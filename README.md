@@ -31,11 +31,16 @@ Objective → Discovery (+Classification) → Doc Generator → Planner → Impl
 ## Installation
 
 ```bash
-# From local directory during development
-claude --plugin-dir ./hydra
+# 1. Add the marketplace (one-time)
+/plugin marketplace add Strumtry/ai-hydra-framework
 
-# Or from GitHub (when published)
-claude plugin install hydra-framework@github:youruser/hydra-framework
+# 2. Install the plugin
+/plugin install hydra-framework@Strumtry/ai-hydra-framework
+```
+
+For development, load directly from a local directory (per-session only):
+```bash
+claude --plugin-dir /path/to/ai-hydra-framework
 ```
 
 ## Quick Start
@@ -190,7 +195,7 @@ After any interruption:
 
 - `jq` — Required for JSON manipulation in hook scripts
 - `git` — Required for commit tracking and state persistence
-- Claude Code with Agent Teams support (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) for parallel execution
+- Claude Code — Agent Teams is enabled automatically by `/hydra-init`
 
 ## Directory Structure
 
