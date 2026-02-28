@@ -1,6 +1,25 @@
-# Hydra Framework
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hydra-logo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/hydra-logo-light.png">
+    <img alt="Hydra Framework" src="assets/hydra-logo-light.png" width="400">
+  </picture>
+</p>
 
-Multi-agent autonomous development loop for Claude Code. Hydra runs a complete SDLC pipeline: Discovery, Classification, Document Generation, Planning, Implementation, Review Board, and Post-Loop finalization — all autonomously.
+<p align="center">
+  <strong>Multi-agent autonomous development loop for Claude Code</strong><br>
+  Discovery &bull; Planning &bull; Implementation &bull; Review &bull; Repeat
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/version-1.1.0-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
+  <img src="https://img.shields.io/badge/Claude_Code-Plugin-7c3aed?style=flat-square" alt="Claude Code Plugin">
+</p>
+
+---
+
+Hydra runs a complete SDLC pipeline: Discovery, Classification, Document Generation, Planning, Implementation, Review Board, and Post-Loop finalization — all autonomously.
 
 ## Architecture
 
