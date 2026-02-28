@@ -41,6 +41,7 @@ Before ANY reviewer runs:
 ### Step 2: Delegate to Reviewers
 
 Read `hydra/config.json → agents.reviewers` to get the active reviewer list.
+Read `hydra/config.json → models.review` for the model to assign reviewers (default: `"opus"`). Pass this as the `model` parameter when spawning each reviewer via the Task tool.
 
 #### Parallel Review Mode (when parallelism.parallel_reviews is true)
 
@@ -68,7 +69,7 @@ Run each reviewer as a subagent, one at a time. Write results to same location.
 - Check if ALL tasks are DONE → if yes, trigger post-loop phase, then output HYDRA_COMPLETE
 
 **ANY CHANGES_REQUESTED:**
-- Delegate to feedback-aggregator to consolidate feedback
+- Delegate to feedback-aggregator to consolidate feedback (use `models.review` from config for the model parameter)
 - Check retry_count against max_retries_per_task
 - If max reached → set task to BLOCKED
 - Otherwise → set task to CHANGES_REQUESTED, increment retry_count
@@ -77,7 +78,7 @@ Run each reviewer as a subagent, one at a time. Write results to same location.
 ### Step 5: Post-Loop Phase
 
 When ALL tasks are DONE, before outputting HYDRA_COMPLETE:
-1. Run post-loop agents (documentation, release-manager, observability) if configured
+1. Run post-loop agents (documentation, release-manager, observability) if configured — use `models.post_loop` from `hydra/config.json` as the `model` parameter (default: `"sonnet"`)
 2. After post-loop agents complete, output HYDRA_COMPLETE
 
 ## Important: Reviews Are Read-Only

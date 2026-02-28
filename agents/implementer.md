@@ -60,6 +60,8 @@ NEVER rely on conversational memory — files are the truth.
 
 ## Delegation Protocol
 
+When delegating to specialists, read `hydra/config.json → models.specialists` for the model to use (default: `"sonnet"`). Pass this as the `model` parameter when spawning each specialist via the Task tool.
+
 For tasks requiring specialist knowledge, delegate:
 - UI tasks: Delegate to Designer (specs) then Frontend Dev (implementation)
 - DB schema changes: Delegate to DB Migration Specialist

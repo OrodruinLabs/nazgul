@@ -14,6 +14,7 @@ SCRIPTS=(
   "scripts/pre-compact.sh"
   "scripts/pre-tool-guard.sh"
   "scripts/session-context.sh"
+  "scripts/migrate-config.sh"
 )
 
 # bash -n syntax checks

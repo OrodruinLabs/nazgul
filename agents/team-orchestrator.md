@@ -17,8 +17,9 @@ You manage Agent Team lifecycle for Hydra's parallel execution modes. You do NOT
 
 When asked to run parallel reviews for a task:
 
-1. Verify `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` environment variable is set
+1. Verify Agent Teams is available: read `hydra/config.json → parallelism.require_settings` and confirm the setting is enabled
 2. Read the reviewer list from `hydra/config.json → agents.reviewers`
+3. Read `hydra/config.json → models.review` for the model to assign each reviewer teammate (default: `"opus"`). Pass this as the `model` parameter when spawning each teammate via the Task tool.
 3. Read the changed files for the task from the task manifest
 4. Spawn a team with one teammate per reviewer:
    - Team name: `hydra-review-[TASK-ID]`
@@ -32,8 +33,9 @@ When asked to run parallel reviews for a task:
 
 When asked to run parallel implementations:
 
-1. Verify agent teams is available
+1. Verify Agent Teams is available: read `hydra/config.json → parallelism.require_settings` and confirm the setting is enabled
 2. Read the parallel group from `hydra/plan.md`
+3. Read `hydra/config.json → models.implementation` for the model to assign each implementer teammate (default: `"sonnet"`). Pass this as the `model` parameter when spawning each teammate via the Task tool.
 3. Verify NO file overlaps between tasks (abort if overlap detected)
 4. Spawn a team with one implementer per task:
    - Team name: `hydra-impl-group-[N]`
@@ -45,7 +47,7 @@ When asked to run parallel implementations:
 
 ## Fallback Behavior
 
-If Agent Teams is not available (env var not set, or feature disabled):
+If Agent Teams is not available (setting not enabled, or feature disabled):
 - Log a warning: "Agent Teams not available, falling back to sequential execution"
 - Return a signal to the caller to use sequential subagent mode instead
 

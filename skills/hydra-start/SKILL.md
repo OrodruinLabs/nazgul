@@ -46,6 +46,20 @@ If `--yolo` flag is present:
      ```
 3. Once confirmed, proceed with full autonomous mode — no pauses, no permission prompts, no human gates
 
+### Model Selection
+
+Read `hydra/config.json → models` to determine which model to assign each pipeline agent. When delegating via the Task tool, pass the `model` parameter:
+
+| Pipeline Agent    | Config Key            | Default |
+|-------------------|-----------------------|---------|
+| Discovery         | `models.discovery`    | opus    |
+| Doc Generator     | `models.docs`         | opus    |
+| Planner           | `models.planning`     | opus    |
+| Implementer       | `models.implementation` | sonnet |
+| Review Gate       | `models.review`       | opus    |
+
+If the `models` section is missing from config.json, use `"sonnet"` as the fallback for all agents.
+
 ### Smart State Detection
 
 Evaluate the preprocessor data above. Work through this state machine top-to-bottom — take the FIRST state that matches:

@@ -13,6 +13,17 @@ if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
+# Auto-migrate config to latest schema version
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+MIGRATE_SCRIPT="$PLUGIN_ROOT/scripts/migrate-config.sh"
+MIGRATION_NOTICE=""
+if [ -f "$MIGRATE_SCRIPT" ]; then
+  MIGRATE_OUTPUT=$("$MIGRATE_SCRIPT" "$HYDRA_DIR" 2>/dev/null) || true
+  if [ -n "$MIGRATE_OUTPUT" ]; then
+    MIGRATION_NOTICE="$MIGRATE_OUTPUT"
+  fi
+fi
+
 MODE=$(jq -r '.mode // "hitl"' "$CONFIG")
 OBJECTIVE=$(jq -r '.objective // "none"' "$CONFIG")
 ITERATION=$(jq -r '.current_iteration // 0' "$CONFIG")
@@ -98,7 +109,7 @@ if [ -f "$PLAN" ]; then
 fi
 
 cat << CONTEXT_EOF2
-
+$([ -n "$MIGRATION_NOTICE" ] && echo "NOTICE: $MIGRATION_NOTICE" || true)
 Active task: ${ACTIVE_TASK:-none} (${ACTIVE_STATUS:-none})
 Reviewers: ${REVIEWERS}
 Git: ${GIT_BRANCH} — ${GIT_LAST}

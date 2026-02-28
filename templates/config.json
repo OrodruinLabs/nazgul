@@ -1,4 +1,5 @@
 {
+  "schema_version": 2,
   "mode": "hitl",
   "objective": null,
   "objective_set_at": null,
@@ -110,6 +111,16 @@
     "parallel_independent_tasks": true,
     "max_parallel_teammates": 4,
     "require_settings": "enableAgentTeams"
+  },
+  "models": {
+    "planning": "opus",
+    "discovery": "opus",
+    "docs": "opus",
+    "review": "opus",
+    "implementation": "sonnet",
+    "specialists": "sonnet",
+    "post_loop": "sonnet",
+    "default": "sonnet"
   },
   "notifications": {
     "enabled": false,

@@ -14,6 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "2"
 assert_json_field "has .mode" "$CONFIG" ".mode" "hitl"
 assert_json_field "has .max_iterations" "$CONFIG" ".max_iterations" "40"
 assert_json_field "has .current_iteration" "$CONFIG" ".current_iteration" "0"

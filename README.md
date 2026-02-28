@@ -165,6 +165,16 @@ After any interruption:
 /hydra-status              # See where things stand
 ```
 
+## Config Upgrades
+
+When the Hydra plugin template evolves (new fields, new sections), existing projects upgrade automatically:
+
+1. On every session start, Hydra compares your project's `hydra/config.json` schema version against the plugin template
+2. If your config is outdated, it creates a backup (`config.json.v1.bak`), applies incremental migrations, and logs to `hydra/logs/migrations.log`
+3. Existing settings are preserved — only missing fields are added
+
+No manual action required. You'll see a one-time notice: `"Hydra config migrated from v1 to v2."`
+
 ## Safety
 
 - **Pre-tool guard** blocks: `rm -rf /`, `DROP TABLE`, `git push --force main`, fork bombs, `curl | sh`
