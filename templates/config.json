@@ -1,0 +1,124 @@
+{
+  "mode": "hitl",
+  "objective": null,
+  "objective_set_at": null,
+  "objectives_history": [],
+  "max_iterations": 40,
+  "current_iteration": 0,
+  "paused": false,
+  "completion_promise": "HYDRA_COMPLETE",
+  "task_file": "hydra/plan.md",
+  "log_dir": "hydra/logs",
+  "review_dir": "hydra/reviews",
+  "project": {
+    "language": null,
+    "framework": null,
+    "test_command": null,
+    "build_command": null,
+    "lint_command": null,
+    "classification": null,
+    "classification_confidence": null,
+    "classified_at": null,
+    "stack": {
+      "runtime": null,
+      "package_manager": null,
+      "framework": null,
+      "database": null,
+      "orm": null,
+      "testing": null,
+      "styling": null,
+      "auth": null,
+      "additional": []
+    },
+    "infrastructure": {
+      "hosting_model": null,
+      "cloud_provider": null,
+      "cloud_region": null,
+      "iac_tool": "terraform",
+      "container_orchestration": null,
+      "cicd_platform": null,
+      "observability": null,
+      "secret_management": null,
+      "environments": ["dev", "prod"]
+    },
+    "tools_verified": false,
+    "tools_installed": []
+  },
+  "discovery": {
+    "last_run": null,
+    "files_scanned": 0,
+    "context_dir": "hydra/context",
+    "existing_docs_count": 0,
+    "existing_docs_quality": null
+  },
+  "agents": {
+    "pipeline": [
+      "discovery",
+      "doc-generator",
+      "planner",
+      "implementer",
+      "feedback-aggregator",
+      "team-orchestrator"
+    ],
+    "reviewers": [],
+    "specialists": [],
+    "post_loop": [],
+    "disabled": [],
+    "custom": []
+  },
+  "documents": {
+    "required": [],
+    "generated": [],
+    "approved": [],
+    "existing": [],
+    "dir": "hydra/docs"
+  },
+  "review_gate": {
+    "require_all_approve": true,
+    "max_retries_per_task": 3,
+    "current_task_retries": 0,
+    "auto_approve_concerns": true,
+    "block_on_security_reject": true,
+    "confidence_threshold": 80
+  },
+  "safety": {
+    "block_destructive_commands": true,
+    "require_tests_pass_before_review": true,
+    "max_consecutive_failures": 5,
+    "consecutive_failures": 0
+  },
+  "afk": {
+    "enabled": false,
+    "yolo": false,
+    "timeout_minutes": 90,
+    "checkpoint_every_n_iterations": 5,
+    "auto_commit": true,
+    "commit_prefix": "hydra:"
+  },
+  "context": {
+    "budget_strategy": "aggressive",
+    "compact_threshold_pct": 70,
+    "compact_custom_instructions": "Preserve: current task ID and status, list of all modified files this iteration, active reviewer verdicts, any blocking issues. Discard: file contents already written to disk, previous iteration details, exploratory reads.",
+    "max_file_read_lines": 200,
+    "use_subagents_for_exploration": true,
+    "checkpoint_state_before_compact": true
+  },
+  "parallelism": {
+    "enabled": true,
+    "use_agent_teams": true,
+    "parallel_reviews": true,
+    "parallel_independent_tasks": true,
+    "max_parallel_teammates": 4,
+    "require_env": "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
+  },
+  "notifications": {
+    "enabled": false,
+    "notify_on": [
+      "task_complete",
+      "blocked",
+      "loop_complete",
+      "security_rejection"
+    ],
+    "notify_file": "hydra/notifications.jsonl"
+  }
+}

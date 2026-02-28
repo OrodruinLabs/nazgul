@@ -1,0 +1,82 @@
+{
+  "colors": {
+    "primary": "#000000",
+    "secondary": "#666666",
+    "accent": "#0066FF",
+    "background": "#FFFFFF",
+    "surface": "#F5F5F5",
+    "text": "#1A1A1A",
+    "muted": "#999999",
+    "error": "#DC2626",
+    "warning": "#F59E0B",
+    "success": "#16A34A"
+  },
+  "typography": {
+    "display": {
+      "family": "",
+      "weights": [400, 700],
+      "sizes": {
+        "xl": "48px",
+        "lg": "32px",
+        "md": "24px"
+      }
+    },
+    "body": {
+      "family": "",
+      "weights": [400, 500, 600],
+      "sizes": {
+        "lg": "18px",
+        "md": "16px",
+        "sm": "14px",
+        "xs": "12px"
+      }
+    },
+    "mono": {
+      "family": "",
+      "weights": [400],
+      "sizes": {
+        "md": "14px",
+        "sm": "12px"
+      }
+    }
+  },
+  "spacing": {
+    "xs": "4px",
+    "sm": "8px",
+    "md": "16px",
+    "lg": "24px",
+    "xl": "32px",
+    "2xl": "48px",
+    "3xl": "64px"
+  },
+  "breakpoints": {
+    "sm": "640px",
+    "md": "768px",
+    "lg": "1024px",
+    "xl": "1280px",
+    "2xl": "1536px"
+  },
+  "borderRadius": {
+    "sm": "4px",
+    "md": "8px",
+    "lg": "12px",
+    "full": "9999px"
+  },
+  "animation": {
+    "duration": {
+      "fast": "150ms",
+      "normal": "300ms",
+      "slow": "500ms"
+    },
+    "easing": {
+      "default": "cubic-bezier(0.4, 0, 0.2, 1)",
+      "in": "cubic-bezier(0.4, 0, 1, 1)",
+      "out": "cubic-bezier(0, 0, 0.2, 1)"
+    }
+  },
+  "shadows": {
+    "sm": "0 1px 2px rgba(0,0,0,0.05)",
+    "md": "0 4px 6px rgba(0,0,0,0.1)",
+    "lg": "0 10px 15px rgba(0,0,0,0.1)"
+  }
+}

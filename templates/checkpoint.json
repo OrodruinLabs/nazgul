@@ -1,0 +1,40 @@
+{
+  "iteration": 0,
+  "timestamp": "",
+  "mode": "hitl",
+  "active_task": {
+    "id": null,
+    "status": null,
+    "retry_count": 0,
+    "last_action": null,
+    "next_action": null,
+    "files_modified_this_iteration": []
+  },
+  "plan_snapshot": {
+    "total_tasks": 0,
+    "done": 0,
+    "ready": 0,
+    "in_progress": 0,
+    "in_review": 0,
+    "changes_requested": 0,
+    "blocked": 0,
+    "planned": 0
+  },
+  "git": {
+    "branch": null,
+    "last_commit_sha": null,
+    "last_commit_message": null,
+    "uncommitted_changes": false
+  },
+  "reviewers": {
+    "active": [],
+    "last_review_task": null,
+    "last_review_verdict": null
+  },
+  "context_health": {
+    "compactions_this_session": 0,
+    "iterations_since_last_compaction": 0,
+    "consecutive_failures": 0
+  },
+  "recovery_instructions": ""
+}

@@ -1,0 +1,9 @@
+# Runtime directory (created per-project by /hydra-init)
+hydra/
+
+# Local Claude Code config
+.claude/settings.local.json
+.claude/agents/generated/
+
+# OS
+.DS_Store
