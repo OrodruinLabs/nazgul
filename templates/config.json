@@ -109,7 +109,7 @@
     "parallel_reviews": true,
     "parallel_independent_tasks": true,
     "max_parallel_teammates": 4,
-    "require_env": "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
+    "require_settings": "enableAgentTeams"
   },
   "notifications": {
     "enabled": false,

@@ -64,3 +64,9 @@ Show the user:
 If the project doesn't already have Hydra instructions in CLAUDE.md:
 - Append the Hydra section from `templates/CLAUDE.md.template`
 - Or create CLAUDE.md if it doesn't exist
+
+### Step 6: Enable Agent Teams
+Ensure Agent Teams is enabled for this project:
+1. If `.claude/settings.json` doesn't exist, create it with `{"enableAgentTeams": true}`
+2. If it exists but doesn't have `enableAgentTeams`, read it, merge in `"enableAgentTeams": true`, and write it back
+3. If it already has `"enableAgentTeams": true`, skip (no-op)
