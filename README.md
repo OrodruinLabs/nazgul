@@ -31,16 +31,16 @@ Objective → Discovery (+Classification) → Doc Generator → Planner → Impl
 ## Installation
 
 ```bash
-# 1. Add the marketplace (one-time)
-/plugin marketplace add Strumtry/ai-hydra-framework
+# Clone the repo
+git clone https://github.com/Strumtry/ai-hydra-framework.git
 
-# 2. Install the plugin
-/plugin install hydra-framework@Strumtry/ai-hydra-framework
+# Launch Claude Code with the plugin loaded
+claude --plugin-dir /path/to/ai-hydra-framework
 ```
 
-For development, load directly from a local directory (per-session only):
+To load Hydra automatically, add an alias to your shell profile (`~/.zshrc` or `~/.bashrc`):
 ```bash
-claude --plugin-dir /path/to/ai-hydra-framework
+alias claude='claude --plugin-dir /path/to/ai-hydra-framework'
 ```
 
 ## Quick Start
