@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { createDb } from './db.js';
+import { createApp } from './server.js';
 import {
   handleGetPendingEvents,
   handleAcknowledgeEvent,
@@ -93,3 +94,17 @@ server.registerTool('get_event_history', {
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
+
+// Start HTTP webhook server if WEBHOOK_PORT is set
+const webhookPort = process.env.HYDRA_WEBHOOK_PORT;
+if (webhookPort) {
+  const app = createApp(db, {
+    githubSecret: process.env.GITHUB_WEBHOOK_SECRET,
+    apiToken: process.env.HYDRA_API_TOKEN,
+  });
+  app.listen(parseInt(webhookPort, 10), '127.0.0.1', () => {
+    console.error(
+      `Hydra webhook server listening on http://127.0.0.1:${webhookPort}`
+    );
+  });
+}
