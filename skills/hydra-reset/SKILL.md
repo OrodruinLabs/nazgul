@@ -4,8 +4,8 @@ description: Reset Hydra state to a clean slate. Archives current state and recr
 context: fork
 allowed-tools: Read, Write, Bash, Glob
 metadata:
-  author: Hydra Framework
-  version: 1.0.0
+  author: Jose Mejia
+  version: 1.1.0
 ---
 
 # Hydra Reset

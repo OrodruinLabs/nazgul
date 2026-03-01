@@ -4,8 +4,8 @@ description: Manually trigger a review cycle for a specific task or the current 
 context: fork
 allowed-tools: Read, Bash, Glob, Grep
 metadata:
-  author: Hydra Framework
-  version: 1.0.0
+  author: Jose Mejia
+  version: 1.1.0
 ---
 
 # Hydra Review

@@ -5,8 +5,8 @@ context: fork
 disable-model-invocation: true
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task
 metadata:
-  author: Hydra Framework
-  version: 1.0.0
+  author: Jose Mejia
+  version: 1.1.0
 ---
 
 # Hydra Init

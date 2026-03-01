@@ -4,8 +4,8 @@ description: Collect targeted codebase context for a specific objective type. Us
 context: fork
 allowed-tools: Read, Write, Bash, Glob, Grep, LS
 metadata:
-  author: Hydra Framework
-  version: 1.0.0
+  author: Jose Mejia
+  version: 1.1.0
 ---
 
 # Hydra Context Collection

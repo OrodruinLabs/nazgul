@@ -4,8 +4,8 @@ description: Run a cleanup and simplification pass on all files modified during 
 context: fork
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 metadata:
-  author: Hydra Framework
-  version: 1.0.0
+  author: Jose Mejia
+  version: 1.1.0
 ---
 
 # Hydra Simplify

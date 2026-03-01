@@ -4,8 +4,8 @@ description: View Hydra run history — iteration timeline, task completions, re
 context: fork
 allowed-tools: Read, Bash, Glob
 metadata:
-  author: Hydra Framework
-  version: 1.0.0
+  author: Jose Mejia
+  version: 1.1.0
 ---
 
 # Hydra Log

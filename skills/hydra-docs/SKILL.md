@@ -4,8 +4,8 @@ description: View, generate, or regenerate project documents (PRD, TRD, ADRs, te
 context: fork
 allowed-tools: Read, Write, Glob, Grep, Bash
 metadata:
-  author: Hydra Framework
-  version: 1.0.0
+  author: Jose Mejia
+  version: 1.1.0
 ---
 
 # Hydra Docs

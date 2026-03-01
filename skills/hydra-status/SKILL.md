@@ -4,8 +4,8 @@ description: Check the current state of a Hydra autonomous loop. Use when asked 
 context: fork
 allowed-tools: Read, Bash, Glob
 metadata:
-  author: Hydra Framework
-  version: 1.0.0
+  author: Jose Mejia
+  version: 1.1.0
 ---
 
 # Hydra Status

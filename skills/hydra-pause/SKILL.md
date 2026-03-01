@@ -4,8 +4,8 @@ description: Gracefully pause the Hydra autonomous loop at the next iteration bo
 context: fork
 allowed-tools: Read, Write, Edit, Bash
 metadata:
-  author: Hydra Framework
-  version: 1.0.0
+  author: Jose Mejia
+  version: 1.1.0
 ---
 
 # Hydra Pause

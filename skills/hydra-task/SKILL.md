@@ -4,8 +4,8 @@ description: Task lifecycle management — skip, unblock, add, prioritize, info,
 context: fork
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 metadata:
-  author: Hydra Framework
-  version: 1.0.0
+  author: Jose Mejia
+  version: 1.1.0
 ---
 
 # Hydra Task
