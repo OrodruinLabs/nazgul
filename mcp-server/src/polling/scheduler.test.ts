@@ -69,6 +69,38 @@ describe('PollScheduler', () => {
     scheduler.stop();
   });
 
+  test('skips overlapping ticks when previous is still running', async () => {
+    // First fetch hangs (never resolves during the test window)
+    let resolveHanging: () => void;
+    const hangingPromise = new Promise<void>((resolve) => { resolveHanging = resolve; });
+    mockFetch.mockImplementationOnce(() => hangingPromise.then(() => ({
+      status: 304,
+      headers: new Map(),
+    })));
+
+    const scheduler = new PollScheduler(db, 'owner/repo');
+    scheduler.start(5);
+
+    // Initial tick starts — fetch is hanging
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    // Interval fires while first tick is still running — should be skipped
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(mockFetch).toHaveBeenCalledTimes(1); // still 1, not 2
+
+    // Resolve the hanging fetch so the first tick completes
+    resolveHanging!();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Next interval should now work
+    mockFetch.mockResolvedValueOnce({ status: 304, headers: new Map() });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    scheduler.stop();
+  });
+
   test('handles poll errors without crashing', async () => {
     mockFetch.mockRejectedValueOnce(new Error('network failure'));
 

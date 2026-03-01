@@ -52,6 +52,34 @@ describe('PollManager', () => {
     expect(result.changed).toBe(false);
   });
 
+  it('returns changed=false on HTTP 4xx/5xx without corrupting state', async () => {
+    // First poll succeeds and saves state
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        headers: { get: (h: string) => h === 'etag' ? '"good"' : null },
+        json: async () => ({ workflow_runs: [] }),
+      })
+      // Second poll returns 403 rate limit
+      .mockResolvedValueOnce({
+        status: 403,
+        headers: { get: () => null },
+      });
+
+    const manager = new PollManager(db, fetchMock as any);
+    const key = 'test:error-handling';
+
+    const first = await manager.poll(key, 'https://api.example.com/test');
+    expect(first.changed).toBe(true);
+
+    const second = await manager.poll(key, 'https://api.example.com/test');
+    expect(second.changed).toBe(false);
+
+    // Verify last_data was NOT overwritten by the error response
+    const state = db.prepare('SELECT last_data FROM poll_state WHERE resource_key = ?').get(key) as { last_data: string };
+    expect(JSON.parse(state.last_data)).toEqual({ workflow_runs: [] });
+  });
+
   it('pollGitHubWorkflowRuns emits events for new runs', async () => {
     const workflowData = {
       workflow_runs: [
