@@ -73,11 +73,23 @@ If the project doesn't already have Hydra instructions in CLAUDE.md:
 - Append the Hydra section from `templates/CLAUDE.md.template`
 - Or create CLAUDE.md if it doesn't exist
 
-### Step 6: Enable Agent Teams & MCP Permissions
-Ensure Agent Teams and notification tools are enabled for this project:
-1. If `.claude/settings.json` doesn't exist, create it with:
-   `{"enableAgentTeams": true, "permissions": {"allow": ["mcp__hydra-notifications__*"]}}`
-2. If it exists:
-   a. If missing `enableAgentTeams`, merge in `"enableAgentTeams": true`
-   b. If missing `permissions.allow` containing `mcp__hydra-notifications__*`, add it to the array (create array if needed)
-3. If both already present, skip (no-op)
+### Step 6: Enable Agent Teams, MCP Server & Permissions
+Ensure Agent Teams, the notification MCP server, and permissions are all configured for this project.
+
+Resolve the plugin root: use `$CLAUDE_PLUGIN_ROOT` env var. If not set, fall back to the plugin's known install path.
+
+Read `.claude/settings.json` (or start with `{}`), then merge ALL of the following:
+
+1. **`enableAgentTeams`**: set to `true` if missing
+2. **`mcpServers.hydra-notifications`**: if missing, add:
+   ```json
+   {
+     "command": "node",
+     "args": ["${PLUGIN_ROOT}/mcp-server/dist/index.js"],
+     "env": { "HYDRA_DB_PATH": "./hydra/notifications.db" }
+   }
+   ```
+   where `${PLUGIN_ROOT}` is the resolved absolute path (no env var references in the final JSON).
+3. **`permissions.allow`**: if array doesn't contain `"mcp__hydra-notifications__*"`, add it
+
+Write the merged result back. If everything is already present, skip (no-op).
