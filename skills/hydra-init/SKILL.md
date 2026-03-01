@@ -78,6 +78,8 @@ Ensure Agent Teams, the notification MCP server, and permissions are all configu
 
 Resolve the plugin root: use `$CLAUDE_PLUGIN_ROOT` env var. If not set, fall back to the plugin's known install path.
 
+**Build MCP server if needed:** Check if `<plugin-root>/mcp-server/dist/index.js` exists. If it does NOT exist, run `cd <plugin-root>/mcp-server && npm install && npm run build`. If the build fails, tell the user: "MCP server build failed. Check the output above and fix any issues in `mcp-server/`." STOP.
+
 Read `.claude/settings.json` (or start with `{}`), then merge ALL of the following:
 
 1. **`enableAgentTeams`**: set to `true` if missing

@@ -21,14 +21,17 @@ context: fork
 
 1. Check if `hydra/config.json` exists. If not: "Hydra not initialized. Run `/hydra-init` first." STOP.
 2. Check if notifications are enabled in config (`notifications.enabled`). If not: "Notifications are disabled. Enable in hydra/config.json." STOP.
-3. Ensure the MCP server is configured in `.claude/settings.json`:
-   a. Read `.claude/settings.json` (or start with `{}`)
-   b. If `mcpServers.hydra-notifications` is missing, add it:
-      - Resolve plugin root from `$CLAUDE_PLUGIN_ROOT` env var
+3. Ensure the MCP server is built and configured:
+   a. Resolve plugin root from `$CLAUDE_PLUGIN_ROOT` env var
+   b. Check if `<plugin-root>/mcp-server/dist/index.js` exists
+   c. If it does NOT exist, run `cd <plugin-root>/mcp-server && npm install && npm run build`
+   d. If the build fails, tell the user: "MCP server build failed. Check the output above and fix any issues in `mcp-server/`." STOP.
+   e. Read `.claude/settings.json` (or start with `{}`)
+   f. If `mcpServers.hydra-notifications` is missing, add it:
       - Add: `{"command": "node", "args": ["<plugin-root>/mcp-server/dist/index.js"], "env": {"HYDRA_DB_PATH": "./hydra/notifications.db"}}`
-   c. If `permissions.allow` doesn't contain `"mcp__hydra-notifications__*"`, add it
-   d. Write back the merged settings
-   e. If changes were made, tell the user: "MCP server configured. Restart Claude Code to activate, then run `/hydra-notify` again." STOP.
+   g. If `permissions.allow` doesn't contain `"mcp__hydra-notifications__*"`, add it
+   h. Write back the merged settings
+   i. If changes were made, tell the user: "MCP server configured. Restart Claude Code to activate, then run `/hydra-notify` again." STOP.
 4. Verify the MCP server is available by calling `get_pending_events`. If it fails: "MCP server is configured but not running. Restart Claude Code to activate it." STOP.
 
 ## Process

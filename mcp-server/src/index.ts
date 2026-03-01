@@ -17,7 +17,7 @@ import { PollScheduler } from './polling/scheduler.js';
 import { getGitHubRepo } from './utils/git-remote.js';
 import { getGitHubToken } from './utils/gh-token.js';
 
-const DB_PATH = process.env.HYDRA_NOTIFICATIONS_DB ?? './hydra-notifications.db';
+const DB_PATH = process.env.HYDRA_DB_PATH ?? './hydra/notifications.db';
 const db = createDb(DB_PATH);
 const poller = new PollManager(db);
 
