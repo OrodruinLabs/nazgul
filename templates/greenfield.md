@@ -3,6 +3,13 @@
 ## Objective
 <!-- Derived from stack scaffolding conversation or user input. -->
 
+## Project Vision
+- **What it does**: <!-- From project-spec.md -->
+- **Who it's for**: <!-- From project-spec.md -->
+- **Core features**: <!-- From project-spec.md -->
+- **Problem it solves**: <!-- From project-spec.md -->
+- **Constraints**: <!-- From project-spec.md -->
+
 ## Project Type
 <!-- Web app, CLI tool, API service, library, mobile app, full-stack, etc. -->
 

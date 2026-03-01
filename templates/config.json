@@ -3,6 +3,7 @@
   "mode": "hitl",
   "objective": null,
   "objective_set_at": null,
+  "project_spec": null,
   "objectives_history": [],
   "max_iterations": 40,
   "current_iteration": 0,

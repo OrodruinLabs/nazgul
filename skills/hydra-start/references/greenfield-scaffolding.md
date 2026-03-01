@@ -1,6 +1,31 @@
 # Greenfield Stack Scaffolding
 
-For greenfield projects, Hydra asks about the desired stack and verifies/installs all required tools before proceeding.
+For greenfield projects, Hydra checks for a project spec, asks about the desired stack, and verifies/installs all required tools before proceeding.
+
+## Step 0: Project Spec Detection
+
+Before stack selection, check for a project specification:
+
+1. **If `hydra/context/project-spec.md` already exists:** Skip this step (idempotent).
+2. **Otherwise**, look for spec files in the project root (first match wins):
+   - `project-spec.md`
+   - `SPEC.md`
+   - `spec.md`
+   - `PROJECT.md`
+   - `PRD.md`
+3. **If a spec file is found:**
+   - Read the file contents
+   - If the file is structured (has clear headings for vision, features, users, etc.): parse and normalize into the standard `project-spec.md` format
+   - If the file is unstructured (plain text brief, Notion export, freeform notes): place the full content in `## Raw Spec` and attempt best-effort extraction into structured sections (Vision, Target Users, Core Features, Problem Statement, Constraints)
+   - If the file exceeds 500 lines: truncate `## Raw Spec` to 200 lines with note `[Truncated — original at: [filename]]`
+   - Set `## Source` → Method: `imported`, Imported from: `[filename]`
+   - Write to `hydra/context/project-spec.md`
+   - Update `hydra/config.json` → set `project_spec` to `"imported"`
+   - Tell user: `"Found project spec at [filename]. Using it for planning."`
+4. **If no spec file found + HITL mode:**
+   - Tell user: `"No project spec found. You can create one with /hydra-gen-spec, or we'll proceed with just the tech stack."`
+   - Continue to Step 1.
+5. **If no spec file found + AFK mode:** Skip silently, proceed to Step 1.
 
 ## Step 1: Stack Selection
 
@@ -202,7 +227,15 @@ Write verified stack to `config.json -> project.stack`:
 }
 ```
 
-Set the objective to:
+Set the objective based on whether a project spec exists:
+
+**If `hydra/context/project-spec.md` exists** (vision is available):
+```
+"Build [vision summary]: [framework] with [database], [auth], [testing], and [cloud_provider] infrastructure via Terraform — all tools verified and configured"
+```
+Where `[vision summary]` is a concise version of the `## Vision` section from project-spec.md.
+
+**If no project spec** (current behavior):
 ```
 "Scaffold [framework] project with [database], [auth], [testing], and [cloud_provider] infrastructure via Terraform — all tools verified and configured"
 ```

@@ -16,6 +16,7 @@ You produce structured project documents that become the source of truth for all
 
 ## Inputs You Consume
 
+- `hydra/context/project-spec.md` — **PRIMARY**: Product specification with vision, target users, core features, problem statement, and constraints (if exists). This is the richest source of product context and takes precedence for PRD content.
 - `hydra/context/project-classification.md` — What type of project this is
 - `hydra/context/project-profile.md` — Technical stack and structure
 - `hydra/context/architecture-map.md` — How the system is organized
@@ -36,9 +37,22 @@ All documents go to `hydra/docs/`. This directory is the project's living docume
 | Test Plan | Full strategy | Feature tests | Regression suite | Regression test | Migration validation |
 | Migration Plan | No | No | No | No | Full |
 
+**Note:** When `hydra/context/project-spec.md` is present, it is the PRIMARY source for PRD content across all project types. The spec provides product context that technical analysis alone cannot capture.
+
 ## Process
 
 0. Read `hydra/config.json` → `objective` field. If null, read `hydra/plan.md` → `## Objective`. If both empty, STOP and report: "No objective found. Cannot generate documents."
+0.5. Read `hydra/context/project-spec.md` (if it exists). When present, map its content to PRD sections:
+   - `## Vision` → PRD Overview / Executive Summary
+   - `## Target Users` → PRD User Stories seed (personas and context)
+   - `## Core Features` → PRD Goals / Feature Requirements
+   - `## Problem Statement` → PRD Problem Statement
+   - `## Constraints` → PRD Technical Constraints / Non-Functional Requirements
+   - `## User Stories` (if Tier 2) → PRD User Stories (use directly)
+   - `## Success Metrics` (if Tier 2) → PRD Success Criteria / KPIs
+   - `## Out of Scope` (if Tier 2) → PRD Out of Scope
+   - `## Raw Spec` (if present from import) → Read fully for additional details to incorporate
+   This mapping ensures the PRD reflects product intent, not just technical stack.
 1. Read project classification → determine which documents to generate
 1.5. Read `hydra/context/existing-docs.md` (if it exists):
    a. For each existing document with relevance HIGH or MEDIUM:

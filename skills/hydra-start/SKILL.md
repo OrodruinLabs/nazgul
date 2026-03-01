@@ -24,6 +24,7 @@ $ARGUMENTS
 - Config: !`cat hydra/config.json 2>/dev/null || echo "NOT_INITIALIZED"`
 - Stored objective: !`jq -r '.objective // "none"' hydra/config.json 2>/dev/null || echo "none"`
 - Discovery: !`cat hydra/context/discovery-summary.md 2>/dev/null || echo "NOT_RUN"`
+- Project spec: !`cat hydra/context/project-spec.md 2>/dev/null | head -3 || echo "NONE"`
 - Classification: !`cat hydra/context/project-classification.md 2>/dev/null | head -5 || echo "NOT_CLASSIFIED"`
 - Docs generated: !`ls hydra/docs/*.md 2>/dev/null | wc -l | tr -d ' '`
 - Active tasks: !`grep -rl 'Status.*\(READY\|IN_PROGRESS\|IN_REVIEW\|IMPLEMENTED\|CHANGES_REQUESTED\)' hydra/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' '`
@@ -206,7 +207,7 @@ Append to `objectives_history` array.
 
 ### Greenfield Stack Scaffolding
 
-For greenfield projects, Hydra runs an interactive stack selection, tool pre-flight check, and configuration workflow. Consult `references/greenfield-scaffolding.md` for the full process including stack selection menus, AFK defaults, tool configuration steps, infrastructure scaffolding, and config storage.
+For greenfield projects, Hydra first checks for a project spec (see Step 0 in `references/greenfield-scaffolding.md`), then runs an interactive stack selection, tool pre-flight check, and configuration workflow. Consult `references/greenfield-scaffolding.md` for the full process including project spec detection, stack selection menus, AFK defaults, tool configuration steps, infrastructure scaffolding, and config storage.
 
 For the tool detection commands table (check commands and install commands per platform), see `references/tool-preflight.md`.
 
