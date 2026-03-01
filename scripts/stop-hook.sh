@@ -96,6 +96,55 @@ if [ -d "$HYDRA_DIR/tasks" ]; then
   done
 fi
 
+# --- REVIEW GATE ENFORCEMENT (Layer 2 — reactive safety net) ---
+# Validate that no tasks are DONE without review evidence
+if [ -d "$HYDRA_DIR/tasks" ]; then
+  for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
+    [ -f "$task_file" ] || continue
+    STATUS=$(grep -m1 '^\- \*\*Status\*\*:' "$task_file" 2>/dev/null | sed 's/.*:[[:space:]]*//' || echo "")
+    if [ "$STATUS" = "DONE" ]; then
+      TASK_ID=$(basename "$task_file" .md)
+      REVIEW_DIR="$HYDRA_DIR/reviews/$TASK_ID"
+      REVIEW_VALID=true
+
+      # Check review directory exists with reviewer files
+      if [ ! -d "$REVIEW_DIR" ]; then
+        REVIEW_VALID=false
+      else
+        HAS_REVIEWS=false
+        for rf in "$REVIEW_DIR"/*.md; do
+          [ -f "$rf" ] || continue
+          case "$(basename "$rf")" in
+            test-failures.md|consolidated-feedback.md) continue ;;
+          esac
+          HAS_REVIEWS=true
+          break
+        done
+        if [ "$HAS_REVIEWS" = false ]; then
+          REVIEW_VALID=false
+        fi
+      fi
+
+      if [ "$REVIEW_VALID" = false ]; then
+        # VIOLATION: Reset to IMPLEMENTED
+        sed -i.bak 's/^\(- \*\*Status\*\*:\) DONE/\1 IMPLEMENTED/' "$task_file" && rm -f "${task_file}.bak"
+        DONE_COUNT=$((DONE_COUNT - 1))
+        IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
+        echo "HYDRA REVIEW GATE VIOLATION: ${TASK_ID} was DONE without reviews — reset to IMPLEMENTED" >&2
+
+        # Log violation to notifications
+        NOTIFY_FILE="$HYDRA_DIR/notifications.jsonl"
+        jq -n \
+          --arg event "review_gate_violation" \
+          --arg task "$TASK_ID" \
+          --arg timestamp "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+          --arg summary "${TASK_ID} was marked DONE without review evidence. Reset to IMPLEMENTED." \
+          '{event: $event, task: $task, timestamp: $timestamp, summary: $summary, requires_human: false}' >> "$NOTIFY_FILE"
+      fi
+    fi
+  done
+fi
+
 # Track progress for consecutive failure detection
 PREV_DONE=$(jq -r '.safety._prev_done_count // 0' "$CONFIG")
 if [ "$DONE_COUNT" -gt "$PREV_DONE" ]; then

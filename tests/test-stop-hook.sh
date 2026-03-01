@@ -48,6 +48,9 @@ create_plan
 create_task_file "TASK-001" "DONE"
 create_task_file "TASK-002" "DONE"
 create_task_file "TASK-003" "DONE"
+create_review_dir "TASK-001"
+create_review_dir "TASK-002"
+create_review_dir "TASK-003"
 run_hook
 assert_exit_code "all tasks done: exit 0" "$HOOK_EC" 0
 teardown_temp_dir
@@ -103,6 +106,7 @@ setup_hydra_dir
 create_config
 create_plan
 create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
 create_task_file "TASK-002" "READY"
 run_hook
 assert_exit_code "READY tasks: exit 2" "$HOOK_EC" 2
@@ -155,6 +159,8 @@ create_config '.safety.consecutive_failures = 3' '.safety._prev_done_count = 1'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_task_file "TASK-002" "DONE"
+create_review_dir "TASK-001"
+create_review_dir "TASK-002"
 create_task_file "TASK-003" "READY"
 run_hook
 val=$(jq -r '.safety.consecutive_failures' "$TEST_DIR/hydra/config.json")
@@ -168,6 +174,7 @@ setup_hydra_dir
 create_config '.safety.consecutive_failures = 2' '.safety._prev_done_count = 1'
 create_plan
 create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
 create_task_file "TASK-002" "READY"
 run_hook
 val=$(jq -r '.safety.consecutive_failures' "$TEST_DIR/hydra/config.json")
@@ -229,6 +236,7 @@ setup_hydra_dir
 create_config
 create_plan
 create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
 create_task_file "TASK-002" "PLANNED" "TASK-001"
 run_hook
 status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/hydra/tasks/TASK-002.md" | sed 's/.*: //')
@@ -276,6 +284,7 @@ setup_hydra_dir
 create_config '.notifications.enabled = true' '.safety._prev_done_count = 0'
 create_plan
 create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
 create_task_file "TASK-002" "READY"
 run_hook
 assert_file_exists "notifications file created" "$TEST_DIR/hydra/notifications.jsonl"
@@ -325,6 +334,35 @@ if jq empty "$TEST_DIR/hydra/checkpoints/iteration-001.json" 2>/dev/null; then
 else
   _fail "checkpoint is valid JSON"
 fi
+teardown_temp_dir
+
+# --- Test 23: Review gate enforcement — DONE without reviews reset to IMPLEMENTED ---
+setup_temp_dir
+setup_git_repo
+setup_hydra_dir
+create_config
+create_plan
+create_task_file "TASK-001" "DONE"
+# Intentionally NO create_review_dir — simulate the violation
+create_task_file "TASK-002" "READY"
+run_hook
+status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/hydra/tasks/TASK-001.md" | sed 's/.*: //')
+assert_eq "review gate violation resets DONE to IMPLEMENTED" "$status" "IMPLEMENTED"
+assert_contains "review gate violation logged" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+teardown_temp_dir
+
+# --- Test 24: Review gate — DONE with reviews stays DONE ---
+setup_temp_dir
+setup_git_repo
+setup_hydra_dir
+create_config
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+create_task_file "TASK-002" "READY"
+run_hook
+status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/hydra/tasks/TASK-001.md" | sed 's/.*: //')
+assert_eq "DONE with reviews stays DONE" "$status" "DONE"
 teardown_temp_dir
 
 report_results

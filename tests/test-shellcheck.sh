@@ -15,6 +15,7 @@ SCRIPTS=(
   "scripts/pre-tool-guard.sh"
   "scripts/session-context.sh"
   "scripts/migrate-config.sh"
+  "scripts/task-state-guard.sh"
 )
 
 # bash -n syntax checks

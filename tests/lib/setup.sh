@@ -71,6 +71,20 @@ TASK_EOF
   fi
 }
 
+create_review_dir() {
+  # Creates a mock review directory with an APPROVED reviewer file
+  # Usage: create_review_dir TASK-001
+  local id="$1"
+  mkdir -p "$TEST_DIR/hydra/reviews/${id}"
+  cat > "$TEST_DIR/hydra/reviews/${id}/code-reviewer.md" << REVIEW_EOF
+# Code Review: ${id}
+
+## Verdict: APPROVED
+
+No blocking issues found.
+REVIEW_EOF
+}
+
 create_plan() {
   # Creates a plan.md with Recovery Pointer in the format stop-hook.sh expects
   cat > "$TEST_DIR/hydra/plan.md" << 'PLAN_EOF'

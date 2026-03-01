@@ -53,5 +53,12 @@ check_pattern 'curl\s+.*\|\s*(ba)?sh' "Piped internet execution (curl | sh)"
 check_pattern 'wget\s+.*\|\s*(ba)?sh' "Piped internet execution (wget | sh)"
 check_pattern 'curl\s+.*\|\s*sudo' "Piped internet execution with sudo"
 
+# Task manifest status protection — prevent bypassing Write/Edit hooks
+check_pattern 'sed.*hydra/tasks/TASK-.*Status' "Direct sed on task manifest status (use Write/Edit tools)"
+check_pattern 'echo.*Status.*hydra/tasks/TASK-' "Direct echo to task manifest (use Write/Edit tools)"
+check_pattern 'printf.*Status.*hydra/tasks/TASK-' "Direct printf to task manifest (use Write/Edit tools)"
+check_pattern 'cat.*>.*hydra/tasks/TASK-' "Direct cat redirect to task manifest (use Write/Edit tools)"
+check_pattern 'tee.*hydra/tasks/TASK-' "Direct tee to task manifest (use Write/Edit tools)"
+
 # All checks passed
 exit 0
