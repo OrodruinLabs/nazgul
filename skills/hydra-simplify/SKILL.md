@@ -3,9 +3,15 @@ name: hydra-simplify
 description: Run a cleanup and simplification pass on all files modified during a Hydra loop. Use after a Hydra loop completes to improve code clarity without changing functionality.
 context: fork
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
+metadata:
+  author: Hydra Framework
+  version: 1.0.0
 ---
 
 # Hydra Simplify
+
+## Examples
+- `/hydra-simplify` — Run cleanup pass on all files modified during the last Hydra loop
 
 ## Modified Files
 - Git changes: !`git diff --name-only HEAD~10 2>/dev/null || echo "No recent changes"`

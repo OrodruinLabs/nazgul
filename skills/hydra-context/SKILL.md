@@ -3,9 +3,16 @@ name: hydra-context
 description: Collect targeted codebase context for a specific objective type. Use before planning to deeply understand the code that will be affected.
 context: fork
 allowed-tools: Read, Write, Bash, Glob, Grep, LS
+metadata:
+  author: Hydra Framework
+  version: 1.0.0
 ---
 
 # Hydra Context Collection
+
+## Examples
+- `/hydra-context` — Collect context based on the current objective type
+- `/hydra-context refactor` — Collect context specifically for a refactor scope
 
 ## Current Project
 - Profile: !`head -20 hydra/context/project-profile.md 2>/dev/null || echo "No profile — run /hydra-init first"`

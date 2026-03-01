@@ -1,11 +1,17 @@
 ---
 name: hydra-pause
-description: Gracefully pause the Hydra autonomous loop at the next iteration boundary. The loop will stop cleanly after the current task action completes.
+description: Gracefully pause the Hydra autonomous loop at the next iteration boundary. Use when user says "pause hydra", "stop the loop", "halt hydra", or wants to pause work without losing progress.
 context: fork
 allowed-tools: Read, Write, Edit, Bash
+metadata:
+  author: Hydra Framework
+  version: 1.0.0
 ---
 
 # Hydra Pause
+
+## Examples
+- `/hydra-pause` — Pause the loop at the next iteration boundary
 
 ## Current State
 - Config: !`cat hydra/config.json 2>/dev/null || echo "NOT_INITIALIZED"`

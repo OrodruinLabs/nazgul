@@ -3,9 +3,15 @@ name: hydra-status
 description: Check the current state of a Hydra autonomous loop. Use when asked about loop progress, task status, iteration count, review board status, or how the Hydra loop is going.
 context: fork
 allowed-tools: Read, Bash, Glob
+metadata:
+  author: Hydra Framework
+  version: 1.0.0
 ---
 
 # Hydra Status
+
+## Examples
+- `/hydra-status` — View current loop progress, task counts, and review board state
 
 ## Current State
 - Mode: !`jq -r '.mode // "unknown"' hydra/config.json 2>/dev/null || echo "unknown"`

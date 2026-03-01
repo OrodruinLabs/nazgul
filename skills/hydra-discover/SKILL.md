@@ -4,9 +4,16 @@ description: Scan the codebase to build a project profile and generate tailored 
 context: fork
 agent: discovery
 allowed-tools: Bash, Read, Write, Glob, Grep, LS
+metadata:
+  author: Hydra Framework
+  version: 1.0.0
 ---
 
 # Hydra Discovery
+
+## Examples
+- `/hydra-discover` — Scan codebase and generate project profile + reviewer agents
+- `/hydra-discover` (re-run) — Backs up existing context before rescanning
 
 ## Current Project
 - Root: !`pwd`

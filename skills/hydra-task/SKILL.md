@@ -3,9 +3,20 @@ name: hydra-task
 description: Task lifecycle management — skip, unblock, add, prioritize, info, and list tasks. Use when you need to manage individual tasks in the Hydra pipeline.
 context: fork
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
+metadata:
+  author: Hydra Framework
+  version: 1.0.0
 ---
 
 # Hydra Task
+
+## Examples
+- `/hydra-task` — List all tasks with status summary
+- `/hydra-task info TASK-003` — Show full details and review history for a task
+- `/hydra-task skip TASK-005` — Skip a task and promote unblocked downstream tasks
+- `/hydra-task unblock TASK-004` — Reset a blocked task back to READY
+- `/hydra-task add "Implement rate limiting"` — Create a new task
+- `/hydra-task prioritize TASK-006 --before TASK-003` — Reorder task execution
 
 ## Arguments
 $ARGUMENTS

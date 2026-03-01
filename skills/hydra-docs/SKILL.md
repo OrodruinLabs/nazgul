@@ -3,9 +3,17 @@ name: hydra-docs
 description: View, generate, or regenerate project documents (PRD, TRD, ADRs, test plans). Use when asked about project documentation, design decisions, or technical specs.
 context: fork
 allowed-tools: Read, Write, Glob, Grep, Bash
+metadata:
+  author: Hydra Framework
+  version: 1.0.0
 ---
 
 # Hydra Docs
+
+## Examples
+- `/hydra-docs` — View list of generated documents
+- `/hydra-docs generate` — Generate or regenerate all project documents
+- `/hydra-docs approve` — Approve documents for planning
 
 ## Current Documents
 - Manifest: !`cat hydra/docs/manifest.md 2>/dev/null || echo "No documents generated yet. Run /hydra-init first."`

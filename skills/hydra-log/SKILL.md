@@ -3,9 +3,15 @@ name: hydra-log
 description: View Hydra run history — iteration timeline, task completions, review verdicts, git commits. Use after an overnight run to see what happened.
 context: fork
 allowed-tools: Read, Bash, Glob
+metadata:
+  author: Hydra Framework
+  version: 1.0.0
 ---
 
 # Hydra Log
+
+## Examples
+- `/hydra-log` — View unified timeline of all Hydra activity (iterations, commits, reviews)
 
 ## Current State
 - Iteration logs: !`tail -20 hydra/logs/iterations.jsonl 2>/dev/null || echo "No iteration logs"`

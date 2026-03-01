@@ -1,11 +1,19 @@
 ---
 name: hydra-init
-description: Initialize Hydra for a project — check prerequisites, run discovery, create runtime directories, generate reviewer agents. Run this first before using any other Hydra commands.
+description: Initialize Hydra for a project — check prerequisites, run discovery, create runtime directories, generate reviewer agents. Use when setting up Hydra for the first time, user says "initialize hydra", "set up hydra", or before running any other Hydra commands.
+context: fork
 disable-model-invocation: true
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task
+metadata:
+  author: Hydra Framework
+  version: 1.0.0
 ---
 
 # Hydra Init
+
+## Examples
+- `/hydra-init` — Initialize Hydra with default settings
+- `/hydra-init --force` — Reinitialize, archiving current state first
 
 ## Prerequisites Check
 - jq installed: !`which jq 2>/dev/null && echo "YES" || echo "NO — install jq first: brew install jq (macOS) or apt install jq (Linux)"`

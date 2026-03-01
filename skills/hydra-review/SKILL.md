@@ -3,9 +3,16 @@ name: hydra-review
 description: Manually trigger a review cycle for a specific task or the current IN_REVIEW task. Use when asked to review a task, run reviewers, or check review status.
 context: fork
 allowed-tools: Read, Bash, Glob, Grep
+metadata:
+  author: Hydra Framework
+  version: 1.0.0
 ---
 
 # Hydra Review
+
+## Examples
+- `/hydra-review` — Review the current IN_REVIEW task
+- `/hydra-review TASK-003` — Review a specific task by ID
 
 ## Current State
 - Config: !`cat hydra/config.json 2>/dev/null || echo "No config"`

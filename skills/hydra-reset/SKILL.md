@@ -3,9 +3,17 @@ name: hydra-reset
 description: Reset Hydra state to a clean slate. Archives current state and recreates from templates. Use when Hydra gets into a corrupted or confusing state.
 context: fork
 allowed-tools: Read, Write, Bash, Glob
+metadata:
+  author: Hydra Framework
+  version: 1.0.0
 ---
 
 # Hydra Reset
+
+## Examples
+- `/hydra-reset` — Archive current state and reset to clean slate (with confirmation)
+- `/hydra-reset --hard` — Reset immediately without confirmation prompt
+- `/hydra-reset --preserve-context` — Reset but keep the context/ directory intact
 
 ## Arguments
 $ARGUMENTS
