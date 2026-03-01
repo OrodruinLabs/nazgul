@@ -17,8 +17,8 @@ metadata:
 
 ## Current Project
 - Root: !`pwd`
-- File count: !`find . -type f -not -path './.git/*' -not -path './node_modules/*' -not -path './venv/*' -not -path './__pycache__/*' | wc -l`
-- Languages: !`find . -type f -not -path './.git/*' -not -path './node_modules/*' -not -path './venv/*' | sed 's/.*\.//' | sort | uniq -c | sort -rn | head -10`
+- File count: !`find . -type f -not -path './.git/*' -not -path './node_modules/*' -not -path './venv/*' -not -path './__pycache__/*' -not -path './hydra/*' -not -path './.claude/*' | wc -l`
+- Languages: !`find . -type f -not -path './.git/*' -not -path './node_modules/*' -not -path './venv/*' -not -path './hydra/*' -not -path './.claude/*' | sed 's/.*\.//' | sort | uniq -c | sort -rn | head -10`
 - Package files: !`ls -1 package.json requirements.txt Cargo.toml go.mod pyproject.toml Gemfile pom.xml build.gradle 2>/dev/null || echo "None found"`
 - Config files: !`ls -1 .eslintrc* .prettierrc* tsconfig.json .editorconfig Makefile Dockerfile docker-compose* .github/workflows/*.yml 2>/dev/null || echo "None found"`
 - Git status: !`git log --oneline -5 2>/dev/null || echo "Not a git repo"`

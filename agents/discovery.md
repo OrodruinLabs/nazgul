@@ -23,6 +23,27 @@ You are the Discovery Agent. Your job is to deeply understand this codebase and 
 
 ---
 
+## Excluded Directories
+
+**ALWAYS skip these directories when scanning.** They are Hydra's own runtime/output files and must never be treated as project source code:
+
+- `hydra/` — Hydra runtime directory (config, context, tasks, reviews, checkpoints, logs)
+- `.claude/` — Claude Code configuration and generated agents
+- `.git/` — Git internals
+- `node_modules/` — npm dependencies
+- `venv/`, `.venv/`, `env/` — Python virtual environments
+- `__pycache__/` — Python bytecode cache
+- `dist/`, `build/`, `.next/`, `.nuxt/` — Build output directories
+- `vendor/` — Vendored dependencies
+- `target/` — Rust/Java build output
+
+When using Glob, Grep, or Bash `find` commands, always exclude these paths. For example:
+```bash
+find . -type f -not -path './hydra/*' -not -path './.claude/*' -not -path './.git/*' -not -path './node_modules/*' ...
+```
+
+---
+
 ## Step 1: Project Profile (`hydra/context/project-profile.md`)
 
 Detect and document:
