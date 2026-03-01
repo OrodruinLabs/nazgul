@@ -88,10 +88,10 @@ Read `.claude/settings.json` (or start with `{}`), then merge ALL of the followi
    {
      "command": "node",
      "args": ["${PLUGIN_ROOT}/mcp-server/dist/index.js"],
-     "env": { "HYDRA_DB_PATH": "./hydra/notifications.db" }
+     "env": { "HYDRA_DB_PATH": "${PROJECT_ROOT}/hydra/notifications.db" }
    }
    ```
-   where `${PLUGIN_ROOT}` is the resolved absolute path (no env var references in the final JSON).
+   where `${PLUGIN_ROOT}` is the resolved absolute path of the plugin directory and `${PROJECT_ROOT}` is the resolved absolute path of the current working directory (no env var references in the final JSON).
 3. **`permissions.allow`**: if array doesn't contain `"mcp__hydra-notifications__*"`, add it
 
 Write the merged result back. If everything is already present, skip (no-op).

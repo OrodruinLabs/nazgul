@@ -28,7 +28,8 @@ context: fork
    d. If the build fails, tell the user: "MCP server build failed. Check the output above and fix any issues in `mcp-server/`." STOP.
    e. Read `.claude/settings.json` (or start with `{}`)
    f. If `mcpServers.hydra-notifications` is missing, add it:
-      - Add: `{"command": "node", "args": ["<plugin-root>/mcp-server/dist/index.js"], "env": {"HYDRA_DB_PATH": "./hydra/notifications.db"}}`
+      - Add: `{"command": "node", "args": ["<plugin-root>/mcp-server/dist/index.js"], "env": {"HYDRA_DB_PATH": "<project-root>/hydra/notifications.db"}}`
+        where `<project-root>` is the resolved absolute path of the current working directory (no env var references in the final JSON)
    g. If `permissions.allow` doesn't contain `"mcp__hydra-notifications__*"`, add it
    h. Write back the merged settings
    i. If changes were made, tell the user: "MCP server configured. Restart Claude Code to activate, then run `/hydra-notify` again." STOP.
