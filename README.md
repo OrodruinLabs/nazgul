@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.1.0-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.2.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-Plugin-7c3aed?style=flat-square" alt="Claude Code Plugin">
 </p>
@@ -68,18 +68,66 @@ alias claude='claude --plugin-dir /path/to/ai-hydra-framework'
 # 1. Initialize Hydra for your project
 /hydra-init
 
-# 2. Just start — Hydra figures out what to do
+# 2. (Optional) Build a project spec for greenfield projects
+/hydra-gen-spec
+
+# 3. Just start — Hydra figures out what to do
 /hydra-start
 
-# 2b. Or go full berserk (no permission prompts, no pauses)
+# 3b. Or go full berserk (no permission prompts, no pauses)
 claude --dangerously-skip-permissions
 /hydra-start --yolo --max 30
 
-# 3. Check progress
+# 4. Check progress
 /hydra-status
 ```
 
 Hydra auto-detects project state: if there's active work it resumes, if docs exist it plans, if the project is fresh it scans for TODOs/issues/failing tests and derives an objective. You can always override with `/hydra-start "specific objective"`.
+
+## External Board Sync
+
+Hydra can sync task progress to external project boards so your team has visibility without leaving their existing tools.
+
+```bash
+# Connect to GitHub Projects
+/hydra-board github
+
+# Take over an existing project (archives current items)
+/hydra-board github --clean
+
+# Check sync health
+/hydra-board status
+
+# Disconnect
+/hydra-board disconnect
+```
+
+**How it works:**
+
+- **One-way sync**: Hydra is always the source of truth. Local tasks push to GitHub — changes on GitHub are ignored.
+- **Automatic**: Discovery detects GitHub repos. `/hydra-start` prompts to connect. After that, the planner creates issues for new tasks and the stop hook syncs status changes — no manual intervention.
+- **Non-blocking**: Sync failures never stop local work. After 5 consecutive failures, sync auto-disables with a warning.
+- **Provider-pluggable**: GitHub Projects V2 is the first provider. Adding new providers (ADO, Trello) requires only a new `scripts/board-sync-{provider}.sh` — no changes to config schema or agents.
+
+Each Hydra task becomes a GitHub Issue with `hydra:*` labels and custom project fields (Hydra Status, Task ID, Group). Issues close automatically when tasks reach DONE.
+
+## Notification System
+
+Hydra writes structured events to `hydra/notifications.jsonl` that external tools can consume:
+
+```jsonl
+{"event":"task_complete","task":"TASK-003","timestamp":"...","summary":"User service done"}
+{"event":"blocked","task":"TASK-005","timestamp":"...","reason":"API key needed","requires_human":true}
+{"event":"loop_complete","timestamp":"...","summary":"6/6 tasks done, 18 commits"}
+```
+
+An optional MCP notification server (`mcp-server/`) provides:
+- **SQLite persistence** for event storage and querying
+- **Webhook receiver** with GitHub normalizer (HMAC-verified)
+- **Polling manager** with ETag-based change detection for PR comments
+- **Event router** with glob-pattern matching to route events to the right Hydra agents
+
+Process pending events with `/hydra-notify`.
 
 ## Commands
 
@@ -88,7 +136,7 @@ Hydra auto-detects project state: if there's active work it resumes, if docs exi
 | `/hydra-init` | First-time setup: discovery, reviewer generation, runtime dirs | User-only |
 | `/hydra-start` | Smart start/resume — auto-detects state, derives objective from project context | User-only |
 | `/hydra-start "objective"` | Override: start a specific new objective | User-only |
-| `/hydra-status` | Check loop progress, task counts, reviewer board | Read-only fork |
+| `/hydra-status` | Check loop progress, task counts, reviewer board, board sync health | Read-only fork |
 | `/hydra-task` | Task lifecycle: skip, unblock, add, prioritize, info, list | Fork |
 | `/hydra-pause` | Gracefully pause the loop at next iteration boundary | Fork |
 | `/hydra-log` | View run history — iterations, commits, reviews, blockers | Read-only fork |
@@ -98,6 +146,9 @@ Hydra auto-detects project state: if there's active work it resumes, if docs exi
 | `/hydra-context` | Collect targeted context for an objective type | Fork |
 | `/hydra-simplify` | Post-loop cleanup pass on modified files | Fork |
 | `/hydra-docs` | View or regenerate project documents | Fork |
+| `/hydra-board` | Connect task tracking to external boards (GitHub Projects, etc.) | Fork |
+| `/hydra-notify` | Process pending notification events — route to agents and execute actions | Fork |
+| `/hydra-gen-spec` | Interactive project spec builder — outputs `hydra/context/project-spec.md` | Fork |
 
 ### Flags for `/hydra-start`
 
@@ -197,10 +248,12 @@ No manual action required. You'll see a one-time notice: `"Hydra config migrated
 ## Safety
 
 - **Pre-tool guard** blocks: `rm -rf /`, `DROP TABLE`, `git push --force main`, fork bombs, `curl | sh`
+- **Review gate enforcement**: 3-layer defense-in-depth — stop hook validates, task-state guard prevents bypasses, review-gate agent enforces. Tasks cannot reach DONE without ALL reviewers approving.
 - **Security rejections** in AFK mode → BLOCKED (requires human review)
 - **Max retries per task**: 3 (configurable)
 - **Max consecutive failures**: 5 (auto-stops if no progress)
 - **Confidence threshold**: Findings below 80/100 are non-blocking concerns
+- **Board sync isolation**: Sync failures never block local work — auto-disables after 5 consecutive failures
 
 ## Troubleshooting
 
@@ -252,9 +305,10 @@ hydra/                          # Plugin root
 │   ├── release-manager.md      # Versioning + releases
 │   ├── observability.md        # Logging + metrics
 │   └── templates/              # Reviewer templates (10)
-├── skills/                     # Slash commands (12)
+├── skills/                     # Slash commands (15)
 ├── hooks/hooks.json            # Hook definitions
-├── scripts/                    # Hook scripts (4)
+├── scripts/                    # Hook + sync scripts (8)
+├── mcp-server/                 # MCP notification server (TypeScript)
 └── templates/                  # Objective + doc templates
 ```
 
