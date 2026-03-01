@@ -62,4 +62,20 @@ assert_eq "has .documents object" "$val" "object"
 val=$(jq -r '.discovery | type' "$CONFIG")
 assert_eq "has .discovery object" "$val" "object"
 
+# Nested: .board
+val=$(jq -r '.board | type' "$CONFIG")
+assert_eq "has .board object" "$val" "object"
+
+# Board fields
+assert_json_field "has .board.enabled" "$CONFIG" ".board.enabled" "false"
+val=$(jq -r '.board.provider' "$CONFIG")
+assert_eq "has .board.provider null" "$val" "null"
+val=$(jq -r '.board.provider_config | type' "$CONFIG")
+assert_eq "has .board.provider_config object" "$val" "object"
+val=$(jq -r '.board.task_map | type' "$CONFIG")
+assert_eq "has .board.task_map object" "$val" "object"
+val=$(jq -r '.board.last_sync' "$CONFIG")
+assert_eq "has .board.last_sync null" "$val" "null"
+assert_json_field "has .board.sync_failures" "$CONFIG" ".board.sync_failures" "0"
+
 report_results

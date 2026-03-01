@@ -132,5 +132,13 @@
       "security_rejection"
     ],
     "notify_file": "hydra/notifications.jsonl"
+  },
+  "board": {
+    "enabled": false,
+    "provider": null,
+    "provider_config": {},
+    "task_map": {},
+    "last_sync": null,
+    "sync_failures": 0
   }
 }
