@@ -9,6 +9,7 @@ HYDRA_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/hydra"
 CONFIG="$HYDRA_DIR/config.json"
 PLAN="$HYDRA_DIR/plan.md"
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # If Hydra not initialized, allow stop
 if [ ! -f "$CONFIG" ]; then
@@ -336,6 +337,21 @@ if [ -f "$PLAN" ]; then
   sed -i.bak "s|^\- \*\*Last Checkpoint:\*\* .*|- **Last Checkpoint:** hydra/checkpoints/iteration-$(printf '%03d' "$NEW_ITER").json|" "$PLAN" 2>/dev/null || true
   sed -i.bak "s|^\- \*\*Last Commit:\*\* .*|- **Last Commit:** ${GIT_SHA} ${GIT_MSG}|" "$PLAN" 2>/dev/null || true
   rm -f "${PLAN}.bak"
+fi
+
+# --- BOARD SYNC — push status changes to external board ---
+BOARD_ENABLED=$(jq -r '.board.enabled // false' "$CONFIG")
+if [ "$BOARD_ENABLED" = "true" ]; then
+  BOARD_PROVIDER=$(jq -r '.board.provider // ""' "$CONFIG")
+  BOARD_SCRIPT="$SCRIPT_DIR/board-sync-${BOARD_PROVIDER}.sh"
+  if [ -f "$BOARD_SCRIPT" ]; then
+    if [ -d "$HYDRA_DIR/tasks" ]; then
+      for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
+        [ -f "$task_file" ] || continue
+        bash "$BOARD_SCRIPT" sync-task "$task_file" 2>/dev/null || true
+      done
+    fi
+  fi
 fi
 
 # Checkpoint rotation — keep last 10
