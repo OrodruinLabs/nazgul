@@ -520,6 +520,35 @@ Create the directory `hydra/reviews/[TASK-ID]/` first if it doesn't exist (`mkdi
 
 ---
 
+## Step 6.5: GitHub Capability Detection
+
+Detect whether this project is hosted on GitHub and whether the `gh` CLI is available with the required `project` scope. This is passive detection — no user prompts, just store what is found.
+
+### Detection Steps
+
+1. **Check for `gh` CLI**: `command -v gh`
+2. **Check GitHub repo**: `gh repo view --json owner,name 2>/dev/null`
+3. **Check auth scopes**: `gh auth status 2>&1` — look for `project` in the scopes list
+4. **Check existing projects**: `gh project list --format json 2>/dev/null` — count projects
+
+### Output
+
+Append to `hydra/context/project-profile.md`:
+
+```markdown
+## GitHub Integration
+- **GitHub repo**: [owner/repo or "Not detected"]
+- **gh CLI**: [installed or "Not installed"]
+- **project scope**: [present or "Not present — run: gh auth refresh -s project"]
+- **Existing projects**: [count] projects found
+```
+
+### Update config.json
+
+No config changes — this is informational only. The `/hydra-start` skill reads this from context to decide whether to prompt for board sync.
+
+---
+
 ## Step 7: Write Discovery Summary
 
 Write a brief summary to `hydra/context/discovery-summary.md`:
