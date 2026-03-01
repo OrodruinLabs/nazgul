@@ -19,6 +19,8 @@ context: fork
 
 ## Pre-flight
 
+**If `--setup` was passed:** skip steps 1–2 and go directly to step 3.
+
 1. Check if `hydra/config.json` exists. If not: "Hydra not initialized. Run `/hydra-init` first." STOP.
 2. Check if notifications are enabled in config (`notifications.enabled`). If not: "Notifications are disabled. Enable in hydra/config.json." STOP.
 3. Ensure the MCP server is built and configured:
