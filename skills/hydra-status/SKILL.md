@@ -28,6 +28,11 @@ metadata:
 - Git branch: !`git branch --show-current 2>/dev/null`
 - Last commit: !`git log --oneline -1 2>/dev/null`
 - Latest checkpoint: !`ls -1t hydra/checkpoints/iteration-*.json 2>/dev/null | head -1 || echo "No checkpoints"`
+- Board enabled: !`jq -r '.board.enabled // false' hydra/config.json 2>/dev/null || echo "false"`
+- Board provider: !`jq -r '.board.provider // "none"' hydra/config.json 2>/dev/null || echo "none"`
+- Board last sync: !`jq -r '.board.last_sync // "never"' hydra/config.json 2>/dev/null || echo "never"`
+- Board failures: !`jq -r '.board.sync_failures // 0' hydra/config.json 2>/dev/null || echo "0"`
+- Board tasks mapped: !`jq -r '.board.task_map | length' hydra/config.json 2>/dev/null || echo "0"`
 
 ## Instructions
 
@@ -75,6 +80,14 @@ Git
 ─────────────────────────────────────
 Branch: [branch]
 Last:   [commit]
+
+Board Sync
+─────────────────────────────────────
+Enabled:      [yes/no]
+Provider:     [github/none]
+Last sync:    [timestamp]
+Tasks mapped: [N]
+Failures:     [N]
 ```
 
 1. Parse the config JSON for mode, iteration count, max iterations
