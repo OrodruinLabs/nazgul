@@ -466,7 +466,7 @@ hooks:
   SubagentStop:
     - hooks:
         - type: prompt
-          prompt: "A reviewer subagent is trying to stop. Check if it has written its review file to hydra/reviews/. If the review file exists and contains a Final Verdict (APPROVED or CHANGES_REQUESTED), approve the stop. If no review file was written, block and instruct the reviewer to write its findings. $ARGUMENTS"
+          prompt: "A reviewer subagent is trying to stop. Check if it has written its review file to hydra/reviews/[TASK-ID]/[reviewer-name].md (inside a per-task subdirectory, NOT flat in hydra/reviews/). The file must contain a Final Verdict (APPROVED or CHANGES_REQUESTED). If no review file was written in the correct location, block and instruct the reviewer to create the hydra/reviews/[TASK-ID]/ directory and write its review there. $ARGUMENTS"
 ---
 
 # [Reviewer Name] — [Project Name]
@@ -512,6 +512,10 @@ For each finding, use confidence-scored format:
 IMPORTANT: You are reviewing for THIS specific project. Reference actual files, actual patterns,
 actual conventions. Do not give generic advice. If you cite a standard, show where it's already
 followed in this codebase as the reference implementation.
+
+Write your review to `hydra/reviews/[TASK-ID]/[your-reviewer-name].md`.
+Create the directory `hydra/reviews/[TASK-ID]/` first if it doesn't exist (`mkdir -p`).
+[TASK-ID] is the task you are reviewing (e.g., TASK-001).
 ```
 
 ---
