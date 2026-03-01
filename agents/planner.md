@@ -85,6 +85,17 @@ Write the plan to `hydra/plan.md` with:
 
 Write individual task manifests to `hydra/tasks/TASK-NNN.md` using the task manifest template.
 
+After writing each task manifest, if board sync is enabled, create the corresponding GitHub Issue:
+
+```bash
+if [ "$(jq -r '.board.enabled // false' hydra/config.json)" = "true" ]; then
+  PROVIDER=$(jq -r '.board.provider' hydra/config.json)
+  bash "scripts/board-sync-${PROVIDER}.sh" create-issue "hydra/tasks/TASK-NNN.md"
+fi
+```
+
+This creates the GitHub Issue with status PLANNED and adds it to the project board. Sync failures are non-blocking — they log a warning but do not interrupt planning.
+
 Each task manifest includes:
 - `delegates_to` field (if specialist agents needed: designer, frontend-dev, etc.)
 - `traces_to` field (PRD criteria, TRD component, ADR reference)
