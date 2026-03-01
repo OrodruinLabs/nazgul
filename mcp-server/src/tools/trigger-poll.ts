@@ -1,5 +1,6 @@
 import { PollManager } from '../polling/poll-manager.js';
 import { getGitHubRepo } from '../utils/git-remote.js';
+import { getGitHubToken } from '../utils/gh-token.js';
 
 export interface TriggerPollInput {
   resource?: string;
@@ -15,7 +16,7 @@ export async function handleTriggerPoll(
     return { error: 'Not a GitHub repository' };
   }
 
-  const token = process.env.GITHUB_TOKEN;
+  const token = getGitHubToken();
   const resource = input.resource ?? 'all';
   const polled: string[] = [];
 

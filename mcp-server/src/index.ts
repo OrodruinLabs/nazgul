@@ -15,6 +15,7 @@ import {
 import { PollManager } from './polling/poll-manager.js';
 import { PollScheduler } from './polling/scheduler.js';
 import { getGitHubRepo } from './utils/git-remote.js';
+import { getGitHubToken } from './utils/gh-token.js';
 
 const DB_PATH = process.env.HYDRA_NOTIFICATIONS_DB ?? './hydra-notifications.db';
 const db = createDb(DB_PATH);
@@ -132,7 +133,11 @@ if (pollInterval) {
   if (!isNaN(seconds) && seconds > 0) {
     const repo = getGitHubRepo();
     if (repo) {
-      const scheduler = new PollScheduler(db, repo, process.env.GITHUB_TOKEN);
+      const token = getGitHubToken();
+      if (!token) {
+        console.error('[hydra-poll] No GitHub token found (set GITHUB_TOKEN or run `gh auth login`) — skipping');
+      }
+      const scheduler = new PollScheduler(db, repo, token);
       scheduler.start(seconds);
       console.error(`[hydra-poll] Polling ${repo} every ${seconds}s`);
 
