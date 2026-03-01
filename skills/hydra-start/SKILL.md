@@ -149,10 +149,22 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 3. Classify Project: In HITL mode, confirm classification with user.
 4. Generate Documents: Delegate to Doc Generator. In HITL mode, pause for doc review.
 5. Collect Context: Based on objective type, collect targeted context.
-6. Delegate to Planner: Planner reads context + docs, decomposes into tasks.
-7. Review Plan (HITL): Show plan for approval. AFK: continue.
-8. Delegate to Implementer: Start working on the first READY task.
-9. Stop hook takes over.
+5.5. **Board Sync Prompt** (HITL mode only):
+   - Check `hydra/context/project-profile.md` for "## GitHub Integration" section
+   - If GitHub repo detected AND board not already enabled (`jq -r '.board.enabled' hydra/config.json` is `false`):
+     - Ask user: "GitHub repo detected ([owner]/[repo]). Track tasks on GitHub Projects?"
+     - Options:
+       a. Yes, create a new project
+       b. Yes, use an existing project (list them)
+       c. Skip for now (can run `/hydra-board github` later)
+     - If (a): run `gh project create --owner [owner] --title "Hydra: [repo]"`, then `bash scripts/board-sync-github.sh setup [number]`
+     - If (b): let user pick, then `bash scripts/board-sync-github.sh setup [number]`
+     - If (c): continue without board sync
+   - In AFK mode: skip board prompt (user must run `/hydra-board` explicitly)
+7. Delegate to Planner: Planner reads context + docs, decomposes into tasks.
+8. Review Plan (HITL): Show plan for approval. AFK: continue.
+9. Delegate to Implementer: Start working on the first READY task.
+10. Stop hook takes over.
 
 ---
 
