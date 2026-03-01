@@ -36,6 +36,11 @@ export class PollManager {
       return { changed: false };
     }
 
+    if (response.status >= 400) {
+      console.error(`[hydra-poll] HTTP ${response.status} for ${url}`);
+      return { changed: false };
+    }
+
     const etag = response.headers.get('etag');
     const data = await response.json();
     this.saveState(resourceKey, etag, JSON.stringify(data));

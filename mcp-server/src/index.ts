@@ -12,11 +12,13 @@ import {
   handleGetEventHistory,
   handleTriggerPoll,
 } from './tools/index.js';
+import { PollManager } from './polling/poll-manager.js';
 import { PollScheduler } from './polling/scheduler.js';
 import { getGitHubRepo } from './utils/git-remote.js';
 
 const DB_PATH = process.env.HYDRA_NOTIFICATIONS_DB ?? './hydra-notifications.db';
 const db = createDb(DB_PATH);
+const poller = new PollManager(db);
 
 const server = new McpServer({
   name: 'hydra-notifications',
@@ -103,7 +105,7 @@ server.registerTool('trigger_poll', {
     pr_number: z.number().optional(),
   }),
 }, async (input) => ({
-  content: [{ type: 'text', text: JSON.stringify(await handleTriggerPoll(db, input)) }],
+  content: [{ type: 'text', text: JSON.stringify(await handleTriggerPoll(poller, input)) }],
 }));
 
 const transport = new StdioServerTransport();

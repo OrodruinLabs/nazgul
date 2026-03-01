@@ -8,6 +8,7 @@ import { handleGetEvent } from './get-event.js';
 import { handleGetEventHistory } from './get-event-history.js';
 import { handleTriggerPoll } from './trigger-poll.js';
 import { getGitHubRepo } from '../utils/git-remote.js';
+import { PollManager } from '../polling/poll-manager.js';
 import { insertEvent } from '../db.js';
 
 vi.mock('../utils/git-remote.js', () => ({
@@ -138,7 +139,7 @@ describe('MCP tool handlers', () => {
 
     it('returns error when not in GitHub repo', async () => {
       vi.mocked(getGitHubRepo).mockReturnValue(null);
-      const result = await handleTriggerPoll(db, {});
+      const result = await handleTriggerPoll(new PollManager(db), {});
       expect(result).toEqual({ error: 'Not a GitHub repository' });
     });
 
@@ -150,7 +151,7 @@ describe('MCP tool handlers', () => {
         json: async () => ({}),
       }) as unknown as typeof globalThis.fetch;
 
-      const result = await handleTriggerPoll(db, { resource: 'workflows' });
+      const result = await handleTriggerPoll(new PollManager(db), { resource: 'workflows' });
       expect(result).toHaveProperty('polled');
       expect(result).toHaveProperty('repo', 'owner/repo');
       expect((result as { polled: string[] }).polled).toContain('workflows');
@@ -164,7 +165,7 @@ describe('MCP tool handlers', () => {
         json: async () => ({}),
       }) as unknown as typeof globalThis.fetch;
 
-      const result = await handleTriggerPoll(db, { resource: 'comments', pr_number: 42 });
+      const result = await handleTriggerPoll(new PollManager(db), { resource: 'comments', pr_number: 42 });
       expect(result).toHaveProperty('polled');
       expect((result as { polled: string[] }).polled).toContain('comments');
     });
@@ -177,7 +178,7 @@ describe('MCP tool handlers', () => {
         json: async () => ({}),
       }) as unknown as typeof globalThis.fetch;
 
-      const result = await handleTriggerPoll(db, { resource: 'comments' });
+      const result = await handleTriggerPoll(new PollManager(db), { resource: 'comments' });
       expect(result).toHaveProperty('polled');
       expect((result as { polled: string[] }).polled).not.toContain('comments');
     });
@@ -190,7 +191,7 @@ describe('MCP tool handlers', () => {
         json: async () => ({}),
       }) as unknown as typeof globalThis.fetch;
 
-      const result = await handleTriggerPoll(db, { resource: 'all', pr_number: 7 });
+      const result = await handleTriggerPoll(new PollManager(db), { resource: 'all', pr_number: 7 });
       expect(result).toHaveProperty('polled');
       const polled = (result as { polled: string[] }).polled;
       expect(polled).toContain('workflows');

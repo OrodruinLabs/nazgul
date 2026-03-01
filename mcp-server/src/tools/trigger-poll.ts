@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { PollManager } from '../polling/poll-manager.js';
 import { getGitHubRepo } from '../utils/git-remote.js';
 
@@ -8,7 +7,7 @@ export interface TriggerPollInput {
 }
 
 export async function handleTriggerPoll(
-  db: Database.Database,
+  poller: PollManager,
   input: TriggerPollInput
 ): Promise<{ polled: string[]; repo: string } | { error: string }> {
   const repo = getGitHubRepo();
@@ -18,7 +17,6 @@ export async function handleTriggerPoll(
 
   const token = process.env.GITHUB_TOKEN;
   const resource = input.resource ?? 'all';
-  const poller = new PollManager(db);
   const polled: string[] = [];
 
   if (resource === 'workflows' || resource === 'all') {
