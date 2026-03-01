@@ -58,8 +58,8 @@ server.registerTool('emit_event', {
   title: 'Emit Event',
   description: 'Create a new event for agent-to-agent chaining',
   inputSchema: z.object({
-    source: z.string(),
-    event_type: z.string(),
+    source: z.string().min(1),
+    event_type: z.string().min(1),
     priority: z.enum(['critical', 'high', 'normal', 'low']).optional(),
     payload: z.string(),
     metadata: z.string().optional(),

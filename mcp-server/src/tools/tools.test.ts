@@ -76,6 +76,12 @@ describe('MCP tool handlers', () => {
       expect(updated!.status).toBe('done');
       expect(updated!.completed_at).not.toBeNull();
     });
+
+    it('fails if event is not in processing status', () => {
+      seedEvent(db, { id: 'comp-pending', status: 'pending' });
+      const result = handleCompleteEvent(db, { event_id: 'comp-pending', status: 'done' });
+      expect(result.success).toBe(false);
+    });
   });
 
   describe('emit_event', () => {

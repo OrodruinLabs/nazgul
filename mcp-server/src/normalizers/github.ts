@@ -44,7 +44,7 @@ export function normalizeGitHub(req: Request): PartialHydraEvent | null {
   const repo = body.repository?.full_name ?? 'unknown';
 
   return {
-    id: body.delivery ?? randomUUID(),
+    id: (req.headers['x-github-delivery'] as string) ?? randomUUID(),
     source: 'github',
     event_type: eventType,
     priority: eventType.includes('failed') || eventType.includes('unresolved') ? 'high' : 'normal',

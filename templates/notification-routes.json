@@ -10,6 +10,11 @@
       "priority_override": "high"
     },
     {
+      "match": { "source": "github", "event_type": "pr.comment.*" },
+      "agents": ["review-gate"],
+      "priority_override": "normal"
+    },
+    {
       "match": { "source": "github", "event_type": "pr.comments.unresolved_summary" },
       "agents": ["review-gate", "implementer"],
       "priority_override": "high"

@@ -14,7 +14,11 @@ interface ServerOptions {
 
 export function createApp(db: Database.Database, options: ServerOptions = {}) {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({
+    verify: (_req, _res, buf) => {
+      (_req as any).rawBody = buf;
+    }
+  }));
 
   app.get('/health', (_req: Request, res: Response) => {
     res.json({ status: 'ok', timestamp: Date.now() });
