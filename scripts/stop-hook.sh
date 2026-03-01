@@ -348,7 +348,17 @@ if [ "$BOARD_ENABLED" = "true" ]; then
     if [ -d "$HYDRA_DIR/tasks" ]; then
       for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
         [ -f "$task_file" ] || continue
+        # Only sync tasks whose status changed since last sync
+        task_id=$(grep -m1 '^\- \*\*ID\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "")
+        current_status=$(grep -m1 '^\- \*\*Status\*\*:' "$task_file" 2>/dev/null | sed 's/.*:[[:space:]]*//' || echo "")
+        cached_status=$(jq -r --arg tid "$task_id" '.board._last_synced_status[$tid] // ""' "$CONFIG" 2>/dev/null || echo "")
+        if [ -z "$task_id" ] || [ "$current_status" = "$cached_status" ]; then
+          continue
+        fi
         bash "$BOARD_SCRIPT" sync-task "$task_file" 2>/dev/null || true
+        # Cache the synced status to avoid re-syncing unchanged tasks
+        jq --arg tid "$task_id" --arg st "$current_status" \
+          '.board._last_synced_status[$tid] = $st' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
       done
     fi
   fi

@@ -47,7 +47,21 @@ get_repo_info() {
 update_config() {
   local jq_filter="$1"
   shift
-  jq "$jq_filter" "$@" "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
+  jq "$jq_filter" "$@" "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+}
+
+gh_with_retry() {
+  local attempts=3 delay=1
+  for i in $(seq 1 "$attempts"); do
+    if "$@" 2>/dev/null; then
+      return 0
+    fi
+    if [ "$i" -lt "$attempts" ]; then
+      sleep "$delay"
+      delay=$((delay * 2))
+    fi
+  done
+  return 1
 }
 
 increment_sync_failures() {
@@ -62,7 +76,7 @@ increment_sync_failures() {
 }
 
 reset_sync_failures() {
-  jq '.board.sync_failures = 0 | .board.last_sync = (now | strftime("%Y-%m-%dT%H:%M:%SZ"))' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
+  jq '.board.sync_failures = 0 | .board.last_sync = (now | strftime("%Y-%m-%dT%H:%M:%SZ"))' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
 }
 
 # --- Commands ---
@@ -216,7 +230,14 @@ cmd_create_issue() {
   owner=$(jq -r '.board.provider_config.owner' "$CONFIG")
   repo=$(jq -r '.board.provider_config.repo' "$CONFIG")
   task_id=$(grep -m1 '^\- \*\*ID\*\*:' "$task_file" | sed 's/.*: //')
-  title=$(head -1 "$task_file" | sed 's/^# //')
+  local raw_title
+  raw_title=$(head -1 "$task_file" | sed 's/^# //')
+  # Ensure title follows spec format: TASK-001: [Title]
+  if echo "$raw_title" | grep -q "^${task_id}"; then
+    title="$raw_title"
+  else
+    title="${task_id}: ${raw_title}"
+  fi
   status=$(grep -m1 '^\- \*\*Status\*\*:' "$task_file" | sed 's/.*:[[:space:]]*//')
   group=$(grep -m1 '^\- \*\*Group\*\*:' "$task_file" | sed 's/.*: //' || echo "0")
 
@@ -239,12 +260,12 @@ cmd_create_issue() {
   status_label=$(echo "$status" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
 
   local issue_url issue_number
-  issue_url=$(gh issue create \
+  issue_url=$(gh_with_retry gh issue create \
     --repo "$owner/$repo" \
     --title "$title" \
     --body "$issue_body" \
-    --label "hydra,hydra:${status_label}" 2>/dev/null) || {
-    log_warn "Failed to create issue for $task_id"
+    --label "hydra,hydra:${status_label}") || {
+    log_warn "Failed to create issue for $task_id (after 3 retries)"
     increment_sync_failures
     return 1
   }
@@ -256,11 +277,11 @@ cmd_create_issue() {
   local project_number item_id
   project_number=$(jq -r '.board.provider_config.project_number' "$CONFIG")
 
-  item_id=$(gh project item-add "$project_number" \
+  item_id=$(gh_with_retry gh project item-add "$project_number" \
     --owner "$owner" \
     --url "$issue_url" \
-    --format json --jq '.id' 2>/dev/null) || {
-    log_warn "Failed to add issue #$issue_number to project"
+    --format json --jq '.id') || {
+    log_warn "Failed to add issue #$issue_number to project (after 3 retries)"
     increment_sync_failures
     return 1
   }
@@ -351,6 +372,13 @@ cmd_sync_task() {
       --project-id "$project_id" \
       --field-id "$hydra_status_field_id" \
       --single-select-option-id "$status_option_id" 2>/dev/null || {
+      # Check if issue was deleted externally — recreate if so
+      if ! gh issue view "$issue_number" --repo "$owner/$repo" --json number >/dev/null 2>&1; then
+        log_warn "$task_id issue #$issue_number deleted externally — recreating"
+        update_config --arg tid "$task_id" 'del(.board.task_map[$tid])'
+        cmd_create_issue "$task_file"
+        return $?
+      fi
       log_warn "Failed to update Hydra Status for $task_id"
       increment_sync_failures
       return 1
@@ -457,7 +485,7 @@ cmd_disconnect() {
     .board.task_map = {} |
     .board.last_sync = null |
     .board.sync_failures = 0
-  ' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
+  ' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
 
   log_info "Board sync disconnected"
 }
