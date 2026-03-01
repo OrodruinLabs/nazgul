@@ -10,7 +10,10 @@ import {
   handleEmitEvent,
   handleGetEvent,
   handleGetEventHistory,
+  handleTriggerPoll,
 } from './tools/index.js';
+import { PollScheduler } from './polling/scheduler.js';
+import { getGitHubRepo } from './utils/git-remote.js';
 
 const DB_PATH = process.env.HYDRA_NOTIFICATIONS_DB ?? './hydra-notifications.db';
 const db = createDb(DB_PATH);
@@ -92,6 +95,17 @@ server.registerTool('get_event_history', {
   content: [{ type: 'text', text: JSON.stringify(handleGetEventHistory(db, input)) }],
 }));
 
+server.registerTool('trigger_poll', {
+  title: 'Trigger Poll',
+  description: 'Manually trigger polling of GitHub APIs for new events',
+  inputSchema: z.object({
+    resource: z.enum(['comments', 'workflows', 'all']).optional(),
+    pr_number: z.number().optional(),
+  }),
+}, async (input) => ({
+  content: [{ type: 'text', text: JSON.stringify(await handleTriggerPoll(db, input)) }],
+}));
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
 
@@ -107,4 +121,25 @@ if (webhookPort) {
       `Hydra webhook server listening on http://127.0.0.1:${webhookPort}`
     );
   });
+}
+
+// Start scheduled polling if HYDRA_POLL_INTERVAL is set
+const pollInterval = process.env.HYDRA_POLL_INTERVAL;
+if (pollInterval) {
+  const seconds = parseInt(pollInterval, 10);
+  if (!isNaN(seconds) && seconds > 0) {
+    const repo = getGitHubRepo();
+    if (repo) {
+      const scheduler = new PollScheduler(db, repo, process.env.GITHUB_TOKEN);
+      scheduler.start(seconds);
+      console.error(`[hydra-poll] Polling ${repo} every ${seconds}s`);
+
+      // Cleanup on exit
+      const cleanup = () => scheduler.stop();
+      process.on('SIGINT', cleanup);
+      process.on('SIGTERM', cleanup);
+    } else {
+      console.error('[hydra-poll] HYDRA_POLL_INTERVAL set but not in a GitHub repo — skipping');
+    }
+  }
 }

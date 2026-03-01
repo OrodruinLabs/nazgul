@@ -42,6 +42,73 @@ export class PollManager {
     return { changed: true, data };
   }
 
+  async pollGitHubWorkflowRuns(
+    repo: string,
+    token?: string
+  ): Promise<void> {
+    const resourceKey = `github:${repo}:workflow_runs`;
+    const url = `https://api.github.com/repos/${repo}/actions/runs?status=completed&per_page=10`;
+    const headers: Record<string, string> = {
+      Accept: 'application/vnd.github.v3+json',
+    };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    // Read previous state BEFORE poll() overwrites it
+    const previousState = this.getState(resourceKey);
+    const previousRunIds = new Set<number>();
+    if (previousState?.last_data) {
+      const prev = JSON.parse(previousState.last_data);
+      for (const run of prev.workflow_runs ?? []) {
+        previousRunIds.add(run.id);
+      }
+    }
+
+    const result = await this.poll(resourceKey, url, headers);
+    if (!result.changed || !result.data) return;
+
+    const response = result.data as {
+      workflow_runs: Array<{
+        id: number;
+        name: string;
+        html_url: string;
+        head_branch: string;
+        head_sha: string;
+        conclusion: string;
+      }>;
+    };
+
+    for (const run of response.workflow_runs ?? []) {
+      if (previousRunIds.has(run.id)) continue;
+      if (run.conclusion !== 'failure' && run.conclusion !== 'success') continue;
+
+      const event: HydraEvent = {
+        id: randomUUID(),
+        source: 'github',
+        event_type:
+          run.conclusion === 'failure' ? 'build.failed' : 'build.succeeded',
+        priority: run.conclusion === 'failure' ? 'high' : 'normal',
+        status: 'pending',
+        project_id: null,
+        payload: JSON.stringify({
+          repo,
+          run_id: run.id,
+          name: run.name,
+          html_url: run.html_url,
+          head_branch: run.head_branch,
+          head_sha: run.head_sha,
+          conclusion: run.conclusion,
+        }),
+        metadata: null,
+        created_at: Date.now(),
+        processed_at: null,
+        completed_at: null,
+        retry_count: 0,
+      };
+
+      insertEvent(this.db, event);
+    }
+  }
+
   async pollGitHubUnresolvedComments(
     repo: string,
     prNumber: number,
