@@ -118,3 +118,12 @@ $([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "WARNING: Read hydra/review
 
 Read hydra/plan.md for full state. Continue the Hydra pipeline.
 CONTEXT_EOF2
+
+# Check for pending notification events (zero-cost: reads SQLite directly)
+NOTIFY_DB="$HYDRA_DIR/notifications.db"
+if [ -f "$NOTIFY_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
+  PENDING=$(sqlite3 "$NOTIFY_DB" "SELECT COUNT(*) FROM events WHERE status='pending';" 2>/dev/null || echo "0")
+  if [ "$PENDING" -gt 0 ]; then
+    echo "NOTIFICATION_EVENTS: $PENDING pending event(s). Run /hydra-notify to process them."
+  fi
+fi

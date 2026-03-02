@@ -141,8 +141,22 @@ describe('PollScheduler', () => {
       ok: true,
       json: async () => [{ number: 42 }],
     });
-    // Third call: PR comments poll (304 no change)
-    mockFetch.mockResolvedValueOnce({ status: 304, headers: new Map() });
+    // Third call: PR comments GraphQL poll (empty unresolved threads)
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      json: async () => ({
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [],
+              },
+            },
+          },
+        },
+      }),
+    });
 
     const scheduler = new PollScheduler(db, 'owner/repo', 'token123');
     scheduler.start(60);

@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import { insertEvent, type HydraEvent } from '../db.js';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 
 type FetchFn = typeof globalThis.fetch;
 
@@ -119,26 +119,82 @@ export class PollManager {
     prNumber: number,
     token?: string
   ): Promise<void> {
+    if (!token) return; // GraphQL requires authentication
+
     const resourceKey = `github:${repo}:pr:${prNumber}:comments`;
-    const url = `https://api.github.com/repos/${repo}/pulls/${prNumber}/comments`;
-    const headers: Record<string, string> = {
-      Accept: 'application/vnd.github.v3+json',
-    };
-    if (token) headers.Authorization = `Bearer ${token}`;
+    const [owner, name] = repo.split('/');
 
-    const result = await this.poll(resourceKey, url, headers);
-    if (!result.changed || !result.data) return;
+    const query = `
+      query($owner: String!, $name: String!, $pr: Int!, $cursor: String) {
+        repository(owner: $owner, name: $name) {
+          pullRequest(number: $pr) {
+            reviewThreads(first: 100, after: $cursor) {
+              pageInfo { hasNextPage endCursor }
+              nodes {
+                id
+                isResolved
+                comments(first: 100) {
+                  nodes {
+                    id
+                    body
+                    author { login }
+                    path
+                    line
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
 
-    const comments = result.data as Array<{
-      id: number;
+    // Paginate through all review threads
+    interface ThreadComment {
+      id: string;
       body: string;
-      user: { login: string };
+      author: { login: string } | null;
       path: string;
       line: number | null;
-      created_at: string;
-    }>;
+    }
+    interface ReviewThread {
+      id: string;
+      isResolved: boolean;
+      comments: { nodes: ThreadComment[] };
+    }
 
-    if (comments.length === 0) return;
+    const allThreads: ReviewThread[] = [];
+    let cursor: string | null = null;
+
+    do {
+      const result = await this.graphql(token, query, {
+        owner,
+        name,
+        pr: prNumber,
+        cursor,
+      });
+      if (!result) return;
+
+      const connection =
+        result.data?.repository?.pullRequest?.reviewThreads;
+      if (!connection) return;
+
+      allThreads.push(...(connection.nodes as ReviewThread[]));
+      cursor = connection.pageInfo.hasNextPage
+        ? connection.pageInfo.endCursor
+        : null;
+    } while (cursor);
+
+    // Filter to unresolved threads and flatten comments with thread IDs
+    const unresolvedThreads = allThreads.filter((t) => !t.isResolved);
+    const unresolvedComments = unresolvedThreads.flatMap((t) =>
+      t.comments.nodes.map((c) => ({ ...c, threadId: t.id }))
+    );
+
+    if (unresolvedComments.length === 0) return;
+
+    // Content-hash dedup instead of ETag
+    if (!this.hasContentChanged(resourceKey, unresolvedComments)) return;
 
     const event: HydraEvent = {
       id: randomUUID(),
@@ -150,15 +206,19 @@ export class PollManager {
       payload: JSON.stringify({
         repo,
         pr_number: prNumber,
-        comments: comments.map((c) => ({
+        comments: unresolvedComments.map((c) => ({
           id: c.id,
+          thread_id: c.threadId,
           body: c.body,
-          author: c.user.login,
+          author: c.author?.login ?? 'unknown',
           file_path: c.path,
           line: c.line,
         })),
       }),
-      metadata: JSON.stringify({ total_comments: comments.length }),
+      metadata: JSON.stringify({
+        total_comments: unresolvedComments.length,
+        thread_ids: [...new Set(unresolvedComments.map((c) => c.threadId))],
+      }),
       created_at: Date.now(),
       processed_at: null,
       completed_at: null,
@@ -194,5 +254,56 @@ export class PollManager {
         'UPDATE poll_state SET last_polled = ?, poll_count = poll_count + 1 WHERE resource_key = ?'
       )
       .run(Date.now(), key);
+  }
+
+  private async graphql(
+    token: string,
+    query: string,
+    variables: Record<string, unknown>
+  ): Promise<{ data?: Record<string, any> } | null> {
+    try {
+      const response = await this.fetchFn(
+        'https://api.github.com/graphql',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ query, variables }),
+        }
+      );
+
+      if (response.status >= 400) {
+        console.error(
+          `[hydra-poll] GraphQL HTTP ${response.status}`
+        );
+        return null;
+      }
+
+      return (await response.json()) as {
+        data?: Record<string, any>;
+      };
+    } catch (err) {
+      console.error('[hydra-poll] GraphQL request failed:', err);
+      return null;
+    }
+  }
+
+  private hasContentChanged(
+    key: string,
+    data: unknown
+  ): boolean {
+    const serialized = JSON.stringify(data);
+    const hash = createHash('sha256').update(serialized).digest('hex');
+    const state = this.getState(key);
+
+    if (state?.etag === hash) {
+      this.updatePollTime(key);
+      return false;
+    }
+
+    this.saveState(key, hash, serialized);
+    return true;
   }
 }

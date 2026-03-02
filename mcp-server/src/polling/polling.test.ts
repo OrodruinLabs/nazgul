@@ -236,21 +236,138 @@ describe('PollManager', () => {
     expect(eventsAfterSecond).toHaveLength(1); // unchanged
   });
 
-  it('emits summary event for unresolved comments', async () => {
-    const comments = [
-      { id: 1, body: 'Fix this', user: { login: 'reviewer' }, path: 'src/app.ts', line: 10, created_at: '2026-01-01T00:00:00Z' },
-    ];
+  it('emits summary event for unresolved comments via GraphQL', async () => {
+    const graphqlResponse = {
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                {
+                  id: 'T_1',
+                  isResolved: false,
+                  comments: {
+                    nodes: [
+                      { id: 'C_1', body: 'Fix this', author: { login: 'reviewer' }, path: 'src/app.ts', line: 10 },
+                    ],
+                  },
+                },
+                {
+                  id: 'T_2',
+                  isResolved: true,
+                  comments: {
+                    nodes: [
+                      { id: 'C_2', body: 'Looks good', author: { login: 'reviewer' }, path: 'src/app.ts', line: 20 },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+
     const fetchMock = vi.fn().mockResolvedValueOnce({
       status: 200,
-      headers: { get: (h: string) => h === 'etag' ? '"first"' : null },
-      json: async () => comments,
+      json: async () => graphqlResponse,
     });
+
+    const manager = new PollManager(db, fetchMock as any);
+    await manager.pollGitHubUnresolvedComments('owner/repo', 1, 'token123');
+
+    const events = getEventsByStatus(db, 'pending');
+    expect(events).toHaveLength(1);
+    expect(events[0].event_type).toBe('pr.comments.unresolved_summary');
+
+    const payload = JSON.parse(events[0].payload);
+    expect(payload.comments).toHaveLength(1);
+    expect(payload.comments[0].id).toBe('C_1');
+    expect(payload.comments[0].thread_id).toBe('T_1');
+    expect(payload.comments[0].body).toBe('Fix this');
+  });
+
+  it('filters out resolved threads from unresolved comments', async () => {
+    const graphqlResponse = {
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                {
+                  id: 'T_resolved',
+                  isResolved: true,
+                  comments: {
+                    nodes: [
+                      { id: 'C_resolved', body: 'Done', author: { login: 'dev' }, path: 'a.ts', line: 1 },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      status: 200,
+      json: async () => graphqlResponse,
+    });
+
+    const manager = new PollManager(db, fetchMock as any);
+    await manager.pollGitHubUnresolvedComments('owner/repo', 1, 'token123');
+
+    const events = getEventsByStatus(db, 'pending');
+    expect(events).toHaveLength(0);
+  });
+
+  it('returns early with no event when token is missing', async () => {
+    const fetchMock = vi.fn();
 
     const manager = new PollManager(db, fetchMock as any);
     await manager.pollGitHubUnresolvedComments('owner/repo', 1);
 
+    expect(fetchMock).not.toHaveBeenCalled();
     const events = getEventsByStatus(db, 'pending');
-    expect(events.length).toBeGreaterThanOrEqual(1);
-    expect(events[0].event_type).toBe('pr.comments.unresolved_summary');
+    expect(events).toHaveLength(0);
+  });
+
+  it('deduplicates via content hash — same data twice emits only 1 event', async () => {
+    const graphqlResponse = {
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                {
+                  id: 'T_dup',
+                  isResolved: false,
+                  comments: {
+                    nodes: [
+                      { id: 'C_dup', body: 'Please fix', author: { login: 'reviewer' }, path: 'b.ts', line: 5 },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ status: 200, json: async () => graphqlResponse })
+      .mockResolvedValueOnce({ status: 200, json: async () => graphqlResponse });
+
+    const manager = new PollManager(db, fetchMock as any);
+    await manager.pollGitHubUnresolvedComments('owner/repo', 1, 'token123');
+    await manager.pollGitHubUnresolvedComments('owner/repo', 1, 'token123');
+
+    const events = getEventsByStatus(db, 'pending');
+    expect(events).toHaveLength(1);
   });
 });
