@@ -127,3 +127,9 @@ if [ -f "$NOTIFY_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
     echo "NOTIFICATION_EVENTS: $PENDING pending event(s). Run /hydra-notify to process them."
   fi
 fi
+
+# Trigger fresh poll from MCP server on session start and compaction
+NOTIFY_ENABLED=$(jq -r '.notifications.enabled // false' "$CONFIG")
+if [ "$NOTIFY_ENABLED" = "true" ]; then
+  echo "ACTION: Call trigger_poll MCP tool to check for new GitHub events."
+fi

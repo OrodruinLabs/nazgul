@@ -130,6 +130,35 @@ if [ "$NEW_STATUS" = "DONE" ]; then
       exit 2
     fi
   done
+
+  # Check 4: ALL configured reviewers must have a review file
+  CONFIG="$HYDRA_DIR/config.json"
+  CONFIGURED_REVIEWERS=""
+  if [ -f "$CONFIG" ]; then
+    CONFIGURED_REVIEWERS=$(jq -r '.agents.reviewers // [] | .[]' "$CONFIG" 2>/dev/null || echo "")
+  fi
+
+  if [ -z "$CONFIGURED_REVIEWERS" ]; then
+    # No reviewers configured = cannot verify review gate
+    echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as DONE" >&2
+    echo "No reviewers configured in hydra/config.json (agents.reviewers is empty)." >&2
+    echo "Run Discovery to generate the reviewer roster." >&2
+    exit 2
+  fi
+
+  MISSING_REVIEWERS=""
+  while IFS= read -r reviewer; do
+    [ -z "$reviewer" ] && continue
+    if [ ! -f "$REVIEW_DIR/${reviewer}.md" ]; then
+      MISSING_REVIEWERS="${MISSING_REVIEWERS} ${reviewer}"
+    fi
+  done <<< "$CONFIGURED_REVIEWERS"
+  if [ -n "$MISSING_REVIEWERS" ]; then
+    echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as DONE" >&2
+    echo "Missing reviews from configured reviewers:${MISSING_REVIEWERS}" >&2
+    echo "ALL configured reviewers must approve before DONE (Constitution Rule 5)." >&2
+    exit 2
+  fi
 fi
 
 # Valid transition — allow

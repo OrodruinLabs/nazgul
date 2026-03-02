@@ -100,6 +100,7 @@ fi
 # --- REVIEW GATE ENFORCEMENT (Layer 2 — reactive safety net) ---
 # Validate that no tasks are DONE without review evidence
 if [ -d "$HYDRA_DIR/tasks" ]; then
+  CONFIGURED_REVIEWERS=$(jq -r '.agents.reviewers // [] | .[]' "$CONFIG" 2>/dev/null || echo "")
   for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     STATUS=$(grep -m1 '^\- \*\*Status\*\*:' "$task_file" 2>/dev/null | sed 's/.*:[[:space:]]*//' || echo "")
@@ -108,10 +109,13 @@ if [ -d "$HYDRA_DIR/tasks" ]; then
       REVIEW_DIR="$HYDRA_DIR/reviews/$TASK_ID"
       REVIEW_VALID=true
 
-      # Check review directory exists with reviewer files
+      # Check 1: Review directory exists
       if [ ! -d "$REVIEW_DIR" ]; then
         REVIEW_VALID=false
-      else
+      fi
+
+      # Check 2: At least one reviewer file exists
+      if [ "$REVIEW_VALID" = true ]; then
         HAS_REVIEWS=false
         for rf in "$REVIEW_DIR"/*.md; do
           [ -f "$rf" ] || continue
@@ -126,12 +130,45 @@ if [ -d "$HYDRA_DIR/tasks" ]; then
         fi
       fi
 
+      # Check 3: ALL review files must contain APPROVED
+      if [ "$REVIEW_VALID" = true ]; then
+        for rf in "$REVIEW_DIR"/*.md; do
+          [ -f "$rf" ] || continue
+          case "$(basename "$rf")" in
+            test-failures.md|consolidated-feedback.md) continue ;;
+          esac
+          if ! grep -qi 'APPROVED' "$rf" 2>/dev/null; then
+            REVIEW_VALID=false
+            break
+          fi
+        done
+      fi
+
+      # Check 4: ALL configured reviewers must have approved files
+      if [ "$REVIEW_VALID" = true ]; then
+        if [ -z "$CONFIGURED_REVIEWERS" ]; then
+          REVIEW_VALID=false  # No roster = can't verify
+        else
+          while IFS= read -r reviewer; do
+            [ -z "$reviewer" ] && continue
+            if [ ! -f "$REVIEW_DIR/${reviewer}.md" ]; then
+              REVIEW_VALID=false
+              break
+            fi
+            if ! grep -qi 'APPROVED' "$REVIEW_DIR/${reviewer}.md" 2>/dev/null; then
+              REVIEW_VALID=false
+              break
+            fi
+          done <<< "$CONFIGURED_REVIEWERS"
+        fi
+      fi
+
       if [ "$REVIEW_VALID" = false ]; then
         # VIOLATION: Reset to IMPLEMENTED
         sed -i.bak 's/^\(- \*\*Status\*\*:\) DONE/\1 IMPLEMENTED/' "$task_file" && rm -f "${task_file}.bak"
         DONE_COUNT=$((DONE_COUNT - 1))
         IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
-        echo "HYDRA REVIEW GATE VIOLATION: ${TASK_ID} was DONE without reviews — reset to IMPLEMENTED" >&2
+        echo "HYDRA REVIEW GATE VIOLATION: ${TASK_ID} was DONE without full review — reset to IMPLEMENTED" >&2
 
         # Log violation to notifications
         NOTIFY_FILE="$HYDRA_DIR/notifications.jsonl"
@@ -139,7 +176,7 @@ if [ -d "$HYDRA_DIR/tasks" ]; then
           --arg event "review_gate_violation" \
           --arg task "$TASK_ID" \
           --arg timestamp "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-          --arg summary "${TASK_ID} was marked DONE without review evidence. Reset to IMPLEMENTED." \
+          --arg summary "${TASK_ID} was marked DONE without full review evidence. Reset to IMPLEMENTED." \
           '{event: $event, task: $task, timestamp: $timestamp, summary: $summary, requires_human: false}' >> "$NOTIFY_FILE"
       fi
     fi
@@ -460,6 +497,14 @@ if [ -n "$ACTIVE_BLOCKED_REASON" ]; then
   fi
 fi
 
+# --- Check for pending notification events from MCP server ---
+NOTIFY_DB="$HYDRA_DIR/notifications.db"
+if [ -f "$NOTIFY_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
+  PENDING_EVENTS=$(sqlite3 "$NOTIFY_DB" "SELECT COUNT(*) FROM events WHERE status='pending';" 2>/dev/null || echo "0")
+else
+  PENDING_EVENTS=0
+fi
+
 # --- Iteration logs (4.1) ---
 mkdir -p "$HYDRA_DIR/logs"
 jq -n \
@@ -512,6 +557,7 @@ $([ -n "$ACTIVE_TASK" ] && echo "Active task: hydra/tasks/${ACTIVE_TASK}.md (${A
 $([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "IMPORTANT: Read hydra/reviews/${ACTIVE_TASK}/consolidated-feedback.md before re-implementing.")
 $([ "$GIT_CONFLICT_DETECTED" = true ] && echo "WARNING: Git conflicts detected. Resolve unmerged files before continuing.")
 $([ -n "$CONTEXT_ROT_WARNING" ] && echo "$CONTEXT_ROT_WARNING")
+$([ "$PENDING_EVENTS" -gt 0 ] && echo "NOTIFICATION_EVENTS: $PENDING_EVENTS pending event(s) from MCP server. Run /hydra-notify to process them.")
 
 Continue the Hydra pipeline: read plan.md, delegate to the appropriate agent based on task status.
 CONTINUE_MSG

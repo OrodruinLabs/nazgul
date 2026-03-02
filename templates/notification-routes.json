@@ -2,7 +2,7 @@
   "routes": [
     {
       "match": { "source": "github", "event_type": "pr.*" },
-      "agents": ["review-gate", "qa-reviewer"]
+      "agents": ["implementer"]
     },
     {
       "match": { "source": "github", "event_type": "pr.comment.unresolved" },
@@ -11,12 +11,12 @@
     },
     {
       "match": { "source": "github", "event_type": "pr.comment.*" },
-      "agents": ["review-gate"],
+      "agents": ["implementer"],
       "priority_override": "normal"
     },
     {
       "match": { "source": "github", "event_type": "pr.comments.unresolved_summary" },
-      "agents": ["review-gate", "implementer"],
+      "agents": ["implementer"],
       "priority_override": "high"
     },
     {
