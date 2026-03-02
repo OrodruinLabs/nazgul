@@ -126,9 +126,9 @@ if (webhookPort) {
   });
 }
 
-// Start scheduled polling if HYDRA_POLL_INTERVAL is set
-const pollInterval = process.env.HYDRA_POLL_INTERVAL;
-if (pollInterval) {
+// Start scheduled polling (default: every 300s; disable with HYDRA_POLL_INTERVAL=0)
+const pollInterval = process.env.HYDRA_POLL_INTERVAL ?? '300';
+{
   const seconds = parseInt(pollInterval, 10);
   if (!isNaN(seconds) && seconds > 0) {
     const repo = getGitHubRepo();
@@ -146,7 +146,7 @@ if (pollInterval) {
       process.on('SIGINT', cleanup);
       process.on('SIGTERM', cleanup);
     } else {
-      console.error('[hydra-poll] HYDRA_POLL_INTERVAL set but not in a GitHub repo — skipping');
+      console.error('[hydra-poll] Not a GitHub repo — polling disabled');
     }
   }
 }

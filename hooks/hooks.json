@@ -5,11 +5,6 @@
       {
         "hooks": [
           {
-            "type": "prompt",
-            "prompt": "You are evaluating whether a Hydra autonomous development loop should continue.\n\nContext from the conversation: $ARGUMENTS\n\nCheck the project's hydra/plan.md status. The loop should CONTINUE (decision: block) if:\n- Any tasks have status READY, IN_PROGRESS, IN_REVIEW, or CHANGES_REQUESTED\n- The completion promise HYDRA_COMPLETE was NOT output in the conversation\n- There is still work to be done\n\nThe loop should STOP (decision: approve) if:\n- All tasks are DONE and HYDRA_COMPLETE was output\n- OR max iterations reached (check hydra/config.json → current_iteration >= max_iterations)\n- OR consecutive failures exceeded (check hydra/config.json → safety.consecutive_failures >= safety.max_consecutive_failures)\n- OR a critical error requires human intervention\n\nRespond with ONLY a JSON object: {\"decision\": \"approve\" or \"block\", \"reason\": \"brief explanation\"}",
-            "timeout": 30
-          },
-          {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/stop-hook.sh\"",
             "timeout": 30

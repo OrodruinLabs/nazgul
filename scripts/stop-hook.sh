@@ -501,6 +501,8 @@ fi
 # --- CONTINUE LOOP ---
 # Exit 2 = block the stop, agent continues
 
+REASON="Iteration ${NEW_ITER}/${MAX_ITER}: ${DONE_COUNT}/${TOTAL_COUNT} tasks done"
+
 cat >&2 << CONTINUE_MSG
 Hydra loop — iteration ${NEW_ITER}/${MAX_ITER} | Mode: ${MODE}
 Tasks: ${DONE_COUNT} done, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked, ${PLANNED_COUNT} planned
@@ -514,4 +516,5 @@ $([ -n "$CONTEXT_ROT_WARNING" ] && echo "$CONTEXT_ROT_WARNING")
 Continue the Hydra pipeline: read plan.md, delegate to the appropriate agent based on task status.
 CONTINUE_MSG
 
+jq -n --arg reason "$REASON" '{"decision":"block","reason":$reason}'
 exit 2

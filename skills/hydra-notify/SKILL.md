@@ -27,13 +27,14 @@ context: fork
    b. Check if `<plugin-root>/mcp-server/dist/index.js` exists
    c. If it does NOT exist, run `cd <plugin-root>/mcp-server && npm install && npm run build`
    d. If the build fails, tell the user: "MCP server build failed. Check the output above and fix any issues in `mcp-server/`." STOP.
-   e. Read `.claude/settings.json` (or start with `{}`)
-   f. If `mcpServers.hydra-notifications` is missing, add it:
-      - Add: `{"command": "node", "args": ["<plugin-root>/mcp-server/dist/index.js"], "env": {"HYDRA_DB_PATH": "<project-root>/hydra/notifications.db"}}`
-        where `<project-root>` is the resolved absolute path of the current working directory (no env var references in the final JSON)
-   g. If `permissions.allow` doesn't contain `"mcp__hydra-notifications__*"`, add it
-   h. Write back the merged settings
-   i. If changes were made, tell the user: "MCP server configured. Restart Claude Code to activate, then run `/hydra-notify` again." STOP.
+   e. **MCP server config → `.mcp.json` (project root):**
+      Read `.mcp.json` at the project root (or start with `{}`). If `mcpServers.hydra-notifications` is missing, add it:
+      - `{"command": "node", "args": ["<plugin-root>/mcp-server/dist/index.js"]}`
+      Write the merged result back.
+   f. **Permissions → `.claude/settings.json`:**
+      Read `.claude/settings.json` (or start with `{}`). If `permissions.allow` doesn't contain `"mcp__hydra-notifications__*"`, add it.
+      Write back the merged settings.
+   g. If changes were made in either file, tell the user: "MCP server configured. Restart Claude Code to activate, then run `/hydra-notify` again." STOP.
 4. Verify the MCP server is available by calling `get_pending_events`. If it fails: "MCP server is configured but not running. Restart Claude Code to activate it." STOP.
 
 ## Process
@@ -47,6 +48,14 @@ context: fork
    d. Spawn the matched agent(s) with event context.
    e. After agent completes, call `complete_event` with result.
 4. Display summary of all processed events.
+
+## Polling
+
+Polling is **on by default** (every 300 seconds). The server automatically:
+- Polls GitHub workflow runs for the current repo
+- Discovers the open PR for the current branch and polls its comments
+
+Tune with `HYDRA_POLL_INTERVAL` (seconds). Set to `0` to disable polling entirely.
 
 ## Arguments
 

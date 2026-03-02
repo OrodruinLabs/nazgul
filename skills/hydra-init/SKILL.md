@@ -80,18 +80,26 @@ Resolve the plugin root: use `$CLAUDE_PLUGIN_ROOT` env var. If not set, fall bac
 
 **Build MCP server if needed:** Check if `<plugin-root>/mcp-server/dist/index.js` exists. If it does NOT exist, run `cd <plugin-root>/mcp-server && npm install && npm run build`. If the build fails, tell the user: "MCP server build failed. Check the output above and fix any issues in `mcp-server/`." STOP.
 
-Read `.claude/settings.json` (or start with `{}`), then merge ALL of the following:
+**A. MCP server config → `.mcp.json` (project root)**
 
-1. **`enableAgentTeams`**: set to `true` if missing
-2. **`mcpServers.hydra-notifications`**: if missing, add:
+Read `.mcp.json` at the project root (or start with `{}`), then merge:
+
+1. **`mcpServers.hydra-notifications`**: if missing, add:
    ```json
    {
      "command": "node",
-     "args": ["${PLUGIN_ROOT}/mcp-server/dist/index.js"],
-     "env": { "HYDRA_DB_PATH": "${PROJECT_ROOT}/hydra/notifications.db" }
+     "args": ["${PLUGIN_ROOT}/mcp-server/dist/index.js"]
    }
    ```
-   where `${PLUGIN_ROOT}` is the resolved absolute path of the plugin directory and `${PROJECT_ROOT}` is the resolved absolute path of the current working directory (no env var references in the final JSON).
-3. **`permissions.allow`**: if array doesn't contain `"mcp__hydra-notifications__*"`, add it
+   where `${PLUGIN_ROOT}` is the resolved absolute path of the plugin directory (no env var references in the final JSON).
+
+Write the merged result back. If already present, skip (no-op).
+
+**B. Agent Teams & permissions → `.claude/settings.json`**
+
+Read `.claude/settings.json` (or start with `{}`), then merge:
+
+1. **`enableAgentTeams`**: set to `true` if missing
+2. **`permissions.allow`**: if array doesn't contain `"mcp__hydra-notifications__*"`, add it
 
 Write the merged result back. If everything is already present, skip (no-op).

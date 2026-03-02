@@ -3,6 +3,14 @@ import { PollScheduler } from './scheduler.js';
 import { createDb } from '../db.js';
 import type Database from 'better-sqlite3';
 
+// Mock getCurrentBranch so PR discovery is controlled
+vi.mock('../utils/git-branch.js', () => ({
+  getCurrentBranch: vi.fn(() => null),
+}));
+
+import { getCurrentBranch } from '../utils/git-branch.js';
+const mockGetCurrentBranch = vi.mocked(getCurrentBranch);
+
 // Mock fetch to prevent real API calls
 const mockFetch = vi.fn();
 
@@ -18,11 +26,13 @@ describe('PollScheduler', () => {
     });
     globalThis.fetch = mockFetch as any;
     db = createDb(':memory:');
+    mockGetCurrentBranch.mockReturnValue(null);
   });
 
   afterEach(() => {
     vi.useRealTimers();
     mockFetch.mockReset();
+    mockGetCurrentBranch.mockReset();
     db.close();
   });
 
@@ -116,6 +126,54 @@ describe('PollScheduler', () => {
       headers: new Map(),
     });
     await vi.advanceTimersByTimeAsync(10000);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    scheduler.stop();
+  });
+
+  test('discovers PR and polls comments when branch has open PR', async () => {
+    mockGetCurrentBranch.mockReturnValue('feature-branch');
+
+    // First call: workflow runs poll (304 no change)
+    mockFetch.mockResolvedValueOnce({ status: 304, headers: new Map() });
+    // Second call: PR discovery — returns an open PR
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [{ number: 42 }],
+    });
+    // Third call: PR comments poll (304 no change)
+    mockFetch.mockResolvedValueOnce({ status: 304, headers: new Map() });
+
+    const scheduler = new PollScheduler(db, 'owner/repo', 'token123');
+    scheduler.start(60);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+
+    // Verify the PR discovery URL
+    const prDiscoveryCall = mockFetch.mock.calls[1];
+    expect(prDiscoveryCall[0]).toContain('/repos/owner/repo/pulls?head=');
+    expect(prDiscoveryCall[0]).toContain('owner%3Afeature-branch');
+
+    scheduler.stop();
+  });
+
+  test('skips PR comment polling when no open PR found', async () => {
+    mockGetCurrentBranch.mockReturnValue('feature-branch');
+
+    // First call: workflow runs poll
+    mockFetch.mockResolvedValueOnce({ status: 304, headers: new Map() });
+    // Second call: PR discovery — no open PRs
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [],
+    });
+
+    const scheduler = new PollScheduler(db, 'owner/repo', 'token123');
+    scheduler.start(60);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Only 2 calls: workflow + PR discovery (no comment poll)
     expect(mockFetch).toHaveBeenCalledTimes(2);
 
     scheduler.stop();

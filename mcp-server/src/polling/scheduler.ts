@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { PollManager } from './poll-manager.js';
+import { getCurrentBranch } from '../utils/git-branch.js';
 
 export class PollScheduler {
   private interval: ReturnType<typeof setInterval> | null = null;
@@ -36,12 +37,38 @@ export class PollScheduler {
     try {
       await this.pollManager.pollGitHubWorkflowRuns(this.repo, this.token);
       console.error(`[hydra-poll] Polled workflow runs for ${this.repo}`);
+
+      // Auto-discover open PR for the current branch and poll its comments
+      const prNumber = await this.discoverPrNumber();
+      if (prNumber != null) {
+        await this.pollManager.pollGitHubUnresolvedComments(this.repo, prNumber, this.token);
+        console.error(`[hydra-poll] Polled PR #${prNumber} comments for ${this.repo}`);
+      }
     } catch (err) {
-      console.error(`[hydra-poll] Error polling workflow runs:`, err);
+      console.error(`[hydra-poll] Error during poll tick:`, err);
     } finally {
       this.running = false;
     }
-    // Note: PR comments polling requires a specific PR number, so it's not included
-    // in the automatic schedule. Use trigger_poll MCP tool for PR-specific polling.
+  }
+
+  private async discoverPrNumber(): Promise<number | null> {
+    const branch = getCurrentBranch();
+    if (!branch) return null;
+
+    const [owner] = this.repo.split('/');
+    const url = `https://api.github.com/repos/${this.repo}/pulls?head=${encodeURIComponent(`${owner}:${branch}`)}&state=open&per_page=1`;
+    const headers: Record<string, string> = {
+      Accept: 'application/vnd.github.v3+json',
+    };
+    if (this.token) headers.Authorization = `Bearer ${this.token}`;
+
+    try {
+      const res = await fetch(url, { headers });
+      if (!res.ok) return null;
+      const pulls = (await res.json()) as Array<{ number: number }>;
+      return pulls.length > 0 ? pulls[0].number : null;
+    } catch {
+      return null;
+    }
   }
 }
