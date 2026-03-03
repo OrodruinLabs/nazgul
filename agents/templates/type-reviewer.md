@@ -35,13 +35,14 @@ hooks:
 - [ ] No unnecessary type complexity (keep types readable and maintainable)
 
 ## How to Review
-1. Read the changed files from the review request
-2. Grep for `any` usage and verify each instance is justified
-3. Check union types for proper discrimination and exhaustive handling
-4. Verify function signatures have explicit types
-5. Run the type checker (tsc --noEmit, mypy, etc.) to verify no type errors
-6. Check that new interfaces/types follow existing naming conventions
-7. Verify generated types are not hand-edited
+1. Read `hydra/reviews/[TASK-ID]/diff.patch` FIRST — focus on what specifically changed
+2. For each changed hunk, read the surrounding context in the full file if needed
+3. Grep for `any` usage and verify each instance is justified
+4. Check union types for proper discrimination and exhaustive handling
+5. Verify function signatures have explicit types
+6. Run the type checker (tsc --noEmit, mypy, etc.) to verify no type errors
+7. Check that new interfaces/types follow existing naming conventions
+8. Verify generated types are not hand-edited
 
 ## Output Format
 

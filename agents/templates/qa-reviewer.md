@@ -31,11 +31,12 @@ hooks:
 - [ ] Test data is realistic and covers boundary values
 
 ## How to Review
-1. Read the changed files from the review request
-2. Find corresponding test files
-3. Run the test suite to verify all pass
-4. Check coverage if tool available
-5. Evaluate test quality against checklist
+1. Read `hydra/reviews/[TASK-ID]/diff.patch` FIRST — focus on what specifically changed
+2. For each changed hunk, read the surrounding context in the full file if needed
+3. Find corresponding test files
+4. Run the test suite to verify all pass
+5. Check coverage if tool available
+6. Evaluate test quality against checklist
 
 ## Output Format
 

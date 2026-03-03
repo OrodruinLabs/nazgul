@@ -41,7 +41,8 @@ NEVER rely on conversational memory — files are the truth.
 
 1. Read `hydra/plan.md` — find the first READY task whose dependencies are all DONE
 2. If a task is CHANGES_REQUESTED, pick it up (it has priority)
-3. Claim the task: update status to IN_PROGRESS, set claimed_at timestamp
+3. Claim the task: update status to IN_PROGRESS, set claimed_at timestamp.
+   Record current HEAD SHA as base reference: add `- **Base SHA**: [sha]` to the task manifest.
 
 ## Implementation Protocol
 
@@ -55,8 +56,14 @@ NEVER rely on conversational memory — files are the truth.
 8. Run linter after implementation — fix all errors
 9. Update task manifest with implementation log
 10. Set status to IMPLEMENTED when all acceptance criteria met, tests pass, lint clean
-11. Update plan.md Recovery Pointer on every state change
-12. Commit if in AFK mode with prefix from config
+11. Capture the diff for reviewers:
+    - `mkdir -p hydra/reviews/[TASK-ID]`
+    - Read the Base SHA from the task manifest
+    - `git diff [base-sha]..HEAD -- [files from File Scope creates + modifies] > hydra/reviews/[TASK-ID]/diff.patch`
+    - If in YOLO mode (branched): `git diff $(git merge-base HEAD main)..HEAD > hydra/reviews/[TASK-ID]/diff.patch`
+    - VERIFY: diff.patch must be non-empty. If empty, try `git diff HEAD~1..HEAD` as fallback.
+12. Update plan.md Recovery Pointer on every state change
+13. Commit if in AFK mode with prefix from config
 
 ## Branch Stacking (YOLO Mode)
 

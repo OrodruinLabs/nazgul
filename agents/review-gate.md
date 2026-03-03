@@ -38,15 +38,28 @@ Before ANY reviewer runs:
 7. If test_failures >= 3: set task to BLOCKED with reason "3 consecutive test failures — requires human investigation". Write detailed test output to `hydra/reviews/[TASK-ID]/test-failures.md`. Do NOT retry.
 8. Only proceed to reviewers if test_failures < 3 AND ALL pre-checks pass
 
+### Step 1.5: Verify Diff Exists
+
+Before spawning reviewers, verify `hydra/reviews/[TASK-ID]/diff.patch` exists and is non-empty.
+- If missing: generate it using task manifest's Base SHA and File Scope:
+  `git diff [base-sha]..HEAD -- [files] > hydra/reviews/[TASK-ID]/diff.patch`
+- If still empty: log WARNING but proceed (pure additions may need full-file review)
+
 ### Step 2: Delegate to Reviewers
 
 Read `hydra/config.json → agents.reviewers` to get the active reviewer list.
 Read `hydra/config.json → models.review` for the model to assign reviewers (default: `"opus"`). Pass this as the `model` parameter when spawning each reviewer via the Task tool.
 
+#### What Each Reviewer Receives
+1. `hydra/reviews/[TASK-ID]/diff.patch` — the unified diff showing exactly what changed. **Reviewers MUST read this FIRST.**
+2. The changed file list from the task manifest's File Scope — for full-file context when needed
+3. Their agent definition from `.claude/agents/generated/`
+4. Relevant context from `hydra/context/`
+
 #### Parallel Review Mode (when parallelism.parallel_reviews is true)
 
 1. Create an agent team for the review
-2. Each reviewer: reads changed files, reads their definition in `.claude/agents/generated/`, reads relevant context, writes review to `hydra/reviews/[TASK-ID]/[reviewer-name].md`
+2. Each reviewer: reads diff.patch FIRST, then changed files for context, reads their definition in `.claude/agents/generated/`, reads relevant context, writes review to `hydra/reviews/[TASK-ID]/[reviewer-name].md`
 3. Wait for ALL reviewers to complete
 4. Read all review files
 

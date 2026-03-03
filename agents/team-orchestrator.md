@@ -20,10 +20,11 @@ When asked to run parallel reviews for a task:
 1. Verify Agent Teams is available: read `hydra/config.json → parallelism.require_settings` and confirm the setting is enabled
 2. Read the reviewer list from `hydra/config.json → agents.reviewers`
 3. Read `hydra/config.json → models.review` for the model to assign each reviewer teammate (default: `"opus"`). Pass this as the `model` parameter when spawning each teammate via the Task tool.
-3. Read the changed files for the task from the task manifest
+3. Read the changed files for the task from the task manifest. Verify `hydra/reviews/[TASK-ID]/diff.patch` exists.
 4. Spawn a team with one teammate per reviewer:
    - Team name: `hydra-review-[TASK-ID]`
-   - Each teammate gets: their agent definition, the file list, relevant context paths
+   - Each teammate gets: their agent definition, the diff file path (`hydra/reviews/[TASK-ID]/diff.patch`), the file list, relevant context paths
+   - Instruct each teammate: "Read diff.patch FIRST to understand what changed, then read full files only for additional context"
    - Each teammate writes their review to `hydra/reviews/[TASK-ID]/[name].md`
 5. Monitor the shared task list until all reviewers complete
 6. Signal completion to the caller

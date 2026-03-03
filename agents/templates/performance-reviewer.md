@@ -34,13 +34,14 @@ hooks:
 - [ ] Large data sets use streaming or chunking instead of loading into memory
 
 ## How to Review
-1. Read the changed files from the review request
-2. Identify database queries and check for N+1 patterns
-3. Check for unbounded loops or recursive operations
-4. Analyze imports for bundle size impact (large dependencies)
-5. Look for missing cleanup in lifecycle hooks (useEffect, componentWillUnmount, __del__)
-6. Check for unnecessary computation in hot paths
-7. Run performance-related tests if available
+1. Read `hydra/reviews/[TASK-ID]/diff.patch` FIRST — focus on what specifically changed
+2. For each changed hunk, read the surrounding context in the full file if needed
+3. Identify database queries and check for N+1 patterns
+4. Check for unbounded loops or recursive operations
+5. Analyze imports for bundle size impact (large dependencies)
+6. Look for missing cleanup in lifecycle hooks (useEffect, componentWillUnmount, __del__)
+7. Check for unnecessary computation in hot paths
+8. Run performance-related tests if available
 
 ## Output Format
 

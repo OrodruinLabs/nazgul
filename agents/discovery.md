@@ -428,6 +428,13 @@ Tailor to the SPECIFIC language and conventions:
 - Reference the import style and file organization
 - Include language-specific best practices
 - Add silent-failure-hunting: check every error handling path for swallowed errors
+- Add null/optional safety audit: for EVERY property access on external data (API responses,
+  database results, user input, deserialized JSON), verify null/undefined is handled. Check for:
+  - Missing optional chaining on nested property access
+  - Missing nullish coalescing for default values
+  - Unguarded `.map()`, `.filter()`, `.find()` on potentially undefined arrays
+  - String operations (`.trim()`, `.toLowerCase()`) on potentially undefined strings
+  This is a systematic check on the diff, not a general heuristic.
 
 #### `.claude/agents/generated/security-reviewer.md`
 
@@ -443,6 +450,7 @@ Tailor to the SPECIFIC security surface found:
 - If **database/ORM detected** → generate `db-reviewer.md` (migration safety, query efficiency, indexing)
 - If **API detected** → generate `api-reviewer.md` (REST conventions, versioning, error responses, docs)
 - If **frontend detected** → generate `ux-reviewer.md` (accessibility, responsiveness, performance)
+- If **frontend framework detected** → generate `frontend-reviewer.md` (null safety, data fetching, forms, error states)
 - If **TypeScript/Flow/mypy detected** → generate `type-reviewer.md` (type design, strictness, generics)
 - If **infrastructure configs detected** → generate `infra-reviewer.md` (security groups, resource limits, scaling)
 - If **ML/data pipeline detected** → generate `data-reviewer.md` (data validation, pipeline idempotency, model versioning)
@@ -480,10 +488,11 @@ Include file paths, patterns, libraries, and conventions detected by Discovery.]
 NOT generic best practices — things grounded in what this codebase actually does.]
 
 ## How to Review
-1. Read the changed files (provided in the review request)
-2. Compare against the project's established patterns in hydra/context/
-3. Check each item in your review checklist
-4. Run relevant commands to verify (tests, linter, type checker, etc.)
+1. Read `hydra/reviews/[TASK-ID]/diff.patch` FIRST — this shows exactly what changed, line by line
+2. For each changed hunk, read the surrounding context in the full file if needed
+3. Compare changes against the project's established patterns in hydra/context/
+4. Check each item in your review checklist against the CHANGED code
+5. Run relevant commands to verify (tests, linter, type checker, etc.)
 
 ## Output Format
 
@@ -682,15 +691,16 @@ Based on classification + codebase detection, determine which agents to spawn.
 - architect-reviewer: IF source_files > 10
 - code-reviewer: IF source_files > 10
 - security-reviewer: IF source_files > 10
-- qa-reviewer: IF source_files > 10 AND NOT (bugfix AND zero_tests)
-- performance-reviewer: IF database_detected OR frontend_detected OR loc > 50000
-- a11y-reviewer: IF frontend_detected (HTML/JSX/TSX/Vue/Svelte)
+- qa-reviewer: IF test_framework_detected OR source_files > 20
+- performance-reviewer: IF database_detected OR frontend_detected OR data_fetching_library_detected OR loc > 50000
+- a11y-reviewer: IF frontend_detected (HTML/JSX/TSX/Vue/Svelte) OR react_native OR expo
 - db-reviewer: IF orm_or_database_detected
 - api-reviewer: IF api_routes_detected
 - type-reviewer: IF typescript OR typed_python (mypy) OR flow
 - infra-reviewer: IF docker OR kubernetes OR terraform OR cloud_configs
 - dependency-reviewer: IF package_manager_detected AND source_files > 20
-- mobile-reviewer: IF react_native OR flutter OR swift OR kotlin_android
+- mobile-reviewer: IF react_native OR expo OR flutter OR swift OR kotlin_android
+- frontend-reviewer: IF frontend_framework_detected (React, Vue, Angular, Svelte, Next.js, Nuxt, Expo)
 - data-reviewer: IF ml_pipeline OR data_processing
 
 ## Specialist Agents

@@ -35,13 +35,14 @@ hooks:
 - [ ] Touch targets are at least 44x44 CSS pixels (mobile)
 
 ## How to Review
-1. Read the changed UI files from the review request
-2. Check HTML/JSX structure for semantic correctness
-3. Grep for interactive elements and verify ARIA attributes
-4. Check for keyboard event handlers alongside click handlers
-5. Verify focus management in modals, dropdowns, and dynamic content
-6. Check color values against contrast ratio requirements
-7. Run accessibility tests if configured (axe, jest-axe, pa11y)
+1. Read `hydra/reviews/[TASK-ID]/diff.patch` FIRST — focus on what specifically changed
+2. For each changed hunk, read the surrounding context in the full file if needed
+3. Check HTML/JSX structure for semantic correctness
+4. Grep for interactive elements and verify ARIA attributes
+5. Check for keyboard event handlers alongside click handlers
+6. Verify focus management in modals, dropdowns, and dynamic content
+7. Check color values against contrast ratio requirements
+8. Run accessibility tests if configured (axe, jest-axe, pa11y)
 
 ## Output Format
 

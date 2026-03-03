@@ -61,13 +61,14 @@ hooks:
 - [ ] Pipeline includes `terraform validate` and `tflint` / `checkov` steps
 
 ## How to Review
-1. Read the changed infrastructure files from the review request
-2. Check Terraform files for proper state management, pinned versions, and no hardcoded secrets
-3. Check Dockerfiles for multi-stage builds, non-root users, specific base image tags
-4. Verify Kubernetes manifests have resource limits and health probes
-5. Check security groups and network policies for overly permissive rules
-6. Verify no secrets are hardcoded (grep for API keys, passwords, tokens in configs)
-7. Run infrastructure linters if available (hadolint, tflint, kubelinter, checkov, tfsec)
+1. Read `hydra/reviews/[TASK-ID]/diff.patch` FIRST — focus on what specifically changed
+2. For each changed hunk, read the surrounding context in the full file if needed
+3. Check Terraform files for proper state management, pinned versions, and no hardcoded secrets
+4. Check Dockerfiles for multi-stage builds, non-root users, specific base image tags
+5. Verify Kubernetes manifests have resource limits and health probes
+6. Check security groups and network policies for overly permissive rules
+7. Verify no secrets are hardcoded (grep for API keys, passwords, tokens in configs)
+8. Run infrastructure linters if available (hadolint, tflint, kubelinter, checkov, tfsec)
 
 ## Output Format
 

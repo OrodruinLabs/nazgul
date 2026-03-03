@@ -35,13 +35,14 @@ hooks:
 - [ ] No raw SQL injection vectors (parameterized queries, ORM query builders)
 
 ## How to Review
-1. Read migration files and schema changes
-2. Check for corresponding rollback migrations
-3. Analyze queries for efficiency (look for missing indexes, N+1 patterns)
-4. Verify transaction boundaries around multi-step operations
-5. Check for data integrity constraints on new columns/tables
-6. Run migration tests if available (migrate up, verify, migrate down, verify)
-7. Look for raw SQL and verify parameterization
+1. Read `hydra/reviews/[TASK-ID]/diff.patch` FIRST — focus on what specifically changed
+2. For each changed hunk, read the surrounding context in the full file if needed
+3. Check for corresponding rollback migrations
+4. Analyze queries for efficiency (look for missing indexes, N+1 patterns)
+5. Verify transaction boundaries around multi-step operations
+6. Check for data integrity constraints on new columns/tables
+7. Run migration tests if available (migrate up, verify, migrate down, verify)
+8. Look for raw SQL and verify parameterization
 
 ## Output Format
 

@@ -35,14 +35,15 @@ hooks:
 - [ ] Accessibility supported (VoiceOver/TalkBack labels, dynamic type, reduced motion)
 
 ## How to Review
-1. Read the changed mobile files from the review request
-2. Check layout files for responsive design and safe area handling
-3. Verify platform-specific code follows respective guidelines
-4. Check network-dependent features for offline fallback
-5. Verify permission requests are contextual with graceful denial handling
-6. Look for memory leaks (unreleased listeners, unbounded caches, circular references)
-7. Check navigation flow for platform-appropriate patterns
-8. Run mobile tests if available (detox, XCTest, Espresso)
+1. Read `hydra/reviews/[TASK-ID]/diff.patch` FIRST — focus on what specifically changed
+2. For each changed hunk, read the surrounding context in the full file if needed
+3. Check layout files for responsive design and safe area handling
+4. Verify platform-specific code follows respective guidelines
+5. Check network-dependent features for offline fallback
+6. Verify permission requests are contextual with graceful denial handling
+7. Look for memory leaks (unreleased listeners, unbounded caches, circular references)
+8. Check navigation flow for platform-appropriate patterns
+9. Run mobile tests if available (detox, XCTest, Espresso)
 
 ## Output Format
 

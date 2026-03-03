@@ -35,13 +35,14 @@ hooks:
 - [ ] Outdated major versions flagged for consideration
 
 ## How to Review
-1. Read the changed package manifest files (package.json, requirements.txt, Cargo.toml, go.mod)
-2. Identify new and updated dependencies
-3. Run security audit (npm audit, pip audit, cargo audit, govulncheck)
-4. Check license compatibility for each new dependency
-5. Evaluate necessity (is this dependency justified or could existing tools cover it?)
-6. Verify lockfile is updated and consistent
-7. Check for duplicate packages in the dependency tree
+1. Read `hydra/reviews/[TASK-ID]/diff.patch` FIRST — focus on what specifically changed
+2. For each changed hunk, read the surrounding context in the full file if needed
+3. Identify new and updated dependencies
+4. Run security audit (npm audit, pip audit, cargo audit, govulncheck)
+5. Check license compatibility for each new dependency
+6. Evaluate necessity (is this dependency justified or could existing tools cover it?)
+7. Verify lockfile is updated and consistent
+8. Check for duplicate packages in the dependency tree
 
 ## Output Format
 

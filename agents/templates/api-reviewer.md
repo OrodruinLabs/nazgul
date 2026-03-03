@@ -35,14 +35,15 @@ hooks:
 - [ ] No sensitive data in URLs (tokens, passwords, PII in query params)
 
 ## How to Review
-1. Read the changed route/endpoint files from the review request
-2. Compare URL patterns and HTTP methods against existing API conventions
-3. Verify error handling follows the project's error response format
-4. Check that input validation is present (using the project's validation library)
-5. Verify auth middleware is applied to protected routes
-6. Check for pagination on list endpoints
-7. Run API tests if available
-8. Verify OpenAPI spec is updated (if applicable)
+1. Read `hydra/reviews/[TASK-ID]/diff.patch` FIRST — focus on what specifically changed
+2. For each changed hunk, read the surrounding context in the full file if needed
+3. Compare URL patterns and HTTP methods against existing API conventions
+4. Verify error handling follows the project's error response format
+5. Check that input validation is present (using the project's validation library)
+6. Verify auth middleware is applied to protected routes
+7. Check for pagination on list endpoints
+8. Run API tests if available
+9. Verify OpenAPI spec is updated (if applicable)
 
 ## Output Format
 

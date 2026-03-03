@@ -35,14 +35,15 @@ hooks:
 - [ ] Resource efficiency (appropriate partitioning, no unnecessary full scans, caching where beneficial)
 
 ## How to Review
-1. Read the changed data pipeline or ML code from the review request
-2. Check for data validation at ingestion and transformation boundaries
-3. Verify pipeline can be safely re-run (idempotency checks)
-4. Look for PII exposure (logging, error messages, intermediate files)
-5. Check ML code for data leakage patterns
-6. Verify schema changes are backward compatible or properly migrated
-7. Check for proper error handling on data quality issues
-8. Run data tests if available (great_expectations, dbt test, pytest data fixtures)
+1. Read `hydra/reviews/[TASK-ID]/diff.patch` FIRST — focus on what specifically changed
+2. For each changed hunk, read the surrounding context in the full file if needed
+3. Check for data validation at ingestion and transformation boundaries
+4. Verify pipeline can be safely re-run (idempotency checks)
+5. Look for PII exposure (logging, error messages, intermediate files)
+6. Check ML code for data leakage patterns
+7. Verify schema changes are backward compatible or properly migrated
+8. Check for proper error handling on data quality issues
+9. Run data tests if available (great_expectations, dbt test, pytest data fixtures)
 
 ## Output Format
 
