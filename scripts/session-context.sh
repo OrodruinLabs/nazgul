@@ -34,6 +34,7 @@ DONE_COUNT=0
 READY_COUNT=0
 IN_PROGRESS_COUNT=0
 IN_REVIEW_COUNT=0
+APPROVED_COUNT=0
 CHANGES_COUNT=0
 BLOCKED_COUNT=0
 TOTAL_COUNT=0
@@ -50,11 +51,12 @@ if [ -d "$HYDRA_DIR/tasks" ]; then
       READY) READY_COUNT=$((READY_COUNT + 1)) ;;
       IN_PROGRESS) IN_PROGRESS_COUNT=$((IN_PROGRESS_COUNT + 1)) ;;
       IN_REVIEW|IMPLEMENTED) IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1)) ;;
+      APPROVED) APPROVED_COUNT=$((APPROVED_COUNT + 1)) ;;
       CHANGES_REQUESTED) CHANGES_COUNT=$((CHANGES_COUNT + 1)) ;;
       BLOCKED) BLOCKED_COUNT=$((BLOCKED_COUNT + 1)) ;;
     esac
     if [ -z "$ACTIVE_TASK" ]; then
-      if [ "$STATUS" = "IN_PROGRESS" ] || [ "$STATUS" = "CHANGES_REQUESTED" ] || [ "$STATUS" = "IN_REVIEW" ]; then
+      if [ "$STATUS" = "IN_PROGRESS" ] || [ "$STATUS" = "CHANGES_REQUESTED" ] || [ "$STATUS" = "IN_REVIEW" ] || [ "$STATUS" = "IMPLEMENTED" ]; then
         ACTIVE_TASK=$(basename "$task_file" .md)
         ACTIVE_STATUS="$STATUS"
       fi
@@ -98,7 +100,7 @@ GIT_LAST=$(git -C "${CLAUDE_PROJECT_DIR:-$(pwd)}" log --oneline -1 2>/dev/null |
 # Output context
 cat << CONTEXT_EOF
 Hydra loop state — iteration ${ITERATION}/${MAX_ITER} | Mode: ${MODE} | Objective: ${OBJECTIVE}
-Tasks: ${DONE_COUNT} done, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked | Total: ${TOTAL_COUNT}
+Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked | Total: ${TOTAL_COUNT}
 Compactions: ${COMPACTION_COUNT}
 CONTEXT_EOF
 
@@ -111,6 +113,11 @@ fi
 cat << CONTEXT_EOF2
 $([ -n "$MIGRATION_NOTICE" ] && echo "NOTICE: $MIGRATION_NOTICE" || true)
 Active task: ${ACTIVE_TASK:-none} (${ACTIVE_STATUS:-none})
+$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (hydra-framework:review-gate) for ${ACTIVE_TASK}. Do NOT skip the review gate." || true)
+$([ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (hydra-framework:review-gate) for ${ACTIVE_TASK}." || true)
+$([ "$ACTIVE_STATUS" = "READY" ] && echo "DELEGATE: Spawn implementer agent (hydra-framework:implementer) for ${ACTIVE_TASK}." || true)
+$([ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (hydra-framework:implementer) for ${ACTIVE_TASK}." || true)
+$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (hydra-framework:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first." || true)
 Reviewers: ${REVIEWERS}
 Git: ${GIT_BRANCH} — ${GIT_LAST}
 Latest checkpoint: ${LATEST_CHECKPOINT}

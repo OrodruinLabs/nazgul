@@ -58,6 +58,19 @@ NEVER rely on conversational memory — files are the truth.
 11. Update plan.md Recovery Pointer on every state change
 12. Commit if in AFK mode with prefix from config
 
+## Branch Stacking (YOLO Mode)
+
+When `hydra/config.json → afk.yolo` is `true`, create a stacked branch per task:
+
+### On task claim (READY → IN_PROGRESS):
+1. Read `hydra/config.json → afk.last_task_branch`
+2. If null/empty (first task): `git checkout -b hydra/TASK-NNN`
+3. If set (subsequent): `git checkout -b hydra/TASK-NNN hydra/TASK-{prev}`
+4. Update config: set `afk.last_task_branch` to `hydra/TASK-NNN`
+
+### Dependency awareness:
+In YOLO mode, tasks whose dependencies are all APPROVED or DONE are considered ready.
+
 ## Delegation Protocol
 
 When delegating to specialists, read `hydra/config.json → models.specialists` for the model to use (default: `"sonnet"`). Pass this as the `model` parameter when spawning each specialist via the Task tool.

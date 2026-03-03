@@ -67,8 +67,10 @@ valid_transition() {
     IN_PROGRESS_BLOCKED)         return 0 ;;
     IMPLEMENTED_IN_REVIEW)       return 0 ;;
     IN_REVIEW_DONE)              return 0 ;;
+    IN_REVIEW_APPROVED)          return 0 ;;
     IN_REVIEW_CHANGES_REQUESTED) return 0 ;;
     IN_REVIEW_BLOCKED)           return 0 ;;
+    APPROVED_DONE)               return 0 ;;
     CHANGES_REQUESTED_IN_PROGRESS) return 0 ;;
     CHANGES_REQUESTED_BLOCKED)   return 0 ;;
     *) return 1 ;;
@@ -80,21 +82,37 @@ if ! valid_transition "$OLD_STATUS" "$NEW_STATUS"; then
   echo "Constitution Article III permitted transitions:" >&2
   echo "  PLANNED→READY, READY→IN_PROGRESS, IN_PROGRESS→IMPLEMENTED," >&2
   echo "  IMPLEMENTED→IN_REVIEW, IN_REVIEW→DONE (with reviews)," >&2
+  echo "  IN_REVIEW→APPROVED (YOLO), APPROVED→DONE (PR merged)," >&2
   echo "  IN_REVIEW→CHANGES_REQUESTED, *→BLOCKED" >&2
   exit 2
 fi
 
-# --- ENFORCE REVIEW GATE FOR DONE (Constitution Article IV) ---
-if [ "$NEW_STATUS" = "DONE" ]; then
-  TASK_ID=$(basename "$FILE_PATH" .md)
-  HYDRA_DIR=$(dirname "$(dirname "$FILE_PATH")")
+# --- ENFORCE REVIEW GATE (Constitution Article IV) ---
+# In YOLO mode, gate APPROVED; in non-YOLO, gate DONE
+# APPROVED → DONE in YOLO needs no review checks (PR merge is external validation)
+TASK_ID=$(basename "$FILE_PATH" .md)
+HYDRA_DIR=$(dirname "$(dirname "$FILE_PATH")")
+CONFIG="$HYDRA_DIR/config.json"
+YOLO_MODE="false"
+if [ -f "$CONFIG" ]; then
+  YOLO_MODE=$(jq -r '.afk.yolo // false' "$CONFIG" 2>/dev/null || echo "false")
+fi
+
+NEEDS_REVIEW_CHECK=false
+if [ "$YOLO_MODE" = "true" ] && [ "$NEW_STATUS" = "APPROVED" ]; then
+  NEEDS_REVIEW_CHECK=true
+elif [ "$YOLO_MODE" != "true" ] && [ "$NEW_STATUS" = "DONE" ]; then
+  NEEDS_REVIEW_CHECK=true
+fi
+
+if [ "$NEEDS_REVIEW_CHECK" = true ]; then
   REVIEW_DIR="$HYDRA_DIR/reviews/$TASK_ID"
 
   # Check 1: Review directory must exist
   if [ ! -d "$REVIEW_DIR" ]; then
-    echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as DONE" >&2
+    echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
     echo "No review directory at: ${REVIEW_DIR}" >&2
-    echo "ALL reviewers must approve before DONE (Constitution Rule 5)." >&2
+    echo "ALL reviewers must approve before ${NEW_STATUS} (Constitution Rule 5)." >&2
     exit 2
   fi
 
@@ -110,9 +128,9 @@ if [ "$NEW_STATUS" = "DONE" ]; then
   done
 
   if [ "$REVIEW_COUNT" -eq 0 ]; then
-    echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as DONE" >&2
+    echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
     echo "Review directory exists but contains no reviewer files." >&2
-    echo "ALL reviewers must approve before DONE (Constitution Rule 5)." >&2
+    echo "ALL reviewers must approve before ${NEW_STATUS} (Constitution Rule 5)." >&2
     exit 2
   fi
 
@@ -124,15 +142,14 @@ if [ "$NEW_STATUS" = "DONE" ]; then
       test-failures.md|consolidated-feedback.md) continue ;;
     esac
     if ! grep -qi 'APPROVED' "$review_file" 2>/dev/null; then
-      echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as DONE" >&2
+      echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
       echo "Review ${BASENAME} does not contain APPROVED verdict." >&2
-      echo "ALL reviewers must approve before DONE (Constitution Rule 5)." >&2
+      echo "ALL reviewers must approve before ${NEW_STATUS} (Constitution Rule 5)." >&2
       exit 2
     fi
   done
 
   # Check 4: ALL configured reviewers must have a review file
-  CONFIG="$HYDRA_DIR/config.json"
   CONFIGURED_REVIEWERS=""
   if [ -f "$CONFIG" ]; then
     CONFIGURED_REVIEWERS=$(jq -r '.agents.reviewers // [] | .[]' "$CONFIG" 2>/dev/null || echo "")
@@ -140,7 +157,7 @@ if [ "$NEW_STATUS" = "DONE" ]; then
 
   if [ -z "$CONFIGURED_REVIEWERS" ]; then
     # No reviewers configured = cannot verify review gate
-    echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as DONE" >&2
+    echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
     echo "No reviewers configured in hydra/config.json (agents.reviewers is empty)." >&2
     echo "Run Discovery to generate the reviewer roster." >&2
     exit 2
@@ -154,9 +171,9 @@ if [ "$NEW_STATUS" = "DONE" ]; then
     fi
   done <<< "$CONFIGURED_REVIEWERS"
   if [ -n "$MISSING_REVIEWERS" ]; then
-    echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as DONE" >&2
+    echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
     echo "Missing reviews from configured reviewers:${MISSING_REVIEWERS}" >&2
-    echo "ALL configured reviewers must approve before DONE (Constitution Rule 5)." >&2
+    echo "ALL configured reviewers must approve before ${NEW_STATUS} (Constitution Rule 5)." >&2
     exit 2
   fi
 fi

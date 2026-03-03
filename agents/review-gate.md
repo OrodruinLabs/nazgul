@@ -63,10 +63,23 @@ Run each reviewer as a subagent, one at a time. Write results to same location.
 ### Step 4: Handle Results
 
 **ALL APPROVED:**
-- Set task status to DONE
-- Record completion commit SHA
-- Update plan.md Recovery Pointer
-- Check if ALL tasks are DONE → if yes, trigger post-loop phase, then output HYDRA_COMPLETE
+1. Read `hydra/config.json → afk.yolo`
+2. **If YOLO mode:**
+   - Set task status to APPROVED (not DONE)
+   - Push the task branch: `git push -u origin hydra/TASK-NNN`
+   - Create stacked PR:
+     - First task: `gh pr create --base main --head hydra/TASK-NNN`
+     - Subsequent: `gh pr create --base hydra/TASK-{prev} --head hydra/TASK-NNN`
+     - Title: `hydra: TASK-NNN — [task title]`
+     - Body: include reviewer verdict summary
+   - Record PR URL in task manifest (field: `- **PR**: [url]`)
+   - Update plan.md Recovery Pointer
+   - Move to next task immediately
+3. **If NOT YOLO mode:** (existing behavior unchanged)
+   - Set task status to DONE
+   - Record completion commit SHA
+   - Update plan.md Recovery Pointer
+   - Check if ALL tasks DONE → post-loop phase, then output HYDRA_COMPLETE
 
 **ANY CHANGES_REQUESTED:**
 - Delegate to feedback-aggregator to consolidate feedback (use `models.review` from config for the model parameter)

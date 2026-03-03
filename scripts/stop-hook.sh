@@ -22,6 +22,7 @@ MAX_ITER=$(jq -r '.max_iterations // 40' "$CONFIG")
 MODE=$(jq -r '.mode // "hitl"' "$CONFIG")
 CONSEC_FAILURES=$(jq -r '.safety.consecutive_failures // 0' "$CONFIG")
 MAX_CONSEC=$(jq -r '.safety.max_consecutive_failures // 5' "$CONFIG")
+YOLO_MODE=$(jq -r '.afk.yolo // false' "$CONFIG" 2>/dev/null || echo "false")
 # completion_promise is checked by the prompt-layer Stop hook, not this script
 
 # --- Pause flag check (for /hydra-pause skill) ---
@@ -74,6 +75,7 @@ DONE_COUNT=0
 READY_COUNT=0
 IN_PROGRESS_COUNT=0
 IN_REVIEW_COUNT=0
+APPROVED_COUNT=0
 CHANGES_COUNT=0
 BLOCKED_COUNT=0
 PLANNED_COUNT=0
@@ -90,6 +92,7 @@ if [ -d "$HYDRA_DIR/tasks" ]; then
       IN_PROGRESS) IN_PROGRESS_COUNT=$((IN_PROGRESS_COUNT + 1)) ;;
       IMPLEMENTED) IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1)) ;;
       IN_REVIEW) IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1)) ;;
+      APPROVED) APPROVED_COUNT=$((APPROVED_COUNT + 1)) ;;
       CHANGES_REQUESTED) CHANGES_COUNT=$((CHANGES_COUNT + 1)) ;;
       BLOCKED) BLOCKED_COUNT=$((BLOCKED_COUNT + 1)) ;;
       PLANNED) PLANNED_COUNT=$((PLANNED_COUNT + 1)) ;;
@@ -99,7 +102,8 @@ fi
 
 # --- REVIEW GATE ENFORCEMENT (Layer 2 — reactive safety net) ---
 # Validate that no tasks are DONE without review evidence
-if [ -d "$HYDRA_DIR/tasks" ]; then
+# In YOLO mode, APPROVED tasks have been locally reviewed; DONE only happens via PR merge
+if [ "$YOLO_MODE" != "true" ] && [ -d "$HYDRA_DIR/tasks" ]; then
   CONFIGURED_REVIEWERS=$(jq -r '.agents.reviewers // [] | .[]' "$CONFIG" 2>/dev/null || echo "")
   for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
@@ -184,15 +188,21 @@ if [ -d "$HYDRA_DIR/tasks" ]; then
 fi
 
 # Track progress for consecutive failure detection
+# In YOLO mode, APPROVED counts as progress alongside DONE
 PREV_DONE=$(jq -r '.safety._prev_done_count // 0' "$CONFIG")
-if [ "$DONE_COUNT" -gt "$PREV_DONE" ]; then
+if [ "$YOLO_MODE" = "true" ]; then
+  PROGRESS_COUNT=$((DONE_COUNT + APPROVED_COUNT))
+else
+  PROGRESS_COUNT=$DONE_COUNT
+fi
+if [ "$PROGRESS_COUNT" -gt "$PREV_DONE" ]; then
   # Progress made — reset consecutive failures
   CONSEC_FAILURES=0
 else
   # No progress
   CONSEC_FAILURES=$((CONSEC_FAILURES + 1))
 fi
-jq --argjson cf "$CONSEC_FAILURES" --argjson pd "$DONE_COUNT" \
+jq --argjson cf "$CONSEC_FAILURES" --argjson pd "$PROGRESS_COUNT" \
   '.safety.consecutive_failures = $cf | .safety._prev_done_count = $pd' \
   "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
 
@@ -304,6 +314,7 @@ jq -n \
   --argjson files_modified "$FILES_MODIFIED_JSON" \
   --argjson total "$TOTAL_COUNT" \
   --argjson done_count "$DONE_COUNT" \
+  --argjson approved "$APPROVED_COUNT" \
   --argjson ready "$READY_COUNT" \
   --argjson in_progress "$IN_PROGRESS_COUNT" \
   --argjson in_review "$IN_REVIEW_COUNT" \
@@ -334,6 +345,7 @@ jq -n \
     plan_snapshot: {
       total_tasks: $total,
       done: $done_count,
+      approved: $approved,
       ready: $ready,
       in_progress: $in_progress,
       in_review: $in_review,
@@ -417,15 +429,20 @@ if [ -d "$HYDRA_DIR/tasks" ]; then
         sed -i.bak 's/^\(- \*\*Status\*\*:\) PLANNED/\1 READY/' "$task_file" && rm -f "${task_file}.bak"
         continue
       fi
-      # Check if all dependencies are DONE
+      # Check if all dependencies are DONE (or APPROVED in YOLO mode)
       ALL_DONE=true
       while IFS= read -r dep; do
         dep_file="$HYDRA_DIR/tasks/${dep}.md"
         if [ -f "$dep_file" ]; then
           DEP_STATUS=$(grep -m1 '^\- \*\*Status\*\*:' "$dep_file" 2>/dev/null | sed 's/.*: //' || echo "")
-          if [ "$DEP_STATUS" != "DONE" ]; then
-            ALL_DONE=false
-            break
+          if [ "$YOLO_MODE" = "true" ]; then
+            if [ "$DEP_STATUS" != "DONE" ] && [ "$DEP_STATUS" != "APPROVED" ]; then
+              ALL_DONE=false; break
+            fi
+          else
+            if [ "$DEP_STATUS" != "DONE" ]; then
+              ALL_DONE=false; break
+            fi
           fi
         fi
       done <<< "$(echo "$DEPS" | tr ',' '\n' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')"
@@ -519,16 +536,32 @@ jq -n \
 
 # --- EXIT CONDITIONS ---
 
-# 1. All tasks DONE
-if [ "$TOTAL_COUNT" -gt 0 ] && [ "$DONE_COUNT" -eq "$TOTAL_COUNT" ]; then
-  if [ "$NOTIFY_ENABLED" = "true" ]; then
-    jq -n \
-      --arg event "loop_complete" \
-      --arg timestamp "$TIMESTAMP" \
-      --arg summary "All ${TOTAL_COUNT} tasks done. Branch: ${GIT_BRANCH}." \
-      '{event: $event, timestamp: $timestamp, summary: $summary}' >> "$NOTIFY_FILE"
+# 1. All tasks complete
+# YOLO mode: loop completes when all tasks are APPROVED or DONE
+# Non-YOLO: loop completes when all tasks are DONE
+if [ "$TOTAL_COUNT" -gt 0 ]; then
+  if [ "$YOLO_MODE" = "true" ]; then
+    LOCALLY_COMPLETE=$((APPROVED_COUNT + DONE_COUNT))
+    if [ "$LOCALLY_COMPLETE" -eq "$TOTAL_COUNT" ]; then
+      if [ "$NOTIFY_ENABLED" = "true" ]; then
+        jq -n \
+          --arg event "loop_complete" \
+          --arg timestamp "$TIMESTAMP" \
+          --arg summary "All ${TOTAL_COUNT} tasks locally complete (${APPROVED_COUNT} approved, ${DONE_COUNT} merged). Branch: ${GIT_BRANCH}." \
+          '{event: $event, timestamp: $timestamp, summary: $summary}' >> "$NOTIFY_FILE"
+      fi
+      exit 0
+    fi
+  elif [ "$DONE_COUNT" -eq "$TOTAL_COUNT" ]; then
+    if [ "$NOTIFY_ENABLED" = "true" ]; then
+      jq -n \
+        --arg event "loop_complete" \
+        --arg timestamp "$TIMESTAMP" \
+        --arg summary "All ${TOTAL_COUNT} tasks done. Branch: ${GIT_BRANCH}." \
+        '{event: $event, timestamp: $timestamp, summary: $summary}' >> "$NOTIFY_FILE"
+    fi
+    exit 0
   fi
-  exit 0
 fi
 
 # 2. Max iterations reached
@@ -550,10 +583,14 @@ REASON="Iteration ${NEW_ITER}/${MAX_ITER}: ${DONE_COUNT}/${TOTAL_COUNT} tasks do
 
 cat >&2 << CONTINUE_MSG
 Hydra loop — iteration ${NEW_ITER}/${MAX_ITER} | Mode: ${MODE}
-Tasks: ${DONE_COUNT} done, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked, ${PLANNED_COUNT} planned
+Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked, ${PLANNED_COUNT} planned
 
 Read hydra/plan.md → Recovery Pointer section for current state.
 $([ -n "$ACTIVE_TASK" ] && echo "Active task: hydra/tasks/${ACTIVE_TASK}.md (${ACTIVE_STATUS})" || echo "No active task — find first READY task in hydra/plan.md")
+$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (hydra-framework:review-gate) for ${ACTIVE_TASK}. Do NOT skip the review gate.")
+$([ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (hydra-framework:review-gate) for ${ACTIVE_TASK}.")
+$([ "$ACTIVE_STATUS" = "READY" ] || [ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (hydra-framework:implementer) for ${ACTIVE_TASK}.")
+$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (hydra-framework:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first.")
 $([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "IMPORTANT: Read hydra/reviews/${ACTIVE_TASK}/consolidated-feedback.md before re-implementing.")
 $([ "$GIT_CONFLICT_DETECTED" = true ] && echo "WARNING: Git conflicts detected. Resolve unmerged files before continuing.")
 $([ -n "$CONTEXT_ROT_WARNING" ] && echo "$CONTEXT_ROT_WARNING")

@@ -95,7 +95,9 @@
     "timeout_minutes": 90,
     "checkpoint_every_n_iterations": 5,
     "auto_commit": true,
-    "commit_prefix": "hydra:"
+    "commit_prefix": "hydra:",
+    "branch_per_task": true,
+    "last_task_branch": null
   },
   "context": {
     "budget_strategy": "aggressive",

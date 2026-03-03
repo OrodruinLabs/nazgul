@@ -36,19 +36,22 @@ These rules govern all agent behavior during a Hydra loop. Violation of any rule
 No task may skip a state. The state machine is the backbone of correctness.
 
 ```
-PLANNED → READY → IN_PROGRESS → IMPLEMENTED → IN_REVIEW → DONE
+Non-YOLO: PLANNED → READY → IN_PROGRESS → IMPLEMENTED → IN_REVIEW → DONE
+YOLO:     PLANNED → READY → IN_PROGRESS → IMPLEMENTED → IN_REVIEW → APPROVED → DONE
 ```
 
 ### Permitted Transitions
 
 | From | To | Condition | Written By |
 |------|----|-----------|------------|
-| PLANNED | READY | All dependencies are DONE | Stop hook (automatic) |
+| PLANNED | READY | All dependencies are DONE (or APPROVED in YOLO mode) | Stop hook (automatic) |
 | READY | IN_PROGRESS | Agent claims the task | Implementer |
 | IN_PROGRESS | IMPLEMENTED | Code complete + tests pass + lint clean | Implementer |
 | IMPLEMENTED | IN_REVIEW | Review gate picks up the task | Review Gate |
-| IN_REVIEW | DONE | ALL reviewers APPROVED | Review Gate |
+| IN_REVIEW | DONE | ALL reviewers APPROVED (non-YOLO mode) | Review Gate |
+| IN_REVIEW | APPROVED | ALL reviewers APPROVED (YOLO mode) | Review Gate |
 | IN_REVIEW | CHANGES_REQUESTED | ANY reviewer rejects | Review Gate |
+| APPROVED | DONE | PR merged (external event, YOLO mode only) | Notification handler or user |
 | CHANGES_REQUESTED | IN_PROGRESS | Implementer addresses feedback | Implementer |
 | Any active state | BLOCKED | Max retries hit, unresolvable issue, or 3 consecutive test failures | Implementer or Review Gate |
 | BLOCKED | READY | Human intervention resolves the blocker | User (manual or /hydra-task unblock) |
@@ -60,6 +63,7 @@ PLANNED → READY → IN_PROGRESS → IMPLEMENTED → IN_REVIEW → DONE
 - IN_PROGRESS directly to IN_REVIEW (must go through IMPLEMENTED)
 - IN_REVIEW directly to IN_PROGRESS (must go through CHANGES_REQUESTED)
 - DONE to any other state (DONE is terminal)
+- APPROVED to any state other than DONE (APPROVED is near-terminal, only PR merge advances it)
 
 ---
 
@@ -82,6 +86,16 @@ PLANNED → READY → IN_PROGRESS → IMPLEMENTED → IN_REVIEW → DONE
 7. **Test failure escalation is per-task.** The 3-consecutive-test-failure threshold tracks across retries for the same task. If a task fails tests 3 times (even across different retry cycles), it is BLOCKED with detailed test output written to `hydra/reviews/[TASK-ID]/test-failures.md`.
 
 8. **Feedback priority is fixed.** When the Feedback Aggregator consolidates reviewer feedback, priority is: security findings first, correctness issues second, style concerns last. Security findings are always blocking regardless of confidence score.
+
+### YOLO Mode — Deferred Merge
+
+In YOLO mode (`afk.yolo: true`), the in-loop review gate still runs fully — all
+configured reviewers must approve before a task advances. However, instead of DONE,
+the task is set to APPROVED and a stacked PR is created. The loop proceeds to the
+next task immediately.
+
+DONE is set only when the PR is merged. This defers external code review to the PR
+while preserving all local quality checks (tests, lint, all 6 reviewers).
 
 ---
 

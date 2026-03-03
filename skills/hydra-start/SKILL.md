@@ -265,7 +265,9 @@ If no active tasks found: "Nothing to continue. Run `/hydra-start` to auto-detec
 ### YOLO Mode Notes
 - Everything in AFK mode, PLUS:
 - Zero permission prompts — all tool calls execute immediately
-- The agent goes full berserk: reads, writes, edits, runs tests, commits — no interruptions
+- **All reviewers still run** — the full review gate executes for every task
+- **Deferred merge** — after reviewers approve, task → APPROVED + stacked PR created; DONE only when PR merged
+- **Branch stacking** — each task gets `hydra/TASK-NNN` branch based on previous task's branch
+- Loop continues immediately after APPROVED — doesn't wait for PR merge
+- Tests, lint, security guards fully active
 - Requires launching Claude Code with `--dangerously-skip-permissions`
-- Recommended for overnight/unattended runs on trusted codebases
-- Security guard (pre-tool-guard.sh) still blocks genuinely destructive commands (rm -rf /, DROP TABLE, etc.)
