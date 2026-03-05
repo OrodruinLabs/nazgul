@@ -30,6 +30,7 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 - `/hydra-context` — Collect targeted context for an objective type
 - `/hydra-simplify` — Post-loop cleanup pass on modified files
 - `/hydra-docs` — View or regenerate project documents
+- `/hydra-help` — Quick reference for all commands and modes
 
 ## The 10 Rules for the Hydra Loop
 
