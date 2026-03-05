@@ -14,6 +14,8 @@ metadata:
 ## Examples
 - `/hydra-init` — Initialize Hydra with default settings
 - `/hydra-init --force` — Reinitialize, archiving current state first
+- `/hydra-init --local` — Initialize in local mode (files not tracked in git)
+- `/hydra-init --local --force` — Reinitialize in local mode
 
 ## Prerequisites Check
 - jq installed: !`which jq 2>/dev/null && echo "YES" || echo "NO — install jq first: brew install jq (macOS) or apt install jq (Linux)"`
@@ -31,6 +33,11 @@ Initialize the Hydra Framework for this project:
 2. If it exists, warn the user: "Hydra is already initialized for this project. Use `--force` to reinitialize (current state will be archived)."
 3. If `--force` was passed (check $ARGUMENTS), archive current state to `hydra/archive/` first, then proceed
 4. If neither --force nor fresh: STOP here
+
+### Step 0.5: Parse Arguments
+1. Check `$ARGUMENTS` for `--local` flag
+2. If `--local` is present, set a variable `LOCAL_MODE=true`
+3. Both `--local` and `--force` can be combined
 
 ### Step 1: Check Prerequisites
 1. Verify `jq` is installed (required for hook scripts). If jq is NOT installed, output: "REQUIRED: jq is not installed. Install it first: `brew install jq` (macOS) or `apt install jq` (Linux). Hydra cannot function without jq." — STOP, do not proceed with initialization.
@@ -54,6 +61,23 @@ hydra/
 └── notifications.jsonl  # Empty, for OpenClaw bridge
 ```
 
+### Step 2.5: Configure Git Ignore (Local Mode Only)
+If `LOCAL_MODE=true`:
+
+1. Read or create `.gitignore` at the project root
+2. Check if `# Hydra Framework (local mode)` marker already exists
+3. If marker is NOT present, append:
+   ```
+   # Hydra Framework (local mode)
+   hydra/
+   .claude/agents/generated/
+   .mcp.json
+   ```
+4. Set `install_mode` to `"local"` in the config:
+   ```bash
+   jq '.install_mode = "local"' hydra/config.json > hydra/config.json.tmp && mv hydra/config.json.tmp hydra/config.json
+   ```
+
 ### Step 3: Run Discovery
 Delegate to the Discovery agent to scan the codebase:
 1. Generate project context files in `hydra/context/`
@@ -66,9 +90,15 @@ Show the user:
 - Number of files scanned
 - Reviewer board generated (list all reviewer agents)
 - Companion plugin status
+- Install mode: local (files not tracked in git) / shared (files tracked in git)
 - Next step: `/hydra-start "your objective"`
 
-### Step 5: Inject CLAUDE.md
+### Step 5: Inject CLAUDE.md (Shared Mode Only)
+If `LOCAL_MODE=true`:
+- Skip this step entirely. The plugin's own CLAUDE.md provides instructions via the plugin system.
+- Output: "Skipping CLAUDE.md injection (local mode)."
+
+Otherwise (shared mode):
 If the project doesn't already have Hydra instructions in CLAUDE.md:
 - Append the Hydra section from `templates/CLAUDE.md.template`
 - Or create CLAUDE.md if it doesn't exist
