@@ -43,7 +43,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_hydra_dir
-create_config
+create_config '.agents.reviewers = ["code-reviewer"]'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_task_file "TASK-002" "DONE"
@@ -155,7 +155,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_hydra_dir
-create_config '.safety.consecutive_failures = 3' '.safety._prev_done_count = 1'
+create_config '.safety.consecutive_failures = 3' '.safety._prev_done_count = 1' '.agents.reviewers = ["code-reviewer"]'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_task_file "TASK-002" "DONE"
@@ -233,7 +233,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_hydra_dir
-create_config
+create_config '.agents.reviewers = ["code-reviewer"]'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -281,7 +281,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_hydra_dir
-create_config '.notifications.enabled = true' '.safety._prev_done_count = 0'
+create_config '.notifications.enabled = true' '.safety._prev_done_count = 0' '.agents.reviewers = ["code-reviewer"]'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -355,7 +355,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_hydra_dir
-create_config
+create_config '.agents.reviewers = ["code-reviewer"]'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"

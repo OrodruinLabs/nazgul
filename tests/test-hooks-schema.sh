@@ -28,7 +28,7 @@ assert_eq "has SessionStart hook" "$val" "array"
 
 # Stop has both prompt and command hooks
 stop_types=$(jq -r '[.hooks.Stop[0].hooks[].type] | sort | join(",")' "$HOOKS")
-assert_eq "Stop has prompt and command" "$stop_types" "command,prompt"
+assert_eq "Stop has command hook" "$stop_types" "command"
 
 # PreToolUse has Bash matcher
 matcher=$(jq -r '.hooks.PreToolUse[0].matcher' "$HOOKS")
