@@ -62,11 +62,24 @@ To load Hydra automatically, add an alias to your shell profile (`~/.zshrc` or `
 alias claude='claude --plugin-dir /path/to/ai-hydra-framework'
 ```
 
+## Local Mode
+
+By default, `/hydra-init` creates files that are tracked in git (shared mode). If you want to keep all Hydra artifacts out of your project's repository, use local mode:
+
+```bash
+/hydra-init --local
+```
+
+This automatically adds `hydra/`, `.claude/agents/generated/`, and `.mcp.json` to your `.gitignore` and skips CLAUDE.md injection. All Hydra functionality works identically — the files just stay local to your machine.
+
 ## Quick Start
 
 ```bash
 # 1. Initialize Hydra for your project
 /hydra-init
+
+# 1b. Or initialize without tracking Hydra files in git
+/hydra-init --local
 
 # 2. (Optional) Build a project spec for greenfield projects
 /hydra-gen-spec
@@ -80,6 +93,9 @@ claude --dangerously-skip-permissions
 
 # 4. Check progress
 /hydra-status
+
+# Need help? See all commands at a glance
+/hydra-help
 ```
 
 Hydra auto-detects project state: if there's active work it resumes, if docs exist it plans, if the project is fresh it scans for TODOs/issues/failing tests and derives an objective. You can always override with `/hydra-start "specific objective"`.
@@ -133,7 +149,9 @@ Process pending events with `/hydra-notify`.
 
 | Command | Description | Mode |
 |---------|-------------|------|
+| `/hydra-help` | Quick reference for all commands, modes, and rules | Read-only |
 | `/hydra-init` | First-time setup: discovery, reviewer generation, runtime dirs | User-only |
+| `/hydra-init --local` | Same as above, but gitignores all Hydra artifacts | User-only |
 | `/hydra-start` | Smart start/resume — auto-detects state, derives objective from project context | User-only |
 | `/hydra-start "objective"` | Override: start a specific new objective | User-only |
 | `/hydra-status` | Check loop progress, task counts, reviewer board, board sync health | Read-only fork |
@@ -305,7 +323,7 @@ hydra/                          # Plugin root
 │   ├── release-manager.md      # Versioning + releases
 │   ├── observability.md        # Logging + metrics
 │   └── templates/              # Reviewer templates (10)
-├── skills/                     # Slash commands (15)
+├── skills/                     # Slash commands (16)
 ├── hooks/hooks.json            # Hook definitions
 ├── scripts/                    # Hook + sync scripts (8)
 ├── mcp-server/                 # MCP notification server (TypeScript)
