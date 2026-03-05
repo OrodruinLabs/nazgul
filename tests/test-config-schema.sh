@@ -19,6 +19,7 @@ assert_json_field "has .mode" "$CONFIG" ".mode" "hitl"
 assert_json_field "has .max_iterations" "$CONFIG" ".max_iterations" "40"
 assert_json_field "has .current_iteration" "$CONFIG" ".current_iteration" "0"
 assert_json_field "has .completion_promise" "$CONFIG" ".completion_promise" "HYDRA_COMPLETE"
+assert_json_field "has .install_mode" "$CONFIG" ".install_mode" "shared"
 
 # Nested: .project
 val=$(jq -r '.project | type' "$CONFIG")
