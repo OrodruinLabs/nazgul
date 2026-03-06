@@ -16,8 +16,6 @@
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-Plugin-7c3aed?style=flat-square" alt="Claude Code Plugin">
   <img src="https://img.shields.io/badge/agents-29-orange?style=flat-square" alt="Agents">
-  <img src="https://img.shields.io/github/stars/Strumtry/ai-hydra-framework?style=flat-square" alt="GitHub Stars">
-  <img src="https://img.shields.io/github/last-commit/Strumtry/ai-hydra-framework?style=flat-square" alt="Last Commit">
 </p>
 
 <br>
@@ -34,7 +32,7 @@ Hydra runs a complete autonomous SDLC pipeline — from scanning your codebase t
 - **Survives interruptions** — checkpoints, recovery pointers, and session hooks mean you can close your laptop and resume later
 
 ```mermaid
-flowchart LR
+flowchart TD
   A["Objective"] --> B["Discovery"]
   B --> C["Docs"]
   C --> D["Plan"]
