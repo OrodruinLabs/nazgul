@@ -25,6 +25,7 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 - `/hydra-pause` — Gracefully pause the loop at next iteration boundary
 - `/hydra-log` — View run history: iterations, commits, reviews, blockers
 - `/hydra-reset` — Archive current state and reset to clean slate
+- `/hydra-clean` — Fully remove Hydra from this project
 - `/hydra-review` — Manually trigger review for a task
 - `/hydra-discover` — Re-run codebase discovery
 - `/hydra-context` — Collect targeted context for an objective type

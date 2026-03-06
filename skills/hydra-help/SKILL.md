@@ -52,6 +52,7 @@ metadata:
 | `/hydra-pause` | Pause loop at next iteration boundary |
 | `/hydra-reset` | Archive state and start fresh |
 | `/hydra-review` | Manually trigger review for a task |
+| `/hydra-clean` | Fully remove Hydra from this project |
 
 ## Advanced
 
