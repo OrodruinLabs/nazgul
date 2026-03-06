@@ -21,7 +21,9 @@ skills/                              # User-facing commands (/hydra-*)
 │   ├── hydra-discover/SKILL.md
 │   ├── hydra-context/SKILL.md
 │   ├── hydra-simplify/SKILL.md
-│   └── hydra-docs/SKILL.md
+│   ├── hydra-docs/SKILL.md
+│   ├── hydra-patch/SKILL.md
+│   └── hydra-verify/SKILL.md
 agents/                              # Subagent definitions
 │   ├── discovery.md                 # Pipeline: scans codebase, classifies project
 │   ├── doc-generator.md             # Pipeline: generates PRD, TRD, ADRs
@@ -50,6 +52,9 @@ templates/                           # Objective + document templates
 │   ├── CLAUDE.md.template           # Injected into target projects by /hydra-init
 │   ├── feature.md / tdd.md / bugfix.md / refactor.md / greenfield.md / migration.md
 │   └── docs/                        # Document templates for doc-generator
+references/                          # Shared reference docs for agents
+│   ├── ui-brand.md                  # Visual identity and output formatting
+│   └── verification-patterns.md     # Stub detection and wiring verification
 tests/                               # Plugin validation tests
 ```
 
