@@ -24,6 +24,12 @@
 - **Delegates to**: none
 <!-- Specialist agents this task delegates to, e.g. designer, frontend-dev
      The implementer writes delegation briefs to hydra/tasks/TASK-000-delegation.md -->
+- **Files modified**: []
+<!-- List of all files this task will create or modify (populated by planner from File Scope).
+     Used by wave analysis to detect file overlap between tasks. -->
+- **Wave**: 0
+<!-- Wave number assigned by the planner's wave analysis.
+     Tasks in the same wave can execute in parallel safely. -->
 - **Traces to**: none
 <!-- Traceability back to project documents. See Traceability section below. -->
 - **Created at**: <!-- ISO 8601 timestamp, e.g. 2026-02-27T10:00:00Z -->

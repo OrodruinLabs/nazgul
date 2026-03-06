@@ -100,6 +100,50 @@ Each task manifest includes:
 - `delegates_to` field (if specialist agents needed: designer, frontend-dev, etc.)
 - `traces_to` field (PRD criteria, TRD component, ADR reference)
 
+## Wave Analysis
+
+After generating all tasks, perform wave analysis for parallel execution:
+
+### Step 1: Build File Overlap Matrix
+For each pair of tasks, check if their `File Scope` sections overlap:
+- Extract all files from `Creates` and `Modifies` for each task
+- Populate the `Files modified` metadata field with this list
+- Two tasks overlap if ANY file appears in both tasks' file lists
+
+### Step 2: Build Dependency Graph
+From each task's `Depends on` field, construct a directed dependency graph.
+Tasks with dependencies MUST be in a later wave than their dependencies.
+
+### Step 3: Assign Waves
+- **Wave 1**: Tasks with NO dependencies AND no file overlap with each other
+- **Wave 2**: Tasks that depend on Wave 1 tasks (or overlap with Wave 1 files)
+- **Wave N**: Tasks that depend on Wave N-1 tasks
+- If two tasks have file overlap but no explicit dependency, place them in sequential waves
+
+Rules:
+- Tasks in the same wave can execute in parallel safely
+- Tasks in different waves execute sequentially
+- When uncertain about overlap, default to sequential (higher wave number)
+- Populate the `Wave` metadata field in each task manifest
+
+### Step 4: Write Wave Groups to plan.md
+Add a `## Wave Groups` section to plan.md:
+
+```markdown
+## Wave Groups
+
+### Wave 1
+- TASK-001, TASK-002 (independent, no file overlap)
+
+### Wave 2
+- TASK-003 (depends on TASK-001, modifies src/auth/)
+
+### Wave 3
+- TASK-004 (depends on TASK-002 and TASK-003)
+```
+
+This section is read by the loop orchestrator to determine parallel execution order.
+
 ## Context Management Rules
 
 1. Use subagents for all codebase exploration. Delegate to subagents for scanning.
