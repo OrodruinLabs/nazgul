@@ -113,6 +113,7 @@
     "use_agent_teams": true,
     "parallel_reviews": true,
     "parallel_independent_tasks": true,
+    "wave_execution": true,
     "max_parallel_teammates": 4,
     "require_settings": "enableAgentTeams"
   },

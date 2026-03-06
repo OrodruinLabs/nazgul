@@ -256,6 +256,40 @@ If no active tasks found: "Nothing to continue. Run `/hydra-start` to auto-detec
 
 ---
 
+### Wave-Based Execution
+
+Before dispatching the implementer, check for wave-based parallel execution:
+
+1. Read `hydra/plan.md` for a `## Wave Groups` section
+2. Read `hydra/config.json` for `parallelism.wave_execution` and `parallelism.enabled`
+
+**If wave groups exist AND wave_execution is true AND parallelism is enabled:**
+
+a. Identify the current wave — the lowest wave number with READY tasks
+b. Collect all READY tasks in that wave
+c. If only 1 task: dispatch implementer normally (no parallelism overhead)
+d. If 2+ tasks: dispatch parallel Agent Teams:
+   - One implementer per task, each with fresh context
+   - Team name: `hydra-impl-wave-[N]`
+   - Max parallel agents: `parallelism.max_parallel_teammates` from config
+   - Each agent commits atomically
+e. Wait for all agents in the wave to complete
+f. After wave completion:
+   - Verify no merge conflicts: run `git diff --check` on each task's files
+   - If conflicts detected: flag for manual resolution, mark conflicting task BLOCKED
+   - Promote next wave's tasks from PLANNED to READY (via dependency check)
+g. Continue to next wave
+
+**If wave groups don't exist OR wave_execution is false:**
+- Fall back to sequential execution (current behavior — pick next READY task, dispatch implementer)
+
+**Safety rules:**
+- If any task in a wave fails, complete remaining tasks in that wave but don't start next wave
+- If dependency analysis is missing, default to sequential
+- Never run more agents than `max_parallel_teammates`
+
+---
+
 ### AFK Mode Notes
 - Set `afk.enabled: true` in config
 - Auto-commit on every state transition with `hydra:` prefix
