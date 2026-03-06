@@ -73,6 +73,49 @@ Run each reviewer as a subagent, one at a time. Write results to same location.
 - Apply confidence threshold: findings with confidence < 80 → non-blocking CONCERN (⚠️)
 - Findings with confidence >= 80 AND severity HIGH/MEDIUM → blocking REJECT (❌)
 
+### Step 3.5: Human Verification (HITL Mode Only)
+
+**Condition:** ALL automated reviewers returned APPROVED AND config `mode` is `"hitl"`.
+
+Skip this step entirely if mode is `"afk"` or if any reviewer returned CHANGES_REQUESTED.
+
+#### Process
+
+1. Read the task manifest for acceptance criteria and implementation log
+2. Run automated pre-checks from `references/verification-patterns.md`:
+   - **Level 1 (Exists):** Check all files in task's File Scope exist
+   - **Level 2 (Substantive):** Run stub detection on created/modified files
+   - **Level 3 (Wired):** Verify new files are imported/referenced
+3. If pre-checks find issues, include them as context in the checkpoint
+4. Extract user-observable deliverables from acceptance criteria
+5. Present a verification checkpoint:
+
+```
+┌─── ◈ CHECKPOINT: Verification Required ──────────────┐
+│                                                       │
+│  TASK-NNN: [title]                                    │
+│  Reviewers: All approved ✦                            │
+│                                                       │
+│  Pre-check results:                                   │
+│  [Level 1-3 summary, or "All pre-checks passed"]     │
+│                                                       │
+│  Please verify:                                       │
+│  1. [testable deliverable from acceptance criteria]   │
+│  2. [testable deliverable]                            │
+│  3. [testable deliverable]                            │
+│                                                       │
+│  → Type "approved" or describe issues                 │
+└───────────────────────────────────────────────────────┘
+```
+
+6. Wait for human response:
+   - "approved" / "yes" / "y" → Continue to mark task DONE
+   - Any other response → Treat as issue description:
+     a. Log the issue in `hydra/tasks/TASK-NNN/verification.md`
+     b. Set task status to CHANGES_REQUESTED
+     c. Create actionable feedback: "Human verification failed: [user's description]"
+     d. Delegate to feedback-aggregator to consolidate with any reviewer concerns
+
 ### Step 4: Handle Results
 
 **ALL APPROVED:**

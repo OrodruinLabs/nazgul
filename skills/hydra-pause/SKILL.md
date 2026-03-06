@@ -43,13 +43,74 @@ Use `jq` to set `"paused": true` in `hydra/config.json`:
 jq '.paused = true' hydra/config.json > hydra/config.json.tmp && mv hydra/config.json.tmp hydra/config.json
 ```
 
-### Step 4: Confirm
+### Step 4: Generate Handoff Document
+
+After setting `paused: true`, generate `hydra/HANDOFF.md` for human consumption:
+
+1. Read `hydra/config.json` for: iteration count, max iterations, mode, objective
+2. Scan all `hydra/tasks/TASK-*.md` files to gather status counts and details
+3. Read any ADR files in `hydra/docs/` for decisions made
+4. Read blocked tasks for gotchas
+
+Write `hydra/HANDOFF.md`:
+
+```markdown
+# Hydra Handoff — [date]
+
+## Status
+Iteration [current]/[max] | Mode: [hitl/afk] | Paused at: [timestamp]
+
+## Objective
+[current objective from config]
+
+## What's Done
+[List each DONE task with ✦ symbol]
+- ✦ TASK-001: [title]
+- ✦ TASK-002: [title]
+
+## What's In Flight
+[List IN_PROGRESS and IN_REVIEW tasks with ◆ symbol and context]
+- ◆ TASK-007: [title] — [brief status from implementation log]
+- ◆ TASK-008: [title] — in review, awaiting [reviewer name]
+
+## Decisions Made
+[List ADRs or key decisions from task manifests]
+- ADR-001: [title]
+- ADR-002: [title]
+
+## Blockers & Gotchas
+[List BLOCKED tasks with ✗ symbol and reasons]
+- ✗ TASK-009: [title] — [blocked reason]
+
+## To Resume
+Run `/hydra-start` — loop picks up from the current task.
+Or `/hydra-status` to review state before continuing.
+```
+
+If no tasks exist yet, write a minimal handoff:
+```markdown
+# Hydra Handoff — [date]
+
+## Status
+Iteration [current]/[max] | Mode: [mode] | Paused at: [timestamp]
+No tasks generated yet.
+
+## To Resume
+Run `/hydra-start` to begin.
+```
+
+Use symbols: ✦ for done, ◆ for in-progress, ✗ for blocked.
+
+### Step 5: Confirm
 
 Output:
 ```
-Hydra will pause at the next iteration boundary.
-The current task action will complete before stopping.
+─── ◈ HYDRA ▸ PAUSED ────────────────────────────────────
 
-To resume: /hydra-start
-To check status: /hydra-status
+Handoff saved to hydra/HANDOFF.md
+Iteration [N]/[max] | [done] tasks done, [active] in flight
+
+─── ◈ NEXT ─────────────────────────────────────────────
+  /hydra-start to resume
+────────────────────────────────────────────────────────
 ```
