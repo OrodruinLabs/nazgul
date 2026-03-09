@@ -6,7 +6,7 @@
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 setup_temp_dir() {
-  TEST_DIR=$(mktemp -d "${TMPDIR:-/tmp}/hydra-test-XXXXXX")
+  TEST_DIR=$(mktemp -d "${TMPDIR:-/tmp}/hydra:test-XXXXXX")
   export TEST_DIR
   export CLAUDE_PROJECT_DIR="$TEST_DIR"
 }

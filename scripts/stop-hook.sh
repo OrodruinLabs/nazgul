@@ -25,7 +25,7 @@ MAX_CONSEC=$(jq -r '.safety.max_consecutive_failures // 5' "$CONFIG")
 YOLO_MODE=$(jq -r '.afk.yolo // false' "$CONFIG" 2>/dev/null || echo "false")
 # completion_promise is checked by the prompt-layer Stop hook, not this script
 
-# --- Pause flag check (for /hydra-pause skill) ---
+# --- Pause flag check (for /hydra:pause skill) ---
 PAUSED=$(jq -r '.paused // false' "$CONFIG")
 if [ "$PAUSED" = "true" ]; then
   jq '.paused = false' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
@@ -173,15 +173,6 @@ if [ "$YOLO_MODE" != "true" ] && [ -d "$HYDRA_DIR/tasks" ]; then
         DONE_COUNT=$((DONE_COUNT - 1))
         IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
         echo "HYDRA REVIEW GATE VIOLATION: ${TASK_ID} was DONE without full review — reset to IMPLEMENTED" >&2
-
-        # Log violation to notifications
-        NOTIFY_FILE="$HYDRA_DIR/notifications.jsonl"
-        jq -n \
-          --arg event "review_gate_violation" \
-          --arg task "$TASK_ID" \
-          --arg timestamp "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-          --arg summary "${TASK_ID} was marked DONE without full review evidence. Reset to IMPLEMENTED." \
-          '{event: $event, task: $task, timestamp: $timestamp, summary: $summary, requires_human: false}' >> "$NOTIFY_FILE"
       fi
     fi
   done
@@ -247,11 +238,17 @@ if [ -z "$ACTIVE_TASK" ]; then
   done
 fi
 
-# Get git state
+# Get git state (handle repos with no commits)
 GIT_BRANCH=$(git -C "$PROJECT_ROOT" branch --show-current 2>/dev/null || echo "unknown")
-GIT_SHA=$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
-GIT_MSG=$(git -C "$PROJECT_ROOT" log --oneline -1 2>/dev/null | cut -c9- || echo "unknown")
-GIT_DIRTY=$(git -C "$PROJECT_ROOT" diff --quiet 2>/dev/null && echo "false" || echo "true")
+if git -C "$PROJECT_ROOT" rev-parse HEAD >/dev/null 2>&1; then
+  GIT_SHA=$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  GIT_MSG=$(git -C "$PROJECT_ROOT" log --oneline -1 2>/dev/null | cut -c9- || echo "unknown")
+  GIT_DIRTY=$(git -C "$PROJECT_ROOT" diff --quiet 2>/dev/null && echo "false" || echo "true")
+else
+  GIT_SHA="unknown"
+  GIT_MSG="no commits yet"
+  GIT_DIRTY="true"
+fi
 
 # --- Capture files modified this iteration (GAP-012) ---
 # Get the last checkpoint's commit SHA to diff against, fall back to HEAD~1
@@ -262,10 +259,12 @@ if [ -n "$LAST_CHECKPOINT_FILE" ]; then
 fi
 
 FILES_MODIFIED_JSON="[]"
-if [ -n "$LAST_CHECKPOINT_SHA" ] && git -C "$PROJECT_ROOT" cat-file -t "$LAST_CHECKPOINT_SHA" >/dev/null 2>&1; then
-  FILES_MODIFIED_JSON=$(git -C "$PROJECT_ROOT" diff --name-only "$LAST_CHECKPOINT_SHA" HEAD 2>/dev/null | jq -R -s 'split("\n") | map(select(length > 0))' || echo "[]")
-else
-  FILES_MODIFIED_JSON=$(git -C "$PROJECT_ROOT" diff --name-only HEAD~1 HEAD 2>/dev/null | jq -R -s 'split("\n") | map(select(length > 0))' || echo "[]")
+if git -C "$PROJECT_ROOT" rev-parse HEAD >/dev/null 2>&1; then
+  if [ -n "$LAST_CHECKPOINT_SHA" ] && git -C "$PROJECT_ROOT" cat-file -t "$LAST_CHECKPOINT_SHA" >/dev/null 2>&1; then
+    FILES_MODIFIED_JSON=$(git -C "$PROJECT_ROOT" diff --name-only "$LAST_CHECKPOINT_SHA" HEAD 2>/dev/null | jq -R -s 'split("\n") | map(select(length > 0))' || echo "[]")
+  else
+    FILES_MODIFIED_JSON=$(git -C "$PROJECT_ROOT" diff --name-only HEAD~1 HEAD 2>/dev/null | jq -R -s 'split("\n") | map(select(length > 0))' || echo "[]")
+  fi
 fi
 
 # --- Context rot detection (3.4) ---
@@ -467,59 +466,6 @@ if echo "$GIT_PORCELAIN" | grep -qE '^(U.|.U|AA|DD) '; then
     fi
     ACTIVE_BLOCKED_REASON="git conflict"
   fi
-  # Write git conflict notification
-  NOTIFY_FILE="$HYDRA_DIR/notifications.jsonl"
-  jq -n \
-    --arg event "git_conflict" \
-    --arg task "${ACTIVE_TASK:-unknown}" \
-    --arg timestamp "$TIMESTAMP" \
-    --arg summary "Git conflict detected. Unmerged files found. Task blocked." \
-    '{event: $event, task: $task, timestamp: $timestamp, summary: $summary, requires_human: true}' >> "$NOTIFY_FILE"
-fi
-
-# --- Write notification events ---
-NOTIFY_ENABLED=$(jq -r '.notifications.enabled // false' "$CONFIG")
-NOTIFY_FILE="$HYDRA_DIR/notifications.jsonl"
-if [ "$NOTIFY_ENABLED" = "true" ]; then
-  # Check for task completions
-  if [ "$DONE_COUNT" -gt "$PREV_DONE" ]; then
-    jq -n \
-      --arg event "task_complete" \
-      --arg task "${ACTIVE_TASK:-unknown}" \
-      --arg timestamp "$TIMESTAMP" \
-      --arg summary "Task completed. ${DONE_COUNT}/${TOTAL_COUNT} done." \
-      '{event: $event, task: $task, timestamp: $timestamp, summary: $summary}' >> "$NOTIFY_FILE"
-  fi
-  if [ "$BLOCKED_COUNT" -gt 0 ]; then
-    jq -n \
-      --arg event "blocked" \
-      --arg task "${ACTIVE_TASK:-unknown}" \
-      --arg timestamp "$TIMESTAMP" \
-      --arg reason "Task blocked. Check task manifest for details." \
-      '{event: $event, task: $task, timestamp: $timestamp, reason: $reason, requires_human: true}' >> "$NOTIFY_FILE"
-  fi
-fi
-
-# --- Security rejections always notify (3.6) ---
-# Check if any BLOCKED task has a security-related blocked reason
-if [ -n "$ACTIVE_BLOCKED_REASON" ]; then
-  if echo "$ACTIVE_BLOCKED_REASON" | grep -qi "security"; then
-    # ALWAYS write security rejection notification regardless of notifications.enabled
-    jq -n \
-      --arg event "security_rejection" \
-      --arg task "${ACTIVE_TASK:-unknown}" \
-      --arg timestamp "$TIMESTAMP" \
-      --arg reason "Security rejection: ${ACTIVE_BLOCKED_REASON}" \
-      '{event: $event, task: $task, timestamp: $timestamp, reason: $reason, requires_human: true}' >> "$NOTIFY_FILE"
-  fi
-fi
-
-# --- Check for pending notification events from MCP server ---
-NOTIFY_DB="$HYDRA_DIR/notifications.db"
-if [ -f "$NOTIFY_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
-  PENDING_EVENTS=$(sqlite3 "$NOTIFY_DB" "SELECT COUNT(*) FROM events WHERE status='pending';" 2>/dev/null || echo "0")
-else
-  PENDING_EVENTS=0
 fi
 
 # --- Iteration logs (4.1) ---
@@ -543,23 +489,9 @@ if [ "$TOTAL_COUNT" -gt 0 ]; then
   if [ "$YOLO_MODE" = "true" ]; then
     LOCALLY_COMPLETE=$((APPROVED_COUNT + DONE_COUNT))
     if [ "$LOCALLY_COMPLETE" -eq "$TOTAL_COUNT" ]; then
-      if [ "$NOTIFY_ENABLED" = "true" ]; then
-        jq -n \
-          --arg event "loop_complete" \
-          --arg timestamp "$TIMESTAMP" \
-          --arg summary "All ${TOTAL_COUNT} tasks locally complete (${APPROVED_COUNT} approved, ${DONE_COUNT} merged). Branch: ${GIT_BRANCH}." \
-          '{event: $event, timestamp: $timestamp, summary: $summary}' >> "$NOTIFY_FILE"
-      fi
       exit 0
     fi
   elif [ "$DONE_COUNT" -eq "$TOTAL_COUNT" ]; then
-    if [ "$NOTIFY_ENABLED" = "true" ]; then
-      jq -n \
-        --arg event "loop_complete" \
-        --arg timestamp "$TIMESTAMP" \
-        --arg summary "All ${TOTAL_COUNT} tasks done. Branch: ${GIT_BRANCH}." \
-        '{event: $event, timestamp: $timestamp, summary: $summary}' >> "$NOTIFY_FILE"
-    fi
     exit 0
   fi
 fi
@@ -587,14 +519,13 @@ Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${I
 
 Read hydra/plan.md → Recovery Pointer section for current state.
 $([ -n "$ACTIVE_TASK" ] && echo "Active task: hydra/tasks/${ACTIVE_TASK}.md (${ACTIVE_STATUS})" || echo "No active task — find first READY task in hydra/plan.md")
-$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (hydra-framework:review-gate) for ${ACTIVE_TASK}. Do NOT skip the review gate.")
-$([ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (hydra-framework:review-gate) for ${ACTIVE_TASK}.")
-$([ "$ACTIVE_STATUS" = "READY" ] || [ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (hydra-framework:implementer) for ${ACTIVE_TASK}.")
-$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (hydra-framework:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first.")
+$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (hydra:review-gate) for ${ACTIVE_TASK}. Do NOT skip the review gate.")
+$([ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (hydra:review-gate) for ${ACTIVE_TASK}.")
+$([ "$ACTIVE_STATUS" = "READY" ] || [ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}.")
+$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first.")
 $([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "IMPORTANT: Read hydra/reviews/${ACTIVE_TASK}/consolidated-feedback.md before re-implementing.")
 $([ "$GIT_CONFLICT_DETECTED" = true ] && echo "WARNING: Git conflicts detected. Resolve unmerged files before continuing.")
 $([ -n "$CONTEXT_ROT_WARNING" ] && echo "$CONTEXT_ROT_WARNING")
-$([ "$PENDING_EVENTS" -gt 0 ] && echo "NOTIFICATION_EVENTS: $PENDING_EVENTS pending event(s) from MCP server. Run /hydra-notify to process them.")
 
 Continue the Hydra pipeline: read plan.md, delegate to the appropriate agent based on task status.
 CONTINUE_MSG

@@ -127,16 +127,6 @@
     "post_loop": "sonnet",
     "default": "sonnet"
   },
-  "notifications": {
-    "enabled": false,
-    "notify_on": [
-      "task_complete",
-      "blocked",
-      "loop_complete",
-      "security_rejection"
-    ],
-    "notify_file": "hydra/notifications.jsonl"
-  },
   "board": {
     "enabled": false,
     "provider": null,

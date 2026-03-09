@@ -1,8 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/hydra-logo-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/hydra-logo-light.png">
-    <img alt="Hydra Framework" src="assets/hydra-logo-light.png" width="400">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hydra:logo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/hydra:logo-light.png">
+    <img alt="Hydra Framework" src="assets/hydra:logo-light.png" width="400">
   </picture>
 </p>
 
@@ -45,13 +45,13 @@ flowchart TD
 ## Install
 
 ```bash
-git clone https://github.com/Strumtry/ai-hydra-framework.git
-claude --plugin-dir /path/to/ai-hydra-framework
+git clone https://github.com/Strumtry/ai-hydra.git
+claude --plugin-dir /path/to/ai-hydra
 ```
 
 To load automatically, add to `~/.zshrc` or `~/.bashrc`:
 ```bash
-alias claude='claude --plugin-dir /path/to/ai-hydra-framework'
+alias claude='claude --plugin-dir /path/to/ai-hydra'
 ```
 
 ## Quick Start
@@ -59,36 +59,36 @@ alias claude='claude --plugin-dir /path/to/ai-hydra-framework'
 > [!TIP]
 > **3 commands to get started:**
 > ```bash
-> /hydra-init            # Set up Hydra for your project
-> /hydra-start           # Start the autonomous loop
-> /hydra-status          # Check progress anytime
+> /hydra:init            # Set up Hydra for your project
+> /hydra:start           # Start the autonomous loop
+> /hydra:status          # Check progress anytime
 > ```
 
-Hydra auto-detects project state: active work resumes, existing docs trigger planning, fresh projects scan for TODOs/issues/failing tests. Override with `/hydra-start "specific objective"`.
+Hydra auto-detects project state: active work resumes, existing docs trigger planning, fresh projects scan for TODOs/issues/failing tests. Override with `/hydra:start "specific objective"`.
 
 > [!WARNING]
 > **Autonomous mode** skips all permission prompts:
 > ```bash
 > claude --dangerously-skip-permissions
-> /hydra-start --yolo --max 30
+> /hydra:start --yolo --max 30
 > ```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `/hydra-init` | First-time setup: discovery, reviewer generation, runtime dirs |
-| `/hydra-start` | Smart start/resume — auto-detects state, derives objective |
-| `/hydra-status` | Check loop progress, task counts, reviewer board |
-| `/hydra-pause` | Gracefully pause at next iteration boundary |
-| `/hydra-task` | Task lifecycle: skip, unblock, add, prioritize, list |
-| `/hydra-review` | Manually trigger review for a task |
-| `/hydra-log` | View run history — iterations, commits, reviews |
-| `/hydra-board` | Connect task tracking to GitHub Projects |
-| `/hydra-docs` | View or regenerate project documents |
-| `/hydra-help` | Quick reference for all commands and modes |
+| `/hydra:init` | First-time setup: discovery, reviewer generation, runtime dirs |
+| `/hydra:start` | Smart start/resume — auto-detects state, derives objective |
+| `/hydra:status` | Check loop progress, task counts, reviewer board |
+| `/hydra:pause` | Gracefully pause at next iteration boundary |
+| `/hydra:task` | Task lifecycle: skip, unblock, add, prioritize, list |
+| `/hydra:review` | Manually trigger review for a task |
+| `/hydra:log` | View run history — iterations, commits, reviews |
+| `/hydra:board` | Connect task tracking to GitHub Projects |
+| `/hydra:docs` | View or regenerate project documents |
+| `/hydra:help` | Quick reference for all commands and modes |
 
-See `/hydra-help` for the full command list and all flags.
+See `/hydra:help` for the full command list and all flags.
 
 ## How It Works
 
@@ -100,12 +100,12 @@ See [Architecture](docs/ARCHITECTURE.md) for the full agent roster, pipeline det
 
 - `jq` — Required for JSON manipulation in hook scripts
 - `git` — Required for commit tracking and state persistence
-- Claude Code — Agent Teams is enabled automatically by `/hydra-init`
+- Claude Code — Agent Teams is enabled automatically by `/hydra:init`
 
 ## Learn More
 
 - [Architecture](docs/ARCHITECTURE.md) — Pipeline, agent roster, recovery, directory structure
-- [Configuration](docs/CONFIGURATION.md) — Start flags, local mode, board sync, notifications
+- [Configuration](docs/CONFIGURATION.md) — Start flags, local mode, board sync
 - [Safety & Rules](docs/SAFETY.md) — The 10 rules, guardrails, troubleshooting
 - [Plugins](docs/PLUGINS.md) — Companion plugins, compatibility matrix, OpenClaw
 

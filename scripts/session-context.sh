@@ -113,11 +113,11 @@ fi
 cat << CONTEXT_EOF2
 $([ -n "$MIGRATION_NOTICE" ] && echo "NOTICE: $MIGRATION_NOTICE" || true)
 Active task: ${ACTIVE_TASK:-none} (${ACTIVE_STATUS:-none})
-$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (hydra-framework:review-gate) for ${ACTIVE_TASK}. Do NOT skip the review gate." || true)
-$([ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (hydra-framework:review-gate) for ${ACTIVE_TASK}." || true)
-$([ "$ACTIVE_STATUS" = "READY" ] && echo "DELEGATE: Spawn implementer agent (hydra-framework:implementer) for ${ACTIVE_TASK}." || true)
-$([ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (hydra-framework:implementer) for ${ACTIVE_TASK}." || true)
-$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (hydra-framework:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first." || true)
+$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (hydra:review-gate) for ${ACTIVE_TASK}. Do NOT skip the review gate." || true)
+$([ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (hydra:review-gate) for ${ACTIVE_TASK}." || true)
+$([ "$ACTIVE_STATUS" = "READY" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}." || true)
+$([ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}." || true)
+$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first." || true)
 Reviewers: ${REVIEWERS}
 Git: ${GIT_BRANCH} — ${GIT_LAST}
 Latest checkpoint: ${LATEST_CHECKPOINT}
@@ -125,18 +125,3 @@ $([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "WARNING: Read hydra/review
 
 Read hydra/plan.md for full state. Continue the Hydra pipeline.
 CONTEXT_EOF2
-
-# Check for pending notification events (zero-cost: reads SQLite directly)
-NOTIFY_DB="$HYDRA_DIR/notifications.db"
-if [ -f "$NOTIFY_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
-  PENDING=$(sqlite3 "$NOTIFY_DB" "SELECT COUNT(*) FROM events WHERE status='pending';" 2>/dev/null || echo "0")
-  if [ "$PENDING" -gt 0 ]; then
-    echo "NOTIFICATION_EVENTS: $PENDING pending event(s). Run /hydra-notify to process them."
-  fi
-fi
-
-# Trigger fresh poll from MCP server on session start and compaction
-NOTIFY_ENABLED=$(jq -r '.notifications.enabled // false' "$CONFIG")
-if [ "$NOTIFY_ENABLED" = "true" ]; then
-  echo "ACTION: Call trigger_poll MCP tool to check for new GitHub events."
-fi

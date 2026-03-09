@@ -41,10 +41,10 @@ tests/run-tests.sh --filter=json
 
 These features require runtime Claude Code and cannot be tested with shell scripts alone.
 
-### 1. Bootstrap Test (`/hydra-init`)
+### 1. Bootstrap Test (`/hydra:init`)
 
 1. Open a fresh Claude Code session in this repo
-2. Run `/hydra-init`
+2. Run `/hydra:init`
 3. Verify:
    - `hydra/config.json` created (not the template — runtime copy)
    - `hydra/plan.md` created
@@ -52,9 +52,9 @@ These features require runtime Claude Code and cannot be tested with shell scrip
    - At least 3 reviewer agents generated in `.claude/agents/generated/`
    - Discovery status in plan.md is checked off
 
-### 2. Pipeline Test (`/hydra-start`)
+### 2. Pipeline Test (`/hydra:start`)
 
-1. After `/hydra-init`, run `/hydra-start "Add a hello-world endpoint to README"`
+1. After `/hydra:init`, run `/hydra:start "Add a hello-world endpoint to README"`
 2. Verify:
    - Objective set in `hydra/config.json`
    - Documents generated in `hydra/docs/` (at least TRD)
@@ -65,7 +65,7 @@ These features require runtime Claude Code and cannot be tested with shell scrip
 ### 3. Recovery Test
 
 1. During an active loop, close the Claude Code session
-2. Reopen and run `/hydra-start`
+2. Reopen and run `/hydra:start`
 3. Verify:
    - Session context hook outputs current state
    - Recovery Pointer in plan.md is accurate

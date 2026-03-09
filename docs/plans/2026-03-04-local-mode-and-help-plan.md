@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add a `--local` flag to `/hydra-init` that gitignores all Hydra artifacts, and create a `/hydra-help` quick-reference skill.
+**Goal:** Add a `--local` flag to `/hydra:init` that gitignores all Hydra artifacts, and create a `/hydra:help` quick-reference skill.
 
 **Architecture:** Two independent changes. (1) Modify `hydra-init` to accept `--local`, add gitignore entries, skip CLAUDE.md injection, and store the mode in config. (2) Create a new `hydra-help` skill with `disable-model-invocation: true` that prints a formatted reference card.
 
@@ -56,21 +56,21 @@ git commit -m "feat(config): add install_mode field to config template"
 
 ---
 
-### Task 2: Add `--local` flag handling to `/hydra-init`
+### Task 2: Add `--local` flag handling to `/hydra:init`
 
 **Files:**
-- Modify: `skills/hydra-init/SKILL.md` — add `--local` argument parsing and gitignore step
+- Modify: `skills/hydra:init/SKILL.md` — add `--local` argument parsing and gitignore step
 
 **Step 1: Add `--local` to examples section**
 
-In `skills/hydra-init/SKILL.md`, update the Examples section:
+In `skills/hydra:init/SKILL.md`, update the Examples section:
 
 ```markdown
 ## Examples
-- `/hydra-init` — Initialize Hydra with default settings
-- `/hydra-init --force` — Reinitialize, archiving current state first
-- `/hydra-init --local` — Initialize in local mode (files not tracked in git)
-- `/hydra-init --local --force` — Reinitialize in local mode
+- `/hydra:init` — Initialize Hydra with default settings
+- `/hydra:init --force` — Reinitialize, archiving current state first
+- `/hydra:init --local` — Initialize in local mode (files not tracked in git)
+- `/hydra:init --local --force` — Reinitialize in local mode
 ```
 
 **Step 2: Add argument parsing after Step 0**
@@ -137,16 +137,16 @@ Expected: PASS (skill still has valid frontmatter)
 **Step 7: Commit**
 
 ```bash
-git add skills/hydra-init/SKILL.md
+git add skills/hydra:init/SKILL.md
 git commit -m "feat(init): add --local flag for gitignored Hydra installation"
 ```
 
 ---
 
-### Task 3: Create `/hydra-help` skill
+### Task 3: Create `/hydra:help` skill
 
 **Files:**
-- Create: `skills/hydra-help/SKILL.md` — the help quick-reference card
+- Create: `skills/hydra:help/SKILL.md` — the help quick-reference card
 
 **Step 1: Write the failing test (frontmatter validation)**
 
@@ -158,12 +158,12 @@ Expected: PASS (baseline — no hydra-help yet)
 **Step 2: Create the skill directory**
 
 ```bash
-mkdir -p skills/hydra-help
+mkdir -p skills/hydra:help
 ```
 
 **Step 3: Write the skill file**
 
-Create `skills/hydra-help/SKILL.md`:
+Create `skills/hydra:help/SKILL.md`:
 
 ```markdown
 ---
@@ -182,55 +182,55 @@ metadata:
 
 | Command | Description |
 |---------|-------------|
-| `/hydra-init` | Set up Hydra for this project |
-| `/hydra-init --local` | Set up without tracking files in git |
-| `/hydra-init --force` | Reinitialize (archives current state) |
+| `/hydra:init` | Set up Hydra for this project |
+| `/hydra:init --local` | Set up without tracking files in git |
+| `/hydra:init --force` | Reinitialize (archives current state) |
 
 ## Running
 
 | Command | Description |
 |---------|-------------|
-| `/hydra-start` | Auto-detect state and continue work |
-| `/hydra-start "objective"` | Start a specific objective |
+| `/hydra:start` | Auto-detect state and continue work |
+| `/hydra:start "objective"` | Start a specific objective |
 
-**Flags for `/hydra-start`:** `--afk` (autonomous), `--yolo` (no reviews), `--hitl` (human-in-the-loop, default), `--max N` (iteration limit)
+**Flags for `/hydra:start`:** `--afk` (autonomous), `--yolo` (no reviews), `--hitl` (human-in-the-loop, default), `--max N` (iteration limit)
 
 ## Monitoring
 
 | Command | Description |
 |---------|-------------|
-| `/hydra-status` | Loop progress, task counts, review board |
-| `/hydra-log` | Iteration history, commits, reviews |
-| `/hydra-task list` | List all tasks with status |
+| `/hydra:status` | Loop progress, task counts, review board |
+| `/hydra:log` | Iteration history, commits, reviews |
+| `/hydra:task list` | List all tasks with status |
 
 ## Task Management
 
 | Command | Description |
 |---------|-------------|
-| `/hydra-task add "desc"` | Add a new task |
-| `/hydra-task skip <id>` | Skip a blocked task |
-| `/hydra-task unblock <id>` | Unblock a task |
-| `/hydra-task info <id>` | Show task details |
-| `/hydra-task prioritize <id>` | Move task to top of queue |
+| `/hydra:task add "desc"` | Add a new task |
+| `/hydra:task skip <id>` | Skip a blocked task |
+| `/hydra:task unblock <id>` | Unblock a task |
+| `/hydra:task info <id>` | Show task details |
+| `/hydra:task prioritize <id>` | Move task to top of queue |
 
 ## Control
 
 | Command | Description |
 |---------|-------------|
-| `/hydra-pause` | Pause loop at next iteration boundary |
-| `/hydra-reset` | Archive state and start fresh |
-| `/hydra-review` | Manually trigger review for a task |
+| `/hydra:pause` | Pause loop at next iteration boundary |
+| `/hydra:reset` | Archive state and start fresh |
+| `/hydra:review` | Manually trigger review for a task |
 
 ## Advanced
 
 | Command | Description |
 |---------|-------------|
-| `/hydra-discover` | Re-run codebase discovery |
-| `/hydra-context` | Collect context for an objective type |
-| `/hydra-simplify` | Post-loop cleanup pass |
-| `/hydra-docs` | View or regenerate project documents |
-| `/hydra-board` | Connect to GitHub Projects / Azure DevOps |
-| `/hydra-gen-spec` | Interactively build a project specification |
+| `/hydra:discover` | Re-run codebase discovery |
+| `/hydra:context` | Collect context for an objective type |
+| `/hydra:simplify` | Post-loop cleanup pass |
+| `/hydra:docs` | View or regenerate project documents |
+| `/hydra:board` | Connect to GitHub Projects / Azure DevOps |
+| `/hydra:gen-spec` | Interactively build a project specification |
 
 ## Modes
 
@@ -262,8 +262,8 @@ Expected: PASS — new skill has valid frontmatter (name, description)
 **Step 5: Commit**
 
 ```bash
-git add skills/hydra-help/SKILL.md
-git commit -m "feat(help): add /hydra-help quick reference command"
+git add skills/hydra:help/SKILL.md
+git commit -m "feat(help): add /hydra:help quick reference command"
 ```
 
 ---
@@ -271,21 +271,21 @@ git commit -m "feat(help): add /hydra-help quick reference command"
 ### Task 4: Update CLAUDE.md.template with help reference
 
 **Files:**
-- Modify: `templates/CLAUDE.md.template` — add `/hydra-help` to the commands list
+- Modify: `templates/CLAUDE.md.template` — add `/hydra:help` to the commands list
 
 **Step 1: Add help command to template**
 
 In `templates/CLAUDE.md.template`, add to the Commands section (after the existing list):
 
 ```markdown
-- `/hydra-help` — Quick reference for all commands and modes
+- `/hydra:help` — Quick reference for all commands and modes
 ```
 
 **Step 2: Commit**
 
 ```bash
 git add templates/CLAUDE.md.template
-git commit -m "docs: add /hydra-help to CLAUDE.md template commands list"
+git commit -m "docs: add /hydra:help to CLAUDE.md template commands list"
 ```
 
 ---

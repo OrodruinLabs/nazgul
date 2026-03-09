@@ -1,6 +1,6 @@
 # Verification Patterns Reference
 
-Generic verification patterns for detecting stubs, verifying wiring, and checking implementation substance. Used by `/hydra-verify` and reviewer agents.
+Generic verification patterns for detecting stubs, verifying wiring, and checking implementation substance. Used by `/hydra:verify` and reviewer agents.
 
 ---
 

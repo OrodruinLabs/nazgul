@@ -554,7 +554,7 @@ Append to `hydra/context/project-profile.md`:
 
 ### Update config.json
 
-No config changes — this is informational only. The `/hydra-start` skill reads this from context to decide whether to prompt for board sync.
+No config changes — this is informational only. The `/hydra:start` skill reads this from context to decide whether to prompt for board sync.
 
 ---
 

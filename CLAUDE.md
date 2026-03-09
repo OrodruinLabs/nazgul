@@ -4,7 +4,7 @@
 
 Hydra is a Claude Code plugin that provides multi-agent autonomous development. This repo IS the installable plugin.
 
-**Install:** `claude --plugin-dir /path/to/ai-hydra-framework` or clone to `~/.claude/plugins/hydra-framework`.
+**Install:** `claude --plugin-dir /path/to/ai-hydra` or clone to `~/.claude/plugins/hydra`.
 
 ## Directory Structure
 
@@ -13,17 +13,17 @@ Hydra is a Claude Code plugin that provides multi-agent autonomous development. 
 CONSTITUTION.md                      # Non-negotiable operating principles
 GOVERNANCE.md                        # Decision authority, conflict resolution, escalation
 TEAM_CHARTER.md                      # Agent roles, communication protocols, coordination
-skills/                              # User-facing commands (/hydra-*)
-│   ├── hydra-init/SKILL.md
-│   ├── hydra-start/SKILL.md
-│   ├── hydra-status/SKILL.md
-│   ├── hydra-review/SKILL.md
-│   ├── hydra-discover/SKILL.md
-│   ├── hydra-context/SKILL.md
-│   ├── hydra-simplify/SKILL.md
-│   ├── hydra-docs/SKILL.md
-│   ├── hydra-patch/SKILL.md
-│   └── hydra-verify/SKILL.md
+skills/                              # User-facing commands (/hydra:*)
+│   ├── init/SKILL.md
+│   ├── start/SKILL.md
+│   ├── status/SKILL.md
+│   ├── review/SKILL.md
+│   ├── discover/SKILL.md
+│   ├── context/SKILL.md
+│   ├── simplify/SKILL.md
+│   ├── docs/SKILL.md
+│   ├── patch/SKILL.md
+│   └── verify/SKILL.md
 agents/                              # Subagent definitions
 │   ├── discovery.md                 # Pipeline: scans codebase, classifies project
 │   ├── doc-generator.md             # Pipeline: generates PRD, TRD, ADRs
@@ -49,7 +49,7 @@ scripts/                             # Shell scripts for hooks
 │   ├── pre-tool-guard.sh
 │   └── session-context.sh
 templates/                           # Objective + document templates
-│   ├── CLAUDE.md.template           # Injected into target projects by /hydra-init
+│   ├── CLAUDE.md.template           # Injected into target projects by /hydra:init
 │   ├── feature.md / tdd.md / bugfix.md / refactor.md / greenfield.md / migration.md
 │   └── docs/                        # Document templates for doc-generator
 references/                          # Shared reference docs for agents
@@ -66,7 +66,7 @@ tests/                               # Plugin validation tests
 
 3. **Shell scripts must be POSIX-safe.** All scripts in `scripts/` should pass `bash -n` and `shellcheck`. They use `jq` for JSON manipulation.
 
-4. **Runtime files are NOT part of the plugin.** The `hydra/` directory (config.json, plan.md, tasks/, checkpoints/, etc.) is created per-project by `/hydra-init`. This repo contains only the plugin code.
+4. **Runtime files are NOT part of the plugin.** The `hydra/` directory (config.json, plan.md, tasks/, checkpoints/, etc.) is created per-project by `/hydra:init`. This repo contains only the plugin code.
 
 ## Code Style
 

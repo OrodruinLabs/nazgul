@@ -17,25 +17,25 @@ Hydra tracks tasks locally in `hydra/tasks/TASK-NNN.md` files. Teams using GitHu
 - **Archive existing items** when taking over an existing project (non-destructive)
 - **Provider-pluggable architecture** — generic skill and config, provider-specific sync scripts
 
-## Command: `/hydra-board <provider> [--clean]`
+## Command: `/hydra:board <provider> [--clean]`
 
 ### Usage
 
 ```
-/hydra-board github            # Connect to GitHub Projects (create new or pick existing)
-/hydra-board github --clean    # Take over existing project (archive all items first)
-/hydra-board disconnect        # Remove board sync
-/hydra-board status            # Show current board connection + sync health
+/hydra:board github            # Connect to GitHub Projects (create new or pick existing)
+/hydra:board github --clean    # Take over existing project (archive all items first)
+/hydra:board disconnect        # Remove board sync
+/hydra:board status            # Show current board connection + sync health
 ```
 
 ### Standalone vs Integrated
 
-- **Standalone**: `/hydra-board github` can be run at any time after `/hydra-init`
-- **Integrated**: During `/hydra-start`, if discovery detected a GitHub repo, the user is prompted:
+- **Standalone**: `/hydra:board github` can be run at any time after `/hydra:init`
+- **Integrated**: During `/hydra:start`, if discovery detected a GitHub repo, the user is prompted:
   - "GitHub repo detected (owner/repo). Track tasks on GitHub Projects?"
   - Options: Create new project / Use existing project / Skip for now
 
-### Flow: `/hydra-board github`
+### Flow: `/hydra:board github`
 
 1. Verify Hydra is initialized (`hydra/config.json` exists)
 2. Detect GitHub repo: `gh repo view --json owner,name`
@@ -126,14 +126,14 @@ The discovery agent detects GitHub capability during its scan:
 - Stores results in `hydra/context/` as part of the project profile
 - No user prompt during discovery — just detection
 
-## `/hydra-start` Integration
+## `/hydra:start` Integration
 
 After discovery completes, before planning:
 - Check discovery context for GitHub detection
 - If GitHub detected, prompt user:
   - "GitHub repo detected (owner/repo). Track tasks on GitHub Projects?"
   - Create new project / Use existing project / Skip for now
-- If yes, run board setup inline (same script as `/hydra-board`)
+- If yes, run board setup inline (same script as `/hydra:board`)
 - Planning continues with sync active
 
 ## Config Schema
@@ -207,6 +207,6 @@ Guard rails:
 Adding a new provider requires:
 1. `scripts/board-sync-{provider}.sh` implementing the standard interface
 2. Provider-specific `provider_config` schema (documented in the script)
-3. Add provider name to `/hydra-board` skill's argument handling
+3. Add provider name to `/hydra:board` skill's argument handling
 
 No changes needed to config schema, stop hook logic, or agent protocols.

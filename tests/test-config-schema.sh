@@ -43,10 +43,6 @@ assert_json_field "has .safety.max_consecutive_failures" "$CONFIG" ".safety.max_
 val=$(jq -r '.afk | type' "$CONFIG")
 assert_eq "has .afk object" "$val" "object"
 
-# Nested: .notifications
-val=$(jq -r '.notifications | type' "$CONFIG")
-assert_eq "has .notifications object" "$val" "object"
-
 # Nested: .context
 val=$(jq -r '.context | type' "$CONFIG")
 assert_eq "has .context object" "$val" "object"

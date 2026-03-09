@@ -35,8 +35,8 @@ Hydra survives compaction, crashes, and session restarts:
 
 After any interruption:
 ```bash
-/hydra-start --continue    # Resume from last checkpoint
-/hydra-status              # See where things stand
+/hydra:start --continue    # Resume from last checkpoint
+/hydra:status              # See where things stand
 ```
 
 ## Directory Structure
@@ -68,6 +68,5 @@ hydra/                          # Plugin root
 ├── skills/                     # Slash commands (16)
 ├── hooks/hooks.json            # Hook definitions
 ├── scripts/                    # Hook + sync scripts (8)
-├── mcp-server/                 # MCP notification server (TypeScript)
 └── templates/                  # Objective + doc templates
 ```

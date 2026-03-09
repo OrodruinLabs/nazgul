@@ -1,5 +1,5 @@
 {
-  "name": "hydra-framework",
+  "name": "hydra",
   "description": "Multi-agent autonomous development loop with review pipeline, context management, and parallel execution",
   "version": "1.1.0"
 }

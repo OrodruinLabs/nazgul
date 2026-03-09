@@ -277,19 +277,7 @@ else
 fi
 teardown_temp_dir
 
-# --- Test 20: Notification on task done ---
-setup_temp_dir
-setup_git_repo
-setup_hydra_dir
-create_config '.notifications.enabled = true' '.safety._prev_done_count = 0' '.agents.reviewers = ["code-reviewer"]'
-create_plan
-create_task_file "TASK-001" "DONE"
-create_review_dir "TASK-001"
-create_task_file "TASK-002" "READY"
-run_hook
-assert_file_exists "notifications file created" "$TEST_DIR/hydra/notifications.jsonl"
-assert_file_contains "task_complete event" "$TEST_DIR/hydra/notifications.jsonl" "task_complete"
-teardown_temp_dir
+# --- Test 20: (removed — notification system removed) ---
 
 # --- Test 21: Git conflict blocks task ---
 setup_temp_dir
@@ -314,10 +302,8 @@ if echo "$porcelain" | grep -qE '^(U.|.U|AA|DD) '; then
   run_hook
   status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/hydra/tasks/TASK-001.md" | sed 's/.*: //')
   assert_eq "git conflict blocks task" "$status" "BLOCKED"
-  assert_file_contains "git conflict notification" "$TEST_DIR/hydra/notifications.jsonl" "git_conflict"
 else
   _pass "git conflict blocks task (skipped — no conflict produced)"
-  _pass "git conflict notification (skipped)"
 fi
 teardown_temp_dir
 

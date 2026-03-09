@@ -100,7 +100,7 @@ Post-loop agents run in strict sequence after ALL tasks reach DONE:
 2. **Release Manager** → Handles version bumps, release notes, git tags
 3. **Observability** → Verifies logging, metrics, error tracking are properly configured
 
-**Failure handling**: If any post-loop agent fails, HYDRA_COMPLETE does not fire. The failure is logged and the user is notified. The loop can resume with `/hydra-start` to retry.
+**Failure handling**: If any post-loop agent fails, HYDRA_COMPLETE does not fire. The failure is logged and the user is notified. The loop can resume with `/hydra:start` to retry.
 
 **Authority scope**: Post-loop agents may modify documentation, release artifacts, and observability configs. They must NOT modify application source code or test files.
 
@@ -122,8 +122,6 @@ Agents communicate exclusively through files. There is no direct agent-to-agent 
 | Each Reviewer | Feedback Aggregator | `hydra/reviews/TASK-NNN/[name].md` | Individual review verdicts |
 | Feedback Aggregator | Implementer | `hydra/reviews/TASK-NNN/consolidated-feedback.md` | Actionable feedback |
 | Stop Hook | All agents (next iteration) | stderr message, checkpoint | Loop state, continue instructions |
-| Any agent | External tools | `hydra/notifications.jsonl` | Events for OpenClaw or monitoring |
-
 ### The Recovery Pointer as Coordination Signal
 
 The Recovery Pointer in `plan.md` acts as the coordination bus. Every agent reads it first. Every agent that changes state updates it. This is how agents "hand off" work across iterations:
@@ -147,23 +145,6 @@ hydra: TASK-008 → BLOCKED (requires API keys)
 ```
 
 `git log --oneline --grep="hydra:"` reconstructs the entire project history.
-
-### Notifications for External Integration
-
-The stop hook writes structured events to `hydra/notifications.jsonl` for external tools:
-
-| Event Type | When Emitted | Payload |
-|-----------|-------------|---------|
-| `task_complete` | A task transitions to DONE | task ID, completion count, total |
-| `blocked` | A task transitions to BLOCKED | task ID, blocked reason, requires_human flag |
-| `loop_complete` | All tasks DONE + post-loop complete | total tasks, branch, summary |
-| `security_rejection` | Task blocked for security reasons | task ID, security reason (fires ALWAYS, ignores notifications.enabled) |
-| `git_conflict` | Unmerged files detected | task ID, conflict details |
-| `post_loop_failure` | Post-loop agent fails | agent name, failure details |
-
-**Security notifications are unconditional.** The `security_rejection` event fires regardless of the `notifications.enabled` setting. This ensures security issues are never silently swallowed.
-
-External tools like OpenClaw can `tail -f hydra/notifications.jsonl` to monitor loop progress and react to events.
 
 ---
 
@@ -278,7 +259,7 @@ There is no direct invocation between pipeline stages. The stop hook is the sche
 
 ### During Loop
 
-- Pipeline agents are invoked by the stop hook's continue message or by `/hydra-start`
+- Pipeline agents are invoked by the stop hook's continue message or by `/hydra:start`
 - Reviewers are invoked by the Review Gate (sequentially or in parallel)
 - Specialists are invoked by the Implementer via delegation briefs
 - Post-loop agents are invoked by the Review Gate after all tasks are DONE
@@ -287,7 +268,7 @@ There is no direct invocation between pipeline stages. The stop hook is the sche
 
 - The loop ends when all tasks are DONE and post-loop is complete (HYDRA_COMPLETE)
 - Or when an exit condition is met (max iterations, consecutive failures, AFK timeout, pause flag)
-- Agent state does not persist between loops — each new `/hydra-start` reads fresh from disk
+- Agent state does not persist between loops — each new `/hydra:start` reads fresh from disk
 
 ---
 
@@ -296,12 +277,12 @@ There is no direct invocation between pipeline stages. The stop hook is the sche
 Skills that perform read-only operations run with `context: fork` to prevent polluting the main session's context window. This means they execute in an isolated context that is discarded after the skill completes.
 
 **Forked skills** (isolated context):
-- `/hydra-status`, `/hydra-task`, `/hydra-pause`, `/hydra-log`, `/hydra-reset`
-- `/hydra-review`, `/hydra-discover`, `/hydra-context`, `/hydra-simplify`, `/hydra-docs`
+- `/hydra:status`, `/hydra:task`, `/hydra:pause`, `/hydra:log`, `/hydra:reset`
+- `/hydra:review`, `/hydra:discover`, `/hydra:context`, `/hydra:simplify`, `/hydra:docs`
 
 **Non-forked skills** (share main context):
-- `/hydra-init` (needs to modify main session state)
-- `/hydra-start` (drives the main loop)
+- `/hydra:init` (needs to modify main session state)
+- `/hydra:start` (drives the main loop)
 
 Forked skills can safely read any file without worrying about context budget. Their results are presented to the user but their file reads don't consume main session context.
 
@@ -311,15 +292,15 @@ Forked skills can safely read any file without worrying about context budget. Th
 
 | Responsibility | Primary | Backup |
 |---------------|---------|--------|
-| Project understanding | Discovery | Human (via /hydra-discover) |
+| Project understanding | Discovery | Human (via /hydra:discover) |
 | Requirements documentation | Doc Generator | Human (manual docs) |
-| Task decomposition | Planner | Human (via /hydra-task add) |
+| Task decomposition | Planner | Human (via /hydra:task add) |
 | Code implementation | Implementer + Specialists | Human (manual coding) |
-| Code review | Review Board | Human (via /hydra-review) |
+| Code review | Review Board | Human (via /hydra:review) |
 | Feedback consolidation | Feedback Aggregator | Human (reading review files) |
-| State management | Stop Hook + Pre-Compact Hook | Human (via /hydra-status, /hydra-task) |
-| Recovery | Session-Context Hook + Checkpoints | Human (via /hydra-start --continue) |
-| Documentation | Documentation Agent (post-loop) | Human (via /hydra-docs) |
+| State management | Stop Hook + Pre-Compact Hook | Human (via /hydra:status, /hydra:task) |
+| Recovery | Session-Context Hook + Checkpoints | Human (via /hydra:start --continue) |
+| Documentation | Documentation Agent (post-loop) | Human (via /hydra:docs) |
 | Release management | Release Manager (post-loop) | Human (manual release) |
 | Observability | Observability Agent (post-loop) | Human (manual setup) |
 

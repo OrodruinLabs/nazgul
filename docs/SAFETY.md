@@ -25,18 +25,18 @@
 
 ## Troubleshooting
 
-**"No Hydra config found"** — Run `/hydra-init` first.
+**"No Hydra config found"** — Run `/hydra:init` first.
 
-**"Discovery not run"** — Run `/hydra-init` or `/hydra-discover`.
+**"Discovery not run"** — Run `/hydra:init` or `/hydra:discover`.
 
-**Loop stops unexpectedly** — Check `hydra/config.json` for `max_iterations` or `consecutive_failures`. Run `/hydra-start --continue` to resume.
+**Loop stops unexpectedly** — Check `hydra/config.json` for `max_iterations` or `consecutive_failures`. Run `/hydra:start --continue` to resume.
 
-**Task stuck as BLOCKED** — Check `hydra/tasks/TASK-NNN.md` for the `blocked_reason`. Fix the issue manually, then run `/hydra-task unblock TASK-NNN` or set status to READY and `/hydra-start --continue`.
+**Task stuck as BLOCKED** — Check `hydra/tasks/TASK-NNN.md` for the `blocked_reason`. Fix the issue manually, then run `/hydra:task unblock TASK-NNN` or set status to READY and `/hydra:start --continue`.
 
-**Want to see what happened overnight?** — Run `/hydra-log` for a full timeline of iterations, commits, reviews, and blockers.
+**Want to see what happened overnight?** — Run `/hydra:log` for a full timeline of iterations, commits, reviews, and blockers.
 
-**Need to pause the loop?** — Run `/hydra-pause` to stop cleanly at the next iteration boundary.
+**Need to pause the loop?** — Run `/hydra:pause` to stop cleanly at the next iteration boundary.
 
-**Hydra state is corrupted** — Run `/hydra-reset` to archive current state and start fresh. Use `--preserve-context` to keep discovery data.
+**Hydra state is corrupted** — Run `/hydra:reset` to archive current state and start fresh. Use `--preserve-context` to keep discovery data.
 
 **Context degradation** — If the agent seems confused after many iterations, run `/compact` with Hydra-specific instructions, then the session-context hook will re-inject state.

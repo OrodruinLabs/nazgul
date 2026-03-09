@@ -27,7 +27,7 @@
 
 ## Stack Selection
 
-<!-- Filled by the stack scaffolding conversation in /hydra-start -->
+<!-- Filled by the stack scaffolding conversation in /hydra:start -->
 
 ### Runtime & Language
 - Language: <!-- TypeScript, Python, Go, Rust, Java, Ruby, etc. -->
@@ -73,7 +73,7 @@
 
 ## Tool Verification
 
-<!-- Filled by the tool pre-flight check in /hydra-start -->
+<!-- Filled by the tool pre-flight check in /hydra:start -->
 
 ### Required Tools
 | Tool | Required Version | Status | Install Command |

@@ -10,7 +10,7 @@ The supreme operating law of the Hydra Framework. These principles are non-negot
 
 Every piece of state lives on disk, committed to git. The context window is ephemeral and disposable. No agent may rely on conversational memory for state. If it matters, it must be written to a file. If it's only in context, it doesn't exist.
 
-This principle drives every architectural decision in Hydra: task manifests, recovery pointers, checkpoints, notifications, and review artifacts all exist as files.
+This principle drives every architectural decision in Hydra: task manifests, recovery pointers, checkpoints, and review artifacts all exist as files.
 
 ---
 
@@ -54,7 +54,7 @@ YOLO:     PLANNED → READY → IN_PROGRESS → IMPLEMENTED → IN_REVIEW → AP
 | APPROVED | DONE | PR merged (external event, YOLO mode only) | Notification handler or user |
 | CHANGES_REQUESTED | IN_PROGRESS | Implementer addresses feedback | Implementer |
 | Any active state | BLOCKED | Max retries hit, unresolvable issue, or 3 consecutive test failures | Implementer or Review Gate |
-| BLOCKED | READY | Human intervention resolves the blocker | User (manual or /hydra-task unblock) |
+| BLOCKED | READY | Human intervention resolves the blocker | User (manual or /hydra:task unblock) |
 
 ### Forbidden Transitions
 
@@ -79,7 +79,7 @@ YOLO:     PLANNED → READY → IN_PROGRESS → IMPLEMENTED → IN_REVIEW → AP
 
 4. **Pre-checks before reviews.** Tests and lint must pass BEFORE any reviewer runs. Failed pre-checks send the task back to IN_PROGRESS. Three consecutive test failures block the task.
 
-5. **Security rejections are absolute in AFK mode.** If any reviewer raises a security concern in autonomous mode, the task is BLOCKED and requires human review. This notification fires regardless of the `notifications.enabled` setting.
+5. **Security rejections are absolute in AFK mode.** If any reviewer raises a security concern in autonomous mode, the task is BLOCKED and requires human review.
 
 6. **Every finding must be structured.** Each reviewer finding MUST include: severity (HIGH/MEDIUM/LOW), confidence score (0-100), file path, category, verdict (APPROVE/REJECT/CONCERN), issue description, and fix suggestion. Unstructured findings are invalid.
 
@@ -161,7 +161,7 @@ Classification governs everything downstream:
 
 ### AFK vs. HITL Behavior
 
-- **AFK mode:** Ambiguous classification defaults to BROWNFIELD. This is the safest default — it produces the most context without over-generating documents. Discovery logs the ambiguity to `hydra/notifications.jsonl`.
+- **AFK mode:** Ambiguous classification defaults to BROWNFIELD. This is the safest default — it produces the most context without over-generating documents.
 - **HITL mode:** Classification is confirmed with the user before proceeding. Discovery presents its evidence and recommended classification, and the user approves or overrides.
 
 ### Hard Requirement
@@ -228,7 +228,7 @@ These commands are blocked unconditionally:
 
 ### Escalation
 
-When a task is BLOCKED, the system always writes a notification. When the blocked reason involves security, the notification fires regardless of the `notifications.enabled` setting. Git conflicts detected during the loop automatically block the active task.
+When a task is BLOCKED, the system escalates it. When the blocked reason involves security, the task requires human review. Git conflicts detected during the loop automatically block the active task.
 
 ---
 
@@ -254,7 +254,7 @@ Read-only skills (`hydra-status`, `hydra-review`, `hydra-discover`, `hydra-conte
 
 ### Context Rot Detection
 
-After 8+ iterations without compaction, the stop hook warns about potential context degradation. Running `/compact` with Hydra-specific instructions resets the iteration counter. The warning is logged to `hydra/notifications.jsonl` and displayed to the user if in HITL mode.
+After 8+ iterations without compaction, the stop hook warns about potential context degradation. Running `/compact` with Hydra-specific instructions resets the iteration counter. The warning is displayed to the user if in HITL mode.
 
 ### Compaction Survival
 
@@ -304,4 +304,4 @@ This constitution may be amended only by:
 
 No agent may unilaterally override these rules during operation. Configuration can adjust thresholds (Article VIII soft limits) but cannot disable fundamental principles (Articles I-VII).
 
-**HYDRA_COMPLETE fires ONLY after post-loop agents complete.** If a post-loop agent fails, HYDRA_COMPLETE does not fire. The failure is logged to `hydra/notifications.jsonl` and the user is notified. Post-loop agents must all succeed for the loop to be considered truly complete.
+**HYDRA_COMPLETE fires ONLY after post-loop agents complete.** If a post-loop agent fails, HYDRA_COMPLETE does not fire. The user is notified and post-loop agents must all succeed for the loop to be considered truly complete.

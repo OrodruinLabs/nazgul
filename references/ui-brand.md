@@ -151,7 +151,7 @@ Shown after every major phase completion or task completion to indicate what com
 ```
 ─── ◈ NEXT ─────────────────────────────────────────────
   Task 007: Add auth middleware
-  /hydra-start to continue
+  /hydra:start to continue
 ────────────────────────────────────────────────────────
 ```
 

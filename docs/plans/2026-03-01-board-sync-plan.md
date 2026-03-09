@@ -4,7 +4,7 @@
 
 **Goal:** Sync Hydra's local task tracking to GitHub Projects V2, with a provider-pluggable architecture for future board providers.
 
-**Architecture:** One-way push from Hydra to GitHub via `gh` CLI. A new `scripts/board-sync-github.sh` handles all GitHub API calls. The stop hook calls it on every iteration; the planner calls it when creating tasks. A new `/hydra-board` skill provides standalone setup/disconnect/status.
+**Architecture:** One-way push from Hydra to GitHub via `gh` CLI. A new `scripts/board-sync-github.sh` handles all GitHub API calls. The stop hook calls it on every iteration; the planner calls it when creating tasks. A new `/hydra:board` skill provides standalone setup/disconnect/status.
 
 **Tech Stack:** Bash (`gh` CLI, `jq`), GitHub Projects V2 GraphQL API (via `gh project` commands)
 
@@ -703,10 +703,10 @@ git commit -m "feat(board): add GitHub Projects sync script with full provider i
 
 ---
 
-### Task 3: Create `/hydra-board` skill
+### Task 3: Create `/hydra:board` skill
 
 **Files:**
-- Create: `skills/hydra-board/SKILL.md`
+- Create: `skills/hydra:board/SKILL.md`
 - Modify: `tests/test-frontmatter.sh` (should auto-detect new skill)
 
 **Step 1: Write a test to verify the skill has valid frontmatter**
@@ -718,7 +718,7 @@ Expected: PASS (baseline)
 
 **Step 2: Create the skill file**
 
-Create `skills/hydra-board/SKILL.md`:
+Create `skills/hydra:board/SKILL.md`:
 
 ```markdown
 ---
@@ -734,10 +734,10 @@ metadata:
 # Hydra Board
 
 ## Examples
-- `/hydra-board github` — Connect to GitHub Projects
-- `/hydra-board github --clean` — Take over existing project (archive items first)
-- `/hydra-board disconnect` — Remove board sync
-- `/hydra-board status` — Show current board connection
+- `/hydra:board github` — Connect to GitHub Projects
+- `/hydra:board github --clean` — Take over existing project (archive items first)
+- `/hydra:board disconnect` — Remove board sync
+- `/hydra:board status` — Show current board connection
 
 ## Arguments
 $ARGUMENTS
@@ -787,7 +787,7 @@ STOP.
 ### Step 2: Prerequisites Check
 
 1. Check Hydra initialized (use preprocessor data above)
-2. If NOT initialized: "Run `/hydra-init` first." — STOP
+2. If NOT initialized: "Run `/hydra:init` first." — STOP
 3. Check GitHub repo detected (use preprocessor data above)
 4. If NOT detected: "Not a GitHub repository or `gh` not authenticated." — STOP
 5. Check project scope (use preprocessor data above)
@@ -845,8 +845,8 @@ Tasks:      [N] synced
 URL:        https://github.com/orgs/[owner]/projects/[number]
 
 Tasks will auto-sync to the board on every state transition.
-Run `/hydra-board status` to check sync health.
-Run `/hydra-board disconnect` to remove sync.
+Run `/hydra:board status` to check sync health.
+Run `/hydra:board disconnect` to remove sync.
 ```
 ```
 
@@ -863,8 +863,8 @@ Expected: ALL PASS
 **Step 5: Commit**
 
 ```bash
-git add skills/hydra-board/SKILL.md
-git commit -m "feat(board): add /hydra-board skill for external board sync setup"
+git add skills/hydra:board/SKILL.md
+git commit -m "feat(board): add /hydra:board skill for external board sync setup"
 ```
 
 ---
@@ -980,7 +980,7 @@ Append to `hydra/context/project-profile.md`:
 
 ### Update config.json
 
-No config changes — this is informational only. The `/hydra-start` skill reads this from context to decide whether to prompt for board sync.
+No config changes — this is informational only. The `/hydra:start` skill reads this from context to decide whether to prompt for board sync.
 
 ---
 ```
@@ -998,18 +998,18 @@ git commit -m "feat(board): add GitHub capability detection to discovery agent"
 
 ---
 
-### Task 6: Add board sync prompt to `/hydra-start`
+### Task 6: Add board sync prompt to `/hydra:start`
 
 **Files:**
-- Modify: `skills/hydra-start/SKILL.md:151-155` (add Step 5.5 in FRESH state, after "Collect Context" and before "Delegate to Planner")
+- Modify: `skills/hydra:start/SKILL.md:151-155` (add Step 5.5 in FRESH state, after "Collect Context" and before "Delegate to Planner")
 
 **Step 1: Read the insertion point**
 
-Read: `skills/hydra-start/SKILL.md:144-156` — the FRESH state flow.
+Read: `skills/hydra:start/SKILL.md:144-156` — the FRESH state flow.
 
 **Step 2: Add board sync prompt**
 
-Edit `skills/hydra-start/SKILL.md`. Between step 5 ("Collect Context", line 151) and step 6 ("Delegate to Planner", line 152), insert a new step:
+Edit `skills/hydra:start/SKILL.md`. Between step 5 ("Collect Context", line 151) and step 6 ("Delegate to Planner", line 152), insert a new step:
 
 ```markdown
 5.5. **Board Sync Prompt** (HITL mode only):
@@ -1019,11 +1019,11 @@ Edit `skills/hydra-start/SKILL.md`. Between step 5 ("Collect Context", line 151)
      - Options:
        a. Yes, create a new project
        b. Yes, use an existing project (list them)
-       c. Skip for now (can run `/hydra-board github` later)
+       c. Skip for now (can run `/hydra:board github` later)
      - If (a): run `gh project create --owner [owner] --title "Hydra: [repo]"`, then `bash scripts/board-sync-github.sh setup [number]`
      - If (b): let user pick, then `bash scripts/board-sync-github.sh setup [number]`
      - If (c): continue without board sync
-   - In AFK mode: skip board prompt (user must run `/hydra-board` explicitly)
+   - In AFK mode: skip board prompt (user must run `/hydra:board` explicitly)
 ```
 
 Renumber steps 6-9 to 7-10.
@@ -1035,8 +1035,8 @@ Read the modified FRESH state section and confirm steps flow: 1, 2, 3, 4, 5, 5.5
 **Step 4: Commit**
 
 ```bash
-git add skills/hydra-start/SKILL.md
-git commit -m "feat(board): add GitHub Projects prompt to /hydra-start flow"
+git add skills/hydra:start/SKILL.md
+git commit -m "feat(board): add GitHub Projects prompt to /hydra:start flow"
 ```
 
 ---
@@ -1077,18 +1077,18 @@ git commit -m "feat(board): add board sync delegation to planner agent"
 
 ---
 
-### Task 8: Add board status to `/hydra-status`
+### Task 8: Add board status to `/hydra:status`
 
 **Files:**
-- Modify: `skills/hydra-status/SKILL.md` (add board section to preprocessor data and report format)
+- Modify: `skills/hydra:status/SKILL.md` (add board section to preprocessor data and report format)
 
 **Step 1: Read current hydra-status skill**
 
-Read: `skills/hydra-status/SKILL.md`
+Read: `skills/hydra:status/SKILL.md`
 
 **Step 2: Add board status to preprocessor data**
 
-Edit `skills/hydra-status/SKILL.md`. After line 30 (Latest checkpoint), add:
+Edit `skills/hydra:status/SKILL.md`. After line 30 (Latest checkpoint), add:
 
 ```markdown
 - Board enabled: !`jq -r '.board.enabled // false' hydra/config.json 2>/dev/null || echo "false"`
@@ -1100,7 +1100,7 @@ Edit `skills/hydra-status/SKILL.md`. After line 30 (Latest checkpoint), add:
 
 **Step 3: Add board section to report format**
 
-Edit `skills/hydra-status/SKILL.md`. After the "Git" section in the report format template (after line 78), add:
+Edit `skills/hydra:status/SKILL.md`. After the "Git" section in the report format template (after line 78), add:
 
 ```markdown
 Board Sync
@@ -1115,8 +1115,8 @@ Failures:    [N]
 **Step 4: Commit**
 
 ```bash
-git add skills/hydra-status/SKILL.md
-git commit -m "feat(board): add board sync status to /hydra-status report"
+git add skills/hydra:status/SKILL.md
+git commit -m "feat(board): add board sync status to /hydra:status report"
 ```
 
 ---
@@ -1154,10 +1154,10 @@ git commit -m "test(board): register board sync test in test runner"
 |------|------|-------|
 | 1 | Config schema | `templates/config.json`, `tests/test-config-schema.sh` |
 | 2 | Sync script | `scripts/board-sync-github.sh`, `tests/test-board-sync-github.sh` |
-| 3 | Skill | `skills/hydra-board/SKILL.md` |
+| 3 | Skill | `skills/hydra:board/SKILL.md` |
 | 4 | Stop hook integration | `scripts/stop-hook.sh`, `tests/test-stop-hook.sh` |
 | 5 | Discovery detection | `agents/discovery.md` |
-| 6 | Start prompt | `skills/hydra-start/SKILL.md` |
+| 6 | Start prompt | `skills/hydra:start/SKILL.md` |
 | 7 | Planner integration | `agents/planner.md` |
-| 8 | Status display | `skills/hydra-status/SKILL.md` |
+| 8 | Status display | `skills/hydra:status/SKILL.md` |
 | 9 | Test runner | `tests/run-tests.sh` |

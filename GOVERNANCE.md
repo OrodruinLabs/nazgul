@@ -114,9 +114,9 @@ When a specialist agent (e.g., Frontend Dev) produces work that the Implementer 
 |---------|-----------|--------|
 | 3 consecutive test failures | Task BLOCKED | Write test output to `hydra/reviews/[TASK-ID]/test-failures.md`. Requires human investigation. |
 | Max retries exceeded | Task BLOCKED | Document all attempted approaches. Requires human decision. |
-| Security rejection in AFK mode | Task BLOCKED | Notification fires regardless of notification settings. Requires human review. |
-| Security blocker vs other blockers | Different handling | Security blockers: notification fires regardless of `notifications.enabled`, requires human unblock (cannot auto-resolve even in YOLO mode). Other blockers: follow normal notification settings, may be auto-resolved by `/hydra-task unblock`. |
-| Git conflicts detected | Task BLOCKED | Notification with `requires_human: true`. Merge conflicts need manual resolution. |
+| Security rejection in AFK mode | Task BLOCKED | Requires human review. |
+| Security blocker vs other blockers | Different handling | Security blockers require human unblock (cannot auto-resolve even in YOLO mode). Other blockers may be auto-resolved by `/hydra:task unblock`. |
+| Git conflicts detected | Task BLOCKED | Merge conflicts need manual resolution. |
 | 5 consecutive iterations with no progress | Loop STOPS | Suggests human review of blocked tasks and plan. |
 | AFK timeout exceeded | Loop STOPS | Session time limit reached. Human resumes when ready. |
 | Context rot (8+ iterations since compaction) | WARNING | Recommends running `/compact`. Does not block. |
@@ -127,13 +127,13 @@ Users can intervene at any time:
 
 | Action | Command |
 |--------|---------|
-| Pause the loop | `/hydra-pause` |
-| Check status | `/hydra-status` |
-| View history | `/hydra-log` |
-| Unblock a task | `/hydra-task unblock TASK-NNN` |
-| Skip a task | `/hydra-task skip TASK-NNN` |
-| Add a task | `/hydra-task add "description"` |
-| Reset everything | `/hydra-reset` |
+| Pause the loop | `/hydra:pause` |
+| Check status | `/hydra:status` |
+| View history | `/hydra:log` |
+| Unblock a task | `/hydra:task unblock TASK-NNN` |
+| Skip a task | `/hydra:task skip TASK-NNN` |
+| Add a task | `/hydra:task add "description"` |
+| Reset everything | `/hydra:reset` |
 | Edit task directly | Edit `hydra/tasks/TASK-NNN.md` manually |
 
 ---
@@ -152,7 +152,7 @@ Users can intervene at any time:
 - Classification, documents, and plan proceed automatically
 - Auto-commit on every state transition with `hydra:` prefix
 - Security rejections auto-block (human reviews later)
-- Blockers are logged to notifications; human reviews asynchronously
+- Blockers are logged; human reviews asynchronously
 - Session time limit enforced (`afk.timeout_minutes`)
 
 ### YOLO (Full Berserk)
@@ -283,9 +283,8 @@ They must NOT modify application source code or test files.
 ### Failure Handling
 
 - If a post-loop agent fails, HYDRA_COMPLETE does NOT fire
-- The failure is logged to `hydra/notifications.jsonl` with event type `post_loop_failure`
 - The user is notified and must resolve the issue before completion
-- The loop can be resumed with `/hydra-start` which will retry the failed post-loop phase
+- The loop can be resumed with `/hydra:start` which will retry the failed post-loop phase
 
 ### Completion
 
@@ -345,7 +344,6 @@ The Team Orchestrator manages all parallel coordination:
 | Project documents | `hydra/docs/` | Doc Generator |
 | Runtime configuration | `hydra/config.json` | Various (mode, iteration, agents) |
 | Iteration log | `hydra/logs/iterations.jsonl` | Stop hook |
-| External notifications | `hydra/notifications.jsonl` | Stop hook |
 
 ### Checkpoint Retention
 
