@@ -1,5 +1,5 @@
 {
-  "description": "Hydra Framework hooks — stop loop management, pre-compact checkpoints, safety guards, session context injection",
+  "description": "Hydra Framework hooks — stop loop management, pre-compact checkpoints, safety guards, session context injection, auto-formatting, notifications, session staging",
   "hooks": {
     "Stop": [
       {
@@ -8,6 +8,11 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/stop-hook.sh\"",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/notify.sh\"",
+            "timeout": 60
           }
         ]
       }
@@ -45,6 +50,18 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/formatter.sh\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "startup",
@@ -62,6 +79,17 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/session-context.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/session-staging.sh\"",
             "timeout": 10
           }
         ]

@@ -97,6 +97,17 @@ For tasks requiring specialist knowledge, delegate:
 - Mobile features: Delegate to Mobile Dev
 Write delegation briefs to `hydra/tasks/[TASK-ID]-delegation.md`
 
+### Debugger Delegation (Auto on 2nd Retry)
+
+When picking up a task with status CHANGES_REQUESTED, check the task manifest's retry count:
+- **Retry 0 or 1**: Handle normally — read consolidated feedback, fix issues
+- **Retry 2 (3rd attempt)**: BEFORE implementing, delegate to the Debugger agent:
+  1. Spawn the Debugger agent with the TASK-ID
+  2. Wait for the Debugger to write `hydra/tasks/[TASK-ID]-diagnosis.md`
+  3. Read the diagnosis file — it contains root cause analysis and specific fix instructions
+  4. Follow the diagnosis fix order exactly
+  5. This is the last chance — if the 3rd attempt also fails, the task will be BLOCKED
+
 ## CRITICAL Rules
 
 - Do NOT output HYDRA_COMPLETE — only the review gate decides advancement

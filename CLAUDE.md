@@ -23,7 +23,8 @@ skills/                              # User-facing commands (/hydra:*)
 │   ├── simplify/SKILL.md
 │   ├── docs/SKILL.md
 │   ├── patch/SKILL.md
-│   └── verify/SKILL.md
+│   ├── verify/SKILL.md
+│   └── metrics/SKILL.md
 agents/                              # Subagent definitions
 │   ├── discovery.md                 # Pipeline: scans codebase, classifies project
 │   ├── doc-generator.md             # Pipeline: generates PRD, TRD, ADRs
@@ -38,6 +39,7 @@ agents/                              # Subagent definitions
 │   ├── devops.md                    # Specialist: Docker, K8s, cloud configs
 │   ├── cicd.md                      # Specialist: CI/CD pipeline generation
 │   ├── db-migration.md              # Specialist: safe schema changes
+│   ├── debugger.md                  # Specialist: investigation on repeated failures
 │   ├── documentation.md             # Post-loop: README, API docs, changelog
 │   ├── release-manager.md           # Post-loop: versioning, release notes
 │   ├── observability.md             # Post-loop: logging, metrics, error tracking
@@ -47,7 +49,10 @@ scripts/                             # Shell scripts for hooks
 │   ├── stop-hook.sh
 │   ├── pre-compact.sh
 │   ├── pre-tool-guard.sh
-│   └── session-context.sh
+│   ├── session-context.sh
+│   ├── formatter.sh                 # PostToolUse: auto-format after edits (opt-in)
+│   ├── notify.sh                    # Stop: completion notifications
+│   └── session-staging.sh           # SessionEnd: stage files for AFK safety
 templates/                           # Objective + document templates
 │   ├── CLAUDE.md.template           # Injected into target projects by /hydra:init
 │   ├── feature.md / tdd.md / bugfix.md / refactor.md / greenfield.md / migration.md

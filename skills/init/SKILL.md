@@ -110,3 +110,21 @@ Read `.claude/settings.json` (or start with `{}`), then merge:
 1. **`enableAgentTeams`**: set to `true` if missing
 
 Write the merged result back. If already present, skip (no-op).
+
+### Step 7: Optional Features Prompt
+
+Ask the user about optional features and store preferences in `hydra/config.json`:
+
+#### Auto-Formatter
+Ask: "Auto-format files after edits? (Runs prettier/ruff/gofmt/etc. based on file type) [y/N]"
+- If yes: set `formatter.enabled: true` in config.json
+- If no (default): set `formatter.enabled: false`
+- Detects the project's formatter from Discovery context (e.g., prettier for JS/TS, ruff for Python)
+
+#### Completion Notifications
+Ask: "Notify when the loop completes? Enter a command (e.g., `say 'Hydra done'`) or press Enter to skip:"
+- If command provided: set `notifications.on_complete: "[command]"` in config.json
+- If skipped: leave `notifications` section empty
+- Suggest platform-appropriate defaults:
+  - macOS: `say 'Hydra loop complete'`
+  - Linux: `notify-send 'Hydra' 'Loop complete'`
