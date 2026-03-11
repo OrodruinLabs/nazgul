@@ -29,17 +29,20 @@ else
   exit 0
 fi
 
-# Check if this changes the Status field
+# Check if this changes the Status field (supports both list-item and heading formats)
 NEW_STATUS=$(echo "$NEW_CONTENT" | sed -n 's/.*\*\*Status\*\*:[[:space:]]*\([A-Z_]*\).*/\1/p' | head -1)
+if [ -z "$NEW_STATUS" ]; then
+  NEW_STATUS=$(echo "$NEW_CONTENT" | sed -n 's/^## Status:[[:space:]]*\([A-Z_]*\).*/\1/p' | head -1)
+fi
 if [ -z "$NEW_STATUS" ]; then
   # Not a status change — allow
   exit 0
 fi
 
-# Read current status from file on disk
+# Read current status from file on disk (supports both formats)
 OLD_STATUS=""
 if [ -f "$FILE_PATH" ]; then
-  OLD_STATUS=$(grep -m1 '^\- \*\*Status\*\*:' "$FILE_PATH" 2>/dev/null | sed 's/.*:[[:space:]]*//' || echo "")
+  OLD_STATUS=$(grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$FILE_PATH" 2>/dev/null | sed 's/.*:[[:space:]]*//' || echo "")
 fi
 
 # If file is new (first write), allow PLANNED or READY as initial status

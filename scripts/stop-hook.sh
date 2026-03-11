@@ -11,6 +11,23 @@ PLAN="$HYDRA_DIR/plan.md"
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Helper: extract status from task manifest (supports both formats)
+# Format 1: - **Status**: DONE  (list-item)
+# Format 2: ## Status: DONE    (ATX heading)
+get_task_status() {
+  grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$1" 2>/dev/null | sed 's/.*:[[:space:]]*//' || echo "${2:-}"
+}
+
+# Helper: set status in task manifest (handles both formats)
+set_task_status() {
+  local file="$1" old_status="$2" new_status="$3"
+  if grep -q '^## Status:' "$file" 2>/dev/null; then
+    sed -i.bak "s/^## Status:[[:space:]]*${old_status}/## Status: ${new_status}/" "$file" && rm -f "${file}.bak"
+  else
+    sed -i.bak "s/^\(- \*\*Status\*\*:\)[[:space:]]*${old_status}/\1 ${new_status}/" "$file" && rm -f "${file}.bak"
+  fi
+}
+
 # If Hydra not initialized, allow stop
 if [ ! -f "$CONFIG" ]; then
   exit 0
@@ -88,7 +105,7 @@ if [ -d "$HYDRA_DIR/tasks" ]; then
   for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
-    STATUS=$(grep -m1 '^\- \*\*Status\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "PLANNED")
+    STATUS=$(get_task_status "$task_file" "PLANNED")
     case "$STATUS" in
       DONE) DONE_COUNT=$((DONE_COUNT + 1)) ;;
       READY) READY_COUNT=$((READY_COUNT + 1)) ;;
@@ -110,7 +127,7 @@ if [ "$YOLO_MODE" != "true" ] && [ -d "$HYDRA_DIR/tasks" ]; then
   CONFIGURED_REVIEWERS=$(jq -r '.agents.reviewers // [] | .[]' "$CONFIG" 2>/dev/null || echo "")
   for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
-    STATUS=$(grep -m1 '^\- \*\*Status\*\*:' "$task_file" 2>/dev/null | sed 's/.*:[[:space:]]*//' || echo "")
+    STATUS=$(get_task_status "$task_file")
     if [ "$STATUS" = "DONE" ]; then
       TASK_ID=$(basename "$task_file" .md)
       REVIEW_DIR="$HYDRA_DIR/reviews/$TASK_ID"
@@ -172,7 +189,7 @@ if [ "$YOLO_MODE" != "true" ] && [ -d "$HYDRA_DIR/tasks" ]; then
 
       if [ "$REVIEW_VALID" = false ]; then
         # VIOLATION: Reset to IMPLEMENTED
-        sed -i.bak 's/^\(- \*\*Status\*\*:\) DONE/\1 IMPLEMENTED/' "$task_file" && rm -f "${task_file}.bak"
+        set_task_status "$task_file" "DONE" "IMPLEMENTED"
         DONE_COUNT=$((DONE_COUNT - 1))
         IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
         echo "HYDRA REVIEW GATE VIOLATION: ${TASK_ID} was DONE without full review — reset to IMPLEMENTED" >&2
@@ -207,7 +224,7 @@ ACTIVE_RETRY=0
 ACTIVE_BLOCKED_REASON=""
 for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
   [ -f "$task_file" ] || continue
-  STATUS=$(grep -m1 '^\- \*\*Status\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "")
+  STATUS=$(get_task_status "$task_file")
   if [ "$STATUS" = "IN_PROGRESS" ] || [ "$STATUS" = "CHANGES_REQUESTED" ] || [ "$STATUS" = "IN_REVIEW" ] || [ "$STATUS" = "IMPLEMENTED" ]; then
     ACTIVE_TASK=$(basename "$task_file" .md)
     ACTIVE_STATUS="$STATUS"
@@ -220,7 +237,7 @@ done
 if [ -d "$HYDRA_DIR/tasks" ]; then
   for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
-    STATUS=$(grep -m1 '^\- \*\*Status\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "")
+    STATUS=$(get_task_status "$task_file")
     if [ "$STATUS" = "BLOCKED" ]; then
       ACTIVE_BLOCKED_REASON=$(grep -m1 '^\- \*\*Blocked reason\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "")
       break
@@ -232,7 +249,7 @@ fi
 if [ -z "$ACTIVE_TASK" ]; then
   for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
-    STATUS=$(grep -m1 '^\- \*\*Status\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "")
+    STATUS=$(get_task_status "$task_file")
     if [ "$STATUS" = "READY" ]; then
       ACTIVE_TASK=$(basename "$task_file" .md)
       ACTIVE_STATUS="READY"
@@ -418,7 +435,7 @@ if [ "$BOARD_ENABLED" = "true" ]; then
       for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
         [ -f "$task_file" ] || continue
         task_id=$(grep -m1 '^\- \*\*ID\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "")
-        current_status=$(grep -m1 '^\- \*\*Status\*\*:' "$task_file" 2>/dev/null | sed 's/.*:[[:space:]]*//' || echo "")
+        current_status=$(get_task_status "$task_file")
         if [ -z "$task_id" ] || [ "$current_status" = "${CACHED_MAP[$task_id]:-}" ]; then
           continue
         fi
@@ -445,11 +462,11 @@ fi
 if [ -d "$HYDRA_DIR/tasks" ]; then
   for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
-    STATUS=$(grep -m1 '^\- \*\*Status\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "")
+    STATUS=$(get_task_status "$task_file")
     if [ "$STATUS" = "PLANNED" ]; then
       DEPS=$(grep -m1 '^\- \*\*Depends on\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "none")
       if [ "$DEPS" = "none" ] || [ -z "$DEPS" ]; then
-        sed -i.bak 's/^\(- \*\*Status\*\*:\) PLANNED/\1 READY/' "$task_file" && rm -f "${task_file}.bak"
+        set_task_status "$task_file" "PLANNED" "READY"
         continue
       fi
       # Check if all dependencies are DONE (or APPROVED in YOLO mode)
@@ -457,7 +474,7 @@ if [ -d "$HYDRA_DIR/tasks" ]; then
       while IFS= read -r dep; do
         dep_file="$HYDRA_DIR/tasks/${dep}.md"
         if [ -f "$dep_file" ]; then
-          DEP_STATUS=$(grep -m1 '^\- \*\*Status\*\*:' "$dep_file" 2>/dev/null | sed 's/.*: //' || echo "")
+          DEP_STATUS=$(get_task_status "$dep_file")
           if [ "$YOLO_MODE" = "true" ]; then
             if [ "$DEP_STATUS" != "DONE" ] && [ "$DEP_STATUS" != "APPROVED" ]; then
               ALL_DONE=false; break
@@ -470,7 +487,7 @@ if [ -d "$HYDRA_DIR/tasks" ]; then
         fi
       done <<< "$(echo "$DEPS" | tr ',' '\n' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')"
       if [ "$ALL_DONE" = true ]; then
-        sed -i.bak 's/^\(- \*\*Status\*\*:\) PLANNED/\1 READY/' "$task_file" && rm -f "${task_file}.bak"
+        set_task_status "$task_file" "PLANNED" "READY"
       fi
     fi
   done
@@ -483,7 +500,7 @@ if echo "$GIT_PORCELAIN" | grep -qE '^(U.|.U|AA|DD) '; then
   GIT_CONFLICT_DETECTED=true
   # Set the active task to BLOCKED with reason "git conflict"
   if [ -n "$ACTIVE_TASK" ] && [ -f "$HYDRA_DIR/tasks/${ACTIVE_TASK}.md" ]; then
-    sed -i.bak 's/^\(- \*\*Status\*\*:\) .*/\1 BLOCKED/' "$HYDRA_DIR/tasks/${ACTIVE_TASK}.md" && rm -f "$HYDRA_DIR/tasks/${ACTIVE_TASK}.md.bak"
+    set_task_status "$HYDRA_DIR/tasks/${ACTIVE_TASK}.md" ".*" "BLOCKED"
     # Add or update blocked reason
     if grep -q '^\- \*\*Blocked reason\*\*:' "$HYDRA_DIR/tasks/${ACTIVE_TASK}.md" 2>/dev/null; then
       sed -i.bak 's/^\(- \*\*Blocked reason\*\*:\) .*/\1 git conflict — unmerged files detected/' "$HYDRA_DIR/tasks/${ACTIVE_TASK}.md" && rm -f "$HYDRA_DIR/tasks/${ACTIVE_TASK}.md.bak"

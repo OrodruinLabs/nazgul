@@ -8,6 +8,11 @@ HYDRA_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/hydra"
 CONFIG="$HYDRA_DIR/config.json"
 PLAN="$HYDRA_DIR/plan.md"
 
+# Helper: extract status from task manifest (supports both formats)
+get_task_status() {
+  grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$1" 2>/dev/null | sed 's/.*:[[:space:]]*//' || echo "${2:-}"
+}
+
 # If Hydra not active, nothing to do
 if [ ! -f "$CONFIG" ]; then
   exit 0
@@ -27,7 +32,7 @@ ACTIVE_RETRY=0
 if [ -d "$HYDRA_DIR/tasks" ]; then
   for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
-    STATUS=$(grep -m1 '^\- \*\*Status\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "")
+    STATUS=$(get_task_status "$task_file")
     if [ "$STATUS" = "IN_PROGRESS" ] || [ "$STATUS" = "CHANGES_REQUESTED" ] || [ "$STATUS" = "IN_REVIEW" ] || [ "$STATUS" = "IMPLEMENTED" ]; then
       ACTIVE_TASK=$(basename "$task_file" .md)
       ACTIVE_STATUS="$STATUS"
@@ -52,7 +57,7 @@ if [ -d "$HYDRA_DIR/tasks" ]; then
   for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
-    STATUS=$(grep -m1 '^\- \*\*Status\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "PLANNED")
+    STATUS=$(get_task_status "$task_file" "PLANNED")
     case "$STATUS" in
       DONE) DONE_COUNT=$((DONE_COUNT + 1)) ;;
       READY) READY_COUNT=$((READY_COUNT + 1)) ;;

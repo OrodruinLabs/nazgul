@@ -106,7 +106,7 @@ fi
 # Check if all tasks are DONE
 if [[ "$LOOP_COMPLETE" != "true" && -d "hydra/tasks" ]]; then
     TOTAL=$(ls hydra/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' ')
-    DONE=$(grep -rl 'Status.*DONE' hydra/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' ')
+    DONE=$(grep -rlE '(Status\*\*:[[:space:]]*DONE|^## Status:[[:space:]]*DONE)' hydra/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' ')
     if [[ "$TOTAL" -gt 0 && "$TOTAL" == "$DONE" ]]; then
         LOOP_COMPLETE="true"
         debug_log "All $TOTAL tasks DONE"

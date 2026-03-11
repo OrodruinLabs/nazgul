@@ -238,8 +238,8 @@ cmd_create_issue() {
   else
     title="${task_id}: ${raw_title}"
   fi
-  status=$(grep -m1 '^\- \*\*Status\*\*:' "$task_file" | sed 's/.*:[[:space:]]*//')
-  group=$(grep -m1 '^\- \*\*Group\*\*:' "$task_file" | sed 's/.*: //' || echo "0")
+  status=$(grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$task_file" | sed 's/.*:[[:space:]]*//')
+  group=$(grep -m1 -E '(^\- \*\*Group\*\*:|^## Group:)' "$task_file" | sed 's/.*:[[:space:]]*//' || echo "0")
 
   # Extract description and acceptance criteria for issue body
   local body criteria issue_body
@@ -346,7 +346,7 @@ cmd_sync_task() {
 
   local task_id status
   task_id=$(grep -m1 '^\- \*\*ID\*\*:' "$task_file" | sed 's/.*: //')
-  status=$(grep -m1 '^\- \*\*Status\*\*:' "$task_file" | sed 's/.*:[[:space:]]*//')
+  status=$(grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$task_file" | sed 's/.*:[[:space:]]*//')
 
   # Check if we have a mapping for this task
   local issue_number item_id
