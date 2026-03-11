@@ -1,5 +1,5 @@
 ---
-name: help
+name: hydra:help
 description: Show Hydra quick reference — all commands, modes, and getting started guide. Use when user says "hydra help", "what commands", or needs orientation.
 disable-model-invocation: true
 allowed-tools: []

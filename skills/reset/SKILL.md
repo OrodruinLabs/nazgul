@@ -1,5 +1,5 @@
 ---
-name: reset
+name: hydra:reset
 description: Reset Hydra state to a clean slate. Archives current state and recreates from templates. Use when Hydra gets into a corrupted or confusing state.
 context: fork
 allowed-tools: Read, Write, Bash, Glob

@@ -1,5 +1,5 @@
 ---
-name: log
+name: hydra:log
 description: View Hydra run history — iteration timeline, task completions, review verdicts, git commits. Use after an overnight run to see what happened.
 context: fork
 allowed-tools: Read, Bash, Glob

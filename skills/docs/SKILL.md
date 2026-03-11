@@ -1,5 +1,5 @@
 ---
-name: docs
+name: hydra:docs
 description: View, generate, or regenerate project documents (PRD, TRD, ADRs, test plans). Use when asked about project documentation, design decisions, or technical specs.
 context: fork
 allowed-tools: Read, Write, Glob, Grep, Bash

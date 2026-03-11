@@ -1,5 +1,5 @@
 ---
-name: discover
+name: hydra:discover
 description: Scan the codebase to build a project profile and generate tailored reviewer agents. Use when setting up Hydra for a new project, after major codebase changes, or when reviewer agents need updating.
 context: fork
 agent: discovery

@@ -1,5 +1,5 @@
 ---
-name: verify
+name: hydra:verify
 description: "Human acceptance testing — structured verification that work actually works. Run standalone or integrated in HITL review cycle."
 context: fork
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep

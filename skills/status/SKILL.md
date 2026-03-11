@@ -1,5 +1,5 @@
 ---
-name: status
+name: hydra:status
 description: Check the current state of a Hydra autonomous loop. Use when asked about loop progress, task status, iteration count, review board status, or how the Hydra loop is going.
 context: fork
 allowed-tools: Read, Bash, Glob

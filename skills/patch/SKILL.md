@@ -1,5 +1,5 @@
 ---
-name: patch
+name: hydra:patch
 description: "Lightweight task mode for bug fixes, config changes, and small features. Supports --no-review and --discuss flags."
 context: fork
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent

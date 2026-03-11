@@ -1,5 +1,5 @@
 ---
-name: simplify
+name: hydra:simplify
 description: Run a cleanup and simplification pass on all files modified during a Hydra loop. Use after a Hydra loop completes to improve code clarity without changing functionality.
 context: fork
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep

@@ -1,5 +1,5 @@
 ---
-name: review
+name: hydra:review
 description: Manually trigger a review cycle for a specific task or the current IN_REVIEW task. Use when asked to review a task, run reviewers, or check review status.
 context: fork
 allowed-tools: Read, Bash, Glob, Grep

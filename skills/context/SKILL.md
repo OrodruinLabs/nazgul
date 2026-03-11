@@ -1,5 +1,5 @@
 ---
-name: context
+name: hydra:context
 description: Collect targeted codebase context for a specific objective type. Use before planning to deeply understand the code that will be affected.
 context: fork
 allowed-tools: Read, Write, Bash, Glob, Grep, LS

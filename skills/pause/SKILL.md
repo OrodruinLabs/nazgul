@@ -1,5 +1,5 @@
 ---
-name: pause
+name: hydra:pause
 description: Gracefully pause the Hydra autonomous loop at the next iteration boundary. Use when user says "pause hydra", "stop the loop", "halt hydra", or wants to pause work without losing progress.
 context: fork
 allowed-tools: Read, Write, Edit, Bash

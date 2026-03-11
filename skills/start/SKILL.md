@@ -1,5 +1,5 @@
 ---
-name: start
+name: hydra:start
 description: Start or resume a Hydra autonomous development loop. Use when user says "start hydra", "run hydra", "begin development", "resume the loop", or passes an objective for new work. Auto-detects project state — no arguments needed.
 context: fork
 disable-model-invocation: true

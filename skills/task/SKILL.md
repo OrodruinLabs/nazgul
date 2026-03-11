@@ -1,5 +1,5 @@
 ---
-name: task
+name: hydra:task
 description: Task lifecycle management — skip, unblock, add, prioritize, info, and list tasks. Use when you need to manage individual tasks in the Hydra pipeline.
 context: fork
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep

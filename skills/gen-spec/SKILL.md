@@ -1,5 +1,5 @@
 ---
-name: gen-spec
+name: hydra:gen-spec
 description: Interactively build a project specification. Guides you through tiered questions — quick product overview first, optional deep-dive into user stories and success metrics. Outputs hydra/context/project-spec.md.
 context: fork
 allowed-tools: Read, Write, Bash, Glob, Grep

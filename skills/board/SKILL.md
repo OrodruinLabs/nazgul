@@ -1,5 +1,5 @@
 ---
-name: board
+name: hydra:board
 description: Connect Hydra task tracking to an external project board (GitHub Projects, Azure DevOps, etc). Use when user says "connect to github projects", "set up board", "track on github", or "hydra board".
 context: fork
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep

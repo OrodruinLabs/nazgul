@@ -1,5 +1,5 @@
 ---
-name: clean
+name: hydra:clean
 description: Fully remove Hydra from a project — deletes all runtime state, generated agents, MCP config, permissions, CLAUDE.md injections, and gitignore entries. Use when user says "remove hydra", "uninstall hydra", "clean hydra", or wants to completely undo /hydra:init.
 context: fork
 allowed-tools: Read, Edit, Bash, Glob, Grep, AskUserQuestion
