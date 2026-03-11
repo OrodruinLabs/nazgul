@@ -38,6 +38,8 @@ $ARGUMENTS
 
 ## Instructions
 
+Format all output per `references/ui-brand.md` — use stage banners, status symbols, spawning indicators, and display patterns defined there.
+
 ### Parse Arguments
 - `$ARGUMENTS` may contain:
   - An objective string (optional — override for new work)

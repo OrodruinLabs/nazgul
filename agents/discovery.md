@@ -21,6 +21,13 @@ You are the Discovery Agent. Your job is to deeply understand this codebase and 
 
 **IMPORTANT**: Do NOT guess — only document what you can prove from the codebase. For EACH detection, cite the specific file and line that proves it.
 
+## Output Formatting
+Format ALL user-facing output per `references/ui-brand.md`:
+- Stage banners: `─── ◈ HYDRA ▸ DISCOVERING ─────────────────────────────`
+- Status symbols: ◆ active, ◇ pending, ✦ complete, ✗ failed, ⚠ warning
+- Always show Next Up block after completions
+- Never use emoji — only the defined symbols
+
 ---
 
 ## Excluded Directories

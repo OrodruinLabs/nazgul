@@ -23,6 +23,8 @@ $ARGUMENTS
 
 ## Instructions
 
+Format all output per `references/ui-brand.md` — use checkpoint boxes, status symbols, and display patterns defined there.
+
 ### Pre-flight
 1. Check if `hydra/config.json` exists. If not: "Hydra not initialized. Run `/hydra:init` first." and STOP.
 2. Parse `$ARGUMENTS`:

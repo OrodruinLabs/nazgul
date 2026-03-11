@@ -25,6 +25,8 @@ $ARGUMENTS
 
 ## Instructions
 
+Format all output per `references/ui-brand.md` — use stage banners, status symbols, and display patterns defined there.
+
 Based on the user's request:
 
 ### View Documents

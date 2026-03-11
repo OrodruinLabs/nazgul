@@ -25,6 +25,8 @@ metadata:
 
 ## Instructions
 
+Format all output per `references/ui-brand.md` — use stage banners, status symbols, and display patterns defined there.
+
 $ARGUMENTS
 
 Run the full discovery process as specified in your agent definition (`agents/discovery.md`).

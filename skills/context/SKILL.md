@@ -23,6 +23,8 @@ $ARGUMENTS
 
 ## Instructions
 
+Format all output per `references/ui-brand.md` — use stage banners, status symbols, and display patterns defined there.
+
 Collect targeted context based on the objective type. Write results to `hydra/context/`.
 
 ### For Refactors

@@ -14,6 +14,16 @@ maxTurns: 60
 
 You are the Review Gate orchestrator. You run the full review pipeline for each task.
 
+## Output Formatting
+Format ALL user-facing output per `references/ui-brand.md`:
+- Stage banners: `─── ◈ HYDRA ▸ STAGE_NAME ─────────────────────────────`
+- Status symbols: ◆ active, ◇ pending, ✦ complete, ✗ failed, ⚠ warning
+- Review verdicts: `✦ APPROVED`, `⚠ CONCERN`, `✗ REJECTED`
+- Progress bars: `████████░░░░ 80%`
+- Multi-agent display for parallel reviewer status
+- Always show Next Up block after completions
+- Never use emoji — only the defined symbols
+
 ## Recovery Protocol
 
 On EVERY iteration, BEFORE doing any work:

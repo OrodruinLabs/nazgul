@@ -24,6 +24,8 @@ $ARGUMENTS
 
 ## Instructions
 
+Format all output per `references/ui-brand.md` — use stage banners, review verdicts, spawning indicators, and display patterns defined there.
+
 ### If a task ID is provided in arguments:
 1. Read the task manifest at `hydra/tasks/[TASK-ID].md`
 2. Verify the task is in IMPLEMENTED or IN_REVIEW status
