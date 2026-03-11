@@ -16,13 +16,16 @@ if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
-# Read current state
-ITERATION=$(jq -r '.current_iteration // 0' "$CONFIG")
-MAX_ITER=$(jq -r '.max_iterations // 40' "$CONFIG")
-MODE=$(jq -r '.mode // "hitl"' "$CONFIG")
-CONSEC_FAILURES=$(jq -r '.safety.consecutive_failures // 0' "$CONFIG")
-MAX_CONSEC=$(jq -r '.safety.max_consecutive_failures // 5' "$CONFIG")
-YOLO_MODE=$(jq -r '.afk.yolo // false' "$CONFIG" 2>/dev/null || echo "false")
+# Read current state (batched into single jq call)
+CONFIG_STATE=$(jq -r '[
+  (.current_iteration // 0),
+  (.max_iterations // 40),
+  (.mode // "hitl"),
+  (.safety.consecutive_failures // 0),
+  (.safety.max_consecutive_failures // 5),
+  (.afk.yolo // false)
+] | join("\t")' "$CONFIG" 2>/dev/null || echo "0\t40\thitl\t0\t5\tfalse")
+IFS=$'\t' read -r ITERATION MAX_ITER MODE CONSEC_FAILURES MAX_CONSEC YOLO_MODE <<< "$CONFIG_STATE"
 # completion_promise is checked by the prompt-layer Stop hook, not this script
 
 # --- Pause flag check (for /hydra:pause skill) ---
@@ -273,7 +276,7 @@ COMPACTION_COUNT=0
 LAST_COMPACTION_ITER=0
 if [ -f "$COMPACTION_COUNT_FILE" ]; then
   COMPACTION_COUNT=$(jq -r '.count // 0' "$COMPACTION_COUNT_FILE" 2>/dev/null || echo "0")
-  LAST_COMPACTION_ITER=$(jq -r '.last_compaction_iter // 0' "$COMPACTION_COUNT_FILE" 2>/dev/null || echo "0")
+  LAST_COMPACTION_ITER=$(jq -r '.last_compaction_iteration // 0' "$COMPACTION_COUNT_FILE" 2>/dev/null || echo "0")
 fi
 ITERS_SINCE_COMPACTION=$((NEW_ITER - LAST_COMPACTION_ITER))
 CONTEXT_ROT_WARNING=""
@@ -299,7 +302,7 @@ if [ -n "$ACTIVE_TASK" ]; then
   ACTIVE_TASK_NEXT="Read hydra/tasks/${ACTIVE_TASK}.md and continue work"
   RECOVERY_INSTR="Read hydra/plan.md Recovery Pointer, then hydra/tasks/${ACTIVE_TASK}.md for current state."
 else
-  RECOVERY_INSTR="Read hydra/plan.md Recovery Pointer, then hydra/tasks/none.md for current state."
+  RECOVERY_INSTR="Read hydra/plan.md Recovery Pointer. No active task — find first READY task in plan."
 fi
 
 jq -n \
@@ -378,13 +381,23 @@ if [ -f "$PLAN" ]; then
     NEXT_ACTION_TEXT="Read hydra/tasks/${ACTIVE_TASK}.md and continue based on status ${ACTIVE_STATUS}"
   fi
 
-  # Update each Recovery Pointer field using sed (if the section exists)
-  sed -i.bak "s|^\- \*\*Current Task:\*\* .*|- **Current Task:** ${ACTIVE_TASK:-none}|" "$PLAN" 2>/dev/null || true
-  sed -i.bak "s|^\- \*\*Last Action:\*\* .*|- **Last Action:** Iteration ${NEW_ITER} completed|" "$PLAN" 2>/dev/null || true
-  sed -i.bak "s|^\- \*\*Next Action:\*\* .*|- **Next Action:** ${NEXT_ACTION_TEXT}|" "$PLAN" 2>/dev/null || true
-  sed -i.bak "s|^\- \*\*Last Checkpoint:\*\* .*|- **Last Checkpoint:** hydra/checkpoints/iteration-$(printf '%03d' "$NEW_ITER").json|" "$PLAN" 2>/dev/null || true
-  sed -i.bak "s|^\- \*\*Last Commit:\*\* .*|- **Last Commit:** ${GIT_SHA} ${GIT_MSG}|" "$PLAN" 2>/dev/null || true
-  rm -f "${PLAN}.bak"
+  # Update Recovery Pointer fields using awk (safe with arbitrary text in GIT_MSG)
+  CHECKPOINT_NAME="hydra/checkpoints/iteration-$(printf '%03d' "$NEW_ITER").json"
+  awk \
+    -v task="${ACTIVE_TASK:-none}" \
+    -v action="Iteration ${NEW_ITER} completed" \
+    -v next="$NEXT_ACTION_TEXT" \
+    -v ckpt="$CHECKPOINT_NAME" \
+    -v sha="$GIT_SHA" \
+    -v msg="$GIT_MSG" \
+    '{
+      if ($0 ~ /^- \*\*Current Task:\*\*/) { print "- **Current Task:** " task }
+      else if ($0 ~ /^- \*\*Last Action:\*\*/) { print "- **Last Action:** " action }
+      else if ($0 ~ /^- \*\*Next Action:\*\*/) { print "- **Next Action:** " next }
+      else if ($0 ~ /^- \*\*Last Checkpoint:\*\*/) { print "- **Last Checkpoint:** " ckpt }
+      else if ($0 ~ /^- \*\*Last Commit:\*\*/) { print "- **Last Commit:** " sha " " msg }
+      else { print }
+    }' "$PLAN" > "${PLAN}.tmp" && mv "${PLAN}.tmp" "$PLAN"
 fi
 
 # --- BOARD SYNC — push status changes to external board ---
@@ -394,20 +407,31 @@ if [ "$BOARD_ENABLED" = "true" ]; then
   BOARD_SCRIPT="$SCRIPT_DIR/board-sync-${BOARD_PROVIDER}.sh"
   if [ -f "$BOARD_SCRIPT" ]; then
     if [ -d "$HYDRA_DIR/tasks" ]; then
+      # Read all cached statuses in one jq call
+      CACHED_STATUSES=$(jq -r '.board._last_synced_status // {} | to_entries[] | "\(.key)\t\(.value)"' "$CONFIG" 2>/dev/null || echo "")
+      declare -A CACHED_MAP=()
+      while IFS=$'\t' read -r _tid _st; do
+        [ -n "$_tid" ] && CACHED_MAP["$_tid"]="$_st"
+      done <<< "$CACHED_STATUSES"
+      # Collect status changes to batch-write after the loop
+      BOARD_UPDATES=""
       for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
         [ -f "$task_file" ] || continue
-        # Only sync tasks whose status changed since last sync
         task_id=$(grep -m1 '^\- \*\*ID\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "")
         current_status=$(grep -m1 '^\- \*\*Status\*\*:' "$task_file" 2>/dev/null | sed 's/.*:[[:space:]]*//' || echo "")
-        cached_status=$(jq -r --arg tid "$task_id" '.board._last_synced_status[$tid] // ""' "$CONFIG" 2>/dev/null || echo "")
-        if [ -z "$task_id" ] || [ "$current_status" = "$cached_status" ]; then
+        if [ -z "$task_id" ] || [ "$current_status" = "${CACHED_MAP[$task_id]:-}" ]; then
           continue
         fi
         bash "$BOARD_SCRIPT" sync-task "$task_file" 2>/dev/null || true
-        # Cache the synced status to avoid re-syncing unchanged tasks
-        jq --arg tid "$task_id" --arg st "$current_status" \
-          '.board._last_synced_status[$tid] = $st' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+        BOARD_UPDATES="${BOARD_UPDATES}${task_id}\t${current_status}\n"
       done
+      # Batch-write all status changes in a single jq call
+      if [ -n "$BOARD_UPDATES" ]; then
+        UPDATES_JSON=$(printf '%b' "$BOARD_UPDATES" | awk -F'\t' 'NF==2{printf "%s\"%s\":\"%s\"", (NR>1?",":""), $1, $2}' | sed 's/^/{/;s/$/}/')
+        jq --argjson updates "$UPDATES_JSON" \
+          '.board._last_synced_status = (.board._last_synced_status // {} | . + $updates)' \
+          "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+      fi
     fi
   fi
 fi
@@ -519,11 +543,11 @@ Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${I
 
 Read hydra/plan.md → Recovery Pointer section for current state.
 $([ -n "$ACTIVE_TASK" ] && echo "Active task: hydra/tasks/${ACTIVE_TASK}.md (${ACTIVE_STATUS})" || echo "No active task — find first READY task in hydra/plan.md")
-$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (hydra:review-gate) for ${ACTIVE_TASK}. Do NOT skip the review gate.")
-$([ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (hydra:review-gate) for ${ACTIVE_TASK}.")
-$([ "$ACTIVE_STATUS" = "READY" ] || [ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}.")
-$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first.")
-$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "IMPORTANT: Read hydra/reviews/${ACTIVE_TASK}/consolidated-feedback.md before re-implementing.")
+$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (hydra:review-gate) for ${ACTIVE_TASK}. Do NOT skip the review gate." || true)
+$([ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (hydra:review-gate) for ${ACTIVE_TASK}." || true)
+$([ "$ACTIVE_STATUS" = "READY" ] || [ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}." || true)
+$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first." || true)
+$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "IMPORTANT: Read hydra/reviews/${ACTIVE_TASK}/consolidated-feedback.md before re-implementing." || true)
 $([ "$GIT_CONFLICT_DETECTED" = true ] && echo "WARNING: Git conflicts detected. Resolve unmerged files before continuing.")
 $([ -n "$CONTEXT_ROT_WARNING" ] && echo "$CONTEXT_ROT_WARNING")
 

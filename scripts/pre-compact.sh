@@ -42,6 +42,7 @@ DONE_COUNT=0
 READY_COUNT=0
 IN_PROGRESS_COUNT=0
 IN_REVIEW_COUNT=0
+APPROVED_COUNT=0
 CHANGES_COUNT=0
 BLOCKED_COUNT=0
 PLANNED_COUNT=0
@@ -58,6 +59,7 @@ if [ -d "$HYDRA_DIR/tasks" ]; then
       IN_PROGRESS) IN_PROGRESS_COUNT=$((IN_PROGRESS_COUNT + 1)) ;;
       IMPLEMENTED) IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1)) ;;
       IN_REVIEW) IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1)) ;;
+      APPROVED) APPROVED_COUNT=$((APPROVED_COUNT + 1)) ;;
       CHANGES_REQUESTED) CHANGES_COUNT=$((CHANGES_COUNT + 1)) ;;
       BLOCKED) BLOCKED_COUNT=$((BLOCKED_COUNT + 1)) ;;
       PLANNED) PLANNED_COUNT=$((PLANNED_COUNT + 1)) ;;
@@ -100,6 +102,7 @@ jq -n \
   --argjson files_modified "$FILES_MODIFIED_JSON" \
   --argjson total_tasks "$TOTAL_COUNT" \
   --argjson done_count "$DONE_COUNT" \
+  --argjson approved "$APPROVED_COUNT" \
   --argjson ready "$READY_COUNT" \
   --argjson in_progress "$IN_PROGRESS_COUNT" \
   --argjson in_review "$IN_REVIEW_COUNT" \
@@ -127,6 +130,7 @@ jq -n \
     plan_snapshot: {
       total_tasks: $total_tasks,
       done: $done_count,
+      approved: $approved,
       ready: $ready,
       in_progress: $in_progress,
       in_review: $in_review,
