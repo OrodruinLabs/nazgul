@@ -48,6 +48,9 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 9. **Commit in AFK mode.** Every state transition gets a commit with the hydra: prefix.
 10. **HYDRA_COMPLETE means ALL tasks DONE and post-loop finished.** Not before.
 
+## Git Convention
+- The default branch is `main`. All Hydra branch operations (stacking, PRs, merges) target `main`.
+
 ## Safety
 - Pre-tool guard blocks destructive commands (rm -rf /, DROP TABLE, etc.)
 - Security rejections in AFK mode → BLOCKED (requires human review)

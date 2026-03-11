@@ -74,6 +74,7 @@ tests/                               # Plugin validation tests
 - Markdown: Use ATX headers (`#`). Fenced code blocks with language tags.
 - YAML frontmatter: Consistent indentation (2 spaces). Quote string values with special characters.
 - File naming: kebab-case for all files. UPPERCASE for docs (CLAUDE.md, README.md).
+- Git: The default branch is always `main`, never `master`. All agent and skill references to the default branch must use `main`.
 
 ## Key Concepts
 
