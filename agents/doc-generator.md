@@ -31,11 +31,13 @@ All documents go to `hydra/docs/`. This directory is the project's living docume
 
 | Document | Greenfield | Brownfield | Refactor | Bugfix | Migration |
 |----------|-----------|------------|----------|--------|-----------|
-| PRD | Full | Feature-scoped | No | No | Feature parity |
-| TRD | Full | Feature-scoped | Target architecture | No | Target stack |
-| ADR | Key decisions | For new decisions | Why refactor | No | Why migrate |
+| PRD | Full | Feature-scoped | Refactor scope | Bug context & impact | Feature parity |
+| TRD | Full | Feature-scoped | Target architecture | Fix architecture | Target stack |
+| ADR | Key decisions | For new decisions | Why refactor | Root cause & fix rationale | Why migrate |
 | Test Plan | Full strategy | Feature tests | Regression suite | Regression test | Migration validation |
 | Migration Plan | No | No | No | No | Full |
+
+> **All projects generate PRD, TRD, ADR, and Test Plan.** The scope and depth vary by classification, but no document type is ever skipped.
 
 **Note:** When `hydra/context/project-spec.md` is present, it is the PRIMARY source for PRD content across all project types. The spec provides product context that technical analysis alone cannot capture.
 
@@ -58,7 +60,7 @@ All documents go to `hydra/docs/`. This directory is the project's living docume
    a. For each existing document with relevance HIGH or MEDIUM:
       - Read the full document content
       - Extract facts, requirements, decisions, and constraints relevant to the objective
-      - Note which sections can be referenced rather than regenerated
+      - Use as context to inform generated documents
    b. Build an internal mapping — which existing docs inform which generated docs:
       - Existing README/ARCHITECTURE docs → TRD "Current State" section
       - Existing API specs (OpenAPI/GraphQL) → TRD "API Design" section
@@ -69,7 +71,7 @@ All documents go to `hydra/docs/`. This directory is the project's living docume
       - Existing GUIDE docs (implementation guides, contribution guides) → Reference in relevant generated docs where applicable
       - Existing OTHER docs → Read if HIGH/MEDIUM relevance; cite in "Prior Documentation" sections
    c. If documentation quality is COMPREHENSIVE:
-      - BROWNFIELD: generated docs should be ADDITIVE — extend what exists, don't duplicate
+      - BROWNFIELD: generated docs incorporate findings from existing docs but are always written fresh
       - MIGRATION: generated docs should map from existing to target
       - REFACTOR: generated docs should reference existing as the "before" state
    c2. If documentation quality is PARTIAL:
@@ -98,7 +100,7 @@ All documents go to `hydra/docs/`. This directory is the project's living docume
 - TRDs must reference actual architecture from `architecture-map.md`.
 - ADRs must list real alternatives with concrete reasons for the choice.
 - Every document should be concise (1-3 pages). No 50-page specs.
-- When existing docs cover a topic, REFERENCE them by path — do not copy-paste content.
+- Always generate complete documents. Cite existing docs as references where relevant.
 - Generated docs must not contradict existing docs without explicit justification.
 - For BROWNFIELD with existing API specs: TRD "API Design" must extend the existing spec, citing base spec path.
 - For projects with existing ADRs: number new ADRs sequentially after the highest existing ADR number.

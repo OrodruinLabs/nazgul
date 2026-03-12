@@ -119,14 +119,17 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 
 #### STATE: DOCS_READY
 **Detection:** Docs generated > 0 AND total tasks == 0
-**Action:** Documents exist but no plan yet — run the planner.
+**Action:** Documents exist but no plan yet — regenerate documents from current context, then run the planner.
 1. Read stored objective from config.json
-2. If objective exists: tell user "Docs ready. Running planner on existing documents..."
-3. If no objective: read the PRD overview section as the objective, store it in config.json
-4. Delegate to Planner agent
-5. Review Plan (HITL mode: show plan for approval. AFK: continue.)
-6. Delegate to Implementer
-7. Stop hook takes over.
+2. If no objective: read the PRD overview section as the objective, store it in config.json
+3. Tell user: "Regenerating documents from current context before planning..."
+4. Delegate to Doc Generator agent (regenerates all docs to reflect current objective and context)
+5. In HITL mode, pause for doc review.
+6. Tell user: "Docs ready. Running planner..."
+7. Delegate to Planner agent
+8. Review Plan (HITL mode: show plan for approval. AFK: continue.)
+9. Delegate to Implementer
+10. Stop hook takes over.
 
 ---
 
