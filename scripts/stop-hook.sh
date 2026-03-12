@@ -523,6 +523,11 @@ jq -n \
 
 # --- EXIT CONDITIONS ---
 
+# 0. No tasks exist — nothing to loop on
+if [ "$TOTAL_COUNT" -eq 0 ]; then
+  exit 0
+fi
+
 # 1. All tasks complete
 # YOLO mode: loop completes when all tasks are APPROVED or DONE
 # Non-YOLO: loop completes when all tasks are DONE
