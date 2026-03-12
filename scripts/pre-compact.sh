@@ -36,7 +36,7 @@ if [ -d "$HYDRA_DIR/tasks" ]; then
     if [ "$STATUS" = "IN_PROGRESS" ] || [ "$STATUS" = "CHANGES_REQUESTED" ] || [ "$STATUS" = "IN_REVIEW" ] || [ "$STATUS" = "IMPLEMENTED" ]; then
       ACTIVE_TASK=$(basename "$task_file" .md)
       ACTIVE_STATUS="$STATUS"
-      ACTIVE_RETRY=$(grep -m1 '^\- \*\*Retry count\*\*:' "$task_file" 2>/dev/null | sed 's|.*: \([0-9]*\)/.*|\1|' || echo "0")
+      ACTIVE_RETRY=$(grep -m1 '^\- \*\*Retry count\*\*:' "$task_file" 2>/dev/null | sed 's|.*: \([0-9]*\).*|\1|' || echo "0")
       break
     fi
   done

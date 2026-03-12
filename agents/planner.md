@@ -91,7 +91,7 @@ Write the plan to `hydra/plan.md` with:
 - Parallel Groups with all tasks
 - Recovery Pointer
 
-Write individual task manifests to `hydra/tasks/TASK-NNN.md` using the task manifest template.
+Write individual task manifests to `hydra/tasks/TASK-NNN.md` using the task manifest template. Read the template at `templates/task-manifest.md` first — copy its exact field formats (e.g. `**Retry count**: 0/3` not bare `0`). The stop hook parses these fields with sed; format mismatches cause failures.
 
 After writing each task manifest, if board sync is enabled, create the corresponding GitHub Issue:
 
