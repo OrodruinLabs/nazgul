@@ -100,9 +100,11 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
    - If null (pre-v3 project): create feature branch now:
      a. Capture current branch as `branch.base`
      b. Store `pwd` as `branch.main_worktree_path`
-     c. Slugify objective → `hydra/obj-<slug>`
-     d. `git checkout -b hydra/obj-<slug>`
-     e. Create worktree dir, store paths in config
+     c. Slugify objective → `feat/<display_id>-<slug>`
+     d. Compute feature ID: `FEAT-NNN` from `objectives_history.length + 1`. If board connected, prefer issue number as display_id.
+     e. Store `feat_id` and `feat_display_id` in config.json. Set `afk.commit_prefix` to `feat(<display_id>):`.
+     f. `git checkout -b feat/<display_id>-<slug>`
+     g. Create worktree dir, store paths in config
 6. Update config.json: set mode from flags (afk/hitl), reset `current_iteration` to 0. If `current_iteration >= max_iterations`, ALSO reset `current_iteration` to 0 and bump `max_iterations` by its original value (e.g., 40 → 80) to allow the continued run to have a full iteration budget.
 7. Delegate to the appropriate agent based on active task status:
    - READY/IN_PROGRESS → Implementer
@@ -124,7 +126,7 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
      a. Read `hydra/config.json → branch.feature` and `branch.base`
      b. If feature branch exists:
         - Push the feature branch: `git push -u origin <feature-branch>`
-        - Create PR: `gh pr create --base <base-branch> --head <feature-branch> --title "hydra: <objective>" --body "<task summary>"`
+        - Create PR: `gh pr create --base <base-branch> --head <feature-branch> --title "<objective> (<feat_display_id>)" --body "<task summary>"`
         - Clean up all worktrees (remove task worktrees and worktree parent dir)
      c. Output HYDRA_COMPLETE
 3. If post-loop already run:
@@ -141,9 +143,11 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 3. **Branch Setup** (if `branch.feature` is null):
    a. Capture current branch as `branch.base`
    b. Store `pwd` as `branch.main_worktree_path`
-   c. Slugify objective → `hydra/obj-<slug>`
-   d. `git checkout -b hydra/obj-<slug>`
-   e. Create worktree dir, store paths in config
+   c. Slugify objective → `feat/<display_id>-<slug>`
+   d. Compute feature ID: `FEAT-NNN` from `objectives_history.length + 1`. If board connected, prefer issue number as display_id.
+   e. Store `feat_id` and `feat_display_id` in config.json. Set `afk.commit_prefix` to `feat(<display_id>):`.
+   f. `git checkout -b feat/<display_id>-<slug>`
+   g. Create worktree dir, store paths in config
 4. Tell user: "Regenerating documents from current context before planning..."
 5. Delegate to Doc Generator agent (regenerates all docs to reflect current objective and context)
 6. In HITL mode, pause for doc review.
@@ -163,9 +167,11 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 3. **Branch Setup:**
    a. Capture current branch as `branch.base`
    b. Store `pwd` as `branch.main_worktree_path`
-   c. Slugify objective → `hydra/obj-<slug>`
-   d. `git checkout -b hydra/obj-<slug>`
-   e. Create worktree dir, store paths in config
+   c. Slugify objective → `feat/<display_id>-<slug>`
+   d. Compute feature ID: `FEAT-NNN` from `objectives_history.length + 1`. If board connected, prefer issue number as display_id.
+   e. Store `feat_id` and `feat_display_id` in config.json. Set `afk.commit_prefix` to `feat(<display_id>):`.
+   f. `git checkout -b feat/<display_id>-<slug>`
+   g. Create worktree dir, store paths in config
 4. Tell user: "Discovery complete. Generating documents, then planning..."
 5. Delegate to Doc Generator agent. In HITL mode, pause for doc review.
 6. Delegate to Planner agent. In HITL mode, pause for plan review.
@@ -181,9 +187,11 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 2. **Branch Setup:**
    a. Capture current branch as `branch.base`
    b. Store `pwd` as `branch.main_worktree_path`
-   c. Slugify objective → `hydra/obj-<slug>` (lowercase, non-alnum to hyphens, max 50 chars)
-   d. `git checkout -b hydra/obj-<slug>`
-   e. Create worktree dir at `../<project>-hydra-worktrees/`, store path in config
+   c. Slugify objective → `feat/<display_id>-<slug>` (lowercase, non-alnum to hyphens, max 50 chars)
+   d. Compute feature ID: `FEAT-NNN` from `objectives_history.length + 1`. If board connected, prefer issue number as display_id.
+   e. Store `feat_id` and `feat_display_id` in config.json. Set `afk.commit_prefix` to `feat(<display_id>):`.
+   f. `git checkout -b feat/<display_id>-<slug>`
+   g. Create worktree dir at `../<project>-hydra-worktrees/`, store path in config
 3. Run Discovery agent (scans codebase, classifies project, generates reviewers)
 4. Classify Project: In HITL mode, confirm classification with user.
 5. Generate Documents: Delegate to Doc Generator. In HITL mode, pause for doc review.
@@ -334,7 +342,7 @@ g. Continue to next wave
 
 ### AFK Mode Notes
 - Set `afk.enabled: true` in config
-- Auto-commit on every state transition with `hydra:` prefix
+- Auto-commit on every state transition with dynamic prefix from config (e.g., `feat(FEAT-003):` or `feat(#42):`)
 - Security rejections → BLOCKED (requires human review later)
 - No pauses for human review
 
