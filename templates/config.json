@@ -4,6 +4,8 @@
   "mode": "hitl",
   "objective": null,
   "objective_set_at": null,
+  "feat_id": null,
+  "feat_display_id": null,
   "project_spec": null,
   "objectives_history": [],
   "max_iterations": 40,
@@ -106,7 +108,7 @@
     "timeout_minutes": 90,
     "checkpoint_every_n_iterations": 5,
     "auto_commit": true,
-    "commit_prefix": "hydra:"
+    "commit_prefix": null
   },
   "context": {
     "budget_strategy": "aggressive",
