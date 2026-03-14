@@ -129,8 +129,8 @@ Skip this step entirely if mode is `"afk"` or if any reviewer returned CHANGES_R
 ### Step 4: Handle Results
 
 **ALL APPROVED:**
-1. Read `hydra/config.json → afk.yolo`, `branch.feature`, `branch.main_worktree_path`, `branch.worktree_dir`
-2. **If YOLO mode:**
+1. Read `hydra/config.json → afk.yolo`, `afk.task_pr`, `branch.feature`, `branch.main_worktree_path`, `branch.worktree_dir`
+2. **If YOLO mode WITH task_pr (`afk.yolo: true` AND `afk.task_pr: true`):**
    - Set task status to APPROVED (not DONE)
    - Push the task branch: `git push -u origin hydra/TASK-NNN`
    - Create PR targeting the feature branch:
@@ -140,7 +140,7 @@ Skip this step entirely if mode is `"afk"` or if any reviewer returned CHANGES_R
    - Record PR URL in task manifest (field: `- **PR**: [url]`)
    - Update plan.md Recovery Pointer
    - Move to next task immediately
-3. **If NOT YOLO mode:**
+3. **Otherwise (non-YOLO, OR YOLO without task_pr):**
    - `cd <main_worktree_path>`, checkout feature branch
    - `git merge hydra/TASK-NNN --no-ff -m "hydra: merge TASK-NNN — [title]"`
    - If merge conflict: `git merge --abort`, mark task BLOCKED with reason "merge conflict with feature branch", write conflict details to task manifest
