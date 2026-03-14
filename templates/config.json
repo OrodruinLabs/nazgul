@@ -102,6 +102,7 @@
   "afk": {
     "enabled": false,
     "yolo": false,
+    "task_pr": false,
     "timeout_minutes": 90,
     "checkpoint_every_n_iterations": 5,
     "auto_commit": true,
