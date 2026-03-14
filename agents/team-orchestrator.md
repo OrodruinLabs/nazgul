@@ -49,7 +49,7 @@ When asked to run parallel implementations:
 4. Verify NO file overlaps between tasks (abort if overlap detected)
 5. **Create worktrees for each task:**
    - Read `branch.feature` and `branch.worktree_dir` from config
-   - For each task: `git worktree add <worktree_dir>/TASK-NNN -b hydra/TASK-NNN <feature-branch>`
+   - For each task: `git worktree add <worktree_dir>/TASK-NNN -b feat/<display_id>/TASK-NNN <feature-branch>`
    - Pass the worktree path to each implementer teammate
 6. Spawn a team with one implementer per task:
    - Team name: `hydra-impl-group-[N]`
@@ -60,7 +60,7 @@ When asked to run parallel implementations:
 8. **Merge completed tasks to feature branch:**
    - For each IMPLEMENTED task:
      a. Checkout feature branch in main worktree
-     b. `git merge --no-ff hydra/TASK-NNN -m "hydra: merge TASK-NNN — [title]"`
+     b. `git merge --no-ff feat/<display_id>/TASK-NNN -m "<commit_prefix> merge TASK-NNN — [title]"`
      c. If merge conflict: `git merge --abort`, mark task BLOCKED with conflict details
      d. If success: remove worktree, delete task branch
 9. Signal completion
