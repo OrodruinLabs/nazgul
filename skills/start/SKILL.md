@@ -316,7 +316,7 @@ a. Identify the current wave — the lowest wave number with READY tasks
 b. Collect all READY tasks in that wave
 c. If only 1 task: dispatch implementer normally (no parallelism overhead)
 d. If 2+ tasks: dispatch parallel Agent Teams:
-   - Create a worktree per task: `git worktree add <worktree_dir>/TASK-NNN -b hydra/TASK-NNN <feature-branch>`
+   - Create a worktree per task: `git worktree add <worktree_dir>/TASK-NNN -b feat/<display_id>/TASK-NNN <feature-branch>`
    - One implementer per task, each working in its own worktree with fresh context
    - Pass worktree path to each implementer teammate
    - Team name: `hydra-impl-wave-[N]`
@@ -324,7 +324,7 @@ d. If 2+ tasks: dispatch parallel Agent Teams:
    - Each agent commits in its own worktree
 e. Wait for all agents in the wave to complete
 f. After wave completion:
-   - Merge each task branch into feature branch: `git merge --no-ff hydra/TASK-NNN`
+   - Merge each task branch into feature branch: `git merge --no-ff feat/<display_id>/TASK-NNN`
    - If merge conflict: `git merge --abort`, mark conflicting task BLOCKED with conflict details
    - Clean up completed task worktrees and delete task branches
    - Promote next wave's tasks from PLANNED to READY (via dependency check)
@@ -352,6 +352,6 @@ g. Continue to next wave
 - **All reviewers still run** — the full review gate executes for every task
 - **Default: Feature-level PR** — tasks merge into feature branch (same as hitl/afk), single PR created at objective completion
 - **Optional: `--task-pr`** — enables stacked per-task PRs targeting feature branch (legacy behavior)
-- **Worktree isolation** — each task gets its own worktree at `<worktree_dir>/TASK-NNN` with branch `hydra/TASK-NNN`
+- **Worktree isolation** — each task gets its own worktree at `<worktree_dir>/TASK-NNN` with branch `feat/<display_id>/TASK-NNN`
 - Tests, lint, security guards fully active
 - Requires launching Claude Code with `--dangerously-skip-permissions`

@@ -50,7 +50,7 @@ Hydra Run Log
 ─────────────────────────────────────────────────────────
 [14:30:01] ITERATION   #1 started
 [14:30:05] TASK        TASK-001 → IN_PROGRESS
-[14:31:12] COMMIT      abc1234 hydra: implement auth module
+[14:31:12] COMMIT      abc1234 feat(FEAT-003): implement auth module
 [14:31:15] TASK        TASK-001 → IMPLEMENTED
 [14:31:16] REVIEW      TASK-001 review started (3 reviewers)
 [14:32:00] VERDICT     TASK-001 APPROVED (qa: 92, perf: 85, type: 88)
@@ -59,7 +59,7 @@ Hydra Run Log
 
 [14:32:05] ITERATION   #2 started
 [14:32:08] TASK        TASK-002 → IN_PROGRESS
-[14:33:45] COMMIT      def5678 hydra: add payment routes
+[14:33:45] COMMIT      def5678 feat(FEAT-003): add payment routes
 [14:33:50] TASK        TASK-002 → IMPLEMENTED
 [14:33:51] REVIEW      TASK-002 review started (3 reviewers)
 [14:34:30] VERDICT     TASK-002 CHANGES_REQUESTED (qa: 75, perf: 60)

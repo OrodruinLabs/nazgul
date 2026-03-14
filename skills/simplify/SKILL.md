@@ -26,8 +26,8 @@ Run a post-loop cleanup pass on files modified during the Hydra loop.
 
 ### Process
 1. Identify all files modified during the Hydra loop:
-   - Check git log for commits with the hydra: prefix
-   - `git log --oneline --all --grep="hydra:" --name-only`
+   - Check git log for commits with the configured commit prefix
+   - `git log --oneline --all --grep="$(jq -r '.afk.commit_prefix // "feat("' hydra/config.json 2>/dev/null)" --name-only`
 2. For each modified file:
    a. Read the file
    b. Look for simplification opportunities:
