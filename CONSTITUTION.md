@@ -36,8 +36,8 @@ These rules govern all agent behavior during a Hydra loop. Violation of any rule
 No task may skip a state. The state machine is the backbone of correctness.
 
 ```
-Non-YOLO: PLANNED → READY → IN_PROGRESS → IMPLEMENTED → IN_REVIEW → DONE
-YOLO:     PLANNED → READY → IN_PROGRESS → IMPLEMENTED → IN_REVIEW → APPROVED → DONE
+Default:     PLANNED → READY → IN_PROGRESS → IMPLEMENTED → IN_REVIEW → DONE
+Task-PR:     PLANNED → READY → IN_PROGRESS → IMPLEMENTED → IN_REVIEW → APPROVED → DONE
 ```
 
 ### Permitted Transitions
@@ -49,9 +49,9 @@ YOLO:     PLANNED → READY → IN_PROGRESS → IMPLEMENTED → IN_REVIEW → AP
 | IN_PROGRESS | IMPLEMENTED | Code complete + tests pass + lint clean | Implementer |
 | IMPLEMENTED | IN_REVIEW | Review gate picks up the task | Review Gate |
 | IN_REVIEW | DONE | ALL reviewers APPROVED (non-YOLO mode) | Review Gate |
-| IN_REVIEW | APPROVED | ALL reviewers APPROVED (YOLO mode) | Review Gate |
+| IN_REVIEW | APPROVED | ALL reviewers APPROVED (YOLO + task-pr mode only) | Review Gate |
 | IN_REVIEW | CHANGES_REQUESTED | ANY reviewer rejects | Review Gate |
-| APPROVED | DONE | PR merged (external event, YOLO mode only) | Notification handler or user |
+| APPROVED | DONE | PR merged (external event, YOLO + task-pr mode only) | Notification handler or user |
 | CHANGES_REQUESTED | IN_PROGRESS | Implementer addresses feedback | Implementer |
 | Any active state | BLOCKED | Max retries hit, unresolvable issue, or 3 consecutive test failures | Implementer or Review Gate |
 | BLOCKED | READY | Human intervention resolves the blocker | User (manual or /hydra:task unblock) |
@@ -87,15 +87,18 @@ YOLO:     PLANNED → READY → IN_PROGRESS → IMPLEMENTED → IN_REVIEW → AP
 
 8. **Feedback priority is fixed.** When the Feedback Aggregator consolidates reviewer feedback, priority is: security findings first, correctness issues second, style concerns last. Security findings are always blocking regardless of confidence score.
 
-### YOLO Mode — Deferred Merge
+### YOLO Mode — PR Strategy
 
 In YOLO mode (`afk.yolo: true`), the in-loop review gate still runs fully — all
-configured reviewers must approve before a task advances. However, instead of DONE,
-the task is set to APPROVED and a stacked PR is created. The loop proceeds to the
-next task immediately.
+configured reviewers must approve before a task advances.
 
-DONE is set only when the PR is merged. This defers external code review to the PR
-while preserving all local quality checks (tests, lint, all 6 reviewers).
+**Default (feature-level PR):** After approval, the task branch is merged into the
+feature branch (same as hitl/afk). A single PR is created when the objective completes.
+This is the default behavior matching all other modes.
+
+**Task-level PRs (`afk.task_pr: true`):** After approval, the task is set to APPROVED
+and a stacked PR is created targeting the feature branch. The loop proceeds to the
+next task immediately. DONE is set only when the PR is merged.
 
 ---
 
@@ -317,8 +320,8 @@ main (base branch — untouched during loop)
 
 ### Merge Protocol
 
-- **Non-YOLO:** On review approval, the review gate merges the task branch into the feature branch with `--no-ff`, then removes the worktree and deletes the task branch
-- **YOLO:** On review approval, the task branch is pushed and a PR is created targeting the feature branch (not main)
+- **Non-YOLO (and YOLO default):** On review approval, the review gate merges the task branch into the feature branch with `--no-ff`, then removes the worktree and deletes the task branch
+- **YOLO with `--task-pr`:** On review approval, the task branch is pushed and a PR is created targeting the feature branch (not main)
 - **Conflict handling:** If merge fails, `git merge --abort` is run, and the task is marked BLOCKED with conflict details
 - **On objective completion:** The feature branch is pushed and a PR is created targeting the base branch
 
