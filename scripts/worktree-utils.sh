@@ -17,7 +17,22 @@ create_feature_branch() {
   local config="${3:-$CONFIG}"
   local slug
   slug=$(slugify_objective "$objective")
-  local branch_name="hydra/obj-${slug}"
+  # Compute feat_id from objectives_history length
+  local feat_num
+  feat_num=$(jq '(.objectives_history // [] | length) + 1' "$config")
+  local feat_id="FEAT-$(printf '%03d' "$feat_num")"
+
+  # Check for board issue number
+  local board_issue
+  board_issue=$(jq -r '.board.current_issue // ""' "$config")
+  local display_id
+  if [ -n "$board_issue" ] && [ "$board_issue" != "null" ]; then
+    display_id="#${board_issue}"
+  else
+    display_id="$feat_id"
+  fi
+
+  local branch_name="feat/${board_issue:-$feat_id}-${slug}"
   local base_branch
   base_branch=$(git -C "$project_root" branch --show-current 2>/dev/null || echo "main")
   local main_worktree_path
@@ -32,7 +47,10 @@ create_feature_branch() {
     --arg base "$base_branch" \
     --arg mwp "$main_worktree_path" \
     --arg ts "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-    '.branch.feature = $feat | .branch.base = $base | .branch.main_worktree_path = $mwp | .branch.created_at = $ts' \
+    --arg fid "$feat_id" \
+    --arg did "$display_id" \
+    --arg prefix "feat(${display_id}):" \
+    '.branch.feature = $feat | .branch.base = $base | .branch.main_worktree_path = $mwp | .branch.created_at = $ts | .feat_id = $fid | .feat_display_id = $did | .afk.commit_prefix = $prefix' \
     "$config" > "$tmp" && mv "$tmp" "$config"
 
   echo "$branch_name"
@@ -44,7 +62,7 @@ setup_worktree_dir() {
   local project_name
   project_name=$(basename "$project_root")
   local worktree_dir
-  worktree_dir="$(dirname "$project_root")/${project_name}-hydra-worktrees"
+  worktree_dir="$(dirname "$project_root")/${project_name}-worktrees"
 
   mkdir -p "$worktree_dir"
 
@@ -71,7 +89,12 @@ create_task_worktree() {
   fi
 
   local task_dir="${worktree_dir}/${task_id}"
-  local task_branch="hydra/${task_id}"
+  local feat_display
+  feat_display=$(jq -r '.feat_display_id // "FEAT-000"' "$config")
+  local board_issue
+  board_issue=$(jq -r '.board.current_issue // ""' "$config")
+  local feat_ref="${board_issue:-$feat_display}"
+  local task_branch="feat/${feat_ref}/${task_id}"
 
   git -C "$project_root" worktree add "$task_dir" -b "$task_branch" "$feature_branch" 2>/dev/null
 
@@ -89,10 +112,17 @@ merge_task_to_feature() {
 
   local feature_branch
   feature_branch=$(jq -r '.branch.feature // ""' "$config")
-  local task_branch="hydra/${task_id}"
+  local feat_display
+  feat_display=$(jq -r '.feat_display_id // "FEAT-000"' "$config")
+  local board_issue
+  board_issue=$(jq -r '.board.current_issue // ""' "$config")
+  local feat_ref="${board_issue:-$feat_display}"
+  local task_branch="feat/${feat_ref}/${task_id}"
 
   git -C "$project_root" checkout "$feature_branch"
-  if ! git -C "$project_root" merge --no-ff -m "hydra: merge ${task_id}" "$task_branch" 2>/dev/null; then
+  local commit_prefix
+  commit_prefix=$(jq -r '.afk.commit_prefix // "feat:"' "$config")
+  if ! git -C "$project_root" merge --no-ff -m "${commit_prefix} merge ${task_id}" "$task_branch" 2>/dev/null; then
     git -C "$project_root" merge --abort 2>/dev/null || true
     return 1
   fi
@@ -107,7 +137,12 @@ cleanup_task_worktree() {
   local worktree_dir
   worktree_dir=$(jq -r '.branch.worktree_dir // ""' "$config")
   local task_dir="${worktree_dir}/${task_id}"
-  local task_branch="hydra/${task_id}"
+  local feat_display
+  feat_display=$(jq -r '.feat_display_id // "FEAT-000"' "$config")
+  local board_issue
+  board_issue=$(jq -r '.board.current_issue // ""' "$config")
+  local feat_ref="${board_issue:-$feat_display}"
+  local task_branch="feat/${feat_ref}/${task_id}"
 
   if [ -d "$task_dir" ]; then
     git -C "$project_root" worktree remove "$task_dir" --force 2>/dev/null || true
