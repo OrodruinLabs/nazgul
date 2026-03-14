@@ -150,7 +150,7 @@ Users can intervene at any time:
 ### AFK (Autonomous)
 
 - Classification, documents, and plan proceed automatically
-- Auto-commit on every state transition with `hydra:` prefix
+- Auto-commit on every state transition with dynamic prefix from config (e.g., `feat(#42):`)
 - Security rejections auto-block (human reviews later)
 - Blockers are logged; human reviews asynchronously
 - Session time limit enforced (`afk.timeout_minutes`)

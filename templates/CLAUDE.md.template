@@ -45,7 +45,7 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 6. **Address ALL blocking feedback.** When CHANGES_REQUESTED, fix every REJECT item.
 7. **One task at a time.** Don't work on multiple tasks simultaneously (unless parallel mode with Agent Teams).
 8. **Update Recovery Pointer on every state change.** This is how you survive compaction.
-9. **Commit in AFK mode.** Every state transition gets a commit with the hydra: prefix.
+9. **Commit in AFK mode.** Every state transition gets a commit with the dynamic prefix from config (e.g., `feat(FEAT-003):`).
 10. **HYDRA_COMPLETE means ALL tasks DONE and post-loop finished.** Not before.
 
 ## Git Convention

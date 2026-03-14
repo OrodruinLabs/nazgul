@@ -137,14 +137,14 @@ Review Gate finishes → updates Recovery Pointer to "Implementer should read fe
 In AFK mode, every state transition generates a commit:
 
 ```
-hydra: TASK-001 → IN_PROGRESS (claimed)
-hydra: TASK-001 → IMPLEMENTED (tests: 5/5, lint: clean)
-hydra: TASK-001 → DONE (all reviewers approved)
-hydra: TASK-004 → CHANGES_REQUESTED (retry 1/3, code-reviewer rejected)
-hydra: TASK-008 → BLOCKED (requires API keys)
+feat(#42): TASK-001 → IN_PROGRESS (claimed)
+feat(#42): TASK-001 → IMPLEMENTED (tests: 5/5, lint: clean)
+feat(#42): TASK-001 → DONE (all reviewers approved)
+feat(#42): TASK-004 → CHANGES_REQUESTED (retry 1/3, code-reviewer rejected)
+feat(#42): TASK-008 → BLOCKED (requires API keys)
 ```
 
-`git log --oneline --grep="hydra:"` reconstructs the entire project history.
+`git log --oneline --grep="feat("` reconstructs the entire project history.
 
 ---
 
