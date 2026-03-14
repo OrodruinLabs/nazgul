@@ -15,7 +15,7 @@ metadata:
 
 ## Modified Files
 - Git changes: !`git diff --name-only HEAD~10 2>/dev/null || echo "No recent changes"`
-- Config: !`jq '.afk.commit_prefix // "hydra:"' hydra/config.json 2>/dev/null || echo "hydra:"`
+- Config: !`jq '.afk.commit_prefix // "feat:"' hydra/config.json 2>/dev/null || echo "feat:"`
 
 ## Arguments
 $ARGUMENTS
