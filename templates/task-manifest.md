@@ -117,7 +117,7 @@
      - Created tests/models/user.test.ts with 5 test cases (create, read, update, delete, duplicate email)
      **Test results**: 5/5 passing
      **Lint results**: clean (0 errors, 0 warnings)
-     **Commit**: `hydra: TASK-001 implement user model` (sha: def5678) -->
+     **Commit**: `feat(FEAT-001): TASK-001 implement user model` (sha: def5678) -->
 
 ## Review Results
 <!-- Populated by the review-gate agent after each review cycle.
@@ -133,7 +133,7 @@
      - qa-reviewer: CONCERN (confidence: 72) — could add edge case test for empty email [non-blocking]
 
      **Verdict**: ALL_APPROVED
-     **Completion commit**: `hydra: TASK-001 complete` (sha: ghi9012) -->
+     **Completion commit**: `feat(FEAT-001): TASK-001 complete` (sha: ghi9012) -->
 
 <!-- If CHANGES_REQUESTED:
      - architect-reviewer: APPROVED (confidence: 90)
