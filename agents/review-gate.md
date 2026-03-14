@@ -129,24 +129,24 @@ Skip this step entirely if mode is `"afk"` or if any reviewer returned CHANGES_R
 ### Step 4: Handle Results
 
 **ALL APPROVED:**
-1. Read `hydra/config.json → afk.yolo`, `afk.task_pr`, `branch.feature`, `branch.main_worktree_path`, `branch.worktree_dir`
+1. Read `hydra/config.json → afk.yolo`, `afk.task_pr`, `branch.feature`, `branch.main_worktree_path`, `branch.worktree_dir`, `feat_display_id`, `afk.commit_prefix`
 2. **If YOLO mode WITH task_pr (`afk.yolo: true` AND `afk.task_pr: true`):**
    - Set task status to APPROVED (not DONE)
-   - Push the task branch: `git push -u origin hydra/TASK-NNN`
+   - Push the task branch: `git push -u origin feat/<display_id>/TASK-NNN`
    - Create PR targeting the feature branch:
-     - `gh pr create --base <feature-branch> --head hydra/TASK-NNN`
-     - Title: `hydra: TASK-NNN — [task title]`
+     - `gh pr create --base <feature-branch> --head feat/<display_id>/TASK-NNN`
+     - Title: `TASK-NNN — [task title] (<feat_display_id>)`
      - Body: include reviewer verdict summary
    - Record PR URL in task manifest (field: `- **PR**: [url]`)
    - Update plan.md Recovery Pointer
    - Move to next task immediately
 3. **Otherwise (non-YOLO, OR YOLO without task_pr):**
    - `cd <main_worktree_path>`, checkout feature branch
-   - `git merge hydra/TASK-NNN --no-ff -m "hydra: merge TASK-NNN — [title]"`
+   - `git merge feat/<display_id>/TASK-NNN --no-ff -m "<commit_prefix> merge TASK-NNN — [title]"`
    - If merge conflict: `git merge --abort`, mark task BLOCKED with reason "merge conflict with feature branch", write conflict details to task manifest
    - If merge succeeds:
      - Remove the task worktree: `git worktree remove <worktree_dir>/TASK-NNN --force`
-     - Delete the task branch: `git branch -D hydra/TASK-NNN`
+     - Delete the task branch: `git branch -D feat/<display_id>/TASK-NNN`
      - Set task status to DONE
      - Record completion commit SHA
      - Update plan.md Recovery Pointer
@@ -166,7 +166,7 @@ When ALL tasks are DONE, before outputting HYDRA_COMPLETE:
 2. After post-loop agents complete:
    a. Read `branch.feature` and `branch.base` from config
    b. Push feature branch: `git push -u origin <feature-branch>`
-   c. Create PR: `gh pr create --base <base-branch> --head <feature-branch> --title "hydra: <objective>" --body "<task summary>"`
+   c. Create PR: `gh pr create --base <base-branch> --head <feature-branch> --title "<objective> (<feat_display_id>)" --body "<task summary>"`
    d. Clean up all remaining worktrees and worktree parent dir
 3. Output HYDRA_COMPLETE
 
