@@ -26,9 +26,9 @@ assert_eq "has PreToolUse hook" "$val" "array"
 val=$(jq -r '.hooks.SessionStart | type' "$HOOKS")
 assert_eq "has SessionStart hook" "$val" "array"
 
-# Stop has both prompt and command hooks
-stop_types=$(jq -r '[.hooks.Stop[0].hooks[].type] | sort | join(",")' "$HOOKS")
-assert_eq "Stop has command hook" "$stop_types" "command"
+# Stop has command hooks
+stop_types=$(jq -r '[.hooks.Stop[0].hooks[].type] | unique | join(",")' "$HOOKS")
+assert_eq "Stop has command hooks" "$stop_types" "command"
 
 # PreToolUse has Bash matcher
 matcher=$(jq -r '.hooks.PreToolUse[0].matcher' "$HOOKS")

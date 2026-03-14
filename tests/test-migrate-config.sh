@@ -41,12 +41,12 @@ cat > "$HYDRA_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$HYDRA_DIR" 2>/dev/null)
 assert_contains "v1 → v2 output" "$OUTPUT" "migrated"
-assert_json_field "v1 → v2 schema_version" "$HYDRA_DIR/config.json" ".schema_version" "2"
+assert_json_field "v1 → v2 schema_version" "$HYDRA_DIR/config.json" ".schema_version" "3"
 val=$(jq -r '.models | type' "$HYDRA_DIR/config.json")
 assert_eq "v1 → v2 models section added" "$val" "object"
 assert_json_field "v1 → v2 models.default" "$HYDRA_DIR/config.json" ".models.default" "sonnet"
 
-# --- Test 3: v2 config → no-op ---
+# --- Test 3: v2 config → migrated to v3, branch section added ---
 HYDRA_DIR=$(setup_hydra_dir "v2-config")
 cat > "$HYDRA_DIR/config.json" << 'EOF'
 {
@@ -54,11 +54,39 @@ cat > "$HYDRA_DIR/config.json" << 'EOF'
   "mode": "hitl",
   "models": {
     "default": "sonnet"
+  },
+  "afk": {
+    "enabled": false,
+    "yolo": false,
+    "branch_per_task": true,
+    "last_task_branch": null
   }
 }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$HYDRA_DIR" 2>/dev/null) || true
-assert_eq "v2 config → no output" "$OUTPUT" ""
+assert_contains "v2 → v3 output" "$OUTPUT" "migrated"
+assert_json_field "v2 → v3 schema_version" "$HYDRA_DIR/config.json" ".schema_version" "3"
+val=$(jq -r '.branch | type' "$HYDRA_DIR/config.json")
+assert_eq "v2 → v3 branch section added" "$val" "object"
+val=$(jq -r '.afk | has("branch_per_task")' "$HYDRA_DIR/config.json")
+assert_eq "v2 → v3 afk.branch_per_task removed" "$val" "false"
+val=$(jq -r '.afk | has("last_task_branch")' "$HYDRA_DIR/config.json")
+assert_eq "v2 → v3 afk.last_task_branch removed" "$val" "false"
+
+# --- Test 3b: v3 config → no-op ---
+HYDRA_DIR=$(setup_hydra_dir "v3-config")
+cat > "$HYDRA_DIR/config.json" << 'EOF'
+{
+  "schema_version": 3,
+  "mode": "hitl",
+  "branch": {
+    "feature": null,
+    "base": null
+  }
+}
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$HYDRA_DIR" 2>/dev/null) || true
+assert_eq "v3 config → no output" "$OUTPUT" ""
 
 # --- Test 4: Backup file created on migration ---
 HYDRA_DIR=$(setup_hydra_dir "backup-check")

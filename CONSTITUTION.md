@@ -294,7 +294,41 @@ Specialist agents (Designer, Frontend Dev, DevOps, DB Migration, etc.) implement
 
 ---
 
-## Article XII — Amendments
+## Article XII — Branch Isolation
+
+### Feature Branch Mandate
+
+Hydra NEVER commits directly to the base branch (typically `main`). Every objective gets a feature branch (`hydra/obj-<slug>`), and every task gets an isolated worktree with its own branch (`hydra/TASK-NNN`).
+
+```
+main (base branch — untouched during loop)
+ └── hydra/obj-<slug> (feature branch — integration point)
+      ├── hydra/TASK-001 (worktree 1 — merges back to feature)
+      ├── hydra/TASK-002 (worktree 2 — merges back to feature)
+      └── hydra/TASK-003 (worktree 3 — merges back to feature)
+```
+
+### Worktree Isolation
+
+- Task worktrees live in `../<project>-hydra-worktrees/TASK-NNN/`
+- The `hydra/` runtime directory stays in the main worktree — agents reference it via absolute path (`branch.main_worktree_path`)
+- Each implementer works exclusively in its task worktree
+- Task branches are ephemeral — deleted after merge to the feature branch
+
+### Merge Protocol
+
+- **Non-YOLO:** On review approval, the review gate merges the task branch into the feature branch with `--no-ff`, then removes the worktree and deletes the task branch
+- **YOLO:** On review approval, the task branch is pushed and a PR is created targeting the feature branch (not main)
+- **Conflict handling:** If merge fails, `git merge --abort` is run, and the task is marked BLOCKED with conflict details
+- **On objective completion:** The feature branch is pushed and a PR is created targeting the base branch
+
+### Non-Negotiable
+
+No agent may commit to the base branch during a Hydra loop. Violation of this rule is a framework failure.
+
+---
+
+## Article XIII — Amendments
 
 This constitution may be amended only by:
 1. Updating this file in the Hydra plugin source

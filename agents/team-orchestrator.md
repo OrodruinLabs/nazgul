@@ -46,14 +46,25 @@ When asked to run parallel implementations:
 1. Verify Agent Teams is available: read `hydra/config.json → parallelism.require_settings` and confirm the setting is enabled
 2. Read the parallel group from `hydra/plan.md`
 3. Read `hydra/config.json → models.implementation` for the model to assign each implementer teammate (default: `"sonnet"`). Pass this as the `model` parameter when spawning each teammate via the Task tool.
-3. Verify NO file overlaps between tasks (abort if overlap detected)
-4. Spawn a team with one implementer per task:
+4. Verify NO file overlaps between tasks (abort if overlap detected)
+5. **Create worktrees for each task:**
+   - Read `branch.feature` and `branch.worktree_dir` from config
+   - For each task: `git worktree add <worktree_dir>/TASK-NNN -b hydra/TASK-NNN <feature-branch>`
+   - Pass the worktree path to each implementer teammate
+6. Spawn a team with one implementer per task:
    - Team name: `hydra-impl-group-[N]`
-   - Each teammate gets: their task details, their file scope, implementer rules
-   - Each teammate updates plan.md when done
-5. Monitor until all implementers set status to IN_REVIEW or BLOCKED
-6. Signal completion
-7. Clean up the team
+   - Each teammate gets: their task details, their file scope, implementer rules, AND their worktree path
+   - Each teammate works in its own worktree and references hydra runtime via `branch.main_worktree_path`
+   - Each teammate commits in its own worktree
+7. Monitor until all implementers set status to IMPLEMENTED or BLOCKED
+8. **Merge completed tasks to feature branch:**
+   - For each IMPLEMENTED task:
+     a. Checkout feature branch in main worktree
+     b. `git merge --no-ff hydra/TASK-NNN -m "hydra: merge TASK-NNN — [title]"`
+     c. If merge conflict: `git merge --abort`, mark task BLOCKED with conflict details
+     d. If success: remove worktree, delete task branch
+9. Signal completion
+10. Clean up the team
 
 ## Fallback Behavior
 

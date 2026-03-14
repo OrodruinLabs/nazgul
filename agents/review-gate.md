@@ -129,23 +129,28 @@ Skip this step entirely if mode is `"afk"` or if any reviewer returned CHANGES_R
 ### Step 4: Handle Results
 
 **ALL APPROVED:**
-1. Read `hydra/config.json → afk.yolo`
+1. Read `hydra/config.json → afk.yolo`, `branch.feature`, `branch.main_worktree_path`, `branch.worktree_dir`
 2. **If YOLO mode:**
    - Set task status to APPROVED (not DONE)
    - Push the task branch: `git push -u origin hydra/TASK-NNN`
-   - Create stacked PR:
-     - First task: `gh pr create --base main --head hydra/TASK-NNN`
-     - Subsequent: `gh pr create --base hydra/TASK-{prev} --head hydra/TASK-NNN`
+   - Create PR targeting the feature branch:
+     - `gh pr create --base <feature-branch> --head hydra/TASK-NNN`
      - Title: `hydra: TASK-NNN — [task title]`
      - Body: include reviewer verdict summary
    - Record PR URL in task manifest (field: `- **PR**: [url]`)
    - Update plan.md Recovery Pointer
    - Move to next task immediately
-3. **If NOT YOLO mode:** (existing behavior unchanged)
-   - Set task status to DONE
-   - Record completion commit SHA
-   - Update plan.md Recovery Pointer
-   - Check if ALL tasks DONE → post-loop phase, then output HYDRA_COMPLETE
+3. **If NOT YOLO mode:**
+   - `cd <main_worktree_path>`, checkout feature branch
+   - `git merge hydra/TASK-NNN --no-ff -m "hydra: merge TASK-NNN — [title]"`
+   - If merge conflict: `git merge --abort`, mark task BLOCKED with reason "merge conflict with feature branch", write conflict details to task manifest
+   - If merge succeeds:
+     - Remove the task worktree: `git worktree remove <worktree_dir>/TASK-NNN --force`
+     - Delete the task branch: `git branch -D hydra/TASK-NNN`
+     - Set task status to DONE
+     - Record completion commit SHA
+     - Update plan.md Recovery Pointer
+   - Check if ALL tasks DONE → post-loop phase
 
 **ANY CHANGES_REQUESTED:**
 - Delegate to feedback-aggregator to consolidate feedback (use `models.review` from config for the model parameter)
@@ -158,7 +163,12 @@ Skip this step entirely if mode is `"afk"` or if any reviewer returned CHANGES_R
 
 When ALL tasks are DONE, before outputting HYDRA_COMPLETE:
 1. Run post-loop agents (documentation, release-manager, observability) if configured — use `models.post_loop` from `hydra/config.json` as the `model` parameter (default: `"sonnet"`)
-2. After post-loop agents complete, output HYDRA_COMPLETE
+2. After post-loop agents complete:
+   a. Read `branch.feature` and `branch.base` from config
+   b. Push feature branch: `git push -u origin <feature-branch>`
+   c. Create PR: `gh pr create --base <base-branch> --head <feature-branch> --title "hydra: <objective>" --body "<task summary>"`
+   d. Clean up all remaining worktrees and worktree parent dir
+3. Output HYDRA_COMPLETE
 
 ## Important: Reviews Are Read-Only
 

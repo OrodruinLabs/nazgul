@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "2"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "3"
 assert_json_field "has .mode" "$CONFIG" ".mode" "hitl"
 assert_json_field "has .max_iterations" "$CONFIG" ".max_iterations" "40"
 assert_json_field "has .current_iteration" "$CONFIG" ".current_iteration" "0"
@@ -38,6 +38,10 @@ assert_json_field "has .review_gate.confidence_threshold" "$CONFIG" ".review_gat
 
 # Nested: .safety.max_consecutive_failures
 assert_json_field "has .safety.max_consecutive_failures" "$CONFIG" ".safety.max_consecutive_failures" "5"
+
+# Nested: .branch
+val=$(jq -r '.branch | type' "$CONFIG")
+assert_eq "has .branch object" "$val" "object"
 
 # Nested: .afk
 val=$(jq -r '.afk | type' "$CONFIG")

@@ -93,13 +93,21 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 2. Read `hydra/plan.md` → Recovery Pointer
 3. Read the latest checkpoint in `hydra/checkpoints/`
 4. Read the active task manifest
-5. Update config.json: set mode from flags (afk/hitl), reset `current_iteration` to 0. If `current_iteration >= max_iterations`, ALSO reset `current_iteration` to 0 and bump `max_iterations` by its original value (e.g., 40 → 80) to allow the continued run to have a full iteration budget.
-6. Delegate to the appropriate agent based on active task status:
+5. **Branch Verification:** Read `hydra/config.json → branch.feature`.
+   - If set: verify current branch matches, `git checkout <feature>` if not on it
+   - If null (pre-v3 project): create feature branch now:
+     a. Capture current branch as `branch.base`
+     b. Store `pwd` as `branch.main_worktree_path`
+     c. Slugify objective → `hydra/obj-<slug>`
+     d. `git checkout -b hydra/obj-<slug>`
+     e. Create worktree dir, store paths in config
+6. Update config.json: set mode from flags (afk/hitl), reset `current_iteration` to 0. If `current_iteration >= max_iterations`, ALSO reset `current_iteration` to 0 and bump `max_iterations` by its original value (e.g., 40 → 80) to allow the continued run to have a full iteration budget.
+7. Delegate to the appropriate agent based on active task status:
    - READY/IN_PROGRESS → Implementer
    - IMPLEMENTED/IN_REVIEW → Review Gate
    - CHANGES_REQUESTED → Implementer (read consolidated feedback first)
    - BLOCKED → Show to user, ask what to do
-7. The stop hook takes over from here.
+8. The stop hook takes over from here.
 
 ---
 
@@ -110,7 +118,13 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 2. If post-loop NOT run yet:
    - Tell user: "All [N] tasks complete. Running post-loop agents (documentation, release, observability)..."
    - Delegate to post-loop agents (documentation → release-manager → observability)
-   - After post-loop: output HYDRA_COMPLETE
+   - After post-loop:
+     a. Read `hydra/config.json → branch.feature` and `branch.base`
+     b. If feature branch exists:
+        - Push the feature branch: `git push -u origin <feature-branch>`
+        - Create PR: `gh pr create --base <base-branch> --head <feature-branch> --title "hydra: <objective>" --body "<task summary>"`
+        - Clean up all worktrees (remove task worktrees and worktree parent dir)
+     c. Output HYDRA_COMPLETE
 3. If post-loop already run:
    - Tell user: "Previous objective complete: [stored objective]. Starting objective derivation for next work..."
    - Fall through to FRESH state below to derive a new objective
@@ -122,14 +136,20 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 **Action:** Documents exist but no plan yet — regenerate documents from current context, then run the planner.
 1. Read stored objective from config.json
 2. If no objective: read the PRD overview section as the objective, store it in config.json
-3. Tell user: "Regenerating documents from current context before planning..."
-4. Delegate to Doc Generator agent (regenerates all docs to reflect current objective and context)
-5. In HITL mode, pause for doc review.
-6. Tell user: "Docs ready. Running planner..."
-7. Delegate to Planner agent
-8. Review Plan (HITL mode: show plan for approval. AFK: continue.)
-9. Delegate to Implementer
-10. Stop hook takes over.
+3. **Branch Setup** (if `branch.feature` is null):
+   a. Capture current branch as `branch.base`
+   b. Store `pwd` as `branch.main_worktree_path`
+   c. Slugify objective → `hydra/obj-<slug>`
+   d. `git checkout -b hydra/obj-<slug>`
+   e. Create worktree dir, store paths in config
+4. Tell user: "Regenerating documents from current context before planning..."
+5. Delegate to Doc Generator agent (regenerates all docs to reflect current objective and context)
+6. In HITL mode, pause for doc review.
+7. Tell user: "Docs ready. Running planner..."
+8. Delegate to Planner agent
+9. Review Plan (HITL mode: show plan for approval. AFK: continue.)
+10. Delegate to Implementer
+11. Stop hook takes over.
 
 ---
 
@@ -138,11 +158,17 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 **Action:** Discovery ran but no docs or plan yet.
 1. Check if objective exists in config.json
 2. If no objective: run **Objective Derivation** (see below)
-3. Tell user: "Discovery complete. Generating documents, then planning..."
-4. Delegate to Doc Generator agent. In HITL mode, pause for doc review.
-5. Delegate to Planner agent. In HITL mode, pause for plan review.
-6. Delegate to Implementer
-7. Stop hook takes over.
+3. **Branch Setup:**
+   a. Capture current branch as `branch.base`
+   b. Store `pwd` as `branch.main_worktree_path`
+   c. Slugify objective → `hydra/obj-<slug>`
+   d. `git checkout -b hydra/obj-<slug>`
+   e. Create worktree dir, store paths in config
+4. Tell user: "Discovery complete. Generating documents, then planning..."
+5. Delegate to Doc Generator agent. In HITL mode, pause for doc review.
+6. Delegate to Planner agent. In HITL mode, pause for plan review.
+7. Delegate to Implementer
+8. Stop hook takes over.
 
 ---
 
@@ -150,11 +176,17 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 **Detection:** None of the above matched (config exists but discovery hasn't run)
 **Action:** Fresh project — need discovery + everything.
 1. Run **Objective Derivation** (see below) if no objective in config.json
-2. Run Discovery agent (scans codebase, classifies project, generates reviewers)
-3. Classify Project: In HITL mode, confirm classification with user.
-4. Generate Documents: Delegate to Doc Generator. In HITL mode, pause for doc review.
-5. Collect Context: Based on objective type, collect targeted context.
-5.5. **Board Sync Prompt** (HITL mode only):
+2. **Branch Setup:**
+   a. Capture current branch as `branch.base`
+   b. Store `pwd` as `branch.main_worktree_path`
+   c. Slugify objective → `hydra/obj-<slug>` (lowercase, non-alnum to hyphens, max 50 chars)
+   d. `git checkout -b hydra/obj-<slug>`
+   e. Create worktree dir at `../<project>-hydra-worktrees/`, store path in config
+3. Run Discovery agent (scans codebase, classifies project, generates reviewers)
+4. Classify Project: In HITL mode, confirm classification with user.
+5. Generate Documents: Delegate to Doc Generator. In HITL mode, pause for doc review.
+6. Collect Context: Based on objective type, collect targeted context.
+6.5. **Board Sync Prompt** (HITL mode only):
    - Check `hydra/context/project-profile.md` for "## GitHub Integration" section
    - If GitHub repo detected AND board not already enabled (`jq -r '.board.enabled' hydra/config.json` is `false`):
      - Ask user: "GitHub repo detected ([owner]/[repo]). Track tasks on GitHub Projects?"
@@ -166,10 +198,10 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
      - If (b): let user pick, then `bash scripts/board-sync-github.sh setup [number]`
      - If (c): continue without board sync
    - In AFK mode: skip board prompt (user must run `/hydra:board` explicitly)
-7. Delegate to Planner: Planner reads context + docs, decomposes into tasks.
-8. Review Plan (HITL): Show plan for approval. AFK: continue.
-9. Delegate to Implementer: Start working on the first READY task.
-10. Stop hook takes over.
+8. Delegate to Planner: Planner reads context + docs, decomposes into tasks.
+9. Review Plan (HITL): Show plan for approval. AFK: continue.
+10. Delegate to Implementer: Start working on the first READY task.
+11. Stop hook takes over.
 
 ---
 
@@ -274,14 +306,17 @@ a. Identify the current wave — the lowest wave number with READY tasks
 b. Collect all READY tasks in that wave
 c. If only 1 task: dispatch implementer normally (no parallelism overhead)
 d. If 2+ tasks: dispatch parallel Agent Teams:
-   - One implementer per task, each with fresh context
+   - Create a worktree per task: `git worktree add <worktree_dir>/TASK-NNN -b hydra/TASK-NNN <feature-branch>`
+   - One implementer per task, each working in its own worktree with fresh context
+   - Pass worktree path to each implementer teammate
    - Team name: `hydra-impl-wave-[N]`
    - Max parallel agents: `parallelism.max_parallel_teammates` from config
-   - Each agent commits atomically
+   - Each agent commits in its own worktree
 e. Wait for all agents in the wave to complete
 f. After wave completion:
-   - Verify no merge conflicts: run `git diff --check` on each task's files
-   - If conflicts detected: flag for manual resolution, mark conflicting task BLOCKED
+   - Merge each task branch into feature branch: `git merge --no-ff hydra/TASK-NNN`
+   - If merge conflict: `git merge --abort`, mark conflicting task BLOCKED with conflict details
+   - Clean up completed task worktrees and delete task branches
    - Promote next wave's tasks from PLANNED to READY (via dependency check)
 g. Continue to next wave
 
@@ -305,8 +340,8 @@ g. Continue to next wave
 - Everything in AFK mode, PLUS:
 - Zero permission prompts — all tool calls execute immediately
 - **All reviewers still run** — the full review gate executes for every task
-- **Deferred merge** — after reviewers approve, task → APPROVED + stacked PR created; DONE only when PR merged
-- **Branch stacking** — each task gets `hydra/TASK-NNN` branch based on previous task's branch
+- **Deferred merge** — after reviewers approve, task → APPROVED + PR created targeting feature branch; DONE only when PR merged
+- **Worktree isolation** — each task gets its own worktree at `<worktree_dir>/TASK-NNN` with branch `hydra/TASK-NNN`
 - Loop continues immediately after APPROVED — doesn't wait for PR merge
 - Tests, lint, security guards fully active
 - Requires launching Claude Code with `--dangerously-skip-permissions`

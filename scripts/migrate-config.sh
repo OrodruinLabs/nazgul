@@ -68,6 +68,33 @@ migrate_1_to_2() {
   log_migration "Migrated 1 -> 2: added schema_version, ensured models section"
 }
 
+migrate_2_to_3() {
+  local tmp
+
+  # Move afk.last_task_branch to branch.last_task_branch
+  local last_branch
+  last_branch=$(jq -r '.afk.last_task_branch // null' "$CONFIG")
+
+  # Remove branch_per_task and last_task_branch from afk, add branch section
+  tmp=$(mktemp)
+  jq --arg lb "$last_branch" '
+    .schema_version = 3
+    | .branch = {
+        "feature": null,
+        "base": null,
+        "main_worktree_path": null,
+        "worktree_dir": null,
+        "last_task_branch": (if $lb == "null" then null else $lb end),
+        "created_at": null,
+        "auto_pr_on_complete": true
+      }
+    | del(.afk.branch_per_task)
+    | del(.afk.last_task_branch)
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+
+  log_migration "Migrated 2 -> 3: moved branch fields from afk to branch section"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"

@@ -270,6 +270,15 @@ else
   GIT_DIRTY="true"
 fi
 
+# Get branch isolation state
+FEATURE_BRANCH=$(jq -r '.branch.feature // ""' "$CONFIG" 2>/dev/null || echo "")
+BASE_BRANCH=$(jq -r '.branch.base // ""' "$CONFIG" 2>/dev/null || echo "")
+WORKTREE_DIR=$(jq -r '.branch.worktree_dir // ""' "$CONFIG" 2>/dev/null || echo "")
+WORKTREE_COUNT=0
+if [ -n "$WORKTREE_DIR" ] && [ -d "$WORKTREE_DIR" ]; then
+  WORKTREE_COUNT=$(find "$WORKTREE_DIR" -maxdepth 1 -name 'TASK-*' -type d 2>/dev/null | wc -l | tr -d ' ')
+fi
+
 # --- Capture files modified this iteration (GAP-012) ---
 # Get the last checkpoint's commit SHA to diff against, fall back to HEAD~1
 LAST_CHECKPOINT_FILE=$(ls -1t "$HYDRA_DIR/checkpoints/iteration-"*.json 2>/dev/null | head -1 || true)
@@ -348,6 +357,9 @@ jq -n \
   --argjson compactions "$COMPACTION_COUNT" \
   --argjson iters_since_compact "$ITERS_SINCE_COMPACTION" \
   --argjson consec_failures "$CONSEC_FAILURES" \
+  --arg feature_branch "$FEATURE_BRANCH" \
+  --arg base_branch "$BASE_BRANCH" \
+  --argjson worktree_count "$WORKTREE_COUNT" \
   --arg recovery "$RECOVERY_INSTR" \
   '{
     iteration: $iteration,
@@ -378,6 +390,11 @@ jq -n \
       last_commit_message: $git_msg,
       uncommitted_changes: $git_dirty
     },
+    branch: {
+      feature: (if $feature_branch == "" then null else $feature_branch end),
+      base: (if $base_branch == "" then null else $base_branch end),
+      active_worktrees: $worktree_count
+    },
     reviewers: {
       active: $active_reviewers,
       last_review_task: null,
@@ -403,14 +420,14 @@ if [ -f "$PLAN" ]; then
   awk \
     -v task="${ACTIVE_TASK:-none}" \
     -v action="Iteration ${NEW_ITER} completed" \
-    -v next="$NEXT_ACTION_TEXT" \
+    -v next_action="$NEXT_ACTION_TEXT" \
     -v ckpt="$CHECKPOINT_NAME" \
     -v sha="$GIT_SHA" \
     -v msg="$GIT_MSG" \
     '{
       if ($0 ~ /^- \*\*Current Task:\*\*/) { print "- **Current Task:** " task }
       else if ($0 ~ /^- \*\*Last Action:\*\*/) { print "- **Last Action:** " action }
-      else if ($0 ~ /^- \*\*Next Action:\*\*/) { print "- **Next Action:** " next }
+      else if ($0 ~ /^- \*\*Next Action:\*\*/) { print "- **Next Action:** " next_action }
       else if ($0 ~ /^- \*\*Last Checkpoint:\*\*/) { print "- **Last Checkpoint:** " ckpt }
       else if ($0 ~ /^- \*\*Last Commit:\*\*/) { print "- **Last Commit:** " sha " " msg }
       else { print }
@@ -562,6 +579,7 @@ REASON="Iteration ${NEW_ITER}/${MAX_ITER}: ${DONE_COUNT}/${TOTAL_COUNT} tasks do
 cat >&2 << CONTINUE_MSG
 Hydra loop — iteration ${NEW_ITER}/${MAX_ITER} | Mode: ${MODE}
 Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked, ${PLANNED_COUNT} planned
+$([ -n "$FEATURE_BRANCH" ] && echo "Branch: ${FEATURE_BRANCH} → ${BASE_BRANCH} | Worktrees: ${WORKTREE_COUNT}" || true)
 
 Read hydra/plan.md → Recovery Pointer section for current state.
 $([ -n "$ACTIVE_TASK" ] && echo "Active task: hydra/tasks/${ACTIVE_TASK}.md (${ACTIVE_STATUS})" || echo "No active task — find first READY task in hydra/plan.md")

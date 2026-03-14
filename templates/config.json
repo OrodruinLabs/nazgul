@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "install_mode": "shared",
   "mode": "hitl",
   "objective": null,
@@ -90,15 +90,22 @@
     "max_consecutive_failures": 5,
     "consecutive_failures": 0
   },
+  "branch": {
+    "feature": null,
+    "base": null,
+    "main_worktree_path": null,
+    "worktree_dir": null,
+    "last_task_branch": null,
+    "created_at": null,
+    "auto_pr_on_complete": true
+  },
   "afk": {
     "enabled": false,
     "yolo": false,
     "timeout_minutes": 90,
     "checkpoint_every_n_iterations": 5,
     "auto_commit": true,
-    "commit_prefix": "hydra:",
-    "branch_per_task": true,
-    "last_task_branch": null
+    "commit_prefix": "hydra:"
   },
   "context": {
     "budget_strategy": "aggressive",

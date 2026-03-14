@@ -65,26 +65,29 @@ NEVER rely on conversational memory — files are the truth.
 9. Update task manifest with implementation log
 10. Set status to IMPLEMENTED when all acceptance criteria met, tests pass, lint clean
 11. Capture the diff for reviewers:
-    - `mkdir -p hydra/reviews/[TASK-ID]`
-    - Read the Base SHA from the task manifest
-    - `git diff [base-sha]..HEAD -- [files from File Scope creates + modifies] > hydra/reviews/[TASK-ID]/diff.patch`
-    - If in YOLO mode (branched): `git diff $(git merge-base HEAD main)..HEAD > hydra/reviews/[TASK-ID]/diff.patch`
+    - Read `branch.feature` and `branch.main_worktree_path` from config
+    - `mkdir -p <main_worktree_path>/hydra/reviews/[TASK-ID]`
+    - `git diff <feature-branch>..HEAD > <main_worktree_path>/hydra/reviews/[TASK-ID]/diff.patch`
     - VERIFY: diff.patch must be non-empty. If empty, try `git diff HEAD~1..HEAD` as fallback.
 12. Update plan.md Recovery Pointer on every state change
 13. Commit if in AFK mode with prefix from config
 
-## Branch Stacking (YOLO Mode)
+## Branch and Worktree Protocol
 
-When `hydra/config.json → afk.yolo` is `true`, create a stacked branch per task:
+Every task runs in an isolated worktree. This applies to ALL modes (HITL, AFK, YOLO).
 
 ### On task claim (READY → IN_PROGRESS):
-1. Read `hydra/config.json → afk.last_task_branch`
-2. If null/empty (first task): `git checkout -b hydra/TASK-NNN`
-3. If set (subsequent): `git checkout -b hydra/TASK-NNN hydra/TASK-{prev}`
-4. Update config: set `afk.last_task_branch` to `hydra/TASK-NNN`
+1. Read `hydra/config.json → branch.feature`, `branch.worktree_dir`, `branch.main_worktree_path`
+2. Create task worktree: `git worktree add <worktree_dir>/TASK-NNN -b hydra/TASK-NNN <feature-branch>`
+3. `cd` into the worktree for ALL implementation work
+4. Reference hydra runtime via absolute path: `<main_worktree_path>/hydra/` for plan.md, tasks/, reviews/, config.json, etc.
+5. Update config: set `branch.last_task_branch` to `hydra/TASK-NNN`
 
 ### Dependency awareness:
 In YOLO mode, tasks whose dependencies are all APPROVED or DONE are considered ready.
+
+### YOLO additional steps:
+After review approval, push task branch and create PR targeting the feature branch (not main).
 
 ## Delegation Protocol
 
