@@ -16,6 +16,7 @@ metadata:
 - `/hydra:start "add user authentication"` — Start a new objective
 - `/hydra:start --afk --max 20` — Run autonomously for up to 20 iterations
 - `/hydra:start --yolo` — Full autonomous mode with no permission prompts
+- `/hydra:start --yolo --task-pr` — YOLO mode with stacked per-task PRs
 
 ## Arguments
 $ARGUMENTS
@@ -43,13 +44,14 @@ Format all output per `references/ui-brand.md` — use stage banners, status sym
 ### Parse Arguments
 - `$ARGUMENTS` may contain:
   - An objective string (optional — override for new work)
-  - Flags: `--afk`, `--hitl`, `--max N`, `--yolo`, `--continue`
+  - Flags: `--afk`, `--hitl`, `--max N`, `--yolo`, `--task-pr`, `--continue`
   - Or nothing at all (smart mode — this is the default)
 
 ### YOLO Mode Pre-flight (--yolo)
 If `--yolo` flag is present:
 1. Set `afk.enabled: true` and `afk.yolo: true` in config.json
-2. Check if the current session was launched with `--dangerously-skip-permissions`:
+2. If `--task-pr` flag is also present: set `afk.task_pr: true` in config.json
+3. Check if the current session was launched with `--dangerously-skip-permissions`:
    - Try running a quick Bash command — if no permission prompt fires, we're good
    - If permissions ARE being prompted, **STOP** and tell the user:
      ```
@@ -57,7 +59,7 @@ If `--yolo` flag is present:
      claude --dangerously-skip-permissions
      Then re-run: /hydra:start --yolo --max N
      ```
-3. Once confirmed, proceed with full autonomous mode — no pauses, no permission prompts, no human gates
+4. Once confirmed, proceed with full autonomous mode — no pauses, no permission prompts, no human gates
 
 ### Model Selection
 
@@ -340,8 +342,8 @@ g. Continue to next wave
 - Everything in AFK mode, PLUS:
 - Zero permission prompts — all tool calls execute immediately
 - **All reviewers still run** — the full review gate executes for every task
-- **Deferred merge** — after reviewers approve, task → APPROVED + PR created targeting feature branch; DONE only when PR merged
+- **Default: Feature-level PR** — tasks merge into feature branch (same as hitl/afk), single PR created at objective completion
+- **Optional: `--task-pr`** — enables stacked per-task PRs targeting feature branch (legacy behavior)
 - **Worktree isolation** — each task gets its own worktree at `<worktree_dir>/TASK-NNN` with branch `hydra/TASK-NNN`
-- Loop continues immediately after APPROVED — doesn't wait for PR merge
 - Tests, lint, security guards fully active
 - Requires launching Claude Code with `--dangerously-skip-permissions`
