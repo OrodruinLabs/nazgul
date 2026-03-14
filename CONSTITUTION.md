@@ -26,7 +26,7 @@ These rules govern all agent behavior during a Hydra loop. Violation of any rule
 6. **Address ALL blocking feedback.** When CHANGES_REQUESTED, fix every REJECT item.
 7. **One task at a time.** Don't work on multiple tasks simultaneously (unless parallel mode with Agent Teams).
 8. **Update Recovery Pointer on every state change.** This is how you survive compaction.
-9. **Commit in AFK mode.** Every state transition gets a commit with the `hydra:` prefix.
+9. **Commit in AFK mode.** Every state transition gets a commit with the dynamic prefix from config (e.g., `feat(FEAT-003):` or `feat(#42):`).
 10. **HYDRA_COMPLETE means ALL tasks DONE and post-loop finished.** Not before.
 
 ---
@@ -301,19 +301,19 @@ Specialist agents (Designer, Frontend Dev, DevOps, DB Migration, etc.) implement
 
 ### Feature Branch Mandate
 
-Hydra NEVER commits directly to the base branch (typically `main`). Every objective gets a feature branch (`hydra/obj-<slug>`), and every task gets an isolated worktree with its own branch (`hydra/TASK-NNN`).
+Hydra NEVER commits directly to the base branch (typically `main`). Every objective gets a feature branch (`feat/<id>-<slug>`), and every task gets an isolated worktree with its own branch (`feat/<id>/TASK-NNN`).
 
 ```
 main (base branch — untouched during loop)
- └── hydra/obj-<slug> (feature branch — integration point)
-      ├── hydra/TASK-001 (worktree 1 — merges back to feature)
-      ├── hydra/TASK-002 (worktree 2 — merges back to feature)
-      └── hydra/TASK-003 (worktree 3 — merges back to feature)
+ └── feat/<id>-<slug> (feature branch — integration point)
+      ├── feat/<id>/TASK-001 (worktree 1 — merges back to feature)
+      ├── feat/<id>/TASK-002 (worktree 2 — merges back to feature)
+      └── feat/<id>/TASK-003 (worktree 3 — merges back to feature)
 ```
 
 ### Worktree Isolation
 
-- Task worktrees live in `../<project>-hydra-worktrees/TASK-NNN/`
+- Task worktrees live in `../<project>-worktrees/TASK-NNN/`
 - The `hydra/` runtime directory stays in the main worktree — agents reference it via absolute path (`branch.main_worktree_path`)
 - Each implementer works exclusively in its task worktree
 - Task branches are ephemeral — deleted after merge to the feature branch
