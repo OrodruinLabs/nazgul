@@ -34,10 +34,9 @@ Hydra survives compaction, crashes, and session restarts:
 4. **Recovery Pointer** in plan.md tells the agent exactly where to resume
 5. **Checkpoint files** in `hydra/checkpoints/` have full JSON state snapshots
 6. **Webhook forwarding** optionally notifies external systems on stop/compact events
-7. **SubagentStop hook** detects agent failures and auto-increments failure counters
-8. **PostToolUseFailure hook** tracks consecutive Bash failures and escalates after 3
-9. **TaskCompleted hook** fires immediately when spawned agents finish for faster transitions
-10. **TeammateIdle hook** detects stuck teammates in Agent Teams parallel execution
+7. **TaskCompleted hook** fires immediately when spawned agents finish for faster transitions
+8. **Prompt guard hook** validates user prompts on submission
+9. **Task-state guard hook** prevents edits outside claimed task scope
 
 After any interruption:
 ```bash
@@ -68,9 +67,9 @@ hydra/                          # Plugin root
 │   ├── documentation.md        # Post-loop docs
 │   ├── release-manager.md      # Versioning + releases
 │   ├── observability.md        # Logging + metrics
-│   └── templates/              # Reviewer templates (10)
+│   └── templates/              # Reviewer base template + domain config
 ├── skills/                     # Slash commands (20)
-├── hooks/hooks.json            # Hook definitions (13 hook types: Stop, PreCompact, PostCompact, PreToolUse, PostToolUse, PostToolUseFailure, SessionStart, SessionEnd, SubagentStop, TaskCompleted, Notification, UserPromptSubmit, TeammateIdle)
-├── scripts/                    # Hook + sync scripts (16)
+├── hooks/hooks.json            # Hook definitions (9 hook types: Stop, PreCompact, PostCompact, PreToolUse, PostToolUse, SessionStart, SessionEnd, TaskCompleted, UserPromptSubmit)
+├── scripts/                    # Hook + sync scripts (15)
 └── templates/                  # Objective + doc templates
 ```

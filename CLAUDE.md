@@ -41,7 +41,7 @@ agents/                              # Subagent definitions
 │   ├── documentation.md             # Post-loop: README, API docs, changelog
 │   ├── release-manager.md           # Post-loop: versioning, release notes
 │   ├── observability.md             # Post-loop: logging, metrics, error tracking
-│   └── templates/                   # Reviewer templates (Discovery customizes per-project)
+│   └── templates/                   # Reviewer base template + domain config
 hooks/hooks.json                     # Hook configuration
 scripts/                             # Shell scripts for hooks
 │   ├── stop-hook.sh
