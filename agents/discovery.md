@@ -738,7 +738,25 @@ For each agent in the roster:
 
 ### Reviewer Generation
 
-Follow the Reviewer Agent Template in Step 6 above. Use templates from `agents/templates/` as the base, then inject project-specific context.
+For each selected reviewer:
+
+1. Read `agents/templates/reviewer-base.md` for the shared template structure
+2. Read `agents/templates/reviewer-domains.json` for domain-specific content
+3. Look up the reviewer name (e.g., `qa-reviewer`) in the domain config JSON
+4. Substitute all `{{placeholders}}` in the base template with values from the domain config:
+   - `{{reviewer_name}}` — the JSON key (e.g., `qa-reviewer`)
+   - `{{description}}` — the `description` field
+   - `{{title}}` — the `title` field
+   - `{{context_items}}` — the `context_items` field
+   - `{{checklist}}` — format each item in the `checklist` array as `- [ ] item`
+   - `{{review_steps}}` — format each item in the `review_steps` array as a numbered step (continuing from step 2, so first item is step 3, etc.)
+   - `{{category}}` — the `category` field
+   - `{{approved_criteria}}` — the `approved_criteria` field
+   - `{{rejected_criteria}}` — the `rejected_criteria` field
+5. Inject project-specific context into the `## Project Context` section
+6. Write the generated reviewer to `.claude/agents/generated/[name].md`
+
+Follow the Reviewer Agent Template in Step 6 above for the final output format, tailoring to THIS project's specific patterns.
 
 ### Specialist Agent Generation
 
