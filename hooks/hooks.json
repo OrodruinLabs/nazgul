@@ -1,5 +1,5 @@
 {
-  "description": "Hydra Framework hooks — stop loop management, pre/post-compact state management, safety guards, session context injection, auto-formatting, notifications, webhook forwarding, session staging",
+  "description": "Hydra Framework hooks — stop loop management, pre/post-compact state management, safety guards, session context injection, auto-formatting, notifications, webhook forwarding, session staging, agent failure detection, tool failure tracking, task completion, prompt validation, teammate monitoring",
   "hooks": {
     "Stop": [
       {
@@ -81,6 +81,16 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'HYDRA_DIR=\"${CLAUDE_PROJECT_DIR:-$(pwd)}/hydra\"; F=\"$HYDRA_DIR/.tool_failures\"; [ -f \"$F\" ] && printf \"{\\\"consecutive_bash_failures\\\": 0, \\\"last_failure\\\": null}\\n\" > \"$F\"; exit 0'",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "SessionStart": [
@@ -111,6 +121,73 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/session-staging.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/subagent-stop.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/tool-failure-tracker.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/task-completed.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/notify.sh\"",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/prompt-guard.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "TeammateIdle": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/teammate-idle.sh\"",
             "timeout": 10
           }
         ]

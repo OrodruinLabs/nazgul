@@ -34,6 +34,10 @@ Hydra survives compaction, crashes, and session restarts:
 4. **Recovery Pointer** in plan.md tells the agent exactly where to resume
 5. **Checkpoint files** in `hydra/checkpoints/` have full JSON state snapshots
 6. **Webhook forwarding** optionally notifies external systems on stop/compact events
+7. **SubagentStop hook** detects agent failures and auto-increments failure counters
+8. **PostToolUseFailure hook** tracks consecutive Bash failures and escalates after 3
+9. **TaskCompleted hook** fires immediately when spawned agents finish for faster transitions
+10. **TeammateIdle hook** detects stuck teammates in Agent Teams parallel execution
 
 After any interruption:
 ```bash
@@ -68,7 +72,7 @@ hydra/                          # Plugin root
 │   ├── observability.md        # Logging + metrics
 │   └── templates/              # Reviewer templates (10)
 ├── skills/                     # Slash commands (20)
-├── hooks/hooks.json            # Hook definitions (Stop, PreCompact, PostCompact, PreToolUse, PostToolUse, SessionStart, SessionEnd)
-├── scripts/                    # Hook + sync scripts (11)
+├── hooks/hooks.json            # Hook definitions (13 hook types: Stop, PreCompact, PostCompact, PreToolUse, PostToolUse, PostToolUseFailure, SessionStart, SessionEnd, SubagentStop, TaskCompleted, Notification, UserPromptSubmit, TeammateIdle)
+├── scripts/                    # Hook + sync scripts (16)
 └── templates/                  # Objective + doc templates
 ```

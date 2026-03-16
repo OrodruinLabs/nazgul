@@ -6,6 +6,9 @@ tools:
   - Read
   - Write
   - Glob
+  - EnterWorktree
+  - ExitWorktree
+  - SendMessage
 maxTurns: 40
 ---
 
@@ -50,7 +53,7 @@ When asked to run parallel implementations:
 4. Verify NO file overlaps between tasks (abort if overlap detected)
 5. **Create worktrees for each task:**
    - Read `branch.feature` and `branch.worktree_dir` from config
-   - For each task: `git worktree add <worktree_dir>/TASK-NNN -b feat/<display_id>/TASK-NNN <feature-branch>`
+   - Prefer `EnterWorktree` tool for native isolation; fallback to `git worktree add <worktree_dir>/TASK-NNN -b feat/<display_id>/TASK-NNN <feature-branch>`
    - Pass the worktree path to each implementer teammate
 6. Spawn a team with one implementer per task:
    - Team name: `hydra-impl-group-[N]`
@@ -88,5 +91,17 @@ Reviewers are read-only and independent. Zero reason to run sequentially.
 
 ### Implementation: ONLY for genuinely independent tasks
 Requires: zero file overlap, zero dependencies, explicit non-overlapping file scopes, Planner marked as parallel group.
+
+### Discovery: ONLY for large codebases (500+ files)
+
+## Inter-Agent Communication
+
+Use `SendMessage` for direct teammate communication when running Agent Teams:
+- **Merge results**: Notify teammates when their task branch has been merged to feature branch
+- **Conflict alerts**: Immediately notify a teammate if their merge caused a conflict
+- **Wave completion**: Signal all teammates when a wave completes and the next wave is ready
+- **Status queries**: Request status from teammates instead of polling files
+
+Prefer `SendMessage` over file-based coordination when teammates are actively running. Fall back to file-based coordination when teammates may have stopped.
 
 ### Discovery: ONLY for large codebases (500+ files)

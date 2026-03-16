@@ -9,6 +9,7 @@ tools:
   - Glob
   - Grep
   - LS
+  - EnterWorktree
   - ExitWorktree
 maxTurns: 100
 memory: |
@@ -79,7 +80,7 @@ Every task runs in an isolated worktree. This applies to ALL modes (HITL, AFK, Y
 
 ### On task claim (READY → IN_PROGRESS):
 1. Read `hydra/config.json → branch.feature`, `branch.worktree_dir`, `branch.main_worktree_path`
-2. Create task worktree: `git worktree add <worktree_dir>/TASK-NNN -b feat/<display_id>/TASK-NNN <feature-branch>`
+2. Create task worktree: prefer `EnterWorktree` tool for native isolation; fallback to `git worktree add <worktree_dir>/TASK-NNN -b feat/<display_id>/TASK-NNN <feature-branch>` if EnterWorktree is unavailable
 3. `cd` into the worktree for ALL implementation work
 4. Reference hydra runtime via absolute path: `<main_worktree_path>/hydra/` for plan.md, tasks/, reviews/, config.json, etc.
 5. Update config: set `branch.last_task_branch` to `feat/<display_id>/TASK-NNN`
