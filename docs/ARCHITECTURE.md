@@ -49,9 +49,7 @@ After any interruption:
 
 ```
 hydra/                          # Plugin root
-├── CONSTITUTION.md             # Non-negotiable operating principles (the supreme law)
-├── GOVERNANCE.md               # Decision authority, conflict resolution, escalation
-├── TEAM_CHARTER.md             # Agent roles, communication, coordination model
+├── RULES.md                    # Enforceable operating rules (consolidated)
 ├── .claude-plugin/plugin.json  # Plugin manifest
 ├── agents/                     # Agent definitions
 │   ├── discovery.md            # Codebase scanner + classifier

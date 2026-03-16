@@ -10,9 +10,7 @@ Hydra is a Claude Code plugin that provides multi-agent autonomous development. 
 
 ```
 .claude-plugin/plugin.json           # Plugin manifest (must be at repo root)
-CONSTITUTION.md                      # Non-negotiable operating principles
-GOVERNANCE.md                        # Decision authority, conflict resolution, escalation
-TEAM_CHARTER.md                      # Agent roles, communication protocols, coordination
+RULES.md                             # Enforceable operating rules (consolidated)
 skills/                              # User-facing commands (/hydra:*)
 │   ├── init/SKILL.md
 │   ├── start/SKILL.md
