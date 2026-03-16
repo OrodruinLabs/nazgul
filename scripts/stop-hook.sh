@@ -10,23 +10,7 @@ CONFIG="$HYDRA_DIR/config.json"
 PLAN="$HYDRA_DIR/plan.md"
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-# Helper: extract status from task manifest (supports both formats)
-# Format 1: - **Status**: DONE  (list-item)
-# Format 2: ## Status: DONE    (ATX heading)
-get_task_status() {
-  grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$1" 2>/dev/null | sed 's/.*:[[:space:]]*//' || echo "${2:-}"
-}
-
-# Helper: set status in task manifest (handles both formats)
-set_task_status() {
-  local file="$1" old_status="$2" new_status="$3"
-  if grep -q '^## Status:' "$file" 2>/dev/null; then
-    sed -i.bak "s/^## Status:[[:space:]]*${old_status}/## Status: ${new_status}/" "$file" && rm -f "${file}.bak"
-  else
-    sed -i.bak "s/^\(- \*\*Status\*\*:\)[[:space:]]*${old_status}/\1 ${new_status}/" "$file" && rm -f "${file}.bak"
-  fi
-}
+source "$SCRIPT_DIR/lib/task-utils.sh"
 
 # If Hydra not initialized, allow stop
 if [ ! -f "$CONFIG" ]; then
