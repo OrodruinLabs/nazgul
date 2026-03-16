@@ -53,4 +53,56 @@ When the Hydra plugin template evolves (new fields, new sections), existing proj
 2. If your config is outdated, it creates a backup (`config.json.v1.bak`), applies incremental migrations, and logs to `hydra/logs/migrations.log`
 3. Existing settings are preserved — only missing fields are added
 
-No manual action required. You'll see a one-time notice: `"Hydra config migrated from v1 to v2."`
+No manual action required. You'll see a one-time notice: `"Hydra config migrated from v3 to v4."`
+
+## Webhooks
+
+Hydra can forward loop events to external HTTP endpoints for remote monitoring of AFK/YOLO runs.
+
+```json
+{
+  "webhooks": {
+    "enabled": true,
+    "url": "https://hooks.slack.com/services/...",
+    "events": ["stop", "compact", "task_complete"],
+    "headers": { "Authorization": "Bearer ..." }
+  }
+}
+```
+
+Events are POSTed as JSON with iteration count, task status, objective, and branch info. Webhook failures never block the loop.
+
+## Worktree Sparse Paths
+
+For monorepos, configure sparse checkout to speed up task worktree creation:
+
+```json
+{
+  "branch": {
+    "sparse_paths": ["src/api/", "tests/api/", "package.json"]
+  }
+}
+```
+
+When set, task worktrees only check out the specified directories instead of the full repo.
+
+## Fast Mode
+
+Enable fast mode for implementation agents to get ~2.5x faster inference at higher token cost:
+
+```json
+{
+  "models": {
+    "fast_mode_implementation": true
+  }
+}
+```
+
+## Auto-Enhancement
+
+Hydra can periodically check for new Claude Code features and propose improvements:
+
+```bash
+/hydra:enhance              # One-time check
+/loop 2w /hydra:enhance     # Auto-check every 2 weeks
+```

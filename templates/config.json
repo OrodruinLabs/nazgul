@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "install_mode": "shared",
   "mode": "hitl",
   "objective": null,
@@ -99,7 +99,8 @@
     "worktree_dir": null,
     "last_task_branch": null,
     "created_at": null,
-    "auto_pr_on_complete": true
+    "auto_pr_on_complete": true,
+    "sparse_paths": null
   },
   "afk": {
     "enabled": false,
@@ -135,7 +136,8 @@
     "implementation": "sonnet",
     "specialists": "sonnet",
     "post_loop": "sonnet",
-    "default": "sonnet"
+    "default": "sonnet",
+    "fast_mode_implementation": false
   },
   "board": {
     "enabled": false,
@@ -144,5 +146,11 @@
     "task_map": {},
     "last_sync": null,
     "sync_failures": 0
+  },
+  "webhooks": {
+    "enabled": false,
+    "url": null,
+    "events": ["stop", "compact", "task_complete"],
+    "headers": {}
   }
 }

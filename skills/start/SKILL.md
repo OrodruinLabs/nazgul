@@ -75,6 +75,14 @@ Read `hydra/config.json → models` to determine which model to assign each pipe
 
 If the `models` section is missing from config.json, use `"sonnet"` as the fallback for all agents.
 
+**Fast Mode:** If `models.fast_mode_implementation` is `true`, implementation and specialist agents use fast mode for ~2.5x speed improvement. This trades higher token cost for faster iteration cycles — useful for large objectives with many tasks.
+
+### Session Naming
+
+When launching Hydra, use session naming for identification:
+- Launch with: `claude -n "hydra-<feat_display_id>"` (e.g., `claude -n "hydra-FEAT-003"`)
+- Agent Teams sessions are auto-named by the team-orchestrator: `hydra-impl-TASK-NNN`, `hydra-review-TASK-NNN`
+
 ### Smart State Detection
 
 Evaluate the preprocessor data above. Work through this state machine top-to-bottom — take the FIRST state that matches:

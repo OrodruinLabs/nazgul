@@ -86,6 +86,7 @@ Hydra auto-detects project state: active work resumes, existing docs trigger pla
 | `/hydra:log` | View run history — iterations, commits, reviews |
 | `/hydra:board` | Connect task tracking to GitHub Projects |
 | `/hydra:docs` | View or regenerate project documents |
+| `/hydra:enhance` | Research Claude Code releases, propose Hydra improvements |
 | `/hydra:help` | Quick reference for all commands and modes |
 
 See `/hydra:help` for the full command list and all flags.

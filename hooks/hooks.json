@@ -1,5 +1,5 @@
 {
-  "description": "Hydra Framework hooks — stop loop management, pre-compact checkpoints, safety guards, session context injection, auto-formatting, notifications, session staging",
+  "description": "Hydra Framework hooks — stop loop management, pre/post-compact state management, safety guards, session context injection, auto-formatting, notifications, webhook forwarding, session staging",
   "hooks": {
     "Stop": [
       {
@@ -13,6 +13,11 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/notify.sh\"",
             "timeout": 60
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/webhook-forward.sh\" stop",
+            "timeout": 10
           }
         ]
       }
@@ -24,6 +29,22 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/pre-compact.sh\"",
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/post-compact.sh\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/webhook-forward.sh\" compact",
+            "timeout": 10
           }
         ]
       }

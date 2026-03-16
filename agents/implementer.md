@@ -9,6 +9,7 @@ tools:
   - Glob
   - Grep
   - LS
+  - ExitWorktree
 maxTurns: 100
 memory: |
   Update your agent memory as you discover:
@@ -82,6 +83,9 @@ Every task runs in an isolated worktree. This applies to ALL modes (HITL, AFK, Y
 3. `cd` into the worktree for ALL implementation work
 4. Reference hydra runtime via absolute path: `<main_worktree_path>/hydra/` for plan.md, tasks/, reviews/, config.json, etc.
 5. Update config: set `branch.last_task_branch` to `feat/<display_id>/TASK-NNN`
+
+### On task completion (IMPLEMENTED):
+After setting status to IMPLEMENTED and capturing the diff, use `ExitWorktree` to cleanly exit the worktree session if running in a Claude Code worktree context. This is preferred over manual `git worktree remove`.
 
 ### Dependency awareness:
 In YOLO mode, tasks whose dependencies are all APPROVED or DONE are considered ready.

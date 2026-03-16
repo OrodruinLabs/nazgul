@@ -29,9 +29,11 @@ Objective → Discovery (+Classification) → Doc Generator → Planner → Impl
 Hydra survives compaction, crashes, and session restarts:
 
 1. **Pre-compact hook** writes a checkpoint before compaction
-2. **Session-context hook** re-injects state on startup/compaction
-3. **Recovery Pointer** in plan.md tells the agent exactly where to resume
-4. **Checkpoint files** in `hydra/checkpoints/` have full JSON state snapshots
+2. **Post-compact hook** re-injects loop state immediately after compaction completes
+3. **Session-context hook** re-injects state on startup/compaction
+4. **Recovery Pointer** in plan.md tells the agent exactly where to resume
+5. **Checkpoint files** in `hydra/checkpoints/` have full JSON state snapshots
+6. **Webhook forwarding** optionally notifies external systems on stop/compact events
 
 After any interruption:
 ```bash
@@ -65,8 +67,8 @@ hydra/                          # Plugin root
 │   ├── release-manager.md      # Versioning + releases
 │   ├── observability.md        # Logging + metrics
 │   └── templates/              # Reviewer templates (10)
-├── skills/                     # Slash commands (16)
-├── hooks/hooks.json            # Hook definitions
-├── scripts/                    # Hook + sync scripts (8)
+├── skills/                     # Slash commands (20)
+├── hooks/hooks.json            # Hook definitions (Stop, PreCompact, PostCompact, PreToolUse, PostToolUse, SessionStart, SessionEnd)
+├── scripts/                    # Hook + sync scripts (11)
 └── templates/                  # Objective + doc templates
 ```

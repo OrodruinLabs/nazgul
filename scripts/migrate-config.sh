@@ -95,6 +95,25 @@ migrate_2_to_3() {
   log_migration "Migrated 2 -> 3: moved branch fields from afk to branch section"
 }
 
+migrate_3_to_4() {
+  local tmp
+
+  # Add webhooks section
+  tmp=$(mktemp)
+  jq '.schema_version = 4
+    | .webhooks = (.webhooks // {
+        "enabled": false,
+        "url": null,
+        "events": ["stop", "compact", "task_complete"],
+        "headers": {}
+      })
+    | .branch.sparse_paths = (.branch.sparse_paths // null)
+    | .models.fast_mode_implementation = (.models.fast_mode_implementation // false)
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+
+  log_migration "Migrated 3 -> 4: added webhooks, branch.sparse_paths, models.fast_mode_implementation"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"

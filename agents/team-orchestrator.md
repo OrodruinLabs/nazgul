@@ -32,6 +32,7 @@ When asked to run parallel reviews for a task:
 3. Read the changed files for the task from the task manifest. Verify `hydra/reviews/[TASK-ID]/diff.patch` exists.
 4. Spawn a team with one teammate per reviewer:
    - Team name: `hydra-review-[TASK-ID]`
+   - Session naming: name each teammate session as `hydra-[reviewer-name]-[TASK-ID]` using the `-n` flag for identification in Agent Teams UI
    - Each teammate gets: their agent definition, the diff file path (`hydra/reviews/[TASK-ID]/diff.patch`), the file list, relevant context paths
    - Instruct each teammate: "Read diff.patch FIRST to understand what changed, then read full files only for additional context"
    - Each teammate writes their review to `hydra/reviews/[TASK-ID]/[name].md`
@@ -53,6 +54,7 @@ When asked to run parallel implementations:
    - Pass the worktree path to each implementer teammate
 6. Spawn a team with one implementer per task:
    - Team name: `hydra-impl-group-[N]`
+   - Session naming: name each teammate session as `hydra-impl-[TASK-ID]` using the `-n` flag for identification in Agent Teams UI
    - Each teammate gets: their task details, their file scope, implementer rules, AND their worktree path
    - Each teammate works in its own worktree and references hydra runtime via `branch.main_worktree_path`
    - Each teammate commits in its own worktree

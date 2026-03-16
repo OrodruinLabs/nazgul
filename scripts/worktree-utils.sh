@@ -98,6 +98,19 @@ create_task_worktree() {
 
   git -C "$project_root" worktree add "$task_dir" -b "$task_branch" "$feature_branch" 2>/dev/null
 
+  # Apply sparse checkout if configured
+  local sparse_paths
+  sparse_paths=$(jq -r '.branch.sparse_paths // empty' "$config" 2>/dev/null || true)
+  if [ -n "$sparse_paths" ] && [ "$sparse_paths" != "null" ]; then
+    git -C "$task_dir" sparse-checkout init --cone 2>/dev/null || true
+    # Read sparse_paths array and set cone patterns
+    local paths
+    paths=$(jq -r '.branch.sparse_paths[]' "$config" 2>/dev/null || true)
+    if [ -n "$paths" ]; then
+      echo "$paths" | git -C "$task_dir" sparse-checkout set --stdin 2>/dev/null || true
+    fi
+  fi
+
   local tmp
   tmp=$(mktemp)
   jq --arg lb "$task_branch" '.branch.last_task_branch = $lb' "$config" > "$tmp" && mv "$tmp" "$config"
