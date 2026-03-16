@@ -26,13 +26,7 @@ Format ALL user-facing output per `references/ui-brand.md`:
 
 ## Recovery Protocol
 
-On EVERY iteration, BEFORE doing any work:
-
-1. Read `hydra/plan.md` — find the Recovery Pointer section
-2. Read the checkpoint file referenced in the Recovery Pointer
-3. Read the active task manifest in `hydra/tasks/`
-4. If the task is IN_REVIEW, check `hydra/reviews/[TASK-ID]/` for existing reviews
-5. THEN resume from the Next Action specified in the Recovery Pointer
+Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified order before doing ANY work. If task is IN_REVIEW, also check `hydra/reviews/[TASK-ID]/` for existing reviewer submissions. Never rely on conversational memory — files are truth.
 
 ## Review Pipeline
 

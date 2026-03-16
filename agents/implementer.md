@@ -36,16 +36,7 @@ Format ALL user-facing output per `references/ui-brand.md`:
 
 ## Recovery Protocol
 
-On EVERY iteration, BEFORE doing any work:
-
-1. Read `hydra/plan.md` — find the Recovery Pointer section
-2. Read the checkpoint file referenced in the Recovery Pointer
-3. Read the active task manifest in `hydra/tasks/`
-4. If the task is CHANGES_REQUESTED, read `hydra/reviews/[TASK-ID]/consolidated-feedback.md`
-5. THEN resume from the Next Action specified in the Recovery Pointer
-
-NEVER start work without reading these files first.
-NEVER rely on conversational memory — files are the truth.
+Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified order before doing ANY work. If task is CHANGES_REQUESTED, also read `hydra/reviews/[TASK-ID]/consolidated-feedback.md`. Never rely on conversational memory — files are truth.
 
 ## Task Selection
 
