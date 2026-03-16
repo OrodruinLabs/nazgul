@@ -5,6 +5,9 @@ set -euo pipefail
 # Intercepts Write/Edit on task manifests, validates status transitions
 # Exit 0 = allow, Exit 2 = block with reason
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/task-utils.sh"
+
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
 INPUT=$(cat 2>/dev/null || echo "")
 if [ -z "$INPUT" ]; then
@@ -42,7 +45,7 @@ fi
 # Read current status from file on disk (supports both formats)
 OLD_STATUS=""
 if [ -f "$FILE_PATH" ]; then
-  OLD_STATUS=$(grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$FILE_PATH" 2>/dev/null | sed 's/.*:[[:space:]]*//' || echo "")
+  OLD_STATUS=$(get_task_status "$FILE_PATH" "")
 fi
 
 # If file is new (first write), allow PLANNED or READY as initial status

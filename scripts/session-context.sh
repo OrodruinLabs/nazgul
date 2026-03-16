@@ -7,11 +7,8 @@ set -euo pipefail
 HYDRA_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/hydra"
 CONFIG="$HYDRA_DIR/config.json"
 PLAN="$HYDRA_DIR/plan.md"
-
-# Helper: extract status from task manifest (supports both formats)
-get_task_status() {
-  grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$1" 2>/dev/null | sed 's/.*:[[:space:]]*//' || echo "${2:-}"
-}
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/task-utils.sh"
 
 # If Hydra not initialized, nothing to inject
 if [ ! -f "$CONFIG" ]; then
