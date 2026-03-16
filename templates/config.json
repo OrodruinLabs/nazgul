@@ -1,12 +1,9 @@
 {
-  "schema_version": 4,
-  "install_mode": "shared",
+  "schema_version": 5,
   "mode": "hitl",
   "objective": null,
-  "objective_set_at": null,
   "feat_id": null,
   "feat_display_id": null,
-  "project_spec": null,
   "objectives_history": [],
   "max_iterations": 40,
   "current_iteration": 0,
@@ -45,16 +42,11 @@
       "observability": null,
       "secret_management": null,
       "environments": ["dev", "prod"]
-    },
-    "tools_verified": false,
-    "tools_installed": []
+    }
   },
   "discovery": {
     "last_run": null,
-    "files_scanned": 0,
-    "context_dir": "hydra/context",
-    "existing_docs_count": 0,
-    "existing_docs_quality": null
+    "context_dir": "hydra/context"
   },
   "agents": {
     "pipeline": [
@@ -72,10 +64,6 @@
     "custom": []
   },
   "documents": {
-    "required": [],
-    "generated": [],
-    "approved": [],
-    "existing": [],
     "dir": "hydra/docs"
   },
   "review_gate": {
@@ -114,7 +102,6 @@
   "context": {
     "budget_strategy": "aggressive",
     "compact_threshold_pct": 70,
-    "compact_custom_instructions": "Preserve: current task ID and status, list of all modified files this iteration, active reviewer verdicts, any blocking issues. Discard: file contents already written to disk, previous iteration details, exploratory reads.",
     "max_file_read_lines": 200,
     "use_subagents_for_exploration": true,
     "checkpoint_state_before_compact": true
@@ -124,9 +111,7 @@
     "use_agent_teams": true,
     "parallel_reviews": true,
     "parallel_independent_tasks": true,
-    "wave_execution": true,
-    "max_parallel_teammates": 4,
-    "require_settings": "enableAgentTeams"
+    "max_parallel_teammates": 4
   },
   "models": {
     "planning": "opus",
@@ -136,8 +121,7 @@
     "implementation": "sonnet",
     "specialists": "sonnet",
     "post_loop": "sonnet",
-    "default": "sonnet",
-    "fast_mode_implementation": false
+    "default": "sonnet"
   },
   "board": {
     "enabled": false,

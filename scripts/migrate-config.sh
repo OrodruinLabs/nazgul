@@ -108,10 +108,34 @@ migrate_3_to_4() {
         "headers": {}
       })
     | .branch.sparse_paths = (.branch.sparse_paths // null)
-    | .models.fast_mode_implementation = (.models.fast_mode_implementation // false)
   ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
 
-  log_migration "Migrated 3 -> 4: added webhooks, branch.sparse_paths, models.fast_mode_implementation"
+  log_migration "Migrated 3 -> 4: added webhooks, branch.sparse_paths"
+}
+
+migrate_4_to_5() {
+  local tmp
+  tmp=$(mktemp)
+  jq '.schema_version = 5
+    | del(.install_mode)
+    | del(.project_spec)
+    | del(.objective_set_at)
+    | del(.documents.required)
+    | del(.documents.generated)
+    | del(.documents.approved)
+    | del(.documents.existing)
+    | del(.context.compact_custom_instructions)
+    | del(.parallelism.wave_execution)
+    | del(.parallelism.require_settings)
+    | del(.models.fast_mode_implementation)
+    | del(.project.tools_verified)
+    | del(.project.tools_installed)
+    | del(.discovery.files_scanned)
+    | del(.discovery.existing_docs_count)
+    | del(.discovery.existing_docs_quality)
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+
+  log_migration "Migrated 4 -> 5: removed unused config fields"
 }
 
 # --- Run incremental migrations ---
