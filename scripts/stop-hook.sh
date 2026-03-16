@@ -521,7 +521,8 @@ jq -n \
   --argjson done_count "$DONE_COUNT" \
   --argjson total "$TOTAL_COUNT" \
   --arg git_sha "$GIT_SHA" \
-  '{iteration: $iteration, timestamp: $timestamp, active_task: $active_task, status: $status, done: $done_count, total: $total, git_sha: $git_sha}' >> "$HYDRA_DIR/logs/iterations.jsonl"
+  --arg blocked_reason "${ACTIVE_BLOCKED_REASON:-}" \
+  '{iteration: $iteration, timestamp: $timestamp, active_task: $active_task, status: $status, done: $done_count, total: $total, git_sha: $git_sha, blocked_reason: $blocked_reason}' >> "$HYDRA_DIR/logs/iterations.jsonl"
 
 # --- EXIT CONDITIONS ---
 

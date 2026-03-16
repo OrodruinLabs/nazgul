@@ -18,7 +18,7 @@ make_write_input() {
   local file_path="$1" status="$2"
   # Use printf to avoid interpretation of backslash sequences in content
   local content
-  content=$(printf '# TASK-001: Test\\n\\n- **Status**: %s\\n- **Group**: 1' "$status")
+  content=$(printf '# TASK-001: Test\n\n- **Status**: %s\n- **Group**: 1' "$status")
   jq -n \
     --arg fp "$file_path" \
     --arg content "$content" \
