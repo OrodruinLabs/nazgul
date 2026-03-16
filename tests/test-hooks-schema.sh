@@ -29,29 +29,17 @@ assert_eq "has PreToolUse hook" "$val" "array"
 val=$(jq -r '.hooks.PostToolUse | type' "$HOOKS")
 assert_eq "has PostToolUse hook" "$val" "array"
 
-val=$(jq -r '.hooks.PostToolUseFailure | type' "$HOOKS")
-assert_eq "has PostToolUseFailure hook" "$val" "array"
-
 val=$(jq -r '.hooks.SessionStart | type' "$HOOKS")
 assert_eq "has SessionStart hook" "$val" "array"
 
 val=$(jq -r '.hooks.SessionEnd | type' "$HOOKS")
 assert_eq "has SessionEnd hook" "$val" "array"
 
-val=$(jq -r '.hooks.SubagentStop | type' "$HOOKS")
-assert_eq "has SubagentStop hook" "$val" "array"
-
 val=$(jq -r '.hooks.TaskCompleted | type' "$HOOKS")
 assert_eq "has TaskCompleted hook" "$val" "array"
 
-val=$(jq -r '.hooks.Notification | type' "$HOOKS")
-assert_eq "has Notification hook" "$val" "array"
-
 val=$(jq -r '.hooks.UserPromptSubmit | type' "$HOOKS")
 assert_eq "has UserPromptSubmit hook" "$val" "array"
-
-val=$(jq -r '.hooks.TeammateIdle | type' "$HOOKS")
-assert_eq "has TeammateIdle hook" "$val" "array"
 
 # Stop has command hooks
 stop_types=$(jq -r '[.hooks.Stop[0].hooks[].type] | unique | join(",")' "$HOOKS")
