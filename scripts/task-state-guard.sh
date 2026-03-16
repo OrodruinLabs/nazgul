@@ -32,10 +32,14 @@ else
   exit 0
 fi
 
-# Check if this changes the Status field (supports both list-item and heading formats)
+# Check if this changes the Status field (supports list-item, ATX inline, and ATX block formats)
 NEW_STATUS=$(echo "$NEW_CONTENT" | sed -n 's/.*\*\*Status\*\*:[[:space:]]*\([A-Z_]*\).*/\1/p' | head -1)
 if [ -z "$NEW_STATUS" ]; then
   NEW_STATUS=$(echo "$NEW_CONTENT" | sed -n 's/^## Status:[[:space:]]*\([A-Z_]*\).*/\1/p' | head -1)
+fi
+if [ -z "$NEW_STATUS" ]; then
+  # Try ATX block format: ## Status\n<VALUE>
+  NEW_STATUS=$(echo "$NEW_CONTENT" | awk '/^## Status[[:space:]]*$/{getline; gsub(/^[[:space:]]+|[[:space:]]+$/, ""); if (/^[A-Z_]+$/) print; exit}')
 fi
 if [ -z "$NEW_STATUS" ]; then
   # Not a status change — allow
