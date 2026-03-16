@@ -3,20 +3,45 @@
 # Eliminates duplication of get_task_status(), set_task_status(), and task counting.
 
 # Extract status from a task manifest file.
-# Supports both list-item (- **Status**: X) and ATX heading (## Status: X) formats.
+# Supports three formats:
+#   1. List-item:  - **Status**: X
+#   2. ATX inline: ## Status: X
+#   3. ATX block:  ## Status\n X  (value on next line)
 # Usage: get_task_status <file> [default]
 get_task_status() {
-  grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$1" 2>/dev/null | sed 's/.*:[[:space:]]*//' || echo "${2:-}"
+  local result
+  # Try inline formats first (colon on same line)
+  result=$(grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$1" 2>/dev/null | sed 's/.*:[[:space:]]*//')
+  if [ -n "$result" ]; then
+    echo "$result"
+    return
+  fi
+  # Try block format: ## Status (no colon), value on next line
+  result=$(awk '/^## Status[[:space:]]*$/{getline; gsub(/^[[:space:]]+|[[:space:]]+$/, ""); if (/^[A-Z_]+$/) print; exit}' "$1" 2>/dev/null)
+  if [ -n "$result" ]; then
+    echo "$result"
+    return
+  fi
+  echo "${2:-}"
 }
 
 # Update status in a task manifest file.
+# Handles all three formats (list-item, ATX inline, ATX block).
 # Usage: set_task_status <file> <old_status> <new_status>
 set_task_status() {
   local file="$1" old_status="$2" new_status="$3"
   if grep -q '^## Status:' "$file" 2>/dev/null; then
+    # ATX inline: ## Status: X
     sed -i.bak "s/^## Status:[[:space:]]*${old_status}/## Status: ${new_status}/" "$file" && rm -f "${file}.bak"
-  else
+  elif grep -q '^\- \*\*Status\*\*:' "$file" 2>/dev/null; then
+    # List-item: - **Status**: X
     sed -i.bak "s/^\(- \*\*Status\*\*:\)[[:space:]]*${old_status}/\1 ${new_status}/" "$file" && rm -f "${file}.bak"
+  elif grep -q '^## Status' "$file" 2>/dev/null; then
+    # ATX block: ## Status\nX — convert to inline format
+    awk -v old="$old_status" -v new="$new_status" '
+      /^## Status[[:space:]]*$/ { print "## Status: " new; getline; next }
+      { print }
+    ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
   fi
 }
 

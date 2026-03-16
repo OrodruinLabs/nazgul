@@ -86,4 +86,41 @@ result=$(get_active_task "$TEST_DIR/hydra/tasks")
 assert_eq "get_active_task returns empty" "$result" ""
 teardown_temp_dir
 
+# --- Test 8: get_task_status reads ATX block format (## Status\nVALUE) ---
+setup_temp_dir
+setup_hydra_dir
+mkdir -p "$TEST_DIR/hydra/tasks"
+cat > "$TEST_DIR/hydra/tasks/TASK-008.md" << 'EOF'
+# TASK-008: Test
+
+## Status
+DONE
+
+## Description
+A task with block-style status (no colon, value on next line)
+EOF
+source "$LIB"
+result=$(get_task_status "$TEST_DIR/hydra/tasks/TASK-008.md")
+assert_eq "get_task_status ATX block format" "$result" "DONE"
+teardown_temp_dir
+
+# --- Test 9: set_task_status converts ATX block format to inline ---
+setup_temp_dir
+setup_hydra_dir
+mkdir -p "$TEST_DIR/hydra/tasks"
+cat > "$TEST_DIR/hydra/tasks/TASK-009.md" << 'EOF'
+# TASK-009: Test
+
+## Status
+READY
+
+## Description
+Block-style status that should be converted to inline by set_task_status
+EOF
+source "$LIB"
+set_task_status "$TEST_DIR/hydra/tasks/TASK-009.md" "READY" "IN_PROGRESS"
+result=$(get_task_status "$TEST_DIR/hydra/tasks/TASK-009.md")
+assert_eq "set_task_status ATX block format" "$result" "IN_PROGRESS"
+teardown_temp_dir
+
 report_results
