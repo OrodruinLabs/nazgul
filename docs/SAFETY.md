@@ -22,6 +22,8 @@
 - **Max consecutive failures**: 5 (auto-stops if no progress)
 - **Confidence threshold**: Findings below 80/100 are non-blocking concerns
 - **Board sync isolation**: Sync failures never block local work — auto-disables after 5 consecutive failures
+- **Fix-first auto-remediation**: Mechanical review findings (dead code, style) are applied automatically; only risky changes (security, architecture) require human judgment
+- **Concurrent session detection**: Filesystem locks warn when multiple Hydra sessions run on the same project, preventing state corruption
 
 ## Troubleshooting
 
@@ -40,3 +42,5 @@
 **Hydra state is corrupted** — Run `/hydra:reset` to archive current state and start fresh. Use `--preserve-context` to keep discovery data.
 
 **Context degradation** — If the agent seems confused after many iterations, run `/compact` with Hydra-specific instructions, then the session-context hook will re-inject state.
+
+**Concurrent session warning** (e.g., "WARNING: N concurrent Hydra sessions detected. State corruption risk.") — Ensure only one Hydra session per project at a time. Stale locks are cleaned after 2 hours, or delete `hydra/sessions/*.lock` manually.

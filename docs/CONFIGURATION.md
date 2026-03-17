@@ -6,6 +6,7 @@
 - `--yolo` — Full berserk mode: `--afk` + `--dangerously-skip-permissions`. Zero prompts, zero pauses. Requires launching Claude Code with `claude --dangerously-skip-permissions`
 - `--hitl` — Human-in-the-loop (default): pause for plan review, doc review, blocker resolution
 - `--max N` — Maximum iterations (default: 40)
+- `--task-pr` — (with `--yolo`) Create stacked per-task PRs targeting the feature branch instead of a single PR at completion
 - `--continue` — Explicit resume (backward compat — bare `/hydra:start` auto-detects this)
 
 ## Local Mode
@@ -106,3 +107,22 @@ Hydra can periodically check for new Claude Code features and propose improvemen
 /hydra:enhance              # One-time check
 /loop 2w /hydra:enhance     # Auto-check every 2 weeks
 ```
+
+## Self-Improvement Mode
+
+Enable agent self-rating and improvement reports:
+
+```json
+{
+  "self_improvement": {
+    "enabled": true,
+    "threshold": 7
+  }
+}
+```
+
+Agents rating their experience below the threshold file structured JSON reports to `hydra/improvement-reports/`. Reports include task ID, agent name, rating, summary, and improvement suggestions. View aggregated data with `/hydra:metrics`.
+
+## Concurrent Session Detection
+
+Hydra automatically tracks active sessions via filesystem locks in `hydra/sessions/`. Stale locks (>2 hours) are cleaned automatically. If multiple sessions target the same project, a warning is issued on startup. No configuration needed — always active.
