@@ -1,8 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/hydra:logo-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/hydra:logo-light.png">
-    <img alt="Hydra Framework" src="assets/hydra:logo-light.png" width="400">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hydra-logo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/hydra-logo-light.png">
+    <img alt="Hydra Framework" src="assets/hydra-logo-light.png" width="400">
   </picture>
 </p>
 
