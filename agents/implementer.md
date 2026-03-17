@@ -107,6 +107,22 @@ When picking up a task with status CHANGES_REQUESTED, check the task manifest's 
   4. Follow the diagnosis fix order exactly
   5. This is the last chance — if the 3rd attempt also fails, the task will be BLOCKED
 
+## Self-Improvement (Optional)
+
+After setting a task to IMPLEMENTED, if `self_improvement.enabled` is true in `hydra/config.json`:
+
+1. Rate your experience implementing this task on a 0-10 scale (see `references/self-improvement.md`)
+2. If your rating is below the configured threshold (default 7), file a report:
+   ```bash
+   scripts/file-improvement-report.sh \
+     --task TASK-NNN \
+     --agent implementer \
+     --rating N \
+     --summary "One sentence describing the friction"
+   ```
+3. Reports are stored in `hydra/improvement-reports/` for trend analysis by `/hydra:metrics`
+4. Skip this step silently if `self_improvement.enabled` is false or missing
+
 ## CRITICAL Rules
 
 - Do NOT output HYDRA_COMPLETE — only the review gate decides advancement

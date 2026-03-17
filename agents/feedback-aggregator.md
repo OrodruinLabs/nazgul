@@ -115,6 +115,18 @@ For every fix suggestion, attempt to find an existing correct implementation in 
    - Add: "Pattern reference: [file:line] — see this file for the correct approach"
 5. This gives the Implementer a concrete example to follow, not just abstract advice
 
+## Fix-First Classification
+
+After consolidating and deduplicating all findings, classify each finding using `references/fix-first-heuristic.md`:
+
+### AUTO-FIX Items
+Mechanical issues that can be applied without discussion: dead code, style violations, stale comments, import ordering, missing type annotations on internal functions. Group these under an `## AUTO-FIX Items` section in the consolidated output. For each: file path, line range, what to change, which reviewer flagged it.
+
+### ASK Items
+Risky changes that require human/implementer judgment: security findings, architecture decisions, API contract changes, concurrency issues. Group these under an `## ASK Items` section. For each: file path, description, severity, confidence, which reviewer flagged it, why it requires judgment.
+
+Classify conservatively — when in doubt, mark as ASK. Security findings are ALWAYS ASK regardless of confidence.
+
 ## Step-by-Step Process
 
 1. Read `hydra/config.json` for confidence threshold, mode, and expected reviewer list

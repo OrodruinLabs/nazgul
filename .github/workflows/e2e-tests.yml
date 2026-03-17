@@ -1,0 +1,26 @@
+name: E2E Skill Tests
+on:
+  workflow_dispatch:
+    inputs:
+      test_filter:
+        description: 'Test file filter (e.g., status)'
+        required: false
+        default: ''
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Run E2E tests
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "${{ inputs.test_filter }}" ]; then
+            bash tests/e2e/run-e2e.sh --filter="${{ inputs.test_filter }}"
+          else
+            bash tests/e2e/run-e2e.sh
+          fi

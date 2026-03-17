@@ -9,10 +9,23 @@ CONFIG="$HYDRA_DIR/config.json"
 PLAN="$HYDRA_DIR/plan.md"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/task-utils.sh"
+source "$SCRIPT_DIR/lib/session-tracker.sh"
 
 # If Hydra not initialized, nothing to inject
 if [ ! -f "$CONFIG" ]; then
   exit 0
+fi
+
+# Session tracking — register this session and warn on concurrent
+SESSION_ID="${CLAUDE_SESSION_ID:-$(date +%s)-$$}"
+SESSIONS_DIR="$HYDRA_DIR/sessions"
+# Persist generated session ID so stop-hook can unregister it
+printf '%s' "$SESSION_ID" > "$HYDRA_DIR/.session_id"
+register_session "$SESSION_ID" "$SESSIONS_DIR"
+cleanup_stale_sessions "$SESSIONS_DIR"
+CONCURRENT_WARNING=""
+if warning_msg=$(is_concurrent_session_warning "$SESSIONS_DIR"); then
+  CONCURRENT_WARNING="$warning_msg"
 fi
 
 # Auto-migrate config to latest schema version
@@ -134,6 +147,7 @@ $([ -n "$FEATURE_BRANCH" ] && echo "Branch: ${FEATURE_BRANCH} → ${BASE_BRANCH}
 Git: ${GIT_BRANCH} — ${GIT_LAST}
 Latest checkpoint: ${LATEST_CHECKPOINT}
 $([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "WARNING: Read hydra/reviews/${ACTIVE_TASK}/consolidated-feedback.md for reviewer feedback." || true)
+$([ -n "$CONCURRENT_WARNING" ] && echo "$CONCURRENT_WARNING" || true)
 
 Read hydra/plan.md for full state. Continue the Hydra pipeline.
 CONTEXT_EOF2
