@@ -1,0 +1,17 @@
+name: Skill Docs Freshness
+on:
+  pull_request:
+    paths:
+      - 'skills/**'
+      - 'templates/skill-partials/**'
+      - 'scripts/gen-skill-docs.sh'
+
+jobs:
+  freshness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check SKILL.md freshness
+        run: |
+          chmod +x scripts/gen-skill-docs.sh
+          scripts/gen-skill-docs.sh --check
