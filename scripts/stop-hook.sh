@@ -190,7 +190,7 @@ fi
 # Track progress for consecutive failure detection
 # In YOLO mode, APPROVED counts as progress alongside DONE
 PREV_DONE=$(jq -r '.safety._prev_done_count // 0' "$CONFIG")
-if [ "$YOLO_MODE" = "true" ] && [ "$TASK_PR_MODE" = "true" ]; then
+if [ "$YOLO_MODE" = "true" ]; then
   PROGRESS_COUNT=$((DONE_COUNT + APPROVED_COUNT))
 else
   PROGRESS_COUNT=$DONE_COUNT
@@ -481,7 +481,7 @@ if [ -d "$HYDRA_DIR/tasks" ]; then
         dep_file="$HYDRA_DIR/tasks/${dep}.md"
         if [ -f "$dep_file" ]; then
           DEP_STATUS=$(get_task_status "$dep_file")
-          if [ "$YOLO_MODE" = "true" ] && [ "$TASK_PR_MODE" = "true" ]; then
+          if [ "$YOLO_MODE" = "true" ]; then
             if [ "$DEP_STATUS" != "DONE" ] && [ "$DEP_STATUS" != "APPROVED" ]; then
               ALL_DONE=false; break
             fi
@@ -539,7 +539,7 @@ fi
 # YOLO mode: loop completes when all tasks are APPROVED or DONE
 # Non-YOLO: loop completes when all tasks are DONE
 if [ "$TOTAL_COUNT" -gt 0 ]; then
-  if [ "$YOLO_MODE" = "true" ] && [ "$TASK_PR_MODE" = "true" ]; then
+  if [ "$YOLO_MODE" = "true" ]; then
     LOCALLY_COMPLETE=$((APPROVED_COUNT + DONE_COUNT))
     if [ "$LOCALLY_COMPLETE" -eq "$TOTAL_COUNT" ]; then
       exit 0

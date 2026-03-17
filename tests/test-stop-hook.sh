@@ -351,4 +351,18 @@ status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/hydra/tasks/TASK-001.md" | se
 assert_eq "DONE with reviews stays DONE" "$status" "DONE"
 teardown_temp_dir
 
+# --- Test: YOLO without task-pr — all APPROVED exits cleanly ---
+setup_temp_dir
+setup_git_repo
+setup_hydra_dir
+create_config '.afk.yolo = true' '.afk.task_pr = false' '.current_iteration = 1'
+create_plan
+create_task_file "TASK-001" "APPROVED"
+create_task_file "TASK-002" "APPROVED"
+create_review_dir "TASK-001"
+create_review_dir "TASK-002"
+run_hook
+assert_exit_code "YOLO no task-pr: all APPROVED exits 0" "$HOOK_EC" 0
+teardown_temp_dir
+
 report_results
