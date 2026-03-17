@@ -11,11 +11,15 @@ PLAN="$HYDRA_DIR/plan.md"
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/task-utils.sh"
+source "$SCRIPT_DIR/lib/session-tracker.sh"
 
 # If Hydra not initialized, allow stop
 if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
+
+# Clean up session lock on exit
+unregister_session "${CLAUDE_SESSION_ID:-unknown}" "$HYDRA_DIR/sessions"
 
 # Read current state (batched into single jq call)
 CONFIG_STATE=$(jq -r '[

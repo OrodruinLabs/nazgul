@@ -77,6 +77,24 @@ Run each reviewer as a subagent, one at a time. Write results to same location.
 - Apply confidence threshold: findings with confidence < 80 → non-blocking CONCERN (⚠️)
 - Findings with confidence >= 80 AND severity HIGH/MEDIUM → blocking REJECT (❌)
 
+### Step 3.75: Fix-First Auto-Remediation
+
+When verdict is CHANGES_REQUESTED and feedback-aggregator has classified findings using `references/fix-first-heuristic.md`:
+
+1. Read `hydra/reviews/[TASK-ID]/consolidated-feedback.md`
+2. Count AUTO-FIX vs ASK items
+3. If AUTO-FIX items exist:
+   a. Log: "Applying N auto-fix items from reviewer feedback"
+   b. Set task back to IN_PROGRESS
+   c. Delegate to implementer with ONLY the AUTO-FIX items
+   d. After implementer completes: re-run pre-checks (tests, lint)
+   e. If pre-checks pass AND no ASK items remain: mark task DONE (skip re-review for mechanical fixes)
+   f. If pre-checks pass AND ASK items remain: present ASK items per mode (HITL → ask user, AFK → apply if < HIGH, YOLO → apply all non-security)
+   g. If pre-checks fail: full retry cycle as normal
+4. If only ASK items: proceed to Step 4 as normal (CHANGES_REQUESTED flow)
+
+This reduces review round-trips by fixing obvious issues without re-entering the full review cycle.
+
 ### Step 3.5: Human Verification (HITL Mode Only)
 
 **Condition:** ALL automated reviewers returned APPROVED AND config `mode` is `"hitl"`.
@@ -119,6 +137,26 @@ Skip this step entirely if mode is `"afk"` or if any reviewer returned CHANGES_R
      b. Set task status to CHANGES_REQUESTED
      c. Create actionable feedback: "Human verification failed: [user's description]"
      d. Delegate to feedback-aggregator to consolidate with any reviewer concerns
+
+### Step 3.75: Fix-First Auto-Remediation
+
+Apply the fix-first heuristic from `references/fix-first-heuristic.md`.
+
+When verdict is CHANGES_REQUESTED and feedback-aggregator has classified findings:
+
+1. Read `hydra/reviews/[TASK-ID]/consolidated.md`
+2. Count AUTO-FIX vs ASK items
+3. If AUTO-FIX items exist:
+   a. Log: "Applying N auto-fix items from reviewer feedback"
+   b. Set task back to IN_PROGRESS
+   c. Delegate to implementer with ONLY the AUTO-FIX items
+   d. After implementer completes: re-run pre-checks (tests, lint)
+   e. If pre-checks pass AND no ASK items remain: re-submit for review (skip re-review, mark DONE)
+   f. If pre-checks pass AND ASK items remain: present ASK items per mode (HITL → ask user, AFK → apply if < HIGH, YOLO → apply all non-security)
+   g. If pre-checks fail: full retry cycle as normal
+4. If only ASK items: proceed to Step 4 as normal (CHANGES_REQUESTED flow)
+
+This reduces review round-trips by fixing obvious issues without re-entering the full review cycle.
 
 ### Step 4: Handle Results
 

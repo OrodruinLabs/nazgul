@@ -115,6 +115,18 @@ For every fix suggestion, attempt to find an existing correct implementation in 
    - Add: "Pattern reference: [file:line] — see this file for the correct approach"
 5. This gives the Implementer a concrete example to follow, not just abstract advice
 
+## Fix-First Classification
+
+After consolidating and deduplicating all findings, classify each finding using `references/fix-first-heuristic.md`:
+
+### AUTO-FIX Items
+Mechanical issues that can be applied without discussion: dead code, style violations, stale comments, import ordering, missing type annotations on internal functions. Group these under an `## AUTO-FIX Items` section in the consolidated output. For each: file path, line range, what to change, which reviewer flagged it.
+
+### ASK Items
+Risky changes that require human/implementer judgment: security findings, architecture decisions, API contract changes, concurrency issues. Group these under an `## ASK Items` section. For each: file path, description, severity, confidence, which reviewer flagged it, why it requires judgment.
+
+Classify conservatively — when in doubt, mark as ASK. Security findings are ALWAYS ASK regardless of confidence.
+
 ## Step-by-Step Process
 
 1. Read `hydra/config.json` for confidence threshold, mode, and expected reviewer list
@@ -178,6 +190,24 @@ Write to `hydra/reviews/[TASK-ID]/consolidated-feedback.md`:
 | code-reviewer | CHANGES_REQUESTED | 2 | 3 |
 | security-reviewer | CHANGES_REQUESTED | 1 | 0 |
 ```
+
+## Fix-First Classification
+
+After consolidating all reviewer findings, classify each finding using `references/fix-first-heuristic.md`:
+
+### Output Format
+
+Write the consolidated feedback to `hydra/reviews/[TASK-ID]/consolidated.md` with findings grouped:
+
+#### AUTO-FIX Items
+For each: file path, line range, what to change, which reviewer flagged it.
+These will be applied automatically by the implementer without discussion.
+
+#### ASK Items
+For each: file path, description, severity, confidence, which reviewer flagged it, why it requires human/implementer judgment.
+These will be batched into a single decision point.
+
+Classify conservatively — when in doubt, mark as ASK.
 
 ## Rules
 
