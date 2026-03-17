@@ -43,4 +43,4 @@
 
 **Context degradation** — If the agent seems confused after many iterations, run `/compact` with Hydra-specific instructions, then the session-context hook will re-inject state.
 
-**"Multiple concurrent sessions detected"** — Ensure only one Hydra session per project at a time. Stale locks are cleaned after 2 hours, or delete `hydra/sessions/*.lock` manually.
+**Concurrent session warning** (e.g., "WARNING: N concurrent Hydra sessions detected. State corruption risk.") — Ensure only one Hydra session per project at a time. Stale locks are cleaned after 2 hours, or delete `hydra/sessions/*.lock` manually.

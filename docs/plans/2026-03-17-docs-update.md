@@ -102,17 +102,17 @@ Add:
 **Step 7: Update Testing section (lines 104-108)**
 
 Replace with:
-```markdown
-## Testing
+Replace the Testing section with:
 
-```bash
-tests/run-tests.sh                    # Run all unit/integration tests (18 files)
-tests/run-tests.sh --filter=stop-hook # Run specific test file
-tests/e2e/run-e2e.sh                  # Run E2E skill tests (requires claude CLI, costs money)
-```
+    ## Testing
 
-CI runs automatically on push (`test.yml`) and checks skill template freshness on PRs (`skill-docs.yml`). E2E tests are manual trigger only (`e2e-tests.yml`).
-```
+    ```bash
+    tests/run-tests.sh                    # Run all unit/integration tests (18 files)
+    tests/run-tests.sh --filter=stop-hook # Run specific test file
+    tests/e2e/run-e2e.sh                  # Run E2E skill tests (requires claude CLI, costs money)
+    ```
+
+    CI runs automatically on push (`test.yml`) and checks skill template freshness on PRs (`skill-docs.yml`). E2E tests are manual trigger only (`e2e-tests.yml`).
 
 **Step 8: Commit**
 
@@ -212,27 +212,28 @@ Add:
 
 **Step 2: Add Self-Improvement section (after line 108)**
 
-Add:
-```markdown
-## Self-Improvement Mode
+Add the following sections:
 
-Enable agent self-rating and improvement reports:
+    ## Self-Improvement Mode
 
-```json
-{
-  "self_improvement": {
-    "enabled": true,
-    "threshold": 7
-  }
-}
-```
+    Enable agent self-rating and improvement reports:
 
-Agents rating their experience below the threshold file structured JSON reports to `hydra/improvement-reports/`. Reports include task ID, agent name, rating, summary, and improvement suggestions. View aggregated data with `/hydra:metrics`.
+    ```json
+    {
+      "self_improvement": {
+        "enabled": true,
+        "threshold": 7
+      }
+    }
+    ```
 
-## Concurrent Session Detection
+    Agents rating their experience below the threshold file structured JSON reports
+    to `hydra/improvement-reports/`. View aggregated data with `/hydra:metrics`.
 
-Hydra automatically tracks active sessions via filesystem locks in `hydra/sessions/`. Stale locks (>2 hours) are cleaned automatically. If multiple sessions target the same project, a warning is issued on startup. No configuration needed — always active.
-```
+    ## Concurrent Session Detection
+
+    Hydra automatically tracks active sessions via filesystem locks in `hydra/sessions/`.
+    Stale locks (>2 hours) are cleaned automatically. No configuration needed — always active.
 
 **Step 3: Commit**
 

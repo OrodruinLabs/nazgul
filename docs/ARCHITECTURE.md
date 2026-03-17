@@ -101,7 +101,9 @@ hydra/                          # Plugin root
 ├── hooks/hooks.json            # Hook definitions (9 hook types: Stop, PreCompact, PostCompact, PreToolUse, PostToolUse, SessionStart, SessionEnd, TaskCompleted, UserPromptSubmit)
 ├── scripts/                    # Hook + sync scripts (17 + 2 libs)
 │   └── lib/                    # Shared libraries (task-utils.sh, session-tracker.sh)
-├── templates/                  # Objective + doc templates
-│   └── skill-partials/         # Shared SKILL.md template partials
-└── .github/workflows/          # CI pipelines (test, e2e, skill-docs freshness)
+└── templates/                  # Objective + doc templates
+    └── skill-partials/         # Shared SKILL.md template partials
+
+# At repo root (not inside hydra/):
+.github/workflows/              # CI pipelines (test, e2e, skill-docs freshness)
 ```
