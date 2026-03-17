@@ -15,14 +15,14 @@
   <img src="https://img.shields.io/badge/version-1.2.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-Plugin-7c3aed?style=flat-square" alt="Claude Code Plugin">
-  <img src="https://img.shields.io/badge/agents-29-orange?style=flat-square" alt="Agents">
+  <img src="https://img.shields.io/badge/agents-17-orange?style=flat-square" alt="Agents">
 </p>
 
 <br>
 
 ---
 
-Hydra runs a complete autonomous SDLC pipeline — from scanning your codebase to shipping reviewed code — with up to 29 specialized agents.
+Hydra runs a complete autonomous SDLC pipeline — from scanning your codebase to shipping reviewed code — with 17 core agents plus project-specific reviewers.
 
 ## What Hydra Does
 
