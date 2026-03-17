@@ -4,7 +4,7 @@
 
 Hydra is a Claude Code plugin that provides multi-agent autonomous development. This repo IS the installable plugin.
 
-**Install:** `claude --plugin-dir /path/to/ai-hydra` or clone to `~/.claude/plugins/hydra`.
+**Install:** `claude --plugin-dir /path/to/ai-hydra-framework` or clone to `~/.claude/plugins/hydra`.
 
 ## Directory Structure
 
@@ -44,21 +44,47 @@ agents/                              # Subagent definitions
 │   └── templates/                   # Reviewer base template + domain config
 hooks/hooks.json                     # Hook configuration
 scripts/                             # Shell scripts for hooks
-│   ├── stop-hook.sh
-│   ├── pre-compact.sh
-│   ├── pre-tool-guard.sh
-│   ├── session-context.sh
+│   ├── stop-hook.sh                 # Stop: loop engine, state machine, checkpoints
+│   ├── pre-compact.sh               # PreCompact: checkpoint before compaction
+│   ├── post-compact.sh              # PostCompact: re-inject state after compaction
+│   ├── pre-tool-guard.sh            # PreToolUse: block destructive commands
+│   ├── task-state-guard.sh          # PreToolUse: verify task state before edits
+│   ├── prompt-guard.sh              # UserPromptSubmit: validate user prompts
+│   ├── session-context.sh           # SessionStart: inject loop state + session tracking
+│   ├── session-staging.sh           # SessionEnd: stage files for AFK safety
 │   ├── formatter.sh                 # PostToolUse: auto-format after edits (opt-in)
 │   ├── notify.sh                    # Stop: completion notifications
-│   └── session-staging.sh           # SessionEnd: stage files for AFK safety
+│   ├── webhook-forward.sh           # Stop/Compact: forward events to HTTP endpoints
+│   ├── task-completed.sh            # TaskCompleted: update board, record metrics
+│   ├── board-sync-github.sh         # GitHub Projects board sync
+│   ├── migrate-config.sh            # Config schema migration (v1→v5)
+│   ├── worktree-utils.sh            # Git worktree helper functions
+│   ├── file-improvement-report.sh   # Self-improvement: write JSON reports
+│   ├── gen-skill-docs.sh            # Skill template: resolve {{PARTIAL:name}}
+│   └── lib/                         # Shared libraries
+│       ├── task-utils.sh            # Task status parsing (4 formats) + counting
+│       └── session-tracker.sh       # Concurrent session lock management
 templates/                           # Objective + document templates
 │   ├── CLAUDE.md.template           # Injected into target projects by /hydra:init
 │   ├── feature.md / tdd.md / bugfix.md / refactor.md / greenfield.md / migration.md
-│   └── docs/                        # Document templates for doc-generator
+│   ├── docs/                        # Document templates for doc-generator
+│   └── skill-partials/              # Shared partials for SKILL.md templates
+│       ├── preamble.md              # Standard output formatting + recovery
+│       └── recovery-protocol.md     # 4-step file-first recovery
 references/                          # Shared reference docs for agents
 │   ├── ui-brand.md                  # Visual identity and output formatting
-│   └── verification-patterns.md     # Stub detection and wiring verification
+│   ├── verification-patterns.md     # Stub detection and wiring verification
+│   ├── fix-first-heuristic.md       # AUTO-FIX vs ASK classification rules
+│   └── self-improvement.md          # Agent self-rating protocol
 tests/                               # Plugin validation tests
+│   ├── run-tests.sh                 # Test runner (18 test files)
+│   ├── test-*.sh                    # Unit/integration tests
+│   ├── lib/                         # Test assertions + setup helpers
+│   └── e2e/                         # E2E skill tests via claude -p
+.github/workflows/                   # CI pipelines
+│   ├── test.yml                     # Unit/integration tests on push/PR
+│   ├── e2e-tests.yml                # E2E skill tests (manual trigger)
+│   └── skill-docs.yml               # Skill template freshness check on PR
 ```
 
 ## Build Rules
@@ -93,6 +119,8 @@ tests/                               # Plugin validation tests
 
 **Review board is non-negotiable.** ALL reviewers must approve before a task can be DONE. Confidence scores below 80 become non-blocking warnings instead of rejections.
 
+**Fix-first review.** Feedback aggregator classifies findings as AUTO-FIX (mechanical — applied automatically) or ASK (risky — requires judgment). Review gate Step 3.75 applies auto-fixes before presenting remaining items.
+
 **Recovery must be automatic.** After any interruption, reading the Recovery Pointer + latest checkpoint + active task manifest must give enough information to resume.
 
 ## Dependencies
@@ -104,5 +132,9 @@ tests/                               # Plugin validation tests
 ## Testing
 
 ```bash
-tests/run-tests.sh
+tests/run-tests.sh                    # Run all unit/integration tests (18 files)
+tests/run-tests.sh --filter=stop-hook # Run specific test file
+tests/e2e/run-e2e.sh                  # Run E2E skill tests (requires claude CLI, costs money)
 ```
+
+CI runs automatically on push (`test.yml`) and checks skill template freshness on PRs (`skill-docs.yml`). E2E tests are manual trigger only (`e2e-tests.yml`).
