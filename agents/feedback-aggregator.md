@@ -191,24 +191,6 @@ Write to `hydra/reviews/[TASK-ID]/consolidated-feedback.md`:
 | security-reviewer | CHANGES_REQUESTED | 1 | 0 |
 ```
 
-## Fix-First Classification
-
-After consolidating all reviewer findings, classify each finding using `references/fix-first-heuristic.md`:
-
-### Output Format
-
-Write the consolidated feedback to `hydra/reviews/[TASK-ID]/consolidated.md` with findings grouped:
-
-#### AUTO-FIX Items
-For each: file path, line range, what to change, which reviewer flagged it.
-These will be applied automatically by the implementer without discussion.
-
-#### ASK Items
-For each: file path, description, severity, confidence, which reviewer flagged it, why it requires human/implementer judgment.
-These will be batched into a single decision point.
-
-Classify conservatively — when in doubt, mark as ASK.
-
 ## Rules
 
 1. **Read config FIRST.** The confidence threshold and mode determine all classification decisions.

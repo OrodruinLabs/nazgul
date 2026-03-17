@@ -15,7 +15,7 @@ assert_file_exists "gen-skill-docs.sh exists" "$script"
 if [ -x "$script" ]; then
   _pass "gen-skill-docs.sh is executable"
 else
-  _fail "gen-skill-docs.sh is executable"
+  _fail "gen-skill-docs.sh is NOT executable" "permissions: $(ls -l "$script" | awk '{print $1}')"
 fi
 
 # Test 2: Preamble partial exists

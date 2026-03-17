@@ -37,7 +37,7 @@ while IFS= read -r tmpl_file; do
   while [[ "$result" == *'{{PARTIAL:'* ]] && [ "$depth" -lt "$MAX_DEPTH" ]; do
     depth=$((depth + 1))
     # Extract the first partial name
-    partial_name=$(echo "$result" | grep -oE '\{\{PARTIAL:[a-zA-Z0-9_-]+\}\}' | head -1 | sed 's/{{PARTIAL://;s/}}//')
+    partial_name=$(echo "$result" | grep -oE '\{\{PARTIAL:[a-zA-Z0-9_-]+\}\}' | head -1 | sed 's/{{PARTIAL://;s/}}//' || true)
     if [ -z "$partial_name" ]; then
       break
     fi
@@ -61,7 +61,7 @@ while IFS= read -r tmpl_file; do
 
   if $CHECK_MODE; then
     if [ -f "$target" ]; then
-      if ! diff -q <(echo "$result") "$target" >/dev/null 2>&1; then
+      if ! diff -q <(printf '%s\n' "$result") "$target" >/dev/null 2>&1; then
         echo "STALE: $target (regenerate with scripts/gen-skill-docs.sh)"
         STALE=$((STALE + 1))
       fi
@@ -72,7 +72,7 @@ while IFS= read -r tmpl_file; do
   elif $DRY_RUN; then
     echo "Would generate: $target from $tmpl_file (partials resolved)"
   else
-    echo "$result" > "$target"
+    printf '%s\n' "$result" > "$target"
     echo "Generated: $target"
   fi
 done < <(find "$ROOT_DIR/skills" -name "SKILL.md.tmpl" 2>/dev/null)

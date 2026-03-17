@@ -42,9 +42,12 @@ teardown_temp_dir
 setup_temp_dir
 sessions_dir="$TEST_DIR/sessions"
 mkdir -p "$sessions_dir"
-echo '{"pid": 99999, "started": "2026-03-17T01:00:00Z"}' > "$sessions_dir/stale.lock"
-# Backdate it to 3 hours ago
-touch -t 202603170100 "$sessions_dir/stale.lock"
+echo '{"pid": 99999, "started": "old"}' > "$sessions_dir/stale.lock"
+# Backdate mtime to 3 hours ago (relative to now, cross-platform)
+three_hours_ago=$(date -v-3H +"%Y%m%d%H%M" 2>/dev/null || date -d "3 hours ago" +"%Y%m%d%H%M" 2>/dev/null || echo "")
+if [ -n "$three_hours_ago" ]; then
+  touch -t "$three_hours_ago" "$sessions_dir/stale.lock"
+fi
 cleanup_stale_sessions "$sessions_dir" 7200
 count=$(count_active_sessions "$sessions_dir")
 assert_eq "stale cleanup" "$count" "0"

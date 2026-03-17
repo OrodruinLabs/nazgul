@@ -2,8 +2,14 @@
 # session-tracker.sh — filesystem-based concurrent session detection
 # Adapted from gstack's session tracking pattern
 
+_sanitize_session_id() {
+  # Replace any non-alphanumeric/hyphen/underscore chars with underscore
+  echo "$1" | tr -c 'A-Za-z0-9_-' '_'
+}
+
 register_session() {
-  local session_id="$1"
+  local session_id
+  session_id=$(_sanitize_session_id "$1")
   local sessions_dir="${2:-hydra/sessions}"
   mkdir -p "$sessions_dir"
 
@@ -16,7 +22,8 @@ register_session() {
 }
 
 unregister_session() {
-  local session_id="$1"
+  local session_id
+  session_id=$(_sanitize_session_id "$1")
   local sessions_dir="${2:-hydra/sessions}"
   rm -f "$sessions_dir/${session_id}.lock"
 }

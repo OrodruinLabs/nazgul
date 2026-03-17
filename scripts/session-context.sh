@@ -19,6 +19,8 @@ fi
 # Session tracking — register this session and warn on concurrent
 SESSION_ID="${CLAUDE_SESSION_ID:-$(date +%s)-$$}"
 SESSIONS_DIR="$HYDRA_DIR/sessions"
+# Persist generated session ID so stop-hook can unregister it
+printf '%s' "$SESSION_ID" > "$HYDRA_DIR/.session_id"
 register_session "$SESSION_ID" "$SESSIONS_DIR"
 cleanup_stale_sessions "$SESSIONS_DIR"
 CONCURRENT_WARNING=""

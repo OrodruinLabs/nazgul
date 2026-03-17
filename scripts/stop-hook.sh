@@ -18,8 +18,12 @@ if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
-# Clean up session lock on exit
-unregister_session "${CLAUDE_SESSION_ID:-unknown}" "$HYDRA_DIR/sessions"
+# Clean up session lock on exit — read persisted ID to match session-context.sh
+SESSION_ID="${CLAUDE_SESSION_ID:-}"
+if [ -z "$SESSION_ID" ] && [ -f "$HYDRA_DIR/.session_id" ]; then
+  SESSION_ID=$(cat "$HYDRA_DIR/.session_id")
+fi
+[ -n "$SESSION_ID" ] && unregister_session "$SESSION_ID" "$HYDRA_DIR/sessions"
 
 # Read current state (batched into single jq call)
 CONFIG_STATE=$(jq -r '[

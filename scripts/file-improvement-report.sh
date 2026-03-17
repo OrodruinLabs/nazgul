@@ -26,6 +26,16 @@ if [ -z "$TASK" ] || [ -z "$AGENT" ] || [ -z "$RATING" ] || [ -z "$SUMMARY" ]; t
   exit 1
 fi
 
+# Validate TASK and AGENT contain only safe filename characters
+if ! echo "$TASK" | grep -qE '^[A-Za-z0-9_-]+$'; then
+  echo "Error: --task must match [A-Za-z0-9_-]+" >&2
+  exit 1
+fi
+if ! echo "$AGENT" | grep -qE '^[A-Za-z0-9_-]+$'; then
+  echo "Error: --agent must match [A-Za-z0-9_-]+" >&2
+  exit 1
+fi
+
 mkdir -p "$OUTPUT_DIR"
 
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")

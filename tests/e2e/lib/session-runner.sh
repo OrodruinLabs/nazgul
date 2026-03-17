@@ -6,15 +6,34 @@
 
 set -euo pipefail
 
+# Detect timeout command (GNU timeout or macOS gtimeout from coreutils)
+_timeout_cmd() {
+  if command -v timeout &>/dev/null; then
+    echo "timeout"
+  elif command -v gtimeout &>/dev/null; then
+    echo "gtimeout"
+  else
+    echo ""
+  fi
+}
+
 run_skill_session() {
   local skill_command="$1"
   local timeout_seconds="${2:-60}"
   local output_file
   output_file=$(mktemp)
+  local tcmd
+  tcmd=$(_timeout_cmd)
 
   echo "[e2e] Running: claude -p \"$skill_command\" (timeout: ${timeout_seconds}s)" >&2
 
-  if timeout "$timeout_seconds" claude -p "$skill_command" \
+  if [ -z "$tcmd" ]; then
+    echo "[e2e] WARNING: timeout/gtimeout not found, running without timeout" >&2
+    tcmd="command"
+    timeout_seconds=""
+  fi
+
+  if $tcmd $timeout_seconds claude -p "$skill_command" \
     --output-format text \
     --max-turns 5 \
     > "$output_file" 2>&1; then
