@@ -1,8 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/hydra:logo-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/hydra:logo-light.png">
-    <img alt="Hydra Framework" src="assets/hydra:logo-light.png" width="400">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hydra-logo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/hydra-logo-light.png">
+    <img alt="Hydra Framework" src="assets/hydra-logo-light.png" width="400">
   </picture>
 </p>
 
@@ -32,7 +32,7 @@ Hydra runs a complete autonomous SDLC pipeline — from scanning your codebase t
 - **Survives interruptions** — checkpoints, recovery pointers, and session hooks mean you can close your laptop and resume later
 
 ```mermaid
-flowchart TD
+flowchart LR
   A["Objective"] --> B["Discovery"]
   B --> C["Docs"]
   C --> D["Plan"]
