@@ -15,7 +15,7 @@ Objective → Discovery (+Classification) → Doc Generator → Planner → Impl
 7. Loop continues until ALL tasks pass ALL reviewers
 8. **Post-Loop** agents update docs, manage releases, verify observability
 
-## Agent Roster (29 potential, 12-18 typical)
+## Agent Roster (17 core + project-specific reviewers)
 
 | Category | Agents |
 |----------|--------|
