@@ -3,10 +3,11 @@
 # Eliminates duplication of get_task_status(), set_task_status(), and task counting.
 
 # Extract status from a task manifest file.
-# Supports three formats:
-#   1. List-item:  - **Status**: X
-#   2. ATX inline: ## Status: X
-#   3. ATX block:  ## Status\n X  (value on next line)
+# Supports four formats:
+#   1. List-item:    - **Status**: X
+#   2. ATX inline:   ## Status: X
+#   3. ATX block:    ## Status\n X  (value on next line)
+#   4. YAML front:   status: X     (inside --- fenced YAML frontmatter)
 # Usage: get_task_status <file> [default]
 get_task_status() {
   local result
@@ -22,11 +23,17 @@ get_task_status() {
     echo "$result"
     return
   fi
+  # Try YAML frontmatter: status: VALUE (between --- fences)
+  result=$(awk '/^---$/{fm++; next} fm==1 && /^status:/{gsub(/^status:[[:space:]]*/, ""); print; exit}' "$1" 2>/dev/null)
+  if [ -n "$result" ]; then
+    echo "$result"
+    return
+  fi
   echo "${2:-}"
 }
 
 # Update status in a task manifest file.
-# Handles all three formats (list-item, ATX inline, ATX block).
+# Handles all four formats (list-item, ATX inline, ATX block, YAML frontmatter).
 # Usage: set_task_status <file> <old_status> <new_status>
 set_task_status() {
   local file="$1" old_status="$2" new_status="$3"
@@ -42,6 +49,9 @@ set_task_status() {
       /^## Status[[:space:]]*$/ { print "## Status: " new; getline; next }
       { print }
     ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+  elif awk '/^---$/{fm++; next} fm==1 && /^status:/{found=1; exit} END{exit !found}' "$file" 2>/dev/null; then
+    # YAML frontmatter: status: X
+    sed -i.bak "s/^status:[[:space:]]*${old_status}/status: ${new_status}/" "$file" && rm -f "${file}.bak"
   fi
 }
 

@@ -29,7 +29,8 @@ Hydra runs a complete autonomous SDLC pipeline — from scanning your codebase t
 - **Auto-detects your project** — classifies it (greenfield, brownfield, bugfix, refactor, migration) and tailors the pipeline
 - **Generates docs before code** — PRDs, TRDs, and ADRs so agents build with context
 - **Multi-agent review board** — Architect, Security, Code Quality + project-specific reviewers must ALL approve every task
-- **Survives interruptions** — checkpoints, recovery pointers, and session hooks mean you can close your laptop and resume later
+- **Fix-first review** — auto-fixes mechanical issues (dead code, style), only asks about risky changes (security, architecture)
+- **Survives interruptions** — checkpoints, recovery pointers, session tracking, and hooks mean you can close your laptop and resume later
 
 ```mermaid
 flowchart LR
@@ -45,13 +46,13 @@ flowchart LR
 ## Install
 
 ```bash
-git clone https://github.com/Strumtry/ai-hydra.git
-claude --plugin-dir /path/to/ai-hydra
+git clone https://github.com/OrodruinLabs/ai-hydra-framework.git
+claude --plugin-dir /path/to/ai-hydra-framework
 ```
 
 To load automatically, add to `~/.zshrc` or `~/.bashrc`:
 ```bash
-alias claude='claude --plugin-dir /path/to/ai-hydra'
+alias claude='claude --plugin-dir /path/to/ai-hydra-framework'
 ```
 
 ## Quick Start
@@ -87,13 +88,17 @@ Hydra auto-detects project state: active work resumes, existing docs trigger pla
 | `/hydra:board` | Connect task tracking to GitHub Projects |
 | `/hydra:docs` | View or regenerate project documents |
 | `/hydra:enhance` | Research Claude Code releases, propose Hydra improvements |
+| `/hydra:metrics` | View loop performance — velocity, approval rates, self-improvement reports |
+| `/hydra:verify` | Human acceptance testing for completed tasks |
 | `/hydra:help` | Quick reference for all commands and modes |
 
 See `/hydra:help` for the full command list and all flags.
 
 ## How It Works
 
-Hydra runs a pipeline of specialized agents. Discovery scans your codebase and classifies the project. The Doc Generator creates foundational documents. The Planner decomposes your objective into dependency-ordered tasks. The Implementer builds each task (delegating to specialists like Frontend Dev, DevOps, or DB Migration as needed). A Review Board of 3-13 reviewers must unanimously approve each task before it advances. The loop continues until every task is done, then Post-Loop agents handle documentation, releases, and observability.
+Hydra runs a pipeline of specialized agents. Discovery scans your codebase and classifies the project. The Doc Generator creates foundational documents. The Planner decomposes your objective into dependency-ordered tasks. The Implementer builds each task (delegating to specialists like Frontend Dev, DevOps, or DB Migration as needed). A Review Board of 3-13 reviewers must unanimously approve each task before it advances — mechanical issues are auto-fixed, only risky changes require discussion. The loop continues until every task is done, then Post-Loop agents handle documentation, releases, and observability.
+
+Agents can optionally self-rate their experience and file improvement reports, creating a feedback loop for plugin quality. Concurrent sessions are detected via filesystem locks to prevent state corruption.
 
 See [Architecture](docs/ARCHITECTURE.md) for the full agent roster, pipeline details, and recovery system.
 
