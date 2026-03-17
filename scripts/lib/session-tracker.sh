@@ -46,16 +46,24 @@ cleanup_stale_sessions() {
   local now
   now=$(date +%s)
 
-  for lock_file in "$sessions_dir"/*.lock; do
+  local lock_files
+  lock_files=$(find "$sessions_dir" -maxdepth 1 -name '*.lock' 2>/dev/null) || true
+  [ -n "$lock_files" ] || return 0
+
+  while IFS= read -r lock_file; do
     [ -f "$lock_file" ] || continue
     local file_age
-    # macOS uses -f %m, Linux uses -c %Y
-    file_age=$(stat -f %m "$lock_file" 2>/dev/null || stat -c %Y "$lock_file" 2>/dev/null || echo 0)
+    # Linux (GNU stat) uses -c %Y, macOS (BSD stat) uses -f %m
+    file_age=$(stat -c %Y "$lock_file" 2>/dev/null || stat -f %m "$lock_file" 2>/dev/null || echo "0")
+    # Guard against non-numeric values
+    if ! [[ "$file_age" =~ ^[0-9]+$ ]]; then
+      file_age=0
+    fi
     local age=$((now - file_age))
     if [ "$age" -gt "$max_age_seconds" ]; then
       rm -f "$lock_file"
     fi
-  done
+  done <<< "$lock_files"
 }
 
 is_concurrent_session_warning() {
