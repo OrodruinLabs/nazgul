@@ -97,6 +97,17 @@ if ! valid_transition "$OLD_STATUS" "$NEW_STATUS"; then
   exit 2
 fi
 
+# --- ENFORCE EVIDENCE GATES ---
+# IN_PROGRESS -> IMPLEMENTED requires a commit SHA in the manifest content
+if [ "$OLD_STATUS" = "IN_PROGRESS" ] && [ "$NEW_STATUS" = "IMPLEMENTED" ]; then
+  if ! echo "$NEW_CONTENT" | grep -qE '[0-9a-f]{7,40}'; then
+    echo "HYDRA STATE GUARD: BLOCKED — Cannot mark IMPLEMENTED without a commit SHA" >&2
+    echo "Add a ## Commits section with at least one commit hash to the task manifest." >&2
+    echo "If you implemented the work, you should have committed it." >&2
+    exit 2
+  fi
+fi
+
 # --- ENFORCE REVIEW GATE (Constitution Article IV) ---
 # In YOLO mode, gate APPROVED; in non-YOLO, gate DONE
 # APPROVED → DONE in YOLO needs no review checks (PR merge is external validation)

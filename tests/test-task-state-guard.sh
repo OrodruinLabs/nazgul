@@ -117,7 +117,9 @@ setup_temp_dir
 setup_hydra_dir
 create_task_file "TASK-001" "IN_PROGRESS"
 TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
-input=$(make_write_input "$TASK_PATH" "IMPLEMENTED")
+content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- abc1234def')
+input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
 run_guard "$input"
 assert_exit_code "IN_PROGRESS->IMPLEMENTED allowed" "$GUARD_EC" 0
 teardown_temp_dir
@@ -273,5 +275,33 @@ teardown_temp_dir
 # ---------------------------------------------------------------------------
 GUARD_STDERR=$(echo "" | bash "$GUARD" 2>&1 >/dev/null) && GUARD_EC=0 || GUARD_EC=$?
 assert_exit_code "empty stdin allowed" "$GUARD_EC" 0
+
+# ---------------------------------------------------------------------------
+# Test 19: IN_PROGRESS -> IMPLEMENTED without commit SHA — blocked
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_task_file "TASK-001" "IN_PROGRESS"
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IMPLEMENTED")
+run_guard "$input"
+assert_exit_code "IMPLEMENTED without commit SHA blocked" "$GUARD_EC" 2
+assert_contains "IMPLEMENTED without SHA message" "$GUARD_STDERR" "commit SHA"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 20: IN_PROGRESS -> IMPLEMENTED with commit SHA — allowed
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_task_file "TASK-001" "IN_PROGRESS"
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+# Build input with commit SHA in content
+content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- abc1234def')
+input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
+run_guard "$input"
+assert_exit_code "IMPLEMENTED with commit SHA allowed" "$GUARD_EC" 0
+teardown_temp_dir
 
 report_results
