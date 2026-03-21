@@ -389,4 +389,16 @@ run_guard "$input"
 assert_exit_code "source edit with guard disabled allowed" "$GUARD_EC" 0
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# Test 28: Source file edit with empty hydra/tasks/ dir — allowed (no active loop)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.guards.requireActiveTask = true'
+# hydra/tasks/ exists but has no TASK files
+input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"console.log(1)"}}')
+run_guard "$input"
+assert_exit_code "source edit with empty tasks dir allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
 report_results

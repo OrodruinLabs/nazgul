@@ -48,14 +48,21 @@ if ! echo "$FILE_PATH" | grep -qE 'hydra/tasks/TASK-[0-9]+\.md$'; then
 
   # Check if any task is IN_PROGRESS
   HAS_ACTIVE=false
+  TASK_COUNT=0
   for task_file in "$HYDRA_TASKS_DIR"/TASK-*.md; do
     [ -f "$task_file" ] || continue
+    TASK_COUNT=$((TASK_COUNT + 1))
     STATUS=$(get_task_status "$task_file" "")
     if [ "$STATUS" = "IN_PROGRESS" ]; then
       HAS_ACTIVE=true
       break
     fi
   done
+
+  # No task files at all = not an active loop, allow everything
+  if [ "$TASK_COUNT" -eq 0 ]; then
+    exit 0
+  fi
 
   if [ "$HAS_ACTIVE" = false ]; then
     echo "HYDRA STATE GUARD: BLOCKED — No task is IN_PROGRESS" >&2
