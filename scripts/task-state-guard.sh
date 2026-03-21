@@ -108,6 +108,19 @@ if [ "$OLD_STATUS" = "IN_PROGRESS" ] && [ "$NEW_STATUS" = "IMPLEMENTED" ]; then
   fi
 fi
 
+# IMPLEMENTED -> IN_REVIEW requires review directory to exist
+if [ "$OLD_STATUS" = "IMPLEMENTED" ] && [ "$NEW_STATUS" = "IN_REVIEW" ]; then
+  TASK_ID_CHECK=$(basename "$FILE_PATH" .md)
+  HYDRA_DIR_CHECK=$(dirname "$(dirname "$FILE_PATH")")
+  REVIEW_DIR_CHECK="$HYDRA_DIR_CHECK/reviews/$TASK_ID_CHECK"
+  if [ ! -d "$REVIEW_DIR_CHECK" ]; then
+    echo "HYDRA STATE GUARD: BLOCKED — Cannot move to IN_REVIEW without a review directory" >&2
+    echo "Expected: ${REVIEW_DIR_CHECK}/" >&2
+    echo "The review-gate agent creates this directory when it starts reviewing." >&2
+    exit 2
+  fi
+fi
+
 # --- ENFORCE REVIEW GATE (Constitution Article IV) ---
 # In YOLO mode, gate APPROVED; in non-YOLO, gate DONE
 # APPROVED → DONE in YOLO needs no review checks (PR merge is external validation)

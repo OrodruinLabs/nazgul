@@ -304,4 +304,30 @@ run_guard "$input"
 assert_exit_code "IMPLEMENTED with commit SHA allowed" "$GUARD_EC" 0
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# Test 21: IMPLEMENTED -> IN_REVIEW without review directory — blocked
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_task_file "TASK-001" "IMPLEMENTED"
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
+run_guard "$input"
+assert_exit_code "IN_REVIEW without review dir blocked" "$GUARD_EC" 2
+assert_contains "IN_REVIEW without review dir message" "$GUARD_STDERR" "review directory"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 22: IMPLEMENTED -> IN_REVIEW with review directory — allowed
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_task_file "TASK-001" "IMPLEMENTED"
+mkdir -p "$TEST_DIR/hydra/reviews/TASK-001"
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
+run_guard "$input"
+assert_exit_code "IN_REVIEW with review dir allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
 report_results
