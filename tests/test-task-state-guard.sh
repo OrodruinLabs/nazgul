@@ -330,4 +330,63 @@ run_guard "$input"
 assert_exit_code "IN_REVIEW with review dir allowed" "$GUARD_EC" 0
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# Test 23: Source file edit with no IN_PROGRESS task — blocked
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "READY"
+input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"console.log(1)"}}')
+run_guard "$input"
+assert_exit_code "source edit without active task blocked" "$GUARD_EC" 2
+assert_contains "source edit blocked message" "$GUARD_STDERR" "No task is IN_PROGRESS"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 24: Source file edit with an IN_PROGRESS task — allowed
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "IN_PROGRESS"
+input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"console.log(1)"}}')
+run_guard "$input"
+assert_exit_code "source edit with active task allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 25: Hydra file edit with no IN_PROGRESS task — always allowed
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "READY"
+input=$(jq -n --arg fp "$TEST_DIR/hydra/plan.md" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"# Plan"}}')
+run_guard "$input"
+assert_exit_code "hydra file edit always allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 26: Source file edit with no hydra/tasks/ dir — allowed (not initialized)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+# No setup_hydra_dir — no hydra/ directory at all
+input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"console.log(1)"}}')
+run_guard "$input"
+assert_exit_code "source edit without hydra dir allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 27: Source file edit with guards.requireActiveTask=false — allowed
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.guards.requireActiveTask = false'
+create_task_file "TASK-001" "READY"
+input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"console.log(1)"}}')
+run_guard "$input"
+assert_exit_code "source edit with guard disabled allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
 report_results

@@ -18,8 +18,53 @@ fi
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null || echo "")
 
-# Only guard task manifest files (hydra/tasks/TASK-NNN.md)
+# If this is NOT a task manifest, check if it needs the active-task guard
 if ! echo "$FILE_PATH" | grep -qE 'hydra/tasks/TASK-[0-9]+\.md$'; then
+  # Files inside hydra/ are always allowed (config, plan, reviews, etc.)
+  if echo "$FILE_PATH" | grep -qE '/hydra/'; then
+    exit 0
+  fi
+
+  # Check if active task guard is enabled
+  HYDRA_TASKS_DIR=""
+  if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -d "$CLAUDE_PROJECT_DIR/hydra/tasks" ]; then
+    HYDRA_TASKS_DIR="$CLAUDE_PROJECT_DIR/hydra/tasks"
+    HYDRA_CONFIG="$CLAUDE_PROJECT_DIR/hydra/config.json"
+  fi
+
+  # No hydra/tasks dir = not a Hydra project, allow everything
+  if [ -z "$HYDRA_TASKS_DIR" ]; then
+    exit 0
+  fi
+
+  # Check config flag — default to true if not set
+  REQUIRE_ACTIVE="true"
+  if [ -f "${HYDRA_CONFIG:-}" ]; then
+    REQUIRE_ACTIVE=$(jq -r 'if .guards.requireActiveTask == false then "false" else "true" end' "$HYDRA_CONFIG" 2>/dev/null || echo "true")
+  fi
+  if [ "$REQUIRE_ACTIVE" != "true" ]; then
+    exit 0
+  fi
+
+  # Check if any task is IN_PROGRESS
+  HAS_ACTIVE=false
+  for task_file in "$HYDRA_TASKS_DIR"/TASK-*.md; do
+    [ -f "$task_file" ] || continue
+    STATUS=$(get_task_status "$task_file" "")
+    if [ "$STATUS" = "IN_PROGRESS" ]; then
+      HAS_ACTIVE=true
+      break
+    fi
+  done
+
+  if [ "$HAS_ACTIVE" = false ]; then
+    echo "HYDRA STATE GUARD: BLOCKED — No task is IN_PROGRESS" >&2
+    echo "Cannot edit source files without an active task." >&2
+    echo "Transition a task to IN_PROGRESS before editing: $FILE_PATH" >&2
+    exit 2
+  fi
+
+  # Has active task — allow the source file edit
   exit 0
 fi
 
