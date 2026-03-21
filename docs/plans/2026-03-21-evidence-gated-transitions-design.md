@@ -1,7 +1,7 @@
 # Evidence-Gated Task State Transitions
 
 **Date:** 2026-03-21
-**Status:** Draft
+**Status:** Implemented
 **Problem:** Loop engine does work without transitioning tasks through the state machine, then attempts batch retroactive transitions
 
 ## Problem Statement
