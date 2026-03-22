@@ -20,6 +20,28 @@ metadata:
 ## Arguments
 $ARGUMENTS
 
+## Modes
+
+Simplification runs in three modes:
+
+### Manual Mode (`/hydra:simplify`)
+User-invoked post-loop cleanup. Runs on all files modified during the last Hydra loop. This is what you get when you run the command directly.
+
+### Per-Task Mode (review-gate Step 0)
+Automatic. After each task reaches IMPLEMENTED, the simplifier agent reviews the task's changed files for reuse, quality, and efficiency — fixing issues before reviewers see the code. Reduces review round-trips.
+
+Config: `hydra/config.json → simplify.per_task` (default: `true`)
+
+### Post-Loop Batch Mode (review-gate Step 5.0)
+Automatic. After ALL tasks are DONE, a batch simplification pass runs across all files modified during the entire loop. Catches cross-task issues (duplicate utilities, inconsistent patterns) that per-task simplify can't see.
+
+Config: `hydra/config.json → simplify.post_loop` (default: `true`)
+
+### Focus
+All modes support an optional focus argument (e.g., `"performance"`, `"readability"`) to narrow the review scope.
+
+Config: `hydra/config.json → simplify.focus` (default: `null`)
+
 ## Instructions
 
 Run a post-loop cleanup pass on files modified during the Hydra loop.

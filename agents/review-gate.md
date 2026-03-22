@@ -7,6 +7,8 @@ tools:
   - Glob
   - Grep
   - Bash
+  - EnterWorktree
+  - ExitWorktree
 maxTurns: 60
 ---
 
@@ -29,6 +31,22 @@ Format ALL user-facing output per `references/ui-brand.md`:
 Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified order before doing ANY work. If task is IN_REVIEW, also check `hydra/reviews/[TASK-ID]/` for existing reviewer submissions. Never rely on conversational memory — files are truth.
 
 ## Review Pipeline
+
+### Step 0: Simplify Pass (Conditional)
+
+Before running pre-checks, optionally dispatch a simplification pass on the implemented code.
+
+1. Read `hydra/config.json → simplify.per_task` (default: true)
+2. If disabled, skip to Step 1
+3. Read the task worktree path from config: `<worktree_dir>/TASK-NNN`
+4. Dispatch the Simplifier agent with:
+   - Task ID
+   - Worktree path
+   - Main worktree path (for writing reports to hydra/reviews/)
+   - Focus argument from `simplify.focus` (if set)
+5. When simplifier returns, proceed to Step 1
+
+Step 0 is non-blocking. Whether simplify succeeds, partially reverts, or is disabled, always proceed to Step 1.
 
 ### Step 1: Pre-Review Automated Checks (SEQUENTIAL, NON-NEGOTIABLE)
 
@@ -174,6 +192,28 @@ Skip this step entirely if mode is `"afk"` or if any reviewer returned CHANGES_R
 ### Step 5: Post-Loop Phase
 
 When ALL tasks are DONE, before outputting HYDRA_COMPLETE:
+
+#### Step 5.0: Post-Loop Batch Simplify (Conditional)
+
+After all tasks are DONE, run a cross-task simplification pass across ALL modified files.
+
+1. Read `hydra/config.json → simplify.post_loop` (default: true)
+2. If disabled, skip to Step 5.1
+3. Identify all files modified during the loop:
+   - `git log --name-only --pretty=format: <base-branch>..<feature-branch> | sort -u`
+4. Group files by directory/module (max 5 files per group)
+5. Spawn parallel simplifier agents (one per group) via Agent tool:
+   - Each agent runs the same 3-review protocol (reuse, quality, efficiency)
+   - Each works in the feature branch (no worktree needed — all tasks merged)
+   - Focus: cross-task issues — duplicate utilities, inconsistent patterns, shared code opportunities
+6. Aggregate results across all groups
+7. For each finding:
+   - Apply fix, run tests, revert on failure
+8. Commit: `git commit -am "<commit_prefix> post-loop simplify"`
+9. Write summary to `hydra/reviews/post-loop-simplify-report.md`
+
+#### Step 5.1: Post-Loop Agents & PR
+
 1. Run post-loop agents (documentation, release-manager, observability) if configured — use `models.post_loop` from `hydra/config.json` as the `model` parameter (default: `"sonnet"`)
 2. After post-loop agents complete:
    a. Read `branch.feature` and `branch.base` from config

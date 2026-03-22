@@ -41,7 +41,7 @@ cat > "$HYDRA_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$HYDRA_DIR" 2>/dev/null)
 assert_contains "v1 → v2 output" "$OUTPUT" "migrated"
-assert_json_field "v1 → v2 schema_version" "$HYDRA_DIR/config.json" ".schema_version" "5"
+assert_json_field "v1 → v2 schema_version" "$HYDRA_DIR/config.json" ".schema_version" "6"
 val=$(jq -r '.models | type' "$HYDRA_DIR/config.json")
 assert_eq "v1 → v2 models section added" "$val" "object"
 assert_json_field "v1 → v2 models.default" "$HYDRA_DIR/config.json" ".models.default" "sonnet"
@@ -65,7 +65,7 @@ cat > "$HYDRA_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$HYDRA_DIR" 2>/dev/null) || true
 assert_contains "v2 → v3 output" "$OUTPUT" "migrated"
-assert_json_field "v2 → v3 schema_version" "$HYDRA_DIR/config.json" ".schema_version" "5"
+assert_json_field "v2 → v3 schema_version" "$HYDRA_DIR/config.json" ".schema_version" "6"
 val=$(jq -r '.branch | type' "$HYDRA_DIR/config.json")
 assert_eq "v2 → v3 branch section added" "$val" "object"
 val=$(jq -r '.afk | has("branch_per_task")' "$HYDRA_DIR/config.json")
@@ -90,7 +90,7 @@ cat > "$HYDRA_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$HYDRA_DIR" 2>/dev/null) || true
 assert_contains "v3 → v4 output" "$OUTPUT" "migrated"
-assert_json_field "v3 → v4 schema_version" "$HYDRA_DIR/config.json" ".schema_version" "5"
+assert_json_field "v3 → v4 schema_version" "$HYDRA_DIR/config.json" ".schema_version" "6"
 val=$(jq -r '.webhooks | type' "$HYDRA_DIR/config.json")
 assert_eq "v3 → v4 webhooks section added" "$val" "object"
 assert_json_field "v3 → v4 webhooks.enabled" "$HYDRA_DIR/config.json" ".webhooks.enabled" "false"
@@ -151,7 +151,7 @@ cat > "$HYDRA_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$HYDRA_DIR" 2>/dev/null) || true
 assert_contains "v4 → v5 output" "$OUTPUT" "migrated"
-assert_json_field "v4 → v5 schema_version" "$HYDRA_DIR/config.json" ".schema_version" "5"
+assert_json_field "v4 → v5 schema_version" "$HYDRA_DIR/config.json" ".schema_version" "6"
 # Verify removed fields are gone
 val=$(jq 'has("install_mode")' "$HYDRA_DIR/config.json")
 assert_eq "v4 → v5 install_mode removed" "$val" "false"
@@ -174,7 +174,7 @@ assert_json_field "v4 → v5 documents.dir preserved" "$HYDRA_DIR/config.json" "
 assert_json_field "v4 → v5 discovery.context_dir preserved" "$HYDRA_DIR/config.json" ".discovery.context_dir" "hydra/context"
 assert_json_field "v4 → v5 models.default preserved" "$HYDRA_DIR/config.json" ".models.default" "sonnet"
 
-# --- Test 3d: v5 config → no-op ---
+# --- Test 3d: v5 config → migrated to v6, simplify section added ---
 HYDRA_DIR=$(setup_hydra_dir "v5-config")
 cat > "$HYDRA_DIR/config.json" << 'EOF'
 {
@@ -197,7 +197,30 @@ cat > "$HYDRA_DIR/config.json" << 'EOF'
 }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$HYDRA_DIR" 2>/dev/null) || true
-assert_eq "v5 config → no output" "$OUTPUT" ""
+assert_contains "v5 → v6 output" "$OUTPUT" "migrated"
+assert_json_field "v5 → v6 schema_version" "$HYDRA_DIR/config.json" ".schema_version" "6"
+val=$(jq -r '.simplify | type' "$HYDRA_DIR/config.json")
+assert_eq "v5 → v6 simplify section added" "$val" "object"
+assert_json_field "v5 → v6 simplify.per_task" "$HYDRA_DIR/config.json" ".simplify.per_task" "true"
+assert_json_field "v5 → v6 simplify.post_loop" "$HYDRA_DIR/config.json" ".simplify.post_loop" "true"
+val=$(jq -r '.simplify.focus' "$HYDRA_DIR/config.json")
+assert_eq "v5 → v6 simplify.focus null" "$val" "null"
+
+# --- Test 3e: v6 config → no-op ---
+HYDRA_DIR=$(setup_hydra_dir "v6-config")
+cat > "$HYDRA_DIR/config.json" << 'EOF'
+{
+  "schema_version": 6,
+  "mode": "hitl",
+  "simplify": {
+    "per_task": true,
+    "post_loop": true,
+    "focus": null
+  }
+}
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$HYDRA_DIR" 2>/dev/null) || true
+assert_eq "v6 config → no output" "$OUTPUT" ""
 
 # --- Test 4: Backup file created on migration ---
 HYDRA_DIR=$(setup_hydra_dir "backup-check")

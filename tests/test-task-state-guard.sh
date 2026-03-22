@@ -441,4 +441,40 @@ assert_exit_code "IMPLEMENTED via Edit without SHA blocked" "$GUARD_EC" 2
 assert_contains "IMPLEMENTED via Edit without SHA message" "$GUARD_STDERR" "commit SHA"
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# Test 31: simplify-report.md excluded from reviewer file count
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "IN_REVIEW"
+create_review_dir "TASK-001"
+# Add a simplify-report.md — should NOT count as a reviewer file
+cat > "$TEST_DIR/hydra/reviews/TASK-001/simplify-report.md" << 'REPORT_EOF'
+# Simplify Report: TASK-001
+## Summary
+- Findings: 0
+REPORT_EOF
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "simplify-report.md excluded from reviewer count" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 32: diff.patch excluded from reviewer file count
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "IN_REVIEW"
+create_review_dir "TASK-001"
+# Add a diff.patch — should NOT count as a reviewer file
+echo "diff --git a/foo.ts b/foo.ts" > "$TEST_DIR/hydra/reviews/TASK-001/diff.patch"
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "diff.patch excluded from reviewer count" "$GUARD_EC" 0
+teardown_temp_dir
+
 report_results

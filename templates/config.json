@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "mode": "hitl",
   "objective": null,
   "feat_id": null,
@@ -73,6 +73,11 @@
     "auto_approve_concerns": true,
     "block_on_security_reject": true,
     "confidence_threshold": 80
+  },
+  "simplify": {
+    "per_task": true,
+    "post_loop": true,
+    "focus": null
   },
   "safety": {
     "block_destructive_commands": true,

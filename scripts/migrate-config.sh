@@ -138,6 +138,13 @@ migrate_4_to_5() {
   log_migration "Migrated 4 -> 5: removed unused config fields"
 }
 
+migrate_5_to_6() {
+  local tmp
+  tmp=$(mktemp)
+  jq '.simplify = { "per_task": true, "post_loop": true, "focus": null } | .schema_version = 6' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v5→v6: Added simplify section (per-task + post-loop, enabled by default)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"
