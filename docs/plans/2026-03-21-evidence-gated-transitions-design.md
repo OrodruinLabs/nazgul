@@ -42,11 +42,11 @@ fi
 
 **Why this works:**
 - The implementer agent already should record commits in the task manifest (step 9 of Implementation Protocol)
-- A commit SHA can't be faked — it must reference a real git object
-- If there's no commit, no work was done, so IMPLEMENTED is a lie
+- The guard looks for a commit-like SHA (7+ hex chars), which in the normal workflow corresponds to a real git commit recorded during implementation
+- If there's no commit-like SHA recorded, it's a strong signal that no work was done or at least not properly committed, so the guard treats IMPLEMENTED as invalid
 - Survives compaction: structural check, not instruction-dependent
 
-**Edge case — single commit for multiple files:** Fine. The SHA just needs to exist. We're checking "did you do work and commit it," not "did you do enough work."
+**Edge case — single commit for multiple files:** Fine. The SHA-like token just needs to be present. We're checking "did you (presumably) do work and commit it," not "did you do enough work."
 
 #### IMPLEMENTED -> IN_REVIEW: Requires review directory
 

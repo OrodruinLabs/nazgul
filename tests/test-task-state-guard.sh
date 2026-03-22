@@ -28,11 +28,12 @@ make_write_input() {
 # Helper: build JSON hook input for an Edit tool call.
 # new_string must contain the new status line.
 make_edit_input() {
-  local file_path="$1" new_status="$2"
+  local file_path="$1" new_status="$2" old_status="${3:-READY}"
   jq -n \
     --arg fp "$file_path" \
+    --arg os "- **Status**: $old_status" \
     --arg ns "- **Status**: $new_status" \
-    '{"tool_name":"Edit","tool_input":{"file_path":$fp,"old_string":"- **Status**: READY","new_string":$ns}}'
+    '{"tool_name":"Edit","tool_input":{"file_path":$fp,"old_string":$os,"new_string":$ns}}'
 }
 
 # Helper: pipe input to the guard, capture stderr and exit code.
@@ -290,7 +291,7 @@ assert_contains "IMPLEMENTED without SHA message" "$GUARD_STDERR" "commit SHA"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# Test 20: IN_PROGRESS -> IMPLEMENTED with commit SHA — allowed
+# Test 20: IN_PROGRESS -> IMPLEMENTED with commit SHA (Write) — allowed
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_hydra_dir
@@ -302,6 +303,19 @@ input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
   '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
 run_guard "$input"
 assert_exit_code "IMPLEMENTED with commit SHA allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 20b: IN_PROGRESS -> IMPLEMENTED via Edit — SHA already in file on disk
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_task_file_with_commits "TASK-001" "IN_PROGRESS" "abc1234def"
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+# Edit only changes the status line — SHA is in the existing file, not in new_string
+input=$(make_edit_input "$TASK_PATH" "IMPLEMENTED" "IN_PROGRESS")
+run_guard "$input"
+assert_exit_code "IMPLEMENTED via Edit with SHA on disk allowed" "$GUARD_EC" 0
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -399,6 +413,32 @@ create_config '.guards.requireActiveTask = true'
 input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"console.log(1)"}}')
 run_guard "$input"
 assert_exit_code "source edit with empty tasks dir allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 29: Hydra file edit with relative path — always allowed
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "READY"
+input=$(jq -n '{"tool_name":"Write","tool_input":{"file_path":"hydra/plan.md","content":"# Plan"}}')
+run_guard "$input"
+assert_exit_code "hydra relative path edit always allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 30: IN_PROGRESS -> IMPLEMENTED via Edit without SHA anywhere — blocked
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_task_file "TASK-001" "IN_PROGRESS"
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+# Edit tool: neither new_string nor existing file has a SHA
+input=$(make_edit_input "$TASK_PATH" "IMPLEMENTED" "IN_PROGRESS")
+run_guard "$input"
+assert_exit_code "IMPLEMENTED via Edit without SHA blocked" "$GUARD_EC" 2
+assert_contains "IMPLEMENTED via Edit without SHA message" "$GUARD_STDERR" "commit SHA"
 teardown_temp_dir
 
 report_results

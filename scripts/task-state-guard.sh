@@ -21,7 +21,8 @@ FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null || e
 # If this is NOT a task manifest, check if it needs the active-task guard
 if ! echo "$FILE_PATH" | grep -qE 'hydra/tasks/TASK-[0-9]+\.md$'; then
   # Files inside hydra/ are always allowed (config, plan, reviews, etc.)
-  if echo "$FILE_PATH" | grep -qE '/hydra/'; then
+  # Match both absolute (/path/hydra/) and relative (hydra/) paths
+  if echo "$FILE_PATH" | grep -qE '(^|/)hydra(/|$)'; then
     exit 0
   fi
 
@@ -151,8 +152,14 @@ fi
 
 # --- ENFORCE EVIDENCE GATES ---
 # IN_PROGRESS -> IMPLEMENTED requires a commit SHA in the manifest content
+# For Edit tool, NEW_CONTENT is only the replacement string — also check existing file
 if [ "$OLD_STATUS" = "IN_PROGRESS" ] && [ "$NEW_STATUS" = "IMPLEMENTED" ]; then
-  if ! echo "$NEW_CONTENT" | grep -qE '[0-9a-f]{7,40}'; then
+  MANIFEST_TEXT="$NEW_CONTENT"
+  if [ -f "$FILE_PATH" ]; then
+    MANIFEST_TEXT="${MANIFEST_TEXT}
+$(cat "$FILE_PATH" 2>/dev/null || true)"
+  fi
+  if ! echo "$MANIFEST_TEXT" | grep -qE '[0-9a-f]{7,40}'; then
     echo "HYDRA STATE GUARD: BLOCKED — Cannot mark IMPLEMENTED without a commit SHA" >&2
     echo "Add a ## Commits section with at least one commit hash to the task manifest." >&2
     echo "If you implemented the work, you should have committed it." >&2
