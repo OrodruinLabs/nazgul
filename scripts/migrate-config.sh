@@ -145,7 +145,6 @@ migrate_5_to_6() {
     (if (.simplify | type) == "object" then .simplify else {} end) as $existing
     | .schema_version = 6
     | .simplify = {
-        "per_task": (if $existing | has("per_task") then $existing.per_task else true end),
         "post_loop": (if $existing | has("post_loop") then $existing.post_loop else true end),
         "focus": (if $existing | has("focus") then $existing.focus else null end)
       }

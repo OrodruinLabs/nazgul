@@ -201,7 +201,6 @@ assert_contains "v5 → v6 output" "$OUTPUT" "migrated"
 assert_json_field "v5 → v6 schema_version" "$HYDRA_DIR/config.json" ".schema_version" "6"
 val=$(jq -r '.simplify | type' "$HYDRA_DIR/config.json")
 assert_eq "v5 → v6 simplify section added" "$val" "object"
-assert_json_field "v5 → v6 simplify.per_task" "$HYDRA_DIR/config.json" ".simplify.per_task" "true"
 assert_json_field "v5 → v6 simplify.post_loop" "$HYDRA_DIR/config.json" ".simplify.post_loop" "true"
 val=$(jq -r '.simplify.focus' "$HYDRA_DIR/config.json")
 assert_eq "v5 → v6 simplify.focus null" "$val" "null"
@@ -216,14 +215,13 @@ cat > "$HYDRA_DIR/config.json" << 'EOF'
   "schema_version": 5,
   "mode": "hitl",
   "simplify": {
-    "per_task": false,
     "post_loop": false,
     "focus": "performance"
   }
 }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$HYDRA_DIR" 2>/dev/null) || true
-assert_json_field "v5 → v6 preserves per_task=false" "$HYDRA_DIR/config.json" ".simplify.per_task" "false"
+# per_task removed — simplify always runs, no config opt-out
 assert_json_field "v5 → v6 preserves post_loop=false" "$HYDRA_DIR/config.json" ".simplify.post_loop" "false"
 assert_json_field "v5 → v6 preserves focus value" "$HYDRA_DIR/config.json" ".simplify.focus" "performance"
 
@@ -234,7 +232,6 @@ cat > "$HYDRA_DIR/config.json" << 'EOF'
   "schema_version": 6,
   "mode": "hitl",
   "simplify": {
-    "per_task": true,
     "post_loop": true,
     "focus": null
   }

@@ -86,7 +86,6 @@ assert_json_field "has .board.sync_failures" "$CONFIG" ".board.sync_failures" "0
 # Nested: .simplify
 val=$(jq -r '.simplify | type' "$CONFIG")
 assert_eq "has .simplify object" "$val" "object"
-assert_json_field "has .simplify.per_task" "$CONFIG" ".simplify.per_task" "true"
 assert_json_field "has .simplify.post_loop" "$CONFIG" ".simplify.post_loop" "true"
 val=$(jq -r '.simplify.focus' "$CONFIG")
 assert_eq "has .simplify.focus null" "$val" "null"

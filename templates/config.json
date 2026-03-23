@@ -41,7 +41,10 @@
       "cicd_platform": null,
       "observability": null,
       "secret_management": null,
-      "environments": ["dev", "prod"]
+      "environments": [
+        "dev",
+        "prod"
+      ]
     }
   },
   "discovery": {
@@ -75,7 +78,6 @@
     "confidence_threshold": 80
   },
   "simplify": {
-    "per_task": true,
     "post_loop": true,
     "focus": null
   },
@@ -142,7 +144,11 @@
   "webhooks": {
     "enabled": false,
     "url": null,
-    "events": ["stop", "compact", "task_complete"],
+    "events": [
+      "stop",
+      "compact",
+      "task_complete"
+    ],
     "headers": {}
   }
 }

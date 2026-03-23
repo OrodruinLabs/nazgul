@@ -33,24 +33,22 @@ Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified o
 
 ## Review Pipeline
 
-### Step 0: Simplify Pass (MANDATORY CHECK — DO NOT SKIP)
+### Step 0: Simplify Pass (ALWAYS RUNS — DO NOT SKIP)
 
-**You MUST check this config and dispatch the simplifier if enabled. This is not optional.**
+**You MUST dispatch the simplifier before reviewers. This is not optional and not configurable.**
 
-1. Read `hydra/config.json → simplify.per_task` (default: true)
-2. If `simplify.per_task` is `false`, log "Simplify: disabled by config" and skip to Step 1
-3. If `simplify.per_task` is `true` (or absent — default is true):
-   a. Read the task worktree path from config: `<worktree_dir>/TASK-NNN`
-   b. **Dispatch the Simplifier agent** using the Agent tool with `subagent_type: "hydra:simplifier"`:
-      - Task ID
-      - Worktree path
-      - Main worktree path (for writing reports to hydra/reviews/)
-      - Focus argument from `simplify.focus` (if set)
-   c. Wait for the simplifier to complete
-   d. Log the result (files changed, tests status)
-4. Proceed to Step 1 regardless of simplifier outcome
+1. Read the task worktree path from config: `<worktree_dir>/TASK-NNN`
+2. Read `simplify.focus` from `hydra/config.json` (if set, pass as focus argument)
+3. **Dispatch the Simplifier agent** using the Agent tool with `subagent_type: "hydra:simplifier"`:
+   - Task ID
+   - Worktree path
+   - Main worktree path (for writing reports to hydra/reviews/)
+   - Focus argument from `simplify.focus` (if set)
+4. Wait for the simplifier to complete
+5. Log the result (files changed, tests status)
+6. Proceed to Step 1 regardless of simplifier outcome
 
-Step 0 is non-blocking on failure — if simplify errors or reverts, always proceed to Step 1. But you MUST attempt it when config enables it.
+Step 0 is non-blocking on failure — if simplify errors or reverts, always proceed to Step 1. But you MUST always run it.
 
 ### Step 1: Pre-Review Automated Checks (SEQUENTIAL, NON-NEGOTIABLE)
 

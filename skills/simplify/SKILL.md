@@ -30,7 +30,7 @@ User-invoked post-loop cleanup. Runs on all files modified during the last Hydra
 ### Per-Task Mode (review-gate Step 0)
 Automatic. After each task reaches IMPLEMENTED, the simplifier agent reviews the task's changed files for reuse, quality, and efficiency — fixing issues before reviewers see the code. Reduces review round-trips.
 
-Config: `hydra/config.json → simplify.per_task` (default: `true`)
+Always runs. Not configurable — simplification is mandatory before review.
 
 ### Post-Loop Batch Mode (review-gate Step 5.0)
 Automatic. After ALL tasks are DONE, a batch simplification pass runs across all files modified during the entire loop. Catches cross-task issues (duplicate utilities, inconsistent patterns) that per-task simplify can't see.
