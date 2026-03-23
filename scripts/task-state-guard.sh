@@ -18,22 +18,26 @@ fi
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
 
 # Handle MultiEdit: fan out into per-edit Edit invocations
+# Aggregate all new_string content per file so evidence gates (e.g., commit SHA)
+# can see text from sibling edits to the same file.
 if [ "$TOOL_NAME" = "MultiEdit" ]; then
   EDITS_JSON=$(echo "$INPUT" | jq -c '.tool_input.edits // [] | .[]' 2>/dev/null || echo "")
   if [ -z "$EDITS_JSON" ]; then
     exit 0
   fi
+  # Collect all new_string values across all edits for aggregated evidence checking
+  ALL_NEW_STRINGS=$(echo "$INPUT" | jq -r '.tool_input.edits // [] | .[].new_string // ""' 2>/dev/null || echo "")
   while IFS= read -r EDIT; do
     [ -z "$EDIT" ] && continue
-    SINGLE_INPUT=$(echo "$INPUT" | jq --argjson edit "$EDIT" '
+    # Build synthetic Edit payload with this edit's fields plus aggregated content
+    # for evidence gates that need to see all edits (e.g., SHA check)
+    SINGLE_INPUT=$(echo "$INPUT" | jq --argjson edit "$EDIT" --arg all "$ALL_NEW_STRINGS" '
       .tool_name = "Edit"
-      | .tool_input.file_path = $edit.file_path
-      | .tool_input.new_string = $edit.new_string
+      | .tool_input = $edit
+      | .tool_input.new_string = ($edit.new_string + "\n" + $all)
     ')
-    echo "$SINGLE_INPUT" | "$0"
-    STATUS=$?
-    if [ "$STATUS" -ne 0 ]; then
-      exit "$STATUS"
+    if ! echo "$SINGLE_INPUT" | "$0"; then
+      exit $?
     fi
   done <<< "$EDITS_JSON"
   exit 0
