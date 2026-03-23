@@ -100,10 +100,10 @@ if ! is_task_manifest "$FILE_PATH"; then
     exit 0
   fi
 
-  # Check if any task is IN_PROGRESS
+  # Check if any task or patch is IN_PROGRESS
   HAS_ACTIVE=false
   TASK_COUNT=0
-  for task_file in "$HYDRA_TASKS_DIR"/TASK-*.md; do
+  for task_file in "$HYDRA_TASKS_DIR"/TASK-*.md "$HYDRA_TASKS_DIR"/patches/PATCH-*.md; do
     [ -f "$task_file" ] || continue
     TASK_COUNT=$((TASK_COUNT + 1))
     STATUS=$(get_task_status "$task_file" "")

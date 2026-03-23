@@ -522,4 +522,44 @@ run_guard "$input"
 assert_exit_code "MultiEdit source edit without active task blocked" "$GUARD_EC" 2
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# Test 35: Source file edit with IN_PROGRESS patch (no TASK in progress) — allowed
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "APPROVED"
+mkdir -p "$TEST_DIR/hydra/tasks/patches"
+cat > "$TEST_DIR/hydra/tasks/patches/PATCH-001.md" << 'PATCH_EOF'
+# PATCH-001: Test patch
+
+- **Status**: IN_PROGRESS
+- **Created**: 2026-03-23T00:00:00Z
+- **Source**: /hydra:patch
+PATCH_EOF
+input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"console.log(1)"}}')
+run_guard "$input"
+assert_exit_code "source edit with IN_PROGRESS patch allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 36: Source file edit with no IN_PROGRESS patch or task — blocked
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "APPROVED"
+mkdir -p "$TEST_DIR/hydra/tasks/patches"
+cat > "$TEST_DIR/hydra/tasks/patches/PATCH-001.md" << 'PATCH_EOF'
+# PATCH-001: Test patch
+
+- **Status**: DONE
+- **Created**: 2026-03-23T00:00:00Z
+- **Source**: /hydra:patch
+PATCH_EOF
+input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"console.log(1)"}}')
+run_guard "$input"
+assert_exit_code "source edit with DONE patch still blocked" "$GUARD_EC" 2
+teardown_temp_dir
+
 report_results
