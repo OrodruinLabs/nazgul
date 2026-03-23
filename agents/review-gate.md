@@ -202,14 +202,17 @@ After all tasks are DONE, run a cross-task simplification pass across ALL modifi
 3. Identify all files modified during the loop:
    - `git log --name-only --pretty=format: <base-branch>..<feature-branch> | sort -u`
 4. Group files by directory/module (max 5 files per group)
-5. Spawn parallel simplifier agents (one per group) via Agent tool:
-   - Each agent runs the same 3-review protocol (reuse, quality, efficiency)
+5. **Parallel analysis phase:** Spawn parallel review agents (one per group) via Agent tool:
+   - Each agent runs the 3-review protocol (reuse, quality, efficiency) in **read-only** mode
    - Each works in the feature branch (no worktree needed — all tasks merged)
    - Focus: cross-task issues — duplicate utilities, inconsistent patterns, shared code opportunities
-6. Aggregate results across all groups
-7. For each finding:
-   - Apply fix, run tests, revert on failure
-8. Commit: `git commit -am "<commit_prefix> post-loop simplify"`
+   - Each returns a list of findings (do NOT apply fixes yet)
+6. Aggregate findings across all groups, deduplicate, order by confidence
+7. **Serial apply phase:** For each finding (sequentially, not in parallel):
+   - Apply fix, run tests
+   - If tests pass → commit immediately: `git commit -am "simplify: <description>"`
+   - If tests fail → revert only affected files: `git checkout -- <files>`
+8. If any fixes were committed, squash into one: `git commit -am "<commit_prefix> post-loop simplify"`. If no fixes survived, skip the commit.
 9. Write summary to `hydra/reviews/post-loop-simplify-report.md`
 
 #### Step 5.1: Post-Loop Agents & PR

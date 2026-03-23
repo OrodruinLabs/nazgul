@@ -34,13 +34,14 @@ You receive:
 
 ### Step 1: Identify Changed Files
 
-Read the task's `diff.patch` from `<main_worktree_path>/hydra/reviews/<TASK-ID>/diff.patch` to identify all changed files. If no diff exists, generate it:
-
-```bash
-git diff --name-only HEAD~1
-```
-
-Read all changed files in full to understand the code.
+1. Read the task manifest at `<main_worktree_path>/hydra/tasks/<TASK-ID>.md` to get the **Base SHA** (from the manifest's metadata)
+2. Read the task's `diff.patch` from `<main_worktree_path>/hydra/reviews/<TASK-ID>/diff.patch` to identify all changed files
+3. If no diff exists, generate it using the base SHA:
+   ```bash
+   git diff --name-only <base-sha>..HEAD
+   ```
+   If no base SHA is available, fall back to: `git merge-base origin/main HEAD` to compute it
+4. Read all changed files in full to understand the code
 
 ### Step 2: Parallel Review
 
@@ -85,15 +86,19 @@ Read `hydra/config.json → project.test_command` for the test command.
 For each finding (highest confidence first):
 1. Apply the fix using Edit tool
 2. Run the test command: `<test_command>`
-3. If tests pass → keep the fix, log as applied
-4. If tests fail → revert with `git checkout -- .`, log as skipped
+3. If tests pass → **commit immediately**: `git commit -am "simplify: <brief description>"`
+4. If tests fail → revert **only this fix**: `git checkout -- <affected-files>`, log as skipped
+
+**Important:** Commit each passing fix individually so that a later failed fix cannot wipe earlier successful ones. The final squash commit in Step 5 combines them.
 
 ### Step 5: Commit & Report
 
-If any fixes were applied:
+If any fixes were applied (individual commits exist from Step 4):
 1. Read `hydra/config.json → afk.commit_prefix` for the commit prefix
-2. Commit: `git commit -am "<commit_prefix> simplify <TASK-ID>"`
-3. Regenerate diff: `git diff <base>..HEAD -- <files> > <main_worktree_path>/hydra/reviews/<TASK-ID>/diff.patch`
+2. Squash the individual fix commits into one: `git reset --soft <pre-simplify-sha> && git commit -m "<commit_prefix> simplify <TASK-ID>"`
+3. Regenerate diff using the base SHA from Step 1: `git diff <base-sha>..HEAD -- <files> > <main_worktree_path>/hydra/reviews/<TASK-ID>/diff.patch`
+
+If no fixes were applied (all reverted or zero findings), skip the commit.
 
 Write summary to `<main_worktree_path>/hydra/reviews/<TASK-ID>/simplify-report.md`:
 

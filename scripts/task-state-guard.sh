@@ -20,9 +20,12 @@ FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null || e
 
 # If this is NOT a task manifest, check if it needs the active-task guard
 if ! echo "$FILE_PATH" | grep -qE 'hydra/tasks/TASK-[0-9]+\.md$'; then
-  # Files inside hydra/ are always allowed (config, plan, reviews, etc.)
-  # Match both absolute (/path/hydra/) and relative (hydra/) paths
-  if echo "$FILE_PATH" | grep -qE '(^|/)hydra(/|$)'; then
+  # Files inside the project's hydra/ control directory are always allowed
+  # Match relative hydra/ paths or absolute paths under CLAUDE_PROJECT_DIR/hydra/
+  if echo "$FILE_PATH" | grep -qE '^hydra(/|$)'; then
+    exit 0
+  fi
+  if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && echo "$FILE_PATH" | grep -qE "^${CLAUDE_PROJECT_DIR}/hydra(/|$)"; then
     exit 0
   fi
 

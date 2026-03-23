@@ -141,7 +141,15 @@ migrate_4_to_5() {
 migrate_5_to_6() {
   local tmp
   tmp=$(mktemp)
-  jq '.simplify = { "per_task": true, "post_loop": true, "focus": null } | .schema_version = 6' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  jq '
+    (.simplify // {}) as $existing
+    | .schema_version = 6
+    | .simplify = ($existing + {
+        "per_task": ($existing.per_task // true),
+        "post_loop": ($existing.post_loop // true),
+        "focus": ($existing.focus // null)
+      })
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
   log_migration "v5→v6: Added simplify section (per-task + post-loop, enabled by default)"
 }
 
