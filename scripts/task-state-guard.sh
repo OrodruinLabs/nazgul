@@ -132,8 +132,10 @@ fi
 # Extract new content being written
 if [ "$TOOL_NAME" = "Edit" ]; then
   NEW_CONTENT=$(echo "$INPUT" | jq -r '.tool_input.new_string // ""' 2>/dev/null || echo "")
+  OLD_STRING=$(echo "$INPUT" | jq -r '.tool_input.old_string // ""' 2>/dev/null || echo "")
 elif [ "$TOOL_NAME" = "Write" ]; then
   NEW_CONTENT=$(echo "$INPUT" | jq -r '.tool_input.content // ""' 2>/dev/null || echo "")
+  OLD_STRING=""
 else
   exit 0
 fi
@@ -205,13 +207,20 @@ fi
 
 # --- ENFORCE EVIDENCE GATES ---
 # IN_PROGRESS -> IMPLEMENTED requires a commit SHA in the manifest content
-# For Write, NEW_CONTENT is the full file — check only that.
-# For Edit/MultiEdit, NEW_CONTENT is partial — also check existing file on disk.
+# For Write, NEW_CONTENT is the full post-edit file.
+# For Edit, reconstruct post-edit content by applying old_string→new_string on the file.
 if [ "$OLD_STATUS" = "IN_PROGRESS" ] && [ "$NEW_STATUS" = "IMPLEMENTED" ]; then
-  MANIFEST_TEXT="$NEW_CONTENT"
-  if [ "$TOOL_NAME" != "Write" ] && [ -f "$FILE_PATH" ]; then
-    MANIFEST_TEXT="${MANIFEST_TEXT}
-$(cat "$FILE_PATH" 2>/dev/null || true)"
+  if [ "$TOOL_NAME" = "Write" ]; then
+    MANIFEST_TEXT="$NEW_CONTENT"
+  elif [ -f "$FILE_PATH" ] && [ -n "$OLD_STRING" ]; then
+    # Reconstruct post-edit file: replace old_string with new_string in on-disk content
+    MANIFEST_TEXT=$(awk -v old="$OLD_STRING" -v new="$NEW_CONTENT" '
+      BEGIN { buf="" }
+      { buf = buf (NR>1 ? "\n" : "") $0 }
+      END { idx = index(buf, old); if (idx) print substr(buf, 1, idx-1) new substr(buf, idx+length(old)); else print buf }
+    ' "$FILE_PATH")
+  else
+    MANIFEST_TEXT="$NEW_CONTENT"
   fi
   if ! printf '%s' "$MANIFEST_TEXT" | grep -qE '[0-9a-f]{7,40}'; then
     echo "HYDRA STATE GUARD: BLOCKED — Cannot mark IMPLEMENTED without a commit SHA" >&2
