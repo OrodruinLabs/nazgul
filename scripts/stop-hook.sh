@@ -577,7 +577,7 @@ $([ -n "$FEATURE_BRANCH" ] && echo "Branch: ${FEATURE_BRANCH} → ${BASE_BRANCH}
 
 Read hydra/plan.md → Recovery Pointer section for current state.
 $([ -n "$ACTIVE_TASK" ] && echo "Active task: hydra/tasks/${ACTIVE_TASK}.md (${ACTIVE_STATUS})" || echo "No active task — find first READY task in hydra/plan.md")
-$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (hydra:review-gate) for ${ACTIVE_TASK}. Do NOT skip the review gate." || true)
+$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (hydra:review-gate) for ${ACTIVE_TASK}. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition." || true)
 $([ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (hydra:review-gate) for ${ACTIVE_TASK}." || true)
 $([ "$ACTIVE_STATUS" = "READY" ] || [ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}." || true)
 $([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first." || true)
