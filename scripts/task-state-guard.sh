@@ -18,7 +18,9 @@ fi
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null || echo "")
 
-# If this is NOT a task manifest, check if it needs the active-task guard
+# Derive project root — prefer CLAUDE_PROJECT_DIR, fall back to pwd
+PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+
 # Helper: check if a path is inside the project's hydra/ control directory
 is_hydra_path() {
   local p="$1"
@@ -26,25 +28,21 @@ is_hydra_path() {
   case "$p" in
     hydra|hydra/*) return 0 ;;
   esac
-  # Absolute path under CLAUDE_PROJECT_DIR/hydra/
-  if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
-    case "$p" in
-      "${CLAUDE_PROJECT_DIR}"/hydra|"${CLAUDE_PROJECT_DIR}"/hydra/*) return 0 ;;
-    esac
-  fi
+  # Absolute path under PROJECT_ROOT/hydra/
+  case "$p" in
+    "${PROJECT_ROOT}"/hydra|"${PROJECT_ROOT}"/hydra/*) return 0 ;;
+  esac
   return 1
 }
 
 # Helper: check if path is a task manifest in the project's hydra/ dir
 is_task_manifest() {
   local p="$1"
-  # Must match TASK-NNN.md at the end
-  case "$p" in
-    */hydra/tasks/TASK-[0-9]*.md|hydra/tasks/TASK-[0-9]*.md) return 0 ;;
-  esac
-  return 1
+  # Must match hydra/tasks/TASK-<digits>.md (strict: digits only before .md)
+  [[ "$p" =~ (^|/)hydra/tasks/TASK-[0-9]+\.md$ ]]
 }
 
+# If this is NOT a task manifest, check if it needs the active-task guard
 if ! is_task_manifest "$FILE_PATH"; then
   # Files inside hydra/ are always allowed (config, plan, reviews, etc.)
   if is_hydra_path "$FILE_PATH"; then
@@ -53,9 +51,9 @@ if ! is_task_manifest "$FILE_PATH"; then
 
   # Check if active task guard is enabled
   HYDRA_TASKS_DIR=""
-  if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -d "$CLAUDE_PROJECT_DIR/hydra/tasks" ]; then
-    HYDRA_TASKS_DIR="$CLAUDE_PROJECT_DIR/hydra/tasks"
-    HYDRA_CONFIG="$CLAUDE_PROJECT_DIR/hydra/config.json"
+  if [ -d "$PROJECT_ROOT/hydra/tasks" ]; then
+    HYDRA_TASKS_DIR="$PROJECT_ROOT/hydra/tasks"
+    HYDRA_CONFIG="$PROJECT_ROOT/hydra/config.json"
   fi
 
   # No hydra/tasks dir = not a Hydra project, allow everything
@@ -184,7 +182,7 @@ if [ "$OLD_STATUS" = "IN_PROGRESS" ] && [ "$NEW_STATUS" = "IMPLEMENTED" ]; then
     MANIFEST_TEXT="${MANIFEST_TEXT}
 $(cat "$FILE_PATH" 2>/dev/null || true)"
   fi
-  if ! echo "$MANIFEST_TEXT" | grep -qE '[0-9a-f]{7,40}'; then
+  if ! printf '%s' "$MANIFEST_TEXT" | grep -qiE '[0-9a-f]{7,40}'; then
     echo "HYDRA STATE GUARD: BLOCKED — Cannot mark IMPLEMENTED without a commit SHA" >&2
     echo "Add a ## Commits section with at least one commit hash to the task manifest." >&2
     echo "If you implemented the work, you should have committed it." >&2

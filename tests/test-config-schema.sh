@@ -35,6 +35,11 @@ assert_eq "has .agents.reviewers array" "$val" "array"
 # Nested: .review_gate.confidence_threshold
 assert_json_field "has .review_gate.confidence_threshold" "$CONFIG" ".review_gate.confidence_threshold" "80"
 
+# Nested: .guards
+val=$(jq -r '.guards | type' "$CONFIG")
+assert_eq "has .guards object" "$val" "object"
+assert_json_field "has .guards.requireActiveTask" "$CONFIG" ".guards.requireActiveTask" "true"
+
 # Nested: .safety.max_consecutive_failures
 assert_json_field "has .safety.max_consecutive_failures" "$CONFIG" ".safety.max_consecutive_failures" "5"
 

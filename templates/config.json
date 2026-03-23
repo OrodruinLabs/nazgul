@@ -79,6 +79,9 @@
     "post_loop": true,
     "focus": null
   },
+  "guards": {
+    "requireActiveTask": true
+  },
   "safety": {
     "block_destructive_commands": true,
     "require_tests_pass_before_review": true,
