@@ -205,6 +205,9 @@ assert_json_field "v5 → v6 simplify.per_task" "$HYDRA_DIR/config.json" ".simpl
 assert_json_field "v5 → v6 simplify.post_loop" "$HYDRA_DIR/config.json" ".simplify.post_loop" "true"
 val=$(jq -r '.simplify.focus' "$HYDRA_DIR/config.json")
 assert_eq "v5 → v6 simplify.focus null" "$val" "null"
+val=$(jq -r '.guards | type' "$HYDRA_DIR/config.json")
+assert_eq "v5 → v6 guards section added" "$val" "object"
+assert_json_field "v5 → v6 guards.requireActiveTask" "$HYDRA_DIR/config.json" ".guards.requireActiveTask" "true"
 
 # --- Test 3d-b: v5 config with explicit simplify.per_task=false preserved ---
 HYDRA_DIR=$(setup_hydra_dir "v5-config-false")

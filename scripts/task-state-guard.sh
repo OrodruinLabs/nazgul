@@ -16,6 +16,29 @@ fi
 
 # Parse JSON input with jq
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
+
+# Handle MultiEdit: fan out into per-edit Edit invocations
+if [ "$TOOL_NAME" = "MultiEdit" ]; then
+  EDITS_JSON=$(echo "$INPUT" | jq -c '.tool_input.edits // [] | .[]' 2>/dev/null || echo "")
+  if [ -z "$EDITS_JSON" ]; then
+    exit 0
+  fi
+  while IFS= read -r EDIT; do
+    [ -z "$EDIT" ] && continue
+    SINGLE_INPUT=$(echo "$INPUT" | jq --argjson edit "$EDIT" '
+      .tool_name = "Edit"
+      | .tool_input.file_path = $edit.file_path
+      | .tool_input.new_string = $edit.new_string
+    ')
+    echo "$SINGLE_INPUT" | "$0"
+    STATUS=$?
+    if [ "$STATUS" -ne 0 ]; then
+      exit "$STATUS"
+    fi
+  done <<< "$EDITS_JSON"
+  exit 0
+fi
+
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null || echo "")
 
 # Derive project root — prefer CLAUDE_PROJECT_DIR, fall back to pwd

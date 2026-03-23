@@ -149,8 +149,12 @@ migrate_5_to_6() {
         "post_loop": (if $existing | has("post_loop") then $existing.post_loop else true end),
         "focus": (if $existing | has("focus") then $existing.focus else null end)
       }
+    | (if (.guards | type) == "object" then .guards else {} end) as $guards
+    | .guards = ($guards + {
+        "requireActiveTask": (if $guards | has("requireActiveTask") then $guards.requireActiveTask else true end)
+      })
   ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
-  log_migration "v5→v6: Added simplify section (per-task + post-loop, enabled by default)"
+  log_migration "v5→v6: Added simplify section and guards.requireActiveTask (enabled by default)"
 }
 
 # --- Run incremental migrations ---
