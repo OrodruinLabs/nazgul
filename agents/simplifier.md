@@ -9,6 +9,8 @@ tools:
   - Glob
   - Grep
   - Agent
+  - EnterWorktree
+  - ExitWorktree
 maxTurns: 50
 ---
 
@@ -31,6 +33,10 @@ You receive:
 - **Focus** (optional) — e.g. `"performance"`, `"readability"` — narrows review scope
 
 ## Simplification Protocol
+
+### Step 0: Enter Worktree
+
+Use `EnterWorktree` to enter the task's worktree path before running any git commands. All git operations (diff, commit, checkout) must run inside the task worktree, not the main worktree. Use `ExitWorktree` when done.
 
 ### Step 1: Identify Changed Files
 

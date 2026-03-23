@@ -35,7 +35,7 @@ if [ "$TOOL_NAME" = "MultiEdit" ]; then
     SINGLE_INPUT=$(echo "$INPUT" | jq --argjson edit "$EDIT" --arg agg "$SAME_FILE_STRINGS" '
       .tool_name = "Edit"
       | .tool_input = $edit
-      | .tool_input.new_string = ($edit.new_string + "\n" + $agg)
+      | .tool_input.new_string = $agg
     ')
     EC=0
     echo "$SINGLE_INPUT" | "$0" || EC=$?
