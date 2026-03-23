@@ -83,6 +83,11 @@ If zero findings — exit immediately. Write a brief no-op report and return.
 
 Read `hydra/config.json → project.test_command` for the test command.
 
+**Before applying any fixes**, capture the current commit SHA as the pre-simplify checkpoint:
+```bash
+PRE_SIMPLIFY_SHA=$(git rev-parse HEAD)
+```
+
 For each finding (highest confidence first):
 1. Apply the fix using Edit tool
 2. Run the test command: `<test_command>`
@@ -95,7 +100,7 @@ For each finding (highest confidence first):
 
 If any fixes were applied (individual commits exist from Step 4):
 1. Read `hydra/config.json → afk.commit_prefix` for the commit prefix
-2. Squash the individual fix commits into one: `git reset --soft <pre-simplify-sha> && git commit -m "<commit_prefix> simplify <TASK-ID>"`
+2. Squash the individual fix commits into one: `git reset --soft $PRE_SIMPLIFY_SHA && git commit -m "<commit_prefix> simplify <TASK-ID>"`
 3. Regenerate diff using the base SHA from Step 1: `git diff <base-sha>..HEAD -- <files> > <main_worktree_path>/hydra/reviews/<TASK-ID>/diff.patch`
 
 If no fixes were applied (all reverted or zero findings), skip the commit.

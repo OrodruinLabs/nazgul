@@ -19,13 +19,35 @@ TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null || echo "")
 
 # If this is NOT a task manifest, check if it needs the active-task guard
-if ! echo "$FILE_PATH" | grep -qE 'hydra/tasks/TASK-[0-9]+\.md$'; then
-  # Files inside the project's hydra/ control directory are always allowed
-  # Match relative hydra/ paths or absolute paths under CLAUDE_PROJECT_DIR/hydra/
-  if echo "$FILE_PATH" | grep -qE '^hydra(/|$)'; then
-    exit 0
+# Helper: check if a path is inside the project's hydra/ control directory
+is_hydra_path() {
+  local p="$1"
+  # Relative path starting with hydra/
+  case "$p" in
+    hydra|hydra/*) return 0 ;;
+  esac
+  # Absolute path under CLAUDE_PROJECT_DIR/hydra/
+  if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+    case "$p" in
+      "${CLAUDE_PROJECT_DIR}"/hydra|"${CLAUDE_PROJECT_DIR}"/hydra/*) return 0 ;;
+    esac
   fi
-  if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && echo "$FILE_PATH" | grep -qE "^${CLAUDE_PROJECT_DIR}/hydra(/|$)"; then
+  return 1
+}
+
+# Helper: check if path is a task manifest in the project's hydra/ dir
+is_task_manifest() {
+  local p="$1"
+  # Must match TASK-NNN.md at the end
+  case "$p" in
+    */hydra/tasks/TASK-[0-9]*.md|hydra/tasks/TASK-[0-9]*.md) return 0 ;;
+  esac
+  return 1
+}
+
+if ! is_task_manifest "$FILE_PATH"; then
+  # Files inside hydra/ are always allowed (config, plan, reviews, etc.)
+  if is_hydra_path "$FILE_PATH"; then
     exit 0
   fi
 
