@@ -17,12 +17,12 @@ assert_file_exists "simplifier.md exists" "$AGENT_FILE"
 # --- Test 2: Has valid frontmatter with name ---
 assert_file_contains "has name field" "$AGENT_FILE" "name: simplifier"
 
-# --- Test 3: Has required tools ---
-assert_file_contains "has Read tool" "$AGENT_FILE" "Read"
-assert_file_contains "has Write tool" "$AGENT_FILE" "Write"
-assert_file_contains "has Edit tool" "$AGENT_FILE" "Edit"
-assert_file_contains "has Bash tool" "$AGENT_FILE" "Bash"
-assert_file_contains "has Agent tool" "$AGENT_FILE" "Agent"
+# --- Test 3: Has required tools in frontmatter ---
+assert_file_contains "has Read tool" "$AGENT_FILE" "  - Read"
+assert_file_contains "has Write tool" "$AGENT_FILE" "  - Write"
+assert_file_contains "has Edit tool" "$AGENT_FILE" "  - Edit"
+assert_file_contains "has Bash tool" "$AGENT_FILE" "  - Bash"
+assert_file_contains "has Agent tool" "$AGENT_FILE" "  - Agent"
 
 # --- Test 4: Has maxTurns ---
 assert_file_contains "has maxTurns" "$AGENT_FILE" "maxTurns:"

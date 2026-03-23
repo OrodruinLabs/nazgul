@@ -461,4 +461,65 @@ run_guard "$input"
 assert_exit_code "simplify-report.md excluded from reviewer count" "$GUARD_EC" 0
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# Test 32: MultiEdit with invalid state transition — blocked
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_task_file "TASK-001" "PLANNED"
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+input=$(jq -n --arg fp "$TASK_PATH" \
+  --arg os "- **Status**: PLANNED" \
+  --arg ns "- **Status**: DONE" '{
+  "tool_name": "MultiEdit",
+  "tool_input": {
+    "edits": [
+      {"file_path": $fp, "old_string": $os, "new_string": $ns}
+    ]
+  }
+}')
+run_guard "$input"
+assert_exit_code "MultiEdit invalid transition blocked" "$GUARD_EC" 2
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 33: MultiEdit with valid state transition — allowed
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_task_file "TASK-001" "PLANNED"
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+input=$(jq -n --arg fp "$TASK_PATH" \
+  --arg os "- **Status**: PLANNED" \
+  --arg ns "- **Status**: READY" '{
+  "tool_name": "MultiEdit",
+  "tool_input": {
+    "edits": [
+      {"file_path": $fp, "old_string": $os, "new_string": $ns}
+    ]
+  }
+}')
+run_guard "$input"
+assert_exit_code "MultiEdit valid transition allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 34: MultiEdit source edit without active task — blocked
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "READY"
+input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{
+  "tool_name": "MultiEdit",
+  "tool_input": {
+    "edits": [
+      {"file_path": $fp, "old_string": "old", "new_string": "new"}
+    ]
+  }
+}')
+run_guard "$input"
+assert_exit_code "MultiEdit source edit without active task blocked" "$GUARD_EC" 2
+teardown_temp_dir
+
 report_results

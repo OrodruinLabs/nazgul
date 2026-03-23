@@ -212,7 +212,7 @@ After all tasks are DONE, run a cross-task simplification pass across ALL modifi
    - Apply fix, run tests
    - If tests pass → commit immediately: `git commit -am "simplify: <description>"`
    - If tests fail → revert only affected files: `git checkout -- <files>`
-8. If any fixes were committed, squash into one: `git commit -am "<commit_prefix> post-loop simplify"`. If no fixes survived, skip the commit.
+8. If any fixes were committed, capture `PRE_SIMPLIFY_SHA` before Step 7 begins, then squash: `git reset --soft $PRE_SIMPLIFY_SHA && git commit -m "<commit_prefix> post-loop simplify"`. If no fixes survived, skip the commit.
 9. Write summary to `hydra/reviews/post-loop-simplify-report.md`
 
 #### Step 5.1: Post-Loop Agents & PR

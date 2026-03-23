@@ -18,26 +18,29 @@ fi
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
 
 # Handle MultiEdit: fan out into per-edit Edit invocations
-# Aggregate all new_string content per file so evidence gates (e.g., commit SHA)
+# Aggregate new_string content per file so evidence gates (e.g., commit SHA)
 # can see text from sibling edits to the same file.
 if [ "$TOOL_NAME" = "MultiEdit" ]; then
   EDITS_JSON=$(echo "$INPUT" | jq -c '.tool_input.edits // [] | .[]' 2>/dev/null || echo "")
   if [ -z "$EDITS_JSON" ]; then
     exit 0
   fi
-  # Collect all new_string values across all edits for aggregated evidence checking
-  ALL_NEW_STRINGS=$(echo "$INPUT" | jq -r '.tool_input.edits // [] | .[].new_string // ""' 2>/dev/null || echo "")
   while IFS= read -r EDIT; do
     [ -z "$EDIT" ] && continue
-    # Build synthetic Edit payload with this edit's fields plus aggregated content
-    # for evidence gates that need to see all edits (e.g., SHA check)
-    SINGLE_INPUT=$(echo "$INPUT" | jq --argjson edit "$EDIT" --arg all "$ALL_NEW_STRINGS" '
+    # Aggregate all new_string values from edits targeting the SAME file
+    EDIT_FILE=$(echo "$EDIT" | jq -r '.file_path // ""')
+    SAME_FILE_STRINGS=$(echo "$INPUT" | jq -r --arg fp "$EDIT_FILE" '
+      .tool_input.edits // [] | .[] | select(.file_path == $fp) | .new_string // ""
+    ' 2>/dev/null || echo "")
+    SINGLE_INPUT=$(echo "$INPUT" | jq --argjson edit "$EDIT" --arg agg "$SAME_FILE_STRINGS" '
       .tool_name = "Edit"
       | .tool_input = $edit
-      | .tool_input.new_string = ($edit.new_string + "\n" + $all)
+      | .tool_input.new_string = ($edit.new_string + "\n" + $agg)
     ')
-    if ! echo "$SINGLE_INPUT" | "$0"; then
-      exit $?
+    EC=0
+    echo "$SINGLE_INPUT" | "$0" || EC=$?
+    if [ "$EC" -ne 0 ]; then
+      exit "$EC"
     fi
   done <<< "$EDITS_JSON"
   exit 0
@@ -202,14 +205,15 @@ fi
 
 # --- ENFORCE EVIDENCE GATES ---
 # IN_PROGRESS -> IMPLEMENTED requires a commit SHA in the manifest content
-# For Edit tool, NEW_CONTENT is only the replacement string — also check existing file
+# For Write, NEW_CONTENT is the full file — check only that.
+# For Edit/MultiEdit, NEW_CONTENT is partial — also check existing file on disk.
 if [ "$OLD_STATUS" = "IN_PROGRESS" ] && [ "$NEW_STATUS" = "IMPLEMENTED" ]; then
   MANIFEST_TEXT="$NEW_CONTENT"
-  if [ -f "$FILE_PATH" ]; then
+  if [ "$TOOL_NAME" != "Write" ] && [ -f "$FILE_PATH" ]; then
     MANIFEST_TEXT="${MANIFEST_TEXT}
 $(cat "$FILE_PATH" 2>/dev/null || true)"
   fi
-  if ! printf '%s' "$MANIFEST_TEXT" | grep -qiE '[0-9a-f]{7,40}'; then
+  if ! printf '%s' "$MANIFEST_TEXT" | grep -qE '[0-9a-f]{7,40}'; then
     echo "HYDRA STATE GUARD: BLOCKED — Cannot mark IMPLEMENTED without a commit SHA" >&2
     echo "Add a ## Commits section with at least one commit hash to the task manifest." >&2
     echo "If you implemented the work, you should have committed it." >&2
