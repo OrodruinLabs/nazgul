@@ -16,18 +16,126 @@ fi
 
 # Parse JSON input with jq
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
+
+# Handle MultiEdit: fan out into per-edit Edit invocations
+# Aggregate new_string content per file so evidence gates (e.g., commit SHA)
+# can see text from sibling edits to the same file.
+if [ "$TOOL_NAME" = "MultiEdit" ]; then
+  EDITS_JSON=$(echo "$INPUT" | jq -c '.tool_input.edits // [] | .[]' 2>/dev/null || echo "")
+  if [ -z "$EDITS_JSON" ]; then
+    exit 0
+  fi
+  while IFS= read -r EDIT; do
+    [ -z "$EDIT" ] && continue
+    # Aggregate all new_string values from edits targeting the SAME file
+    EDIT_FILE=$(echo "$EDIT" | jq -r '.file_path // ""')
+    SAME_FILE_STRINGS=$(echo "$INPUT" | jq -r --arg fp "$EDIT_FILE" '
+      .tool_input.edits // [] | .[] | select(.file_path == $fp) | .new_string // ""
+    ' 2>/dev/null || echo "")
+    SINGLE_INPUT=$(echo "$INPUT" | jq --argjson edit "$EDIT" --arg agg "$SAME_FILE_STRINGS" '
+      .tool_name = "Edit"
+      | .tool_input = $edit
+      | .tool_input.new_string = $agg
+    ')
+    EC=0
+    echo "$SINGLE_INPUT" | "$0" || EC=$?
+    if [ "$EC" -ne 0 ]; then
+      exit "$EC"
+    fi
+  done <<< "$EDITS_JSON"
+  exit 0
+fi
+
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null || echo "")
 
-# Only guard task manifest files (hydra/tasks/TASK-NNN.md)
-if ! echo "$FILE_PATH" | grep -qE 'hydra/tasks/TASK-[0-9]+\.md$'; then
+# Derive project root — prefer CLAUDE_PROJECT_DIR, fall back to pwd
+PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+
+# Helper: check if a path is inside the project's hydra/ control directory
+is_hydra_path() {
+  local p="$1"
+  # Relative path starting with hydra/
+  case "$p" in
+    hydra|hydra/*) return 0 ;;
+  esac
+  # Absolute path under PROJECT_ROOT/hydra/
+  case "$p" in
+    "${PROJECT_ROOT}"/hydra|"${PROJECT_ROOT}"/hydra/*) return 0 ;;
+  esac
+  return 1
+}
+
+# Helper: check if path is a task manifest in the project's hydra/ dir
+is_task_manifest() {
+  local p="$1"
+  # Must match hydra/tasks/TASK-<digits>.md (strict: digits only before .md)
+  [[ "$p" =~ (^|/)hydra/tasks/TASK-[0-9]+\.md$ ]]
+}
+
+# If this is NOT a task manifest, check if it needs the active-task guard
+if ! is_task_manifest "$FILE_PATH"; then
+  # Files inside hydra/ are always allowed (config, plan, reviews, etc.)
+  if is_hydra_path "$FILE_PATH"; then
+    exit 0
+  fi
+
+  # Check if active task guard is enabled
+  HYDRA_TASKS_DIR=""
+  if [ -d "$PROJECT_ROOT/hydra/tasks" ]; then
+    HYDRA_TASKS_DIR="$PROJECT_ROOT/hydra/tasks"
+    HYDRA_CONFIG="$PROJECT_ROOT/hydra/config.json"
+  fi
+
+  # No hydra/tasks dir = not a Hydra project, allow everything
+  if [ -z "$HYDRA_TASKS_DIR" ]; then
+    exit 0
+  fi
+
+  # Check config flag — default to true if not set
+  REQUIRE_ACTIVE="true"
+  if [ -f "${HYDRA_CONFIG:-}" ]; then
+    REQUIRE_ACTIVE=$(jq -r 'if .guards.requireActiveTask == false then "false" else "true" end' "$HYDRA_CONFIG" 2>/dev/null || echo "true")
+  fi
+  if [ "$REQUIRE_ACTIVE" != "true" ]; then
+    exit 0
+  fi
+
+  # Check if any task is IN_PROGRESS
+  HAS_ACTIVE=false
+  TASK_COUNT=0
+  for task_file in "$HYDRA_TASKS_DIR"/TASK-*.md; do
+    [ -f "$task_file" ] || continue
+    TASK_COUNT=$((TASK_COUNT + 1))
+    STATUS=$(get_task_status "$task_file" "")
+    if [ "$STATUS" = "IN_PROGRESS" ]; then
+      HAS_ACTIVE=true
+      break
+    fi
+  done
+
+  # No task files at all = not an active loop, allow everything
+  if [ "$TASK_COUNT" -eq 0 ]; then
+    exit 0
+  fi
+
+  if [ "$HAS_ACTIVE" = false ]; then
+    echo "HYDRA STATE GUARD: BLOCKED — No task is IN_PROGRESS" >&2
+    echo "Cannot edit source files without an active task." >&2
+    echo "Transition a task to IN_PROGRESS before editing: $FILE_PATH" >&2
+    exit 2
+  fi
+
+  # Has active task — allow the source file edit
   exit 0
 fi
 
 # Extract new content being written
 if [ "$TOOL_NAME" = "Edit" ]; then
   NEW_CONTENT=$(echo "$INPUT" | jq -r '.tool_input.new_string // ""' 2>/dev/null || echo "")
+  OLD_STRING=$(echo "$INPUT" | jq -r '.tool_input.old_string // ""' 2>/dev/null || echo "")
 elif [ "$TOOL_NAME" = "Write" ]; then
   NEW_CONTENT=$(echo "$INPUT" | jq -r '.tool_input.content // ""' 2>/dev/null || echo "")
+  OLD_STRING=""
 else
   exit 0
 fi
@@ -97,6 +205,44 @@ if ! valid_transition "$OLD_STATUS" "$NEW_STATUS"; then
   exit 2
 fi
 
+# --- ENFORCE EVIDENCE GATES ---
+# IN_PROGRESS -> IMPLEMENTED requires a commit SHA in the manifest content
+# For Write, NEW_CONTENT is the full post-edit file.
+# For Edit, reconstruct post-edit content by applying old_string→new_string on the file.
+if [ "$OLD_STATUS" = "IN_PROGRESS" ] && [ "$NEW_STATUS" = "IMPLEMENTED" ]; then
+  if [ "$TOOL_NAME" = "Write" ]; then
+    MANIFEST_TEXT="$NEW_CONTENT"
+  elif [ -f "$FILE_PATH" ] && [ -n "$OLD_STRING" ]; then
+    # Reconstruct post-edit file: replace old_string with new_string in on-disk content
+    MANIFEST_TEXT=$(awk -v old="$OLD_STRING" -v new="$NEW_CONTENT" '
+      BEGIN { buf="" }
+      { buf = buf (NR>1 ? "\n" : "") $0 }
+      END { idx = index(buf, old); if (idx) print substr(buf, 1, idx-1) new substr(buf, idx+length(old)); else print buf }
+    ' "$FILE_PATH")
+  else
+    MANIFEST_TEXT="$NEW_CONTENT"
+  fi
+  if ! printf '%s' "$MANIFEST_TEXT" | grep -qE '[0-9a-f]{7,40}'; then
+    echo "HYDRA STATE GUARD: BLOCKED — Cannot mark IMPLEMENTED without a commit SHA" >&2
+    echo "Add a ## Commits section with at least one commit hash to the task manifest." >&2
+    echo "If you implemented the work, you should have committed it." >&2
+    exit 2
+  fi
+fi
+
+# IMPLEMENTED -> IN_REVIEW requires review directory to exist
+if [ "$OLD_STATUS" = "IMPLEMENTED" ] && [ "$NEW_STATUS" = "IN_REVIEW" ]; then
+  TASK_ID_CHECK=$(basename "$FILE_PATH" .md)
+  HYDRA_DIR_CHECK=$(dirname "$(dirname "$FILE_PATH")")
+  REVIEW_DIR_CHECK="$HYDRA_DIR_CHECK/reviews/$TASK_ID_CHECK"
+  if [ ! -d "$REVIEW_DIR_CHECK" ]; then
+    echo "HYDRA STATE GUARD: BLOCKED — Cannot move to IN_REVIEW without a review directory" >&2
+    echo "Expected: ${REVIEW_DIR_CHECK}/" >&2
+    echo "The review-gate agent creates this directory when it starts reviewing." >&2
+    exit 2
+  fi
+fi
+
 # --- ENFORCE REVIEW GATE (Constitution Article IV) ---
 # In YOLO mode, gate APPROVED; in non-YOLO, gate DONE
 # APPROVED → DONE in YOLO needs no review checks (PR merge is external validation)
@@ -132,7 +278,7 @@ if [ "$NEEDS_REVIEW_CHECK" = true ]; then
     [ -f "$review_file" ] || continue
     BASENAME=$(basename "$review_file")
     case "$BASENAME" in
-      test-failures.md|consolidated-feedback.md) continue ;;
+      test-failures.md|consolidated-feedback.md|simplify-report.md) continue ;;
     esac
     REVIEW_COUNT=$((REVIEW_COUNT + 1))
   done
@@ -149,7 +295,7 @@ if [ "$NEEDS_REVIEW_CHECK" = true ]; then
     [ -f "$review_file" ] || continue
     BASENAME=$(basename "$review_file")
     case "$BASENAME" in
-      test-failures.md|consolidated-feedback.md) continue ;;
+      test-failures.md|consolidated-feedback.md|simplify-report.md) continue ;;
     esac
     if ! grep -qi 'APPROVED' "$review_file" 2>/dev/null; then
       echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2

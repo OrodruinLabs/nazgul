@@ -138,6 +138,25 @@ migrate_4_to_5() {
   log_migration "Migrated 4 -> 5: removed unused config fields"
 }
 
+migrate_5_to_6() {
+  local tmp
+  tmp=$(mktemp)
+  jq '
+    (if (.simplify | type) == "object" then .simplify else {} end) as $existing
+    | .schema_version = 6
+    | .simplify = {
+        "per_task": (if $existing | has("per_task") then $existing.per_task else true end),
+        "post_loop": (if $existing | has("post_loop") then $existing.post_loop else true end),
+        "focus": (if $existing | has("focus") then $existing.focus else null end)
+      }
+    | (if (.guards | type) == "object" then .guards else {} end) as $guards
+    | .guards = ($guards + {
+        "requireActiveTask": (if $guards | has("requireActiveTask") then $guards.requireActiveTask else true end)
+      })
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v5→v6: Added simplify section and guards.requireActiveTask (enabled by default)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"

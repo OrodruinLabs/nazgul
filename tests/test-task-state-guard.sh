@@ -28,11 +28,12 @@ make_write_input() {
 # Helper: build JSON hook input for an Edit tool call.
 # new_string must contain the new status line.
 make_edit_input() {
-  local file_path="$1" new_status="$2"
+  local file_path="$1" new_status="$2" old_status="${3:-READY}"
   jq -n \
     --arg fp "$file_path" \
+    --arg os "- **Status**: $old_status" \
     --arg ns "- **Status**: $new_status" \
-    '{"tool_name":"Edit","tool_input":{"file_path":$fp,"old_string":"- **Status**: READY","new_string":$ns}}'
+    '{"tool_name":"Edit","tool_input":{"file_path":$fp,"old_string":$os,"new_string":$ns}}'
 }
 
 # Helper: pipe input to the guard, capture stderr and exit code.
@@ -117,7 +118,9 @@ setup_temp_dir
 setup_hydra_dir
 create_task_file "TASK-001" "IN_PROGRESS"
 TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
-input=$(make_write_input "$TASK_PATH" "IMPLEMENTED")
+content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- abc1234def')
+input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
 run_guard "$input"
 assert_exit_code "IN_PROGRESS->IMPLEMENTED allowed" "$GUARD_EC" 0
 teardown_temp_dir
@@ -273,5 +276,250 @@ teardown_temp_dir
 # ---------------------------------------------------------------------------
 GUARD_STDERR=$(echo "" | bash "$GUARD" 2>&1 >/dev/null) && GUARD_EC=0 || GUARD_EC=$?
 assert_exit_code "empty stdin allowed" "$GUARD_EC" 0
+
+# ---------------------------------------------------------------------------
+# Test 19: IN_PROGRESS -> IMPLEMENTED without commit SHA — blocked
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_task_file "TASK-001" "IN_PROGRESS"
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IMPLEMENTED")
+run_guard "$input"
+assert_exit_code "IMPLEMENTED without commit SHA blocked" "$GUARD_EC" 2
+assert_contains "IMPLEMENTED without SHA message" "$GUARD_STDERR" "commit SHA"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 20: IN_PROGRESS -> IMPLEMENTED with commit SHA (Write) — allowed
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_task_file "TASK-001" "IN_PROGRESS"
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+# Build input with commit SHA in content
+content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- abc1234def')
+input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
+run_guard "$input"
+assert_exit_code "IMPLEMENTED with commit SHA allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 20b: IN_PROGRESS -> IMPLEMENTED via Edit — SHA already in file on disk
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_task_file_with_commits "TASK-001" "IN_PROGRESS" "abc1234def"
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+# Edit only changes the status line — SHA is in the existing file, not in new_string
+input=$(make_edit_input "$TASK_PATH" "IMPLEMENTED" "IN_PROGRESS")
+run_guard "$input"
+assert_exit_code "IMPLEMENTED via Edit with SHA on disk allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 21: IMPLEMENTED -> IN_REVIEW without review directory — blocked
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_task_file "TASK-001" "IMPLEMENTED"
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
+run_guard "$input"
+assert_exit_code "IN_REVIEW without review dir blocked" "$GUARD_EC" 2
+assert_contains "IN_REVIEW without review dir message" "$GUARD_STDERR" "review directory"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 22: IMPLEMENTED -> IN_REVIEW with review directory — allowed
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_task_file "TASK-001" "IMPLEMENTED"
+mkdir -p "$TEST_DIR/hydra/reviews/TASK-001"
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
+run_guard "$input"
+assert_exit_code "IN_REVIEW with review dir allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 23: Source file edit with no IN_PROGRESS task — blocked
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "READY"
+input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"console.log(1)"}}')
+run_guard "$input"
+assert_exit_code "source edit without active task blocked" "$GUARD_EC" 2
+assert_contains "source edit blocked message" "$GUARD_STDERR" "No task is IN_PROGRESS"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 24: Source file edit with an IN_PROGRESS task — allowed
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "IN_PROGRESS"
+input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"console.log(1)"}}')
+run_guard "$input"
+assert_exit_code "source edit with active task allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 25: Hydra file edit with no IN_PROGRESS task — always allowed
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "READY"
+input=$(jq -n --arg fp "$TEST_DIR/hydra/plan.md" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"# Plan"}}')
+run_guard "$input"
+assert_exit_code "hydra file edit always allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 26: Source file edit with no hydra/tasks/ dir — allowed (not initialized)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+# No setup_hydra_dir — no hydra/ directory at all
+input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"console.log(1)"}}')
+run_guard "$input"
+assert_exit_code "source edit without hydra dir allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 27: Source file edit with guards.requireActiveTask=false — allowed
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.guards.requireActiveTask = false'
+create_task_file "TASK-001" "READY"
+input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"console.log(1)"}}')
+run_guard "$input"
+assert_exit_code "source edit with guard disabled allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 28: Source file edit with empty hydra/tasks/ dir — allowed (no active loop)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.guards.requireActiveTask = true'
+# hydra/tasks/ exists but has no TASK files
+input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"console.log(1)"}}')
+run_guard "$input"
+assert_exit_code "source edit with empty tasks dir allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 29: Hydra file edit with relative path — always allowed
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "READY"
+input=$(jq -n '{"tool_name":"Write","tool_input":{"file_path":"hydra/plan.md","content":"# Plan"}}')
+run_guard "$input"
+assert_exit_code "hydra relative path edit always allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 30: IN_PROGRESS -> IMPLEMENTED via Edit without SHA anywhere — blocked
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_task_file "TASK-001" "IN_PROGRESS"
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+# Edit tool: neither new_string nor existing file has a SHA
+input=$(make_edit_input "$TASK_PATH" "IMPLEMENTED" "IN_PROGRESS")
+run_guard "$input"
+assert_exit_code "IMPLEMENTED via Edit without SHA blocked" "$GUARD_EC" 2
+assert_contains "IMPLEMENTED via Edit without SHA message" "$GUARD_STDERR" "commit SHA"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 31: simplify-report.md excluded from reviewer file count
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "IN_REVIEW"
+create_review_dir "TASK-001"
+# Add a simplify-report.md — should NOT count as a reviewer file
+cat > "$TEST_DIR/hydra/reviews/TASK-001/simplify-report.md" << 'REPORT_EOF'
+# Simplify Report: TASK-001
+## Summary
+- Findings: 0
+REPORT_EOF
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "simplify-report.md excluded from reviewer count" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 32: MultiEdit with invalid state transition — blocked
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_task_file "TASK-001" "PLANNED"
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+input=$(jq -n --arg fp "$TASK_PATH" \
+  --arg os "- **Status**: PLANNED" \
+  --arg ns "- **Status**: DONE" '{
+  "tool_name": "MultiEdit",
+  "tool_input": {
+    "edits": [
+      {"file_path": $fp, "old_string": $os, "new_string": $ns}
+    ]
+  }
+}')
+run_guard "$input"
+assert_exit_code "MultiEdit invalid transition blocked" "$GUARD_EC" 2
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 33: MultiEdit with valid state transition — allowed
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_task_file "TASK-001" "PLANNED"
+TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
+input=$(jq -n --arg fp "$TASK_PATH" \
+  --arg os "- **Status**: PLANNED" \
+  --arg ns "- **Status**: READY" '{
+  "tool_name": "MultiEdit",
+  "tool_input": {
+    "edits": [
+      {"file_path": $fp, "old_string": $os, "new_string": $ns}
+    ]
+  }
+}')
+run_guard "$input"
+assert_exit_code "MultiEdit valid transition allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 34: MultiEdit source edit without active task — blocked
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_hydra_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "READY"
+input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{
+  "tool_name": "MultiEdit",
+  "tool_input": {
+    "edits": [
+      {"file_path": $fp, "old_string": "old", "new_string": "new"}
+    ]
+  }
+}')
+run_guard "$input"
+assert_exit_code "MultiEdit source edit without active task blocked" "$GUARD_EC" 2
+teardown_temp_dir
 
 report_results

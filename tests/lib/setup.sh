@@ -71,6 +71,26 @@ TASK_EOF
   fi
 }
 
+create_task_file_with_commits() {
+  # Usage: create_task_file_with_commits TASK-001 IN_PROGRESS "abc1234"
+  local id="$1"
+  local status="$2"
+  local commits="${3:-}"
+
+  cat > "$TEST_DIR/hydra/tasks/${id}.md" << TASK_EOF
+# ${id}: Test task
+
+- **Status**: ${status}
+- **Depends on**: none
+- **Group**: 1
+- **Retry count**: 0/3
+- **Assigned to**: implementer
+
+## Commits
+- ${commits}
+TASK_EOF
+}
+
 create_review_dir() {
   # Creates a mock review directory with an APPROVED reviewer file
   # Usage: create_review_dir TASK-001

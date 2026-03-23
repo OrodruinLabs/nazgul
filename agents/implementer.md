@@ -56,7 +56,7 @@ Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified o
 7. Run tests after every change — do NOT proceed if tests fail
 8. Run linter after implementation — fix all errors
 9. Update task manifest with implementation log
-10. Set status to IMPLEMENTED when all acceptance criteria met, tests pass, lint clean
+10. Set status to IMPLEMENTED when all acceptance criteria met, tests pass, lint clean. **The task manifest MUST contain a `## Commits` section with at least one commit SHA — the state guard will block the transition without it.**
 11. Capture the diff for reviewers:
     - Read `branch.feature` and `branch.main_worktree_path` from config
     - `mkdir -p <main_worktree_path>/hydra/reviews/[TASK-ID]`

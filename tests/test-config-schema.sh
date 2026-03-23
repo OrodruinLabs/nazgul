@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "5"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "6"
 assert_json_field "has .mode" "$CONFIG" ".mode" "hitl"
 assert_json_field "has .max_iterations" "$CONFIG" ".max_iterations" "40"
 assert_json_field "has .current_iteration" "$CONFIG" ".current_iteration" "0"
@@ -34,6 +34,11 @@ assert_eq "has .agents.reviewers array" "$val" "array"
 
 # Nested: .review_gate.confidence_threshold
 assert_json_field "has .review_gate.confidence_threshold" "$CONFIG" ".review_gate.confidence_threshold" "80"
+
+# Nested: .guards
+val=$(jq -r '.guards | type' "$CONFIG")
+assert_eq "has .guards object" "$val" "object"
+assert_json_field "has .guards.requireActiveTask" "$CONFIG" ".guards.requireActiveTask" "true"
 
 # Nested: .safety.max_consecutive_failures
 assert_json_field "has .safety.max_consecutive_failures" "$CONFIG" ".safety.max_consecutive_failures" "5"
@@ -77,5 +82,13 @@ assert_eq "has .board.task_map object" "$val" "object"
 val=$(jq -r '.board.last_sync' "$CONFIG")
 assert_eq "has .board.last_sync null" "$val" "null"
 assert_json_field "has .board.sync_failures" "$CONFIG" ".board.sync_failures" "0"
+
+# Nested: .simplify
+val=$(jq -r '.simplify | type' "$CONFIG")
+assert_eq "has .simplify object" "$val" "object"
+assert_json_field "has .simplify.per_task" "$CONFIG" ".simplify.per_task" "true"
+assert_json_field "has .simplify.post_loop" "$CONFIG" ".simplify.post_loop" "true"
+val=$(jq -r '.simplify.focus' "$CONFIG")
+assert_eq "has .simplify.focus null" "$val" "null"
 
 report_results
