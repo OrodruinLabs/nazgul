@@ -461,20 +461,4 @@ run_guard "$input"
 assert_exit_code "simplify-report.md excluded from reviewer count" "$GUARD_EC" 0
 teardown_temp_dir
 
-# ---------------------------------------------------------------------------
-# Test 32: diff.patch excluded from reviewer file count
-# ---------------------------------------------------------------------------
-setup_temp_dir
-setup_hydra_dir
-create_config '.agents.reviewers = ["code-reviewer"]'
-create_task_file "TASK-001" "IN_REVIEW"
-create_review_dir "TASK-001"
-# Add a diff.patch — should NOT count as a reviewer file
-echo "diff --git a/foo.ts b/foo.ts" > "$TEST_DIR/hydra/reviews/TASK-001/diff.patch"
-TASK_PATH="$TEST_DIR/hydra/tasks/TASK-001.md"
-input=$(make_write_input "$TASK_PATH" "DONE")
-run_guard "$input"
-assert_exit_code "diff.patch excluded from reviewer count" "$GUARD_EC" 0
-teardown_temp_dir
-
 report_results

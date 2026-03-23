@@ -142,7 +142,7 @@ migrate_5_to_6() {
   local tmp
   tmp=$(mktemp)
   jq '
-    (.simplify // {}) as $existing
+    (if (.simplify | type) == "object" then .simplify else {} end) as $existing
     | .schema_version = 6
     | .simplify = {
         "per_task": (if $existing | has("per_task") then $existing.per_task else true end),

@@ -240,7 +240,7 @@ if [ "$NEEDS_REVIEW_CHECK" = true ]; then
     [ -f "$review_file" ] || continue
     BASENAME=$(basename "$review_file")
     case "$BASENAME" in
-      test-failures.md|consolidated-feedback.md|simplify-report.md|diff.patch) continue ;;
+      test-failures.md|consolidated-feedback.md|simplify-report.md) continue ;;
     esac
     REVIEW_COUNT=$((REVIEW_COUNT + 1))
   done
@@ -257,7 +257,7 @@ if [ "$NEEDS_REVIEW_CHECK" = true ]; then
     [ -f "$review_file" ] || continue
     BASENAME=$(basename "$review_file")
     case "$BASENAME" in
-      test-failures.md|consolidated-feedback.md|simplify-report.md|diff.patch) continue ;;
+      test-failures.md|consolidated-feedback.md|simplify-report.md) continue ;;
     esac
     if ! grep -qi 'APPROVED' "$review_file" 2>/dev/null; then
       echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
