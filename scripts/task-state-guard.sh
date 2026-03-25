@@ -79,6 +79,15 @@ if ! is_task_manifest "$FILE_PATH"; then
     exit 0
   fi
 
+  # Documentation and plan files are always allowed (design docs, ADRs, plans, etc.)
+  case "$FILE_PATH" in
+    */docs/*|*/plans/*|*/doc/*|*/.claude/*) exit 0 ;;
+  esac
+  # Also check relative paths
+  case "$FILE_PATH" in
+    docs/*|plans/*|doc/*|.claude/*) exit 0 ;;
+  esac
+
   # Check if active task guard is enabled
   HYDRA_TASKS_DIR=""
   if [ -d "$PROJECT_ROOT/hydra/tasks" ]; then
