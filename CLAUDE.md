@@ -83,7 +83,7 @@ references/                          # Shared reference docs for agents
 │   ├── fix-first-heuristic.md       # AUTO-FIX vs ASK classification rules
 │   └── self-improvement.md          # Agent self-rating protocol
 tests/                               # Plugin validation tests
-│   ├── run-tests.sh                 # Test runner (23 unit/integration files)
+│   ├── run-tests.sh                 # Test runner (24 unit/integration files)
 │   ├── test-*.sh                    # Unit/integration tests
 │   ├── fixtures/                    # Test fixtures (bootstrap-transform scrub cases)
 │   ├── lib/                         # Test assertions + setup helpers
@@ -139,7 +139,7 @@ tests/                               # Plugin validation tests
 ## Testing
 
 ```bash
-tests/run-tests.sh                    # Run all unit/integration tests (23 files)
+tests/run-tests.sh                    # Run all unit/integration tests (24 files)
 tests/run-tests.sh --filter=stop-hook # Run specific test file
 tests/e2e/run-e2e.sh                  # Run E2E skill tests (requires claude CLI, costs money)
 ```

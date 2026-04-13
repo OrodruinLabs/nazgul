@@ -25,6 +25,7 @@ $ARGUMENTS
 - `--dry-run` — Run pipeline and transform into scratch; skip relocation and cleanup.
 - `--verbose` — Stream agent output live.
 - `--wipe-scratch` — Delete any existing `./.bootstrap-scratch/` before starting.
+- `--resume-scratch` — Keep any existing `./.bootstrap-scratch/` and continue from there (skip re-running earlier steps that already produced output).
 
 ## Instructions
 
@@ -44,6 +45,7 @@ BOOTSTRAP_OVERWRITE=false
 BOOTSTRAP_DRY_RUN=false
 BOOTSTRAP_VERBOSE=false
 BOOTSTRAP_WIPE_SCRATCH=false
+BOOTSTRAP_RESUME_SCRATCH=false
 BOOTSTRAP_OBJECTIVE=""
 
 # Disable pathname expansion during tokenization so an objective containing
@@ -60,6 +62,7 @@ for tok in "$@"; do
     --dry-run)       BOOTSTRAP_DRY_RUN=true ;;
     --verbose)       BOOTSTRAP_VERBOSE=true ;;
     --wipe-scratch)  BOOTSTRAP_WIPE_SCRATCH=true ;;
+    --resume-scratch) BOOTSTRAP_RESUME_SCRATCH=true ;;
     --*)             echo "warning: unknown flag: $tok" >&2 ;;
     *)               BOOTSTRAP_OBJECTIVE="${BOOTSTRAP_OBJECTIVE:+$BOOTSTRAP_OBJECTIVE }$tok" ;;
   esac
@@ -76,19 +79,26 @@ check_scratch_state; scratch_rc=$?
 case $scratch_rc in
   0) ;;
   12)
-    if [ "$BOOTSTRAP_WIPE_SCRATCH" = "true" ]; then
+    if [ "$BOOTSTRAP_RESUME_SCRATCH" = "true" ]; then
+      # Keep the existing scratch tree and continue into Phase 2.
+      # Downstream steps detect and reuse pre-existing outputs where present.
+      true
+    elif [ "$BOOTSTRAP_WIPE_SCRATCH" = "true" ]; then
       rm -rf ./.bootstrap-scratch
     elif [ "$BOOTSTRAP_YES" = "true" ]; then
-      echo "error: scratch exists, --yes in effect, cannot prompt; pass --wipe-scratch to force" >&2
+      echo "error: scratch exists, --yes in effect, cannot prompt; pass --wipe-scratch or --resume-scratch" >&2
       exit 12
     else
-      # LLM prompt: ask the user to choose resume / wipe-and-restart / abort.
-      # - "resume"          — keep ./.bootstrap-scratch and continue to Phase 2
-      # - "wipe-and-restart"— rm -rf ./.bootstrap-scratch, then continue
-      # - "abort"           — exit 12
-      # The LLM implements the branch; do NOT auto-delete scratch here, or the
-      # "resume" path becomes unreachable.
-      echo "./.bootstrap-scratch/ exists from a prior run. Choose: resume / wipe-and-restart / abort"
+      # Interactive: prompt the user and RE-INVOKE the skill with the matching
+      # flag. The bash fragment exits here so the LLM can ask the question and
+      # restart, instead of the resume path being silently unreachable.
+      #
+      # LLM: ask the user "resume / wipe-and-restart / abort" and re-run:
+      #   - "resume"            → /hydra:bootstrap-project --resume-scratch ...
+      #   - "wipe-and-restart"  → /hydra:bootstrap-project --wipe-scratch ...
+      #   - "abort"             → stop
+      echo "./.bootstrap-scratch/ exists from a prior run." >&2
+      echo "Re-run with --resume-scratch, --wipe-scratch, or abort." >&2
       exit 12
     fi
     ;;
