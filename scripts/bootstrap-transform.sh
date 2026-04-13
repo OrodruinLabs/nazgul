@@ -57,6 +57,71 @@ apply_path_rules() {
 }
 
 # -----------------------------------------------------------------------------
+# Classes 2 & 3 — prose term rewrites + sentence/line removal
+# -----------------------------------------------------------------------------
+
+# For each prose rule, if it matches in the file body, delete the containing
+# sentence or list item. Skips YAML frontmatter.
+apply_prose_rules() {
+  local file="$1"
+  local tmp
+  tmp=$(mktemp)
+
+  # Build a single extended-regex OR of all prose patterns
+  local patterns=()
+  local rule
+  for rule in "${BOOTSTRAP_SCRUB_PROSE_RULES[@]}"; do
+    patterns+=("${rule%%|*}")
+  done
+  local joined
+  joined=$(printf '%s|' "${patterns[@]}")
+  joined="${joined%|}"
+
+  awk -v pat="$joined" '
+    BEGIN { in_fm=0 }
+    NR==1 && /^---$/ { in_fm=1; print; next }
+    in_fm && /^---$/ { in_fm=0; print; next }
+    in_fm { print; next }
+    {
+      line = $0
+      if (match(line, pat)) {
+        # If a list item, drop the whole line
+        if (line ~ /^[ \t]*([-*]|[0-9]+\.)[ \t]/) {
+          next
+        }
+        # Tokenize by walking characters and splitting at . ? ! followed by space.
+        out = ""
+        buf = ""
+        L = length(line)
+        for (j = 1; j <= L; j++) {
+          c = substr(line, j, 1)
+          buf = buf c
+          # End of sentence: terminator followed by space or EOL
+          nextc = (j < L) ? substr(line, j+1, 1) : ""
+          if ((c == "." || c == "?" || c == "!") && (nextc == " " || nextc == "\t" || nextc == "")) {
+            if (buf !~ pat) {
+              out = (out == "") ? buf : out buf
+            }
+            buf = ""
+          }
+        }
+        if (buf != "" && buf !~ pat) {
+          out = (out == "") ? buf : out buf
+        }
+        if (out ~ /^[ \t]*$/) next
+        # Trim leading spaces carried over from dropped preceding sentence
+        sub(/^[ \t]+/, "", out)
+        print out
+        next
+      }
+      print
+    }
+  ' "$file" > "$tmp"
+
+  mv "$tmp" "$file"
+}
+
+# -----------------------------------------------------------------------------
 # Class 4 — frontmatter stripping (agent files only)
 # -----------------------------------------------------------------------------
 
@@ -134,6 +199,7 @@ done
 # Apply rules per file
 while IFS= read -r file; do
   strip_frontmatter "$file"
+  apply_prose_rules "$file"
   apply_path_rules "$file"
 done < <(find "$SCRATCH" -type f \( -name '*.md' -o -name '*.json' \))
 
