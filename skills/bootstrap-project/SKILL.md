@@ -128,7 +128,91 @@ test -f ./.bootstrap-scratch/context/project-spec.md || { echo "error: project-s
 
 ### Phase 3 — Pipeline execution
 
-*(Implemented in Task 13.)*
+Export STATE_ROOT and BUNDLE_MODE for all downstream renders:
+
+```bash
+export STATE_ROOT="./.bootstrap-scratch"
+export BUNDLE_MODE="true"
+source "$CLAUDE_PLUGIN_ROOT/scripts/lib/bootstrap-render.sh"
+```
+
+Render and invoke each pipeline agent. For each agent, the renderer produces a Hydra-free prompt pointed at the scratch tree; the LLM then executes the agent's instructions.
+
+#### 3a. Discovery
+
+Render the discovery prompt and invoke it:
+
+```bash
+render_agent_prompt "$CLAUDE_PLUGIN_ROOT/agents/discovery.md" "$STATE_ROOT" > "$STATE_ROOT/.discovery-prompt.md"
+```
+
+Then invoke the discovery agent via the `Agent` tool, passing the rendered prompt as the system/initial message. The agent writes to `$STATE_ROOT/context/{project-profile,project-classification,architecture-map,existing-docs}.md`.
+
+After the agent returns, verify expected outputs exist:
+
+```bash
+for f in project-profile.md project-classification.md architecture-map.md; do
+  test -f "$STATE_ROOT/context/$f" || {
+    echo "error: discovery did not produce $f; preserving scratch for debugging" >&2
+    exit 40
+  }
+done
+```
+
+#### 3b. Doc generation
+
+```bash
+render_agent_prompt "$CLAUDE_PLUGIN_ROOT/agents/doc-generator.md" "$STATE_ROOT" > "$STATE_ROOT/.docgen-prompt.md"
+```
+
+Invoke the doc-generator agent. It reads `$STATE_ROOT/context/` and writes to `$STATE_ROOT/docs/{PRD,TRD,ADR-*,test-plan,manifest}.md` (and `migration-plan.md` if classification=migration).
+
+Verify:
+
+```bash
+for f in PRD.md TRD.md test-plan.md; do
+  test -f "$STATE_ROOT/docs/$f" || {
+    echo "error: doc-generator did not produce $f; preserving scratch" >&2
+    exit 41
+  }
+done
+```
+
+#### 3c. Reviewer instantiation
+
+The reviewer template at `agents/templates/reviewer-base.md` is rendered once per reviewer domain determined from `project-profile.md`. Available domain definitions live in `agents/templates/reviewer-domains.json` (existing structure: keys like `qa-reviewer`, `api-reviewer`, with per-domain `checklist` and `review_steps` arrays, plus `description`, `title`, `context_items`, `category`, `approved_criteria`, `rejected_criteria`). The JSON does NOT have a `keywords` field today, so domain selection goes via a two-step rule:
+
+1. **Always include:** `qa-reviewer` and `code-reviewer` (baseline; assumed present in the JSON — if a key is missing, skip it with a warning and continue).
+2. **Conditionally include** based on keyword scan of `project-profile.md`:
+   - `api-reviewer` — if profile mentions `api`, `rest`, `graphql`, `endpoint`
+   - `frontend-reviewer` — if profile mentions `react`, `vue`, `svelte`, `angular`, `next.js`, `nuxt`, `nextjs`
+   - `security-reviewer` — always include when the profile mentions `auth`, `login`, `password`, `token`, `jwt`, `oauth`
+   - `performance-reviewer` — if profile mentions `database`, `caching`, `redis`, `perf`
+
+This mapping is hard-coded in `select_reviewer_domains` (see Step 2 below). Domains not defined in `reviewer-domains.json` are skipped.
+
+For each selected domain, render the template with `BUNDLE_MODE=true`:
+
+```bash
+DOMAINS=$(select_reviewer_domains "$STATE_ROOT/context/project-profile.md" "$CLAUDE_PLUGIN_ROOT/agents/templates/reviewer-domains.json")
+
+for domain in $DOMAINS; do
+  out="$STATE_ROOT/agents/${domain}.md"
+  BUNDLE_MODE=true render_template "$CLAUDE_PLUGIN_ROOT/agents/templates/reviewer-base.md" \
+    | substitute_domain_vars "$domain" "$CLAUDE_PLUGIN_ROOT/agents/templates/reviewer-domains.json" \
+    > "$out"
+  test -s "$out" || { echo "error: reviewer $domain rendered empty" >&2; exit 42; }
+done
+```
+
+#### 3d. Designer (conditional)
+
+```bash
+if grep -qiE 'react|vue|svelte|angular|swiftui|flutter' "$STATE_ROOT/context/project-profile.md"; then
+  render_agent_prompt "$CLAUDE_PLUGIN_ROOT/agents/designer.md" "$STATE_ROOT" > "$STATE_ROOT/.designer-prompt.md"
+  # Invoke designer agent. Writes to $STATE_ROOT/.claude/{design-tokens.json,design-system.md}.
+fi
+```
 
 ### Phase 4 — Transform, relocate, cleanup
 
