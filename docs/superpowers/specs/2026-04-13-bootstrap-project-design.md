@@ -82,13 +82,14 @@ The skill is strictly single-shot: no state machine, no checkpoints, no loop mac
 
 | Component | Change |
 |---|---|
-| `agents/discovery.md` | Read `STATE_ROOT` env var (default `hydra/`) for output location. |
-| `agents/doc-generator.md` | Read `STATE_ROOT` for inputs (`$STATE_ROOT/context/`) and outputs (`$STATE_ROOT/docs/`). |
-| `agents/designer.md` | Read `STATE_ROOT` for outputs. |
-| `agents/templates/` reviewer template | Accept a `BUNDLE_MODE` flag. When true, emit Hydra-free identity/purpose prose (no mention of review board, review-gate, or loop). |
+| `agents/templates/reviewer-base.md` | Accept a `BUNDLE_MODE` flag via `{{#bundle_mode}}` / `{{^bundle_mode}}` conditional blocks (comment-prefixed inside frontmatter to stay valid YAML). When bundle mode is on, Hydra-specific identity prose (review-board hook, `hydra/reviews/` paths) is stripped at render time. |
+| `agents/templates/reviewer-domains.json` | Added `code-reviewer` and `security-reviewer` entries required by the baseline/conditional selection in `select_reviewer_domains`. No breaking changes to existing keys. |
+
+**Pipeline agents (`discovery.md`, `doc-generator.md`, `designer.md`) are NOT modified.** Path redirection happens at skill-invocation time via `scripts/lib/bootstrap-render.sh::render_agent_prompt`, which reads each agent's source file and substitutes `hydra/` → `$STATE_ROOT/` in the rendered prompt text before passing it to the LLM. The agents' source text continues to reference `hydra/` literally; only the rendered copy used by the bootstrap run differs. This keeps Hydra's own loop behavior untouched and concentrates the bootstrap-specific concern in a single helper.
 
 ### Components explicitly untouched
 
+- `discovery.md`, `doc-generator.md`, `designer.md` — invoked via the prompt renderer; not edited.
 - `planner.md`, `implementer.md`, `review-gate.md`, `team-orchestrator.md`, `feedback-aggregator.md`, `debugger.md` — loop-phase agents; not part of the bundle.
 - Loop scripts: `stop-hook.sh`, `pre-compact.sh`, `session-context.sh`, etc.
 - `templates/docs/*` source templates — remain generic. Any Hydra-specific content introduced downstream is caught by the post-transform assertion.

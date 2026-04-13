@@ -81,14 +81,20 @@ select_reviewer_domains() {
     candidates+=("performance-reviewer")
   fi
 
-  # Filter to keys actually present in the JSON
-  local d
+  # Filter to keys actually present in the JSON.
+  # jq -e exit codes: 0 = key found, 1 = key missing/null, other = parse/runtime error.
+  # Don't swallow errors — a malformed domains JSON should fail loudly, not
+  # silently produce an empty reviewer set.
+  local d jq_rc
   for d in "${candidates[@]}"; do
-    if jq -e --arg d "$d" '.[$d]' "$domains_json" >/dev/null 2>&1; then
-      echo "$d"
-    else
-      echo "warning: domain '$d' not in reviewer-domains.json — skipping" >&2
-    fi
+    jq -e --arg d "$d" '.[$d]' "$domains_json" >/dev/null 2>&1
+    jq_rc=$?
+    case $jq_rc in
+      0) echo "$d" ;;
+      1) echo "warning: domain '$d' not in reviewer-domains.json — skipping" >&2 ;;
+      *) echo "error: select_reviewer_domains: jq exit $jq_rc reading $domains_json" >&2
+         return "$jq_rc" ;;
+    esac
   done
 }
 
