@@ -56,7 +56,8 @@ relocate_bundle() {
   done
 
   # --- Dry-run: ensure every target dir can be created and written ---
-  local pair src dst dst_dir checked_str
+  local pair src dst dst_dir
+  local checked_str=""
   for pair in "${moves[@]}"; do
     dst="${pair#*|}"
     dst_dir=$(dirname "$dst")
