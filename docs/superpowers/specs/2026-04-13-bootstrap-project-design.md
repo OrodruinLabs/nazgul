@@ -1,7 +1,7 @@
 # Design — `/hydra:bootstrap-project`: Portable, Hydra-Free Project Bundle Generator
 
 **Date:** 2026-04-13
-**Status:** Approved design, awaiting implementation plan
+**Status:** Implemented (PR #9) — plan at `docs/superpowers/plans/2026-04-13-bootstrap-project.md`
 **Author:** Jose Mejia (brainstormed with Claude)
 
 ## Summary
@@ -31,7 +31,7 @@ The skill is strictly single-shot: no state machine, no checkpoints, no loop mac
 
 ## Architecture
 
-```
+```text
 /hydra:bootstrap-project (skill)
  ├─ 1. Pre-flight gate
  │    - abort if ./hydra/ exists
@@ -97,7 +97,7 @@ The skill is strictly single-shot: no state machine, no checkpoints, no loop mac
 
 ### Step 0 — Invocation
 
-```
+```text
 user: /hydra:bootstrap-project
       /hydra:bootstrap-project "Add Stripe billing to existing app"
 ```
@@ -146,7 +146,7 @@ If any step fails (non-zero exit, missing expected outputs), the skill stops imm
 
 Dry-run all planned writes first. If any would fail (permissions, read-only mount), abort before any real write.
 
-```
+```text
 $STATE_ROOT/docs/PRD.md                → ./docs/PRD.md
 $STATE_ROOT/docs/TRD.md                → ./docs/TRD.md
 $STATE_ROOT/docs/ADR-*.md              → ./docs/ADR-*.md

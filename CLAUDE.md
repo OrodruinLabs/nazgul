@@ -139,7 +139,7 @@ tests/                               # Plugin validation tests
 ## Testing
 
 ```bash
-tests/run-tests.sh                    # Run all unit/integration tests (18 files)
+tests/run-tests.sh                    # Run all unit/integration tests (23 files)
 tests/run-tests.sh --filter=stop-hook # Run specific test file
 tests/e2e/run-e2e.sh                  # Run E2E skill tests (requires claude CLI, costs money)
 ```

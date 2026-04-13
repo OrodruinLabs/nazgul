@@ -13,10 +13,13 @@ render_template() {
     *) bundle_on="true" ;;
   esac
 
+  # Markers must be on their OWN line (optionally prefixed with "# " so they
+  # stay valid YAML inside frontmatter). Anchored match prevents mangling of
+  # documentation blocks that reference the markers in prose.
   awk -v on="$bundle_on" '
-    /{{#bundle_mode}}/  { in_pos=1; next }
-    /{{\/bundle_mode}}/ { in_pos=0; in_inv=0; next }
-    /{{\^bundle_mode}}/ { in_inv=1; next }
+    /^[[:space:]]*(#[[:space:]]*)?\{\{#bundle_mode\}\}[[:space:]]*$/  { in_pos=1; next }
+    /^[[:space:]]*(#[[:space:]]*)?\{\{\/bundle_mode\}\}[[:space:]]*$/ { in_pos=0; in_inv=0; next }
+    /^[[:space:]]*(#[[:space:]]*)?\{\{\^bundle_mode\}\}[[:space:]]*$/ { in_inv=1; next }
     in_pos { if (on == "true") print; next }
     in_inv { if (on == "false") print; next }
     { print }
@@ -47,7 +50,16 @@ render_agent_prompt() {
 select_reviewer_domains() {
   local profile="$1"
   local domains_json="$2"
-  [ -f "$profile" ] && [ -f "$domains_json" ] || return 0
+  # Fail fast on missing inputs so the skill surfaces the issue instead of
+  # silently producing an empty reviewer set.
+  if [ ! -f "$profile" ]; then
+    echo "error: select_reviewer_domains: profile not found: $profile" >&2
+    return 1
+  fi
+  if [ ! -f "$domains_json" ]; then
+    echo "error: select_reviewer_domains: domains file not found: $domains_json" >&2
+    return 1
+  fi
 
   # Baseline
   local -a candidates=("code-reviewer" "qa-reviewer")
@@ -86,30 +98,34 @@ select_reviewer_domains() {
 substitute_domain_vars() {
   local domain="$1"
   local json="$2"
-  [ -f "$json" ] || { cat; return; }
+  # Sourced libs deliberately don't use `set -euo pipefail` (would leak to
+  # caller), so each fallible step checks its own exit status explicitly.
+  if [ ! -f "$json" ]; then
+    echo "error: substitute_domain_vars: domains file not found: $json" >&2
+    return 1
+  fi
 
-  local name title desc cat checklist review_steps approved rejected ctx
+  local name title desc cat checklist review_steps approved rejected ctx rc
   name="$domain"
-  title=$(jq -r --arg d "$domain" '.[$d].title // $d' "$json")
-  desc=$(jq -r --arg d "$domain" '.[$d].description // ""' "$json")
-  cat=$(jq -r --arg d "$domain" '.[$d].category // "general"' "$json")
+  title=$(jq -r --arg d "$domain" '.[$d].title // $d' "$json")                           || { rc=$?; echo "error: jq failed on .title" >&2; return "$rc"; }
+  desc=$(jq -r --arg d "$domain" '.[$d].description // ""' "$json")                      || { rc=$?; echo "error: jq failed on .description" >&2; return "$rc"; }
+  cat=$(jq -r --arg d "$domain" '.[$d].category // "general"' "$json")                   || { rc=$?; echo "error: jq failed on .category" >&2; return "$rc"; }
   # Array → "- item1\n- item2\n..."
   checklist=$(jq -r --arg d "$domain" '
     (.[$d].checklist // []) | map("- " + .) | join("\n")
-  ' "$json")
+  ' "$json")                                                                             || { rc=$?; echo "error: jq failed on .checklist" >&2; return "$rc"; }
   # Numbered list starting at 3 (the template hard-codes steps 1 and 2)
   review_steps=$(jq -r --arg d "$domain" '
     (.[$d].review_steps // []) | to_entries | map("\(.key + 3). \(.value)") | join("\n")
-  ' "$json")
-  approved=$(jq -r --arg d "$domain" '.[$d].approved_criteria // "no blocking issues"' "$json")
-  rejected=$(jq -r --arg d "$domain" '.[$d].rejected_criteria // "blocking issues found"' "$json")
-  ctx=$(jq -r --arg d "$domain" '.[$d].context_items // ""' "$json")
+  ' "$json")                                                                             || { rc=$?; echo "error: jq failed on .review_steps" >&2; return "$rc"; }
+  approved=$(jq -r --arg d "$domain" '.[$d].approved_criteria // "no blocking issues"' "$json")   || { rc=$?; echo "error: jq failed on .approved_criteria" >&2; return "$rc"; }
+  rejected=$(jq -r --arg d "$domain" '.[$d].rejected_criteria // "blocking issues found"' "$json") || { rc=$?; echo "error: jq failed on .rejected_criteria" >&2; return "$rc"; }
+  ctx=$(jq -r --arg d "$domain" '.[$d].context_items // ""' "$json")                     || { rc=$?; echo "error: jq failed on .context_items" >&2; return "$rc"; }
 
-  # Use python/awk-style substitution because sed handles multiline values awkwardly.
-  # Write template to a temp file so we can substitute via awk.
+  # Write template to a temp file so awk can substitute multiline values.
   local tpl
-  tpl=$(mktemp)
-  cat > "$tpl"
+  tpl=$(mktemp) || { echo "error: substitute_domain_vars: mktemp failed" >&2; return 1; }
+  cat > "$tpl"  || { rc=$?; rm -f "$tpl"; echo "error: substitute_domain_vars: failed reading template from stdin" >&2; return "$rc"; }
 
   awk -v name="$name" -v title="$title" -v desc="$desc" -v cat="$cat" \
       -v checklist="$checklist" -v review_steps="$review_steps" \
@@ -127,6 +143,7 @@ substitute_domain_vars() {
       print
     }
   ' "$tpl"
-
+  rc=$?
   rm -f "$tpl"
+  return "$rc"
 }

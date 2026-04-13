@@ -3,12 +3,12 @@ name: "hydra:bootstrap-project"
 description: "Generate a portable, Hydra-free project bundle (docs + Claude subagents) without installing Hydra. Runs the full pre-planning pipeline (discovery, doc-generator, reviewer-instantiation, optional designer) and emits output into standard paths (./docs/, ./docs/context/, ./.claude/agents/, ./.claude/)."
 context: fork
 allowed-tools: "Read, Write, Edit, Bash, Glob, Grep, Agent"
-metadata:
-  author: Jose Mejia
-  version: 0.1.0
 ---
 
 # Bootstrap Project
+
+<!-- Author: Jose Mejia · Version: 0.1.0 -->
+
 
 ## Examples
 - `/hydra:bootstrap-project` — Interactive: ask for objective, then run full pipeline
@@ -36,6 +36,32 @@ Source the preflight helpers:
 source "$CLAUDE_PLUGIN_ROOT/scripts/lib/bootstrap-preflight.sh"
 ```
 
+Parse `$ARGUMENTS` structurally: split on whitespace, pull out known flags, and leave the rest as the free-form objective. This prevents false positives where an objective string contains a flag-like substring (e.g. "document the `--dry-run` workflow").
+
+```bash
+BOOTSTRAP_YES=false
+BOOTSTRAP_OVERWRITE=false
+BOOTSTRAP_DRY_RUN=false
+BOOTSTRAP_VERBOSE=false
+BOOTSTRAP_WIPE_SCRATCH=false
+BOOTSTRAP_OBJECTIVE=""
+
+# Intentionally NOT quoted: we want word-splitting so each token is processed.
+# shellcheck disable=SC2086
+set -- $ARGUMENTS
+for tok in "$@"; do
+  case "$tok" in
+    --yes)           BOOTSTRAP_YES=true ;;
+    --overwrite)     BOOTSTRAP_OVERWRITE=true ;;
+    --dry-run)       BOOTSTRAP_DRY_RUN=true ;;
+    --verbose)       BOOTSTRAP_VERBOSE=true ;;
+    --wipe-scratch)  BOOTSTRAP_WIPE_SCRATCH=true ;;
+    --*)             echo "warning: unknown flag: $tok" >&2 ;;
+    *)               BOOTSTRAP_OBJECTIVE="${BOOTSTRAP_OBJECTIVE:+$BOOTSTRAP_OBJECTIVE }$tok" ;;
+  esac
+done
+```
+
 Run checks in order. If any returns non-zero, respect the contract (hard abort or prompt):
 
 ```bash
@@ -45,15 +71,20 @@ check_scratch_state; scratch_rc=$?
 case $scratch_rc in
   0) ;;
   12)
-    if echo "$ARGUMENTS" | grep -q -- '--wipe-scratch'; then
+    if [ "$BOOTSTRAP_WIPE_SCRATCH" = "true" ]; then
       rm -rf ./.bootstrap-scratch
-    elif echo "$ARGUMENTS" | grep -q -- '--yes'; then
+    elif [ "$BOOTSTRAP_YES" = "true" ]; then
       echo "error: scratch exists, --yes in effect, cannot prompt; pass --wipe-scratch to force" >&2
       exit 12
     else
-      # Ask the user (LLM prompt): resume / wipe-and-restart / abort
-      # Conventional response handling: default to wipe-and-restart.
-      rm -rf ./.bootstrap-scratch
+      # LLM prompt: ask the user to choose resume / wipe-and-restart / abort.
+      # - "resume"          — keep ./.bootstrap-scratch and continue to Phase 2
+      # - "wipe-and-restart"— rm -rf ./.bootstrap-scratch, then continue
+      # - "abort"           — exit 12
+      # The LLM implements the branch; do NOT auto-delete scratch here, or the
+      # "resume" path becomes unreachable.
+      echo "./.bootstrap-scratch/ exists from a prior run. Choose: resume / wipe-and-restart / abort"
+      exit 12
     fi
     ;;
   *) exit "$scratch_rc" ;;
@@ -63,9 +94,9 @@ check_docs_agents_empty; docs_rc=$?
 case $docs_rc in
   0) ;;
   11)
-    if echo "$ARGUMENTS" | grep -q -- '--overwrite'; then
+    if [ "$BOOTSTRAP_OVERWRITE" = "true" ]; then
       true  # proceed
-    elif echo "$ARGUMENTS" | grep -q -- '--yes'; then
+    elif [ "$BOOTSTRAP_YES" = "true" ]; then
       exit 11
     else
       # Interactive prompt: overwrite / abort. Default abort on empty reply.
@@ -93,10 +124,11 @@ mkdir -p ./.bootstrap-scratch/context ./.bootstrap-scratch/docs ./.bootstrap-scr
 
 Determine the objective source:
 
-1. **If `$ARGUMENTS` contains a non-flag, non-empty string**, use it as the objective. Write a minimal project-spec:
+1. **If `$BOOTSTRAP_OBJECTIVE` (parsed in Phase 1) is non-empty**, use it as the objective. Write a minimal project-spec:
 
    ```bash
-   cat > ./.bootstrap-scratch/context/project-spec.md <<SPEC
+   if [ -n "$BOOTSTRAP_OBJECTIVE" ]; then
+     cat > ./.bootstrap-scratch/context/project-spec.md <<SPEC
    # Project Specification
 
    ## Source
@@ -104,8 +136,9 @@ Determine the objective source:
    - Created at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 
    ## Vision
-   $OBJECTIVE
+   $BOOTSTRAP_OBJECTIVE
    SPEC
+   fi
    ```
 
 2. **Otherwise**, run the condensed Tier 1 interactive flow. Ask these 5 questions one at a time, phrased naturally, and wait for each answer:
@@ -241,10 +274,10 @@ case $transform_rc in
 esac
 ```
 
-If `--dry-run`, stop here. Report the scratch location to the user:
+If `--dry-run` was set (parsed in Phase 1), stop here. Report the scratch location to the user:
 
 ```bash
-if echo "$ARGUMENTS" | grep -q -- '--dry-run'; then
+if [ "$BOOTSTRAP_DRY_RUN" = "true" ]; then
   echo "Dry-run complete. Review the bundle at $STATE_ROOT/ before re-running without --dry-run."
   exit 0
 fi
