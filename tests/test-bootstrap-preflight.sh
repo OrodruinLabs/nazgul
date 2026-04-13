@@ -71,6 +71,18 @@ MANY_ERR=$(cd "$WORK/has-many" && check_docs_agents_empty 2>&1 >/dev/null || tru
 assert_contains "error lists ./docs blocker"           "$MANY_ERR" "./docs"
 assert_contains "error lists ./.claude/agents blocker" "$MANY_ERR" "./.claude/agents"
 
+# Unreadable dir must FAIL CLOSED — not be silently treated as empty.
+mkdir -p "$WORK/unreadable/docs"
+chmod 000 "$WORK/unreadable/docs"
+set +e
+(cd "$WORK/unreadable" && check_docs_agents_empty >/dev/null 2>&1)
+ec=$?
+UNREAD_ERR=$(cd "$WORK/unreadable" && check_docs_agents_empty 2>&1 >/dev/null || true)
+set -e
+chmod 755 "$WORK/unreadable/docs"
+assert_exit_code     "unreadable docs: exit 11" "$ec" 11
+assert_contains      "error names unreadable"   "$UNREAD_ERR" "unreadable"
+
 # --- check_scratch_state ---
 mkdir -p "$WORK/no-scratch"
 (cd "$WORK/no-scratch" && check_scratch_state) && _pass "no scratch: passes" || _fail "no scratch: passes"

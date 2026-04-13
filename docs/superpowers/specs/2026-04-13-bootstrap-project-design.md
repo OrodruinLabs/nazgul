@@ -140,7 +140,7 @@ If any step fails (non-zero exit, missing expected outputs), the skill stops imm
 1. **Path rewrites** (Class 1, primary)
 2. **Frontmatter stripping** (Class 4, primary)
 3. **Prose term rewrites and sentence removal** (Classes 2 & 3, safety net only — bundle-mode reviewer template should leave little to scrub)
-4. **Blocking assertion**: `grep -riE '[Hh]ydra|HYDRA' <scratch>` must return zero matches (excluding the scrub-map allowlist, empty in v1). Failure prints matching file + line + suggested scrub-map diff.
+4. **Blocking assertion**: a boundary-aware `grep -rinE '(^|[^[:alnum:]_])(hydra|Hydra|HYDRA)(/|[^[:alnum:]]|$)'` over the relocated subtree must return zero matches (excluding the scrub-map allowlist, empty in v1). Boundary anchors prevent false positives on incidental substrings like "dehydrate" or "Hydrangea". Failure prints matching file + line + suggested scrub-map diff.
 
 ### Step 5 — Relocate (best-effort)
 
@@ -185,9 +185,9 @@ Applied in order:
 | `hydra/tasks/` | *(drop sentence)* |
 | `hydra/checkpoints/` | *(drop sentence)* |
 
-### Class 2 — Prose term rewrites (safety net; whole-word)
+### Class 2 — Prose term rewrites (safety net; pattern-based)
 
-Triggered only if bundle-mode reviewer template leaks terms. Each triggers sentence-level removal:
+Triggered only if bundle-mode reviewer template leaks terms. Patterns are extended-regex fragments combined into one alternation and matched as case-sensitive SUBSTRINGS — not implicitly whole-word. If a future rule needs word-boundary semantics, the pattern itself must encode them (e.g. POSIX `[^[:alnum:]_]` on either side). Each match triggers sentence-level removal:
 - `Hydra pipeline`
 - `Hydra loop`
 - `the Hydra framework`
@@ -230,7 +230,7 @@ Test diffs `actual/` vs `expected/`. Scrub-map changes require fixture updates, 
 1. **Pre-flight failures** — hard abort or interactive prompt; nothing written.
 2. **Agent failures** (mid-pipeline) — stop, preserve scratch for debugging, print step name + scratch path. No files land in `./docs/` or `./.claude/`.
 3. **Transform failures** — scrub processing error or final assertion trips. Stop, preserve scratch, name offending file(s), suggest scrub-map diff.
-4. **Relocation failures** — dry-run write check fails, or mid-relocation failure. Stop, preserve scratch, name failed path. No partial bundle.
+4. **Relocation failures** — dry-run write check fails, or mid-relocation failure. Stop, preserve scratch, name failed path. If the dry-run check fails, nothing is written; if a real move fails mid-run, the bundle may be partially relocated (see the `bootstrap-relocate.sh` header for the exact guarantees).
 5. **Cleanup failures** — best-effort; logged as warnings. Bundle is already in place.
 
 ### Atomicity guarantee (best-effort)
@@ -239,8 +239,9 @@ The dry-run feasibility pass catches the common failure modes (missing/unwritabl
 
 ### Debugging aids
 
-- `./.bootstrap-scratch/bootstrap.log` — timestamps, step boundaries, agent exit codes.
+- On any pre-relocation failure (agent, transform, pre-flight), `./.bootstrap-scratch/` is preserved for inspection — stdout/stderr from each step appears in the Claude Code transcript.
 - `--dry-run` — run pipeline + transform into scratch; skip relocation and cleanup; user can inspect bundle before committing.
+- Future enhancement: persist a structured `./.bootstrap-scratch/bootstrap.log` with timestamps, step boundaries, and agent exit codes. Deferred from v1.
 
 ## Testing strategy
 

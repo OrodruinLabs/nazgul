@@ -23,16 +23,40 @@ check_no_hydra_dir() {
   return 0
 }
 
+# _dir_blocker <path>
+#   Classifies a directory for preflight purposes. Prints the appropriate
+#   blocker label to stdout (empty string if no blocker). Exits 0.
+#
+#   Cases:
+#     - doesn't exist          → no blocker (prints "")
+#     - exists, unreadable     → blocker (prints "<path> (unreadable)")
+#     - exists, readable, empty→ no blocker (prints "")
+#     - exists, readable, non-empty → blocker (prints "<path>")
+#
+#   Fails CLOSED: an unreadable or un-inspectable dir is treated as a blocker
+#   so the skill won't silently overwrite into a path it can't introspect.
+_dir_blocker() {
+  local d="$1"
+  [ -d "$d" ] || { printf ''; return; }
+  if [ ! -r "$d" ] || [ ! -x "$d" ]; then
+    printf '%s (unreadable)' "$d"
+    return
+  fi
+  # `find -mindepth 1 -print -quit` emits one line iff the dir has at least
+  # one entry. Redirect stderr so a late-stage permission issue on a child
+  # doesn't leak noise; stdout gives us the signal we need either way.
+  if find "$d" -mindepth 1 -print -quit 2>/dev/null | grep -q .; then
+    printf '%s' "$d"
+  fi
+}
+
 check_docs_agents_empty() {
   # Accumulate ALL blocker paths so the user sees them at once instead of
   # hitting a confusing sequence of single-blocker failures on successive runs.
   local -a blockers=()
-  if [ -d "./docs" ] && [ -n "$(ls -A ./docs 2>/dev/null)" ]; then
-    blockers+=("./docs")
-  fi
-  if [ -d "./.claude/agents" ] && [ -n "$(ls -A ./.claude/agents 2>/dev/null)" ]; then
-    blockers+=("./.claude/agents")
-  fi
+  local b
+  b=$(_dir_blocker "./docs");             [ -n "$b" ] && blockers+=("$b")
+  b=$(_dir_blocker "./.claude/agents");   [ -n "$b" ] && blockers+=("$b")
   # Design files are individual files (not directories) this skill may write
   # to. Guard against clobbering pre-existing user config.
   if [ -f "./.claude/design-tokens.json" ]; then
@@ -43,12 +67,11 @@ check_docs_agents_empty() {
   fi
 
   if [ "${#blockers[@]}" -gt 0 ]; then
-    echo "error: the following skill-managed targets already exist:" >&2
-    local b
+    echo "error: the following skill-managed targets already exist or cannot be inspected:" >&2
     for b in "${blockers[@]}"; do
       echo "  - $b" >&2
     done
-    echo "       Re-run with --overwrite to replace them." >&2
+    echo "       Re-run with --overwrite to replace them, or fix permissions on unreadable paths." >&2
     return 11
   fi
   return 0
