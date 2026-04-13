@@ -280,7 +280,10 @@ done < <(_existing_relocated_dirs)
 if [ "${#ASSERT_TARGETS[@]}" -eq 0 ]; then
   ASSERT_MATCHES=""
 else
-  ASSERT_MATCHES=$(grep -rinE '[Hh]ydra|HYDRA' "${ASSERT_TARGETS[@]}" 2>/dev/null || true)
+  # Pattern uses POSIX char-class boundaries so "dehydrate", "Hydrangea", etc.
+  # don't false-trigger. Matches: "hydra/..." paths, standalone "hydra"/"Hydra"
+  # tokens, "HYDRA", and "HYDRA_*" env-var forms.
+  ASSERT_MATCHES=$(grep -rinE '(^|[^[:alnum:]_])(hydra|Hydra|HYDRA)(/|[^[:alnum:]]|$)' "${ASSERT_TARGETS[@]}" 2>/dev/null || true)
 fi
 
 if [ -n "$ASSERT_MATCHES" ]; then

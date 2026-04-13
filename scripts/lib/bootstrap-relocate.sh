@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
-# bootstrap-relocate.sh — Atomic, staged file relocation from scratch to final.
+# bootstrap-relocate.sh — Preflight-checked file relocation from scratch to
+# final target paths.
 #
 # Exit codes:
-#   20 — dry-run check failed (target would not be writable)
-#   21 — write failed mid-run (should not happen after dry-run passes)
+#   20 — dry-run feasibility check failed (target unreachable/unwritable)
+#   21 — write failed mid-run; bundle may be partially relocated
 #   0  — success
+#
+# Not transactionally atomic. The dry-run pass catches the common failure modes
+# (missing/unwritable ancestors, target-as-file collisions) before any
+# filesystem mutation, so most failures surface with the project untouched. It
+# does NOT cover disk-full, race conditions (concurrent chmod between dry-run
+# and real-move), or hardware errors mid-stream — those exit 21 with a loud
+# stderr message and may leave the project in a partial state. True
+# transactional atomicity would require staging into an adjacent dir and
+# doing a single rename, which this implementation intentionally avoids for
+# simplicity.
 
 # relocate_bundle <scratch-root> <project-root>
 #   Moves files from scratch/{docs,context,agents,.claude} into project root
 #   under ./docs/, ./docs/context/, ./.claude/agents/, ./.claude/.
-#
-# Atomicity: runs a dry-run feasibility pass first (checks every target dir is
-# writable). Only if all pass does it perform the actual moves. If a real move
-# fails after dry-run passed, exits 21 with loud error (should be rare — only
-# under racy conditions like concurrent chmod).
 relocate_bundle() {
   local scratch="$1"
   local project="$2"

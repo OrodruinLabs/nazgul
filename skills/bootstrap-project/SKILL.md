@@ -100,7 +100,11 @@ case $docs_rc in
   0) ;;
   11)
     if [ "$BOOTSTRAP_OVERWRITE" = "true" ]; then
-      true  # proceed
+      # Actually clear the managed targets so relocation produces a clean
+      # bundle instead of silently merging with stale files. Only remove
+      # paths this skill owns — never the whole ./.claude/ tree (which may
+      # hold unrelated user config).
+      rm -rf ./docs ./.claude/agents
     elif [ "$BOOTSTRAP_YES" = "true" ]; then
       exit 11
     else

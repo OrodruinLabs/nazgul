@@ -11,25 +11,25 @@ echo "=== $TEST_NAME ==="
 TRANSFORM="$REPO_ROOT/scripts/bootstrap-transform.sh"
 FIXTURE_DIR="$SCRIPT_DIR/fixtures/bootstrap-transform"
 
-# Working copy of input (transform mutates in place)
+# Working copy of input (transform mutates in place). stderr capture lives
+# OUTSIDE $WORK so the diff pass doesn't need to exclude it — keeping the diff
+# strict catches regressions in any future bundle path (including `.claude/`).
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-transform-XXXXXX")
-trap 'rm -rf "$WORK"' EXIT
+ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/bootstrap-transform-err.XXXXXX")
+trap 'rm -rf "$WORK"; rm -f "$ERR_FILE"' EXIT
 cp -R "$FIXTURE_DIR/input/." "$WORK/"
 
 # Run transform
-if ! bash "$TRANSFORM" "$WORK" 2>"$WORK/.err"; then
-  _fail "transform exits 0" "$(cat "$WORK/.err")"
+if ! bash "$TRANSFORM" "$WORK" 2>"$ERR_FILE"; then
+  _fail "transform exits 0" "$(cat "$ERR_FILE")"
   report_results
   exit 1
 fi
 _pass "transform exits 0"
 
-# Diff actual vs expected. Exclude the .err file (scratch-only debug capture)
-# and any dotfile entries at the work-dir root (not part of the expected bundle).
-DIFF_OUTPUT=$(diff -r \
-  --exclude='.err' \
-  --exclude='.*' \
-  "$FIXTURE_DIR/expected" "$WORK" 2>&1 || true)
+# Diff actual vs expected — no excludes needed now that the err file lives
+# outside $WORK. If a fixture adds `.claude/` content later, it gets diffed too.
+DIFF_OUTPUT=$(diff -r "$FIXTURE_DIR/expected" "$WORK" 2>&1 || true)
 
 if [ -z "$DIFF_OUTPUT" ]; then
   _pass "output matches expected"
