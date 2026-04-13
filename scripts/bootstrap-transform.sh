@@ -57,6 +57,101 @@ apply_path_rules() {
 }
 
 # -----------------------------------------------------------------------------
+# Class 4 — frontmatter stripping (agent files only)
+# -----------------------------------------------------------------------------
+
+# Is this file an agent (has YAML frontmatter starting at line 1)?
+_is_agent_file() {
+  local file="$1"
+  head -1 "$file" 2>/dev/null | grep -qx -- '---'
+}
+
+# Given a frontmatter key, should it be removed?
+_frontmatter_key_is_dropped() {
+  local key="$1"
+  for drop in "${BOOTSTRAP_SCRUB_FRONTMATTER_REMOVE[@]}"; do
+    # Remove exact match (hydra, review-board, loop-phase)
+    [ "$key" = "$drop" ] && return 0
+  done
+  # Also remove any key starting with "hydra_" (underscore form)
+  case "$key" in
+    hydra_*) return 0 ;;
+  esac
+  return 1
+}
+
+# Strip a leading description prefix like "Pipeline:" and unwrap quotes.
+_normalize_description() {
+  local value="$1"
+  # Strip surrounding quotes (single or double)
+  value="${value#\"}"
+  value="${value%\"}"
+  value="${value#\'}"
+  value="${value%\'}"
+  # Strip leading prefix tokens
+  for prefix in "${BOOTSTRAP_SCRUB_DESCRIPTION_PREFIXES[@]}"; do
+    # prefix followed by optional space, then the rest
+    value="${value#"$prefix "}"
+    value="${value#"$prefix"}"
+  done
+  printf '%s' "$value"
+}
+
+# Parse, filter, and rewrite YAML frontmatter in place.
+# Simple line-oriented parser: handles block keys (list values indented) by
+# treating any line with no leading whitespace as a new top-level key.
+strip_frontmatter() {
+  local file="$1"
+  _is_agent_file "$file" || return 0
+
+  local tmp
+  tmp=$(mktemp)
+
+  awk '
+    BEGIN { in_fm=0; skipping_block=0; emitted_open=0 }
+    NR==1 && /^---$/ { in_fm=1; print; emitted_open=1; next }
+    in_fm && /^---$/ { in_fm=0; skipping_block=0; print; next }
+    in_fm {
+      # Top-level key? (no leading whitespace, contains colon)
+      if (match($0, /^[A-Za-z_][A-Za-z0-9_.-]*:/)) {
+        key = substr($0, 1, RLENGTH-1)
+        # Check if this key should be dropped
+        if (key ~ /^hydra_/ || key == "hydra" || key == "review-board" || key == "loop-phase") {
+          skipping_block=1
+          next
+        }
+        skipping_block=0
+
+        if (key == "description") {
+          # Rewrite inline value, then print
+          rest = substr($0, RLENGTH+1)
+          sub(/^[ \t]*/, "", rest)
+          # Strip surrounding quotes
+          if ((rest ~ /^".*"$/) || (rest ~ /^'"'"'.*'"'"'$/)) {
+            rest = substr(rest, 2, length(rest)-2)
+          }
+          # Strip known prefixes
+          sub(/^Pipeline:[ \t]*/, "", rest)
+          sub(/^Post-loop:[ \t]*/, "", rest)
+          sub(/^Specialist:[ \t]*/, "", rest)
+          print "description: " rest
+          next
+        }
+        print
+        next
+      }
+      # Continuation of previous key (indented). Print only if not skipping.
+      if (skipping_block == 0) { print }
+      next
+    }
+    # Outside frontmatter — pass through
+    { print }
+  ' "$file" > "$tmp"
+
+  mv "$tmp" "$file"
+}
+
+# -----------------------------------------------------------------------------
 # Main walk
 # -----------------------------------------------------------------------------
 
@@ -69,6 +164,7 @@ done
 
 # Apply rules per file
 while IFS= read -r file; do
+  strip_frontmatter "$file"
   apply_path_rules "$file"
 done < <(find "$SCRATCH" -type f \( -name '*.md' -o -name '*.json' \))
 
