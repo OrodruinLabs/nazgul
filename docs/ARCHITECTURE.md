@@ -99,8 +99,8 @@ hydra/                          # Plugin root
 │   └── templates/              # Reviewer base template + domain config
 ├── skills/                     # Slash commands (20)
 ├── hooks/hooks.json            # Hook definitions (9 hook types: Stop, PreCompact, PostCompact, PreToolUse, PostToolUse, SessionStart, SessionEnd, TaskCompleted, UserPromptSubmit)
-├── scripts/                    # Hook + sync scripts (17 + 2 libs)
-│   └── lib/                    # Shared libraries (task-utils.sh, session-tracker.sh)
+├── scripts/                    # Hook + sync scripts (18 + 6 libs)
+│   └── lib/                    # Shared libraries (task-utils.sh, session-tracker.sh, bootstrap-{scrub-map,render,preflight,relocate}.sh)
 └── templates/                  # Objective + doc templates
     └── skill-partials/         # Shared SKILL.md template partials
 
