@@ -55,30 +55,51 @@ relocate_bundle() {
     fi
   done
 
-  # --- Dry-run: ensure every target dir can be created and written ---
+  # --- Dry-run: verify every target dir is reachable WITHOUT creating anything ---
+  # For each dst_dir, walk up to the nearest existing ancestor and check it's
+  # a writable directory. This preserves the all-or-nothing guarantee: if any
+  # target is unreachable, we abort before touching the filesystem.
   local pair src dst dst_dir
   local checked_str=""
   for pair in "${moves[@]}"; do
     dst="${pair#*|}"
     dst_dir=$(dirname "$dst")
-    # Avoid associative arrays; use a string match instead
     if ! printf '%s\n' "$checked_str" | grep -qxF "$dst_dir"; then
-      if ! mkdir -p "$dst_dir" 2>/dev/null; then
-        echo "error: cannot create target directory: $dst_dir" >&2
+      # Walk up to find the nearest existing ancestor
+      local ancestor="$dst_dir"
+      while [ ! -e "$ancestor" ]; do
+        local parent
+        parent=$(dirname "$ancestor")
+        if [ "$parent" = "$ancestor" ]; then
+          break
+        fi
+        ancestor="$parent"
+      done
+      if [ ! -d "$ancestor" ]; then
+        echo "error: target path unreachable (ancestor not a directory): $dst_dir ($ancestor)" >&2
         return 20
       fi
-      if [ ! -w "$dst_dir" ]; then
-        echo "error: target directory is not writable: $dst_dir" >&2
+      if [ ! -w "$ancestor" ]; then
+        echo "error: target path ancestor is not writable: $ancestor" >&2
         return 20
       fi
       checked_str="$checked_str$dst_dir"$'\n'
     fi
   done
 
-  # --- Real moves ---
+  # --- Real moves: NOW create dirs and mv files ---
+  local created_str=""
   for pair in "${moves[@]}"; do
     src="${pair%|*}"
     dst="${pair#*|}"
+    dst_dir=$(dirname "$dst")
+    if ! printf '%s\n' "$created_str" | grep -qxF "$dst_dir"; then
+      if ! mkdir -p "$dst_dir" 2>/dev/null; then
+        echo "error: failed to create target directory: $dst_dir" >&2
+        return 21
+      fi
+      created_str="$created_str$dst_dir"$'\n'
+    fi
     if ! mv "$src" "$dst" 2>/dev/null; then
       echo "error: failed to move $src -> $dst" >&2
       return 21

@@ -2,14 +2,16 @@
 # bootstrap-transform.sh — Scrub Hydra references from a scratch tree.
 # Usage: bootstrap-transform.sh <scratch-root>
 #
-# Applies rules from scripts/lib/bootstrap-scrub-map.sh in order:
-#   Class 1 — path rewrites (this task)
-#   Class 4 — frontmatter stripping (Task 3)
-#   Classes 2 & 3 — prose scrub safety net (Task 4)
-#   Final assertion — no remaining Hydra tokens (Task 5)
+# Applies rules from scripts/lib/bootstrap-scrub-map.sh. Actual execution order
+# in the main walk is:
+#   1. Drop files listed in BOOTSTRAP_SCRUB_DROP_FILES
+#   2. For each remaining *.md / *.json file:
+#      a. Class 4 — frontmatter stripping (agent files only)
+#      b. Classes 2 & 3 — prose scrub safety net (body text, sentence/line drops)
+#      c. Class 1 — path rewrites (with line-drop for __DROP__ tokens)
+#   3. Final assertion — no residual [Hh]ydra|HYDRA tokens (exits 3 on match)
 #
-# Transform mutates the scratch tree in place. Drops files listed in
-# BOOTSTRAP_SCRUB_DROP_FILES.
+# Transform mutates the scratch tree in place.
 
 set -euo pipefail
 
@@ -141,16 +143,48 @@ strip_frontmatter() {
   local tmp
   tmp=$(mktemp)
 
-  awk '
-    BEGIN { in_fm=0; skipping_block=0; emitted_open=0 }
+  # Join BOOTSTRAP_SCRUB_FRONTMATTER_REMOVE into an alternation pattern.
+  # Exact match: e.g. "hydra|review-board|loop-phase".
+  local _fm_key
+  local _fm_exact=""
+  for _fm_key in "${BOOTSTRAP_SCRUB_FRONTMATTER_REMOVE[@]}"; do
+    if [ -z "$_fm_exact" ]; then
+      _fm_exact="$_fm_key"
+    else
+      _fm_exact="$_fm_exact|$_fm_key"
+    fi
+  done
+
+  # Join BOOTSTRAP_SCRUB_DESCRIPTION_PREFIXES into an alternation pattern for
+  # leading-prefix removal in the description value.
+  local _prefix
+  local _desc_prefixes=""
+  for _prefix in "${BOOTSTRAP_SCRUB_DESCRIPTION_PREFIXES[@]}"; do
+    if [ -z "$_desc_prefixes" ]; then
+      _desc_prefixes="$_prefix"
+    else
+      _desc_prefixes="$_desc_prefixes|$_prefix"
+    fi
+  done
+
+  awk -v fm_exact="$_fm_exact" -v desc_prefixes="$_desc_prefixes" '
+    BEGIN {
+      in_fm=0; skipping_block=0; emitted_open=0
+      # Exact-match pattern: anchor both ends so e.g. "hydra" does not match "hydrant".
+      fm_pat = "^(" fm_exact ")$"
+      # Prefix-strip pattern for description values. The scrub map owns the
+      # list; we compose the regex here.
+      prefix_pat = "^(" desc_prefixes ")[ \\t]*"
+    }
     NR==1 && /^---$/ { in_fm=1; print; emitted_open=1; next }
     in_fm && /^---$/ { in_fm=0; skipping_block=0; print; next }
     in_fm {
       # Top-level key? (no leading whitespace, contains colon)
       if (match($0, /^[A-Za-z_][A-Za-z0-9_.-]*:/)) {
         key = substr($0, 1, RLENGTH-1)
-        # Check if this key should be dropped
-        if (key ~ /^hydra_/ || key == "hydra" || key == "review-board" || key == "loop-phase") {
+        # Drop if the key matches the scrub-map exact list, OR starts with
+        # "hydra_" (underscore-prefixed namespace is a known extension).
+        if (key ~ fm_pat || key ~ /^hydra_/) {
           skipping_block=1
           next
         }
@@ -164,10 +198,8 @@ strip_frontmatter() {
           if ((rest ~ /^".*"$/) || (rest ~ /^'"'"'.*'"'"'$/)) {
             rest = substr(rest, 2, length(rest)-2)
           }
-          # Strip known prefixes
-          sub(/^Pipeline:[ \t]*/, "", rest)
-          sub(/^Post-loop:[ \t]*/, "", rest)
-          sub(/^Specialist:[ \t]*/, "", rest)
+          # Strip any one leading prefix listed in the scrub map.
+          sub(prefix_pat, "", rest)
           print "description: " rest
           next
         }

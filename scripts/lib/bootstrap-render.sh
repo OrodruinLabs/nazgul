@@ -52,17 +52,20 @@ select_reviewer_domains() {
   # Baseline
   local -a candidates=("code-reviewer" "qa-reviewer")
 
-  # Conditional adds by keyword presence
-  if grep -qiE '\b(api|rest|graphql|endpoint)\b' "$profile"; then
+  # Conditional adds by keyword presence. Use `grep -wi` (POSIX word match) for
+  # single-token keywords, and an explicit POSIX char-class boundary for
+  # keywords that include non-word chars (e.g. "next.js"). `\b` is unreliable
+  # in BSD grep, so we avoid it.
+  if grep -qwiE '(api|rest|graphql|endpoint)' "$profile"; then
     candidates+=("api-reviewer")
   fi
-  if grep -qiE '\b(react|vue|svelte|angular|next\.js|nextjs|nuxt)\b' "$profile"; then
+  if grep -qiE '(^|[^[:alnum:]_])(react|vue|svelte|angular|next\.js|nextjs|nuxt)([^[:alnum:]_]|$)' "$profile"; then
     candidates+=("frontend-reviewer")
   fi
-  if grep -qiE '\b(auth|login|password|token|jwt|oauth)\b' "$profile"; then
+  if grep -qwiE '(auth|login|password|token|jwt|oauth)' "$profile"; then
     candidates+=("security-reviewer")
   fi
-  if grep -qiE '\b(database|caching|redis|perf)\b' "$profile"; then
+  if grep -qwiE '(database|caching|redis|perf)' "$profile"; then
     candidates+=("performance-reviewer")
   fi
 

@@ -1,8 +1,8 @@
 ---
-name: hydra:bootstrap-project
-description: Generate a portable, Hydra-free project bundle (docs + Claude subagents) without installing Hydra. Runs the full pre-planning pipeline (discovery, doc-generator, reviewer-instantiation, optional designer) and emits output into standard paths (./docs/, ./docs/context/, ./.claude/agents/, ./.claude/).
+name: "hydra:bootstrap-project"
+description: "Generate a portable, Hydra-free project bundle (docs + Claude subagents) without installing Hydra. Runs the full pre-planning pipeline (discovery, doc-generator, reviewer-instantiation, optional designer) and emits output into standard paths (./docs/, ./docs/context/, ./.claude/agents/, ./.claude/)."
 context: fork
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
+allowed-tools: "Read, Write, Edit, Bash, Glob, Grep, Agent"
 metadata:
   author: Jose Mejia
   version: 0.1.0
@@ -40,8 +40,9 @@ Run checks in order. If any returns non-zero, respect the contract (hard abort o
 
 ```bash
 check_no_hydra_dir || exit $?
-check_scratch_state
-case $? in
+
+check_scratch_state; scratch_rc=$?
+case $scratch_rc in
   0) ;;
   12)
     if echo "$ARGUMENTS" | grep -q -- '--wipe-scratch'; then
@@ -55,11 +56,11 @@ case $? in
       rm -rf ./.bootstrap-scratch
     fi
     ;;
-  *) exit $? ;;
+  *) exit "$scratch_rc" ;;
 esac
 
-check_docs_agents_empty
-case $? in
+check_docs_agents_empty; docs_rc=$?
+case $docs_rc in
   0) ;;
   11)
     if echo "$ARGUMENTS" | grep -q -- '--overwrite'; then
@@ -73,6 +74,7 @@ case $? in
       exit 11
     fi
     ;;
+  *) exit "$docs_rc" ;;
 esac
 
 check_git_clean
@@ -226,7 +228,8 @@ Run the transform:
 
 ```bash
 bash "$CLAUDE_PLUGIN_ROOT/scripts/bootstrap-transform.sh" "$STATE_ROOT"
-case $? in
+transform_rc=$?
+case $transform_rc in
   0) ;;
   2) echo "error: transform usage error" >&2; exit 50 ;;
   3)
@@ -234,7 +237,7 @@ case $? in
     echo "       scratch preserved at $STATE_ROOT for debugging." >&2
     exit 51
     ;;
-  *) echo "error: transform failed (exit $?)" >&2; exit 52 ;;
+  *) echo "error: transform failed (exit $transform_rc)" >&2; exit 52 ;;
 esac
 ```
 

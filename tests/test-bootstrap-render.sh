@@ -81,7 +81,7 @@ description: {{description}}
 {{review_steps}}
 TPL
 
-OUT=$(cat "$WORK/tpl.md" | substitute_domain_vars "code-reviewer" "$WORK/domains.json")
+OUT=$(substitute_domain_vars "code-reviewer" "$WORK/domains.json" < "$WORK/tpl.md")
 assert_contains "name substituted" "$OUT" "name: code-reviewer"
 assert_contains "title substituted" "$OUT" "title: Code Reviewer"
 assert_not_contains "no placeholder leak" "$OUT" "{{"

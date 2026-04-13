@@ -48,9 +48,12 @@ cat > "$ASSERT_WORK/docs/evil.md" <<'EVIL'
 This file uses HYDRA in uppercase intentionally.
 EVIL
 
-ASSERT_OUTPUT=$(bash "$TRANSFORM" "$ASSERT_WORK" 2>&1 || true)
-# Re-run for exit code (||true above always yields 0 in $?)
-ASSERT_EC=$(bash "$TRANSFORM" "$ASSERT_WORK" >/dev/null 2>&1; echo $?)
+# Single invocation: capture combined output AND exit code.
+# Can't use `set +e` with `ASSERT_OUTPUT=$(...)` because the assignment wraps
+# the command; use the explicit-capture pattern instead.
+ASSERT_OUTPUT=$(bash "$TRANSFORM" "$ASSERT_WORK" 2>&1; echo "__EC=$?")
+ASSERT_EC="${ASSERT_OUTPUT##*__EC=}"
+ASSERT_OUTPUT="${ASSERT_OUTPUT%__EC=*}"
 
 assert_exit_code "assertion fires on residual Hydra token" "$ASSERT_EC" 3
 assert_contains "error message names file" "$ASSERT_OUTPUT" "evil.md"

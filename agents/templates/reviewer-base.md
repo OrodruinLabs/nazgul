@@ -8,13 +8,13 @@ tools:
   - Bash
 allowed-tools: Read, Glob, Grep, Bash(npm test *), Bash(npx *), Bash(pytest *), Bash(cargo test *), Bash(go test *), Bash(bash -n *), Bash(shellcheck *)
 maxTurns: 30
-{{^bundle_mode}}
+# {{^bundle_mode}}
 hooks:
   SubagentStop:
     - hooks:
         - type: prompt
           prompt: "A reviewer subagent is trying to stop. Check if it has written its review file to hydra/reviews/[TASK-ID]/[reviewer-name].md (inside a per-task subdirectory, NOT flat in hydra/reviews/). The file must contain a Final Verdict (APPROVED or CHANGES_REQUESTED). If no review file was written in the correct location, block and instruct the reviewer to create the hydra/reviews/[TASK-ID]/ directory and write its review there. $ARGUMENTS"
-{{/bundle_mode}}
+# {{/bundle_mode}}
 ---
 
 <!--

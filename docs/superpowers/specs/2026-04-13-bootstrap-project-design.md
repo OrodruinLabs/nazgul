@@ -71,7 +71,7 @@ The skill is strictly single-shot: no state machine, no checkpoints, no loop mac
 
 | Component | Location | Responsibility |
 |---|---|---|
-| `bootstrap-project` skill | `skills/bootstrap-project/SKILL.md` | Entry point. Orchestrates pre-flight → objective → pipeline → transform → relocate → cleanup. Not `hydra:`-prefixed because the output is Hydra-free. |
+| `hydra:bootstrap-project` skill | `skills/bootstrap-project/SKILL.md` | Entry point. Orchestrates pre-flight → objective → pipeline → transform → relocate → cleanup. Lives under the Hydra plugin namespace because it's invoked via the Hydra plugin; the *output* bundle is Hydra-free. |
 | Transform script | `scripts/bootstrap-transform.sh` | Pure shell. Reads scratch tree, applies scrub-map, writes to final tree. Idempotent, deterministic, testable. |
 | Scrub map | `scripts/lib/bootstrap-scrub-map.sh` | Centralized string and path replacement rules. Sourced by transform script. Single file to audit when Hydra adds new terms. |
 | Fixture test | `tests/test-bootstrap-transform.sh` | Feeds canned scratch inputs into transform, asserts exact output against `tests/fixtures/bootstrap-transform/expected/`. Locks scrub behavior against regression. |
