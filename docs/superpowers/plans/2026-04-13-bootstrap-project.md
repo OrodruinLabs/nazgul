@@ -509,37 +509,6 @@ _is_agent_file() {
   head -1 "$file" 2>/dev/null | grep -qx -- '---'
 }
 
-# Given a frontmatter key, should it be removed?
-_frontmatter_key_is_dropped() {
-  local key="$1"
-  for drop in "${BOOTSTRAP_SCRUB_FRONTMATTER_REMOVE[@]}"; do
-    # Remove exact match (hydra, review-board, loop-phase)
-    [ "$key" = "$drop" ] && return 0
-  done
-  # Also remove any key starting with "hydra_" (underscore form)
-  case "$key" in
-    hydra_*) return 0 ;;
-  esac
-  return 1
-}
-
-# Strip a leading description prefix like "Pipeline:" and unwrap quotes.
-_normalize_description() {
-  local value="$1"
-  # Strip surrounding quotes (single or double)
-  value="${value#\"}"
-  value="${value%\"}"
-  value="${value#\'}"
-  value="${value%\'}"
-  # Strip leading prefix tokens
-  for prefix in "${BOOTSTRAP_SCRUB_DESCRIPTION_PREFIXES[@]}"; do
-    # prefix followed by optional space, then the rest
-    value="${value#"$prefix "}"
-    value="${value#"$prefix"}"
-  done
-  printf '%s' "$value"
-}
-
 # Parse, filter, and rewrite YAML frontmatter in place.
 # Simple line-oriented parser: handles block keys (list values indented) by
 # treating any line with no leading whitespace as a new top-level key.
