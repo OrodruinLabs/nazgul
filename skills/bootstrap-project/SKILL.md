@@ -216,8 +216,73 @@ fi
 
 ### Phase 4 — Transform, relocate, cleanup
 
-*(Implemented in Task 14.)*
+Source the relocate helpers:
+
+```bash
+source "$CLAUDE_PLUGIN_ROOT/scripts/lib/bootstrap-relocate.sh"
+```
+
+Run the transform:
+
+```bash
+bash "$CLAUDE_PLUGIN_ROOT/scripts/bootstrap-transform.sh" "$STATE_ROOT"
+case $? in
+  0) ;;
+  2) echo "error: transform usage error" >&2; exit 50 ;;
+  3)
+    echo "error: transform final assertion failed — see output above." >&2
+    echo "       scratch preserved at $STATE_ROOT for debugging." >&2
+    exit 51
+    ;;
+  *) echo "error: transform failed (exit $?)" >&2; exit 52 ;;
+esac
+```
+
+If `--dry-run`, stop here. Report the scratch location to the user:
+
+```bash
+if echo "$ARGUMENTS" | grep -q -- '--dry-run'; then
+  echo "Dry-run complete. Review the bundle at $STATE_ROOT/ before re-running without --dry-run."
+  exit 0
+fi
+```
+
+Relocate atomically:
+
+```bash
+relocate_bundle "$STATE_ROOT" "." || exit $?
+```
+
+Append to `.gitignore` and clean up:
+
+```bash
+append_gitignore "."
+cleanup_scratch "$STATE_ROOT"
+```
 
 ### Phase 5 — Summary
 
-*(Implemented in Task 14.)*
+```bash
+count_md()   { find "$1" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' '; }
+count_dir()  { find "$1" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' '; }
+
+DOCS=$(count_md ./docs)
+CTX=$(count_md ./docs/context)
+AGENTS=$(count_md ./.claude/agents)
+DESIGN=$(count_dir ./.claude)
+
+cat <<SUMMARY
+Bootstrap complete.
+
+Generated:
+  ./docs/            $DOCS documents (PRD, TRD, ADRs, test plan)
+  ./docs/context/    $CTX context files
+  ./.claude/agents/  $AGENTS reviewer agents
+  ./.claude/         $DESIGN design-system files (if UI surface detected)
+
+Next steps:
+  - Review ./docs/PRD.md and ./docs/TRD.md
+  - Commit the bundle:      git add docs/ .claude/ && git commit
+  - Use the reviewers:      invoke them from Claude Code in this repo
+SUMMARY
+```
