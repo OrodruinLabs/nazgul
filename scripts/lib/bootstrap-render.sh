@@ -116,9 +116,10 @@ substitute_domain_vars() {
   title=$(jq -r --arg d "$domain" '.[$d].title // $d' "$json")                           || { rc=$?; echo "error: jq failed on .title" >&2; return "$rc"; }
   desc=$(jq -r --arg d "$domain" '.[$d].description // ""' "$json")                      || { rc=$?; echo "error: jq failed on .description" >&2; return "$rc"; }
   cat=$(jq -r --arg d "$domain" '.[$d].category // "general"' "$json")                   || { rc=$?; echo "error: jq failed on .category" >&2; return "$rc"; }
-  # Array → "- item1\n- item2\n..."
+  # Array → "- [ ] item1\n- [ ] item2\n..." — matches the task-checkbox
+  # convention used elsewhere in the reviewer pipeline (agents/discovery.md).
   checklist=$(jq -r --arg d "$domain" '
-    (.[$d].checklist // []) | map("- " + .) | join("\n")
+    (.[$d].checklist // []) | map("- [ ] " + .) | join("\n")
   ' "$json")                                                                             || { rc=$?; echo "error: jq failed on .checklist" >&2; return "$rc"; }
   # Numbered list starting at 3 (the template hard-codes steps 1 and 2)
   review_steps=$(jq -r --arg d "$domain" '

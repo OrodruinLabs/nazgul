@@ -220,27 +220,63 @@ strip_frontmatter() {
 # -----------------------------------------------------------------------------
 # Main walk
 # -----------------------------------------------------------------------------
+#
+# IMPORTANT: the transform only operates on directories that will be relocated
+# into the final bundle — docs/, context/, agents/, .claude/. The skill writes
+# rendered pipeline prompts (e.g. .discovery-prompt.md) at the scratch root;
+# those prompts preserve Hydra prose from the source agents (by design, since
+# the LLM executes them in bundle-scratch mode) and must NOT be scrubbed or
+# asserted against. The relocate step ignores them too.
 
-# Drop files first
+# Scope the walk to the relocated subtree.
+RELOCATED_DIRS=(
+  "$SCRATCH/docs"
+  "$SCRATCH/context"
+  "$SCRATCH/agents"
+  "$SCRATCH/.claude"
+)
+
+_existing_relocated_dirs() {
+  local d
+  for d in "${RELOCATED_DIRS[@]}"; do
+    [ -d "$d" ] && printf '%s\n' "$d"
+  done
+}
+
+# Drop files first (only within relocated subtree).
 for basename in "${BOOTSTRAP_SCRUB_DROP_FILES[@]}"; do
-  while IFS= read -r path; do
-    rm -f "$path"
-  done < <(find "$SCRATCH" -type f -name "$basename")
+  while IFS= read -r dir; do
+    while IFS= read -r path; do
+      rm -f "$path"
+    done < <(find "$dir" -type f -name "$basename")
+  done < <(_existing_relocated_dirs)
 done
 
-# Apply rules per file
-while IFS= read -r file; do
-  strip_frontmatter "$file"
-  apply_prose_rules "$file"
-  apply_path_rules "$file"
-done < <(find "$SCRATCH" -type f \( -name '*.md' -o -name '*.json' \))
+# Apply rules per file (only within relocated subtree).
+while IFS= read -r dir; do
+  while IFS= read -r file; do
+    strip_frontmatter "$file"
+    apply_prose_rules "$file"
+    apply_path_rules "$file"
+  done < <(find "$dir" -type f \( -name '*.md' -o -name '*.json' \))
+done < <(_existing_relocated_dirs)
 
 # -----------------------------------------------------------------------------
-# Final assertion — no residual Hydra tokens
+# Final assertion — no residual Hydra tokens (scoped to the relocated subtree)
 # -----------------------------------------------------------------------------
 
-# -i is portable; -E is portable; -r recursive; -n with line numbers
-ASSERT_MATCHES=$(grep -rinE '[Hh]ydra|HYDRA' "$SCRATCH" 2>/dev/null || true)
+# Build the target list dynamically so the assertion doesn't error on a
+# missing directory (e.g. when .claude/ isn't populated this run).
+ASSERT_TARGETS=()
+while IFS= read -r dir; do
+  ASSERT_TARGETS+=("$dir")
+done < <(_existing_relocated_dirs)
+
+if [ "${#ASSERT_TARGETS[@]}" -eq 0 ]; then
+  ASSERT_MATCHES=""
+else
+  ASSERT_MATCHES=$(grep -rinE '[Hh]ydra|HYDRA' "${ASSERT_TARGETS[@]}" 2>/dev/null || true)
+fi
 
 if [ -n "$ASSERT_MATCHES" ]; then
   {
