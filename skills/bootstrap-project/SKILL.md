@@ -46,6 +46,10 @@ BOOTSTRAP_VERBOSE=false
 BOOTSTRAP_WIPE_SCRATCH=false
 BOOTSTRAP_OBJECTIVE=""
 
+# Disable pathname expansion during tokenization so an objective containing
+# glob metachars (*, ?, [) doesn't expand to matching filenames. Re-enable
+# afterwards so downstream code behaves normally.
+set -f
 # Intentionally NOT quoted: we want word-splitting so each token is processed.
 # shellcheck disable=SC2086
 set -- $ARGUMENTS
@@ -60,6 +64,7 @@ for tok in "$@"; do
     *)               BOOTSTRAP_OBJECTIVE="${BOOTSTRAP_OBJECTIVE:+$BOOTSTRAP_OBJECTIVE }$tok" ;;
   esac
 done
+set +f
 ```
 
 Run checks in order. If any returns non-zero, respect the contract (hard abort or prompt):

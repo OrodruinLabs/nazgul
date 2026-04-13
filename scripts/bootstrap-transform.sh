@@ -67,7 +67,7 @@ apply_path_rules() {
 apply_prose_rules() {
   local file="$1"
   local tmp
-  tmp=$(mktemp)
+  tmp=$(mktemp "${TMPDIR:-/tmp}/bootstrap-transform.XXXXXX")
 
   # Build a single extended-regex OR of all prose patterns
   local patterns=()
@@ -141,7 +141,7 @@ strip_frontmatter() {
   _is_agent_file "$file" || return 0
 
   local tmp
-  tmp=$(mktemp)
+  tmp=$(mktemp "${TMPDIR:-/tmp}/bootstrap-transform.XXXXXX")
 
   # Join BOOTSTRAP_SCRUB_FRONTMATTER_REMOVE into an alternation pattern.
   # Exact match: e.g. "hydra|review-board|loop-phase".

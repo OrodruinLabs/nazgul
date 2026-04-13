@@ -130,7 +130,7 @@ substitute_domain_vars() {
 
   # Write template to a temp file so awk can substitute multiline values.
   local tpl
-  tpl=$(mktemp) || { echo "error: substitute_domain_vars: mktemp failed" >&2; return 1; }
+  tpl=$(mktemp "${TMPDIR:-/tmp}/bootstrap-domain.XXXXXX") || { echo "error: substitute_domain_vars: mktemp failed" >&2; return 1; }
   cat > "$tpl"  || { rc=$?; rm -f "$tpl"; echo "error: substitute_domain_vars: failed reading template from stdin" >&2; return "$rc"; }
 
   awk -v name="$name" -v title="$title" -v desc="$desc" -v cat="$cat" \
