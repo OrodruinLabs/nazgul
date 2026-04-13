@@ -99,7 +99,7 @@ See `/hydra:help` for the full command list and all flags.
 
 Single-shot command that runs Hydra's pre-planning pipeline (discovery, doc-generator, reviewer-instantiation, optional designer) against any repo and emits a portable bundle — `./docs/`, `./docs/context/`, `./.claude/agents/`, and optional `./.claude/design-*` — with all Hydra references scrubbed. The output works anywhere Claude Code runs and does not require Hydra to be installed.
 
-Usage: `/hydra:bootstrap-project [objective] [--yes] [--overwrite] [--dry-run] [--verbose]`. Refuses to run if `./hydra/` already exists (use `/hydra:start` for Hydra-managed loops).
+Usage: `/hydra:bootstrap-project [objective] [--yes] [--overwrite] [--dry-run] [--wipe-scratch] [--resume-scratch]`. Refuses to run if `./hydra/` already exists (use `/hydra:start` for Hydra-managed loops).
 
 ## How It Works
 
