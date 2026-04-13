@@ -203,4 +203,28 @@ while IFS= read -r file; do
   apply_path_rules "$file"
 done < <(find "$SCRATCH" -type f \( -name '*.md' -o -name '*.json' \))
 
+# -----------------------------------------------------------------------------
+# Final assertion — no residual Hydra tokens
+# -----------------------------------------------------------------------------
+
+# -i is portable; -E is portable; -r recursive; -n with line numbers
+ASSERT_MATCHES=$(grep -rinE '[Hh]ydra|HYDRA' "$SCRATCH" 2>/dev/null || true)
+
+if [ -n "$ASSERT_MATCHES" ]; then
+  {
+    echo "bootstrap-transform: residual Hydra tokens found after scrub pass:"
+    echo ""
+    echo "$ASSERT_MATCHES" | sed 's/^/  /'
+    echo ""
+    echo "Fix: add a rule to scripts/lib/bootstrap-scrub-map.sh covering the"
+    echo "matched token, then re-run. Suggested shape:"
+    echo ""
+    echo "  BOOTSTRAP_SCRUB_PROSE_RULES+=(\"<your-token>|__DROP__\")"
+    echo ""
+    echo "After adding the rule, update the fixture so the regression test"
+    echo "locks the new behavior: tests/fixtures/bootstrap-transform/."
+  } >&2
+  exit 3
+fi
+
 exit 0

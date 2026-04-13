@@ -35,4 +35,23 @@ else
   _fail "output matches expected" "diff:" "$DIFF_OUTPUT"
 fi
 
+# ---------------------------------------------------------------------
+# Assertion test: if a Hydra token survives all rules, transform must fail
+# ---------------------------------------------------------------------
+ASSERT_WORK=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-assert-XXXXXX")
+trap 'rm -rf "$WORK" "$ASSERT_WORK"' EXIT
+mkdir -p "$ASSERT_WORK/docs"
+cat > "$ASSERT_WORK/docs/evil.md" <<'EVIL'
+# Doc
+This file uses HYDRA in uppercase intentionally.
+EVIL
+
+ASSERT_OUTPUT=$(bash "$TRANSFORM" "$ASSERT_WORK" 2>&1 || true)
+# Re-run for exit code (||true above always yields 0 in $?)
+ASSERT_EC=$(bash "$TRANSFORM" "$ASSERT_WORK" >/dev/null 2>&1; echo $?)
+
+assert_exit_code "assertion fires on residual Hydra token" "$ASSERT_EC" 3
+assert_contains "error message names file" "$ASSERT_OUTPUT" "evil.md"
+assert_contains "error message suggests scrub-map edit" "$ASSERT_OUTPUT" "scripts/lib/bootstrap-scrub-map.sh"
+
 report_results
