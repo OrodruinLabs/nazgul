@@ -35,6 +35,8 @@ else
   _fail "output matches expected" "diff:" "$DIFF_OUTPUT"
 fi
 
+assert_file_not_exists "manifest.md dropped from bundle" "$WORK/docs/manifest.md"
+
 # ---------------------------------------------------------------------
 # Assertion test: if a Hydra token survives all rules, transform must fail
 # ---------------------------------------------------------------------
