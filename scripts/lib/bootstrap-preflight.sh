@@ -5,7 +5,9 @@
 #
 # Exit codes:
 #   10 — ./hydra/ exists (hard abort)
-#   11 — ./docs/ or ./.claude/agents/ is non-empty (prompt or abort)
+#   11 — ./docs/ or ./.claude/agents/ non-empty, or a design file already
+#         exists at ./.claude/design-tokens.json or ./.claude/design-system.md
+#         (prompt or abort)
 #   12 — ./.bootstrap-scratch/ exists from prior run (prompt)
 #   0  — check passed
 
@@ -22,16 +24,31 @@ check_no_hydra_dir() {
 }
 
 check_docs_agents_empty() {
-  local blocker=""
+  # Accumulate ALL blocker paths so the user sees them at once instead of
+  # hitting a confusing sequence of single-blocker failures on successive runs.
+  local -a blockers=()
   if [ -d "./docs" ] && [ -n "$(ls -A ./docs 2>/dev/null)" ]; then
-    blocker="./docs"
-  elif [ -d "./.claude/agents" ] && [ -n "$(ls -A ./.claude/agents 2>/dev/null)" ]; then
-    blocker="./.claude/agents"
+    blockers+=("./docs")
+  fi
+  if [ -d "./.claude/agents" ] && [ -n "$(ls -A ./.claude/agents 2>/dev/null)" ]; then
+    blockers+=("./.claude/agents")
+  fi
+  # Design files are individual files (not directories) this skill may write
+  # to. Guard against clobbering pre-existing user config.
+  if [ -f "./.claude/design-tokens.json" ]; then
+    blockers+=("./.claude/design-tokens.json")
+  fi
+  if [ -f "./.claude/design-system.md" ]; then
+    blockers+=("./.claude/design-system.md")
   fi
 
-  if [ -n "$blocker" ]; then
-    echo "error: $blocker is not empty." >&2
-    echo "       Re-run with --overwrite to replace existing contents." >&2
+  if [ "${#blockers[@]}" -gt 0 ]; then
+    echo "error: the following skill-managed targets already exist:" >&2
+    local b
+    for b in "${blockers[@]}"; do
+      echo "  - $b" >&2
+    done
+    echo "       Re-run with --overwrite to replace them." >&2
     return 11
   fi
   return 0

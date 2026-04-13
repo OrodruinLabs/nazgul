@@ -23,7 +23,6 @@ $ARGUMENTS
 - `--yes` — Non-interactive; abort on ambiguous prompts.
 - `--overwrite` — Force overwrite of non-empty `./docs/` or `./.claude/agents/`.
 - `--dry-run` — Run pipeline and transform into scratch; skip relocation and cleanup.
-- `--verbose` — Stream agent output live.
 - `--wipe-scratch` — Delete any existing `./.bootstrap-scratch/` before starting.
 - `--resume-scratch` — Keep any existing `./.bootstrap-scratch/` and continue from there (skip re-running earlier steps that already produced output).
 
@@ -43,7 +42,6 @@ Parse `$ARGUMENTS` structurally: split on whitespace, pull out known flags, and 
 BOOTSTRAP_YES=false
 BOOTSTRAP_OVERWRITE=false
 BOOTSTRAP_DRY_RUN=false
-BOOTSTRAP_VERBOSE=false
 BOOTSTRAP_WIPE_SCRATCH=false
 BOOTSTRAP_RESUME_SCRATCH=false
 BOOTSTRAP_OBJECTIVE=""
@@ -60,7 +58,6 @@ for tok in "$@"; do
     --yes)           BOOTSTRAP_YES=true ;;
     --overwrite)     BOOTSTRAP_OVERWRITE=true ;;
     --dry-run)       BOOTSTRAP_DRY_RUN=true ;;
-    --verbose)       BOOTSTRAP_VERBOSE=true ;;
     --wipe-scratch)  BOOTSTRAP_WIPE_SCRATCH=true ;;
     --resume-scratch) BOOTSTRAP_RESUME_SCRATCH=true ;;
     --*)             echo "warning: unknown flag: $tok" >&2 ;;
@@ -115,6 +112,7 @@ case $docs_rc in
       # paths this skill owns — never the whole ./.claude/ tree (which may
       # hold unrelated user config).
       rm -rf ./docs ./.claude/agents
+      rm -f ./.claude/design-tokens.json ./.claude/design-system.md
     elif [ "$BOOTSTRAP_YES" = "true" ]; then
       exit 11
     else

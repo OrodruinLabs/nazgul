@@ -46,6 +46,31 @@ ec=$?
 set -e
 assert_exit_code "agents non-empty: exit 11" "$ec" 11
 
+# Design files are also managed — must block if present.
+mkdir -p "$WORK/has-tokens/.claude"
+echo '{}' > "$WORK/has-tokens/.claude/design-tokens.json"
+set +e
+(cd "$WORK/has-tokens" && check_docs_agents_empty >/dev/null 2>&1)
+ec=$?
+set -e
+assert_exit_code "design-tokens.json present: exit 11" "$ec" 11
+
+mkdir -p "$WORK/has-design/.claude"
+echo "# Design" > "$WORK/has-design/.claude/design-system.md"
+set +e
+(cd "$WORK/has-design" && check_docs_agents_empty >/dev/null 2>&1)
+ec=$?
+set -e
+assert_exit_code "design-system.md present: exit 11" "$ec" 11
+
+# Error message should list ALL blockers at once, not one at a time.
+mkdir -p "$WORK/has-many/docs" "$WORK/has-many/.claude/agents"
+echo x > "$WORK/has-many/docs/PRD.md"
+echo x > "$WORK/has-many/.claude/agents/code-reviewer.md"
+MANY_ERR=$(cd "$WORK/has-many" && check_docs_agents_empty 2>&1 >/dev/null || true)
+assert_contains "error lists ./docs blocker"           "$MANY_ERR" "./docs"
+assert_contains "error lists ./.claude/agents blocker" "$MANY_ERR" "./.claude/agents"
+
 # --- check_scratch_state ---
 mkdir -p "$WORK/no-scratch"
 (cd "$WORK/no-scratch" && check_scratch_state) && _pass "no scratch: passes" || _fail "no scratch: passes"

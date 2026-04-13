@@ -52,7 +52,7 @@ The skill is strictly single-shot: no state machine, no checkpoints, no loop mac
  │    - frontmatter stripping (primary)
  │    - prose scrub (safety net)
  │    - blocking assertion: no /[Hh]ydra|HYDRA/ tokens remain
- ├─ 5. Relocate files (staged; atomic all-or-nothing)
+ ├─ 5. Relocate files (dry-run feasibility check + staged moves; see Atomicity)
  ├─ 6. Cleanup ./.bootstrap-scratch/ (best-effort)
  └─ 7. Print summary + next-steps message
 ```
@@ -63,7 +63,7 @@ The skill is strictly single-shot: no state machine, no checkpoints, no loop mac
 - **Reuses Hydra's pipeline agents.** Discovery, doc-generator, designer, reviewer-template are invoked unchanged except for a `STATE_ROOT` environment variable controlling output paths.
 - **One transform layer.** All un-Hydra-ing logic lives in `scripts/bootstrap-transform.sh` with a fixture-based regression test.
 - **Scratch dir is invisible.** `./.bootstrap-scratch/` is created, used, and deleted within a single run.
-- **Atomicity.** Either the full bundle lands, or `./docs/` and `./.claude/` are untouched. Enforced by staged relocation.
+- **Best-effort atomicity.** A dry-run feasibility pass checks target reachability and writability before any filesystem mutation, so the common failure modes (missing/unwritable ancestors, target-as-file collisions) fail with the project untouched. Disk-full, race conditions, and hardware errors during the real-moves pass still exit 21 and may leave a partial bundle — see `scripts/lib/bootstrap-relocate.sh` header for details.
 
 ## Components
 
@@ -107,7 +107,6 @@ Flags:
 - `--yes` — non-interactive; accept defaults, abort on ambiguous prompts.
 - `--overwrite` — force overwrite of non-empty `./docs/` or `./.claude/agents/`.
 - `--dry-run` — run pipeline and transform into scratch; skip relocation and cleanup.
-- `--verbose` — stream agent output live instead of capturing to log.
 
 ### Step 1 — Pre-flight gate
 
@@ -143,9 +142,9 @@ If any step fails (non-zero exit, missing expected outputs), the skill stops imm
 3. **Prose term rewrites and sentence removal** (Classes 2 & 3, safety net only — bundle-mode reviewer template should leave little to scrub)
 4. **Blocking assertion**: `grep -riE '[Hh]ydra|HYDRA' <scratch>` must return zero matches (excluding the scrub-map allowlist, empty in v1). Failure prints matching file + line + suggested scrub-map diff.
 
-### Step 5 — Relocate (atomic)
+### Step 5 — Relocate (best-effort)
 
-Dry-run all planned writes first. If any would fail (permissions, read-only mount), abort before any real write.
+Dry-run all planned writes first. If any would fail (permissions, read-only mount, target-as-file collision), abort before any real write. Mid-run failures after the dry-run passes (disk full, race conditions) exit 21 and may leave a partial bundle.
 
 ```text
 $STATE_ROOT/docs/PRD.md                → ./docs/PRD.md
@@ -234,14 +233,13 @@ Test diffs `actual/` vs `expected/`. Scrub-map changes require fixture updates, 
 4. **Relocation failures** — dry-run write check fails, or mid-relocation failure. Stop, preserve scratch, name failed path. No partial bundle.
 5. **Cleanup failures** — best-effort; logged as warnings. Bundle is already in place.
 
-### Atomicity guarantee
+### Atomicity guarantee (best-effort)
 
-The skill makes exactly one promise: either `./docs/` and `./.claude/` receive a complete bundle, or they are untouched. Enforced by staged-then-committed relocation.
+The dry-run feasibility pass catches the common failure modes (missing/unwritable ancestors, target-as-file collisions) before any filesystem mutation. When dry-run passes, relocation proceeds; a failure partway through (disk full, concurrent chmod, hardware error) exits 21 with a loud stderr message and may leave the bundle partially relocated. True transactional atomicity — staging into a sibling directory and committing via a single rename — is intentionally out of scope.
 
 ### Debugging aids
 
 - `./.bootstrap-scratch/bootstrap.log` — timestamps, step boundaries, agent exit codes.
-- `--verbose` — live agent output.
 - `--dry-run` — run pipeline + transform into scratch; skip relocation and cleanup; user can inspect bundle before committing.
 
 ## Testing strategy

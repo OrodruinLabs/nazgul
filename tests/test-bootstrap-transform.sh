@@ -14,9 +14,16 @@ FIXTURE_DIR="$SCRIPT_DIR/fixtures/bootstrap-transform"
 # Working copy of input (transform mutates in place). stderr capture lives
 # OUTSIDE $WORK so the diff pass doesn't need to exclude it — keeping the diff
 # strict catches regressions in any future bundle path (including `.claude/`).
+# ASSERT_WORK is allocated later but declared here so one consolidated trap
+# covers every path.
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-transform-XXXXXX")
 ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/bootstrap-transform-err.XXXXXX")
-trap 'rm -rf "$WORK"; rm -f "$ERR_FILE"' EXIT
+ASSERT_WORK=""
+_cleanup() {
+  rm -rf "$WORK" "${ASSERT_WORK:-}" 2>/dev/null || true
+  rm -f "$ERR_FILE" 2>/dev/null || true
+}
+trap _cleanup EXIT
 cp -R "$FIXTURE_DIR/input/." "$WORK/"
 
 # Run transform
@@ -43,7 +50,6 @@ assert_file_not_exists "manifest.md dropped from bundle" "$WORK/docs/manifest.md
 # Assertion test: if a Hydra token survives all rules, transform must fail
 # ---------------------------------------------------------------------
 ASSERT_WORK=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-assert-XXXXXX")
-trap 'rm -rf "$WORK" "$ASSERT_WORK"' EXIT
 mkdir -p "$ASSERT_WORK/docs"
 cat > "$ASSERT_WORK/docs/evil.md" <<'EVIL'
 # Doc
