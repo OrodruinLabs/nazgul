@@ -643,7 +643,7 @@ Create `tests/fixtures/bootstrap-transform/expected/agents/dirty-prose-reviewer.
 ```markdown
 ---
 name: dirty-prose-reviewer
-description: A reviewer with some legacy prose.
+description: A reviewer with legacy prose.
 tools:
   - Read
 allowed-tools: Read
@@ -824,7 +824,7 @@ trap 'rm -rf "$WORK" "$ASSERT_WORK"' EXIT
 mkdir -p "$ASSERT_WORK/docs"
 cat > "$ASSERT_WORK/docs/evil.md" <<'EVIL'
 # Doc
-This sentence mentions H-y-d-r-a in a way scrub rules miss: the Hydra-flavored system.
+This file uses HYDRA in uppercase intentionally.
 EVIL
 
 ASSERT_OUTPUT=$(bash "$TRANSFORM" "$ASSERT_WORK" 2>&1 || true)
