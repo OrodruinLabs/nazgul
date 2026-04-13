@@ -44,7 +44,7 @@ apply_path_rules() {
     if [ "$repl" = "__DROP__" ]; then
       # Delete whole line containing the token (Task 4 refines this to sentence-level).
       # For now, deleting the line is sufficient for path tokens that stand alone.
-      sed -i.bak "/$(printf '%s' "$find" | sed 's/[\/&]/\\&/g')/d" "$file"
+      sed -i.bak "/$(printf '%s' "$find" | sed 's/[\/&.]/\\&/g')/d" "$file"
     else
       # Literal replacement. Escape forward slashes for sed.
       local find_esc repl_esc
