@@ -355,5 +355,53 @@
     "category": "Data Engineering | Machine Learning",
     "approved_criteria": "Data pipeline is validated, idempotent, and handles PII correctly",
     "rejected_criteria": "Data validation missing, PII exposure, pipeline not idempotent, or data leakage detected (confidence >= 80)"
+  },
+  "code-reviewer": {
+    "description": "Reviews code for correctness, clarity, maintainability, and adherence to project conventions",
+    "title": "Code",
+    "context_items": "language, framework, style guide, formatting/lint tools, naming conventions, error-handling patterns",
+    "checklist": [
+      "Logic is correct and handles documented edge cases",
+      "Naming is clear and matches project conventions",
+      "No duplication that should be extracted; no premature abstraction",
+      "Error handling matches existing patterns; no swallowed errors",
+      "No dead code, commented-out blocks, or speculative comments",
+      "Functions and files have one clear responsibility",
+      "Public interfaces are minimal and well-documented",
+      "No security regressions in input handling, command construction, or data passed to subprocesses"
+    ],
+    "review_steps": [
+      "Read the diff and identify the unit of change",
+      "Read full files for any non-trivial change to understand context",
+      "Run linters and formatters if available",
+      "Cross-check against existing patterns in neighboring files"
+    ],
+    "category": "Code Quality",
+    "approved_criteria": "Logic correct, conventions followed, no major maintainability concerns",
+    "rejected_criteria": "Logic bugs, convention violations, or maintainability issues (confidence >= 80)"
+  },
+  "security-reviewer": {
+    "description": "Reviews security-sensitive code paths for common vulnerabilities and unsafe patterns",
+    "title": "Security",
+    "context_items": "auth model, secret storage, input validation library, request signing, transport security, dependency posture",
+    "checklist": [
+      "User-supplied input is validated and properly escaped at trust boundaries",
+      "No string-built SQL, shell, or command-injection surfaces",
+      "Secrets are never logged or returned in responses",
+      "Authentication state is checked on every protected operation",
+      "Authorization checks are present and not bypassable by client manipulation",
+      "Crypto uses vetted libraries and current algorithms (no MD5/SHA1 for security)",
+      "Sessions/tokens have appropriate lifetime and rotation",
+      "External calls validate certificates and use safe defaults"
+    ],
+    "review_steps": [
+      "Trace each user-input boundary to its first sensitive sink",
+      "Check authn/authz on all new or changed endpoints",
+      "Search the diff for hard-coded secrets, tokens, or keys",
+      "Verify dependencies introduced are reputable and up-to-date"
+    ],
+    "category": "Security",
+    "approved_criteria": "No security regressions; common vulnerability classes addressed",
+    "rejected_criteria": "Injection surface, missing authn/authz, or secret exposure (confidence >= 80)"
   }
 }
