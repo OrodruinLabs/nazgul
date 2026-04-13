@@ -200,7 +200,12 @@ strip_frontmatter() {
           }
           # Strip any one leading prefix listed in the scrub map.
           sub(prefix_pat, "", rest)
-          print "description: " rest
+          # Always re-emit as a double-quoted YAML scalar so the value is
+          # YAML-safe regardless of what chars survived (e.g. "#", ":", "{", "[").
+          # Escape backslashes and double-quotes per YAML double-quoted rules.
+          gsub(/\\/, "\\\\", rest)
+          gsub(/"/, "\\\"", rest)
+          print "description: \"" rest "\""
           next
         }
         print

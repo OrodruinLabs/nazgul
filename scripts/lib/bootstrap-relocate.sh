@@ -79,8 +79,11 @@ relocate_bundle() {
         echo "error: target path unreachable (ancestor not a directory): $dst_dir ($ancestor)" >&2
         return 20
       fi
-      if [ ! -w "$ancestor" ]; then
-        echo "error: target path ancestor is not writable: $ancestor" >&2
+      # mkdir -p needs BOTH write (create child) AND execute/search (traverse
+      # into existing path). Without -x, a later mkdir inside the real-moves
+      # pass could fail after earlier moves succeeded, breaking atomicity.
+      if [ ! -w "$ancestor" ] || [ ! -x "$ancestor" ]; then
+        echo "error: target path ancestor not writable or not searchable: $ancestor" >&2
         return 20
       fi
       checked_str="$checked_str$dst_dir"$'\n'

@@ -24,9 +24,11 @@ if ! bash "$TRANSFORM" "$WORK" 2>"$WORK/.err"; then
 fi
 _pass "transform exits 0"
 
-# Diff actual vs expected (ignore the .err file and any hidden dirs)
+# Diff actual vs expected. Exclude the .err file (scratch-only debug capture)
+# and any dotfile entries at the work-dir root (not part of the expected bundle).
 DIFF_OUTPUT=$(diff -r \
   --exclude='.err' \
+  --exclude='.*' \
   "$FIXTURE_DIR/expected" "$WORK" 2>&1 || true)
 
 if [ -z "$DIFF_OUTPUT" ]; then

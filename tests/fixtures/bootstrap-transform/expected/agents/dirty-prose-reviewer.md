@@ -1,6 +1,6 @@
 ---
 name: dirty-prose-reviewer
-description: A reviewer with legacy prose.
+description: "A reviewer with legacy prose."
 tools:
   - Read
 allowed-tools: Read

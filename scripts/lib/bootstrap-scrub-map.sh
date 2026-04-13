@@ -23,7 +23,10 @@ BOOTSTRAP_SCRUB_PATH_RULES=(
 )
 
 # Class 2 — Prose term rewrites (safety net). All map to __DROP__ (sentence removal).
-# Match is whole-word, case-sensitive except where noted.
+# Patterns are extended-regex fragments combined into one alternation and matched
+# as case-sensitive SUBSTRINGS (no automatic word boundaries). If a future rule
+# needs word-boundary behavior, encode it in the pattern itself (e.g. with
+# `[^[:alnum:]_]` on either side, since `\b` is not portable).
 BOOTSTRAP_SCRUB_PROSE_RULES=(
   "Hydra pipeline|__DROP__"
   "Hydra loop|__DROP__"

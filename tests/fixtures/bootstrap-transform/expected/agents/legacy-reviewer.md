@@ -1,6 +1,6 @@
 ---
 name: legacy-reviewer
-description: code quality reviewer for Python.
+description: "code quality reviewer for Python."
 tools:
   - Read
   - Grep
