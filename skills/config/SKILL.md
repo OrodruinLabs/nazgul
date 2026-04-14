@@ -123,10 +123,12 @@ Same as init Step 7 Question 1. Use `AskUserQuestion`:
 
 ### Notifications Sub-flow
 
-Same as init Step 7 Question 2. Use `AskUserQuestion`:
+Use `AskUserQuestion`:
 - header: "Notify"
 - question: "Notify when the loop completes?"
 - options:
-  - "Voice alert" — platform default command
-  - "Silent" — "No notification"
-- Update `nazgul/config.json → notifications.on_complete`
+  - "Voice alert (Recommended)" — platform default: `say 'Nazgul loop complete'` (macOS) or `notify-send 'Nazgul' 'Loop complete'` (Linux)
+  - "Silent" — "No notification when the loop finishes"
+- If Voice alert: set `nazgul/config.json → notifications.on_complete` to the platform-appropriate command
+- If Silent: remove or empty `nazgul/config.json → notifications.on_complete`
+- If Other (custom command): set `nazgul/config.json → notifications.on_complete` to the user's command
