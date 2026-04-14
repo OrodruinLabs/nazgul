@@ -31,7 +31,7 @@ When asked to run parallel reviews for a task:
 
 1. Verify Agent Teams is available: read `nazgul/config.json → parallelism.require_settings` and confirm the setting is enabled
 2. Read the reviewer list from `nazgul/config.json → agents.reviewers`
-3. Read `nazgul/config.json → models.review` for the model to assign each reviewer teammate (default: `"opus"`). Pass this as the `model` parameter when spawning each teammate via the Task tool.
+3. Read `nazgul/config.json → models.review` for the model to assign each reviewer teammate (default: `"sonnet"`). Pass this as the `model` parameter when spawning each teammate via the Task tool.
 3. Read the changed files for the task from the task manifest. Verify `nazgul/reviews/[TASK-ID]/diff.patch` exists.
 4. Spawn a team with one teammate per reviewer:
    - Team name: `nazgul-review-[TASK-ID]`

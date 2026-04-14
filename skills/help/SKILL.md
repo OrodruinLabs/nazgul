@@ -63,6 +63,7 @@ metadata:
 | `/nazgul:simplify` | Post-loop cleanup pass |
 | `/nazgul:docs` | View or regenerate project documents |
 | `/nazgul:board` | Connect to GitHub Projects / Azure DevOps |
+| `/nazgul:config` | View and change settings (models, formatter, notifications) |
 | `/nazgul:gen-spec` | Interactively build a project specification |
 
 ## Modes

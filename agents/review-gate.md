@@ -72,7 +72,7 @@ Before spawning reviewers, verify `nazgul/reviews/[TASK-ID]/diff.patch` exists a
 ### Step 2: Delegate to Reviewers
 
 Read `nazgul/config.json → agents.reviewers` to get the active reviewer list.
-Read `nazgul/config.json → models.review` for the model to assign reviewers (default: `"opus"`). Pass this as the `model` parameter when spawning each reviewer via the Task tool.
+Read `nazgul/config.json → models.review` for the model to assign reviewers (default: `"sonnet"`). Pass this as the `model` parameter when spawning each reviewer via the Task tool.
 
 #### What Each Reviewer Receives
 1. `nazgul/reviews/[TASK-ID]/diff.patch` — the unified diff showing exactly what changed. **Reviewers MUST read this FIRST.**
@@ -219,7 +219,7 @@ After all tasks are DONE, run a cross-task simplification pass across ALL modifi
 
 #### Step 5.1: Post-Loop Agents & PR
 
-1. Run post-loop agents (documentation, release-manager, observability) if configured — use `models.post_loop` from `nazgul/config.json` as the `model` parameter (default: `"sonnet"`)
+1. Run post-loop agents (documentation, release-manager, observability) if configured — use `models.post_loop` from `nazgul/config.json` as the `model` parameter (default: `"haiku"`)
 2. After post-loop agents complete:
    a. Read `branch.feature` and `branch.base` from config
    b. Push feature branch: `git push -u origin <feature-branch>`

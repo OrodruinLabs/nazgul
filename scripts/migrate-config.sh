@@ -55,12 +55,12 @@ migrate_1_to_2() {
     tmp=$(mktemp)
     jq '.models = {
       "planning": "opus",
-      "discovery": "opus",
-      "docs": "opus",
-      "review": "opus",
+      "discovery": "sonnet",
+      "docs": "sonnet",
+      "review": "sonnet",
       "implementation": "sonnet",
       "specialists": "sonnet",
-      "post_loop": "sonnet",
+      "post_loop": "haiku",
       "default": "sonnet"
     }' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
   fi
