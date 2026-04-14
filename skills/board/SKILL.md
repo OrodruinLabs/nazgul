@@ -2,7 +2,7 @@
 name: nazgul:board
 description: Connect Nazgul task tracking to an external project board (GitHub Projects, Azure DevOps, etc). Use when user says "connect to github projects", "set up board", "track on github", or "nazgul board".
 context: fork
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion
 metadata:
   author: Jose Mejia
   version: 1.0.0
@@ -79,24 +79,28 @@ Using the preprocessor "Existing projects" data:
    Existing GitHub Projects found:
    1. #[num]: [title]
    2. #[num]: [title]
-   3. Create a new project
-
-   Which project should Nazgul use?
    ```
 
-2. If no projects exist, ask:
-   ```
-   No existing GitHub Projects found. Create one?
-   Project name (default: "Nazgul: [repo-name]"):
-   ```
+   Then use `AskUserQuestion`:
+   - header: "Project"
+   - question: "Which GitHub Project should Nazgul use?"
+   - options: list existing projects (up to 3) + "Create a new project" as the last option
+   - If "Create new": run `gh project create --owner [owner] --title "Nazgul: [repo-name]" --format json` and extract project number
 
-3. If user picks "Create new":
-   - Run: `gh project create --owner [owner] --title "[name]" --format json`
-   - Extract project number
+2. If no projects exist, use `AskUserQuestion`:
+   - header: "Project"
+   - question: "No existing GitHub Projects found. Create one?"
+   - options:
+     - "Create project" — "Create 'Nazgul: [repo-name]' on GitHub Projects"
+     - "Abort" — "Cancel board setup"
 
-4. If user picks existing + `--clean` flag:
-   - Show: "This will archive [N] items on project '[title]'. Continue?"
-   - If confirmed: run `bash scripts/board-sync-github.sh archive-all [project-number]`
+3. If user picks existing + `--clean` flag, use `AskUserQuestion`:
+   - header: "Confirm"
+   - question: "This will archive [N] items on project '[title]'. Continue?"
+   - options:
+     - "Archive and continue" — "Clear existing items and set up fresh"
+     - "Keep items" — "Connect without archiving existing items"
+   - If "Archive": run `bash scripts/board-sync-github.sh archive-all [project-number]`
 
 ### Step 4: Run Setup
 

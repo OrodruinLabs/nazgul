@@ -2,7 +2,7 @@
 name: nazgul:reset
 description: Reset Nazgul state to a clean slate. Archives current state and recreates from templates. Use when Nazgul gets into a corrupted or confusing state.
 context: fork
-allowed-tools: Read, Write, Bash, Glob
+allowed-tools: Read, Write, Bash, Glob, AskUserQuestion
 metadata:
   author: Jose Mejia
   version: 1.1.0
@@ -41,8 +41,9 @@ Check `$ARGUMENTS` for flags:
 
 ### Step 3: Confirm with User
 
-Unless `--hard` flag is present, show a confirmation prompt:
+Unless `--hard` flag is present, show the summary, then use `AskUserQuestion` to confirm:
 
+First, display what will be archived:
 ```
 Nazgul Reset
 ═══════════════════════════════════════
@@ -58,11 +59,16 @@ This will archive and reset the following:
 Context directory: [WILL BE RESET | WILL BE PRESERVED (--preserve-context)]
 
 Everything will be archived to nazgul/archive/[timestamp]/ before deletion.
-
-Proceed? (yes/no)
 ```
 
-Wait for user confirmation. If the user says no, abort.
+Then use `AskUserQuestion`:
+- header: "Confirm"
+- question: "Archive current state and reset Nazgul to a clean slate?"
+- options:
+  - "Reset" — "Archive everything and start fresh"
+  - "Abort" — "Cancel and keep current state"
+
+If Abort: stop immediately.
 
 ### Step 4: Create Archive Directory
 

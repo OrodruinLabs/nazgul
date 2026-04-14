@@ -41,8 +41,9 @@ Check `$ARGUMENTS` for `--force` flag. If present, skip confirmation.
 
 ### Step 3: Confirm with User
 
-Unless `--force` is present, show what will be removed and ask for confirmation:
+Unless `--force` is present, show what will be removed, then use `AskUserQuestion` to confirm:
 
+First, display a summary of what exists:
 ```
 Nazgul Clean — Full Removal
 ═══════════════════════════════════════════════════════
@@ -54,11 +55,16 @@ The following will be PERMANENTLY DELETED:
   .claude/settings.json entries [EXISTS | not found]
   CLAUDE.md nazgul section       [EXISTS | not found]
   .gitignore nazgul entries      [EXISTS | not found]
-
-This cannot be undone. Proceed? (yes/no)
 ```
 
-Wait for user confirmation. If the user says no, abort.
+Then use `AskUserQuestion`:
+- header: "Confirm"
+- question: "This cannot be undone. Remove all Nazgul files from this project?"
+- options:
+  - "Remove everything" — "Permanently delete all Nazgul runtime state, agents, and config"
+  - "Abort" — "Cancel and keep everything as-is"
+
+If Abort: stop immediately.
 
 ### Step 4: Remove Runtime State
 

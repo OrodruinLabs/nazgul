@@ -2,7 +2,7 @@
 name: "nazgul:bootstrap-project"
 description: "Generate a portable, Nazgul-free project bundle (docs + Claude subagents) without installing Nazgul. Runs the full pre-planning pipeline (discovery, doc-generator, reviewer-instantiation, optional designer) and emits output into standard paths (./docs/, ./docs/context/, ./.claude/agents/, ./.claude/)."
 context: fork
-allowed-tools: "Read, Write, Edit, Bash, Glob, Grep, Agent"
+allowed-tools: "Read, Write, Edit, Bash, Glob, Grep, Agent, AskUserQuestion"
 ---
 
 # Bootstrap Project
@@ -90,12 +90,18 @@ case $scratch_rc in
       # flag. The bash fragment exits here so the LLM can ask the question and
       # restart, instead of the resume path being silently unreachable.
       #
-      # LLM: ask the user "resume / wipe-and-restart / abort" and re-run:
-      #   - "resume"            → /nazgul:bootstrap-project --resume-scratch ...
-      #   - "wipe-and-restart"  → /nazgul:bootstrap-project --wipe-scratch ...
-      #   - "abort"             → stop
+      # LLM: use AskUserQuestion with these options:
+      #   header: "Scratch"
+      #   question: "A previous bootstrap run left ./.bootstrap-scratch/. How would you like to proceed?"
+      #   options:
+      #     - "Resume" — "Continue from where the last run stopped"
+      #     - "Wipe and restart" — "Delete scratch and start fresh"
+      #     - "Abort" — "Stop and keep everything as-is"
+      #   Then re-invoke:
+      #     - Resume        → /nazgul:bootstrap-project --resume-scratch ...
+      #     - Wipe/restart  → /nazgul:bootstrap-project --wipe-scratch ...
+      #     - Abort         → stop
       echo "./.bootstrap-scratch/ exists from a prior run." >&2
-      echo "Re-run with --resume-scratch, --wipe-scratch, or abort." >&2
       exit 12
     fi
     ;;
@@ -116,9 +122,15 @@ case $docs_rc in
     elif [ "$BOOTSTRAP_YES" = "true" ]; then
       exit 11
     else
-      # Interactive prompt: overwrite / abort. Default abort on empty reply.
-      echo "Non-empty ./docs/ or ./.claude/agents/ detected. Abort? [Y/n]"
-      # LLM: ask the user, proceed only on explicit "overwrite"
+      # LLM: use AskUserQuestion with these options:
+      #   header: "Overwrite"
+      #   question: "Non-empty ./docs/ or ./.claude/agents/ detected. What would you like to do?"
+      #   options:
+      #     - "Overwrite" — "Clear managed targets (./docs/, ./.claude/agents/) and proceed"
+      #     - "Abort" — "Stop and keep everything as-is"
+      #   If Overwrite: re-invoke with --overwrite flag
+      #   If Abort: stop
+      echo "Non-empty ./docs/ or ./.claude/agents/ detected." >&2
       exit 11
     fi
     ;;

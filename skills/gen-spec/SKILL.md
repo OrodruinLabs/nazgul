@@ -2,7 +2,7 @@
 name: nazgul:gen-spec
 description: Interactively build a project specification. Guides you through tiered questions — quick product overview first, optional deep-dive into user stories and success metrics. Outputs nazgul/context/project-spec.md.
 context: fork
-allowed-tools: Read, Write, Bash, Glob, Grep
+allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion
 metadata:
   author: Jose Mejia
   version: 1.1.0
@@ -26,10 +26,16 @@ $ARGUMENTS
 ### Pre-flight
 1. Check if `nazgul/config.json` exists. If not, tell the user: "Nazgul not initialized. Run `/nazgul:init` first." and STOP.
 2. Check if `nazgul/context/project-spec.md` already exists:
-   - If yes: Show the current spec (first 20 lines) and ask: "A project spec already exists. Do you want to **replace** it with a new one, **edit** specific sections, or **keep** it as-is?"
-   - If "keep": STOP.
-   - If "edit": Ask which sections to update, then update only those sections in-place.
-   - If "replace": Continue with Tier 1 below.
+   - If yes: Show the current spec (first 20 lines), then use `AskUserQuestion`:
+     - header: "Spec"
+     - question: "A project spec already exists. What would you like to do?"
+     - options:
+       - "Replace" — "Start fresh with a new spec"
+       - "Edit" — "Update specific sections of the existing spec"
+       - "Keep" — "Keep the current spec as-is"
+     - If "Keep": STOP.
+     - If "Edit": Ask which sections to update, then update only those sections in-place.
+     - If "Replace": Continue with Tier 1 below.
 
 ### Tier 1: Core Questions (~2 minutes)
 
@@ -52,10 +58,15 @@ After collecting Tier 1 answers, write the initial `nazgul/context/project-spec.
 
 After Tier 1, ask:
 
-> "Got the basics down. Want to go deeper? I can help define user stories, success metrics, and detailed feature descriptions. Takes about 5 more minutes. (y/n)"
+Use `AskUserQuestion`:
+- header: "Depth"
+- question: "Got the basics down. Want to go deeper with user stories, success metrics, and detailed feature descriptions?"
+- options:
+  - "Go deeper" — "Define user stories, success metrics, and feature details (~5 more minutes)"
+  - "Done" — "Finalize the spec with what we have"
 
-- **If no:** Finalize the spec with Tier 1 content only. Update `nazgul/config.json` → set `project_spec` to `"interactive"`. DONE.
-- **If yes:** Continue to Tier 2.
+- **If Done:** Finalize the spec with Tier 1 content only. Update `nazgul/config.json` → set `project_spec` to `"interactive"`. DONE.
+- **If Go deeper:** Continue to Tier 2.
 
 ### Tier 2: Deep Dive (~5 minutes)
 
