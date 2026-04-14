@@ -131,4 +131,4 @@ Use `AskUserQuestion`:
   - "Silent" — "No notification when the loop finishes"
 - If Voice alert: set `nazgul/config.json → notifications.on_complete` to the platform-appropriate command
 - If Silent: remove or empty `nazgul/config.json → notifications.on_complete`
-- If Other (custom command): set `nazgul/config.json → notifications.on_complete` to the user's command
+- If Other (user selects the built-in "Other" free-text option): set `nazgul/config.json → notifications.on_complete` to the user's custom command
