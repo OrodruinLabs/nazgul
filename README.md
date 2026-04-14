@@ -4,9 +4,9 @@
     <source media="(prefers-color-scheme: light)" srcset="assets/nazgul-logo-light.png">
     <img alt="Nazgul Framework" src="assets/nazgul-logo-light.png" width="400">
   </picture>
+  <br>
+  <strong style="font-size:24px;">NAZGUL</strong>
 </p>
-
-<h1 align="center">NAZGUL</h1>
 
 <p align="center">
   <strong>Multi-agent autonomous development loop for Claude Code</strong><br>
