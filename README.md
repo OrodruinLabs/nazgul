@@ -32,6 +32,7 @@ Nazgul runs a complete autonomous SDLC pipeline — from scanning your codebase 
 - **Generates docs before code** — PRDs, TRDs, and ADRs so agents build with context
 - **Multi-agent review board** — Architect, Security, Code Quality + project-specific reviewers must ALL approve every task
 - **Fix-first review** — auto-fixes mechanical issues (dead code, style), only asks about risky changes (security, architecture)
+- **Per-stage model routing** — assign Opus, Sonnet, or Haiku to each pipeline stage for the right balance of cost, speed, and quality
 - **Survives interruptions** — checkpoints, recovery pointers, session tracking, and hooks mean you can close your laptop and resume later
 
 ## Install
@@ -98,6 +99,28 @@ Nazgul auto-detects project state: active work resumes, existing docs trigger pl
 | `/nazgul:bootstrap-project` | Generate a portable, Nazgul-free bundle (docs + Claude subagents) |
 
 See `/nazgul:help` for the full command list and all flags.
+
+### Model Routing
+
+Different pipeline stages have different complexity needs. Nazgul lets you assign the right model to each stage:
+
+| Stage | Default | Why |
+|-------|---------|-----|
+| Planning | Opus | Decomposition and dependency ordering need deep reasoning |
+| Discovery | Sonnet | Codebase scanning is pattern matching |
+| Docs | Sonnet | Technical writing is well within Sonnet's capability |
+| Review | Sonnet | Structured checklists, Sonnet handles them well |
+| Implementation | Sonnet | Code generation is Sonnet's sweet spot |
+| Specialists | Sonnet | Same as implementation |
+| Post-loop | Haiku | Changelog and docs updates are mechanical |
+
+Configure during init or anytime after with `/nazgul:config`:
+
+```bash
+/nazgul:config models        # Jump straight to model settings
+```
+
+Three presets available: **Balanced** (default), **Quality** (all Opus), and **Fast/cheap** (Haiku where possible). Or pick per stage.
 
 ### Just want docs and agents without Nazgul?
 
