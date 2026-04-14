@@ -115,7 +115,7 @@ Write the merged result back. If already present, skip (no-op).
 
 Use `AskUserQuestion` to ask about optional features. Store preferences in `nazgul/config.json`.
 
-Call `AskUserQuestion` with both questions at once (up to 4 questions supported):
+Call `AskUserQuestion` with all three questions at once (up to 4 questions supported):
 
 **Question 1 — Auto-Formatter:**
 - header: "Formatter"
@@ -135,3 +135,41 @@ Call `AskUserQuestion` with both questions at once (up to 4 questions supported)
 - If Voice alert: set `notifications.on_complete` to the platform-appropriate command
 - If Silent: leave `notifications` section empty
 - If Other (custom command): set `notifications.on_complete` to the user's command
+
+**Question 3 — Model Assignments:**
+- header: "Models"
+- question: "Customize model assignments per pipeline stage?"
+- options:
+  - "Use defaults (Recommended)" — "Opus for planning, Sonnet for implementation/review, Haiku for post-loop"
+  - "Customize" — "Choose a model for each pipeline stage"
+- If Use defaults: write the balanced preset to `nazgul/config.json → models`
+- If Customize: run the model assignment sub-flow:
+
+**Model assignment sub-flow (only if Customize selected):**
+
+1. `AskUserQuestion`:
+   - header: "Models"
+   - question: "Use a preset or pick per stage?"
+   - options:
+     - "Balanced" — "Opus planning, Sonnet implementation/review, Haiku post-loop"
+     - "Quality" — "Opus for everything"
+     - "Fast/cheap" — "Haiku for docs/review/post-loop, Sonnet for planning/implementation"
+     - "Per stage" — "Pick individually"
+
+2. If "Per stage": call `AskUserQuestion` twice (4 questions max per call):
+   - **Batch 1** (header per question: stage name):
+     - "Planning?" → Opus (Recommended) / Sonnet / Haiku
+     - "Discovery?" → Opus / Sonnet (Recommended) / Haiku
+     - "Docs?" → Opus / Sonnet (Recommended) / Haiku
+     - "Review?" → Opus / Sonnet (Recommended) / Haiku
+   - **Batch 2:**
+     - "Implementation?" → Opus / Sonnet (Recommended) / Haiku
+     - "Specialists?" → Opus / Sonnet (Recommended) / Haiku
+     - "Post-loop?" → Opus / Sonnet / Haiku (Recommended)
+
+3. Write selected models to `nazgul/config.json → models`
+
+**Presets map:**
+- Balanced: `{ planning: "opus", discovery: "sonnet", docs: "sonnet", review: "sonnet", implementation: "sonnet", specialists: "sonnet", post_loop: "haiku", default: "sonnet" }`
+- Quality: `{ planning: "opus", discovery: "opus", docs: "opus", review: "opus", implementation: "opus", specialists: "opus", post_loop: "opus", default: "opus" }`
+- Fast/cheap: `{ planning: "sonnet", discovery: "haiku", docs: "haiku", review: "haiku", implementation: "sonnet", specialists: "sonnet", post_loop: "haiku", default: "haiku" }`
