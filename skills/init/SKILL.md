@@ -3,7 +3,7 @@ name: nazgul:init
 description: Initialize Nazgul for a project — check prerequisites, run discovery, create runtime directories, generate reviewer agents. Use when setting up Nazgul for the first time, user says "initialize nazgul", "set up nazgul", or before running any other Nazgul commands.
 context: fork
 disable-model-invocation: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, AskUserQuestion
 metadata:
   author: Jose Mejia
   version: 1.1.0
@@ -113,18 +113,25 @@ Write the merged result back. If already present, skip (no-op).
 
 ### Step 7: Optional Features Prompt
 
-Ask the user about optional features and store preferences in `nazgul/config.json`:
+Use `AskUserQuestion` to ask about optional features. Store preferences in `nazgul/config.json`.
 
-#### Auto-Formatter
-Ask: "Auto-format files after edits? (Runs prettier/ruff/gofmt/etc. based on file type) [y/N]"
-- If yes: set `formatter.enabled: true` in config.json
-- If no (default): set `formatter.enabled: false`
-- Detects the project's formatter from Discovery context (e.g., prettier for JS/TS, ruff for Python)
+Call `AskUserQuestion` with both questions at once (up to 4 questions supported):
 
-#### Completion Notifications
-Ask: "Notify when the loop completes? Enter a command (e.g., `say 'Nazgul done'`) or press Enter to skip:"
-- If command provided: set `notifications.on_complete: "[command]"` in config.json
-- If skipped: leave `notifications` section empty
-- Suggest platform-appropriate defaults:
-  - macOS: `say 'Nazgul loop complete'`
-  - Linux: `notify-send 'Nazgul' 'Loop complete'`
+**Question 1 — Auto-Formatter:**
+- header: "Formatter"
+- question: "Auto-format files after edits?"
+- options:
+  - "Yes" — "Run prettier/ruff/gofmt/etc. automatically based on file type"
+  - "No (Recommended)" — "Skip auto-formatting, handle it manually"
+- If Yes: set `formatter.enabled: true` in config.json
+- If No: set `formatter.enabled: false`
+
+**Question 2 — Completion Notifications:**
+- header: "Notify"
+- question: "Notify when the loop completes?"
+- options:
+  - "Voice alert (Recommended)" — platform default: `say 'Nazgul loop complete'` (macOS) or `notify-send 'Nazgul' 'Loop complete'` (Linux)
+  - "Silent" — "No notification when the loop finishes"
+- If Voice alert: set `notifications.on_complete` to the platform-appropriate command
+- If Silent: leave `notifications` section empty
+- If Other (custom command): set `notifications.on_complete` to the user's command
