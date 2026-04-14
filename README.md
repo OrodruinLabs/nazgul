@@ -32,17 +32,6 @@ Nazgul runs a complete autonomous SDLC pipeline — from scanning your codebase 
 - **Fix-first review** — auto-fixes mechanical issues (dead code, style), only asks about risky changes (security, architecture)
 - **Survives interruptions** — checkpoints, recovery pointers, session tracking, and hooks mean you can close your laptop and resume later
 
-```mermaid
-flowchart LR
-  A["Objective"] --> B["Discovery"]
-  B --> C["Docs"]
-  C --> D["Plan"]
-  D --> E["Implement"]
-  E --> F["Review Board"]
-  F -->|"approve"| G["Ship"]
-  F -->|"reject"| E
-```
-
 ## Install
 
 **From the Orodruin Labs marketplace** (recommended):
