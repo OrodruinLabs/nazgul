@@ -9,8 +9,5 @@
   "homepage": "https://github.com/OrodruinLabs/nazgul",
   "repository": "https://github.com/OrodruinLabs/nazgul",
   "license": "MIT",
-  "keywords": ["agents", "automation", "development", "multi-agent", "review"],
-  "skills": "./skills/",
-  "agents": "./agents/",
-  "hooks": "./hooks/hooks.json"
+  "keywords": ["agents", "automation", "development", "multi-agent", "review"]
 }
