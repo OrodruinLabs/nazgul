@@ -153,9 +153,16 @@ Create the scratch tree:
 mkdir -p ./.bootstrap-scratch/context ./.bootstrap-scratch/docs ./.bootstrap-scratch/agents ./.bootstrap-scratch/.claude
 ```
 
-Determine the objective source:
+Detect whether this is an existing codebase or an empty project:
 
-1. **If `$BOOTSTRAP_OBJECTIVE` (parsed in Phase 1) is non-empty**, use it as the objective. Write a minimal project-spec:
+```bash
+detect_project_type
+echo "Detected: $BOOTSTRAP_PROJECT_TYPE ($BOOTSTRAP_SOURCE_COUNT source files)"
+```
+
+Determine the objective source using a three-tier priority:
+
+1. **If `$BOOTSTRAP_OBJECTIVE` (parsed in Phase 1) is non-empty**, use it regardless of project type. Write a minimal project-spec:
 
    ```bash
    if [ -n "$BOOTSTRAP_OBJECTIVE" ]; then
@@ -172,7 +179,31 @@ Determine the objective source:
    fi
    ```
 
-2. **Otherwise**, run the condensed Tier 1 interactive flow. Ask these 5 questions one at a time, phrased naturally, and wait for each answer:
+2. **If brownfield** (`$BOOTSTRAP_PROJECT_TYPE` = "brownfield") **and no explicit objective**, skip interactive questions entirely. The codebase IS the spec — Discovery will scan it and derive everything. Write a codebase-derived project-spec:
+
+   ```bash
+   if [ -z "$BOOTSTRAP_OBJECTIVE" ] && [ "$BOOTSTRAP_PROJECT_TYPE" = "brownfield" ]; then
+     PROJECT_NAME=$(basename "$(pwd)")
+     cat > ./.bootstrap-scratch/context/project-spec.md <<SPEC
+   # Project Specification
+
+   ## Source
+   - Method: brownfield-auto (derived from existing codebase)
+   - Created at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+   - Source files detected: $BOOTSTRAP_SOURCE_COUNT
+
+   ## Vision
+   Document and analyze the existing $PROJECT_NAME codebase.
+
+   ## Note
+   This is a brownfield project. The objective, architecture, features, and
+   constraints will be derived from scanning the existing source code during
+   the Discovery phase. No interactive input was required.
+   SPEC
+   fi
+   ```
+
+3. **If greenfield** (`$BOOTSTRAP_PROJECT_TYPE` = "greenfield") **and no explicit objective**, run the condensed Tier 1 interactive flow. Ask these 5 questions one at a time, phrased naturally, and wait for each answer:
 
    1. *"In a sentence or two, what are you building?"*
    2. *"Who will use this?"*
@@ -182,7 +213,7 @@ Determine the objective source:
 
    After collecting answers, write `./.bootstrap-scratch/context/project-spec.md` with the standard sections (`## Vision`, `## Target Users`, `## Core Features`, `## Problem Statement`, `## Constraints`).
 
-3. **After Tier 1, offer Tier 2**: *"Got the basics. Want to go deeper on user stories and success metrics? (~5 more minutes) (y/n)"*
+   **After Tier 1, offer Tier 2**: *"Got the basics. Want to go deeper on user stories and success metrics? (~5 more minutes) (y/n)"*
    - If yes, ask per-feature user stories and success metrics, append to the spec.
    - If no, finalize with Tier 1 content only.
 
