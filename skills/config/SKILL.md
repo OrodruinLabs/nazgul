@@ -1,5 +1,5 @@
 ---
-name: nazgul:config
+name: "nazgul:config"
 description: View and change Nazgul settings — model assignments, formatter, notifications. Use when user says "configure nazgul", "change models", "nazgul settings", or wants to adjust config after init.
 context: fork
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion
@@ -22,11 +22,11 @@ metadata:
 
 Read `nazgul/config.json` and display:
 
-```
+```text
 ─── ◈ NAZGUL ▸ CONFIGURATION ───────────────────────────
 ```
 
-```
+```text
 Models:
   Planning:        [models.planning]
   Discovery:       [models.discovery]
@@ -92,12 +92,13 @@ Otherwise, use `AskUserQuestion` (multiSelect: true):
 
 4. Update `nazgul/config.json → models` with the selected values using `jq`:
    ```bash
-   jq '.models.planning = "opus" | .models.discovery = "sonnet" | ...' nazgul/config.json > tmp && mv tmp nazgul/config.json
+   jq '.models.planning = "opus" | .models.discovery = "sonnet" | ...' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
    ```
 
-5. Update `model:` field in generated reviewer agents:
-   - Glob for `.claude/agents/generated/*.md`
-   - For each file: if `model:` line exists in frontmatter, replace the value; if not, add `model: [models.review]` after the `name:` line
+5. Update `model:` field in generated agents by role:
+   - Reviewer agents → set `model: [models.review]`
+   - Specialist agents → set `model: [models.specialists]`
+   - Identify role by checking the agent's `description:` frontmatter field or filename pattern
 
 6. Display confirmation:
    ```
