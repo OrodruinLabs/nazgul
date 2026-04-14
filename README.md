@@ -52,7 +52,11 @@ Nazgul runs a complete autonomous SDLC pipeline — from scanning your codebase 
 git clone https://github.com/OrodruinLabs/nazgul.git ~/.claude/plugins/nazgul
 ```
 
-**Update:** select the plugin in `/plugin` and choose "Update now", or enable auto-updates per marketplace in `/plugin` → Marketplaces tab → select orodruin-labs → Enable auto-update.
+**Update:**
+```bash
+/plugin                # Select nazgul → "Update now"
+```
+Or enable auto-updates: `/plugin` → Marketplaces tab → orodruin-labs → Enable auto-update.
 
 ## Quick Start
 
