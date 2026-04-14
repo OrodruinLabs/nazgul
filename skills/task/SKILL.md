@@ -1,6 +1,6 @@
 ---
-name: hydra:task
-description: Task lifecycle management — skip, unblock, add, prioritize, info, and list tasks. Use when you need to manage individual tasks in the Hydra pipeline.
+name: nazgul:task
+description: Task lifecycle management — skip, unblock, add, prioritize, info, and list tasks. Use when you need to manage individual tasks in the Nazgul pipeline.
 context: fork
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 metadata:
@@ -8,22 +8,22 @@ metadata:
   version: 1.1.0
 ---
 
-# Hydra Task
+# Nazgul Task
 
 ## Examples
-- `/hydra:task` — List all tasks with status summary
-- `/hydra:task info TASK-003` — Show full details and review history for a task
-- `/hydra:task skip TASK-005` — Skip a task and promote unblocked downstream tasks
-- `/hydra:task unblock TASK-004` — Reset a blocked task back to READY
-- `/hydra:task add "Implement rate limiting"` — Create a new task
-- `/hydra:task prioritize TASK-006 --before TASK-003` — Reorder task execution
+- `/nazgul:task` — List all tasks with status summary
+- `/nazgul:task info TASK-003` — Show full details and review history for a task
+- `/nazgul:task skip TASK-005` — Skip a task and promote unblocked downstream tasks
+- `/nazgul:task unblock TASK-004` — Reset a blocked task back to READY
+- `/nazgul:task add "Implement rate limiting"` — Create a new task
+- `/nazgul:task prioritize TASK-006 --before TASK-003` — Reorder task execution
 
 ## Arguments
 $ARGUMENTS
 
 ## Current State
-- Task list: !`ls hydra/tasks/TASK-*.md 2>/dev/null || echo "No tasks"`
-- Plan: !`head -50 hydra/plan.md 2>/dev/null || echo "No plan"`
+- Task list: !`ls nazgul/tasks/TASK-*.md 2>/dev/null || echo "No tasks"`
+- Plan: !`head -50 nazgul/plan.md 2>/dev/null || echo "No plan"`
 
 ## Instructions
 
@@ -38,7 +38,7 @@ Parse `$ARGUMENTS` for a subcommand and its parameters. If no subcommand is prov
 Produce a quick status table of all tasks:
 
 ```
-Hydra Tasks
+Nazgul Tasks
 ═══════════════════════════════════════════════════════════
 ID         Status              Description
 ─────────────────────────────────────────────────────────
@@ -51,7 +51,7 @@ TASK-005   PLANNED             Write integration tests
 Total: 5 | Done: 1 | Active: 2 | Blocked: 1 | Planned: 1
 ```
 
-1. Read each `hydra/tasks/TASK-*.md` file
+1. Read each `nazgul/tasks/TASK-*.md` file
 2. Extract: task ID, status, and the first line of the description
 3. Sort by task ID (numeric order)
 4. Format as the table above
@@ -63,7 +63,7 @@ Total: 5 | Done: 1 | Active: 2 | Blocked: 1 | Planned: 1
 
 Set the specified task's status to SKIPPED.
 
-1. Validate the task file exists: `hydra/tasks/TASK-NNN.md`
+1. Validate the task file exists: `nazgul/tasks/TASK-NNN.md`
 2. If not found, error: "Task TASK-NNN not found."
 3. Use sed to update the `Status:` field to `SKIPPED` in the task manifest
 4. Scan all other task manifests for dependencies that reference TASK-NNN
@@ -76,7 +76,7 @@ Set the specified task's status to SKIPPED.
 
 Reset a BLOCKED task back to READY so it can be picked up by the loop.
 
-1. Validate the task file exists: `hydra/tasks/TASK-NNN.md`
+1. Validate the task file exists: `nazgul/tasks/TASK-NNN.md`
 2. If not found, error: "Task TASK-NNN not found."
 3. If the task is not BLOCKED, warn: "TASK-NNN is not blocked (current status: [status])."
 4. Update `Status:` to `READY`
@@ -91,7 +91,7 @@ Reset a BLOCKED task back to READY so it can be picked up by the loop.
 Create a new task manifest and append it to the plan.
 
 1. Scan existing task files to determine the next available TASK-NNN number
-2. Create `hydra/tasks/TASK-NNN.md` with the following template:
+2. Create `nazgul/tasks/TASK-NNN.md` with the following template:
 
 ```markdown
 # TASK-NNN: [description]
@@ -101,7 +101,7 @@ Create a new task manifest and append it to the plan.
 - **Dependencies:** none
 - **Retry:** 0/3
 - **Created:** [ISO 8601 timestamp]
-- **Source:** manual (via /hydra:task add)
+- **Source:** manual (via /nazgul:task add)
 
 ## Description
 [description]
@@ -114,7 +114,7 @@ _To be filled by implementer._
 ```
 
 3. If there are no dependencies (check if any were specified in the description), set status to `READY` instead of `PLANNED`
-4. Append the task to `hydra/plan.md` in the task list section
+4. Append the task to `nazgul/plan.md` in the task list section
 5. Output: "Created TASK-NNN: [description]. Status: [PLANNED|READY]."
 
 ---
@@ -124,7 +124,7 @@ _To be filled by implementer._
 Reorder tasks in the plan so TASK-NNN appears before TASK-MMM.
 
 1. Validate both task files exist
-2. Read `hydra/plan.md`
+2. Read `nazgul/plan.md`
 3. Find the lines referencing both tasks in the plan's task list
 4. Remove TASK-NNN's line from its current position
 5. Insert it immediately before TASK-MMM's line
@@ -139,10 +139,10 @@ Note: This changes execution order but does NOT override dependency constraints.
 
 Show full details for a specific task.
 
-1. Validate the task file exists: `hydra/tasks/TASK-NNN.md`
+1. Validate the task file exists: `nazgul/tasks/TASK-NNN.md`
 2. If not found, error: "Task TASK-NNN not found."
-3. Read and display the full contents of `hydra/tasks/TASK-NNN.md`
-4. Check for review history: look for files matching `hydra/reviews/TASK-NNN-*.md`
+3. Read and display the full contents of `nazgul/tasks/TASK-NNN.md`
+4. Check for review history: look for files matching `nazgul/reviews/TASK-NNN-*.md`
 5. If review files exist, display them in chronological order:
 
 ```
@@ -157,13 +157,13 @@ Review History
 ...
 ```
 
-6. Check for delegation briefs: `hydra/tasks/TASK-NNN-delegation.md`
+6. Check for delegation briefs: `nazgul/tasks/TASK-NNN-delegation.md`
 7. If a delegation brief exists, include it in the output
 
 ---
 
 ### Error Handling
 
-- If Hydra is not initialized (no `hydra/config.json`): "Hydra not initialized. Run `/hydra:init` first."
-- If no tasks exist: "No tasks found. Run `/hydra:start` to generate a plan."
+- If Nazgul is not initialized (no `nazgul/config.json`): "Nazgul not initialized. Run `/nazgul:init` first."
+- If no tasks exist: "No tasks found. Run `/nazgul:start` to generate a plan."
 - If an unknown subcommand is provided: "Unknown subcommand: [X]. Available: list, skip, unblock, add, prioritize, info"

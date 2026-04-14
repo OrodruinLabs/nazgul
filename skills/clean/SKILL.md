@@ -1,6 +1,6 @@
 ---
-name: hydra:clean
-description: Fully remove Hydra from a project — deletes all runtime state, generated agents, MCP config, permissions, CLAUDE.md injections, and gitignore entries. Use when user says "remove hydra", "uninstall hydra", "clean hydra", or wants to completely undo /hydra:init.
+name: nazgul:clean
+description: Fully remove Nazgul from a project — deletes all runtime state, generated agents, MCP config, permissions, CLAUDE.md injections, and gitignore entries. Use when user says "remove nazgul", "uninstall nazgul", "clean nazgul", or wants to completely undo /nazgul:init.
 context: fork
 allowed-tools: Read, Edit, Bash, Glob, Grep, AskUserQuestion
 metadata:
@@ -8,31 +8,31 @@ metadata:
   version: 1.0.0
 ---
 
-# Hydra Clean
+# Nazgul Clean
 
 ## Examples
-- `/hydra:clean` — Fully remove Hydra from this project (with confirmation)
-- `/hydra:clean --force` — Remove without confirmation prompt
+- `/nazgul:clean` — Fully remove Nazgul from this project (with confirmation)
+- `/nazgul:clean --force` — Remove without confirmation prompt
 
 ## Arguments
 $ARGUMENTS
 
 ## Current State
-- Hydra initialized: !`test -f hydra/config.json && echo "YES" || echo "NO"`
-- Install mode: !`test -f hydra/config.json && jq -r '.install_mode // "shared"' hydra/config.json 2>/dev/null || echo "unknown"`
-- Tasks count: !`ls hydra/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' '`
+- Nazgul initialized: !`test -f nazgul/config.json && echo "YES" || echo "NO"`
+- Install mode: !`test -f nazgul/config.json && jq -r '.install_mode // "shared"' nazgul/config.json 2>/dev/null || echo "unknown"`
+- Tasks count: !`ls nazgul/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' '`
 - Generated agents: !`ls .claude/agents/generated/*.md 2>/dev/null | wc -l | tr -d ' '`
-- CLAUDE.md has hydra section: !`grep -q "Hydra Framework" CLAUDE.md 2>/dev/null && echo "YES" || echo "NO"`
-- Gitignore has hydra entries: !`grep -q "# Hydra Framework (local mode)" .gitignore 2>/dev/null && echo "YES" || echo "NO"`
+- CLAUDE.md has nazgul section: !`grep -q "Nazgul Framework" CLAUDE.md 2>/dev/null && echo "YES" || echo "NO"`
+- Gitignore has nazgul entries: !`grep -q "# Nazgul Framework (local mode)" .gitignore 2>/dev/null && echo "YES" || echo "NO"`
 
 ## Instructions
 
-Fully remove Hydra from this project. No archiving — permanent deletion.
+Fully remove Nazgul from this project. No archiving — permanent deletion.
 
-### Step 1: Check if Hydra is Present
+### Step 1: Check if Nazgul is Present
 
-If none of the current state indicators show Hydra presence (no config, no agents, no MCP entry, no CLAUDE.md section):
-- Output: "Hydra is not installed in this project. Nothing to clean."
+If none of the current state indicators show Nazgul presence (no config, no agents, no MCP entry, no CLAUDE.md section):
+- Output: "Nazgul is not installed in this project. Nothing to clean."
 - Stop here.
 
 ### Step 2: Parse Arguments
@@ -44,16 +44,16 @@ Check `$ARGUMENTS` for `--force` flag. If present, skip confirmation.
 Unless `--force` is present, show what will be removed and ask for confirmation:
 
 ```
-Hydra Clean — Full Removal
+Nazgul Clean — Full Removal
 ═══════════════════════════════════════════════════════
 
 The following will be PERMANENTLY DELETED:
 
-  hydra/                        [EXISTS | not found]
+  nazgul/                        [EXISTS | not found]
   .claude/agents/generated/     [N file(s) | not found]
   .claude/settings.json entries [EXISTS | not found]
-  CLAUDE.md hydra section       [EXISTS | not found]
-  .gitignore hydra entries      [EXISTS | not found]
+  CLAUDE.md nazgul section       [EXISTS | not found]
+  .gitignore nazgul entries      [EXISTS | not found]
 
 This cannot be undone. Proceed? (yes/no)
 ```
@@ -62,15 +62,15 @@ Wait for user confirmation. If the user says no, abort.
 
 ### Step 4: Remove Runtime State
 
-Delete the entire `hydra/` directory:
+Delete the entire `nazgul/` directory:
 
 ```bash
-rm -rf hydra/
+rm -rf nazgul/
 ```
 
 ### Step 5: Remove Generated Agents
 
-Delete the `.claude/agents/generated/` directory (these are Hydra-generated reviewer agents):
+Delete the `.claude/agents/generated/` directory (these are Nazgul-generated reviewer agents):
 
 ```bash
 rm -rf .claude/agents/generated/
@@ -93,21 +93,21 @@ If `.claude/settings.json` exists:
 
 ### Step 7: Clean CLAUDE.md
 
-If the project's `CLAUDE.md` contains a Hydra-injected section:
+If the project's `CLAUDE.md` contains a Nazgul-injected section:
 
 1. Read `CLAUDE.md`
-2. Look for the Hydra section — it starts with `# Hydra Framework — Project Instructions` (the content from `templates/CLAUDE.md.template`)
-3. Remove everything from that header to the end of the Hydra section. The Hydra section runs from `# Hydra Framework — Project Instructions` to the end of the file (it is always appended at the bottom by `/hydra:init`).
+2. Look for the Nazgul section — it starts with `# Nazgul Framework — Project Instructions` (the content from `templates/CLAUDE.md.template`)
+3. Remove everything from that header to the end of the Nazgul section. The Nazgul section runs from `# Nazgul Framework — Project Instructions` to the end of the file (it is always appended at the bottom by `/nazgul:init`).
 4. Trim any trailing blank lines left behind
 5. If CLAUDE.md is now empty (only whitespace), delete the file entirely
-6. If CLAUDE.md still has non-Hydra content, write it back with the Hydra section removed
+6. If CLAUDE.md still has non-Nazgul content, write it back with the Nazgul section removed
 
 ### Step 8: Clean .gitignore
 
-If `.gitignore` contains the Hydra local mode block:
+If `.gitignore` contains the Nazgul local mode block:
 
 1. Read `.gitignore`
-2. Remove the block starting with `# Hydra Framework (local mode)` and the lines that follow it (`hydra/`, `.claude/agents/generated/`, `.mcp.json`)
+2. Remove the block starting with `# Nazgul Framework (local mode)` and the lines that follow it (`nazgul/`, `.claude/agents/generated/`, `.mcp.json`)
 3. Trim any extra blank lines left behind
 4. If `.gitignore` is now empty, delete it
 5. Otherwise write it back
@@ -115,16 +115,16 @@ If `.gitignore` contains the Hydra local mode block:
 ### Step 9: Output Summary
 
 ```
-Hydra Clean Complete
+Nazgul Clean Complete
 ═══════════════════════════════════════════════════════
 
 Removed:
-  hydra/                        [DELETED | was not present]
+  nazgul/                        [DELETED | was not present]
   .claude/agents/generated/     [DELETED (N files) | was not present]
   .claude/settings.json entries [CLEANED | was not present]
-  CLAUDE.md hydra section       [REMOVED | was not present]
-  .gitignore hydra entries      [REMOVED | was not present]
+  CLAUDE.md nazgul section       [REMOVED | was not present]
+  .gitignore nazgul entries      [REMOVED | was not present]
 
-Hydra has been fully removed from this project.
-To reinstall: /hydra:init
+Nazgul has been fully removed from this project.
+To reinstall: /nazgul:init
 ```

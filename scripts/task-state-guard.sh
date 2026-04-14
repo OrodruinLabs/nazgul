@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Hydra Task State Guard — enforces Constitution Article III state machine
+# Nazgul Task State Guard — enforces Constitution Article III state machine
 # Intercepts Write/Edit on task manifests, validates status transitions
 # Exit 0 = allow, Exit 2 = block with reason
 
@@ -51,31 +51,31 @@ FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null || e
 # Derive project root — prefer CLAUDE_PROJECT_DIR, fall back to pwd
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 
-# Helper: check if a path is inside the project's hydra/ control directory
-is_hydra_path() {
+# Helper: check if a path is inside the project's nazgul/ control directory
+is_nazgul_path() {
   local p="$1"
-  # Relative path starting with hydra/
+  # Relative path starting with nazgul/
   case "$p" in
-    hydra|hydra/*) return 0 ;;
+    nazgul|nazgul/*) return 0 ;;
   esac
-  # Absolute path under PROJECT_ROOT/hydra/
+  # Absolute path under PROJECT_ROOT/nazgul/
   case "$p" in
-    "${PROJECT_ROOT}"/hydra|"${PROJECT_ROOT}"/hydra/*) return 0 ;;
+    "${PROJECT_ROOT}"/nazgul|"${PROJECT_ROOT}"/nazgul/*) return 0 ;;
   esac
   return 1
 }
 
-# Helper: check if path is a task manifest in the project's hydra/ dir
+# Helper: check if path is a task manifest in the project's nazgul/ dir
 is_task_manifest() {
   local p="$1"
-  # Must match hydra/tasks/TASK-<digits>.md (strict: digits only before .md)
-  [[ "$p" =~ (^|/)hydra/tasks/TASK-[0-9]+\.md$ ]]
+  # Must match nazgul/tasks/TASK-<digits>.md (strict: digits only before .md)
+  [[ "$p" =~ (^|/)nazgul/tasks/TASK-[0-9]+\.md$ ]]
 }
 
 # If this is NOT a task manifest, check if it needs the active-task guard
 if ! is_task_manifest "$FILE_PATH"; then
-  # Files inside hydra/ are always allowed (config, plan, reviews, etc.)
-  if is_hydra_path "$FILE_PATH"; then
+  # Files inside nazgul/ are always allowed (config, plan, reviews, etc.)
+  if is_nazgul_path "$FILE_PATH"; then
     exit 0
   fi
 
@@ -89,21 +89,21 @@ if ! is_task_manifest "$FILE_PATH"; then
   esac
 
   # Check if active task guard is enabled
-  HYDRA_TASKS_DIR=""
-  if [ -d "$PROJECT_ROOT/hydra/tasks" ]; then
-    HYDRA_TASKS_DIR="$PROJECT_ROOT/hydra/tasks"
-    HYDRA_CONFIG="$PROJECT_ROOT/hydra/config.json"
+  NAZGUL_TASKS_DIR=""
+  if [ -d "$PROJECT_ROOT/nazgul/tasks" ]; then
+    NAZGUL_TASKS_DIR="$PROJECT_ROOT/nazgul/tasks"
+    NAZGUL_CONFIG="$PROJECT_ROOT/nazgul/config.json"
   fi
 
-  # No hydra/tasks dir = not a Hydra project, allow everything
-  if [ -z "$HYDRA_TASKS_DIR" ]; then
+  # No nazgul/tasks dir = not a Nazgul project, allow everything
+  if [ -z "$NAZGUL_TASKS_DIR" ]; then
     exit 0
   fi
 
   # Check config flag — default to true if not set
   REQUIRE_ACTIVE="true"
-  if [ -f "${HYDRA_CONFIG:-}" ]; then
-    REQUIRE_ACTIVE=$(jq -r 'if .guards.requireActiveTask == false then "false" else "true" end' "$HYDRA_CONFIG" 2>/dev/null || echo "true")
+  if [ -f "${NAZGUL_CONFIG:-}" ]; then
+    REQUIRE_ACTIVE=$(jq -r 'if .guards.requireActiveTask == false then "false" else "true" end' "$NAZGUL_CONFIG" 2>/dev/null || echo "true")
   fi
   if [ "$REQUIRE_ACTIVE" != "true" ]; then
     exit 0
@@ -112,7 +112,7 @@ if ! is_task_manifest "$FILE_PATH"; then
   # Check if any task or patch is IN_PROGRESS
   HAS_ACTIVE=false
   TASK_COUNT=0
-  for task_file in "$HYDRA_TASKS_DIR"/TASK-*.md "$HYDRA_TASKS_DIR"/patches/PATCH-*.md; do
+  for task_file in "$NAZGUL_TASKS_DIR"/TASK-*.md "$NAZGUL_TASKS_DIR"/patches/PATCH-*.md; do
     [ -f "$task_file" ] || continue
     TASK_COUNT=$((TASK_COUNT + 1))
     STATUS=$(get_task_status "$task_file" "")
@@ -128,7 +128,7 @@ if ! is_task_manifest "$FILE_PATH"; then
   fi
 
   if [ "$HAS_ACTIVE" = false ]; then
-    echo "HYDRA STATE GUARD: BLOCKED — No task is IN_PROGRESS" >&2
+    echo "NAZGUL STATE GUARD: BLOCKED — No task is IN_PROGRESS" >&2
     echo "Cannot edit source files without an active task." >&2
     echo "Transition a task to IN_PROGRESS before editing: $FILE_PATH" >&2
     exit 2
@@ -174,7 +174,7 @@ if [ -z "$OLD_STATUS" ]; then
   if [ "$NEW_STATUS" = "PLANNED" ] || [ "$NEW_STATUS" = "READY" ]; then
     exit 0
   fi
-  echo "HYDRA STATE GUARD: BLOCKED — New task must start as PLANNED or READY, not ${NEW_STATUS}" >&2
+  echo "NAZGUL STATE GUARD: BLOCKED — New task must start as PLANNED or READY, not ${NEW_STATUS}" >&2
   exit 2
 fi
 
@@ -205,7 +205,7 @@ valid_transition() {
 }
 
 if ! valid_transition "$OLD_STATUS" "$NEW_STATUS"; then
-  echo "HYDRA STATE GUARD: BLOCKED — Invalid state transition: ${OLD_STATUS} → ${NEW_STATUS}" >&2
+  echo "NAZGUL STATE GUARD: BLOCKED — Invalid state transition: ${OLD_STATUS} → ${NEW_STATUS}" >&2
   echo "Constitution Article III permitted transitions:" >&2
   echo "  PLANNED→READY, READY→IN_PROGRESS, IN_PROGRESS→IMPLEMENTED," >&2
   echo "  IMPLEMENTED→IN_REVIEW, IN_REVIEW→DONE (with reviews)," >&2
@@ -232,7 +232,7 @@ if [ "$OLD_STATUS" = "IN_PROGRESS" ] && [ "$NEW_STATUS" = "IMPLEMENTED" ]; then
     MANIFEST_TEXT="$NEW_CONTENT"
   fi
   if ! printf '%s' "$MANIFEST_TEXT" | grep -qE '[0-9a-f]{7,40}'; then
-    echo "HYDRA STATE GUARD: BLOCKED — Cannot mark IMPLEMENTED without a commit SHA" >&2
+    echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark IMPLEMENTED without a commit SHA" >&2
     echo "Add a ## Commits section with at least one commit hash to the task manifest." >&2
     echo "If you implemented the work, you should have committed it." >&2
     exit 2
@@ -242,10 +242,10 @@ fi
 # IMPLEMENTED -> IN_REVIEW requires review directory to exist
 if [ "$OLD_STATUS" = "IMPLEMENTED" ] && [ "$NEW_STATUS" = "IN_REVIEW" ]; then
   TASK_ID_CHECK=$(basename "$FILE_PATH" .md)
-  HYDRA_DIR_CHECK=$(dirname "$(dirname "$FILE_PATH")")
-  REVIEW_DIR_CHECK="$HYDRA_DIR_CHECK/reviews/$TASK_ID_CHECK"
+  NAZGUL_DIR_CHECK=$(dirname "$(dirname "$FILE_PATH")")
+  REVIEW_DIR_CHECK="$NAZGUL_DIR_CHECK/reviews/$TASK_ID_CHECK"
   if [ ! -d "$REVIEW_DIR_CHECK" ]; then
-    echo "HYDRA STATE GUARD: BLOCKED — Cannot move to IN_REVIEW without a review directory" >&2
+    echo "NAZGUL STATE GUARD: BLOCKED — Cannot move to IN_REVIEW without a review directory" >&2
     echo "Expected: ${REVIEW_DIR_CHECK}/" >&2
     echo "The review-gate agent creates this directory when it starts reviewing." >&2
     exit 2
@@ -256,8 +256,8 @@ fi
 # In YOLO mode, gate APPROVED; in non-YOLO, gate DONE
 # APPROVED → DONE in YOLO needs no review checks (PR merge is external validation)
 TASK_ID=$(basename "$FILE_PATH" .md)
-HYDRA_DIR=$(dirname "$(dirname "$FILE_PATH")")
-CONFIG="$HYDRA_DIR/config.json"
+NAZGUL_DIR=$(dirname "$(dirname "$FILE_PATH")")
+CONFIG="$NAZGUL_DIR/config.json"
 YOLO_MODE="false"
 if [ -f "$CONFIG" ]; then
   YOLO_MODE=$(jq -r '.afk.yolo // false' "$CONFIG" 2>/dev/null || echo "false")
@@ -271,11 +271,11 @@ elif [ "$YOLO_MODE" != "true" ] && [ "$NEW_STATUS" = "DONE" ]; then
 fi
 
 if [ "$NEEDS_REVIEW_CHECK" = true ]; then
-  REVIEW_DIR="$HYDRA_DIR/reviews/$TASK_ID"
+  REVIEW_DIR="$NAZGUL_DIR/reviews/$TASK_ID"
 
   # Check 1: Review directory must exist
   if [ ! -d "$REVIEW_DIR" ]; then
-    echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
+    echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
     echo "No review directory at: ${REVIEW_DIR}" >&2
     echo "ALL reviewers must approve before ${NEW_STATUS} (Constitution Rule 5)." >&2
     exit 2
@@ -293,7 +293,7 @@ if [ "$NEEDS_REVIEW_CHECK" = true ]; then
   done
 
   if [ "$REVIEW_COUNT" -eq 0 ]; then
-    echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
+    echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
     echo "Review directory exists but contains no reviewer files." >&2
     echo "ALL reviewers must approve before ${NEW_STATUS} (Constitution Rule 5)." >&2
     exit 2
@@ -307,7 +307,7 @@ if [ "$NEEDS_REVIEW_CHECK" = true ]; then
       test-failures.md|consolidated-feedback.md|simplify-report.md) continue ;;
     esac
     if ! grep -qi 'APPROVED' "$review_file" 2>/dev/null; then
-      echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
+      echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
       echo "Review ${BASENAME} does not contain APPROVED verdict." >&2
       echo "ALL reviewers must approve before ${NEW_STATUS} (Constitution Rule 5)." >&2
       exit 2
@@ -322,8 +322,8 @@ if [ "$NEEDS_REVIEW_CHECK" = true ]; then
 
   if [ -z "$CONFIGURED_REVIEWERS" ]; then
     # No reviewers configured = cannot verify review gate
-    echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
-    echo "No reviewers configured in hydra/config.json (agents.reviewers is empty)." >&2
+    echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
+    echo "No reviewers configured in nazgul/config.json (agents.reviewers is empty)." >&2
     echo "Run Discovery to generate the reviewer roster." >&2
     exit 2
   fi
@@ -336,7 +336,7 @@ if [ "$NEEDS_REVIEW_CHECK" = true ]; then
     fi
   done <<< "$CONFIGURED_REVIEWERS"
   if [ -n "$MISSING_REVIEWERS" ]; then
-    echo "HYDRA STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
+    echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
     echo "Missing reviews from configured reviewers:${MISSING_REVIEWERS}" >&2
     echo "ALL configured reviewers must approve before ${NEW_STATUS} (Constitution Rule 5)." >&2
     exit 2

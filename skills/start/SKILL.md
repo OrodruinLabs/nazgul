@@ -1,6 +1,6 @@
 ---
-name: hydra:start
-description: Start or resume a Hydra autonomous development loop. Use when user says "start hydra", "run hydra", "begin development", "resume the loop", or passes an objective for new work. Auto-detects project state — no arguments needed.
+name: nazgul:start
+description: Start or resume a Nazgul autonomous development loop. Use when user says "start nazgul", "run nazgul", "begin development", "resume the loop", or passes an objective for new work. Auto-detects project state — no arguments needed.
 context: fork
 disable-model-invocation: true
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task
@@ -9,33 +9,33 @@ metadata:
   version: 1.1.0
 ---
 
-# Hydra Start
+# Nazgul Start
 
 ## Examples
-- `/hydra:start` — Auto-detect project state and resume or begin work
-- `/hydra:start "add user authentication"` — Start a new objective
-- `/hydra:start --afk --max 20` — Run autonomously for up to 20 iterations
-- `/hydra:start --yolo` — Full autonomous mode with no permission prompts
-- `/hydra:start --yolo --task-pr` — YOLO mode with stacked per-task PRs
+- `/nazgul:start` — Auto-detect project state and resume or begin work
+- `/nazgul:start "add user authentication"` — Start a new objective
+- `/nazgul:start --afk --max 20` — Run autonomously for up to 20 iterations
+- `/nazgul:start --yolo` — Full autonomous mode with no permission prompts
+- `/nazgul:start --yolo --task-pr` — YOLO mode with stacked per-task PRs
 
 ## Arguments
 $ARGUMENTS
 
 ## Current Project State
-- Config: !`cat hydra/config.json 2>/dev/null || echo "NOT_INITIALIZED"`
-- Stored objective: !`jq -r '.objective // "none"' hydra/config.json 2>/dev/null || echo "none"`
-- Discovery: !`cat hydra/context/discovery-summary.md 2>/dev/null || echo "NOT_RUN"`
-- Project spec: !`cat hydra/context/project-spec.md 2>/dev/null | head -3 || echo "NONE"`
-- Classification: !`cat hydra/context/project-classification.md 2>/dev/null | head -5 || echo "NOT_CLASSIFIED"`
-- Docs generated: !`ls hydra/docs/*.md 2>/dev/null | wc -l | tr -d ' '`
-- Active tasks: !`grep -rl 'Status.*\(READY\|IN_PROGRESS\|IN_REVIEW\|IMPLEMENTED\|CHANGES_REQUESTED\)' hydra/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' '`
-- Done tasks: !`grep -rl 'Status.*DONE' hydra/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' '`
-- Total tasks: !`ls hydra/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' '`
+- Config: !`cat nazgul/config.json 2>/dev/null || echo "NOT_INITIALIZED"`
+- Stored objective: !`jq -r '.objective // "none"' nazgul/config.json 2>/dev/null || echo "none"`
+- Discovery: !`cat nazgul/context/discovery-summary.md 2>/dev/null || echo "NOT_RUN"`
+- Project spec: !`cat nazgul/context/project-spec.md 2>/dev/null | head -3 || echo "NONE"`
+- Classification: !`cat nazgul/context/project-classification.md 2>/dev/null | head -5 || echo "NOT_CLASSIFIED"`
+- Docs generated: !`ls nazgul/docs/*.md 2>/dev/null | wc -l | tr -d ' '`
+- Active tasks: !`grep -rl 'Status.*\(READY\|IN_PROGRESS\|IN_REVIEW\|IMPLEMENTED\|CHANGES_REQUESTED\)' nazgul/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' '`
+- Done tasks: !`grep -rl 'Status.*DONE' nazgul/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' '`
+- Total tasks: !`ls nazgul/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' '`
 - Active reviewers: !`ls .claude/agents/generated/ 2>/dev/null || echo "No reviewers generated"`
-- Current plan: !`head -20 hydra/plan.md 2>/dev/null || echo "No plan yet"`
-- Recovery Pointer: !`sed -n '/^## Recovery Pointer/,/^## /p' hydra/plan.md 2>/dev/null | head -7 || echo "none"`
+- Current plan: !`head -20 nazgul/plan.md 2>/dev/null || echo "No plan yet"`
+- Recovery Pointer: !`sed -n '/^## Recovery Pointer/,/^## /p' nazgul/plan.md 2>/dev/null | head -7 || echo "none"`
 - TODOs in codebase: !`grep -rn 'TODO\|FIXME\|HACK\|XXX' --include='*.ts' --include='*.js' --include='*.py' --include='*.rb' --include='*.go' --include='*.rs' --include='*.java' --include='*.md' . 2>/dev/null | head -10 || echo "none"`
-- Test context: !`cat hydra/context/test-strategy.md 2>/dev/null | head -5 || echo "none"`
+- Test context: !`cat nazgul/context/test-strategy.md 2>/dev/null | head -5 || echo "none"`
 
 ## Instructions
 
@@ -57,13 +57,13 @@ If `--yolo` flag is present:
      ```
      YOLO mode requires --dangerously-skip-permissions. Restart with:
      claude --dangerously-skip-permissions
-     Then re-run: /hydra:start --yolo --max N
+     Then re-run: /nazgul:start --yolo --max N
      ```
 4. Once confirmed, proceed with full autonomous mode — no pauses, no permission prompts, no human gates
 
 ### Model Selection
 
-Read `hydra/config.json → models` to determine which model to assign each pipeline agent. When delegating via the Task tool, pass the `model` parameter:
+Read `nazgul/config.json → models` to determine which model to assign each pipeline agent. When delegating via the Task tool, pass the `model` parameter:
 
 | Pipeline Agent    | Config Key            | Default |
 |-------------------|-----------------------|---------|
@@ -79,9 +79,9 @@ If the `models` section is missing from config.json, use `"sonnet"` as the fallb
 
 ### Session Naming
 
-When launching Hydra, use session naming for identification:
-- Launch with: `claude -n "hydra-<feat_display_id>"` (e.g., `claude -n "hydra-FEAT-003"`)
-- Agent Teams sessions are auto-named by the team-orchestrator: `hydra-impl-TASK-NNN`, `hydra-review-TASK-NNN`
+When launching Nazgul, use session naming for identification:
+- Launch with: `claude -n "nazgul-<feat_display_id>"` (e.g., `claude -n "nazgul-FEAT-003"`)
+- Agent Teams sessions are auto-named by the team-orchestrator: `nazgul-impl-TASK-NNN`, `nazgul-review-TASK-NNN`
 
 ### Smart State Detection
 
@@ -91,7 +91,7 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 
 #### STATE: NOT_INITIALIZED
 **Detection:** Config shows "NOT_INITIALIZED"
-**Action:** Tell the user: "Hydra not initialized. Run `/hydra:init` first."
+**Action:** Tell the user: "Nazgul not initialized. Run `/nazgul:init` first."
 **Stop here.**
 
 ---
@@ -100,10 +100,10 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 **Detection:** Active tasks > 0 (any task with status READY, IN_PROGRESS, IN_REVIEW, IMPLEMENTED, or CHANGES_REQUESTED)
 **Action:** Auto-resume the loop.
 1. Tell the user: "Resuming: [stored objective]. [N] active tasks remaining."
-2. Read `hydra/plan.md` → Recovery Pointer
-3. Read the latest checkpoint in `hydra/checkpoints/`
+2. Read `nazgul/plan.md` → Recovery Pointer
+3. Read the latest checkpoint in `nazgul/checkpoints/`
 4. Read the active task manifest
-5. **Branch Verification:** Read `hydra/config.json → branch.feature`.
+5. **Branch Verification:** Read `nazgul/config.json → branch.feature`.
    - If set: verify current branch matches, `git checkout <feature>` if not on it
    - If null (pre-v3 project): create feature branch now:
      a. Capture current branch as `branch.base`
@@ -131,12 +131,12 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
    - Tell user: "All [N] tasks complete. Running post-loop agents (documentation, release, observability)..."
    - Delegate to post-loop agents (documentation → release-manager → observability)
    - After post-loop:
-     a. Read `hydra/config.json → branch.feature` and `branch.base`
+     a. Read `nazgul/config.json → branch.feature` and `branch.base`
      b. If feature branch exists:
         - Push the feature branch: `git push -u origin <feature-branch>`
         - Create PR: `gh pr create --base <base-branch> --head <feature-branch> --title "<objective> (<feat_display_id>)" --body "<task summary>"`
         - Clean up all worktrees (remove task worktrees and worktree parent dir)
-     c. Output HYDRA_COMPLETE
+     c. Output NAZGUL_COMPLETE
 3. If post-loop already run:
    - Tell user: "Previous objective complete: [stored objective]. Starting objective derivation for next work..."
    - Fall through to FRESH state below to derive a new objective
@@ -199,23 +199,23 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
    d. Compute feature ID: `FEAT-NNN` from `objectives_history.length + 1`. If board connected, prefer issue number as display_id.
    e. Store `feat_id` and `feat_display_id` in config.json. Set `afk.commit_prefix` to `feat(<display_id>):`.
    f. `git checkout -b feat/<display_id>-<slug>`
-   g. Create worktree dir at `../<project>-hydra-worktrees/`, store path in config
+   g. Create worktree dir at `../<project>-nazgul-worktrees/`, store path in config
 3. Run Discovery agent (scans codebase, classifies project, generates reviewers)
 4. Classify Project: In HITL mode, confirm classification with user.
 5. Generate Documents: Delegate to Doc Generator. In HITL mode, pause for doc review.
 6. Collect Context: Based on objective type, collect targeted context.
 6.5. **Board Sync Prompt** (HITL mode only):
-   - Check `hydra/context/project-profile.md` for "## GitHub Integration" section
-   - If GitHub repo detected AND board not already enabled (`jq -r '.board.enabled' hydra/config.json` is `false`):
+   - Check `nazgul/context/project-profile.md` for "## GitHub Integration" section
+   - If GitHub repo detected AND board not already enabled (`jq -r '.board.enabled' nazgul/config.json` is `false`):
      - Ask user: "GitHub repo detected ([owner]/[repo]). Track tasks on GitHub Projects?"
      - Options:
        a. Yes, create a new project
        b. Yes, use an existing project (list them)
-       c. Skip for now (can run `/hydra:board github` later)
-     - If (a): run `gh project create --owner [owner] --title "Hydra: [repo]"`, then `bash scripts/board-sync-github.sh setup [number]`
+       c. Skip for now (can run `/nazgul:board github` later)
+     - If (a): run `gh project create --owner [owner] --title "Nazgul: [repo]"`, then `bash scripts/board-sync-github.sh setup [number]`
      - If (b): let user pick, then `bash scripts/board-sync-github.sh setup [number]`
      - If (c): continue without board sync
-   - In AFK mode: skip board prompt (user must run `/hydra:board` explicitly)
+   - In AFK mode: skip board prompt (user must run `/nazgul:board` explicitly)
 8. Delegate to Planner: Planner reads context + docs, decomposes into tasks.
 9. Review Plan (HITL): Show plan for approval. AFK: continue.
 10. Delegate to Implementer: Start working on the first READY task.
@@ -225,17 +225,17 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 
 ### Objective Derivation
 
-When no objective exists in config.json and none was provided as an argument, Hydra derives one from project signals. The approach depends on whether this is a greenfield project.
+When no objective exists in config.json and none was provided as an argument, Nazgul derives one from project signals. The approach depends on whether this is a greenfield project.
 
 #### Check: Is this a Greenfield Project?
-If classification is `GREENFIELD` (from `hydra/context/project-classification.md`) OR the codebase has fewer than 10 source files:
+If classification is `GREENFIELD` (from `nazgul/context/project-classification.md`) OR the codebase has fewer than 10 source files:
 → Go to **Greenfield Stack Scaffolding** (below)
 
 Otherwise → continue with signal scanning:
 
 #### Step 1: Scan for signals (use the preprocessor data above + additional reads)
 Gather signals in priority order:
-1. **Project profile** — read `hydra/context/project-profile.md` for stated goals, purpose
+1. **Project profile** — read `nazgul/context/project-profile.md` for stated goals, purpose
 2. **TODO/FIXME/HACK comments** — from the preprocessor TODOs data
 3. **Failing tests** — run the project's test command (from config.json `project.test_command`) and capture failures
 4. **README roadmap** — read the project's README.md for "roadmap", "planned features", "next steps" sections
@@ -245,7 +245,7 @@ Gather signals in priority order:
 #### Step 2: Present or select
 **HITL mode** — Present discovered signals as an interactive menu:
 ```
-Hydra scanned your project and found potential work:
+Nazgul scanned your project and found potential work:
 
 1. [signal description] (source: TODOs in src/payments/)
 2. [signal description] (source: 2 failing tests in auth.test.ts)
@@ -258,7 +258,7 @@ Wait for user selection. If user picks "something else", use their input.
 
 **AFK mode** — Auto-select the highest-priority signal:
 - Priority: failing tests > TODOs with urgency keywords (FIXME, HACK) > open issues > WIP commits > general TODOs
-- If zero signals found: error — "No objective could be derived from project context. Run `/hydra:start 'your objective'` to specify one."
+- If zero signals found: error — "No objective could be derived from project context. Run `/nazgul:start 'your objective'` to specify one."
 
 #### Step 3: Store
 Write the derived/selected objective to config.json:
@@ -274,7 +274,7 @@ Append to `objectives_history` array.
 
 ### Greenfield Stack Scaffolding
 
-For greenfield projects, Hydra first checks for a project spec (see Step 0 in `references/greenfield-scaffolding.md`), then runs an interactive stack selection, tool pre-flight check, and configuration workflow. Consult `references/greenfield-scaffolding.md` for the full process including project spec detection, stack selection menus, AFK defaults, tool configuration steps, infrastructure scaffolding, and config storage.
+For greenfield projects, Nazgul first checks for a project spec (see Step 0 in `references/greenfield-scaffolding.md`), then runs an interactive stack selection, tool pre-flight check, and configuration workflow. Consult `references/greenfield-scaffolding.md` for the full process including project spec detection, stack selection menus, AFK defaults, tool configuration steps, infrastructure scaffolding, and config storage.
 
 For the tool detection commands table (check commands and install commands per platform), see `references/tool-preflight.md`.
 
@@ -290,12 +290,12 @@ When the user explicitly passes an objective string in `$ARGUMENTS`:
      You have an active objective: "[stored objective]" with [N] tasks remaining.
      Options:
      a. Archive it and start the new objective
-     b. Cancel and resume current work (/hydra:start)
+     b. Cancel and resume current work (/nazgul:start)
      ```
    - In AFK mode with active tasks: auto-archive and start new
    - If no active tasks: proceed directly
 2. **Archive old work** (if applicable):
-   - Create `hydra/archive/[YYYY-MM-DD-HHMMSS]/` directory
+   - Create `nazgul/archive/[YYYY-MM-DD-HHMMSS]/` directory
    - Move: plan.md, tasks/, reviews/, docs/, checkpoints/ into archive
    - Keep: config.json (will be updated), context/ (still valid for same project)
    - Update `objectives_history` in config.json with `completed_at` and `plan_archived_to`
@@ -307,7 +307,7 @@ When the user explicitly passes an objective string in `$ARGUMENTS`:
 ### `--continue` Flag (backward compatibility)
 
 If `--continue` is present, behave exactly as ACTIVE_LOOP state. Also reset `current_iteration` to 0 if it has reached `max_iterations`.
-If no active tasks found: "Nothing to continue. Run `/hydra:start` to auto-detect what to do."
+If no active tasks found: "Nothing to continue. Run `/nazgul:start` to auto-detect what to do."
 
 ---
 
@@ -315,8 +315,8 @@ If no active tasks found: "Nothing to continue. Run `/hydra:start` to auto-detec
 
 Before dispatching the implementer, check for wave-based parallel execution:
 
-1. Read `hydra/plan.md` for a `## Wave Groups` section
-2. Read `hydra/config.json` for `parallelism.wave_execution` and `parallelism.enabled`
+1. Read `nazgul/plan.md` for a `## Wave Groups` section
+2. Read `nazgul/config.json` for `parallelism.wave_execution` and `parallelism.enabled`
 
 **If wave groups exist AND wave_execution is true AND parallelism is enabled:**
 
@@ -327,7 +327,7 @@ d. If 2+ tasks: dispatch parallel Agent Teams:
    - Create a worktree per task: `git worktree add <worktree_dir>/TASK-NNN -b feat/<display_id>/TASK-NNN <feature-branch>`
    - One implementer per task, each working in its own worktree with fresh context
    - Pass worktree path to each implementer teammate
-   - Team name: `hydra-impl-wave-[N]`
+   - Team name: `nazgul-impl-wave-[N]`
    - Max parallel agents: `parallelism.max_parallel_teammates` from config
    - Each agent commits in its own worktree
 e. Wait for all agents in the wave to complete

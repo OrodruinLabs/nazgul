@@ -1,5 +1,5 @@
-# Runtime directory (created per-project by /hydra-init)
-hydra/
+# Runtime directory (created per-project by /nazgul-init)
+nazgul/
 
 # Local Claude Code config
 .claude/settings.local.json

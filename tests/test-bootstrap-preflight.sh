@@ -14,17 +14,17 @@ source "$REPO_ROOT/scripts/lib/bootstrap-preflight.sh"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-preflight-XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 
-# --- check_no_hydra_dir ---
-mkdir -p "$WORK/with-hydra/hydra"
+# --- check_no_nazgul_dir ---
+mkdir -p "$WORK/with-nazgul/nazgul"
 mkdir -p "$WORK/clean"
 
-(cd "$WORK/clean" && check_no_hydra_dir) && _pass "clean: no hydra dir" || _fail "clean: no hydra dir"
+(cd "$WORK/clean" && check_no_nazgul_dir) && _pass "clean: no nazgul dir" || _fail "clean: no nazgul dir"
 
 set +e
-(cd "$WORK/with-hydra" && check_no_hydra_dir >/dev/null 2>&1)
+(cd "$WORK/with-nazgul" && check_no_nazgul_dir >/dev/null 2>&1)
 ec=$?
 set -e
-assert_exit_code "hydra dir present: exit 10" "$ec" 10
+assert_exit_code "nazgul dir present: exit 10" "$ec" 10
 
 # --- check_docs_agents_empty ---
 mkdir -p "$WORK/empty"

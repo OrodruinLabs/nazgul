@@ -20,7 +20,7 @@ You are the Simplifier Agent. You review implemented code for reuse, quality, an
 
 ## Output Formatting
 Format ALL user-facing output per `references/ui-brand.md`:
-- Stage banners: `─── ◈ HYDRA ▸ SIMPLIFY ──────────────────────────────`
+- Stage banners: `─── ◈ NAZGUL ▸ SIMPLIFY ──────────────────────────────`
 - Status symbols: ◆ active, ◇ pending, ✦ complete, ✗ failed, ⚠ warning
 - Never use emoji — only the defined symbols
 
@@ -29,7 +29,7 @@ Format ALL user-facing output per `references/ui-brand.md`:
 You receive:
 - **Task ID** — the task being simplified
 - **Worktree path** — where the task's code lives
-- **Main worktree path** — for writing reports to `hydra/reviews/`
+- **Main worktree path** — for writing reports to `nazgul/reviews/`
 - **Focus** (optional) — e.g. `"performance"`, `"readability"` — narrows review scope
 
 ## Simplification Protocol
@@ -40,8 +40,8 @@ Use `EnterWorktree` to enter the task's worktree path before running any git com
 
 ### Step 1: Identify Changed Files
 
-1. Read the task manifest at `<main_worktree_path>/hydra/tasks/<TASK-ID>.md` to get the **Base SHA** (from the manifest's metadata)
-2. Read the task's `diff.patch` from `<main_worktree_path>/hydra/reviews/<TASK-ID>/diff.patch` to identify all changed files
+1. Read the task manifest at `<main_worktree_path>/nazgul/tasks/<TASK-ID>.md` to get the **Base SHA** (from the manifest's metadata)
+2. Read the task's `diff.patch` from `<main_worktree_path>/nazgul/reviews/<TASK-ID>/diff.patch` to identify all changed files
 3. If no diff exists, generate it using the base SHA:
    ```bash
    git diff --name-only <base-sha>..HEAD
@@ -87,7 +87,7 @@ If zero findings — exit immediately. Write a brief no-op report and return.
 
 ### Step 4: Apply Fixes
 
-Read `hydra/config.json → project.test_command` for the test command.
+Read `nazgul/config.json → project.test_command` for the test command.
 
 **Before applying any fixes**, capture the current commit SHA as the pre-simplify checkpoint:
 ```bash
@@ -105,13 +105,13 @@ For each finding (highest confidence first):
 ### Step 5: Commit & Report
 
 If any fixes were applied (individual commits exist from Step 4):
-1. Read `hydra/config.json → afk.commit_prefix` for the commit prefix
+1. Read `nazgul/config.json → afk.commit_prefix` for the commit prefix
 2. Squash the individual fix commits into one: `git reset --soft $PRE_SIMPLIFY_SHA && git commit -m "<commit_prefix> simplify <TASK-ID>"`
-3. Regenerate diff using the base SHA from Step 1: `git diff <base-sha>..HEAD -- <files> > <main_worktree_path>/hydra/reviews/<TASK-ID>/diff.patch`
+3. Regenerate diff using the base SHA from Step 1: `git diff <base-sha>..HEAD -- <files> > <main_worktree_path>/nazgul/reviews/<TASK-ID>/diff.patch`
 
 If no fixes were applied (all reverted or zero findings), skip the commit.
 
-Write summary to `<main_worktree_path>/hydra/reviews/<TASK-ID>/simplify-report.md`:
+Write summary to `<main_worktree_path>/nazgul/reviews/<TASK-ID>/simplify-report.md`:
 
 ```markdown
 # Simplify Report: <TASK-ID>

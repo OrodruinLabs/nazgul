@@ -4,20 +4,20 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/session-runner.sh"
 
-echo "=== E2E: /hydra:status ==="
+echo "=== E2E: /nazgul:status ==="
 
-# Setup: create a minimal hydra runtime dir in a temp project
+# Setup: create a minimal nazgul runtime dir in a temp project
 TEMP_PROJECT=$(mktemp -d)
 trap 'rm -rf "$TEMP_PROJECT"' EXIT
 
 cd "$TEMP_PROJECT"
 git init -q
-git config user.email "test@hydra.dev"
-git config user.name "Hydra Test"
+git config user.email "test@nazgul.dev"
+git config user.name "Nazgul Test"
 touch .gitkeep && git add . && git commit -q -m "init"
-mkdir -p hydra/tasks hydra/checkpoints
+mkdir -p nazgul/tasks nazgul/checkpoints
 
-cat > hydra/config.json << 'CONF'
+cat > nazgul/config.json << 'CONF'
 {
   "schema_version": 5,
   "mode": "hitl",
@@ -28,7 +28,7 @@ cat > hydra/config.json << 'CONF'
 }
 CONF
 
-cat > hydra/plan.md << 'PLAN'
+cat > nazgul/plan.md << 'PLAN'
 # Plan
 ## Recovery Pointer
 - **Current Task:** TASK-001
@@ -38,14 +38,14 @@ cat > hydra/plan.md << 'PLAN'
 PLAN
 
 # Run the skill
-OUTPUT=$(run_skill_session "/hydra:status" 60)
+OUTPUT=$(run_skill_session "/nazgul:status" 60)
 
 # Validate
 PASSED=0
 FAILED=0
 
-assert_output_contains "$OUTPUT" "HYDRA" "Shows Hydra branding" && ((PASSED++)) || ((FAILED++))
+assert_output_contains "$OUTPUT" "NAZGUL" "Shows Nazgul branding" && ((PASSED++)) || ((FAILED++))
 
 echo ""
-echo "E2E /hydra:status: $PASSED passed, $FAILED failed"
+echo "E2E /nazgul:status: $PASSED passed, $FAILED failed"
 [ "$FAILED" -eq 0 ]

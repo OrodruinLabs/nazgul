@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Hydra Post-Compact — re-injects loop state after context compaction
+# Nazgul Post-Compact — re-injects loop state after context compaction
 # Fires AFTER compaction completes, BEFORE Claude responds.
 # Stdout is shown to the agent as the first thing in the new context.
 
-HYDRA_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/hydra"
-CONFIG="$HYDRA_DIR/config.json"
-PLAN="$HYDRA_DIR/plan.md"
+NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
+CONFIG="$NAZGUL_DIR/config.json"
+PLAN="$NAZGUL_DIR/plan.md"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/task-utils.sh"
 
-# If Hydra not initialized, nothing to inject
+# If Nazgul not initialized, nothing to inject
 if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
@@ -34,8 +34,8 @@ TOTAL_COUNT=0
 ACTIVE_TASK=""
 ACTIVE_STATUS=""
 
-if [ -d "$HYDRA_DIR/tasks" ]; then
-  for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
+if [ -d "$NAZGUL_DIR/tasks" ]; then
+  for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
     STATUS=$(get_task_status "$task_file" "PLANNED")
@@ -58,7 +58,7 @@ if [ -d "$HYDRA_DIR/tasks" ]; then
 fi
 
 # Update compaction counter
-COMPACTION_FILE="$HYDRA_DIR/.compaction_count"
+COMPACTION_FILE="$NAZGUL_DIR/.compaction_count"
 if [ -f "$COMPACTION_FILE" ]; then
   PREV_COUNT=$(jq -r '.count // 0' "$COMPACTION_FILE" 2>/dev/null || echo "0")
 else
@@ -68,7 +68,7 @@ NEW_COUNT=$((PREV_COUNT + 1))
 printf '{"count": %d, "last_compaction_iteration": %s}\n' "$NEW_COUNT" "$ITERATION" > "$COMPACTION_FILE"
 
 # Get latest checkpoint
-LATEST_CHECKPOINT=$(ls -1t "$HYDRA_DIR/checkpoints/iteration-"*.json 2>/dev/null | head -1 || echo "none")
+LATEST_CHECKPOINT=$(ls -1t "$NAZGUL_DIR/checkpoints/iteration-"*.json 2>/dev/null | head -1 || echo "none")
 
 # Get reviewers
 REVIEWERS=$(jq -r '.agents.reviewers // [] | join(", ")' "$CONFIG" 2>/dev/null || echo "none configured")
@@ -79,7 +79,7 @@ GIT_LAST=$(git -C "${CLAUDE_PROJECT_DIR:-$(pwd)}" log --oneline -1 2>/dev/null |
 
 # Output recovery context
 cat << CONTEXT_EOF
-Hydra loop state — iteration ${ITERATION}/${MAX_ITER} | Mode: ${MODE} | Objective: ${OBJECTIVE}
+Nazgul loop state — iteration ${ITERATION}/${MAX_ITER} | Mode: ${MODE} | Objective: ${OBJECTIVE}
 Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked | Total: ${TOTAL_COUNT}
 Compactions: ${NEW_COUNT}
 CONTEXT_EOF
@@ -93,16 +93,16 @@ fi
 cat << CONTEXT_EOF2
 
 Active task: ${ACTIVE_TASK:-none} (${ACTIVE_STATUS:-none})
-$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (hydra:review-gate) for ${ACTIVE_TASK}. Do NOT skip the review gate." || true)
-$([ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (hydra:review-gate) for ${ACTIVE_TASK}." || true)
-$([ "$ACTIVE_STATUS" = "READY" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}." || true)
-$([ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}." || true)
-$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first." || true)
+$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. Do NOT skip the review gate." || true)
+$([ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}." || true)
+$([ "$ACTIVE_STATUS" = "READY" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}." || true)
+$([ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}." || true)
+$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first." || true)
 Reviewers: ${REVIEWERS}
 
 Git: ${GIT_BRANCH} — ${GIT_LAST}
 Latest checkpoint: ${LATEST_CHECKPOINT}
-$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "WARNING: Read hydra/reviews/${ACTIVE_TASK}/consolidated-feedback.md for reviewer feedback." || true)
+$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "WARNING: Read nazgul/reviews/${ACTIVE_TASK}/consolidated-feedback.md for reviewer feedback." || true)
 
-Read hydra/plan.md for full state. Continue the Hydra pipeline.
+Read nazgul/plan.md for full state. Continue the Nazgul pipeline.
 CONTEXT_EOF2

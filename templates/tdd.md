@@ -31,7 +31,7 @@ The Planner should:
 1. Identify the test framework and patterns in use
 2. Map existing test organization (co-located vs separate directory)
 3. Find fixture/mock patterns
-4. Document in hydra/context/tdd-scope.md
+4. Document in nazgul/context/tdd-scope.md
 
 ## Out of Scope
 -

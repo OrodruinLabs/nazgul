@@ -2,7 +2,7 @@
 
 ### Output Formatting
 Format ALL user-facing output per `references/ui-brand.md`:
-- Stage banners: `─── ◈ HYDRA ▸ STAGE_NAME ─────────────────────────────`
+- Stage banners: `─── ◈ NAZGUL ▸ STAGE_NAME ─────────────────────────────`
 - Status symbols: ◆ active, ◇ pending, ✦ complete, ✗ failed, ⚠ warning
 - Never use emoji — only the defined symbols
 

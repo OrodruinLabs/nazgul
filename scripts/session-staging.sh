@@ -9,8 +9,8 @@
 # NEVER commits — only stages (git add).
 #
 # Environment Variables:
-#   HYDRA_STAGING_DISABLE  - Set to "1" to disable (default: enabled)
-#   HYDRA_STAGING_DEBUG    - Enable debug logging to stderr (default: "0")
+#   NAZGUL_STAGING_DISABLE  - Set to "1" to disable (default: enabled)
+#   NAZGUL_STAGING_DEBUG    - Enable debug logging to stderr (default: "0")
 #
 # Hook Type: SessionEnd
 #   - Non-blocking: always exits 0
@@ -21,7 +21,7 @@
 set -euo pipefail
 
 debug_log() {
-    if [[ "${HYDRA_STAGING_DEBUG:-0}" == "1" ]]; then
+    if [[ "${NAZGUL_STAGING_DEBUG:-0}" == "1" ]]; then
         echo "[STAGING $(date -Iseconds)] $1" >&2
     fi
 }
@@ -32,21 +32,21 @@ output_result() {
 }
 
 # --- Check if disabled ---
-if [[ "${HYDRA_STAGING_DISABLE:-0}" == "1" ]]; then
-    debug_log "Disabled (HYDRA_STAGING_DISABLE=1)"
+if [[ "${NAZGUL_STAGING_DISABLE:-0}" == "1" ]]; then
+    debug_log "Disabled (NAZGUL_STAGING_DISABLE=1)"
     output_result
 fi
 
-# --- Check if Hydra is initialized ---
-if [[ ! -f "hydra/config.json" ]]; then
-    debug_log "No hydra/config.json — not a Hydra project"
+# --- Check if Nazgul is initialized ---
+if [[ ! -f "nazgul/config.json" ]]; then
+    debug_log "No nazgul/config.json — not a Nazgul project"
     output_result
 fi
 
 # --- Check if AFK mode is enabled ---
 AFK_ENABLED="false"
 if command -v jq &>/dev/null; then
-    AFK_ENABLED=$(jq -r '.afk.enabled // false' hydra/config.json 2>/dev/null || echo "false")
+    AFK_ENABLED=$(jq -r '.afk.enabled // false' nazgul/config.json 2>/dev/null || echo "false")
 fi
 
 if [[ "$AFK_ENABLED" != "true" ]]; then
@@ -91,7 +91,7 @@ while IFS= read -r file; do
 done < <(git ls-files --others --exclude-standard 2>/dev/null)
 
 if [[ "$STAGED_COUNT" -gt 0 ]]; then
-    echo "[HYDRA] Staged $STAGED_COUNT file(s) at session end (AFK safety net)" >&2
+    echo "[NAZGUL] Staged $STAGED_COUNT file(s) at session end (AFK safety net)" >&2
 else
     debug_log "No files to stage"
 fi

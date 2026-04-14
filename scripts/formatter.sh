@@ -5,13 +5,13 @@
 # Fires on Edit/Write/MultiEdit tool use and formats the affected file
 # using the appropriate formatter based on file extension.
 #
-# Opt-in: Only runs if hydra/config.json → formatter.enabled is true
-# or HYDRA_FORMATTER_ENABLED=1 is set.
+# Opt-in: Only runs if nazgul/config.json → formatter.enabled is true
+# or NAZGUL_FORMATTER_ENABLED=1 is set.
 #
 # Environment Variables:
-#   HYDRA_FORMATTER_ENABLED  - Set to "1" to enable (overrides config)
-#   HYDRA_FORMATTER_DISABLE  - Set to "1" to force-disable (overrides everything)
-#   HYDRA_FORMATTER_DEBUG    - Enable debug logging to stderr (default: "0")
+#   NAZGUL_FORMATTER_ENABLED  - Set to "1" to enable (overrides config)
+#   NAZGUL_FORMATTER_DISABLE  - Set to "1" to force-disable (overrides everything)
+#   NAZGUL_FORMATTER_DEBUG    - Enable debug logging to stderr (default: "0")
 #
 # Hook Type: PostToolUse (matcher: Edit|Write|MultiEdit)
 #   - Non-blocking: errors logged but don't fail the hook
@@ -22,7 +22,7 @@
 set -euo pipefail
 
 debug_log() {
-    if [[ "${HYDRA_FORMATTER_DEBUG:-0}" == "1" ]]; then
+    if [[ "${NAZGUL_FORMATTER_DEBUG:-0}" == "1" ]]; then
         echo "[FORMATTER $(date -Iseconds)] $1" >&2
     fi
 }
@@ -38,25 +38,25 @@ EOF
 
 # --- Check if enabled ---
 
-if [[ "${HYDRA_FORMATTER_DISABLE:-0}" == "1" ]]; then
-    debug_log "Force-disabled (HYDRA_FORMATTER_DISABLE=1)"
+if [[ "${NAZGUL_FORMATTER_DISABLE:-0}" == "1" ]]; then
+    debug_log "Force-disabled (NAZGUL_FORMATTER_DISABLE=1)"
     output_result "disabled" "Force-disabled by env var"
 fi
 
 ENABLED="false"
 
 # Check env var first
-if [[ "${HYDRA_FORMATTER_ENABLED:-0}" == "1" ]]; then
+if [[ "${NAZGUL_FORMATTER_ENABLED:-0}" == "1" ]]; then
     ENABLED="true"
 fi
 
 # Check config.json
 if [[ "$ENABLED" != "true" ]] && command -v jq &>/dev/null; then
-    ENABLED=$(jq -r '.formatter.enabled // false' hydra/config.json 2>/dev/null || echo "false")
+    ENABLED=$(jq -r '.formatter.enabled // false' nazgul/config.json 2>/dev/null || echo "false")
 fi
 
 if [[ "$ENABLED" != "true" ]]; then
-    debug_log "Not enabled (set formatter.enabled in config or HYDRA_FORMATTER_ENABLED=1)"
+    debug_log "Not enabled (set formatter.enabled in config or NAZGUL_FORMATTER_ENABLED=1)"
     output_result "not_enabled" "Formatter not enabled"
 fi
 

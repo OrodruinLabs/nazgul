@@ -3,22 +3,22 @@
 # notify.sh — Stop hook for loop completion notifications
 #
 # Fires on Stop and executes a user-configured notification command
-# when the Hydra loop completes (all tasks DONE or HYDRA_COMPLETE detected).
+# when the Nazgul loop completes (all tasks DONE or NAZGUL_COMPLETE detected).
 #
 # Configuration (checked in order):
-#   1. hydra/config.json → notifications.on_complete
-#   2. HYDRA_NOTIFY_ON_STOP environment variable
+#   1. nazgul/config.json → notifications.on_complete
+#   2. NAZGUL_NOTIFY_ON_STOP environment variable
 #
 # Environment Variables:
-#   HYDRA_NOTIFY_ON_STOP   - Command to execute on completion (fallback)
-#   HYDRA_NOTIFY_DISABLE   - Set to "1" to disable (default: enabled)
-#   HYDRA_NOTIFY_DEBUG     - Enable debug logging to stderr (default: "0")
+#   NAZGUL_NOTIFY_ON_STOP   - Command to execute on completion (fallback)
+#   NAZGUL_NOTIFY_DISABLE   - Set to "1" to disable (default: enabled)
+#   NAZGUL_NOTIFY_DEBUG     - Enable debug logging to stderr (default: "0")
 #
 # Exported to notification command:
-#   HYDRA_SESSION_ID       - Session ID from hook input
-#   HYDRA_CWD              - Working directory
-#   HYDRA_TRANSCRIPT_PATH  - Transcript path
-#   HYDRA_OBJECTIVE        - Current objective from config
+#   NAZGUL_SESSION_ID       - Session ID from hook input
+#   NAZGUL_CWD              - Working directory
+#   NAZGUL_TRANSCRIPT_PATH  - Transcript path
+#   NAZGUL_OBJECTIVE        - Current objective from config
 #
 # Hook Type: Stop
 #   - Only notifies when loop is complete (not every iteration)
@@ -26,23 +26,23 @@
 #
 # Usage examples:
 #   # macOS speech
-#   notifications.on_complete: "say 'Hydra loop complete'"
+#   notifications.on_complete: "say 'Nazgul loop complete'"
 #
 #   # Desktop notification (macOS)
-#   notifications.on_complete: "osascript -e 'display notification \"Hydra done\" with title \"Hydra\"'"
+#   notifications.on_complete: "osascript -e 'display notification \"Nazgul done\" with title \"Nazgul\"'"
 #
 #   # tmux signal
-#   HYDRA_NOTIFY_ON_STOP="tmux send-keys -t main 'echo done' Enter"
+#   NAZGUL_NOTIFY_ON_STOP="tmux send-keys -t main 'echo done' Enter"
 #
 #   # Webhook
-#   HYDRA_NOTIFY_ON_STOP="curl -s -X POST https://hooks.example.com/hydra-done"
+#   NAZGUL_NOTIFY_ON_STOP="curl -s -X POST https://hooks.example.com/nazgul-done"
 
 set -euo pipefail
 
 COMMAND_TIMEOUT=30
 
 debug_log() {
-    if [[ "${HYDRA_NOTIFY_DEBUG:-0}" == "1" ]]; then
+    if [[ "${NAZGUL_NOTIFY_DEBUG:-0}" == "1" ]]; then
         echo "[NOTIFY $(date -Iseconds)] $1" >&2
     fi
 }
@@ -53,8 +53,8 @@ output_result() {
 }
 
 # --- Check if disabled ---
-if [[ "${HYDRA_NOTIFY_DISABLE:-0}" == "1" ]]; then
-    debug_log "Disabled (HYDRA_NOTIFY_DISABLE=1)"
+if [[ "${NAZGUL_NOTIFY_DISABLE:-0}" == "1" ]]; then
+    debug_log "Disabled (NAZGUL_NOTIFY_DISABLE=1)"
     output_result
 fi
 
@@ -80,33 +80,33 @@ extract_field() {
     echo "$default"
 }
 
-export HYDRA_SESSION_ID
-export HYDRA_CWD
-export HYDRA_TRANSCRIPT_PATH
-export HYDRA_OBJECTIVE
+export NAZGUL_SESSION_ID
+export NAZGUL_CWD
+export NAZGUL_TRANSCRIPT_PATH
+export NAZGUL_OBJECTIVE
 
-HYDRA_SESSION_ID=$(extract_field "session_id" "unknown")
-HYDRA_CWD=$(extract_field "cwd" "$(pwd)")
-HYDRA_TRANSCRIPT_PATH=$(extract_field "transcript_path" "unknown")
-HYDRA_OBJECTIVE=$(jq -r '.objective // "unknown"' hydra/config.json 2>/dev/null || echo "unknown")
+NAZGUL_SESSION_ID=$(extract_field "session_id" "unknown")
+NAZGUL_CWD=$(extract_field "cwd" "$(pwd)")
+NAZGUL_TRANSCRIPT_PATH=$(extract_field "transcript_path" "unknown")
+NAZGUL_OBJECTIVE=$(jq -r '.objective // "unknown"' nazgul/config.json 2>/dev/null || echo "unknown")
 
 # --- Check if loop is actually complete ---
 # Only notify on completion, not every iteration stop
 
 LOOP_COMPLETE="false"
 
-# Check transcript for HYDRA_COMPLETE
-if [[ "$HYDRA_TRANSCRIPT_PATH" != "unknown" && -f "$HYDRA_TRANSCRIPT_PATH" ]]; then
-    if grep -q "HYDRA_COMPLETE" "$HYDRA_TRANSCRIPT_PATH" 2>/dev/null; then
+# Check transcript for NAZGUL_COMPLETE
+if [[ "$NAZGUL_TRANSCRIPT_PATH" != "unknown" && -f "$NAZGUL_TRANSCRIPT_PATH" ]]; then
+    if grep -q "NAZGUL_COMPLETE" "$NAZGUL_TRANSCRIPT_PATH" 2>/dev/null; then
         LOOP_COMPLETE="true"
-        debug_log "HYDRA_COMPLETE found in transcript"
+        debug_log "NAZGUL_COMPLETE found in transcript"
     fi
 fi
 
 # Check if all tasks are DONE
-if [[ "$LOOP_COMPLETE" != "true" && -d "hydra/tasks" ]]; then
-    TOTAL=$( (ls hydra/tasks/TASK-*.md 2>/dev/null || true) | wc -l | tr -d ' ')
-    DONE=$( (grep -rlE '(Status\*\*:[[:space:]]*DONE|^## Status:[[:space:]]*DONE)' hydra/tasks/TASK-*.md 2>/dev/null || true) | wc -l | tr -d ' ')
+if [[ "$LOOP_COMPLETE" != "true" && -d "nazgul/tasks" ]]; then
+    TOTAL=$( (ls nazgul/tasks/TASK-*.md 2>/dev/null || true) | wc -l | tr -d ' ')
+    DONE=$( (grep -rlE '(Status\*\*:[[:space:]]*DONE|^## Status:[[:space:]]*DONE)' nazgul/tasks/TASK-*.md 2>/dev/null || true) | wc -l | tr -d ' ')
     if [[ "$TOTAL" -gt 0 && "$TOTAL" == "$DONE" ]]; then
         LOOP_COMPLETE="true"
         debug_log "All $TOTAL tasks DONE"
@@ -122,13 +122,13 @@ fi
 NOTIFY_CMD=""
 
 # Check config.json first
-if command -v jq &>/dev/null && [[ -f "hydra/config.json" ]]; then
-    NOTIFY_CMD=$(jq -r '.notifications.on_complete // empty' hydra/config.json 2>/dev/null || true)
+if command -v jq &>/dev/null && [[ -f "nazgul/config.json" ]]; then
+    NOTIFY_CMD=$(jq -r '.notifications.on_complete // empty' nazgul/config.json 2>/dev/null || true)
 fi
 
 # Fall back to env var
 if [[ -z "$NOTIFY_CMD" ]]; then
-    NOTIFY_CMD="${HYDRA_NOTIFY_ON_STOP:-}"
+    NOTIFY_CMD="${NAZGUL_NOTIFY_ON_STOP:-}"
 fi
 
 # Check if whitespace-only

@@ -19,7 +19,7 @@ You are the Review Gate orchestrator. You run the full review pipeline for each 
 
 ## Output Formatting
 Format ALL user-facing output per `references/ui-brand.md`:
-- Stage banners: `─── ◈ HYDRA ▸ STAGE_NAME ─────────────────────────────`
+- Stage banners: `─── ◈ NAZGUL ▸ STAGE_NAME ─────────────────────────────`
 - Status symbols: ◆ active, ◇ pending, ✦ complete, ✗ failed, ⚠ warning
 - Review verdicts: `✦ APPROVED`, `⚠ CONCERN`, `✗ REJECTED`
 - Progress bars: `████████░░░░ 80%`
@@ -29,7 +29,7 @@ Format ALL user-facing output per `references/ui-brand.md`:
 
 ## Recovery Protocol
 
-Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified order before doing ANY work. If task is IN_REVIEW, also check `hydra/reviews/[TASK-ID]/` for existing reviewer submissions. Never rely on conversational memory — files are truth.
+Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified order before doing ANY work. If task is IN_REVIEW, also check `nazgul/reviews/[TASK-ID]/` for existing reviewer submissions. Never rely on conversational memory — files are truth.
 
 ## Review Pipeline
 
@@ -38,11 +38,11 @@ Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified o
 **You MUST dispatch the simplifier before reviewers. This is not optional and not configurable.**
 
 1. Read the task worktree path from config: `<worktree_dir>/TASK-NNN`
-2. Read `simplify.focus` from `hydra/config.json` (if set, pass as focus argument)
-3. **Dispatch the Simplifier agent** using the Agent tool with `subagent_type: "hydra:simplifier"`:
+2. Read `simplify.focus` from `nazgul/config.json` (if set, pass as focus argument)
+3. **Dispatch the Simplifier agent** using the Agent tool with `subagent_type: "nazgul:simplifier"`:
    - Task ID
    - Worktree path
-   - Main worktree path (for writing reports to hydra/reviews/)
+   - Main worktree path (for writing reports to nazgul/reviews/)
    - Focus argument from `simplify.focus` (if set)
 4. Wait for the simplifier to complete
 5. Log the result (files changed, tests status)
@@ -53,37 +53,37 @@ Step 0 is non-blocking on failure — if simplify errors or reverts, always proc
 ### Step 1: Pre-Review Automated Checks (SEQUENTIAL, NON-NEGOTIABLE)
 
 Before ANY reviewer runs:
-1. Read `hydra/config.json` for test_command, lint_command, build_command
+1. Read `nazgul/config.json` for test_command, lint_command, build_command
 2. Run test command → must pass
 3. Run lint command → must pass
 4. If either fails: set task back to IN_PROGRESS, write failure details to task manifest
 5. Track test failures: read `test_failures` count from the task manifest (field: `- **Test failures**: N`). If not present, assume 0.
 6. Increment test_failures count and write back to task manifest
-7. If test_failures >= 3: set task to BLOCKED with reason "3 consecutive test failures — requires human investigation". Write detailed test output to `hydra/reviews/[TASK-ID]/test-failures.md`. Do NOT retry.
+7. If test_failures >= 3: set task to BLOCKED with reason "3 consecutive test failures — requires human investigation". Write detailed test output to `nazgul/reviews/[TASK-ID]/test-failures.md`. Do NOT retry.
 8. Only proceed to reviewers if test_failures < 3 AND ALL pre-checks pass
 
 ### Step 1.5: Verify Diff Exists
 
-Before spawning reviewers, verify `hydra/reviews/[TASK-ID]/diff.patch` exists and is non-empty.
+Before spawning reviewers, verify `nazgul/reviews/[TASK-ID]/diff.patch` exists and is non-empty.
 - If missing: generate it using task manifest's Base SHA and File Scope:
-  `git diff [base-sha]..HEAD -- [files] > hydra/reviews/[TASK-ID]/diff.patch`
+  `git diff [base-sha]..HEAD -- [files] > nazgul/reviews/[TASK-ID]/diff.patch`
 - If still empty: log WARNING but proceed (pure additions may need full-file review)
 
 ### Step 2: Delegate to Reviewers
 
-Read `hydra/config.json → agents.reviewers` to get the active reviewer list.
-Read `hydra/config.json → models.review` for the model to assign reviewers (default: `"opus"`). Pass this as the `model` parameter when spawning each reviewer via the Task tool.
+Read `nazgul/config.json → agents.reviewers` to get the active reviewer list.
+Read `nazgul/config.json → models.review` for the model to assign reviewers (default: `"opus"`). Pass this as the `model` parameter when spawning each reviewer via the Task tool.
 
 #### What Each Reviewer Receives
-1. `hydra/reviews/[TASK-ID]/diff.patch` — the unified diff showing exactly what changed. **Reviewers MUST read this FIRST.**
+1. `nazgul/reviews/[TASK-ID]/diff.patch` — the unified diff showing exactly what changed. **Reviewers MUST read this FIRST.**
 2. The changed file list from the task manifest's File Scope — for full-file context when needed
 3. Their agent definition from `.claude/agents/generated/`
-4. Relevant context from `hydra/context/`
+4. Relevant context from `nazgul/context/`
 
 #### Parallel Review Mode (when parallelism.parallel_reviews is true)
 
 1. Create an agent team for the review
-2. Each reviewer: reads diff.patch FIRST, then changed files for context, reads their definition in `.claude/agents/generated/`, reads relevant context, writes review to `hydra/reviews/[TASK-ID]/[reviewer-name].md`
+2. Each reviewer: reads diff.patch FIRST, then changed files for context, reads their definition in `.claude/agents/generated/`, reads relevant context, writes review to `nazgul/reviews/[TASK-ID]/[reviewer-name].md`
 3. Wait for ALL reviewers to complete
 4. Read all review files
 
@@ -101,7 +101,7 @@ Run each reviewer as a subagent, one at a time. Write results to same location.
 
 When verdict is CHANGES_REQUESTED and feedback-aggregator has classified findings using `references/fix-first-heuristic.md`:
 
-1. Read `hydra/reviews/[TASK-ID]/consolidated-feedback.md`
+1. Read `nazgul/reviews/[TASK-ID]/consolidated-feedback.md`
 2. Count AUTO-FIX vs ASK items
 3. If AUTO-FIX items exist:
    a. Log: "Applying N auto-fix items from reviewer feedback"
@@ -153,7 +153,7 @@ Skip this step entirely if mode is `"afk"` or if any reviewer returned CHANGES_R
 6. Wait for human response:
    - "approved" / "yes" / "y" → Continue to mark task DONE
    - Any other response → Treat as issue description:
-     a. Log the issue in `hydra/tasks/TASK-NNN/verification.md`
+     a. Log the issue in `nazgul/tasks/TASK-NNN/verification.md`
      b. Set task status to CHANGES_REQUESTED
      c. Create actionable feedback: "Human verification failed: [user's description]"
      d. Delegate to feedback-aggregator to consolidate with any reviewer concerns
@@ -161,7 +161,7 @@ Skip this step entirely if mode is `"afk"` or if any reviewer returned CHANGES_R
 ### Step 4: Handle Results
 
 **ALL APPROVED:**
-1. Read `hydra/config.json → afk.yolo`, `afk.task_pr`, `branch.feature`, `branch.main_worktree_path`, `branch.worktree_dir`, `feat_display_id`, `afk.commit_prefix`
+1. Read `nazgul/config.json → afk.yolo`, `afk.task_pr`, `branch.feature`, `branch.main_worktree_path`, `branch.worktree_dir`, `feat_display_id`, `afk.commit_prefix`
 2. **If YOLO mode WITH task_pr (`afk.yolo: true` AND `afk.task_pr: true`):**
    - Set task status to APPROVED (not DONE)
    - Push the task branch: `git push -u origin feat/<display_id>/TASK-NNN`
@@ -193,13 +193,13 @@ Skip this step entirely if mode is `"afk"` or if any reviewer returned CHANGES_R
 
 ### Step 5: Post-Loop Phase
 
-When ALL tasks are DONE, before outputting HYDRA_COMPLETE:
+When ALL tasks are DONE, before outputting NAZGUL_COMPLETE:
 
 #### Step 5.0: Post-Loop Batch Simplify (Conditional)
 
 After all tasks are DONE, run a cross-task simplification pass across ALL modified files.
 
-1. Read `hydra/config.json → simplify.post_loop` (default: true)
+1. Read `nazgul/config.json → simplify.post_loop` (default: true)
 2. If disabled, skip to Step 5.1
 3. Identify all files modified during the loop:
    - `git log --name-only --pretty=format: <base-branch>..<feature-branch> | sort -u`
@@ -215,24 +215,24 @@ After all tasks are DONE, run a cross-task simplification pass across ALL modifi
    - If tests pass → commit immediately: `git commit -am "simplify: <description>"`
    - If tests fail → revert only affected files: `git checkout -- <files>`
 8. If any fixes were committed, capture `PRE_SIMPLIFY_SHA` before Step 7 begins, then squash: `git reset --soft $PRE_SIMPLIFY_SHA && git commit -m "<commit_prefix> post-loop simplify"`. If no fixes survived, skip the commit.
-9. Write summary to `hydra/reviews/post-loop-simplify-report.md`
+9. Write summary to `nazgul/reviews/post-loop-simplify-report.md`
 
 #### Step 5.1: Post-Loop Agents & PR
 
-1. Run post-loop agents (documentation, release-manager, observability) if configured — use `models.post_loop` from `hydra/config.json` as the `model` parameter (default: `"sonnet"`)
+1. Run post-loop agents (documentation, release-manager, observability) if configured — use `models.post_loop` from `nazgul/config.json` as the `model` parameter (default: `"sonnet"`)
 2. After post-loop agents complete:
    a. Read `branch.feature` and `branch.base` from config
    b. Push feature branch: `git push -u origin <feature-branch>`
    c. Create PR: `gh pr create --base <base-branch> --head <feature-branch> --title "<objective> (<feat_display_id>)" --body "<task summary>"`
    d. Clean up all remaining worktrees and worktree parent dir
-3. Output HYDRA_COMPLETE
+3. Output NAZGUL_COMPLETE
 
 ## Important: Reviews Are Read-Only
 
 Reviewer teammates must NEVER modify project files. They only:
 - Read source code and context files
 - Run tests/linters (read-only verification)
-- Write their review to hydra/reviews/
+- Write their review to nazgul/reviews/
 
 ## Context Management Rules
 

@@ -1,5 +1,5 @@
 ---
-name: hydra:patch
+name: nazgul:patch
 description: "Lightweight task mode for bug fixes, config changes, and small features. Supports --no-review and --discuss flags."
 context: fork
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
@@ -8,26 +8,26 @@ metadata:
   version: 1.0.0
 ---
 
-# Hydra Patch
+# Nazgul Patch
 
 ## Examples
-- `/hydra:patch "fix CORS headers on API"` — Quick patch with single reviewer
-- `/hydra:patch --no-review "update README badges"` — Skip review, just implement
-- `/hydra:patch --discuss "add rate limiting"` — Discuss gray areas first, then patch
-- `/hydra:patch` — Interactive mode, prompts for description
+- `/nazgul:patch "fix CORS headers on API"` — Quick patch with single reviewer
+- `/nazgul:patch --no-review "update README badges"` — Skip review, just implement
+- `/nazgul:patch --discuss "add rate limiting"` — Discuss gray areas first, then patch
+- `/nazgul:patch` — Interactive mode, prompts for description
 
 ## Arguments
 $ARGUMENTS
 
 ## Current State
-- Config: !`cat hydra/config.json 2>/dev/null | head -3 || echo "NOT_INITIALIZED"`
-- Existing patches: !`ls hydra/tasks/patches/PATCH-*.md 2>/dev/null | wc -l || echo "0"`
-- Active reviewers: !`jq -r '.agents.reviewers // [] | join(", ")' hydra/config.json 2>/dev/null || echo "none"`
+- Config: !`cat nazgul/config.json 2>/dev/null | head -3 || echo "NOT_INITIALIZED"`
+- Existing patches: !`ls nazgul/tasks/patches/PATCH-*.md 2>/dev/null | wc -l || echo "0"`
+- Active reviewers: !`jq -r '.agents.reviewers // [] | join(", ")' nazgul/config.json 2>/dev/null || echo "none"`
 
 ## Instructions
 
 ### Pre-flight
-1. Check if `hydra/config.json` exists. If not: "Hydra not initialized. Run `/hydra:init` first." and STOP.
+1. Check if `nazgul/config.json` exists. If not: "Nazgul not initialized. Run `/nazgul:init` first." and STOP.
 2. Parse `$ARGUMENTS` for flags:
    - `--no-review` → skip review step
    - `--discuss` → run gray area discussion before planning
@@ -37,12 +37,12 @@ $ARGUMENTS
 ### Display Banner
 Output per references/ui-brand.md:
 ```
-─── ◈ HYDRA ▸ PATCHING ────────────────────────────────
+─── ◈ NAZGUL ▸ PATCHING ────────────────────────────────
 ```
 
 ### Step 1: Create Patch Task
-1. Scan `hydra/tasks/patches/` for next available PATCH-NNN number (create directory if needed)
-2. Create `hydra/tasks/patches/PATCH-NNN.md`:
+1. Scan `nazgul/tasks/patches/` for next available PATCH-NNN number (create directory if needed)
+2. Create `nazgul/tasks/patches/PATCH-NNN.md`:
 
 ```markdown
 # PATCH-NNN: [description]
@@ -50,7 +50,7 @@ Output per references/ui-brand.md:
 ## Metadata
 - **Status**: IN_PROGRESS
 - **Created**: [ISO 8601 timestamp]
-- **Source**: /hydra:patch
+- **Source**: /nazgul:patch
 - **Flags**: [--no-review, --discuss, or none]
 
 ## Description
@@ -101,24 +101,24 @@ If `--no-review` was passed:
 
 ### Step 6: Complete
 1. Update patch manifest status to DONE
-2. Append to `hydra/plan.md` under `## Patches` section (create section if it doesn't exist):
+2. Append to `nazgul/plan.md` under `## Patches` section (create section if it doesn't exist):
    ```
    - [x] PATCH-NNN: [description] (sha: [commit])
    ```
 3. Display completion with Next Up block per ui-brand.md:
    ```
-   ─── ◈ HYDRA ▸ COMPLETE ✦ ──────────────────────────────
+   ─── ◈ NAZGUL ▸ COMPLETE ✦ ──────────────────────────────
 
    ✦ PATCH-NNN: [description]
      Commits: [N] | Files changed: [N] | Review: [approved/skipped]
 
    ─── ◈ NEXT ─────────────────────────────────────────────
-     /hydra:start to continue main objective
-     /hydra:patch for another quick fix
+     /nazgul:start to continue main objective
+     /nazgul:patch for another quick fix
    ────────────────────────────────────────────────────────
    ```
 
 ### Error Handling
-- If planner fails to generate subtasks: "Could not plan this patch. Try providing more detail or use `/hydra:start` for a full task."
+- If planner fails to generate subtasks: "Could not plan this patch. Try providing more detail or use `/nazgul:start` for a full task."
 - If implementer fails: Mark patch BLOCKED with error details
 - If reviewer rejects after max retries: Mark patch BLOCKED, show consolidated feedback

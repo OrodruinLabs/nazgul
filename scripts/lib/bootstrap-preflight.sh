@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# bootstrap-preflight.sh — Pre-flight gate checks for /hydra:bootstrap-project.
+# bootstrap-preflight.sh — Pre-flight gate checks for /nazgul:bootstrap-project.
 # Pure functions; each returns a distinct non-zero exit code so the skill can
 # branch cleanly. All operate relative to the current working directory.
 #
 # Exit codes:
-#   10 — ./hydra/ exists (hard abort)
+#   10 — ./nazgul/ exists (hard abort)
 #   11 — ./docs/ or ./.claude/agents/ non-empty, or a design file already
 #         exists at ./.claude/design-tokens.json or ./.claude/design-system.md
 #         (prompt or abort)
@@ -13,11 +13,11 @@
 
 BOOTSTRAP_GIT_WARNING=""
 
-check_no_hydra_dir() {
-  if [ -d "./hydra" ]; then
-    echo "error: ./hydra/ exists. This project is already Hydra-initialized." >&2
-    echo "       /hydra:bootstrap-project generates a portable, Hydra-free bundle." >&2
-    echo "       Use /hydra:start instead, or remove ./hydra/ first." >&2
+check_no_nazgul_dir() {
+  if [ -d "./nazgul" ]; then
+    echo "error: ./nazgul/ exists. This project is already Nazgul-initialized." >&2
+    echo "       /nazgul:bootstrap-project generates a portable, Nazgul-free bundle." >&2
+    echo "       Use /nazgul:start instead, or remove ./nazgul/ first." >&2
     return 10
   fi
   return 0

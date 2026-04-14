@@ -23,7 +23,7 @@
      The stop hook auto-promotes PLANNED -> READY when deps are met. -->
 - **Delegates to**: none
 <!-- Specialist agents this task delegates to, e.g. designer, frontend-dev
-     The implementer writes delegation briefs to hydra/tasks/TASK-000-delegation.md -->
+     The implementer writes delegation briefs to nazgul/tasks/TASK-000-delegation.md -->
 - **Files modified**: []
 <!-- List of all files this task will create or modify (populated by planner from File Scope).
      Used by wave analysis to detect file overlap between tasks. -->
@@ -121,7 +121,7 @@
 
 ## Review Results
 <!-- Populated by the review-gate agent after each review cycle.
-     Each reviewer's verdict is also written to hydra/reviews/TASK-000/[reviewer-name].md
+     Each reviewer's verdict is also written to nazgul/reviews/TASK-000/[reviewer-name].md
      This section is a summary for quick reference.
      Confidence scores below the threshold (default 80) are non-blocking CONCERN items. -->
 
@@ -142,4 +142,4 @@
 
      **Verdict**: CHANGES_REQUESTED
      **Blocking issues**: 1
-     **Consolidated feedback**: hydra/reviews/TASK-000/consolidated-feedback.md -->
+     **Consolidated feedback**: nazgul/reviews/TASK-000/consolidated-feedback.md -->

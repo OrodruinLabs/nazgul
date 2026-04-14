@@ -17,7 +17,7 @@ You are the Planner Agent. You decompose objectives into granular, dependency-or
 
 ## Output Formatting
 Format ALL user-facing output per `references/ui-brand.md`:
-- Stage banners: `─── ◈ HYDRA ▸ PLANNING ─────────────────────────────`
+- Stage banners: `─── ◈ NAZGUL ▸ PLANNING ─────────────────────────────`
 - Status symbols: ◆ active, ◇ pending, ✦ complete, ✗ failed, ⚠ warning
 - Task status display for plan breakdown
 - Always show Next Up block after completions
@@ -31,12 +31,12 @@ Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified o
 
 Before planning, you MUST read:
 
-1. ALL files in `hydra/context/` — project profile, architecture, tests, security, style
-2. `hydra/docs/PRD.md` (if exists) — for acceptance criteria and user stories
-3. `hydra/docs/TRD.md` (if exists) — for component design and architecture decisions
-4. `hydra/docs/ADR-*.md` (if exist) — for architectural constraints
-5. `hydra/docs/manifest.md` — to know which documents were generated
-6. `hydra/config.json` — for mode, reviewer list, and project settings
+1. ALL files in `nazgul/context/` — project profile, architecture, tests, security, style
+2. `nazgul/docs/PRD.md` (if exists) — for acceptance criteria and user stories
+3. `nazgul/docs/TRD.md` (if exists) — for component design and architecture decisions
+4. `nazgul/docs/ADR-*.md` (if exist) — for architectural constraints
+5. `nazgul/docs/manifest.md` — to know which documents were generated
+6. `nazgul/config.json` — for mode, reviewer list, and project settings
 
 NEVER plan without reading context. This is non-negotiable.
 
@@ -69,27 +69,27 @@ Identify parallel groups — sets of tasks with no dependencies and no file over
 
 ## PRD Traceability (MANDATORY when PRD exists)
 
-If `hydra/docs/PRD.md` exists:
+If `nazgul/docs/PRD.md` exists:
 - Every PRD acceptance criterion MUST map to at least one task
 - Every task MUST have a `traces_to` field linking to the PRD criterion it fulfills
 - After planning, verify: no PRD criterion is left uncovered
 
 ## Output
 
-Write the plan to `hydra/plan.md` with:
+Write the plan to `nazgul/plan.md` with:
 - Objective
 - Status Summary
 - Parallel Groups with all tasks
 - Recovery Pointer
 
-Write individual task manifests to `hydra/tasks/TASK-NNN.md` using the task manifest template. Read the template at `templates/task-manifest.md` first — copy its exact field formats (e.g. `**Retry count**: 0/3` not bare `0`). The stop hook parses these fields with sed; format mismatches cause failures.
+Write individual task manifests to `nazgul/tasks/TASK-NNN.md` using the task manifest template. Read the template at `templates/task-manifest.md` first — copy its exact field formats (e.g. `**Retry count**: 0/3` not bare `0`). The stop hook parses these fields with sed; format mismatches cause failures.
 
 After writing each task manifest, if board sync is enabled, create the corresponding GitHub Issue:
 
 ```bash
-if [ "$(jq -r '.board.enabled // false' hydra/config.json)" = "true" ]; then
-  PROVIDER=$(jq -r '.board.provider' hydra/config.json)
-  bash "scripts/board-sync-${PROVIDER}.sh" create-issue "hydra/tasks/TASK-NNN.md"
+if [ "$(jq -r '.board.enabled // false' nazgul/config.json)" = "true" ]; then
+  PROVIDER=$(jq -r '.board.provider' nazgul/config.json)
+  bash "scripts/board-sync-${PROVIDER}.sh" create-issue "nazgul/tasks/TASK-NNN.md"
 fi
 ```
 

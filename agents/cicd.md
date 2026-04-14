@@ -12,7 +12,7 @@ maxTurns: 40
 
 # CI/CD Engineer Agent
 
-You build and maintain the deployment pipeline. Read `hydra/config.json → project.infrastructure.cicd_platform` for the selected platform.
+You build and maintain the deployment pipeline. Read `nazgul/config.json → project.infrastructure.cicd_platform` for the selected platform.
 
 ## Platform-Specific Outputs
 

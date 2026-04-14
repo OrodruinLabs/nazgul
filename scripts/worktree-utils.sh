@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Hydra Worktree Utilities — shared helpers for branch/worktree management
+# Nazgul Worktree Utilities — shared helpers for branch/worktree management
 # Source this file: source "$(dirname "$0")/worktree-utils.sh"
 
-# Requires: HYDRA_DIR and CONFIG to be set by the caller
+# Requires: NAZGUL_DIR and CONFIG to be set by the caller
 
 slugify_objective() {
   local input="$1"

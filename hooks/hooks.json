@@ -1,5 +1,5 @@
 {
-  "description": "Hydra Framework hooks — stop loop management, pre/post-compact state management, safety guards, session context injection, auto-formatting, notifications, webhook forwarding, session staging, task completion, prompt validation",
+  "description": "Nazgul Framework hooks — stop loop management, pre/post-compact state management, safety guards, session context injection, auto-formatting, notifications, webhook forwarding, session staging, task completion, prompt validation",
   "hooks": {
     "Stop": [
       {

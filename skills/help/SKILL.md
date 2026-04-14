@@ -1,6 +1,6 @@
 ---
-name: hydra:help
-description: Show Hydra quick reference — all commands, modes, and getting started guide. Use when user says "hydra help", "what commands", or needs orientation.
+name: nazgul:help
+description: Show Nazgul quick reference — all commands, modes, and getting started guide. Use when user says "nazgul help", "what commands", or needs orientation.
 disable-model-invocation: true
 allowed-tools: []
 metadata:
@@ -8,62 +8,62 @@ metadata:
   version: 1.0.0
 ---
 
-# Hydra Framework — Quick Reference
+# Nazgul Framework — Quick Reference
 
 ## Getting Started
 
 | Command | Description |
 |---------|-------------|
-| `/hydra:init` | Set up Hydra for this project |
-| `/hydra:init --local` | Set up without tracking files in git |
-| `/hydra:init --force` | Reinitialize (archives current state) |
+| `/nazgul:init` | Set up Nazgul for this project |
+| `/nazgul:init --local` | Set up without tracking files in git |
+| `/nazgul:init --force` | Reinitialize (archives current state) |
 
 ## Running
 
 | Command | Description |
 |---------|-------------|
-| `/hydra:start` | Auto-detect state and continue work |
-| `/hydra:start "objective"` | Start a specific objective |
+| `/nazgul:start` | Auto-detect state and continue work |
+| `/nazgul:start "objective"` | Start a specific objective |
 
-**Flags for `/hydra:start`:** `--afk` (autonomous), `--yolo` (no reviews), `--hitl` (human-in-the-loop, default), `--max N` (iteration limit)
+**Flags for `/nazgul:start`:** `--afk` (autonomous), `--yolo` (no reviews), `--hitl` (human-in-the-loop, default), `--max N` (iteration limit)
 
 ## Monitoring
 
 | Command | Description |
 |---------|-------------|
-| `/hydra:status` | Loop progress, task counts, review board |
-| `/hydra:log` | Iteration history, commits, reviews |
-| `/hydra:task list` | List all tasks with status |
+| `/nazgul:status` | Loop progress, task counts, review board |
+| `/nazgul:log` | Iteration history, commits, reviews |
+| `/nazgul:task list` | List all tasks with status |
 
 ## Task Management
 
 | Command | Description |
 |---------|-------------|
-| `/hydra:task add "desc"` | Add a new task |
-| `/hydra:task skip <id>` | Skip a blocked task |
-| `/hydra:task unblock <id>` | Unblock a task |
-| `/hydra:task info <id>` | Show task details |
-| `/hydra:task prioritize <id>` | Move task to top of queue |
+| `/nazgul:task add "desc"` | Add a new task |
+| `/nazgul:task skip <id>` | Skip a blocked task |
+| `/nazgul:task unblock <id>` | Unblock a task |
+| `/nazgul:task info <id>` | Show task details |
+| `/nazgul:task prioritize <id>` | Move task to top of queue |
 
 ## Control
 
 | Command | Description |
 |---------|-------------|
-| `/hydra:pause` | Pause loop at next iteration boundary |
-| `/hydra:reset` | Archive state and start fresh |
-| `/hydra:review` | Manually trigger review for a task |
-| `/hydra:clean` | Fully remove Hydra from this project |
+| `/nazgul:pause` | Pause loop at next iteration boundary |
+| `/nazgul:reset` | Archive state and start fresh |
+| `/nazgul:review` | Manually trigger review for a task |
+| `/nazgul:clean` | Fully remove Nazgul from this project |
 
 ## Advanced
 
 | Command | Description |
 |---------|-------------|
-| `/hydra:discover` | Re-run codebase discovery |
-| `/hydra:context` | Collect context for an objective type |
-| `/hydra:simplify` | Post-loop cleanup pass |
-| `/hydra:docs` | View or regenerate project documents |
-| `/hydra:board` | Connect to GitHub Projects / Azure DevOps |
-| `/hydra:gen-spec` | Interactively build a project specification |
+| `/nazgul:discover` | Re-run codebase discovery |
+| `/nazgul:context` | Collect context for an objective type |
+| `/nazgul:simplify` | Post-loop cleanup pass |
+| `/nazgul:docs` | View or regenerate project documents |
+| `/nazgul:board` | Connect to GitHub Projects / Azure DevOps |
+| `/nazgul:gen-spec` | Interactively build a project specification |
 
 ## Modes
 
@@ -83,5 +83,5 @@ metadata:
 6. Address ALL blocking feedback — fix every REJECT item
 7. One task at a time — unless using parallel Agent Teams
 8. Update Recovery Pointer on every state change
-9. Commit in AFK mode — every state transition gets a `hydra:` commit
-10. HYDRA_COMPLETE means ALL tasks DONE and post-loop finished
+9. Commit in AFK mode — every state transition gets a `nazgul:` commit
+10. NAZGUL_COMPLETE means ALL tasks DONE and post-loop finished

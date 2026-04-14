@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap scrub map — Hydra-token removal rules for /hydra:bootstrap-project.
+# Bootstrap scrub map — Nazgul-token removal rules for /nazgul:bootstrap-project.
 # Sourced by scripts/bootstrap-transform.sh. No side effects on source.
 #
 # To add a new rule when the final assertion fires:
@@ -11,15 +11,15 @@
 # Class 1 — Path rewrites. Applied longest-first via sort in transform.
 # Format: "find|replace"  (replace may be "__DROP__" to mean "drop containing sentence/line")
 BOOTSTRAP_SCRUB_PATH_RULES=(
-  "hydra/docs/manifest.md|__DROP__"
-  "hydra/docs/|docs/"
-  "hydra/context/|docs/context/"
-  "hydra/config.json|__DROP__"
-  "hydra/plan.md|__DROP__"
-  "hydra/tasks/|__DROP__"
-  "hydra/checkpoints/|__DROP__"
-  "hydra/reviews/|__DROP__"
-  "hydra/logs/|__DROP__"
+  "nazgul/docs/manifest.md|__DROP__"
+  "nazgul/docs/|docs/"
+  "nazgul/context/|docs/context/"
+  "nazgul/config.json|__DROP__"
+  "nazgul/plan.md|__DROP__"
+  "nazgul/tasks/|__DROP__"
+  "nazgul/checkpoints/|__DROP__"
+  "nazgul/reviews/|__DROP__"
+  "nazgul/logs/|__DROP__"
 )
 
 # Class 2 — Prose term rewrites (safety net). All map to __DROP__ (sentence removal).
@@ -28,18 +28,18 @@ BOOTSTRAP_SCRUB_PATH_RULES=(
 # needs word-boundary behavior, encode it in the pattern itself (e.g. with
 # `[^[:alnum:]_]` on either side, since `\b` is not portable).
 BOOTSTRAP_SCRUB_PROSE_RULES=(
-  "Hydra pipeline|__DROP__"
-  "Hydra loop|__DROP__"
-  "the Hydra framework|__DROP__"
-  "Hydra framework|__DROP__"
-  "Hydra's review board|__DROP__"
-  "Hydra|__DROP__"
-  "HYDRA_[A-Z_]*|__DROP__"
+  "Nazgul pipeline|__DROP__"
+  "Nazgul loop|__DROP__"
+  "the Nazgul framework|__DROP__"
+  "Nazgul framework|__DROP__"
+  "Nazgul's review board|__DROP__"
+  "Nazgul|__DROP__"
+  "NAZGUL_[A-Z_]*|__DROP__"
 )
 
 # Class 4 — YAML frontmatter keys to remove from agent files.
 BOOTSTRAP_SCRUB_FRONTMATTER_REMOVE=(
-  "hydra"
+  "nazgul"
   "review-board"
   "loop-phase"
 )

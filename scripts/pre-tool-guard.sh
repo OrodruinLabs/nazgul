@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Hydra Pre-Tool Guard — blocks destructive bash commands
+# Nazgul Pre-Tool Guard — blocks destructive bash commands
 # Exit 0 = allow command
 # Exit 2 = block command (reason on stderr)
 
@@ -21,7 +21,7 @@ check_pattern() {
   local pattern="$1"
   local reason="$2"
   if echo "$INPUT" | grep -qiE "$pattern"; then
-    echo "HYDRA SAFETY: Blocked — $reason" >&2
+    echo "NAZGUL SAFETY: Blocked — $reason" >&2
     echo "Command contained: $pattern" >&2
     exit 2
   fi
@@ -54,11 +54,11 @@ check_pattern 'wget\s+.*\|\s*(ba)?sh' "Piped internet execution (wget | sh)"
 check_pattern 'curl\s+.*\|\s*sudo' "Piped internet execution with sudo"
 
 # Task manifest status protection — prevent bypassing Write/Edit hooks
-check_pattern 'sed.*hydra/tasks/TASK-.*Status' "Direct sed on task manifest status (use Write/Edit tools)"
-check_pattern 'echo.*Status.*hydra/tasks/TASK-' "Direct echo to task manifest (use Write/Edit tools)"
-check_pattern 'printf.*Status.*hydra/tasks/TASK-' "Direct printf to task manifest (use Write/Edit tools)"
-check_pattern 'cat.*>.*hydra/tasks/TASK-' "Direct cat redirect to task manifest (use Write/Edit tools)"
-check_pattern 'tee.*hydra/tasks/TASK-' "Direct tee to task manifest (use Write/Edit tools)"
+check_pattern 'sed.*nazgul/tasks/TASK-.*Status' "Direct sed on task manifest status (use Write/Edit tools)"
+check_pattern 'echo.*Status.*nazgul/tasks/TASK-' "Direct echo to task manifest (use Write/Edit tools)"
+check_pattern 'printf.*Status.*nazgul/tasks/TASK-' "Direct printf to task manifest (use Write/Edit tools)"
+check_pattern 'cat.*>.*nazgul/tasks/TASK-' "Direct cat redirect to task manifest (use Write/Edit tools)"
+check_pattern 'tee.*nazgul/tasks/TASK-' "Direct tee to task manifest (use Write/Edit tools)"
 
 # All checks passed
 exit 0

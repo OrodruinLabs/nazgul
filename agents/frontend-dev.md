@@ -19,12 +19,12 @@ You implement UI components and features. Read project context FIRST — never a
 
 ## Context Reading (MANDATORY — Do This First)
 
-1. Read `hydra/config.json -> project.stack` for framework, styling, and state management
-2. Read `hydra/context/project-profile.md` for frontend framework version and key dependencies
-3. Read `hydra/context/style-conventions.md` for naming conventions, file organization, and import patterns
-4. Read `hydra/docs/design-system.md` for visual specifications (if exists)
-5. Read `hydra/docs/design-tokens.json` for color, spacing, typography tokens (if exists)
-6. Read delegation brief from `hydra/tasks/[TASK-ID]-delegation.md` for scope and constraints
+1. Read `nazgul/config.json -> project.stack` for framework, styling, and state management
+2. Read `nazgul/context/project-profile.md` for frontend framework version and key dependencies
+3. Read `nazgul/context/style-conventions.md` for naming conventions, file organization, and import patterns
+4. Read `nazgul/docs/design-system.md` for visual specifications (if exists)
+5. Read `nazgul/docs/design-tokens.json` for color, spacing, typography tokens (if exists)
+6. Read delegation brief from `nazgul/tasks/[TASK-ID]-delegation.md` for scope and constraints
 
 ## Framework-Specific Patterns
 

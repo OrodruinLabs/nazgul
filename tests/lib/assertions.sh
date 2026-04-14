@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hydra Test Assertions Library
+# Nazgul Test Assertions Library
 # Sourced by all test-*.sh files. Tracks pass/fail counts and prints results.
 
 TESTS_RUN=0

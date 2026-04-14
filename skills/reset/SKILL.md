@@ -1,6 +1,6 @@
 ---
-name: hydra:reset
-description: Reset Hydra state to a clean slate. Archives current state and recreates from templates. Use when Hydra gets into a corrupted or confusing state.
+name: nazgul:reset
+description: Reset Nazgul state to a clean slate. Archives current state and recreates from templates. Use when Nazgul gets into a corrupted or confusing state.
 context: fork
 allowed-tools: Read, Write, Bash, Glob
 metadata:
@@ -8,56 +8,56 @@ metadata:
   version: 1.1.0
 ---
 
-# Hydra Reset
+# Nazgul Reset
 
 ## Examples
-- `/hydra:reset` — Archive current state and reset to clean slate (with confirmation)
-- `/hydra:reset --hard` — Reset immediately without confirmation prompt
-- `/hydra:reset --preserve-context` — Reset but keep the context/ directory intact
+- `/nazgul:reset` — Archive current state and reset to clean slate (with confirmation)
+- `/nazgul:reset --hard` — Reset immediately without confirmation prompt
+- `/nazgul:reset --preserve-context` — Reset but keep the context/ directory intact
 
 ## Arguments
 $ARGUMENTS
 
 ## Current State
-- Config exists: !`test -f hydra/config.json && echo "YES" || echo "NO"`
-- Tasks count: !`ls hydra/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' '`
-- Checkpoints count: !`ls hydra/checkpoints/iteration-*.json 2>/dev/null | wc -l | tr -d ' '`
+- Config exists: !`test -f nazgul/config.json && echo "YES" || echo "NO"`
+- Tasks count: !`ls nazgul/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' '`
+- Checkpoints count: !`ls nazgul/checkpoints/iteration-*.json 2>/dev/null | wc -l | tr -d ' '`
 
 ## Instructions
 
-Reset Hydra state to a clean slate by archiving existing state and recreating from templates.
+Reset Nazgul state to a clean slate by archiving existing state and recreating from templates.
 
 ### Step 1: Check Initialization
 
 If config does not exist (shows "NO"):
-- Output: "Nothing to reset — Hydra not initialized. Run `/hydra:init` to set up."
+- Output: "Nothing to reset — Nazgul not initialized. Run `/nazgul:init` to set up."
 - Stop here.
 
 ### Step 2: Parse Arguments
 
 Check `$ARGUMENTS` for flags:
 - `--hard` — Skip confirmation, proceed immediately
-- `--preserve-context` — Keep the `hydra/context/` directory intact (architecture map, style conventions, test strategy, etc.)
+- `--preserve-context` — Keep the `nazgul/context/` directory intact (architecture map, style conventions, test strategy, etc.)
 
 ### Step 3: Confirm with User
 
 Unless `--hard` flag is present, show a confirmation prompt:
 
 ```
-Hydra Reset
+Nazgul Reset
 ═══════════════════════════════════════
 
 This will archive and reset the following:
-  - Plan:         hydra/plan.md
+  - Plan:         nazgul/plan.md
   - Tasks:        [N] task file(s)
   - Checkpoints:  [N] checkpoint file(s)
-  - Reviews:      hydra/reviews/
-  - Docs:         hydra/docs/
-  - Logs:         hydra/logs/
+  - Reviews:      nazgul/reviews/
+  - Docs:         nazgul/docs/
+  - Logs:         nazgul/logs/
 
 Context directory: [WILL BE RESET | WILL BE PRESERVED (--preserve-context)]
 
-Everything will be archived to hydra/archive/[timestamp]/ before deletion.
+Everything will be archived to nazgul/archive/[timestamp]/ before deletion.
 
 Proceed? (yes/no)
 ```
@@ -69,7 +69,7 @@ Wait for user confirmation. If the user says no, abort.
 Generate a timestamp-based archive directory:
 
 ```bash
-ARCHIVE_DIR="hydra/archive/$(date +%Y-%m-%d-%H%M%S)"
+ARCHIVE_DIR="nazgul/archive/$(date +%Y-%m-%d-%H%M%S)"
 mkdir -p "$ARCHIVE_DIR"
 ```
 
@@ -77,23 +77,23 @@ mkdir -p "$ARCHIVE_DIR"
 
 Move the following into the archive directory (if they exist):
 
-1. `hydra/plan.md` → `$ARCHIVE_DIR/plan.md`
-2. `hydra/tasks/` → `$ARCHIVE_DIR/tasks/`
-3. `hydra/checkpoints/` → `$ARCHIVE_DIR/checkpoints/`
-4. `hydra/reviews/` → `$ARCHIVE_DIR/reviews/`
-5. `hydra/docs/` → `$ARCHIVE_DIR/docs/`
-6. `hydra/logs/` → `$ARCHIVE_DIR/logs/`
+1. `nazgul/plan.md` → `$ARCHIVE_DIR/plan.md`
+2. `nazgul/tasks/` → `$ARCHIVE_DIR/tasks/`
+3. `nazgul/checkpoints/` → `$ARCHIVE_DIR/checkpoints/`
+4. `nazgul/reviews/` → `$ARCHIVE_DIR/reviews/`
+5. `nazgul/docs/` → `$ARCHIVE_DIR/docs/`
+6. `nazgul/logs/` → `$ARCHIVE_DIR/logs/`
 
 If `--preserve-context` is NOT set:
-8. `hydra/context/` → `$ARCHIVE_DIR/context/`
+8. `nazgul/context/` → `$ARCHIVE_DIR/context/`
 
 Use `mv` for each item. Skip items that do not exist.
 
 ### Step 6: Reset Config
 
-1. Read current `hydra/config.json` and extract `project.*` fields (project name, language, framework, test command, etc.)
+1. Read current `nazgul/config.json` and extract `project.*` fields (project name, language, framework, test command, etc.)
 2. Read the config template from the plugin: look for the template config in the plugin's templates directory
-3. Write a fresh `hydra/config.json` with:
+3. Write a fresh `nazgul/config.json` with:
    - All default values from the template
    - The preserved `project.*` fields restored
    - `paused: false`
@@ -105,10 +105,10 @@ Use `jq` for all JSON manipulation:
 
 ```bash
 # Extract project fields from current config
-PROJECT=$(jq '.project' hydra/config.json)
+PROJECT=$(jq '.project' nazgul/config.json)
 
 # After writing fresh config, restore project fields
-jq --argjson project "$PROJECT" '.project = $project' hydra/config.json > hydra/config.json.tmp && mv hydra/config.json.tmp hydra/config.json
+jq --argjson project "$PROJECT" '.project = $project' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
 ```
 
 ### Step 7: Recreate Empty Directories
@@ -116,25 +116,25 @@ jq --argjson project "$PROJECT" '.project = $project' hydra/config.json > hydra/
 Ensure the following empty directories exist for the next run:
 
 ```bash
-mkdir -p hydra/tasks
-mkdir -p hydra/checkpoints
-mkdir -p hydra/reviews
-mkdir -p hydra/docs
-mkdir -p hydra/logs
+mkdir -p nazgul/tasks
+mkdir -p nazgul/checkpoints
+mkdir -p nazgul/reviews
+mkdir -p nazgul/docs
+mkdir -p nazgul/logs
 ```
 
 If `--preserve-context` was NOT set:
 ```bash
-mkdir -p hydra/context
+mkdir -p nazgul/context
 ```
 
 ### Step 8: Output Summary
 
 ```
-Hydra Reset Complete
+Nazgul Reset Complete
 ═══════════════════════════════════════
 
-Archived to: hydra/archive/[timestamp]/
+Archived to: nazgul/archive/[timestamp]/
   - Plan:         [archived | not found]
   - Tasks:        [N] file(s) archived
   - Checkpoints:  [N] file(s) archived
@@ -146,7 +146,7 @@ Archived to: hydra/archive/[timestamp]/
 Config reset with project settings preserved.
 
 Next steps:
-  - /hydra:start            Start a fresh run
-  - /hydra:start "objective" Start with a specific objective
-  - /hydra:status           Verify clean state
+  - /nazgul:start            Start a fresh run
+  - /nazgul:start "objective" Start with a specific objective
+  - /nazgul:status           Verify clean state
 ```

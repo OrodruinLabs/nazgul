@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Hydra Webhook Forward — POSTs loop events to a configured webhook URL
-# Reads webhook config from hydra/config.json. No-ops if webhooks disabled.
+# Nazgul Webhook Forward — POSTs loop events to a configured webhook URL
+# Reads webhook config from nazgul/config.json. No-ops if webhooks disabled.
 # Usage: webhook-forward.sh [event_type]
 # Called by hooks (Stop, PostCompact) to notify external systems.
 
-HYDRA_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/hydra"
-CONFIG="$HYDRA_DIR/config.json"
+NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
+CONFIG="$NAZGUL_DIR/config.json"
 
-# If Hydra not initialized or no config, exit silently
+# If Nazgul not initialized or no config, exit silently
 if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
@@ -46,8 +46,8 @@ GIT_BRANCH=$(git -C "${CLAUDE_PROJECT_DIR:-$(pwd)}" branch --show-current 2>/dev
 DONE_COUNT=0
 TOTAL_COUNT=0
 ACTIVE_TASK=""
-if [ -d "$HYDRA_DIR/tasks" ]; then
-  for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
+if [ -d "$NAZGUL_DIR/tasks" ]; then
+  for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
     STATUS=$(grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$task_file" 2>/dev/null | sed 's/.*:[[:space:]]*//' || echo "PLANNED")

@@ -16,7 +16,7 @@ You build and maintain the infrastructure layer. **Terraform is the default IaC 
 
 ## Infrastructure Selection Reference
 
-Read `hydra/config.json → project.infrastructure` for the selected stack:
+Read `nazgul/config.json → project.infrastructure` for the selected stack:
 - `hosting_model`: PaaS, containers, serverless, or VMs
 - `cloud_provider`: AWS, GCP, Azure, DigitalOcean, self-hosted
 - `iac_tool`: Always Terraform unless explicitly overridden

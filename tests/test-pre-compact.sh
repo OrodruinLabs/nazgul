@@ -27,21 +27,21 @@ teardown_temp_dir
 # --- Test 2: Checkpoint file created ---
 setup_temp_dir
 setup_git_repo
-setup_hydra_dir
+setup_nazgul_dir
 create_config '.current_iteration = 3'
 create_task_file "TASK-001" "READY"
 run_compact
-assert_file_exists "checkpoint created" "$TEST_DIR/hydra/checkpoints/iteration-003.json"
+assert_file_exists "checkpoint created" "$TEST_DIR/nazgul/checkpoints/iteration-003.json"
 teardown_temp_dir
 
 # --- Test 3: Checkpoint is valid JSON ---
 setup_temp_dir
 setup_git_repo
-setup_hydra_dir
+setup_nazgul_dir
 create_config '.current_iteration = 2'
 create_task_file "TASK-001" "READY"
 run_compact
-cp_file="$TEST_DIR/hydra/checkpoints/iteration-002.json"
+cp_file="$TEST_DIR/nazgul/checkpoints/iteration-002.json"
 if jq empty "$cp_file" 2>/dev/null; then
   _pass "checkpoint is valid JSON"
 else
@@ -52,24 +52,24 @@ teardown_temp_dir
 # --- Test 4: Active task captured in checkpoint ---
 setup_temp_dir
 setup_git_repo
-setup_hydra_dir
+setup_nazgul_dir
 create_config '.current_iteration = 5'
 create_task_file "TASK-005" "IN_PROGRESS"
 run_compact
-assert_json_field "active task id" "$TEST_DIR/hydra/checkpoints/iteration-005.json" ".active_task.id" "TASK-005"
+assert_json_field "active task id" "$TEST_DIR/nazgul/checkpoints/iteration-005.json" ".active_task.id" "TASK-005"
 teardown_temp_dir
 
 # --- Test 5: Task counts correct in checkpoint ---
 setup_temp_dir
 setup_git_repo
-setup_hydra_dir
+setup_nazgul_dir
 create_config '.current_iteration = 4'
 create_task_file "TASK-001" "DONE"
 create_task_file "TASK-002" "DONE"
 create_task_file "TASK-003" "READY"
 create_task_file "TASK-004" "BLOCKED"
 run_compact
-cp_file="$TEST_DIR/hydra/checkpoints/iteration-004.json"
+cp_file="$TEST_DIR/nazgul/checkpoints/iteration-004.json"
 assert_json_field "done count" "$cp_file" ".plan_snapshot.done" "2"
 assert_json_field "ready count" "$cp_file" ".plan_snapshot.ready" "1"
 assert_json_field "blocked count" "$cp_file" ".plan_snapshot.blocked" "1"
@@ -78,18 +78,18 @@ teardown_temp_dir
 # --- Test 6: Stdout has recovery header ---
 setup_temp_dir
 setup_git_repo
-setup_hydra_dir
+setup_nazgul_dir
 create_config '.current_iteration = 1'
 create_task_file "TASK-001" "READY"
 create_plan
 run_compact
-assert_contains "stdout has header" "$COMPACT_OUTPUT" "=== HYDRA RECOVERY STATE ==="
+assert_contains "stdout has header" "$COMPACT_OUTPUT" "=== NAZGUL RECOVERY STATE ==="
 teardown_temp_dir
 
 # --- Test 7: Stdout has iteration info ---
 setup_temp_dir
 setup_git_repo
-setup_hydra_dir
+setup_nazgul_dir
 create_config '.current_iteration = 5'
 create_task_file "TASK-001" "DONE"
 create_task_file "TASK-002" "DONE"
@@ -105,7 +105,7 @@ teardown_temp_dir
 # --- Test 8: Stdout shows active task ---
 setup_temp_dir
 setup_git_repo
-setup_hydra_dir
+setup_nazgul_dir
 create_config '.current_iteration = 2'
 create_task_file "TASK-002" "IN_PROGRESS"
 run_compact

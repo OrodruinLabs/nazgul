@@ -18,13 +18,13 @@ simulate_bootstrap() {
 
   # Pre-flight (in-process)
   (cd "$project" && source "$REPO_ROOT/scripts/lib/bootstrap-preflight.sh" && \
-    check_no_hydra_dir && check_scratch_state && check_docs_agents_empty && check_git_clean) || return $?
+    check_no_nazgul_dir && check_scratch_state && check_docs_agents_empty && check_git_clean) || return $?
 
   # Stubbed pipeline — write canonical outputs to scratch
   mkdir -p "$scratch/docs" "$scratch/context" "$scratch/agents" "$scratch/.claude"
   cat > "$scratch/docs/PRD.md" <<'PRD'
 # PRD
-See hydra/context/project-profile.md for stack info.
+See nazgul/context/project-profile.md for stack info.
 PRD
   cat > "$scratch/docs/TRD.md" <<'TRD'
 # TRD
@@ -48,7 +48,7 @@ tools:
   - Read
 allowed-tools: Read
 maxTurns: 30
-hydra:
+nazgul:
   phase: review
 ---
 
@@ -82,21 +82,21 @@ assert_file_exists "reviewer"       "$TEST_DIR/.claude/agents/code-reviewer.md"
 
 assert_file_not_exists "manifest dropped"           "$TEST_DIR/docs/manifest.md"
 assert_file_not_exists "scratch cleaned up"         "$TEST_DIR/.bootstrap-scratch"
-assert_file_not_contains "PRD has no hydra/ path"   "$TEST_DIR/docs/PRD.md" "hydra/"
-assert_file_not_contains "reviewer has no hydra fm" "$TEST_DIR/.claude/agents/code-reviewer.md" "hydra:"
+assert_file_not_contains "PRD has no nazgul/ path"   "$TEST_DIR/docs/PRD.md" "nazgul/"
+assert_file_not_contains "reviewer has no nazgul fm" "$TEST_DIR/.claude/agents/code-reviewer.md" "nazgul:"
 assert_file_contains "gitignore appended"           "$TEST_DIR/.gitignore" ".bootstrap-scratch/"
 
 teardown_temp_dir
 
-# --- Pre-flight: aborts if ./hydra/ exists ---
+# --- Pre-flight: aborts if ./nazgul/ exists ---
 setup_temp_dir
 setup_git_repo
-mkdir -p "$TEST_DIR/hydra"
+mkdir -p "$TEST_DIR/nazgul"
 set +e
 simulate_bootstrap "$TEST_DIR" >/dev/null 2>&1
 ec=$?
 set -e
-assert_exit_code "aborts on ./hydra/" "$ec" 10
+assert_exit_code "aborts on ./nazgul/" "$ec" 10
 assert_file_not_exists "docs NOT created" "$TEST_DIR/docs/PRD.md"
 teardown_temp_dir
 

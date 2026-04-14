@@ -1,0 +1,13 @@
+{
+  "name": "orodruin-labs",
+  "owner": {
+    "name": "Orodruin Labs"
+  },
+  "plugins": [
+    {
+      "name": "nazgul",
+      "source": "github:OrodruinLabs/nazgul",
+      "description": "Multi-agent autonomous development loop with review pipeline, context management, and parallel execution"
+    }
+  ]
+}

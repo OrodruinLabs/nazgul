@@ -10,7 +10,7 @@ _sanitize_session_id() {
 register_session() {
   local session_id
   session_id=$(_sanitize_session_id "$1")
-  local sessions_dir="${2:-hydra/sessions}"
+  local sessions_dir="${2:-nazgul/sessions}"
   mkdir -p "$sessions_dir"
 
   jq -n \
@@ -24,12 +24,12 @@ register_session() {
 unregister_session() {
   local session_id
   session_id=$(_sanitize_session_id "$1")
-  local sessions_dir="${2:-hydra/sessions}"
+  local sessions_dir="${2:-nazgul/sessions}"
   rm -f "$sessions_dir/${session_id}.lock"
 }
 
 count_active_sessions() {
-  local sessions_dir="${1:-hydra/sessions}"
+  local sessions_dir="${1:-nazgul/sessions}"
   if [ -d "$sessions_dir" ] && ls "$sessions_dir"/*.lock >/dev/null 2>&1; then
     ls "$sessions_dir"/*.lock 2>/dev/null | wc -l | tr -d ' '
   else
@@ -38,7 +38,7 @@ count_active_sessions() {
 }
 
 cleanup_stale_sessions() {
-  local sessions_dir="${1:-hydra/sessions}"
+  local sessions_dir="${1:-nazgul/sessions}"
   local max_age_seconds="${2:-7200}"  # 2 hours default
 
   [ -d "$sessions_dir" ] || return 0
@@ -67,11 +67,11 @@ cleanup_stale_sessions() {
 }
 
 is_concurrent_session_warning() {
-  local sessions_dir="${1:-hydra/sessions}"
+  local sessions_dir="${1:-nazgul/sessions}"
   local count
   count=$(count_active_sessions "$sessions_dir")
   if [ "$count" -gt 1 ]; then
-    echo "WARNING: $count concurrent Hydra sessions detected. State corruption risk."
+    echo "WARNING: $count concurrent Nazgul sessions detected. State corruption risk."
     return 0
   fi
   return 1

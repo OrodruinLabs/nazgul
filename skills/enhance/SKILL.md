@@ -1,6 +1,6 @@
 ---
-name: hydra:enhance
-description: Research latest Claude Code features and propose Hydra improvements. Use periodically to keep Hydra aligned with new platform capabilities. Run with `/loop 2w /hydra:enhance` for auto-recurring checks.
+name: nazgul:enhance
+description: Research latest Claude Code features and propose Nazgul improvements. Use periodically to keep Nazgul aligned with new platform capabilities. Run with `/loop 2w /nazgul:enhance` for auto-recurring checks.
 context: fork
 allowed-tools: Read, Bash, Glob, Grep, WebSearch, WebFetch
 metadata:
@@ -8,13 +8,13 @@ metadata:
   version: 1.1.0
 ---
 
-# Hydra Enhance
+# Nazgul Enhance
 
 ## Examples
-- `/hydra:enhance` — Research latest Claude Code features and propose Hydra improvements
-- `/loop 2w /hydra:enhance` — Auto-check every 2 weeks for new enhancement opportunities
+- `/nazgul:enhance` — Research latest Claude Code features and propose Nazgul improvements
+- `/loop 2w /nazgul:enhance` — Auto-check every 2 weeks for new enhancement opportunities
 
-## Current Hydra Capabilities
+## Current Nazgul Capabilities
 
 ### Plugin Version
 - Version: !`jq -r '.version // "unknown"' .claude-plugin/plugin.json 2>/dev/null || echo "unknown"`
@@ -47,7 +47,7 @@ Format all output per `references/ui-brand.md` — use stage banners, status sym
 ### Phase 1: Inventory Current Capabilities
 
 Using the preprocessor data above, build an internal capability map:
-- Which hook lifecycle events does Hydra handle? (Stop, PreCompact, PreToolUse, PostToolUse, SessionStart, SessionEnd — anything missing?)
+- Which hook lifecycle events does Nazgul handle? (Stop, PreCompact, PreToolUse, PostToolUse, SessionStart, SessionEnd — anything missing?)
 - Which Claude Code tools do agents currently use? (Check allowed-tools in agent frontmatter)
 - What config options exist? (Check templates/config.json sections)
 - What scripts handle automation? (Check scripts/ directory)
@@ -75,16 +75,16 @@ Compare discovered features against the capability inventory. For each gap, clas
 
 | Impact | Criteria |
 |--------|----------|
-| HIGH   | Improves core loop reliability OR enables capability Hydra can't do today |
+| HIGH   | Improves core loop reliability OR enables capability Nazgul can't do today |
 | MEDIUM | Improves performance/UX without new capability |
-| LOW    | Already handled by Hydra's own implementation OR not applicable |
+| LOW    | Already handled by Nazgul's own implementation OR not applicable |
 
 ### Phase 4: Output Enhancement Proposal
 
 Output a structured report:
 
 ```
-─── ◈ HYDRA ▸ ENHANCING ─────────────────────────────
+─── ◈ NAZGUL ▸ ENHANCING ─────────────────────────────
 
 Enhancement Proposals
 ═══════════════════════════════════════
@@ -104,7 +104,7 @@ New Features Discovered
   Source:    Claude Code vX.Y.Z (YYYY-MM-DD)
   Status:   Not implemented / Partially implemented
   Proposal: [What to do]
-  Files:    [Which Hydra files to modify]
+  Files:    [Which Nazgul files to modify]
   Effort:   Trivial / Moderate / Significant
 
 ◆ [MEDIUM] Feature Name
@@ -114,15 +114,15 @@ New Features Discovered
   ...
 
 ─── ◈ NEXT ─────────────────────────────────────────────
-  Run `/hydra:start "integrate [feature]"` to implement
-  Or `/loop 2w /hydra:enhance` for recurring checks
+  Run `/nazgul:start "integrate [feature]"` to implement
+  Or `/loop 2w /nazgul:enhance` for recurring checks
 ────────────────────────────────────────────────────────
 ```
 
 ### Important Notes
 
-- This skill is READ-ONLY. It does NOT modify Hydra files.
+- This skill is READ-ONLY. It does NOT modify Nazgul files.
 - It produces proposals for the user to act on.
 - When run via `/loop`, it auto-checks periodically without user intervention.
 - Focus on actionable, specific proposals — not vague suggestions.
-- Always check if a feature is already handled by Hydra before proposing it.
+- Always check if a feature is already handled by Nazgul before proposing it.

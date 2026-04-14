@@ -1,29 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Hydra Stop Hook — Loop engine and state management
+# Nazgul Stop Hook — Loop engine and state management
 # Exit 0 = allow stop (loop ends)
 # Exit 2 = block stop (loop continues) with stderr message
 
-HYDRA_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/hydra"
-CONFIG="$HYDRA_DIR/config.json"
-PLAN="$HYDRA_DIR/plan.md"
+NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
+CONFIG="$NAZGUL_DIR/config.json"
+PLAN="$NAZGUL_DIR/plan.md"
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/task-utils.sh"
 source "$SCRIPT_DIR/lib/session-tracker.sh"
 
-# If Hydra not initialized, allow stop
+# If Nazgul not initialized, allow stop
 if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
 # Clean up session lock on exit — read persisted ID to match session-context.sh
 SESSION_ID="${CLAUDE_SESSION_ID:-}"
-if [ -z "$SESSION_ID" ] && [ -f "$HYDRA_DIR/.session_id" ]; then
-  SESSION_ID=$(cat "$HYDRA_DIR/.session_id")
+if [ -z "$SESSION_ID" ] && [ -f "$NAZGUL_DIR/.session_id" ]; then
+  SESSION_ID=$(cat "$NAZGUL_DIR/.session_id")
 fi
-[ -n "$SESSION_ID" ] && unregister_session "$SESSION_ID" "$HYDRA_DIR/sessions"
+[ -n "$SESSION_ID" ] && unregister_session "$SESSION_ID" "$NAZGUL_DIR/sessions"
 
 # Read current state (batched into single jq call)
 CONFIG_STATE=$(jq -r '[
@@ -38,7 +38,7 @@ CONFIG_STATE=$(jq -r '[
 IFS=$'\t' read -r ITERATION MAX_ITER MODE CONSEC_FAILURES MAX_CONSEC YOLO_MODE TASK_PR_MODE <<< "$CONFIG_STATE"
 # completion_promise is checked by the prompt-layer Stop hook, not this script
 
-# --- Pause flag check (for /hydra:pause skill) ---
+# --- Pause flag check (for /nazgul:pause skill) ---
 PAUSED=$(jq -r '.paused // false' "$CONFIG")
 if [ "$PAUSED" = "true" ]; then
   jq '.paused = false' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
@@ -51,7 +51,7 @@ AFK_TIMEOUT=$(jq -r '.afk.timeout_minutes // 90' "$CONFIG")
 if [ "$AFK_ENABLED" = "true" ] && [ "$AFK_TIMEOUT" != "null" ]; then
   # Find the earliest checkpoint timestamp or fall back to config's objective_set_at
   SESSION_START=""
-  FIRST_CHECKPOINT=$(ls -1t "$HYDRA_DIR/checkpoints/iteration-"*.json 2>/dev/null | tail -1 || true)
+  FIRST_CHECKPOINT=$(ls -1t "$NAZGUL_DIR/checkpoints/iteration-"*.json 2>/dev/null | tail -1 || true)
   if [ -n "$FIRST_CHECKPOINT" ]; then
     SESSION_START=$(jq -r '.timestamp // ""' "$FIRST_CHECKPOINT")
   fi
@@ -71,7 +71,7 @@ if [ "$AFK_ENABLED" = "true" ] && [ "$AFK_TIMEOUT" != "null" ]; then
       if [ "$START_EPOCH" -gt 0 ]; then
         ELAPSED_MINUTES=$(( (NOW_EPOCH - START_EPOCH) / 60 ))
         if [ "$ELAPSED_MINUTES" -ge "$AFK_TIMEOUT" ]; then
-          echo "Hydra: AFK timeout reached (${ELAPSED_MINUTES}m >= ${AFK_TIMEOUT}m). Stopping." >&2
+          echo "Nazgul: AFK timeout reached (${ELAPSED_MINUTES}m >= ${AFK_TIMEOUT}m). Stopping." >&2
           exit 0
         fi
       fi
@@ -94,8 +94,8 @@ BLOCKED_COUNT=0
 PLANNED_COUNT=0
 TOTAL_COUNT=0
 
-if [ -d "$HYDRA_DIR/tasks" ]; then
-  for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
+if [ -d "$NAZGUL_DIR/tasks" ]; then
+  for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
     STATUS=$(get_task_status "$task_file" "PLANNED")
@@ -116,14 +116,14 @@ fi
 # --- REVIEW GATE ENFORCEMENT (Layer 2 — reactive safety net) ---
 # Validate that no tasks are DONE without review evidence
 # In YOLO mode, APPROVED tasks have been locally reviewed; DONE only happens via PR merge
-if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$HYDRA_DIR/tasks" ]; then
+if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NAZGUL_DIR/tasks" ]; then
   CONFIGURED_REVIEWERS=$(jq -r '.agents.reviewers // [] | .[]' "$CONFIG" 2>/dev/null || echo "")
-  for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
+  for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     STATUS=$(get_task_status "$task_file")
     if [ "$STATUS" = "DONE" ]; then
       TASK_ID=$(basename "$task_file" .md)
-      REVIEW_DIR="$HYDRA_DIR/reviews/$TASK_ID"
+      REVIEW_DIR="$NAZGUL_DIR/reviews/$TASK_ID"
       REVIEW_VALID=true
 
       # Check 1: Review directory exists
@@ -185,7 +185,7 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$HY
         set_task_status "$task_file" "DONE" "IMPLEMENTED"
         DONE_COUNT=$((DONE_COUNT - 1))
         IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
-        echo "HYDRA REVIEW GATE VIOLATION: ${TASK_ID} was DONE without full review — reset to IMPLEMENTED" >&2
+        echo "NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} was DONE without full review — reset to IMPLEMENTED" >&2
       fi
     fi
   done
@@ -215,7 +215,7 @@ ACTIVE_TASK=""
 ACTIVE_STATUS=""
 ACTIVE_RETRY=0
 ACTIVE_BLOCKED_REASON=""
-for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
+for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
   [ -f "$task_file" ] || continue
   STATUS=$(get_task_status "$task_file")
   if [ "$STATUS" = "IN_PROGRESS" ] || [ "$STATUS" = "CHANGES_REQUESTED" ] || [ "$STATUS" = "IN_REVIEW" ] || [ "$STATUS" = "IMPLEMENTED" ]; then
@@ -227,8 +227,8 @@ for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
 done
 
 # Check for BLOCKED tasks and capture blocked reason
-if [ -d "$HYDRA_DIR/tasks" ]; then
-  for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
+if [ -d "$NAZGUL_DIR/tasks" ]; then
+  for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     STATUS=$(get_task_status "$task_file")
     if [ "$STATUS" = "BLOCKED" ]; then
@@ -240,7 +240,7 @@ fi
 
 # If no active task, find first READY
 if [ -z "$ACTIVE_TASK" ]; then
-  for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
+  for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     STATUS=$(get_task_status "$task_file")
     if [ "$STATUS" = "READY" ]; then
@@ -274,7 +274,7 @@ fi
 
 # --- Capture files modified this iteration (GAP-012) ---
 # Get the last checkpoint's commit SHA to diff against, fall back to HEAD~1
-LAST_CHECKPOINT_FILE=$(ls -1t "$HYDRA_DIR/checkpoints/iteration-"*.json 2>/dev/null | head -1 || true)
+LAST_CHECKPOINT_FILE=$(ls -1t "$NAZGUL_DIR/checkpoints/iteration-"*.json 2>/dev/null | head -1 || true)
 LAST_CHECKPOINT_SHA=""
 if [ -n "$LAST_CHECKPOINT_FILE" ]; then
   LAST_CHECKPOINT_SHA=$(jq -r '.git.last_commit_sha // ""' "$LAST_CHECKPOINT_FILE" 2>/dev/null || echo "")
@@ -290,7 +290,7 @@ if git -C "$PROJECT_ROOT" rev-parse HEAD >/dev/null 2>&1; then
 fi
 
 # --- Context rot detection (3.4) ---
-COMPACTION_COUNT_FILE="$HYDRA_DIR/.compaction_count"
+COMPACTION_COUNT_FILE="$NAZGUL_DIR/.compaction_count"
 COMPACTION_COUNT=0
 LAST_COMPACTION_ITER=0
 if [ -f "$COMPACTION_COUNT_FILE" ]; then
@@ -304,8 +304,8 @@ if [ "$ITERS_SINCE_COMPACTION" -ge 8 ]; then
 fi
 
 # --- Write checkpoint with jq (GAP — safe JSON construction) ---
-mkdir -p "$HYDRA_DIR/checkpoints"
-CHECKPOINT_FILE="$HYDRA_DIR/checkpoints/iteration-$(printf '%03d' "$NEW_ITER").json"
+mkdir -p "$NAZGUL_DIR/checkpoints"
+CHECKPOINT_FILE="$NAZGUL_DIR/checkpoints/iteration-$(printf '%03d' "$NEW_ITER").json"
 
 ACTIVE_REVIEWERS=$(jq -c '.agents.reviewers // []' "$CONFIG" 2>/dev/null || echo "[]")
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -318,10 +318,10 @@ RECOVERY_INSTR=""
 if [ -n "$ACTIVE_TASK" ]; then
   ACTIVE_TASK_ID="$ACTIVE_TASK"
   ACTIVE_TASK_STATUS="$ACTIVE_STATUS"
-  ACTIVE_TASK_NEXT="Read hydra/tasks/${ACTIVE_TASK}.md and continue work"
-  RECOVERY_INSTR="Read hydra/plan.md Recovery Pointer, then hydra/tasks/${ACTIVE_TASK}.md for current state."
+  ACTIVE_TASK_NEXT="Read nazgul/tasks/${ACTIVE_TASK}.md and continue work"
+  RECOVERY_INSTR="Read nazgul/plan.md Recovery Pointer, then nazgul/tasks/${ACTIVE_TASK}.md for current state."
 else
-  RECOVERY_INSTR="Read hydra/plan.md Recovery Pointer. No active task — find first READY task in plan."
+  RECOVERY_INSTR="Read nazgul/plan.md Recovery Pointer. No active task — find first READY task in plan."
 fi
 
 jq -n \
@@ -405,11 +405,11 @@ jq -n \
 if [ -f "$PLAN" ]; then
   NEXT_ACTION_TEXT="Continue work on ${ACTIVE_TASK:-next READY task}"
   if [ -n "$ACTIVE_TASK" ]; then
-    NEXT_ACTION_TEXT="Read hydra/tasks/${ACTIVE_TASK}.md and continue based on status ${ACTIVE_STATUS}"
+    NEXT_ACTION_TEXT="Read nazgul/tasks/${ACTIVE_TASK}.md and continue based on status ${ACTIVE_STATUS}"
   fi
 
   # Update Recovery Pointer fields using awk (safe with arbitrary text in GIT_MSG)
-  CHECKPOINT_NAME="hydra/checkpoints/iteration-$(printf '%03d' "$NEW_ITER").json"
+  CHECKPOINT_NAME="nazgul/checkpoints/iteration-$(printf '%03d' "$NEW_ITER").json"
   awk \
     -v task="${ACTIVE_TASK:-none}" \
     -v action="Iteration ${NEW_ITER} completed" \
@@ -433,7 +433,7 @@ if [ "$BOARD_ENABLED" = "true" ]; then
   BOARD_PROVIDER=$(jq -r '.board.provider // ""' "$CONFIG")
   BOARD_SCRIPT="$SCRIPT_DIR/board-sync-${BOARD_PROVIDER}.sh"
   if [ -f "$BOARD_SCRIPT" ]; then
-    if [ -d "$HYDRA_DIR/tasks" ]; then
+    if [ -d "$NAZGUL_DIR/tasks" ]; then
       # Read all cached statuses in one jq call
       CACHED_STATUSES=$(jq -r '.board._last_synced_status // {} | to_entries[] | "\(.key)\t\(.value)"' "$CONFIG" 2>/dev/null || echo "")
       declare -A CACHED_MAP=()
@@ -442,7 +442,7 @@ if [ "$BOARD_ENABLED" = "true" ]; then
       done <<< "$CACHED_STATUSES"
       # Collect status changes to batch-write after the loop
       BOARD_UPDATES=""
-      for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
+      for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
         [ -f "$task_file" ] || continue
         task_id=$(grep -m1 '^\- \*\*ID\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "")
         current_status=$(get_task_status "$task_file")
@@ -464,13 +464,13 @@ if [ "$BOARD_ENABLED" = "true" ]; then
 fi
 
 # Checkpoint rotation — keep last 10
-if [ -d "$HYDRA_DIR/checkpoints" ]; then
-  ls -1t "$HYDRA_DIR/checkpoints/iteration-"*.json 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
+if [ -d "$NAZGUL_DIR/checkpoints" ]; then
+  ls -1t "$NAZGUL_DIR/checkpoints/iteration-"*.json 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
 fi
 
 # --- Auto-promote PLANNED -> READY when dependencies are met ---
-if [ -d "$HYDRA_DIR/tasks" ]; then
-  for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
+if [ -d "$NAZGUL_DIR/tasks" ]; then
+  for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     STATUS=$(get_task_status "$task_file")
     if [ "$STATUS" = "PLANNED" ]; then
@@ -482,7 +482,7 @@ if [ -d "$HYDRA_DIR/tasks" ]; then
       # Check if all dependencies are DONE (or APPROVED in YOLO mode)
       ALL_DONE=true
       while IFS= read -r dep; do
-        dep_file="$HYDRA_DIR/tasks/${dep}.md"
+        dep_file="$NAZGUL_DIR/tasks/${dep}.md"
         if [ -f "$dep_file" ]; then
           DEP_STATUS=$(get_task_status "$dep_file")
           if [ "$YOLO_MODE" = "true" ]; then
@@ -509,18 +509,18 @@ GIT_PORCELAIN=$(git -C "$PROJECT_ROOT" status --porcelain 2>/dev/null || echo ""
 if echo "$GIT_PORCELAIN" | grep -qE '^(U.|.U|AA|DD) '; then
   GIT_CONFLICT_DETECTED=true
   # Set the active task to BLOCKED with reason "git conflict"
-  if [ -n "$ACTIVE_TASK" ] && [ -f "$HYDRA_DIR/tasks/${ACTIVE_TASK}.md" ]; then
-    set_task_status "$HYDRA_DIR/tasks/${ACTIVE_TASK}.md" ".*" "BLOCKED"
+  if [ -n "$ACTIVE_TASK" ] && [ -f "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" ]; then
+    set_task_status "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" ".*" "BLOCKED"
     # Add or update blocked reason
-    if grep -q '^\- \*\*Blocked reason\*\*:' "$HYDRA_DIR/tasks/${ACTIVE_TASK}.md" 2>/dev/null; then
-      sed -i.bak 's/^\(- \*\*Blocked reason\*\*:\) .*/\1 git conflict — unmerged files detected/' "$HYDRA_DIR/tasks/${ACTIVE_TASK}.md" && rm -f "$HYDRA_DIR/tasks/${ACTIVE_TASK}.md.bak"
+    if grep -q '^\- \*\*Blocked reason\*\*:' "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" 2>/dev/null; then
+      sed -i.bak 's/^\(- \*\*Blocked reason\*\*:\) .*/\1 git conflict — unmerged files detected/' "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" && rm -f "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md.bak"
     fi
     ACTIVE_BLOCKED_REASON="git conflict"
   fi
 fi
 
 # --- Iteration logs (4.1) ---
-mkdir -p "$HYDRA_DIR/logs"
+mkdir -p "$NAZGUL_DIR/logs"
 jq -n \
   --argjson iteration "$NEW_ITER" \
   --arg timestamp "$TIMESTAMP" \
@@ -530,7 +530,7 @@ jq -n \
   --argjson total "$TOTAL_COUNT" \
   --arg git_sha "$GIT_SHA" \
   --arg blocked_reason "${ACTIVE_BLOCKED_REASON:-}" \
-  '{iteration: $iteration, timestamp: $timestamp, active_task: $active_task, status: $status, done: $done_count, total: $total, git_sha: $git_sha, blocked_reason: $blocked_reason}' >> "$HYDRA_DIR/logs/iterations.jsonl"
+  '{iteration: $iteration, timestamp: $timestamp, active_task: $active_task, status: $status, done: $done_count, total: $total, git_sha: $git_sha, blocked_reason: $blocked_reason}' >> "$NAZGUL_DIR/logs/iterations.jsonl"
 
 # --- EXIT CONDITIONS ---
 
@@ -555,13 +555,13 @@ fi
 
 # 2. Max iterations reached
 if [ "$NEW_ITER" -ge "$MAX_ITER" ]; then
-  echo "Hydra: Max iterations ($MAX_ITER) reached. ${DONE_COUNT}/${TOTAL_COUNT} tasks done." >&2
+  echo "Nazgul: Max iterations ($MAX_ITER) reached. ${DONE_COUNT}/${TOTAL_COUNT} tasks done." >&2
   exit 0
 fi
 
 # 3. Consecutive failures exceeded
 if [ "$CONSEC_FAILURES" -ge "$MAX_CONSEC" ]; then
-  echo "Hydra: ${CONSEC_FAILURES} consecutive iterations with no progress. Stopping." >&2
+  echo "Nazgul: ${CONSEC_FAILURES} consecutive iterations with no progress. Stopping." >&2
   exit 0
 fi
 
@@ -571,21 +571,21 @@ fi
 REASON="Iteration ${NEW_ITER}/${MAX_ITER}: ${DONE_COUNT}/${TOTAL_COUNT} tasks done"
 
 cat >&2 << CONTINUE_MSG
-Hydra loop — iteration ${NEW_ITER}/${MAX_ITER} | Mode: ${MODE}
+Nazgul loop — iteration ${NEW_ITER}/${MAX_ITER} | Mode: ${MODE}
 Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked, ${PLANNED_COUNT} planned
 $([ -n "$FEATURE_BRANCH" ] && echo "Branch: ${FEATURE_BRANCH} → ${BASE_BRANCH} | Worktrees: ${WORKTREE_COUNT}" || true)
 
-Read hydra/plan.md → Recovery Pointer section for current state.
-$([ -n "$ACTIVE_TASK" ] && echo "Active task: hydra/tasks/${ACTIVE_TASK}.md (${ACTIVE_STATUS})" || echo "No active task — find first READY task in hydra/plan.md")
-$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (hydra:review-gate) for ${ACTIVE_TASK}. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition." || true)
-$([ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (hydra:review-gate) for ${ACTIVE_TASK}." || true)
-$([ "$ACTIVE_STATUS" = "READY" ] || [ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}." || true)
-$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first." || true)
-$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "IMPORTANT: Read hydra/reviews/${ACTIVE_TASK}/consolidated-feedback.md before re-implementing." || true)
+Read nazgul/plan.md → Recovery Pointer section for current state.
+$([ -n "$ACTIVE_TASK" ] && echo "Active task: nazgul/tasks/${ACTIVE_TASK}.md (${ACTIVE_STATUS})" || echo "No active task — find first READY task in nazgul/plan.md")
+$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition." || true)
+$([ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}." || true)
+$([ "$ACTIVE_STATUS" = "READY" ] || [ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}." || true)
+$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first." || true)
+$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "IMPORTANT: Read nazgul/reviews/${ACTIVE_TASK}/consolidated-feedback.md before re-implementing." || true)
 $([ "$GIT_CONFLICT_DETECTED" = true ] && echo "WARNING: Git conflicts detected. Resolve unmerged files before continuing.")
 $([ -n "$CONTEXT_ROT_WARNING" ] && echo "$CONTEXT_ROT_WARNING")
 
-Continue the Hydra pipeline: read plan.md, delegate to the appropriate agent based on task status.
+Continue the Nazgul pipeline: read plan.md, delegate to the appropriate agent based on task status.
 CONTINUE_MSG
 
 jq -n --arg reason "$REASON" '{"decision":"block","reason":$reason}'

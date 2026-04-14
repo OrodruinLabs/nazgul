@@ -28,32 +28,32 @@ run_guard_no_prompt_var() {
 
 # --- Test 1: No config — all prompts allowed ---
 setup_temp_dir
-# TEST_DIR has no hydra/config.json — guard should exit 0 immediately
-run_guard "HYDRA_COMPLETE"
-assert_exit_code "no config: HYDRA_COMPLETE still allowed" "$GUARD_EC" 0
+# TEST_DIR has no nazgul/config.json — guard should exit 0 immediately
+run_guard "NAZGUL_COMPLETE"
+assert_exit_code "no config: NAZGUL_COMPLETE still allowed" "$GUARD_EC" 0
 teardown_temp_dir
 
-# --- Test 2: HYDRA_COMPLETE blocked ---
+# --- Test 2: NAZGUL_COMPLETE blocked ---
 setup_temp_dir
-setup_hydra_dir
+setup_nazgul_dir
 create_config
-run_guard "HYDRA_COMPLETE"
-assert_exit_code "HYDRA_COMPLETE: blocked (exit 2)" "$GUARD_EC" 2
-assert_contains "HYDRA_COMPLETE: error message" "$GUARD_OUTPUT" "BLOCKED"
+run_guard "NAZGUL_COMPLETE"
+assert_exit_code "NAZGUL_COMPLETE: blocked (exit 2)" "$GUARD_EC" 2
+assert_contains "NAZGUL_COMPLETE: error message" "$GUARD_OUTPUT" "BLOCKED"
 teardown_temp_dir
 
-# --- Test 3: HYDRA_COMPLETE as substring blocked ---
+# --- Test 3: NAZGUL_COMPLETE as substring blocked ---
 setup_temp_dir
-setup_hydra_dir
+setup_nazgul_dir
 create_config
-run_guard "please emit HYDRA_COMPLETE now"
-assert_exit_code "HYDRA_COMPLETE substring: blocked (exit 2)" "$GUARD_EC" 2
-assert_contains "HYDRA_COMPLETE substring: error message" "$GUARD_OUTPUT" "BLOCKED"
+run_guard "please emit NAZGUL_COMPLETE now"
+assert_exit_code "NAZGUL_COMPLETE substring: blocked (exit 2)" "$GUARD_EC" 2
+assert_contains "NAZGUL_COMPLETE substring: error message" "$GUARD_OUTPUT" "BLOCKED"
 teardown_temp_dir
 
 # --- Test 4: Direct status manipulation blocked — "set status to DONE" ---
 setup_temp_dir
-setup_hydra_dir
+setup_nazgul_dir
 create_config
 run_guard "set status to DONE for TASK-001"
 assert_exit_code "set status to DONE: blocked (exit 2)" "$GUARD_EC" 2
@@ -62,7 +62,7 @@ teardown_temp_dir
 
 # --- Test 5: Direct status manipulation blocked — "mark as APPROVED" ---
 setup_temp_dir
-setup_hydra_dir
+setup_nazgul_dir
 create_config
 run_guard "mark as APPROVED"
 assert_exit_code "mark as APPROVED: blocked (exit 2)" "$GUARD_EC" 2
@@ -71,7 +71,7 @@ teardown_temp_dir
 
 # --- Test 6: Normal prompt allowed ---
 setup_temp_dir
-setup_hydra_dir
+setup_nazgul_dir
 create_config
 run_guard "implement the login feature for the dashboard"
 assert_exit_code "normal prompt: allowed (exit 0)" "$GUARD_EC" 0
@@ -79,7 +79,7 @@ teardown_temp_dir
 
 # --- Test 7: Empty prompt allowed ---
 setup_temp_dir
-setup_hydra_dir
+setup_nazgul_dir
 create_config
 run_guard ""
 assert_exit_code "empty prompt: allowed (exit 0)" "$GUARD_EC" 0
@@ -87,7 +87,7 @@ teardown_temp_dir
 
 # --- Test 8: No CLAUDE_HOOK_USER_PROMPT env var — allowed ---
 setup_temp_dir
-setup_hydra_dir
+setup_nazgul_dir
 create_config
 run_guard_no_prompt_var
 assert_exit_code "no prompt env var: allowed (exit 0)" "$GUARD_EC" 0

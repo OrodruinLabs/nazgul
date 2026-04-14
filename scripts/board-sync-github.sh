@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# board-sync-github.sh — GitHub Projects V2 provider for Hydra board sync
+# board-sync-github.sh — GitHub Projects V2 provider for Nazgul board sync
 # Usage: board-sync-github.sh <command> [args]
 #
 # Commands:
 #   setup <project-number>    Connect to project, create fields, store IDs
 #   create-issue <task-file>  Create GitHub Issue + add to project
 #   sync-task <task-file>     Update issue status/labels from task manifest
-#   sync-all                  Full sync of all hydra/tasks/TASK-*.md
+#   sync-all                  Full sync of all nazgul/tasks/TASK-*.md
 #   archive-all <project-num> Archive all existing items (--clean)
 #   disconnect                Remove board config from config.json
 #   status                    Show connection info + last sync
 
-HYDRA_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/hydra"
-CONFIG="$HYDRA_DIR/config.json"
+NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
+CONFIG="$NAZGUL_DIR/config.json"
 
 # --- Helpers ---
 
@@ -24,7 +24,7 @@ log_error() { echo "board-sync: ERROR: $*" >&2; }
 
 check_prereqs() {
   if [ ! -f "$CONFIG" ]; then
-    log_error "Hydra not initialized (hydra/config.json not found)"
+    log_error "Nazgul not initialized (nazgul/config.json not found)"
     exit 1
   fi
   if ! command -v gh >/dev/null 2>&1; then
@@ -109,15 +109,15 @@ cmd_setup() {
   # Create custom fields (or find existing ones)
   log_info "Creating custom fields..."
 
-  local hydra_status_field_json task_id_field_json group_field_json
-  hydra_status_field_json=$(gh project field-create "$project_number" \
+  local nazgul_status_field_json task_id_field_json group_field_json
+  nazgul_status_field_json=$(gh project field-create "$project_number" \
     --owner "$owner" \
-    --name "Hydra Status" \
+    --name "Nazgul Status" \
     --data-type "SINGLE_SELECT" \
     --single-select-options "PLANNED,READY,IN_PROGRESS,IMPLEMENTED,IN_REVIEW,CHANGES_REQUESTED,DONE,BLOCKED" \
     --format json 2>/dev/null) || {
-    hydra_status_field_json=$(gh project field-list "$project_number" --owner "$owner" --format json --jq '.fields[] | select(.name == "Hydra Status")' 2>/dev/null) || {
-      log_error "Failed to create or find 'Hydra Status' field"
+    nazgul_status_field_json=$(gh project field-list "$project_number" --owner "$owner" --format json --jq '.fields[] | select(.name == "Nazgul Status")' 2>/dev/null) || {
+      log_error "Failed to create or find 'Nazgul Status' field"
       exit 1
     }
   }
@@ -144,16 +144,16 @@ cmd_setup() {
     }
   }
 
-  local hydra_status_id task_id_field_id group_field_id
-  hydra_status_id=$(echo "$hydra_status_field_json" | jq -r '.id')
+  local nazgul_status_id task_id_field_id group_field_id
+  nazgul_status_id=$(echo "$nazgul_status_field_json" | jq -r '.id')
   task_id_field_id=$(echo "$task_id_field_json" | jq -r '.id')
   group_field_id=$(echo "$group_field_json" | jq -r '.id')
 
-  # Get option IDs for Hydra Status single-select
+  # Get option IDs for Nazgul Status single-select
   log_info "Fetching status option IDs..."
   local fields_json status_options
   fields_json=$(gh project field-list "$project_number" --owner "$owner" --format json 2>/dev/null)
-  status_options=$(echo "$fields_json" | jq -r --arg fid "$hydra_status_id" '.fields[] | select(.id == $fid) | .options // []')
+  status_options=$(echo "$fields_json" | jq -r --arg fid "$nazgul_status_id" '.fields[] | select(.id == $fid) | .options // []')
 
   # Build status_option_ids map
   local status_option_ids="{}"
@@ -169,7 +169,7 @@ cmd_setup() {
 
   # Create labels
   log_info "Creating labels..."
-  for label in "hydra" "hydra:planned" "hydra:ready" "hydra:in-progress" "hydra:implemented" "hydra:in-review" "hydra:changes-requested" "hydra:done" "hydra:blocked"; do
+  for label in "nazgul" "nazgul:planned" "nazgul:ready" "nazgul:in-progress" "nazgul:implemented" "nazgul:in-review" "nazgul:changes-requested" "nazgul:done" "nazgul:blocked"; do
     gh label create "$label" --repo "$owner/$repo" --force 2>/dev/null || true
   done
 
@@ -181,7 +181,7 @@ cmd_setup() {
     --arg repo "$repo" \
     --argjson pn "$project_number" \
     --arg pid "$project_id" \
-    --arg hsid "$hydra_status_id" \
+    --arg hsid "$nazgul_status_id" \
     --arg tid "$task_id_field_id" \
     --arg gid "$group_field_id" \
     --argjson soids "$status_option_ids" \
@@ -191,7 +191,7 @@ cmd_setup() {
       project_number: $pn,
       project_id: $pid,
       field_ids: {
-        hydra_status: $hsid,
+        nazgul_status: $hsid,
         task_id: $tid,
         group: $gid
       },
@@ -245,7 +245,7 @@ cmd_create_issue() {
   local body criteria issue_body
   body=$(awk '/^## Description$/,/^## /' "$task_file" | sed '1d;$d' | head -20)
   criteria=$(awk '/^## Acceptance Criteria$/,/^## /' "$task_file" | sed '1d;$d' | head -10)
-  issue_body=$(printf "%s\n\n## Acceptance Criteria\n%s\n\n---\n*Managed by Hydra*" "$body" "$criteria")
+  issue_body=$(printf "%s\n\n## Acceptance Criteria\n%s\n\n---\n*Managed by Nazgul*" "$body" "$criteria")
 
   # Check if issue already exists in task_map
   local existing
@@ -264,7 +264,7 @@ cmd_create_issue() {
     --repo "$owner/$repo" \
     --title "$title" \
     --body "$issue_body" \
-    --label "hydra,hydra:${status_label}") || {
+    --label "nazgul,nazgul:${status_label}") || {
     log_warn "Failed to create issue for $task_id (after 3 retries)"
     increment_sync_failures
     return 1
@@ -289,20 +289,20 @@ cmd_create_issue() {
   log_info "Added issue #$issue_number to project as item $item_id"
 
   # Set custom fields on the project item
-  local project_id hydra_status_field_id task_id_field_id group_field_id status_option_id
+  local project_id nazgul_status_field_id task_id_field_id group_field_id status_option_id
   project_id=$(jq -r '.board.provider_config.project_id' "$CONFIG")
-  hydra_status_field_id=$(jq -r '.board.provider_config.field_ids.hydra_status' "$CONFIG")
+  nazgul_status_field_id=$(jq -r '.board.provider_config.field_ids.nazgul_status' "$CONFIG")
   task_id_field_id=$(jq -r '.board.provider_config.field_ids.task_id' "$CONFIG")
   group_field_id=$(jq -r '.board.provider_config.field_ids.group' "$CONFIG")
   status_option_id=$(jq -r --arg s "$status" '.board.provider_config.status_option_ids[$s] // empty' "$CONFIG")
 
-  # Set Hydra Status
+  # Set Nazgul Status
   if [ -n "$status_option_id" ]; then
     gh project item-edit \
       --id "$item_id" \
       --project-id "$project_id" \
-      --field-id "$hydra_status_field_id" \
-      --single-select-option-id "$status_option_id" 2>/dev/null || log_warn "Failed to set Hydra Status on $task_id"
+      --field-id "$nazgul_status_field_id" \
+      --single-select-option-id "$status_option_id" 2>/dev/null || log_warn "Failed to set Nazgul Status on $task_id"
   fi
 
   # Set Task ID text field
@@ -358,19 +358,19 @@ cmd_sync_task() {
     return $?
   fi
 
-  local owner repo project_id hydra_status_field_id status_option_id
+  local owner repo project_id nazgul_status_field_id status_option_id
   owner=$(jq -r '.board.provider_config.owner' "$CONFIG")
   repo=$(jq -r '.board.provider_config.repo' "$CONFIG")
   project_id=$(jq -r '.board.provider_config.project_id' "$CONFIG")
-  hydra_status_field_id=$(jq -r '.board.provider_config.field_ids.hydra_status' "$CONFIG")
+  nazgul_status_field_id=$(jq -r '.board.provider_config.field_ids.nazgul_status' "$CONFIG")
   status_option_id=$(jq -r --arg s "$status" '.board.provider_config.status_option_ids[$s] // empty' "$CONFIG")
 
-  # Update Hydra Status field on project item
+  # Update Nazgul Status field on project item
   if [ -n "$status_option_id" ]; then
     gh project item-edit \
       --id "$item_id" \
       --project-id "$project_id" \
-      --field-id "$hydra_status_field_id" \
+      --field-id "$nazgul_status_field_id" \
       --single-select-option-id "$status_option_id" 2>/dev/null || {
       # Check if issue was deleted externally — recreate if so
       if ! gh issue view "$issue_number" --repo "$owner/$repo" --json number >/dev/null 2>&1; then
@@ -379,21 +379,21 @@ cmd_sync_task() {
         cmd_create_issue "$task_file"
         return $?
       fi
-      log_warn "Failed to update Hydra Status for $task_id"
+      log_warn "Failed to update Nazgul Status for $task_id"
       increment_sync_failures
       return 1
     }
   fi
 
-  # Update labels — remove old hydra:* status labels, add new one
+  # Update labels — remove old nazgul:* status labels, add new one
   local status_label
   status_label=$(echo "$status" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
 
-  for old_label in "hydra:planned" "hydra:ready" "hydra:in-progress" "hydra:implemented" "hydra:in-review" "hydra:changes-requested" "hydra:done" "hydra:blocked"; do
+  for old_label in "nazgul:planned" "nazgul:ready" "nazgul:in-progress" "nazgul:implemented" "nazgul:in-review" "nazgul:changes-requested" "nazgul:done" "nazgul:blocked"; do
     gh issue edit "$issue_number" --repo "$owner/$repo" --remove-label "$old_label" 2>/dev/null || true
   done
 
-  gh issue edit "$issue_number" --repo "$owner/$repo" --add-label "hydra:${status_label}" 2>/dev/null || true
+  gh issue edit "$issue_number" --repo "$owner/$repo" --add-label "nazgul:${status_label}" 2>/dev/null || true
 
   # Handle terminal states
   if [ "$status" = "DONE" ]; then
@@ -426,8 +426,8 @@ cmd_sync_all() {
   log_info "Full sync starting..."
   local count=0
 
-  if [ -d "$HYDRA_DIR/tasks" ]; then
-    for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
+  if [ -d "$NAZGUL_DIR/tasks" ]; then
+    for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
       [ -f "$task_file" ] || continue
       cmd_sync_task "$task_file" || true
       count=$((count + 1))
@@ -466,13 +466,13 @@ cmd_archive_all() {
 
   log_info "Archived $count items from project #$project_number"
 
-  # Clean stale hydra labels
+  # Clean stale nazgul labels
   local repo
   repo=$(echo "$repo_info" | jq -r '.name')
-  for label in "hydra:planned" "hydra:ready" "hydra:in-progress" "hydra:implemented" "hydra:in-review" "hydra:changes-requested" "hydra:done" "hydra:blocked"; do
+  for label in "nazgul:planned" "nazgul:ready" "nazgul:in-progress" "nazgul:implemented" "nazgul:in-review" "nazgul:changes-requested" "nazgul:done" "nazgul:blocked"; do
     gh label delete "$label" --repo "$owner/$repo" --yes 2>/dev/null || true
   done
-  log_info "Cleaned stale hydra labels"
+  log_info "Cleaned stale nazgul labels"
 }
 
 cmd_disconnect() {
@@ -492,7 +492,7 @@ cmd_disconnect() {
 
 cmd_status() {
   if [ ! -f "$CONFIG" ]; then
-    echo "Hydra not initialized" >&2
+    echo "Nazgul not initialized" >&2
     exit 1
   fi
 

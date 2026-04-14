@@ -47,13 +47,13 @@ fi
 assert_file_not_exists "manifest.md dropped from bundle" "$WORK/docs/manifest.md"
 
 # ---------------------------------------------------------------------
-# Assertion test: if a Hydra token survives all rules, transform must fail
+# Assertion test: if a Nazgul token survives all rules, transform must fail
 # ---------------------------------------------------------------------
 ASSERT_WORK=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-assert-XXXXXX")
 mkdir -p "$ASSERT_WORK/docs"
 cat > "$ASSERT_WORK/docs/evil.md" <<'EVIL'
 # Doc
-This file uses HYDRA in uppercase intentionally.
+This file uses NAZGUL in uppercase intentionally.
 EVIL
 
 # Single invocation: capture combined output AND exit code.
@@ -63,7 +63,7 @@ ASSERT_OUTPUT=$(bash "$TRANSFORM" "$ASSERT_WORK" 2>&1; echo "__EC=$?")
 ASSERT_EC="${ASSERT_OUTPUT##*__EC=}"
 ASSERT_OUTPUT="${ASSERT_OUTPUT%__EC=*}"
 
-assert_exit_code "assertion fires on residual Hydra token" "$ASSERT_EC" 3
+assert_exit_code "assertion fires on residual Nazgul token" "$ASSERT_EC" 3
 assert_contains "error message names file" "$ASSERT_OUTPUT" "evil.md"
 assert_contains "error message suggests scrub-map edit" "$ASSERT_OUTPUT" "scripts/lib/bootstrap-scrub-map.sh"
 

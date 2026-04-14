@@ -27,7 +27,7 @@ render_template() {
 }
 
 # render_agent_prompt <agent-file> <state-root>
-#   Render an agent prompt for pipeline execution: substitute hydra/ path
+#   Render an agent prompt for pipeline execution: substitute nazgul/ path
 #   prefixes with <state-root>/. Does NOT apply bundle_mode; use render_template
 #   directly when that's needed.
 render_agent_prompt() {
@@ -36,11 +36,11 @@ render_agent_prompt() {
   # Strip any trailing slash from state_root
   state_root="${state_root%/}"
 
-  # Replace `hydra/` with `<state-root>/` everywhere. Word-boundary not needed;
-  # hydra/ is a path-level prefix that doesn't appear outside paths.
+  # Replace `nazgul/` with `<state-root>/` everywhere. Word-boundary not needed;
+  # nazgul/ is a path-level prefix that doesn't appear outside paths.
   local sr_esc
   sr_esc=$(printf '%s' "$state_root" | sed 's/[\/&]/\\&/g')
-  sed "s/hydra\//$sr_esc\//g" "$file"
+  sed "s/nazgul\//$sr_esc\//g" "$file"
 }
 
 # select_reviewer_domains <project-profile.md> <reviewer-domains.json>

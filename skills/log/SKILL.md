@@ -1,6 +1,6 @@
 ---
-name: hydra:log
-description: View Hydra run history — iteration timeline, task completions, review verdicts, git commits. Use after an overnight run to see what happened.
+name: nazgul:log
+description: View Nazgul run history — iteration timeline, task completions, review verdicts, git commits. Use after an overnight run to see what happened.
 context: fork
 allowed-tools: Read, Bash, Glob
 metadata:
@@ -8,29 +8,29 @@ metadata:
   version: 1.1.0
 ---
 
-# Hydra Log
+# Nazgul Log
 
 ## Examples
-- `/hydra:log` — View unified timeline of all Hydra activity (iterations, commits, reviews)
+- `/nazgul:log` — View unified timeline of all Nazgul activity (iterations, commits, reviews)
 
 ## Current State
-- Iteration logs: !`tail -20 hydra/logs/iterations.jsonl 2>/dev/null || echo "No iteration logs"`
-- Recent commits: !`git log --oneline --grep="$(jq -r '.afk.commit_prefix // "feat("' hydra/config.json 2>/dev/null)" -20 2>/dev/null || echo "No commits found"`
-- Checkpoints: !`ls -1t hydra/checkpoints/iteration-*.json 2>/dev/null | head -5 || echo "No checkpoints"`
+- Iteration logs: !`tail -20 nazgul/logs/iterations.jsonl 2>/dev/null || echo "No iteration logs"`
+- Recent commits: !`git log --oneline --grep="$(jq -r '.afk.commit_prefix // "feat("' nazgul/config.json 2>/dev/null)" -20 2>/dev/null || echo "No commits found"`
+- Checkpoints: !`ls -1t nazgul/checkpoints/iteration-*.json 2>/dev/null | head -5 || echo "No checkpoints"`
 
 ## Instructions
 
-Build a unified timeline from all Hydra activity sources and present it as a formatted run history.
+Build a unified timeline from all Nazgul activity sources and present it as a formatted run history.
 
 ### Step 1: Parse All Sources
 
 Gather events from the preprocessor data above. Each source provides different event types:
 
-1. **Iteration logs** (`hydra/logs/iterations.jsonl`): Each line is a JSON object with `timestamp`, `iteration`, `task_id`, `action`, `result`. These are the primary timeline markers.
+1. **Iteration logs** (`nazgul/logs/iterations.jsonl`): Each line is a JSON object with `timestamp`, `iteration`, `task_id`, `action`, `result`. These are the primary timeline markers.
 
 2. **Git commits** (filtered by commit prefix from config): Commits with the configured prefix represent state changes committed to disk. Read `afk.commit_prefix` from config to determine the grep pattern. Extract the timestamp, short hash, and message.
 
-3. **Checkpoints** (`hydra/checkpoints/iteration-*.json`): Each file captures a full snapshot at an iteration boundary. Read the latest 5 for context recovery info.
+3. **Checkpoints** (`nazgul/checkpoints/iteration-*.json`): Each file captures a full snapshot at an iteration boundary. Read the latest 5 for context recovery info.
 
 ### Step 2: Build Unified Timeline
 
@@ -43,7 +43,7 @@ Merge all events into a single list sorted by timestamp (oldest first). For each
 ### Step 3: Output Formatted Timeline
 
 ```
-Hydra Run Log
+Nazgul Run Log
 ═══════════════════════════════════════════════════════════
 
 [YYYY-MM-DD]
@@ -86,7 +86,7 @@ Errors:           0
 ### Step 4: Handle Edge Cases
 
 - If no iteration logs exist: check if there are at least git commits. Show whatever is available.
-- If nothing exists at all: "No Hydra activity recorded yet. Run `/hydra:start` to begin."
+- If nothing exists at all: "No Nazgul activity recorded yet. Run `/nazgul:start` to begin."
 - If checkpoints exist but no logs: reconstruct a partial timeline from checkpoint data, noting gaps.
 
 ### Step 5: Additional Detail (if few events)
