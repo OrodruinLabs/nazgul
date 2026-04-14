@@ -2,7 +2,7 @@
 name: nazgul:board
 description: Connect Nazgul task tracking to an external project board (GitHub Projects, Azure DevOps, etc). Use when user says "connect to github projects", "set up board", "track on github", or "nazgul board".
 context: fork
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, ToolSearch
 metadata:
   author: Jose Mejia
   version: 1.0.0
@@ -31,6 +31,8 @@ $ARGUMENTS
 - Mapped tasks: !`jq -r '.board.task_map | length' nazgul/config.json 2>/dev/null || echo "0"`
 
 ## Instructions
+
+**Pre-load:** Run `ToolSearch` with query `select:AskUserQuestion` to load the interactive prompt tool (deferred by default). Do this BEFORE any step that uses `AskUserQuestion`.
 
 ### Step 0: Parse Arguments
 

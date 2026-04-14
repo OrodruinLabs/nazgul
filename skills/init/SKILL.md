@@ -3,7 +3,7 @@ name: nazgul:init
 description: Initialize Nazgul for a project — check prerequisites, run discovery, create runtime directories, generate reviewer agents. Use when setting up Nazgul for the first time, user says "initialize nazgul", "set up nazgul", or before running any other Nazgul commands.
 context: fork
 disable-model-invocation: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, ToolSearch
 metadata:
   author: Jose Mejia
   version: 1.1.0
@@ -25,6 +25,8 @@ metadata:
 - security-guidance: !`ls ~/.claude/plugins/security-guidance 2>/dev/null && echo "INSTALLED" || echo "NOT INSTALLED — recommended: claude plugin install security-guidance"`
 
 ## Instructions
+
+**Pre-load:** Run `ToolSearch` with query `select:AskUserQuestion` to load the interactive prompt tool (deferred by default). Do this BEFORE any step that uses `AskUserQuestion`.
 
 Initialize the Nazgul Framework for this project:
 

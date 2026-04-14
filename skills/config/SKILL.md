@@ -2,7 +2,7 @@
 name: "nazgul:config"
 description: View and change Nazgul settings — model assignments, formatter, notifications. Use when user says "configure nazgul", "change models", "nazgul settings", or wants to adjust config after init.
 context: fork
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, ToolSearch
 metadata:
   author: Jose Mejia
   version: 1.0.0
@@ -16,6 +16,7 @@ metadata:
 
 ## Pre-flight
 
+0. Load the `AskUserQuestion` tool (deferred by default): run `ToolSearch` with query `select:AskUserQuestion`. Do this BEFORE any step that uses `AskUserQuestion`.
 1. Check if `nazgul/config.json` exists. If not: "Nazgul not initialized. Run `/nazgul:init` first." and STOP.
 
 ## Step 1: Display Current Settings

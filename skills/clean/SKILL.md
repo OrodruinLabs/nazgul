@@ -2,7 +2,7 @@
 name: nazgul:clean
 description: Fully remove Nazgul from a project — deletes all runtime state, generated agents, MCP config, permissions, CLAUDE.md injections, and gitignore entries. Use when user says "remove nazgul", "uninstall nazgul", "clean nazgul", or wants to completely undo /nazgul:init.
 context: fork
-allowed-tools: Read, Edit, Bash, Glob, Grep, AskUserQuestion
+allowed-tools: Read, Edit, Bash, Glob, Grep, ToolSearch
 metadata:
   author: Jose Mejia
   version: 1.0.0
@@ -26,6 +26,8 @@ $ARGUMENTS
 - Gitignore has nazgul entries: !`grep -q "# Nazgul Framework (local mode)" .gitignore 2>/dev/null && echo "YES" || echo "NO"`
 
 ## Instructions
+
+**Pre-load:** Run `ToolSearch` with query `select:AskUserQuestion` to load the interactive prompt tool (deferred by default). Do this BEFORE any step that uses `AskUserQuestion`.
 
 Fully remove Nazgul from this project. No archiving — permanent deletion.
 

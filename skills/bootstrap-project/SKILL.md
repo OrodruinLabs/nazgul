@@ -2,7 +2,7 @@
 name: "nazgul:bootstrap-project"
 description: "Generate a portable, Nazgul-free project bundle (docs + Claude subagents) without installing Nazgul. Runs the full pre-planning pipeline (discovery, doc-generator, reviewer-instantiation, optional designer) and emits output into standard paths (./docs/, ./docs/context/, ./.claude/agents/, ./.claude/)."
 context: fork
-allowed-tools: "Read, Write, Edit, Bash, Glob, Grep, Agent, AskUserQuestion"
+allowed-tools: "Read, Write, Edit, Bash, Glob, Grep, Agent, ToolSearch"
 ---
 
 # Bootstrap Project
@@ -27,6 +27,8 @@ $ARGUMENTS
 - `--resume-scratch` — Keep any existing `./.bootstrap-scratch/` and proceed with the run. Pipeline agents are still invoked; each may reuse pre-existing files in scratch at its own discretion, but the skill does not explicitly skip phases based on what's already there.
 
 ## Instructions
+
+**Pre-load:** Run `ToolSearch` with query `select:AskUserQuestion` to load the interactive prompt tool (deferred by default). Do this BEFORE any step that uses `AskUserQuestion`.
 
 ### Phase 1 — Pre-flight gate
 

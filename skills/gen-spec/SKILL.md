@@ -2,7 +2,7 @@
 name: nazgul:gen-spec
 description: Interactively build a project specification. Guides you through tiered questions — quick product overview first, optional deep-dive into user stories and success metrics. Outputs nazgul/context/project-spec.md.
 context: fork
-allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion
+allowed-tools: Read, Write, Bash, Glob, Grep, ToolSearch
 metadata:
   author: Jose Mejia
   version: 1.1.0
@@ -24,6 +24,7 @@ $ARGUMENTS
 ## Instructions
 
 ### Pre-flight
+0. Load the `AskUserQuestion` tool (deferred by default): run `ToolSearch` with query `select:AskUserQuestion`. Do this BEFORE any step that uses `AskUserQuestion`.
 1. Check if `nazgul/config.json` exists. If not, tell the user: "Nazgul not initialized. Run `/nazgul:init` first." and STOP.
 2. Check if `nazgul/context/project-spec.md` already exists:
    - If yes: Show the current spec (first 20 lines), then use `AskUserQuestion`:

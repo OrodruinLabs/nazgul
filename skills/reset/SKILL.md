@@ -2,7 +2,7 @@
 name: nazgul:reset
 description: Reset Nazgul state to a clean slate. Archives current state and recreates from templates. Use when Nazgul gets into a corrupted or confusing state.
 context: fork
-allowed-tools: Read, Write, Bash, Glob, AskUserQuestion
+allowed-tools: Read, Write, Bash, Glob, ToolSearch
 metadata:
   author: Jose Mejia
   version: 1.1.0
@@ -24,6 +24,8 @@ $ARGUMENTS
 - Checkpoints count: !`ls nazgul/checkpoints/iteration-*.json 2>/dev/null | wc -l | tr -d ' '`
 
 ## Instructions
+
+**Pre-load:** Run `ToolSearch` with query `select:AskUserQuestion` to load the interactive prompt tool (deferred by default). Do this BEFORE any step that uses `AskUserQuestion`.
 
 Reset Nazgul state to a clean slate by archiving existing state and recreating from templates.
 

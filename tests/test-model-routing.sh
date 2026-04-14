@@ -56,7 +56,7 @@ skill_name=$(head -10 "$REPO_ROOT/skills/config/SKILL.md" | grep "^name:" | sed 
 assert_eq "config skill name is nazgul:config" "$skill_name" "nazgul:config"
 
 tools_line=$(head -10 "$REPO_ROOT/skills/config/SKILL.md" | grep "allowed-tools:")
-assert_contains "config skill has AskUserQuestion in allowed-tools" "$tools_line" "AskUserQuestion"
+assert_contains "config skill has ToolSearch in allowed-tools" "$tools_line" "ToolSearch"
 
 # ── Test: discovery agent references models.review config key ──
 discovery_content=$(cat "$REPO_ROOT/agents/discovery.md")
