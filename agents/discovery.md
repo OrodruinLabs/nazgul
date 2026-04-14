@@ -760,6 +760,7 @@ For each selected reviewer:
    - REMOVE all three marker lines themselves (with or without `# ` prefix)
    This ensures generated reviewers contain only the Nazgul branch, never the bundle-mode branch or the literal markers.
 7. Write the generated reviewer to `.claude/agents/generated/[name].md`
+8. Read `nazgul/config.json → models.review` (default: `"sonnet"`). Add `model: [value]` to the generated reviewer's YAML frontmatter, after the `name:` field.
 
 Follow the Reviewer Agent Template in Step 6 above for the final output format, tailoring to THIS project's specific patterns.
 
@@ -770,6 +771,7 @@ For each specialist in the roster, generate a project-tailored version in `.clau
 ```markdown
 ---
 name: [specialist-name]
+model: [read from nazgul/config.json → models.specialists, default: "sonnet"]
 description: [one-line description tailored to this project]
 tools:
   - Read
