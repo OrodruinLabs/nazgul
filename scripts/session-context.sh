@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Hydra Session Context — injects state on startup and after compaction
+# Nazgul Session Context — injects state on startup and after compaction
 # Stdout is shown to the agent
 
-HYDRA_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/hydra"
-CONFIG="$HYDRA_DIR/config.json"
-PLAN="$HYDRA_DIR/plan.md"
+NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
+CONFIG="$NAZGUL_DIR/config.json"
+PLAN="$NAZGUL_DIR/plan.md"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/task-utils.sh"
 source "$SCRIPT_DIR/lib/session-tracker.sh"
 
-# If Hydra not initialized, nothing to inject
+# If Nazgul not initialized, nothing to inject
 if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
 # Session tracking — register this session and warn on concurrent
 SESSION_ID="${CLAUDE_SESSION_ID:-$(date +%s)-$$}"
-SESSIONS_DIR="$HYDRA_DIR/sessions"
+SESSIONS_DIR="$NAZGUL_DIR/sessions"
 # Persist generated session ID so stop-hook can unregister it
-printf '%s' "$SESSION_ID" > "$HYDRA_DIR/.session_id"
+printf '%s' "$SESSION_ID" > "$NAZGUL_DIR/.session_id"
 register_session "$SESSION_ID" "$SESSIONS_DIR"
 cleanup_stale_sessions "$SESSIONS_DIR"
 CONCURRENT_WARNING=""
@@ -33,7 +33,7 @@ PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 MIGRATE_SCRIPT="$PLUGIN_ROOT/scripts/migrate-config.sh"
 MIGRATION_NOTICE=""
 if [ -f "$MIGRATE_SCRIPT" ]; then
-  MIGRATE_OUTPUT=$("$MIGRATE_SCRIPT" "$HYDRA_DIR" 2>/dev/null) || true
+  MIGRATE_OUTPUT=$("$MIGRATE_SCRIPT" "$NAZGUL_DIR" 2>/dev/null) || true
   if [ -n "$MIGRATE_OUTPUT" ]; then
     MIGRATION_NOTICE="$MIGRATE_OUTPUT"
   fi
@@ -56,8 +56,8 @@ TOTAL_COUNT=0
 ACTIVE_TASK=""
 ACTIVE_STATUS=""
 
-if [ -d "$HYDRA_DIR/tasks" ]; then
-  for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
+if [ -d "$NAZGUL_DIR/tasks" ]; then
+  for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
     STATUS=$(get_task_status "$task_file" "PLANNED")
@@ -80,7 +80,7 @@ if [ -d "$HYDRA_DIR/tasks" ]; then
 fi
 
 # Compaction counter (GAP-008 context rot detection)
-COMPACTION_FILE="$HYDRA_DIR/.compaction_count"
+COMPACTION_FILE="$NAZGUL_DIR/.compaction_count"
 HOOK_EVENT="${CLAUDE_HOOK_EVENT:-}"
 
 if [ "$HOOK_EVENT" = "compact" ]; then
@@ -103,7 +103,7 @@ else
 fi
 
 # Get latest checkpoint
-LATEST_CHECKPOINT=$(ls -1t "$HYDRA_DIR/checkpoints/iteration-"*.json 2>/dev/null | head -1 || echo "none")
+LATEST_CHECKPOINT=$(ls -1t "$NAZGUL_DIR/checkpoints/iteration-"*.json 2>/dev/null | head -1 || echo "none")
 
 # Get reviewers
 REVIEWERS=$(jq -r '.agents.reviewers // [] | join(", ")' "$CONFIG" 2>/dev/null || echo "none configured")
@@ -123,7 +123,7 @@ fi
 
 # Output context
 cat << CONTEXT_EOF
-Hydra loop state — iteration ${ITERATION}/${MAX_ITER} | Mode: ${MODE} | Objective: ${OBJECTIVE}
+Nazgul loop state — iteration ${ITERATION}/${MAX_ITER} | Mode: ${MODE} | Objective: ${OBJECTIVE}
 Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked | Total: ${TOTAL_COUNT}
 Compactions: ${COMPACTION_COUNT}
 CONTEXT_EOF
@@ -137,17 +137,17 @@ fi
 cat << CONTEXT_EOF2
 $([ -n "$MIGRATION_NOTICE" ] && echo "NOTICE: $MIGRATION_NOTICE" || true)
 Active task: ${ACTIVE_TASK:-none} (${ACTIVE_STATUS:-none})
-$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (hydra:review-gate) for ${ACTIVE_TASK}. Do NOT skip the review gate." || true)
-$([ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (hydra:review-gate) for ${ACTIVE_TASK}." || true)
-$([ "$ACTIVE_STATUS" = "READY" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}." || true)
-$([ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}." || true)
-$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (hydra:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first." || true)
+$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. Do NOT skip the review gate." || true)
+$([ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}." || true)
+$([ "$ACTIVE_STATUS" = "READY" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}." || true)
+$([ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}." || true)
+$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first." || true)
 Reviewers: ${REVIEWERS}
 $([ -n "$FEATURE_BRANCH" ] && echo "Branch: ${FEATURE_BRANCH} → ${BASE_BRANCH} | Worktrees: ${WORKTREE_COUNT}" || true)
 Git: ${GIT_BRANCH} — ${GIT_LAST}
 Latest checkpoint: ${LATEST_CHECKPOINT}
-$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "WARNING: Read hydra/reviews/${ACTIVE_TASK}/consolidated-feedback.md for reviewer feedback." || true)
+$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "WARNING: Read nazgul/reviews/${ACTIVE_TASK}/consolidated-feedback.md for reviewer feedback." || true)
 $([ -n "$CONCURRENT_WARNING" ] && echo "$CONCURRENT_WARNING" || true)
 
-Read hydra/plan.md for full state. Continue the Hydra pipeline.
+Read nazgul/plan.md for full state. Continue the Nazgul pipeline.
 CONTEXT_EOF2

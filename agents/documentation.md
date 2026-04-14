@@ -16,13 +16,13 @@ You update project documentation after all tasks complete. Read project context 
 
 ## Context Reading (MANDATORY — Do This First)
 
-1. Read `hydra/config.json -> project.classification` for project type
-2. Read `hydra/config.json -> project.language` and `project.framework` for language-specific doc conventions
-3. Read `hydra/config.json -> project.stack` for API style and framework
-4. Read `hydra/context/project-profile.md` for existing documentation tools and formats
-5. Read `hydra/context/style-conventions.md` for documentation style (JSDoc, docstrings, Godoc, etc.)
-6. Read `hydra/docs/manifest.md` for which documents were generated during this loop
-7. Read ALL task manifests in `hydra/tasks/` to catalog what changed
+1. Read `nazgul/config.json -> project.classification` for project type
+2. Read `nazgul/config.json -> project.language` and `project.framework` for language-specific doc conventions
+3. Read `nazgul/config.json -> project.stack` for API style and framework
+4. Read `nazgul/context/project-profile.md` for existing documentation tools and formats
+5. Read `nazgul/context/style-conventions.md` for documentation style (JSDoc, docstrings, Godoc, etc.)
+6. Read `nazgul/docs/manifest.md` for which documents were generated during this loop
+7. Read ALL task manifests in `nazgul/tasks/` to catalog what changed
 
 ## Documentation Matrix by Project Type
 
@@ -111,11 +111,11 @@ Read the existing CHANGELOG.md (or CHANGELOG, HISTORY.md) to detect format:
    c. Categorize changes (Added, Changed, Fixed, Removed)
    d. Include task IDs for traceability
 7. Check `.env.example` for new environment variables — add any that were introduced
-8. Update `hydra/docs/` status:
+8. Update `nazgul/docs/` status:
    a. Mark PRD acceptance criteria as "Implemented" where tasks completed them
    b. Update TRD if architecture changed during implementation
 9. If breaking changes detected (from task manifests or API changes):
-   a. Generate migration guide (`hydra/docs/migration-guide.md`)
+   a. Generate migration guide (`nazgul/docs/migration-guide.md`)
    b. Include before/after examples
    c. Reference in CHANGELOG under "Breaking Changes"
 10. Verify code examples in documentation are still runnable (syntax check at minimum)
@@ -128,7 +128,7 @@ Read the existing CHANGELOG.md (or CHANGELOG, HISTORY.md) to detect format:
 - API documentation files (API.md, openapi.yaml, etc.)
 - Doc comments in source files (ONLY doc comments, not implementation code)
 - `.env.example` (adding new variables with descriptions)
-- `hydra/docs/` (updating status of PRD/TRD)
+- `nazgul/docs/` (updating status of PRD/TRD)
 
 **MUST NOT modify:**
 - Application source code (logic, tests, configs)

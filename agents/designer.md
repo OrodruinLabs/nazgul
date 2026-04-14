@@ -19,12 +19,12 @@ You create or extend design systems and visual specifications. Read project cont
 
 ## Context Reading (MANDATORY — Do This First)
 
-1. Read `hydra/config.json -> project.classification` (GREENFIELD, BROWNFIELD, REFACTOR)
-2. Read `hydra/config.json -> project.stack.styling` for CSS framework/methodology
-3. Read `hydra/context/project-profile.md` for frontend framework and key dependencies
-4. Read `hydra/context/style-conventions.md` for existing visual and naming patterns
-5. Read delegation brief from `hydra/tasks/[TASK-ID]-delegation.md` for scope and constraints
-6. Read the PRD (`hydra/docs/PRD.md`) for user experience requirements
+1. Read `nazgul/config.json -> project.classification` (GREENFIELD, BROWNFIELD, REFACTOR)
+2. Read `nazgul/config.json -> project.stack.styling` for CSS framework/methodology
+3. Read `nazgul/context/project-profile.md` for frontend framework and key dependencies
+4. Read `nazgul/context/style-conventions.md` for existing visual and naming patterns
+5. Read delegation brief from `nazgul/tasks/[TASK-ID]-delegation.md` for scope and constraints
+6. Read the PRD (`nazgul/docs/PRD.md`) for user experience requirements
 
 ## Conditional Behavior by Project Type
 
@@ -106,8 +106,8 @@ Do NOT change the visual design. Only restructure implementation:
     - States (default, hover, active, focus, disabled, loading, error)
     - Responsive behavior at each breakpoint
     - Accessibility requirements (contrast ratios, focus indicators)
-11. Write `hydra/docs/design-system.md` with all design decisions and specifications
-12. Write `hydra/docs/design-tokens.json` with all tokens in structured format
+11. Write `nazgul/docs/design-system.md` with all design decisions and specifications
+12. Write `nazgul/docs/design-tokens.json` with all tokens in structured format
 13. Validate: design-tokens.json is valid JSON, all colors in design-system.md appear in tokens, breakpoints are consistent between system and tokens
 
 ## Output Format

@@ -16,12 +16,12 @@ You handle versioning, release notes, and git tags after all tasks complete. Rea
 
 ## Context Reading (MANDATORY — Do This First)
 
-1. Read `hydra/config.json -> project.classification` for change scope
-2. Read `hydra/config.json -> project.language` and `project.framework` for version file locations
-3. Read `hydra/config.json -> project.infrastructure.cicd_platform` for release pipeline
-4. Read `hydra/context/project-profile.md` for package manager and build system
-5. Read `hydra/context/style-conventions.md` for git conventions (commit style, tag format, branch naming)
-6. Read ALL task manifests in `hydra/tasks/` to analyze change types
+1. Read `nazgul/config.json -> project.classification` for change scope
+2. Read `nazgul/config.json -> project.language` and `project.framework` for version file locations
+3. Read `nazgul/config.json -> project.infrastructure.cicd_platform` for release pipeline
+4. Read `nazgul/context/project-profile.md` for package manager and build system
+5. Read `nazgul/context/style-conventions.md` for git conventions (commit style, tag format, branch naming)
+6. Read ALL task manifests in `nazgul/tasks/` to analyze change types
 7. Read existing git tags: `git tag --list --sort=-v:refname | head -10` for versioning scheme
 
 ## Version File Detection
@@ -90,7 +90,7 @@ If the project is a monorepo (workspaces detected in package.json, Cargo workspa
 
 ## Release Notes Format
 
-Write to `hydra/docs/release-notes-v[VERSION].md`:
+Write to `nazgul/docs/release-notes-v[VERSION].md`:
 
 ```
 # Release v[VERSION]
@@ -131,7 +131,7 @@ Write to `hydra/docs/release-notes-v[VERSION].md`:
 7. Generate release notes in the format above, with all task references
 8. Generate or update CHANGELOG entry (coordinate with Documentation agent — do not duplicate)
 9. Create annotated git tag: `git tag -a v[VERSION] -m "Release v[VERSION]: [1-line summary]"`
-10. If CI release pipeline exists (`hydra/config.json -> project.infrastructure.cicd_platform`):
+10. If CI release pipeline exists (`nazgul/config.json -> project.infrastructure.cicd_platform`):
     - Verify the release workflow file exists
     - Document how to trigger it (push tag, manual dispatch, etc.)
 11. Generate PR description summarizing all changes (if the project uses PR-based workflow)
@@ -141,7 +141,7 @@ Write to `hydra/docs/release-notes-v[VERSION].md`:
 **MAY modify:**
 - Version files (package.json, pyproject.toml, Cargo.toml, etc.)
 - CHANGELOG.md (add release entry)
-- Release notes (create `hydra/docs/release-notes-v[VERSION].md`)
+- Release notes (create `nazgul/docs/release-notes-v[VERSION].md`)
 - Git tags (create annotated tags)
 
 **MUST NOT modify:**

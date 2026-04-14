@@ -1,6 +1,6 @@
 ---
-name: hydra:gen-spec
-description: Interactively build a project specification. Guides you through tiered questions — quick product overview first, optional deep-dive into user stories and success metrics. Outputs hydra/context/project-spec.md.
+name: nazgul:gen-spec
+description: Interactively build a project specification. Guides you through tiered questions — quick product overview first, optional deep-dive into user stories and success metrics. Outputs nazgul/context/project-spec.md.
 context: fork
 allowed-tools: Read, Write, Bash, Glob, Grep
 metadata:
@@ -8,24 +8,24 @@ metadata:
   version: 1.1.0
 ---
 
-# Hydra Generate Project Spec
+# Nazgul Generate Project Spec
 
 ## Examples
-- `/hydra:gen-spec` — Start the interactive spec builder
-- `/hydra:gen-spec` (with existing spec) — Review and optionally replace or edit current spec
+- `/nazgul:gen-spec` — Start the interactive spec builder
+- `/nazgul:gen-spec` (with existing spec) — Review and optionally replace or edit current spec
 
 ## Arguments
 $ARGUMENTS
 
 ## Current State
-- Existing spec: !`cat hydra/context/project-spec.md 2>/dev/null | head -5 || echo "NONE"`
-- Config: !`cat hydra/config.json 2>/dev/null | head -3 || echo "NOT_INITIALIZED"`
+- Existing spec: !`cat nazgul/context/project-spec.md 2>/dev/null | head -5 || echo "NONE"`
+- Config: !`cat nazgul/config.json 2>/dev/null | head -3 || echo "NOT_INITIALIZED"`
 
 ## Instructions
 
 ### Pre-flight
-1. Check if `hydra/config.json` exists. If not, tell the user: "Hydra not initialized. Run `/hydra:init` first." and STOP.
-2. Check if `hydra/context/project-spec.md` already exists:
+1. Check if `nazgul/config.json` exists. If not, tell the user: "Nazgul not initialized. Run `/nazgul:init` first." and STOP.
+2. Check if `nazgul/context/project-spec.md` already exists:
    - If yes: Show the current spec (first 20 lines) and ask: "A project spec already exists. Do you want to **replace** it with a new one, **edit** specific sections, or **keep** it as-is?"
    - If "keep": STOP.
    - If "edit": Ask which sections to update, then update only those sections in-place.
@@ -46,7 +46,7 @@ Ask these 5 questions conversationally — adapt phrasing to feel natural, not l
 5. **Any constraints or must-haves?** (optional)
    - "Any hard constraints? Deadlines, compliance, specific integrations, performance targets? (Skip if none.)"
 
-After collecting Tier 1 answers, write the initial `hydra/context/project-spec.md` with Tier 1 content.
+After collecting Tier 1 answers, write the initial `nazgul/context/project-spec.md` with Tier 1 content.
 
 ### Tier 2 Offer
 
@@ -54,7 +54,7 @@ After Tier 1, ask:
 
 > "Got the basics down. Want to go deeper? I can help define user stories, success metrics, and detailed feature descriptions. Takes about 5 more minutes. (y/n)"
 
-- **If no:** Finalize the spec with Tier 1 content only. Update `hydra/config.json` → set `project_spec` to `"interactive"`. DONE.
+- **If no:** Finalize the spec with Tier 1 content only. Update `nazgul/config.json` → set `project_spec` to `"interactive"`. DONE.
 - **If yes:** Continue to Tier 2.
 
 ### Tier 2: Deep Dive (~5 minutes)
@@ -70,7 +70,7 @@ Then ask about:
 6. **Technical constraints** — "Any technical requirements? (specific APIs, protocols, libraries, performance SLAs)"
 7. **Integrations** — "Does this need to integrate with any external services?"
 
-Update `hydra/context/project-spec.md` with Tier 2 sections. Update `hydra/config.json` → set `project_spec` to `"interactive"`.
+Update `nazgul/context/project-spec.md` with Tier 2 sections. Update `nazgul/config.json` → set `project_spec` to `"interactive"`.
 
 ### Tier 3: Gray Area Discovery (Optional)
 
@@ -143,7 +143,7 @@ Skip the interactive selection. Instead:
 
 #### Writing Decisions
 
-Append to `hydra/context/project-spec.md`:
+Append to `nazgul/context/project-spec.md`:
 
 ```markdown
 ## Phase Decisions
@@ -160,11 +160,11 @@ Append to `hydra/context/project-spec.md`:
 - [Feature suggested during discussion but out of scope — captured for future phases]
 ```
 
-Update `hydra/config.json` → set `project_spec` to `"interactive"`. DONE.
+Update `nazgul/config.json` → set `project_spec` to `"interactive"`. DONE.
 
 ### Output Format
 
-Write `hydra/context/project-spec.md` using this structure:
+Write `nazgul/context/project-spec.md` using this structure:
 
 ```markdown
 # Project Specification
@@ -219,7 +219,7 @@ Write `hydra/context/project-spec.md` using this structure:
 After writing the spec, display a summary:
 
 ```
-Project spec saved to hydra/context/project-spec.md
+Project spec saved to nazgul/context/project-spec.md
 
 Vision: [1-line summary]
 Features: [count] core features defined
@@ -227,5 +227,5 @@ Depth: [Tier 1 only | Tier 1 + Tier 2 | Tier 1 + Tier 2 + Tier 3]
 Phase decisions: [N] locked, [M] at Claude's discretion
 
 This spec will be used by the Doc Generator to create a product-aware PRD.
-Run /hydra:start to begin development.
+Run /nazgul:start to begin development.
 ```

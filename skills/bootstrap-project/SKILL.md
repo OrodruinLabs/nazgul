@@ -1,6 +1,6 @@
 ---
-name: "hydra:bootstrap-project"
-description: "Generate a portable, Hydra-free project bundle (docs + Claude subagents) without installing Hydra. Runs the full pre-planning pipeline (discovery, doc-generator, reviewer-instantiation, optional designer) and emits output into standard paths (./docs/, ./docs/context/, ./.claude/agents/, ./.claude/)."
+name: "nazgul:bootstrap-project"
+description: "Generate a portable, Nazgul-free project bundle (docs + Claude subagents) without installing Nazgul. Runs the full pre-planning pipeline (discovery, doc-generator, reviewer-instantiation, optional designer) and emits output into standard paths (./docs/, ./docs/context/, ./.claude/agents/, ./.claude/)."
 context: fork
 allowed-tools: "Read, Write, Edit, Bash, Glob, Grep, Agent"
 ---
@@ -11,10 +11,10 @@ allowed-tools: "Read, Write, Edit, Bash, Glob, Grep, Agent"
 
 
 ## Examples
-- `/hydra:bootstrap-project` — Interactive: ask for objective, then run full pipeline
-- `/hydra:bootstrap-project "Add Stripe billing to existing app"` — Use given objective
-- `/hydra:bootstrap-project --dry-run` — Run pipeline and transform into scratch without relocating
-- `/hydra:bootstrap-project --yes --overwrite` — Non-interactive, overwrite existing ./docs or ./.claude/agents
+- `/nazgul:bootstrap-project` — Interactive: ask for objective, then run full pipeline
+- `/nazgul:bootstrap-project "Add Stripe billing to existing app"` — Use given objective
+- `/nazgul:bootstrap-project --dry-run` — Run pipeline and transform into scratch without relocating
+- `/nazgul:bootstrap-project --yes --overwrite` — Non-interactive, overwrite existing ./docs or ./.claude/agents
 
 ## Arguments
 $ARGUMENTS
@@ -70,7 +70,7 @@ set +f
 Run checks in order. If any returns non-zero, respect the contract (hard abort or prompt):
 
 ```bash
-check_no_hydra_dir || exit $?
+check_no_nazgul_dir || exit $?
 
 check_scratch_state; scratch_rc=$?
 case $scratch_rc in
@@ -91,8 +91,8 @@ case $scratch_rc in
       # restart, instead of the resume path being silently unreachable.
       #
       # LLM: ask the user "resume / wipe-and-restart / abort" and re-run:
-      #   - "resume"            → /hydra:bootstrap-project --resume-scratch ...
-      #   - "wipe-and-restart"  → /hydra:bootstrap-project --wipe-scratch ...
+      #   - "resume"            → /nazgul:bootstrap-project --resume-scratch ...
+      #   - "wipe-and-restart"  → /nazgul:bootstrap-project --wipe-scratch ...
       #   - "abort"             → stop
       echo "./.bootstrap-scratch/ exists from a prior run." >&2
       echo "Re-run with --resume-scratch, --wipe-scratch, or abort." >&2
@@ -188,7 +188,7 @@ export BUNDLE_MODE="true"
 source "$CLAUDE_PLUGIN_ROOT/scripts/lib/bootstrap-render.sh"
 ```
 
-Render and invoke each pipeline agent. For each agent, the renderer produces a Hydra-free prompt pointed at the scratch tree; the LLM then executes the agent's instructions.
+Render and invoke each pipeline agent. For each agent, the renderer produces a Nazgul-free prompt pointed at the scratch tree; the LLM then executes the agent's instructions.
 
 #### 3a. Discovery
 

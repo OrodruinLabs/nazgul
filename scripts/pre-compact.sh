@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Hydra Pre-Compact Hook — checkpoint state before compaction
+# Nazgul Pre-Compact Hook — checkpoint state before compaction
 # Stdout becomes part of the compaction context summary
 
-HYDRA_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/hydra"
-CONFIG="$HYDRA_DIR/config.json"
-PLAN="$HYDRA_DIR/plan.md"
+NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
+CONFIG="$NAZGUL_DIR/config.json"
+PLAN="$NAZGUL_DIR/plan.md"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/task-utils.sh"
 
-# If Hydra not active, nothing to do
+# If Nazgul not active, nothing to do
 if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
@@ -19,15 +19,15 @@ ITERATION=$(jq -r '.current_iteration // 0' "$CONFIG")
 MODE=$(jq -r '.mode // "hitl"' "$CONFIG")
 
 # Write checkpoint
-mkdir -p "$HYDRA_DIR/checkpoints"
-CHECKPOINT="$HYDRA_DIR/checkpoints/iteration-$(printf '%03d' "$ITERATION").json"
+mkdir -p "$NAZGUL_DIR/checkpoints"
+CHECKPOINT="$NAZGUL_DIR/checkpoints/iteration-$(printf '%03d' "$ITERATION").json"
 
 # Get active task
 ACTIVE_TASK=""
 ACTIVE_STATUS=""
 ACTIVE_RETRY=0
-if [ -d "$HYDRA_DIR/tasks" ]; then
-  for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
+if [ -d "$NAZGUL_DIR/tasks" ]; then
+  for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     STATUS=$(get_task_status "$task_file")
     if [ "$STATUS" = "IN_PROGRESS" ] || [ "$STATUS" = "CHANGES_REQUESTED" ] || [ "$STATUS" = "IN_REVIEW" ] || [ "$STATUS" = "IMPLEMENTED" ]; then
@@ -50,8 +50,8 @@ BLOCKED_COUNT=0
 PLANNED_COUNT=0
 TOTAL_COUNT=0
 
-if [ -d "$HYDRA_DIR/tasks" ]; then
-  for task_file in "$HYDRA_DIR/tasks"/TASK-*.md; do
+if [ -d "$NAZGUL_DIR/tasks" ]; then
+  for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
     STATUS=$(get_task_status "$task_file" "PLANNED")
@@ -85,7 +85,7 @@ ACTIVE_REVIEWERS=$(jq -c '.agents.reviewers // []' "$CONFIG" 2>/dev/null || echo
 if [ -n "$ACTIVE_TASK" ]; then
   ACTIVE_TASK_ID="$ACTIVE_TASK"
   ACTIVE_TASK_STATUS="$ACTIVE_STATUS"
-  NEXT_ACTION="Resume from Recovery Pointer in hydra/plan.md"
+  NEXT_ACTION="Resume from Recovery Pointer in nazgul/plan.md"
 else
   ACTIVE_TASK_ID=""
   ACTIVE_TASK_STATUS=""
@@ -116,7 +116,7 @@ jq -n \
   --arg git_msg "$GIT_MSG" \
   --argjson git_dirty "$GIT_DIRTY" \
   --argjson reviewers "$ACTIVE_REVIEWERS" \
-  --arg recovery "Post-compaction: Read hydra/plan.md Recovery Pointer, then hydra/tasks/${ACTIVE_TASK:-none}.md" \
+  --arg recovery "Post-compaction: Read nazgul/plan.md Recovery Pointer, then nazgul/tasks/${ACTIVE_TASK:-none}.md" \
   '{
     iteration: $iteration,
     timestamp: $timestamp,
@@ -153,11 +153,11 @@ jq -n \
   }' > "$CHECKPOINT"
 
 # Output Recovery Pointer to stdout (survives compaction)
-echo "=== HYDRA RECOVERY STATE ==="
+echo "=== NAZGUL RECOVERY STATE ==="
 if [ -f "$PLAN" ]; then
   sed -n '/^## Recovery Pointer/,/^## /p' "$PLAN" | head -6
 fi
 echo ""
 echo "Iteration: ${ITERATION} | Mode: ${MODE} | Tasks: ${DONE_COUNT}/${TOTAL_COUNT} done"
 echo "Active task: ${ACTIVE_TASK:-none} (${ACTIVE_STATUS:-none})"
-echo "=== END HYDRA STATE ==="
+echo "=== END NAZGUL STATE ==="

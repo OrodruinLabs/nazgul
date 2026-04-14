@@ -1,6 +1,6 @@
-# Hydra Rules
+# Nazgul Rules
 
-Enforceable operating rules for the Hydra Framework. Every rule here is checked by a hook, agent, or script.
+Enforceable operating rules for the Nazgul Framework. Every rule here is checked by a hook, agent, or script.
 
 ---
 
@@ -15,7 +15,7 @@ Enforceable operating rules for the Hydra Framework. Every rule here is checked 
 7. **One task at a time.** Don't work on multiple tasks simultaneously (unless parallel mode with Agent Teams).
 8. **Update Recovery Pointer on every state change.** This is how you survive compaction.
 9. **Commit in AFK mode.** Every state transition gets a commit with the dynamic prefix from config.
-10. **HYDRA_COMPLETE means ALL tasks DONE and post-loop finished.** Not before.
+10. **NAZGUL_COMPLETE means ALL tasks DONE and post-loop finished.** Not before.
 
 ---
 
@@ -56,7 +56,7 @@ Task-PR:     PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> APPR
 
 1. **All reviewers must approve.** Unanimous -- no majority vote.
 2. **Confidence threshold governs severity.** Below 80 = non-blocking CONCERN. At or above 80 with HIGH/MEDIUM severity = blocking REJECT.
-3. **Reviewers are read-only.** Never modify project files. Read, verify, write review to `hydra/reviews/`.
+3. **Reviewers are read-only.** Never modify project files. Read, verify, write review to `nazgul/reviews/`.
 4. **Pre-checks before reviews.** Tests and lint must pass BEFORE reviewers run. Three consecutive test failures block the task.
 5. **Security rejections are absolute in AFK mode.** Task is BLOCKED, requires human review.
 6. **Every finding must be structured.** Required fields: severity, confidence, file path, category, verdict, issue, fix.
@@ -74,18 +74,18 @@ The Recovery Pointer is read first by every agent on every start.
 - **Current Task:** TASK-NNN
 - **Last Action:** [what just happened]
 - **Next Action:** [what should happen next]
-- **Last Checkpoint:** hydra/checkpoints/iteration-NNN.json
+- **Last Checkpoint:** nazgul/checkpoints/iteration-NNN.json
 - **Last Commit:** abc1234
 ```
 
 ### Recovery Read Order
 
-1. `hydra/config.json` -- Mode, iteration, reviewer list
-2. `hydra/plan.md` -- Recovery Pointer
-3. `hydra/checkpoints/iteration-NNN.json` -- Latest checkpoint
-4. `hydra/tasks/TASK-XXX.md` -- Active task manifest
-5. `hydra/reviews/TASK-XXX/` -- If CHANGES_REQUESTED: consolidated feedback
-6. `hydra/context/project-profile.md` -- If needed: project conventions
+1. `nazgul/config.json` -- Mode, iteration, reviewer list
+2. `nazgul/plan.md` -- Recovery Pointer
+3. `nazgul/checkpoints/iteration-NNN.json` -- Latest checkpoint
+4. `nazgul/tasks/TASK-XXX.md` -- Active task manifest
+5. `nazgul/reviews/TASK-XXX/` -- If CHANGES_REQUESTED: consolidated feedback
+6. `nazgul/context/project-profile.md` -- If needed: project conventions
 
 **No agent may begin work without reading files 1-4. Files are truth -- never rely on conversational memory.**
 
@@ -138,7 +138,7 @@ The Recovery Pointer is read first by every agent on every start.
 ## 8. File Scope Restrictions
 
 - **Implementer**: Only files in the task's `file_scope`. Must update manifest before expanding.
-- **Reviewers**: Read-only. Write only to `hydra/reviews/`.
+- **Reviewers**: Read-only. Write only to `nazgul/reviews/`.
 - **Parallel tasks**: Zero file overlap. Team Orchestrator validates before assigning.
 - **Specialists**: Only files in the delegation brief's scope.
 

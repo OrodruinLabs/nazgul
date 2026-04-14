@@ -24,7 +24,7 @@ The Planner should:
 1. Find the most similar existing feature in the codebase
 2. Map its implementation pattern (routes, handlers, services, models, tests)
 3. Identify extension points where the new feature integrates
-4. Document the pattern to follow in hydra/context/feature-scope.md
+4. Document the pattern to follow in nazgul/context/feature-scope.md
 
 ## Out of Scope
 <!-- Explicitly list what this feature does NOT include -->

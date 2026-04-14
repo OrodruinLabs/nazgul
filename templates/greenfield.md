@@ -27,7 +27,7 @@
 
 ## Stack Selection
 
-<!-- Filled by the stack scaffolding conversation in /hydra:start -->
+<!-- Filled by the stack scaffolding conversation in /nazgul:start -->
 
 ### Runtime & Language
 - Language: <!-- TypeScript, Python, Go, Rust, Java, Ruby, etc. -->
@@ -73,7 +73,7 @@
 
 ## Tool Verification
 
-<!-- Filled by the tool pre-flight check in /hydra:start -->
+<!-- Filled by the tool pre-flight check in /nazgul:start -->
 
 ### Required Tools
 | Tool | Required Version | Status | Install Command |
@@ -113,7 +113,7 @@ The Planner should:
 2. Create scaffold structure matching the chosen framework's conventions
 3. Set up linting, formatting, and testing from the start
 4. Generate .env.example with required environment variables
-5. Document conventions in hydra/context/greenfield-scope.md
+5. Document conventions in nazgul/context/greenfield-scope.md
 6. Initialize Terraform project structure in `infra/`
 7. Generate CI/CD pipeline config for selected platform
 8. Set up environment-specific Terraform variable files

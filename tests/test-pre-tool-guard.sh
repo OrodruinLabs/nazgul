@@ -46,7 +46,7 @@ for bad_cmd in \
   ec=$(get_exit_code "$bad_cmd")
   assert_exit_code "blocked: '$bad_cmd'" "$ec" 2
   output=$(run_guard "$bad_cmd")
-  assert_contains "reason for '$bad_cmd'" "$output" "HYDRA SAFETY"
+  assert_contains "reason for '$bad_cmd'" "$output" "NAZGUL SAFETY"
 done
 
 # --- Database destruction (should exit 2) ---
@@ -57,7 +57,7 @@ for bad_cmd in \
   ec=$(get_exit_code "$bad_cmd")
   assert_exit_code "blocked: '$bad_cmd'" "$ec" 2
   output=$(run_guard "$bad_cmd")
-  assert_contains "reason for '$bad_cmd'" "$output" "HYDRA SAFETY"
+  assert_contains "reason for '$bad_cmd'" "$output" "NAZGUL SAFETY"
 done
 
 # --- Git force push (should exit 2) ---
@@ -67,7 +67,7 @@ for bad_cmd in \
   ec=$(get_exit_code "$bad_cmd")
   assert_exit_code "blocked: '$bad_cmd'" "$ec" 2
   output=$(run_guard "$bad_cmd")
-  assert_contains "reason for '$bad_cmd'" "$output" "HYDRA SAFETY"
+  assert_contains "reason for '$bad_cmd'" "$output" "NAZGUL SAFETY"
 done
 
 # --- Dangerous system commands (should exit 2) ---
@@ -77,7 +77,7 @@ for bad_cmd in \
   ec=$(get_exit_code "$bad_cmd")
   assert_exit_code "blocked: '$bad_cmd'" "$ec" 2
   output=$(run_guard "$bad_cmd")
-  assert_contains "reason for '$bad_cmd'" "$output" "HYDRA SAFETY"
+  assert_contains "reason for '$bad_cmd'" "$output" "NAZGUL SAFETY"
 done
 
 report_results

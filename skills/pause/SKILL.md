@@ -1,6 +1,6 @@
 ---
-name: hydra:pause
-description: Gracefully pause the Hydra autonomous loop at the next iteration boundary. Use when user says "pause hydra", "stop the loop", "halt hydra", or wants to pause work without losing progress.
+name: nazgul:pause
+description: Gracefully pause the Nazgul autonomous loop at the next iteration boundary. Use when user says "pause nazgul", "stop the loop", "halt nazgul", or wants to pause work without losing progress.
 context: fork
 allowed-tools: Read, Write, Edit, Bash
 metadata:
@@ -8,54 +8,54 @@ metadata:
   version: 1.1.0
 ---
 
-# Hydra Pause
+# Nazgul Pause
 
 ## Examples
-- `/hydra:pause` — Pause the loop at the next iteration boundary
+- `/nazgul:pause` — Pause the loop at the next iteration boundary
 
 ## Current State
-- Config: !`cat hydra/config.json 2>/dev/null || echo "NOT_INITIALIZED"`
-- Paused: !`jq -r '.paused // false' hydra/config.json 2>/dev/null || echo "unknown"`
+- Config: !`cat nazgul/config.json 2>/dev/null || echo "NOT_INITIALIZED"`
+- Paused: !`jq -r '.paused // false' nazgul/config.json 2>/dev/null || echo "unknown"`
 
 ## Instructions
 
-Gracefully pause the Hydra autonomous loop so it stops at the next iteration boundary.
+Gracefully pause the Nazgul autonomous loop so it stops at the next iteration boundary.
 
 ### Step 1: Check Initialization
 
 If the config shows "NOT_INITIALIZED":
-- Output: "Hydra not initialized. Run `/hydra:init` first."
+- Output: "Nazgul not initialized. Run `/nazgul:init` first."
 - Stop here.
 
 ### Step 2: Check Current Pause State
 
-Read `hydra/config.json` and check the `paused` field.
+Read `nazgul/config.json` and check the `paused` field.
 
 If already paused (`"paused": true`):
-- Output: "Hydra is already paused. Run `/hydra:start` to resume."
+- Output: "Nazgul is already paused. Run `/nazgul:start` to resume."
 - Stop here.
 
 ### Step 3: Set Pause Flag
 
-Use `jq` to set `"paused": true` in `hydra/config.json`:
+Use `jq` to set `"paused": true` in `nazgul/config.json`:
 
 ```bash
-jq '.paused = true' hydra/config.json > hydra/config.json.tmp && mv hydra/config.json.tmp hydra/config.json
+jq '.paused = true' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
 ```
 
 ### Step 4: Generate Handoff Document
 
-After setting `paused: true`, generate `hydra/HANDOFF.md` for human consumption:
+After setting `paused: true`, generate `nazgul/HANDOFF.md` for human consumption:
 
-1. Read `hydra/config.json` for: iteration count, max iterations, mode, objective
-2. Scan all `hydra/tasks/TASK-*.md` files to gather status counts and details
-3. Read any ADR files in `hydra/docs/` for decisions made
+1. Read `nazgul/config.json` for: iteration count, max iterations, mode, objective
+2. Scan all `nazgul/tasks/TASK-*.md` files to gather status counts and details
+3. Read any ADR files in `nazgul/docs/` for decisions made
 4. Read blocked tasks for gotchas
 
-Write `hydra/HANDOFF.md`:
+Write `nazgul/HANDOFF.md`:
 
 ```markdown
-# Hydra Handoff — [date]
+# Nazgul Handoff — [date]
 
 ## Status
 Iteration [current]/[max] | Mode: [hitl/afk] | Paused at: [timestamp]
@@ -83,20 +83,20 @@ Iteration [current]/[max] | Mode: [hitl/afk] | Paused at: [timestamp]
 - ✗ TASK-009: [title] — [blocked reason]
 
 ## To Resume
-Run `/hydra:start` — loop picks up from the current task.
-Or `/hydra:status` to review state before continuing.
+Run `/nazgul:start` — loop picks up from the current task.
+Or `/nazgul:status` to review state before continuing.
 ```
 
 If no tasks exist yet, write a minimal handoff:
 ```markdown
-# Hydra Handoff — [date]
+# Nazgul Handoff — [date]
 
 ## Status
 Iteration [current]/[max] | Mode: [mode] | Paused at: [timestamp]
 No tasks generated yet.
 
 ## To Resume
-Run `/hydra:start` to begin.
+Run `/nazgul:start` to begin.
 ```
 
 Use symbols: ✦ for done, ◆ for in-progress, ✗ for blocked.
@@ -105,12 +105,12 @@ Use symbols: ✦ for done, ◆ for in-progress, ✗ for blocked.
 
 Output:
 ```
-─── ◈ HYDRA ▸ PAUSED ────────────────────────────────────
+─── ◈ NAZGUL ▸ PAUSED ────────────────────────────────────
 
-Handoff saved to hydra/HANDOFF.md
+Handoff saved to nazgul/HANDOFF.md
 Iteration [N]/[max] | [done] tasks done, [active] in flight
 
 ─── ◈ NEXT ─────────────────────────────────────────────
-  /hydra:start to resume
+  /nazgul:start to resume
 ────────────────────────────────────────────────────────
 ```

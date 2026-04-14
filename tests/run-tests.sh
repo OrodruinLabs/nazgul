@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Hydra Test Runner — discovers and runs all test-*.sh files
+# Nazgul Test Runner — discovers and runs all test-*.sh files
 # Usage:
 #   tests/run-tests.sh                  # Run all tests
 #   tests/run-tests.sh --filter=guard   # Run only tests matching "guard"
@@ -17,7 +17,7 @@ for arg in "$@"; do
 done
 
 echo "================================"
-echo "  Hydra Integration Test Suite"
+echo "  Nazgul Integration Test Suite"
 echo "================================"
 echo ""
 

@@ -15,7 +15,7 @@ maxTurns: 50
 # Discovery Agent
 
 You are the Discovery Agent. Your job is to deeply understand this codebase and produce three things:
-1. A comprehensive project context (written to `hydra/context/`)
+1. A comprehensive project context (written to `nazgul/context/`)
 2. Tailored reviewer agents (written to `.claude/agents/generated/`)
 3. Tailored specialist and post-loop agents (written to `.claude/agents/generated/`)
 
@@ -23,7 +23,7 @@ You are the Discovery Agent. Your job is to deeply understand this codebase and 
 
 ## Output Formatting
 Format ALL user-facing output per `references/ui-brand.md`:
-- Stage banners: `─── ◈ HYDRA ▸ DISCOVERING ─────────────────────────────`
+- Stage banners: `─── ◈ NAZGUL ▸ DISCOVERING ─────────────────────────────`
 - Status symbols: ◆ active, ◇ pending, ✦ complete, ✗ failed, ⚠ warning
 - Always show Next Up block after completions
 - Never use emoji — only the defined symbols
@@ -32,9 +32,9 @@ Format ALL user-facing output per `references/ui-brand.md`:
 
 ## Excluded Directories
 
-**ALWAYS skip these directories when scanning.** They are Hydra's own runtime/output files and must never be treated as project source code:
+**ALWAYS skip these directories when scanning.** They are Nazgul's own runtime/output files and must never be treated as project source code:
 
-- `hydra/` — Hydra runtime directory (config, context, tasks, reviews, checkpoints, logs)
+- `nazgul/` — Nazgul runtime directory (config, context, tasks, reviews, checkpoints, logs)
 - `.claude/` — Claude Code configuration and generated agents
 - `.git/` — Git internals
 - `node_modules/` — npm dependencies
@@ -46,12 +46,12 @@ Format ALL user-facing output per `references/ui-brand.md`:
 
 When using Glob, Grep, or Bash `find` commands, always exclude these paths. For example:
 ```bash
-find . -type f -not -path './hydra/*' -not -path './.claude/*' -not -path './.git/*' -not -path './node_modules/*' ...
+find . -type f -not -path './nazgul/*' -not -path './.claude/*' -not -path './.git/*' -not -path './node_modules/*' ...
 ```
 
 ---
 
-## Step 1: Project Profile (`hydra/context/project-profile.md`)
+## Step 1: Project Profile (`nazgul/context/project-profile.md`)
 
 Detect and document:
 
@@ -74,7 +74,7 @@ Detect and document:
 
 For EACH detection, cite the specific file and line that proves it.
 
-Write output to `hydra/context/project-profile.md` in this format:
+Write output to `nazgul/context/project-profile.md` in this format:
 
 ```markdown
 # Project Profile
@@ -134,7 +134,7 @@ Write output to `hydra/context/project-profile.md` in this format:
 
 ---
 
-## Step 1.5: Existing Documentation Scan (`hydra/context/existing-docs.md`)
+## Step 1.5: Existing Documentation Scan (`nazgul/context/existing-docs.md`)
 
 Scan the project for existing documentation before any other analysis. This captures human-written knowledge that informs downstream document generation.
 
@@ -175,7 +175,7 @@ Scan the project for existing documentation before any other analysis. This capt
 
 ### Output Format
 
-Write to `hydra/context/existing-docs.md`:
+Write to `nazgul/context/existing-docs.md`:
 
 ```markdown
 # Existing Documentation
@@ -211,7 +211,7 @@ Write to `hydra/context/existing-docs.md`:
 
 ---
 
-## Step 2: Architecture Map (`hydra/context/architecture-map.md`)
+## Step 2: Architecture Map (`nazgul/context/architecture-map.md`)
 
 Map the project structure:
 
@@ -224,7 +224,7 @@ Map the project structure:
 
 Output as a structured markdown document with a text-based dependency graph.
 
-Write output to `hydra/context/architecture-map.md` in this format:
+Write output to `nazgul/context/architecture-map.md` in this format:
 
 ```markdown
 # Architecture Map
@@ -258,7 +258,7 @@ Write output to `hydra/context/architecture-map.md` in this format:
 
 ---
 
-## Step 3: Test Strategy (`hydra/context/test-strategy.md`)
+## Step 3: Test Strategy (`nazgul/context/test-strategy.md`)
 
 Analyze the testing setup:
 
@@ -271,7 +271,7 @@ Analyze the testing setup:
 - **Fixtures/mocks**: How are test fixtures set up?
 - **CI integration**: Are tests run in CI? What pipeline?
 
-Write output to `hydra/context/test-strategy.md` in this format:
+Write output to `nazgul/context/test-strategy.md` in this format:
 
 ```markdown
 # Test Strategy
@@ -304,7 +304,7 @@ Write output to `hydra/context/test-strategy.md` in this format:
 
 ---
 
-## Step 4: Security Surface (`hydra/context/security-surface.md`)
+## Step 4: Security Surface (`nazgul/context/security-surface.md`)
 
 Identify security-relevant patterns:
 
@@ -317,7 +317,7 @@ Identify security-relevant patterns:
 - **Rate limiting**: Any rate limiting middleware?
 - **Known vulnerable patterns**: SQL concatenation, eval(), innerHTML, etc.
 
-Write output to `hydra/context/security-surface.md` in this format:
+Write output to `nazgul/context/security-surface.md` in this format:
 
 ```markdown
 # Security Surface
@@ -352,7 +352,7 @@ Write output to `hydra/context/security-surface.md` in this format:
 
 ---
 
-## Step 5: Style Conventions (`hydra/context/style-conventions.md`)
+## Step 5: Style Conventions (`nazgul/context/style-conventions.md`)
 
 Detect coding conventions by reading existing code:
 
@@ -369,7 +369,7 @@ Detect coding conventions by reading existing code:
 Read at least 5-10 representative files across different modules to detect patterns.
 Do NOT guess — only document what you can prove from the codebase.
 
-Write output to `hydra/context/style-conventions.md` in this format:
+Write output to `nazgul/context/style-conventions.md` in this format:
 
 ```markdown
 # Style Conventions
@@ -481,7 +481,7 @@ hooks:
   SubagentStop:
     - hooks:
         - type: prompt
-          prompt: "A reviewer subagent is trying to stop. Check if it has written its review file to hydra/reviews/[TASK-ID]/[reviewer-name].md (inside a per-task subdirectory, NOT flat in hydra/reviews/). The file must contain a Final Verdict (APPROVED or CHANGES_REQUESTED). If no review file was written in the correct location, block and instruct the reviewer to create the hydra/reviews/[TASK-ID]/ directory and write its review there. $ARGUMENTS"
+          prompt: "A reviewer subagent is trying to stop. Check if it has written its review file to nazgul/reviews/[TASK-ID]/[reviewer-name].md (inside a per-task subdirectory, NOT flat in nazgul/reviews/). The file must contain a Final Verdict (APPROVED or CHANGES_REQUESTED). If no review file was written in the correct location, block and instruct the reviewer to create the nazgul/reviews/[TASK-ID]/ directory and write its review there. $ARGUMENTS"
 ---
 
 # [Reviewer Name] — [Project Name]
@@ -495,9 +495,9 @@ Include file paths, patterns, libraries, and conventions detected by Discovery.]
 NOT generic best practices — things grounded in what this codebase actually does.]
 
 ## How to Review
-1. Read `hydra/reviews/[TASK-ID]/diff.patch` FIRST — this shows exactly what changed, line by line
+1. Read `nazgul/reviews/[TASK-ID]/diff.patch` FIRST — this shows exactly what changed, line by line
 2. For each changed hunk, read the surrounding context in the full file if needed
-3. Compare changes against the project's established patterns in hydra/context/
+3. Compare changes against the project's established patterns in nazgul/context/
 4. Check each item in your review checklist against the CHANGED code
 5. Run relevant commands to verify (tests, linter, type checker, etc.)
 
@@ -529,8 +529,8 @@ IMPORTANT: You are reviewing for THIS specific project. Reference actual files, 
 actual conventions. Do not give generic advice. If you cite a standard, show where it's already
 followed in this codebase as the reference implementation.
 
-Write your review to `hydra/reviews/[TASK-ID]/[your-reviewer-name].md`.
-Create the directory `hydra/reviews/[TASK-ID]/` first if it doesn't exist (`mkdir -p`).
+Write your review to `nazgul/reviews/[TASK-ID]/[your-reviewer-name].md`.
+Create the directory `nazgul/reviews/[TASK-ID]/` first if it doesn't exist (`mkdir -p`).
 [TASK-ID] is the task you are reviewing (e.g., TASK-001).
 ```
 
@@ -549,7 +549,7 @@ Detect whether this project is hosted on GitHub and whether the `gh` CLI is avai
 
 ### Output
 
-Append to `hydra/context/project-profile.md`:
+Append to `nazgul/context/project-profile.md`:
 
 ```markdown
 ## GitHub Integration
@@ -561,13 +561,13 @@ Append to `hydra/context/project-profile.md`:
 
 ### Update config.json
 
-No config changes — this is informational only. The `/hydra:start` skill reads this from context to decide whether to prompt for board sync.
+No config changes — this is informational only. The `/nazgul:start` skill reads this from context to decide whether to prompt for board sync.
 
 ---
 
 ## Step 7: Write Discovery Summary
 
-Write a brief summary to `hydra/context/discovery-summary.md`:
+Write a brief summary to `nazgul/context/discovery-summary.md`:
 - When discovery was run
 - How many files scanned
 - Project classification and confidence
@@ -583,7 +583,7 @@ Write a brief summary to `hydra/context/discovery-summary.md`:
 
 ## Step 8: Update config.json
 
-Update `hydra/config.json` with:
+Update `nazgul/config.json` with:
 - `project.language`, `project.framework`, `project.test_command`, `project.build_command`
 - `reviewers` array listing all generated reviewer agent names
 - `discovery.last_run` timestamp
@@ -664,7 +664,7 @@ If ambiguous, default to BROWNFIELD (safest — produces most context).
 
 ### Output
 
-Write `hydra/context/project-classification.md`:
+Write `nazgul/context/project-classification.md`:
 
 ```markdown
 # Project Classification
@@ -724,7 +724,7 @@ Based on classification + codebase detection, determine which agents to spawn.
 - observability: IF logging_framework_detected OR greenfield
 ```
 
-Write the roster to `hydra/config.json → agents` section.
+Write the roster to `nazgul/config.json → agents` section.
 
 ---
 
@@ -754,11 +754,11 @@ For each selected reviewer:
    - `{{approved_criteria}}` — the `approved_criteria` field
    - `{{rejected_criteria}}` — the `rejected_criteria` field
 5. Inject project-specific context into the `## Project Context` section
-6. **Strip `{{^bundle_mode}}` / `{{#bundle_mode}}` conditional blocks.** The template may contain lines like `{{^bundle_mode}}`, `{{#bundle_mode}}`, and `{{/bundle_mode}}` (sometimes prefixed with `# ` inside frontmatter). Hydra is the default mode (bundle_mode=false), so:
+6. **Strip `{{^bundle_mode}}` / `{{#bundle_mode}}` conditional blocks.** The template may contain lines like `{{^bundle_mode}}`, `{{#bundle_mode}}`, and `{{/bundle_mode}}` (sometimes prefixed with `# ` inside frontmatter). Nazgul is the default mode (bundle_mode=false), so:
    - KEEP the content between `{{^bundle_mode}}` and `{{/bundle_mode}}`
    - REMOVE the content between `{{#bundle_mode}}` and `{{/bundle_mode}}`
    - REMOVE all three marker lines themselves (with or without `# ` prefix)
-   This ensures generated reviewers contain only the Hydra branch, never the bundle-mode branch or the literal markers.
+   This ensures generated reviewers contain only the Nazgul branch, never the bundle-mode branch or the literal markers.
 7. Write the generated reviewer to `.claude/agents/generated/[name].md`
 
 Follow the Reviewer Agent Template in Step 6 above for the final output format, tailoring to THIS project's specific patterns.
@@ -927,14 +927,14 @@ They must NOT modify application source code or test files.
 ## Execution Checklist
 
 - [ ] Scan entire codebase for file types, configs, dependencies
-- [ ] Write `hydra/context/project-profile.md`
-- [ ] Write `hydra/context/existing-docs.md`
-- [ ] Write `hydra/context/architecture-map.md`
-- [ ] Write `hydra/context/test-strategy.md`
-- [ ] Write `hydra/context/security-surface.md`
-- [ ] Write `hydra/context/style-conventions.md`
-- [ ] Classify project type → write `hydra/context/project-classification.md`
-- [ ] Determine agent roster → write to `hydra/config.json`
+- [ ] Write `nazgul/context/project-profile.md`
+- [ ] Write `nazgul/context/existing-docs.md`
+- [ ] Write `nazgul/context/architecture-map.md`
+- [ ] Write `nazgul/context/test-strategy.md`
+- [ ] Write `nazgul/context/security-surface.md`
+- [ ] Write `nazgul/context/style-conventions.md`
+- [ ] Classify project type → write `nazgul/context/project-classification.md`
+- [ ] Determine agent roster → write to `nazgul/config.json`
 - [ ] Generate `.claude/agents/generated/architect-reviewer.md`
 - [ ] Generate `.claude/agents/generated/code-reviewer.md`
 - [ ] Generate `.claude/agents/generated/security-reviewer.md`
@@ -948,5 +948,5 @@ They must NOT modify application source code or test files.
 - [ ] Generate `.claude/agents/generated/documentation.md` (if in roster)
 - [ ] Generate `.claude/agents/generated/release-manager.md` (if in roster)
 - [ ] Generate `.claude/agents/generated/observability.md` (if in roster)
-- [ ] Write `hydra/context/discovery-summary.md`
-- [ ] Update `hydra/config.json` with all settings
+- [ ] Write `nazgul/context/discovery-summary.md`
+- [ ] Update `nazgul/config.json` with all settings

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Hydra Config Migration — upgrades project config to latest schema version
+# Nazgul Config Migration — upgrades project config to latest schema version
 # Called by session-context.sh on every session start.
-# Usage: migrate-config.sh [hydra_dir]
+# Usage: migrate-config.sh [nazgul_dir]
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-HYDRA_DIR="${1:-${CLAUDE_PROJECT_DIR:-$(pwd)}/hydra}"
-CONFIG="$HYDRA_DIR/config.json"
+NAZGUL_DIR="${1:-${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul}"
+CONFIG="$NAZGUL_DIR/config.json"
 TEMPLATE="$PLUGIN_ROOT/templates/config.json"
 
 # Nothing to migrate if no project config or no template
@@ -28,7 +28,7 @@ if [ "$CURRENT_VERSION" -ge "$TARGET_VERSION" ]; then
 fi
 
 # Create log directory
-LOG_DIR="$HYDRA_DIR/logs"
+LOG_DIR="$NAZGUL_DIR/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/migrations.log"
 
@@ -174,4 +174,4 @@ while [ "$VERSION" -lt "$TARGET_VERSION" ]; do
 done
 
 log_migration "Config migrated from v${CURRENT_VERSION} to v${TARGET_VERSION}"
-echo "Hydra config migrated from v${CURRENT_VERSION} to v${TARGET_VERSION}."
+echo "Nazgul config migrated from v${CURRENT_VERSION} to v${TARGET_VERSION}."

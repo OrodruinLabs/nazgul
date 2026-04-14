@@ -19,11 +19,11 @@ You implement mobile platform features. Read project context FIRST — never ass
 
 ## Context Reading (MANDATORY — Do This First)
 
-1. Read `hydra/config.json -> project.stack` for mobile framework and runtime
-2. Read `hydra/context/project-profile.md` for detected mobile framework, navigation library, state management
-3. Read `hydra/context/style-conventions.md` for naming and file organization patterns
-4. Read `hydra/context/architecture-map.md` for navigation structure and module layout
-5. Read delegation brief from `hydra/tasks/[TASK-ID]-delegation.md` for scope and constraints
+1. Read `nazgul/config.json -> project.stack` for mobile framework and runtime
+2. Read `nazgul/context/project-profile.md` for detected mobile framework, navigation library, state management
+3. Read `nazgul/context/style-conventions.md` for naming and file organization patterns
+4. Read `nazgul/context/architecture-map.md` for navigation structure and module layout
+5. Read delegation brief from `nazgul/tasks/[TASK-ID]-delegation.md` for scope and constraints
 
 ## Platform Reference
 

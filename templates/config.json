@@ -8,10 +8,10 @@
   "max_iterations": 40,
   "current_iteration": 0,
   "paused": false,
-  "completion_promise": "HYDRA_COMPLETE",
-  "task_file": "hydra/plan.md",
-  "log_dir": "hydra/logs",
-  "review_dir": "hydra/reviews",
+  "completion_promise": "NAZGUL_COMPLETE",
+  "task_file": "nazgul/plan.md",
+  "log_dir": "nazgul/logs",
+  "review_dir": "nazgul/reviews",
   "project": {
     "language": null,
     "framework": null,
@@ -49,7 +49,7 @@
   },
   "discovery": {
     "last_run": null,
-    "context_dir": "hydra/context"
+    "context_dir": "nazgul/context"
   },
   "agents": {
     "pipeline": [
@@ -67,7 +67,7 @@
     "custom": []
   },
   "documents": {
-    "dir": "hydra/docs"
+    "dir": "nazgul/docs"
   },
   "review_gate": {
     "require_all_approve": true,

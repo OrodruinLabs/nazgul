@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Hydra TaskCompleted — fires when a Task-spawned agent finishes
+# Nazgul TaskCompleted — fires when a Task-spawned agent finishes
 # Logs completion and fires webhook event for real-time monitoring.
 
-HYDRA_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/hydra"
-CONFIG="$HYDRA_DIR/config.json"
+NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
+CONFIG="$NAZGUL_DIR/config.json"
 
-# If Hydra not initialized, exit silently
+# If Nazgul not initialized, exit silently
 if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
 # Log task completion
-LOG_DIR="$HYDRA_DIR/logs"
+LOG_DIR="$NAZGUL_DIR/logs"
 mkdir -p "$LOG_DIR"
 printf '{"event":"task_completed","timestamp":"%s"}\n' \
   "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "$LOG_DIR/iterations.jsonl"
 
 # Reset tool failure counter on successful task completion
-FAILURE_FILE="$HYDRA_DIR/.tool_failures"
+FAILURE_FILE="$NAZGUL_DIR/.tool_failures"
 if [ -f "$FAILURE_FILE" ]; then
   printf '{"consecutive_bash_failures": 0, "last_failure": null}\n' > "$FAILURE_FILE"
 fi

@@ -38,7 +38,7 @@ The Planner should:
 2. Create a compatibility matrix (what works, what needs changes)
 3. Identify breaking changes and their impact
 4. Plan a phased migration if possible (expand-contract pattern)
-5. Document in hydra/context/migration-scope.md
+5. Document in nazgul/context/migration-scope.md
 
 ## Rollback Plan
 <!-- Detailed steps to revert the migration -->

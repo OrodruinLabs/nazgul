@@ -36,7 +36,7 @@ The Planner MUST run FULL context collection before planning a refactor:
 5. Check git blame for recent changes
 6. Read the actual code of EVERY file in scope
 7. Document current behavior that MUST be preserved
-8. Write findings to hydra/context/refactor-scope.md
+8. Write findings to nazgul/context/refactor-scope.md
 
 **WARNING**: Skipping context collection on a refactor will cause broken dependencies, missing test updates, and reviewer rejections. The Planner must map the full blast radius.
 

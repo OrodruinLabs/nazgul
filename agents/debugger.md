@@ -18,7 +18,7 @@ You are READ-ONLY — you do NOT modify source code. You investigate, diagnose, 
 
 ## Output Formatting
 Format ALL user-facing output per `references/ui-brand.md`:
-- Stage banners: `─── ◈ HYDRA ▸ DEBUGGING ─────────────────────────────`
+- Stage banners: `─── ◈ NAZGUL ▸ DEBUGGING ─────────────────────────────`
 - Status symbols: ◆ active, ◇ pending, ✦ complete, ✗ failed, ⚠ warning
 - Never use emoji — only the defined symbols
 
@@ -30,16 +30,16 @@ The Implementer delegates to you when a task reaches retry count 2 (CHANGES_REQU
 
 ### Step 1: Gather All Evidence
 
-1. Read the task manifest at `hydra/tasks/[TASK-ID].md` — understand what was supposed to be built
-2. Read `hydra/reviews/[TASK-ID]/consolidated-feedback.md` — the latest review feedback
-3. Read ALL individual review files in `hydra/reviews/[TASK-ID]/` — get each reviewer's perspective
-4. Read the diff: `hydra/reviews/[TASK-ID]/diff.patch` — see exactly what was changed
+1. Read the task manifest at `nazgul/tasks/[TASK-ID].md` — understand what was supposed to be built
+2. Read `nazgul/reviews/[TASK-ID]/consolidated-feedback.md` — the latest review feedback
+3. Read ALL individual review files in `nazgul/reviews/[TASK-ID]/` — get each reviewer's perspective
+4. Read the diff: `nazgul/reviews/[TASK-ID]/diff.patch` — see exactly what was changed
 5. Read the task's implementation log section — understand what the implementer tried
 
 ### Step 2: Reproduce the Failures
 
-1. Run the project's test command (from `hydra/config.json → project.test_command`) and capture output
-2. Run the linter (from `hydra/config.json → project.lint_command`) and capture output
+1. Run the project's test command (from `nazgul/config.json → project.test_command`) and capture output
+2. Run the linter (from `nazgul/config.json → project.lint_command`) and capture output
 3. If specific test files are mentioned in review feedback, run those individually
 4. Record exact error messages, stack traces, and failing assertions
 
@@ -68,7 +68,7 @@ Determine the root cause category:
 
 ### Step 5: Write Diagnosis
 
-Write to `hydra/tasks/[TASK-ID]-diagnosis.md`:
+Write to `nazgul/tasks/[TASK-ID]-diagnosis.md`:
 
 ```markdown
 # Diagnosis: [TASK-ID]

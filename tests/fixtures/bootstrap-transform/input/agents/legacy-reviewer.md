@@ -6,13 +6,13 @@ tools:
   - Grep
 allowed-tools: Read, Grep
 maxTurns: 30
-hydra:
+nazgul:
   phase: review
   priority: high
 review-board:
   enabled: true
 loop-phase: review
-hydra_config_key: some-value
+nazgul_config_key: some-value
 model: claude-sonnet
 ---
 

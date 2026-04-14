@@ -21,18 +21,18 @@ Format ALL user-facing output per `references/ui-brand.md`:
 
 ## Context Reading (MANDATORY — Do This First)
 
-1. Read `hydra/config.json -> review_gate.confidence_threshold` (default: 80)
-2. Read `hydra/config.json -> mode` (HITL or AFK — affects contradiction resolution)
-3. Read `hydra/config.json -> agents.reviewers` for the expected reviewer list
-4. Read `hydra/context/style-conventions.md` for pattern references (to enrich fix suggestions)
-5. Read `hydra/context/architecture-map.md` for correct implementation references
+1. Read `nazgul/config.json -> review_gate.confidence_threshold` (default: 80)
+2. Read `nazgul/config.json -> mode` (HITL or AFK — affects contradiction resolution)
+3. Read `nazgul/config.json -> agents.reviewers` for the expected reviewer list
+4. Read `nazgul/context/style-conventions.md` for pattern references (to enrich fix suggestions)
+5. Read `nazgul/context/architecture-map.md` for correct implementation references
 
 ## Completeness Check
 
 Before consolidating, verify all expected reviewers have submitted:
 
-1. Read the expected reviewer list from `hydra/config.json -> agents.reviewers`
-2. List all files in `hydra/reviews/[TASK-ID]/`
+1. Read the expected reviewer list from `nazgul/config.json -> agents.reviewers`
+2. List all files in `nazgul/reviews/[TASK-ID]/`
 3. Compare: every reviewer in the expected list should have a corresponding `[reviewer-name].md` file
 4. If a reviewer is MISSING:
    - Log a warning in the consolidated feedback: "WARNING: [reviewer-name] did not submit a review"
@@ -107,8 +107,8 @@ When two reviewers give conflicting advice (e.g., one says "use approach A", ano
 
 For every fix suggestion, attempt to find an existing correct implementation in the codebase:
 
-1. Read `hydra/context/style-conventions.md` for documented patterns with file references
-2. Read `hydra/context/architecture-map.md` for module structure and data flow references
+1. Read `nazgul/context/style-conventions.md` for documented patterns with file references
+2. Read `nazgul/context/architecture-map.md` for module structure and data flow references
 3. If a reviewer provided a "Pattern reference" in their finding, include it
 4. If no pattern reference was provided but a correct implementation exists in the codebase, add one:
    - Search for similar correct implementations (e.g., if the issue is "missing error handling", find a file that DOES handle errors correctly)
@@ -129,8 +129,8 @@ Classify conservatively — when in doubt, mark as ASK. Security findings are AL
 
 ## Step-by-Step Process
 
-1. Read `hydra/config.json` for confidence threshold, mode, and expected reviewer list
-2. Read all review files in `hydra/reviews/[TASK-ID]/`
+1. Read `nazgul/config.json` for confidence threshold, mode, and expected reviewer list
+2. Read all review files in `nazgul/reviews/[TASK-ID]/`
 3. Run completeness check — verify all expected reviewers submitted (warn if missing)
 4. Extract ALL findings from each review file (parse the structured format: severity, confidence, file, category, verdict, issue, fix)
 5. Deduplicate findings:
@@ -140,12 +140,12 @@ Classify conservatively — when in doubt, mark as ASK. Security findings are AL
 7. Apply confidence threshold — classify each finding as BLOCKING or NON-BLOCKING
 8. Prioritize: security > correctness > performance > style (within each: highest confidence first)
 9. Enrich with pattern references — find correct implementations in the codebase for each fix
-10. Write consolidated feedback to `hydra/reviews/[TASK-ID]/consolidated-feedback.md`
+10. Write consolidated feedback to `nazgul/reviews/[TASK-ID]/consolidated-feedback.md`
 11. Write summary statistics at the top of the file
 
 ## Output Format
 
-Write to `hydra/reviews/[TASK-ID]/consolidated-feedback.md`:
+Write to `nazgul/reviews/[TASK-ID]/consolidated-feedback.md`:
 
 ```markdown
 # Consolidated Review Feedback: [TASK-ID]

@@ -1,4 +1,4 @@
-# Hydra Plan
+# Nazgul Plan
 
 ## Objective
 <!-- Set by the Planner agent after reading context files and user objective.
@@ -35,7 +35,7 @@
 -->
 
 ## Tasks
-<!-- Individual task entries are maintained in hydra/tasks/TASK-NNN.md manifests.
+<!-- Individual task entries are maintained in nazgul/tasks/TASK-NNN.md manifests.
      This section serves as a quick-reference index.
      Status key: PLANNED | READY | IN_PROGRESS | IMPLEMENTED | IN_REVIEW | CHANGES_REQUESTED | DONE | BLOCKED
 
@@ -44,7 +44,7 @@
      - **Status**: DONE
      - **Group**: 1
      - **Depends on**: none
-     - **Manifest**: hydra/tasks/TASK-001.md
+     - **Manifest**: nazgul/tasks/TASK-001.md
 -->
 
 ## Completed

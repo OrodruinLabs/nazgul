@@ -24,9 +24,9 @@ run_fixture() {
   (cd "$work" && git init -q && git add -A && git -c user.email=e2e@test -c user.name=e2e commit -q -m init)
 
   echo ""
-  echo "--- running /hydra:bootstrap-project against $fixture_name ---"
+  echo "--- running /nazgul:bootstrap-project against $fixture_name ---"
 
-  (cd "$work" && claude -p "/hydra:bootstrap-project \"A demo app for e2e validation\" --yes --overwrite" 2>&1) || {
+  (cd "$work" && claude -p "/nazgul:bootstrap-project \"A demo app for e2e validation\" --yes --overwrite" 2>&1) || {
     _fail "$fixture_name: skill invocation exit 0"
     return 1
   }
@@ -41,15 +41,15 @@ run_fixture() {
     _fail "$fixture_name: too few docs" "expected >=$min_expected_files, got $got_docs"
   fi
 
-  # No Hydra tokens anywhere in bundle. Boundary pattern matches the one the
-  # transform uses so E2E failures correspond to real Hydra leaks (not
-  # incidental substrings like "dehydrate").
+  # No Nazgul tokens anywhere in bundle. Boundary pattern matches the one the
+  # transform uses so E2E failures correspond to real Nazgul leaks (not
+  # incidental substrings like "denazgulte").
   local leaks
-  leaks=$(grep -rinE '(^|[^[:alnum:]_])(hydra|Hydra|HYDRA)(/|[^[:alnum:]]|$)' "$work/docs" "$work/.claude" 2>/dev/null || true)
+  leaks=$(grep -rinE '(^|[^[:alnum:]_])(nazgul|Nazgul|NAZGUL)(/|[^[:alnum:]]|$)' "$work/docs" "$work/.claude" 2>/dev/null || true)
   if [ -z "$leaks" ]; then
-    _pass "$fixture_name: no Hydra tokens leaked"
+    _pass "$fixture_name: no Nazgul tokens leaked"
   else
-    _fail "$fixture_name: Hydra tokens leaked" "$leaks"
+    _fail "$fixture_name: Nazgul tokens leaked" "$leaks"
   fi
 
   # Reviewer frontmatter is valid YAML

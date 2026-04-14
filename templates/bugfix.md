@@ -35,7 +35,7 @@ The Planner should:
 1. Trace the code path from entry point to error
 2. Find related tests (passing and failing)
 3. Check git log for recent changes to affected files
-4. Document findings in hydra/context/bugfix-scope.md
+4. Document findings in nazgul/context/bugfix-scope.md
 
 ## Root Cause Analysis
 <!-- Filled during investigation -->

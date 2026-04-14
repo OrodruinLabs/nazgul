@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "================================"
-echo "  Hydra E2E Test Suite"
+echo "  Nazgul E2E Test Suite"
 echo "  WARNING: These tests call"
 echo "  claude -p and cost money."
 echo "================================"

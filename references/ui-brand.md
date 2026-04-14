@@ -1,26 +1,26 @@
-# Hydra UI Brand Reference
+# Nazgul UI Brand Reference
 
-Visual identity and output formatting standards for all Hydra agents and skills. Every agent MUST follow these conventions to maintain a consistent, professional output experience.
+Visual identity and output formatting standards for all Nazgul agents and skills. Every agent MUST follow these conventions to maintain a consistent, professional output experience.
 
 ---
 
 ## 1. Stage Banners
 
-Stage transition headers mark major pipeline phases. Use the exact format below — consistent width, uppercase stage name, `HYDRA` prefix.
+Stage transition headers mark major pipeline phases. Use the exact format below — consistent width, uppercase stage name, `NAZGUL` prefix.
 
 ```
-─── ◈ HYDRA ▸ DISCOVERING ─────────────────────────────
-─── ◈ HYDRA ▸ PLANNING ────────────────────────────────
-─── ◈ HYDRA ▸ IMPLEMENTING ────────────────────────────
-─── ◈ HYDRA ▸ REVIEWING ───────────────────────────────
-─── ◈ HYDRA ▸ VERIFYING ───────────────────────────────
-─── ◈ HYDRA ▸ PATCHING ────────────────────────────────
-─── ◈ HYDRA ▸ COMPLETE ✦ ──────────────────────────────
+─── ◈ NAZGUL ▸ DISCOVERING ─────────────────────────────
+─── ◈ NAZGUL ▸ PLANNING ────────────────────────────────
+─── ◈ NAZGUL ▸ IMPLEMENTING ────────────────────────────
+─── ◈ NAZGUL ▸ REVIEWING ───────────────────────────────
+─── ◈ NAZGUL ▸ VERIFYING ───────────────────────────────
+─── ◈ NAZGUL ▸ PATCHING ────────────────────────────────
+─── ◈ NAZGUL ▸ COMPLETE ✦ ──────────────────────────────
 ```
 
 Rules:
 - Stage names are always UPPERCASE.
-- The `◈ HYDRA ▸` prefix is mandatory on every banner.
+- The `◈ NAZGUL ▸` prefix is mandatory on every banner.
 - Pad the trailing `─` characters to maintain consistent width (~55 characters total).
 - The COMPLETE banner appends `✦` to signal final success.
 
@@ -30,7 +30,7 @@ Rules:
 
 | Symbol | Meaning                    | Usage                                      |
 |--------|----------------------------|---------------------------------------------|
-| `◈`    | Hydra primary              | Banners and top-level headers only          |
+| `◈`    | Nazgul primary              | Banners and top-level headers only          |
 | `◆`    | Active / In Progress       | Currently executing tasks or agents         |
 | `◇`    | Pending / Waiting          | Queued tasks, agents not yet started        |
 | `✦`    | Complete / Approved        | Finished tasks, approved reviews            |
@@ -47,7 +47,7 @@ These symbols replace all emoji usage. Do not mix with emoji.
 When multiple agents run in parallel, show each agent's status individually with its current state:
 
 ```
-─── ◈ HYDRA ▸ REVIEWING ───────────────────────────────
+─── ◈ NAZGUL ▸ REVIEWING ───────────────────────────────
 
   ✦ qa-reviewer           approved (94%)
   ◆ performance-reviewer   analyzing...
@@ -124,7 +124,7 @@ Checkpoints require human input. Three types exist — use the matching label.
 Rules:
 - Box width must be consistent within a session.
 - Always include the `→` prompt line telling the user what to do.
-- The `◈` symbol marks the checkpoint as a Hydra-level gate.
+- The `◈` symbol marks the checkpoint as a Nazgul-level gate.
 
 ---
 
@@ -151,7 +151,7 @@ Shown after every major phase completion or task completion to indicate what com
 ```
 ─── ◈ NEXT ─────────────────────────────────────────────
   Task 007: Add auth middleware
-  /hydra:start to continue
+  /nazgul:start to continue
 ────────────────────────────────────────────────────────
 ```
 
@@ -230,14 +230,14 @@ These replace any legacy emoji verdicts. All review output must use these exact 
 
 ## 11. Anti-Patterns
 
-The following are explicitly prohibited in Hydra output:
+The following are explicitly prohibited in Nazgul output:
 
 | Do Not                                              | Do Instead                                          |
 |-----------------------------------------------------|-----------------------------------------------------|
 | Vary box/banner widths within a session              | Pick a consistent width and maintain it             |
 | Use random emoji (rocket, sparkle, star, etc.)       | Use only the symbols defined in Section 2           |
 | Omit the Next Up block after completions             | Always show Next Up (Section 7)                     |
-| Skip `◈ HYDRA ▸` prefix in banners                  | Every banner starts with `◈ HYDRA ▸`               |
+| Skip `◈ NAZGUL ▸` prefix in banners                  | Every banner starts with `◈ NAZGUL ▸`               |
 | Use legacy emoji (`✅`, `⚠️`, `❌`)                  | Use `✦`, `⚠`, `✗` instead                         |
 | Mix separator styles (`---`, `===`, `***`)           | Use `─` line separators exclusively                 |
 | Use lowercase stage names in banners                 | Stage names are always UPPERCASE                    |

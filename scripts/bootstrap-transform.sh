@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bootstrap-transform.sh — Scrub Hydra references from a scratch tree.
+# bootstrap-transform.sh — Scrub Nazgul references from a scratch tree.
 # Usage: bootstrap-transform.sh <scratch-root>
 #
 # Applies rules from scripts/lib/bootstrap-scrub-map.sh. Actual execution order
@@ -9,7 +9,7 @@
 #      a. Class 4 — frontmatter stripping (agent files only)
 #      b. Classes 2 & 3 — prose scrub safety net (body text, sentence/line drops)
 #      c. Class 1 — path rewrites (with line-drop for __DROP__ tokens)
-#   3. Final assertion — no residual [Hh]ydra|HYDRA tokens (exits 3 on match)
+#   3. Final assertion — no residual [Hh]ydra|NAZGUL tokens (exits 3 on match)
 #
 # Transform mutates the scratch tree in place.
 
@@ -144,7 +144,7 @@ strip_frontmatter() {
   tmp=$(mktemp "${TMPDIR:-/tmp}/bootstrap-transform.XXXXXX")
 
   # Join BOOTSTRAP_SCRUB_FRONTMATTER_REMOVE into an alternation pattern.
-  # Exact match: e.g. "hydra|review-board|loop-phase".
+  # Exact match: e.g. "nazgul|review-board|loop-phase".
   local _fm_key
   local _fm_exact=""
   for _fm_key in "${BOOTSTRAP_SCRUB_FRONTMATTER_REMOVE[@]}"; do
@@ -170,7 +170,7 @@ strip_frontmatter() {
   awk -v fm_exact="$_fm_exact" -v desc_prefixes="$_desc_prefixes" '
     BEGIN {
       in_fm=0; skipping_block=0; emitted_open=0
-      # Exact-match pattern: anchor both ends so e.g. "hydra" does not match "hydrant".
+      # Exact-match pattern: anchor both ends so e.g. "nazgul" does not match "nazgulnt".
       fm_pat = "^(" fm_exact ")$"
       # Prefix-strip pattern for description values. The scrub map owns the
       # list; we compose the regex here.
@@ -183,8 +183,8 @@ strip_frontmatter() {
       if (match($0, /^[A-Za-z_][A-Za-z0-9_.-]*:/)) {
         key = substr($0, 1, RLENGTH-1)
         # Drop if the key matches the scrub-map exact list, OR starts with
-        # "hydra_" (underscore-prefixed namespace is a known extension).
-        if (key ~ fm_pat || key ~ /^hydra_/) {
+        # "nazgul_" (underscore-prefixed namespace is a known extension).
+        if (key ~ fm_pat || key ~ /^nazgul_/) {
           skipping_block=1
           next
         }
@@ -229,7 +229,7 @@ strip_frontmatter() {
 # IMPORTANT: the transform only operates on directories that will be relocated
 # into the final bundle — docs/, context/, agents/, .claude/. The skill writes
 # rendered pipeline prompts (e.g. .discovery-prompt.md) at the scratch root;
-# those prompts preserve Hydra prose from the source agents (by design, since
+# those prompts preserve Nazgul prose from the source agents (by design, since
 # the LLM executes them in bundle-scratch mode) and must NOT be scrubbed or
 # asserted against. The relocate step ignores them too.
 
@@ -267,7 +267,7 @@ while IFS= read -r dir; do
 done < <(_existing_relocated_dirs)
 
 # -----------------------------------------------------------------------------
-# Final assertion — no residual Hydra tokens (scoped to the relocated subtree)
+# Final assertion — no residual Nazgul tokens (scoped to the relocated subtree)
 # -----------------------------------------------------------------------------
 
 # Build the target list dynamically so the assertion doesn't error on a
@@ -280,15 +280,15 @@ done < <(_existing_relocated_dirs)
 if [ "${#ASSERT_TARGETS[@]}" -eq 0 ]; then
   ASSERT_MATCHES=""
 else
-  # Pattern uses POSIX char-class boundaries so "dehydrate", "Hydrangea", etc.
-  # don't false-trigger. Matches: "hydra/..." paths, standalone "hydra"/"Hydra"
-  # tokens, "HYDRA", and "HYDRA_*" env-var forms.
-  ASSERT_MATCHES=$(grep -rinE '(^|[^[:alnum:]_])(hydra|Hydra|HYDRA)(/|[^[:alnum:]]|$)' "${ASSERT_TARGETS[@]}" 2>/dev/null || true)
+  # Pattern uses POSIX char-class boundaries so "denazgulte", "Nazgulngea", etc.
+  # don't false-trigger. Matches: "nazgul/..." paths, standalone "nazgul"/"Nazgul"
+  # tokens, "NAZGUL", and "NAZGUL_*" env-var forms.
+  ASSERT_MATCHES=$(grep -rinE '(^|[^[:alnum:]_])(nazgul|Nazgul|NAZGUL)(/|[^[:alnum:]]|$)' "${ASSERT_TARGETS[@]}" 2>/dev/null || true)
 fi
 
 if [ -n "$ASSERT_MATCHES" ]; then
   {
-    echo "bootstrap-transform: residual Hydra tokens found after scrub pass:"
+    echo "bootstrap-transform: residual Nazgul tokens found after scrub pass:"
     echo ""
     echo "$ASSERT_MATCHES" | sed 's/^/  /'
     echo ""

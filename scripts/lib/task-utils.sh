@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hydra shared task utilities — sourced by scripts that read/write task manifests.
+# Nazgul shared task utilities — sourced by scripts that read/write task manifests.
 # Eliminates duplication of get_task_status(), set_task_status(), and task counting.
 
 # Extract status from a task manifest file.

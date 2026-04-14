@@ -16,21 +16,21 @@ trap 'rm -rf "$WORK"' EXIT
 
 # --- Path substitution ---
 cat > "$WORK/in.md" <<'IN'
-Read hydra/context/foo.md and write to hydra/docs/bar.md.
-Config lives in hydra/config.json.
+Read nazgul/context/foo.md and write to nazgul/docs/bar.md.
+Config lives in nazgul/config.json.
 IN
 
 render_agent_prompt "$WORK/in.md" ".bootstrap-scratch" > "$WORK/out.md"
 
-assert_file_contains "path replaced: hydra/context/" "$WORK/out.md" ".bootstrap-scratch/context/foo.md"
-assert_file_contains "path replaced: hydra/docs/"    "$WORK/out.md" ".bootstrap-scratch/docs/bar.md"
-assert_file_contains "path replaced: hydra/config"   "$WORK/out.md" ".bootstrap-scratch/config.json"
+assert_file_contains "path replaced: nazgul/context/" "$WORK/out.md" ".bootstrap-scratch/context/foo.md"
+assert_file_contains "path replaced: nazgul/docs/"    "$WORK/out.md" ".bootstrap-scratch/docs/bar.md"
+assert_file_contains "path replaced: nazgul/config"   "$WORK/out.md" ".bootstrap-scratch/config.json"
 
 # --- Bundle-mode conditional stripping ---
 cat > "$WORK/tmpl.md" <<'TMPL'
 Before.
 {{^bundle_mode}}
-This is the Hydra branch.
+This is the Nazgul branch.
 {{/bundle_mode}}
 {{#bundle_mode}}
 This is the bundle branch.
@@ -40,12 +40,12 @@ TMPL
 
 # Default (bundle_mode=false) — keep inverse, drop positive
 render_template "$WORK/tmpl.md" > "$WORK/tmpl-default.md"
-assert_file_contains "default keeps inverse" "$WORK/tmpl-default.md" "Hydra branch"
+assert_file_contains "default keeps inverse" "$WORK/tmpl-default.md" "Nazgul branch"
 assert_file_not_contains "default drops positive" "$WORK/tmpl-default.md" "bundle branch"
 
 # Bundle mode on — drop inverse, keep positive
 BUNDLE_MODE=true render_template "$WORK/tmpl.md" > "$WORK/tmpl-bundle.md"
-assert_file_not_contains "bundle drops inverse" "$WORK/tmpl-bundle.md" "Hydra branch"
+assert_file_not_contains "bundle drops inverse" "$WORK/tmpl-bundle.md" "Nazgul branch"
 assert_file_contains "bundle keeps positive" "$WORK/tmpl-bundle.md" "bundle branch"
 
 # --- select_reviewer_domains ---

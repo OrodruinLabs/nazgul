@@ -1,4 +1,4 @@
-# Hydra Integration Tests
+# Nazgul Integration Tests
 
 ## Running Tests
 
@@ -35,37 +35,37 @@ tests/run-tests.sh --filter=json
 ## Test Library
 
 - `tests/lib/assertions.sh` — `assert_eq`, `assert_contains`, `assert_file_exists`, `assert_json_field`, etc.
-- `tests/lib/setup.sh` — `setup_temp_dir`, `setup_git_repo`, `setup_hydra_dir`, `create_config`, `create_task_file`, `create_plan`
+- `tests/lib/setup.sh` — `setup_temp_dir`, `setup_git_repo`, `setup_nazgul_dir`, `create_config`, `create_task_file`, `create_plan`
 
 ## Manual Test Procedures
 
 These features require runtime Claude Code and cannot be tested with shell scripts alone.
 
-### 1. Bootstrap Test (`/hydra:init`)
+### 1. Bootstrap Test (`/nazgul:init`)
 
 1. Open a fresh Claude Code session in this repo
-2. Run `/hydra:init`
+2. Run `/nazgul:init`
 3. Verify:
-   - `hydra/config.json` created (not the template — runtime copy)
-   - `hydra/plan.md` created
-   - `hydra/context/` has 5 context files (project-profile, architecture-map, style-conventions, security-surface, test-strategy)
+   - `nazgul/config.json` created (not the template — runtime copy)
+   - `nazgul/plan.md` created
+   - `nazgul/context/` has 5 context files (project-profile, architecture-map, style-conventions, security-surface, test-strategy)
    - At least 3 reviewer agents generated in `.claude/agents/generated/`
    - Discovery status in plan.md is checked off
 
-### 2. Pipeline Test (`/hydra:start`)
+### 2. Pipeline Test (`/nazgul:start`)
 
-1. After `/hydra:init`, run `/hydra:start "Add a hello-world endpoint to README"`
+1. After `/nazgul:init`, run `/nazgul:start "Add a hello-world endpoint to README"`
 2. Verify:
-   - Objective set in `hydra/config.json`
-   - Documents generated in `hydra/docs/` (at least TRD)
-   - Tasks created in `hydra/tasks/`
+   - Objective set in `nazgul/config.json`
+   - Documents generated in `nazgul/docs/` (at least TRD)
+   - Tasks created in `nazgul/tasks/`
    - Plan.md updated with task index
    - Loop begins (stop hook blocks stop, agent continues working)
 
 ### 3. Recovery Test
 
 1. During an active loop, close the Claude Code session
-2. Reopen and run `/hydra:start`
+2. Reopen and run `/nazgul:start`
 3. Verify:
    - Session context hook outputs current state
    - Recovery Pointer in plan.md is accurate

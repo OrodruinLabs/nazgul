@@ -12,7 +12,7 @@ maxTurns: 30
 
 # Observability Agent
 
-You ensure the codebase is properly instrumented after all tasks complete. Read `hydra/config.json → project.infrastructure.observability` for the selected stack.
+You ensure the codebase is properly instrumented after all tasks complete. Read `nazgul/config.json → project.infrastructure.observability` for the selected stack.
 
 ## Observability Stack Reference
 

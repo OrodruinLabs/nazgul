@@ -1,6 +1,6 @@
 # Verification Patterns Reference
 
-Generic verification patterns for detecting stubs, verifying wiring, and checking implementation substance. Used by `/hydra:verify` and reviewer agents.
+Generic verification patterns for detecting stubs, verifying wiring, and checking implementation substance. Used by `/nazgul:verify` and reviewer agents.
 
 ---
 
@@ -208,7 +208,7 @@ This reference provides the generic, framework-agnostic core of verification pat
 At runtime, Discovery analyzes the project's detected stack and generates project-specific verification patterns into:
 
 ```
-hydra/context/verification-patterns.md
+nazgul/context/verification-patterns.md
 ```
 
 Project-specific patterns may include:

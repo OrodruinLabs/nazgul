@@ -16,16 +16,16 @@ You produce structured project documents that become the source of truth for all
 
 ## Inputs You Consume
 
-- `hydra/context/project-spec.md` — **PRIMARY**: Product specification with vision, target users, core features, problem statement, and constraints (if exists). This is the richest source of product context and takes precedence for PRD content.
-- `hydra/context/project-classification.md` — What type of project this is
-- `hydra/context/project-profile.md` — Technical stack and structure
-- `hydra/context/architecture-map.md` — How the system is organized
-- `hydra/config.json` → `objective` field — the user's original or derived objective string
-- `hydra/context/existing-docs.md` — Inventory of existing project documentation (if exists)
+- `nazgul/context/project-spec.md` — **PRIMARY**: Product specification with vision, target users, core features, problem statement, and constraints (if exists). This is the richest source of product context and takes precedence for PRD content.
+- `nazgul/context/project-classification.md` — What type of project this is
+- `nazgul/context/project-profile.md` — Technical stack and structure
+- `nazgul/context/architecture-map.md` — How the system is organized
+- `nazgul/config.json` → `objective` field — the user's original or derived objective string
+- `nazgul/context/existing-docs.md` — Inventory of existing project documentation (if exists)
 
 ## Where You Write
 
-All documents go to `hydra/docs/`. This directory is the project's living documentation.
+All documents go to `nazgul/docs/`. This directory is the project's living documentation.
 
 ## Document Generation Matrix
 
@@ -39,12 +39,12 @@ All documents go to `hydra/docs/`. This directory is the project's living docume
 
 > **All projects generate PRD, TRD, ADR, and Test Plan.** The scope and depth vary by classification, but no document type is ever skipped.
 
-**Note:** When `hydra/context/project-spec.md` is present, it is the PRIMARY source for PRD content across all project types. The spec provides product context that technical analysis alone cannot capture.
+**Note:** When `nazgul/context/project-spec.md` is present, it is the PRIMARY source for PRD content across all project types. The spec provides product context that technical analysis alone cannot capture.
 
 ## Process
 
-0. Read `hydra/config.json` → `objective` field. If null, read `hydra/plan.md` → `## Objective`. If both empty, STOP and report: "No objective found. Cannot generate documents."
-0.5. Read `hydra/context/project-spec.md` (if it exists). When present, map its content to PRD sections:
+0. Read `nazgul/config.json` → `objective` field. If null, read `nazgul/plan.md` → `## Objective`. If both empty, STOP and report: "No objective found. Cannot generate documents."
+0.5. Read `nazgul/context/project-spec.md` (if it exists). When present, map its content to PRD sections:
    - `## Vision` → PRD Overview / Executive Summary
    - `## Target Users` → PRD User Stories seed (personas and context)
    - `## Core Features` → PRD Goals / Feature Requirements
@@ -56,7 +56,7 @@ All documents go to `hydra/docs/`. This directory is the project's living docume
    - `## Raw Spec` (if present from import) → Read fully for additional details to incorporate
    This mapping ensures the PRD reflects product intent, not just technical stack.
 1. Read project classification → determine which documents to generate
-1.5. Read `hydra/context/existing-docs.md` (if it exists):
+1.5. Read `nazgul/context/existing-docs.md` (if it exists):
    a. For each existing document with relevance HIGH or MEDIUM:
       - Read the full document content
       - Extract facts, requirements, decisions, and constraints relevant to the objective
@@ -87,8 +87,8 @@ All documents go to `hydra/docs/`. This directory is the project's living docume
       - Incorporate findings from step 1.5 into the appropriate sections
       - Fill the "Prior Documentation" section citing existing sources with file paths
       - Ensure no contradictions with existing docs; if found, note and justify resolution
-   c. Write to `hydra/docs/[document-type].md`
-   d. Log to `hydra/docs/manifest.md`
+   c. Write to `nazgul/docs/[document-type].md`
+   d. Log to `nazgul/docs/manifest.md`
 4. If HITL mode: pause for human review of docs before proceeding
 5. If AFK mode: generate all docs and continue
 
@@ -107,7 +107,7 @@ All documents go to `hydra/docs/`. This directory is the project's living docume
 
 ## Output: manifest.md
 
-Write `hydra/docs/manifest.md`:
+Write `nazgul/docs/manifest.md`:
 
 ```markdown
 # Document Manifest

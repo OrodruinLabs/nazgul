@@ -1,6 +1,6 @@
 ---
-name: hydra:init
-description: Initialize Hydra for a project — check prerequisites, run discovery, create runtime directories, generate reviewer agents. Use when setting up Hydra for the first time, user says "initialize hydra", "set up hydra", or before running any other Hydra commands.
+name: nazgul:init
+description: Initialize Nazgul for a project — check prerequisites, run discovery, create runtime directories, generate reviewer agents. Use when setting up Nazgul for the first time, user says "initialize nazgul", "set up nazgul", or before running any other Nazgul commands.
 context: fork
 disable-model-invocation: true
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task
@@ -9,13 +9,13 @@ metadata:
   version: 1.1.0
 ---
 
-# Hydra Init
+# Nazgul Init
 
 ## Examples
-- `/hydra:init` — Initialize Hydra with default settings
-- `/hydra:init --force` — Reinitialize, archiving current state first
-- `/hydra:init --local` — Initialize in local mode (files not tracked in git)
-- `/hydra:init --local --force` — Reinitialize in local mode
+- `/nazgul:init` — Initialize Nazgul with default settings
+- `/nazgul:init --force` — Reinitialize, archiving current state first
+- `/nazgul:init --local` — Initialize in local mode (files not tracked in git)
+- `/nazgul:init --local --force` — Reinitialize in local mode
 
 ## Prerequisites Check
 - jq installed: !`which jq 2>/dev/null && echo "YES" || echo "NO — install jq first: brew install jq (macOS) or apt install jq (Linux)"`
@@ -26,12 +26,12 @@ metadata:
 
 ## Instructions
 
-Initialize the Hydra Framework for this project:
+Initialize the Nazgul Framework for this project:
 
 ### Step 0: Idempotency Check
-1. Check if `hydra/config.json` already exists
-2. If it exists, warn the user: "Hydra is already initialized for this project. Use `--force` to reinitialize (current state will be archived)."
-3. If `--force` was passed (check $ARGUMENTS), archive current state to `hydra/archive/` first, then proceed
+1. Check if `nazgul/config.json` already exists
+2. If it exists, warn the user: "Nazgul is already initialized for this project. Use `--force` to reinitialize (current state will be archived)."
+3. If `--force` was passed (check $ARGUMENTS), archive current state to `nazgul/archive/` first, then proceed
 4. If neither --force nor fresh: STOP here
 
 ### Step 0.5: Parse Arguments
@@ -40,7 +40,7 @@ Initialize the Hydra Framework for this project:
 3. Both `--local` and `--force` can be combined
 
 ### Step 1: Check Prerequisites
-1. Verify `jq` is installed (required for hook scripts). If jq is NOT installed, output: "REQUIRED: jq is not installed. Install it first: `brew install jq` (macOS) or `apt install jq` (Linux). Hydra cannot function without jq." — STOP, do not proceed with initialization.
+1. Verify `jq` is installed (required for hook scripts). If jq is NOT installed, output: "REQUIRED: jq is not installed. Install it first: `brew install jq` (macOS) or `apt install jq` (Linux). Nazgul cannot function without jq." — STOP, do not proceed with initialization.
 2. Verify this is a git repository
 3. Check for companion plugins and suggest if missing:
    - security-guidance (ESSENTIAL — real-time code vulnerability detection)
@@ -49,7 +49,7 @@ Initialize the Hydra Framework for this project:
 ### Step 2: Create Runtime Directory Structure
 Create the following directories and files:
 ```
-hydra/
+nazgul/
 ├── config.json          # Copy from plugin templates/config.json
 ├── plan.md              # Copy from plugin templates/plan.md
 ├── tasks/               # Empty, for task manifests
@@ -64,24 +64,24 @@ hydra/
 If `LOCAL_MODE=true`:
 
 1. Read or create `.gitignore` at the project root
-2. Check if `# Hydra Framework (local mode)` marker already exists
+2. Check if `# Nazgul Framework (local mode)` marker already exists
 3. If marker is NOT present, append:
    ```
-   # Hydra Framework (local mode)
-   hydra/
+   # Nazgul Framework (local mode)
+   nazgul/
    .claude/agents/generated/
    .mcp.json
    ```
 4. Set `install_mode` to `"local"` in the config:
    ```bash
-   jq '.install_mode = "local"' hydra/config.json > hydra/config.json.tmp && mv hydra/config.json.tmp hydra/config.json
+   jq '.install_mode = "local"' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
    ```
 
 ### Step 3: Run Discovery
 Delegate to the Discovery agent to scan the codebase:
-1. Generate project context files in `hydra/context/`
+1. Generate project context files in `nazgul/context/`
 2. Generate tailored reviewer agents in `.claude/agents/generated/`
-3. Update `hydra/config.json` with discovered project settings
+3. Update `nazgul/config.json` with discovered project settings
 
 ### Step 4: Display Summary
 Show the user:
@@ -90,7 +90,7 @@ Show the user:
 - Reviewer board generated (list all reviewer agents)
 - Companion plugin status
 - Install mode: local (files not tracked in git) / shared (files tracked in git)
-- Next step: `/hydra:start "your objective"`
+- Next step: `/nazgul:start "your objective"`
 
 ### Step 5: Inject CLAUDE.md (Shared Mode Only)
 If `LOCAL_MODE=true`:
@@ -98,8 +98,8 @@ If `LOCAL_MODE=true`:
 - Output: "Skipping CLAUDE.md injection (local mode)."
 
 Otherwise (shared mode):
-If the project doesn't already have Hydra instructions in CLAUDE.md:
-- Append the Hydra section from `templates/CLAUDE.md.template`
+If the project doesn't already have Nazgul instructions in CLAUDE.md:
+- Append the Nazgul section from `templates/CLAUDE.md.template`
 - Or create CLAUDE.md if it doesn't exist
 
 ### Step 6: Enable Agent Teams & Permissions
@@ -113,7 +113,7 @@ Write the merged result back. If already present, skip (no-op).
 
 ### Step 7: Optional Features Prompt
 
-Ask the user about optional features and store preferences in `hydra/config.json`:
+Ask the user about optional features and store preferences in `nazgul/config.json`:
 
 #### Auto-Formatter
 Ask: "Auto-format files after edits? (Runs prettier/ruff/gofmt/etc. based on file type) [y/N]"
@@ -122,9 +122,9 @@ Ask: "Auto-format files after edits? (Runs prettier/ruff/gofmt/etc. based on fil
 - Detects the project's formatter from Discovery context (e.g., prettier for JS/TS, ruff for Python)
 
 #### Completion Notifications
-Ask: "Notify when the loop completes? Enter a command (e.g., `say 'Hydra done'`) or press Enter to skip:"
+Ask: "Notify when the loop completes? Enter a command (e.g., `say 'Nazgul done'`) or press Enter to skip:"
 - If command provided: set `notifications.on_complete: "[command]"` in config.json
 - If skipped: leave `notifications` section empty
 - Suggest platform-appropriate defaults:
-  - macOS: `say 'Hydra loop complete'`
-  - Linux: `notify-send 'Hydra' 'Loop complete'`
+  - macOS: `say 'Nazgul loop complete'`
+  - Linux: `notify-send 'Nazgul' 'Loop complete'`

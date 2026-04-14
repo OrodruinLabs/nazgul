@@ -1,17 +1,17 @@
-# CLAUDE.md — Hydra Framework Plugin
+# CLAUDE.md — Nazgul Framework Plugin
 
 ## What This Project Is
 
-Hydra is a Claude Code plugin that provides multi-agent autonomous development. This repo IS the installable plugin.
+Nazgul is a Claude Code plugin that provides multi-agent autonomous development. This repo IS the installable plugin.
 
-**Install:** `claude --plugin-dir /path/to/ai-hydra-framework` or clone to `~/.claude/plugins/hydra`.
+**Install:** `claude --plugin-dir /path/to/ai-nazgul-framework` or clone to `~/.claude/plugins/nazgul`.
 
 ## Directory Structure
 
 ```
 .claude-plugin/plugin.json           # Plugin manifest (must be at repo root)
 RULES.md                             # Enforceable operating rules (consolidated)
-skills/                              # User-facing commands (/hydra:*)
+skills/                              # User-facing commands (/nazgul:*)
 │   ├── init/SKILL.md
 │   ├── start/SKILL.md
 │   ├── status/SKILL.md
@@ -23,7 +23,7 @@ skills/                              # User-facing commands (/hydra:*)
 │   ├── patch/SKILL.md
 │   ├── verify/SKILL.md
 │   ├── metrics/SKILL.md
-│   └── bootstrap-project/SKILL.md   # Emit portable Hydra-free bundle (one-shot)
+│   └── bootstrap-project/SKILL.md   # Emit portable Nazgul-free bundle (one-shot)
 agents/                              # Subagent definitions
 │   ├── discovery.md                 # Pipeline: scans codebase, classifies project
 │   ├── doc-generator.md             # Pipeline: generates PRD, TRD, ADRs
@@ -62,7 +62,7 @@ scripts/                             # Shell scripts for hooks
 │   ├── worktree-utils.sh            # Git worktree helper functions
 │   ├── file-improvement-report.sh   # Self-improvement: write JSON reports
 │   ├── gen-skill-docs.sh            # Skill template: resolve {{PARTIAL:name}}
-│   ├── bootstrap-transform.sh       # bootstrap-project: Hydra-token scrub pass
+│   ├── bootstrap-transform.sh       # bootstrap-project: Nazgul-token scrub pass
 │   └── lib/                         # Shared libraries
 │       ├── task-utils.sh            # Task status parsing (4 formats) + counting
 │       ├── session-tracker.sh       # Concurrent session lock management
@@ -71,7 +71,7 @@ scripts/                             # Shell scripts for hooks
 │       ├── bootstrap-preflight.sh   # bootstrap-project: pre-flight gate checks
 │       └── bootstrap-relocate.sh    # bootstrap-project: atomic staged relocation
 templates/                           # Objective + document templates
-│   ├── CLAUDE.md.template           # Injected into target projects by /hydra:init
+│   ├── CLAUDE.md.template           # Injected into target projects by /nazgul:init
 │   ├── feature.md / tdd.md / bugfix.md / refactor.md / greenfield.md / migration.md
 │   ├── docs/                        # Document templates for doc-generator
 │   └── skill-partials/              # Shared partials for SKILL.md templates
@@ -102,7 +102,7 @@ tests/                               # Plugin validation tests
 
 3. **Shell scripts must be POSIX-safe.** All scripts in `scripts/` should pass `bash -n` and `shellcheck`. They use `jq` for JSON manipulation.
 
-4. **Runtime files are NOT part of the plugin.** The `hydra/` directory (config.json, plan.md, tasks/, checkpoints/, etc.) is created per-project by `/hydra:init`. This repo contains only the plugin code.
+4. **Runtime files are NOT part of the plugin.** The `nazgul/` directory (config.json, plan.md, tasks/, checkpoints/, etc.) is created per-project by `/nazgul:init`. This repo contains only the plugin code.
 
 ## Code Style
 

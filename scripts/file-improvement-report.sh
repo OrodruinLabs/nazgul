@@ -8,7 +8,7 @@ TASK=""
 AGENT=""
 RATING=""
 SUMMARY=""
-OUTPUT_DIR="hydra/improvement-reports"
+OUTPUT_DIR="nazgul/improvement-reports"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

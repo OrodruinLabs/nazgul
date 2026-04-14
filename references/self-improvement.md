@@ -30,11 +30,11 @@ At the end of each task implementation, the implementer rates the experience 0-1
 
 ## Report Storage
 
-Reports are written to `hydra/improvement-reports/` in the project runtime directory. The `/hydra:metrics` skill aggregates these for trend analysis.
+Reports are written to `nazgul/improvement-reports/` in the project runtime directory. The `/nazgul:metrics` skill aggregates these for trend analysis.
 
 ## Opt-In
 
-Self-improvement mode is enabled via `hydra/config.json`:
+Self-improvement mode is enabled via `nazgul/config.json`:
 ```json
 { "self_improvement": { "enabled": true, "threshold": 7 } }
 ```

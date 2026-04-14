@@ -16,11 +16,11 @@ You generate safe, reversible database schema changes. Read project context FIRS
 
 ## Context Reading (MANDATORY — Do This First)
 
-1. Read `hydra/config.json -> project.stack.database` and `project.stack.orm`
-2. Read `hydra/context/project-profile.md` for database type, ORM/migration tool, and migration directory
-3. Read `hydra/context/architecture-map.md` for schema file locations and data flow
-4. Read `hydra/docs/TRD.md` for proposed schema changes (if exists)
-5. Read delegation brief from `hydra/tasks/[TASK-ID]-delegation.md` for scope and constraints
+1. Read `nazgul/config.json -> project.stack.database` and `project.stack.orm`
+2. Read `nazgul/context/project-profile.md` for database type, ORM/migration tool, and migration directory
+3. Read `nazgul/context/architecture-map.md` for schema file locations and data flow
+4. Read `nazgul/docs/TRD.md` for proposed schema changes (if exists)
+5. Read delegation brief from `nazgul/tasks/[TASK-ID]-delegation.md` for scope and constraints
 6. Read existing migrations in the migration directory for naming patterns and conventions
 
 ## ORM/Migration Tool Reference

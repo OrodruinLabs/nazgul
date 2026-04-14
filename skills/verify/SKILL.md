@@ -1,5 +1,5 @@
 ---
-name: hydra:verify
+name: nazgul:verify
 description: "Human acceptance testing — structured verification that work actually works. Run standalone or integrated in HITL review cycle."
 context: fork
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
@@ -8,42 +8,42 @@ metadata:
   version: 1.0.0
 ---
 
-# Hydra Verify
+# Nazgul Verify
 
 ## Examples
-- `/hydra:verify` — Verify all completed tasks that haven't been verified yet
-- `/hydra:verify TASK-003` — Verify a specific completed task
+- `/nazgul:verify` — Verify all completed tasks that haven't been verified yet
+- `/nazgul:verify TASK-003` — Verify a specific completed task
 
 ## Arguments
 $ARGUMENTS
 
 ## Current State
-- Config: !`cat hydra/config.json 2>/dev/null | head -3 || echo "NOT_INITIALIZED"`
-- Completed unverified tasks: !`for f in hydra/tasks/TASK-*.md; do status=$(grep -m1 'Status' "$f" 2>/dev/null | sed 's/.*: *//'); id=$(basename "$f" .md); if [ "$status" = "DONE" ] && [ ! -f "hydra/tasks/$id/verification.md" ]; then echo "$id"; fi; done 2>/dev/null || echo "none"`
+- Config: !`cat nazgul/config.json 2>/dev/null | head -3 || echo "NOT_INITIALIZED"`
+- Completed unverified tasks: !`for f in nazgul/tasks/TASK-*.md; do status=$(grep -m1 'Status' "$f" 2>/dev/null | sed 's/.*: *//'); id=$(basename "$f" .md); if [ "$status" = "DONE" ] && [ ! -f "nazgul/tasks/$id/verification.md" ]; then echo "$id"; fi; done 2>/dev/null || echo "none"`
 
 ## Instructions
 
 Format all output per `references/ui-brand.md` — use checkpoint boxes, status symbols, and display patterns defined there.
 
 ### Pre-flight
-1. Check if `hydra/config.json` exists. If not: "Hydra not initialized. Run `/hydra:init` first." and STOP.
+1. Check if `nazgul/config.json` exists. If not: "Nazgul not initialized. Run `/nazgul:init` first." and STOP.
 2. Parse `$ARGUMENTS`:
    - If a task ID provided → verify that specific task
    - If no arguments → find all DONE tasks without `verification.md` and verify them in sequence
 
 ### Display Banner
 ```
-─── ◈ HYDRA ▸ VERIFYING ─────────────────────────────────
+─── ◈ NAZGUL ▸ VERIFYING ─────────────────────────────────
 ```
 
 ### Step 1: Load Task Context
 
 For each task being verified:
-1. Read the task manifest at `hydra/tasks/TASK-NNN.md`
+1. Read the task manifest at `nazgul/tasks/TASK-NNN.md`
 2. Verify status is DONE (or APPROVED in YOLO mode). If not: "TASK-NNN is not complete (status: [status]). Only completed tasks can be verified."
 3. Read the implementation log section for what was built
 4. Read acceptance criteria for what should be true
-5. Check for review results in `hydra/reviews/TASK-NNN/`
+5. Check for review results in `nazgul/reviews/TASK-NNN/`
 
 ### Step 2: Automated Pre-Checks (Levels 1-3)
 
@@ -108,14 +108,14 @@ Handle responses:
 
 ### Step 5: Record Results
 
-Write `hydra/tasks/TASK-NNN/verification.md` (create directory if needed):
+Write `nazgul/tasks/TASK-NNN/verification.md` (create directory if needed):
 
 ```markdown
 # Verification: TASK-NNN
 
 ## Summary
 - **Verified at**: [ISO 8601 timestamp]
-- **Verified by**: human (via /hydra:verify)
+- **Verified by**: human (via /nazgul:verify)
 - **Result**: [ALL_PASS | ISSUES_FOUND]
 
 ## Pre-Checks
@@ -139,12 +139,12 @@ Write `hydra/tasks/TASK-NNN/verification.md` (create directory if needed):
 
 If any issues found:
 1. For each issue, create a new task:
-   - `hydra/tasks/TASK-MMM.md` with status READY
+   - `nazgul/tasks/TASK-MMM.md` with status READY
    - Description references the original task and the specific issue
    - Link: `- **Traces to**: TASK-NNN verification issue #N`
 2. Report:
 ```
-─── ◈ HYDRA ▸ VERIFYING ─────────────────────────────────
+─── ◈ NAZGUL ▸ VERIFYING ─────────────────────────────────
 
 TASK-003: 3/4 deliverables passed, 1 issue found
 
@@ -156,19 +156,19 @@ TASK-003: 3/4 deliverables passed, 1 issue found
 Fix task created: TASK-008 (fix error message display)
 
 ─── ◈ NEXT ─────────────────────────────────────────────
-  /hydra:start to implement fixes
+  /nazgul:start to implement fixes
 ────────────────────────────────────────────────────────
 ```
 
 If all pass:
 ```
-─── ◈ HYDRA ▸ VERIFYING ─────────────────────────────────
+─── ◈ NAZGUL ▸ VERIFYING ─────────────────────────────────
 
 ✦ TASK-003: All 4 deliverables verified
 
 ─── ◈ NEXT ─────────────────────────────────────────────
-  /hydra:verify to check more tasks
-  /hydra:start to continue
+  /nazgul:verify to check more tasks
+  /nazgul:start to continue
 ────────────────────────────────────────────────────────
 ```
 
