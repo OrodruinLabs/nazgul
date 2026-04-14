@@ -90,6 +90,7 @@ Nazgul auto-detects project state: active work resumes, existing docs trigger pl
 | `/nazgul:log` | View run history — iterations, commits, reviews |
 | `/nazgul:board` | Connect task tracking to GitHub Projects |
 | `/nazgul:docs` | View or regenerate project documents |
+| `/nazgul:config` | View and change settings (models, formatter, notifications) |
 | `/nazgul:enhance` | Research Claude Code releases, propose Nazgul improvements |
 | `/nazgul:metrics` | View loop performance — velocity, approval rates, self-improvement reports |
 | `/nazgul:verify` | Human acceptance testing for completed tasks |
