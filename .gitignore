@@ -5,5 +5,8 @@ hydra/
 .claude/settings.local.json
 .claude/agents/generated/
 
+# Git worktrees (local isolated checkouts)
+.worktrees/
+
 # OS
 .DS_Store

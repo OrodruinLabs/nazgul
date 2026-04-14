@@ -91,8 +91,15 @@ Hydra auto-detects project state: active work resumes, existing docs trigger pla
 | `/hydra:metrics` | View loop performance — velocity, approval rates, self-improvement reports |
 | `/hydra:verify` | Human acceptance testing for completed tasks |
 | `/hydra:help` | Quick reference for all commands and modes |
+| `/hydra:bootstrap-project` | Generate a portable, Hydra-free bundle (docs + Claude subagents) |
 
 See `/hydra:help` for the full command list and all flags.
+
+### `/hydra:bootstrap-project`
+
+Single-shot command that runs Hydra's pre-planning pipeline (discovery, doc-generator, reviewer-instantiation, optional designer) against any repo and emits a portable bundle — `./docs/`, `./docs/context/`, `./.claude/agents/`, and optional `./.claude/design-*` — with all Hydra references scrubbed. The output works anywhere Claude Code runs and does not require Hydra to be installed.
+
+Usage: `/hydra:bootstrap-project [objective] [--yes] [--overwrite] [--dry-run] [--wipe-scratch] [--resume-scratch]`. Refuses to run if `./hydra/` already exists (use `/hydra:start` for Hydra-managed loops).
 
 ## How It Works
 

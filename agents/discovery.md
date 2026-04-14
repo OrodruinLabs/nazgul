@@ -754,7 +754,12 @@ For each selected reviewer:
    - `{{approved_criteria}}` — the `approved_criteria` field
    - `{{rejected_criteria}}` — the `rejected_criteria` field
 5. Inject project-specific context into the `## Project Context` section
-6. Write the generated reviewer to `.claude/agents/generated/[name].md`
+6. **Strip `{{^bundle_mode}}` / `{{#bundle_mode}}` conditional blocks.** The template may contain lines like `{{^bundle_mode}}`, `{{#bundle_mode}}`, and `{{/bundle_mode}}` (sometimes prefixed with `# ` inside frontmatter). Hydra is the default mode (bundle_mode=false), so:
+   - KEEP the content between `{{^bundle_mode}}` and `{{/bundle_mode}}`
+   - REMOVE the content between `{{#bundle_mode}}` and `{{/bundle_mode}}`
+   - REMOVE all three marker lines themselves (with or without `# ` prefix)
+   This ensures generated reviewers contain only the Hydra branch, never the bundle-mode branch or the literal markers.
+7. Write the generated reviewer to `.claude/agents/generated/[name].md`
 
 Follow the Reviewer Agent Template in Step 6 above for the final output format, tailoring to THIS project's specific patterns.
 

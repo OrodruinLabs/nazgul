@@ -22,7 +22,8 @@ skills/                              # User-facing commands (/hydra:*)
 │   ├── docs/SKILL.md
 │   ├── patch/SKILL.md
 │   ├── verify/SKILL.md
-│   └── metrics/SKILL.md
+│   ├── metrics/SKILL.md
+│   └── bootstrap-project/SKILL.md   # Emit portable Hydra-free bundle (one-shot)
 agents/                              # Subagent definitions
 │   ├── discovery.md                 # Pipeline: scans codebase, classifies project
 │   ├── doc-generator.md             # Pipeline: generates PRD, TRD, ADRs
@@ -61,9 +62,14 @@ scripts/                             # Shell scripts for hooks
 │   ├── worktree-utils.sh            # Git worktree helper functions
 │   ├── file-improvement-report.sh   # Self-improvement: write JSON reports
 │   ├── gen-skill-docs.sh            # Skill template: resolve {{PARTIAL:name}}
+│   ├── bootstrap-transform.sh       # bootstrap-project: Hydra-token scrub pass
 │   └── lib/                         # Shared libraries
 │       ├── task-utils.sh            # Task status parsing (4 formats) + counting
-│       └── session-tracker.sh       # Concurrent session lock management
+│       ├── session-tracker.sh       # Concurrent session lock management
+│       ├── bootstrap-scrub-map.sh   # bootstrap-project: scrub rules data
+│       ├── bootstrap-render.sh      # bootstrap-project: prompt rendering + domain helpers
+│       ├── bootstrap-preflight.sh   # bootstrap-project: pre-flight gate checks
+│       └── bootstrap-relocate.sh    # bootstrap-project: atomic staged relocation
 templates/                           # Objective + document templates
 │   ├── CLAUDE.md.template           # Injected into target projects by /hydra:init
 │   ├── feature.md / tdd.md / bugfix.md / refactor.md / greenfield.md / migration.md
@@ -77,8 +83,9 @@ references/                          # Shared reference docs for agents
 │   ├── fix-first-heuristic.md       # AUTO-FIX vs ASK classification rules
 │   └── self-improvement.md          # Agent self-rating protocol
 tests/                               # Plugin validation tests
-│   ├── run-tests.sh                 # Test runner (18 test files)
+│   ├── run-tests.sh                 # Test runner (24 unit/integration files)
 │   ├── test-*.sh                    # Unit/integration tests
+│   ├── fixtures/                    # Test fixtures (bootstrap-transform scrub cases)
 │   ├── lib/                         # Test assertions + setup helpers
 │   └── e2e/                         # E2E skill tests via claude -p
 .github/workflows/                   # CI pipelines
@@ -132,7 +139,7 @@ tests/                               # Plugin validation tests
 ## Testing
 
 ```bash
-tests/run-tests.sh                    # Run all unit/integration tests (18 files)
+tests/run-tests.sh                    # Run all unit/integration tests (24 files)
 tests/run-tests.sh --filter=stop-hook # Run specific test file
 tests/e2e/run-e2e.sh                  # Run E2E skill tests (requires claude CLI, costs money)
 ```
