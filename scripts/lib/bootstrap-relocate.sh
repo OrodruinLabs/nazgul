@@ -63,8 +63,10 @@ relocate_bundle() {
 
   # --- Dry-run: verify every target dir is reachable WITHOUT creating anything ---
   # For each dst_dir, walk up to the nearest existing ancestor and check it's
-  # a writable directory. This preserves the all-or-nothing guarantee: if any
-  # target is unreachable, we abort before touching the filesystem.
+  # a writable directory. Bailing here prevents the common failure modes from
+  # writing anything. Does NOT provide a true all-or-nothing guarantee: a later
+  # failure in the real-moves pass (disk full, races) can still leave the
+  # project partially relocated — see the file header for the exact contract.
   local pair src dst dst_dir
   local checked_str=""
   for pair in "${moves[@]}"; do

@@ -24,7 +24,7 @@ $ARGUMENTS
 - `--overwrite` — Force overwrite of non-empty `./docs/` or `./.claude/agents/`.
 - `--dry-run` — Run pipeline and transform into scratch; skip relocation and cleanup.
 - `--wipe-scratch` — Delete any existing `./.bootstrap-scratch/` before starting.
-- `--resume-scratch` — Keep any existing `./.bootstrap-scratch/` and continue from there (skip re-running earlier steps that already produced output).
+- `--resume-scratch` — Keep any existing `./.bootstrap-scratch/` and proceed with the run. Pipeline agents are still invoked; each may reuse pre-existing files in scratch at its own discretion, but the skill does not explicitly skip phases based on what's already there.
 
 ## Instructions
 
