@@ -92,11 +92,21 @@ Nazgul auto-detects project state: active work resumes, existing docs trigger pl
 
 See `/nazgul:help` for the full command list and all flags.
 
-### `/nazgul:bootstrap-project`
+### Just want docs and agents without Nazgul?
 
-Single-shot command that runs Nazgul's pre-planning pipeline (discovery, doc-generator, reviewer-instantiation, optional designer) against any repo and emits a portable bundle — `./docs/`, `./docs/context/`, `./.claude/agents/`, and optional `./.claude/design-*` — with all Nazgul references scrubbed. The output works anywhere Claude Code runs and does not require Nazgul to be installed.
+`/nazgul:bootstrap-project` runs the pre-planning pipeline once and outputs a portable bundle — no Nazgul dependency required. You get project docs, codebase context, and tailored Claude subagents that work with plain Claude Code.
 
-Usage: `/nazgul:bootstrap-project [objective] [--yes] [--overwrite] [--dry-run] [--wipe-scratch] [--resume-scratch]`. Refuses to run if `./nazgul/` already exists (use `/nazgul:start` for Nazgul-managed loops).
+**What it generates:**
+- `./docs/` — PRD, TRD, ADRs
+- `./docs/context/` — Codebase analysis from Discovery
+- `./.claude/agents/` — Project-specific reviewer agents
+
+**Usage:**
+```bash
+/nazgul:bootstrap-project "your objective"
+```
+
+All Nazgul references are scrubbed from the output. Won't run if `./nazgul/` exists (use `/nazgul:start` for full pipeline instead).
 
 ## How It Works
 
