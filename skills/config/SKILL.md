@@ -96,9 +96,10 @@ Otherwise, use `AskUserQuestion` (multiSelect: true):
    ```
 
 5. Update `model:` field in generated agents by role:
-   - Reviewer agents → set `model: [models.review]`
-   - Specialist agents → set `model: [models.specialists]`
-   - Identify role by checking the agent's `description:` frontmatter field or filename pattern
+   - Read `nazgul/config.json → agents.reviewers` and `agents.specialists` arrays
+   - For each file in `.claude/agents/generated/*.md`, extract the agent name from frontmatter
+   - If name appears in `agents.reviewers` → set `model: [models.review]`
+   - If name appears in `agents.specialists` → set `model: [models.specialists]`
 
 6. Display confirmation:
    ```
