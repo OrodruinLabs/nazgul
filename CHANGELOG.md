@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-04-14
+
+### Added
+- Per-stage model routing — configure which AI model (Opus, Sonnet, Haiku) runs each pipeline stage
+- New `/nazgul:config` skill — view and change settings (models, formatter, notifications) after init
+- Model presets: Balanced (default), Quality, Fast/cheap
+- Per-stage customization via interactive `AskUserQuestion` prompts
+- Model configuration step in `/nazgul:init` Step 7
+- Generated reviewer and specialist agents now include `model:` in frontmatter
+- Unit tests for model routing config and skill wiring
+
+### Changed
+- Default model assignments updated to balanced preset (Opus for planning, Sonnet for implementation/review, Haiku for post-loop)
+
 ## [1.1.0] - 2026-04-14
 
 ### Added
