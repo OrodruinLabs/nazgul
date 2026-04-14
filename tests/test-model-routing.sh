@@ -52,7 +52,7 @@ done
 # ── Test: config skill exists with correct frontmatter ────
 assert_file_exists "config skill exists" "$REPO_ROOT/skills/config/SKILL.md"
 
-skill_name=$(head -10 "$REPO_ROOT/skills/config/SKILL.md" | grep "^name:" | sed 's/name: *//')
+skill_name=$(head -10 "$REPO_ROOT/skills/config/SKILL.md" | grep "^name:" | sed 's/name: *//; s/"//g')
 assert_eq "config skill name is nazgul:config" "$skill_name" "nazgul:config"
 
 tools_line=$(head -10 "$REPO_ROOT/skills/config/SKILL.md" | grep "allowed-tools:")
