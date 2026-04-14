@@ -6,7 +6,10 @@
   "plugins": [
     {
       "name": "nazgul",
-      "source": "github:OrodruinLabs/nazgul",
+      "source": {
+        "source": "github",
+        "repo": "OrodruinLabs/nazgul"
+      },
       "description": "Multi-agent autonomous development loop with review pipeline, context management, and parallel execution"
     }
   ]
