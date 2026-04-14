@@ -6,6 +6,8 @@
   </picture>
 </p>
 
+<h1 align="center">NAZGUL</h1>
+
 <p align="center">
   <strong>Multi-agent autonomous development loop for Claude Code</strong><br>
   Discovery &bull; Planning &bull; Implementation &bull; Review &bull; Repeat
