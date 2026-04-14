@@ -63,15 +63,15 @@ If `--yolo` flag is present:
 
 ### Model Selection
 
-Read `nazgul/config.json → models` to determine which model to assign each pipeline agent. When delegating via the Task tool, pass the `model` parameter:
+Read `nazgul/config.json → models` to determine which model to assign each pipeline agent. When delegating via the Agent tool, pass the `model` parameter:
 
 | Pipeline Agent    | Config Key            | Default |
 |-------------------|-----------------------|---------|
-| Discovery         | `models.discovery`    | opus    |
-| Doc Generator     | `models.docs`         | opus    |
+| Discovery         | `models.discovery`    | sonnet  |
+| Doc Generator     | `models.docs`         | sonnet  |
 | Planner           | `models.planning`     | opus    |
 | Implementer       | `models.implementation` | sonnet |
-| Review Gate       | `models.review`       | opus    |
+| Review Gate       | `models.review`       | sonnet  |
 
 If the `models` section is missing from config.json, use `"sonnet"` as the fallback for all agents.
 
