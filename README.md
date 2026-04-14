@@ -6,7 +6,7 @@
   </picture>
 </p>
 
-<h2 align="center">NAZGUL</h2>
+<h3 align="center">NAZGUL</h3>
 
 <p align="center">
   <strong>Multi-agent autonomous development loop for Claude Code</strong><br>
