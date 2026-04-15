@@ -95,20 +95,27 @@ check_scratch_state() {
 #   Heuristic: >= 5 source files = brownfield. Excludes vendored/generated dirs.
 detect_project_type() {
   local count
-  count=$(find . -type f \( \
-    -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" \
-    -o -name "*.py" -o -name "*.rb" -o -name "*.go" -o -name "*.rs" \
-    -o -name "*.java" -o -name "*.kt" -o -name "*.swift" -o -name "*.cs" \
-    -o -name "*.cpp" -o -name "*.c" -o -name "*.h" -o -name "*.hpp" \
-    -o -name "*.php" -o -name "*.ex" -o -name "*.exs" -o -name "*.scala" \
-    -o -name "*.sh" -o -name "*.lua" -o -name "*.zig" -o -name "*.dart" \
-    -o -name "*.vue" -o -name "*.svelte" \
-  \) \
-    ! -path "./node_modules/*" ! -path "./.git/*" ! -path "./dist/*" \
-    ! -path "./build/*" ! -path "./vendor/*" ! -path "./.next/*" \
-    ! -path "./target/*" ! -path "./__pycache__/*" ! -path "./.venv/*" \
-    ! -path "./venv/*" ! -path "./.bootstrap-scratch/*" \
-    2>/dev/null | wc -l | tr -d ' ')
+  # Use -prune to skip descending into vendored/generated directories entirely.
+  # This is both faster (no recursion into node_modules) and correct (the
+  # previous `! -path` approach only filtered results AFTER walking the tree).
+  count=$({ find . \
+    \( -type d \( \
+         -name node_modules -o -name .git -o -name dist \
+      -o -name build -o -name vendor -o -name .next \
+      -o -name target -o -name __pycache__ -o -name .venv \
+      -o -name venv -o -name .bootstrap-scratch \
+    \) -prune \) \
+    -o \
+    \( -type f \( \
+         -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" \
+      -o -name "*.py" -o -name "*.rb" -o -name "*.go" -o -name "*.rs" \
+      -o -name "*.java" -o -name "*.kt" -o -name "*.swift" -o -name "*.cs" \
+      -o -name "*.cpp" -o -name "*.c" -o -name "*.h" -o -name "*.hpp" \
+      -o -name "*.php" -o -name "*.ex" -o -name "*.exs" -o -name "*.scala" \
+      -o -name "*.sh" -o -name "*.lua" -o -name "*.zig" -o -name "*.dart" \
+      -o -name "*.vue" -o -name "*.svelte" \
+    \) -print \) \
+    2>/dev/null || true; } | wc -l | tr -d ' ')
 
   # shellcheck disable=SC2034
   BOOTSTRAP_SOURCE_COUNT="$count"

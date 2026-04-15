@@ -203,7 +203,20 @@ Determine the objective source using a three-tier priority:
    fi
    ```
 
-3. **If greenfield** (`$BOOTSTRAP_PROJECT_TYPE` = "greenfield") **and no explicit objective**, run the condensed Tier 1 interactive flow. Ask these 5 questions one at a time, phrased naturally, and wait for each answer:
+3. **If greenfield** (`$BOOTSTRAP_PROJECT_TYPE` = "greenfield") **and no explicit objective**:
+
+   First, enforce the `--yes` non-interactive contract — we cannot ask questions in that mode:
+
+   ```bash
+   if [ -z "$BOOTSTRAP_OBJECTIVE" ] && [ "$BOOTSTRAP_PROJECT_TYPE" = "greenfield" ] && [ "$BOOTSTRAP_YES" = "true" ]; then
+     echo "error: greenfield project with no objective; --yes is set so we cannot prompt." >&2
+     echo "       Re-run with an explicit objective argument, e.g.:" >&2
+     echo "       /nazgul:bootstrap-project --yes \"your product idea here\"" >&2
+     exit 13
+   fi
+   ```
+
+   Otherwise, run the condensed Tier 1 interactive flow. Ask these 5 questions one at a time, phrased naturally, and wait for each answer:
 
    1. *"In a sentence or two, what are you building?"*
    2. *"Who will use this?"*
