@@ -106,5 +106,74 @@ BOOTSTRAP_GIT_WARNING=""
 check_git_clean
 assert_contains "dirty git: warning set" "$BOOTSTRAP_GIT_WARNING" "uncommitted"
 
+# --- detect_project_type ---
+# Helper: runs detect_project_type in the given directory and echoes
+# "<type> <count>" so the caller can capture it without losing state to a subshell.
+_run_detect() {
+  ( cd "$1" && detect_project_type && echo "$BOOTSTRAP_PROJECT_TYPE $BOOTSTRAP_SOURCE_COUNT" )
+}
+
+# Empty dir → greenfield, count=0
+mkdir -p "$WORK/empty-proj"
+result=$(_run_detect "$WORK/empty-proj")
+assert_eq "empty dir: greenfield + count=0" "$result" "greenfield 0"
+
+# Below threshold → greenfield
+mkdir -p "$WORK/small-proj"
+touch "$WORK/small-proj/a.js" "$WORK/small-proj/b.py" "$WORK/small-proj/c.ts"
+result=$(_run_detect "$WORK/small-proj")
+assert_eq "3 files: greenfield + count=3"   "$result" "greenfield 3"
+
+# At/above threshold (5) → brownfield
+mkdir -p "$WORK/big-proj/src"
+touch "$WORK/big-proj/src/a.js" "$WORK/big-proj/src/b.ts" \
+      "$WORK/big-proj/src/c.py" "$WORK/big-proj/src/d.go" \
+      "$WORK/big-proj/src/e.rs"
+result=$(_run_detect "$WORK/big-proj")
+assert_eq "5 files: brownfield + count=5"   "$result" "brownfield 5"
+
+# Excluded dirs must not be counted AND must be pruned (not descended into)
+mkdir -p "$WORK/with-vendored/node_modules/foo" \
+         "$WORK/with-vendored/vendor" \
+         "$WORK/with-vendored/.bootstrap-scratch/context" \
+         "$WORK/with-vendored/.git" \
+         "$WORK/with-vendored/dist" \
+         "$WORK/with-vendored/build" \
+         "$WORK/with-vendored/.next" \
+         "$WORK/with-vendored/target" \
+         "$WORK/with-vendored/__pycache__" \
+         "$WORK/with-vendored/.venv" \
+         "$WORK/with-vendored/venv"
+# Drop a pile of source-looking files INTO the excluded dirs — if prune works
+# these shouldn't count even though there are more than 5 of them.
+touch "$WORK/with-vendored/node_modules/foo/a.js" \
+      "$WORK/with-vendored/node_modules/foo/b.js" \
+      "$WORK/with-vendored/node_modules/foo/c.js" \
+      "$WORK/with-vendored/vendor/d.py" \
+      "$WORK/with-vendored/vendor/e.py" \
+      "$WORK/with-vendored/.bootstrap-scratch/context/f.ts" \
+      "$WORK/with-vendored/dist/g.js" \
+      "$WORK/with-vendored/build/h.ts" \
+      "$WORK/with-vendored/.next/i.js" \
+      "$WORK/with-vendored/target/j.rs" \
+      "$WORK/with-vendored/__pycache__/k.py" \
+      "$WORK/with-vendored/.venv/l.py" \
+      "$WORK/with-vendored/venv/m.py"
+# Plus two real source files at the root.
+touch "$WORK/with-vendored/real1.js" "$WORK/with-vendored/real2.py"
+result=$(_run_detect "$WORK/with-vendored")
+assert_eq "excluded dirs ignored: greenfield + count=2" "$result" "greenfield 2"
+
+# Non-source files don't inflate the count (config, markdown, JSON).
+mkdir -p "$WORK/config-heavy"
+touch "$WORK/config-heavy/package.json" \
+      "$WORK/config-heavy/tsconfig.json" \
+      "$WORK/config-heavy/README.md" \
+      "$WORK/config-heavy/.eslintrc" \
+      "$WORK/config-heavy/Dockerfile" \
+      "$WORK/config-heavy/.env.example"
+result=$(_run_detect "$WORK/config-heavy")
+assert_eq "config files only: greenfield + count=0" "$result" "greenfield 0"
+
 cd "$REPO_ROOT"
 report_results

@@ -86,6 +86,49 @@ check_scratch_state() {
   return 0
 }
 
+# detect_project_type
+#   Counts meaningful source files in the working directory to determine
+#   whether this is a brownfield (existing codebase) or greenfield project.
+#   Sets BOOTSTRAP_PROJECT_TYPE to "brownfield" or "greenfield".
+#   Sets BOOTSTRAP_SOURCE_COUNT to the number of source files found.
+#
+#   Heuristic: >= 5 source files = brownfield. Excludes vendored/generated dirs.
+detect_project_type() {
+  local count
+  # Use -prune to skip descending into vendored/generated directories entirely.
+  # This is both faster (no recursion into node_modules) and correct (the
+  # previous `! -path` approach only filtered results AFTER walking the tree).
+  count=$({ find . \
+    \( -type d \( \
+         -name node_modules -o -name .git -o -name dist \
+      -o -name build -o -name vendor -o -name .next \
+      -o -name target -o -name __pycache__ -o -name .venv \
+      -o -name venv -o -name .bootstrap-scratch \
+    \) -prune \) \
+    -o \
+    \( -type f \( \
+         -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" \
+      -o -name "*.py" -o -name "*.rb" -o -name "*.go" -o -name "*.rs" \
+      -o -name "*.java" -o -name "*.kt" -o -name "*.swift" -o -name "*.cs" \
+      -o -name "*.cpp" -o -name "*.c" -o -name "*.h" -o -name "*.hpp" \
+      -o -name "*.php" -o -name "*.ex" -o -name "*.exs" -o -name "*.scala" \
+      -o -name "*.sh" -o -name "*.lua" -o -name "*.zig" -o -name "*.dart" \
+      -o -name "*.vue" -o -name "*.svelte" \
+    \) -print \) \
+    2>/dev/null || true; } | wc -l | tr -d ' ')
+
+  # shellcheck disable=SC2034
+  BOOTSTRAP_SOURCE_COUNT="$count"
+  if [ "$count" -ge 5 ]; then
+    # shellcheck disable=SC2034
+    BOOTSTRAP_PROJECT_TYPE="brownfield"
+  else
+    # shellcheck disable=SC2034
+    BOOTSTRAP_PROJECT_TYPE="greenfield"
+  fi
+  return 0
+}
+
 check_git_clean() {
   # shellcheck disable=SC2034
   BOOTSTRAP_GIT_WARNING=""
