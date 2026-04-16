@@ -5,7 +5,7 @@ context: fork
 allowed-tools: Read, Bash, Glob
 metadata:
   author: Jose Mejia
-  version: 1.2.1
+  version: 1.2.2
 ---
 
 # Nazgul Status
