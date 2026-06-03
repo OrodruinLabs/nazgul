@@ -276,6 +276,9 @@ if [ "$NEEDS_REVIEW_CHECK" = true ]; then
   EVIDENCE_PROBLEMS=$(validate_review_evidence "$NAZGUL_DIR" "$TASK_ID") || true
   if [ -n "$EVIDENCE_PROBLEMS" ]; then
     echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
+    # NO_REVIEW_DIR and NO_REVIEWERS_CONFIGURED are single-token outputs (the lib
+    # early-returns on them) — bare-token case patterns are safe. Any other
+    # output is MISSING/UNAPPROVED lines handled by the * branch.
     case "$EVIDENCE_PROBLEMS" in
       NO_REVIEW_DIR)
         echo "No review directory at: ${REVIEW_DIR}" >&2
@@ -292,6 +295,9 @@ if [ "$NEEDS_REVIEW_CHECK" = true ]; then
         fi
         if [ -n "$UNAPPROVED_LIST" ]; then
           echo "Review does not contain APPROVED verdict:${UNAPPROVED_LIST}" >&2
+        fi
+        if [ -z "$MISSING_LIST" ] && [ -z "$UNAPPROVED_LIST" ]; then
+          echo "Unexpected review evidence problem: ${EVIDENCE_PROBLEMS}" >&2
         fi
         ;;
     esac
