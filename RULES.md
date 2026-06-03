@@ -41,6 +41,7 @@ Task-PR:     PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> APPR
 | CHANGES_REQUESTED | IN_PROGRESS | Implementer addresses feedback |
 | Any active state | BLOCKED | Max retries, unresolvable issue, or 3 consecutive test failures |
 | BLOCKED | READY | Human intervention resolves the blocker |
+| BLOCKED | IN_REVIEW | Review evidence materialized via `/nazgul:review --materialize` (review directory required) |
 
 ### Forbidden Transitions
 
