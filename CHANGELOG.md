@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-06-03
+
+### Fixed
+- YOLO loop livelock: tasks could never reach DONE when review verdicts were written to a consolidated `summary.md` instead of per-reviewer files — the state guard and stop hook silently fought every transition forever
+- Stop hook review-gate resets are now diagnostic: the continue message and JSON reason name the exact missing/unapproved reviewers and the repair command (previously stderr-only, never surfaced)
+- Evidence validation logic deduplicated into `scripts/lib/review-evidence.sh` — `task-state-guard.sh` and `stop-hook.sh` had already drifted (`simplify-report.md` exclusion differed)
+- Review Gate agent now verifies every configured reviewer wrote its file before aggregating verdicts (Step 2.5), and re-reads task manifests from disk before emitting NAZGUL_COMPLETE
+- `/nazgul:start` OBJECTIVE_COMPLETE state and Rule 10 require disk verification before any completion claim
+- BLOCKED was a dead-end in the state guard's transition matrix — `BLOCKED → READY` (unblock) and `BLOCKED → IN_REVIEW` (materialize, review directory required) are now legal exits
+
+### Added
+- `/nazgul:review --materialize [TASK-ID | --all]` — repair command that re-runs the full reviewer board for tasks stuck without per-reviewer evidence, reconstructing `diff.patch` from manifest commit SHAs when missing
+- Livelock breaker: a second consecutive review-gate reset for the same task escalates to BLOCKED with a remediation note instead of looping (reset counts in `config.json` `.safety._review_reset_counts`)
+- `tests/test-review-evidence.sh` — unit tests for the shared validation library, including the summary.md-only regression case
+
 ## [1.2.2] - 2026-04-16
 
 ### Fixed

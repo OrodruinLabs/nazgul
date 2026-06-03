@@ -1,6 +1,6 @@
 {
   "name": "nazgul",
-  "version": "1.2.2",
+  "version": "1.3.0",
   "description": "Multi-agent autonomous development loop with review pipeline, context management, and parallel execution",
   "author": {
     "name": "Orodruin Labs",
@@ -9,5 +9,11 @@
   "homepage": "https://github.com/OrodruinLabs/nazgul",
   "repository": "https://github.com/OrodruinLabs/nazgul",
   "license": "MIT",
-  "keywords": ["agents", "automation", "development", "multi-agent", "review"]
+  "keywords": [
+    "agents",
+    "automation",
+    "development",
+    "multi-agent",
+    "review"
+  ]
 }
