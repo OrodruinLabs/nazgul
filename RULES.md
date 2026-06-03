@@ -15,7 +15,7 @@ Enforceable operating rules for the Nazgul Framework. Every rule here is checked
 7. **One task at a time.** Don't work on multiple tasks simultaneously (unless parallel mode with Agent Teams).
 8. **Update Recovery Pointer on every state change.** This is how you survive compaction.
 9. **Commit in AFK mode.** Every state transition gets a commit with the dynamic prefix from config.
-10. **NAZGUL_COMPLETE means ALL tasks DONE and post-loop finished.** Not before.
+10. **NAZGUL_COMPLETE means ALL tasks DONE and post-loop finished.** Not before. Verified by re-reading task manifests from disk immediately beforehand — never by recalling prior transitions (guards can silently block status writes).
 
 ---
 
