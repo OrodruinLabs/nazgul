@@ -100,6 +100,8 @@ treat one as proof that reviewers ran.
 After all reviewers complete (parallel or sequential), verify every configured
 reviewer produced a file:
 
+Set `TASK_ID` to the active task's ID (e.g., `TASK-003`) before running the check:
+
 ```bash
 for r in $(jq -r '.agents.reviewers[]' nazgul/config.json); do
   [ -f "nazgul/reviews/$TASK_ID/$r.md" ] || echo "MISSING: $r"
