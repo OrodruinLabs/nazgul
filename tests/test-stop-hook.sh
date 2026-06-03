@@ -391,11 +391,13 @@ setup_git_repo
 setup_nazgul_dir
 create_config '.agents.reviewers = ["code-reviewer", "qa-reviewer"]' '.safety._review_reset_counts = {"TASK-001": 1}'
 create_plan
-create_task_file "TASK-001" "DONE"
+create_task_file "TASK-001" "DONE" "none" "stale reason"   # pre-seeded Blocked reason exercises the awk update branch
 create_review_dir "TASK-001"
 create_task_file "TASK-002" "READY"
 run_hook
 assert_exit_code "second violation: exit 2" "$HOOK_EC" 2
+assert_contains "escalation logged" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+assert_contains "escalation names BLOCKED" "$HOOK_OUTPUT" "escalated to BLOCKED"
 status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
 assert_eq "second violation: escalated to BLOCKED" "$status" "BLOCKED"
 assert_contains "blocked reason written" "$(cat "$TEST_DIR/nazgul/tasks/TASK-001.md")" "review evidence missing"
@@ -414,6 +416,8 @@ create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"   # code-reviewer.md APPROVED — roster satisfied
 create_task_file "TASK-002" "READY"
 run_hook
+assert_exit_code "valid evidence: exit 2" "$HOOK_EC" 2
+assert_not_contains "valid evidence: no violation noise" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
 status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
 assert_eq "valid evidence: stays DONE" "$status" "DONE"
 count=$(jq -r '.safety._review_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")

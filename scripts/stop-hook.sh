@@ -126,6 +126,7 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
     STATUS=$(get_task_status "$task_file")
     TASK_ID=$(basename "$task_file" .md)
     RESET_COUNT=$(jq -r --arg t "$TASK_ID" '.safety._review_reset_counts[$t] // 0' "$CONFIG" 2>/dev/null || echo "0")
+    case "$RESET_COUNT" in (*[!0-9]*|'') RESET_COUNT=0 ;; esac
 
     if [ "$STATUS" = "DONE" ]; then
       EVIDENCE_PROBLEMS=$(validate_review_evidence "$NAZGUL_DIR" "$TASK_ID") || true
@@ -136,11 +137,13 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
           set_task_status "$task_file" "DONE" "BLOCKED"
           BLOCKED_REASON_TEXT="review evidence missing (${MISSING_LIST}) — run /nazgul:review --materialize ${TASK_ID}"
           if grep -q '^\- \*\*Blocked reason\*\*:' "$task_file" 2>/dev/null; then
-            sed -i.bak "s|^\(- \*\*Blocked reason\*\*:\) .*|\1 ${BLOCKED_REASON_TEXT}|" "$task_file" && rm -f "${task_file}.bak"
+            awk -v reason="- **Blocked reason**: ${BLOCKED_REASON_TEXT}" \
+              '/^\- \*\*Blocked reason\*\*:/ { print reason; next } { print }' \
+              "$task_file" > "${task_file}.tmp" && mv "${task_file}.tmp" "$task_file"
           else
             echo "- **Blocked reason**: ${BLOCKED_REASON_TEXT}" >> "$task_file"
           fi
-          jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
+          jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
           DONE_COUNT=$((DONE_COUNT - 1))
           BLOCKED_COUNT=$((BLOCKED_COUNT + 1))
           REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} escalated to BLOCKED — review evidence missing: ${MISSING_LIST}. Run /nazgul:review --materialize ${TASK_ID}
@@ -148,7 +151,7 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
         else
           # First violation — reset to IMPLEMENTED with diagnostics
           set_task_status "$task_file" "DONE" "IMPLEMENTED"
-          jq --arg t "$TASK_ID" '.safety._review_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
+          jq --arg t "$TASK_ID" '.safety._review_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
           DONE_COUNT=$((DONE_COUNT - 1))
           IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
           REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} reset DONE → IMPLEMENTED — missing/unapproved reviews: ${MISSING_LIST}. Fix: spawn review-gate for ${TASK_ID}, or run /nazgul:review --materialize ${TASK_ID}
@@ -156,13 +159,15 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
         fi
       elif [ "$RESET_COUNT" != "0" ]; then
         # Evidence is now valid — clear the stale counter
-        jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
+        jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
       fi
     elif [ "$RESET_COUNT" != "0" ]; then
       # Task no longer DONE — clear the stale counter
-      jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
+      jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
     fi
   done
+  # Emitted here (in addition to CONTINUE_MSG) so violations are visible even on
+  # exit-0 paths (max iterations, consecutive failures) where CONTINUE_MSG never prints.
   if [ -n "$REVIEW_VIOLATIONS" ]; then
     printf '%s' "$REVIEW_VIOLATIONS" >&2
   fi
@@ -547,7 +552,9 @@ fi
 
 REASON="Iteration ${NEW_ITER}/${MAX_ITER}: ${DONE_COUNT}/${TOTAL_COUNT} tasks done"
 if [ -n "$REVIEW_VIOLATIONS" ]; then
-  VIOLATION_SUMMARY=$(printf '%s' "$REVIEW_VIOLATIONS" | head -3 | tr '\n' ';')
+  # head -3 is an intentional size cap for the one-line JSON reason; the full
+  # violation list is surfaced in CONTINUE_MSG below.
+  VIOLATION_SUMMARY=$(printf '%s' "$REVIEW_VIOLATIONS" | head -3 | tr '\n' ';' | sed 's/;$//')
   REASON="${REASON} | ${VIOLATION_SUMMARY}"
 fi
 
