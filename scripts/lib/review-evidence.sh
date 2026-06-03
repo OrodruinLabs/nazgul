@@ -13,6 +13,17 @@ _is_review_meta_file() {
   esac
 }
 
+# A file counts as APPROVED only when the word appears on a verdict line
+# ("## Verdict: APPROVED", "**Final Verdict: APPROVED**") or at the start of
+# a line (e.g. "APPROVED — no blocking issues" under a Final Verdict header).
+# Prose mentions ("this pattern is approved elsewhere") and UNAPPROVED do not
+# count. Case-insensitive.
+# Usage: _has_approved_verdict <file>
+_has_approved_verdict() {
+  grep -qiE 'verdict[^[:alpha:]]*approved' "$1" 2>/dev/null && return 0
+  grep -qiE '^[[:space:]#>*`_-]*approved([^[:alpha:]]|$)' "$1" 2>/dev/null
+}
+
 # Validate review evidence for a task.
 # Usage: validate_review_evidence <nazgul_dir> <task_id>
 # Returns 0 and prints nothing if evidence is complete.
@@ -48,7 +59,7 @@ validate_review_evidence() {
     if [ ! -f "$review_dir/${reviewer}.md" ]; then
       echo "MISSING $reviewer"
       problems=$((problems + 1))
-    elif ! grep -qi 'APPROVED' "$review_dir/${reviewer}.md" 2>/dev/null; then
+    elif ! _has_approved_verdict "$review_dir/${reviewer}.md"; then
       echo "UNAPPROVED $reviewer"
       problems=$((problems + 1))
     fi
@@ -64,7 +75,7 @@ validate_review_evidence() {
     fi
     name="${base%.md}"
     if ! grep -qxF "$name" <<< "$configured_reviewers"; then
-      if ! grep -qi 'APPROVED' "$rf" 2>/dev/null; then
+      if ! _has_approved_verdict "$rf"; then
         echo "UNAPPROVED $name"
         problems=$((problems + 1))
       fi

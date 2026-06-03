@@ -119,4 +119,54 @@ assert_contains "multi: missing qa-reviewer" "$VAL_OUTPUT" "MISSING qa-reviewer"
 assert_contains "multi: missing security-reviewer" "$VAL_OUTPUT" "MISSING security-reviewer"
 teardown_temp_dir
 
+# --- Test 10: Prose mention of "approved" does NOT count as a verdict ---
+setup_evidence_env "code-reviewer"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+cat > "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md" << 'REVIEW_EOF'
+# Review: TASK-001
+
+This pattern is approved elsewhere in the codebase, but here it breaks.
+
+## Final Verdict
+CHANGES_REQUESTED
+REVIEW_EOF
+run_validate "TASK-001"
+assert_exit_code "prose mention: exit 1" "$VAL_EC" 1
+assert_contains "prose mention flagged unapproved" "$VAL_OUTPUT" "UNAPPROVED code-reviewer"
+teardown_temp_dir
+
+# --- Test 11: APPROVED at line start (Final Verdict section body) counts ---
+setup_evidence_env "code-reviewer"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+cat > "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md" << 'REVIEW_EOF'
+# Review: TASK-001
+
+## Final Verdict
+
+APPROVED — no blocking issues found.
+REVIEW_EOF
+run_validate "TASK-001"
+assert_exit_code "line-start verdict: exit 0" "$VAL_EC" 0
+teardown_temp_dir
+
+# --- Test 12: Bold verdict line counts; UNAPPROVED in text does not false-positive ---
+setup_evidence_env "code-reviewer qa-reviewer"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+cat > "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md" << 'REVIEW_EOF'
+# Review: TASK-001
+
+**Final Verdict: APPROVED**
+REVIEW_EOF
+cat > "$TEST_DIR/nazgul/reviews/TASK-001/qa-reviewer.md" << 'REVIEW_EOF'
+# Review: TASK-001
+
+## Final Verdict
+UNAPPROVED pending fixes.
+REVIEW_EOF
+run_validate "TASK-001"
+assert_exit_code "mixed verdicts: exit 1" "$VAL_EC" 1
+assert_not_contains "bold verdict accepted" "$VAL_OUTPUT" "code-reviewer"
+assert_contains "UNAPPROVED text not a false positive" "$VAL_OUTPUT" "UNAPPROVED qa-reviewer"
+teardown_temp_dir
+
 report_results
