@@ -66,9 +66,11 @@ files.
 4. **Dispatch the FULL configured reviewer board** over the diff via the Review
    Gate agent — each reviewer writes its own
    `nazgul/reviews/[TASK-ID]/<reviewer>.md`.
-5. **On all APPROVED:** walk the legal state path for the current mode —
-   if `afk.yolo` is true in `nazgul/config.json`: current status → IN_REVIEW
-   → APPROVED; otherwise → IN_REVIEW → DONE. (Tasks already DONE that pass
+5. **On all APPROVED:** walk the legal state path for the current mode: first
+   reach IN_REVIEW (IMPLEMENTED → IN_REVIEW, or BLOCKED → IN_REVIEW — legal
+   because the reviewer files now exist), then if `afk.yolo` is true in
+   `nazgul/config.json`: IN_REVIEW → APPROVED; otherwise IN_REVIEW → DONE.
+   (Tasks already DONE that pass
    validation need no walk.) Then clear the escalation bookkeeping: remove the
    task's key from `.safety._review_reset_counts` in `nazgul/config.json`
    (jq + temp-file write), and remove any `review evidence missing` Blocked

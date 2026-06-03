@@ -201,6 +201,10 @@ valid_transition() {
     APPROVED_DONE)               return 0 ;;
     CHANGES_REQUESTED_IN_PROGRESS) return 0 ;;
     CHANGES_REQUESTED_BLOCKED)   return 0 ;;
+    # BLOCKED exits: READY via /nazgul:task unblock; IN_REVIEW via /nazgul:review --materialize
+    # (BLOCKED→IN_REVIEW still requires a review directory — enforced below)
+    BLOCKED_READY)               return 0 ;;
+    BLOCKED_IN_REVIEW)           return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -211,7 +215,8 @@ if ! valid_transition "$OLD_STATUS" "$NEW_STATUS"; then
   echo "  PLANNED→READY, READY→IN_PROGRESS, IN_PROGRESS→IMPLEMENTED," >&2
   echo "  IMPLEMENTED→IN_REVIEW, IN_REVIEW→DONE (with reviews)," >&2
   echo "  IN_REVIEW→APPROVED (YOLO), APPROVED→DONE (PR merged)," >&2
-  echo "  IN_REVIEW→CHANGES_REQUESTED, *→BLOCKED" >&2
+  echo "  IN_REVIEW→CHANGES_REQUESTED, *→BLOCKED," >&2
+  echo "  BLOCKED→READY (unblock), BLOCKED→IN_REVIEW (materialize)" >&2
   exit 2
 fi
 
@@ -240,8 +245,9 @@ if [ "$OLD_STATUS" = "IN_PROGRESS" ] && [ "$NEW_STATUS" = "IMPLEMENTED" ]; then
   fi
 fi
 
-# IMPLEMENTED -> IN_REVIEW requires review directory to exist
-if [ "$OLD_STATUS" = "IMPLEMENTED" ] && [ "$NEW_STATUS" = "IN_REVIEW" ]; then
+# IMPLEMENTED/BLOCKED -> IN_REVIEW requires review directory to exist
+# (BLOCKED -> IN_REVIEW is the /nazgul:review --materialize repair path)
+if { [ "$OLD_STATUS" = "IMPLEMENTED" ] || [ "$OLD_STATUS" = "BLOCKED" ]; } && [ "$NEW_STATUS" = "IN_REVIEW" ]; then
   TASK_ID_CHECK=$(basename "$FILE_PATH" .md)
   NAZGUL_DIR_CHECK=$(dirname "$(dirname "$FILE_PATH")")
   REVIEW_DIR_CHECK="$NAZGUL_DIR_CHECK/reviews/$TASK_ID_CHECK"

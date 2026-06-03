@@ -583,4 +583,60 @@ run_guard "$input"
 assert_exit_code "source edit with DONE patch still blocked" "$GUARD_EC" 2
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# Test 37: BLOCKED -> READY allowed (/nazgul:task unblock path)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "BLOCKED"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "READY")
+run_guard "$input"
+assert_exit_code "BLOCKED->READY allowed (unblock)" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 38: BLOCKED -> IN_REVIEW allowed when review dir exists (--materialize)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "BLOCKED"
+create_review_dir "TASK-001"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
+run_guard "$input"
+assert_exit_code "BLOCKED->IN_REVIEW with review dir allowed (materialize)" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 38b: BLOCKED -> IN_REVIEW without review dir — blocked
+# Proves the materialize path still requires the review directory.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "BLOCKED"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
+run_guard "$input"
+assert_exit_code "BLOCKED->IN_REVIEW without review dir blocked" "$GUARD_EC" 2
+assert_contains "BLOCKED->IN_REVIEW without dir message" "$GUARD_STDERR" "review directory"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 39: BLOCKED -> DONE still rejected — BLOCKED is not a free-for-all
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "BLOCKED"
+create_review_dir "TASK-001"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "BLOCKED->DONE blocked" "$GUARD_EC" 2
+assert_contains "BLOCKED->DONE message" "$GUARD_STDERR" "Invalid state transition"
+teardown_temp_dir
+
 report_results
