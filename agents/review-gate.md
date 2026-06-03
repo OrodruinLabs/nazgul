@@ -91,6 +91,29 @@ Read `nazgul/config.json → models.review` for the model to assign reviewers (d
 
 Run each reviewer as a subagent, one at a time. Write results to same location.
 
+### Step 2.5: Evidence Check (MANDATORY — before any verdict)
+
+Review evidence exists ONLY as per-reviewer files. A consolidated summary.md is
+NOT review evidence — never write one in place of per-reviewer files, and never
+treat one as proof that reviewers ran.
+
+After all reviewers complete (parallel or sequential), verify every configured
+reviewer produced a file:
+
+```bash
+for r in $(jq -r '.agents.reviewers[]' nazgul/config.json); do
+  [ -f "nazgul/reviews/$TASK_ID/$r.md" ] || echo "MISSING: $r"
+done
+```
+
+- If any reviewer is MISSING: re-dispatch ONLY those reviewers (max 1 retry per
+  reviewer), then re-run the check.
+- Still missing after the retry: set the task to BLOCKED with reason
+  `review evidence incomplete — no review file from: <names>`. Do NOT proceed
+  to Step 3.
+- NEVER aggregate verdicts from partial evidence. NEVER substitute your own
+  summary for a missing reviewer file.
+
 ### Step 3: Determine Verdict
 
 - Task passes ONLY when ALL reviewers return APPROVED (no blocking findings)
@@ -194,6 +217,19 @@ Skip this step entirely if mode is `"afk"` or if any reviewer returned CHANGES_R
 ### Step 5: Post-Loop Phase
 
 When ALL tasks are DONE, before outputting NAZGUL_COMPLETE:
+
+#### Step 5.-1: Verify Completion From Disk (MANDATORY)
+
+Status writes can be blocked by guards, so any claim about status must come
+from a read that happened AFTER the last write. Before anything else in Step 5:
+
+1. Re-read EVERY `nazgul/tasks/TASK-*.md` from disk:
+   `grep -H '^\- \*\*Status\*\*:' nazgul/tasks/TASK-*.md`
+2. If ANY task is not DONE, do NOT proceed and do NOT output NAZGUL_COMPLETE.
+   Report the actual per-task statuses and return to the loop with the first
+   non-DONE task as the active task.
+3. When updating plan.md (`## Completed`, `Status Summary`), derive every entry
+   from the statuses just read — never from memory of transitions you attempted.
 
 #### Step 5.0: Post-Loop Batch Simplify (Conditional)
 
