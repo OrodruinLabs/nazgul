@@ -244,6 +244,27 @@ assert_contains "unapproved review message" "$GUARD_STDERR" "does not contain AP
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
+# Test 15b: Review gate — summary.md only (no per-reviewer file) — blocked
+# APPROVED text inside summary.md must NOT satisfy the gate
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "IN_REVIEW"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+cat > "$TEST_DIR/nazgul/reviews/TASK-001/summary.md" << 'REVIEW_EOF'
+# Review Summary: TASK-001
+
+Verdict: APPROVED (all reviewers)
+REVIEW_EOF
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "summary-only evidence blocked" "$GUARD_EC" 2
+assert_contains "summary-only evidence message" "$GUARD_STDERR" "Missing reviews"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
 # Test 16: YOLO mode — review gate guards APPROVED instead of DONE
 # In YOLO mode, writing APPROVED requires review checks; no reviews = blocked
 # ---------------------------------------------------------------------------
