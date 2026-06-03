@@ -49,11 +49,14 @@ files.
 1. **Select targets:**
    - With a TASK-ID: that task only.
    - With `--all`: every task in `nazgul/tasks/` whose status is DONE,
-     APPROVED, or IMPLEMENTED and where any configured reviewer
+     APPROVED, IMPLEMENTED, IN_REVIEW, or BLOCKED with a review-evidence
+     Blocked reason, and where any configured reviewer
      (`jq -r '.agents.reviewers[]' nazgul/config.json`) lacks an APPROVED
      `nazgul/reviews/[TASK-ID]/<reviewer>.md`. Including IMPLEMENTED is by
      design: the deadlock parks tasks there; a task awaiting first review
-     simply gets its first review. Display the matched list before dispatch.
+     simply gets its first review. Including evidence-BLOCKED tasks matters
+     most: those are exactly what the stop hook's escalation creates.
+     Display the matched list before dispatch.
 2. **Accept any post-implementation status** — IMPLEMENTED, IN_REVIEW, DONE,
    APPROVED, or BLOCKED (when the Blocked reason mentions review evidence).
    If BLOCKED for another reason, skip and report.

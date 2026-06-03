@@ -43,7 +43,7 @@ This matches the placement and form used in `skills/clean/SKILL.md` and the 13 o
 
 Rewrite Step 0.5 in `skills/init/SKILL.md` so the model must emit the parsed decision before proceeding. Current text:
 
-```
+```text
 ### Step 0.5: Parse Arguments
 1. Check `$ARGUMENTS` for `--local` flag
 2. If `--local` is present, set a variable `LOCAL_MODE=true`
@@ -52,7 +52,7 @@ Rewrite Step 0.5 in `skills/init/SKILL.md` so the model must emit the parsed dec
 
 New text:
 
-```
+```text
 ### Step 0.5: Parse Arguments
 1. Read the `## Arguments` block above. Note the literal string of arguments passed (may be empty).
 2. Output to the user: "Parsed arguments: `<contents of Arguments block, or (none)>`. LOCAL_MODE = <true|false>. FORCE = <true|false>."

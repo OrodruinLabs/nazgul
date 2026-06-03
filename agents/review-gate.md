@@ -226,7 +226,7 @@ Status writes can be blocked by guards, so any claim about status must come
 from a read that happened AFTER the last write. Before anything else in Step 5:
 
 1. Re-read EVERY `nazgul/tasks/TASK-*.md` from disk:
-   `grep -H '^\- \*\*Status\*\*:' nazgul/tasks/TASK-*.md`
+   `grep -H -E '(^\- \*\*Status\*\*:|^## Status:)' nazgul/tasks/TASK-*.md`
 2. If ANY task is not DONE, do NOT proceed and do NOT output NAZGUL_COMPLETE.
    Report the actual per-task statuses and return to the loop with the first
    non-DONE task as the active task.

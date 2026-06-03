@@ -161,8 +161,11 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
         # Evidence is now valid — clear the stale counter
         jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
       fi
-    elif [ "$RESET_COUNT" != "0" ]; then
-      # Task no longer DONE — clear the stale counter
+    elif [ "$RESET_COUNT" != "0" ] && [ "$STATUS" != "IMPLEMENTED" ] && [ "$STATUS" != "IN_REVIEW" ]; then
+      # Task left DONE for a non-repair state — clear the stale counter.
+      # IMPLEMENTED/IN_REVIEW are the repair path the reset itself creates: the
+      # counter must survive them, or a later bad DONE restarts at zero and
+      # never escalates. Valid evidence (branch above) still clears it.
       jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
     fi
   done

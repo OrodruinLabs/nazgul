@@ -127,7 +127,7 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 **Detection:** Total tasks > 0 AND active tasks == 0 AND done tasks == total tasks
 **Action:** All tasks are done.
 1. VERIFY FROM DISK first: re-read every task manifest
-   (`grep -H '^\- \*\*Status\*\*:' nazgul/tasks/TASK-*.md`). If any task is not
+   (`grep -H -E '(^\- \*\*Status\*\*:|^## Status:)' nazgul/tasks/TASK-*.md`). If any task is not
    DONE, this state was mis-detected — report the actual statuses and route to
    the appropriate state instead. Never emit NAZGUL_COMPLETE, and never write
    DONE entries to plan.md, based on remembered transitions: status writes can

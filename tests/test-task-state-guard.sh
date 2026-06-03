@@ -596,12 +596,13 @@ assert_exit_code "BLOCKED->READY allowed (unblock)" "$GUARD_EC" 0
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# Test 38: BLOCKED -> IN_REVIEW allowed when review dir exists (--materialize)
+# Test 38: BLOCKED -> IN_REVIEW allowed when review dir exists AND the blocker
+# is a review-evidence blocker (--materialize)
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
 create_config '.agents.reviewers = ["code-reviewer"]'
-create_task_file "TASK-001" "BLOCKED"
+create_task_file "TASK-001" "BLOCKED" "none" "review evidence missing (code-reviewer) — run /nazgul:review --materialize TASK-001"
 create_review_dir "TASK-001"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
@@ -616,12 +617,29 @@ teardown_temp_dir
 setup_temp_dir
 setup_nazgul_dir
 create_config '.agents.reviewers = ["code-reviewer"]'
-create_task_file "TASK-001" "BLOCKED"
+create_task_file "TASK-001" "BLOCKED" "none" "review evidence missing (code-reviewer) — run /nazgul:review --materialize TASK-001"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
 run_guard "$input"
 assert_exit_code "BLOCKED->IN_REVIEW without review dir blocked" "$GUARD_EC" 2
 assert_contains "BLOCKED->IN_REVIEW without dir message" "$GUARD_STDERR" "review directory"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 38c: BLOCKED for a non-evidence reason -> IN_REVIEW rejected even with
+# a review dir — materialize must not bypass unrelated blockers (git
+# conflicts, test failures). Those go through /nazgul:task unblock instead.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "BLOCKED" "none" "git conflict — unmerged files detected"
+create_review_dir "TASK-001"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
+run_guard "$input"
+assert_exit_code "BLOCKED (non-evidence) ->IN_REVIEW rejected" "$GUARD_EC" 2
+assert_contains "non-evidence blocker message" "$GUARD_STDERR" "review-evidence repair"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------

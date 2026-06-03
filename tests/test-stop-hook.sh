@@ -424,4 +424,21 @@ count=$(jq -r '.safety._review_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/
 assert_eq "valid evidence: stale count cleared" "$count" "0"
 teardown_temp_dir
 
+# --- Reset count survives the repair path (IMPLEMENTED/IN_REVIEW) ---
+# After a first-violation reset the task sits at IMPLEMENTED; the counter must
+# NOT clear there, or a later bad DONE restarts at zero and never escalates.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer", "qa-reviewer"]' '.safety._review_reset_counts = {"TASK-001": 1, "TASK-003": 1}'
+create_plan
+create_task_file "TASK-001" "IMPLEMENTED"   # repair path — counter must survive
+create_task_file "TASK-003" "READY"         # left the repair path — counter clears
+run_hook
+count=$(jq -r '.safety._review_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
+assert_eq "repair path: count survives IMPLEMENTED" "$count" "1"
+count=$(jq -r '.safety._review_reset_counts["TASK-003"] // 0' "$TEST_DIR/nazgul/config.json")
+assert_eq "non-repair status: count cleared" "$count" "0"
+teardown_temp_dir
+
 report_results

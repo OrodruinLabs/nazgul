@@ -259,6 +259,18 @@ if { [ "$OLD_STATUS" = "IMPLEMENTED" ] || [ "$OLD_STATUS" = "BLOCKED" ]; } && [ 
   fi
 fi
 
+# BLOCKED -> IN_REVIEW is reserved for review-evidence blockers. Tasks blocked
+# for other reasons (git conflicts, test failures, max retries) must not bypass
+# their blocker via the repair path — use /nazgul:task unblock instead.
+if [ "$OLD_STATUS" = "BLOCKED" ] && [ "$NEW_STATUS" = "IN_REVIEW" ]; then
+  if ! grep -qi '^\- \*\*Blocked reason\*\*:.*review evidence' "$FILE_PATH" 2>/dev/null; then
+    echo "NAZGUL STATE GUARD: BLOCKED — BLOCKED → IN_REVIEW is reserved for review-evidence repair" >&2
+    echo "This task's Blocked reason is not a review-evidence blocker." >&2
+    echo "Use /nazgul:task unblock to return it to READY instead." >&2
+    exit 2
+  fi
+fi
+
 # --- ENFORCE REVIEW GATE (Constitution Article IV) ---
 # In YOLO mode, gate APPROVED; in non-YOLO, gate DONE
 # APPROVED → DONE in YOLO needs no review checks (PR merge is external validation)
