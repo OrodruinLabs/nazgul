@@ -15,7 +15,7 @@ Enforceable operating rules for the Nazgul Framework. Every rule here is checked
 7. **One task at a time.** Don't work on multiple tasks simultaneously (unless parallel mode with Agent Teams).
 8. **Update Recovery Pointer on every state change.** This is how you survive compaction.
 9. **Commit in AFK mode.** Every state transition gets a commit with the dynamic prefix from config.
-10. **NAZGUL_COMPLETE means ALL tasks DONE and post-loop finished.** Not before.
+10. **NAZGUL_COMPLETE means ALL tasks DONE and post-loop finished.** Not before. Verified by re-reading task manifests from disk immediately beforehand — never by recalling prior transitions (guards can silently block status writes).
 
 ---
 
@@ -41,6 +41,7 @@ Task-PR:     PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> APPR
 | CHANGES_REQUESTED | IN_PROGRESS | Implementer addresses feedback |
 | Any active state | BLOCKED | Max retries, unresolvable issue, or 3 consecutive test failures |
 | BLOCKED | READY | Human intervention resolves the blocker |
+| BLOCKED | IN_REVIEW | Review evidence materialized via `/nazgul:review --materialize` (review directory required) |
 
 ### Forbidden Transitions
 

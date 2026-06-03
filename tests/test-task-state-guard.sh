@@ -244,6 +244,27 @@ assert_contains "unapproved review message" "$GUARD_STDERR" "does not contain AP
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
+# Test 15b: Review gate — summary.md only (no per-reviewer file) — blocked
+# APPROVED text inside summary.md must NOT satisfy the gate
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "IN_REVIEW"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+cat > "$TEST_DIR/nazgul/reviews/TASK-001/summary.md" << 'REVIEW_EOF'
+# Review Summary: TASK-001
+
+Verdict: APPROVED (all reviewers)
+REVIEW_EOF
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "summary-only evidence blocked" "$GUARD_EC" 2
+assert_contains "summary-only evidence message" "$GUARD_STDERR" "Missing reviews"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
 # Test 16: YOLO mode — review gate guards APPROVED instead of DONE
 # In YOLO mode, writing APPROVED requires review checks; no reviews = blocked
 # ---------------------------------------------------------------------------
@@ -560,6 +581,80 @@ PATCH_EOF
 input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"console.log(1)"}}')
 run_guard "$input"
 assert_exit_code "source edit with DONE patch still blocked" "$GUARD_EC" 2
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 37: BLOCKED -> READY allowed (/nazgul:task unblock path)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "BLOCKED"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "READY")
+run_guard "$input"
+assert_exit_code "BLOCKED->READY allowed (unblock)" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 38: BLOCKED -> IN_REVIEW allowed when review dir exists AND the blocker
+# is a review-evidence blocker (--materialize)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "BLOCKED" "none" "review evidence missing (code-reviewer) — run /nazgul:review --materialize TASK-001"
+create_review_dir "TASK-001"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
+run_guard "$input"
+assert_exit_code "BLOCKED->IN_REVIEW with review dir allowed (materialize)" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 38b: BLOCKED -> IN_REVIEW without review dir — blocked
+# Proves the materialize path still requires the review directory.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "BLOCKED" "none" "review evidence missing (code-reviewer) — run /nazgul:review --materialize TASK-001"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
+run_guard "$input"
+assert_exit_code "BLOCKED->IN_REVIEW without review dir blocked" "$GUARD_EC" 2
+assert_contains "BLOCKED->IN_REVIEW without dir message" "$GUARD_STDERR" "review directory"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 38c: BLOCKED for a non-evidence reason -> IN_REVIEW rejected even with
+# a review dir — materialize must not bypass unrelated blockers (git
+# conflicts, test failures). Those go through /nazgul:task unblock instead.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "BLOCKED" "none" "git conflict — unmerged files detected"
+create_review_dir "TASK-001"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
+run_guard "$input"
+assert_exit_code "BLOCKED (non-evidence) ->IN_REVIEW rejected" "$GUARD_EC" 2
+assert_contains "non-evidence blocker message" "$GUARD_STDERR" "review-evidence repair"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 39: BLOCKED -> DONE still rejected — BLOCKED is not a free-for-all
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "BLOCKED"
+create_review_dir "TASK-001"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "BLOCKED->DONE blocked" "$GUARD_EC" 2
+assert_contains "BLOCKED->DONE message" "$GUARD_STDERR" "Invalid state transition"
 teardown_temp_dir
 
 report_results

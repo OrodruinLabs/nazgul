@@ -12,6 +12,7 @@ PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/task-utils.sh"
 source "$SCRIPT_DIR/lib/session-tracker.sh"
+source "$SCRIPT_DIR/lib/review-evidence.sh"
 
 # If Nazgul not initialized, allow stop
 if [ ! -f "$CONFIG" ]; then
@@ -114,81 +115,65 @@ if [ -d "$NAZGUL_DIR/tasks" ]; then
 fi
 
 # --- REVIEW GATE ENFORCEMENT (Layer 2 — reactive safety net) ---
-# Validate that no tasks are DONE without review evidence
+# Validate that no tasks are DONE without review evidence (shared lib: review-evidence.sh)
+# First violation: reset DONE → IMPLEMENTED with diagnostics. Second consecutive
+# violation for the same task: escalate to BLOCKED with remediation (no livelock).
 # In YOLO mode, APPROVED tasks have been locally reviewed; DONE only happens via PR merge
+REVIEW_VIOLATIONS=""
 if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NAZGUL_DIR/tasks" ]; then
-  CONFIGURED_REVIEWERS=$(jq -r '.agents.reviewers // [] | .[]' "$CONFIG" 2>/dev/null || echo "")
   for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     STATUS=$(get_task_status "$task_file")
+    TASK_ID=$(basename "$task_file" .md)
+    RESET_COUNT=$(jq -r --arg t "$TASK_ID" '.safety._review_reset_counts[$t] // 0' "$CONFIG" 2>/dev/null || echo "0")
+    case "$RESET_COUNT" in (*[!0-9]*|'') RESET_COUNT=0 ;; esac
+
     if [ "$STATUS" = "DONE" ]; then
-      TASK_ID=$(basename "$task_file" .md)
-      REVIEW_DIR="$NAZGUL_DIR/reviews/$TASK_ID"
-      REVIEW_VALID=true
-
-      # Check 1: Review directory exists
-      if [ ! -d "$REVIEW_DIR" ]; then
-        REVIEW_VALID=false
-      fi
-
-      # Check 2: At least one reviewer file exists
-      if [ "$REVIEW_VALID" = true ]; then
-        HAS_REVIEWS=false
-        for rf in "$REVIEW_DIR"/*.md; do
-          [ -f "$rf" ] || continue
-          case "$(basename "$rf")" in
-            test-failures.md|consolidated-feedback.md) continue ;;
-          esac
-          HAS_REVIEWS=true
-          break
-        done
-        if [ "$HAS_REVIEWS" = false ]; then
-          REVIEW_VALID=false
-        fi
-      fi
-
-      # Check 3: ALL review files must contain APPROVED
-      if [ "$REVIEW_VALID" = true ]; then
-        for rf in "$REVIEW_DIR"/*.md; do
-          [ -f "$rf" ] || continue
-          case "$(basename "$rf")" in
-            test-failures.md|consolidated-feedback.md) continue ;;
-          esac
-          if ! grep -qi 'APPROVED' "$rf" 2>/dev/null; then
-            REVIEW_VALID=false
-            break
+      EVIDENCE_PROBLEMS=$(validate_review_evidence "$NAZGUL_DIR" "$TASK_ID") || true
+      if [ -n "$EVIDENCE_PROBLEMS" ]; then
+        MISSING_LIST=$(echo "$EVIDENCE_PROBLEMS" | awk 'NF>1 {out = out sep $2; sep = ", "} NF==1 {out = out sep $1; sep = ", "} END {print out}')
+        if [ "$RESET_COUNT" -ge 1 ]; then
+          # Second consecutive violation — escalate to BLOCKED with remediation
+          set_task_status "$task_file" "DONE" "BLOCKED"
+          BLOCKED_REASON_TEXT="review evidence missing (${MISSING_LIST}) — run /nazgul:review --materialize ${TASK_ID}"
+          if grep -q '^\- \*\*Blocked reason\*\*:' "$task_file" 2>/dev/null; then
+            awk -v reason="- **Blocked reason**: ${BLOCKED_REASON_TEXT}" \
+              '/^\- \*\*Blocked reason\*\*:/ { print reason; next } { print }' \
+              "$task_file" > "${task_file}.tmp" && mv "${task_file}.tmp" "$task_file"
+          else
+            echo "- **Blocked reason**: ${BLOCKED_REASON_TEXT}" >> "$task_file"
           fi
-        done
-      fi
-
-      # Check 4: ALL configured reviewers must have approved files
-      if [ "$REVIEW_VALID" = true ]; then
-        if [ -z "$CONFIGURED_REVIEWERS" ]; then
-          REVIEW_VALID=false  # No roster = can't verify
+          jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+          DONE_COUNT=$((DONE_COUNT - 1))
+          BLOCKED_COUNT=$((BLOCKED_COUNT + 1))
+          REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} escalated to BLOCKED — review evidence missing: ${MISSING_LIST}. Run /nazgul:review --materialize ${TASK_ID}
+"
         else
-          while IFS= read -r reviewer; do
-            [ -z "$reviewer" ] && continue
-            if [ ! -f "$REVIEW_DIR/${reviewer}.md" ]; then
-              REVIEW_VALID=false
-              break
-            fi
-            if ! grep -qi 'APPROVED' "$REVIEW_DIR/${reviewer}.md" 2>/dev/null; then
-              REVIEW_VALID=false
-              break
-            fi
-          done <<< "$CONFIGURED_REVIEWERS"
+          # First violation — reset to IMPLEMENTED with diagnostics
+          set_task_status "$task_file" "DONE" "IMPLEMENTED"
+          jq --arg t "$TASK_ID" '.safety._review_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+          DONE_COUNT=$((DONE_COUNT - 1))
+          IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
+          REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} reset DONE → IMPLEMENTED — missing/unapproved reviews: ${MISSING_LIST}. Fix: spawn review-gate for ${TASK_ID}, or run /nazgul:review --materialize ${TASK_ID}
+"
         fi
+      elif [ "$RESET_COUNT" != "0" ]; then
+        # Evidence is now valid — clear the stale counter
+        jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
       fi
-
-      if [ "$REVIEW_VALID" = false ]; then
-        # VIOLATION: Reset to IMPLEMENTED
-        set_task_status "$task_file" "DONE" "IMPLEMENTED"
-        DONE_COUNT=$((DONE_COUNT - 1))
-        IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
-        echo "NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} was DONE without full review — reset to IMPLEMENTED" >&2
-      fi
+    elif [ "$RESET_COUNT" != "0" ] && [ "$STATUS" != "IMPLEMENTED" ] && [ "$STATUS" != "IN_REVIEW" ]; then
+      # Task left DONE for a non-repair state — clear the stale counter.
+      # IMPLEMENTED/IN_REVIEW are the repair path the reset itself creates: the
+      # counter must survive them, or a later bad DONE restarts at zero and
+      # never escalates. Valid evidence (branch above) still clears it.
+      jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
     fi
   done
+  # Emitted here (in addition to CONTINUE_MSG) so violations are visible even on
+  # exit-0 paths (max iterations, consecutive failures) where CONTINUE_MSG never prints.
+  if [ -n "$REVIEW_VIOLATIONS" ]; then
+    printf '%s' "$REVIEW_VIOLATIONS" >&2
+  fi
 fi
 
 # Track progress for consecutive failure detection
@@ -569,10 +554,17 @@ fi
 # Exit 2 = block the stop, agent continues
 
 REASON="Iteration ${NEW_ITER}/${MAX_ITER}: ${DONE_COUNT}/${TOTAL_COUNT} tasks done"
+if [ -n "$REVIEW_VIOLATIONS" ]; then
+  # head -3 is an intentional size cap for the one-line JSON reason; the full
+  # violation list is surfaced in CONTINUE_MSG below.
+  VIOLATION_SUMMARY=$(printf '%s' "$REVIEW_VIOLATIONS" | head -3 | tr '\n' ';' | sed 's/;$//')
+  REASON="${REASON} | ${VIOLATION_SUMMARY}"
+fi
 
 cat >&2 << CONTINUE_MSG
 Nazgul loop — iteration ${NEW_ITER}/${MAX_ITER} | Mode: ${MODE}
 Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked, ${PLANNED_COUNT} planned
+$([ -n "$REVIEW_VIOLATIONS" ] && printf '%s' "$REVIEW_VIOLATIONS" || true)
 $([ -n "$FEATURE_BRANCH" ] && echo "Branch: ${FEATURE_BRANCH} → ${BASE_BRANCH} | Worktrees: ${WORKTREE_COUNT}" || true)
 
 Read nazgul/plan.md → Recovery Pointer section for current state.

@@ -365,4 +365,80 @@ run_hook
 assert_exit_code "YOLO no task-pr: all APPROVED exits 0" "$HOOK_EC" 0
 teardown_temp_dir
 
+# --- Reset diagnostics: first violation names missing reviewers in output ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer", "qa-reviewer"]'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"   # writes code-reviewer.md only — qa-reviewer missing
+create_task_file "TASK-002" "READY"   # keeps the loop alive (exit 2 path)
+run_hook
+assert_exit_code "first violation: exit 2" "$HOOK_EC" 2
+assert_contains "violation logged" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+assert_contains "missing reviewer named" "$HOOK_OUTPUT" "qa-reviewer"
+assert_contains "remediation named" "$HOOK_OUTPUT" "materialize"
+status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
+assert_eq "first violation: reset to IMPLEMENTED" "$status" "IMPLEMENTED"
+count=$(jq -r '.safety._review_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
+assert_eq "first violation: reset count recorded" "$count" "1"
+teardown_temp_dir
+
+# --- Escalation: second violation sets BLOCKED with remediation reason ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer", "qa-reviewer"]' '.safety._review_reset_counts = {"TASK-001": 1}'
+create_plan
+create_task_file "TASK-001" "DONE" "none" "stale reason"   # pre-seeded Blocked reason exercises the awk update branch
+create_review_dir "TASK-001"
+create_task_file "TASK-002" "READY"
+run_hook
+assert_exit_code "second violation: exit 2" "$HOOK_EC" 2
+assert_contains "escalation logged" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+assert_contains "escalation names BLOCKED" "$HOOK_OUTPUT" "escalated to BLOCKED"
+status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
+assert_eq "second violation: escalated to BLOCKED" "$status" "BLOCKED"
+assert_contains "blocked reason written" "$(cat "$TEST_DIR/nazgul/tasks/TASK-001.md")" "review evidence missing"
+assert_contains "blocked reason names command" "$(cat "$TEST_DIR/nazgul/tasks/TASK-001.md")" "/nazgul:review --materialize TASK-001"
+count=$(jq -r '.safety._review_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
+assert_eq "second violation: count cleared" "$count" "0"
+teardown_temp_dir
+
+# --- Valid evidence clears a stale reset count ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]' '.safety._review_reset_counts = {"TASK-001": 1}'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"   # code-reviewer.md APPROVED — roster satisfied
+create_task_file "TASK-002" "READY"
+run_hook
+assert_exit_code "valid evidence: exit 2" "$HOOK_EC" 2
+assert_not_contains "valid evidence: no violation noise" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
+assert_eq "valid evidence: stays DONE" "$status" "DONE"
+count=$(jq -r '.safety._review_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
+assert_eq "valid evidence: stale count cleared" "$count" "0"
+teardown_temp_dir
+
+# --- Reset count survives the repair path (IMPLEMENTED/IN_REVIEW) ---
+# After a first-violation reset the task sits at IMPLEMENTED; the counter must
+# NOT clear there, or a later bad DONE restarts at zero and never escalates.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer", "qa-reviewer"]' '.safety._review_reset_counts = {"TASK-001": 1, "TASK-003": 1}'
+create_plan
+create_task_file "TASK-001" "IMPLEMENTED"   # repair path — counter must survive
+create_task_file "TASK-003" "READY"         # left the repair path — counter clears
+run_hook
+count=$(jq -r '.safety._review_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
+assert_eq "repair path: count survives IMPLEMENTED" "$count" "1"
+count=$(jq -r '.safety._review_reset_counts["TASK-003"] // 0' "$TEST_DIR/nazgul/config.json")
+assert_eq "non-repair status: count cleared" "$count" "0"
+teardown_temp_dir
+
 report_results

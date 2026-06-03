@@ -6,7 +6,7 @@ disable-model-invocation: true
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task
 metadata:
   author: Jose Mejia
-  version: 1.2.2
+  version: 1.3.0
 ---
 
 # Nazgul Start
@@ -126,8 +126,15 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 #### STATE: OBJECTIVE_COMPLETE
 **Detection:** Total tasks > 0 AND active tasks == 0 AND done tasks == total tasks
 **Action:** All tasks are done.
-1. Check if post-loop agents have already run (look for release notes, updated CHANGELOG, etc.)
-2. If post-loop NOT run yet:
+1. VERIFY FROM DISK first: re-read every task manifest
+   (`grep -H -E '(^\- \*\*Status\*\*:|^## Status:)' nazgul/tasks/TASK-*.md`). If any task is not
+   DONE, this state was mis-detected — report the actual statuses and route to
+   the appropriate state instead. Never emit NAZGUL_COMPLETE, and never write
+   DONE entries to plan.md, based on remembered transitions: status writes can
+   be blocked by guards, so claims must come from reads that happened after the
+   last write.
+2. Check if post-loop agents have already run (look for release notes, updated CHANGELOG, etc.)
+3. If post-loop NOT run yet:
    - Tell user: "All [N] tasks complete. Running post-loop agents (documentation, release, observability)..."
    - Delegate to post-loop agents (documentation → release-manager → observability)
    - After post-loop:
@@ -137,7 +144,7 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
         - Create PR: `gh pr create --base <base-branch> --head <feature-branch> --title "<objective> (<feat_display_id>)" --body "<task summary>"`
         - Clean up all worktrees (remove task worktrees and worktree parent dir)
      c. Output NAZGUL_COMPLETE
-3. If post-loop already run:
+4. If post-loop already run:
    - Tell user: "Previous objective complete: [stored objective]. Starting objective derivation for next work..."
    - Fall through to FRESH state below to derive a new objective
 

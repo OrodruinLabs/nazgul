@@ -7,6 +7,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/task-utils.sh"
+source "$SCRIPT_DIR/lib/review-evidence.sh"
 
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
 INPUT=$(cat 2>/dev/null || echo "")
@@ -200,6 +201,10 @@ valid_transition() {
     APPROVED_DONE)               return 0 ;;
     CHANGES_REQUESTED_IN_PROGRESS) return 0 ;;
     CHANGES_REQUESTED_BLOCKED)   return 0 ;;
+    # BLOCKED exits: READY via /nazgul:task unblock; IN_REVIEW via /nazgul:review --materialize
+    # (BLOCKED→IN_REVIEW still requires a review directory — enforced below)
+    BLOCKED_READY)               return 0 ;;
+    BLOCKED_IN_REVIEW)           return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -210,7 +215,8 @@ if ! valid_transition "$OLD_STATUS" "$NEW_STATUS"; then
   echo "  PLANNED→READY, READY→IN_PROGRESS, IN_PROGRESS→IMPLEMENTED," >&2
   echo "  IMPLEMENTED→IN_REVIEW, IN_REVIEW→DONE (with reviews)," >&2
   echo "  IN_REVIEW→APPROVED (YOLO), APPROVED→DONE (PR merged)," >&2
-  echo "  IN_REVIEW→CHANGES_REQUESTED, *→BLOCKED" >&2
+  echo "  IN_REVIEW→CHANGES_REQUESTED, *→BLOCKED," >&2
+  echo "  BLOCKED→READY (unblock), BLOCKED→IN_REVIEW (materialize)" >&2
   exit 2
 fi
 
@@ -239,8 +245,9 @@ if [ "$OLD_STATUS" = "IN_PROGRESS" ] && [ "$NEW_STATUS" = "IMPLEMENTED" ]; then
   fi
 fi
 
-# IMPLEMENTED -> IN_REVIEW requires review directory to exist
-if [ "$OLD_STATUS" = "IMPLEMENTED" ] && [ "$NEW_STATUS" = "IN_REVIEW" ]; then
+# IMPLEMENTED/BLOCKED -> IN_REVIEW requires review directory to exist
+# (BLOCKED -> IN_REVIEW is the /nazgul:review --materialize repair path)
+if { [ "$OLD_STATUS" = "IMPLEMENTED" ] || [ "$OLD_STATUS" = "BLOCKED" ]; } && [ "$NEW_STATUS" = "IN_REVIEW" ]; then
   TASK_ID_CHECK=$(basename "$FILE_PATH" .md)
   NAZGUL_DIR_CHECK=$(dirname "$(dirname "$FILE_PATH")")
   REVIEW_DIR_CHECK="$NAZGUL_DIR_CHECK/reviews/$TASK_ID_CHECK"
@@ -248,6 +255,18 @@ if [ "$OLD_STATUS" = "IMPLEMENTED" ] && [ "$NEW_STATUS" = "IN_REVIEW" ]; then
     echo "NAZGUL STATE GUARD: BLOCKED — Cannot move to IN_REVIEW without a review directory" >&2
     echo "Expected: ${REVIEW_DIR_CHECK}/" >&2
     echo "The review-gate agent creates this directory when it starts reviewing." >&2
+    exit 2
+  fi
+fi
+
+# BLOCKED -> IN_REVIEW is reserved for review-evidence blockers. Tasks blocked
+# for other reasons (git conflicts, test failures, max retries) must not bypass
+# their blocker via the repair path — use /nazgul:task unblock instead.
+if [ "$OLD_STATUS" = "BLOCKED" ] && [ "$NEW_STATUS" = "IN_REVIEW" ]; then
+  if ! grep -qi '^\- \*\*Blocked reason\*\*:.*review evidence' "$FILE_PATH" 2>/dev/null; then
+    echo "NAZGUL STATE GUARD: BLOCKED — BLOCKED → IN_REVIEW is reserved for review-evidence repair" >&2
+    echo "This task's Blocked reason is not a review-evidence blocker." >&2
+    echo "Use /nazgul:task unblock to return it to READY instead." >&2
     exit 2
   fi
 fi
@@ -272,73 +291,35 @@ fi
 
 if [ "$NEEDS_REVIEW_CHECK" = true ]; then
   REVIEW_DIR="$NAZGUL_DIR/reviews/$TASK_ID"
-
-  # Check 1: Review directory must exist
-  if [ ! -d "$REVIEW_DIR" ]; then
+  EVIDENCE_PROBLEMS=$(validate_review_evidence "$NAZGUL_DIR" "$TASK_ID") || true
+  if [ -n "$EVIDENCE_PROBLEMS" ]; then
     echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
-    echo "No review directory at: ${REVIEW_DIR}" >&2
-    echo "ALL reviewers must approve before ${NEW_STATUS} (Constitution Rule 5)." >&2
-    exit 2
-  fi
-
-  # Check 2: Must contain reviewer files (exclude meta-files)
-  REVIEW_COUNT=0
-  for review_file in "$REVIEW_DIR"/*.md; do
-    [ -f "$review_file" ] || continue
-    BASENAME=$(basename "$review_file")
-    case "$BASENAME" in
-      test-failures.md|consolidated-feedback.md|simplify-report.md) continue ;;
+    # NO_REVIEW_DIR and NO_REVIEWERS_CONFIGURED are single-token outputs (the lib
+    # early-returns on them) — bare-token case patterns are safe. Any other
+    # output is MISSING/UNAPPROVED lines handled by the * branch.
+    case "$EVIDENCE_PROBLEMS" in
+      NO_REVIEW_DIR)
+        echo "No review directory at: ${REVIEW_DIR}" >&2
+        ;;
+      NO_REVIEWERS_CONFIGURED)
+        echo "No reviewers configured in nazgul/config.json (agents.reviewers is empty)." >&2
+        echo "Run Discovery to generate the reviewer roster." >&2
+        ;;
+      *)
+        MISSING_LIST=$(echo "$EVIDENCE_PROBLEMS" | awk '$1=="MISSING"{printf " %s", $2}')
+        UNAPPROVED_LIST=$(echo "$EVIDENCE_PROBLEMS" | awk '$1=="UNAPPROVED"{printf " %s", $2}')
+        if [ -n "$MISSING_LIST" ]; then
+          echo "Missing reviews from configured reviewers:${MISSING_LIST}" >&2
+        fi
+        if [ -n "$UNAPPROVED_LIST" ]; then
+          echo "Review does not contain APPROVED verdict:${UNAPPROVED_LIST}" >&2
+        fi
+        if [ -z "$MISSING_LIST" ] && [ -z "$UNAPPROVED_LIST" ]; then
+          echo "Unexpected review evidence problem: ${EVIDENCE_PROBLEMS}" >&2
+        fi
+        ;;
     esac
-    REVIEW_COUNT=$((REVIEW_COUNT + 1))
-  done
-
-  if [ "$REVIEW_COUNT" -eq 0 ]; then
-    echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
-    echo "Review directory exists but contains no reviewer files." >&2
     echo "ALL reviewers must approve before ${NEW_STATUS} (Constitution Rule 5)." >&2
-    exit 2
-  fi
-
-  # Check 3: Every reviewer must have APPROVED
-  for review_file in "$REVIEW_DIR"/*.md; do
-    [ -f "$review_file" ] || continue
-    BASENAME=$(basename "$review_file")
-    case "$BASENAME" in
-      test-failures.md|consolidated-feedback.md|simplify-report.md) continue ;;
-    esac
-    if ! grep -qi 'APPROVED' "$review_file" 2>/dev/null; then
-      echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
-      echo "Review ${BASENAME} does not contain APPROVED verdict." >&2
-      echo "ALL reviewers must approve before ${NEW_STATUS} (Constitution Rule 5)." >&2
-      exit 2
-    fi
-  done
-
-  # Check 4: ALL configured reviewers must have a review file
-  CONFIGURED_REVIEWERS=""
-  if [ -f "$CONFIG" ]; then
-    CONFIGURED_REVIEWERS=$(jq -r '.agents.reviewers // [] | .[]' "$CONFIG" 2>/dev/null || echo "")
-  fi
-
-  if [ -z "$CONFIGURED_REVIEWERS" ]; then
-    # No reviewers configured = cannot verify review gate
-    echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
-    echo "No reviewers configured in nazgul/config.json (agents.reviewers is empty)." >&2
-    echo "Run Discovery to generate the reviewer roster." >&2
-    exit 2
-  fi
-
-  MISSING_REVIEWERS=""
-  while IFS= read -r reviewer; do
-    [ -z "$reviewer" ] && continue
-    if [ ! -f "$REVIEW_DIR/${reviewer}.md" ]; then
-      MISSING_REVIEWERS="${MISSING_REVIEWERS} ${reviewer}"
-    fi
-  done <<< "$CONFIGURED_REVIEWERS"
-  if [ -n "$MISSING_REVIEWERS" ]; then
-    echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
-    echo "Missing reviews from configured reviewers:${MISSING_REVIEWERS}" >&2
-    echo "ALL configured reviewers must approve before ${NEW_STATUS} (Constitution Rule 5)." >&2
     exit 2
   fi
 fi
