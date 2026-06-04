@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.2] - 2026-06-04
+
+### Fixed
+- YOLO review-gate livelock from a verdict verb-form mismatch: reviewer agents write `## Verdict: APPROVE`, but `_has_approved_verdict` in `scripts/lib/review-evidence.sh` only matched the past participle `approved`, so every fully-reviewed file read as `UNAPPROVED` and the stop hook reset all tasks `DONE → IMPLEMENTED` every iteration (burning the full `--max` budget after a false `NAZGUL_COMPLETE`). The matcher now accepts `APPROVE`/`APPROVES`/`APPROVED` while keeping anchoring and a word boundary so `approval denied` and the `approved` substring in `UNAPPROVED` don't false-match
+- Reviewer template (`agents/templates/reviewer-base.md`) now requires exactly one verbatim verdict line with the canonical token and explicitly forbids the imperative `APPROVE`, preventing recurrence
+
 ## [1.3.1] - 2026-06-04
 
 ### Fixed

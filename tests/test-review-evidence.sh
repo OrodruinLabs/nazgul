@@ -169,4 +169,57 @@ assert_not_contains "bold verdict accepted" "$VAL_OUTPUT" "code-reviewer"
 assert_contains "UNAPPROVED text not a false positive" "$VAL_OUTPUT" "UNAPPROVED qa-reviewer"
 teardown_temp_dir
 
+# --- Test 13 (REGRESSION — verb-form livelock): imperative "APPROVE" counts ---
+# Reviewer agents naturally write "## Verdict: APPROVE"; the matcher must accept it.
+setup_evidence_env "code-reviewer"
+write_review "TASK-001" "code-reviewer" "APPROVE"
+run_validate "TASK-001"
+assert_exit_code "imperative APPROVE: exit 0" "$VAL_EC" 0
+assert_eq "imperative APPROVE: no output" "$VAL_OUTPUT" ""
+teardown_temp_dir
+
+# --- Test 14: 3rd-person "APPROVES" counts ---
+setup_evidence_env "code-reviewer"
+write_review "TASK-001" "code-reviewer" "APPROVES"
+run_validate "TASK-001"
+assert_exit_code "APPROVES: exit 0" "$VAL_EC" 0
+teardown_temp_dir
+
+# --- Test 15: APPROVE with trailing punctuation on the verdict line counts ---
+# The trailing "." exercises the [^[:alpha:]] boundary branch (not the $ end-of-line
+# branch that Test 13's punctuation-free "## Verdict: APPROVE" already covers).
+setup_evidence_env "code-reviewer"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+cat > "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md" << 'REVIEW_EOF'
+# Review: TASK-001
+
+## Verdict: APPROVE.
+
+Typecheck + 147 tests green. APPROVE.
+REVIEW_EOF
+run_validate "TASK-001"
+assert_exit_code "APPROVE with punctuation: exit 0" "$VAL_EC" 0
+teardown_temp_dir
+
+# --- Test 16: "UNAPPROVED" on a verdict line does NOT match (substring guard) ---
+setup_evidence_env "code-reviewer"
+write_review "TASK-001" "code-reviewer" "UNAPPROVED"
+run_validate "TASK-001"
+assert_exit_code "verdict UNAPPROVED: exit 1" "$VAL_EC" 1
+assert_contains "verdict UNAPPROVED flagged" "$VAL_OUTPUT" "UNAPPROVED code-reviewer"
+teardown_temp_dir
+
+# --- Test 17: "approval denied" does NOT false-positive (word-boundary guard) ---
+setup_evidence_env "code-reviewer"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+cat > "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md" << 'REVIEW_EOF'
+# Review: TASK-001
+
+## Verdict: approval denied — blocking issues remain
+REVIEW_EOF
+run_validate "TASK-001"
+assert_exit_code "approval denied: exit 1" "$VAL_EC" 1
+assert_contains "approval denied flagged unapproved" "$VAL_OUTPUT" "UNAPPROVED code-reviewer"
+teardown_temp_dir
+
 report_results

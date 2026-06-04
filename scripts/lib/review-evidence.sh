@@ -13,15 +13,19 @@ _is_review_meta_file() {
   esac
 }
 
-# A file counts as APPROVED only when the word appears on a verdict line
-# ("## Verdict: APPROVED", "**Final Verdict: APPROVED**") or at the start of
-# a line (e.g. "APPROVED — no blocking issues" under a Final Verdict header).
-# Prose mentions ("this pattern is approved elsewhere") and UNAPPROVED do not
-# count. Case-insensitive.
+# A file counts as APPROVED only when the verdict token appears on a verdict
+# line ("## Verdict: APPROVED", "**Final Verdict: APPROVED**") or at the start
+# of a line (e.g. "APPROVED — no blocking issues" under a Final Verdict header).
+# Accepts the imperative/3rd-person forms reviewers naturally write —
+# APPROVE / APPROVES / APPROVED — not just the past participle. The trailing
+# word boundary keeps "approval denied" and the "approved" substring inside
+# "UNAPPROVED" from matching. Prose mentions ("this pattern is approved
+# elsewhere") don't count because they lack the verdict-line/line-start anchor.
+# Case-insensitive.
 # Usage: _has_approved_verdict <file>
 _has_approved_verdict() {
-  grep -qiE 'verdict[^[:alpha:]]*approved' "$1" 2>/dev/null && return 0
-  grep -qiE '^[[:space:]#>*`_-]*approved([^[:alpha:]]|$)' "$1" 2>/dev/null
+  grep -qiE 'verdict[^[:alpha:]]*approve(d|s)?([^[:alpha:]]|$)' "$1" 2>/dev/null && return 0
+  grep -qiE '^[[:space:]#>*`_-]*approve(d|s)?([^[:alpha:]]|$)' "$1" 2>/dev/null
 }
 
 # Validate review evidence for a task.

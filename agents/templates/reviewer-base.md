@@ -70,8 +70,11 @@ For each finding:
 - REJECT: [blocking items] (confidence: N/100)
 
 ## Final Verdict
-- `APPROVED` — {{approved_criteria}}
-- `CHANGES_REQUESTED` — {{rejected_criteria}}
+
+End your review with **exactly one** verdict line, written verbatim, using the canonical token `APPROVED` (past participle) — not the imperative `APPROVE` — so every reviewer's verdict reads consistently:
+
+- `Final Verdict: APPROVED` — {{approved_criteria}}
+- `Final Verdict: CHANGES_REQUESTED` — {{rejected_criteria}}
 
 {{^bundle_mode}}
 Write your review to `nazgul/reviews/[TASK-ID]/{{reviewer_name}}.md`.
