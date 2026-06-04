@@ -24,7 +24,7 @@ Objective → Discovery (+Classification) → Doc Generator → Planner → Impl
 | Specialists (conditional) | Designer, Frontend Dev, Mobile Dev, DevOps, CI/CD, DB Migration, Debugger |
 | Post-Loop (conditional) | Documentation, Release Manager, Observability, Simplifier |
 
-Discovery generates only the agents a given project needs. The full set of core agents exists as specs, plus a reviewer template (`agents/templates/reviewer-base.md`) that spawns project-specific reviewers driven by `reviewer-domains.json`.
+Discovery generates only the agents a given project needs. The full set of core agents exists as specs, plus a reviewer template (`agents/templates/reviewer-base.md`) that spawns project-specific reviewers driven by `agents/templates/reviewer-domains.json`.
 
 ## Recovery
 

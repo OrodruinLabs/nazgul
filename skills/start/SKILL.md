@@ -87,14 +87,15 @@ When launching Nazgul, use session naming for identification:
 
 Loop counters are **per-run state, not objective state**. A stale counter left over from a previous run will silently brick the loop: the stop hook hits its max-iteration or consecutive-failure gate on the very first iteration and exits 0 (allows the stop) instead of re-dispatching — so the loop "never continues" even though READY tasks exist.
 
-**As soon as you determine the state is anything other than NOT_INITIALIZED — and before delegating to any agent — reset the counters:**
+**Before delegating to any agent, reset the counters.** The `[ -f ... ]` guard makes this a safe no-op in the NOT_INITIALIZED case (no `nazgul/config.json` yet), so the command is always safe to run regardless of ordering:
 
 ```bash
-jq '.current_iteration = 0 | .safety.consecutive_failures = 0 | .safety._prev_done_count = 0' \
-  nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
+[ -f nazgul/config.json ] && \
+  jq '.current_iteration = 0 | .safety.consecutive_failures = 0 | .safety._prev_done_count = 0' \
+    nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
 ```
 
-This applies to **every** loop-starting path (ACTIVE_LOOP, DOCS_READY, DISCOVERY_DONE, FRESH, New Objective Override). Do not skip it.
+This applies to **every** loop-starting path (ACTIVE_LOOP, DOCS_READY, DISCOVERY_DONE, FRESH, New Objective Override). Do not skip it for those states.
 
 ### Smart State Detection
 
