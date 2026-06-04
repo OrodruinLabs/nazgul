@@ -5,7 +5,7 @@ context: fork
 allowed-tools: Read, Bash, Glob
 metadata:
   author: Jose Mejia
-  version: 1.3.0
+  version: 1.3.1
 ---
 
 # Nazgul Log

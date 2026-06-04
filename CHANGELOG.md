@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.1] - 2026-06-04
+
+### Fixed
+- `/nazgul:start` now resets loop counters (`current_iteration`, `safety.consecutive_failures`, `safety._prev_done_count`) on every loop-starting path. Previously only the ACTIVE_LOOP/`--continue` resume paths reset `current_iteration` and nothing ever reset `consecutive_failures`, so starting a fresh objective (e.g. `/nazgul:start --yolo`) with stale counters at/over their caps silently bricked the loop — the Stop hook hit its max-iteration or consecutive-failure gate and exited 0 (allowed the stop) instead of re-dispatching, despite READY tasks
+- Restored four README-linked docs (`docs/ARCHITECTURE.md`, `CONFIGURATION.md`, `SAFETY.md`, `PLUGINS.md`) deleted in the Hydra→Nazgul rebrand, rebranded and fact-checked against the current codebase — the README "Learn More" links no longer 404
+
 ## [1.3.0] - 2026-06-03
 
 ### Fixed

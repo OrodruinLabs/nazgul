@@ -33,7 +33,7 @@
 
 **Loop stops unexpectedly** — Check `nazgul/config.json` for `max_iterations` or `consecutive_failures`. Run `/nazgul:start` to resume.
 
-**Task stuck as BLOCKED** — Check `nazgul/tasks/TASK-NNN.md` for the `blocked_reason`. Fix the issue manually, then run `/nazgul:task unblock TASK-NNN` or set status to READY and `/nazgul:start`.
+**Task stuck as BLOCKED** — Check the `- **Blocked reason**:` line in `nazgul/tasks/TASK-NNN.md`. Fix the issue manually, then run `/nazgul:task unblock TASK-NNN` or set status to READY and `/nazgul:start`.
 
 **Want to see what happened overnight?** — Run `/nazgul:log` for a full timeline of iterations, commits, reviews, and blockers.
 

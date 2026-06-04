@@ -6,7 +6,7 @@ disable-model-invocation: true
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task
 metadata:
   author: Jose Mejia
-  version: 1.3.0
+  version: 1.3.1
 ---
 
 # Nazgul Start
@@ -83,6 +83,20 @@ When launching Nazgul, use session naming for identification:
 - Launch with: `claude -n "nazgul-<feat_display_id>"` (e.g., `claude -n "nazgul-FEAT-003"`)
 - Agent Teams sessions are auto-named by the team-orchestrator: `nazgul-impl-TASK-NNN`, `nazgul-review-TASK-NNN`
 
+### Reset Loop Counters (MANDATORY)
+
+Loop counters are **per-run state, not objective state**. A stale counter left over from a previous run will silently brick the loop: the stop hook hits its max-iteration or consecutive-failure gate on the very first iteration and exits 0 (allows the stop) instead of re-dispatching — so the loop "never continues" even though READY tasks exist.
+
+**Before delegating to any agent, reset the counters.** The `[ -f ... ]` guard makes this a safe no-op in the NOT_INITIALIZED case (no `nazgul/config.json` yet), so the command is always safe to run regardless of ordering:
+
+```bash
+[ -f nazgul/config.json ] && \
+  jq '.current_iteration = 0 | .safety.consecutive_failures = 0 | .safety._prev_done_count = 0' \
+    nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
+```
+
+This applies to **every** loop-starting path (ACTIVE_LOOP, DOCS_READY, DISCOVERY_DONE, FRESH, New Objective Override). Do not skip it for those states.
+
 ### Smart State Detection
 
 Evaluate the preprocessor data above. Work through this state machine top-to-bottom — take the FIRST state that matches:
@@ -113,7 +127,7 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
      e. Store `feat_id` and `feat_display_id` in config.json. Set `afk.commit_prefix` to `feat(<display_id>):`.
      f. `git checkout -b feat/<display_id>-<slug>`
      g. Create worktree dir, store paths in config
-6. Update config.json: set mode from flags (afk/hitl), reset `current_iteration` to 0. If `current_iteration >= max_iterations`, ALSO reset `current_iteration` to 0 and bump `max_iterations` by its original value (e.g., 40 → 80) to allow the continued run to have a full iteration budget.
+6. Update config.json: set mode from flags (afk/hitl). (Loop counters were already reset by the mandatory **Reset Loop Counters** step above.)
 7. Delegate to the appropriate agent based on active task status:
    - READY/IN_PROGRESS → Implementer
    - IMPLEMENTED/IN_REVIEW → Review Gate
@@ -313,7 +327,7 @@ When the user explicitly passes an objective string in `$ARGUMENTS`:
 
 ### `--continue` Flag (backward compatibility)
 
-If `--continue` is present, behave exactly as ACTIVE_LOOP state. Also reset `current_iteration` to 0 if it has reached `max_iterations`.
+If `--continue` is present, behave exactly as ACTIVE_LOOP state (loop counters are reset by the mandatory **Reset Loop Counters** step).
 If no active tasks found: "Nothing to continue. Run `/nazgul:start` to auto-detect what to do."
 
 ---
