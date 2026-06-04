@@ -14,7 +14,7 @@ _is_review_meta_file() {
 }
 
 # A file counts as APPROVED only when the verdict token appears on a verdict
-# line ("## Verdict: APPROVED", "**Final Verdict: APPROVE**") or at the start
+# line ("## Verdict: APPROVED", "**Final Verdict: APPROVED**") or at the start
 # of a line (e.g. "APPROVED — no blocking issues" under a Final Verdict header).
 # Accepts the imperative/3rd-person forms reviewers naturally write —
 # APPROVE / APPROVES / APPROVED — not just the past participle. The trailing

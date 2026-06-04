@@ -71,7 +71,7 @@ For each finding:
 
 ## Final Verdict
 
-End your review with **exactly one** verdict line, written verbatim. Use the canonical token — `APPROVED` (past participle), never the imperative `APPROVE` — so the evidence validator recognizes it:
+End your review with **exactly one** verdict line, written verbatim, using the canonical token `APPROVED` (past participle) — not the imperative `APPROVE` — so every reviewer's verdict reads consistently:
 
 - `Final Verdict: APPROVED` — {{approved_criteria}}
 - `Final Verdict: CHANGES_REQUESTED` — {{rejected_criteria}}

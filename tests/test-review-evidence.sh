@@ -186,12 +186,14 @@ assert_exit_code "APPROVES: exit 0" "$VAL_EC" 0
 teardown_temp_dir
 
 # --- Test 15: APPROVE with trailing punctuation on the verdict line counts ---
+# The trailing "." exercises the [^[:alpha:]] boundary branch (not the $ end-of-line
+# branch that Test 13's punctuation-free "## Verdict: APPROVE" already covers).
 setup_evidence_env "code-reviewer"
 mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
 cat > "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md" << 'REVIEW_EOF'
 # Review: TASK-001
 
-## Verdict: APPROVE
+## Verdict: APPROVE.
 
 Typecheck + 147 tests green. APPROVE.
 REVIEW_EOF
