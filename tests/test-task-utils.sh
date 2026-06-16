@@ -123,4 +123,35 @@ result=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-009.md")
 assert_eq "set_task_status ATX block format" "$result" "IN_PROGRESS"
 teardown_temp_dir
 
+# --- Canonical frontmatter status (new) ---
+FM=$(mktemp)
+printf -- '---\nstatus: IN_REVIEW\n---\n# TASK-1\n- **Status**: PLANNED\n' > "$FM"
+assert_eq "frontmatter wins over legacy line" "$(get_task_status "$FM")" "IN_REVIEW"
+
+printf -- '---\nstatus: NONSENSE\n---\n- **Status**: READY\n' > "$FM"
+assert_eq "invalid frontmatter status → INVALID" "$(get_task_status "$FM")" "INVALID"
+
+printf -- '# TASK-1\n- **Status**: BLOCKED\n' > "$FM"
+assert_eq "legacy list-item fallback" "$(get_task_status "$FM")" "BLOCKED"
+
+printf -- '---\nstatus: READY\n---\n# TASK-1\n' > "$FM"
+set_task_status "$FM" READY IN_PROGRESS
+assert_eq "set updates frontmatter" "$(get_task_status "$FM")" "IN_PROGRESS"
+rm -f "$FM"
+
+CRLF=$(mktemp)
+printf -- '---\r\nstatus: READY\r\n---\r\n# TASK\r\n' > "$CRLF"
+set_task_status "$CRLF" READY IN_PROGRESS
+assert_eq "set_task_status rewrites CRLF frontmatter" "$(get_task_status "$CRLF")" "IN_PROGRESS"
+rm -f "$CRLF"
+
+# Compare-and-swap: frontmatter rewrite honors old_status (matches list-item branch)
+CAS=$(mktemp)
+printf -- '---\nstatus: IN_REVIEW\n---\n# TASK\n' > "$CAS"
+set_task_status "$CAS" READY DONE   # old_status mismatch → no-op
+assert_eq "frontmatter set is no-op when old_status mismatches" "$(get_task_status "$CAS")" "IN_REVIEW"
+set_task_status "$CAS" IN_REVIEW DONE   # old_status matches → transition
+assert_eq "frontmatter set transitions when old_status matches" "$(get_task_status "$CAS")" "DONE"
+rm -f "$CAS"
+
 report_results

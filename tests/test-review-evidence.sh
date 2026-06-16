@@ -222,4 +222,41 @@ assert_exit_code "approval denied: exit 1" "$VAL_EC" 1
 assert_contains "approval denied flagged unapproved" "$VAL_OUTPUT" "UNAPPROVED code-reviewer"
 teardown_temp_dir
 
+# --- Structured-verdict path + historical livelock regressions ---
+SS_DIR=$(mktemp -d)
+mkdir -p "$SS_DIR/reviews/TASK-900"
+printf '{"agents":{"reviewers":["code-reviewer"]}}' > "$SS_DIR/config.json"
+
+# Structured APPROVE passes the gate
+printf -- '---\nverdict: APPROVE\nconfidence: 95\n---\nlooks good\n' > "$SS_DIR/reviews/TASK-900/code-reviewer.md"
+rc=0; validate_review_evidence "$SS_DIR" "TASK-900" >/dev/null || rc=$?
+assert_exit_code "structured APPROVE → gate passes" "$rc" 0
+
+# 1.3.2 regression: imperative APPROVE (now the canonical enum value) passes
+printf -- '---\nverdict: APPROVE\nconfidence: 80\n---\n' > "$SS_DIR/reviews/TASK-900/code-reviewer.md"
+rc=0; validate_review_evidence "$SS_DIR" "TASK-900" >/dev/null || rc=$?
+assert_exit_code "1.3.2 imperative APPROVE → passes" "$rc" 0
+
+# Structured CHANGES_REQUESTED is NOT approved
+printf -- '---\nverdict: CHANGES_REQUESTED\nconfidence: 90\n---\n' > "$SS_DIR/reviews/TASK-900/code-reviewer.md"
+out=$(validate_review_evidence "$SS_DIR" "TASK-900" || true)
+assert_contains "CHANGES_REQUESTED → UNAPPROVED" "$out" "UNAPPROVED code-reviewer"
+
+# Malformed verdict fails loudly (not silently approved)
+printf -- '---\nverdict: LGTM\nconfidence: 99\n---\n' > "$SS_DIR/reviews/TASK-900/code-reviewer.md"
+out=$(validate_review_evidence "$SS_DIR" "TASK-900" || true)
+assert_contains "invalid verdict → UNAPPROVED" "$out" "UNAPPROVED code-reviewer"
+
+# 1.3.0 regression: summary.md is meta, not a reviewer file (still excluded)
+printf -- '---\nverdict: APPROVE\n---\n' > "$SS_DIR/reviews/TASK-900/code-reviewer.md"
+printf -- 'consolidated junk\n' > "$SS_DIR/reviews/TASK-900/summary.md"
+rc=0; validate_review_evidence "$SS_DIR" "TASK-900" >/dev/null || rc=$?
+assert_exit_code "1.3.0 summary.md ignored → passes" "$rc" 0
+
+# Legacy fallback: old-style verdict line still works when no frontmatter
+printf -- '# Review\n\nFinal Verdict: APPROVED — ok\n' > "$SS_DIR/reviews/TASK-900/code-reviewer.md"
+rc=0; validate_review_evidence "$SS_DIR" "TASK-900" >/dev/null || rc=$?
+assert_exit_code "legacy APPROVED line still passes (fallback)" "$rc" 0
+rm -rf "$SS_DIR"
+
 report_results

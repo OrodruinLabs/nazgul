@@ -17,7 +17,7 @@ hooks:
   SubagentStop:
     - hooks:
         - type: prompt
-          prompt: "A reviewer subagent is trying to stop. Check if it has written its review file to nazgul/reviews/[TASK-ID]/[reviewer-name].md (inside a per-task subdirectory, NOT flat in nazgul/reviews/). The file must contain a Final Verdict (APPROVED or CHANGES_REQUESTED). If no review file was written in the correct location, block and instruct the reviewer to create the nazgul/reviews/[TASK-ID]/ directory and write its review there. $ARGUMENTS"
+          prompt: "A reviewer subagent is trying to stop. Check if it has written its review file to nazgul/reviews/[TASK-ID]/[reviewer-name].md (inside a per-task subdirectory, NOT flat in nazgul/reviews/). The file MUST BEGIN with a YAML frontmatter block (as its first lines) containing `verdict: APPROVE` or `verdict: CHANGES_REQUESTED` and an integer `confidence:`. If no review file was written in the correct location, block and instruct the reviewer to create the nazgul/reviews/[TASK-ID]/ directory and write its review there. If the file exists but is missing the frontmatter block, or `verdict:` is not exactly one of `APPROVE` or `CHANGES_REQUESTED`, block and instruct the reviewer to add the canonical frontmatter block (verdict + integer confidence) at the very top of the file. $ARGUMENTS"
 # {{/bundle_mode}}
 ---
 
@@ -75,10 +75,19 @@ For each finding:
 
 ## Final Verdict
 
-End your review with **exactly one** verdict line, written verbatim, using the canonical token `APPROVED` (past participle) — not the imperative `APPROVE` — so every reviewer's verdict reads consistently:
+Begin your review file with a YAML frontmatter block as the FIRST lines of the file, then your narrative below it:
 
-- `Final Verdict: APPROVED` — {{approved_criteria}}
-- `Final Verdict: CHANGES_REQUESTED` — {{rejected_criteria}}
+```yaml
+---
+verdict: APPROVE
+confidence: 92
+---
+```
+
+- `verdict: APPROVE` — {{approved_criteria}}
+- `verdict: CHANGES_REQUESTED` — {{rejected_criteria}}
+
+`verdict` MUST be exactly `APPROVE` or `CHANGES_REQUESTED`; `confidence` is an integer 0-100. Any other verdict value is rejected by the review-evidence gate and blocks the task.
 
 {{^bundle_mode}}
 Write your review to `nazgul/reviews/[TASK-ID]/{{reviewer_name}}.md`.

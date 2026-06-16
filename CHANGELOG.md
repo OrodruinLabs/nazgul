@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2026-06-16
+
+### Changed
+- Review verdicts and task status are now read from a canonical YAML frontmatter block via a single shared parser (`scripts/lib/structured-state.sh`), replacing the regex/awk sniffing in `review-evidence.sh` and `task-utils.sh`. Verdicts validate against a fixed enum (`APPROVE`|`CHANGES_REQUESTED`) and task status against the state-machine enum; a malformed block now fails **loudly** (surfaces as `UNAPPROVED` / a blocked transition) instead of silently mis-reading. This retires the parsing-drift bug class behind the 1.3.0, 1.3.2, and #17 review-gate livelocks. Existing files keep working via an absent→legacy fallback (no forced migration). Roadmap item 1.4.1.
+- Reviewer agents (`reviewer-base.md`) now write a `verdict:`/`confidence:` frontmatter block at the top of their review file; task manifests carry a canonical `status:` frontmatter block (the `- **Status**:` line is now a display mirror).
+
+### Added
+- `scripts/lib/structured-state.sh` — frontmatter parser with enum validation, CRLF tolerance, quoted-scalar handling, an idempotent source guard, and a `set -e`-safe contract.
+- `tests/test-structured-state.sh`; regression cases in `test-review-evidence.sh`/`test-task-utils.sh` pinning the historical livelocks and the structured/legacy/INVALID paths.
+
 ## [1.3.5] - 2026-06-16
 
 ### Changed
