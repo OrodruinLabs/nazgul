@@ -145,4 +145,13 @@ set_task_status "$CRLF" READY IN_PROGRESS
 assert_eq "set_task_status rewrites CRLF frontmatter" "$(get_task_status "$CRLF")" "IN_PROGRESS"
 rm -f "$CRLF"
 
+# Compare-and-swap: frontmatter rewrite honors old_status (matches list-item branch)
+CAS=$(mktemp)
+printf -- '---\nstatus: IN_REVIEW\n---\n# TASK\n' > "$CAS"
+set_task_status "$CAS" READY DONE   # old_status mismatch → no-op
+assert_eq "frontmatter set is no-op when old_status mismatches" "$(get_task_status "$CAS")" "IN_REVIEW"
+set_task_status "$CAS" IN_REVIEW DONE   # old_status matches → transition
+assert_eq "frontmatter set transitions when old_status matches" "$(get_task_status "$CAS")" "DONE"
+rm -f "$CAS"
+
 report_results

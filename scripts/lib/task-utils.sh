@@ -48,11 +48,18 @@ get_task_status() {
 set_task_status() {
   local file="$1" old_status="$2" new_status="$3"
   if has_status_frontmatter "$file"; then
-    # Canonical frontmatter: rewrite the status: line inside the leading --- fence.
-    # The rewrite awk tolerates CRLF because /^---[[:space:]]*$/ matches a trailing \r.
-    awk -v new="$new_status" '
+    # Canonical frontmatter: rewrite the status: line inside the leading --- fence,
+    # honoring the compare-and-swap contract — only transition when the current
+    # value equals old_status (matches the list-item branch; a mismatch is a no-op).
+    # CRLF-tolerant: strips a trailing \r from the current value before comparing,
+    # and /^---[[:space:]]*$/ matches a trailing \r on the fence.
+    awk -v old="$old_status" -v new="$new_status" '
       NR==1 {print; infm=1; next}
-      infm && /^status[[:space:]]*:/ {print "status: " new; next}
+      infm && /^status[[:space:]]*:/ {
+        cur=$0; sub(/^status[[:space:]]*:[[:space:]]*/, "", cur); sub(/\r$/, "", cur)
+        if (cur == old) { print "status: " new } else { print }
+        next
+      }
       infm && /^---[[:space:]]*$/ {infm=0; print; next}
       {print}
     ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"

@@ -77,7 +77,7 @@ For each finding:
 
 Begin your review file with a YAML frontmatter block as the FIRST lines of the file, then your narrative below it:
 
-```
+```yaml
 ---
 verdict: APPROVE
 confidence: 92
