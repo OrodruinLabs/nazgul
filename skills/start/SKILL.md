@@ -7,7 +7,7 @@ argument-hint: "[\"objective\"] [--afk|--yolo|--hitl] [--max N]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task
 metadata:
   author: Jose Mejia
-  version: 1.4.1
+  version: 1.4.2
 ---
 
 # Nazgul Start

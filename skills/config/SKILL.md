@@ -6,7 +6,7 @@ argument-hint: "[models]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 1.4.1
+  version: 1.4.2
 ---
 
 # Nazgul Config
