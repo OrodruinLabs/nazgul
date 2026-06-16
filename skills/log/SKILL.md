@@ -5,7 +5,7 @@ context: fork
 allowed-tools: Read, Bash, Glob
 metadata:
   author: Jose Mejia
-  version: 1.4.1
+  version: 1.4.2
 ---
 
 # Nazgul Log
@@ -16,7 +16,7 @@ metadata:
 ## Current State
 - Iteration logs: !`tail -20 nazgul/logs/iterations.jsonl 2>/dev/null || echo "No iteration logs"`
 - Recent commits: !`git log --oneline --grep="$(jq -r '.afk.commit_prefix // "feat("' nazgul/config.json 2>/dev/null)" -20 2>/dev/null || echo "No commits found"`
-- Checkpoints: !`ls -1t nazgul/checkpoints/iteration-*.json 2>/dev/null | head -5 || echo "No checkpoints"`
+- Checkpoints: !`ls -1t nazgul/checkpoints/iteration-*.json 2>/dev/null | head -2 || echo "No checkpoints"`
 
 ## Instructions
 
@@ -26,11 +26,11 @@ Build a unified timeline from all Nazgul activity sources and present it as a fo
 
 Gather events from the preprocessor data above. Each source provides different event types:
 
-1. **Iteration logs** (`nazgul/logs/iterations.jsonl`): Each line is a JSON object with `timestamp`, `iteration`, `task_id`, `action`, `result`. These are the primary timeline markers.
+1. **Iteration logs** (`nazgul/logs/iterations.jsonl`): Each line is a JSON object. Iteration-boundary lines carry `iteration`, `timestamp`, `active_task`, `status`, `done`, `total`, `git_sha`, `blocked_reason`; some lines from other writers carry an `event` field (e.g. `stop_failure`, `task_completed`) plus `timestamp` instead. These are the primary timeline markers.
 
 2. **Git commits** (filtered by commit prefix from config): Commits with the configured prefix represent state changes committed to disk. Read `afk.commit_prefix` from config to determine the grep pattern. Extract the timestamp, short hash, and message.
 
-3. **Checkpoints** (`nazgul/checkpoints/iteration-*.json`): Each file captures a full snapshot at an iteration boundary. Read the latest 5 for context recovery info.
+3. **Checkpoints** (`nazgul/checkpoints/iteration-*.json`): Each file captures a full snapshot at an iteration boundary. Checkpoints are **retention-limited** (only the latest ~2 survive — they exist for recovery, not full history), so read the most recent for context-recovery detail and rely on `iterations.jsonl` (source 1) for the full timeline.
 
 ### Step 2: Build Unified Timeline
 

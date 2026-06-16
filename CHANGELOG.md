@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.2] - 2026-06-17
+
+### Changed
+- Checkpoint retention reduced from 10 to 2 per run (roadmap 1.4.3). Recovery only ever reads the latest checkpoint, so the extra 8 were pure per-run churn; one extra is kept for diff-base safety. The diagnostic reports (`test-failures.md`/`simplify-report.md`) are intentionally kept — they're conditional human diagnostics already gitignored in shared mode.
+- The AFK-timeout clock now uses `objective_set_at` as its **primary** source (oldest-checkpoint timestamp only as fallback) — more accurate (true objective start) and independent of checkpoint pruning.
+- `/nazgul:metrics` and `/nazgul:log` now source iteration history (total iterations, time span, timeline) from the durable, never-pruned `nazgul/logs/iterations.jsonl` rather than the now-retention-limited checkpoint files, so reducing checkpoint retention doesn't regress those views.
+
 ## [1.4.1] - 2026-06-16
 
 ### Added

@@ -5,7 +5,7 @@ context: fork
 allowed-tools: Read, Bash, Glob, Grep
 metadata:
   author: Jose Mejia
-  version: 1.4.1
+  version: 1.4.2
 ---
 
 # Nazgul Metrics
@@ -17,7 +17,7 @@ metadata:
 ## Current State
 - Config: !`cat nazgul/config.json 2>/dev/null | head -3 || echo "NOT_INITIALIZED"`
 - Tasks dir: !`ls nazgul/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' '`
-- Checkpoints dir: !`ls nazgul/checkpoints/iteration-*.json 2>/dev/null | wc -l | tr -d ' '`
+- Checkpoints retained (recovery only): !`ls nazgul/checkpoints/iteration-*.json 2>/dev/null | wc -l | tr -d ' '`
 - Reviews dir: !`ls -d nazgul/reviews/TASK-*/ 2>/dev/null | wc -l | tr -d ' '`
 
 ## Arguments
@@ -38,10 +38,11 @@ Read these sources to compute metrics:
    - For each task: count retry attempts (how many times status went to CHANGES_REQUESTED)
    - Extract claimed_at and completed_at timestamps for velocity
 
-2. **Checkpoints** (`nazgul/checkpoints/iteration-*.json`):
-   - Total iterations run
+2. **Iteration log** (`nazgul/logs/iterations.jsonl`) — the durable, never-pruned per-iteration record (one JSON line each: `iteration`, `timestamp`, `done`, `total`, `git_sha`). Use this as the authoritative source for:
+   - Total iterations run (max `.iteration`, or line count)
    - First and last iteration timestamps (for time span)
-   - Compaction count
+
+   NOTE: `nazgul/checkpoints/` is retention-limited (only the latest ~2 survive — they exist for recovery, not history), so do NOT count checkpoint files for iteration totals or time span. Use `iterations.jsonl`. Read the compaction count from `nazgul/.compaction_count` (or count `"event":"compaction"`-style markers in the log) rather than from checkpoints.
 
 3. **Review files** (`nazgul/reviews/TASK-*/`):
    - For each task reviewed: count reviewer verdicts (APPROVED vs CHANGES_REQUESTED)
@@ -59,7 +60,7 @@ Read these sources to compute metrics:
 - **Retry distribution**: histogram of retry counts (0, 1, 2, 3)
 - **Reviewer blocking rate**: per reviewer, rejections / total reviews
 - **Avg iterations per task**: total iterations / tasks DONE
-- **Time span**: first checkpoint timestamp to last
+- **Time span**: first to last `timestamp` in `iterations.jsonl`
 - **Loop health**: consecutive failures, compaction count, active task status
 
 ### Display Format
