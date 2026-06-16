@@ -2,6 +2,10 @@
 # Nazgul shared task utilities — sourced by scripts that read/write task manifests.
 # Eliminates duplication of get_task_status(), set_task_status(), and task counting.
 
+_TU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$_TU_DIR/structured-state.sh"
+
 # Extract status from a task manifest file.
 # Supports four formats:
 #   1. List-item:    - **Status**: X
@@ -11,6 +15,12 @@
 # Usage: get_task_status <file> [default]
 get_task_status() {
   local result
+  # Canonical frontmatter status takes precedence; INVALID surfaces loudly.
+  local fm_status fm_rc
+  fm_status=$(read_task_status "$1") && fm_rc=0 || fm_rc=$?
+  if [ "$fm_rc" -eq 0 ]; then echo "$fm_status"; return; fi
+  if [ "$fm_rc" -eq 2 ]; then echo "INVALID"; return; fi
+  # fm_rc==1 (no status frontmatter): fall through to legacy parsing below.
   # Try inline formats first (colon on same line)
   result=$(grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$1" 2>/dev/null | sed 's/.*:[[:space:]]*//')
   if [ -n "$result" ]; then
@@ -37,7 +47,16 @@ get_task_status() {
 # Usage: set_task_status <file> <old_status> <new_status>
 set_task_status() {
   local file="$1" old_status="$2" new_status="$3"
-  if grep -q '^## Status:' "$file" 2>/dev/null; then
+  if [ "$(sed -n '1p' "$file" 2>/dev/null)" = "---" ] && \
+     awk 'NR==1{next} /^---[[:space:]]*$/{exit} /^status[[:space:]]*:/{found=1; exit} END{exit !found}' "$file"; then
+    # Canonical frontmatter: status: X (between the leading --- fences)
+    awk -v new="$new_status" '
+      NR==1 {print; infm=1; next}
+      infm && /^status[[:space:]]*:/ {print "status: " new; next}
+      infm && /^---[[:space:]]*$/ {infm=0; print; next}
+      {print}
+    ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+  elif grep -q '^## Status:' "$file" 2>/dev/null; then
     # ATX inline: ## Status: X
     sed -i.bak "s/^## Status:[[:space:]]*${old_status}/## Status: ${new_status}/" "$file" && rm -f "${file}.bak"
   elif grep -q '^\- \*\*Status\*\*:' "$file" 2>/dev/null; then
