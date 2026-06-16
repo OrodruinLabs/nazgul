@@ -64,7 +64,8 @@ Before ANY reviewer runs:
 6. Increment test_failures count and write back to task manifest
 7. If test_failures >= 3: set task to BLOCKED with reason "3 consecutive test failures — requires human investigation". Write detailed test output to `nazgul/reviews/[TASK-ID]/test-failures.md`. Do NOT retry.
 8. Only proceed to reviewers if test_failures < 3 AND ALL pre-checks pass
-9. Record the automated pre-check results (test/lint/build/smoke pass-fail) in `nazgul/tasks/[TASK-ID]/verification.md` so the runtime-verification outcome is visible to `/nazgul:verify`.
+
+   (Do NOT write `nazgul/tasks/[TASK-ID]/verification.md` here — that file is the human-acceptance marker `/nazgul:verify` keys off. Pre-check failures are already captured in the task manifest and, on escalation, `nazgul/reviews/[TASK-ID]/test-failures.md`; a task reaching DONE implies build/smoke passed.)
 
 ### Step 1.5: Verify Diff Exists
 
