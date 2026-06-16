@@ -22,4 +22,22 @@ printf -- '---\nverdict: APPROVE\n---\n' > "$TMP/nokey.md"
 rc=0; read_frontmatter_field "$TMP/nokey.md" status >/dev/null || rc=$?
 assert_exit_code "missing key returns 1" "$rc" 1
 
+# read_verdict
+printf -- '---\nverdict: APPROVE\n---\n' > "$TMP/v_ok.md"
+out=$(read_verdict "$TMP/v_ok.md"); rc=$?
+assert_eq "valid verdict value" "$out" "APPROVE"; assert_exit_code "valid verdict rc" "$rc" 0
+
+printf -- '---\nverdict: CHANGES_REQUESTED\n---\n' > "$TMP/v_cr.md"
+assert_eq "changes_requested verdict" "$(read_verdict "$TMP/v_cr.md")" "CHANGES_REQUESTED"
+
+printf -- '---\nverdict: MAYBE\n---\n' > "$TMP/v_bad.md"
+assert_eq "off-enum verdict -> INVALID" "$(read_verdict "$TMP/v_bad.md" || true)" "INVALID"
+rc=0; read_verdict "$TMP/v_bad.md" >/dev/null || rc=$?
+assert_exit_code "off-enum verdict rc=2" "$rc" 2
+
+printf -- 'Final Verdict: APPROVED\n' > "$TMP/v_none.md"
+assert_eq "no verdict block -> NONE" "$(read_verdict "$TMP/v_none.md" || true)" "NONE"
+rc=0; read_verdict "$TMP/v_none.md" >/dev/null || rc=$?
+assert_exit_code "no verdict block rc=1" "$rc" 1
+
 report_results

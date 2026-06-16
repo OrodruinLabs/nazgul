@@ -24,3 +24,15 @@ _in_list() {
   for item in $2; do [ "$item" = "$needle" ] && return 0; done
   return 1
 }
+
+# read_verdict <file> -> APPROVE|CHANGES_REQUESTED (0) | INVALID (2) | NONE (1)
+read_verdict() {
+  local file="$1" v
+  if ! v=$(read_frontmatter_field "$file" verdict); then
+    echo "NONE"; return 1
+  fi
+  if _in_list "$v" "$VALID_VERDICTS"; then
+    echo "$v"; return 0
+  fi
+  echo "INVALID"; return 2
+}
