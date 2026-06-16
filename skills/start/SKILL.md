@@ -92,7 +92,8 @@ Loop counters are **per-run state, not objective state**. A stale counter left o
 
 ```bash
 [ -f nazgul/config.json ] && \
-  jq '.current_iteration = 0 | .safety.consecutive_failures = 0 | .safety._prev_done_count = 0 | (.budget.spent_usd) = 0' \
+  jq '.current_iteration = 0 | .safety.consecutive_failures = 0 | .safety._prev_done_count = 0
+      | .budget = (if (.budget | type) == "object" then .budget else {} end) | .budget.spent_usd = 0' \
     nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
 ```
 
