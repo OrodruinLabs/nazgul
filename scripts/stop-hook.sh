@@ -84,6 +84,22 @@ fi
 NEW_ITER=$((ITERATION + 1))
 jq --argjson iter "$NEW_ITER" '.current_iteration = $iter' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
 
+# --- Budget accumulation (cost governor; estimate, not metered spend) ---
+BUDGET_ENABLED=$(jq -r '.budget.enabled // false' "$CONFIG")
+BUDGET_EST=0
+BUDGET_SPENT=$(jq -r '.budget.spent_usd // 0' "$CONFIG")
+if [ "$BUDGET_ENABLED" = "true" ]; then
+  BUDGET_EST=$(jq -r '
+    (.budget.per_iteration_usd) as $explicit
+    | if $explicit != null then $explicit
+      else ((.budget.model_iteration_cost // {})[(.models.implementation // "sonnet")]
+            // (.budget.model_iteration_cost // {}).sonnet // 0.30)
+      end
+  ' "$CONFIG")
+  BUDGET_SPENT=$(jq -r --argjson est "$BUDGET_EST" '(.budget.spent_usd // 0) + $est' "$CONFIG")
+  jq --argjson s "$BUDGET_SPENT" '.budget.spent_usd = $s' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
+fi
+
 # Count tasks by status
 DONE_COUNT=0
 READY_COUNT=0
@@ -339,6 +355,8 @@ jq -n \
   --arg base_branch "$BASE_BRANCH" \
   --argjson worktree_count "$WORKTREE_COUNT" \
   --arg recovery "$RECOVERY_INSTR" \
+  --argjson est_iteration_usd "$BUDGET_EST" \
+  --argjson budget_spent_usd "$BUDGET_SPENT" \
   '{
     iteration: $iteration,
     timestamp: $timestamp,
@@ -360,7 +378,9 @@ jq -n \
       in_review: $in_review,
       changes_requested: $changes_requested,
       blocked: $blocked,
-      planned: $planned
+      planned: $planned,
+      est_iteration_usd: $est_iteration_usd,
+      budget_spent_usd: $budget_spent_usd
     },
     git: {
       branch: $git_branch,
@@ -542,6 +562,15 @@ fi
 if [ "$NEW_ITER" -ge "$MAX_ITER" ]; then
   echo "Nazgul: Max iterations ($MAX_ITER) reached. ${DONE_COUNT}/${TOTAL_COUNT} tasks done." >&2
   exit 0
+fi
+
+# 2.5 Budget ceiling reached (cost governor — estimate)
+BUDGET_MAX=$(jq -r '.budget.max_usd // "null"' "$CONFIG")
+if [ "$BUDGET_ENABLED" = "true" ] && [ "$BUDGET_MAX" != "null" ]; then
+  if awk -v s="$BUDGET_SPENT" -v m="$BUDGET_MAX" 'BEGIN{exit !(s+0 >= m+0)}'; then
+    echo "Nazgul: budget reached (~\$${BUDGET_SPENT} / \$${BUDGET_MAX} after ${NEW_ITER} iterations). Stopping." >&2
+    exit 0
+  fi
 fi
 
 # 3. Consecutive failures exceeded
