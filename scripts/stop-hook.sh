@@ -50,9 +50,15 @@ fi
 AFK_ENABLED=$(jq -r '.afk.enabled // false' "$CONFIG")
 AFK_TIMEOUT=$(jq -r '.afk.timeout_minutes // 90' "$CONFIG")
 if [ "$AFK_ENABLED" = "true" ] && [ "$AFK_TIMEOUT" != "null" ]; then
-  # Session start = objective_set_at (primary; accurate + retention-independent),
-  # falling back to the oldest surviving checkpoint's timestamp when absent.
+  # Session start = objective_set_at (primary). Fallbacks, both retention-safe-ish:
+  # the durable never-pruned iteration log's first line, then (last resort) the
+  # oldest surviving checkpoint.
   SESSION_START=$(jq -r '.objective_set_at // ""' "$CONFIG")
+  if [ -z "$SESSION_START" ] || [ "$SESSION_START" = "null" ]; then
+    if [ -f "$NAZGUL_DIR/logs/iterations.jsonl" ]; then
+      SESSION_START=$(head -1 "$NAZGUL_DIR/logs/iterations.jsonl" 2>/dev/null | jq -r '.timestamp // ""' 2>/dev/null || echo "")
+    fi
+  fi
   if [ -z "$SESSION_START" ] || [ "$SESSION_START" = "null" ]; then
     FIRST_CHECKPOINT=$(ls -1t "$NAZGUL_DIR/checkpoints/iteration-"*.json 2>/dev/null | tail -1 || true)
     [ -n "$FIRST_CHECKPOINT" ] && SESSION_START=$(jq -r '.timestamp // ""' "$FIRST_CHECKPOINT")

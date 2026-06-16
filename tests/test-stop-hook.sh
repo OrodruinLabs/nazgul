@@ -526,4 +526,24 @@ else
 fi
 teardown_temp_dir
 
+# AFK clock falls back to durable iterations.jsonl when objective_set_at absent
+# (decoupled from pruning: fires even with no/recent checkpoints — covers migrated
+# configs where migrate_4_to_5 deleted objective_set_at)
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+old_ts=$(date -u -v-3H +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "3 hours ago" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
+if [ -n "$old_ts" ]; then
+  create_config ".afk.enabled = true" ".afk.timeout_minutes = 90"
+  jq 'del(.objective_set_at)' "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.tmp" && mv "$TEST_DIR/nazgul/config.json.tmp" "$TEST_DIR/nazgul/config.json"
+  create_plan; create_task_file "TASK-001" "READY"
+  mkdir -p "$TEST_DIR/nazgul/logs"
+  printf '{"iteration":1,"timestamp":"%s"}\n' "$old_ts" > "$TEST_DIR/nazgul/logs/iterations.jsonl"
+  run_hook
+  assert_exit_code "AFK: durable iterations.jsonl fallback fires → stop" "$HOOK_EC" 0
+  assert_contains "AFK durable-log fallback stderr" "$HOOK_OUTPUT" "AFK timeout"
+else
+  _pass "AFK durable-log fallback (skipped — date format unavailable)"
+  _pass "AFK durable-log fallback stderr (skipped)"
+fi
+teardown_temp_dir
+
 report_results
