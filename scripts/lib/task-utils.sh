@@ -47,9 +47,9 @@ get_task_status() {
 # Usage: set_task_status <file> <old_status> <new_status>
 set_task_status() {
   local file="$1" old_status="$2" new_status="$3"
-  if [ "$(sed -n '1p' "$file" 2>/dev/null)" = "---" ] && \
-     awk 'NR==1{next} /^---[[:space:]]*$/{exit} /^status[[:space:]]*:/{found=1; exit} END{exit !found}' "$file"; then
-    # Canonical frontmatter: status: X (between the leading --- fences)
+  if has_status_frontmatter "$file"; then
+    # Canonical frontmatter: rewrite the status: line inside the leading --- fence.
+    # The rewrite awk tolerates CRLF because /^---[[:space:]]*$/ matches a trailing \r.
     awk -v new="$new_status" '
       NR==1 {print; infm=1; next}
       infm && /^status[[:space:]]*:/ {print "status: " new; next}
@@ -69,7 +69,8 @@ set_task_status() {
       { print }
     ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
   elif awk '/^---$/{fm++; next} fm==1 && /^status:/{found=1; exit} END{exit !found}' "$file" 2>/dev/null; then
-    # YAML frontmatter: status: X
+    # Legacy fallback: YAML frontmatter where line 1 is not a bare `---` (e.g. no
+    # leading fence, so has_status_frontmatter above declined). Retained for old manifests.
     sed -i.bak "s/^status:[[:space:]]*${old_status}/status: ${new_status}/" "$file" && rm -f "${file}.bak"
   fi
 }

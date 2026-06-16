@@ -48,6 +48,17 @@ read_verdict() {
   echo "INVALID"; return 2
 }
 
+# has_status_frontmatter <file> -> 0 if the file has a leading YAML frontmatter
+# block (line 1 is `---`, CRLF tolerated) containing a `status:` line before the
+# closing fence. Single source of truth for the status-frontmatter WRITE guard.
+has_status_frontmatter() {
+  local file="$1" first
+  [ -f "$file" ] || return 1
+  first=$(sed -n '1p' "$file" 2>/dev/null); first="${first%$'\r'}"
+  [ "$first" = "---" ] || return 1
+  awk 'NR==1{next} /^---[[:space:]]*$/{exit} /^status[[:space:]]*:/{found=1; exit} END{exit !found}' "$file"
+}
+
 # read_task_status <file> -> STATUS (0) | INVALID (2) | "" (1, no status frontmatter)
 read_task_status() {
   local file="$1" s

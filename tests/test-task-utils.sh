@@ -139,4 +139,10 @@ set_task_status "$FM" READY IN_PROGRESS
 assert_eq "set updates frontmatter" "$(get_task_status "$FM")" "IN_PROGRESS"
 rm -f "$FM"
 
+CRLF=$(mktemp)
+printf -- '---\r\nstatus: READY\r\n---\r\n# TASK\r\n' > "$CRLF"
+set_task_status "$CRLF" READY IN_PROGRESS
+assert_eq "set_task_status rewrites CRLF frontmatter" "$(get_task_status "$CRLF")" "IN_PROGRESS"
+rm -f "$CRLF"
+
 report_results
