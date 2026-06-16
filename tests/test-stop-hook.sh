@@ -469,4 +469,13 @@ assert_exit_code "budget disabled → continue" "$rc" 2
 assert_json_field "budget disabled → spent untouched" "$TEST_DIR/nazgul/config.json" ".budget.spent_usd" "0.9"
 teardown_temp_dir
 
+# Malformed (non-numeric) per_iteration_usd → coerces to default 0.30, never aborts mid-iteration
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.mode="afk"' '.budget.enabled=true' '.budget.max_usd=100' '.budget.spent_usd=0' '.budget.per_iteration_usd="cheap"'
+create_task_file TASK-001 READY
+rc=0; echo '{}' | CLAUDE_PROJECT_DIR="$TEST_DIR" "$REPO_ROOT/scripts/stop-hook.sh" >/dev/null 2>/dev/null || rc=$?
+assert_exit_code "malformed per_iteration_usd → continue (no abort)" "$rc" 2
+assert_eq "malformed per_iteration_usd → defaults to 0.30" "$(jq -r '.budget.spent_usd' "$TEST_DIR/nazgul/config.json")" "0.3"
+teardown_temp_dir
+
 report_results

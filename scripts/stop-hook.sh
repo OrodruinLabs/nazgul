@@ -89,14 +89,18 @@ BUDGET_ENABLED=$(jq -r '.budget.enabled // false' "$CONFIG")
 BUDGET_EST=0
 BUDGET_SPENT=$(jq -r '.budget.spent_usd // 0' "$CONFIG")
 if [ "$BUDGET_ENABLED" = "true" ]; then
+  # Coerce to a number and default on any non-numeric/hand-edited value, so a
+  # malformed budget can never make a downstream jq --argjson abort the hook
+  # mid-iteration (after current_iteration was already incremented).
   BUDGET_EST=$(jq -r '
     (.budget.per_iteration_usd) as $explicit
-    | if $explicit != null then $explicit
-      else ((.budget.model_iteration_cost // {})[(.models.implementation // "sonnet")]
-            // (.budget.model_iteration_cost // {}).sonnet // 0.30)
-      end
+    | (if $explicit != null then $explicit
+       else ((.budget.model_iteration_cost // {})[(.models.implementation // "sonnet")]
+             // (.budget.model_iteration_cost // {}).sonnet // 0.30)
+       end)
+    | tonumber? // 0.30
   ' "$CONFIG")
-  BUDGET_SPENT=$(jq -r --argjson est "$BUDGET_EST" '(.budget.spent_usd // 0) + $est' "$CONFIG")
+  BUDGET_SPENT=$(jq -r --argjson est "$BUDGET_EST" '((.budget.spent_usd // 0) | tonumber? // 0) + $est' "$CONFIG")
   jq --argjson s "$BUDGET_SPENT" '.budget.spent_usd = $s' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
 fi
 
