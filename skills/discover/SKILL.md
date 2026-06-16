@@ -15,6 +15,9 @@ metadata:
 - `/nazgul:discover` — Scan codebase and generate project profile + reviewer agents
 - `/nazgul:discover` (re-run) — Backs up existing context before rescanning
 
+## Arguments
+$ARGUMENTS
+
 ## Current Project
 - Root: !`pwd`
 - File count: !`find . -type f -not -path './.git/*' -not -path './node_modules/*' -not -path './venv/*' -not -path './__pycache__/*' -not -path './nazgul/*' -not -path './.claude/*' | wc -l`
@@ -26,8 +29,6 @@ metadata:
 ## Instructions
 
 Format all output per `references/ui-brand.md` — use stage banners, status symbols, and display patterns defined there.
-
-$ARGUMENTS
 
 Run the full discovery process as specified in your agent definition (`agents/discovery.md`).
 

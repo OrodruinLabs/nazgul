@@ -34,13 +34,8 @@ $ARGUMENTS
 
 Initialize the Nazgul Framework for this project:
 
-### Step 0: Idempotency Check
-1. Check if `nazgul/config.json` already exists
-2. If it exists, warn the user: "Nazgul is already initialized for this project. Use `--force` to reinitialize (current state will be archived)."
-3. If `--force` was passed (the `## Arguments` block above contains the token `--force`), archive current state to `nazgul/archive/` first, then proceed
-4. If neither --force nor fresh: STOP here
-
-### Step 0.5: Parse Arguments
+### Step 0: Parse Arguments
+This runs FIRST, before any branching, so every later step shares one parsed decision.
 1. Read the `## Arguments` block above — that is the literal argument string the user typed (it may be empty).
 2. Determine two flags from that string:
    - `LOCAL_MODE` = true if and only if the arguments contain the token `--local`, otherwise false.
@@ -50,6 +45,12 @@ Initialize the Nazgul Framework for this project:
    `Parsed arguments: "<contents of the Arguments block, or (none) if empty>". LOCAL_MODE = <true|false>. FORCE = <true|false>.`
 4. Backstop: if the `## Arguments` block above contains the literal text `$ARGUMENTS` (i.e. the placeholder was not substituted), argument substitution is broken — STOP and report: "Skill argument substitution failed — this is a plugin bug, do not proceed." Otherwise continue.
 5. Carry `LOCAL_MODE` and `FORCE` forward as decided here; every later step that branches on them MUST use these values, not re-derive them.
+
+### Step 0.5: Idempotency Check
+1. Check if `nazgul/config.json` already exists
+2. If it exists, warn the user: "Nazgul is already initialized for this project. Use `--force` to reinitialize (current state will be archived)."
+3. If `FORCE` is true (from Step 0), archive current state to `nazgul/archive/` first, then proceed
+4. If `FORCE` is false and Nazgul is already initialized: STOP here
 
 ### Step 1: Check Prerequisites
 1. Verify `jq` is installed (required for hook scripts). If jq is NOT installed, output: "REQUIRED: jq is not installed. Install it first: `brew install jq` (macOS) or `apt install jq` (Linux). Nazgul cannot function without jq." — STOP, do not proceed with initialization.
