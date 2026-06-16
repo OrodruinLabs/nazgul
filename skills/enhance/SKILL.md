@@ -5,7 +5,7 @@ context: fork
 allowed-tools: Read, Bash, Glob, Grep, WebSearch, WebFetch
 metadata:
   author: Jose Mejia
-  version: 1.3.4
+  version: 1.3.5
 ---
 
 # Nazgul Enhance

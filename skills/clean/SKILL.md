@@ -5,7 +5,7 @@ context: fork
 allowed-tools: Read, Edit, Bash, Glob, Grep, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 1.3.4
+  version: 1.3.5
 ---
 
 # Nazgul Clean
@@ -23,7 +23,7 @@ $ARGUMENTS
 - Tasks count: !`ls nazgul/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' '`
 - Generated agents: !`ls .claude/agents/generated/*.md 2>/dev/null | wc -l | tr -d ' '`
 - CLAUDE.md has nazgul section: !`grep -q "Nazgul Framework" CLAUDE.md 2>/dev/null && echo "YES" || echo "NO"`
-- Gitignore has nazgul entries: !`grep -q "# Nazgul Framework (local mode)" .gitignore 2>/dev/null && echo "YES" || echo "NO"`
+- Gitignore has nazgul entries: !`grep -qE "# Nazgul Framework (\(local mode\)|— ephemeral runtime)" .gitignore 2>/dev/null && echo "YES" || echo "NO"`
 
 ## Instructions
 
@@ -112,13 +112,14 @@ If the project's `CLAUDE.md` contains a Nazgul-injected section:
 
 ### Step 8: Clean .gitignore
 
-If `.gitignore` contains the Nazgul local mode block:
+`/nazgul:init` writes one of two blocks depending on install mode. Remove **whichever is present** (both, if somehow both exist):
 
 1. Read `.gitignore`
-2. Remove the block starting with `# Nazgul Framework (local mode)` and the lines that follow it (`nazgul/`, `.claude/agents/generated/`, `.mcp.json`)
-3. Trim any extra blank lines left behind
-4. If `.gitignore` is now empty, delete it
-5. Otherwise write it back
+2. Remove the **local-mode** block if present: the marker `# Nazgul Framework (local mode)` and its lines (`nazgul/`, `.claude/agents/generated/`, `.mcp.json`)
+3. Remove the **shared-mode ephemeral** block if present: the marker `# Nazgul Framework — ephemeral runtime` and its lines (`nazgul/checkpoints/`, `nazgul/logs/`, `nazgul/sessions/`, `nazgul/.session_id`, `nazgul/.compaction_count`, `nazgul/archive/`, `nazgul/reviews/*/test-failures.md`, `nazgul/reviews/*/simplify-report.md`, `nazgul/reviews/post-loop-simplify-report.md`)
+4. Trim any extra blank lines left behind
+5. If `.gitignore` is now empty, delete it
+6. Otherwise write it back
 
 ### Step 9: Output Summary
 

@@ -1,5 +1,6 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
+  "install_mode": "shared",
   "mode": "hitl",
   "objective": null,
   "feat_id": null,

@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.5] - 2026-06-16
+
+### Changed
+- **Shared install mode no longer commits the ephemeral runtime journal to your repo.** Previously `/nazgul:init` only wrote a `.gitignore` block in `--local` mode, so the *default* shared mode tracked the entire `nazgul/` tree — every per-iteration checkpoint, log, session control file, and the write-only review reports landed in your project's git history and PRs (~95–110 files for a 10-task objective). Shared mode now gitignores the regenerable, machine-local journal (`checkpoints/`, `logs/`, `sessions/`, `.session_id`, `.compaction_count`, `archive/`, `reviews/*/test-failures.md`, `reviews/*/simplify-report.md`, `post-loop-simplify-report.md`) while keeping the **decision record** tracked (`config.json`, `plan.md`, `tasks/`, `reviews/` per-reviewer verdicts, `docs/`, `context/`, generated agents) so teammates can still resume the loop from a clone. Verified: recovery reads `plan.md` + task manifests, not checkpoint *content*, so ignoring checkpoints does not weaken cross-machine resume. `init` Step 2.5 now always runs with shared/local branches; `clean` removes either gitignore block.
+
+### Fixed
+- **`install_mode` was not durably persisted.** `migrate-config.sh` (`migrate_4_to_5`) deleted `install_mode` as an "unused" field, but `init` writes it and `clean`/the new shared-mode gitignore logic read it — so the flag was silently stripped on the first session-start migration. Re-legitimized as a first-class field: added to `templates/config.json`, schema bumped 6 → 7, and a new `migrate_6_to_7` restores it (`.install_mode // "shared"`, preserving an existing `"local"`).
+
+### Migration
+- Existing shared-mode projects that already committed the ephemeral paths: stop tracking them (files stay on disk) — `init` surfaces the one-shot, or run:
+  `git rm -r --cached nazgul/{checkpoints,logs,sessions,archive,.session_id,.compaction_count}` (+ the two report files), then commit.
+
 ## [1.3.4] - 2026-06-16
 
 ### Fixed

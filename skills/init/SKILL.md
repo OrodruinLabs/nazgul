@@ -7,7 +7,7 @@ argument-hint: "[--local] [--force]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 1.3.4
+  version: 1.3.5
 ---
 
 # Nazgul Init
@@ -73,22 +73,51 @@ nazgul/
 └── logs/                # Empty, for iteration logs
 ```
 
-### Step 2.5: Configure Git Ignore (Local Mode Only)
-If `LOCAL_MODE=true`:
+### Step 2.5: Configure Git Ignore
+This step ALWAYS runs, with two branches based on `LOCAL_MODE` (from Step 0). Read or create `.gitignore` at the project root.
 
-1. Read or create `.gitignore` at the project root
-2. Check if `# Nazgul Framework (local mode)` marker already exists
-3. If marker is NOT present, append:
-   ```
+There are exactly two Nazgul `.gitignore` blocks, each identified by its **exact first-line marker** (match this line exactly when detecting/removing/idempotency-checking — do not match on the descriptive comment lines):
+- local mode → marker `# Nazgul Framework (local mode)`
+- shared mode → marker `# Nazgul Framework — ephemeral runtime`
+
+**Mode-switch safety (do this in BOTH branches first):** remove the *opposite* mode's block if present, before appending this mode's. Otherwise a stale block conflicts — e.g. a leftover local-mode block ignores the whole `nazgul/` tree and would prevent shared mode from tracking the decision record. Removing a block means deleting its marker line and the lines under it up to the next blank line / comment.
+
+**If `LOCAL_MODE=true` (local mode — nothing tracked in git):**
+1. Remove the shared-mode block (marker `# Nazgul Framework — ephemeral runtime`) if present.
+2. If the `# Nazgul Framework (local mode)` marker is NOT already present, append:
+   ```gitignore
    # Nazgul Framework (local mode)
    nazgul/
    .claude/agents/generated/
    .mcp.json
    ```
-4. Set `install_mode` to `"local"` in the config:
+3. Set `install_mode` to `"local"`:
    ```bash
    jq '.install_mode = "local"' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
    ```
+
+**Otherwise (shared mode — track the decision record, ignore the ephemeral journal):**
+The decision record (`config.json`, `plan.md`, `tasks/`, `reviews/`, `docs/`, `context/`, generated agents) stays tracked so teammates can resume the loop from a clone. Only regenerable, machine-local journal files are ignored.
+1. Remove the local-mode block (marker `# Nazgul Framework (local mode)`) if present.
+2. If the `# Nazgul Framework — ephemeral runtime` marker is NOT already present, append (the marker is the FIRST line exactly; the second line is a descriptive comment):
+   ```gitignore
+   # Nazgul Framework — ephemeral runtime
+   # (regenerable, machine-local — safe to delete; not shared across teammates)
+   nazgul/checkpoints/
+   nazgul/logs/
+   nazgul/sessions/
+   nazgul/.session_id
+   nazgul/.compaction_count
+   nazgul/archive/
+   nazgul/reviews/*/test-failures.md
+   nazgul/reviews/*/simplify-report.md
+   nazgul/reviews/post-loop-simplify-report.md
+   ```
+3. Set `install_mode` to `"shared"`:
+   ```bash
+   jq '.install_mode = "shared"' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
+   ```
+4. If this is a reinitialization (`--force`) of a project that already committed the ephemeral paths, tell the user they can stop tracking them with the one-shot in Step 4's summary.
 
 ### Step 3: Run Discovery
 Delegate to the Discovery agent to scan the codebase:
@@ -102,7 +131,15 @@ Show the user:
 - Number of files scanned
 - Reviewer board generated (list all reviewer agents)
 - Companion plugin status
-- Install mode: local (files not tracked in git) / shared (files tracked in git)
+- Install mode: local (whole `nazgul/` untracked) / shared (decision record tracked; ephemeral journal — checkpoints, logs, sessions, archive — gitignored)
+- **Shared-mode reinitialization only:** if `git ls-files nazgul/checkpoints nazgul/logs nazgul/sessions nazgul/archive nazgul/.session_id nazgul/.compaction_count 'nazgul/reviews/*/test-failures.md' 'nazgul/reviews/*/simplify-report.md' nazgul/reviews/post-loop-simplify-report.md 2>/dev/null` shows any already-tracked ephemeral paths, tell the user to stop tracking them (files stay on disk; `--ignore-unmatch` keeps the command safe when some paths aren't tracked):
+  ```bash
+  git rm -r --cached --ignore-unmatch nazgul/checkpoints nazgul/logs nazgul/sessions nazgul/archive \
+    nazgul/.session_id nazgul/.compaction_count
+  git rm --cached --ignore-unmatch nazgul/reviews/*/test-failures.md nazgul/reviews/*/simplify-report.md \
+    nazgul/reviews/post-loop-simplify-report.md
+  git commit -m "chore(nazgul): stop tracking ephemeral runtime state"
+  ```
 - Next step: `/nazgul:start "your objective"`
 
 ### Step 5: Inject CLAUDE.md (Shared Mode Only)
