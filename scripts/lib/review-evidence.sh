@@ -4,6 +4,11 @@
 # Canonical evidence is per-reviewer files: nazgul/reviews/<TASK-ID>/<reviewer>.md
 # A consolidated summary.md is NOT evidence — it is a meta-file, excluded below.
 
+# Source structured-state for canonical verdict reading.
+_RE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$_RE_DIR/structured-state.sh"
+
 # Meta-files in a review dir that are NOT reviewer verdicts.
 # Usage: _is_review_meta_file <basename>
 _is_review_meta_file() {
@@ -13,19 +18,34 @@ _is_review_meta_file() {
   esac
 }
 
-# A file counts as APPROVED only when the verdict token appears on a verdict
-# line ("## Verdict: APPROVED", "**Final Verdict: APPROVED**") or at the start
-# of a line (e.g. "APPROVED — no blocking issues" under a Final Verdict header).
+# A file counts as APPROVED via the canonical structured verdict block first:
+# a leading YAML frontmatter `verdict: APPROVE` reads deterministically as
+# approved; `verdict: CHANGES_REQUESTED` as not approved; a malformed/off-enum
+# `verdict:` value fails LOUDLY (not approved) rather than being silently
+# mis-read. Files with NO frontmatter fall back to the legacy regex so in-flight
+# and historical reviews keep working: the token must appear on a verdict line
+# ("## Verdict: APPROVED", "**Final Verdict: APPROVED**") or at the start of a
+# line (e.g. "APPROVED — no blocking issues" under a Final Verdict header).
 # Accepts the imperative/3rd-person forms reviewers naturally write —
 # APPROVE / APPROVES / APPROVED — not just the past participle. The trailing
 # word boundary keeps "approval denied" and the "approved" substring inside
 # "UNAPPROVED" from matching. Prose mentions ("this pattern is approved
 # elsewhere") don't count because they lack the verdict-line/line-start anchor.
-# Case-insensitive.
+# Case-insensitive. VERDICT-ONLY: confidence is handled by the review-gate agent.
 # Usage: _has_approved_verdict <file>
 _has_approved_verdict() {
-  grep -qiE 'verdict[^[:alpha:]]*approve(d|s)?([^[:alpha:]]|$)' "$1" 2>/dev/null && return 0
-  grep -qiE '^[[:space:]#>*`_-]*approve(d|s)?([^[:alpha:]]|$)' "$1" 2>/dev/null
+  local file="$1" v
+  v=$(read_verdict "$file"); local rc=$?
+  if [ "$rc" -eq 0 ]; then
+    [ "$v" = "APPROVE" ] && return 0
+    return 1   # CHANGES_REQUESTED
+  fi
+  if [ "$rc" -eq 2 ]; then
+    return 1   # INVALID block — fail loud (not approved)
+  fi
+  # rc==1 (NONE): legacy regex fallback for files with no frontmatter
+  grep -qiE 'verdict[^[:alpha:]]*approve(d|s)?([^[:alpha:]]|$)' "$file" 2>/dev/null && return 0
+  grep -qiE '^[[:space:]#>*`_-]*approve(d|s)?([^[:alpha:]]|$)' "$file" 2>/dev/null
 }
 
 # Validate review evidence for a task.
