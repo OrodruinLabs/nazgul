@@ -2,10 +2,11 @@
 name: "nazgul:config"
 description: View and change Nazgul settings — model assignments, formatter, notifications. Use when user says "configure nazgul", "change models", "nazgul settings", or wants to adjust config after init.
 context: fork
+argument-hint: "[models]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 1.3.3
+  version: 1.3.4
 ---
 
 # Nazgul Config

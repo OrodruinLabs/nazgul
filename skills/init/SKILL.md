@@ -3,10 +3,11 @@ name: nazgul:init
 description: Initialize Nazgul for a project — check prerequisites, run discovery, create runtime directories, generate reviewer agents. Use when setting up Nazgul for the first time, user says "initialize nazgul", "set up nazgul", or before running any other Nazgul commands.
 context: fork
 disable-model-invocation: true
+argument-hint: "[--local] [--force]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 1.3.3
+  version: 1.3.4
 ---
 
 # Nazgul Init

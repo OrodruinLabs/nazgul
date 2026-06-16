@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.4] - 2026-06-16
+
+### Fixed
+- Subagent definitions `agents/discovery.md` and `agents/templates/reviewer-base.md` carried an `allowed-tools:` frontmatter line, which is a **skills** field and is silently ignored on subagents (the honored field is `tools:`, which both files also have). Net effect was a false sense of restriction — notably the reviewer's intended `Bash(npm test *)`-style scoping was never enforced. Removed the dead lines; reviewers keep `Bash` (needed for tests) and remain covered by the PreToolUse destructive-command guard. Verified against the official subagents frontmatter reference
+- `CLAUDE.md` build rules listed `memory:` as a valid optional skill frontmatter field; it is **not** supported for skills (silently ignored) and no skill actually used it. Corrected the rule and enumerated the real optional fields (`argument-hint`, `arguments`, `disallowed-tools`, `model`, `paths`)
+
+### Added
+- `StopFailure` hook (`scripts/stop-failure.sh`): a turn ending on an API error previously left an AFK/autonomous loop silently stalled. Now records the failure to the iteration log, writes a `.stop_failure` recovery breadcrumb, runs the configured `notifications.on_failure`/`on_complete` command, and forwards a webhook event
+- `SubagentStop` hook (`scripts/subagent-stop.sh`): lightweight observability — appends one line per finished subagent (with agent type when present) to `nazgul/logs/subagents.jsonl`
+- `effort: high` on the `planner` and `debugger` agents (newly-supported subagent frontmatter field) to route the deepest-reasoning stages to higher reasoning effort
+- `argument-hint` autocomplete hints on `init` (`[--local] [--force]`), `config` (`[models]`), and `start` — surfaces accepted flags as the user types, directly improving the discoverability gap behind the original `--local` bug
+- `tests/test-observability-hooks.sh` — behavioral tests for the two new hook scripts (no-op without config, correct logging + breadcrumb with config, agent-name extraction)
+
+### Notes
+- Reviewed the plugin against current (June 2026) Claude Code docs. Confirmed already-correct and intentionally left unchanged: `PreCompact`/`PostCompact` + `SessionStart` source matching for compaction recovery, bare model aliases (`opus`/`sonnet`/`haiku` — they auto-track the latest snapshot; pinning full versioned IDs would freeze stale models), the hooks.json format, and the hand-rolled checkpoint/Recovery-Pointer system. `isolation: worktree` is a real new subagent field but was intentionally NOT adopted because Nazgul already manages worktrees manually (EnterWorktree/ExitWorktree); adding it would double-create worktrees
+
 ## [1.3.3] - 2026-06-16
 
 ### Fixed

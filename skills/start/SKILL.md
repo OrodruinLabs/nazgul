@@ -3,10 +3,11 @@ name: nazgul:start
 description: Start or resume a Nazgul autonomous development loop. Use when user says "start nazgul", "run nazgul", "begin development", "resume the loop", or passes an objective for new work. Auto-detects project state — no arguments needed.
 context: fork
 disable-model-invocation: true
+argument-hint: "[\"objective\"] [--afk|--yolo|--hitl] [--max N]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task
 metadata:
   author: Jose Mejia
-  version: 1.3.3
+  version: 1.3.4
 ---
 
 # Nazgul Start

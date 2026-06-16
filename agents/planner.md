@@ -9,6 +9,7 @@ tools:
   - Bash
   - LS
 maxTurns: 50
+effort: high
 ---
 
 # Planner Agent
