@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Test: Every skill that references $ARGUMENTS in its body must also surface the
-# arguments prominently via a bare-line `$ARGUMENTS` substitution block (the
-# convention used by the argument-taking skills: clean, patch, task, start, ...).
+# Test: Every skill that references $ARGUMENTS in its body must surface the
+# arguments in a dedicated `## Arguments` block — an `## Arguments` heading
+# immediately followed (blank lines allowed) by a bare-line `$ARGUMENTS`. This
+# is the convention used by the argument-taking skills (clean, patch, task,
+# start, ...).
 #
 # Background: Claude Code substitutes `$ARGUMENTS` wherever it appears in a skill
 # body, so an inline reference is not strictly "broken". But burying the
 # placeholder inside numbered-step prose makes the model unreliable at acting on
-# CLI flags (the `/nazgul:init --local` silent-drop bug). Requiring the explicit
-# block keeps the typed arguments visible at the top of every arg-taking skill.
+# CLI flags (the `/nazgul:init --local` silent-drop bug). Requiring a dedicated
+# `## Arguments` block — not merely a bare line buried somewhere — keeps the
+# typed arguments surfaced consistently across every arg-taking skill.
 # See docs/superpowers/specs/2026-04-16-nazgul-init-local-flag-fix-design.md
 TEST_NAME="test-skill-arguments"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -27,21 +30,32 @@ for skill_file in "$REPO_ROOT"/skills/*/SKILL.md; do
 
   # Lines that reference $ARGUMENTS anywhere.
   total_refs=$(printf '%s\n' "$body" | grep -c '\$ARGUMENTS' || true)
-  # Lines whose trimmed content is exactly `$ARGUMENTS` (the substitution block).
-  sub_lines=$(printf '%s\n' "$body" | grep -c '^[[:space:]]*\$ARGUMENTS[[:space:]]*$' || true)
 
   if [ "$total_refs" -eq 0 ]; then
     # Skill takes no arguments — nothing to enforce.
     continue
   fi
 
-  if [ "$sub_lines" -ge 1 ]; then
-    _pass "$rel_path references \$ARGUMENTS and has a substitution block"
+  # Does a dedicated block exist? An `## Arguments` heading whose first
+  # non-blank following line is exactly `$ARGUMENTS`.
+  has_block=$(printf '%s\n' "$body" | awk '
+    /^##[[:space:]]+Arguments[[:space:]]*$/ { inblock=1; next }
+    inblock {
+      if ($0 ~ /^[[:space:]]*$/) next                       # skip blank lines
+      if ($0 ~ /^[[:space:]]*\$ARGUMENTS[[:space:]]*$/) found=1
+      inblock=0                                              # only the first non-blank line counts
+    }
+    END { print (found ? "yes" : "no") }
+  ')
+
+  if [ "$has_block" = "yes" ]; then
+    _pass "$rel_path references \$ARGUMENTS under a dedicated ## Arguments block"
   else
-    _fail "$rel_path references \$ARGUMENTS but has no bare-line substitution block" \
-      "Add a block (after ## Examples) so typed arguments are surfaced:" \
+    _fail "$rel_path references \$ARGUMENTS but has no dedicated ## Arguments block" \
+      "Add this block (after ## Examples) so typed arguments are surfaced:" \
       "  ## Arguments" \
       "  \$ARGUMENTS" \
+      "A bare \$ARGUMENTS buried elsewhere in the body does not satisfy the convention." \
       "See docs/superpowers/specs/2026-04-16-nazgul-init-local-flag-fix-design.md"
   fi
 done
