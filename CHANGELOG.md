@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.1] - 2026-06-16
+
+### Added
+- **Cost/budget governor for AFK/YOLO loops** (roadmap 1.4.2, default disabled). When `budget.enabled` and `budget.max_usd` are set, the Stop hook accumulates an estimated per-iteration cost into `budget.spent_usd` and stops the loop once the ceiling is reached — a dollar-denominated, model-aware ceiling alongside `max_iterations` / `afk.timeout_minutes`. The per-iteration cost is `budget.per_iteration_usd` if set, else derived from `budget.model_iteration_cost[models.implementation]` (so a cheaper implementation tier buys more iterations per dollar). `est_iteration_usd` + `budget_spent_usd` are recorded into each checkpoint; `/nazgul:start` resets the accumulator on every loop-start path. Config schema 7→8.
+- This is an **estimate** (≈ iterations × configured per-tier rate), a deterministic ceiling — **not** metered spend. Subagent tokens are modeled into the rate, not measured (subagents run in separate transcripts the Stop hook can't meter). Tune `budget.model_iteration_cost` per project. Non-numeric hand-edited values coerce to a safe default rather than aborting the loop.
+
 ## [1.4.0] - 2026-06-16
 
 ### Changed
