@@ -7,7 +7,7 @@ argument-hint: "[\"objective\"] [--afk|--yolo|--hitl] [--max N]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task
 metadata:
   author: Jose Mejia
-  version: 1.4.0
+  version: 1.4.1
 ---
 
 # Nazgul Start
@@ -86,13 +86,14 @@ When launching Nazgul, use session naming for identification:
 
 ### Reset Loop Counters (MANDATORY)
 
-Loop counters are **per-run state, not objective state**. A stale counter left over from a previous run will silently brick the loop: the stop hook hits its max-iteration or consecutive-failure gate on the very first iteration and exits 0 (allows the stop) instead of re-dispatching — so the loop "never continues" even though READY tasks exist.
+Loop counters are **per-run state, not objective state**. A stale counter left over from a previous run will silently brick the loop: the stop hook hits its max-iteration or consecutive-failure gate on the very first iteration and exits 0 (allows the stop) instead of re-dispatching — so the loop "never continues" even though READY tasks exist. The same applies to the cost-governor accumulator `budget.spent_usd` — a stale value would trip the budget ceiling immediately.
 
 **Before delegating to any agent, reset the counters.** The `[ -f ... ]` guard makes this a safe no-op in the NOT_INITIALIZED case (no `nazgul/config.json` yet), so the command is always safe to run regardless of ordering:
 
 ```bash
 [ -f nazgul/config.json ] && \
-  jq '.current_iteration = 0 | .safety.consecutive_failures = 0 | .safety._prev_done_count = 0' \
+  jq '.current_iteration = 0 | .safety.consecutive_failures = 0 | .safety._prev_done_count = 0
+      | .budget = (if (.budget | type) == "object" then .budget else {} end) | .budget.spent_usd = 0' \
     nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
 ```
 
