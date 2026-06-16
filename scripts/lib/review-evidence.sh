@@ -5,9 +5,9 @@
 # A consolidated summary.md is NOT evidence — it is a meta-file, excluded below.
 
 # Source structured-state for canonical verdict reading.
-_RE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_NAZGUL_RE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
-source "$_RE_DIR/structured-state.sh"
+source "$_NAZGUL_RE_DIR/structured-state.sh"
 
 # Meta-files in a review dir that are NOT reviewer verdicts.
 # Usage: _is_review_meta_file <basename>
@@ -34,8 +34,8 @@ _is_review_meta_file() {
 # Case-insensitive. VERDICT-ONLY: confidence is handled by the review-gate agent.
 # Usage: _has_approved_verdict <file>
 _has_approved_verdict() {
-  local file="$1" v
-  v=$(read_verdict "$file"); local rc=$?
+  local file="$1" v rc
+  v=$(read_verdict "$file") && rc=0 || rc=$?   # capture rc without tripping set -e
   if [ "$rc" -eq 0 ]; then
     [ "$v" = "APPROVE" ] && return 0
     return 1   # CHANGES_REQUESTED

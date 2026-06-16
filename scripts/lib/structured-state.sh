@@ -3,6 +3,11 @@
 # (review verdicts, task status) from a canonical leading YAML frontmatter block.
 # Sourced by review-evidence.sh and task-utils.sh.
 
+# Idempotent source guard — this lib is sourced by both review-evidence.sh and
+# task-utils.sh, which can both be loaded into the same hook shell.
+[ -n "${_NAZGUL_STRUCTURED_STATE_SOURCED:-}" ] && return 0
+_NAZGUL_STRUCTURED_STATE_SOURCED=1
+
 VALID_VERDICTS="APPROVE CHANGES_REQUESTED"
 VALID_STATUSES="PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED"
 

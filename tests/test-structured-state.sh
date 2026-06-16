@@ -80,4 +80,10 @@ sq_out=$(read_task_status "$TMP/q_sq.md"); sq_rc=$?
 assert_eq "single-quoted status value" "$sq_out" "DONE"
 assert_exit_code "single-quoted status rc" "$sq_rc" 0
 
+# FIX B: idempotent source guard — a second source is a safe no-op and leaves
+# functions/enums intact (the file `return 0`s early instead of re-defining).
+source "$REPO_ROOT/scripts/lib/structured-state.sh"
+assert_eq "double-source: enum intact" "$VALID_VERDICTS" "APPROVE CHANGES_REQUESTED"
+assert_eq "double-source: function still works" "$(read_verdict "$TMP/v_ok.md")" "APPROVE"
+
 report_results
