@@ -583,7 +583,8 @@ Write a brief summary to `nazgul/context/discovery-summary.md`:
 ## Step 8: Update config.json
 
 Update `nazgul/config.json` with:
-- `project.language`, `project.framework`, `project.test_command`, `project.build_command`
+- `project.language`, `project.framework`, `project.test_command`, `project.build_command`, `project.smoke_command`
+- `project.smoke_command` — a short, **self-terminating** command that exercises the built artifact (e.g. `node dist/index.js --version`, `python -c "import <pkg>"`, `./bin/app --healthcheck`). Prefer fast, side-effect-free invocations. Do NOT use a long-running command (e.g. a bare `npm start`/`npm run dev`) — it would hang the review gate. If no obvious runnable target exists (library/docs-only), leave it `null`; runtime verification is then skipped.
 - `reviewers` array listing all generated reviewer agent names
 - `discovery.last_run` timestamp
 - `discovery.files_scanned` count

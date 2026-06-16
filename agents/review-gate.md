@@ -53,14 +53,18 @@ Step 0 is non-blocking on failure — if simplify errors or reverts, always proc
 ### Step 1: Pre-Review Automated Checks (SEQUENTIAL, NON-NEGOTIABLE)
 
 Before ANY reviewer runs:
-1. Read `nazgul/config.json` for test_command, lint_command, build_command
+1. Read `nazgul/config.json` for test_command, lint_command, build_command, smoke_command
 2. Run test command → must pass
 3. Run lint command → must pass
-4. If either fails: set task back to IN_PROGRESS, write failure details to task manifest
+3a. If `build_command` is set (non-null): run it → must pass. (Previously build_command was read but never executed — a task could pass review without building.)
+3b. If `smoke_command` is set (non-null): run it → must pass. The smoke command is a short, SELF-TERMINATING check that the built artifact runs (e.g. `--version`, an import-smoke, a healthcheck). If `smoke_command` is null, skip it and note "no smoke command configured — runtime smoke skipped."
+3c. Pre-check order is test → lint → build → smoke; stop at the first failure. A build or smoke failure is handled exactly like a test/lint failure (the steps below): back to IN_PROGRESS, write failure details to the manifest, increment the failure counter, and ≥3 consecutive → BLOCKED.
+4. If any pre-check (test, lint, build, or smoke) fails: set task back to IN_PROGRESS, write failure details to task manifest
 5. Track test failures: read `test_failures` count from the task manifest (field: `- **Test failures**: N`). If not present, assume 0.
 6. Increment test_failures count and write back to task manifest
 7. If test_failures >= 3: set task to BLOCKED with reason "3 consecutive test failures — requires human investigation". Write detailed test output to `nazgul/reviews/[TASK-ID]/test-failures.md`. Do NOT retry.
 8. Only proceed to reviewers if test_failures < 3 AND ALL pre-checks pass
+9. Record the automated pre-check results (test/lint/build/smoke pass-fail) in `nazgul/tasks/[TASK-ID]/verification.md` so the runtime-verification outcome is visible to `/nazgul:verify`.
 
 ### Step 1.5: Verify Diff Exists
 
