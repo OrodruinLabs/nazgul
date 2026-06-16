@@ -478,4 +478,12 @@ assert_exit_code "malformed per_iteration_usd → continue (no abort)" "$rc" 2
 assert_eq "malformed per_iteration_usd → defaults to 0.30" "$(jq -r '.budget.spent_usd' "$TEST_DIR/nazgul/config.json")" "0.3"
 teardown_temp_dir
 
+# Malformed (non-numeric) max_usd → treated as no ceiling (inert), loop continues — must NOT fail closed
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.mode="afk"' '.budget.enabled=true' '.budget.max_usd="abc"' '.budget.spent_usd=0.9' '.budget.per_iteration_usd=0.5'
+create_task_file TASK-001 READY
+rc=0; echo '{}' | CLAUDE_PROJECT_DIR="$TEST_DIR" "$REPO_ROOT/scripts/stop-hook.sh" >/dev/null 2>/dev/null || rc=$?
+assert_exit_code "malformed max_usd → continue (no fail-closed)" "$rc" 2
+teardown_temp_dir
+
 report_results

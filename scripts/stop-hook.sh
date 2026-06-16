@@ -569,9 +569,12 @@ if [ "$NEW_ITER" -ge "$MAX_ITER" ]; then
 fi
 
 # 2.5 Budget ceiling reached (cost governor — estimate)
-BUDGET_MAX=$(jq -r '.budget.max_usd // "null"' "$CONFIG")
-if [ "$BUDGET_ENABLED" = "true" ] && [ "$BUDGET_MAX" != "null" ]; then
-  if awk -v s="$BUDGET_SPENT" -v m="$BUDGET_MAX" 'BEGIN{exit !(s+0 >= m+0)}'; then
+# Coerce max_usd to a number; a null/non-numeric/non-positive ceiling is treated
+# as "no ceiling" (inert guard) so a fat-fingered config can't fail CLOSED and
+# silently brick an unattended loop — matches the rate/accumulator coercion above.
+BUDGET_MAX=$(jq -r '(.budget.max_usd | tonumber?) // empty' "$CONFIG")
+if [ "$BUDGET_ENABLED" = "true" ] && [ -n "$BUDGET_MAX" ]; then
+  if awk -v s="$BUDGET_SPENT" -v m="$BUDGET_MAX" 'BEGIN{exit !(m > 0 && s+0 >= m+0)}'; then
     echo "Nazgul: budget reached (~\$${BUDGET_SPENT} / \$${BUDGET_MAX} after ${NEW_ITER} iterations). Stopping." >&2
     exit 0
   fi
