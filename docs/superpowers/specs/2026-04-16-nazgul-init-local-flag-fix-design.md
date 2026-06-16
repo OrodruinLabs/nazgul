@@ -1,8 +1,10 @@
 # `/nazgul:init --local` Flag Fix — Design
 
 **Date:** 2026-04-16
-**Status:** Approved (pending written review)
+**Status:** Shipped in 1.3.3 (2026-06-16) — with a corrected root cause; see note below.
 **Scope:** Fix silent drop of CLI flags in `/nazgul:init`, prevent the regression class across all skills, and add runtime transparency.
+
+> **Root-cause correction (2026-06-16).** The "Root Cause" section below is inaccurate. Per current Claude Code docs (code.claude.com/docs/en/skills.md), `$ARGUMENTS` is substituted **wherever** it appears in a skill body, and when it is absent the args are still appended as `ARGUMENTS: <value>`. Arguments therefore always reached the model — a missing `## Arguments` block does **not** prevent substitution. The real defect was instruction *reliability*: the flags were buried in numbered-step prose and `LOCAL_MODE` was threaded as un-echoed mental state across a long forked skill, so the model dropped it. The shipped fix keeps all three changes — the `## Arguments` block (now a clarity/consistency convention, not a substitution requirement), the Step 0.5 transparency guard (the actual robustness fix — it forces the parsed decision to be emitted), and the regression test — and additionally fixes the same latent pattern in `skills/config/SKILL.md`.
 
 ## Problem
 

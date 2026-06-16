@@ -5,7 +5,7 @@ context: fork
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 1.3.2
+  version: 1.3.3
 ---
 
 # Nazgul Config
@@ -13,6 +13,9 @@ metadata:
 ## Examples
 - `/nazgul:config` — View current settings and change any of them
 - `/nazgul:config models` — Jump directly to model assignment configuration
+
+## Arguments
+$ARGUMENTS
 
 ## Pre-flight
 
@@ -44,7 +47,7 @@ Notifications:     [notifications.on_complete || "disabled"]
 
 ## Step 2: Ask What to Change
 
-If `$ARGUMENTS` contains "models", skip directly to the Model Assignment sub-flow.
+If the `## Arguments` block above contains the token `models`, skip directly to the Model Assignment sub-flow.
 
 Otherwise, use `AskUserQuestion` (multiSelect: true):
 - header: "Settings"
