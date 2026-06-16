@@ -40,4 +40,19 @@ assert_eq "no verdict block -> NONE" "$(read_verdict "$TMP/v_none.md" || true)" 
 rc=0; read_verdict "$TMP/v_none.md" >/dev/null || rc=$?
 assert_exit_code "no verdict block rc=1" "$rc" 1
 
+# read_task_status
+printf -- '---\nstatus: IN_REVIEW\n---\n# TASK\n' > "$TMP/s_ok.md"
+out=$(read_task_status "$TMP/s_ok.md"); rc=$?
+assert_eq "valid status value" "$out" "IN_REVIEW"; assert_exit_code "valid status rc" "$rc" 0
+
+printf -- '---\nstatus: WIBBLE\n---\n' > "$TMP/s_bad.md"
+assert_eq "off-enum status -> INVALID" "$(read_task_status "$TMP/s_bad.md" || true)" "INVALID"
+rc=0; read_task_status "$TMP/s_bad.md" >/dev/null || rc=$?
+assert_exit_code "off-enum status rc=2" "$rc" 2
+
+printf -- '# TASK\n- **Status**: READY\n' > "$TMP/s_none.md"
+rc=0; read_task_status "$TMP/s_none.md" >/dev/null || rc=$?
+assert_exit_code "no status block rc=1" "$rc" 1
+assert_eq "no status block prints nothing" "$(read_task_status "$TMP/s_none.md" || true)" ""
+
 report_results

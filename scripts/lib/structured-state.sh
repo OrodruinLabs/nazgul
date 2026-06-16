@@ -36,3 +36,15 @@ read_verdict() {
   fi
   echo "INVALID"; return 2
 }
+
+# read_task_status <file> -> STATUS (0) | INVALID (2) | "" (1, no status frontmatter)
+read_task_status() {
+  local file="$1" s
+  if ! s=$(read_frontmatter_field "$file" status); then
+    return 1
+  fi
+  if _in_list "$s" "$VALID_STATUSES"; then
+    echo "$s"; return 0
+  fi
+  echo "INVALID"; return 2
+}
