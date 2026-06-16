@@ -5,7 +5,7 @@ context: fork
 allowed-tools: Read, Edit, Bash, Glob, Grep, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 1.3.3
+  version: 1.3.4
 ---
 
 # Nazgul Clean

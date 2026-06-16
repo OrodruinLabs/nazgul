@@ -6,7 +6,11 @@ tools:
   - Glob
   - Grep
   - Bash
-allowed-tools: Read, Glob, Grep, Bash(npm test *), Bash(npx *), Bash(pytest *), Bash(cargo test *), Bash(go test *), Bash(bash -n *), Bash(shellcheck *)
+# `tools:` (above) is the honored subagent allowlist; `allowed-tools:` is a
+# SKILL field and is ignored on subagents, so it was removed. Reviewers keep
+# Bash to run the project's test/lint commands; destructive commands are
+# blocked by the PreToolUse guard (scripts/pre-tool-guard.sh). To hard-scope
+# Bash to specific test commands, add rules to permissions.allow in settings.
 maxTurns: 30
 # {{^bundle_mode}}
 hooks:

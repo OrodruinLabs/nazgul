@@ -8,7 +8,6 @@ tools:
   - Glob
   - Grep
   - LS
-allowed-tools: Bash, Read, Write, Glob, Grep, LS
 maxTurns: 50
 ---
 

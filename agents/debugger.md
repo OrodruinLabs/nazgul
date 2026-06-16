@@ -8,6 +8,7 @@ tools:
   - Grep
   - LS
 maxTurns: 30
+effort: high
 ---
 
 # Debugger Agent

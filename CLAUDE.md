@@ -96,7 +96,7 @@ tests/                               # Plugin validation tests
 
 ## Build Rules
 
-1. **Skills use YAML frontmatter.** Every skill in `skills/` is a SKILL.md with frontmatter: `name`, `description`, `allowed-tools`, and optionally `context: fork`, `disable-model-invocation: true`, `agent:`, `memory:`.
+1. **Skills use YAML frontmatter.** Every skill in `skills/` is a SKILL.md with frontmatter: `name`, `description`, `allowed-tools`, and optionally `context: fork`, `disable-model-invocation: true`, `agent:`. Other supported optional fields per the Claude Code skills reference: `argument-hint`, `arguments`, `disallowed-tools`, `model`, `paths`. (`memory:` is NOT a supported skill field — it is silently ignored; the supported subagent field of that name does not apply to skills.)
 
 2. **Agents use markdown with frontmatter.** Each agent in `agents/` has YAML frontmatter with `name`, `description`, `allowed-tools`, `maxTurns`, and a prompt body.
 
