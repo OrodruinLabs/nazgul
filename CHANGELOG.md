@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.3] - 2026-06-16
+
+### Fixed
+- `/nazgul:init --local` silently behaved as shared mode: the `--local`/`--force` flags were buried inline in numbered-step prose, so the model unreliably acted on them — `.gitignore` got no `nazgul/` block, `install_mode` was never set to `local`, and the shared-mode CLAUDE.md section was appended anyway. `skills/init/SKILL.md` now carries an explicit `## Arguments` block (the convention other arg-taking skills follow); **Step 0 now parses + echoes the decision (`Parsed arguments: ... LOCAL_MODE = ... FORCE = ...`) before any branching** — including the idempotency/archive step, which now consumes the parsed `FORCE` instead of re-checking the raw token — with a backstop that halts if the `$ARGUMENTS` placeholder ever fails to substitute
+- `/nazgul:config models` had the same latent defect: the `models` shortcut token was read from an inline `$ARGUMENTS` reference with no `## Arguments` block. Added the block and pointed the shortcut check at it
+- `/nazgul:discover` referenced `$ARGUMENTS` inline under `## Instructions` with no dedicated block; gave it the standard `## Arguments` block
+- Note: contrary to the original design spec's root-cause theory, Claude Code substitutes `$ARGUMENTS` wherever it appears in a skill body (and appends `ARGUMENTS:` when absent), so arguments always reached the model — the real defect was instruction reliability, not missing substitution. The `## Arguments` block is a clarity/consistency convention, and the forced echo in Step 0 is the actual robustness fix
+
+### Added
+- `tests/test-skill-arguments.sh` — regression test enforcing that every skill referencing `$ARGUMENTS` surfaces it in a **dedicated `## Arguments` block** (an `## Arguments` heading immediately followed by a bare `$ARGUMENTS` line), not merely a bare line buried anywhere in the body. Fails on pre-fix `main` (listing `init`, `config`), passes after the fix. Auto-discovered by `tests/run-tests.sh`
+
 ## [1.3.2] - 2026-06-04
 
 ### Fixed

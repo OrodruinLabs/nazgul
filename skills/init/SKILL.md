@@ -6,7 +6,7 @@ disable-model-invocation: true
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 1.3.2
+  version: 1.3.3
 ---
 
 # Nazgul Init
@@ -16,6 +16,9 @@ metadata:
 - `/nazgul:init --force` — Reinitialize, archiving current state first
 - `/nazgul:init --local` — Initialize in local mode (files not tracked in git)
 - `/nazgul:init --local --force` — Reinitialize in local mode
+
+## Arguments
+$ARGUMENTS
 
 ## Prerequisites Check
 - jq installed: !`which jq 2>/dev/null && echo "YES" || echo "NO — install jq first: brew install jq (macOS) or apt install jq (Linux)"`
@@ -30,16 +33,23 @@ metadata:
 
 Initialize the Nazgul Framework for this project:
 
-### Step 0: Idempotency Check
+### Step 0: Parse Arguments
+This runs FIRST, before any branching, so every later step shares one parsed decision.
+1. Read the `## Arguments` block above — that is the literal argument string the user typed (it may be empty).
+2. Determine two flags from that string:
+   - `LOCAL_MODE` = true if and only if the arguments contain the token `--local`, otherwise false.
+   - `FORCE` = true if and only if the arguments contain the token `--force`, otherwise false.
+   - Both flags are independent and can be combined.
+3. **Emit this exact line to the user before doing anything else** (substitute the real values):
+   `Parsed arguments: "<contents of the Arguments block, or (none) if empty>". LOCAL_MODE = <true|false>. FORCE = <true|false>.`
+4. Backstop: if the `## Arguments` block above contains the literal text `$ARGUMENTS` (i.e. the placeholder was not substituted), argument substitution is broken — STOP and report: "Skill argument substitution failed — this is a plugin bug, do not proceed." Otherwise continue.
+5. Carry `LOCAL_MODE` and `FORCE` forward as decided here; every later step that branches on them MUST use these values, not re-derive them.
+
+### Step 0.5: Idempotency Check
 1. Check if `nazgul/config.json` already exists
 2. If it exists, warn the user: "Nazgul is already initialized for this project. Use `--force` to reinitialize (current state will be archived)."
-3. If `--force` was passed (check $ARGUMENTS), archive current state to `nazgul/archive/` first, then proceed
-4. If neither --force nor fresh: STOP here
-
-### Step 0.5: Parse Arguments
-1. Check `$ARGUMENTS` for `--local` flag
-2. If `--local` is present, set a variable `LOCAL_MODE=true`
-3. Both `--local` and `--force` can be combined
+3. If `FORCE` is true (from Step 0), archive current state to `nazgul/archive/` first, then proceed
+4. If `FORCE` is false and Nazgul is already initialized: STOP here
 
 ### Step 1: Check Prerequisites
 1. Verify `jq` is installed (required for hook scripts). If jq is NOT installed, output: "REQUIRED: jq is not installed. Install it first: `brew install jq` (macOS) or `apt install jq` (Linux). Nazgul cannot function without jq." — STOP, do not proceed with initialization.

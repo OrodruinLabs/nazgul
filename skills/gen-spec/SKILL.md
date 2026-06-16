@@ -5,7 +5,7 @@ context: fork
 allowed-tools: Read, Write, Bash, Glob, Grep, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 1.3.2
+  version: 1.3.3
 ---
 
 # Nazgul Generate Project Spec

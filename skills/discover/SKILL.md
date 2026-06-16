@@ -6,7 +6,7 @@ agent: discovery
 allowed-tools: Bash, Read, Write, Glob, Grep, LS
 metadata:
   author: Jose Mejia
-  version: 1.3.2
+  version: 1.3.3
 ---
 
 # Nazgul Discovery
@@ -14,6 +14,9 @@ metadata:
 ## Examples
 - `/nazgul:discover` — Scan codebase and generate project profile + reviewer agents
 - `/nazgul:discover` (re-run) — Backs up existing context before rescanning
+
+## Arguments
+$ARGUMENTS
 
 ## Current Project
 - Root: !`pwd`
@@ -26,8 +29,6 @@ metadata:
 ## Instructions
 
 Format all output per `references/ui-brand.md` — use stage banners, status symbols, and display patterns defined there.
-
-$ARGUMENTS
 
 Run the full discovery process as specified in your agent definition (`agents/discovery.md`).
 
