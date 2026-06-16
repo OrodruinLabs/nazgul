@@ -190,6 +190,17 @@ migrate_7_to_8() {
   log_migration "v7→v8: Added budget block (cost governor, default disabled)"
 }
 
+migrate_8_to_9() {
+  local tmp
+  tmp=$(mktemp)
+  # Add project.smoke_command (runtime-verification gate) when absent; preserve existing.
+  jq '
+    .project = ((.project // {}) | .smoke_command = (.smoke_command // null))
+    | .schema_version = 9
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v8→v9: Added project.smoke_command (runtime-verification gate)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"
