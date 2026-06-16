@@ -355,4 +355,13 @@ CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" >/dev/null 2>/dev/null
 assert_file_exists "migration log created" "$NAZGUL_DIR/logs/migrations.log"
 assert_file_contains "log has migration entry" "$NAZGUL_DIR/logs/migrations.log" "Migrated 1 -> 2"
 
+# --- Test 3i: non-object budget (hand-edited) → clamped to default object at v8 ---
+NAZGUL_DIR=$(setup_nazgul_dir "v7-budget-garbage")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{ "schema_version": 7, "budget": "oops" }
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_json_field "v7 → v8 non-object budget clamped to object" "$NAZGUL_DIR/config.json" ".budget | type" "object"
+assert_json_field "v7 → v8 clamped budget.enabled false" "$NAZGUL_DIR/config.json" ".budget.enabled" "false"
+
 report_results

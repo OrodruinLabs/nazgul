@@ -486,4 +486,12 @@ rc=0; echo '{}' | CLAUDE_PROJECT_DIR="$TEST_DIR" "$REPO_ROOT/scripts/stop-hook.s
 assert_exit_code "malformed max_usd → continue (no fail-closed)" "$rc" 2
 teardown_temp_dir
 
+# Malformed spent_usd with budget DISABLED → checkpoint must not abort the hook
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.mode="afk"' '.budget.enabled=false' '.budget.spent_usd="garbage"'
+create_task_file TASK-001 READY
+rc=0; echo '{}' | CLAUDE_PROJECT_DIR="$TEST_DIR" "$REPO_ROOT/scripts/stop-hook.sh" >/dev/null 2>/dev/null || rc=$?
+assert_exit_code "malformed spent_usd (disabled) → continue (no abort)" "$rc" 2
+teardown_temp_dir
+
 report_results

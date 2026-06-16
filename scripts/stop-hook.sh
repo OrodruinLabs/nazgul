@@ -87,7 +87,10 @@ jq --argjson iter "$NEW_ITER" '.current_iteration = $iter' "$CONFIG" > "${CONFIG
 # --- Budget accumulation (cost governor; estimate, not metered spend) ---
 BUDGET_ENABLED=$(jq -r '.budget.enabled // false' "$CONFIG")
 BUDGET_EST=0
-BUDGET_SPENT=$(jq -r '.budget.spent_usd // 0' "$CONFIG")
+# Coerce at read time: spent_usd is written into the checkpoint via --argjson on
+# EVERY run (even when budget is disabled), so a non-numeric hand-edited value
+# would otherwise abort the hook mid-iteration.
+BUDGET_SPENT=$(jq -r '(.budget.spent_usd // 0) | tonumber? // 0' "$CONFIG")
 if [ "$BUDGET_ENABLED" = "true" ]; then
   # Coerce to a number and default on any non-numeric/hand-edited value, so a
   # malformed budget can never make a downstream jq --argjson abort the hook

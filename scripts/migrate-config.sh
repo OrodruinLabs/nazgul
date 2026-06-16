@@ -173,15 +173,18 @@ migrate_6_to_7() {
 migrate_7_to_8() {
   local tmp
   tmp=$(mktemp)
-  # Add the budget block (default disabled) when absent; preserve an existing one.
+  # Add the budget block (default disabled) when absent; preserve an existing
+  # OBJECT, but clamp a non-object budget (hand-edited to a string/number) back
+  # to the default so downstream `.budget.enabled` lookups can't error
+  # (same type-guard pattern as migrate_5_to_6's .simplify/.guards handling).
   jq '
-    .budget = (.budget // {
+    .budget = (if (.budget | type) == "object" then .budget else {
       "enabled": false,
       "max_usd": null,
       "spent_usd": 0,
       "per_iteration_usd": null,
       "model_iteration_cost": { "opus": 1.20, "sonnet": 0.30, "haiku": 0.05 }
-    })
+    } end)
     | .schema_version = 8
   ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
   log_migration "v7→v8: Added budget block (cost governor, default disabled)"
