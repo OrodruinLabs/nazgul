@@ -83,7 +83,7 @@ Write the plan to `nazgul/plan.md` with:
 - Parallel Groups with all tasks
 - Recovery Pointer
 
-Write individual task manifests to `nazgul/tasks/TASK-NNN.md` using the task manifest template. Read the template at `templates/task-manifest.md` first — copy its exact field formats (e.g. `**Retry count**: 0/3` not bare `0`). The stop hook parses these fields with sed; format mismatches cause failures.
+Write individual task manifests to `nazgul/tasks/TASK-NNN.md` using the task manifest template. Read the template at `templates/task-manifest.md` first — copy its exact field formats (e.g. `**Retry count**: 0/3` not bare `0`). The stop hook parses these fields with sed; format mismatches cause failures. Each new `TASK-NNN.md` MUST begin with a `---` / `status: PLANNED` / `---` YAML frontmatter block — this is the canonical task status read by the hooks.
 
 After writing each task manifest, if board sync is enabled, create the corresponding GitHub Issue:
 

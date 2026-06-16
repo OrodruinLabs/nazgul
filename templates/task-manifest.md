@@ -1,3 +1,6 @@
+---
+status: PLANNED
+---
 # TASK-000: [Task Title]
 
 ## Metadata
@@ -6,7 +9,7 @@
      The session-context hook reads these to produce recovery instructions. -->
 - **ID**: TASK-000
 - **Group**: 0
-- **Status**: PLANNED
+- **Status**: PLANNED  <!-- display mirror only; canonical status is the frontmatter block at the top of this file (read by scripts/lib/structured-state.sh) -->
 <!-- Valid states: PLANNED | READY | IN_PROGRESS | IMPLEMENTED | IN_REVIEW | CHANGES_REQUESTED | DONE | BLOCKED
      State machine rules — NO skipping states:
        PLANNED -> READY (when all depends_on tasks are DONE)

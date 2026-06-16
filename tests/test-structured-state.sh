@@ -86,4 +86,8 @@ source "$REPO_ROOT/scripts/lib/structured-state.sh"
 assert_eq "double-source: enum intact" "$VALID_VERDICTS" "APPROVE CHANGES_REQUESTED"
 assert_eq "double-source: function still works" "$(read_verdict "$TMP/v_ok.md")" "APPROVE"
 
+# Shipped templates must carry valid canonical frontmatter
+assert_eq "task-manifest template status valid" \
+  "$(read_task_status "$REPO_ROOT/templates/task-manifest.md")" "PLANNED"
+
 report_results
