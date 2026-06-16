@@ -55,4 +55,29 @@ rc=0; read_task_status "$TMP/s_none.md" >/dev/null || rc=$?
 assert_exit_code "no status block rc=1" "$rc" 1
 assert_eq "no status block prints nothing" "$(read_task_status "$TMP/s_none.md" || true)" ""
 
+# FIX 1: IFS sensitivity — a caller with IFS=, must not break list membership.
+printf -- '---\nverdict: APPROVE\n---\n' > "$TMP/ifs.md"
+OLD_IFS="$IFS"; IFS=,
+ifs_out=$(read_verdict "$TMP/ifs.md"); ifs_rc=$?
+IFS="$OLD_IFS"
+assert_eq "IFS=, valid verdict value" "$ifs_out" "APPROVE"
+assert_exit_code "IFS=, valid verdict rc" "$ifs_rc" 0
+
+# FIX 2: CRLF tolerance.
+printf -- '---\r\nverdict: APPROVE\r\n---\r\n' > "$TMP/crlf.md"
+crlf_out=$(read_verdict "$TMP/crlf.md"); crlf_rc=$?
+assert_eq "CRLF verdict value" "$crlf_out" "APPROVE"
+assert_exit_code "CRLF verdict rc" "$crlf_rc" 0
+
+# FIX 3: quoted scalars.
+printf -- '---\nverdict: "APPROVE"\n---\n' > "$TMP/q_dq.md"
+dq_out=$(read_verdict "$TMP/q_dq.md"); dq_rc=$?
+assert_eq "double-quoted verdict value" "$dq_out" "APPROVE"
+assert_exit_code "double-quoted verdict rc" "$dq_rc" 0
+
+printf -- "---\nstatus: 'DONE'\n---\n" > "$TMP/q_sq.md"
+sq_out=$(read_task_status "$TMP/q_sq.md"); sq_rc=$?
+assert_eq "single-quoted status value" "$sq_out" "DONE"
+assert_exit_code "single-quoted status rc" "$sq_rc" 0
+
 report_results

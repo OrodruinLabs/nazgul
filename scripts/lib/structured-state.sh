@@ -7,20 +7,26 @@ VALID_VERDICTS="APPROVE CHANGES_REQUESTED"
 VALID_STATUSES="PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED"
 
 # read_frontmatter_field <file> <key> -> prints trimmed value; 0 if found & non-empty, else 1.
+# <key> must be a literal field name: it is interpolated into grep/sed patterns.
 read_frontmatter_field() {
-  local file="$1" key="$2" val
+  local file="$1" key="$2" val first
   [ -f "$file" ] || return 1
-  [ "$(sed -n '1p' "$file" 2>/dev/null)" = "---" ] || return 1
+  # First line must be the frontmatter fence; tolerate a CRLF trailing \r.
+  first=$(sed -n '1p' "$file" 2>/dev/null); first="${first%$'\r'}"
+  [ "$first" = "---" ] || return 1
   val=$(awk 'NR==1{next} /^---[[:space:]]*$/{exit} {print}' "$file" 2>/dev/null \
         | grep -m1 -E "^${key}[[:space:]]*:" \
         | sed -E "s/^${key}[[:space:]]*:[[:space:]]*//; s/[[:space:]]+\$//")
+  val="${val%$'\r'}"                 # strip trailing CR from CRLF files
+  val="${val#\"}"; val="${val%\"}"   # strip one pair of surrounding double quotes
+  val="${val#\'}"; val="${val%\'}"   # strip one pair of surrounding single quotes
   [ -n "$val" ] || return 1
   printf '%s\n' "$val"
 }
 
 # _in_list <value> <space-separated-list> -> 0 if present
 _in_list() {
-  local needle="$1" item
+  local needle="$1" item IFS=' '
   for item in $2; do [ "$item" = "$needle" ] && return 0; done
   return 1
 }
