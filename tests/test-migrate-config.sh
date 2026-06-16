@@ -41,7 +41,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null)
 assert_contains "v1 → v2 output" "$OUTPUT" "migrated"
-assert_json_field "v1 config → v7 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "7"
+assert_json_field "v1 config → v7 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "8"
 val=$(jq -r '.models | type' "$NAZGUL_DIR/config.json")
 assert_eq "v1 → v2 models section added" "$val" "object"
 assert_json_field "v1 → v2 models.default" "$NAZGUL_DIR/config.json" ".models.default" "sonnet"
@@ -65,7 +65,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v2 → v3 output" "$OUTPUT" "migrated"
-assert_json_field "v2 config → v7 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "7"
+assert_json_field "v2 config → v7 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "8"
 val=$(jq -r '.branch | type' "$NAZGUL_DIR/config.json")
 assert_eq "v2 → v3 branch section added" "$val" "object"
 val=$(jq -r '.afk | has("branch_per_task")' "$NAZGUL_DIR/config.json")
@@ -90,7 +90,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v3 → v4 output" "$OUTPUT" "migrated"
-assert_json_field "v3 config → v7 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "7"
+assert_json_field "v3 config → v7 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "8"
 val=$(jq -r '.webhooks | type' "$NAZGUL_DIR/config.json")
 assert_eq "v3 → v4 webhooks section added" "$val" "object"
 assert_json_field "v3 → v4 webhooks.enabled" "$NAZGUL_DIR/config.json" ".webhooks.enabled" "false"
@@ -151,7 +151,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v4 → v5 output" "$OUTPUT" "migrated"
-assert_json_field "v4 config → v7 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "7"
+assert_json_field "v4 config → v7 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "8"
 # install_mode is stripped at 4→5 but RESTORED at 6→7 (default "shared")
 assert_json_field "v4 → v7 install_mode restored to shared" "$NAZGUL_DIR/config.json" ".install_mode" "shared"
 # Verify the other v4→v5-removed fields stay gone through the full chain
@@ -198,7 +198,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v5 → v6 output" "$OUTPUT" "migrated"
-assert_json_field "v5 config → v7 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "7"
+assert_json_field "v5 config → v7 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "8"
 val=$(jq -r '.simplify | type' "$NAZGUL_DIR/config.json")
 assert_eq "v5 → v6 simplify section added" "$val" "object"
 assert_json_field "v5 → v6 simplify.post_loop" "$NAZGUL_DIR/config.json" ".simplify.post_loop" "true"
@@ -239,7 +239,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v6 → v7 output" "$OUTPUT" "migrated"
-assert_json_field "v6 config → v7 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "7"
+assert_json_field "v6 config → v7 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "8"
 assert_json_field "v6 → v7 install_mode defaults to shared" "$NAZGUL_DIR/config.json" ".install_mode" "shared"
 
 # --- Test 3e-b: v6 config with install_mode=local → preserved through v7 ---
@@ -252,7 +252,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
-assert_json_field "v6 config → v7 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "7"
+assert_json_field "v6 config → v7 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "8"
 assert_json_field "v6 → v7 install_mode=local preserved" "$NAZGUL_DIR/config.json" ".install_mode" "local"
 
 # --- Test 3e-c: v6 config with invalid install_mode → clamped to shared ---
@@ -267,7 +267,7 @@ EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_json_field "v6 → v7 invalid install_mode clamped to shared" "$NAZGUL_DIR/config.json" ".install_mode" "shared"
 
-# --- Test 3f: v7 config → no-op ---
+# --- Test 3f: v7 config → migrated to v8, budget added (default disabled) ---
 NAZGUL_DIR=$(setup_nazgul_dir "v7-config")
 cat > "$NAZGUL_DIR/config.json" << 'EOF'
 {
@@ -277,7 +277,29 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
-assert_eq "v7 config → no output" "$OUTPUT" ""
+assert_contains "v7 → v8 output" "$OUTPUT" "migrated"
+assert_json_field "v7 → v8 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "8"
+assert_json_field "v7 → v8 budget.enabled defaults false" "$NAZGUL_DIR/config.json" ".budget.enabled" "false"
+
+# --- Test 3g: existing budget preserved through v8 ---
+NAZGUL_DIR=$(setup_nazgul_dir "v7-budget")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{
+  "schema_version": 7,
+  "budget": { "enabled": true, "max_usd": 25, "spent_usd": 3, "per_iteration_usd": null, "model_iteration_cost": {} }
+}
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_json_field "v7 → v8 existing budget.max_usd preserved" "$NAZGUL_DIR/config.json" ".budget.max_usd" "25"
+assert_json_field "v7 → v8 existing budget.enabled preserved" "$NAZGUL_DIR/config.json" ".budget.enabled" "true"
+
+# --- Test 3h: v8 config → no-op ---
+NAZGUL_DIR=$(setup_nazgul_dir "v8-config")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{ "schema_version": 8, "mode": "hitl" }
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_eq "v8 config → no output" "$OUTPUT" ""
 
 # --- Test 4: Backup file created on migration ---
 NAZGUL_DIR=$(setup_nazgul_dir "backup-check")

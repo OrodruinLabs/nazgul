@@ -170,6 +170,23 @@ migrate_6_to_7() {
   log_migration "v6→v7: Restored install_mode (clamped to local|shared, default \"shared\")"
 }
 
+migrate_7_to_8() {
+  local tmp
+  tmp=$(mktemp)
+  # Add the budget block (default disabled) when absent; preserve an existing one.
+  jq '
+    .budget = (.budget // {
+      "enabled": false,
+      "max_usd": null,
+      "spent_usd": 0,
+      "per_iteration_usd": null,
+      "model_iteration_cost": { "opus": 1.20, "sonnet": 0.30, "haiku": 0.05 }
+    })
+    | .schema_version = 8
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v7→v8: Added budget block (cost governor, default disabled)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"

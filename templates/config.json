@@ -1,5 +1,5 @@
 {
-  "schema_version": 7,
+  "schema_version": 8,
   "install_mode": "shared",
   "mode": "hitl",
   "objective": null,
@@ -90,6 +90,13 @@
     "require_tests_pass_before_review": true,
     "max_consecutive_failures": 5,
     "consecutive_failures": 0
+  },
+  "budget": {
+    "enabled": false,
+    "max_usd": null,
+    "spent_usd": 0,
+    "per_iteration_usd": null,
+    "model_iteration_cost": { "opus": 1.20, "sonnet": 0.30, "haiku": 0.05 }
   },
   "branch": {
     "feature": null,
