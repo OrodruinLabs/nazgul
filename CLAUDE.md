@@ -58,7 +58,7 @@ scripts/                             # Shell scripts for hooks
 │   ├── webhook-forward.sh           # Stop/Compact: forward events to HTTP endpoints
 │   ├── task-completed.sh            # TaskCompleted: update board, record metrics
 │   ├── board-sync-github.sh         # GitHub Projects board sync
-│   ├── migrate-config.sh            # Config schema migration (v1→v5)
+│   ├── migrate-config.sh            # Config schema migration (v1→v7)
 │   ├── worktree-utils.sh            # Git worktree helper functions
 │   ├── file-improvement-report.sh   # Self-improvement: write JSON reports
 │   ├── gen-skill-docs.sh            # Skill template: resolve {{PARTIAL:name}}

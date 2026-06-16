@@ -7,7 +7,7 @@ argument-hint: "[--local] [--force]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 1.3.4
+  version: 1.3.5
 ---
 
 # Nazgul Init
@@ -73,22 +73,42 @@ nazgul/
 └── logs/                # Empty, for iteration logs
 ```
 
-### Step 2.5: Configure Git Ignore (Local Mode Only)
-If `LOCAL_MODE=true`:
+### Step 2.5: Configure Git Ignore
+This step ALWAYS runs. It has two branches based on `LOCAL_MODE` (from Step 0). Read or create `.gitignore` at the project root; each branch is idempotent (skip the append if its marker is already present).
 
-1. Read or create `.gitignore` at the project root
-2. Check if `# Nazgul Framework (local mode)` marker already exists
-3. If marker is NOT present, append:
+**If `LOCAL_MODE=true` (local mode — nothing tracked in git):**
+1. If the `# Nazgul Framework (local mode)` marker is NOT present, append:
    ```
    # Nazgul Framework (local mode)
    nazgul/
    .claude/agents/generated/
    .mcp.json
    ```
-4. Set `install_mode` to `"local"` in the config:
+2. Set `install_mode` to `"local"`:
    ```bash
    jq '.install_mode = "local"' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
    ```
+
+**Otherwise (shared mode — track the decision record, ignore the ephemeral journal):**
+The decision record (`config.json`, `plan.md`, `tasks/`, `reviews/`, `docs/`, `context/`, generated agents) stays tracked so teammates can resume the loop from a clone. Only regenerable, machine-local journal files are ignored.
+1. If the `# Nazgul Framework — ephemeral runtime` marker is NOT present, append:
+   ```
+   # Nazgul Framework — ephemeral runtime (regenerable, machine-local)
+   nazgul/checkpoints/
+   nazgul/logs/
+   nazgul/sessions/
+   nazgul/.session_id
+   nazgul/.compaction_count
+   nazgul/archive/
+   nazgul/reviews/*/test-failures.md
+   nazgul/reviews/*/simplify-report.md
+   nazgul/reviews/post-loop-simplify-report.md
+   ```
+2. Set `install_mode` to `"shared"`:
+   ```bash
+   jq '.install_mode = "shared"' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
+   ```
+3. If this is a reinitialization (`--force`) of a project that already committed the ephemeral paths, tell the user they can stop tracking them with the one-shot in Step 4's summary.
 
 ### Step 3: Run Discovery
 Delegate to the Discovery agent to scan the codebase:
@@ -102,7 +122,15 @@ Show the user:
 - Number of files scanned
 - Reviewer board generated (list all reviewer agents)
 - Companion plugin status
-- Install mode: local (files not tracked in git) / shared (files tracked in git)
+- Install mode: local (whole `nazgul/` untracked) / shared (decision record tracked; ephemeral journal — checkpoints, logs, sessions, archive — gitignored)
+- **Shared-mode reinitialization only:** if `git ls-files nazgul/checkpoints nazgul/logs 2>/dev/null` shows already-tracked ephemeral paths, tell the user to stop tracking them (files stay on disk):
+  ```bash
+  git rm -r --cached nazgul/checkpoints nazgul/logs nazgul/sessions nazgul/archive \
+    nazgul/.session_id nazgul/.compaction_count 2>/dev/null
+  git rm --cached nazgul/reviews/*/test-failures.md nazgul/reviews/*/simplify-report.md \
+    nazgul/reviews/post-loop-simplify-report.md 2>/dev/null
+  git commit -m "chore(nazgul): stop tracking ephemeral runtime state"
+  ```
 - Next step: `/nazgul:start "your objective"`
 
 ### Step 5: Inject CLAUDE.md (Shared Mode Only)

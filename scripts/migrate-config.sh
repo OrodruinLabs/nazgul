@@ -156,6 +156,19 @@ migrate_5_to_6() {
   log_migration "v5→v6: Added simplify section and guards.requireActiveTask (enabled by default)"
 }
 
+migrate_6_to_7() {
+  local tmp
+  tmp=$(mktemp)
+  # Restore install_mode as a durable, first-class field. migrate_4_to_5 had
+  # deleted it as "unused", but init writes it and clean/init gitignore logic
+  # read it. Default to "shared" when absent; preserve an existing "local".
+  jq '
+    .install_mode = (.install_mode // "shared")
+    | .schema_version = 7
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v6→v7: Restored install_mode (default \"shared\"; preserves existing \"local\")"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"
