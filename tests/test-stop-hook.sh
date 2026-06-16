@@ -256,7 +256,7 @@ status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-002.md" | s
 assert_eq "PLANNED stays PLANNED (deps unmet)" "$status" "PLANNED"
 teardown_temp_dir
 
-# --- Test 19: Checkpoint rotation (keep last 10) ---
+# --- Test 19: Checkpoint rotation (keep last 2) ---
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
@@ -268,12 +268,12 @@ for i in $(seq 1 12); do
   printf '{"iteration": %d}\n' "$i" > "$TEST_DIR/nazgul/checkpoints/iteration-$(printf '%03d' "$i").json"
 done
 run_hook
-# Now should have iteration-013.json + some survivors from rotation (keeps 10)
+# Now should have iteration-013.json + some survivors from rotation (keeps 2)
 cp_count=$(ls -1 "$TEST_DIR/nazgul/checkpoints/iteration-"*.json 2>/dev/null | wc -l | tr -d ' ')
-if [ "$cp_count" -le 10 ]; then
-  _pass "checkpoint rotation keeps <= 10"
+if [ "$cp_count" -le 2 ]; then
+  _pass "checkpoint rotation keeps <= 2"
 else
-  _fail "checkpoint rotation keeps <= 10" "found $cp_count checkpoints"
+  _fail "checkpoint rotation keeps <= 2" "found $cp_count checkpoints"
 fi
 teardown_temp_dir
 
@@ -492,6 +492,38 @@ create_config '.mode="afk"' '.budget.enabled=false' '.budget.spent_usd="garbage"
 create_task_file TASK-001 READY
 rc=0; echo '{}' | CLAUDE_PROJECT_DIR="$TEST_DIR" "$REPO_ROOT/scripts/stop-hook.sh" >/dev/null 2>/dev/null || rc=$?
 assert_exit_code "malformed spent_usd (disabled) → continue (no abort)" "$rc" 2
+teardown_temp_dir
+
+# AFK clock uses objective_set_at as PRIMARY (recent objective_set_at → no timeout even with an OLD checkpoint)
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+recent_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+old_ts=$(date -u -v-5H +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "5 hours ago" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
+if [ -n "$old_ts" ]; then
+  create_config ".afk.enabled = true" ".afk.timeout_minutes = 90" ".objective_set_at = \"$recent_ts\""
+  create_plan; create_task_file "TASK-001" "READY"
+  printf '{"iteration":1,"timestamp":"%s"}\n' "$old_ts" > "$TEST_DIR/nazgul/checkpoints/iteration-001.json"
+  run_hook
+  assert_exit_code "AFK: recent objective_set_at overrides old checkpoint → continue" "$HOOK_EC" 2
+else
+  _pass "AFK objective_set_at precedence (skipped — date format unavailable)"
+fi
+teardown_temp_dir
+
+# AFK clock falls back to oldest checkpoint when objective_set_at absent
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+old_ts=$(date -u -v-3H +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "3 hours ago" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
+if [ -n "$old_ts" ]; then
+  create_config ".afk.enabled = true" ".afk.timeout_minutes = 90"
+  jq 'del(.objective_set_at)' "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.tmp" && mv "$TEST_DIR/nazgul/config.json.tmp" "$TEST_DIR/nazgul/config.json"
+  create_plan; create_task_file "TASK-001" "READY"
+  printf '{"iteration":1,"timestamp":"%s"}\n' "$old_ts" > "$TEST_DIR/nazgul/checkpoints/iteration-001.json"
+  run_hook
+  assert_exit_code "AFK: falls back to old checkpoint when objective_set_at absent → stop" "$HOOK_EC" 0
+  assert_contains "AFK fallback stderr" "$HOOK_OUTPUT" "AFK timeout"
+else
+  _pass "AFK checkpoint fallback (skipped — date format unavailable)"
+  _pass "AFK fallback stderr (skipped)"
+fi
 teardown_temp_dir
 
 report_results

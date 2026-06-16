@@ -50,14 +50,12 @@ fi
 AFK_ENABLED=$(jq -r '.afk.enabled // false' "$CONFIG")
 AFK_TIMEOUT=$(jq -r '.afk.timeout_minutes // 90' "$CONFIG")
 if [ "$AFK_ENABLED" = "true" ] && [ "$AFK_TIMEOUT" != "null" ]; then
-  # Find the earliest checkpoint timestamp or fall back to config's objective_set_at
-  SESSION_START=""
-  FIRST_CHECKPOINT=$(ls -1t "$NAZGUL_DIR/checkpoints/iteration-"*.json 2>/dev/null | tail -1 || true)
-  if [ -n "$FIRST_CHECKPOINT" ]; then
-    SESSION_START=$(jq -r '.timestamp // ""' "$FIRST_CHECKPOINT")
-  fi
-  if [ -z "$SESSION_START" ]; then
-    SESSION_START=$(jq -r '.objective_set_at // ""' "$CONFIG")
+  # Session start = objective_set_at (primary; accurate + retention-independent),
+  # falling back to the oldest surviving checkpoint's timestamp when absent.
+  SESSION_START=$(jq -r '.objective_set_at // ""' "$CONFIG")
+  if [ -z "$SESSION_START" ] || [ "$SESSION_START" = "null" ]; then
+    FIRST_CHECKPOINT=$(ls -1t "$NAZGUL_DIR/checkpoints/iteration-"*.json 2>/dev/null | tail -1 || true)
+    [ -n "$FIRST_CHECKPOINT" ] && SESSION_START=$(jq -r '.timestamp // ""' "$FIRST_CHECKPOINT")
   fi
   if [ -n "$SESSION_START" ] && [ "$SESSION_START" != "null" ]; then
     # Convert timestamps to epoch seconds for comparison
@@ -475,9 +473,9 @@ if [ "$BOARD_ENABLED" = "true" ]; then
   fi
 fi
 
-# Checkpoint rotation — keep last 10
+# Checkpoint rotation — keep last 2 (recovery reads only the latest; one extra for diff-base)
 if [ -d "$NAZGUL_DIR/checkpoints" ]; then
-  ls -1t "$NAZGUL_DIR/checkpoints/iteration-"*.json 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
+  ls -1t "$NAZGUL_DIR/checkpoints/iteration-"*.json 2>/dev/null | tail -n +3 | xargs rm -f 2>/dev/null || true
 fi
 
 # --- Auto-promote PLANNED -> READY when dependencies are met ---
