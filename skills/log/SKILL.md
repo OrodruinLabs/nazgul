@@ -16,7 +16,7 @@ metadata:
 ## Current State
 - Iteration logs: !`tail -20 nazgul/logs/iterations.jsonl 2>/dev/null || echo "No iteration logs"`
 - Recent commits: !`git log --oneline --grep="$(jq -r '.afk.commit_prefix // "feat("' nazgul/config.json 2>/dev/null)" -20 2>/dev/null || echo "No commits found"`
-- Checkpoints: !`ls -1t nazgul/checkpoints/iteration-*.json 2>/dev/null | head -5 || echo "No checkpoints"`
+- Checkpoints: !`ls -1t nazgul/checkpoints/iteration-*.json 2>/dev/null | head -2 || echo "No checkpoints"`
 
 ## Instructions
 
@@ -30,7 +30,7 @@ Gather events from the preprocessor data above. Each source provides different e
 
 2. **Git commits** (filtered by commit prefix from config): Commits with the configured prefix represent state changes committed to disk. Read `afk.commit_prefix` from config to determine the grep pattern. Extract the timestamp, short hash, and message.
 
-3. **Checkpoints** (`nazgul/checkpoints/iteration-*.json`): Each file captures a full snapshot at an iteration boundary. Read the latest 5 for context recovery info.
+3. **Checkpoints** (`nazgul/checkpoints/iteration-*.json`): Each file captures a full snapshot at an iteration boundary. Checkpoints are **retention-limited** (only the latest ~2 survive — they exist for recovery, not full history), so read the most recent for context-recovery detail and rely on `iterations.jsonl` (source 1) for the full timeline.
 
 ### Step 2: Build Unified Timeline
 
