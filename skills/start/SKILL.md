@@ -378,7 +378,7 @@ g. Continue to next wave
 ---
 
 ### AFK Mode Notes
-- Set `afk.enabled: true` in config
+- `afk.enabled` is `true` (set by the Apply Flags step — do not set it here)
 - Auto-commit on every state transition with dynamic prefix from config (e.g., `feat(FEAT-003):` or `feat(#42):`)
 - Security rejections → BLOCKED (requires human review later)
 - No pauses for human review
