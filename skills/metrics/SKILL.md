@@ -20,7 +20,7 @@ metadata:
 - Checkpoints retained (recovery only): !`ls nazgul/checkpoints/iteration-*.json 2>/dev/null | wc -l | tr -d ' '`
 - Reviews dir: !`ls -d nazgul/reviews/TASK-*/ 2>/dev/null | wc -l | tr -d ' '`
 - Budget (estimated): !`jq -r '.budget // {} | "enabled=\(.enabled) spent=$\(.spent_usd // 0) ceiling=\(.max_usd // "none")"' nazgul/config.json 2>/dev/null || echo "n/a"`
-- Subagent runs: !`wc -l < nazgul/logs/subagents.jsonl 2>/dev/null | tr -d ' ' || echo 0`
+- Subagent runs: !`test -f nazgul/logs/subagents.jsonl && wc -l < nazgul/logs/subagents.jsonl 2>/dev/null | tr -d ' ' || echo 0`
 
 ## Arguments
 $ARGUMENTS
