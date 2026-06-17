@@ -45,6 +45,9 @@ assert_eq "--yolo inside objective: afk.yolo stays false" "$(jq -r .afk.yolo "$T
 # ...but a real flag OUTSIDE the quoted objective still applies
 mkcfg "$base"; bash "$APPLY" "$TMP/c.json" '"fix the --yolo bug" --afk' >/dev/null
 assert_eq "real flag outside quotes still applies" "$(jq -r .mode "$TMP/c.json")" "afk"
+# Single-quoted objective is also stripped before flag-scanning
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "'refactor the --yolo handler'" >/dev/null
+assert_eq "--yolo inside single-quoted objective ignored" "$(jq -r .mode "$TMP/c.json")" "hitl"
 
 mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--max abc" >/dev/null
 assert_eq "non-numeric --max ignored" "$(jq -r .max_iterations "$TMP/c.json")" "40"
@@ -52,8 +55,10 @@ assert_eq "non-numeric --max ignored" "$(jq -r .max_iterations "$TMP/c.json")" "
 mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--max 0" >/dev/null
 assert_eq "--max 0 ignored (can't brick loop)" "$(jq -r .max_iterations "$TMP/c.json")" "40"
 
-mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--hitl --yolo" >/dev/null
-assert_eq "--hitl wins over --yolo" "$(jq -r .mode "$TMP/c.json")" "hitl"
+mkcfg "$(echo "$base" | jq '.afk.yolo=true|.afk.task_pr=true')"; bash "$APPLY" "$TMP/c.json" "--hitl --yolo" >/dev/null
+assert_eq "--hitl wins over --yolo (mode)" "$(jq -r .mode "$TMP/c.json")" "hitl"
+assert_eq "--hitl --yolo clears afk.yolo" "$(jq -r .afk.yolo "$TMP/c.json")" "false"
+assert_eq "--hitl --yolo clears afk.task_pr" "$(jq -r .afk.task_pr "$TMP/c.json")" "false"
 
 out=$(bash "$APPLY" "$TMP/none.json" "--yolo" 2>/dev/null || true)
 assert_eq "missing config → hitl"  "$out" "hitl"
