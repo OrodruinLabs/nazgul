@@ -5,7 +5,7 @@ context: fork
 allowed-tools: Read, Bash, Glob, Grep
 metadata:
   author: Jose Mejia
-  version: 1.5.0
+  version: 1.5.1
 ---
 
 # Nazgul Metrics
@@ -19,6 +19,8 @@ metadata:
 - Tasks dir: !`ls nazgul/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' '`
 - Checkpoints retained (recovery only): !`ls nazgul/checkpoints/iteration-*.json 2>/dev/null | wc -l | tr -d ' '`
 - Reviews dir: !`ls -d nazgul/reviews/TASK-*/ 2>/dev/null | wc -l | tr -d ' '`
+- Budget (estimated): !`jq -r '(.budget | if type=="object" then . else {} end) | "enabled=\(.enabled // false) spent=$\(.spent_usd // 0) ceiling=\(.max_usd // "none")"' nazgul/config.json 2>/dev/null || echo "n/a"`
+- Subagent runs: !`test -f nazgul/logs/subagents.jsonl && wc -l < nazgul/logs/subagents.jsonl 2>/dev/null | tr -d ' ' || echo 0`
 
 ## Arguments
 $ARGUMENTS
@@ -53,6 +55,14 @@ Read these sources to compute metrics:
    - Mode, max iterations, consecutive failures
    - Active reviewers list
 
+5. **Budget** (`nazgul/config.json → budget`):
+   - `spent_usd` (cumulative ESTIMATED spend for the current run), `max_usd` (ceiling, or null), `enabled`.
+   - NOTE: this is the cost governor's *estimate* (≈ iterations × per-tier rate), NOT metered spend, and it resets per objective (`/nazgul:start`). Label it "estimated" and never present it as actual billing.
+
+6. **Subagent log** (`nazgul/logs/subagents.jsonl`) — one `{event:"subagent_stop", agent, timestamp}` line per finished subagent:
+   - Total subagent runs (line count).
+   - Breakdown by `.agent` (counts per agent type, e.g. implementer, each reviewer, specialists). Use `jq -r .agent ... | sort | uniq -c` semantics.
+
 ### Compute Metrics
 
 - **Task velocity**: tasks DONE / total iterations (tasks per iteration)
@@ -61,6 +71,8 @@ Read these sources to compute metrics:
 - **Reviewer blocking rate**: per reviewer, rejections / total reviews
 - **Avg iterations per task**: total iterations / tasks DONE
 - **Time span**: first to last `timestamp` in `iterations.jsonl`
+- **Estimated cost**: total `budget.spent_usd`; cost/task = `spent_usd / DONE`; cost/iteration = `spent_usd / total iterations`. When `max_usd` is set, also `spent / ceiling (NN%)`. If a denominator is 0 (no DONE tasks or no iterations yet), show `—` instead of dividing (never emit `Infinity`/`NaN`). (Estimate — see source 5.)
+- **Subagent activity**: total subagent runs + per-agent-type counts (source 6)
 - **Loop health**: consecutive failures, compaction count, active task status
 
 ### Display Format
@@ -94,6 +106,20 @@ Reviewer Stats
   [reviewer-name]     ✦ [N] approved  ✗ [N] rejected  ([N]% block rate)
   ...
 
+Cost (estimated)
+─────────────────────────────────────
+  Est. spend:         $[spent]  [/ $[ceiling] ([%]) | (no ceiling) | (governor disabled)]
+  Cost/task:          $[N.NN]
+  Cost/iteration:     $[N.NN]
+  (Estimate from the cost governor — not metered spend; resets per objective.)
+
+Subagent Activity
+─────────────────────────────────────
+  Total runs:         [N]
+  [agent-type]:       [N]
+  [agent-type]:       [N]
+  ...
+
 Loop Health
 ─────────────────────────────────────
   Consecutive failures: [N]
@@ -103,4 +129,4 @@ Loop Health
 ────────────────────────────────────────────────────────
 ```
 
-If specific data is missing (no checkpoints, no reviews yet), show "No data" for that section rather than erroring.
+If specific data is missing, show a graceful placeholder for that section rather than erroring: no reviews yet → "No data"; **`budget.enabled` false** → "Cost: not tracked (budget governor disabled)"; **enabled but `spent_usd` is 0** → "Est. spend: $0 (no spend recorded yet this run)" — do NOT report an enabled governor as disabled (`spent_usd` resets to 0 on every `/nazgul:start`); `subagents.jsonl` absent/empty → "Subagent Activity: no data yet".
