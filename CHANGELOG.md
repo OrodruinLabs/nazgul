@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.1] - 2026-06-17
+
+### Added
+- `/nazgul:metrics` now reports **estimated cost** and **subagent activity** (roadmap 2.3). The Cost section surfaces the budget governor's cumulative estimate (`spent_usd`, % of ceiling, cost per task/iteration) — clearly labeled an *estimate* (≈ iterations × per-tier rate, not metered spend; resets per objective). The Subagent Activity section shows total runs + per-agent-type counts from `nazgul/logs/subagents.jsonl`. Both degrade gracefully (governor disabled → "not tracked"; no subagent log → "no data yet"). Read-only, no schema change.
+
+### Note
+- Closes the planned enhancement roadmap. **Roadmap 2.2 (`Monitor` tool) was dropped** after research: its "replace bash poll-loops" premise didn't hold (Monitor is for streaming/repeated events, not "wait-for-completion"; Nazgul's test/build run synchronously), and the only substantive fit — long-running e2e smoke — was judged too risky (starts/tears down real processes in an unattended loop) for its value.
+
 ## [1.5.0] - 2026-06-17
 
 ### Added
