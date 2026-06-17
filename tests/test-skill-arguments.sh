@@ -60,4 +60,25 @@ for skill_file in "$REPO_ROOT"/skills/*/SKILL.md; do
   fi
 done
 
+# Contract: every --flag a skill documents in its `argument-hint` frontmatter must
+# be referenced in the skill BODY (or the body must invoke a helper that handles
+# flags). Catches the "documented but never handled" class (e.g. /nazgul:start
+# --yolo / --max that were silently ignored). See 2026-06-17-argument-handling spec.
+for skill_file in "$REPO_ROOT"/skills/*/SKILL.md; do
+  [ -f "$skill_file" ] || continue
+  rel_path="${skill_file#"$REPO_ROOT/"}"
+  hint=$(awk -F'argument-hint:' '/^argument-hint:/{print $2; exit}' "$skill_file")
+  [ -n "$hint" ] || continue
+  body=$(awk 'BEGIN{c=0} /^---$/{c++; next} c>=2{print}' "$skill_file")
+  for flag in $(printf '%s\n' "$hint" | grep -oE -- '--[a-z][a-z-]*' | sort -u); do
+    if printf '%s\n' "$body" | grep -qF -- "$flag" \
+       || printf '%s\n' "$body" | grep -q 'apply-start-flags.sh'; then
+      _pass "$rel_path body handles documented flag $flag"
+    else
+      _fail "$rel_path documents $flag in argument-hint but its body never references it" \
+        "Either handle the flag in the body (parse + act on it) or remove it from argument-hint."
+    fi
+  done
+done
+
 report_results
