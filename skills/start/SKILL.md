@@ -3,11 +3,11 @@ name: nazgul:start
 description: Start or resume a Nazgul autonomous development loop. Use when user says "start nazgul", "run nazgul", "begin development", "resume the loop", or passes an objective for new work. Auto-detects project state — no arguments needed.
 context: fork
 disable-model-invocation: true
-argument-hint: "[\"objective\"] [--afk|--yolo|--hitl] [--max N]"
+argument-hint: "[\"objective\"] [--afk|--yolo|--hitl] [--max N] [--task-pr]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task
 metadata:
   author: Jose Mejia
-  version: 1.5.1
+  version: 1.5.2
 ---
 
 # Nazgul Start
@@ -49,18 +49,17 @@ Format all output per `references/ui-brand.md` — use stage banners, status sym
   - Or nothing at all (smart mode — this is the default)
 
 ### YOLO Mode Pre-flight (--yolo)
-If `--yolo` flag is present:
-1. Set `afk.enabled: true` and `afk.yolo: true` in config.json
-2. If `--task-pr` flag is also present: set `afk.task_pr: true` in config.json
-3. Check if the current session was launched with `--dangerously-skip-permissions`:
-   - Try running a quick Bash command — if no permission prompt fires, we're good
-   - If permissions ARE being prompted, **STOP** and tell the user:
-     ```
-     YOLO mode requires --dangerously-skip-permissions. Restart with:
-     claude --dangerously-skip-permissions
-     Then re-run: /nazgul:start --yolo --max N
-     ```
-4. Once confirmed, proceed with full autonomous mode — no pauses, no permission prompts, no human gates
+Runs after **Apply Flags** / before Smart State Detection. The `afk.enabled`/`afk.yolo`/`afk.task_pr` config writes are already done by Apply Flags — do not repeat them here.
+
+If `--yolo` was passed (mode is now `afk` + `afk.yolo` true via Apply Flags), verify the session was launched with `--dangerously-skip-permissions`:
+- Try running a quick Bash command — if no permission prompt fires, we're good
+- If permissions ARE being prompted, **STOP** and tell the user:
+  ```text
+  YOLO mode requires --dangerously-skip-permissions. Restart with:
+  claude --dangerously-skip-permissions
+  Then re-run: /nazgul:start --yolo --max N
+  ```
+- Once confirmed, proceed with full autonomous mode — no pauses, no permission prompts, no human gates
 
 ### Model Selection
 
@@ -83,6 +82,13 @@ If the `models` section is missing from config.json, use `"sonnet"` as the fallb
 When launching Nazgul, use session naming for identification:
 - Launch with: `claude -n "nazgul-<feat_display_id>"` (e.g., `claude -n "nazgul-FEAT-003"`)
 - Agent Teams sessions are auto-named by the team-orchestrator: `nazgul-impl-TASK-NNN`, `nazgul-review-TASK-NNN`
+
+### Apply Flags (MANDATORY — runs on every path, before state detection)
+Persist the CLI flags to config via the tested helper, so every mode-gated branch below reads a correct `config.mode`:
+```bash
+[ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "$ARGUMENTS"
+```
+This sets `mode` (`--yolo`/`--afk` → `afk`, `--hitl` → `hitl`), `afk.enabled`, `afk.yolo`, `afk.task_pr`, and `max_iterations` (`--max N`, positive integer). `--hitl` wins if combined with `--afk`/`--yolo`. Do NOT separately hand-edit these fields from flags anywhere else in this skill — this helper is the single source of truth.
 
 ### Reset Loop Counters (MANDATORY)
 
@@ -129,7 +135,7 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
      e. Store `feat_id` and `feat_display_id` in config.json. Set `afk.commit_prefix` to `feat(<display_id>):`.
      f. `git checkout -b feat/<display_id>-<slug>`
      g. Create worktree dir, store paths in config
-6. Update config.json: set mode from flags (afk/hitl). (Loop counters were already reset by the mandatory **Reset Loop Counters** step above.)
+6. Mode was already applied from flags by the **Apply Flags** step above; do not re-derive it here. (Loop counters were already reset by the mandatory **Reset Loop Counters** step above.)
 7. Delegate to the appropriate agent based on active task status:
    - READY/IN_PROGRESS → Implementer
    - IMPLEMENTED/IN_REVIEW → Review Gate
@@ -372,7 +378,7 @@ g. Continue to next wave
 ---
 
 ### AFK Mode Notes
-- Set `afk.enabled: true` in config
+- `afk.enabled` is `true` (set by the Apply Flags step — do not set it here)
 - Auto-commit on every state transition with dynamic prefix from config (e.g., `feat(FEAT-003):` or `feat(#42):`)
 - Security rejections → BLOCKED (requires human review later)
 - No pauses for human review

@@ -5,7 +5,7 @@ context: fork
 allowed-tools: Read, Bash, Glob, Grep
 metadata:
   author: Jose Mejia
-  version: 1.5.1
+  version: 1.5.2
 ---
 
 # Nazgul Metrics
@@ -30,6 +30,8 @@ $ARGUMENTS
 Format all output per `references/ui-brand.md` — use stage banners, status symbols, progress bars, and display patterns defined there.
 
 If Nazgul is not initialized, say so and stop.
+
+If the typed arguments (`$ARGUMENTS`, the substituted value — not this literal block) are the standalone token `reviews`, display ONLY the Reviewer Stats section (skip Task Velocity, Approval Rate, Cost, Subagent Activity, and Loop Health). Otherwise render the full dashboard. When in `reviews` mode you only need to collect the Review files data (source 3) to compute and display Reviewer Stats.
 
 ### Collect Data
 

@@ -5,7 +5,7 @@ context: fork
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 metadata:
   author: Jose Mejia
-  version: 1.5.1
+  version: 1.5.2
 ---
 
 # Nazgul Patch
@@ -29,9 +29,11 @@ $ARGUMENTS
 ### Pre-flight
 1. Check if `nazgul/config.json` exists. If not: "Nazgul not initialized. Run `/nazgul:init` first." and STOP.
 2. Parse `$ARGUMENTS` for flags:
+   - Backstop: if the `## Arguments` block above is *exactly* the literal token `$ARGUMENTS` (the placeholder was not substituted at all — not merely a patch description that happens to mention `$ARGUMENTS`), argument substitution is broken — STOP and report: "Skill argument substitution failed — this is a plugin bug, do not proceed." Otherwise continue.
    - `--no-review` → skip review step
    - `--discuss` → run gray area discussion before planning
    - Remaining text → patch description
+   - These flags are persisted to the manifest's `## Flags` line in Step 1 and are the authoritative on-disk record; Step 2 and Step 5 read the decision back from that line (do not rely on remembered variables, which are lost on compaction).
 3. If no description after parsing, ask interactively: "What do you want to patch?"
 
 ### Display Banner
@@ -64,7 +66,7 @@ Output per references/ui-brand.md:
 ```
 
 ### Step 2: Discuss (if --discuss flag)
-Only if `--discuss` was passed:
+Read the patch manifest's `## Flags` line (the authoritative on-disk record written in Step 1). Only if it contains `--discuss`:
 1. Analyze the patch description for gray areas based on domain:
    - Code changes → scope, backwards compatibility, edge cases
    - Config changes → environments affected, rollback plan
@@ -86,7 +88,7 @@ Use the implementer agent to execute each subtask:
 - Update patch manifest with implementation log
 
 ### Step 5: Review (unless --no-review)
-If `--no-review` was NOT passed:
+Read the patch manifest's `## Flags` line (the authoritative on-disk record written in Step 1) to decide. If it does NOT contain `--no-review`:
 1. Auto-select a single reviewer based on file types changed:
    - `.ts/.tsx/.js/.jsx` → frontend-reviewer (if available) or code-reviewer
    - `.py` → code-reviewer
@@ -96,7 +98,7 @@ If `--no-review` was NOT passed:
 3. If APPROVED: mark patch DONE
 4. If CHANGES_REQUESTED: show feedback, implementer fixes, re-review (max 2 retries)
 
-If `--no-review` was passed:
+If the `## Flags` line contains `--no-review`:
 - Mark patch DONE immediately after implementation
 
 ### Step 6: Complete

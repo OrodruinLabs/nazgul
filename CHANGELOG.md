@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.2] - 2026-06-17
+
+### Fixed
+- **`/nazgul:start` flags now take effect on every path.** `--yolo` previously set `afk.*` but never `mode`, so mode-gated branches (the objective menu, doc/plan-review pauses) ran as **HITL** under `--yolo`; `--max N` was documented but **never written** to `max_iterations` (silently ignored); `--afk`/`--hitl` were only applied in the ACTIVE_LOOP state; `--task-pr` was honored only with `--yolo`. Flag→config application is now centralized in a single tested helper (`scripts/apply-start-flags.sh`) that `start` calls in a mandatory step on every path — persisting `mode`/`afk.enabled`/`afk.yolo`/`afk.task_pr`/`max_iterations` before state detection. `--hitl` wins over `--afk`/`--yolo` (and clears the autonomous sub-flags); `--max 0`/non-numeric is ignored as a no-op (leaves `max_iterations` unchanged, so it can't brick the loop).
+- **Other skills now honor documented args they previously ignored:** `/nazgul:simplify <focus>` (narrows the pass), `/nazgul:metrics reviews` (shows only reviewer stats), `/nazgul:context <type>` (selects the context section; reads `.project.classification` when no arg). `/nazgul:patch` now reads its `--no-review`/`--discuss` decision back from the manifest `## Flags` line (file-truth, compaction-safe) with an `$ARGUMENTS`-substitution backstop.
+
+### Added
+- `tests/test-start-flags.sh` — exhaustive unit tests of the flag helper (every flag, combos, precedence, `--max 0`/non-numeric, missing config). **This is the test that would have caught the `--yolo`/`--max` bugs.**
+- `tests/test-skill-arguments.sh` extended with a contract check: every `--flag` documented in a skill's `argument-hint` must be referenced in its body (or handled by the helper) — catches the "documented but never handled" class going forward.
+
 ## [1.5.1] - 2026-06-17
 
 ### Added

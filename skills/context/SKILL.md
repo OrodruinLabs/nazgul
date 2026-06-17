@@ -5,7 +5,7 @@ context: fork
 allowed-tools: Read, Write, Bash, Glob, Grep, LS
 metadata:
   author: Jose Mejia
-  version: 1.5.1
+  version: 1.5.2
 ---
 
 # Nazgul Context Collection
@@ -26,6 +26,14 @@ $ARGUMENTS
 Format all output per `references/ui-brand.md` — use stage banners, status symbols, and display patterns defined there.
 
 Collect targeted context based on the objective type. Write results to `nazgul/context/`.
+
+### Determine Objective Type
+Parse `$ARGUMENTS` (the `## Arguments` block above) for an objective type — one of: `refactor`, `bugfix`, `feature`, `greenfield`, `migration`. If absent, derive it from `nazgul/config.json` classification (`jq -r '.project.classification // empty' nazgul/config.json`). Then collect the context section(s) matching that type, using the mapping below:
+- `refactor` → **For Refactors**
+- `bugfix` → **For Bug Fixes**
+- `feature` → **For New Features**
+- `greenfield` → **For Greenfield**
+- `migration` → treat as a refactor-style scope (**For Refactors**), focused on the data/system being migrated
 
 ### For Refactors
 1. Identify ALL files in the refactor scope (use grep, glob)
