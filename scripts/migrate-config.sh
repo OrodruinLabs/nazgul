@@ -193,9 +193,12 @@ migrate_7_to_8() {
 migrate_8_to_9() {
   local tmp
   tmp=$(mktemp)
-  # Add project.smoke_command (runtime-verification gate) when absent; preserve existing.
+  # Add project.smoke_command (runtime-verification gate) when absent; preserve
+  # existing. Clamp a non-object .project (hand-edited to a string/array) to {}
+  # first, so the assignment can't error and abort the migration (same type-guard
+  # pattern as migrate_5_to_6/migrate_7_to_8).
   jq '
-    .project = ((.project // {}) | .smoke_command = (.smoke_command // null))
+    .project = ((if (.project | type) == "object" then .project else {} end) | .smoke_command = (.smoke_command // null))
     | .schema_version = 9
   ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
   log_migration "v8→v9: Added project.smoke_command (runtime-verification gate)"
