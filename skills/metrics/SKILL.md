@@ -19,7 +19,7 @@ metadata:
 - Tasks dir: !`ls nazgul/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' '`
 - Checkpoints retained (recovery only): !`ls nazgul/checkpoints/iteration-*.json 2>/dev/null | wc -l | tr -d ' '`
 - Reviews dir: !`ls -d nazgul/reviews/TASK-*/ 2>/dev/null | wc -l | tr -d ' '`
-- Budget (estimated): !`jq -r '.budget // {} | "enabled=\(.enabled) spent=$\(.spent_usd // 0) ceiling=\(.max_usd // "none")"' nazgul/config.json 2>/dev/null || echo "n/a"`
+- Budget (estimated): !`jq -r '(.budget | if type=="object" then . else {} end) | "enabled=\(.enabled // false) spent=$\(.spent_usd // 0) ceiling=\(.max_usd // "none")"' nazgul/config.json 2>/dev/null || echo "n/a"`
 - Subagent runs: !`test -f nazgul/logs/subagents.jsonl && wc -l < nazgul/logs/subagents.jsonl 2>/dev/null | tr -d ' ' || echo 0`
 
 ## Arguments
@@ -71,7 +71,7 @@ Read these sources to compute metrics:
 - **Reviewer blocking rate**: per reviewer, rejections / total reviews
 - **Avg iterations per task**: total iterations / tasks DONE
 - **Time span**: first to last `timestamp` in `iterations.jsonl`
-- **Estimated cost**: total `budget.spent_usd`; cost/task = `spent_usd / DONE`; cost/iteration = `spent_usd / total iterations`. When `max_usd` is set, also `spent / ceiling (NN%)`. (Estimate — see source 5.)
+- **Estimated cost**: total `budget.spent_usd`; cost/task = `spent_usd / DONE`; cost/iteration = `spent_usd / total iterations`. When `max_usd` is set, also `spent / ceiling (NN%)`. If a denominator is 0 (no DONE tasks or no iterations yet), show `—` instead of dividing (never emit `Infinity`/`NaN`). (Estimate — see source 5.)
 - **Subagent activity**: total subagent runs + per-agent-type counts (source 6)
 - **Loop health**: consecutive failures, compaction count, active task status
 
@@ -129,4 +129,4 @@ Loop Health
 ────────────────────────────────────────────────────────
 ```
 
-If specific data is missing, show a graceful placeholder for that section rather than erroring: no reviews yet → "No data"; `budget.enabled` false or `spent_usd` 0 → "Cost: not tracked (budget governor disabled)"; `subagents.jsonl` absent/empty → "Subagent Activity: no data yet".
+If specific data is missing, show a graceful placeholder for that section rather than erroring: no reviews yet → "No data"; **`budget.enabled` false** → "Cost: not tracked (budget governor disabled)"; **enabled but `spent_usd` is 0** → "Est. spend: $0 (no spend recorded yet this run)" — do NOT report an enabled governor as disabled (`spent_usd` resets to 0 on every `/nazgul:start`); `subagents.jsonl` absent/empty → "Subagent Activity: no data yet".
