@@ -8,10 +8,13 @@ ARGS="${2:-}"
 [ -f "$CONFIG" ] || { echo "hitl"; exit 0; }
 
 yolo=false; afk=false; hitl=false; task_pr=false
+# Strip quoted spans first so a flag token INSIDE the objective string is not
+# misread as a flag (e.g. /nazgul:start "fix the --yolo bug" must NOT enable yolo).
+SCAN=$(printf '%s' "$ARGS" | sed -E 's/"[^"]*"//g; s/'"'"'[^'"'"']*'"'"'//g')
 # shellcheck disable=SC2086
-# Intentional word-splitting: ARGS is a single flag string and each
+# Intentional word-splitting: SCAN is a single flag string and each
 # whitespace-separated token is a discrete flag to classify.
-for tok in $ARGS; do
+for tok in $SCAN; do
   case "$tok" in
     --yolo) yolo=true ;;
     --afk) afk=true ;;
@@ -19,7 +22,7 @@ for tok in $ARGS; do
     --task-pr) task_pr=true ;;
   esac
 done
-maxn=$(printf '%s\n' "$ARGS" | grep -oE -- '--max[[:space:]]+[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
+maxn=$(printf '%s\n' "$SCAN" | grep -oE -- '--max[[:space:]]+[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
 # Only a POSITIVE integer is valid; --max 0 (or absent) is ignored so it can't
 # brick the loop (downstream `.max_iterations // 40` only defaults on null).
 if [ -n "$maxn" ] && [ "$maxn" -le 0 ] 2>/dev/null; then maxn=""; fi

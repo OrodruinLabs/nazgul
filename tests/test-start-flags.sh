@@ -38,6 +38,14 @@ assert_eq "--yolo --task-pr taskpr" "$(jq -r .afk.task_pr "$TMP/c.json")" "true"
 mkcfg "$(echo "$base" | jq '.mode="afk"')"; bash "$APPLY" "$TMP/c.json" '"add auth"' >/dev/null
 assert_eq "no mode flag → mode unchanged" "$(jq -r .mode "$TMP/c.json")" "afk"
 
+# A flag token INSIDE the quoted objective must NOT be parsed as a flag
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" '"fix the --yolo bug"' >/dev/null
+assert_eq "--yolo inside objective ignored (mode unchanged)" "$(jq -r .mode "$TMP/c.json")" "hitl"
+assert_eq "--yolo inside objective: afk.yolo stays false" "$(jq -r .afk.yolo "$TMP/c.json")" "false"
+# ...but a real flag OUTSIDE the quoted objective still applies
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" '"fix the --yolo bug" --afk' >/dev/null
+assert_eq "real flag outside quotes still applies" "$(jq -r .mode "$TMP/c.json")" "afk"
+
 mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--max abc" >/dev/null
 assert_eq "non-numeric --max ignored" "$(jq -r .max_iterations "$TMP/c.json")" "40"
 
