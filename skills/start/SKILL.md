@@ -3,7 +3,7 @@ name: nazgul:start
 description: Start or resume a Nazgul autonomous development loop. Use when user says "start nazgul", "run nazgul", "begin development", "resume the loop", or passes an objective for new work. Auto-detects project state — no arguments needed.
 context: fork
 disable-model-invocation: true
-argument-hint: "[\"objective\"] [--afk|--yolo|--hitl] [--max N]"
+argument-hint: "[\"objective\"] [--afk|--yolo|--hitl] [--max N] [--task-pr]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task
 metadata:
   author: Jose Mejia
@@ -54,7 +54,7 @@ Runs after **Apply Flags** / before Smart State Detection. The `afk.enabled`/`af
 If `--yolo` was passed (mode is now `afk` + `afk.yolo` true via Apply Flags), verify the session was launched with `--dangerously-skip-permissions`:
 - Try running a quick Bash command — if no permission prompt fires, we're good
 - If permissions ARE being prompted, **STOP** and tell the user:
-  ```
+  ```text
   YOLO mode requires --dangerously-skip-permissions. Restart with:
   claude --dangerously-skip-permissions
   Then re-run: /nazgul:start --yolo --max N

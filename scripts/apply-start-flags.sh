@@ -33,11 +33,16 @@ elif [ "$yolo" = true ] || [ "$afk" = true ]; then set_mode="afk"; fi
 
 jqp='.'
 if [ -n "$set_mode" ]; then
+  # An explicit mode flag (re)sets mode AND the autonomous sub-flags to exactly
+  # what was requested — so switching from a prior --yolo to --afk/--hitl CLEARS
+  # the stale afk.yolo/afk.task_pr (the runtime gates on those directly).
   jqp="$jqp | .mode=\"$set_mode\""
   if [ "$set_mode" = "afk" ]; then jqp="$jqp | .afk.enabled=true"; else jqp="$jqp | .afk.enabled=false"; fi
+  jqp="$jqp | .afk.yolo=$yolo | .afk.task_pr=$task_pr"
+else
+  # No mode flag = resume: leave mode/afk.* as-is. Honor an explicit --task-pr only.
+  [ "$task_pr" = true ] && jqp="$jqp | .afk.task_pr=true"
 fi
-[ "$yolo" = true ] && jqp="$jqp | .afk.yolo=true"
-[ "$task_pr" = true ] && jqp="$jqp | .afk.task_pr=true"
 [ -n "$maxn" ] && jqp="$jqp | .max_iterations=($maxn)"
 
 tmp=$(mktemp)

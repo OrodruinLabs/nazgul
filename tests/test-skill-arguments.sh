@@ -69,10 +69,20 @@ for skill_file in "$REPO_ROOT"/skills/*/SKILL.md; do
   rel_path="${skill_file#"$REPO_ROOT/"}"
   hint=$(awk -F'argument-hint:' '/^argument-hint:/{print $2; exit}' "$skill_file")
   [ -n "$hint" ] || continue
-  body=$(awk 'BEGIN{c=0} /^---$/{c++; next} c>=2{print}' "$skill_file")
+  # Body EXCLUDING the `## Examples` section — a flag shown only in Examples is
+  # documented, not handled; the contract requires it appear in the actual
+  # instructions (or that the body invokes the flag helper).
+  handled=$(awk '
+    BEGIN{c=0}
+    /^---$/{c++; next}
+    c<2{next}
+    /^##[[:space:]]+Examples[[:space:]]*$/ {skip=1; next}
+    /^##[[:space:]]/ {skip=0}
+    !skip {print}
+  ' "$skill_file")
   for flag in $(printf '%s\n' "$hint" | grep -oE -- '--[a-z][a-z-]*' | sort -u); do
-    if printf '%s\n' "$body" | grep -qF -- "$flag" \
-       || printf '%s\n' "$body" | grep -q 'apply-start-flags.sh'; then
+    if printf '%s\n' "$handled" | grep -qF -- "$flag" \
+       || printf '%s\n' "$handled" | grep -q 'apply-start-flags.sh'; then
       _pass "$rel_path body handles documented flag $flag"
     else
       _fail "$rel_path documents $flag in argument-hint but its body never references it" \

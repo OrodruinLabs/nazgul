@@ -58,4 +58,17 @@ assert_eq "--hitl wins over --yolo" "$(jq -r .mode "$TMP/c.json")" "hitl"
 out=$(bash "$APPLY" "$TMP/none.json" "--yolo" 2>/dev/null || true)
 assert_eq "missing config → hitl"  "$out" "hitl"
 
+# Switching modes CLEARS stale autonomous sub-flags (the runtime gates on them).
+prioryolo='{"mode":"afk","afk":{"enabled":true,"yolo":true,"task_pr":true},"max_iterations":40}'
+mkcfg "$prioryolo"; bash "$APPLY" "$TMP/c.json" "--afk" >/dev/null
+assert_eq "--afk after yolo clears afk.yolo"     "$(jq -r .afk.yolo "$TMP/c.json")" "false"
+assert_eq "--afk after yolo clears afk.task_pr"  "$(jq -r .afk.task_pr "$TMP/c.json")" "false"
+mkcfg "$prioryolo"; bash "$APPLY" "$TMP/c.json" "--hitl" >/dev/null
+assert_eq "--hitl after yolo clears afk.yolo"    "$(jq -r .afk.yolo "$TMP/c.json")" "false"
+assert_eq "--hitl after yolo clears afk.task_pr" "$(jq -r .afk.task_pr "$TMP/c.json")" "false"
+# ...but a no-mode-flag resume PRESERVES the sub-flags (don't clobber a running yolo loop)
+mkcfg "$prioryolo"; bash "$APPLY" "$TMP/c.json" '"keep going"' >/dev/null
+assert_eq "no-flag resume preserves afk.yolo"    "$(jq -r .afk.yolo "$TMP/c.json")" "true"
+assert_eq "no-flag resume preserves mode"        "$(jq -r .mode "$TMP/c.json")" "afk"
+
 report_results

@@ -29,7 +29,7 @@ $ARGUMENTS
 ### Pre-flight
 1. Check if `nazgul/config.json` exists. If not: "Nazgul not initialized. Run `/nazgul:init` first." and STOP.
 2. Parse `$ARGUMENTS` for flags:
-   - Backstop: if the `## Arguments` block above contains the literal text `$ARGUMENTS` (i.e. the placeholder was not substituted), argument substitution is broken — STOP and report: "Skill argument substitution failed — this is a plugin bug, do not proceed." Otherwise continue.
+   - Backstop: if the `## Arguments` block above is *exactly* the literal token `$ARGUMENTS` (the placeholder was not substituted at all — not merely a patch description that happens to mention `$ARGUMENTS`), argument substitution is broken — STOP and report: "Skill argument substitution failed — this is a plugin bug, do not proceed." Otherwise continue.
    - `--no-review` → skip review step
    - `--discuss` → run gray area discussion before planning
    - Remaining text → patch description
