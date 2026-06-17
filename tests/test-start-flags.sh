@@ -41,6 +41,9 @@ assert_eq "no mode flag → mode unchanged" "$(jq -r .mode "$TMP/c.json")" "afk"
 mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--max abc" >/dev/null
 assert_eq "non-numeric --max ignored" "$(jq -r .max_iterations "$TMP/c.json")" "40"
 
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--max 0" >/dev/null
+assert_eq "--max 0 ignored (can't brick loop)" "$(jq -r .max_iterations "$TMP/c.json")" "40"
+
 mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--hitl --yolo" >/dev/null
 assert_eq "--hitl wins over --yolo" "$(jq -r .mode "$TMP/c.json")" "hitl"
 

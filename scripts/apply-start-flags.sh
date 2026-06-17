@@ -20,6 +20,9 @@ for tok in $ARGS; do
   esac
 done
 maxn=$(printf '%s\n' "$ARGS" | grep -oE -- '--max[[:space:]]+[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
+# Only a POSITIVE integer is valid; --max 0 (or absent) is ignored so it can't
+# brick the loop (downstream `.max_iterations // 40` only defaults on null).
+if [ -n "$maxn" ] && [ "$maxn" -le 0 ] 2>/dev/null; then maxn=""; fi
 
 set_mode=""
 if [ "$hitl" = true ]; then set_mode="hitl"
