@@ -41,7 +41,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null)
 assert_contains "v1 → v2 output" "$OUTPUT" "migrated"
-assert_json_field "v1 config → v8 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "8"
+assert_json_field "v1 config → v9 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "9"
 val=$(jq -r '.models | type' "$NAZGUL_DIR/config.json")
 assert_eq "v1 → v2 models section added" "$val" "object"
 assert_json_field "v1 → v2 models.default" "$NAZGUL_DIR/config.json" ".models.default" "sonnet"
@@ -65,7 +65,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v2 → v3 output" "$OUTPUT" "migrated"
-assert_json_field "v2 config → v8 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "8"
+assert_json_field "v2 config → v9 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "9"
 val=$(jq -r '.branch | type' "$NAZGUL_DIR/config.json")
 assert_eq "v2 → v3 branch section added" "$val" "object"
 val=$(jq -r '.afk | has("branch_per_task")' "$NAZGUL_DIR/config.json")
@@ -90,7 +90,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v3 → v4 output" "$OUTPUT" "migrated"
-assert_json_field "v3 config → v8 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "8"
+assert_json_field "v3 config → v9 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "9"
 val=$(jq -r '.webhooks | type' "$NAZGUL_DIR/config.json")
 assert_eq "v3 → v4 webhooks section added" "$val" "object"
 assert_json_field "v3 → v4 webhooks.enabled" "$NAZGUL_DIR/config.json" ".webhooks.enabled" "false"
@@ -151,7 +151,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v4 → v5 output" "$OUTPUT" "migrated"
-assert_json_field "v4 config → v8 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "8"
+assert_json_field "v4 config → v9 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "9"
 # install_mode is stripped at 4→5 but RESTORED at 6→7 (default "shared")
 assert_json_field "v4 → v7 install_mode restored to shared" "$NAZGUL_DIR/config.json" ".install_mode" "shared"
 # Verify the other v4→v5-removed fields stay gone through the full chain
@@ -198,7 +198,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v5 → v6 output" "$OUTPUT" "migrated"
-assert_json_field "v5 config → v8 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "8"
+assert_json_field "v5 config → v9 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "9"
 val=$(jq -r '.simplify | type' "$NAZGUL_DIR/config.json")
 assert_eq "v5 → v6 simplify section added" "$val" "object"
 assert_json_field "v5 → v6 simplify.post_loop" "$NAZGUL_DIR/config.json" ".simplify.post_loop" "true"
@@ -239,7 +239,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v6 → v7 output" "$OUTPUT" "migrated"
-assert_json_field "v6 config → v8 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "8"
+assert_json_field "v6 config → v9 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "9"
 assert_json_field "v6 → v7 install_mode defaults to shared" "$NAZGUL_DIR/config.json" ".install_mode" "shared"
 
 # --- Test 3e-b: v6 config with install_mode=local → preserved through v7 ---
@@ -252,7 +252,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
-assert_json_field "v6 config → v8 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "8"
+assert_json_field "v6 config → v9 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "9"
 assert_json_field "v6 → v7 install_mode=local preserved" "$NAZGUL_DIR/config.json" ".install_mode" "local"
 
 # --- Test 3e-c: v6 config with invalid install_mode → clamped to shared ---
@@ -278,7 +278,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v7 → v8 output" "$OUTPUT" "migrated"
-assert_json_field "v7 → v8 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "8"
+assert_json_field "v7 → v8 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "9"
 assert_json_field "v7 → v8 budget.enabled defaults false" "$NAZGUL_DIR/config.json" ".budget.enabled" "false"
 
 # --- Test 3g: existing budget preserved through v8 ---
@@ -293,13 +293,41 @@ OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) |
 assert_json_field "v7 → v8 existing budget.max_usd preserved" "$NAZGUL_DIR/config.json" ".budget.max_usd" "25"
 assert_json_field "v7 → v8 existing budget.enabled preserved" "$NAZGUL_DIR/config.json" ".budget.enabled" "true"
 
-# --- Test 3h: v8 config → no-op ---
+# --- Test 3h: v8 config → migrated to v9, project.smoke_command added ---
 NAZGUL_DIR=$(setup_nazgul_dir "v8-config")
 cat > "$NAZGUL_DIR/config.json" << 'EOF'
-{ "schema_version": 8, "mode": "hitl" }
+{ "schema_version": 8, "mode": "hitl", "project": { "test_command": "npm test" } }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
-assert_eq "v8 config → no output" "$OUTPUT" ""
+assert_contains "v8 → v9 output" "$OUTPUT" "migrated"
+assert_json_field "v8 → v9 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "9"
+assert_json_field "v8 → v9 smoke_command added (null)" "$NAZGUL_DIR/config.json" ".project.smoke_command" "null"
+assert_json_field "v8 → v9 preserves existing project field" "$NAZGUL_DIR/config.json" ".project.test_command" "npm test"
+
+# --- Test 3i: existing smoke_command preserved through v9 ---
+NAZGUL_DIR=$(setup_nazgul_dir "v8-smoke")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{ "schema_version": 8, "project": { "smoke_command": "node dist/index.js --version" } }
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_json_field "v8 → v9 existing smoke_command preserved" "$NAZGUL_DIR/config.json" ".project.smoke_command" "node dist/index.js --version"
+
+# --- Test 3i-b: non-object project (hand-edited) → clamped to object at v9 ---
+NAZGUL_DIR=$(setup_nazgul_dir "v8-project-garbage")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{ "schema_version": 8, "project": "oops" }
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_json_field "v8 → v9 non-object project clamped to object" "$NAZGUL_DIR/config.json" ".project | type" "object"
+assert_json_field "v8 → v9 clamped project.smoke_command null" "$NAZGUL_DIR/config.json" ".project.smoke_command" "null"
+
+# --- Test 3j: v9 config → no-op ---
+NAZGUL_DIR=$(setup_nazgul_dir "v9-config")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{ "schema_version": 9, "mode": "hitl" }
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_eq "v9 config → no output" "$OUTPUT" ""
 
 # --- Test 4: Backup file created on migration ---
 NAZGUL_DIR=$(setup_nazgul_dir "backup-check")
@@ -355,7 +383,7 @@ CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" >/dev/null 2>/dev/null
 assert_file_exists "migration log created" "$NAZGUL_DIR/logs/migrations.log"
 assert_file_contains "log has migration entry" "$NAZGUL_DIR/logs/migrations.log" "Migrated 1 -> 2"
 
-# --- Test 3i: non-object budget (hand-edited) → clamped to default object at v8 ---
+# --- Test 3k: non-object budget (hand-edited) → clamped to default object at v8 ---
 NAZGUL_DIR=$(setup_nazgul_dir "v7-budget-garbage")
 cat > "$NAZGUL_DIR/config.json" << 'EOF'
 { "schema_version": 7, "budget": "oops" }

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2026-06-17
+
+### Added
+- **Runtime-verification gate** (roadmap 2.1, start of Phase 2 "Verification & Observability"). The review gate's pre-checks now run `build_command` as a **hard gate** — previously it was read but never executed, so a task could pass review and reach DONE with code that doesn't build. A new opt-in `project.smoke_command` runs the built artifact as a short, self-terminating check (e.g. `node dist/index.js --version`, an import-smoke, a healthcheck). Pre-check order is test → lint → build → smoke (stop at first failure); build/smoke failures route through the existing IN_PROGRESS→BLOCKED retry path (captured in the task manifest and, on escalation, `test-failures.md`). Discovery suggests a smoke command. Config schema 8→9.
+- Scope note: this is **not** full end-to-end verification — the smoke command is short and self-terminating; orchestrating long-running processes (servers, browsers) is deferred to the Monitor item (2.2). `smoke_command: null` ⇒ runtime smoke skipped (libraries/docs unaffected).
+
 ## [1.4.2] - 2026-06-17
 
 ### Changed
