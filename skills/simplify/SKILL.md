@@ -47,17 +47,19 @@ Config: `nazgul/config.json → simplify.focus` (default: `null`)
 Run a post-loop cleanup pass on files modified during the Nazgul loop.
 
 ### Process
+0. Parse `$ARGUMENTS` (the `## Arguments` block above) for a focus keyword (e.g. `performance`, `readability`). If absent, fall back to `nazgul/config.json → simplify.focus` (default: `null`). When a focus is set, restrict the simplification pass to that dimension (e.g. only performance-related opportunities); when none is set, run the full pass. Record the chosen focus and use it to narrow the opportunity-selection step below.
 1. Identify all files modified during the Nazgul loop:
    - Check git log for commits with the configured commit prefix
    - `git log --oneline --all --grep="$(jq -r '.afk.commit_prefix // "feat("' nazgul/config.json 2>/dev/null)" --name-only`
 2. For each modified file:
    a. Read the file
-   b. Look for simplification opportunities:
+   b. Look for simplification opportunities. If a focus was chosen in step 0, consider ONLY opportunities matching that dimension; otherwise consider all of:
       - Unnecessary complexity
       - Duplicated code that could be extracted
       - Overly verbose patterns that have simpler equivalents
       - Dead code or unused imports
       - Inconsistent naming that doesn't match project conventions
+      (e.g. focus `performance` → only performance-related opportunities; focus `readability` → only clarity/naming/verbosity opportunities)
    c. Apply simplifications
    d. Run tests after EACH simplification to verify no regressions
    e. If tests fail, revert the simplification

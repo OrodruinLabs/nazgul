@@ -31,6 +31,8 @@ Format all output per `references/ui-brand.md` — use stage banners, status sym
 
 If Nazgul is not initialized, say so and stop.
 
+If the `## Arguments` block above contains the token `reviews`, display ONLY the Reviewer Stats section (skip Task Velocity, Approval Rate, Cost, Subagent Activity, and Loop Health). Otherwise render the full dashboard. When in `reviews` mode you only need to collect the Review files data (source 3) to compute and display Reviewer Stats.
+
 ### Collect Data
 
 Read these sources to compute metrics:

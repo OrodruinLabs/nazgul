@@ -27,6 +27,14 @@ Format all output per `references/ui-brand.md` — use stage banners, status sym
 
 Collect targeted context based on the objective type. Write results to `nazgul/context/`.
 
+### Determine Objective Type
+Parse `$ARGUMENTS` (the `## Arguments` block above) for an objective type — one of: `refactor`, `bugfix`, `feature`, `greenfield`, `migration`. If absent, derive it from `nazgul/config.json` classification (`jq -r '.classification // .project_type // empty' nazgul/config.json`). Then collect the context section(s) matching that type, using the mapping below:
+- `refactor` → **For Refactors**
+- `bugfix` → **For Bug Fixes**
+- `feature` → **For New Features**
+- `greenfield` → **For Greenfield**
+- `migration` → treat as a refactor-style scope (**For Refactors**), focused on the data/system being migrated
+
 ### For Refactors
 1. Identify ALL files in the refactor scope (use grep, glob)
 2. Map their imports/exports to find the full dependency tree
