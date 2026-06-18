@@ -65,6 +65,12 @@ Read these sources to compute metrics:
    - Total subagent runs (line count).
    - Breakdown by `.agent` (counts per agent type, e.g. implementer, each reviewer, specialists). Use `jq -r .agent ... | sort | uniq -c` semantics.
 
+7. **Learned rules** (`nazgul/learning/learned-rules.md`, if present) — read via `scripts/lib/learned-rules.sh parse` (one JSON object per rule):
+   - Active rules: count of rules with `status == "active"`.
+   - Retired rules: count of rules with `status == "retired"`.
+   - Total citations: sum of `hits` across active rules.
+   - Top-cited: the active rules with the highest `hits` (id + title + hits).
+
 ### Compute Metrics
 
 - **Task velocity**: tasks DONE / total iterations (tasks per iteration)
@@ -122,6 +128,13 @@ Subagent Activity
   [agent-type]:       [N]
   ...
 
+Learning
+─────────────────────────────────────
+  Active rules:       [N]  ([R] retired)
+  Total citations:    [N]
+  Top-cited:          LR-NNN ([H] hits) — [title]
+                      LR-NNN ([H] hits) — [title]
+
 Loop Health
 ─────────────────────────────────────
   Consecutive failures: [N]
@@ -131,4 +144,4 @@ Loop Health
 ────────────────────────────────────────────────────────
 ```
 
-If specific data is missing, show a graceful placeholder for that section rather than erroring: no reviews yet → "No data"; **`budget.enabled` false** → "Cost: not tracked (budget governor disabled)"; **enabled but `spent_usd` is 0** → "Est. spend: $0 (no spend recorded yet this run)" — do NOT report an enabled governor as disabled (`spent_usd` resets to 0 on every `/nazgul:start`); `subagents.jsonl` absent/empty → "Subagent Activity: no data yet".
+If specific data is missing, show a graceful placeholder for that section rather than erroring: no reviews yet → "No data"; **`budget.enabled` false** → "Cost: not tracked (budget governor disabled)"; **enabled but `spent_usd` is 0** → "Est. spend: $0 (no spend recorded yet this run)" — do NOT report an enabled governor as disabled (`spent_usd` resets to 0 on every `/nazgul:start`); `subagents.jsonl` absent/empty → "Subagent Activity: no data yet"; **`nazgul/learning/learned-rules.md` absent** → "Learning: no rules yet".
