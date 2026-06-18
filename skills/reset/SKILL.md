@@ -1,11 +1,10 @@
 ---
 name: nazgul:reset
 description: Reset Nazgul state to a clean slate. Archives current state and recreates from templates. Use when Nazgul gets into a corrupted or confusing state.
-context: fork
 allowed-tools: Read, Write, Bash, Glob, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 1.6.0
+  version: 1.6.1
 ---
 
 # Nazgul Reset
