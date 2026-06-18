@@ -55,7 +55,7 @@ a human approves them later via `/nazgul:learn`. You never edit
 Write candidates to `nazgul/learning/proposed-rules.md` (create the dir if needed),
 one per `## CANDIDATE` section:
 
-````markdown
+```markdown
 # Proposed Learned Rules (awaiting approval)
 
 ## CANDIDATE: Guard null user in API handlers
@@ -81,4 +81,3 @@ update `.last-run`.
 - PROPOSE ONLY. Never write to the rules registry. Never approve.
 - Specific + evidence-backed or discard.
 - One-offs are not rules.
-````
