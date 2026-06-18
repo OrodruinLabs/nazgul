@@ -1,11 +1,10 @@
 ---
 name: nazgul:gen-spec
 description: Interactively build a project specification. Guides you through tiered questions — quick product overview first, optional deep-dive into user stories and success metrics. Outputs nazgul/context/project-spec.md.
-context: fork
 allowed-tools: Read, Write, Bash, Glob, Grep, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 1.6.0
+  version: 1.6.1
 ---
 
 # Nazgul Generate Project Spec

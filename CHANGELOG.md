@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.1] - 2026-06-18
+
+### Fixed
+- **Interactive skills can now actually prompt you.** The skills that use `AskUserQuestion` for multiple-choice prompts (`init`, `config`, `gen-spec`, `board`, `reset`, `clean`, `bootstrap-project`) ran with `context: fork` — a forked subagent has no interactive channel, so `AskUserQuestion` was unavailable in that environment and they silently degraded to printing options as plain text (which can't capture your reply). Removed `context: fork` from these seven skills so they run in the main loop where `AskUserQuestion` is available. (The ToolSearch pre-load they already do was correct; the fork was the blocker.) Mechanical/non-interactive skills keep `context: fork` for context isolation.
+
 ## [1.6.0] - 2026-06-18
 
 ### Added

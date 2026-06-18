@@ -1,11 +1,10 @@
 ---
 name: nazgul:board
 description: Connect Nazgul task tracking to an external project board (GitHub Projects, Azure DevOps, etc). Use when user says "connect to github projects", "set up board", "track on github", or "nazgul board".
-context: fork
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 1.6.0
+  version: 1.6.1
 ---
 
 # Nazgul Board

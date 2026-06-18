@@ -1,11 +1,10 @@
 ---
 name: nazgul:clean
 description: Fully remove Nazgul from a project — deletes all runtime state, generated agents, MCP config, permissions, CLAUDE.md injections, and gitignore entries. Use when user says "remove nazgul", "uninstall nazgul", "clean nazgul", or wants to completely undo /nazgul:init.
-context: fork
 allowed-tools: Read, Edit, Bash, Glob, Grep, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 1.6.0
+  version: 1.6.1
 ---
 
 # Nazgul Clean

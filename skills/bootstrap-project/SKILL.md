@@ -1,11 +1,10 @@
 ---
 name: "nazgul:bootstrap-project"
 description: "Generate a portable, Nazgul-free project bundle (docs + Claude subagents) without installing Nazgul. Runs the full pre-planning pipeline (discovery, doc-generator, reviewer-instantiation, optional designer) and emits output into standard paths (./docs/, ./docs/context/, ./.claude/agents/, ./.claude/)."
-context: fork
 allowed-tools: "Read, Write, Edit, Bash, Glob, Grep, Agent, ToolSearch"
 metadata:
   author: Jose Mejia
-  version: 1.6.0
+  version: 1.6.1
 ---
 
 # Bootstrap Project
