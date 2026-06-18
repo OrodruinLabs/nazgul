@@ -14,17 +14,17 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.5.2-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.6.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-Plugin-7c3aed?style=flat-square" alt="Claude Code Plugin">
-  <img src="https://img.shields.io/badge/agents-17-orange?style=flat-square" alt="Agents">
+  <img src="https://img.shields.io/badge/agents-18-orange?style=flat-square" alt="Agents">
 </p>
 
 <br>
 
 ---
 
-Nazgul runs a complete autonomous SDLC pipeline — from scanning your codebase to shipping reviewed code — with 17 core agents plus project-specific reviewers.
+Nazgul runs a complete autonomous SDLC pipeline — from scanning your codebase to shipping reviewed code — with 18 core agents plus project-specific reviewers.
 
 ## What Nazgul Does
 
@@ -97,6 +97,7 @@ Nazgul auto-detects project state: active work resumes, existing docs trigger pl
 | `/nazgul:verify` | Human acceptance testing for completed tasks |
 | `/nazgul:help` | Quick reference for all commands and modes |
 | `/nazgul:bootstrap-project` | Generate a portable, Nazgul-free bundle (docs + Claude subagents) |
+| `/nazgul:learn` | Distill recurring mistakes into numbered, human-approved Learned Rules |
 
 See `/nazgul:help` for the full command list and all flags.
 
@@ -143,6 +144,10 @@ All Nazgul references are scrubbed from the output. Won't run if `./nazgul/` exi
 Nazgul runs a pipeline of specialized agents. Discovery scans your codebase and classifies the project. The Doc Generator creates foundational documents. The Planner decomposes your objective into dependency-ordered tasks. The Implementer builds each task (delegating to specialists like Frontend Dev, DevOps, or DB Migration as needed). A Review Board of 3-13 reviewers must unanimously approve each task before it advances — mechanical issues are auto-fixed, only risky changes require discussion. The loop continues until every task is done, then Post-Loop agents handle documentation, releases, and observability.
 
 Agents can optionally self-rate their experience and file improvement reports, creating a feedback loop for plugin quality. Concurrent sessions are detected via filesystem locks to prevent state corruption.
+
+### Autolearning
+
+Nazgul mines recurring mistakes — review rejections, debugger diagnoses, and repeated test failures — from existing on-disk artifacts and distills them into candidate **Learned Rules** stored in `nazgul/learning/learned-rules.md`. Rules are **human-gated**: the `learner` agent proposes candidates to `nazgul/learning/proposed-rules.md`, and you approve, edit, or reject them interactively via `/nazgul:learn` (also supports `--dry-run` to preview candidates without writing, and `--retire` to clean up un-cited rules). Each approved rule gets a stable, monotonic `LR-NNN` identifier, declares `Scope-Agents` and `Scope-Globs`, and is injected only into the matching agents at dispatch time — so the rule registry can grow without bloating unrelated agents' context. Reviewers cite applicable rules by `LR-NNN`; citations feed a hit counter that surfaces the most impactful rules in `/nazgul:metrics` and triggers retirement of rules that are never cited.
 
 See [Architecture](docs/ARCHITECTURE.md) for the full agent roster, pipeline details, and recovery system.
 

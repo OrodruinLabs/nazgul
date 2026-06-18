@@ -204,6 +204,24 @@ migrate_8_to_9() {
   log_migration "v8→v9: Added project.smoke_command (runtime-verification gate)"
 }
 
+migrate_9_to_10() {
+  local tmp
+  tmp=$(mktemp)
+  # Add the learning block (autolearning feature) when absent; preserve an
+  # existing OBJECT, but clamp a non-object .learning back to {} first so the
+  # field assignments can't error (same type-guard pattern as 7->8 / 8->9).
+  jq '
+    .learning = ((if (.learning | type) == "object" then .learning else {} end)
+      | .enabled = (if has("enabled") then .enabled else true end)
+      | .rules_doc = (.rules_doc // "nazgul/learning/learned-rules.md")
+      | .min_recurrence = (.min_recurrence // 2)
+      | .max_active_rules = (.max_active_rules // 50)
+      | .auto_distill_post_loop = (if has("auto_distill_post_loop") then .auto_distill_post_loop else true end))
+    | .schema_version = 10
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v9→v10: Added learning block (autolearning, default enabled)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"

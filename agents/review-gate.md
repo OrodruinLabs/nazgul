@@ -84,6 +84,11 @@ Read `nazgul/config.json → models.review` for the model to assign reviewers (d
 2. The changed file list from the task manifest's File Scope — for full-file context when needed
 3. Their agent definition from `.claude/agents/generated/`
 4. Relevant context from `nazgul/context/`
+5. **Inject scoped learned rules.** For each reviewer, compute its rule slice:
+   `${CLAUDE_PLUGIN_ROOT}/scripts/lib/learned-rules.sh select --agent <reviewer-name> --files "<space-separated list of the changed files from diff.patch>"`
+   (add `--doc <learning.rules_doc>` if config sets a non-default path). If the
+   command prints anything, include it verbatim in that reviewer's dispatch prompt
+   alongside the changed-files context. If it prints nothing, inject nothing.
 
 #### Parallel Review Mode (when parallelism.parallel_reviews is true)
 
@@ -120,6 +125,12 @@ done
   to Step 3.
 - NEVER aggregate verdicts from partial evidence. NEVER substitute your own
   summary for a missing reviewer file.
+- **Record rule citations.** After reviews are collected, scan every
+  `nazgul/reviews/[TASK-ID]/[reviewer].md` for `LR-NNN` tokens appearing in
+  `Rule reference` lines. For each DISTINCT cited id, run
+  `${CLAUDE_PLUGIN_ROOT}/scripts/lib/learned-rules.sh bump-hits LR-NNN` (add `--doc <learning.rules_doc>`
+  if non-default). This feeds the citation/retirement signal. Failures here are
+  non-fatal — log and continue; never block a verdict on a bump-hits error.
 
 ### Step 3: Determine Verdict
 
@@ -136,11 +147,15 @@ When verdict is CHANGES_REQUESTED and feedback-aggregator has classified finding
 3. If AUTO-FIX items exist:
    a. Log: "Applying N auto-fix items from reviewer feedback"
    b. Set task back to IN_PROGRESS
-   c. Delegate to implementer with ONLY the AUTO-FIX items
-   d. After implementer completes: re-run pre-checks (tests, lint)
-   e. If pre-checks pass AND no ASK items remain: mark task DONE (skip re-review for mechanical fixes)
-   f. If pre-checks pass AND ASK items remain: present ASK items per mode (HITL → ask user, AFK → apply if < HIGH, YOLO → apply all non-security)
-   g. If pre-checks fail: full retry cycle as normal
+   c. Before dispatching the implementer, run
+      `${CLAUDE_PLUGIN_ROOT}/scripts/lib/learned-rules.sh select --agent implementer --files "<the task's in-scope files>"`
+      (add `--doc <learning.rules_doc>` if config sets a non-default path)
+      and include any output verbatim in the implementer's dispatch prompt.
+   d. Delegate to implementer with ONLY the AUTO-FIX items
+   e. After implementer completes: re-run pre-checks (tests, lint)
+   f. If pre-checks pass AND no ASK items remain: mark task DONE (skip re-review for mechanical fixes)
+   g. If pre-checks pass AND ASK items remain: present ASK items per mode (HITL → ask user, AFK → apply if < HIGH, YOLO → apply all non-security)
+   h. If pre-checks fail: full retry cycle as normal
 4. If only ASK items: proceed to Step 4 as normal (CHANGES_REQUESTED flow)
 
 This reduces review round-trips by fixing obvious issues without re-entering the full review cycle.

@@ -67,6 +67,7 @@ For each finding:
 - **Issue**: [specific problem]
 - **Fix**: [specific fix instruction]
 - **Pattern reference**: [file:line showing correct pattern in this codebase]
+- **Rule reference**: [LR-NNN if a Learned Rule from the injected "## Learned Rules" block applies to this finding, else none]
 
 ### Summary
 - PASS: [items that pass]

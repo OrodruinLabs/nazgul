@@ -5,7 +5,7 @@ disable-model-invocation: true
 allowed-tools: []
 metadata:
   author: Jose Mejia
-  version: 1.5.2
+  version: 1.6.0
 ---
 
 # Nazgul Framework — Quick Reference
@@ -62,6 +62,7 @@ metadata:
 | `/nazgul:context` | Collect context for an objective type |
 | `/nazgul:simplify` | Post-loop cleanup pass |
 | `/nazgul:docs` | View or regenerate project documents |
+| `/nazgul:learn` | Distill recurring mistakes into numbered, human-approved Learned Rules |
 | `/nazgul:board` | Connect to GitHub Projects / Azure DevOps |
 | `/nazgul:config` | View and change settings (models, formatter, notifications) |
 | `/nazgul:gen-spec` | Interactively build a project specification |

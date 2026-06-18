@@ -50,20 +50,30 @@ Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified o
 1. Read the task manifest completely (description, acceptance criteria, pattern reference, file scope)
 2. Read the pattern reference files — study how similar things are done in this codebase
 3. Read ALL relevant context files in `nazgul/context/`
-4. If this is a retry (CHANGES_REQUESTED): read consolidated feedback FIRST and address EVERY blocking issue
-5. Implement following existing patterns EXACTLY
-6. Write tests as you go (same framework, same style as existing tests)
-7. Run tests after every change — do NOT proceed if tests fail
-8. Run linter after implementation — fix all errors
-9. Update task manifest with implementation log
-10. Set status to IMPLEMENTED when all acceptance criteria met, tests pass, lint clean. **The task manifest MUST contain a `## Commits` section with at least one commit SHA — the state guard will block the transition without it.**
-11. Capture the diff for reviewers:
+4. **Consult learned rules.** Determine the files in scope for this task (from your
+   task manifest), then fetch the rules scoped to you. Run the selector from the
+   **main worktree root** so `nazgul/` paths resolve (use the `main_worktree_path`
+   from the Branch and Worktree Protocol; if you are not in a separate worktree,
+   that is just the project root):
+   `(cd "<main_worktree_path>" && "${CLAUDE_PLUGIN_ROOT}/scripts/lib/learned-rules.sh" select --agent implementer --files "<those files>" --doc "$(jq -r '.learning.rules_doc // "nazgul/learning/learned-rules.md"' nazgul/config.json 2>/dev/null)")`
+   Treat any returned rules as binding guidelines for THIS codebase — violating one
+   will draw a reviewer `LR-NNN` citation. If the command prints nothing, or the
+   orchestrator already included a `## Learned Rules` block in your prompt, act
+   accordingly. Never fail the task if this command errors — just proceed.
+5. If this is a retry (CHANGES_REQUESTED): read consolidated feedback FIRST and address EVERY blocking issue
+6. Implement following existing patterns EXACTLY
+7. Write tests as you go (same framework, same style as existing tests)
+8. Run tests after every change — do NOT proceed if tests fail
+9. Run linter after implementation — fix all errors
+10. Update task manifest with implementation log
+11. Set status to IMPLEMENTED when all acceptance criteria met, tests pass, lint clean. **The task manifest MUST contain a `## Commits` section with at least one commit SHA — the state guard will block the transition without it.**
+12. Capture the diff for reviewers:
     - Read `branch.feature` and `branch.main_worktree_path` from config
     - `mkdir -p <main_worktree_path>/nazgul/reviews/[TASK-ID]`
     - `git diff <feature-branch>..HEAD > <main_worktree_path>/nazgul/reviews/[TASK-ID]/diff.patch`
     - VERIFY: diff.patch must be non-empty. If empty, try `git diff HEAD~1..HEAD` as fallback.
-12. Update plan.md Recovery Pointer on every state change
-13. Commit if in AFK mode with prefix from config
+13. Update plan.md Recovery Pointer on every state change
+14. Commit if in AFK mode with prefix from config
 
 ## Branch and Worktree Protocol
 

@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.0] - 2026-06-18
+
+### Added
+- **Autolearning — Nazgul learns from its own recurring mistakes.** A new `learner` agent mines recurring review rejections, debugger diagnoses, and repeated test failures (read from existing on-disk artifacts — no new runtime hooks) and distills them into candidate **Learned Rules**. Rules are **human-gated**: proposed to `nazgul/learning/proposed-rules.md`, then approved/edited/rejected interactively via the new `/nazgul:learn` skill (also supports `--dry-run` and `--retire`). Approved rules get a stable, monotonic `LR-NNN` number and live in `nazgul/learning/learned-rules.md` (committed in shared install mode; tracked so an external AI code reviewer can be pointed at it).
+- **Scoped, dispatch-time rule injection.** Each rule declares `Scope-Agents` + `Scope-Globs`; `scripts/lib/learned-rules.sh select` returns only the rules matching a given agent + the files in scope, injected into that agent's dispatch prompt (the registry can grow without bloating any one agent's context). Reviewers cite applicable rules via a new `Rule reference: LR-NNN` finding field, and each citation bumps the rule's hit counter (feeding retirement of un-cited rules).
+- **Post-loop auto-distill** (config `learning.auto_distill_post_loop`, default on): the learner runs at objective completion and proposes (never approves) candidate rules for later review.
+- **`/nazgul:metrics` Learning section** — active/retired rule counts, total citations, and top-cited rules.
+- **Config schema 10** — new `learning` block (`enabled`, `rules_doc`, `min_recurrence`, `max_active_rules`, `auto_distill_post_loop`) with type-guarded `migrate_9_to_10`.
+
 ## [1.5.2] - 2026-06-17
 
 ### Fixed

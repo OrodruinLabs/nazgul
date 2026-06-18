@@ -7,7 +7,7 @@ argument-hint: "[--local] [--force]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 1.5.2
+  version: 1.6.0
 ---
 
 # Nazgul Init
@@ -70,7 +70,8 @@ nazgul/
 ├── reviews/             # Empty, for review artifacts
 ├── context/             # Will be filled by Discovery
 ├── docs/                # Will be filled by Doc Generator
-└── logs/                # Empty, for iteration logs
+├── logs/                # Empty, for iteration logs
+└── learning/            # Empty, for autolearning registry and working files
 ```
 
 ### Step 2.5: Configure Git Ignore
@@ -112,6 +113,9 @@ The decision record (`config.json`, `plan.md`, `tasks/`, `reviews/`, `docs/`, `c
    nazgul/reviews/*/test-failures.md
    nazgul/reviews/*/simplify-report.md
    nazgul/reviews/post-loop-simplify-report.md
+   # Transient autolearning working files (registry + declines stay tracked)
+   nazgul/learning/proposed-rules.md
+   nazgul/learning/.last-run
    ```
 3. Set `install_mode` to `"shared"`:
    ```bash
