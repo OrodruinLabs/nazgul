@@ -55,4 +55,25 @@ assert_eq "parse LR-001 hits int" "$(printf '%s\n' "$parsed" | jq -rs '.[0].hits
 assert_eq "parse LR-001 agents[1]" "$(printf '%s\n' "$parsed" | jq -rs '.[0].agents[1]')" "code-reviewer"
 assert_eq "parse LR-002 globs[0]"  "$(printf '%s\n' "$parsed" | jq -rs '.[1].globs[0]')" "**"
 
+# select: agent + glob match returns the rule block with the heading
+sel=$(bash "$LR" select --agent implementer --files "src/api/auth.ts" --doc "$DOC")
+assert_contains "select injects heading" "$sel" "Learned Rules"
+assert_contains "select includes matching LR-001" "$sel" "LR-001"
+
+# agent not in scope -> no match (LR-001 is implementer/code-reviewer only)
+sel2=$(bash "$LR" select --agent designer --files "src/api/auth.ts" --doc "$DOC")
+assert_not_contains "designer not in LR-001 scope" "$sel2" "LR-001"
+
+# glob not matching -> no match
+sel3=$(bash "$LR" select --agent implementer --files "src/ui/Button.tsx" --doc "$DOC")
+assert_not_contains "ui file not in src/api glob" "$sel3" "LR-001"
+
+# retired rules are never injected (LR-002 is retired, scope *,**)
+sel4=$(bash "$LR" select --agent implementer --files "anything.ts" --doc "$DOC")
+assert_not_contains "retired LR-002 excluded" "$sel4" "LR-002"
+
+# no matches at all -> empty output (caller adds no heading)
+sel5=$(bash "$LR" select --agent designer --files "src/ui/Button.tsx" --doc "$DOC")
+assert_eq "no match -> empty" "$(printf '%s' "$sel5" | tr -d '[:space:]')" ""
+
 report_results
