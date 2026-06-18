@@ -1,5 +1,5 @@
 {
-  "schema_version": 9,
+  "schema_version": 10,
   "install_mode": "shared",
   "mode": "hitl",
   "objective": null,
@@ -98,6 +98,13 @@
     "spent_usd": 0,
     "per_iteration_usd": null,
     "model_iteration_cost": { "opus": 1.20, "sonnet": 0.30, "haiku": 0.05 }
+  },
+  "learning": {
+    "enabled": true,
+    "rules_doc": "nazgul/learning/learned-rules.md",
+    "min_recurrence": 2,
+    "max_active_rules": 50,
+    "auto_distill_post_loop": true
   },
   "branch": {
     "feature": null,

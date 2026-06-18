@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "9"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "10"
 assert_json_field "project has smoke_command" "$CONFIG" ".project.smoke_command" "null"
 assert_json_field "has .budget.enabled" "$CONFIG" ".budget.enabled" "false"
 assert_json_field "has .install_mode" "$CONFIG" ".install_mode" "shared"
