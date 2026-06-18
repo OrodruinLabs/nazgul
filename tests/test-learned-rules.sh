@@ -105,4 +105,54 @@ touch "$TMP/a.ts" "$TMP/b.ts"
 selw=$( cd "$TMP" && bash "$LR" select --agent any-agent --files "a.ts" --doc "$WILD" )
 assert_contains "active */** rule matches from a dir with files" "$selw" "LR-010"
 
+# Robustness: malformed ids, metadata-shaped body lines, garbage Hits.
+ROB="$TMP/rob.md"
+cat > "$ROB" <<'EOF'
+# Rob
+
+## LR-foo: Malformed id heading
+
+- **Status**: active
+- **Scope-Agents**: implementer
+- **Scope-Globs**: **
+- **Hits**: 0
+- **Added**: 2026-06-18
+- **Evidence**: TASK-001
+
+Body.
+
+## LR-005: Real rule with metadata-shaped body
+
+- **Status**: active
+- **Scope-Agents**: implementer
+- **Scope-Globs**: **
+- **Hits**: 4
+- **Added**: 2026-06-18
+- **Evidence**: TASK-002
+
+See the config:
+- **Status**: ignored — body text, not metadata
+EOF
+assert_eq "next-id ignores malformed id" "$(bash "$LR" next-id --doc "$ROB")" "LR-006"
+assert_eq "body metadata-shaped line ignored" "$(bash "$LR" parse --doc "$ROB" | jq -rs '.[] | select(.id=="LR-005") | .hits')" "4"
+assert_eq "parse tolerant of malformed registry" "$(bash "$LR" parse --doc "$ROB" | jq -s 'length')" "2"
+
+# garbage Hits -> 0, never aborts parse
+GH="$TMP/gh.md"
+cat > "$GH" <<'EOF'
+# GH
+
+## LR-001: Garbage hits
+
+- **Status**: active
+- **Scope-Agents**: *
+- **Scope-Globs**: **
+- **Hits**: notanumber
+- **Added**: 2026-06-18
+- **Evidence**: TASK-1
+
+Body.
+EOF
+assert_eq "garbage hits -> 0" "$(bash "$LR" parse --doc "$GH" | jq -rs '.[0].hits')" "0"
+
 report_results

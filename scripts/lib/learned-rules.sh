@@ -35,19 +35,24 @@ _rule_meta() {
     }
     /^## LR-/ {
       flush()
-      line=$0; sub(/^## /, "", line)          # "LR-007: title"
-      id=line; sub(/:.*/, "", id)             # "LR-007"
+      line=$0; sub(/^## /, "", line)
+      id=line; sub(/:.*/, "", id)
       title=line; sub(/^LR-[0-9]+:[[:space:]]*/, "", title)
+      inmeta=1; sawmeta=0
       next
     }
-    /^- \*\*/ {
+    inmeta==1 && /^[[:space:]]*$/ { if (sawmeta) inmeta=0; next }
+    inmeta==1 && /^- \*\*[^*]+\*\*:/ {
+      sawmeta=1
       key=$0; sub(/^- \*\*/, "", key); sub(/\*\*.*/, "", key)
       val=$0; sub(/^- \*\*[^*]+\*\*:[[:space:]]*/, "", val)
       if (key=="Status") status=val
       else if (key=="Scope-Agents") agents=val
       else if (key=="Scope-Globs") globs=val
       else if (key=="Hits") hits=val
+      next
     }
+    inmeta==1 { inmeta=0 }
     END { flush() }
   ' "$doc"
 }
@@ -59,7 +64,9 @@ cmd_next_id() {
   local doc="$1" max=0 n id
   if [ -f "$doc" ]; then
     while IFS=$'\t' read -r id _; do
-      n=${id#LR-}; n=$((10#$n))
+      n=${id#LR-}
+      case "$n" in ""|*[!0-9]*) continue ;; esac
+      n=$((10#$n))
       [ "$n" -gt "$max" ] && max=$n
     done < <(_rule_meta "$doc")
   fi
@@ -83,7 +90,7 @@ cmd_parse() {
       --arg agents "$agents" --arg globs "$globs" '
       def splitlist: if . == "" then [] else (split(",") | map(gsub("^\\s+|\\s+$";""))) end;
       { id: $id, status: $status, title: $title,
-        hits: ($hits | if . == "" then 0 else tonumber end),
+        hits: ($hits | (tonumber? // 0)),
         agents: ($agents | splitlist),
         globs:  ($globs  | splitlist) }'
   done
@@ -93,7 +100,7 @@ cmd_parse() {
 _agent_in_scope() {
   local csv="$1" agent="$2" a arr
   IFS=',' read -ra arr <<< "$csv"
-  for a in "${arr[@]}"; do
+  for a in ${arr[@]+"${arr[@]}"}; do
     a=$(_trim "$a")
     [ "$a" = "*" ] && return 0
     [ "$a" = "$agent" ] && return 0
@@ -106,11 +113,12 @@ _glob_in_scope() {
   local csv="$1" files="$2" g f garr farr
   IFS=',' read -ra garr <<< "$csv"
   IFS=' ' read -ra farr <<< "$files"
-  for g in "${garr[@]}"; do
+  for g in ${garr[@]+"${garr[@]}"}; do
     g=$(_trim "$g")
     [ "$g" = "**" ] && return 0
-    for f in "${farr[@]}"; do
-      # $g is intentionally unquoted HERE so it acts as a case glob pattern
+    for f in ${farr[@]+"${farr[@]}"}; do
+      # $g is intentionally an unquoted case-glob pattern here.
+      # shellcheck disable=SC2254
       case "$f" in $g) return 0 ;; esac
     done
   done
@@ -158,11 +166,18 @@ cmd_bump_hits() {
   [ -f "$doc" ] || return 0
   tmp=$(mktemp)
   awk -v target="$id" '
-    /^## LR-/ { cur=$0; sub(/^## /, "", cur); sub(/:.*/, "", cur) }
-    cur==target && /^- \*\*Hits\*\*:/ {
-      n=$0; sub(/.*:[[:space:]]*/, "", n); n=n+1
+    /^## LR-/ {
+      cur=$0; sub(/^## /, "", cur); sub(/:.*/, "", cur)
+      inmeta=(cur==target); sawmeta=0
+      print; next
+    }
+    inmeta && /^[[:space:]]*$/ { if (sawmeta) inmeta=0; print; next }
+    inmeta && /^- \*\*Hits\*\*:[[:space:]]*/ {
+      sawmeta=1; n=$0; sub(/.*:[[:space:]]*/, "", n); n=n+1
       print "- **Hits**: " n; next
     }
+    inmeta && /^- \*\*[^*]+\*\*:/ { sawmeta=1; print; next }
+    inmeta { inmeta=0; print; next }
     { print }
   ' "$doc" > "$tmp" && mv "$tmp" "$doc"
 }
