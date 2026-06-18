@@ -131,10 +131,14 @@ Write to `nazgul/docs/release-notes-v[VERSION].md`:
 7. Generate release notes in the format above, with all task references
 8. Generate or update CHANGELOG entry (coordinate with Documentation agent — do not duplicate)
 9. Create annotated git tag: `git tag -a v[VERSION] -m "Release v[VERSION]: [1-line summary]"`
-10. If CI release pipeline exists (`nazgul/config.json -> project.infrastructure.cicd_platform`):
+10. **Publish a GitHub Release from the tag** so the Releases page never drifts from the tags. GitHub-hosted repos only — gate on `git remote get-url origin` containing `github.com` AND `gh auth status` succeeding:
+    - Push the tag first: `git push origin v[VERSION]` (the `--verify-tag` below requires the tag to exist on the remote).
+    - `gh release create v[VERSION] --title "v[VERSION] — [1-line name]" --notes-file nazgul/docs/release-notes-v[VERSION].md --verify-tag --latest`
+    - If the repo is not on GitHub, or `gh` is unavailable/unauthenticated, skip this step and report that the tag stands but no Release was published (so a human can create it).
+11. If CI release pipeline exists (`nazgul/config.json -> project.infrastructure.cicd_platform`):
     - Verify the release workflow file exists
     - Document how to trigger it (push tag, manual dispatch, etc.)
-11. Generate PR description summarizing all changes (if the project uses PR-based workflow)
+12. Generate PR description summarizing all changes (if the project uses PR-based workflow)
 
 ## Authority Scope
 
@@ -143,6 +147,7 @@ Write to `nazgul/docs/release-notes-v[VERSION].md`:
 - CHANGELOG.md (add release entry)
 - Release notes (create `nazgul/docs/release-notes-v[VERSION].md`)
 - Git tags (create annotated tags)
+- GitHub Releases (publish from a tag on GitHub-hosted repos via `gh release create`)
 
 **MUST NOT modify:**
 - Application source code or test files
@@ -157,7 +162,8 @@ Write to `nazgul/docs/release-notes-v[VERSION].md`:
 4. **Breaking changes require MAJOR bump.** No exceptions in semver projects.
 5. **Release notes must reference task IDs.** Every change links back to its task for traceability.
 6. **Never skip the git tag.** Every release gets an annotated tag.
-7. **Monorepo awareness.** Only bump packages that actually changed.
-8. **Coordinate with Documentation agent.** Release notes and CHANGELOG should complement each other, not duplicate.
-9. **Authority scope is strict.** Do not modify source code, tests, or infrastructure.
-10. **If no existing version: initialize at v0.1.0.** Greenfield projects start at 0.1.0 (pre-1.0 signals instability).
+7. **Pair every tag with a GitHub Release.** On GitHub-hosted repos, publish a Release from the tag (`gh release create … --verify-tag`) so the Releases page never drifts from the tags. Skip only when the repo isn't on GitHub or `gh` is unavailable.
+8. **Monorepo awareness.** Only bump packages that actually changed.
+9. **Coordinate with Documentation agent.** Release notes and CHANGELOG should complement each other, not duplicate.
+10. **Authority scope is strict.** Do not modify source code, tests, or infrastructure.
+11. **If no existing version: initialize at v0.1.0.** Greenfield projects start at 0.1.0 (pre-1.0 signals instability).

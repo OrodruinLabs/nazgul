@@ -6,7 +6,7 @@ argument-hint: "[--dry-run] [--retire]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 metadata:
   author: Jose Mejia
-  version: 1.6.1
+  version: 1.6.2
 ---
 
 # Nazgul Learn

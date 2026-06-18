@@ -5,7 +5,7 @@ context: fork
 allowed-tools: Read, Write, Bash, Glob, Grep, LS
 metadata:
   author: Jose Mejia
-  version: 1.6.1
+  version: 1.6.2
 ---
 
 # Nazgul Context Collection
