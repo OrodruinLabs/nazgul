@@ -5,7 +5,7 @@ context: fork
 allowed-tools: Read, Bash, Glob, Grep
 metadata:
   author: Jose Mejia
-  version: 1.5.2
+  version: 1.6.0
 ---
 
 # Nazgul Metrics
