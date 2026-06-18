@@ -91,9 +91,9 @@ cmd_parse() {
 
 # _agent_in_scope <agents-csv> <agent>  -> 0 if agent listed or "*"
 _agent_in_scope() {
-  local csv="$1" agent="$2" a
-  local IFS=','
-  for a in $csv; do
+  local csv="$1" agent="$2" a arr
+  IFS=',' read -ra arr <<< "$csv"
+  for a in "${arr[@]}"; do
     a=$(_trim "$a")
     [ "$a" = "*" ] && return 0
     [ "$a" = "$agent" ] && return 0
@@ -103,14 +103,14 @@ _agent_in_scope() {
 
 # _glob_in_scope <globs-csv> <files-space-list>  -> 0 if any glob matches any file
 _glob_in_scope() {
-  local csv="$1" files="$2" g f
-  local IFS=','
-  for g in $csv; do
+  local csv="$1" files="$2" g f garr farr
+  IFS=',' read -ra garr <<< "$csv"
+  IFS=' ' read -ra farr <<< "$files"
+  for g in "${garr[@]}"; do
     g=$(_trim "$g")
     [ "$g" = "**" ] && return 0
-    local IFS=' '
-    for f in $files; do
-      # bash case-glob: '*' spans '/', so src/api/** matches nested paths
+    for f in "${farr[@]}"; do
+      # $g is intentionally unquoted HERE so it acts as a case glob pattern
       case "$f" in $g) return 0 ;; esac
     done
   done

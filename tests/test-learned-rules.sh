@@ -84,4 +84,25 @@ assert_eq "bump-hits leaves LR-002 at 0" "$(bash "$LR" parse --doc "$TMP/bump.md
 bash "$LR" bump-hits LR-999 --doc "$TMP/bump.md"   # absent -> no-op, no error
 assert_eq "bump-hits absent id is no-op" "$(bash "$LR" parse --doc "$TMP/bump.md" | jq -rs '.[0].hits')" "3"
 
+# Regression: an ACTIVE rule scoped */** must match even when cwd has files
+# (guards against unquoted-$csv pathname expansion eating the wildcards).
+WILD="$TMP/wild.md"
+cat > "$WILD" <<'EOF'
+# Wild
+
+## LR-010: Wildcard active rule
+
+- **Status**: active
+- **Scope-Agents**: *
+- **Scope-Globs**: **
+- **Hits**: 0
+- **Added**: 2026-06-18
+- **Evidence**: TASK-099
+
+Applies everywhere.
+EOF
+touch "$TMP/a.ts" "$TMP/b.ts"
+selw=$( cd "$TMP" && bash "$LR" select --agent any-agent --files "a.ts" --doc "$WILD" )
+assert_contains "active */** rule matches from a dir with files" "$selw" "LR-010"
+
 report_results
