@@ -85,7 +85,7 @@ Read `nazgul/config.json → models.review` for the model to assign reviewers (d
 3. Their agent definition from `.claude/agents/generated/`
 4. Relevant context from `nazgul/context/`
 5. **Inject scoped learned rules.** For each reviewer, compute its rule slice:
-   `scripts/lib/learned-rules.sh select --agent <reviewer-name> --files "<space-separated list of the changed files from diff.patch>"`
+   `${CLAUDE_PLUGIN_ROOT}/scripts/lib/learned-rules.sh select --agent <reviewer-name> --files "<space-separated list of the changed files from diff.patch>"`
    (add `--doc <learning.rules_doc>` if config sets a non-default path). If the
    command prints anything, include it verbatim in that reviewer's dispatch prompt
    alongside the changed-files context. If it prints nothing, inject nothing.
@@ -128,7 +128,7 @@ done
 - **Record rule citations.** After reviews are collected, scan every
   `nazgul/reviews/[TASK-ID]/[reviewer].md` for `LR-NNN` tokens appearing in
   `Rule reference` lines. For each DISTINCT cited id, run
-  `scripts/lib/learned-rules.sh bump-hits LR-NNN` (add `--doc <learning.rules_doc>`
+  `${CLAUDE_PLUGIN_ROOT}/scripts/lib/learned-rules.sh bump-hits LR-NNN` (add `--doc <learning.rules_doc>`
   if non-default). This feeds the citation/retirement signal. Failures here are
   non-fatal — log and continue; never block a verdict on a bump-hits error.
 
@@ -148,7 +148,7 @@ When verdict is CHANGES_REQUESTED and feedback-aggregator has classified finding
    a. Log: "Applying N auto-fix items from reviewer feedback"
    b. Set task back to IN_PROGRESS
    c. Before dispatching the implementer, run
-      `scripts/lib/learned-rules.sh select --agent implementer --files "<the task's in-scope files>"`
+      `${CLAUDE_PLUGIN_ROOT}/scripts/lib/learned-rules.sh select --agent implementer --files "<the task's in-scope files>"`
       (add `--doc <learning.rules_doc>` if config sets a non-default path)
       and include any output verbatim in the implementer's dispatch prompt.
    d. Delegate to implementer with ONLY the AUTO-FIX items

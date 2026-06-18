@@ -403,6 +403,7 @@ assert_json_field "v9 → v10 learning.enabled" "$NAZGUL_DIR/config.json" ".lear
 assert_json_field "v9 → v10 learning.rules_doc" "$NAZGUL_DIR/config.json" ".learning.rules_doc" "nazgul/learning/learned-rules.md"
 assert_json_field "v9 → v10 learning.min_recurrence" "$NAZGUL_DIR/config.json" ".learning.min_recurrence" "2"
 assert_json_field "v9 → v10 learning.max_active_rules" "$NAZGUL_DIR/config.json" ".learning.max_active_rules" "50"
+assert_json_field "v9 → v10 learning.auto_distill_post_loop" "$NAZGUL_DIR/config.json" ".learning.auto_distill_post_loop" "true"
 
 # idempotent + type-guard: existing learning object preserved, missing fields backfilled
 NAZGUL_DIR=$(setup_nazgul_dir "v9-to-10-existing")
@@ -413,6 +414,7 @@ OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) |
 assert_json_field "v9 → v10 preserves learning.enabled=false" "$NAZGUL_DIR/config.json" ".learning.enabled" "false"
 assert_json_field "v9 → v10 preserves max_active_rules=99" "$NAZGUL_DIR/config.json" ".learning.max_active_rules" "99"
 assert_json_field "v9 → v10 backfills missing rules_doc" "$NAZGUL_DIR/config.json" ".learning.rules_doc" "nazgul/learning/learned-rules.md"
+assert_json_field "v9 → v10 backfills auto_distill_post_loop" "$NAZGUL_DIR/config.json" ".learning.auto_distill_post_loop" "true"
 
 # non-object .learning clamped to object (hand-edited to a string)
 NAZGUL_DIR=$(setup_nazgul_dir "v9-to-10-garbage")
@@ -422,5 +424,6 @@ EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_json_field "v9 → v10 non-object learning clamped" "$NAZGUL_DIR/config.json" ".learning | type" "object"
 assert_json_field "v9 → v10 clamped learning.enabled default" "$NAZGUL_DIR/config.json" ".learning.enabled" "true"
+assert_json_field "v9 → v10 clamped auto_distill_post_loop default" "$NAZGUL_DIR/config.json" ".learning.auto_distill_post_loop" "true"
 
 report_results

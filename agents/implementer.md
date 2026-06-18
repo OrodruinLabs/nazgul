@@ -51,13 +51,15 @@ Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified o
 2. Read the pattern reference files — study how similar things are done in this codebase
 3. Read ALL relevant context files in `nazgul/context/`
 4. **Consult learned rules.** Determine the files in scope for this task (from your
-   task manifest), then fetch the rules scoped to you:
-   `scripts/lib/learned-rules.sh select --agent implementer --files "<those files>" --doc "$(jq -r '.learning.rules_doc // "nazgul/learning/learned-rules.md"' nazgul/config.json 2>/dev/null)"`
+   task manifest), then fetch the rules scoped to you. Run the selector from the
+   **main worktree root** so `nazgul/` paths resolve (use the `main_worktree_path`
+   from the Branch and Worktree Protocol; if you are not in a separate worktree,
+   that is just the project root):
+   `(cd "<main_worktree_path>" && "${CLAUDE_PLUGIN_ROOT}/scripts/lib/learned-rules.sh" select --agent implementer --files "<those files>" --doc "$(jq -r '.learning.rules_doc // "nazgul/learning/learned-rules.md"' nazgul/config.json 2>/dev/null)")`
    Treat any returned rules as binding guidelines for THIS codebase — violating one
    will draw a reviewer `LR-NNN` citation. If the command prints nothing, or the
    orchestrator already included a `## Learned Rules` block in your prompt, act
-   accordingly (no rules / use the provided block). Never fail the task if this
-   command errors — just proceed.
+   accordingly. Never fail the task if this command errors — just proceed.
 5. If this is a retry (CHANGES_REQUESTED): read consolidated feedback FIRST and address EVERY blocking issue
 6. Implement following existing patterns EXACTLY
 7. Write tests as you go (same framework, same style as existing tests)

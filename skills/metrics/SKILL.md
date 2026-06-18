@@ -65,7 +65,7 @@ Read these sources to compute metrics:
    - Total subagent runs (line count).
    - Breakdown by `.agent` (counts per agent type, e.g. implementer, each reviewer, specialists). Use `jq -r .agent ... | sort | uniq -c` semantics.
 
-7. **Learned rules** (`nazgul/learning/learned-rules.md`, if present) — read via `scripts/lib/learned-rules.sh parse` (one JSON object per rule):
+7. **Learned rules** (`nazgul/learning/learned-rules.md`, if present) — read via `${CLAUDE_PLUGIN_ROOT}/scripts/lib/learned-rules.sh parse` (one JSON object per rule):
    - Active rules: count of rules with `status == "active"`.
    - Retired rules: count of rules with `status == "retired"`.
    - Total citations: sum of `hits` across ALL rules (active + retired).

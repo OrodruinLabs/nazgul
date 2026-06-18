@@ -62,7 +62,7 @@ For EACH candidate, one at a time:
 1. Display: title, Scope-Agents, Scope-Globs, Confidence, Evidence, Dedup, and the body.
 2. Ask: **approve / edit / reject**.
    - **approve**:
-     - Get the next id: `scripts/lib/learned-rules.sh next-id` (uses the default
+     - Get the next id: `${CLAUDE_PLUGIN_ROOT}/scripts/lib/learned-rules.sh next-id` (uses the default
        registry path, or pass `--doc <rules_doc>` if config overrides it).
      - Append the rule to the registry file (`learning.rules_doc`) as a
        `## LR-NNN: <title>` block with metadata lines in this exact order:
@@ -72,7 +72,7 @@ For EACH candidate, one at a time:
    - **reject** (skip writing for dry-run): append one JSON line to
      `nazgul/learning/declined.jsonl`:
      `{"fingerprint":"<id>","reason":"<reason>","ts":"<iso8601>"}` where `<id>` is
-     `scripts/lib/learned-rules.sh fingerprint "$(printf '%s\n%s' "<candidate title>" "<candidate body>")"` —
+     `${CLAUDE_PLUGIN_ROOT}/scripts/lib/learned-rules.sh fingerprint "$(printf '%s\n%s' "<candidate title>" "<candidate body>")"` —
      title, newline, body — identical to how the learner computes it to skip declined candidates.
 3. After the last candidate, delete `proposed-rules.md` (it is transient).
 

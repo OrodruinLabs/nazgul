@@ -45,7 +45,7 @@ fp1=$(bash "$LR" fingerprint "Guard the User")
 fp2=$(bash "$LR" fingerprint "guard   the user")
 assert_eq "fingerprint normalizes case+space" "$fp1" "$fp2"
 fp3=$(bash "$LR" fingerprint "different text")
-assert_not_contains "fingerprint differs for different text" "$fp1" "$fp3"
+assert_eq "fingerprint differs for different text" "$([ "$fp1" != "$fp3" ] && echo differ || echo same)" "differ"
 
 # parse: emits one JSON object per rule with split agents/globs arrays
 parsed=$(bash "$LR" parse --doc "$DOC")
