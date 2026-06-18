@@ -159,6 +159,13 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 3. If post-loop NOT run yet:
    - Tell user: "All [N] tasks complete. Running post-loop agents (documentation, release, observability)..."
    - Delegate to post-loop agents (documentation → release-manager → observability)
+   - **Auto-distill learnings (proposes only).** If `nazgul/config.json` has
+     `.learning.enabled` AND `.learning.auto_distill_post_loop` both true, dispatch
+     the learner agent (Agent tool, `subagent_type: "nazgul:learner"`). It mines
+     this objective's review/diagnosis artifacts and writes candidate rules to
+     `nazgul/learning/proposed-rules.md` for the user to review later via
+     `/nazgul:learn`. It NEVER approves or edits the rules registry. A learner
+     failure is non-fatal — log it and continue (post-loop must still complete).
    - After post-loop:
      a. Read `nazgul/config.json → branch.feature` and `branch.base`
      b. If feature branch exists:
