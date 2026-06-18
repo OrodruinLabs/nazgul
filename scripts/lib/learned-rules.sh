@@ -30,7 +30,7 @@ _rule_meta() {
   awk '
     function flush() {
       if (id != "")
-        printf "%s\t%s\t%s\t%s\t%s\t%s\n", id, status, agents, globs, hits, title
+        printf "%s\037%s\037%s\037%s\037%s\037%s\n", id, status, agents, globs, hits, title
       id=""; status=""; agents=""; globs=""; hits=""; title=""
     }
     /^## LR-/ {
@@ -63,7 +63,7 @@ _trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:
 cmd_next_id() {
   local doc="$1" max=0 n id
   if [ -f "$doc" ]; then
-    while IFS=$'\t' read -r id _; do
+    while IFS=$'\037' read -r id _; do
       n=${id#LR-}
       case "$n" in ""|*[!0-9]*) continue ;; esac
       n=$((10#$n))
@@ -84,7 +84,7 @@ cmd_fingerprint() {
 # cmd_parse <doc> -> one compact JSON object per rule, per line.
 cmd_parse() {
   local doc="$1" id status agents globs hits title
-  _rule_meta "$doc" | while IFS=$'\t' read -r id status agents globs hits title; do
+  _rule_meta "$doc" | while IFS=$'\037' read -r id status agents globs hits title; do
     jq -nc \
       --arg id "$id" --arg status "$status" --arg hits "$hits" --arg title "$title" \
       --arg agents "$agents" --arg globs "$globs" '
@@ -142,7 +142,7 @@ cmd_select() {
   local doc="$1" agent="$2" files="$3"
   [ -f "$doc" ] || return 0
   local matches="" id status agents globs hits title
-  while IFS=$'\t' read -r id status agents globs hits title; do
+  while IFS=$'\037' read -r id status agents globs hits title; do
     [ "$status" = "active" ] || continue
     _agent_in_scope "$agents" "$agent" || continue
     _glob_in_scope "$globs" "$files" || continue

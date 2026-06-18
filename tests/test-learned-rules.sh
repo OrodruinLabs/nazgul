@@ -155,4 +155,26 @@ Body.
 EOF
 assert_eq "garbage hits -> 0" "$(bash "$LR" parse --doc "$GH" | jq -rs '.[0].hits')" "0"
 
+# Omitted metadata line must NOT shift later fields (no IFS empty-field collapse).
+OMIT="$TMP/omit.md"
+cat > "$OMIT" <<'EOF'
+# Omit
+
+## LR-001: Rule missing Scope-Agents line
+
+- **Status**: active
+- **Scope-Globs**: src/api/**
+- **Hits**: 7
+- **Added**: 2026-06-18
+- **Evidence**: TASK-1
+
+Body.
+EOF
+assert_eq "omitted line: globs intact" "$(bash "$LR" parse --doc "$OMIT" | jq -rs '.[0].globs[0]')" "src/api/**"
+assert_eq "omitted line: hits intact"  "$(bash "$LR" parse --doc "$OMIT" | jq -rs '.[0].hits')" "7"
+assert_eq "omitted line: agents empty" "$(bash "$LR" parse --doc "$OMIT" | jq -rs '.[0].agents | length')" "0"
+# a rule with no agents scope matches no one (we never inject a rule we can't scope)
+selo=$(bash "$LR" select --agent implementer --files "src/api/x.ts" --doc "$OMIT")
+assert_not_contains "rule with empty agents matches no one" "$selo" "LR-001"
+
 report_results
