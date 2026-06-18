@@ -47,4 +47,12 @@ assert_eq "fingerprint normalizes case+space" "$fp1" "$fp2"
 fp3=$(bash "$LR" fingerprint "different text")
 assert_not_contains "fingerprint differs for different text" "$fp1" "$fp3"
 
+# parse: emits one JSON object per rule with split agents/globs arrays
+parsed=$(bash "$LR" parse --doc "$DOC")
+assert_eq "parse emits 2 rules" "$(printf '%s\n' "$parsed" | jq -s 'length')" "2"
+assert_eq "parse LR-001 status"  "$(printf '%s\n' "$parsed" | jq -rs '.[0].status')" "active"
+assert_eq "parse LR-001 hits int" "$(printf '%s\n' "$parsed" | jq -rs '.[0].hits')" "2"
+assert_eq "parse LR-001 agents[1]" "$(printf '%s\n' "$parsed" | jq -rs '.[0].agents[1]')" "code-reviewer"
+assert_eq "parse LR-002 globs[0]"  "$(printf '%s\n' "$parsed" | jq -rs '.[1].globs[0]')" "**"
+
 report_results
