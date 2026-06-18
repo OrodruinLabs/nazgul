@@ -76,4 +76,12 @@ assert_not_contains "retired LR-002 excluded" "$sel4" "LR-002"
 sel5=$(bash "$LR" select --agent designer --files "src/ui/Button.tsx" --doc "$DOC")
 assert_eq "no match -> empty" "$(printf '%s' "$sel5" | tr -d '[:space:]')" ""
 
+# bump-hits: increments only the target rule's Hits; no-op on absent id
+cp "$DOC" "$TMP/bump.md"
+bash "$LR" bump-hits LR-001 --doc "$TMP/bump.md"
+assert_eq "bump-hits LR-001 -> 3" "$(bash "$LR" parse --doc "$TMP/bump.md" | jq -rs '.[0].hits')" "3"
+assert_eq "bump-hits leaves LR-002 at 0" "$(bash "$LR" parse --doc "$TMP/bump.md" | jq -rs '.[1].hits')" "0"
+bash "$LR" bump-hits LR-999 --doc "$TMP/bump.md"   # absent -> no-op, no error
+assert_eq "bump-hits absent id is no-op" "$(bash "$LR" parse --doc "$TMP/bump.md" | jq -rs '.[0].hits')" "3"
+
 report_results
