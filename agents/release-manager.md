@@ -131,10 +131,11 @@ Write to `nazgul/docs/release-notes-v[VERSION].md`:
 7. Generate release notes in the format above, with all task references
 8. Generate or update CHANGELOG entry (coordinate with Documentation agent — do not duplicate)
 9. Create annotated git tag: `git tag -a v[VERSION] -m "Release v[VERSION]: [1-line summary]"`
-10. **Publish a GitHub Release from the tag** so the Releases page never drifts from the tags. GitHub-hosted repos only — gate on `git remote get-url origin` containing `github.com` AND `gh auth status` succeeding:
-    - Push the tag first: `git push origin v[VERSION]` (the `--verify-tag` below requires the tag to exist on the remote).
-    - `gh release create v[VERSION] --title "v[VERSION] — [1-line name]" --notes-file nazgul/docs/release-notes-v[VERSION].md --verify-tag --latest`
-    - If the repo is not on GitHub, or `gh` is unavailable/unauthenticated, skip this step and report that the tag stands but no Release was published (so a human can create it).
+10. **Push the tag, then publish a GitHub Release from it** so the Releases page never drifts from the tags.
+    - **Push the tag unconditionally** (whenever a remote exists): `git push origin v[VERSION]`. This is a plain git operation — it must NOT be gated on `gh`, so the tag reaches the remote (and tag-triggered CI/release flows fire) even when `gh` is absent.
+    - **Then, only if** the repo is GitHub-hosted AND `gh` is authenticated (`git remote get-url origin` contains `github.com` AND `gh auth status` succeeds), create the Release:
+      `gh release create v[VERSION] --title "v[VERSION] — [1-line name]" --notes-file nazgul/docs/release-notes-v[VERSION].md --verify-tag --latest`
+    - If the repo is not on GitHub, or `gh` is unavailable/unauthenticated, skip ONLY the Release creation and report that the tag was pushed but no Release was published (so a human can create it).
 11. If CI release pipeline exists (`nazgul/config.json -> project.infrastructure.cicd_platform`):
     - Verify the release workflow file exists
     - Document how to trigger it (push tag, manual dispatch, etc.)
