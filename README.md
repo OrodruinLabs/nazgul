@@ -17,14 +17,14 @@
   <img src="https://img.shields.io/badge/version-1.6.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-Plugin-7c3aed?style=flat-square" alt="Claude Code Plugin">
-  <img src="https://img.shields.io/badge/agents-17-orange?style=flat-square" alt="Agents">
+  <img src="https://img.shields.io/badge/agents-18-orange?style=flat-square" alt="Agents">
 </p>
 
 <br>
 
 ---
 
-Nazgul runs a complete autonomous SDLC pipeline — from scanning your codebase to shipping reviewed code — with 17 core agents plus project-specific reviewers.
+Nazgul runs a complete autonomous SDLC pipeline — from scanning your codebase to shipping reviewed code — with 18 core agents plus project-specific reviewers.
 
 ## What Nazgul Does
 

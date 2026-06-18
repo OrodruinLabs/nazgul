@@ -149,6 +149,7 @@ When verdict is CHANGES_REQUESTED and feedback-aggregator has classified finding
    b. Set task back to IN_PROGRESS
    c. Before dispatching the implementer, run
       `scripts/lib/learned-rules.sh select --agent implementer --files "<the task's in-scope files>"`
+      (add `--doc <learning.rules_doc>` if config sets a non-default path)
       and include any output verbatim in the implementer's dispatch prompt.
    d. Delegate to implementer with ONLY the AUTO-FIX items
    e. After implementer completes: re-run pre-checks (tests, lint)

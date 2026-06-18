@@ -49,8 +49,9 @@ a human approves them later via `/nazgul:learn`. You never edit
 4. DEDUP: if a candidate overlaps an existing ACTIVE rule, do NOT duplicate —
    instead note "strengthens LR-NNN" and describe the refinement.
 5. Skip any candidate already declined. Compute its fingerprint the SAME way
-   `/nazgul:learn` records declines — `scripts/lib/learned-rules.sh fingerprint "<title + body>"`
-   (title and body concatenated, exactly as the candidate would be presented) —
+   `/nazgul:learn` records declines —
+   `scripts/lib/learned-rules.sh fingerprint "$(printf '%s\n%s' "<candidate title>" "<candidate body>")"` —
+   the title, a newline, then the body — identical to how /nazgul:learn records declines —
    and skip it if that fingerprint appears in `nazgul/learning/declined.jsonl`.
 
 ## Output

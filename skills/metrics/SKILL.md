@@ -68,7 +68,7 @@ Read these sources to compute metrics:
 7. **Learned rules** (`nazgul/learning/learned-rules.md`, if present) — read via `scripts/lib/learned-rules.sh parse` (one JSON object per rule):
    - Active rules: count of rules with `status == "active"`.
    - Retired rules: count of rules with `status == "retired"`.
-   - Total citations: sum of `hits` across active rules.
+   - Total citations: sum of `hits` across ALL rules (active + retired).
    - Top-cited: the active rules with the highest `hits` (id + title + hits).
 
 ### Compute Metrics

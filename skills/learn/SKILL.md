@@ -72,7 +72,8 @@ For EACH candidate, one at a time:
    - **reject** (skip writing for dry-run): append one JSON line to
      `nazgul/learning/declined.jsonl`:
      `{"fingerprint":"<id>","reason":"<reason>","ts":"<iso8601>"}` where `<id>` is
-     `scripts/lib/learned-rules.sh fingerprint "<candidate title + body>"`.
+     `scripts/lib/learned-rules.sh fingerprint "$(printf '%s\n%s' "<candidate title>" "<candidate body>")"` —
+     title, newline, body — identical to how the learner computes it to skip declined candidates.
 3. After the last candidate, delete `proposed-rules.md` (it is transient).
 
 ### Step 3: Complete
