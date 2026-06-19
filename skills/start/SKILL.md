@@ -1,10 +1,8 @@
 ---
 name: nazgul:start
 description: Start or resume a Nazgul autonomous development loop. Use when user says "start nazgul", "run nazgul", "begin development", "resume the loop", or passes an objective for new work. Auto-detects project state — no arguments needed.
-context: fork
-disable-model-invocation: true
 argument-hint: "[\"objective\"] [--afk|--yolo|--hitl] [--max N] [--task-pr]"
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, ToolSearch
 metadata:
   author: Jose Mejia
   version: 1.6.2
@@ -89,6 +87,23 @@ Persist the CLI flags to config via the tested helper, so every mode-gated branc
 [ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "$ARGUMENTS"
 ```
 This sets `mode` (`--yolo`/`--afk` → `afk`, `--hitl` → `hitl`), `afk.enabled`, `afk.yolo`, `afk.task_pr`, and `max_iterations` (`--max N`, positive integer). `--hitl` wins if combined with `--afk`/`--yolo`. Do NOT separately hand-edit these fields from flags anywhere else in this skill — this helper is the single source of truth.
+
+### Resolve Run Mode (MANDATORY — before state detection)
+**Pre-load:** run `ToolSearch` with query `select:AskUserQuestion` (the prompt tool is deferred by default).
+
+Determine the run mode unless an explicit flag already set it:
+1. If `$ARGUMENTS` contained an explicit mode flag (`--yolo`, `--afk`, or `--hitl`), Apply Flags already set the mode — **skip this step**.
+2. Otherwise read `nazgul/config.json → default_mode`:
+   - `"hitl"` or `"afk"` → apply it with no prompt:
+     `"${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--<default_mode>"`
+   - `"yolo"` → **confirm first** (YOLO is never silent): use `AskUserQuestion` "Run this objective in YOLO — no permission prompts, auto-commit?" (Yes / No, switch to HITL). On Yes: `apply-start-flags.sh … "--yolo"`. On No: treat as HITL.
+   - `null`/unset → **ask**: `AskUserQuestion` header "Mode", question "How should Nazgul run this objective?", options:
+     - "HITL — review each step" → `--hitl`
+     - "AFK — autonomous, pauses on risky decisions" → `--afk`
+     - "YOLO — fully autonomous, no permission prompts" → `--yolo`
+     Apply the choice via `apply-start-flags.sh … "--<choice>"`. Then ask "Save this as your default mode?" — on Yes, write it:
+     `jq '.default_mode="<choice>"' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json`
+3. Non-interactive fallback: if `AskUserQuestion` is unavailable and `default_mode` is null, default to **HITL** and print a note. Never default to YOLO.
 
 ### Reset Loop Counters (MANDATORY)
 
