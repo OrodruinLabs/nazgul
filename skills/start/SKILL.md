@@ -108,9 +108,10 @@ Determine the run mode:
      - "HITL — review each step" → `--hitl`
      - "AFK — autonomous, pauses on risky decisions" → `--afk`
      - "YOLO — fully autonomous, no permission prompts" → `--yolo`
-     The user selecting "YOLO" here IS the consent — do NOT fire the confirmation gate again. Apply the choice via `[ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--<choice>"`. Then ask "Save this as your default mode?" — on Yes, write it:
-     `jq '.default_mode="<choice>"' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json`
+     The user selecting "YOLO" here IS the consent — do NOT fire the confirmation gate again. Apply the choice via `[ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--<choice>"`. Then ask "Save this as your default mode?" — on Yes, write it using `jq --arg` (store the bare mode — `hitl`, `afk`, or `yolo` — never the `--hitl` flag form):
+     `jq --arg m "<hitl|afk|yolo>" '.default_mode=$m' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json`
 3. Non-interactive fallback: if `AskUserQuestion` is unavailable and `default_mode` is null, default to **HITL** and print a note. Never default to YOLO.
+   - If a path resolves to YOLO (explicit `--yolo`, or `default_mode: "yolo"`) but `AskUserQuestion` is unavailable to collect the confirmation, do NOT run YOLO. Force HITL: `[ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--hitl"`, and print a note that interactive YOLO consent could not be collected. (YOLO never runs without an interactive YES.)
 
 ### Reset Loop Counters (MANDATORY)
 

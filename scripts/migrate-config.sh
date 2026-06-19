@@ -225,11 +225,17 @@ migrate_9_to_10() {
 migrate_10_to_11() {
   local tmp
   tmp=$(mktemp)
-  # Add default_mode (null = ask each run). Preserve a valid string value;
-  # clamp anything that isn't a string or null back to null so start's
-  # default-mode lookup can't misbehave (same defensive pattern as prior migrations).
+  # Add default_mode (null = ask each run). Preserve a valid enum value;
+  # downcase and clamp to hitl|afk|yolo — any other string or non-string
+  # becomes null so start's mode resolution can't be left in an undefined
+  # state (same defensive pattern as prior migrations).
   jq '
-    .default_mode = (if (.default_mode | type) == "string" then .default_mode else null end)
+    .default_mode = (
+      if (.default_mode | type) == "string"
+      then (.default_mode | ascii_downcase
+            | if (. == "hitl" or . == "afk" or . == "yolo") then . else null end)
+      else null end
+    )
     | .schema_version = 11
   ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
   log_migration "v10→v11: Added default_mode (null = prompt for run mode)"

@@ -449,4 +449,12 @@ EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_json_field "v10 → v11 clamps non-string default_mode to null" "$NAZGUL_DIR/config.json" ".default_mode" "null"
 
+# unsupported string → clamped to null
+NAZGUL_DIR=$(setup_nazgul_dir "v10-to-11-badstring")
+cat > "$NAZGUL_DIR/config.json" <<'EOF'
+{ "schema_version": 10, "default_mode": "turbo" }
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_json_field "v10 → v11 clamps unsupported default_mode string to null" "$NAZGUL_DIR/config.json" ".default_mode" "null"
+
 report_results
