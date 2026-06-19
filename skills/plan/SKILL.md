@@ -48,7 +48,23 @@ Run an interactive design dialogue (one focused question at a time, or batched w
 Don't over-ask; once you can state the idea crisply, confirm your understanding back to the user and get a yes before writing anything.
 
 ### Step 2: Write the per-idea spec
-1. Compute the next feature id: `FEAT-NNN` from `nazgul/config.json → objectives_history | length + 1` (matches `/nazgul:start`). Store in config: `objective` (a one-line statement of the idea), `feat_id`, `feat_display_id`.
+1. Own the objective identity (mirror what `/nazgul:start`'s Objective Derivation stores). Order matters:
+   - **First** compute the feature id from the CURRENT history: `FEAT-NNN` where `NNN = (objectives_history | length) + 1`, formatted `FEAT-%03d` (so the first idea is `FEAT-001`). Set `feat_display_id` to the same value (or the board issue id if a board is connected). Do this BEFORE appending to `objectives_history`, so the array length still reflects prior objectives.
+   - **Then** write ALL of these to `nazgul/config.json` in ONE jq update (tmp + mv), so config is never left partially written:
+     - `.objective` = the one-line objective statement
+     - `.feat_id` = the computed `FEAT-NNN`
+     - `.feat_display_id` = same (or board issue id)
+     - `.afk.commit_prefix` = `"feat(<feat_display_id>):"`
+     - append to `.objectives_history`: `{ feat_id, objective, started_at }` where `started_at` = `date -u +%Y-%m-%dT%H:%M:%SZ`
+
+   ```bash
+   jq --arg id "$FEAT_ID" --arg obj "$OBJECTIVE" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+     '.objective=$obj | .feat_id=$id | .feat_display_id=$id
+      | .afk.commit_prefix=("feat(" + $id + "):")
+      | .objectives_history += [{feat_id:$id, objective:$obj, started_at:$ts}]' \
+     nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
+   ```
+   (If a board is connected and you use an issue id as `feat_display_id`, set `.feat_display_id` and the `commit_prefix` from that instead.)
 2. Create `nazgul/context/objectives/` if missing. Write `nazgul/context/objectives/<feat_id>-spec.md` with: title, the objective statement, purpose, scope (in/out), constraints, success criteria, and an objective-type line. This is the per-idea spec the doc-generator reads as PRIMARY for this objective.
 3. Show the spec and get the user's approval before generating tasks (HITL checkpoint). On changes, revise and re-confirm.
 
