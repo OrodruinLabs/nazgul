@@ -17,7 +17,7 @@ You produce structured project documents that become the source of truth for all
 ## Inputs You Consume
 
 - `nazgul/context/objectives/<feat_id>-spec.md` (where `<feat_id>` = `nazgul/config.json → feat_id`) — **PRIMARY (per-idea):** when the active objective has a spec here, it is the PRIMARY source for THIS objective's PRD/feature docs, taking precedence over `project-spec.md`. `project-spec.md` remains the project-level fallback.
-- `nazgul/context/project-spec.md` — **PRIMARY**: Product specification with vision, target users, core features, problem statement, and constraints (if exists). This is the richest source of product context and takes precedence for PRD content.
+- `nazgul/context/project-spec.md` — **PRIMARY (project-level fallback)**: Product specification with vision, target users, core features, problem statement, and constraints (if exists). The richest source of project-level product context; used as PRD source when no per-idea objective spec (above) applies, and for project context the per-idea spec doesn't cover.
 - `nazgul/context/project-classification.md` — What type of project this is
 - `nazgul/context/project-profile.md` — Technical stack and structure
 - `nazgul/context/architecture-map.md` — How the system is organized

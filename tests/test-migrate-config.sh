@@ -392,7 +392,7 @@ OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) |
 assert_json_field "v7 → v8 non-object budget clamped to object" "$NAZGUL_DIR/config.json" ".budget | type" "object"
 assert_json_field "v7 → v8 clamped budget.enabled false" "$NAZGUL_DIR/config.json" ".budget.enabled" "false"
 
-# --- migrate_9_to_10: learning block (terminal schema is now 10) ---
+# --- migrate_9_to_10: learning block (superseded; terminal schema is now 11) ---
 NAZGUL_DIR=$(setup_nazgul_dir "v9-to-10")
 cat > "$NAZGUL_DIR/config.json" <<'EOF'
 { "schema_version": 9, "mode": "hitl" }
