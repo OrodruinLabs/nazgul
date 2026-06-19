@@ -222,6 +222,19 @@ migrate_9_to_10() {
   log_migration "v9→v10: Added learning block (autolearning, default enabled)"
 }
 
+migrate_10_to_11() {
+  local tmp
+  tmp=$(mktemp)
+  # Add default_mode (null = ask each run). Preserve a valid string value;
+  # clamp anything that isn't a string or null back to null so start's
+  # default-mode lookup can't misbehave (same defensive pattern as prior migrations).
+  jq '
+    .default_mode = (if (.default_mode | type) == "string" then .default_mode else null end)
+    | .schema_version = 11
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v10→v11: Added default_mode (null = prompt for run mode)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"
