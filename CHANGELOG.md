@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.2] - 2026-06-18
+
+### Changed
+- **Release flow now publishes a GitHub Release for every tag.** The release-manager agent gained an explicit step to run `gh release create vX.Y.Z --notes-file … --verify-tag --latest` after tagging (gated on a GitHub remote + authenticated `gh`), plus a matching authority-scope entry and rule. This keeps the GitHub Releases page in sync with the git tags — previously tags could be pushed without a corresponding Release (v1.6.0/v1.6.1 had to be backfilled).
+
 ## [1.6.1] - 2026-06-18
 
 ### Fixed
