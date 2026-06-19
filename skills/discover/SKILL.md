@@ -6,7 +6,7 @@ agent: discovery
 allowed-tools: Bash, Read, Write, Glob, Grep, LS
 metadata:
   author: Jose Mejia
-  version: 1.6.2
+  version: 2.0.0
 ---
 
 # Nazgul Discovery

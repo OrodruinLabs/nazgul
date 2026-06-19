@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.0] - 2026-06-19
+
+### Added
+- **`/nazgul:plan` — native brainstorm → spec → tasks.** Interactive design front-end that turns a new idea/objective into a per-idea spec (`nazgul/context/objectives/<feat-id>-spec.md`) and a ready-to-run task plan (reusing the existing discovery/doc-generator/planner agents), then offers to run it. Mirrors the Superpowers brainstorm→plan flow but produces native Nazgul artifacts. `/nazgul:plan` owns objective identity (computes `feat_id`, appends `objectives_history`, sets `afk.commit_prefix`); `/nazgul:start` reuses that identity rather than recomputing it.
+- **`config.default_mode`** (schema 11) — set a preferred run mode (`hitl`/`afk`/`yolo`) so `/nazgul:start` doesn't prompt; settable via `/nazgul:config`. Type-guarded `migrate_10_to_11`.
+- `doc-generator` reads the active objective's per-idea spec as the PRIMARY source for that objective's docs.
+
+### Changed (BREAKING)
+- **`/nazgul:start` no longer runs non-interactively by default.** With no mode flag it now resolves the run mode as: explicit flag > `config.default_mode` > an interactive HITL/AFK/YOLO prompt (with "save as default?"). Existing flag usage (`--yolo`/`--afk`/`--hitl`) is unchanged; the change affects the no-flag default.
+- **`/nazgul:start` lost its `disable-model-invocation` guard and `context: fork`.** It is now model-invocable and interactive, so `/nazgul:plan` can hand off to it and "start nazgul" in natural language no longer errors. The new safety gate is the mode prompt — **YOLO is always confirmed**, on every path including an explicit `--yolo` flag.
+
 ## [1.6.2] - 2026-06-18
 
 ### Changed

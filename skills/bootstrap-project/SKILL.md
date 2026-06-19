@@ -4,7 +4,7 @@ description: "Generate a portable, Nazgul-free project bundle (docs + Claude sub
 allowed-tools: "Read, Write, Edit, Bash, Glob, Grep, Agent, ToolSearch"
 metadata:
   author: Jose Mejia
-  version: 1.6.2
+  version: 2.0.0
 ---
 
 # Bootstrap Project
