@@ -5,7 +5,7 @@ context: fork
 allowed-tools: Read, Write, Edit, Bash
 metadata:
   author: Jose Mejia
-  version: 2.0.0
+  version: 2.0.1
 ---
 
 # Nazgul Pause

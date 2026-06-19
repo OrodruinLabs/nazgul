@@ -5,7 +5,7 @@ argument-hint: "[\"objective\"] [--afk|--yolo|--hitl] [--max N] [--task-pr]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 2.0.0
+  version: 2.0.1
 ---
 
 # Nazgul Start
@@ -49,15 +49,19 @@ Format all output per `references/ui-brand.md` — use stage banners, status sym
 ### YOLO Mode Pre-flight (--yolo)
 Runs after **Apply Flags** / before Smart State Detection. The `afk.enabled`/`afk.yolo`/`afk.task_pr` config writes are already done by Apply Flags — do not repeat them here.
 
-If `--yolo` was passed (mode is now `afk` + `afk.yolo` true via Apply Flags), verify the session was launched with `--dangerously-skip-permissions`:
-- Try running a quick Bash command — if no permission prompt fires, we're good
+If `--yolo` was passed (mode is now `afk` + `afk.yolo` true via Apply Flags), verify the session is in a non-prompting permission mode. There is no API to read the active mode, so **probe** it:
+- Try running a quick Bash command — if no permission prompt fires, we're good. (This holds under either `--permission-mode auto` OR `--dangerously-skip-permissions`; both skip routine prompts.)
 - If permissions ARE being prompted, **STOP** and tell the user:
   ```text
-  YOLO mode requires --dangerously-skip-permissions. Restart with:
-  claude --dangerously-skip-permissions
+  YOLO needs a non-prompting permission mode. Restart with ONE of:
+    claude --permission-mode auto          # recommended — autonomous, but a background
+                                           # safety classifier still blocks dangerous actions
+                                           # (curl|bash, force-push to main, prod deploys, …)
+    claude --dangerously-skip-permissions  # blunt bypass — no safety checks; isolated VM/container only
   Then re-run: /nazgul:start --yolo --max N
   ```
-- Once confirmed, proceed with full autonomous mode — no pauses, no permission prompts, no human gates
+  Prefer `--permission-mode auto` (requires Claude Code v2.1.83+ and Opus 4.6+/Sonnet 4.6); fall back to `--dangerously-skip-permissions` only in a throwaway sandbox.
+- Once confirmed, proceed with full autonomous mode — no pauses, no human gates. (Under `auto`, the classifier may still block a genuinely dangerous action — surface that to the user rather than retrying blindly.)
 
 ### Model Selection
 
