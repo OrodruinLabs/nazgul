@@ -91,17 +91,24 @@ This sets `mode` (`--yolo`/`--afk` → `afk`, `--hitl` → `hitl`), `afk.enabled
 ### Resolve Run Mode (MANDATORY — before state detection)
 **Pre-load:** run `ToolSearch` with query `select:AskUserQuestion` (the prompt tool is deferred by default).
 
-Determine the run mode unless an explicit flag already set it:
-1. If `$ARGUMENTS` contained an explicit mode flag (`--yolo`, `--afk`, or `--hitl`), Apply Flags already set the mode — **skip this step**.
-2. Otherwise read `nazgul/config.json → default_mode`:
-   - `"hitl"` or `"afk"` → apply it with no prompt:
-     `"${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--<default_mode>"`
-   - `"yolo"` → **confirm first** (YOLO is never silent): use `AskUserQuestion` "Run this objective in YOLO — no permission prompts, auto-commit?" (Yes / No, switch to HITL). On Yes: `apply-start-flags.sh … "--yolo"`. On No: treat as HITL.
+**YOLO confirmation gate (shared):** YOLO must NEVER reach execution without an interactive YES. Whenever a path resolves to YOLO via a flag or `default_mode` (NOT via the user actively selecting "YOLO" in the null→ask menu — that selection IS the consent), fire this gate:
+- `AskUserQuestion` header "YOLO", question "Run this objective in YOLO — no permission prompts, auto-commit?", options:
+  - "Yes — full autonomous, no prompts" → proceed in YOLO (mode already applied as `--yolo`).
+  - "No — switch to HITL" → apply HITL explicitly: `[ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--hitl"`
+
+Determine the run mode:
+1. If `$ARGUMENTS` contained an explicit mode flag, Apply Flags already set the mode:
+   - `--afk` or `--hitl` → mode is applied — **skip the rest of this section**.
+   - `--yolo` → mode is now `afk` + `afk.yolo`, BUT you must still fire the **YOLO confirmation gate** above. On No, it re-applies HITL via the helper. Then continue past this section.
+2. Otherwise (no explicit mode flag) read `nazgul/config.json → default_mode`:
+   - `"hitl"` → apply with no prompt: `[ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--hitl"`
+   - `"afk"` → apply with no prompt: `[ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--afk"`
+   - `"yolo"` → apply it (`[ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--yolo"`), then fire the **YOLO confirmation gate** above. On No, it re-applies HITL via the helper.
    - `null`/unset → **ask**: `AskUserQuestion` header "Mode", question "How should Nazgul run this objective?", options:
      - "HITL — review each step" → `--hitl`
      - "AFK — autonomous, pauses on risky decisions" → `--afk`
      - "YOLO — fully autonomous, no permission prompts" → `--yolo`
-     Apply the choice via `apply-start-flags.sh … "--<choice>"`. Then ask "Save this as your default mode?" — on Yes, write it:
+     The user selecting "YOLO" here IS the consent — do NOT fire the confirmation gate again. Apply the choice via `[ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--<choice>"`. Then ask "Save this as your default mode?" — on Yes, write it:
      `jq '.default_mode="<choice>"' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json`
 3. Non-interactive fallback: if `AskUserQuestion` is unavailable and `default_mode` is null, default to **HITL** and print a note. Never default to YOLO.
 
