@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.2] - 2026-06-19
+
+### Fixed
+- **Shared-mode gitignore now excludes `nazgul/reviews/*/diff.patch`.** The review-gate writes a point-in-time captured diff to `nazgul/reviews/<task>/diff.patch` for reviewers to read first. In shared install mode that file was being committed (unlike the already-ignored `test-failures.md` / `simplify-report.md`), so a later review could read a **stale** diff and emit phantom findings against code that had since changed. `/nazgul:init` now adds `nazgul/reviews/*/diff.patch` to the ephemeral-runtime ignore block, and its reinitialization "stop tracking" one-shot includes it for projects that already committed one.
+
 ## [2.0.1] - 2026-06-19
 
 ### Changed
