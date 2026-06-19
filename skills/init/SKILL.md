@@ -6,7 +6,7 @@ argument-hint: "[--local] [--force]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 2.0.1
+  version: 2.0.2
 ---
 
 # Nazgul Init
@@ -111,6 +111,7 @@ The decision record (`config.json`, `plan.md`, `tasks/`, `reviews/`, `docs/`, `c
    nazgul/archive/
    nazgul/reviews/*/test-failures.md
    nazgul/reviews/*/simplify-report.md
+   nazgul/reviews/*/diff.patch
    nazgul/reviews/post-loop-simplify-report.md
    # Transient autolearning working files (registry + declines stay tracked)
    nazgul/learning/proposed-rules.md
@@ -135,12 +136,12 @@ Show the user:
 - Reviewer board generated (list all reviewer agents)
 - Companion plugin status
 - Install mode: local (whole `nazgul/` untracked) / shared (decision record tracked; ephemeral journal — checkpoints, logs, sessions, archive — gitignored)
-- **Shared-mode reinitialization only:** if `git ls-files nazgul/checkpoints nazgul/logs nazgul/sessions nazgul/archive nazgul/.session_id nazgul/.compaction_count 'nazgul/reviews/*/test-failures.md' 'nazgul/reviews/*/simplify-report.md' nazgul/reviews/post-loop-simplify-report.md 2>/dev/null` shows any already-tracked ephemeral paths, tell the user to stop tracking them (files stay on disk; `--ignore-unmatch` keeps the command safe when some paths aren't tracked):
+- **Shared-mode reinitialization only:** if `git ls-files nazgul/checkpoints nazgul/logs nazgul/sessions nazgul/archive nazgul/.session_id nazgul/.compaction_count 'nazgul/reviews/*/test-failures.md' 'nazgul/reviews/*/simplify-report.md' 'nazgul/reviews/*/diff.patch' nazgul/reviews/post-loop-simplify-report.md 2>/dev/null` shows any already-tracked ephemeral paths, tell the user to stop tracking them (files stay on disk; `--ignore-unmatch` keeps the command safe when some paths aren't tracked). **`diff.patch` matters most here** — a committed, stale captured diff makes reviewers analyze old code and emit phantom findings:
   ```bash
   git rm -r --cached --ignore-unmatch nazgul/checkpoints nazgul/logs nazgul/sessions nazgul/archive \
     nazgul/.session_id nazgul/.compaction_count
   git rm --cached --ignore-unmatch nazgul/reviews/*/test-failures.md nazgul/reviews/*/simplify-report.md \
-    nazgul/reviews/post-loop-simplify-report.md
+    nazgul/reviews/*/diff.patch nazgul/reviews/post-loop-simplify-report.md
   git commit -m "chore(nazgul): stop tracking ephemeral runtime state"
   ```
 - Next step: `/nazgul:start "your objective"`
