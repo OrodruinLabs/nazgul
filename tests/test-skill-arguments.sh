@@ -81,8 +81,13 @@ for skill_file in "$REPO_ROOT"/skills/*/SKILL.md; do
     !skip {print}
   ' "$skill_file")
   for flag in $(printf '%s\n' "$hint" | grep -oE -- '--[a-z][a-z-]*' | sort -u); do
-    if printf '%s\n' "$handled" | grep -qF -- "$flag" \
-       || printf '%s\n' "$handled" | grep -q 'apply-start-flags.sh'; then
+    # Use here-strings (not `printf | grep -q`): grep -q exits on first match and
+    # closes the pipe, so the upstream printf dies with SIGPIPE — and under
+    # `set -o pipefail` that turns a genuine MATCH into a non-zero pipeline,
+    # yielding a false FAIL on large skill bodies (only triggers on CI/Linux;
+    # passed on macOS). Here-strings have no pipe, so no SIGPIPE. See PR #30.
+    if grep -qF -- "$flag" <<<"$handled" \
+       || grep -q 'apply-start-flags.sh' <<<"$handled"; then
       _pass "$rel_path body handles documented flag $flag"
     else
       _fail "$rel_path documents $flag in argument-hint but its body never references it" \

@@ -5,7 +5,7 @@ disable-model-invocation: true
 allowed-tools: []
 metadata:
   author: Jose Mejia
-  version: 1.6.2
+  version: 2.0.0
 ---
 
 # Nazgul Framework — Quick Reference
@@ -22,6 +22,7 @@ metadata:
 
 | Command | Description |
 |---------|-------------|
+| `/nazgul:plan` | Brainstorm a new idea into a Nazgul spec + task plan, then run it |
 | `/nazgul:start` | Auto-detect state and continue work |
 | `/nazgul:start "objective"` | Start a specific objective |
 

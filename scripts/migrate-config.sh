@@ -222,6 +222,25 @@ migrate_9_to_10() {
   log_migration "v9→v10: Added learning block (autolearning, default enabled)"
 }
 
+migrate_10_to_11() {
+  local tmp
+  tmp=$(mktemp)
+  # Add default_mode (null = ask each run). Preserve a valid enum value;
+  # downcase and clamp to hitl|afk|yolo — any other string or non-string
+  # becomes null so start's mode resolution can't be left in an undefined
+  # state (same defensive pattern as prior migrations).
+  jq '
+    .default_mode = (
+      if (.default_mode | type) == "string"
+      then (.default_mode | ascii_downcase
+            | if (. == "hitl" or . == "afk" or . == "yolo") then . else null end)
+      else null end
+    )
+    | .schema_version = 11
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v10→v11: Added default_mode (null = prompt for run mode)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"

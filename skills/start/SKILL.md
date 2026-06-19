@@ -1,13 +1,11 @@
 ---
 name: nazgul:start
 description: Start or resume a Nazgul autonomous development loop. Use when user says "start nazgul", "run nazgul", "begin development", "resume the loop", or passes an objective for new work. Auto-detects project state — no arguments needed.
-context: fork
-disable-model-invocation: true
 argument-hint: "[\"objective\"] [--afk|--yolo|--hitl] [--max N] [--task-pr]"
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 1.6.2
+  version: 2.0.0
 ---
 
 # Nazgul Start
@@ -90,6 +88,31 @@ Persist the CLI flags to config via the tested helper, so every mode-gated branc
 ```
 This sets `mode` (`--yolo`/`--afk` → `afk`, `--hitl` → `hitl`), `afk.enabled`, `afk.yolo`, `afk.task_pr`, and `max_iterations` (`--max N`, positive integer). `--hitl` wins if combined with `--afk`/`--yolo`. Do NOT separately hand-edit these fields from flags anywhere else in this skill — this helper is the single source of truth.
 
+### Resolve Run Mode (MANDATORY — before state detection)
+**Pre-load:** run `ToolSearch` with query `select:AskUserQuestion` (the prompt tool is deferred by default).
+
+**YOLO confirmation gate (shared):** YOLO must NEVER reach execution without an interactive YES. Whenever a path resolves to YOLO via a flag or `default_mode` (NOT via the user actively selecting "YOLO" in the null→ask menu — that selection IS the consent), fire this gate:
+- `AskUserQuestion` header "YOLO", question "Run this objective in YOLO — no permission prompts, auto-commit?", options:
+  - "Yes — full autonomous, no prompts" → proceed in YOLO (mode already applied as `--yolo`).
+  - "No — switch to HITL" → apply HITL explicitly: `[ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--hitl"`
+
+Determine the run mode:
+1. If `$ARGUMENTS` contained an explicit mode flag, Apply Flags already set the mode:
+   - `--afk` or `--hitl` → mode is applied — **skip the rest of this section**.
+   - `--yolo` → mode is now `afk` + `afk.yolo`, BUT you must still fire the **YOLO confirmation gate** above. On No, it re-applies HITL via the helper. Then continue past this section.
+2. Otherwise (no explicit mode flag) read `nazgul/config.json → default_mode`:
+   - `"hitl"` → apply with no prompt: `[ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--hitl"`
+   - `"afk"` → apply with no prompt: `[ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--afk"`
+   - `"yolo"` → apply it (`[ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--yolo"`), then fire the **YOLO confirmation gate** above. On No, it re-applies HITL via the helper.
+   - `null`/unset → **ask**: `AskUserQuestion` header "Mode", question "How should Nazgul run this objective?", options:
+     - "HITL — review each step" → `--hitl`
+     - "AFK — autonomous, pauses on risky decisions" → `--afk`
+     - "YOLO — fully autonomous, no permission prompts" → `--yolo`
+     The user selecting "YOLO" here IS the consent — do NOT fire the confirmation gate again. Apply the choice via `[ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--<choice>"`. Then ask "Save this as your default mode?" — on Yes, write it using `jq --arg` (store the bare mode — `hitl`, `afk`, or `yolo` — never the `--hitl` flag form):
+     `jq --arg m "<hitl|afk|yolo>" '.default_mode=$m' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json`
+3. Non-interactive fallback: if `AskUserQuestion` is unavailable and `default_mode` is null, default to **HITL** and print a note. Never default to YOLO.
+   - If a path resolves to YOLO (explicit `--yolo`, or `default_mode: "yolo"`) but `AskUserQuestion` is unavailable to collect the confirmation, do NOT run YOLO. Force HITL: `[ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--hitl"`, and print a note that interactive YOLO consent could not be collected. (YOLO never runs without an interactive YES.)
+
 ### Reset Loop Counters (MANDATORY)
 
 Loop counters are **per-run state, not objective state**. A stale counter left over from a previous run will silently brick the loop: the stop hook hits its max-iteration or consecutive-failure gate on the very first iteration and exits 0 (allows the stop) instead of re-dispatching — so the loop "never continues" even though READY tasks exist. The same applies to the cost-governor accumulator `budget.spent_usd` — a stale value would trip the budget ceiling immediately.
@@ -104,6 +127,13 @@ Loop counters are **per-run state, not objective state**. A stale counter left o
 ```
 
 This applies to **every** loop-starting path (ACTIVE_LOOP, DOCS_READY, DISCOVERY_DONE, FRESH, New Objective Override). Do not skip it for those states.
+
+### Objective Identity (use existing or assign)
+
+Every branch-setup path below that needs a feature id MUST follow this rule instead of unconditionally recomputing one. The objective identity (`feat_id`, `feat_display_id`, `afk.commit_prefix`, and the `objectives_history` entry) is assigned exactly **once per objective**, at objective-creation time.
+
+- **If `config.feat_id` is already set** (e.g. `/nazgul:plan` created this objective up front, or a prior start path already assigned it): **reuse it.** Do NOT recompute the id, do NOT overwrite `feat_id`/`feat_display_id`/`afk.commit_prefix`, and do NOT append to `objectives_history` — all of that was done at creation time. Just proceed to create the git branch/worktree using the existing `feat_id`/`feat_display_id`/`afk.commit_prefix`. (Recomputing here would assign the wrong id — e.g. FEAT-002 when plan made FEAT-001 — and orphan the `objectives/FEAT-001-spec.md` the doc-generator reads.)
+- **Only when `config.feat_id` is null** do you assign identity: compute `FEAT-NNN` from `objectives_history.length + 1` (if board connected, prefer issue number as display_id), set `feat_id` + `feat_display_id` + `afk.commit_prefix` to `feat(<display_id>):`, and append the objective to `objectives_history` — exactly once.
 
 ### Smart State Detection
 
@@ -131,10 +161,9 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
      a. Capture current branch as `branch.base`
      b. Store `pwd` as `branch.main_worktree_path`
      c. Slugify objective → `feat/<display_id>-<slug>`
-     d. Compute feature ID: `FEAT-NNN` from `objectives_history.length + 1`. If board connected, prefer issue number as display_id.
-     e. Store `feat_id` and `feat_display_id` in config.json. Set `afk.commit_prefix` to `feat(<display_id>):`.
-     f. `git checkout -b feat/<display_id>-<slug>`
-     g. Create worktree dir, store paths in config
+     d. Assign objective identity per **Objective Identity (use existing or assign)** above: reuse `config.feat_id`/`feat_display_id`/`afk.commit_prefix` if already set (no recompute, no `objectives_history` append); only when `feat_id` is null compute `FEAT-NNN` from `objectives_history.length + 1`, set the id fields + `afk.commit_prefix`, and append to `objectives_history` once.
+     e. `git checkout -b feat/<display_id>-<slug>`
+     f. Create worktree dir, store paths in config
 6. Mode was already applied from flags by the **Apply Flags** step above; do not re-derive it here. (Loop counters were already reset by the mandatory **Reset Loop Counters** step above.)
 7. Delegate to the appropriate agent based on active task status:
    - READY/IN_PROGRESS → Implementer
@@ -188,10 +217,9 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
    a. Capture current branch as `branch.base`
    b. Store `pwd` as `branch.main_worktree_path`
    c. Slugify objective → `feat/<display_id>-<slug>`
-   d. Compute feature ID: `FEAT-NNN` from `objectives_history.length + 1`. If board connected, prefer issue number as display_id.
-   e. Store `feat_id` and `feat_display_id` in config.json. Set `afk.commit_prefix` to `feat(<display_id>):`.
-   f. `git checkout -b feat/<display_id>-<slug>`
-   g. Create worktree dir, store paths in config
+   d. Assign objective identity per **Objective Identity (use existing or assign)** above: reuse `config.feat_id`/`feat_display_id`/`afk.commit_prefix` if already set (no recompute, no `objectives_history` append); only when `feat_id` is null compute `FEAT-NNN` from `objectives_history.length + 1`, set the id fields + `afk.commit_prefix`, and append to `objectives_history` once.
+   e. `git checkout -b feat/<display_id>-<slug>`
+   f. Create worktree dir, store paths in config
 4. Tell user: "Regenerating documents from current context before planning..."
 5. Delegate to Doc Generator agent (regenerates all docs to reflect current objective and context)
 6. In HITL mode, pause for doc review.
@@ -212,10 +240,9 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
    a. Capture current branch as `branch.base`
    b. Store `pwd` as `branch.main_worktree_path`
    c. Slugify objective → `feat/<display_id>-<slug>`
-   d. Compute feature ID: `FEAT-NNN` from `objectives_history.length + 1`. If board connected, prefer issue number as display_id.
-   e. Store `feat_id` and `feat_display_id` in config.json. Set `afk.commit_prefix` to `feat(<display_id>):`.
-   f. `git checkout -b feat/<display_id>-<slug>`
-   g. Create worktree dir, store paths in config
+   d. Assign objective identity per **Objective Identity (use existing or assign)** above: reuse `config.feat_id`/`feat_display_id`/`afk.commit_prefix` if already set (no recompute, no `objectives_history` append); only when `feat_id` is null compute `FEAT-NNN` from `objectives_history.length + 1`, set the id fields + `afk.commit_prefix`, and append to `objectives_history` once.
+   e. `git checkout -b feat/<display_id>-<slug>`
+   f. Create worktree dir, store paths in config
 4. Tell user: "Discovery complete. Generating documents, then planning..."
 5. Delegate to Doc Generator agent. In HITL mode, pause for doc review.
 6. Delegate to Planner agent. In HITL mode, pause for plan review.
@@ -232,10 +259,9 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
    a. Capture current branch as `branch.base`
    b. Store `pwd` as `branch.main_worktree_path`
    c. Slugify objective → `feat/<display_id>-<slug>` (lowercase, non-alnum to hyphens, max 50 chars)
-   d. Compute feature ID: `FEAT-NNN` from `objectives_history.length + 1`. If board connected, prefer issue number as display_id.
-   e. Store `feat_id` and `feat_display_id` in config.json. Set `afk.commit_prefix` to `feat(<display_id>):`.
-   f. `git checkout -b feat/<display_id>-<slug>`
-   g. Create worktree dir at `../<project>-nazgul-worktrees/`, store path in config
+   d. Assign objective identity per **Objective Identity (use existing or assign)** above: reuse `config.feat_id`/`feat_display_id`/`afk.commit_prefix` if already set (no recompute, no `objectives_history` append); only when `feat_id` is null compute `FEAT-NNN` from `objectives_history.length + 1`, set the id fields + `afk.commit_prefix`, and append to `objectives_history` once.
+   e. `git checkout -b feat/<display_id>-<slug>`
+   f. Create worktree dir at `../<project>-nazgul-worktrees/`, store path in config
 3. Run Discovery agent (scans codebase, classifies project, generates reviewers)
 4. Classify Project: In HITL mode, confirm classification with user.
 5. Generate Documents: Delegate to Doc Generator. In HITL mode, pause for doc review.
@@ -304,7 +330,7 @@ Write the derived/selected objective to config.json:
   "objective_set_at": "[ISO 8601 timestamp]"
 }
 ```
-Append to `objectives_history` array.
+Do NOT append to `objectives_history` here — the single per-objective append is owned by the **Objective Identity (use existing or assign)** rule and happens at branch setup (only when `config.feat_id` is null). Appending here too would double-append.
 
 ---
 
@@ -334,8 +360,9 @@ When the user explicitly passes an objective string in `$ARGUMENTS`:
    - Create `nazgul/archive/[YYYY-MM-DD-HHMMSS]/` directory
    - Move: plan.md, tasks/, reviews/, docs/, checkpoints/ into archive
    - Keep: config.json (will be updated), context/ (still valid for same project)
-   - Update `objectives_history` in config.json with `completed_at` and `plan_archived_to`
-3. **Store new objective** in config.json: set `objective`, `objective_set_at`, append to `objectives_history`
+   - Update the PREVIOUS objective's `objectives_history` entry with `completed_at` and `plan_archived_to`
+   - **Clear the old objective identity so the new objective gets a fresh one:** set `branch.feature`, `feat_id`, and `feat_display_id` to null in config.json. (If you skip this, the idempotent Objective Identity rule would REUSE the previous objective's id for the new objective.)
+3. **Store new objective** in config.json: set `objective`, `objective_set_at`. Do NOT append to `objectives_history` here — the single per-objective append is owned by the **Objective Identity (use existing or assign)** rule and fires at branch setup now that `feat_id` was cleared in step 2.
 4. **Proceed with FRESH state pipeline** (discovery if stale → docs → plan → implement)
 
 ---

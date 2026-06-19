@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.6.2-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-2.0.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-Plugin-7c3aed?style=flat-square" alt="Claude Code Plugin">
   <img src="https://img.shields.io/badge/agents-18-orange?style=flat-square" alt="Agents">
@@ -83,6 +83,7 @@ Nazgul auto-detects project state: active work resumes, existing docs trigger pl
 | Command | Description |
 |---------|-------------|
 | `/nazgul:init` | First-time setup: discovery, reviewer generation, runtime dirs |
+| `/nazgul:plan` | Brainstorm a new idea into a Nazgul spec + task plan, then run it |
 | `/nazgul:start` | Smart start/resume — auto-detects state, derives objective |
 | `/nazgul:status` | Check loop progress, task counts, reviewer board |
 | `/nazgul:pause` | Gracefully pause at next iteration boundary |
@@ -100,6 +101,9 @@ Nazgul auto-detects project state: active work resumes, existing docs trigger pl
 | `/nazgul:learn` | Distill recurring mistakes into numbered, human-approved Learned Rules |
 
 See `/nazgul:help` for the full command list and all flags.
+
+> [!NOTE]
+> **`/nazgul:start` now asks which mode (HITL / AFK / YOLO) when no mode flag is passed and no `default_mode` is set in config.** To skip the prompt, pass `--hitl`, `--afk`, or `--yolo`, or set `config.default_mode` once via `/nazgul:config`. YOLO is always confirmed on every path, including an explicit `--yolo` flag.
 
 ### Model Routing
 

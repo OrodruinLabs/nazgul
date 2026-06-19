@@ -5,7 +5,7 @@ argument-hint: "[models]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 1.6.2
+  version: 2.0.0
 ---
 
 # Nazgul Config
@@ -43,6 +43,7 @@ Models:
 
 Formatter:         [formatter.enabled ? "enabled" : "disabled"]
 Notifications:     [notifications.on_complete || "disabled"]
+Default mode:      [default_mode || "ask each run"]
 ```
 
 ## Step 2: Ask What to Change
@@ -56,6 +57,7 @@ Otherwise, use `AskUserQuestion` (multiSelect: true):
   - "Model assignments" — "Configure which AI model runs each pipeline stage"
   - "Formatter" — "Enable or disable auto-formatting after edits"
   - "Notifications" — "Configure completion notifications"
+  - "Default run mode" — "Set the mode /nazgul:start uses when no flag is passed (or clear it to be asked each time)"
 
 ## Step 3: Run Selected Sub-flows
 
@@ -137,3 +139,20 @@ Use `AskUserQuestion`:
 - If Voice alert: set `nazgul/config.json → notifications.on_complete` to the platform-appropriate command
 - If Silent: remove or empty `nazgul/config.json → notifications.on_complete`
 - If Other (user selects the built-in "Other" free-text option): set `nazgul/config.json → notifications.on_complete` to the user's custom command
+
+### Default Run Mode Sub-flow
+
+1. `AskUserQuestion`:
+   - header: "Default mode"
+   - question: "What mode should /nazgul:start use when you don't pass a flag?"
+   - options:
+     - "Ask each run (Recommended)" — "No default; /nazgul:start prompts for mode each time"
+     - "HITL" — "Review each step"
+     - "AFK" — "Autonomous; pauses on risky decisions"
+     - "YOLO" — "Fully autonomous; no permission prompts (start still confirms YOLO each run)"
+
+2. Write the choice to config: `"Ask each run"` → `null`, otherwise the lowercase mode string:
+   ```bash
+   jq '.default_mode=<value>' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
+   ```
+   (use `null` unquoted for "Ask each run", e.g. `jq '.default_mode=null' …`).

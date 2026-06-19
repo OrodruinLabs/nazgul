@@ -18,6 +18,7 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 
 ## Commands
 - `/nazgul-init` — First-time setup: run Discovery, generate reviewers, create runtime dirs
+- **Design a new idea:** `/nazgul:plan` brainstorms an idea into a per-idea spec (`nazgul/context/objectives/<feat-id>-spec.md`) and a task plan, then offers to run it. `/nazgul:start` executes — it asks which mode (HITL/AFK/YOLO) unless you set `default_mode` in config or pass a flag.
 - `/nazgul-start` — Auto-detects project state and continues or starts work (derives objective from context)
 - `/nazgul-start "objective"` — Override: start a specific new objective (flags: --afk, --yolo, --hitl, --max N)
 - `/nazgul-status` — Check loop progress, task counts, reviewer board

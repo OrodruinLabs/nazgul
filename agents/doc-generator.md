@@ -16,7 +16,8 @@ You produce structured project documents that become the source of truth for all
 
 ## Inputs You Consume
 
-- `nazgul/context/project-spec.md` — **PRIMARY**: Product specification with vision, target users, core features, problem statement, and constraints (if exists). This is the richest source of product context and takes precedence for PRD content.
+- `nazgul/context/objectives/<feat_id>-spec.md` (where `<feat_id>` = `nazgul/config.json → feat_id`) — **PRIMARY (per-idea):** when the active objective has a spec here, it is the PRIMARY source for THIS objective's PRD/feature docs, taking precedence over `project-spec.md`. `project-spec.md` remains the project-level fallback.
+- `nazgul/context/project-spec.md` — **PRIMARY (project-level fallback)**: Product specification with vision, target users, core features, problem statement, and constraints (if exists). The richest source of project-level product context; used as PRD source when no per-idea objective spec (above) applies, and for project context the per-idea spec doesn't cover.
 - `nazgul/context/project-classification.md` — What type of project this is
 - `nazgul/context/project-profile.md` — Technical stack and structure
 - `nazgul/context/architecture-map.md` — How the system is organized
@@ -44,6 +45,7 @@ All documents go to `nazgul/docs/`. This directory is the project's living docum
 ## Process
 
 0. Read `nazgul/config.json` → `objective` field. If null, read `nazgul/plan.md` → `## Objective`. If both empty, STOP and report: "No objective found. Cannot generate documents."
+0.4. Read `nazgul/config.json` → `feat_id`. If `nazgul/context/objectives/<feat_id>-spec.md` exists, read it as the PRIMARY spec for this objective — map its sections to the PRD exactly as step 0.5 maps `project-spec.md`, and prefer it where the two overlap. Then still apply 0.5 for any project-level context not covered by the per-idea spec.
 0.5. Read `nazgul/context/project-spec.md` (if it exists). When present, map its content to PRD sections:
    - `## Vision` → PRD Overview / Executive Summary
    - `## Target Users` → PRD User Stories seed (personas and context)
