@@ -22,6 +22,7 @@ metadata:
 
 | Command | Description |
 |---------|-------------|
+| `/nazgul:plan` | Brainstorm a new idea into a Nazgul spec + task plan, then run it |
 | `/nazgul:start` | Auto-detect state and continue work |
 | `/nazgul:start "objective"` | Start a specific objective |
 
