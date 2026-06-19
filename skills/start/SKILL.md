@@ -127,6 +127,13 @@ Loop counters are **per-run state, not objective state**. A stale counter left o
 
 This applies to **every** loop-starting path (ACTIVE_LOOP, DOCS_READY, DISCOVERY_DONE, FRESH, New Objective Override). Do not skip it for those states.
 
+### Objective Identity (use existing or assign)
+
+Every branch-setup path below that needs a feature id MUST follow this rule instead of unconditionally recomputing one. The objective identity (`feat_id`, `feat_display_id`, `afk.commit_prefix`, and the `objectives_history` entry) is assigned exactly **once per objective**, at objective-creation time.
+
+- **If `config.feat_id` is already set** (e.g. `/nazgul:plan` created this objective up front, or a prior start path already assigned it): **reuse it.** Do NOT recompute the id, do NOT overwrite `feat_id`/`feat_display_id`/`afk.commit_prefix`, and do NOT append to `objectives_history` — all of that was done at creation time. Just proceed to create the git branch/worktree using the existing `feat_id`/`feat_display_id`/`afk.commit_prefix`. (Recomputing here would assign the wrong id — e.g. FEAT-002 when plan made FEAT-001 — and orphan the `objectives/FEAT-001-spec.md` the doc-generator reads.)
+- **Only when `config.feat_id` is null** do you assign identity: compute `FEAT-NNN` from `objectives_history.length + 1` (if board connected, prefer issue number as display_id), set `feat_id` + `feat_display_id` + `afk.commit_prefix` to `feat(<display_id>):`, and append the objective to `objectives_history` — exactly once.
+
 ### Smart State Detection
 
 Evaluate the preprocessor data above. Work through this state machine top-to-bottom — take the FIRST state that matches:
@@ -153,10 +160,9 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
      a. Capture current branch as `branch.base`
      b. Store `pwd` as `branch.main_worktree_path`
      c. Slugify objective → `feat/<display_id>-<slug>`
-     d. Compute feature ID: `FEAT-NNN` from `objectives_history.length + 1`. If board connected, prefer issue number as display_id.
-     e. Store `feat_id` and `feat_display_id` in config.json. Set `afk.commit_prefix` to `feat(<display_id>):`.
-     f. `git checkout -b feat/<display_id>-<slug>`
-     g. Create worktree dir, store paths in config
+     d. Assign objective identity per **Objective Identity (use existing or assign)** above: reuse `config.feat_id`/`feat_display_id`/`afk.commit_prefix` if already set (no recompute, no `objectives_history` append); only when `feat_id` is null compute `FEAT-NNN` from `objectives_history.length + 1`, set the id fields + `afk.commit_prefix`, and append to `objectives_history` once.
+     e. `git checkout -b feat/<display_id>-<slug>`
+     f. Create worktree dir, store paths in config
 6. Mode was already applied from flags by the **Apply Flags** step above; do not re-derive it here. (Loop counters were already reset by the mandatory **Reset Loop Counters** step above.)
 7. Delegate to the appropriate agent based on active task status:
    - READY/IN_PROGRESS → Implementer
@@ -210,10 +216,9 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
    a. Capture current branch as `branch.base`
    b. Store `pwd` as `branch.main_worktree_path`
    c. Slugify objective → `feat/<display_id>-<slug>`
-   d. Compute feature ID: `FEAT-NNN` from `objectives_history.length + 1`. If board connected, prefer issue number as display_id.
-   e. Store `feat_id` and `feat_display_id` in config.json. Set `afk.commit_prefix` to `feat(<display_id>):`.
-   f. `git checkout -b feat/<display_id>-<slug>`
-   g. Create worktree dir, store paths in config
+   d. Assign objective identity per **Objective Identity (use existing or assign)** above: reuse `config.feat_id`/`feat_display_id`/`afk.commit_prefix` if already set (no recompute, no `objectives_history` append); only when `feat_id` is null compute `FEAT-NNN` from `objectives_history.length + 1`, set the id fields + `afk.commit_prefix`, and append to `objectives_history` once.
+   e. `git checkout -b feat/<display_id>-<slug>`
+   f. Create worktree dir, store paths in config
 4. Tell user: "Regenerating documents from current context before planning..."
 5. Delegate to Doc Generator agent (regenerates all docs to reflect current objective and context)
 6. In HITL mode, pause for doc review.
@@ -234,10 +239,9 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
    a. Capture current branch as `branch.base`
    b. Store `pwd` as `branch.main_worktree_path`
    c. Slugify objective → `feat/<display_id>-<slug>`
-   d. Compute feature ID: `FEAT-NNN` from `objectives_history.length + 1`. If board connected, prefer issue number as display_id.
-   e. Store `feat_id` and `feat_display_id` in config.json. Set `afk.commit_prefix` to `feat(<display_id>):`.
-   f. `git checkout -b feat/<display_id>-<slug>`
-   g. Create worktree dir, store paths in config
+   d. Assign objective identity per **Objective Identity (use existing or assign)** above: reuse `config.feat_id`/`feat_display_id`/`afk.commit_prefix` if already set (no recompute, no `objectives_history` append); only when `feat_id` is null compute `FEAT-NNN` from `objectives_history.length + 1`, set the id fields + `afk.commit_prefix`, and append to `objectives_history` once.
+   e. `git checkout -b feat/<display_id>-<slug>`
+   f. Create worktree dir, store paths in config
 4. Tell user: "Discovery complete. Generating documents, then planning..."
 5. Delegate to Doc Generator agent. In HITL mode, pause for doc review.
 6. Delegate to Planner agent. In HITL mode, pause for plan review.
@@ -254,10 +258,9 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
    a. Capture current branch as `branch.base`
    b. Store `pwd` as `branch.main_worktree_path`
    c. Slugify objective → `feat/<display_id>-<slug>` (lowercase, non-alnum to hyphens, max 50 chars)
-   d. Compute feature ID: `FEAT-NNN` from `objectives_history.length + 1`. If board connected, prefer issue number as display_id.
-   e. Store `feat_id` and `feat_display_id` in config.json. Set `afk.commit_prefix` to `feat(<display_id>):`.
-   f. `git checkout -b feat/<display_id>-<slug>`
-   g. Create worktree dir at `../<project>-nazgul-worktrees/`, store path in config
+   d. Assign objective identity per **Objective Identity (use existing or assign)** above: reuse `config.feat_id`/`feat_display_id`/`afk.commit_prefix` if already set (no recompute, no `objectives_history` append); only when `feat_id` is null compute `FEAT-NNN` from `objectives_history.length + 1`, set the id fields + `afk.commit_prefix`, and append to `objectives_history` once.
+   e. `git checkout -b feat/<display_id>-<slug>`
+   f. Create worktree dir at `../<project>-nazgul-worktrees/`, store path in config
 3. Run Discovery agent (scans codebase, classifies project, generates reviewers)
 4. Classify Project: In HITL mode, confirm classification with user.
 5. Generate Documents: Delegate to Doc Generator. In HITL mode, pause for doc review.
@@ -326,7 +329,7 @@ Write the derived/selected objective to config.json:
   "objective_set_at": "[ISO 8601 timestamp]"
 }
 ```
-Append to `objectives_history` array.
+Do NOT append to `objectives_history` here — the single per-objective append is owned by the **Objective Identity (use existing or assign)** rule and happens at branch setup (only when `config.feat_id` is null). Appending here too would double-append.
 
 ---
 
@@ -356,8 +359,9 @@ When the user explicitly passes an objective string in `$ARGUMENTS`:
    - Create `nazgul/archive/[YYYY-MM-DD-HHMMSS]/` directory
    - Move: plan.md, tasks/, reviews/, docs/, checkpoints/ into archive
    - Keep: config.json (will be updated), context/ (still valid for same project)
-   - Update `objectives_history` in config.json with `completed_at` and `plan_archived_to`
-3. **Store new objective** in config.json: set `objective`, `objective_set_at`, append to `objectives_history`
+   - Update the PREVIOUS objective's `objectives_history` entry with `completed_at` and `plan_archived_to`
+   - **Clear the old objective identity so the new objective gets a fresh one:** set `branch.feature`, `feat_id`, and `feat_display_id` to null in config.json. (If you skip this, the idempotent Objective Identity rule would REUSE the previous objective's id for the new objective.)
+3. **Store new objective** in config.json: set `objective`, `objective_set_at`. Do NOT append to `objectives_history` here — the single per-objective append is owned by the **Objective Identity (use existing or assign)** rule and fires at branch setup now that `feat_id` was cleared in step 2.
 4. **Proceed with FRESH state pipeline** (discovery if stale → docs → plan → implement)
 
 ---
