@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.1] - 2026-06-19
+
+### Changed
+- **YOLO permission gate recommends `--permission-mode auto`.** `/nazgul:start`'s YOLO pre-flight now treats either `--permission-mode auto` (recommended — autonomous with a background safety classifier that still blocks dangerous actions like `curl|bash`, force-push to main, prod deploys) or `--dangerously-skip-permissions` (blunt bypass; sandbox only) as a valid non-prompting mode. The probe is unchanged (both modes skip routine prompts; there is no API to read the active mode), but the restart guidance now leads with `auto`. Per the current Claude Code docs, `--dangerously-skip-permissions` is still supported (≡ `--permission-mode bypassPermissions`) but `auto` is the recommended path for unattended runs.
+
 ## [2.0.0] - 2026-06-19
 
 ### Added
