@@ -140,8 +140,8 @@ Show the user:
   ```bash
   git rm -r --cached --ignore-unmatch nazgul/checkpoints nazgul/logs nazgul/sessions nazgul/archive \
     nazgul/.session_id nazgul/.compaction_count
-  git rm --cached --ignore-unmatch nazgul/reviews/*/test-failures.md nazgul/reviews/*/simplify-report.md \
-    nazgul/reviews/*/diff.patch nazgul/reviews/post-loop-simplify-report.md
+  git rm --cached --ignore-unmatch -- 'nazgul/reviews/*/test-failures.md' 'nazgul/reviews/*/simplify-report.md' \
+    'nazgul/reviews/*/diff.patch' nazgul/reviews/post-loop-simplify-report.md
   git commit -m "chore(nazgul): stop tracking ephemeral runtime state"
   ```
 - Next step: `/nazgul:start "your objective"`
