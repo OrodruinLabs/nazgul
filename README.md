@@ -1,9 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/nazgul-logo-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/nazgul-logo-light.png">
-    <img alt="Nazgul Framework" src="assets/nazgul-logo-light.png" width="400">
-  </picture>
+  <img alt="Nazgul — multi-agent autonomous development loop for Claude Code" src="https://raw.githubusercontent.com/OrodruinLabs/nazgul/main/assets/banner.png" width="100%">
 </p>
 
 <h3 align="center">NAZGUL</h3>
