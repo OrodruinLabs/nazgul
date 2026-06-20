@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="Nazgul — multi-agent autonomous development loop for Claude Code" src="https://raw.githubusercontent.com/OrodruinLabs/nazgul/main/assets/banner.png" width="100%">
+  <img alt="Nazgul — multi-agent autonomous development loop for Claude Code" src="assets/banner.png" width="100%">
 </p>
 
 <h3 align="center">NAZGUL</h3>
