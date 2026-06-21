@@ -9,6 +9,7 @@ CONFIG="$NAZGUL_DIR/config.json"
 PLAN="$NAZGUL_DIR/plan.md"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/task-utils.sh"
+source "$SCRIPT_DIR/lib/git-utils.sh"
 
 # If Nazgul not active, nothing to do
 if [ ! -f "$CONFIG" ]; then
@@ -69,8 +70,11 @@ if [ -d "$NAZGUL_DIR/tasks" ]; then
   done
 fi
 
-# Capture files modified this iteration as a JSON array
-FILES_MODIFIED_JSON=$(git -C "${CLAUDE_PROJECT_DIR:-$(pwd)}" diff --name-only HEAD~1 2>/dev/null | jq -R -s 'split("\n") | map(select(length > 0))' || echo "[]")
+# Capture files modified this iteration as a JSON array. Robust against a
+# single-commit repo (see scripts/lib/git-utils.sh) — a bare
+# `git diff … | jq … || echo "[]"` emits "[]\n[]" under pipefail when HEAD~1
+# is missing, breaking the downstream --argjson.
+FILES_MODIFIED_JSON=$(files_modified_json "${CLAUDE_PROJECT_DIR:-$(pwd)}")
 
 # Get git state
 GIT_BRANCH=$(git -C "${CLAUDE_PROJECT_DIR:-$(pwd)}" branch --show-current 2>/dev/null || echo "unknown")

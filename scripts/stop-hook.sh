@@ -13,6 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/task-utils.sh"
 source "$SCRIPT_DIR/lib/session-tracker.sh"
 source "$SCRIPT_DIR/lib/review-evidence.sh"
+source "$SCRIPT_DIR/lib/git-utils.sh"
 
 # If Nazgul not initialized, allow stop
 if [ ! -f "$CONFIG" ]; then
@@ -292,14 +293,11 @@ if [ -n "$LAST_CHECKPOINT_FILE" ]; then
   LAST_CHECKPOINT_SHA=$(jq -r '.git.last_commit_sha // ""' "$LAST_CHECKPOINT_FILE" 2>/dev/null || echo "")
 fi
 
-FILES_MODIFIED_JSON="[]"
-if git -C "$PROJECT_ROOT" rev-parse HEAD >/dev/null 2>&1; then
-  if [ -n "$LAST_CHECKPOINT_SHA" ] && git -C "$PROJECT_ROOT" cat-file -t "$LAST_CHECKPOINT_SHA" >/dev/null 2>&1; then
-    FILES_MODIFIED_JSON=$(git -C "$PROJECT_ROOT" diff --name-only "$LAST_CHECKPOINT_SHA" HEAD 2>/dev/null | jq -R -s 'split("\n") | map(select(length > 0))' || echo "[]")
-  else
-    FILES_MODIFIED_JSON=$(git -C "$PROJECT_ROOT" diff --name-only HEAD~1 HEAD 2>/dev/null | jq -R -s 'split("\n") | map(select(length > 0))' || echo "[]")
-  fi
-fi
+# Robust against a single-commit repo (no HEAD~1) and a missing/invalid base —
+# always yields exactly one JSON array (see scripts/lib/git-utils.sh). A bare
+# `git diff … | jq … || echo "[]"` here used to emit "[]\n[]" under pipefail and
+# abort the hook on a fresh greenfield repo.
+FILES_MODIFIED_JSON=$(files_modified_json "$PROJECT_ROOT" "$LAST_CHECKPOINT_SHA")
 
 # --- Context rot detection (3.4) ---
 COMPACTION_COUNT_FILE="$NAZGUL_DIR/.compaction_count"

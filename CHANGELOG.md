@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.3] - 2026-06-21
+
+### Fixed
+- **Stop/pre-compact hooks no longer abort on a single-commit (greenfield) repo.** `stop-hook.sh` and `pre-compact.sh` built the checkpoint's `files_modified` with `git diff … HEAD~1 … | jq … || echo "[]"`. In a fresh repo `HEAD~1` doesn't exist, so git exits non-zero; under `set -o pipefail` the `|| echo "[]"` fired *after* jq had already printed `[]`, producing `[]\n[]` (two JSON values) → `jq: invalid JSON text passed to --argjson` → the hook aborted before writing its checkpoint, and recurred on every Stop until the repo had ≥2 commits. Extracted a robust `files_modified_json` helper (`scripts/lib/git-utils.sh`) that resolves base→HEAD (valid base → `base..HEAD`; else `HEAD~1..HEAD`; else first-commit empty-tree diff; else `[]`) and always emits exactly one valid JSON array. Both hooks now use it. Added `tests/test-git-utils.sh` (incl. the single-commit regression).
+
 ## [2.0.2] - 2026-06-19
 
 ### Fixed
