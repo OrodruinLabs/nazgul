@@ -5,7 +5,7 @@ disable-model-invocation: true
 allowed-tools: []
 metadata:
   author: Jose Mejia
-  version: 2.0.2
+  version: 2.0.3
 ---
 
 # Nazgul Framework — Quick Reference
