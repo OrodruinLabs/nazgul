@@ -582,10 +582,21 @@ Write a brief summary to `nazgul/context/discovery-summary.md`:
 
 ## Step 8: Update config.json
 
-Update `nazgul/config.json` with:
+**Update via a `jq` merge, never a wholesale rewrite.** Read the existing config,
+set only the fields below, and write the result back atomically. Do NOT regenerate
+config.json from the template or overwrite the whole object — that would clobber
+runtime state owned by other parts of the pipeline (loop counters, `branch.*`,
+`afk.*`, `budget.*`, `paused`, `objectives_history`). In particular **preserve
+`schema_version`** (read it from the existing file and write it back unchanged —
+config migration owns that field; discovery must never reset or drop it).
+
+Apply the updates with a single `jq '… | … '` over the existing file into a temp
+file, then `mv` it into place (the same write-temp-then-move pattern the hooks use).
+
+Set these fields:
 - `project.language`, `project.framework`, `project.test_command`, `project.build_command`, `project.smoke_command`
 - `project.smoke_command` — a short, **self-terminating** command that exercises the built artifact (e.g. `node dist/index.js --version`, `python -c "import <pkg>"`, `./bin/app --healthcheck`). Prefer fast, side-effect-free invocations. Do NOT use a long-running command (e.g. a bare `npm start`/`npm run dev`) — it would hang the review gate. If no obvious runnable target exists (library/docs-only), leave it `null`; runtime verification is then skipped.
-- `reviewers` array listing all generated reviewer agent names
+- `agents.reviewers` array listing all generated reviewer agent names — this is the canonical location; downstream review gating reads `.agents.reviewers` (see `scripts/session-context.sh`, `scripts/lib/review-evidence.sh`, `skills/review`, `skills/status`). Do NOT write a root-level `reviewers` key.
 - `discovery.last_run` timestamp
 - `discovery.files_scanned` count
 - `project.infrastructure.cloud_provider` (detected or null)

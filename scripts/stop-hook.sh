@@ -41,9 +41,13 @@ IFS=$'\t' read -r ITERATION MAX_ITER MODE CONSEC_FAILURES MAX_CONSEC YOLO_MODE T
 # completion_promise is checked by the prompt-layer Stop hook, not this script
 
 # --- Pause flag check (for /nazgul:pause skill) ---
+# Pause is STICKY: once paused, every Stop allows the stop (exit 0) and the flag
+# stays true so the loop never silently self-resumes. The flag is cleared only by
+# /nazgul:start on an explicit resume (see skills/start "Reset Loop Counters").
+# An earlier version cleared paused here on the first Stop, so a pause never held
+# past one iteration.
 PAUSED=$(jq -r '.paused // false' "$CONFIG")
 if [ "$PAUSED" = "true" ]; then
-  jq '.paused = false' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
   exit 0
 fi
 

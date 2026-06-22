@@ -6,7 +6,7 @@ argument-hint: "[--local] [--force]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 2.0.3
+  version: 2.0.4
 ---
 
 # Nazgul Init

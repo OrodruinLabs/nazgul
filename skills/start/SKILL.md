@@ -5,7 +5,7 @@ argument-hint: "[\"objective\"] [--afk|--yolo|--hitl] [--max N] [--task-pr]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 2.0.3
+  version: 2.0.4
 ---
 
 # Nazgul Start
@@ -121,11 +121,14 @@ Determine the run mode:
 
 Loop counters are **per-run state, not objective state**. A stale counter left over from a previous run will silently brick the loop: the stop hook hits its max-iteration or consecutive-failure gate on the very first iteration and exits 0 (allows the stop) instead of re-dispatching — so the loop "never continues" even though READY tasks exist. The same applies to the cost-governor accumulator `budget.spent_usd` — a stale value would trip the budget ceiling immediately.
 
-**Before delegating to any agent, reset the counters.** The `[ -f ... ]` guard makes this a safe no-op in the NOT_INITIALIZED case (no `nazgul/config.json` yet), so the command is always safe to run regardless of ordering:
+Clearing `paused` here is also mandatory: the pause flag is **sticky** (the stop hook leaves it `true` on every Stop so a pause holds), so a previously-paused loop will exit 0 on its first iteration unless `/nazgul:start` clears it. Resuming the loop IS the explicit consent to un-pause.
+
+**Before delegating to any agent, reset the counters and clear the pause flag.** The `[ -f ... ]` guard makes this a safe no-op in the NOT_INITIALIZED case (no `nazgul/config.json` yet), so the command is always safe to run regardless of ordering:
 
 ```bash
 [ -f nazgul/config.json ] && \
   jq '.current_iteration = 0 | .safety.consecutive_failures = 0 | .safety._prev_done_count = 0
+      | .paused = false
       | .budget = (if (.budget | type) == "object" then .budget else {} end) | .budget.spent_usd = 0' \
     nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
 ```

@@ -73,6 +73,27 @@ assert_eq "v2 → v3 afk.branch_per_task removed" "$val" "false"
 val=$(jq -r '.afk | has("last_task_branch")' "$NAZGUL_DIR/config.json")
 assert_eq "v2 → v3 afk.last_task_branch removed" "$val" "false"
 
+# --- Test 3a2: v2 with a REAL afk.last_task_branch and NO branch section ---
+# Exercises the backfill path: migrate_2_to_3 copies afk.last_task_branch into the
+# new branch section (and still removes it from afk). Distinct from Test 3, whose
+# afk.last_task_branch is null.
+NAZGUL_DIR=$(setup_nazgul_dir "v2-afk-branch-backfill")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{
+  "schema_version": 2,
+  "mode": "afk",
+  "afk": {
+    "enabled": true,
+    "branch_per_task": true,
+    "last_task_branch": "task/TASK-009"
+  }
+}
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_json_field "v2 backfill → branch.last_task_branch copied from afk" "$NAZGUL_DIR/config.json" ".branch.last_task_branch" "task/TASK-009"
+val=$(jq -r '.afk | has("last_task_branch")' "$NAZGUL_DIR/config.json")
+assert_eq "v2 backfill → afk.last_task_branch still removed" "$val" "false"
+
 # --- Test 3b: v3 config → migrated to v4, webhooks + sparse_paths + fast_mode added ---
 NAZGUL_DIR=$(setup_nazgul_dir "v3-config")
 cat > "$NAZGUL_DIR/config.json" << 'EOF'
@@ -167,8 +188,12 @@ val=$(jq '.parallelism | has("wave_execution")' "$NAZGUL_DIR/config.json")
 assert_eq "v4 → v5 parallelism.wave_execution removed" "$val" "false"
 val=$(jq '.project | has("tools_verified")' "$NAZGUL_DIR/config.json")
 assert_eq "v4 → v5 project.tools_verified removed" "$val" "false"
-val=$(jq '.discovery | has("files_scanned")' "$NAZGUL_DIR/config.json")
-assert_eq "v4 → v5 discovery.files_scanned removed" "$val" "false"
+# Discovery-owned fields are NOW PRESERVED (regression: they were deleted as "unused").
+assert_json_field "v4 → v5 discovery.files_scanned PRESERVED" "$NAZGUL_DIR/config.json" ".discovery.files_scanned" "100"
+assert_json_field "v4 → v5 discovery.existing_docs_count PRESERVED" "$NAZGUL_DIR/config.json" ".discovery.existing_docs_count" "3"
+assert_json_field "v4 → v5 discovery.existing_docs_quality PRESERVED" "$NAZGUL_DIR/config.json" ".discovery.existing_docs_quality" "good"
+val=$(jq '.documents | has("existing")' "$NAZGUL_DIR/config.json")
+assert_eq "v4 → v5 documents.existing PRESERVED" "$val" "true"
 # Verify kept fields still present
 assert_json_field "v4 → v5 documents.dir preserved" "$NAZGUL_DIR/config.json" ".documents.dir" "nazgul/docs"
 assert_json_field "v4 → v5 discovery.context_dir preserved" "$NAZGUL_DIR/config.json" ".discovery.context_dir" "nazgul/context"
@@ -456,5 +481,56 @@ cat > "$NAZGUL_DIR/config.json" <<'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_json_field "v10 → v11 clamps unsupported default_mode string to null" "$NAZGUL_DIR/config.json" ".default_mode" "null"
+
+# --- Regression: unversioned MODERN config survives the full v1→v11 force-march ---
+# A config with no schema_version is treated as v1, so the whole chain runs over it.
+# Two historical bugs destroyed live state on this path:
+#   migrate_2_to_3 used to assign .branch wholesale → wiped an existing branch.
+#   migrate_4_to_5 used to delete documents.existing + discovery.files_scanned/
+#     existing_docs_count/existing_docs_quality as "unused" → destroyed discovery state.
+# This config carries a populated branch, discovery, and documents section; all of
+# it must survive intact (and reach schema_version 11).
+NAZGUL_DIR=$(setup_nazgul_dir "unversioned-modern")
+cat > "$NAZGUL_DIR/config.json" <<'EOF'
+{
+  "mode": "afk",
+  "branch": {
+    "feature": "feat/FEAT-007-payments",
+    "base": "main",
+    "main_worktree_path": "/repo",
+    "worktree_dir": "/repo/.worktrees",
+    "last_task_branch": "task/TASK-003",
+    "created_at": "2026-06-20T00:00:00Z",
+    "auto_pr_on_complete": true
+  },
+  "discovery": {
+    "files_scanned": 412,
+    "existing_docs_count": 7,
+    "existing_docs_quality": "PARTIAL",
+    "context_dir": "nazgul/context"
+  },
+  "documents": {
+    "dir": "nazgul/docs",
+    "existing": [
+      { "path": "README.md", "type": "readme", "relevance": "high" }
+    ]
+  }
+}
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_contains "unversioned modern → migrated" "$OUTPUT" "migrated"
+assert_json_field "unversioned modern → reaches v11" "$NAZGUL_DIR/config.json" ".schema_version" "11"
+# Branch survived migrate_2_to_3 (no wholesale clobber)
+assert_json_field "branch.feature survives full chain" "$NAZGUL_DIR/config.json" ".branch.feature" "feat/FEAT-007-payments"
+assert_json_field "branch.base survives full chain" "$NAZGUL_DIR/config.json" ".branch.base" "main"
+assert_json_field "branch.last_task_branch survives full chain" "$NAZGUL_DIR/config.json" ".branch.last_task_branch" "task/TASK-003"
+# v3→v4 still backfills the new field non-destructively
+assert_json_field "branch.sparse_paths backfilled" "$NAZGUL_DIR/config.json" ".branch.sparse_paths" "null"
+# Discovery-owned fields survived migrate_4_to_5 (not deleted as "unused")
+assert_json_field "discovery.files_scanned survives full chain" "$NAZGUL_DIR/config.json" ".discovery.files_scanned" "412"
+assert_json_field "discovery.existing_docs_count survives full chain" "$NAZGUL_DIR/config.json" ".discovery.existing_docs_count" "7"
+assert_json_field "discovery.existing_docs_quality survives full chain" "$NAZGUL_DIR/config.json" ".discovery.existing_docs_quality" "PARTIAL"
+assert_json_field "documents.existing survives full chain" "$NAZGUL_DIR/config.json" ".documents.existing | length" "1"
+assert_json_field "documents.existing[0].path survives full chain" "$NAZGUL_DIR/config.json" ".documents.existing[0].path" "README.md"
 
 report_results

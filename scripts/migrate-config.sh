@@ -75,24 +75,30 @@ migrate_2_to_3() {
   local last_branch
   last_branch=$(jq -r '.afk.last_task_branch // null' "$CONFIG")
 
-  # Remove branch_per_task and last_task_branch from afk, add branch section
+  # Fill the branch section NON-DESTRUCTIVELY. An earlier version assigned
+  # `.branch = { ... }` wholesale, which clobbered an already-populated branch
+  # section (e.g. a modern/unversioned config force-marched from v1: it has a
+  # live .branch.feature, but no .schema_version, so the chain runs from v1 and
+  # this step wiped it). Clamp a non-object .branch to {} first, then add each
+  # field only when absent so an existing branch (feature, base, worktree paths)
+  # survives. last_task_branch backfills from afk only when not already set.
   tmp=$(mktemp)
   jq --arg lb "$last_branch" '
     .schema_version = 3
-    | .branch = {
-        "feature": null,
-        "base": null,
-        "main_worktree_path": null,
-        "worktree_dir": null,
-        "last_task_branch": (if $lb == "null" then null else $lb end),
-        "created_at": null,
-        "auto_pr_on_complete": true
-      }
+    | .branch = ((if (.branch | type) == "object" then .branch else {} end)
+        | .feature = (if has("feature") then .feature else null end)
+        | .base = (if has("base") then .base else null end)
+        | .main_worktree_path = (if has("main_worktree_path") then .main_worktree_path else null end)
+        | .worktree_dir = (if has("worktree_dir") then .worktree_dir else null end)
+        | .last_task_branch = (if has("last_task_branch") then .last_task_branch
+                               elif $lb == "null" then null else $lb end)
+        | .created_at = (if has("created_at") then .created_at else null end)
+        | .auto_pr_on_complete = (if has("auto_pr_on_complete") then .auto_pr_on_complete else true end))
     | del(.afk.branch_per_task)
     | del(.afk.last_task_branch)
   ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
 
-  log_migration "Migrated 2 -> 3: moved branch fields from afk to branch section"
+  log_migration "Migrated 2 -> 3: filled branch section defaults non-destructively (preserves an existing branch)"
 }
 
 migrate_3_to_4() {
@@ -116,6 +122,12 @@ migrate_3_to_4() {
 migrate_4_to_5() {
   local tmp
   tmp=$(mktemp)
+  # NOTE: documents.existing and discovery.files_scanned/existing_docs_count/
+  # existing_docs_quality are NOT deleted here. They are live, discovery-owned
+  # fields (written by agents/discovery.md Step 8 and read downstream). An earlier
+  # version of this migration deleted them as "unused" and silently destroyed a
+  # project's discovery state on any v<5 → v5 force-march. Only genuinely retired
+  # fields are removed below.
   jq '.schema_version = 5
     | del(.install_mode)
     | del(.project_spec)
@@ -123,19 +135,15 @@ migrate_4_to_5() {
     | del(.documents.required)
     | del(.documents.generated)
     | del(.documents.approved)
-    | del(.documents.existing)
     | del(.context.compact_custom_instructions)
     | del(.parallelism.wave_execution)
     | del(.parallelism.require_settings)
     | del(.models.fast_mode_implementation)
     | del(.project.tools_verified)
     | del(.project.tools_installed)
-    | del(.discovery.files_scanned)
-    | del(.discovery.existing_docs_count)
-    | del(.discovery.existing_docs_quality)
   ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
 
-  log_migration "Migrated 4 -> 5: removed unused config fields"
+  log_migration "Migrated 4 -> 5: removed retired fields (preserved discovery-owned documents.existing + discovery.files_scanned/existing_docs_count/existing_docs_quality)"
 }
 
 migrate_5_to_6() {
