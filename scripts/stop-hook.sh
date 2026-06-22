@@ -346,10 +346,14 @@ if [ "$GRANULARITY" != "task" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
     AWAITING_AGGREGATE_REVIEW="true"
   fi
 
-  # If the active task came back IMPLEMENTED but the unit is NOT review-ready,
-  # it is a *parked* task — do not dispatch review for it. Re-select the next
-  # READY task so the implementer keeps building the rest of the unit.
-  if [ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && [ "$AGGREGATE_REVIEW_READY" != "true" ]; then
+  # If the active task is IMPLEMENTED (or a stale IN_REVIEW left over from a
+  # per-task run whose granularity was switched to group/feature mid-run) but the
+  # unit is NOT review-ready, it is a *parked* task — do not dispatch review for it.
+  # Re-select the next READY task so the implementer keeps building the rest of the
+  # unit. The genuine aggregate-review-in-progress case (every unit task IN_REVIEW)
+  # is already excluded here: it sets AGGREGATE_REVIEW_READY=true above.
+  if { [ "$ACTIVE_STATUS" = "IMPLEMENTED" ] || [ "$ACTIVE_STATUS" = "IN_REVIEW" ]; } \
+     && [ "$AGGREGATE_REVIEW_READY" != "true" ]; then
     ACTIVE_TASK=""
     ACTIVE_STATUS=""
     for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do

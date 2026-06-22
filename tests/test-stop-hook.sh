@@ -626,6 +626,24 @@ assert_contains "group mixed: group 1 ready for review" "$HOOK_OUTPUT" "group 1"
 assert_contains "group mixed: aggregate dispatch" "$HOOK_OUTPUT" "AGGREGATE review unit"
 teardown_temp_dir
 
+# --- Granularity group, STALE IN_REVIEW from a mid-run switch: treat as parked ---
+# A task reached IN_REVIEW under per-task mode, then granularity was switched to
+# group mid-run. The unit is NOT review-ready (TASK-002 still READY), so the stale
+# IN_REVIEW (the active task, selected first) must be treated as parked: keep
+# implementing the rest of the unit, do NOT re-dispatch a per-task review for it.
+# Regression for the PR #36 Copilot review.
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.review_gate.granularity = "group"'
+create_plan
+create_task_file "TASK-001" "IN_REVIEW";  set_task_group "TASK-001" 1
+create_task_file "TASK-002" "READY";       set_task_group "TASK-002" 1
+run_hook
+assert_exit_code "group stale IN_REVIEW: exit 2" "$HOOK_EC" 2
+assert_contains "group stale IN_REVIEW: awaiting aggregate review" "$HOOK_OUTPUT" "AWAITING AGGREGATE REVIEW"
+assert_contains "group stale IN_REVIEW: keep implementing TASK-002" "$HOOK_OUTPUT" "Spawn implementer agent (nazgul:implementer) for TASK-002"
+assert_not_contains "group stale IN_REVIEW: NO per-task review for TASK-001" "$HOOK_OUTPUT" "Spawn review-gate agent (nazgul:review-gate) for TASK-001"
+teardown_temp_dir
+
 # --- Granularity feature, INCOMPLETE: park IMPLEMENTED across groups, keep building ---
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
 create_config '.review_gate.granularity = "feature"'
