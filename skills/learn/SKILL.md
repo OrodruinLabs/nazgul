@@ -3,7 +3,7 @@ name: nazgul:learn
 description: Distill recurring mistakes into numbered, human-approved Learned Rules. Runs the learner agent, then presents each candidate for approve/edit/reject. Supports --dry-run and --retire.
 context: fork
 argument-hint: "[--dry-run] [--retire]"
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, ToolSearch
 metadata:
   author: Jose Mejia
   version: 2.1.0
@@ -27,6 +27,7 @@ $ARGUMENTS
 ## Instructions
 
 ### Pre-flight
+0. Load the `AskUserQuestion` tool (deferred by default): run `ToolSearch` with query `select:AskUserQuestion`. Do this BEFORE any step that uses `AskUserQuestion` — the interactive approve/edit/reject prompts (Step 2) and the retirement prompt (Step R) both require it.
 1. If `nazgul/config.json` is missing: "Nazgul not initialized. Run `/nazgul:init` first." and STOP.
 2. If `.learning.enabled` is not `true`: "Learning is disabled (`learning.enabled=false`). Enable it in nazgul/config.json to use this." and STOP.
 3. Parse `$ARGUMENTS` for flags:
@@ -44,7 +45,10 @@ Output per references/ui-brand.md:
 ### Step R: Retirement review (only if --retire)
 1. Read the registry (`learning.rules_doc`). List ACTIVE rules whose **Hits** is 0,
    plus — if active-rule count exceeds `learning.max_active_rules` — the lowest-Hits rules.
-2. For each, show LR-NNN + title + Hits + Added, and ask: retire? (y/n).
+2. For each, show LR-NNN + title + Hits + Added, then use `AskUserQuestion` (header: "Retire?", question: "Retire LR-NNN — <title>? (Hits: <n>)") with options:
+   - "Keep" — "Leave this rule active"
+   - "Retire" — "Mark it retired (kept in the file, never deleted or renumbered)"
+   Batch up to 4 rules per `AskUserQuestion` call (one question each) to avoid one prompt per rule.
 3. On yes: edit that rule's `- **Status**:` line to `retired` (keep the rule in the
    file; never delete, never renumber).
 4. Summarize how many were retired. STOP (do not distill in --retire mode).
@@ -60,7 +64,12 @@ say "No recurring mistakes met the threshold — nothing to propose." and STOP.
 
 For EACH candidate, one at a time:
 1. Display: title, Scope-Agents, Scope-Globs, Confidence, Evidence, Dedup, and the body.
-2. Ask: **approve / edit / reject**.
+2. Use `AskUserQuestion` (header: "LR candidate", question: "Approve this Learned Rule — <title>?") with options:
+   - "Approve" — "Add this rule to the registry as-is"
+   - "Edit" — "Revise the title/scope/body, then add it"
+   - "Reject" — "Skip it and record the decision so it isn't re-proposed"
+
+   The built-in "Other" free-text response is treated as **edit** guidance (the user's revision instructions). Then act on the choice:
    - **approve**:
      - Get the next id: `${CLAUDE_PLUGIN_ROOT}/scripts/lib/learned-rules.sh next-id` (uses the default
        registry path, or pass `--doc <rules_doc>` if config overrides it).
