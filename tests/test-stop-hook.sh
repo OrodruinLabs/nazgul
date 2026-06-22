@@ -553,4 +553,149 @@ else
 fi
 teardown_temp_dir
 
+# === REVIEW GRANULARITY (review_gate.granularity) ===
+
+# --- Granularity task (default): IMPLEMENTED task dispatches per-task review ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config   # default template → review_gate.granularity = "task"
+create_plan
+create_task_file "TASK-001" "IMPLEMENTED"
+create_task_file_with_commits "TASK-001" "IMPLEMENTED" "abc1234"
+run_hook
+assert_exit_code "task granularity: exit 2" "$HOOK_EC" 2
+assert_contains "task granularity: per-task review-gate dispatch" "$HOOK_OUTPUT" "Spawn review-gate agent (nazgul:review-gate) for TASK-001"
+assert_contains "task granularity: shown in banner" "$HOOK_OUTPUT" "Review granularity: task"
+teardown_temp_dir
+
+# --- Granularity group, unit INCOMPLETE: park IMPLEMENTED, keep implementing ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.review_gate.granularity = "group"'
+create_plan
+create_task_file "TASK-001" "IMPLEMENTED"; set_task_group "TASK-001" 1
+create_task_file "TASK-002" "READY";       set_task_group "TASK-002" 1
+run_hook
+assert_exit_code "group granularity (incomplete): exit 2" "$HOOK_EC" 2
+assert_contains "group incomplete: awaiting aggregate review marker" "$HOOK_OUTPUT" "AWAITING AGGREGATE REVIEW"
+assert_contains "group incomplete: parked task surfaced" "$HOOK_OUTPUT" "TASK-001"
+assert_contains "group incomplete: keep implementing next task" "$HOOK_OUTPUT" "Spawn implementer agent (nazgul:implementer) for TASK-002"
+assert_not_contains "group incomplete: NO per-task review dispatched" "$HOOK_OUTPUT" "Spawn review-gate agent (nazgul:review-gate) for TASK-001"
+teardown_temp_dir
+
+# --- Granularity group, unit COMPLETE: dispatch ONE aggregate review ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.review_gate.granularity = "group"'
+create_plan
+create_task_file "TASK-001" "IMPLEMENTED"; set_task_group "TASK-001" 1
+create_task_file "TASK-002" "IMPLEMENTED"; set_task_group "TASK-002" 1
+run_hook
+assert_exit_code "group granularity (complete): exit 2" "$HOOK_EC" 2
+assert_contains "group complete: aggregate review ready" "$HOOK_OUTPUT" "AGGREGATE REVIEW READY"
+assert_contains "group complete: review unit scope group 1" "$HOOK_OUTPUT" "group 1"
+assert_contains "group complete: aggregate review-gate dispatched" "$HOOK_OUTPUT" "AGGREGATE review unit"
+assert_contains "group complete: covers both tasks" "$HOOK_OUTPUT" "TASK-001"
+assert_contains "group complete: covers both tasks (002)" "$HOOK_OUTPUT" "TASK-002"
+teardown_temp_dir
+
+# --- Granularity group, ORDERING: earlier group done, review the next group only ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+# Configure a reviewer so the DONE task's review evidence validates (otherwise the
+# Layer-2 enforcement net would reset DONE → IMPLEMENTED and skew the scenario).
+create_config '.review_gate.granularity = "group"' '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "DONE";        set_task_group "TASK-001" 1
+create_review_dir "TASK-001"
+create_task_file "TASK-002" "IMPLEMENTED";  set_task_group "TASK-002" 2
+create_task_file "TASK-003" "IMPLEMENTED";  set_task_group "TASK-003" 2
+run_hook
+assert_exit_code "group ordering: exit 2" "$HOOK_EC" 2
+assert_contains "group ordering: reviews group 2" "$HOOK_OUTPUT" "group 2"
+assert_contains "group ordering: covers TASK-002" "$HOOK_OUTPUT" "TASK-002"
+assert_contains "group ordering: covers TASK-003" "$HOOK_OUTPUT" "TASK-003"
+teardown_temp_dir
+
+# --- Granularity group, mixed groups: only current group counts toward readiness ---
+# Group 1 fully IMPLEMENTED, group 2 still READY → review group 1 now (not blocked by group 2).
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.review_gate.granularity = "group"'
+create_plan
+create_task_file "TASK-001" "IMPLEMENTED"; set_task_group "TASK-001" 1
+create_task_file "TASK-002" "READY";        set_task_group "TASK-002" 2
+run_hook
+assert_exit_code "group mixed: exit 2" "$HOOK_EC" 2
+assert_contains "group mixed: group 1 ready for review" "$HOOK_OUTPUT" "group 1"
+assert_contains "group mixed: aggregate dispatch" "$HOOK_OUTPUT" "AGGREGATE review unit"
+teardown_temp_dir
+
+# --- Granularity group, STALE IN_REVIEW from a mid-run switch: treat as parked ---
+# A task reached IN_REVIEW under per-task mode, then granularity was switched to
+# group mid-run. The unit is NOT review-ready (TASK-002 still READY), so the stale
+# IN_REVIEW (the active task, selected first) must be treated as parked: keep
+# implementing the rest of the unit, do NOT re-dispatch a per-task review for it.
+# Regression for the PR #36 Copilot review.
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.review_gate.granularity = "group"'
+create_plan
+create_task_file "TASK-001" "IN_REVIEW";  set_task_group "TASK-001" 1
+create_task_file "TASK-002" "READY";       set_task_group "TASK-002" 1
+run_hook
+assert_exit_code "group stale IN_REVIEW: exit 2" "$HOOK_EC" 2
+assert_contains "group stale IN_REVIEW: awaiting aggregate review" "$HOOK_OUTPUT" "AWAITING AGGREGATE REVIEW"
+assert_contains "group stale IN_REVIEW: keep implementing TASK-002" "$HOOK_OUTPUT" "Spawn implementer agent (nazgul:implementer) for TASK-002"
+assert_not_contains "group stale IN_REVIEW: NO per-task review for TASK-001" "$HOOK_OUTPUT" "Spawn review-gate agent (nazgul:review-gate) for TASK-001"
+teardown_temp_dir
+
+# --- Granularity group, BLOCKED unit: parked IMPLEMENTED must NOT trigger per-task review ---
+# The unit is incomplete because a sibling is BLOCKED (nothing left to implement). The
+# blocked-unit fallback surfaces the parked IMPLEMENTED task as the active task for
+# recovery, but per-task review dispatch is gated to task mode — so only the awaiting
+# marker shows, never a single-task review. Regression for the PR #36 CodeRabbit review.
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.review_gate.granularity = "group"'
+create_plan
+create_task_file "TASK-001" "IMPLEMENTED"; set_task_group "TASK-001" 1
+create_task_file "TASK-002" "BLOCKED";      set_task_group "TASK-002" 1
+run_hook
+assert_exit_code "group blocked unit: exit 2" "$HOOK_EC" 2
+assert_contains "group blocked unit: awaiting aggregate review" "$HOOK_OUTPUT" "AWAITING AGGREGATE REVIEW"
+assert_not_contains "group blocked unit: NO per-task review for TASK-001" "$HOOK_OUTPUT" "Spawn review-gate agent (nazgul:review-gate) for TASK-001"
+teardown_temp_dir
+
+# --- Granularity feature, INCOMPLETE: park IMPLEMENTED across groups, keep building ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.review_gate.granularity = "feature"'
+create_plan
+create_task_file "TASK-001" "IMPLEMENTED"; set_task_group "TASK-001" 1
+create_task_file "TASK-002" "READY";        set_task_group "TASK-002" 2
+run_hook
+assert_exit_code "feature granularity (incomplete): exit 2" "$HOOK_EC" 2
+assert_contains "feature incomplete: awaiting aggregate review" "$HOOK_OUTPUT" "AWAITING AGGREGATE REVIEW"
+assert_contains "feature incomplete: keep implementing" "$HOOK_OUTPUT" "Spawn implementer agent (nazgul:implementer) for TASK-002"
+assert_not_contains "feature incomplete: NO per-task review" "$HOOK_OUTPUT" "Spawn review-gate agent (nazgul:review-gate) for TASK-001"
+teardown_temp_dir
+
+# --- Granularity feature, COMPLETE: ONE review over base..HEAD ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.review_gate.granularity = "feature"'
+create_plan
+create_task_file "TASK-001" "IMPLEMENTED"; set_task_group "TASK-001" 1
+create_task_file "TASK-002" "IMPLEMENTED"; set_task_group "TASK-002" 2
+create_task_file "TASK-003" "IMPLEMENTED"; set_task_group "TASK-003" 3
+run_hook
+assert_exit_code "feature granularity (complete): exit 2" "$HOOK_EC" 2
+assert_contains "feature complete: aggregate review ready" "$HOOK_OUTPUT" "AGGREGATE REVIEW READY"
+assert_contains "feature complete: scope feature" "$HOOK_OUTPUT" "feature"
+assert_contains "feature complete: base..HEAD scope" "$HOOK_OUTPUT" "base..HEAD"
+assert_contains "feature complete: covers all tasks" "$HOOK_OUTPUT" "TASK-003"
+teardown_temp_dir
+
+# --- Legacy/absent granularity falls back to task behavior ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config 'del(.review_gate.granularity)'
+create_plan
+create_task_file "TASK-001" "IMPLEMENTED"
+run_hook
+assert_exit_code "absent granularity: exit 2" "$HOOK_EC" 2
+assert_contains "absent granularity: defaults to task review" "$HOOK_OUTPUT" "Spawn review-gate agent (nazgul:review-gate) for TASK-001"
+teardown_temp_dir
+
 report_results

@@ -22,10 +22,28 @@ Format ALL user-facing output per `references/ui-brand.md`:
 ## Context Reading (MANDATORY — Do This First)
 
 1. Read `nazgul/config.json -> review_gate.confidence_threshold` (default: 80)
-2. Read `nazgul/config.json -> mode` (HITL or AFK — affects contradiction resolution)
-3. Read `nazgul/config.json -> agents.reviewers` for the expected reviewer list
-4. Read `nazgul/context/style-conventions.md` for pattern references (to enrich fix suggestions)
-5. Read `nazgul/context/architecture-map.md` for correct implementation references
+2. Read `nazgul/config.json -> review_gate.granularity` (default: `task`) — determines whether you consolidate one task's review or an aggregate group/feature review
+3. Read `nazgul/config.json -> mode` (HITL or AFK — affects contradiction resolution)
+4. Read `nazgul/config.json -> agents.reviewers` for the expected reviewer list
+5. Read `nazgul/context/style-conventions.md` for pattern references (to enrich fix suggestions)
+6. Read `nazgul/context/architecture-map.md` for correct implementation references
+
+## Review Unit & Task Attribution (granularity)
+
+The review unit depends on `review_gate.granularity`:
+- **`task`** (default): you consolidate ONE task's reviews from `nazgul/reviews/[TASK-ID]/`. No attribution needed — every finding belongs to that task.
+- **`group` / `feature`**: you consolidate an AGGREGATE review of MANY tasks from `nazgul/reviews/[UNIT-ID]/` (`GROUP-<n>` or `FEATURE-<feat_id>`). The reviewers reviewed the unit's combined diff. **You MUST attribute each finding back to the owning task** so a CHANGES_REQUESTED re-opens only the implicated tasks — not the whole group/feature.
+
+### How to attribute a finding to a task (group/feature mode)
+
+review-gate passes you a **task→file-scope map** for the unit (each task's `Files modified` from its manifest). For every finding:
+1. Take the finding's `File(s)` (e.g. `src/api/users.ts:120`).
+2. Match that file path against each task's file scope. The owning task is the one whose scope contains the file.
+3. If a file maps to exactly one task → tag the finding `Owner: TASK-NNN`.
+4. If a file is touched by more than one task (overlap) or matches none → tag `Owner: AMBIGUOUS` and list the candidate task IDs; review-gate will treat ambiguous findings conservatively (re-open all candidates).
+5. A finding with multiple files spanning multiple tasks → tag every owning task; all of them re-open.
+
+The set of distinct `Owner` task IDs across all BLOCKING findings is the set of tasks review-gate re-opens. Tasks with zero blocking findings stay IMPLEMENTED (parked).
 
 ## Completeness Check
 
@@ -140,8 +158,9 @@ Classify conservatively — when in doubt, mark as ASK. Security findings are AL
 7. Apply confidence threshold — classify each finding as BLOCKING or NON-BLOCKING
 8. Prioritize: security > correctness > performance > style (within each: highest confidence first)
 9. Enrich with pattern references — find correct implementations in the codebase for each fix
-10. Write consolidated feedback to `nazgul/reviews/[TASK-ID]/consolidated-feedback.md`
-11. Write summary statistics at the top of the file
+9a. **(group/feature mode only)** Attribute each finding to its owning task via the task→file-scope map (see "Review Unit & Task Attribution"). Tag every finding with `Owner: TASK-NNN` (or `AMBIGUOUS` + candidates).
+10. Write consolidated feedback to `nazgul/reviews/[UNIT-ID]/consolidated-feedback.md` (`UNIT-ID` is the `TASK-ID` in task mode, or `GROUP-<n>`/`FEATURE-<feat_id>` in group/feature mode)
+11. Write summary statistics at the top of the file. **(group/feature mode)** Include a `## Tasks To Re-open` line listing the distinct owners of all BLOCKING findings — this is the authoritative re-open set review-gate acts on.
 
 ## Output Format
 
@@ -157,11 +176,18 @@ Write to `nazgul/reviews/[TASK-ID]/consolidated-feedback.md`:
 - **Non-blocking**: [N] concerns for awareness
 - **Reviewers**: [N]/[expected] submitted
 - **Missing reviewers**: [list or "none"]
+- **Granularity**: task | group | feature  (group/feature only)
+
+## Tasks To Re-open
+<!-- group/feature mode only — the distinct Owner task IDs of all blocking findings.
+     review-gate re-opens exactly these tasks; all other unit tasks stay IMPLEMENTED. -->
+- TASK-003, TASK-007
 
 ## Blocking Issues (MUST FIX)
 
 ### 1. [Issue title] (Security)
 - **Severity**: HIGH | **Confidence**: 95/100
+- **Owner**: TASK-003   <!-- group/feature mode: owning task by file scope -->
 - **Flagged by**: security-reviewer, code-reviewer
 - **File(s)**: `src/auth/login.ts:45-52`
 - **Issue**: [description]

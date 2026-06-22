@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "11"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "12"
 assert_json_field "has .default_mode" "$CONFIG" ".default_mode" "null"
 assert_json_field "project has smoke_command" "$CONFIG" ".project.smoke_command" "null"
 assert_json_field "has .budget.enabled" "$CONFIG" ".budget.enabled" "false"
@@ -38,6 +38,8 @@ assert_eq "has .agents.reviewers array" "$val" "array"
 
 # Nested: .review_gate.confidence_threshold
 assert_json_field "has .review_gate.confidence_threshold" "$CONFIG" ".review_gate.confidence_threshold" "80"
+# Nested: .review_gate.granularity (default "task")
+assert_json_field "has .review_gate.granularity" "$CONFIG" ".review_gate.granularity" "task"
 
 # Nested: .guards
 val=$(jq -r '.guards | type' "$CONFIG")
