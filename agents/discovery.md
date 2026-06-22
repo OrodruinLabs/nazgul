@@ -596,7 +596,7 @@ file, then `mv` it into place (the same write-temp-then-move pattern the hooks u
 Set these fields:
 - `project.language`, `project.framework`, `project.test_command`, `project.build_command`, `project.smoke_command`
 - `project.smoke_command` — a short, **self-terminating** command that exercises the built artifact (e.g. `node dist/index.js --version`, `python -c "import <pkg>"`, `./bin/app --healthcheck`). Prefer fast, side-effect-free invocations. Do NOT use a long-running command (e.g. a bare `npm start`/`npm run dev`) — it would hang the review gate. If no obvious runnable target exists (library/docs-only), leave it `null`; runtime verification is then skipped.
-- `reviewers` array listing all generated reviewer agent names
+- `agents.reviewers` array listing all generated reviewer agent names — this is the canonical location; downstream review gating reads `.agents.reviewers` (see `scripts/session-context.sh`, `scripts/lib/review-evidence.sh`, `skills/review`, `skills/status`). Do NOT write a root-level `reviewers` key.
 - `discovery.last_run` timestamp
 - `discovery.files_scanned` count
 - `project.infrastructure.cloud_provider` (detected or null)
