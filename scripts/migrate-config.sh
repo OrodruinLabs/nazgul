@@ -249,6 +249,22 @@ migrate_10_to_11() {
   log_migration "v10→v11: Added default_mode (null = prompt for run mode)"
 }
 
+migrate_11_to_12() {
+  local tmp
+  tmp=$(mktemp)
+  # Add review_gate.granularity ("task" = current per-task review behavior).
+  # ADDITIVE ONLY: set it to "task" only when absent — an existing "group"/
+  # "feature" (or any hand-set) value MUST survive untouched. Clamp a non-object
+  # .review_gate back to {} first so the field assignment can't error and abort
+  # the migration (same type-guard pattern as migrate_9_to_10/migrate_10_to_11).
+  jq '
+    .review_gate = ((if (.review_gate | type) == "object" then .review_gate else {} end)
+      | .granularity = (if has("granularity") then .granularity else "task" end))
+    | .schema_version = 12
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v11→v12: Added review_gate.granularity (default \"task\")"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"

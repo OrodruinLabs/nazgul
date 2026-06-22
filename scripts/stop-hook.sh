@@ -40,6 +40,14 @@ CONFIG_STATE=$(jq -r '[
 IFS=$'\t' read -r ITERATION MAX_ITER MODE CONSEC_FAILURES MAX_CONSEC YOLO_MODE TASK_PR_MODE <<< "$CONFIG_STATE"
 # completion_promise is checked by the prompt-layer Stop hook, not this script
 
+# Review granularity (review_gate.granularity): "task" (default — review board
+# fires per task at IMPLEMENTED), "group" (one review per parallel wave/group),
+# or "feature" (one review over base..HEAD once ALL tasks are IMPLEMENTED).
+# Any unrecognized/legacy/absent value falls back to "task" so existing projects
+# and hand-edited configs are unchanged.
+GRANULARITY=$(jq -r '.review_gate.granularity // "task"' "$CONFIG" 2>/dev/null || echo "task")
+case "$GRANULARITY" in task|group|feature) ;; *) GRANULARITY="task" ;; esac
+
 # --- Pause flag check (for /nazgul:pause skill) ---
 # Pause is STICKY: once paused, every Stop allows the stop (exit 0) and the flag
 # stays true so the loop never silently self-resumes. The flag is cleared only by
@@ -268,6 +276,102 @@ if [ -z "$ACTIVE_TASK" ]; then
   done
 fi
 
+# --- REVIEW GRANULARITY: aggregate-review gating (group / feature) ---------------
+# In "task" mode this whole block is a no-op: review-gate dispatches per task at
+# IMPLEMENTED (the existing CONTINUE_MSG dispatch below).
+#
+# In "group"/"feature" mode, tasks are advanced to IMPLEMENTED and *parked* until
+# the whole review unit is built, then ONE review board pass covers the combined
+# diff. We compute:
+#   AGGREGATE_REVIEW_READY  — the unit is fully IMPLEMENTED and is the next thing
+#                             to review (no earlier unit still pending work).
+#   AGGREGATE_REVIEW_SCOPE  — "group <N>" or "feature" (for messaging / scope).
+#   AGGREGATE_REVIEW_TASKS  — space-separated task IDs in the unit awaiting review.
+# When the active task is a *parked* IMPLEMENTED task but its unit is NOT yet
+# complete, we re-select the next READY task so the loop keeps implementing
+# instead of prematurely dispatching a single-task review.
+AGGREGATE_REVIEW_READY="false"
+AGGREGATE_REVIEW_SCOPE=""
+AGGREGATE_REVIEW_TASKS=""
+AWAITING_AGGREGATE_REVIEW="false"
+if [ "$GRANULARITY" != "task" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
+  # The "active group" is the group of the lowest-numbered task that is not yet
+  # DONE (group mode reviews one wave/group at a time, in order). In feature mode
+  # the unit is ALL non-DONE tasks regardless of group.
+  ACTIVE_GROUP=""
+  for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
+    [ -f "$task_file" ] || continue
+    STATUS=$(get_task_status "$task_file")
+    [ "$STATUS" = "DONE" ] && continue
+    ACTIVE_GROUP=$(get_task_field "$task_file" "Group" "$(get_task_field "$task_file" "Wave" "1")")
+    break
+  done
+
+  # Walk the review unit: in group mode, only tasks whose Group matches ACTIVE_GROUP;
+  # in feature mode, every non-DONE task. The unit is "review-ready" when it has at
+  # least one task and every task in it is IMPLEMENTED (none still READY/IN_PROGRESS/
+  # CHANGES_REQUESTED/BLOCKED). A BLOCKED task holds the whole unit back.
+  UNIT_TOTAL=0
+  UNIT_IMPLEMENTED=0
+  UNIT_BLOCKED=0
+  for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
+    [ -f "$task_file" ] || continue
+    STATUS=$(get_task_status "$task_file")
+    [ "$STATUS" = "DONE" ] && continue
+    if [ "$GRANULARITY" = "group" ]; then
+      TGROUP=$(get_task_field "$task_file" "Group" "$(get_task_field "$task_file" "Wave" "1")")
+      [ "$TGROUP" = "$ACTIVE_GROUP" ] || continue
+    fi
+    UNIT_TOTAL=$((UNIT_TOTAL + 1))
+    case "$STATUS" in
+      IMPLEMENTED|IN_REVIEW)
+        UNIT_IMPLEMENTED=$((UNIT_IMPLEMENTED + 1))
+        AGGREGATE_REVIEW_TASKS="${AGGREGATE_REVIEW_TASKS}$(basename "$task_file" .md) "
+        ;;
+      BLOCKED) UNIT_BLOCKED=$((UNIT_BLOCKED + 1)) ;;
+    esac
+  done
+  AGGREGATE_REVIEW_TASKS=$(printf '%s' "$AGGREGATE_REVIEW_TASKS" | sed 's/[[:space:]]*$//')
+
+  if [ "$UNIT_TOTAL" -gt 0 ] && [ "$UNIT_IMPLEMENTED" -eq "$UNIT_TOTAL" ]; then
+    AGGREGATE_REVIEW_READY="true"
+    if [ "$GRANULARITY" = "group" ]; then
+      AGGREGATE_REVIEW_SCOPE="group ${ACTIVE_GROUP}"
+    else
+      AGGREGATE_REVIEW_SCOPE="feature"
+    fi
+  elif [ "$UNIT_IMPLEMENTED" -gt 0 ]; then
+    # Some tasks in the unit are IMPLEMENTED-but-parked, but the unit is not yet
+    # complete — record the "awaiting aggregate review" condition for recovery.
+    AWAITING_AGGREGATE_REVIEW="true"
+  fi
+
+  # If the active task came back IMPLEMENTED but the unit is NOT review-ready,
+  # it is a *parked* task — do not dispatch review for it. Re-select the next
+  # READY task so the implementer keeps building the rest of the unit.
+  if [ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && [ "$AGGREGATE_REVIEW_READY" != "true" ]; then
+    ACTIVE_TASK=""
+    ACTIVE_STATUS=""
+    for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
+      [ -f "$task_file" ] || continue
+      STATUS=$(get_task_status "$task_file")
+      if [ "$STATUS" = "CHANGES_REQUESTED" ] || [ "$STATUS" = "READY" ] || [ "$STATUS" = "IN_PROGRESS" ]; then
+        ACTIVE_TASK=$(basename "$task_file" .md)
+        ACTIVE_STATUS="$STATUS"
+        ACTIVE_RETRY=$(grep -m1 '^\- \*\*Retry count\*\*:' "$task_file" 2>/dev/null | sed 's|.*: \([0-9]*\).*|\1|' || echo "0")
+        break
+      fi
+    done
+    # No more implementable tasks but unit still not complete (e.g. everything left
+    # is BLOCKED) — surface the first parked IMPLEMENTED task so recovery shows the
+    # awaiting-review state rather than a phantom "no active task".
+    if [ -z "$ACTIVE_TASK" ] && [ -n "$AGGREGATE_REVIEW_TASKS" ]; then
+      ACTIVE_TASK=$(printf '%s' "$AGGREGATE_REVIEW_TASKS" | awk '{print $1}')
+      ACTIVE_STATUS="IMPLEMENTED"
+    fi
+  fi
+fi
+
 # Get git state (handle repos with no commits)
 GIT_BRANCH=$(git -C "$PROJECT_ROOT" branch --show-current 2>/dev/null || echo "unknown")
 if git -C "$PROJECT_ROOT" rev-parse HEAD >/dev/null 2>&1; then
@@ -370,6 +474,11 @@ jq -n \
   --arg recovery "$RECOVERY_INSTR" \
   --argjson est_iteration_usd "$BUDGET_EST" \
   --argjson budget_spent_usd "$BUDGET_SPENT" \
+  --arg granularity "$GRANULARITY" \
+  --arg agg_scope "$AGGREGATE_REVIEW_SCOPE" \
+  --arg agg_tasks "$AGGREGATE_REVIEW_TASKS" \
+  --argjson agg_ready "$AGGREGATE_REVIEW_READY" \
+  --argjson agg_awaiting "$AWAITING_AGGREGATE_REVIEW" \
   '{
     iteration: $iteration,
     timestamp: $timestamp,
@@ -411,6 +520,13 @@ jq -n \
       last_review_task: null,
       last_review_verdict: null
     },
+    review_unit: {
+      granularity: $granularity,
+      scope: (if $agg_scope == "" then null else $agg_scope end),
+      tasks_awaiting_review: (if $agg_tasks == "" then [] else ($agg_tasks | split(" ")) end),
+      aggregate_review_ready: $agg_ready,
+      awaiting_aggregate_review: $agg_awaiting
+    },
     context_health: {
       compactions_this_session: $compactions,
       iterations_since_last_compaction: $iters_since_compact,
@@ -424,6 +540,12 @@ if [ -f "$PLAN" ]; then
   NEXT_ACTION_TEXT="Continue work on ${ACTIVE_TASK:-next READY task}"
   if [ -n "$ACTIVE_TASK" ]; then
     NEXT_ACTION_TEXT="Read nazgul/tasks/${ACTIVE_TASK}.md and continue based on status ${ACTIVE_STATUS}"
+  fi
+  # Granularity-aware recovery hints (survive compaction via plan.md Next Action).
+  if [ "$GRANULARITY" != "task" ] && [ "$AGGREGATE_REVIEW_READY" = "true" ]; then
+    NEXT_ACTION_TEXT="AGGREGATE REVIEW (${GRANULARITY}) ready for [${AGGREGATE_REVIEW_SCOPE}] — spawn review-gate over the combined diff for tasks: ${AGGREGATE_REVIEW_TASKS}"
+  elif [ "$GRANULARITY" != "task" ] && [ "$AWAITING_AGGREGATE_REVIEW" = "true" ]; then
+    NEXT_ACTION_TEXT="AWAITING AGGREGATE REVIEW (${GRANULARITY}) — parked IMPLEMENTED tasks (${AGGREGATE_REVIEW_TASKS}); keep implementing the rest of the review unit, do NOT review/re-implement parked tasks"
   fi
 
   # Update Recovery Pointer fields using awk (safe with arbitrary text in GIT_MSG)
@@ -606,19 +728,51 @@ if [ -n "$REVIEW_VIOLATIONS" ]; then
   REASON="${REASON} | ${VIOLATION_SUMMARY}"
 fi
 
+# --- Build the DELEGATE instruction (granularity-aware) --------------------------
+# In "task" mode an IMPLEMENTED/IN_REVIEW active task dispatches a per-task review.
+# In "group"/"feature" mode the review board fires ONCE per review unit over the
+# combined diff — only when AGGREGATE_REVIEW_READY is true (the whole unit is
+# IMPLEMENTED). Parked IMPLEMENTED tasks were already re-selected to the next
+# implementable task above, so they never trigger a single-task review here.
+DISPATCH_INSTR=""
+if [ "$GRANULARITY" != "task" ] && [ "$AGGREGATE_REVIEW_READY" = "true" ]; then
+  if [ "$GRANULARITY" = "feature" ]; then
+    REVIEW_DIFF_HINT="the cumulative feature diff (base..HEAD: ${BASE_BRANCH:-origin/main}..HEAD)"
+  else
+    REVIEW_DIFF_HINT="the combined diff for ${AGGREGATE_REVIEW_SCOPE} (its tasks' commits)"
+  fi
+  DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for the AGGREGATE review unit [${AGGREGATE_REVIEW_SCOPE}]. Review SCOPE is ${REVIEW_DIFF_HINT}, covering tasks: ${AGGREGATE_REVIEW_TASKS}. Pass granularity=${GRANULARITY} and the task list so feedback-aggregator can attribute findings back to the owning task by file scope. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition."
+elif [ "$ACTIVE_STATUS" = "IMPLEMENTED" ]; then
+  DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition."
+elif [ "$ACTIVE_STATUS" = "IN_REVIEW" ]; then
+  DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}."
+elif [ "$ACTIVE_STATUS" = "READY" ] || [ "$ACTIVE_STATUS" = "IN_PROGRESS" ]; then
+  DISPATCH_INSTR="DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}."
+elif [ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ]; then
+  DISPATCH_INSTR="DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first.
+IMPORTANT: Read nazgul/reviews/${ACTIVE_TASK}/consolidated-feedback.md before re-implementing."
+fi
+
+# "Awaiting aggregate review" recovery marker: tasks are IMPLEMENTED-but-parked,
+# unit not yet complete. Survives compaction so recovery knows not to re-review
+# or re-implement parked tasks.
+AGGREGATE_MARKER=""
+if [ "$GRANULARITY" != "task" ] && [ "$AWAITING_AGGREGATE_REVIEW" = "true" ] && [ "$AGGREGATE_REVIEW_READY" != "true" ]; then
+  AGGREGATE_MARKER="AWAITING AGGREGATE REVIEW (${GRANULARITY}): tasks already IMPLEMENTED and PARKED — do NOT re-review or re-implement them: ${AGGREGATE_REVIEW_TASKS}. Keep implementing the rest of the review unit; the review board fires once the whole ${GRANULARITY} is IMPLEMENTED."
+elif [ "$GRANULARITY" != "task" ] && [ "$AGGREGATE_REVIEW_READY" = "true" ]; then
+  AGGREGATE_MARKER="AGGREGATE REVIEW READY (${GRANULARITY}): review unit [${AGGREGATE_REVIEW_SCOPE}] fully IMPLEMENTED — tasks: ${AGGREGATE_REVIEW_TASKS}."
+fi
+
 cat >&2 << CONTINUE_MSG
-Nazgul loop — iteration ${NEW_ITER}/${MAX_ITER} | Mode: ${MODE}
+Nazgul loop — iteration ${NEW_ITER}/${MAX_ITER} | Mode: ${MODE} | Review granularity: ${GRANULARITY}
 Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked, ${PLANNED_COUNT} planned
 $([ -n "$REVIEW_VIOLATIONS" ] && printf '%s' "$REVIEW_VIOLATIONS" || true)
 $([ -n "$FEATURE_BRANCH" ] && echo "Branch: ${FEATURE_BRANCH} → ${BASE_BRANCH} | Worktrees: ${WORKTREE_COUNT}" || true)
 
 Read nazgul/plan.md → Recovery Pointer section for current state.
 $([ -n "$ACTIVE_TASK" ] && echo "Active task: nazgul/tasks/${ACTIVE_TASK}.md (${ACTIVE_STATUS})" || echo "No active task — find first READY task in nazgul/plan.md")
-$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition." || true)
-$([ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}." || true)
-$([ "$ACTIVE_STATUS" = "READY" ] || [ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}." || true)
-$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first." || true)
-$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "IMPORTANT: Read nazgul/reviews/${ACTIVE_TASK}/consolidated-feedback.md before re-implementing." || true)
+$([ -n "$AGGREGATE_MARKER" ] && echo "$AGGREGATE_MARKER" || true)
+$([ -n "$DISPATCH_INSTR" ] && echo "$DISPATCH_INSTR" || true)
 $([ "$GIT_CONFLICT_DETECTED" = true ] && echo "WARNING: Git conflicts detected. Resolve unmerged files before continuing.")
 $([ -n "$CONTEXT_ROT_WARNING" ] && echo "$CONTEXT_ROT_WARNING")
 

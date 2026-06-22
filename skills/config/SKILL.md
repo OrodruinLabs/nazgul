@@ -5,7 +5,7 @@ argument-hint: "[models]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 2.0.4
+  version: 2.1.0
 ---
 
 # Nazgul Config
@@ -44,6 +44,13 @@ Models:
 Formatter:         [formatter.enabled ? "enabled" : "disabled"]
 Notifications:     [notifications.on_complete || "disabled"]
 Default mode:      [default_mode || "ask each run"]
+
+Review:
+  Granularity:     [review_gate.granularity || "task"]
+  Require all approve: [review_gate.require_all_approve]
+  Confidence threshold: [review_gate.confidence_threshold]
+  Max retries/unit:  [review_gate.max_retries_per_task]
+  Block on security reject: [review_gate.block_on_security_reject]
 ```
 
 ## Step 2: Ask What to Change
@@ -58,6 +65,7 @@ Otherwise, use `AskUserQuestion` (multiSelect: true):
   - "Formatter" — "Enable or disable auto-formatting after edits"
   - "Notifications" — "Configure completion notifications"
   - "Default run mode" — "Set the mode /nazgul:start uses when no flag is passed (or clear it to be asked each time)"
+  - "Review granularity" — "Choose whether the review board fires per task, per parallel group, or once per feature"
 
 ## Step 3: Run Selected Sub-flows
 
@@ -156,3 +164,20 @@ Use `AskUserQuestion`:
    jq '.default_mode=<value>' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
    ```
    (use `null` unquoted for "Ask each run", e.g. `jq '.default_mode=null' …`).
+
+### Review Granularity Sub-flow
+
+1. `AskUserQuestion`:
+   - header: "Review unit"
+   - question: "When should the review board run?"
+   - options:
+     - "Per task (Recommended)" — "Review each task the moment it reaches IMPLEMENTED (current default)"
+     - "Per group" — "Review once per planner-defined parallel wave/group, over that group's combined diff"
+     - "Per feature" — "Implement ALL tasks to IMPLEMENTED, then ONE review over the whole feature diff (base..HEAD)"
+
+2. Write the lowercase value to `review_gate.granularity` (`task` | `group` | `feature`):
+   ```bash
+   jq '.review_gate.granularity = "task"' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
+   ```
+
+3. Note for the user: `group`/`feature` defer review until the unit is fully implemented. All other review settings — `require_all_approve`, `confidence_threshold`, `block_on_security_reject` — still apply in every mode; `max_retries_per_task` is counted **per review unit** (task/group/feature), and in group/feature mode a CHANGES_REQUESTED re-opens only the tasks whose files own the findings, not the whole unit. Takes effect on the next pipeline run.

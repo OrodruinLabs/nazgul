@@ -31,6 +31,27 @@ Format ALL user-facing output per `references/ui-brand.md`:
 
 Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified order before doing ANY work. If task is IN_REVIEW, also check `nazgul/reviews/[TASK-ID]/` for existing reviewer submissions. Never rely on conversational memory — files are truth.
 
+## Review Granularity & Scope
+
+The review *unit* is set by `nazgul/config.json → review_gate.granularity` (default `task`). The stop-hook's DELEGATE instruction tells you which unit you are reviewing — read it. The granularity changes only the **scope of the diff** and **which tasks a CHANGES_REQUESTED re-opens**; every other gate below (Step 0 simplify, pre-checks, evidence check, `require_all_approve`, `confidence_threshold`, `block_on_security_reject`) applies identically in all three modes.
+
+- **`task`** (default — current behavior): you are dispatched for ONE task at IMPLEMENTED. Review scope is that task's diff. `[TASK-ID]` below is that single task.
+- **`group`**: you are dispatched ONCE per planner-defined parallel wave/group, after ALL tasks in that group are IMPLEMENTED. Review scope is the group's **combined diff** — the union of every group task's commits. The stop-hook passes the group's task list (`covering tasks: TASK-00X TASK-00Y …`).
+- **`feature`**: you are dispatched ONCE after ALL feature tasks are IMPLEMENTED. Review scope is the **cumulative feature diff `base..HEAD`** (`branch.base..HEAD`, e.g. `origin/main..HEAD`).
+
+When the unit is a group/feature (more than one task), use an aggregate review directory `nazgul/reviews/[UNIT-ID]/` where `UNIT-ID` is `GROUP-<n>` (group mode) or `FEATURE-<feat_id>` (feature mode). Reviewers write one file each there, exactly as in task mode.
+
+**`max_retries_per_task` is interpreted per review unit.** In group/feature mode it counts retries of the *whole unit's* review cycle, not per individual task. A unit that exhausts its retries goes BLOCKED with the implicated tasks named.
+
+### Step 1.5 scope (granularity-aware diff)
+
+Generate the review diff into `nazgul/reviews/[UNIT-ID]/diff.patch`:
+- **task**: `git diff [base-sha]..HEAD -- [task files]` (as today).
+- **group**: `git diff [group-base-sha]..HEAD -- [union of all group tasks' file scopes]`, where `group-base-sha` is the base before the first task in the group landed (the earliest group task's Base SHA). The wave/group task list and per-task file scopes come from the task manifests and `plan.md → Wave Groups`.
+- **feature**: `git diff [base]..HEAD` over the whole feature branch (`branch.base..HEAD`). Do NOT restrict by file scope — the feature unit reviews everything on the branch.
+
+Pass the diff plus the unit's task→file-scope map to the reviewers and (in Step 4) to feedback-aggregator so findings can be attributed back to the owning task.
+
 ## Review Pipeline
 
 ### Step 0: Simplify Pass (ALWAYS RUNS — DO NOT SKIP)
@@ -230,11 +251,10 @@ Skip this step entirely if mode is `"afk"` or if any reviewer returned CHANGES_R
    - Check if ALL tasks DONE → post-loop phase
 
 **ANY CHANGES_REQUESTED:**
-- Delegate to feedback-aggregator to consolidate feedback (use `models.review` from config for the model parameter)
-- Check retry_count against max_retries_per_task
-- If max reached → set task to BLOCKED
-- Otherwise → set task to CHANGES_REQUESTED, increment retry_count
-- Security rejections in AFK mode → BLOCKED (requires human review)
+- Delegate to feedback-aggregator to consolidate feedback (use `models.review` from config for the model parameter). In group/feature mode, pass the unit's task→file-scope map so it can attribute each finding to the owning task.
+- **task mode:** check the single task's retry_count against `max_retries_per_task`; if max reached → BLOCKED; otherwise → CHANGES_REQUESTED, increment retry_count.
+- **group/feature mode (per-task re-open):** feedback-aggregator attributes each finding to the owning task by file scope. Re-open ONLY the implicated tasks (set just those to CHANGES_REQUESTED); tasks with no findings stay IMPLEMENTED (still parked, awaiting the next aggregate review). The implementer fixes the implicated tasks, they return to IMPLEMENTED, and the unit is re-reviewed as a whole. Increment the **unit's** retry counter (`max_retries_per_task` is per review unit here) — if the unit exhausts its retries, BLOCK the still-implicated tasks (name them) and leave the rest IMPLEMENTED.
+- Security rejections in AFK mode → BLOCKED (requires human review) — in group/feature mode, only the task owning the security finding is BLOCKED.
 
 ### Step 5: Post-Loop Phase
 

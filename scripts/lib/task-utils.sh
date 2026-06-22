@@ -82,6 +82,17 @@ set_task_status() {
   fi
 }
 
+# Extract a metadata list-item field from a task manifest.
+# Reads list-item form:  - **<Field>**: <value>
+# Returns the trimmed value, or the supplied default (or empty) when absent.
+# Used by the loop to read a task's Group/Wave for group/feature review granularity.
+# Usage: get_task_field <file> <field-label> [default]
+get_task_field() {
+  local file="$1" field="$2" default="${3:-}" result
+  result=$(grep -m1 -E "^\- \*\*${field}\*\*:" "$file" 2>/dev/null | sed 's/.*:[[:space:]]*//' | sed 's/[[:space:]]*$//')
+  if [ -n "$result" ]; then echo "$result"; else echo "$default"; fi
+}
+
 # Count tasks with a given status in a tasks directory.
 # Usage: count_tasks_by_status <tasks_dir> <status>
 count_tasks_by_status() {

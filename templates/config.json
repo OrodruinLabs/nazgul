@@ -1,5 +1,5 @@
 {
-  "schema_version": 11,
+  "schema_version": 12,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -73,6 +73,7 @@
     "dir": "nazgul/docs"
   },
   "review_gate": {
+    "granularity": "task",
     "require_all_approve": true,
     "max_retries_per_task": 3,
     "current_task_retries": 0,

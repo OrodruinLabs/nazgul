@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.0] - 2026-06-22
+
+### Added
+- **Configurable review granularity (`review_gate.granularity`).** New knob with three values controlling how often the review board runs and what diff it reviews:
+  - `task` (default — unchanged behavior): the review board fires per task the moment it reaches IMPLEMENTED, reviewing that task's diff.
+  - `group`: the board fires once per planner-defined parallel wave/group, after every task in the group is IMPLEMENTED, reviewing the group's combined diff.
+  - `feature`: ALL feature tasks advance to IMPLEMENTED, then ONE review board pass covers the cumulative feature diff (`base..HEAD`).
+
+  Backward-compatible — the default is `task`, so existing projects are unchanged. In `group`/`feature` mode tasks are parked at IMPLEMENTED ("awaiting aggregate review") while the rest of the unit is built; an explicit recovery marker in `plan.md` and the iteration checkpoint (`review_unit` block) means parked tasks survive compaction without being re-reviewed or re-implemented. A CHANGES_REQUESTED re-opens only the tasks whose files own the findings (attributed by the feedback aggregator via file scope) — not the whole group/feature. `require_all_approve`, `confidence_threshold`, and `block_on_security_reject` apply identically in all modes; `max_retries_per_task` is interpreted per review unit (task/group/feature). Configurable via `/nazgul:config` → "Review granularity".
+
+### Changed
+- **Schema version 11 → 12.** Added `review_gate.granularity` (default `"task"`). `migrate_11_to_12` sets it additively only when absent — an existing `"group"`/`"feature"` (or any hand-set) value is never overwritten, and all other `review_gate` fields are preserved. `templates/config.json`, `scripts/migrate-config.sh`, `agents/review-gate.md`, `agents/feedback-aggregator.md`, `skills/config/SKILL.md`, and `docs/CONFIGURATION.md` updated. State-machine coverage for all three granularities added to `tests/test-stop-hook.sh`; migration coverage (default + existing-value survival) added to `tests/test-migrate-config.sh`.
+
 ## [2.0.4] - 2026-06-22
 
 ### Fixed

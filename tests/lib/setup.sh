@@ -91,6 +91,14 @@ create_task_file_with_commits() {
 TASK_EOF
 }
 
+set_task_group() {
+  # Override a task manifest's - **Group**: field (for review-granularity tests).
+  # Usage: set_task_group TASK-001 2
+  local id="$1" group="$2"
+  sed -i.bak "s/^- \*\*Group\*\*:.*/- **Group**: ${group}/" "$TEST_DIR/nazgul/tasks/${id}.md" \
+    && rm -f "$TEST_DIR/nazgul/tasks/${id}.md.bak"
+}
+
 create_review_dir() {
   # Creates a mock review directory with an APPROVED reviewer file
   # Usage: create_review_dir TASK-001

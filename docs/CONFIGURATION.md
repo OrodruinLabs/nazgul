@@ -32,6 +32,27 @@ Different pipeline stages have different complexity needs. Assign the right mode
 
 Three presets are available: **Balanced** (default), **Quality** (all Opus), and **Fast/cheap** (Haiku where possible). Or pick per stage.
 
+### Review Granularity
+
+`review_gate.granularity` controls how often the review board runs and what diff it reviews. Set it via `/nazgul:config` → "Review granularity", or edit `nazgul/config.json` directly.
+
+| Value | When the review board fires | Review scope |
+|-------|-----------------------------|--------------|
+| `task` (default) | The moment each task reaches IMPLEMENTED | That single task's diff |
+| `group` | Once per planner-defined parallel wave/group, after every task in the group is IMPLEMENTED | The group's combined diff (union of its tasks' commits) |
+| `feature` | Once, after ALL feature tasks are IMPLEMENTED | The cumulative feature diff `base..HEAD` |
+
+`task` is the default so existing projects are unchanged. In `group`/`feature` mode, tasks are advanced to IMPLEMENTED and **parked** ("awaiting aggregate review") until the whole unit is built; the loop keeps implementing the rest of the unit instead of reviewing each task. Recovery after a compaction reads the "awaiting aggregate review" marker from `plan.md` / the latest checkpoint, so parked tasks are never re-reviewed or re-implemented.
+
+The other review settings apply identically in all modes:
+
+- `require_all_approve` — every reviewer must APPROVE before the unit passes.
+- `confidence_threshold` (default 80) — findings below this become non-blocking CONCERNs.
+- `block_on_security_reject` — a security REJECT blocks (in AFK mode → BLOCKED for human review).
+- `max_retries_per_task` — interpreted **per review unit** (task / group / feature). In group/feature mode it counts retries of the whole unit's review cycle.
+
+In `group`/`feature` mode a CHANGES_REQUESTED re-opens **only the implicated tasks** — the feedback aggregator attributes each finding to the owning task by file scope, so tasks with no findings stay IMPLEMENTED.
+
 ## Local Mode
 
 By default, `/nazgul:init` creates files that are tracked in git (shared mode). To keep all Nazgul artifacts out of your project's repository, use local mode:

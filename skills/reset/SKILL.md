@@ -4,7 +4,7 @@ description: Reset Nazgul state to a clean slate. Archives current state and rec
 allowed-tools: Read, Write, Bash, Glob, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 2.0.4
+  version: 2.1.0
 ---
 
 # Nazgul Reset
