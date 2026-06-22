@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.4] - 2026-06-22
+
+### Fixed
+- **Config migration no longer destroys discovery-owned state.** `migrate_4_to_5` deleted `documents.existing` and `discovery.files_scanned`/`existing_docs_count`/`existing_docs_quality` as "unused" — but these are live fields written by `agents/discovery.md` Step 8 and read downstream. Any v<5 → v5 force-march (including an unversioned modern config, treated as v1) silently wiped a project's discovery state. Those fields are now preserved; only genuinely retired fields are removed.
+- **`migrate_2_to_3` no longer clobbers an existing branch section.** It assigned `.branch = { … }` wholesale, so an unversioned modern config (live `branch.feature`, no `schema_version` → migrated from v1) lost its branch isolation state on session start. The branch section is now filled non-destructively — each field is added only when absent, so an existing feature/base/worktree config survives the chain.
+- **Pause now sticks.** `stop-hook.sh` cleared the `paused` flag on the first Stop, so `/nazgul:pause` only held for one iteration before the loop self-resumed. Pause is now sticky: the stop hook leaves `paused: true` and allows the stop on every iteration; only `/nazgul:start` clears it (in the mandatory Reset Loop Counters step), making resume an explicit, consented action.
+
+### Changed
+- **`agents/discovery.md` Step 8 now mandates a `jq` merge.** Discovery must update `config.json` field-by-field (preserving `schema_version` and all runtime state) rather than rewriting the object, so it can never reset the schema version or clobber loop/branch/budget/pause state.
+
 ## [2.0.3] - 2026-06-21
 
 ### Fixed

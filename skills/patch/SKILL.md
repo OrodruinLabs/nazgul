@@ -5,7 +5,7 @@ context: fork
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 metadata:
   author: Jose Mejia
-  version: 2.0.3
+  version: 2.0.4
 ---
 
 # Nazgul Patch

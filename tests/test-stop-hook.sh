@@ -27,7 +27,9 @@ run_hook
 assert_exit_code "no config: exit 0" "$HOOK_EC" 0
 teardown_temp_dir
 
-# --- Test 2: Paused — exit 0, paused reset to false ---
+# --- Test 2: Paused — exit 0, paused STAYS true (sticky pause) ---
+# Regression: an earlier stop-hook cleared .paused on the first Stop, so a pause
+# never held past one iteration. Pause is now sticky — only /nazgul:start clears it.
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
@@ -36,7 +38,12 @@ create_plan
 run_hook
 assert_exit_code "paused: exit 0" "$HOOK_EC" 0
 val=$(jq -r '.paused' "$TEST_DIR/nazgul/config.json")
-assert_eq "paused reset to false" "$val" "false"
+assert_eq "paused stays true (sticky)" "$val" "true"
+# A second Stop must also stay paused (pause holds across iterations)
+run_hook
+assert_exit_code "paused (2nd Stop): exit 0" "$HOOK_EC" 0
+val=$(jq -r '.paused' "$TEST_DIR/nazgul/config.json")
+assert_eq "paused still true after 2nd Stop" "$val" "true"
 teardown_temp_dir
 
 # --- Test 3: All tasks DONE — exit 0 ---
