@@ -175,9 +175,9 @@ Use `AskUserQuestion`:
      - "Per group" — "Review once per planner-defined parallel wave/group, over that group's combined diff"
      - "Per feature" — "Implement ALL tasks to IMPLEMENTED, then ONE review over the whole feature diff (base..HEAD)"
 
-2. Write the lowercase value to `review_gate.granularity` (`task` | `group` | `feature`):
+2. Write the **selected** lowercase value to `review_gate.granularity` (`task` | `group` | `feature`) — substitute the user's choice; do NOT run the placeholder verbatim:
    ```bash
-   jq '.review_gate.granularity = "task"' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
+   jq --arg g "<task|group|feature>" '.review_gate.granularity = $g' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
    ```
 
 3. Note for the user: `group`/`feature` defer review until the unit is fully implemented. All other review settings — `require_all_approve`, `confidence_threshold`, `block_on_security_reject` — still apply in every mode; `max_retries_per_task` is counted **per review unit** (task/group/feature), and in group/feature mode a CHANGES_REQUESTED re-opens only the tasks whose files own the findings, not the whole unit. Takes effect on the next pipeline run.

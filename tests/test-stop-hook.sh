@@ -644,6 +644,22 @@ assert_contains "group stale IN_REVIEW: keep implementing TASK-002" "$HOOK_OUTPU
 assert_not_contains "group stale IN_REVIEW: NO per-task review for TASK-001" "$HOOK_OUTPUT" "Spawn review-gate agent (nazgul:review-gate) for TASK-001"
 teardown_temp_dir
 
+# --- Granularity group, BLOCKED unit: parked IMPLEMENTED must NOT trigger per-task review ---
+# The unit is incomplete because a sibling is BLOCKED (nothing left to implement). The
+# blocked-unit fallback surfaces the parked IMPLEMENTED task as the active task for
+# recovery, but per-task review dispatch is gated to task mode — so only the awaiting
+# marker shows, never a single-task review. Regression for the PR #36 CodeRabbit review.
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.review_gate.granularity = "group"'
+create_plan
+create_task_file "TASK-001" "IMPLEMENTED"; set_task_group "TASK-001" 1
+create_task_file "TASK-002" "BLOCKED";      set_task_group "TASK-002" 1
+run_hook
+assert_exit_code "group blocked unit: exit 2" "$HOOK_EC" 2
+assert_contains "group blocked unit: awaiting aggregate review" "$HOOK_OUTPUT" "AWAITING AGGREGATE REVIEW"
+assert_not_contains "group blocked unit: NO per-task review for TASK-001" "$HOOK_OUTPUT" "Spawn review-gate agent (nazgul:review-gate) for TASK-001"
+teardown_temp_dir
+
 # --- Granularity feature, INCOMPLETE: park IMPLEMENTED across groups, keep building ---
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
 create_config '.review_gate.granularity = "feature"'

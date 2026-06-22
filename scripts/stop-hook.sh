@@ -736,8 +736,13 @@ fi
 # In "task" mode an IMPLEMENTED/IN_REVIEW active task dispatches a per-task review.
 # In "group"/"feature" mode the review board fires ONCE per review unit over the
 # combined diff — only when AGGREGATE_REVIEW_READY is true (the whole unit is
-# IMPLEMENTED). Parked IMPLEMENTED tasks were already re-selected to the next
-# implementable task above, so they never trigger a single-task review here.
+# IMPLEMENTED). The per-task review branches are therefore gated to GRANULARITY
+# == "task": in group/feature mode a parked IMPLEMENTED/IN_REVIEW task must NEVER
+# trigger a single-task review. That matters for the blocked-unit fallback above
+# (lines ~368-371), which surfaces a parked IMPLEMENTED task as the active task
+# for recovery even though its unit is incomplete — without this gate it would
+# wrongly dispatch a premature per-task review. Such cases fall through to the
+# AWAITING AGGREGATE REVIEW marker instead.
 DISPATCH_INSTR=""
 if [ "$GRANULARITY" != "task" ] && [ "$AGGREGATE_REVIEW_READY" = "true" ]; then
   if [ "$GRANULARITY" = "feature" ]; then
@@ -746,9 +751,9 @@ if [ "$GRANULARITY" != "task" ] && [ "$AGGREGATE_REVIEW_READY" = "true" ]; then
     REVIEW_DIFF_HINT="the combined diff for ${AGGREGATE_REVIEW_SCOPE} (its tasks' commits)"
   fi
   DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for the AGGREGATE review unit [${AGGREGATE_REVIEW_SCOPE}]. Review SCOPE is ${REVIEW_DIFF_HINT}, covering tasks: ${AGGREGATE_REVIEW_TASKS}. Pass granularity=${GRANULARITY} and the task list so feedback-aggregator can attribute findings back to the owning task by file scope. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition."
-elif [ "$ACTIVE_STATUS" = "IMPLEMENTED" ]; then
+elif [ "$GRANULARITY" = "task" ] && [ "$ACTIVE_STATUS" = "IMPLEMENTED" ]; then
   DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition."
-elif [ "$ACTIVE_STATUS" = "IN_REVIEW" ]; then
+elif [ "$GRANULARITY" = "task" ] && [ "$ACTIVE_STATUS" = "IN_REVIEW" ]; then
   DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}."
 elif [ "$ACTIVE_STATUS" = "READY" ] || [ "$ACTIVE_STATUS" = "IN_PROGRESS" ]; then
   DISPATCH_INSTR="DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}."
