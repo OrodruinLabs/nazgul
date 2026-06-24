@@ -17,15 +17,17 @@ CONFIG="$NAZGUL_DIR/config.json"
 # If Nazgul is not initialized here, do nothing.
 [ -f "$CONFIG" ] || exit 0
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/emit-event.sh"
+
 TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-# Record the failure to the iteration log for /nazgul:log and recovery.
-LOG_DIR="$NAZGUL_DIR/logs"
-mkdir -p "$LOG_DIR"
-printf '{"event":"stop_failure","timestamp":"%s"}\n' "$TS" \
-  >> "$LOG_DIR/iterations.jsonl"
+# Emit stop_failure to the telemetry bus (replaces legacy iterations.jsonl write).
+# CURRENT_ITERATION intentionally omitted — emit_event treats unset as null.
+emit_event "stop_failure"
 
 # Leave a recovery breadcrumb so the next session knows the last turn errored.
+mkdir -p "$NAZGUL_DIR/logs"
 printf '{"last_stop_failure":"%s"}\n' "$TS" > "$NAZGUL_DIR/.stop_failure"
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"

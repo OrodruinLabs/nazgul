@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Nazgul SubagentStop — fires when any subagent finishes. Lightweight
-# observability: appends one line to a subagent metrics log so /nazgul:metrics
+# observability: appends one event to the telemetry bus so /nazgul:metrics
 # can report how many subagents ran per loop. Never blocks the subagent.
 #
 # Input: hook JSON on stdin (may include subagent name / type — recorded if
@@ -19,6 +19,9 @@ CONFIG="$NAZGUL_DIR/config.json"
 # If Nazgul is not initialized here, do nothing.
 [ -f "$CONFIG" ] || exit 0
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/emit-event.sh"
+
 # Best-effort extraction of an agent identifier; default to "unknown".
 AGENT="unknown"
 if command -v jq >/dev/null 2>&1 && [ -n "$INPUT" ]; then
@@ -26,9 +29,8 @@ if command -v jq >/dev/null 2>&1 && [ -n "$INPUT" ]; then
   [ -n "$AGENT" ] || AGENT="unknown"
 fi
 
-LOG_DIR="$NAZGUL_DIR/logs"
-mkdir -p "$LOG_DIR"
-printf '{"event":"subagent_stop","agent":"%s","timestamp":"%s"}\n' \
-  "$AGENT" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "$LOG_DIR/subagents.jsonl"
+# Emit subagent_stop to the telemetry bus (replaces legacy subagents.jsonl write).
+# CURRENT_ITERATION intentionally omitted — emit_event treats unset as null.
+emit_event "subagent_stop" agent "$AGENT"
 
 exit 0

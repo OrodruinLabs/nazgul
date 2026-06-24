@@ -11,6 +11,7 @@ PLAN="$NAZGUL_DIR/plan.md"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/task-utils.sh"
+source "$SCRIPT_DIR/lib/emit-event.sh"
 
 # If Nazgul not initialized, nothing to inject
 if [ ! -f "$CONFIG" ]; then
@@ -66,6 +67,11 @@ else
 fi
 NEW_COUNT=$((PREV_COUNT + 1))
 printf '{"count": %d, "last_compaction_iteration": %s}\n' "$NEW_COUNT" "$ITERATION" > "$COMPACTION_FILE"
+
+# Emit compaction to the telemetry bus (after counter write; pure observer).
+# shellcheck disable=SC2034
+CURRENT_ITERATION="$ITERATION"
+emit_event "compaction" compaction_index:n "$NEW_COUNT" iteration_at_compact:n "$ITERATION"
 
 # Get latest checkpoint
 LATEST_CHECKPOINT=$(ls -1t "$NAZGUL_DIR/checkpoints/iteration-"*.json 2>/dev/null | head -1 || echo "none")

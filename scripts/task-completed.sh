@@ -4,6 +4,11 @@ set -euo pipefail
 # Nazgul TaskCompleted — fires when a Task-spawned agent finishes
 # Logs completion and fires webhook event for real-time monitoring.
 
+INPUT=""
+if [ ! -t 0 ]; then
+  INPUT=$(cat 2>/dev/null || true)
+fi
+
 NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
 CONFIG="$NAZGUL_DIR/config.json"
 
@@ -12,11 +17,19 @@ if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
-# Log task completion
-LOG_DIR="$NAZGUL_DIR/logs"
-mkdir -p "$LOG_DIR"
-printf '{"event":"task_completed","timestamp":"%s"}\n' \
-  "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "$LOG_DIR/iterations.jsonl"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/emit-event.sh"
+
+# task_id is best-effort — the TaskCompleted payload has no reliable task field.
+TASK_ID="unknown"
+if command -v jq >/dev/null 2>&1 && [ -n "$INPUT" ]; then
+  TASK_ID=$(printf '%s' "$INPUT" | jq -r '.task_id // .taskId // "unknown"' 2>/dev/null || echo "unknown")
+  [ -n "$TASK_ID" ] || TASK_ID="unknown"
+fi
+
+# CURRENT_ITERATION intentionally omitted — emit_event treats unset as null.
+# Emit task_completed to the telemetry bus (replaces legacy iterations.jsonl write).
+emit_event "task_completed" task_id "$TASK_ID"
 
 # Reset tool failure counter on successful task completion
 FAILURE_FILE="$NAZGUL_DIR/.tool_failures"
