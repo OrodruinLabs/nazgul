@@ -26,6 +26,41 @@ Objective → Discovery (+Classification) → Doc Generator → Planner → Impl
 
 Discovery generates only the agents a given project needs. The full set of core agents exists as specs, plus a reviewer template (`agents/templates/reviewer-base.md`) that spawns project-specific reviewers driven by `agents/templates/reviewer-domains.json`.
 
+## Telemetry & Observability
+
+Nazgul maintains a canonical, schema-versioned event stream at `nazgul/logs/events.jsonl` — an append-only JSONL file where hooks and agents emit structured telemetry. This consolidates what was previously scattered across multiple files (`iterations.jsonl`, `subagents.jsonl`, in-place config mutations, and dotfiles).
+
+### Event Stream
+
+The event stream captures the complete lifecycle:
+
+- **Iteration boundaries** — when the loop stops after each iteration
+- **Task lifecycle** — task completion events
+- **Review verdicts** — approvals/rejections from the review board with confidence scores
+- **Retries and blocks** — re-attempts after CHANGES_REQUESTED, and blocking states that require intervention
+- **Compaction milestones** — checkpoints during context compression
+- **Subagent lifecycle** — when specialized agents (implementer, discovery, etc.) complete
+- **Budget/cost warnings** — proactive alerts before spending limits
+
+See `docs/superpowers/specs/2026-06-24-telemetry-bus-design.md` for the full event taxonomy and schema.
+
+### Emit Library
+
+`scripts/lib/emit-event.sh` is the canonical append mechanism — atomically writes one JSON event line per call using `flock` (Linux) or a mv-based swap (macOS). Callers pass event type + key-value pairs; the library handles schema versioning, timestamps (ISO 8601 UTC), and iteration context.
+
+Used by:
+- **5 hook scripts** (`stop-hook.sh`, `task-completed.sh`, `subagent-stop.sh`, `stop-failure.sh`, `post-compact.sh`) — write producer events
+- **Review-gate agent** (`agents/review-gate.md`) — emits reviewer verdicts, retry dispatch, and blocks
+- **Agents via CLI wrapper** (`scripts/emit-event-cli.sh`) — agent-friendly invoke pattern
+
+### Migration: Single-Write + Dual-Read
+
+The migration from scattered telemetry to `events.jsonl` is **single-write + dual-read**:
+
+- **Producers** (hooks and review-gate agent) write ONLY the new `events.jsonl` stream. Legacy `iterations.jsonl` and `subagents.jsonl` are no longer appended; they freeze in place as historical records (not deleted).
+- **Consumers** (`/nazgul:metrics`, `/nazgul:log` skills) prefer the new `events.jsonl` but fall back permanently to frozen legacy files for pre-upgrade history. This preserves full event history across upgrades with zero data loss.
+- **No parallel writes, no cutover step, no v15.** The emit library is proven by mandatory unit + concurrency tests; one append-only write is the lowest-risk telemetry design. This approach avoids the complexity of dual-write + version cutover while keeping consumers forward/backward compatible.
+
 ## Recovery
 
 Nazgul survives compaction, crashes, and session restarts:
@@ -91,7 +126,7 @@ hooks/hooks.json             # Hook definitions (9 hook types: Stop, PreCompact,
 │                            #   SessionEnd, TaskCompleted, UserPromptSubmit)
 scripts/                     # Hook + sync scripts (18 + 7 libs)
 │   └── lib/                 # Shared libraries (task-utils, session-tracker,
-│                            #   review-evidence, bootstrap-{scrub-map,render,preflight,relocate})
+│                            #   emit-event, review-evidence, bootstrap-{scrub-map,render,preflight,relocate})
 templates/                   # Objective + doc templates
 │   └── skill-partials/      # Shared SKILL.md template partials
 references/                  # Shared reference docs for agents
@@ -106,5 +141,6 @@ nazgul/
 ├── checkpoints/             # Per-iteration JSON snapshots
 ├── reviews/                 # Review artifacts per task
 ├── context/                 # Project context from Discovery
-└── docs/                    # Generated project documents (PRD, TRD, ADRs)
+├── docs/                    # Generated project documents (PRD, TRD, ADRs)
+└── logs/                    # Runtime telemetry (events.jsonl + frozen legacy history)
 ```
