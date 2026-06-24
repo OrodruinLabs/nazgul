@@ -153,6 +153,43 @@ done
   if non-default). This feeds the citation/retirement signal. Failures here are
   non-fatal — log and continue; never block a verdict on a bump-hits error.
 
+#### Emit reviewer_verdict events (one per confirmed reviewer file)
+
+After all reviewer files are confirmed present, emit one `reviewer_verdict` event per
+reviewer. These are observational — do not alter verdicts or gate logic.
+
+CLI arg convention (CONCERN 1 mitigation — reproduce verbatim so the Bash call is
+constructed correctly): positional `event_type` first, then alternating `key val` pairs;
+a `:n` suffix on a key marks a numeric value.
+
+```bash
+# emit-event-cli.sh arg convention example:
+#   "${CLAUDE_PLUGIN_ROOT}/scripts/emit-event-cli.sh" reviewer_verdict \
+#     task_id "$TASK_ID" reviewer "$REVIEWER_NAME" \
+#     decision "$DECISION" confidence:n "$CONFIDENCE" \
+#     blocking_findings:n "$BLOCKING" concerns:n "$CONCERNS"
+```
+
+For each reviewer in `agents.reviewers`:
+
+1. Read `nazgul/reviews/[TASK-ID]/[reviewer-name].md` and extract: `DECISION`
+   (APPROVE or CHANGES_REQUESTED), `CONFIDENCE` (integer), `BLOCKING` (count of
+   blocking findings, integer), `CONCERNS` (count of non-blocking concerns, integer).
+2. Set `NAZGUL_DIR="${CLAUDE_PROJECT_DIR}/nazgul"` and read `CURRENT_ITERATION` from
+   `nazgul/config.json → current_iteration`.
+3. Emit via Bash tool:
+
+```bash
+NAZGUL_DIR="${CLAUDE_PROJECT_DIR}/nazgul"
+CURRENT_ITERATION=$(jq -r '.current_iteration // "null"' "${CLAUDE_PROJECT_DIR}/nazgul/config.json")
+"${CLAUDE_PLUGIN_ROOT}/scripts/emit-event-cli.sh" reviewer_verdict \
+  task_id "$TASK_ID" reviewer "$REVIEWER_NAME" \
+  decision "$DECISION" confidence:n "$CONFIDENCE" \
+  blocking_findings:n "$BLOCKING" concerns:n "$CONCERNS"
+```
+
+Emit failures are non-fatal — log and continue; never block a verdict on an emit error.
+
 ### Step 3: Determine Verdict
 
 - Task passes ONLY when ALL reviewers return APPROVED (no blocking findings)
@@ -252,9 +289,30 @@ Skip this step entirely if mode is `"afk"` or if any reviewer returned CHANGES_R
 
 **ANY CHANGES_REQUESTED:**
 - Delegate to feedback-aggregator to consolidate feedback (use `models.review` from config for the model parameter). In group/feature mode, pass the unit's task→file-scope map so it can attribute each finding to the owning task.
-- **task mode:** check the single task's retry_count against `max_retries_per_task`; if max reached → BLOCKED; otherwise → CHANGES_REQUESTED, increment retry_count.
-- **group/feature mode (per-task re-open):** feedback-aggregator attributes each finding to the owning task by file scope. Re-open ONLY the implicated tasks (set just those to CHANGES_REQUESTED); tasks with no findings stay IMPLEMENTED (still parked, awaiting the next aggregate review). The implementer fixes the implicated tasks, they return to IMPLEMENTED, and the unit is re-reviewed as a whole. Increment the **unit's** retry counter (`max_retries_per_task` is per review unit here) — if the unit exhausts its retries, BLOCK the still-implicated tasks (name them) and leave the rest IMPLEMENTED.
+- **task mode:** check the single task's retry_count against `max_retries_per_task`; if max reached → BLOCKED (emit `blocked` — see below); otherwise → CHANGES_REQUESTED, increment retry_count, then emit `retry`:
+
+```bash
+NAZGUL_DIR="${CLAUDE_PROJECT_DIR}/nazgul"
+CURRENT_ITERATION=$(jq -r '.current_iteration // "null"' "${CLAUDE_PROJECT_DIR}/nazgul/config.json")
+"${CLAUDE_PLUGIN_ROOT}/scripts/emit-event-cli.sh" retry \
+  task_id "$TASK_ID" retry_count:n "$RETRY_COUNT" reason "CHANGES_REQUESTED"
+```
+
+- **group/feature mode (per-task re-open):** feedback-aggregator attributes each finding to the owning task by file scope. Re-open ONLY the implicated tasks (set just those to CHANGES_REQUESTED); tasks with no findings stay IMPLEMENTED (still parked, awaiting the next aggregate review). The implementer fixes the implicated tasks, they return to IMPLEMENTED, and the unit is re-reviewed as a whole. Increment the **unit's** retry counter (`max_retries_per_task` is per review unit here) — if the unit exhausts its retries, BLOCK the still-implicated tasks (name them) and leave the rest IMPLEMENTED. Emit `retry` (once per re-opened implicated task) after incrementing, as above.
 - Security rejections in AFK mode → BLOCKED (requires human review) — in group/feature mode, only the task owning the security finding is BLOCKED.
+
+On any BLOCKED transition (max-retries exhausted or security rejection), emit `blocked` for
+the affected task before updating task state. These are observational — do not alter gate logic:
+
+```bash
+NAZGUL_DIR="${CLAUDE_PROJECT_DIR}/nazgul"
+CURRENT_ITERATION=$(jq -r '.current_iteration // "null"' "${CLAUDE_PROJECT_DIR}/nazgul/config.json")
+"${CLAUDE_PLUGIN_ROOT}/scripts/emit-event-cli.sh" blocked \
+  task_id "$TASK_ID" reason "$BLOCKED_REASON"
+```
+
+Where `$BLOCKED_REASON` is `"max retries exhausted"` or `"security rejection"` as
+appropriate. Emit failures are non-fatal — log and continue.
 
 ### Step 5: Post-Loop Phase
 
