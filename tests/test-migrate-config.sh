@@ -875,7 +875,8 @@ NAZGUL_DIR=$(setup_nazgul_dir "v17-terminal")
 cat > "$NAZGUL_DIR/config.json" << 'EOF'
 { "schema_version": 17, "mode": "hitl" }
 EOF
-OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null); MIG_EC=$?
+assert_exit_code "v17 terminal no-op: migrator exits 0 (not a crash)" "$MIG_EC" 0
 assert_eq "v17 config → no output (terminal no-op)" "$OUTPUT" ""
 assert_json_field "v17 terminal → schema_version still 17" "$NAZGUL_DIR/config.json" ".schema_version" "17"
 

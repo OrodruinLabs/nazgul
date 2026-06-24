@@ -40,7 +40,7 @@ The canonical event taxonomy is defined by callers of `emit_event` in
 `scripts/lib/emit-event.sh`, `scripts/emit-event-cli.sh`, and agents that call
 `emit-event-cli.sh` directly. The complete real set is:
 
-```
+```text
 iteration_boundary  objective_complete  blocked  budget_threshold
 task_completed      subagent_stop       stop_failure  compaction
 reviewer_verdict    retry
@@ -98,7 +98,7 @@ name in `scripts/migrate-config.sh`.
 
 For each drift finding, report:
 
-```
+```text
 FILE:LINE — reference "<invented_name>" not found in source (searched: <locations>)
   Correct value (if determinable): "<real_name>"
 ```
