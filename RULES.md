@@ -36,7 +36,7 @@ Task-PR:     PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> APPR
 
 ### Permitted Transitions
 
-`[enforced]` All permitted and forbidden transitions are mechanically enforced by `task-state-guard.sh` (PreToolUse on Write/Edit). Illegal status writes are blocked at the tool call level.
+`[enforced]` All permitted and forbidden transitions are mechanically enforced by `task-state-guard.sh` (PreToolUse on Write/Edit). Any status write that is not an adjacent permitted transition — including a non-adjacent jump like `IN_PROGRESS → DONE` or `PLANNED → DONE`, and including a full-manifest Write whose `status:` lives in YAML frontmatter (caught by the guard's status-extraction fallback) — is rejected (exit 2) with a message naming the current status and the allowed next state(s). Illegal status writes are blocked at the tool call level regardless of who drives the loop.
 
 | From | To | Condition |
 |------|----|-----------|
@@ -73,6 +73,7 @@ Task-PR:     PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> APPR
 6. **Every finding must be structured.** `[enforced]` Required fields: severity, confidence, file path, category, verdict, issue, fix. `review-evidence.sh` reads the structured format to determine APPROVE/REJECT — a malformed review without a valid `verdict` field is treated as a non-approval.
 7. **Feedback priority:** `[hook-driven only]` Security first, correctness second, style last. Contradiction resolution in AFK mode is handled by stop-hook (majority wins, ties by confidence); advisory in HITL.
 8. **Contradiction handling:** `[hook-driven only]` HITL = flag for human. AFK = majority wins, ties broken by higher confidence. Applied by stop-hook in AFK mode.
+9. **Review granularity is enforced at the completion gate.** `[enforced]` `review_gate.granularity` (`task`/`group`/`feature`) controls the review unit. The stop-hook drives dispatch at the configured granularity in AFK/YOLO, so it holds up front there. But a human or orchestrator dispatching `nazgul:review-gate` directly (e.g. `/nazgul:review`) bypasses that **sequencing** — so a `SubagentStop` detector records the unit each review actually covered (`nazgul/logs/review-coverage.jsonl`, derived from `reviewer_verdict` events) and the stop-hook's granularity reconciliation gate blocks (or warns, per `review_gate.enforce_granularity`) `NAZGUL_COMPLETE` when a DONE task was reviewed at the wrong granularity. The gate is post-hoc defense-in-depth (the review already ran at the wrong scope) with a bounded backstop so it can never deadlock an unattended loop. Subagent **dispatch** itself cannot be pre-gated (no PreToolUse matcher for the Task tool), so completion-gate enforcement is the available mechanism.
 
 ---
 
