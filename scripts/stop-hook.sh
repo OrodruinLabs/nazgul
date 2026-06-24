@@ -687,12 +687,61 @@ fi
 # YOLO mode: loop completes when all tasks are APPROVED or DONE
 # Non-YOLO: loop completes when all tasks are DONE
 if [ "$TOTAL_COUNT" -gt 0 ]; then
+  IS_COMPLETE=false
   if [ "$YOLO_MODE" = "true" ]; then
-    LOCALLY_COMPLETE=$((APPROVED_COUNT + DONE_COUNT))
-    if [ "$LOCALLY_COMPLETE" -eq "$TOTAL_COUNT" ]; then
-      exit 0
-    fi
+    [ "$((APPROVED_COUNT + DONE_COUNT))" -eq "$TOTAL_COUNT" ] && IS_COMPLETE=true
   elif [ "$DONE_COUNT" -eq "$TOTAL_COUNT" ]; then
+    IS_COMPLETE=true
+  fi
+
+  if [ "$IS_COMPLETE" = "true" ]; then
+    # --- Post-loop learning gate (mandatory; honors opt-out) ------------------
+    # Distilling candidate Learned Rules is otherwise advisory — only the start
+    # skill's OBJECTIVE_COMPLETE prose asks for it, so it silently gets skipped.
+    # Gate loop completion on it: block the stop with a DELEGATE instruction until
+    # the learner has run and recorded a marker for this objective. No-op when
+    # learning is disabled. A bounded attempt counter keeps an unwritable marker
+    # from bricking the loop (this exit path is BEFORE the max-iteration backstop).
+    LEARN_ENABLED=$(jq -r 'if .learning.enabled == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+    LEARN_DISTILL=$(jq -r 'if .learning.auto_distill_post_loop == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+    if [ "$LEARN_ENABLED" = "true" ] && [ "$LEARN_DISTILL" = "true" ]; then
+      OBJ_ID=$(jq -r '.feat_id // "default"' "$CONFIG" 2>/dev/null || echo "default")
+      LEARN_DIR="$NAZGUL_DIR/learning"
+      MARKER="$LEARN_DIR/.distilled"
+      ATTEMPTS_FILE="$LEARN_DIR/.distill-attempts"
+      DISTILLED_FOR=""
+      [ -f "$MARKER" ] && DISTILLED_FOR=$(cat "$MARKER" 2>/dev/null || echo "")
+      if [ "$DISTILLED_FOR" != "$OBJ_ID" ]; then
+        # Reset the attempt counter when it belongs to a different objective.
+        ATTEMPTS=0
+        if [ -f "$ATTEMPTS_FILE" ]; then
+          read -r A_OBJ A_CNT < "$ATTEMPTS_FILE" 2>/dev/null || true
+          if [ "${A_OBJ:-}" = "$OBJ_ID" ]; then
+            case "${A_CNT:-0}" in ''|*[!0-9]*) A_CNT=0 ;; esac
+            ATTEMPTS="$A_CNT"
+          fi
+        fi
+        if [ "$ATTEMPTS" -lt 3 ]; then
+          mkdir -p "$LEARN_DIR"
+          printf '%s %s\n' "$OBJ_ID" "$((ATTEMPTS + 1))" > "$ATTEMPTS_FILE"
+          cat >&2 << LEARN_MSG
+Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP LEARNING GATE (mandatory).
+Candidate Learned Rules have NOT been distilled for this objective (${OBJ_ID}) yet.
+DELEGATE: Spawn the learner agent (Agent tool, subagent_type "nazgul:learner") to mine this
+objective's review/diagnosis artifacts and write candidate rules to
+nazgul/learning/proposed-rules.md. It PROPOSES only — it never approves or edits the registry.
+When it finishes it MUST record completion: echo "${OBJ_ID}" > nazgul/learning/.distilled
+Do NOT output NAZGUL_COMPLETE until distillation has run and the marker is written.
+Opt out for future objectives with learning.auto_distill_post_loop=false in nazgul/config.json.
+LEARN_MSG
+          jq -n --arg r "Post-loop learning gate: distill learned rules for ${OBJ_ID}" '{"decision":"block","reason":$r}'
+          exit 2
+        else
+          echo "Nazgul: learning gate gave up after ${ATTEMPTS} attempts for ${OBJ_ID} — completing without distillation. Run /nazgul:learn manually." >&2
+        fi
+      fi
+    fi
+    # Distilled, opted out, or backstop exhausted — allow completion.
     exit 0
   fi
 fi

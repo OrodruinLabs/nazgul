@@ -71,6 +71,15 @@ Full XML/JSDoc/docstring on PUBLIC interface members is expected (`<inheritdoc/>
 | `guards.lean_comments` | `true` | Master switch. Set to `false` to opt out entirely (the guard becomes a no-op). |
 | `guards.max_consecutive_comment_lines` | `2` | Longest run of line comments allowed before it's flagged as bloat. |
 
+## Post-Loop Learning Gate
+
+When an objective finishes, Nazgul distills recurring mistakes (review rejections, debugger diagnoses, repeated failures) into **candidate** Learned Rules via the `nazgul:learner` agent — it proposes only; you approve them later with `/nazgul:learn`. This step is **mandatory**: `stop-hook.sh` blocks loop completion until the learner has run for the current objective (it records completion by writing the objective id to `nazgul/learning/.distilled`). A bounded attempt counter lets the loop finish with a warning if the marker can't be written, so it can never brick an unattended run.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `learning.enabled` | `true` | Master switch for the learning subsystem. |
+| `learning.auto_distill_post_loop` | `true` | Run (and gate completion on) the learner at objective completion. Set either flag to `false` to opt out — the gate becomes a no-op. |
+
 ## Local Mode
 
 By default, `/nazgul:init` creates files that are tracked in git (shared mode). To keep all Nazgul artifacts out of your project's repository, use local mode:
