@@ -15,6 +15,7 @@ STOP_FAILURE="$REPO_ROOT/scripts/stop-failure.sh"
 SUBAGENT_STOP="$REPO_ROOT/scripts/subagent-stop.sh"
 TASK_COMPLETED="$REPO_ROOT/scripts/task-completed.sh"
 POST_COMPACT="$REPO_ROOT/scripts/post-compact.sh"
+STOP_HOOK="$REPO_ROOT/scripts/stop-hook.sh"
 
 # --- Syntax checks ---
 if bash -n "$STOP_FAILURE" 2>/dev/null; then _pass "stop-failure.sh parses"; else _fail "stop-failure.sh parses"; fi
@@ -183,6 +184,48 @@ create_config '.telemetry.bus_enabled = false'
 "$POST_COMPACT" >/dev/null 2>&1 || true
 assert_file_not_exists "post-compact no emit when bus_enabled false" "$TEST_DIR/nazgul/logs/events.jsonl"
 assert_file_exists "counter file still updated when bus disabled" "$TEST_DIR/nazgul/.compaction_count"
+teardown_temp_dir
+
+# --- post-compact.sh: no-op when Nazgul not initialized ---
+setup_temp_dir
+rc=0; "$POST_COMPACT" >/dev/null 2>&1 || rc=$?
+assert_exit_code "post-compact exits 0 without config" "$rc" 0
+assert_file_not_exists "no events.jsonl created without config" \
+  "$TEST_DIR/nazgul/logs/events.jsonl"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# stop-hook.sh — iteration_boundary emit
+# ---------------------------------------------------------------------------
+
+# --- stop-hook.sh: emits iteration_boundary to events.jsonl ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+rc=0; echo '{}' | CLAUDE_PROJECT_DIR="$TEST_DIR" "$STOP_HOOK" >/dev/null 2>&1 || rc=$?
+assert_file_contains "iteration_boundary emitted" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"iteration_boundary"'
+assert_file_contains "iteration_boundary has done field" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"done"'
+assert_file_contains "iteration_boundary has total field" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"total"'
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# emit resilience — unwritable events.jsonl must not change hook exit code
+# ---------------------------------------------------------------------------
+
+# --- emit resilience: unwritable events.jsonl does not change hook exit code ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/logs"
+touch "$TEST_DIR/nazgul/logs/events.jsonl"
+chmod 444 "$TEST_DIR/nazgul/logs/events.jsonl"
+rc=0; echo '{}' | "$STOP_FAILURE" >/dev/null 2>&1 || rc=$?
+assert_exit_code "emit resilience: stop-failure exits 0 even with read-only events.jsonl" "$rc" 0
+chmod 644 "$TEST_DIR/nazgul/logs/events.jsonl"
 teardown_temp_dir
 
 report_results

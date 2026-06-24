@@ -69,7 +69,7 @@ emit_event() {
   if [ "$_EMIT_HAS_FLOCK" = "1" ]; then
     ( flock -x 200; jq -cn "${jq_args[@]}" "$jq_expr" >> "$EVENTS_FILE" ) 200>"$lockfile"
   else
-    jq -cn "${jq_args[@]}" "$jq_expr" >> "$EVENTS_FILE"
+    jq -cn "${jq_args[@]}" "$jq_expr" >> "$EVENTS_FILE" || true
   fi
 
 }

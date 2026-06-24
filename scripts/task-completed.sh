@@ -20,15 +20,14 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/emit-event.sh"
 
-# Best-effort task_id from stdin. CONCERN 2: TaskCompleted payload does not
-# expose reliable task identity — task_id defaults to "unknown" in most cases.
-# Consumers must not depend on task_id in v1.
+# task_id is best-effort — the TaskCompleted payload has no reliable task field.
 TASK_ID="unknown"
 if command -v jq >/dev/null 2>&1 && [ -n "$INPUT" ]; then
   TASK_ID=$(printf '%s' "$INPUT" | jq -r '.task_id // .taskId // "unknown"' 2>/dev/null || echo "unknown")
   [ -n "$TASK_ID" ] || TASK_ID="unknown"
 fi
 
+# CURRENT_ITERATION intentionally omitted — emit_event treats unset as null.
 # Emit task_completed to the telemetry bus (replaces legacy iterations.jsonl write).
 emit_event "task_completed" task_id "$TASK_ID"
 
