@@ -663,9 +663,9 @@ teardown_temp_dir
 
 # === REVIEW GRANULARITY (review_gate.granularity) ===
 
-# --- Granularity task (default): IMPLEMENTED task dispatches per-task review ---
+# --- Granularity task (explicit): IMPLEMENTED task dispatches per-task review ---
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
-create_config   # default template → review_gate.granularity = "task"
+create_config '.review_gate.granularity = "task"'   # explicit task (v17 default is group)
 create_plan
 create_task_file "TASK-001" "IMPLEMENTED"
 create_task_file_with_commits "TASK-001" "IMPLEMENTED" "abc1234"
