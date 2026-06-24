@@ -4,7 +4,15 @@
 # Never executed directly.
 
 EMIT_SCHEMA_VERSION=1
-EVENTS_FILE="${EVENTS_FILE:-${NAZGUL_DIR:-}/logs/events.jsonl}"
+EVENTS_FILE="${EVENTS_FILE:-${NAZGUL_DIR:+${NAZGUL_DIR}/logs/events.jsonl}}"
+
+# Module-level caches — resolved once at source time, not on every call.
+# bus_enabled: lazy (NAZGUL_DIR may not be set yet when sourced globally).
+_EMIT_BUS_ENABLED=""
+# flock availability is fixed for the lifetime of the process.
+if command -v flock >/dev/null 2>&1; then _EMIT_HAS_FLOCK=1; else _EMIT_HAS_FLOCK=0; fi
+# Log directory guard: 0 = mkdir -p not yet run for this EVENTS_FILE.
+_EMIT_DIR_READY=0
 
 emit_event() {
   local event_type="$1"; shift
@@ -14,41 +22,51 @@ emit_event() {
   [ -z "$EVENTS_FILE" ]    && return 0
 
   # Honor telemetry.bus_enabled: false -> silent no-op.
+  # Resolved lazily on first call so NAZGUL_DIR is guaranteed to be set.
   # Note: cannot use jq `//` (alternative) here — it treats `false` as falsy
   # and returns the fallback. Use an explicit null check instead.
-  local bus_enabled
-  bus_enabled=$(jq -r 'if .telemetry.bus_enabled == null then "true" else (.telemetry.bus_enabled | tostring) end' "${NAZGUL_DIR}/config.json" 2>/dev/null || echo "true")
-  [ "$bus_enabled" = "false" ] && return 0
+  if [ -z "$_EMIT_BUS_ENABLED" ]; then
+    _EMIT_BUS_ENABLED=$(jq -r 'if .telemetry.bus_enabled == null then "true" else (.telemetry.bus_enabled | tostring) end' "${NAZGUL_DIR}/config.json" 2>/dev/null || echo "true")
+  fi
+  [ "$_EMIT_BUS_ENABLED" = "false" ] && return 0
 
-  local iter="${CURRENT_ITERATION:-null}"
   local ts; ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
   local jq_args=()
   # shellcheck disable=SC2016
-  local jq_expr='{sv:($sv|tonumber),ts:$ts,event:$event,iteration:($iter|if .=="null" then null else tonumber end)'
+  local jq_expr='{sv:($sv|tonumber),ts:$ts,event:$event,iteration:$iter'
   jq_args+=(--arg sv "$EMIT_SCHEMA_VERSION")
   jq_args+=(--arg ts "$ts")
   jq_args+=(--arg event "$event_type")
-  jq_args+=(--arg iter "$iter")
+  if [ -n "${CURRENT_ITERATION:-}" ]; then
+    jq_args+=(--argjson iter "$CURRENT_ITERATION")
+  else
+    jq_args+=(--argjson iter "null")
+  fi
 
   while [ $# -ge 2 ]; do
     local raw_key="$1" val="$2"; shift 2
-    local key="$raw_key" numeric=false
-    case "$raw_key" in *:n) key="${raw_key%:n}"; numeric=true ;; esac
-    if [ "$numeric" = true ]; then jq_args+=(--argjson "$key" "$val")
-    else jq_args+=(--arg "$key" "$val"); fi
+    local key="$raw_key"
+    case "$raw_key" in
+      *:n) key="${raw_key%:n}"; jq_args+=(--argjson "$key" "$val") ;;
+      *)   jq_args+=(--arg "$key" "$val") ;;
+    esac
     jq_expr="${jq_expr},${key}:\$${key}"
   done
   jq_expr="${jq_expr}}"
 
-  mkdir -p "$(dirname "$EVENTS_FILE")"
+  # Create log dir on first emit only; ${var%/*} avoids a $(dirname) subshell.
+  if [ "$_EMIT_DIR_READY" = "0" ]; then
+    mkdir -p "${EVENTS_FILE%/*}"
+    _EMIT_DIR_READY=1
+  fi
 
   # flock serialises concurrent SubagentStop fires (Agent Teams). Fallback:
   # O_APPEND + a single jq write() is atomic on POSIX for writes < PIPE_BUF;
   # JSONL lines are short. CONCERN 3: macOS base ships without flock -> the
   # fallback path must be exercised by macOS CI.
   local lockfile="${EVENTS_FILE}.lock"
-  if command -v flock >/dev/null 2>&1; then
+  if [ "$_EMIT_HAS_FLOCK" = "1" ]; then
     ( flock -x 200; jq -cn "${jq_args[@]}" "$jq_expr" >> "$EVENTS_FILE" ) 200>"$lockfile"
   else
     jq -cn "${jq_args[@]}" "$jq_expr" >> "$EVENTS_FILE"
