@@ -155,4 +155,61 @@ ec=$(printf '%s' '{"tool_name":"Write","tool_input":{"file_path":"/x/Foo.cs","co
   | CLAUDE_PROJECT_DIR="$TMP/nonexistent" bash "$GUARD" >/dev/null 2>&1; echo $?)
 assert_exit_code "hook no-op without project config" "$ec" 0
 
+# === Review-driven regression coverage (PR #39 bot feedback) ==================
+
+# --- BAD: triple-single-quote multi-paragraph docstring on private def --------
+write_file bad_doc_sq.py "def _helper(x):
+    '''Compute the thing.
+
+    This second paragraph is bloat.
+    '''
+    return x
+"
+assert_exit_code "blocks ''' multi-paragraph private docstring" "$(check_ec "$TMP/bad_doc_sq.py" "$ENABLED_CONFIG")" 2
+
+# --- BAD: prefixed (r\"\"\") multi-paragraph docstring on private def ----------
+write_file bad_doc_prefix.py 'def _helper(x):
+    r"""Compute the thing.
+
+    Second paragraph, still bloat.
+    """
+    return x
+'
+assert_exit_code "blocks prefixed multi-paragraph private docstring" "$(check_ec "$TMP/bad_doc_prefix.py" "$ENABLED_CONFIG")" 2
+
+# --- ALLOWED: long SINGLE-paragraph /// summary on a private member -----------
+# Regression: line count alone (former cnt>=6) must not flag a single paragraph.
+write_file good_long_summary.cs 'public class V {
+    /// <summary>
+    /// Resolves the venue token from cache, refreshing it from the upstream
+    /// identity provider when the cached copy is missing or has expired, and
+    /// returns the bearer string ready to attach to an outbound request without
+    /// any additional formatting required by the caller at the call site here.
+    /// </summary>
+    private string BuildToken() => _token;
+}
+'
+assert_exit_code "allows long single-paragraph private summary" "$(check_ec "$TMP/good_long_summary.cs" "$ENABLED_CONFIG")" 0
+
+# --- BAD: license keyword in a MID-FILE comment run is NOT exempt -------------
+write_file bad_midfile_license.ts 'export function f() {
+  return 1;
+}
+// this run mentions the MIT License but is not a header
+// second line of the mid-file run
+// third line of the mid-file run
+const x = 2;
+'
+assert_exit_code "mid-file license-keyword run still blocks" "$(check_ec "$TMP/bad_midfile_license.ts" "$ENABLED_CONFIG")" 2
+
+# --- ALLOWED: MultiEdit edits are evaluated independently ---------------------
+# Two separate edits, each with <=2 comment lines, must NOT be joined into a
+# phantom 3+ run.
+ec=$(hook_ec '{"tool_name":"MultiEdit","tool_input":{"file_path":"/x/a.ts","edits":[{"new_string":"// one\n// two\nconst a=1;"},{"new_string":"// three\nconst b=2;"}]}}')
+assert_exit_code "MultiEdit edits evaluated independently (no phantom run)" "$ec" 0
+
+# --- BAD: a single MultiEdit edit that itself has a 3+ run still blocks -------
+ec=$(hook_ec '{"tool_name":"MultiEdit","tool_input":{"file_path":"/x/a.ts","edits":[{"new_string":"const a=1;"},{"new_string":"// one\n// two\n// three\nconst b=2;"}]}}')
+assert_exit_code "MultiEdit blocks a real in-edit run" "$ec" 2
+
 report_results

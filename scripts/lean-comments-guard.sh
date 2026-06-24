@@ -47,7 +47,7 @@ comment_style_for() {
 # Reads content on stdin, prints findings as "LINE|CATEGORY|MESSAGE" lines.
 detect_violations() {
   local style="$1" maxrun="$2"
-  awk -v style="$style" -v maxrun="$maxrun" '
+  awk -v style="$style" -v maxrun="$maxrun" -v tsq="'''" '
     { line[NR] = $0 }
     END {
       n = NR
@@ -58,7 +58,10 @@ detect_violations() {
           j = i; lic = 0
           while (j <= n && is_plain(line[j])) { if (is_lic(line[j])) lic = 1; j++ }
           rl = j - i
-          if (rl > maxrun && !lic)
+          # A license header is only exempt at the very top of the scanned
+          # content (first 3 lines) — a mid-file run that merely mentions a
+          # license keyword must not slip the guard.
+          if (rl > maxrun && !(lic && i <= 3))
             emit(i, "comment-run", rl " consecutive line comments exceed the max of " maxrun)
           i = j
         } else i++
@@ -98,7 +101,9 @@ detect_violations() {
               if (body(line[i]) ~ /^[ \t]*$/) blankdoc = 1
               cnt++; i++
             }
-            if (blankdoc || cnt >= 6) multi = 1
+            # Multi-paragraph = a blank doc line splits paragraphs. A long
+            # SINGLE-paragraph summary is fine, so line count alone never blocks.
+            if (blankdoc) multi = 1
           } else if (line[i] ~ /\/\*\*/) {
             gstart = i; bl = 0
             while (i <= n) {
@@ -140,12 +145,17 @@ detect_violations() {
             while (k <= n && is_blank(line[k])) k++
             if (k > n) continue
             dl = line[k]; sub(/^[ \t]+/, "", dl)
-            if (dl ~ /^"""/) {
-              rest = dl; sub(/^"""/, "", rest)
-              if (index(rest, "\"\"\"") > 0) continue   # single-line docstring is fine
-              blankin = 0; k2 = k + 1
-              while (k2 <= n) { if (index(line[k2], "\"\"\"") > 0) break; if (is_blank(line[k2])) blankin = 1; k2++ }
-              if (blankin) emit(i, "doc-on-nonpublic", "multi-paragraph docstring on a private/test function")
+            sub(/^[rRfFbBuU]+/, "", dl)   # optional string prefix: r/f/rf/b/u"""
+            qq = ""
+            if (dl ~ /^"""/) qq = "\"\"\""
+            else if (substr(dl, 1, 3) == tsq) qq = tsq
+            if (qq != "") {
+              rest = substr(dl, 4)
+              if (index(rest, qq) == 0) {   # not a single-line docstring
+                blankin = 0; k2 = k + 1
+                while (k2 <= n) { if (index(line[k2], qq) > 0) break; if (is_blank(line[k2])) blankin = 1; k2++ }
+                if (blankin) emit(i, "doc-on-nonpublic", "multi-paragraph docstring on a private/test function")
+              }
             }
           }
         }
@@ -258,8 +268,6 @@ case "$TOOL_NAME" in
     ;;
   MultiEdit)
     FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null || echo "")
-    # Inspect the concatenation of all new_string values for this file.
-    CONTENT=$(echo "$INPUT" | jq -r '[.tool_input.edits // [] | .[] | .new_string // ""] | join("\n")' 2>/dev/null || echo "")
     ;;
   *)
     exit 0
@@ -269,6 +277,24 @@ esac
 [ -z "$FILE_PATH" ] && exit 0
 STYLE=$(comment_style_for "$FILE_PATH")
 [ -z "$STYLE" ] && exit 0
+
+if [ "$TOOL_NAME" = "MultiEdit" ]; then
+  # Evaluate each edit's new_string INDEPENDENTLY. Joining all edits would
+  # concatenate non-adjacent insertions and flag comment runs that never
+  # actually become contiguous in the file (false positives).
+  RC=0
+  EDIT_COUNT=$(echo "$INPUT" | jq -r '.tool_input.edits // [] | length' 2>/dev/null || echo 0)
+  case "$EDIT_COUNT" in ''|*[!0-9]*) EDIT_COUNT=0 ;; esac
+  idx=0
+  while [ "$idx" -lt "$EDIT_COUNT" ]; do
+    CONTENT=$(echo "$INPUT" | jq -r --argjson i "$idx" '.tool_input.edits[$i].new_string // ""' 2>/dev/null || echo "")
+    if ! report_for_content "$STYLE" "$MAXRUN" "$FILE_PATH" "$CONTENT"; then
+      RC=2
+    fi
+    idx=$((idx + 1))
+  done
+  exit "$RC"
+fi
 
 if ! report_for_content "$STYLE" "$MAXRUN" "$FILE_PATH" "$CONTENT"; then
   exit 2

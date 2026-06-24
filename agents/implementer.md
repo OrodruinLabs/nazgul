@@ -45,7 +45,7 @@ Rules:
 - NO runs of 3+ line comments, and NO comment that restates or narrates the next line (including micro-optimization noise).
 - A single short comment explaining a non-obvious domain/venue quirk IS allowed.
 
-```
+```csharp
 GOOD:  /// <summary>One subscribe frame covering all requests, or null if the venue can't batch this set.</summary>
 
 BAD (restates code / micro-opt noise):
