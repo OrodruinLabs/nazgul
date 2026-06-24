@@ -763,4 +763,280 @@ run_guard "$input"
 assert_exit_code "file-scope: docs/ path exempt from scope check" "$GUARD_EC" 0
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# FORBIDDEN TRANSITION TESTS (TASK-001 — RULES.md §2 hardening)
+# Each test verifies exit 2 AND that stderr names the from-state or an allowed next-state.
+# ---------------------------------------------------------------------------
+
+# Helper: make a Write input whose content uses YAML frontmatter for status.
+make_frontmatter_write_input() {
+  local file_path="$1" status="$2"
+  local content
+  content="---
+status: ${status}
+---
+# TASK-001: Test
+
+## Metadata
+- **ID**: TASK-001
+- **Group**: 1
+"
+  jq -n \
+    --arg fp "$file_path" \
+    --arg content "$content" \
+    '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}'
+}
+
+# ---------------------------------------------------------------------------
+# Test 46: FORBIDDEN — PLANNED -> IN_PROGRESS (must go through READY)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "PLANNED"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_PROGRESS")
+run_guard "$input"
+assert_exit_code "PLANNED->IN_PROGRESS blocked" "$GUARD_EC" 2
+assert_contains "PLANNED->IN_PROGRESS message names from-state" "$GUARD_STDERR" "PLANNED"
+assert_contains "PLANNED->IN_PROGRESS message names allowed next" "$GUARD_STDERR" "READY"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 47: FORBIDDEN — READY -> IMPLEMENTED (must go through IN_PROGRESS)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "READY"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- abc1234def')
+input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
+run_guard "$input"
+assert_exit_code "READY->IMPLEMENTED blocked" "$GUARD_EC" 2
+assert_contains "READY->IMPLEMENTED message names from-state" "$GUARD_STDERR" "READY"
+assert_contains "READY->IMPLEMENTED message names allowed next" "$GUARD_STDERR" "IN_PROGRESS"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 48: FORBIDDEN — IN_PROGRESS -> IN_REVIEW (must go through IMPLEMENTED)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IN_PROGRESS"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
+run_guard "$input"
+assert_exit_code "IN_PROGRESS->IN_REVIEW blocked" "$GUARD_EC" 2
+assert_contains "IN_PROGRESS->IN_REVIEW message names from-state" "$GUARD_STDERR" "IN_PROGRESS"
+assert_contains "IN_PROGRESS->IN_REVIEW message names allowed next" "$GUARD_STDERR" "IMPLEMENTED"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 49: FORBIDDEN — IN_PROGRESS -> DONE (must go through IMPLEMENTED/IN_REVIEW)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "IN_PROGRESS"
+create_review_dir "TASK-001"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "IN_PROGRESS->DONE blocked" "$GUARD_EC" 2
+assert_contains "IN_PROGRESS->DONE message names from-state" "$GUARD_STDERR" "IN_PROGRESS"
+assert_contains "IN_PROGRESS->DONE message names allowed next" "$GUARD_STDERR" "IMPLEMENTED"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 50: FORBIDDEN — PLANNED -> DONE (skips all intermediate states)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "PLANNED"
+create_review_dir "TASK-001"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "PLANNED->DONE blocked" "$GUARD_EC" 2
+assert_contains "PLANNED->DONE message names from-state" "$GUARD_STDERR" "PLANNED"
+assert_contains "PLANNED->DONE message names allowed next" "$GUARD_STDERR" "READY"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 51: FORBIDDEN — IN_REVIEW -> IN_PROGRESS (must go through CHANGES_REQUESTED)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IN_REVIEW"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_PROGRESS")
+run_guard "$input"
+assert_exit_code "IN_REVIEW->IN_PROGRESS blocked" "$GUARD_EC" 2
+assert_contains "IN_REVIEW->IN_PROGRESS message names from-state" "$GUARD_STDERR" "IN_REVIEW"
+assert_contains "IN_REVIEW->IN_PROGRESS message names allowed next" "$GUARD_STDERR" "CHANGES_REQUESTED"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 52: FORBIDDEN — DONE -> READY (DONE is terminal)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "DONE"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "READY")
+run_guard "$input"
+assert_exit_code "DONE->READY blocked" "$GUARD_EC" 2
+assert_contains "DONE->READY message names terminal state" "$GUARD_STDERR" "terminal"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 53: FORBIDDEN — DONE -> IN_PROGRESS (DONE is terminal)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "DONE"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_PROGRESS")
+run_guard "$input"
+assert_exit_code "DONE->IN_PROGRESS blocked" "$GUARD_EC" 2
+assert_contains "DONE->IN_PROGRESS message names terminal state" "$GUARD_STDERR" "terminal"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# ALLOWED TRANSITION COMPLETENESS TESTS (TASK-001 — precision gate)
+# Tests for transitions not yet explicitly covered in the existing suite.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Test 54: ALLOWED — IN_REVIEW -> APPROVED (YOLO mode)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.afk.yolo = true' '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "IN_REVIEW"
+create_review_dir "TASK-001"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "APPROVED")
+run_guard "$input"
+assert_exit_code "IN_REVIEW->APPROVED allowed (YOLO)" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 55: ALLOWED — IN_REVIEW -> CHANGES_REQUESTED
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IN_REVIEW"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "CHANGES_REQUESTED")
+run_guard "$input"
+assert_exit_code "IN_REVIEW->CHANGES_REQUESTED allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 56: ALLOWED — APPROVED -> DONE (YOLO + task-pr)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.afk.yolo = true' '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "APPROVED"
+create_review_dir "TASK-001"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "APPROVED->DONE allowed (YOLO)" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 57: ALLOWED — CHANGES_REQUESTED -> IN_PROGRESS
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "CHANGES_REQUESTED"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_PROGRESS")
+run_guard "$input"
+assert_exit_code "CHANGES_REQUESTED->IN_PROGRESS allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# FULL-MANIFEST WRITE REGRESSION (TASK-001 — YAML frontmatter extraction bug)
+# Verifies that a full-file Write with status in YAML frontmatter is extracted
+# and the forbidden transition is blocked (the FEAT-002 bypass path).
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Test 58: REGRESSION — full-manifest Write IN_PROGRESS->DONE via YAML frontmatter
+# This is the exact path that slipped through during FEAT-002.
+# The file on disk has status IN_PROGRESS; the Write replaces the whole manifest
+# with YAML frontmatter containing "status: DONE". Must be blocked.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "IN_PROGRESS"
+create_review_dir "TASK-001"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_frontmatter_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "full-manifest Write IN_PROGRESS->DONE via frontmatter blocked" "$GUARD_EC" 2
+assert_contains "frontmatter Write blocked message" "$GUARD_STDERR" "Invalid state transition"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 59: REGRESSION — full-manifest Write PLANNED->DONE via YAML frontmatter
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "PLANNED"
+create_review_dir "TASK-001"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_frontmatter_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "full-manifest Write PLANNED->DONE via frontmatter blocked" "$GUARD_EC" 2
+assert_contains "frontmatter PLANNED->DONE message names from-state" "$GUARD_STDERR" "PLANNED"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 60: REGRESSION — full-manifest Write IN_PROGRESS->READY via YAML frontmatter
+# (not a real workflow but confirms frontmatter extraction works for any token)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IN_PROGRESS"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_frontmatter_write_input "$TASK_PATH" "READY")
+run_guard "$input"
+assert_exit_code "full-manifest Write IN_PROGRESS->READY via frontmatter blocked" "$GUARD_EC" 2
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 61: ALLOWED — full-manifest Write IN_PROGRESS->IMPLEMENTED via YAML frontmatter
+# The 4th extractor must also allow valid transitions — no false positives.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IN_PROGRESS"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+content="---
+status: IMPLEMENTED
+---
+# TASK-001: Test
+
+## Metadata
+- **ID**: TASK-001
+- **Group**: 1
+
+## Commits
+- abc1234def
+"
+input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
+run_guard "$input"
+assert_exit_code "full-manifest Write IN_PROGRESS->IMPLEMENTED via frontmatter allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
 report_results

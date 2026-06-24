@@ -190,7 +190,7 @@ else
   exit 0
 fi
 
-# Check if this changes the Status field (supports list-item, ATX inline, and ATX block formats)
+# Check if this changes the Status field (supports list-item, ATX inline, ATX block, and YAML frontmatter)
 NEW_STATUS=$(echo "$NEW_CONTENT" | sed -n 's/.*\*\*Status\*\*:[[:space:]]*\([A-Z_]*\).*/\1/p' | head -1)
 if [ -z "$NEW_STATUS" ]; then
   NEW_STATUS=$(echo "$NEW_CONTENT" | sed -n 's/^## Status:[[:space:]]*\([A-Z_]*\).*/\1/p' | head -1)
@@ -198,6 +198,18 @@ fi
 if [ -z "$NEW_STATUS" ]; then
   # Try ATX block format: ## Status\n<VALUE>
   NEW_STATUS=$(echo "$NEW_CONTENT" | awk '/^## Status[[:space:]]*$/{getline; gsub(/^[[:space:]]+|[[:space:]]+$/, ""); if (/^[A-Z_]+$/) print; exit}')
+fi
+if [ -z "$NEW_STATUS" ]; then
+  # YAML frontmatter: ^status: TOKEN or bare token line anchored to the known set
+  _fm_line=$(echo "$NEW_CONTENT" | \
+    grep -m1 -E '^status:[[:space:]]*(PLANNED|READY|IN_PROGRESS|IMPLEMENTED|IN_REVIEW|APPROVED|CHANGES_REQUESTED|BLOCKED|DONE)[[:space:]]*$' 2>/dev/null || true)
+  NEW_STATUS=$(printf '%s' "$_fm_line" | sed 's/^status:[[:space:]]*//' | tr -d '[:space:]')
+fi
+if [ -z "$NEW_STATUS" ]; then
+  # Bare token on its own line (catch-all for any remaining inline formats)
+  NEW_STATUS=$(echo "$NEW_CONTENT" | \
+    grep -m1 -E '^(PLANNED|READY|IN_PROGRESS|IMPLEMENTED|IN_REVIEW|APPROVED|CHANGES_REQUESTED|BLOCKED|DONE)[[:space:]]*$' 2>/dev/null \
+    | tr -d '[:space:]' || true)
 fi
 if [ -z "$NEW_STATUS" ]; then
   # Not a status change — allow
@@ -251,12 +263,18 @@ valid_transition() {
 
 if ! valid_transition "$OLD_STATUS" "$NEW_STATUS"; then
   echo "NAZGUL STATE GUARD: BLOCKED — Invalid state transition: ${OLD_STATUS} → ${NEW_STATUS}" >&2
-  echo "Constitution Article III permitted transitions:" >&2
-  echo "  PLANNED→READY, READY→IN_PROGRESS, IN_PROGRESS→IMPLEMENTED," >&2
-  echo "  IMPLEMENTED→IN_REVIEW, IN_REVIEW→DONE (with reviews)," >&2
-  echo "  IN_REVIEW→APPROVED (YOLO), APPROVED→DONE (PR merged)," >&2
-  echo "  IN_REVIEW→CHANGES_REQUESTED, *→BLOCKED," >&2
-  echo "  BLOCKED→READY (unblock), BLOCKED→IN_REVIEW (materialize)" >&2
+  case "$OLD_STATUS" in
+    PLANNED)           echo "  PLANNED allowed next: READY, BLOCKED" >&2 ;;
+    READY)             echo "  READY allowed next: IN_PROGRESS, BLOCKED" >&2 ;;
+    IN_PROGRESS)       echo "  IN_PROGRESS allowed next: IMPLEMENTED, BLOCKED" >&2 ;;
+    IMPLEMENTED)       echo "  IMPLEMENTED allowed next: IN_REVIEW, BLOCKED" >&2 ;;
+    IN_REVIEW)         echo "  IN_REVIEW allowed next: DONE, APPROVED (YOLO), CHANGES_REQUESTED, BLOCKED" >&2 ;;
+    APPROVED)          echo "  APPROVED allowed next: DONE" >&2 ;;
+    CHANGES_REQUESTED) echo "  CHANGES_REQUESTED allowed next: IN_PROGRESS, BLOCKED" >&2 ;;
+    BLOCKED)           echo "  BLOCKED allowed next: READY (unblock), IN_REVIEW (materialize)" >&2 ;;
+    DONE)              echo "  DONE is a terminal state — no further transitions allowed" >&2 ;;
+    *)                 echo "  See RULES.md §2 for the permitted transition table" >&2 ;;
+  esac
   exit 2
 fi
 
