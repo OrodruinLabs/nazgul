@@ -60,12 +60,23 @@ if ! git rev-parse --is-inside-work-tree &>/dev/null; then
     output_result
 fi
 
+# --- Determine install_mode to skip nazgul/ in local installs ---
+INSTALL_MODE=""
+if command -v jq &>/dev/null; then
+    INSTALL_MODE=$(jq -r '.install_mode // ""' nazgul/config.json 2>/dev/null || echo "")
+fi
+
 # --- Stage all modified files ---
 STAGED_COUNT=0
 
 # Modified but not staged
 while IFS= read -r file; do
     if [[ -n "$file" && -e "$file" ]]; then
+        # In local mode, skip nazgul/ runtime state — it must not be committed
+        if [[ "$INSTALL_MODE" == "local" && "$file" == nazgul/* ]]; then
+            debug_log "Skipping nazgul/ path in local mode: $file"
+            continue
+        fi
         if git add "$file" 2>/dev/null; then
             ((STAGED_COUNT++))
             debug_log "Staged: $file"
@@ -76,6 +87,11 @@ done < <(git diff --name-only 2>/dev/null)
 # Untracked files (excluding ignored)
 while IFS= read -r file; do
     if [[ -n "$file" && -e "$file" ]]; then
+        # In local mode, skip nazgul/ runtime state — it must not be committed
+        if [[ "$INSTALL_MODE" == "local" && "$file" == nazgul/* ]]; then
+            debug_log "Skipping nazgul/ path in local mode: $file"
+            continue
+        fi
         # Skip sensitive files
         case "$file" in
             *.env|*.env.*|credentials*|*secret*|*.pem|*.key)
