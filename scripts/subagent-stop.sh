@@ -50,9 +50,9 @@ _record_review_coverage() {
   granularity=$(jq -r '.review_gate.granularity // "task"' "$CONFIG" 2>/dev/null || echo "task")
   case "$granularity" in task|group|feature) ;; *) granularity="task" ;; esac
 
-  # Collect distinct task_ids from the most-recent reviewer_verdict run.
-  # "Most recent run" = all reviewer_verdict events after the last non-reviewer_verdict
-  # event, bounded to a max of 200 lines so this stays O(1) on large logs.
+  # Collect distinct task_ids from recent reviewer_verdict events.
+  # Best-effort: last 200 log lines; may include events from prior review runs
+  # on long logs. review-coverage.jsonl is a derived index — approximation is acceptable.
   local task_ids
   task_ids=$(tail -200 "$events_file" \
     | jq -r 'select(.event == "reviewer_verdict") | .task_id' 2>/dev/null \
@@ -67,6 +67,10 @@ _record_review_coverage() {
 
   while IFS= read -r task_id; do
     [ -n "$task_id" ] || continue
+    case "$task_id" in
+      TASK-[0-9]*) ;;
+      *) continue ;;
+    esac
 
     local review_unit granularity_used
     if [ "$task_count" -eq 1 ]; then
@@ -79,7 +83,7 @@ _record_review_coverage() {
       granularity_used="feature"
     else
       local group
-      group=$(grep -r "^\*\*Group\*\*:\|^- \*\*Group\*\*:" "$NAZGUL_DIR/tasks/${task_id}.md" 2>/dev/null \
+      group=$(grep "^\*\*Group\*\*:\|^- \*\*Group\*\*:" "$NAZGUL_DIR/tasks/${task_id}.md" 2>/dev/null \
         | grep -oE '[0-9]+' | head -1 || echo "1")
       review_unit="GROUP-${group}"
       granularity_used="group"

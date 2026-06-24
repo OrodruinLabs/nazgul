@@ -1039,4 +1039,65 @@ run_guard "$input"
 assert_exit_code "full-manifest Write IN_PROGRESS->IMPLEMENTED via frontmatter allowed" "$GUARD_EC" 0
 teardown_temp_dir
 
+
+# ---------------------------------------------------------------------------
+# Test 62: ALLOWED — IN_REVIEW -> BLOCKED
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IN_REVIEW"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "BLOCKED")
+run_guard "$input"
+assert_exit_code "IN_REVIEW->BLOCKED allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 63: ALLOWED — CHANGES_REQUESTED -> BLOCKED
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "CHANGES_REQUESTED"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "BLOCKED")
+run_guard "$input"
+assert_exit_code "CHANGES_REQUESTED->BLOCKED allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 64: ALLOWED — PLANNED -> BLOCKED
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "PLANNED"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "BLOCKED")
+run_guard "$input"
+assert_exit_code "PLANNED->BLOCKED allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 65: ALLOWED — READY -> BLOCKED
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "READY"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "BLOCKED")
+run_guard "$input"
+assert_exit_code "READY->BLOCKED allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 66: ALLOWED — IMPLEMENTED -> BLOCKED
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IMPLEMENTED"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "BLOCKED")
+run_guard "$input"
+assert_exit_code "IMPLEMENTED->BLOCKED allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
 report_results

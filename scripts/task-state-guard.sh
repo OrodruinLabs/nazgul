@@ -206,7 +206,8 @@ if [ -z "$NEW_STATUS" ]; then
   NEW_STATUS=$(printf '%s' "$_fm_line" | sed 's/^status:[[:space:]]*//' | tr -d '[:space:]')
 fi
 if [ -z "$NEW_STATUS" ]; then
-  # Bare token on its own line (catch-all for any remaining inline formats)
+  # Ordered last so frontmatter and structured headings take precedence; bare token
+  # is a catch-all for any remaining inline formats that slip past earlier extractors.
   NEW_STATUS=$(echo "$NEW_CONTENT" | \
     grep -m1 -E '^(PLANNED|READY|IN_PROGRESS|IMPLEMENTED|IN_REVIEW|APPROVED|CHANGES_REQUESTED|BLOCKED|DONE)[[:space:]]*$' 2>/dev/null \
     | tr -d '[:space:]' || true)
@@ -242,9 +243,12 @@ valid_transition() {
   local to="$2"
   case "${from}_${to}" in
     PLANNED_READY)               return 0 ;;
+    PLANNED_BLOCKED)             return 0 ;;
+    READY_BLOCKED)               return 0 ;;
     READY_IN_PROGRESS)           return 0 ;;
     IN_PROGRESS_IMPLEMENTED)     return 0 ;;
     IN_PROGRESS_BLOCKED)         return 0 ;;
+    IMPLEMENTED_BLOCKED)         return 0 ;;
     IMPLEMENTED_IN_REVIEW)       return 0 ;;
     IN_REVIEW_DONE)              return 0 ;;
     IN_REVIEW_APPROVED)          return 0 ;;

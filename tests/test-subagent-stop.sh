@@ -38,6 +38,7 @@ assert_contains "coverage record has sv:1" "$coverage_line" '"sv":1'
 assert_contains "coverage record has ts field" "$coverage_line" '"ts"'
 assert_contains "single-task: granularity_used is task" "$coverage_line" '"granularity_used":"task"'
 assert_contains "single-task: review_unit is TASK-001" "$coverage_line" '"review_unit":"TASK-001"'
+assert_contains "coverage record has iteration field" "$coverage_line" '"iteration"'
 assert_contains "coverage record has subagent_stop event in events.jsonl" \
   "$(cat "$TEST_DIR/nazgul/logs/events.jsonl")" '"event":"subagent_stop"'
 teardown_temp_dir
@@ -62,7 +63,7 @@ assert_file_exists "group: coverage file created" "$TEST_DIR/nazgul/logs/review-
 line_count=$(wc -l < "$TEST_DIR/nazgul/logs/review-coverage.jsonl" | tr -d ' ')
 assert_eq "group: two records written (one per task)" "$line_count" "2"
 while IFS= read -r line; do
-  assert_contains "group: each record has GROUP- unit" "$line" '"review_unit":"GROUP-'
+  assert_contains "group: each record has GROUP-2 unit" "$line" '"review_unit":"GROUP-2"'
   assert_contains "group: granularity_used is group" "$line" '"granularity_used":"group"'
 done < "$TEST_DIR/nazgul/logs/review-coverage.jsonl"
 teardown_temp_dir
