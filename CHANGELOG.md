@@ -9,6 +9,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 - **State machine is now actually enforced (FEAT-003).** `task-state-guard.sh` rejected only a narrow set of transitions: a full-manifest Write whose `status:` lives in YAML frontmatter matched none of its extractors and fell through to allow — so forbidden jumps like `IN_PROGRESS → DONE` and `PLANNED → DONE` (which RULES.md §2 declares forbidden) silently passed. Added frontmatter + bare-token status extractors and per-state exit-2 messages naming the allowed next state(s); every forbidden transition is now blocked at the tool call. Also restored the missing `BLOCKED` transition arms in the allowlist.
+- **Reviewer persistence — no more "missing review file" re-dispatch waste.** Reviewers were instructed to write their review to a file but had no `Write` tool, so they often returned the review as text and wrote nothing — forcing the review board to re-dispatch reviewers (full re-runs) or scrape output. Reviewers are now strictly read-only (`Read`/`Glob`/`Grep` — no `Write`, **no `Bash`**) and **return** their review; the review-gate orchestrator persists each returned review to `nazgul/reviews/`. Removing `Bash` also stops reviewers re-running the test suite (a major time sink) and makes "reviewers are read-only" genuinely tool-enforced. The generated reviewers were regenerated (`maxTurns` 30 → 12) and the SubagentStop file-write hook removed.
 
 ### Changed
 - **Config schema 15 → 16.** `migrate_15_to_16` adds `review_gate.enforce_granularity` (additive, idempotent).
