@@ -15,7 +15,7 @@ metadata:
 
 ## Current State
 - Events bus: !`if [ -s nazgul/logs/events.jsonl ]; then echo "present"; else echo "absent"; fi`
-- Events (last 20): !`tail -20 nazgul/logs/events.jsonl 2>/dev/null || echo "No events"`
+- Events (last 20): !`if [ -s nazgul/logs/events.jsonl ]; then tail -20 nazgul/logs/events.jsonl; else echo "No events"; fi`
 - Legacy iterations (last 20): !`tail -20 nazgul/logs/iterations.jsonl 2>/dev/null || echo "No legacy iteration logs"`
 - Recent commits: !`git log --oneline --grep="$(jq -r '.afk.commit_prefix // "feat("' nazgul/config.json 2>/dev/null)" -20 2>/dev/null || echo "No commits found"`
 - Checkpoints: !`ls -1t nazgul/checkpoints/iteration-*.json 2>/dev/null | head -2 || echo "No checkpoints"`
@@ -28,9 +28,9 @@ Build a unified timeline from all Nazgul activity sources and present it as a fo
 
 Set `TIMELINE_SOURCE` based on whether the events bus is available:
 
-- **`TIMELINE_SOURCE=events`**: `nazgul/logs/events.jsonl` is present and non-empty (the "Events bus" line shows "present"). Use it as the primary timeline spine. The unified stream is already multi-event-type and sorted: `jq -sc 'sort_by(.ts)|.[]' nazgul/logs/events.jsonl`.
+- **`TIMELINE_SOURCE=events`**: `nazgul/logs/events.jsonl` is present and non-empty (the "Events bus" line shows "present"). Use it as the primary timeline spine. The unified stream is already multi-event-type and sorted: `jq -sc 'sort_by(.ts)[]' nazgul/logs/events.jsonl`.
 
-- **`TIMELINE_SOURCE=legacy`**: `events.jsonl` is absent or empty. Fall back to `nazgul/logs/iterations.jsonl`. These lines are heterogeneous in shape — iteration-boundary lines carry `iteration`, `timestamp`, `active_task`, `status`, `done`, `total`, `git_sha`, `blocked_reason`; some lines from other writers carry an `event` field (e.g. `stop_failure`, `task_completed`) plus `timestamp`. Use the `timestamp` field for sorting regardless of shape.
+- **`TIMELINE_SOURCE=legacy`**: `events.jsonl` is absent/empty. Fall back to `nazgul/logs/iterations.jsonl`. These lines are heterogeneous in shape — iteration-boundary lines carry `iteration`, `timestamp`, `active_task`, `status`, `done`, `total`, `git_sha`, `blocked_reason`; some lines from other writers carry an `event` field (e.g. `stop_failure`, `task_completed`) plus `timestamp`. Use the `timestamp` field for sorting regardless of shape.
 
 In either mode, also collect git commits and checkpoints as supplemental sources (steps 2–3 below).
 
