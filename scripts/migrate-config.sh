@@ -298,6 +298,21 @@ migrate_13_to_14() {
   log_migration "v13→v14: Added telemetry.bus_enabled (default true) + record_metered_cost (default false)"
 }
 
+migrate_14_to_15() {
+  local tmp
+  tmp=$(mktemp)
+  # Add review_gate.simplify_before_review (default false). ADDITIVE ONLY +
+  # type-guard pattern. The pre-review Simplifier pass is now opt-in — the
+  # post-loop simplify pass already cleans up modified files, so running a full
+  # simplifier agent before every review board was wasteful.
+  jq '
+    .review_gate = ((if (.review_gate | type) == "object" then .review_gate else {} end)
+      | .simplify_before_review = (if has("simplify_before_review") then .simplify_before_review else false end))
+    | .schema_version = 15
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v14→v15: Added review_gate.simplify_before_review (default false; pre-review simplify is now opt-in)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"

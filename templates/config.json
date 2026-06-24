@@ -1,5 +1,5 @@
 {
-  "schema_version": 14,
+  "schema_version": 15,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -79,7 +79,8 @@
     "current_task_retries": 0,
     "auto_approve_concerns": true,
     "block_on_security_reject": true,
-    "confidence_threshold": 80
+    "confidence_threshold": 80,
+    "simplify_before_review": false
   },
   "simplify": {
     "post_loop": true,
