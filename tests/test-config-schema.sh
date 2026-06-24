@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "12"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "13"
 assert_json_field "has .default_mode" "$CONFIG" ".default_mode" "null"
 assert_json_field "project has smoke_command" "$CONFIG" ".project.smoke_command" "null"
 assert_json_field "has .budget.enabled" "$CONFIG" ".budget.enabled" "false"
@@ -45,6 +45,8 @@ assert_json_field "has .review_gate.granularity" "$CONFIG" ".review_gate.granula
 val=$(jq -r '.guards | type' "$CONFIG")
 assert_eq "has .guards object" "$val" "object"
 assert_json_field "has .guards.requireActiveTask" "$CONFIG" ".guards.requireActiveTask" "true"
+assert_json_field "has .guards.lean_comments" "$CONFIG" ".guards.lean_comments" "true"
+assert_json_field "has .guards.max_consecutive_comment_lines" "$CONFIG" ".guards.max_consecutive_comment_lines" "2"
 
 # Nested: .safety.max_consecutive_failures
 assert_json_field "has .safety.max_consecutive_failures" "$CONFIG" ".safety.max_consecutive_failures" "5"

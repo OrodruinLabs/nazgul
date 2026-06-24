@@ -90,6 +90,10 @@ confidence: 92
 
 `verdict` MUST be exactly `APPROVE` or `CHANGES_REQUESTED`; `confidence` is an integer 0-100. Any other verdict value is rejected by the review-evidence gate and blocks the task.
 
+### Always-Blocking Findings
+
+Some findings are designated **ALWAYS-BLOCKING** by your "What You Review" section (e.g. comment bloat for the code reviewer). For any always-blocking finding you MUST emit `verdict: CHANGES_REQUESTED` with `confidence` >= the project's `review_gate.confidence_threshold` (default 80). Never downgrade an always-blocking finding to a `CONCERN` or sub-threshold confidence — `auto_approve_concerns` would silently wave it through, which is exactly the failure mode these rules exist to prevent.
+
 {{^bundle_mode}}
 Write your review to `nazgul/reviews/[TASK-ID]/{{reviewer_name}}.md`.
 Create the directory `nazgul/reviews/[TASK-ID]/` first if it doesn't exist.

@@ -51,6 +51,9 @@ Review:
   Confidence threshold: [review_gate.confidence_threshold]
   Max retries/unit:  [review_gate.max_retries_per_task]
   Block on security reject: [review_gate.block_on_security_reject]
+
+Guards:
+  Lean comments:     [guards.lean_comments != false ? "on" : "off"] (max run: [guards.max_consecutive_comment_lines || 2])
 ```
 
 ## Step 2: Ask What to Change
@@ -66,8 +69,20 @@ Otherwise, use `AskUserQuestion` (multiSelect: true):
   - "Notifications" — "Configure completion notifications"
   - "Default run mode" — "Set the mode /nazgul:start uses when no flag is passed (or clear it to be asked each time)"
   - "Review granularity" — "Choose whether the review board fires per task, per parallel group, or once per feature"
+  - "Lean comments guard" — "Toggle the deterministic comment-bloat guard, or tune the max consecutive comment-line run"
 
 ## Step 3: Run Selected Sub-flows
+
+### Lean Comments Guard Sub-flow
+
+1. `AskUserQuestion`:
+   - header: "Lean comments"
+   - question: "Comment-bloat guard (blocks banners, restating comment runs, and `<remarks>`/multi-paragraph docs on non-public members at write time)?"
+   - options:
+     - "On (default)" — "Block comment bloat in source writes and reject it in review"
+     - "Off" — "Opt out — the guard becomes a no-op for this project"
+2. Write the choice: `jq '.guards.lean_comments = (<true|false>)' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json` (substitute `true`/`false`; do NOT run the placeholder verbatim).
+3. If the user wants to tune the threshold, write the integer to `guards.max_consecutive_comment_lines` the same way (default `2` = runs of 3+ are blocked).
 
 ### Model Assignment Sub-flow
 

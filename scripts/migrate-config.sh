@@ -265,6 +265,24 @@ migrate_11_to_12() {
   log_migration "v11→v12: Added review_gate.granularity (default \"task\")"
 }
 
+migrate_12_to_13() {
+  local tmp
+  tmp=$(mktemp)
+  # Add guards.lean_comments (mechanical comment-bloat block) and
+  # guards.max_consecutive_comment_lines. ADDITIVE ONLY: set each only when
+  # absent so a project that has opted out (lean_comments=false) or tuned the
+  # threshold keeps its value. Clamp a non-object .guards back to {} first so the
+  # field assignment can't error and abort the migration (same type-guard pattern
+  # as migrate_5_to_6/migrate_11_to_12).
+  jq '
+    .guards = ((if (.guards | type) == "object" then .guards else {} end)
+      | .lean_comments = (if has("lean_comments") then .lean_comments else true end)
+      | .max_consecutive_comment_lines = (if has("max_consecutive_comment_lines") then .max_consecutive_comment_lines else 2 end))
+    | .schema_version = 13
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v12→v13: Added guards.lean_comments (default true) + max_consecutive_comment_lines (default 2)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"

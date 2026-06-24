@@ -53,6 +53,24 @@ The other review settings apply identically in all modes:
 
 In `group`/`feature` mode a CHANGES_REQUESTED re-opens **only the implicated tasks** — the feedback aggregator attributes each finding to the owning task by file scope, so tasks with no findings stay IMPLEMENTED.
 
+## Lean Comments Guard
+
+`scripts/lean-comments-guard.sh` is a deterministic PreToolUse guard (on `Write`/`Edit`/`MultiEdit`) that **blocks comment bloat at write time**, so verbose comments can't reach the review board and get auto-approved as a low-confidence CONCERN. The code reviewer also treats the same violations as always-blocking. The implementer and simplifier run it as a pre-commit-style check: `scripts/lean-comments-guard.sh --check <files>`.
+
+It inspects source files (C#, TS/JS, Python, and other `//`/`#` languages — shell and config formats are intentionally exempt) and blocks when a change introduces:
+
+- a run of 3+ consecutive line comments that is not a license header;
+- a `<remarks>`/multi-paragraph doc block on a private/internal/protected or test member;
+- a banner/separator comment (`// ── Helpers ──────`, `// =======`);
+- a comment that restates or narrates the next line of code.
+
+Full XML/JSDoc/docstring on PUBLIC interface members is expected (`<inheritdoc/>` on implementations), and a single short comment explaining a non-obvious domain/venue quirk is allowed.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `guards.lean_comments` | `true` | Master switch. Set to `false` to opt out entirely (the guard becomes a no-op). |
+| `guards.max_consecutive_comment_lines` | `2` | Longest run of line comments allowed before it's flagged as bloat. |
+
 ## Local Mode
 
 By default, `/nazgul:init` creates files that are tracked in git (shared mode). To keep all Nazgul artifacts out of your project's repository, use local mode:

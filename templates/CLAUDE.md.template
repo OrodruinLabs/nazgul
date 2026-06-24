@@ -54,6 +54,7 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 
 ## Safety
 - Pre-tool guard blocks destructive commands (rm -rf /, DROP TABLE, etc.)
+- Lean-comments guard blocks comment bloat in source writes — banners, runs of 3+ restating line comments, and `<remarks>`/multi-paragraph docs on non-public/test members. Full XML/JSDoc/docstring is for PUBLIC interface members only (`<inheritdoc/>` on implementations); a one-line domain/venue-quirk comment is allowed. Opt out via `guards.lean_comments`.
 - Security rejections in AFK mode → BLOCKED (requires human review)
 - Max retries per task: 3 (configurable in config.json)
 - Max consecutive failures: 5 (auto-stops if no progress)
