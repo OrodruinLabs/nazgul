@@ -195,6 +195,18 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 3. If post-loop NOT run yet:
    - Tell user: "All [N] tasks complete. Running post-loop agents (documentation, release, observability)..."
    - Delegate to post-loop agents (documentation → release-manager → observability)
+   - **Verify generated docs (cross-check — MANDATORY gate).** If
+     `nazgul/config.json` has `.docs.verify_post_loop` true (or absent — default true),
+     dispatch the doc-verifier agent (Agent tool, `subagent_type: "nazgul:doc-verifier"`).
+     It cross-checks `nazgul/docs/*.md` and the current-objective entries in `CHANGELOG.md`
+     against source: every event type, config key, command/skill name, named script, and
+     schema version in the docs must exist in the codebase. On a clean pass it records
+     completion by writing the feat_id to `nazgul/logs/.docs-verified`. The stop hook
+     **gates loop completion** on this marker: until it matches the current `feat_id`,
+     NAZGUL_COMPLETE is withheld (a bounded backstop of 3 attempts prevents an unwritable
+     marker from deadlocking an unattended loop). If the verifier itself errors, it is
+     non-fatal — log it; the gate's attempt backstop lets the loop complete. To skip
+     verification set `docs.verify_post_loop: false` in `nazgul/config.json` (clean no-op).
    - **Auto-distill learnings (proposes only — MANDATORY gate).** If
      `nazgul/config.json` has `.learning.enabled` AND `.learning.auto_distill_post_loop`
      both true, dispatch the learner agent (Agent tool, `subagent_type: "nazgul:learner"`).
