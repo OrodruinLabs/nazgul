@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.0] - 2026-06-24
+
+### Added
+- **Loop Telemetry Bus — canonical `nazgul/logs/events.jsonl` event stream (FEAT-001).** Replaces the four scattered telemetry stores (iteration journal, subagent log, in-place budget estimate, compaction dotfile) with a single schema-versioned, append-only stream. 10 event types: `iteration_boundary`, `task_completed`, `reviewer_verdict`, `retry`, `blocked`, `compaction`, `subagent_stop`, `stop_failure`, `budget_threshold`, `objective_complete`. Reviewer verdicts, retries, and blocks are now first-class events (not inferrable only from task manifests).
+- **5 producer hooks wired to `emit_event`.** `stop-hook.sh`, `task-completed.sh`, `subagent-stop.sh`, `stop-failure.sh`, and `post-compact.sh` now call `scripts/lib/emit-event.sh` — legacy `iterations.jsonl` / `subagents.jsonl` appends removed; those files freeze in place as historical records.
+- **Review-gate agent emits `reviewer_verdict` / `retry` / `blocked`.** `agents/review-gate.md` calls `emit-event-cli.sh` at each verdict, CHANGES_REQUESTED retry, and BLOCKED escalation — fulfilling the CONCERN-1 mitigation from the architect review.
+- **`/nazgul:metrics` and `/nazgul:log` dual-read the unified stream.** Both consumer skills prefer `events.jsonl` and fall back permanently to frozen legacy files (`iterations.jsonl` / `subagents.jsonl`) for pre-upgrade history — no cutover, no data loss.
+- **`telemetry.bus_enabled` kill switch.** Set `telemetry.bus_enabled: false` to suppress all `emit_event` calls without touching hook scripts. `telemetry.record_metered_cost` (default `false`) is reserved for future metered-cost recording.
+- **Concurrency-safe append with macOS fallback.** `scripts/lib/emit-event.sh` serialises concurrent writers with `flock` when available; on stock macOS (no `/usr/bin/flock`) it falls back to a best-effort direct append relying on `O_APPEND` atomicity for the short JSONL lines. Three concurrent emitters produce no interleaved JSON lines. Emits are best-effort — a write failure never aborts the calling hook.
+
+### Changed
+- **Config schema v13 → v14.** `migrate_13_to_14` adds a `telemetry` block (`bus_enabled: true`, `record_metered_cost: false`) additively — existing keys survive, and `bus_enabled: false` opt-outs are never overwritten. `templates/config.json` updated to v14.
+- **`nazgul/logs/` gitignored (shared install mode).** The event stream is an ephemeral runtime artifact, not a decision record.
+
 ## [2.3.0] - 2026-06-24
 
 ### Added

@@ -10,3 +10,8 @@ nazgul/
 
 # OS
 .DS_Store
+
+# Nazgul Framework (local mode)
+nazgul/
+.claude/agents/generated/
+.mcp.json

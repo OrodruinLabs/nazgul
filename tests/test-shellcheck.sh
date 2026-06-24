@@ -11,12 +11,18 @@ echo "=== $TEST_NAME ==="
 
 SCRIPTS=(
   "scripts/stop-hook.sh"
+  "scripts/task-completed.sh"
+  "scripts/subagent-stop.sh"
+  "scripts/stop-failure.sh"
+  "scripts/post-compact.sh"
   "scripts/pre-compact.sh"
   "scripts/pre-tool-guard.sh"
   "scripts/session-context.sh"
   "scripts/migrate-config.sh"
   "scripts/task-state-guard.sh"
   "scripts/lean-comments-guard.sh"
+  "scripts/emit-event-cli.sh"
+  "scripts/lib/emit-event.sh"
 )
 
 # bash -n syntax checks

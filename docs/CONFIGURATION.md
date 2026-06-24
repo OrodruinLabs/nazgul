@@ -80,6 +80,37 @@ When an objective finishes, Nazgul distills recurring mistakes (review rejection
 | `learning.enabled` | `true` | Master switch for the learning subsystem. |
 | `learning.auto_distill_post_loop` | `true` | Run (and gate completion on) the learner at objective completion. Set either flag to `false` to opt out — the gate becomes a no-op. |
 
+## Telemetry Bus
+
+Nazgul emits structured telemetry to a canonical event stream at `nazgul/logs/events.jsonl`. This replaces the legacy scattered telemetry (iterations.jsonl, subagents.jsonl, budget mutations, dotfiles) with a unified, schema-versioned JSONL record.
+
+### Event Stream Configuration
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `telemetry.bus_enabled` | `true` | Master switch for event emission. Set to `false` to suppress all telemetry writes without modifying hook scripts. |
+| `telemetry.record_metered_cost` | `false` | Reserved for future metered token-cost recording (not yet implemented). |
+
+### Event Types
+
+The stream captures:
+- **iteration_boundary** — fired when the loop stops after each iteration
+- **task_completed** — when the TaskCompleted hook fires
+- **reviewer_verdict** — review board decisions (APPROVE, CHANGES_REQUESTED, REJECTED) with confidence scores
+- **retry** — when a task is retried after CHANGES_REQUESTED
+- **blocked** — when a task or the loop is blocked (git conflict, security reject, max retries)
+- **compaction** — context compression checkpoints
+- **subagent_stop** — when specialized agents (implementer, discovery, etc.) complete
+- **stop_failure** — when the loop stop hook itself fails
+- **budget_threshold** — proactive warning when spending reaches 50% or 90% of the configured limit
+- **objective_complete** — when all tasks finish and the post-loop phase begins
+
+See `docs/superpowers/specs/2026-06-24-telemetry-bus-design.md` for the full event schema and payload details.
+
+### Accessing Telemetry
+
+Consumer skills (`/nazgul:metrics`, `/nazgul:log`) automatically read from `events.jsonl`. For projects upgraded from v2.3.0 or earlier, frozen legacy files (`iterations.jsonl`, `subagents.jsonl`) are read as fallback for pre-upgrade history — **zero data loss, zero manual migration needed**. This is the "single-write + dual-read" migration: producers write only the new stream, consumers read new stream first, then legacy files for pre-upgrade events.
+
 ## Local Mode
 
 By default, `/nazgul:init` creates files that are tracked in git (shared mode). To keep all Nazgul artifacts out of your project's repository, use local mode:

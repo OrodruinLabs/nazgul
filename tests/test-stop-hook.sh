@@ -60,6 +60,14 @@ create_review_dir "TASK-002"
 create_review_dir "TASK-003"
 run_hook
 assert_exit_code "all tasks done (learning off): exit 0" "$HOOK_EC" 0
+assert_file_contains "objective_complete emitted" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"objective_complete"'
+assert_file_contains "objective_complete has total_tasks" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"total_tasks"'
+assert_file_contains "objective_complete has done_count" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"done_count"'
+assert_file_contains "objective_complete has iterations_used" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"iterations_used"'
 teardown_temp_dir
 
 # --- Test 3b: All DONE + learning on + not distilled — gate BLOCKS (exit 2) ---
@@ -371,8 +379,14 @@ if echo "$porcelain" | grep -qE '^(U.|.U|AA|DD) '; then
   run_hook
   status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
   assert_eq "git conflict blocks task" "$status" "BLOCKED"
+  assert_file_contains "blocked event emitted on git conflict" \
+    "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"blocked"'
+  assert_file_contains "blocked event names task" \
+    "$TEST_DIR/nazgul/logs/events.jsonl" '"task_id":"TASK-001"'
 else
   _pass "git conflict blocks task (skipped — no conflict produced)"
+  _pass "blocked event emitted on git conflict (skipped — no conflict produced)"
+  _pass "blocked event names task (skipped — no conflict produced)"
 fi
 teardown_temp_dir
 
@@ -561,6 +575,38 @@ create_config '.mode="afk"' '.budget.enabled=false' '.budget.spent_usd="garbage"
 create_task_file TASK-001 READY
 rc=0; echo '{}' | CLAUDE_PROJECT_DIR="$TEST_DIR" "$REPO_ROOT/scripts/stop-hook.sh" >/dev/null 2>/dev/null || rc=$?
 assert_exit_code "malformed spent_usd (disabled) → continue (no abort)" "$rc" 2
+teardown_temp_dir
+
+# Budget threshold: 50% crossing emits budget_threshold event with pct:50
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.budget.enabled=true' '.budget.max_usd=100' '.budget.spent_usd=49' '.budget.per_iteration_usd=2'
+create_task_file TASK-001 READY
+rc=0; echo '{}' | CLAUDE_PROJECT_DIR="$TEST_DIR" "$REPO_ROOT/scripts/stop-hook.sh" >/dev/null 2>/dev/null || rc=$?
+assert_file_contains "50% budget_threshold emitted" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"budget_threshold"'
+assert_file_contains "50% pct field correct" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"pct":50'
+teardown_temp_dir
+
+# Budget threshold: 90% crossing emits budget_threshold event with pct:90
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.budget.enabled=true' '.budget.max_usd=100' '.budget.spent_usd=89' '.budget.per_iteration_usd=2'
+create_task_file TASK-001 READY
+rc=0; echo '{}' | CLAUDE_PROJECT_DIR="$TEST_DIR" "$REPO_ROOT/scripts/stop-hook.sh" >/dev/null 2>/dev/null || rc=$?
+assert_file_contains "90% budget_threshold emitted" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"budget_threshold"'
+assert_file_contains "90% pct field correct" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"pct":90'
+teardown_temp_dir
+
+# Budget dedup: pre-seeded _budget_threshold_50_emitted suppresses 50% re-emit; 90% fires once
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.budget.enabled=true' '.budget.max_usd=100' '.budget.spent_usd=89' \
+  '.budget.per_iteration_usd=2' '._budget_threshold_50_emitted="true"'
+create_task_file TASK-001 READY
+rc=0; echo '{}' | CLAUDE_PROJECT_DIR="$TEST_DIR" "$REPO_ROOT/scripts/stop-hook.sh" >/dev/null 2>/dev/null || rc=$?
+count=$(grep -c '"event":"budget_threshold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null || echo 0)
+assert_eq "budget dedup: only one threshold emit" "$count" "1"
 teardown_temp_dir
 
 # AFK clock uses objective_set_at as PRIMARY (recent objective_set_at → no timeout even with an OLD checkpoint)
