@@ -40,7 +40,14 @@ if ! echo "$CMD" | grep -qiE 'git\s+(add|stage|commit)'; then
   exit 0
 fi
 
-if ! echo "$CMD" | grep -qiE 'nazgul/'; then
+# Look for a nazgul/ PATH being staged — but ignore quoted text such as a commit
+# message (`git commit -m "... nazgul/reviews ..."`). Stripping single/double-
+# quoted segments removes the message, so a commit that merely MENTIONS nazgul/
+# in its message is not falsely blocked; an actual `git add nazgul/...` pathspec
+# is unquoted and still matches. (Quoting a nazgul path on the command line is
+# rare; the session-staging chokepoint + .gitignore remain the primary guard.)
+CMD_PATHS=$(printf '%s' "$CMD" | sed "s/'[^']*'//g; s/\"[^\"]*\"//g")
+if ! printf '%s' "$CMD_PATHS" | grep -qiE 'nazgul/'; then
   exit 0
 fi
 

@@ -91,6 +91,28 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "allow: local mode + git status nazgul/ exits 0" "$GUARD_EC" 0
 teardown_temp_dir
 
+# Allow case 4: git commit whose MESSAGE mentions nazgul/ but stages no nazgul path
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'git commit -m "persist reviews to nazgul/reviews/ — no path staged"')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "allow: commit message mentioning nazgul/ does not block" "$GUARD_EC" 0
+teardown_temp_dir
+
+# Allow case 5 (single-quoted message variant)
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input "git commit -m 'touch nazgul/config.json mention only'")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "allow: single-quoted message mentioning nazgul/ does not block" "$GUARD_EC" 0
+teardown_temp_dir
+
 # ---------------------------------------------------------------------------
 # DEGRADE cases: uninitialised (no config), install_mode absent, empty stdin
 # ---------------------------------------------------------------------------
