@@ -40,7 +40,16 @@ if ! echo "$CMD" | grep -qiE 'git\s+(add|stage|commit)'; then
   exit 0
 fi
 
-if ! echo "$CMD" | grep -qiE 'nazgul/'; then
+# Look for a nazgul/ PATH being staged. Strip ONLY the commit-message argument
+# (-m / -am... / --message / --message=...) so a message that merely MENTIONS
+# nazgul/ is not falsely blocked — while a real nazgul/ pathspec, even a quoted
+# one like `git add "nazgul/config.json"`, is still caught (we do NOT strip all
+# quoted text, only the message value).
+CMD_PATHS=$(printf '%s' "$CMD" \
+  | sed -E "s/(-[a-zA-Z]*m|--message)[[:space:]]+'[^']*'//g" \
+  | sed -E "s/(-[a-zA-Z]*m|--message)[[:space:]]+\"[^\"]*\"//g" \
+  | sed -E "s/--message=[^[:space:]]*//g")
+if ! printf '%s' "$CMD_PATHS" | grep -qiE 'nazgul/'; then
   exit 0
 fi
 

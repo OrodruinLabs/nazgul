@@ -67,7 +67,7 @@ Task-PR:     PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> APPR
 
 1. **All reviewers must approve.** `[enforced]` Unanimous -- no majority vote. `review-evidence.sh` blocks DONE until all reviewers have `verdict: APPROVE`.
 2. **Confidence threshold governs severity.** `[enforced]` Below 80 = non-blocking CONCERN. At or above 80 with HIGH/MEDIUM severity = blocking REJECT. Applied by `review-evidence.sh`.
-3. **Reviewers are read-only.** `[enforced]` Never modify project files. Read, verify, write review to `nazgul/reviews/`. Enforced via tool allowlist (reviewers are spawned without write tools).
+3. **Reviewers are read-only.** `[enforced]` Reviewers are spawned with only `Read`/`Glob`/`Grep` — no `Write` and no `Bash` — so they genuinely cannot modify any file or run any command (tool-allowlist enforced, not merely convention). They analyze the diff and RETURN their review as their final message; the review-gate orchestrator persists each returned review to `nazgul/reviews/[UNIT-ID]/`. (This single point of persistence is why reviewers no longer silently fail to write their files.)
 4. **Pre-checks before reviews.** `[advisory]` Tests and lint must pass BEFORE reviewers run. Three consecutive test failures block the task. The config flag `require_tests_pass_before_review` is not mechanically gated at the pre-review boundary.
 5. **Security rejections are absolute in AFK mode.** `[hook-driven only]` Task is BLOCKED, requires human review. Applied by stop-hook in AFK mode; not active in HITL or manual dispatch.
 6. **Every finding must be structured.** `[enforced]` Required fields: severity, confidence, file path, category, verdict, issue, fix. `review-evidence.sh` reads the structured format to determine APPROVE/REJECT — a malformed review without a valid `verdict` field is treated as a non-approval.
@@ -171,7 +171,7 @@ Tunable via `guards.lean_comments` (default `true`) and `guards.max_consecutive_
 ## 8. File Scope Restrictions
 
 - **Implementer**: `[enforced]` Only files in the task's `file_scope`. `task-state-guard.sh` (PreToolUse on Write/Edit) blocks edits outside declared scope. Must update manifest before expanding.
-- **Reviewers**: `[enforced]` Read-only. Write only to `nazgul/reviews/`. Enforced via tool allowlist.
+- **Reviewers**: `[enforced]` Read-only — `Read`/`Glob`/`Grep` only, no `Write` and no `Bash` (tool-allowlist enforced). Reviewers do not write any file; they RETURN their review and the review-gate orchestrator persists it to `nazgul/reviews/` (see §3.3).
 - **Parallel tasks**: `[hook-driven only]` Zero file overlap. Team Orchestrator validates before assigning; bypassable by manual task dispatch.
 - **Specialists**: `[hook-driven only]` Only files in the delegation brief's scope. Validated by the Team Orchestrator when stop-hook drives dispatch.
 
