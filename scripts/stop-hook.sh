@@ -14,6 +14,7 @@ source "$SCRIPT_DIR/lib/task-utils.sh"
 source "$SCRIPT_DIR/lib/session-tracker.sh"
 source "$SCRIPT_DIR/lib/review-evidence.sh"
 source "$SCRIPT_DIR/lib/git-utils.sh"
+source "$SCRIPT_DIR/lib/emit-event.sh"
 
 # If Nazgul not initialized, allow stop
 if [ ! -f "$CONFIG" ]; then
@@ -100,6 +101,9 @@ fi
 # Increment iteration
 NEW_ITER=$((ITERATION + 1))
 jq --argjson iter "$NEW_ITER" '.current_iteration = $iter' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
+# CURRENT_ITERATION is read by emit_event() (sourced from lib/emit-event.sh).
+# shellcheck disable=SC2034
+CURRENT_ITERATION="$NEW_ITER"
 
 # --- Budget accumulation (cost governor; estimate, not metered spend) ---
 BUDGET_ENABLED=$(jq -r '.budget.enabled // false' "$CONFIG")
@@ -122,6 +126,31 @@ if [ "$BUDGET_ENABLED" = "true" ]; then
   ' "$CONFIG")
   BUDGET_SPENT=$(jq -r --argjson est "$BUDGET_EST" '((.budget.spent_usd // 0) | tonumber? // 0) + $est' "$CONFIG")
   jq --argjson s "$BUDGET_SPENT" '.budget.spent_usd = $s' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
+
+  # Emit budget_threshold on first crossing of 50% / 90%; deduped via config flags.
+  BUDGET_MAX_THRESHOLD=$(jq -r '(.budget.max_usd | tonumber?) // empty' "$CONFIG" 2>/dev/null || true)
+  if [ -n "$BUDGET_MAX_THRESHOLD" ] && \
+     awk -v m="$BUDGET_MAX_THRESHOLD" 'BEGIN{exit !(m > 0)}'; then
+    if awk -v s="$BUDGET_SPENT" -v m="$BUDGET_MAX_THRESHOLD" \
+         'BEGIN{exit !(s/m >= 0.90)}'; then
+      EMITTED90=$(jq -r '._budget_threshold_90_emitted // false' "$CONFIG" 2>/dev/null || echo "false")
+      if [ "$EMITTED90" = "false" ]; then
+        PCT_VAL=90
+        emit_event "budget_threshold" \
+          spent_usd:n "$BUDGET_SPENT" max_usd:n "$BUDGET_MAX_THRESHOLD" pct:n "$PCT_VAL"
+        jq '._budget_threshold_90_emitted = true' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
+      fi
+    elif awk -v s="$BUDGET_SPENT" -v m="$BUDGET_MAX_THRESHOLD" \
+           'BEGIN{exit !(s/m >= 0.50)}'; then
+      EMITTED50=$(jq -r '._budget_threshold_50_emitted // false' "$CONFIG" 2>/dev/null || echo "false")
+      if [ "$EMITTED50" = "false" ]; then
+        PCT_VAL=50
+        emit_event "budget_threshold" \
+          spent_usd:n "$BUDGET_SPENT" max_usd:n "$BUDGET_MAX_THRESHOLD" pct:n "$PCT_VAL"
+        jq '._budget_threshold_50_emitted = true' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
+      fi
+    fi
+  fi
 fi
 
 # Count tasks by status
@@ -660,21 +689,22 @@ if echo "$GIT_PORCELAIN" | grep -qE '^(U.|.U|AA|DD) '; then
       sed -i.bak 's/^\(- \*\*Blocked reason\*\*:\) .*/\1 git conflict — unmerged files detected/' "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" && rm -f "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md.bak"
     fi
     ACTIVE_BLOCKED_REASON="git conflict"
+    # Emit blocked event (pure observer; state already set by set_task_status above).
+    emit_event "blocked" task_id "${ACTIVE_TASK:-unknown}" reason "git conflict"
   fi
 fi
 
-# --- Iteration logs (4.1) ---
-mkdir -p "$NAZGUL_DIR/logs"
-jq -n \
-  --argjson iteration "$NEW_ITER" \
-  --arg timestamp "$TIMESTAMP" \
-  --arg active_task "${ACTIVE_TASK:-none}" \
-  --arg status "${ACTIVE_STATUS:-none}" \
-  --argjson done_count "$DONE_COUNT" \
-  --argjson total "$TOTAL_COUNT" \
-  --arg git_sha "$GIT_SHA" \
-  --arg blocked_reason "${ACTIVE_BLOCKED_REASON:-}" \
-  '{iteration: $iteration, timestamp: $timestamp, active_task: $active_task, status: $status, done: $done_count, total: $total, git_sha: $git_sha, blocked_reason: $blocked_reason}' >> "$NAZGUL_DIR/logs/iterations.jsonl"
+# --- Iteration boundary emit (replaces legacy iterations.jsonl write) ---
+# Emit iteration_boundary to the telemetry bus. Pure observer after all state
+# writes; does not gate, reorder, or replace any set_task_status call.
+emit_event "iteration_boundary" \
+  active_task "${ACTIVE_TASK:-none}" \
+  active_status "${ACTIVE_STATUS:-none}" \
+  done:n "$DONE_COUNT" \
+  total:n "$TOTAL_COUNT" \
+  git_sha "$GIT_SHA" \
+  blocked_reason "${ACTIVE_BLOCKED_REASON:-}" \
+  budget_spent_usd:n "$BUDGET_SPENT"
 
 # --- EXIT CONDITIONS ---
 
@@ -742,6 +772,11 @@ LEARN_MSG
       fi
     fi
     # Distilled, opted out, or backstop exhausted — allow completion.
+    # Emit objective_complete before exit (pure observer; state is already final).
+    emit_event "objective_complete" \
+      total_tasks:n "$TOTAL_COUNT" \
+      done_count:n "$DONE_COUNT" \
+      iterations_used:n "$NEW_ITER"
     exit 0
   fi
 fi
