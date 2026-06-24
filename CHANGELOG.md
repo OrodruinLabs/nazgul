@@ -14,7 +14,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - **Config schema v13 → v14.** `migrate_13_to_14` adds a `telemetry` block (`bus_enabled: true`, `record_metered_cost: false`) additively — existing keys survive, and `bus_enabled: false` opt-outs are never overwritten. `templates/config.json` updated to v14.
-- `nazgul/logs/` is gitignored (shared install mode) — the event stream is an ephemeral runtime artifact, not a decision record.
+- **`nazgul/logs/` gitignored (shared install mode).** The event stream is an ephemeral runtime artifact, not a decision record.
 
 ## [2.3.0] - 2026-06-24
 
