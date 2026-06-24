@@ -305,9 +305,15 @@ migrate_14_to_15() {
   # type-guard pattern. The pre-review Simplifier pass is now opt-in — the
   # post-loop simplify pass already cleans up modified files, so running a full
   # simplifier agent before every review board was wasteful.
+  # Clamp to a real boolean: keep an existing boolean value (so a hand-set
+  # opt-in survives), but coerce a missing or non-boolean value to false.
   jq '
     .review_gate = ((if (.review_gate | type) == "object" then .review_gate else {} end)
-      | .simplify_before_review = (if has("simplify_before_review") then .simplify_before_review else false end))
+      | .simplify_before_review = (
+          if (has("simplify_before_review") and (.simplify_before_review | type) == "boolean")
+          then .simplify_before_review
+          else false
+          end))
     | .schema_version = 15
   ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
   log_migration "v14→v15: Added review_gate.simplify_before_review (default false; pre-review simplify is now opt-in)"

@@ -376,14 +376,14 @@ OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) |
 assert_json_field "v12 → v13 non-object guards clamped to object" "$NAZGUL_DIR/config.json" ".guards | type" "object"
 assert_json_field "v12 → v13 clamped guards gets lean_comments=true" "$NAZGUL_DIR/config.json" ".guards.lean_comments" "true"
 
-# --- Test 3k: v13 config → migrated to v14 (telemetry block added) ---
+# --- Test 3k: v13 config → full-chain migrate to terminal v15; asserts the v13→v14 telemetry fields ---
 NAZGUL_DIR=$(setup_nazgul_dir "v13-config")
 cat > "$NAZGUL_DIR/config.json" << 'EOF'
 { "schema_version": 13, "mode": "hitl" }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v13 → v14 output" "$OUTPUT" "migrated"
-assert_json_field "v13 → v14 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "15"
+assert_json_field "v13 → v15 (full chain) schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "15"
 assert_json_field "v13 → v14 telemetry.bus_enabled defaults true" "$NAZGUL_DIR/config.json" ".telemetry.bus_enabled" "true"
 assert_json_field "v13 → v14 telemetry.record_metered_cost defaults false" "$NAZGUL_DIR/config.json" ".telemetry.record_metered_cost" "false"
 assert_json_field "v13 → v14 no legacy_write field added" "$NAZGUL_DIR/config.json" '.telemetry | has("legacy_write")' "false"

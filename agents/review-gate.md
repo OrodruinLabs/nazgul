@@ -98,7 +98,7 @@ Before spawning reviewers, verify `nazgul/reviews/[TASK-ID]/diff.patch` exists a
 ### Step 2: Delegate to Reviewers
 
 Read `nazgul/config.json → agents.reviewers` to get the active reviewer list.
-Read `nazgul/config.json → models.review` for the model to assign reviewers (default: `"sonnet"`). Pass this as the `model` parameter when spawning each reviewer via the Task tool — **except `security-reviewer`, which is ALWAYS pinned to `sonnet`** regardless of `models.review`. This lets you set `models.review` to a cheaper model (e.g. `haiku`) for the mechanical reviewers (architect/code/qa) to cut cost, while the security review stays sharp.
+Read `nazgul/config.json → models.review` for the model to assign reviewers (default: `"sonnet"`). Pass this as the `model` parameter when spawning each reviewer via the Agent tool — **except `security-reviewer`, which is ALWAYS pinned to `sonnet`** regardless of `models.review`. This lets you set `models.review` to a cheaper model (e.g. `haiku`) for the mechanical reviewers (architect/code/qa) to cut cost, while the security review stays sharp.
 
 #### What Each Reviewer Receives
 1. `nazgul/reviews/[TASK-ID]/diff.patch` — the unified diff showing exactly what changed. **Reviewers MUST read this FIRST.**
@@ -113,7 +113,7 @@ Read `nazgul/config.json → models.review` for the model to assign reviewers (d
 
 #### Parallel Review Mode (when parallelism.parallel_reviews is true)
 
-**Spawn ALL reviewers concurrently by emitting one Agent (Task) tool call per reviewer in a SINGLE message — all the tool calls in the same assistant turn.** This is the difference between a 10-minute board and a 40-minute one: if you instead spawn them one-per-turn (a Task call, wait, the next Task call), they run *serially* and the board takes 4× as long. Do NOT spawn them one at a time. The harness runs same-message tool calls in parallel.
+**Spawn ALL reviewers concurrently by emitting one Agent tool call per reviewer in a SINGLE message — all the tool calls in the same assistant turn.** This is the difference between a 10-minute board and a 40-minute one: if you instead spawn them one-per-turn (an Agent call, wait, the next Agent call), they run *serially* and the board takes 4× as long. Do NOT spawn them one at a time. The harness runs same-message tool calls in parallel.
 
 1. In one message, dispatch every reviewer in `agents.reviewers` (each as its own Task call, with its computed model + scoped learned rules).
 2. Each reviewer: reads diff.patch FIRST, then changed files for context, reads their definition in `.claude/agents/generated/`, reads relevant context, writes review to `nazgul/reviews/[TASK-ID]/[reviewer-name].md`.
