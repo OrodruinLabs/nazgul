@@ -29,7 +29,7 @@ Format ALL user-facing output per `references/ui-brand.md`:
 
 ## Recovery Protocol
 
-Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified order before doing ANY work. If task is IN_REVIEW, also check `nazgul/reviews/[TASK-ID]/` for existing reviewer submissions. Never rely on conversational memory — files are truth.
+Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified order before doing ANY work. If task is IN_REVIEW, also check `nazgul/reviews/[UNIT-ID]/` for existing reviewer submissions. Never rely on conversational memory — files are truth.
 
 ## Review Granularity & Scope
 
@@ -83,16 +83,16 @@ Before ANY reviewer runs:
 4. If any pre-check (test, lint, build, or smoke) fails: set task back to IN_PROGRESS, write failure details to task manifest
 5. Track test failures: read `test_failures` count from the task manifest (field: `- **Test failures**: N`). If not present, assume 0.
 6. Increment test_failures count and write back to task manifest
-7. If test_failures >= 3: set task to BLOCKED with reason "3 consecutive test failures — requires human investigation". Write detailed test output to `nazgul/reviews/[TASK-ID]/test-failures.md`. Do NOT retry.
+7. If test_failures >= 3: set task to BLOCKED with reason "3 consecutive test failures — requires human investigation". Write detailed test output to `nazgul/reviews/[UNIT-ID]/test-failures.md`. Do NOT retry.
 8. Only proceed to reviewers if test_failures < 3 AND ALL pre-checks pass
 
-   (Do NOT write `nazgul/tasks/[TASK-ID]/verification.md` here — that file is the human-acceptance marker `/nazgul:verify` keys off. Pre-check failures are already captured in the task manifest and, on escalation, `nazgul/reviews/[TASK-ID]/test-failures.md`; a task reaching DONE implies build/smoke passed.)
+   (Do NOT write `nazgul/tasks/[TASK-ID]/verification.md` here — that file is the human-acceptance marker `/nazgul:verify` keys off. Pre-check failures are already captured in the task manifest and, on escalation, `nazgul/reviews/[UNIT-ID]/test-failures.md`; a task reaching DONE implies build/smoke passed.)
 
 ### Step 1.5: Verify Diff Exists
 
-Before spawning reviewers, verify `nazgul/reviews/[TASK-ID]/diff.patch` exists and is non-empty.
+Before spawning reviewers, verify `nazgul/reviews/[UNIT-ID]/diff.patch` exists and is non-empty.
 - If missing: generate it using task manifest's Base SHA and File Scope:
-  `git diff [base-sha]..HEAD -- [files] > nazgul/reviews/[TASK-ID]/diff.patch`
+  `git diff [base-sha]..HEAD -- [files] > nazgul/reviews/[UNIT-ID]/diff.patch`
 - If still empty: log WARNING but proceed (pure additions may need full-file review)
 
 ### Step 2: Delegate to Reviewers
@@ -101,7 +101,7 @@ Read `nazgul/config.json → agents.reviewers` to get the active reviewer list.
 Read `nazgul/config.json → models.review` for the model to assign reviewers (default: `"sonnet"`). Pass this as the `model` parameter when spawning each reviewer via the Agent tool — **except `security-reviewer`, which is ALWAYS pinned to `sonnet`** regardless of `models.review`. This lets you set `models.review` to a cheaper model (e.g. `haiku`) for the mechanical reviewers (architect/code/qa) to cut cost, while the security review stays sharp.
 
 #### What Each Reviewer Receives
-1. `nazgul/reviews/[TASK-ID]/diff.patch` — the unified diff showing exactly what changed. **Reviewers MUST read this FIRST.**
+1. `nazgul/reviews/[UNIT-ID]/diff.patch` — the unified diff showing exactly what changed. **Reviewers MUST read this FIRST.**
 2. The changed file list from the task manifest's File Scope — for full-file context when needed
 3. Their agent definition from `.claude/agents/generated/`
 4. Relevant context from `nazgul/context/`
@@ -155,7 +155,7 @@ done
 - NEVER aggregate verdicts from partial evidence. NEVER substitute your own
   summary for a missing reviewer file.
 - **Record rule citations.** After reviews are collected, scan every
-  `nazgul/reviews/[TASK-ID]/[reviewer].md` for `LR-NNN` tokens appearing in
+  `nazgul/reviews/[UNIT-ID]/[reviewer].md` for `LR-NNN` tokens appearing in
   `Rule reference` lines. For each DISTINCT cited id, run
   `${CLAUDE_PLUGIN_ROOT}/scripts/lib/learned-rules.sh bump-hits LR-NNN` (add `--doc <learning.rules_doc>`
   if non-default). This feeds the citation/retirement signal. Failures here are
@@ -178,7 +178,7 @@ CURRENT_ITERATION=$(jq -r '.current_iteration // "null"' "${CLAUDE_PROJECT_DIR}/
 
 For each reviewer in `agents.reviewers`:
 
-1. Read `nazgul/reviews/[TASK-ID]/[reviewer-name].md` and extract: `DECISION`
+1. Read `nazgul/reviews/[UNIT-ID]/[reviewer-name].md` and extract: `DECISION`
    (APPROVE or CHANGES_REQUESTED), `CONFIDENCE` (integer), `BLOCKING` (count of
    blocking findings, integer), `CONCERNS` (count of non-blocking concerns, integer).
 2. Emit via Bash tool (using the `NAZGUL_DIR` and `CURRENT_ITERATION` set above):
@@ -202,7 +202,7 @@ Emit failures are non-fatal — log and continue; never block a verdict on an em
 
 When verdict is CHANGES_REQUESTED and feedback-aggregator has classified findings using `references/fix-first-heuristic.md`:
 
-1. Read `nazgul/reviews/[TASK-ID]/consolidated-feedback.md`
+1. Read `nazgul/reviews/[UNIT-ID]/consolidated-feedback.md`
 2. Count AUTO-FIX vs ASK items
 3. If AUTO-FIX items exist:
    a. Log: "Applying N auto-fix items from reviewer feedback"

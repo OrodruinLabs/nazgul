@@ -38,7 +38,7 @@ lines, keeping the inverse-branch content.
 
 ## How to Review
 {{^bundle_mode}}
-1. Read `nazgul/reviews/[TASK-ID]/diff.patch` FIRST — focus on what specifically changed
+1. Read `nazgul/reviews/[UNIT-ID]/diff.patch` FIRST — focus on what specifically changed
 2. For each changed hunk, read the surrounding context in the full file if needed (Read/Glob/Grep)
 3. Reason about the diff and reach a verdict. You have no Bash and no Write — the pre-checks already ran the tests, so do not attempt to re-run them; analyze the change and return your review (see Final Verdict).
 {{/bundle_mode}}

@@ -20,6 +20,10 @@ assert_file_not_contains "template: no Bash in tool allowlist" "$TEMPLATE" "  - 
 assert_file_not_contains "template: no Write in tool allowlist" "$TEMPLATE" "  - Write"
 assert_file_not_contains "template: no SubagentStop file-write hook" "$TEMPLATE" "SubagentStop"
 assert_file_contains "template: instructs return-based output" "$TEMPLATE" "Return your review as your final message"
+# Review-directory paths use the granularity-agnostic [UNIT-ID] placeholder, not
+# [TASK-ID] (which would point group/feature reviews at the wrong directory).
+assert_file_not_contains "template: no reviews/[TASK-ID] paths" "$TEMPLATE" 'nazgul/reviews/\[TASK-ID\]'
+assert_file_contains "template: diff.patch read path uses [UNIT-ID]" "$TEMPLATE" 'nazgul/reviews/\[UNIT-ID\]/diff.patch'
 
 # Generated reviewers (rendered from the template) must hold the same invariants
 for f in "$REPO_ROOT"/.claude/agents/generated/*-reviewer.md; do
