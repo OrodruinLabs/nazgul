@@ -135,18 +135,16 @@ if [ "$BUDGET_ENABLED" = "true" ]; then
          'BEGIN{exit !(s/m >= 0.90)}'; then
       EMITTED90=$(jq -r '._budget_threshold_90_emitted // false' "$CONFIG" 2>/dev/null || echo "false")
       if [ "$EMITTED90" = "false" ]; then
-        PCT_VAL=90
         emit_event "budget_threshold" \
-          spent_usd:n "$BUDGET_SPENT" max_usd:n "$BUDGET_MAX_THRESHOLD" pct:n "$PCT_VAL"
+          spent_usd:n "$BUDGET_SPENT" max_usd:n "$BUDGET_MAX_THRESHOLD" pct:n "90"
         jq '._budget_threshold_90_emitted = true' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
       fi
     elif awk -v s="$BUDGET_SPENT" -v m="$BUDGET_MAX_THRESHOLD" \
            'BEGIN{exit !(s/m >= 0.50)}'; then
       EMITTED50=$(jq -r '._budget_threshold_50_emitted // false' "$CONFIG" 2>/dev/null || echo "false")
       if [ "$EMITTED50" = "false" ]; then
-        PCT_VAL=50
         emit_event "budget_threshold" \
-          spent_usd:n "$BUDGET_SPENT" max_usd:n "$BUDGET_MAX_THRESHOLD" pct:n "$PCT_VAL"
+          spent_usd:n "$BUDGET_SPENT" max_usd:n "$BUDGET_MAX_THRESHOLD" pct:n "50"
         jq '._budget_threshold_50_emitted = true' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
       fi
     fi

@@ -30,9 +30,7 @@ if command -v jq >/dev/null 2>&1 && [ -n "$INPUT" ]; then
 fi
 
 # Emit subagent_stop to the telemetry bus (replaces legacy subagents.jsonl write).
-# CURRENT_ITERATION is intentionally null — script does not read config.
-# shellcheck disable=SC2034
-CURRENT_ITERATION="null"
+# CURRENT_ITERATION intentionally omitted — emit_event treats unset as null.
 emit_event "subagent_stop" agent "$AGENT"
 
 exit 0

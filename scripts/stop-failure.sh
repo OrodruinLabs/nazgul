@@ -23,9 +23,7 @@ source "$SCRIPT_DIR/lib/emit-event.sh"
 TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
 # Emit stop_failure to the telemetry bus (replaces legacy iterations.jsonl write).
-# CURRENT_ITERATION is intentionally null — script does not read config.
-# shellcheck disable=SC2034
-CURRENT_ITERATION="null"
+# CURRENT_ITERATION intentionally omitted — emit_event treats unset as null.
 emit_event "stop_failure"
 
 # Leave a recovery breadcrumb so the next session knows the last turn errored.
