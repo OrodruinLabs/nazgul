@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.0] - 2026-06-24
+
+### Added
+- **Granularity completion-gate enforcement (FEAT-003).** `review_gate.granularity` is now enforced even when a human or orchestrator dispatches reviews directly (bypassing stop-hook sequencing). A `SubagentStop` detector records the review unit each review-gate actually covered into `nazgul/logs/review-coverage.jsonl` (a derived index of existing `reviewer_verdict` telemetry events, not a new state store), and the stop-hook reconciliation gate blocks (or warns) `NAZGUL_COMPLETE` when a DONE task was reviewed at the wrong granularity — with a bounded backstop so it can never deadlock an unattended loop. New config knob `review_gate.enforce_granularity` (`"block"` default, `"warn"` alternative). Subagent dispatch can't be pre-gated (no PreToolUse matcher for the Task tool), so enforcement lives at the completion gate.
+
+### Fixed
+- **State machine is now actually enforced (FEAT-003).** `task-state-guard.sh` rejected only a narrow set of transitions: a full-manifest Write whose `status:` lives in YAML frontmatter matched none of its extractors and fell through to allow — so forbidden jumps like `IN_PROGRESS → DONE` and `PLANNED → DONE` (which RULES.md §2 declares forbidden) silently passed. Added frontmatter + bare-token status extractors and per-state exit-2 messages naming the allowed next state(s); every forbidden transition is now blocked at the tool call. Also restored the missing `BLOCKED` transition arms in the allowlist.
+
+### Changed
+- **Config schema 15 → 16.** `migrate_15_to_16` adds `review_gate.enforce_granularity` (additive, idempotent).
+- **Honest RULES.md.** The state-machine rule (§2) and the new granularity rule (§3) are documented as genuinely `[enforced]`, with the manual-dispatch-bypass caveat made explicit.
+
 ## [2.5.0] - 2026-06-24
 
 ### Added
