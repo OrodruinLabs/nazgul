@@ -46,7 +46,7 @@ See `docs/superpowers/specs/2026-06-24-telemetry-bus-design.md` for the full eve
 
 ### Emit Library
 
-`scripts/lib/emit-event.sh` is the canonical append mechanism — atomically writes one JSON event line per call using `flock` (Linux) or a mv-based swap (macOS). Callers pass event type + key-value pairs; the library handles schema versioning, timestamps (ISO 8601 UTC), and iteration context.
+`scripts/lib/emit-event.sh` is the canonical append mechanism — writes one JSON event line per call. When `flock` is available (typically Linux) it serialises concurrent writers with an exclusive lock; when absent (stock macOS) it falls back to a best-effort direct append relying on `O_APPEND` atomicity for the short JSONL lines. Callers pass event type + key-value pairs; the library handles schema versioning, timestamps (ISO 8601 UTC), and iteration context. Emits are best-effort: a write failure never aborts the calling hook.
 
 Used by:
 - **5 hook scripts** (`stop-hook.sh`, `task-completed.sh`, `subagent-stop.sh`, `stop-failure.sh`, `post-compact.sh`) — write producer events

@@ -65,9 +65,14 @@ emit_event() {
   # flock serialises concurrent SubagentStop fires (Agent Teams). Fallback:
   # O_APPEND + a single jq write() is atomic on POSIX for writes < PIPE_BUF;
   # JSONL lines are short.
+  # Emit is best-effort / non-fatal: a write failure (read-only file, full
+  # disk, missing jq) must never abort a hook running under `set -e`. Both the
+  # flock and fallback branches end in `|| true` so the caller's exit status is
+  # unaffected — the flock branch needs it too (a failing redirect inside the
+  # subshell propagates out otherwise).
   local lockfile="${EVENTS_FILE}.lock"
   if [ "$_EMIT_HAS_FLOCK" = "1" ]; then
-    ( flock -x 200; jq -cn "${jq_args[@]}" "$jq_expr" >> "$EVENTS_FILE" ) 200>"$lockfile"
+    ( flock -x 200; jq -cn "${jq_args[@]}" "$jq_expr" >> "$EVENTS_FILE" ) 200>"$lockfile" || true
   else
     jq -cn "${jq_args[@]}" "$jq_expr" >> "$EVENTS_FILE" || true
   fi
