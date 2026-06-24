@@ -8,7 +8,11 @@ set -euo pipefail
 # Exit 2 = block command (reason on stderr)
 #
 # Degradation: exits 0 when config absent, install_mode absent/non-local,
-# command has no nazgul/ token, or stdin is empty.
+# command has no nazgul/ pathspec, or stdin is empty.
+#
+# Known limitation: the awk tokenizer strips single- and double-quoted spans only.
+# It does not handle $'...' ANSI-C quoting or backslash-escaped spaces in unquoted
+# tokens. Those edge cases degrade to allow, which is acceptable for Nazgul loop usage.
 
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 CONFIG="$PROJECT_ROOT/nazgul/config.json"
@@ -36,20 +40,73 @@ fi
 
 # Only block git add / git stage / git commit commands that touch nazgul/ paths.
 # Check these before reading config — the vast majority of Bash calls exit here.
-if ! echo "$CMD" | grep -qiE 'git\s+(add|stage|commit)'; then
+if ! echo "$CMD" | grep -qiE 'git[[:space:]]+(add|stage|commit)'; then
   exit 0
 fi
 
-# Look for a nazgul/ PATH being staged. Strip ONLY the commit-message argument
-# (-m / -am... / --message / --message=...) so a message that merely MENTIONS
-# nazgul/ is not falsely blocked — while a real nazgul/ pathspec, even a quoted
-# one like `git add "nazgul/config.json"`, is still caught (we do NOT strip all
-# quoted text, only the message value).
-CMD_PATHS=$(printf '%s' "$CMD" \
-  | sed -E "s/(-[a-zA-Z]*m|--message)[[:space:]]+'[^']*'//g" \
-  | sed -E "s/(-[a-zA-Z]*m|--message)[[:space:]]+\"[^\"]*\"//g" \
-  | sed -E "s/--message=[^[:space:]]*//g")
-if ! printf '%s' "$CMD_PATHS" | grep -qiE 'nazgul/'; then
+# Parse POSITIONAL pathspec arguments — excluding flags and their value tokens.
+# The awk tokenizer splits on whitespace while collapsing single- and double-quoted
+# spans (strips the outermost quote pair). It then:
+#   1. Skips the "git" token itself.
+#   2. Skips the subcommand (add/stage/commit).
+#   3. Consumes value-taking flags (-m/-am/--message, -F/--file, -C/--reuse-message,
+#      --author, --date) plus their next token (or inline --flag=value), so a commit
+#      message mentioning nazgul/ is never mistaken for a pathspec.
+#   4. After a -- end-of-options marker, treats every remaining token as a pathspec.
+#   5. Reports 1 if any positional token equals "nazgul" or starts with "nazgul/".
+HAS_NAZGUL_PATH=$(printf '%s' "$CMD" | awk '
+BEGIN {
+  in_sq = 0; in_dq = 0; tok = ""; found = 0
+  git_seen = 0; subcmd_seen = 0; end_of_opts = 0; skip_next = 0
+}
+
+function emit(t,    is_value_flag) {
+  if (skip_next) { skip_next = 0; return }
+  if (!git_seen)    { git_seen = 1;    return }
+  if (!subcmd_seen) { subcmd_seen = 1; return }
+  if (end_of_opts)  { check_path(t);   return }
+  if (t == "--")    { end_of_opts = 1; return }
+  is_value_flag = (t ~ /^(-[a-zA-Z]*m|--message|--message=.*|-F|--file|-C|--reuse-message|--author|--date)$/)
+  if (is_value_flag) {
+    if (t !~ /=/) skip_next = 1
+    return
+  }
+  if (t ~ /^-/) { return }
+  check_path(t)
+}
+
+function check_path(t) {
+  if (t == "nazgul" || index(t, "nazgul/") == 1) found = 1
+}
+
+{
+  for (i = 1; i <= length($0); i++) {
+    c = substr($0, i, 1)
+    if (in_sq) {
+      if (c == "'\''") { in_sq = 0; emit(tok); tok = "" }
+      else tok = tok c
+    } else if (in_dq) {
+      if (c == "\"") { in_dq = 0; emit(tok); tok = "" }
+      else tok = tok c
+    } else if (c == "'\''") {
+      if (tok != "") { emit(tok); tok = "" }
+      in_sq = 1
+    } else if (c == "\"") {
+      if (tok != "") { emit(tok); tok = "" }
+      in_dq = 1
+    } else if (c == " " || c == "\t") {
+      if (tok != "") { emit(tok); tok = "" }
+    } else {
+      tok = tok c
+    }
+  }
+  if (tok != "") { emit(tok); tok = "" }
+}
+
+END { print found }
+')
+
+if [ "$HAS_NAZGUL_PATH" != "1" ]; then
   exit 0
 fi
 

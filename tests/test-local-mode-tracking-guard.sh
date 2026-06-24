@@ -77,6 +77,17 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block: message stripped but nazgul/ pathspec still blocks" "$GUARD_EC" 2
 teardown_temp_dir
 
+# Block case 5: mixed pathspec — nazgul/ mixed with a non-nazgul path → block
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input "git add nazgul/ scripts/my-script.sh")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block: mixed pathspec with nazgul/ still blocks" "$GUARD_EC" 2
+teardown_temp_dir
+
 # ---------------------------------------------------------------------------
 # ALLOW cases: shared mode, local mode non-nazgul path, and uninitialised
 # ---------------------------------------------------------------------------
@@ -134,6 +145,55 @@ EOF
 input=$(make_bash_input "git commit -m 'touch nazgul/config.json mention only'")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "allow: single-quoted message mentioning nazgul/ does not block" "$GUARD_EC" 0
+teardown_temp_dir
+
+# Allow FP-3: multiline -m message mentioning nazgul/ — the newline does not escape
+# the quoted span; the entire value is consumed as the message flag value.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+multiline_msg=$(printf "emit event\nreferences nazgul/reviews — no pathspec")
+input=$(jq -n --arg cmd "git commit -m '$multiline_msg'" '{"tool_name":"Bash","tool_input":{"command":$cmd}}')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "allow FP-3: multiline -m message mentioning nazgul/ does not block" "$GUARD_EC" 0
+teardown_temp_dir
+
+# Allow FP-4: read-only grep whose pattern text contains "git add" and "nazgul/" —
+# the command is not a git add/stage/commit so the early gate exits 0.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input "grep -r 'git add.*nazgul/' scripts/")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "allow FP-4: grep pattern containing nazgul/ does not block" "$GUARD_EC" 0
+teardown_temp_dir
+
+# Allow FP-5: git commit -F with a nazgul/ path as the message FILE — the -F flag
+# signals "message from file"; the path is its value, not a pathspec.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input "git commit -F nazgul/commit-msg.txt")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "allow FP-5: -F message-file with nazgul/ path does not block" "$GUARD_EC" 0
+teardown_temp_dir
+
+# Allow FP-6: echo command whose text mentions "git add nazgul/" — not a git tracking
+# command; the early gate exits 0 before any pathspec analysis.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'echo "checking if git add nazgul/ is blocked"')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "allow FP-6: echo mentioning git add nazgul/ does not block" "$GUARD_EC" 0
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
