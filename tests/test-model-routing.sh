@@ -18,7 +18,7 @@ assert_json_field "docs defaults to sonnet"           "$CONFIG" ".models.docs"  
 assert_json_field "review defaults to sonnet"         "$CONFIG" ".models.review"          "sonnet"
 assert_json_field "implementation defaults to sonnet" "$CONFIG" ".models.implementation"  "sonnet"
 assert_json_field "specialists defaults to sonnet"    "$CONFIG" ".models.specialists"     "sonnet"
-assert_json_field "post_loop defaults to haiku"       "$CONFIG" ".models.post_loop"       "haiku"
+assert_json_field "post_loop defaults to sonnet"      "$CONFIG" ".models.post_loop"       "sonnet"
 assert_json_field "default is sonnet"                 "$CONFIG" ".models.default"         "sonnet"
 
 # ── Test: all model values are valid ──────────────────────
