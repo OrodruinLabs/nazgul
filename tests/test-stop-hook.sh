@@ -806,4 +806,64 @@ assert_exit_code "absent granularity: exit 2" "$HOOK_EC" 2
 assert_contains "absent granularity: defaults to task review" "$HOOK_OUTPUT" "Spawn review-gate agent (nazgul:review-gate) for TASK-001"
 teardown_temp_dir
 
+# === GRANULARITY RECONCILIATION GATE (integration) ===
+
+# --- All DONE + coverage violation blocks completion ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.feat_id = "FEAT-INT1"' \
+  '.review_gate.granularity = "group"' \
+  '.review_gate.enforce_granularity = "block"' \
+  '.learning.auto_distill_post_loop = false' \
+  '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+mkdir -p "$TEST_DIR/nazgul/logs"
+printf '%s\n' '{"sv":1,"ts":"2026-06-24T00:00:00Z","task_id":"TASK-001","review_unit":"TASK-001","granularity_used":"task","iteration":1}' \
+  > "$TEST_DIR/nazgul/logs/review-coverage.jsonl"
+run_hook
+assert_exit_code "gran gate integration: violation blocks: exit 2" "$HOOK_EC" 2
+assert_contains "gran gate integration: names gate" "$HOOK_OUTPUT" "GRANULARITY GATE"
+assert_contains "gran gate integration: emits decision-block JSON" "$HOOK_OUTPUT" '"decision"'
+teardown_temp_dir
+
+# --- All DONE + compliant coverage exits cleanly ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.feat_id = "FEAT-INT2"' \
+  '.review_gate.granularity = "group"' \
+  '.review_gate.enforce_granularity = "block"' \
+  '.learning.auto_distill_post_loop = false' \
+  '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+mkdir -p "$TEST_DIR/nazgul/logs"
+printf '%s\n' '{"sv":1,"ts":"2026-06-24T00:00:00Z","task_id":"TASK-001","review_unit":"GROUP-1","granularity_used":"group","iteration":1}' \
+  > "$TEST_DIR/nazgul/logs/review-coverage.jsonl"
+run_hook
+assert_exit_code "gran gate integration: compliant passes: exit 0" "$HOOK_EC" 0
+assert_file_contains "gran gate integration: objective_complete emitted on pass" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"objective_complete"'
+teardown_temp_dir
+
+# --- All DONE + no coverage file degrades to allow ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.feat_id = "FEAT-INT3"' \
+  '.review_gate.granularity = "group"' \
+  '.review_gate.enforce_granularity = "block"' \
+  '.learning.auto_distill_post_loop = false' \
+  '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+run_hook
+assert_exit_code "gran gate integration: no coverage degrades: exit 0" "$HOOK_EC" 0
+teardown_temp_dir
+
 report_results

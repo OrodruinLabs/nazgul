@@ -190,7 +190,7 @@ else
   exit 0
 fi
 
-# Check if this changes the Status field (supports list-item, ATX inline, and ATX block formats)
+# Check if this changes the Status field (supports list-item, ATX inline, ATX block, and YAML frontmatter)
 NEW_STATUS=$(echo "$NEW_CONTENT" | sed -n 's/.*\*\*Status\*\*:[[:space:]]*\([A-Z_]*\).*/\1/p' | head -1)
 if [ -z "$NEW_STATUS" ]; then
   NEW_STATUS=$(echo "$NEW_CONTENT" | sed -n 's/^## Status:[[:space:]]*\([A-Z_]*\).*/\1/p' | head -1)
@@ -198,6 +198,28 @@ fi
 if [ -z "$NEW_STATUS" ]; then
   # Try ATX block format: ## Status\n<VALUE>
   NEW_STATUS=$(echo "$NEW_CONTENT" | awk '/^## Status[[:space:]]*$/{getline; gsub(/^[[:space:]]+|[[:space:]]+$/, ""); if (/^[A-Z_]+$/) print; exit}')
+fi
+if [ -z "$NEW_STATUS" ]; then
+  # YAML frontmatter `status: TOKEN`. When the content has a leading --- ... ---
+  # block, scope the search to it so a `status:` line in the manifest BODY (e.g.
+  # inside a code block) can't be misread as a transition. For a partial edit
+  # that replaces only the status line (no --- delimiters), there is no body to
+  # confuse, so search the whole content. printf (not echo) keeps arbitrary
+  # multiline content POSIX-safe.
+  _fm_src="$NEW_CONTENT"
+  if printf '%s\n' "$NEW_CONTENT" | head -1 | grep -q '^---[[:space:]]*$'; then
+    _fm_src=$(printf '%s\n' "$NEW_CONTENT" | awk 'NR==1 && /^---[[:space:]]*$/{infm=1; next} infm && /^---[[:space:]]*$/{exit} infm')
+  fi
+  _fm_line=$(printf '%s\n' "$_fm_src" | \
+    grep -m1 -E '^status:[[:space:]]*(PLANNED|READY|IN_PROGRESS|IMPLEMENTED|IN_REVIEW|APPROVED|CHANGES_REQUESTED|BLOCKED|DONE)[[:space:]]*$' 2>/dev/null || true)
+  NEW_STATUS=$(printf '%s' "$_fm_line" | sed 's/^status:[[:space:]]*//' | tr -d '[:space:]')
+fi
+if [ -z "$NEW_STATUS" ]; then
+  # Ordered last so frontmatter and structured headings take precedence; bare token
+  # is a catch-all for any remaining inline formats that slip past earlier extractors.
+  NEW_STATUS=$(printf '%s\n' "$NEW_CONTENT" | \
+    grep -m1 -E '^(PLANNED|READY|IN_PROGRESS|IMPLEMENTED|IN_REVIEW|APPROVED|CHANGES_REQUESTED|BLOCKED|DONE)[[:space:]]*$' 2>/dev/null \
+    | tr -d '[:space:]' || true)
 fi
 if [ -z "$NEW_STATUS" ]; then
   # Not a status change — allow
@@ -230,15 +252,19 @@ valid_transition() {
   local to="$2"
   case "${from}_${to}" in
     PLANNED_READY)               return 0 ;;
+    PLANNED_BLOCKED)             return 0 ;;
+    READY_BLOCKED)               return 0 ;;
     READY_IN_PROGRESS)           return 0 ;;
     IN_PROGRESS_IMPLEMENTED)     return 0 ;;
     IN_PROGRESS_BLOCKED)         return 0 ;;
+    IMPLEMENTED_BLOCKED)         return 0 ;;
     IMPLEMENTED_IN_REVIEW)       return 0 ;;
     IN_REVIEW_DONE)              return 0 ;;
     IN_REVIEW_APPROVED)          return 0 ;;
     IN_REVIEW_CHANGES_REQUESTED) return 0 ;;
     IN_REVIEW_BLOCKED)           return 0 ;;
     APPROVED_DONE)               return 0 ;;
+    APPROVED_BLOCKED)            return 0 ;;
     CHANGES_REQUESTED_IN_PROGRESS) return 0 ;;
     CHANGES_REQUESTED_BLOCKED)   return 0 ;;
     # BLOCKED exits: READY via /nazgul:task unblock; IN_REVIEW via /nazgul:review --materialize
@@ -251,12 +277,18 @@ valid_transition() {
 
 if ! valid_transition "$OLD_STATUS" "$NEW_STATUS"; then
   echo "NAZGUL STATE GUARD: BLOCKED — Invalid state transition: ${OLD_STATUS} → ${NEW_STATUS}" >&2
-  echo "Constitution Article III permitted transitions:" >&2
-  echo "  PLANNED→READY, READY→IN_PROGRESS, IN_PROGRESS→IMPLEMENTED," >&2
-  echo "  IMPLEMENTED→IN_REVIEW, IN_REVIEW→DONE (with reviews)," >&2
-  echo "  IN_REVIEW→APPROVED (YOLO), APPROVED→DONE (PR merged)," >&2
-  echo "  IN_REVIEW→CHANGES_REQUESTED, *→BLOCKED," >&2
-  echo "  BLOCKED→READY (unblock), BLOCKED→IN_REVIEW (materialize)" >&2
+  case "$OLD_STATUS" in
+    PLANNED)           echo "  PLANNED allowed next: READY, BLOCKED" >&2 ;;
+    READY)             echo "  READY allowed next: IN_PROGRESS, BLOCKED" >&2 ;;
+    IN_PROGRESS)       echo "  IN_PROGRESS allowed next: IMPLEMENTED, BLOCKED" >&2 ;;
+    IMPLEMENTED)       echo "  IMPLEMENTED allowed next: IN_REVIEW, BLOCKED" >&2 ;;
+    IN_REVIEW)         echo "  IN_REVIEW allowed next: DONE, APPROVED (YOLO), CHANGES_REQUESTED, BLOCKED" >&2 ;;
+    APPROVED)          echo "  APPROVED allowed next: DONE" >&2 ;;
+    CHANGES_REQUESTED) echo "  CHANGES_REQUESTED allowed next: IN_PROGRESS, BLOCKED" >&2 ;;
+    BLOCKED)           echo "  BLOCKED allowed next: READY (unblock), IN_REVIEW (materialize)" >&2 ;;
+    DONE)              echo "  DONE is a terminal state — no further transitions allowed" >&2 ;;
+    *)                 echo "  See RULES.md §2 for the permitted transition table" >&2 ;;
+  esac
   exit 2
 fi
 

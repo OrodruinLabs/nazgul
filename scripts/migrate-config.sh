@@ -319,6 +319,19 @@ migrate_14_to_15() {
   log_migration "v14→v15: Added review_gate.simplify_before_review (default false; pre-review simplify is now opt-in)"
 }
 
+migrate_15_to_16() {
+  local tmp
+  tmp=$(mktemp)
+  # Add review_gate.enforce_granularity (default "block"). ADDITIVE ONLY + type-guard.
+  # "block" halts NAZGUL_COMPLETE on granularity violation; "warn" logs and continues.
+  jq '
+    .review_gate = ((if (.review_gate | type) == "object" then .review_gate else {} end)
+      | .enforce_granularity = (if has("enforce_granularity") then .enforce_granularity else "block" end))
+    | .schema_version = 16
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v15→v16: Added review_gate.enforce_granularity (default block; warn downgrades violation to warning)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"

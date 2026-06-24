@@ -769,7 +769,70 @@ LEARN_MSG
         fi
       fi
     fi
-    # Distilled, opted out, or backstop exhausted — allow completion.
+    # --- Post-loop granularity reconciliation gate ----------------------------
+    # Mirrors the learning gate above: marker, bounded attempt counter (max 3),
+    # decision-block JSON + exit 2 on violation, graceful pass on backstop.
+    # Degrades to allow when coverage file is absent — never blocks on missing data.
+    ENFORCE_GRANULARITY=$(jq -r '.review_gate.enforce_granularity // "block"' "$CONFIG" 2>/dev/null || echo "block")
+    COVERAGE_FILE="$NAZGUL_DIR/logs/review-coverage.jsonl"
+    GRAN_DIR="$NAZGUL_DIR/logs"
+    GRAN_MARKER="$GRAN_DIR/.granularity-checked"
+    GRAN_ATTEMPTS_FILE="$GRAN_DIR/.granularity-attempts"
+    GRAN_OBJ_ID=$(jq -r '.feat_id // "default"' "$CONFIG" 2>/dev/null || echo "default")
+    GRAN_CHECKED_FOR=""
+    [ -f "$GRAN_MARKER" ] && GRAN_CHECKED_FOR=$(cat "$GRAN_MARKER" 2>/dev/null || echo "")
+    if [ "$GRAN_CHECKED_FOR" != "$GRAN_OBJ_ID" ] && [ -f "$COVERAGE_FILE" ]; then
+      # Scope to THIS objective's coverage records. review-coverage.jsonl is
+      # append-only and accumulates records across objectives; a record carrying
+      # a different feat_id belongs to a prior objective and must not block this
+      # one. A record with no/empty feat_id (legacy, pre-stamping) is treated as
+      # belonging to the current objective so older logs still gate.
+      GRAN_VIOLATIONS=$(jq -r --arg g "$GRANULARITY" --arg feat "$GRAN_OBJ_ID" \
+        'select(((.feat_id // "") == "" or .feat_id == $feat) and .granularity_used != $g) | "\(.task_id) reviewed as \(.granularity_used) (expected \($g))"' \
+        "$COVERAGE_FILE" 2>/dev/null | sort -u || true)
+      if [ -n "$GRAN_VIOLATIONS" ]; then
+        if [ "$ENFORCE_GRANULARITY" = "warn" ]; then
+          cat >&2 << GRAN_WARN_MSG
+Nazgul: GRANULARITY WARNING — tasks were reviewed at wrong granularity (configured: ${GRANULARITY}).
+${GRAN_VIOLATIONS}
+enforce_granularity=warn: completing despite violation. Set enforce_granularity=block to enforce.
+GRAN_WARN_MSG
+          mkdir -p "$GRAN_DIR"
+          printf '%s\n' "$GRAN_OBJ_ID" > "$GRAN_MARKER"
+        else
+          GRAN_ATTEMPTS=0
+          if [ -f "$GRAN_ATTEMPTS_FILE" ]; then
+            read -r GA_OBJ GA_CNT < "$GRAN_ATTEMPTS_FILE" 2>/dev/null || true
+            if [ "${GA_OBJ:-}" = "$GRAN_OBJ_ID" ]; then
+              case "${GA_CNT:-0}" in ''|*[!0-9]*) GA_CNT=0 ;; esac
+              GRAN_ATTEMPTS="$GA_CNT"
+            fi
+          fi
+          if [ "$GRAN_ATTEMPTS" -lt 3 ]; then
+            mkdir -p "$GRAN_DIR"
+            printf '%s %s\n' "$GRAN_OBJ_ID" "$((GRAN_ATTEMPTS + 1))" > "$GRAN_ATTEMPTS_FILE"
+            cat >&2 << GRAN_BLOCK_MSG
+Nazgul: GRANULARITY GATE — tasks completed but review coverage violates configured granularity (${GRANULARITY}).
+Offending tasks:
+${GRAN_VIOLATIONS}
+DELEGATE: Re-run the review-gate agent at granularity="${GRANULARITY}" for the affected tasks/units.
+Do NOT output NAZGUL_COMPLETE until coverage at the correct granularity is recorded.
+Set enforce_granularity=warn in nazgul/config.json to downgrade this gate to a warning.
+GRAN_BLOCK_MSG
+            jq -n --arg r "Granularity gate: tasks reviewed at wrong granularity for ${GRAN_OBJ_ID}" '{"decision":"block","reason":$r}'
+            exit 2
+          else
+            echo "Nazgul: granularity gate gave up after ${GRAN_ATTEMPTS} attempts for ${GRAN_OBJ_ID} — completing with violation. Fix review coverage manually." >&2
+            mkdir -p "$GRAN_DIR"
+            printf '%s\n' "$GRAN_OBJ_ID" > "$GRAN_MARKER"
+          fi
+        fi
+      else
+        mkdir -p "$GRAN_DIR"
+        printf '%s\n' "$GRAN_OBJ_ID" > "$GRAN_MARKER"
+      fi
+    fi
+    # Granularity gate passed, opted out, or backstop exhausted — allow completion.
     # Emit objective_complete before exit (pure observer; state is already final).
     emit_event "objective_complete" \
       total_tasks:n "$TOTAL_COUNT" \
