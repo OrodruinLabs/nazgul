@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.0] - 2026-06-24
+
+### Added
+- **Loop Telemetry Bus — canonical `nazgul/logs/events.jsonl` event stream (FEAT-001).** Replaces the four scattered telemetry stores (iteration journal, subagent log, in-place budget estimate, compaction dotfile) with a single schema-versioned, append-only stream. 10 first-class event types: `iteration_boundary`, `task_started`, `task_completed`, `task_failed`, `compaction_checkpoint`, `subagent_started`, `subagent_stopped`, `reviewer_verdict`, `retry_dispatched`, `blocked`. Reviewer verdicts, retries, and blocks are now first-class events (not inferrable only from task manifests).
+- **5 producer hooks wired to `emit_event`.** `stop-hook.sh`, `task-completed.sh`, `subagent-stop.sh`, `stop-failure.sh`, and `post-compact.sh` now call `scripts/lib/emit-event.sh` — legacy `iterations.jsonl` / `subagents.jsonl` appends removed; those files freeze in place as historical records.
+- **Review-gate agent emits `reviewer_verdict` / `retry_dispatched` / `blocked`.** `agents/review-gate.md` calls `emit-event-cli.sh` at each verdict, CHANGES_REQUESTED retry dispatch, and BLOCKED escalation — fulfilling the CONCERN-1 mitigation from the architect review.
+- **`/nazgul:metrics` and `/nazgul:log` dual-read the unified stream.** Both consumer skills prefer `events.jsonl` and fall back permanently to frozen legacy files (`iterations.jsonl` / `subagents.jsonl`) for pre-upgrade history — no cutover, no data loss.
+- **`telemetry.bus_enabled` kill switch.** Set `telemetry.bus_enabled: false` to suppress all `emit_event` calls without touching hook scripts. `telemetry.record_metered_cost` (default `false`) is reserved for future metered-cost recording.
+- **Atomic append with flock fallback.** `scripts/lib/emit-event.sh` uses `flock` for atomic appends on Linux; falls back to a `mv`-based swap on macOS (which lacks `/usr/bin/flock` on standard installs). Three concurrent emitters produce no interleaved JSON lines.
+
+### Changed
+- **Config schema v13 → v14.** `migrate_13_to_14` adds a `telemetry` block (`bus_enabled: true`, `record_metered_cost: false`) additively — existing keys survive, and `bus_enabled: false` opt-outs are never overwritten. `templates/config.json` updated to v14.
+- `nazgul/logs/` is gitignored (shared install mode) — the event stream is an ephemeral runtime artifact, not a decision record.
+
 ## [2.3.0] - 2026-06-24
 
 ### Added
