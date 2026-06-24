@@ -1,21 +1,29 @@
 # Nazgul Rules
 
-Enforceable operating rules for the Nazgul Framework. Every rule here is checked by a hook, agent, or script.
+Enforceable operating rules for the Nazgul Framework. Each rule carries a tier label indicating its real enforcement mechanism — see the legend below. Not every rule has a mechanical guard; the tier makes that explicit.
+
+## Enforcement Tier Legend
+
+| Tier | Label | Meaning |
+|------|-------|---------|
+| 1 | `[enforced]` | A PreToolUse guard, stop-hook gate, evidence check, or tool-allowlist restriction blocks violations mechanically — independent of who drives the loop. |
+| 2 | `[hook-driven only]` | Enforced when `stop-hook.sh` drives the loop (AFK/YOLO). A human or orchestrator that dispatches agents directly can route around it. |
+| 3 | `[advisory]` | Depends on agent and reviewer discipline. No mechanical block exists. |
 
 ---
 
 ## 1. The 10 Rules
 
-1. **Always read plan.md first.** The Recovery Pointer tells you exactly where you are.
-2. **Files are truth, context is ephemeral.** Write state to files immediately. Never rely on conversational memory.
-3. **Follow existing patterns exactly.** Read the pattern reference before implementing. Match the style.
-4. **Tests are mandatory.** Every task includes tests. Run them after every change. Don't proceed if failing.
-5. **Never skip the review gate.** ALL reviewers must approve. No exceptions.
-6. **Address ALL blocking feedback.** When CHANGES_REQUESTED, fix every REJECT item.
-7. **One task at a time.** Don't work on multiple tasks simultaneously (unless parallel mode with Agent Teams).
-8. **Update Recovery Pointer on every state change.** This is how you survive compaction.
-9. **Commit in AFK mode.** Every state transition gets a commit with the dynamic prefix from config.
-10. **NAZGUL_COMPLETE means ALL tasks DONE and post-loop finished.** Not before. Verified by re-reading task manifests from disk immediately beforehand — never by recalling prior transitions (guards can silently block status writes).
+1. **Always read plan.md first.** `[enforced]` The Recovery Pointer tells you exactly where you are. Source edits require an IN_PROGRESS task in the manifest (`task-state-guard.sh`), and state advances require evidence on disk (`review-evidence.sh`) — the guards enforce the principle that files must be read before work proceeds.
+2. **Files are truth, context is ephemeral.** `[enforced]` Write state to files immediately. Never rely on conversational memory. Evidence gates block state transitions that would rely on unwritten state (IMPLEMENTED requires a commit SHA in the manifest).
+3. **Follow existing patterns exactly.** `[advisory]` Read the pattern reference before implementing. Match the style.
+4. **Tests are mandatory.** `[enforced]` Every task includes tests. Run them after every change. Don't proceed if failing. `stop-hook.sh` tracks consecutive failures and blocks the loop after `safety.max_consecutive_failures` (default 5) consecutive failures.
+5. **Never skip the review gate.** `[enforced]` ALL reviewers must approve. No exceptions. `review-evidence.sh` blocks DONE until a review directory with `verdict: APPROVE` exists for every reviewer.
+6. **Address ALL blocking feedback.** `[advisory]` When CHANGES_REQUESTED, fix every REJECT item.
+7. **One task at a time.** `[hook-driven only]` Don't work on multiple tasks simultaneously (unless parallel mode with Agent Teams). Sequencing is enforced by stop-hook dispatch; bypassable by direct orchestrator dispatch.
+8. **Update Recovery Pointer on every state change.** `[enforced]` This is how you survive compaction. Evidence gates enforce real work: IMPLEMENTED requires a commit SHA in the manifest, IN_REVIEW requires a review directory, source edits require an IN_PROGRESS task.
+9. **Commit in AFK mode.** `[hook-driven only]` Every state transition gets a commit with the dynamic prefix from config. Enforced in AFK/YOLO via stop-hook; not enforced in HITL or manual dispatch.
+10. **NAZGUL_COMPLETE means ALL tasks DONE and post-loop finished.** `[enforced]` Not before. Verified by re-reading task manifests from disk immediately beforehand — never by recalling prior transitions (guards can silently block status writes).
 
 ---
 
@@ -27,6 +35,8 @@ Task-PR:     PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> APPR
 ```
 
 ### Permitted Transitions
+
+`[enforced]` All permitted and forbidden transitions are mechanically enforced by `task-state-guard.sh` (PreToolUse on Write/Edit). Illegal status writes are blocked at the tool call level.
 
 | From | To | Condition |
 |------|----|-----------|
@@ -55,20 +65,20 @@ Task-PR:     PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> APPR
 
 ## 3. Review Board
 
-1. **All reviewers must approve.** Unanimous -- no majority vote.
-2. **Confidence threshold governs severity.** Below 80 = non-blocking CONCERN. At or above 80 with HIGH/MEDIUM severity = blocking REJECT.
-3. **Reviewers are read-only.** Never modify project files. Read, verify, write review to `nazgul/reviews/`.
-4. **Pre-checks before reviews.** Tests and lint must pass BEFORE reviewers run. Three consecutive test failures block the task.
-5. **Security rejections are absolute in AFK mode.** Task is BLOCKED, requires human review.
-6. **Every finding must be structured.** Required fields: severity, confidence, file path, category, verdict, issue, fix.
-7. **Feedback priority:** Security first, correctness second, style last.
-8. **Contradiction handling:** HITL = flag for human. AFK = majority wins, ties broken by higher confidence.
+1. **All reviewers must approve.** `[enforced]` Unanimous -- no majority vote. `review-evidence.sh` blocks DONE until all reviewers have `verdict: APPROVE`.
+2. **Confidence threshold governs severity.** `[enforced]` Below 80 = non-blocking CONCERN. At or above 80 with HIGH/MEDIUM severity = blocking REJECT. Applied by `review-evidence.sh`.
+3. **Reviewers are read-only.** `[enforced]` Never modify project files. Read, verify, write review to `nazgul/reviews/`. Enforced via tool allowlist (reviewers are spawned without write tools).
+4. **Pre-checks before reviews.** `[advisory]` Tests and lint must pass BEFORE reviewers run. Three consecutive test failures block the task. The config flag `require_tests_pass_before_review` is not mechanically gated at the pre-review boundary.
+5. **Security rejections are absolute in AFK mode.** `[hook-driven only]` Task is BLOCKED, requires human review. Applied by stop-hook in AFK mode; not active in HITL or manual dispatch.
+6. **Every finding must be structured.** `[enforced]` Required fields: severity, confidence, file path, category, verdict, issue, fix. `review-evidence.sh` reads the structured format to determine APPROVE/REJECT — a malformed review without a valid `verdict` field is treated as a non-approval.
+7. **Feedback priority:** `[hook-driven only]` Security first, correctness second, style last. Contradiction resolution in AFK mode is handled by stop-hook (majority wins, ties by confidence); advisory in HITL.
+8. **Contradiction handling:** `[hook-driven only]` HITL = flag for human. AFK = majority wins, ties broken by higher confidence. Applied by stop-hook in AFK mode.
 
 ---
 
 ## 4. Recovery Protocol
 
-The Recovery Pointer is read first by every agent on every start.
+The Recovery Pointer is read first by every agent on every start. `[enforced]` Evidence gates enforce the underlying principle — source edits require an IN_PROGRESS task (`task-state-guard.sh`) and state advances require on-disk evidence (`review-evidence.sh`). Agents cannot make progress without reading and writing the correct state files.
 
 ```markdown
 ## Recovery Pointer
@@ -95,6 +105,9 @@ The Recovery Pointer is read first by every agent on every start.
 ## 5. Safety Boundaries
 
 ### Hard Blocks (unconditional)
+
+`[enforced]` All hard blocks below are caught by `pre-tool-guard.sh` (PreToolUse on Bash) and blocked before execution, regardless of mode or who drives the loop.
+
 - `rm -rf /`, `rm -rf ~` -- filesystem destruction
 - `DROP TABLE`, `TRUNCATE` -- data destruction
 - `git push --force main/master` -- shared branch destruction
@@ -104,7 +117,7 @@ The Recovery Pointer is read first by every agent on every start.
 
 ### Lean Comments (enforced)
 
-Comments must be LEAN. Full XML/JSDoc/docstring belongs on **PUBLIC interface members only**; implementations use `<inheritdoc/>`. A single short comment explaining a non-obvious domain/venue quirk is allowed. Everything else is bloat and is blocked at write time and rejected by the code reviewer (always-blocking, never an auto-approved CONCERN):
+`[enforced]` Comments must be LEAN. Full XML/JSDoc/docstring belongs on **PUBLIC interface members only**; implementations use `<inheritdoc/>`. A single short comment explaining a non-obvious domain/venue quirk is allowed. Everything else is bloat and is blocked at write time and rejected by the code reviewer (always-blocking, never an auto-approved CONCERN):
 
 - A run of 3+ consecutive `//`/`#` line comments that is not a license header.
 - A `<remarks>`/multi-paragraph doc block on a private/internal/protected or test member.
@@ -114,6 +127,8 @@ Comments must be LEAN. Full XML/JSDoc/docstring belongs on **PUBLIC interface me
 Tunable via `guards.lean_comments` (default `true`) and `guards.max_consecutive_comment_lines` (default `2`).
 
 ### Soft Limits
+
+`[enforced]` Iteration, retry, and failure ceilings are enforced by `stop-hook.sh`; the loop cannot advance past them regardless of mode.
 
 | Limit | Default | Config |
 |-------|---------|--------|
@@ -127,6 +142,8 @@ Tunable via `guards.lean_comments` (default `true`) and `guards.max_consecutive_
 
 ## 6. Classification
 
+`[enforced]` Classification is performed by the Discovery agent and written to `nazgul/config.json`; downstream agents read the config-file classification and adapt accordingly. The written result persists and drives conditional agent roster generation.
+
 | Type | Detection |
 |------|-----------|
 | GREENFIELD | <10 source files, no meaningful logic |
@@ -139,6 +156,8 @@ Tunable via `guards.lean_comments` (default `true`) and `guards.max_consecutive_
 
 ## 7. Document Generation Matrix
 
+`[hook-driven only]` Document generation follows this matrix; the stop-hook drives the doc-generator agent per the configured roster. In manual dispatch the matrix is advisory.
+
 | Document | Greenfield | Brownfield | Refactor | Bugfix | Migration |
 |----------|-----------|------------|----------|--------|-----------|
 | PRD | Full | Feature-scoped | -- | -- | Feature parity |
@@ -150,14 +169,16 @@ Tunable via `guards.lean_comments` (default `true`) and `guards.max_consecutive_
 
 ## 8. File Scope Restrictions
 
-- **Implementer**: Only files in the task's `file_scope`. Must update manifest before expanding.
-- **Reviewers**: Read-only. Write only to `nazgul/reviews/`.
-- **Parallel tasks**: Zero file overlap. Team Orchestrator validates before assigning.
-- **Specialists**: Only files in the delegation brief's scope.
+- **Implementer**: `[enforced]` Only files in the task's `file_scope`. `task-state-guard.sh` (PreToolUse on Write/Edit) blocks edits outside declared scope. Must update manifest before expanding.
+- **Reviewers**: `[enforced]` Read-only. Write only to `nazgul/reviews/`. Enforced via tool allowlist.
+- **Parallel tasks**: `[hook-driven only]` Zero file overlap. Team Orchestrator validates before assigning; bypassable by manual task dispatch.
+- **Specialists**: `[hook-driven only]` Only files in the delegation brief's scope. Validated by the Team Orchestrator when stop-hook drives dispatch.
 
 ---
 
 ## 9. Mode Governance
+
+`[enforced]` Mode is read from `nazgul/config.json` by every agent on start. Pre-tool guard blocks destructive commands in all modes. Stop-hook enforces mode-specific behavior (AFK auto-commit, AFK security BLOCK, YOLO permission skip).
 
 - **HITL** (default): Human approves classification, docs, plan. Consulted on blockers.
 - **AFK**: Auto-approve classification/docs/plan. Auto-commit. Security rejections auto-block.
@@ -167,8 +188,9 @@ Tunable via `guards.lean_comments` (default `true`) and `guards.max_consecutive_
 
 ## 10. Branch Isolation
 
-- Never commit to the base branch during a loop
-- Feature branch: `feat/<id>-<slug>` -- integration point
-- Task worktrees: `feat/<id>/TASK-NNN` -- merge back to feature
-- Worktrees live in `../<project>-worktrees/TASK-NNN/`
-- On conflict: `git merge --abort`, task BLOCKED
+- **Never commit to the base branch during a loop.** `[hook-driven only]` Blocked by `base-branch-commit-guard.sh` (PreToolUse on Bash): a commit targeting `branch.base` while `branch.feature` is set exits 2 with an actionable error. PreToolUse guard pending TASK-002 (`base-branch-commit-guard.sh`)
+- **Never stage `nazgul/` paths in local mode.** `[enforced]` Blocked by `local-mode-tracking-guard.sh` (PreToolUse on Bash): when `install_mode == "local"`, any `git add`/`git commit` touching a `nazgul/` path exits 2.
+- **Feature branch:** `[hook-driven only]` `feat/<id>-<slug>` -- integration point. Written to `branch.feature` in config; guards read this field to validate commits. PreToolUse guard pending TASK-002
+- **Task worktrees:** `[hook-driven only]` `feat/<id>/TASK-NNN` -- merge back to feature. Created by stop-hook worktree utilities; naming enforced by convention in AFK mode.
+- **Worktrees live in** `../<project>-worktrees/TASK-NNN/` -- `[hook-driven only]` Path written to `branch.worktree_dir` in config; used by stop-hook worktree utilities.
+- **On conflict:** `[hook-driven only]` `git merge --abort`, task BLOCKED. Applied by stop-hook on merge failure detection.

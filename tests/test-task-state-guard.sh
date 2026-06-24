@@ -657,4 +657,110 @@ assert_exit_code "BLOCKED->DONE blocked" "$GUARD_EC" 2
 assert_contains "BLOCKED->DONE message" "$GUARD_STDERR" "Invalid state transition"
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# FILE SCOPE GUARD TESTS (TASK-003)
+# Tests the file-scope extension inside the HAS_ACTIVE=true allow path.
+# ---------------------------------------------------------------------------
+
+# Helper: create a task file with an explicit File Scope field.
+create_task_with_file_scope() {
+  local id="$1" status="$2" scope="$3"
+  cat > "$TEST_DIR/nazgul/tasks/${id}.md" << TASK_EOF
+# ${id}: Test task
+
+- **Status**: ${status}
+- **Depends on**: none
+- **Group**: 1
+- **Retry count**: 0/3
+- **Assigned to**: implementer
+- **File Scope**: ${scope}
+TASK_EOF
+}
+
+# ---------------------------------------------------------------------------
+# Test 40: File scope guard — BLOCK: out-of-scope Write
+# Active task scope = scripts/new-guard.sh; editing scripts/unrelated.sh -> exit 2
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.guards.requireActiveTask = true'
+create_task_with_file_scope "TASK-001" "IN_PROGRESS" "scripts/new-guard.sh"
+input=$(jq -n --arg fp "$TEST_DIR/scripts/unrelated.sh" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"echo hello"}}')
+run_guard "$input"
+assert_exit_code "file-scope: out-of-scope Write blocked" "$GUARD_EC" 2
+assert_contains "file-scope: out-of-scope message mentions scope" "$GUARD_STDERR" "file scope"
+assert_contains "file-scope: block message names the blocked file path" "$GUARD_STDERR" "unrelated.sh"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 41: File scope guard — ALLOW: in-scope Write
+# Active task scope = scripts/new-guard.sh; editing scripts/new-guard.sh -> exit 0
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.guards.requireActiveTask = true'
+create_task_with_file_scope "TASK-001" "IN_PROGRESS" "scripts/new-guard.sh"
+input=$(jq -n --arg fp "$TEST_DIR/scripts/new-guard.sh" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"echo hello"}}')
+run_guard "$input"
+assert_exit_code "file-scope: in-scope Write allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 42: File scope guard — ALLOW: File Scope field absent -> no restriction
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "IN_PROGRESS"
+# No File Scope field in this fixture — guard must allow any source file
+input=$(jq -n --arg fp "$TEST_DIR/scripts/any-file.sh" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"echo hi"}}')
+run_guard "$input"
+assert_exit_code "file-scope: absent File Scope allows all" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 43: File scope guard — ALLOW: File Scope field empty string -> no restriction
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.guards.requireActiveTask = true'
+create_task_with_file_scope "TASK-001" "IN_PROGRESS" ""
+input=$(jq -n --arg fp "$TEST_DIR/scripts/any-file.sh" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"echo hi"}}')
+run_guard "$input"
+assert_exit_code "file-scope: empty File Scope allows all" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 44: File scope guard — ALLOW: nazgul/ path exempt regardless of scope
+# Active task scope = scripts/new-guard.sh; editing nazgul/tasks/TASK-001.md -> exit 0
+# (nazgul/ paths early-exit before the scope check is even reached)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.guards.requireActiveTask = true'
+create_task_with_file_scope "TASK-001" "IN_PROGRESS" "scripts/new-guard.sh"
+input=$(jq -n --arg fp "$TEST_DIR/nazgul/tasks/TASK-001.md" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"# Task"}}')
+run_guard "$input"
+assert_exit_code "file-scope: nazgul/ path exempt from scope check" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 45: File scope guard — ALLOW: docs/ path exempt regardless of scope
+# Active task scope = scripts/new-guard.sh; editing docs/TRD.md -> exit 0
+# (docs/ paths early-exit before the scope check is even reached)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.guards.requireActiveTask = true'
+create_task_with_file_scope "TASK-001" "IN_PROGRESS" "scripts/new-guard.sh"
+input=$(jq -n '{"tool_name":"Write","tool_input":{"file_path":"docs/TRD.md","content":"# TRD"}}')
+run_guard "$input"
+assert_exit_code "file-scope: docs/ path exempt from scope check" "$GUARD_EC" 0
+teardown_temp_dir
+
 report_results

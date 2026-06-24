@@ -82,10 +82,7 @@ if ! is_task_manifest "$FILE_PATH"; then
 
   # Documentation and plan files are always allowed (design docs, ADRs, plans, etc.)
   case "$FILE_PATH" in
-    */docs/*|*/plans/*|*/doc/*|*/.claude/*) exit 0 ;;
-  esac
-  # Also check relative paths
-  case "$FILE_PATH" in
+    */docs/*|*/plans/*|*/doc/*|*/.claude/*|\
     docs/*|plans/*|doc/*|.claude/*) exit 0 ;;
   esac
 
@@ -112,6 +109,7 @@ if ! is_task_manifest "$FILE_PATH"; then
 
   # Check if any task or patch is IN_PROGRESS
   HAS_ACTIVE=false
+  ACTIVE_TASK_FILE=""
   TASK_COUNT=0
   for task_file in "$NAZGUL_TASKS_DIR"/TASK-*.md "$NAZGUL_TASKS_DIR"/patches/PATCH-*.md; do
     [ -f "$task_file" ] || continue
@@ -119,6 +117,7 @@ if ! is_task_manifest "$FILE_PATH"; then
     STATUS=$(get_task_status "$task_file" "")
     if [ "$STATUS" = "IN_PROGRESS" ]; then
       HAS_ACTIVE=true
+      ACTIVE_TASK_FILE="$task_file"
       break
     fi
   done
@@ -133,6 +132,47 @@ if ! is_task_manifest "$FILE_PATH"; then
     echo "Cannot edit source files without an active task." >&2
     echo "Transition a task to IN_PROGRESS before editing: $FILE_PATH" >&2
     exit 2
+  fi
+
+  # --- FILE SCOPE GUARD ---
+  # If the active task declares a File Scope, block edits to paths outside it.
+  # Exemptions: nazgul/ paths (already returned exit 0 above) and docs/ paths.
+  # Degrade: if field absent or empty, allow (no restriction declared).
+  ACTIVE_TASK_ID=""
+  FILE_SCOPE=""
+  if [ -n "$ACTIVE_TASK_FILE" ]; then
+    ACTIVE_TASK_ID=$(basename "$ACTIVE_TASK_FILE" .md)
+    FILE_SCOPE=$(get_task_field "$ACTIVE_TASK_FILE" "File Scope" "") || FILE_SCOPE=""
+  fi
+
+  if [ -n "$FILE_SCOPE" ]; then
+    # Parse comma/whitespace-separated list of path tokens
+    # Normalise commas to spaces, then iterate tokens
+    SCOPE_TOKENS=$(printf '%s' "$FILE_SCOPE" | tr ',' ' ')
+    SCOPE_MATCH=false
+    for token in $SCOPE_TOKENS; do
+      [ -z "$token" ] && continue
+      # Reject path-traversal tokens
+      case "$token" in
+        *".."*) continue ;;
+      esac
+      # Anchored path-suffix matching (exact, suffix, or directory-prefix)
+      FILE_BASENAME=$(basename "$FILE_PATH")
+      TOKEN_BASENAME=$(basename "$token")
+      case "$FILE_PATH" in
+        "$token"|*/"$token"|"$token"/*) SCOPE_MATCH=true; break ;;
+      esac
+      case "$FILE_BASENAME" in
+        "$TOKEN_BASENAME") SCOPE_MATCH=true; break ;;
+      esac
+    done
+
+    if [ "$SCOPE_MATCH" = false ]; then
+      echo "NAZGUL FILE SCOPE GUARD: BLOCKED — ${ACTIVE_TASK_ID} file scope does not include: $FILE_PATH" >&2
+      echo "Active task scope: $FILE_SCOPE" >&2
+      echo "To edit this file, update '- **File Scope**:' in nazgul/tasks/${ACTIVE_TASK_ID}.md first." >&2
+      exit 2
+    fi
   fi
 
   # Has active task — allow the source file edit
@@ -220,6 +260,10 @@ if ! valid_transition "$OLD_STATUS" "$NEW_STATUS"; then
   exit 2
 fi
 
+# Derive task identity once — used by both evidence gates and the review gate below
+TASK_ID=$(basename "$FILE_PATH" .md)
+NAZGUL_DIR=$(dirname "$(dirname "$FILE_PATH")")
+
 # --- ENFORCE EVIDENCE GATES ---
 # IN_PROGRESS -> IMPLEMENTED requires a commit SHA in the manifest content
 # For Write, NEW_CONTENT is the full post-edit file.
@@ -248,9 +292,7 @@ fi
 # IMPLEMENTED/BLOCKED -> IN_REVIEW requires review directory to exist
 # (BLOCKED -> IN_REVIEW is the /nazgul:review --materialize repair path)
 if { [ "$OLD_STATUS" = "IMPLEMENTED" ] || [ "$OLD_STATUS" = "BLOCKED" ]; } && [ "$NEW_STATUS" = "IN_REVIEW" ]; then
-  TASK_ID_CHECK=$(basename "$FILE_PATH" .md)
-  NAZGUL_DIR_CHECK=$(dirname "$(dirname "$FILE_PATH")")
-  REVIEW_DIR_CHECK="$NAZGUL_DIR_CHECK/reviews/$TASK_ID_CHECK"
+  REVIEW_DIR_CHECK="$NAZGUL_DIR/reviews/$TASK_ID"
   if [ ! -d "$REVIEW_DIR_CHECK" ]; then
     echo "NAZGUL STATE GUARD: BLOCKED — Cannot move to IN_REVIEW without a review directory" >&2
     echo "Expected: ${REVIEW_DIR_CHECK}/" >&2
@@ -274,8 +316,6 @@ fi
 # --- ENFORCE REVIEW GATE (Constitution Article IV) ---
 # In YOLO mode, gate APPROVED; in non-YOLO, gate DONE
 # APPROVED → DONE in YOLO needs no review checks (PR merge is external validation)
-TASK_ID=$(basename "$FILE_PATH" .md)
-NAZGUL_DIR=$(dirname "$(dirname "$FILE_PATH")")
 CONFIG="$NAZGUL_DIR/config.json"
 YOLO_MODE="false"
 if [ -f "$CONFIG" ]; then

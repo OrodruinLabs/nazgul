@@ -26,6 +26,16 @@ debug_log() {
     fi
 }
 
+# Returns 0 (skip) when the file is a nazgul/ path in local install mode.
+should_skip_local_nazgul() {
+    local file="$1" mode="${2:-}"
+    if [[ "$mode" == "local" && "$file" == nazgul/* ]]; then
+        debug_log "Skipping nazgul/ path in local mode: $file"
+        return 0
+    fi
+    return 1
+}
+
 output_result() {
     echo '{"continue": true}'
     exit 0
@@ -44,10 +54,7 @@ if [[ ! -f "nazgul/config.json" ]]; then
 fi
 
 # --- Check if AFK mode is enabled ---
-AFK_ENABLED="false"
-if command -v jq &>/dev/null; then
-    AFK_ENABLED=$(jq -r '.afk.enabled // false' nazgul/config.json 2>/dev/null || echo "false")
-fi
+AFK_ENABLED=$(jq -r '.afk.enabled // false' nazgul/config.json 2>/dev/null || echo "false")
 
 if [[ "$AFK_ENABLED" != "true" ]]; then
     debug_log "AFK mode not enabled — skipping staging"
@@ -60,14 +67,18 @@ if ! git rev-parse --is-inside-work-tree &>/dev/null; then
     output_result
 fi
 
+# --- Determine install_mode to skip nazgul/ in local installs ---
+INSTALL_MODE=$(jq -r '.install_mode // ""' nazgul/config.json 2>/dev/null || echo "")
+
 # --- Stage all modified files ---
 STAGED_COUNT=0
 
 # Modified but not staged
 while IFS= read -r file; do
     if [[ -n "$file" && -e "$file" ]]; then
+        should_skip_local_nazgul "$file" "$INSTALL_MODE" && continue
         if git add "$file" 2>/dev/null; then
-            ((STAGED_COUNT++))
+            STAGED_COUNT=$((STAGED_COUNT + 1))
             debug_log "Staged: $file"
         fi
     fi
@@ -76,6 +87,7 @@ done < <(git diff --name-only 2>/dev/null)
 # Untracked files (excluding ignored)
 while IFS= read -r file; do
     if [[ -n "$file" && -e "$file" ]]; then
+        should_skip_local_nazgul "$file" "$INSTALL_MODE" && continue
         # Skip sensitive files
         case "$file" in
             *.env|*.env.*|credentials*|*secret*|*.pem|*.key)
@@ -84,7 +96,7 @@ while IFS= read -r file; do
                 ;;
         esac
         if git add "$file" 2>/dev/null; then
-            ((STAGED_COUNT++))
+            STAGED_COUNT=$((STAGED_COUNT + 1))
             debug_log "Staged (new): $file"
         fi
     fi
