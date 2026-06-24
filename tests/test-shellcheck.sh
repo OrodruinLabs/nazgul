@@ -17,6 +17,8 @@ SCRIPTS=(
   "scripts/migrate-config.sh"
   "scripts/task-state-guard.sh"
   "scripts/lean-comments-guard.sh"
+  "scripts/emit-event-cli.sh"
+  "scripts/lib/emit-event.sh"
 )
 
 # bash -n syntax checks

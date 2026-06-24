@@ -11,8 +11,8 @@ EVENTS_FILE="${EVENTS_FILE:-${NAZGUL_DIR:+${NAZGUL_DIR}/logs/events.jsonl}}"
 _EMIT_BUS_ENABLED=""
 # flock availability is fixed for the lifetime of the process.
 if command -v flock >/dev/null 2>&1; then _EMIT_HAS_FLOCK=1; else _EMIT_HAS_FLOCK=0; fi
-# Log directory guard: 0 = mkdir -p not yet run for this EVENTS_FILE.
-_EMIT_DIR_READY=0
+# Log directory guard: tracks last EVENTS_FILE path for which mkdir -p was run.
+_EMIT_DIR_READY=""
 
 emit_event() {
   local event_type="$1"; shift
@@ -44,6 +44,7 @@ emit_event() {
     jq_args+=(--argjson iter "null")
   fi
 
+  # Keys must be [a-zA-Z_][a-zA-Z0-9_]* — all callers are internal; no sanitization guard needed.
   while [ $# -ge 2 ]; do
     local raw_key="$1" val="$2"; shift 2
     local key="$raw_key"
@@ -56,15 +57,14 @@ emit_event() {
   jq_expr="${jq_expr}}"
 
   # Create log dir on first emit only; ${var%/*} avoids a $(dirname) subshell.
-  if [ "$_EMIT_DIR_READY" = "0" ]; then
+  if [ "$_EMIT_DIR_READY" != "$EVENTS_FILE" ]; then
     mkdir -p "${EVENTS_FILE%/*}"
-    _EMIT_DIR_READY=1
+    _EMIT_DIR_READY="$EVENTS_FILE"
   fi
 
   # flock serialises concurrent SubagentStop fires (Agent Teams). Fallback:
   # O_APPEND + a single jq write() is atomic on POSIX for writes < PIPE_BUF;
-  # JSONL lines are short. CONCERN 3: macOS base ships without flock -> the
-  # fallback path must be exercised by macOS CI.
+  # JSONL lines are short.
   local lockfile="${EVENTS_FILE}.lock"
   if [ "$_EMIT_HAS_FLOCK" = "1" ]; then
     ( flock -x 200; jq -cn "${jq_args[@]}" "$jq_expr" >> "$EVENTS_FILE" ) 200>"$lockfile"
@@ -72,6 +72,4 @@ emit_event() {
     jq -cn "${jq_args[@]}" "$jq_expr" >> "$EVENTS_FILE"
   fi
 
-  # TODO(telemetry.max_event_lines): future rotation hook point — when
-  # config.json gains max_event_lines, truncate events.jsonl to that limit here.
 }

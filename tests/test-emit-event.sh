@@ -19,6 +19,7 @@ _source_emit_lib() {
   unset -f emit_event 2>/dev/null || true
   # Reset globals the lib sets at source time
   unset EMIT_SCHEMA_VERSION EVENTS_FILE 2>/dev/null || true
+  unset _EMIT_BUS_ENABLED _EMIT_HAS_FLOCK _EMIT_DIR_READY 2>/dev/null || true
   # shellcheck source=../scripts/lib/emit-event.sh
   source "$EMIT_LIB"
 }
