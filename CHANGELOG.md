@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.0] - 2026-06-24
+
+### Added
+- **Mechanical mutation guards (FEAT-002).** Three PreToolUse guards turn rules that were prose-only into enforced invariants: `local-mode-tracking-guard.sh` blocks `git add`/`stage`/`commit` of `nazgul/` paths when `install_mode` is `"local"` (closes the runtime-state leak that put loop files into a PR); `base-branch-commit-guard.sh` blocks a `git commit` to the base branch while a feature branch is active; and `task-state-guard.sh` now blocks implementer Write/Edit outside the active task's `file_scope` (anchored path matching, `nazgul/`+`docs/` exempt). The `session-staging.sh` auto-stage is gated on `install_mode` so local-mode loops no longer track `nazgul/`.
+- **Honest RULES.md.** Every rule is annotated with its real enforcement tier — `[enforced]`, `[hook-driven only]`, or `[advisory]` — with a legend. RULES.md no longer claims enforcement it doesn't have.
+
+### Changed
+- **Faster, leaner review board (~3–4×).** Reviewers are now spawned concurrently in a single message (was effectively serial); the pre-review Simplifier pass is opt-in via `review_gate.simplify_before_review` (default false; post-loop simplify already covers cleanup); reviewers no longer re-run the full test suite (pre-checks ran it once); `maxTurns` lowered (orchestrator 60→40, reviewers 30→15); `security-reviewer` pinned to `sonnet` while other reviewers honor `models.review` (set it to `haiku` to cut cost).
+- **Config schema 14 → 15.** `migrate_14_to_15` adds `review_gate.simplify_before_review` (additive, idempotent, boolean-clamped).
+
 ## [2.4.0] - 2026-06-24
 
 ### Added
