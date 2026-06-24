@@ -55,8 +55,7 @@ check_pattern 'curl\s+.*\|\s*sudo' "Piped internet execution with sudo"
 
 # Task manifest status protection — prevent bypassing Write/Edit hooks
 check_pattern 'sed.*nazgul/tasks/TASK-.*Status' "Direct sed on task manifest status (use Write/Edit tools)"
-check_pattern 'echo.*Status.*nazgul/tasks/TASK-' "Direct echo to task manifest (use Write/Edit tools)"
-check_pattern 'printf.*Status.*nazgul/tasks/TASK-' "Direct printf to task manifest (use Write/Edit tools)"
+check_pattern '(echo|printf).*>>?\s*nazgul/tasks/TASK-[^[:space:]]' "Direct echo/printf redirect to task manifest (use Write/Edit tools)"
 check_pattern 'cat.*>.*nazgul/tasks/TASK-' "Direct cat redirect to task manifest (use Write/Edit tools)"
 check_pattern 'tee.*nazgul/tasks/TASK-' "Direct tee to task manifest (use Write/Edit tools)"
 
