@@ -200,15 +200,24 @@ if [ -z "$NEW_STATUS" ]; then
   NEW_STATUS=$(echo "$NEW_CONTENT" | awk '/^## Status[[:space:]]*$/{getline; gsub(/^[[:space:]]+|[[:space:]]+$/, ""); if (/^[A-Z_]+$/) print; exit}')
 fi
 if [ -z "$NEW_STATUS" ]; then
-  # YAML frontmatter: ^status: TOKEN or bare token line anchored to the known set
-  _fm_line=$(echo "$NEW_CONTENT" | \
+  # YAML frontmatter `status: TOKEN`. When the content has a leading --- ... ---
+  # block, scope the search to it so a `status:` line in the manifest BODY (e.g.
+  # inside a code block) can't be misread as a transition. For a partial edit
+  # that replaces only the status line (no --- delimiters), there is no body to
+  # confuse, so search the whole content. printf (not echo) keeps arbitrary
+  # multiline content POSIX-safe.
+  _fm_src="$NEW_CONTENT"
+  if printf '%s\n' "$NEW_CONTENT" | head -1 | grep -q '^---[[:space:]]*$'; then
+    _fm_src=$(printf '%s\n' "$NEW_CONTENT" | awk 'NR==1 && /^---[[:space:]]*$/{infm=1; next} infm && /^---[[:space:]]*$/{exit} infm')
+  fi
+  _fm_line=$(printf '%s\n' "$_fm_src" | \
     grep -m1 -E '^status:[[:space:]]*(PLANNED|READY|IN_PROGRESS|IMPLEMENTED|IN_REVIEW|APPROVED|CHANGES_REQUESTED|BLOCKED|DONE)[[:space:]]*$' 2>/dev/null || true)
   NEW_STATUS=$(printf '%s' "$_fm_line" | sed 's/^status:[[:space:]]*//' | tr -d '[:space:]')
 fi
 if [ -z "$NEW_STATUS" ]; then
   # Ordered last so frontmatter and structured headings take precedence; bare token
   # is a catch-all for any remaining inline formats that slip past earlier extractors.
-  NEW_STATUS=$(echo "$NEW_CONTENT" | \
+  NEW_STATUS=$(printf '%s\n' "$NEW_CONTENT" | \
     grep -m1 -E '^(PLANNED|READY|IN_PROGRESS|IMPLEMENTED|IN_REVIEW|APPROVED|CHANGES_REQUESTED|BLOCKED|DONE)[[:space:]]*$' 2>/dev/null \
     | tr -d '[:space:]' || true)
 fi
@@ -255,6 +264,7 @@ valid_transition() {
     IN_REVIEW_CHANGES_REQUESTED) return 0 ;;
     IN_REVIEW_BLOCKED)           return 0 ;;
     APPROVED_DONE)               return 0 ;;
+    APPROVED_BLOCKED)            return 0 ;;
     CHANGES_REQUESTED_IN_PROGRESS) return 0 ;;
     CHANGES_REQUESTED_BLOCKED)   return 0 ;;
     # BLOCKED exits: READY via /nazgul:task unblock; IN_REVIEW via /nazgul:review --materialize

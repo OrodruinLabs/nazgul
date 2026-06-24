@@ -826,7 +826,7 @@ printf '%s\n' '{"sv":1,"ts":"2026-06-24T00:00:00Z","task_id":"TASK-001","review_
 run_hook
 assert_exit_code "gran gate integration: violation blocks: exit 2" "$HOOK_EC" 2
 assert_contains "gran gate integration: names gate" "$HOOK_OUTPUT" "GRANULARITY GATE"
-assert_contains "gran gate integration: gate after learning gate" "$HOOK_OUTPUT" "GRANULARITY GATE"
+assert_contains "gran gate integration: emits decision-block JSON" "$HOOK_OUTPUT" '"decision"'
 teardown_temp_dir
 
 # --- All DONE + compliant coverage exits cleanly ---

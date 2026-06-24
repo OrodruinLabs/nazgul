@@ -46,17 +46,28 @@ _record_review_coverage() {
   local ts; ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   local iteration="${CURRENT_ITERATION:-null}"
 
-  local granularity
+  local granularity feat_id cur_iter
   granularity=$(jq -r '.review_gate.granularity // "task"' "$CONFIG" 2>/dev/null || echo "task")
   case "$granularity" in task|group|feature) ;; *) granularity="task" ;; esac
+  feat_id=$(jq -r '.feat_id // "default"' "$CONFIG" 2>/dev/null || echo "default")
+  cur_iter=$(jq -r '.current_iteration // "null"' "$CONFIG" 2>/dev/null || echo "null")
 
-  # Collect distinct task_ids from recent reviewer_verdict events.
-  # Best-effort: last 200 log lines; may include events from prior review runs
-  # on long logs. review-coverage.jsonl is a derived index — approximation is acceptable.
+  # Collect distinct task_ids for THIS review run's reviewer_verdict events.
+  # Scope to the current iteration when known — this isolates the current review
+  # from prior runs whose verdicts may still sit in the log tail (the cause of
+  # cross-run granularity misclassification). Fall back to the recent tail when
+  # the iteration is unknown, so the detector never silently stops recording.
   local task_ids
-  task_ids=$(tail -200 "$events_file" \
-    | jq -r 'select(.event == "reviewer_verdict") | .task_id' 2>/dev/null \
-    | sort -u | grep -v '^$' | grep -v '^null$' || true)
+  if [ "$cur_iter" != "null" ] && [ -n "$cur_iter" ]; then
+    task_ids=$(tail -400 "$events_file" \
+      | jq -r --argjson it "$cur_iter" 'select(.event == "reviewer_verdict" and .iteration == $it) | .task_id' 2>/dev/null \
+      | sort -u | grep -v '^$' | grep -v '^null$' || true)
+  fi
+  if [ -z "${task_ids:-}" ]; then
+    task_ids=$(tail -200 "$events_file" \
+      | jq -r 'select(.event == "reviewer_verdict") | .task_id' 2>/dev/null \
+      | sort -u | grep -v '^$' | grep -v '^null$' || true)
+  fi
 
   [ -n "$task_ids" ] || return 0
 
@@ -100,9 +111,10 @@ _record_review_coverage() {
       --arg task_id "$task_id" \
       --arg review_unit "$review_unit" \
       --arg granularity_used "$granularity_used" \
+      --arg feat_id "$feat_id" \
       --arg ts "$ts" \
       --argjson iteration "$iter_json" \
-      '{sv:1,ts:$ts,task_id:$task_id,review_unit:$review_unit,granularity_used:$granularity_used,iteration:$iteration}' \
+      '{sv:1,ts:$ts,feat_id:$feat_id,task_id:$task_id,review_unit:$review_unit,granularity_used:$granularity_used,iteration:$iteration}' \
       >> "$coverage_file" 2>/dev/null || true
   done <<< "$task_ids"
 }

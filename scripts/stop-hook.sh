@@ -782,8 +782,13 @@ LEARN_MSG
     GRAN_CHECKED_FOR=""
     [ -f "$GRAN_MARKER" ] && GRAN_CHECKED_FOR=$(cat "$GRAN_MARKER" 2>/dev/null || echo "")
     if [ "$GRAN_CHECKED_FOR" != "$GRAN_OBJ_ID" ] && [ -f "$COVERAGE_FILE" ]; then
-      GRAN_VIOLATIONS=$(jq -r --arg g "$GRANULARITY" \
-        'select(.granularity_used != $g) | "\(.task_id) reviewed as \(.granularity_used) (expected \($g))"' \
+      # Scope to THIS objective's coverage records. review-coverage.jsonl is
+      # append-only and accumulates records across objectives; a record carrying
+      # a different feat_id belongs to a prior objective and must not block this
+      # one. A record with no/empty feat_id (legacy, pre-stamping) is treated as
+      # belonging to the current objective so older logs still gate.
+      GRAN_VIOLATIONS=$(jq -r --arg g "$GRANULARITY" --arg feat "$GRAN_OBJ_ID" \
+        'select(((.feat_id // "") == "" or .feat_id == $feat) and .granularity_used != $g) | "\(.task_id) reviewed as \(.granularity_used) (expected \($g))"' \
         "$COVERAGE_FILE" 2>/dev/null | sort -u || true)
       if [ -n "$GRAN_VIOLATIONS" ]; then
         if [ "$ENFORCE_GRANULARITY" = "warn" ]; then

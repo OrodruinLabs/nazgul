@@ -185,4 +185,25 @@ run_hook
 assert_exit_code "absent enforce_granularity defaults to block: exit 2" "$HOOK_EC" 2
 teardown_temp_dir
 
+# --- Stale record from ANOTHER objective must NOT block this one ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.feat_id = "FEAT-GG9"' \
+  '.review_gate.granularity = "group"' \
+  '.review_gate.enforce_granularity = "block"' \
+  '.learning.auto_distill_post_loop = false' \
+  '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+mkdir -p "$TEST_DIR/nazgul/logs"
+# A violating record, but stamped with a DIFFERENT objective's feat_id — the
+# gate must ignore it and complete cleanly (no false block).
+printf '%s\n' '{"sv":1,"ts":"2026-06-24T00:00:00Z","feat_id":"FEAT-OTHER","task_id":"TASK-001","review_unit":"TASK-001","granularity_used":"task","iteration":1}' \
+  > "$TEST_DIR/nazgul/logs/review-coverage.jsonl"
+run_hook
+assert_exit_code "foreign-objective coverage record does not block: exit 0" "$HOOK_EC" 0
+teardown_temp_dir
+
 report_results
