@@ -286,12 +286,9 @@ migrate_12_to_13() {
 migrate_13_to_14() {
   local tmp
   tmp=$(mktemp)
-  # Add telemetry block (bus_enabled + record_metered_cost). ADDITIVE ONLY: set
-  # each field only when absent so a hand-set bus_enabled=false or
-  # record_metered_cost=true survives untouched. Clamp a non-object .telemetry
-  # back to {} first so the field assignment can't error and abort the chain
-  # (same type-guard pattern as migrate_11_to_12/migrate_12_to_13).
-  # NO legacy_write field — single-write + dual-read design (Section 6).
+  # Add telemetry.bus_enabled + record_metered_cost. Same ADDITIVE ONLY +
+  # type-guard pattern as migrate_12_to_13. NO legacy_write — single-write +
+  # dual-read design (Section 6).
   jq '
     .telemetry = ((if (.telemetry | type) == "object" then .telemetry else {} end)
       | .bus_enabled = (if has("bus_enabled") then .bus_enabled else true end)

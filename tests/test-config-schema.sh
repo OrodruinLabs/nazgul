@@ -104,9 +104,7 @@ assert_eq "has .telemetry object" "$val" "object"
 assert_json_field "has .telemetry.bus_enabled" "$CONFIG" ".telemetry.bus_enabled" "true"
 assert_json_field "has .telemetry.record_metered_cost" "$CONFIG" ".telemetry.record_metered_cost" "false"
 # Exactly 2 fields — no legacy_write (single-write design, Section 6)
-val=$(jq '.telemetry | keys | length' "$CONFIG")
-assert_eq "telemetry has exactly 2 fields" "$val" "2"
-val=$(jq '.telemetry | has("legacy_write")' "$CONFIG")
-assert_eq "telemetry has no legacy_write field" "$val" "false"
+assert_json_field "telemetry has exactly 2 fields" "$CONFIG" '.telemetry | keys | length' "2"
+assert_json_field "telemetry has no legacy_write field" "$CONFIG" '.telemetry | has("legacy_write")' "false"
 
 report_results

@@ -386,8 +386,7 @@ assert_contains "v13 → v14 output" "$OUTPUT" "migrated"
 assert_json_field "v13 → v14 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "14"
 assert_json_field "v13 → v14 telemetry.bus_enabled defaults true" "$NAZGUL_DIR/config.json" ".telemetry.bus_enabled" "true"
 assert_json_field "v13 → v14 telemetry.record_metered_cost defaults false" "$NAZGUL_DIR/config.json" ".telemetry.record_metered_cost" "false"
-val=$(jq 'has("legacy_write") or (.telemetry | has("legacy_write"))' "$NAZGUL_DIR/config.json")
-assert_eq "v13 → v14 no legacy_write field added" "$val" "false"
+assert_json_field "v13 → v14 no legacy_write field added" "$NAZGUL_DIR/config.json" '.telemetry | has("legacy_write")' "false"
 
 # --- migrate_13_to_14: preserves pre-existing fields (additive only) ---
 NAZGUL_DIR=$(setup_nazgul_dir "v13-to-14-preserve")
@@ -443,10 +442,8 @@ cat > "$NAZGUL_DIR/config.json" <<'EOF'
 { "schema_version": 13, "mode": "hitl" }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
-val=$(jq '.telemetry | keys | length' "$NAZGUL_DIR/config.json")
-assert_eq "v13 → v14 telemetry has exactly 2 fields" "$val" "2"
-val=$(jq '.telemetry | has("legacy_write")' "$NAZGUL_DIR/config.json")
-assert_eq "v13 → v14 telemetry has no legacy_write field" "$val" "false"
+assert_json_field "v13 → v14 telemetry has exactly 2 fields" "$NAZGUL_DIR/config.json" '.telemetry | keys | length' "2"
+assert_json_field "v13 → v14 telemetry has no legacy_write field" "$NAZGUL_DIR/config.json" '.telemetry | has("legacy_write")' "false"
 
 # --- v14 config → no-op (current terminal schema) ---
 NAZGUL_DIR=$(setup_nazgul_dir "v14-terminal")
