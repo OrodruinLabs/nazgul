@@ -112,6 +112,7 @@ if ! is_task_manifest "$FILE_PATH"; then
 
   # Check if any task or patch is IN_PROGRESS
   HAS_ACTIVE=false
+  ACTIVE_TASK_FILE=""
   TASK_COUNT=0
   for task_file in "$NAZGUL_TASKS_DIR"/TASK-*.md "$NAZGUL_TASKS_DIR"/patches/PATCH-*.md; do
     [ -f "$task_file" ] || continue
@@ -119,6 +120,7 @@ if ! is_task_manifest "$FILE_PATH"; then
     STATUS=$(get_task_status "$task_file" "")
     if [ "$STATUS" = "IN_PROGRESS" ]; then
       HAS_ACTIVE=true
+      ACTIVE_TASK_FILE="$task_file"
       break
     fi
   done
@@ -133,6 +135,43 @@ if ! is_task_manifest "$FILE_PATH"; then
     echo "Cannot edit source files without an active task." >&2
     echo "Transition a task to IN_PROGRESS before editing: $FILE_PATH" >&2
     exit 2
+  fi
+
+  # --- FILE SCOPE GUARD ---
+  # If the active task declares a File Scope, block edits to paths outside it.
+  # Exemptions: nazgul/ paths (already returned exit 0 above) and docs/ paths.
+  # Degrade: if field absent or empty, allow (no restriction declared).
+  ACTIVE_TASK_ID=""
+  FILE_SCOPE=""
+  if [ -n "$ACTIVE_TASK_FILE" ]; then
+    ACTIVE_TASK_ID=$(basename "$ACTIVE_TASK_FILE" .md)
+    FILE_SCOPE=$(get_task_field "$ACTIVE_TASK_FILE" "File Scope" "") || FILE_SCOPE=""
+  fi
+
+  if [ -n "$FILE_SCOPE" ]; then
+    # Parse comma/whitespace-separated list of path tokens
+    # Normalise commas to spaces, then iterate tokens
+    SCOPE_TOKENS=$(printf '%s' "$FILE_SCOPE" | tr ',' ' ')
+    SCOPE_MATCH=false
+    for token in $SCOPE_TOKENS; do
+      [ -z "$token" ] && continue
+      # Match token against FILE_PATH: exact match, basename match, or suffix match
+      FILE_BASENAME=$(basename "$FILE_PATH")
+      TOKEN_BASENAME=$(basename "$token")
+      case "$FILE_PATH" in
+        *"$token"*) SCOPE_MATCH=true; break ;;
+      esac
+      case "$FILE_BASENAME" in
+        "$TOKEN_BASENAME") SCOPE_MATCH=true; break ;;
+      esac
+    done
+
+    if [ "$SCOPE_MATCH" = false ]; then
+      echo "NAZGUL FILE SCOPE GUARD: BLOCKED — ${ACTIVE_TASK_ID} file scope does not include: $FILE_PATH" >&2
+      echo "Active task scope: $FILE_SCOPE" >&2
+      echo "To edit this file, update '- **File Scope**:' in nazgul/tasks/${ACTIVE_TASK_ID}.md first." >&2
+      exit 2
+    fi
   fi
 
   # Has active task — allow the source file edit
