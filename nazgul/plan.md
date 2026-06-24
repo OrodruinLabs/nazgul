@@ -23,9 +23,9 @@ per project convention.
 | Task | Title | Depends on | Wave | Status |
 |------|-------|-----------|------|--------|
 | TASK-001 | Emit library + CLI wrapper + unit tests | none | 1 | DONE |
-| TASK-002 | Config schema v13→v14 migration + telemetry block + gitignore | none | 1 | READY |
-| TASK-003 | Shell hook wiring — replace legacy writes with emit_event (5 hooks) | TASK-001 | 2 | READY |
-| TASK-004 | Review-gate agent emit wiring (reviewer_verdict / retry / blocked) | TASK-001 | 2 | READY |
+| TASK-002 | Config schema v13→v14 migration + telemetry block + gitignore | none | 1 | DONE |
+| TASK-003 | Shell hook wiring — replace legacy writes with emit_event (5 hooks) | TASK-001 | 2 | DONE |
+| TASK-004 | Review-gate agent emit wiring (reviewer_verdict / retry / blocked) | TASK-001 | 2 | IMPLEMENTED |
 | TASK-005 | Consumer migration — metrics + log skills dual-read | TASK-003, TASK-004 | 3 | PLANNED |
 | TASK-006 | Version-bump hygiene (plugin.json 2.3.0→2.4.0 + README + CHANGELOG) | TASK-002, TASK-003, TASK-004, TASK-005 | 4 | PLANNED |
 
@@ -80,9 +80,11 @@ Every PRD acceptance criterion maps to at least one task:
 
 ## Completed
 - TASK-001 ✦ DONE @ 6b0c7f7 (2026-06-24) — emit library + CLI wrapper + 20 tests; 4 reviewer board APPROVE
+- TASK-002 ✦ DONE @ 5e0b692 (2026-06-24) — config schema v13→v14, telemetry block, 139+41 tests; 4 reviewer board APPROVE
+- TASK-003 ✦ DONE @ cae3136 (2026-06-24) — 5 producer hooks wired to emit_event, legacy iterations/subagents.jsonl writes removed; simplify pass + review-board auto-remediation (lean comment, emit `|| true` exit-code safety, +14 observability tests / +18 stop-hook tests); 4 reviewer board APPROVE (security 96, full suite 34/34)
 
 ## Recovery Pointer
-- **Active task**: none (TASK-001 DONE @ 6b0c7f7)
-- **Next action**: TASK-002 (READY, independent) and TASK-003+TASK-004 (both now READY — TASK-001 done). Wave 1 parallel: run TASK-002 alongside TASK-003/TASK-004 (Wave 2 released).
+- **Active task**: TASK-004 (IMPLEMENTED @ 88f3add)
+- **Next action**: Review gate for TASK-004; TASK-003 also IMPLEMENTED (Wave 2 parallel) — await both reviews before TASK-005
 - **Plan written**: 2026-06-24 (re-plan — replaces the prior dual-write→cutover plan)
-- **Last updated**: 2026-06-24T14:00:00Z
+- **Last updated**: 2026-06-24T19:15:00Z
