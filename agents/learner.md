@@ -76,6 +76,11 @@ user fields. Use the requireUser(req) helper in src/api/auth.ts.
 Then update `nazgul/learning/.last-run` to the current ISO-8601 timestamp
 (`date -u +%Y-%m-%dT%H:%M:%SZ`).
 
+Finally, record post-loop completion so the stop hook's mandatory learning gate can
+let the loop finish: write the current objective id to the distillation marker —
+`echo "$(jq -r '.feat_id // "default"' nazgul/config.json)" > nazgul/learning/.distilled`.
+Always do this last, even when no clusters qualified (a clean run still satisfies the gate).
+
 If there are no qualifying clusters, write a `proposed-rules.md` containing only
 the header and a line `_No recurring mistakes met the threshold._`, and still
 update `.last-run`.

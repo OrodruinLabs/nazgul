@@ -46,11 +46,11 @@ val=$(jq -r '.paused' "$TEST_DIR/nazgul/config.json")
 assert_eq "paused still true after 2nd Stop" "$val" "true"
 teardown_temp_dir
 
-# --- Test 3: All tasks DONE — exit 0 ---
+# --- Test 3: All tasks DONE (learning opted out) — exit 0 ---
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]'
+create_config '.agents.reviewers = ["code-reviewer"]' '.learning.auto_distill_post_loop = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_task_file "TASK-002" "DONE"
@@ -59,7 +59,69 @@ create_review_dir "TASK-001"
 create_review_dir "TASK-002"
 create_review_dir "TASK-003"
 run_hook
-assert_exit_code "all tasks done: exit 0" "$HOOK_EC" 0
+assert_exit_code "all tasks done (learning off): exit 0" "$HOOK_EC" 0
+teardown_temp_dir
+
+# --- Test 3b: All DONE + learning on + not distilled — gate BLOCKS (exit 2) ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-007"'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_task_file "TASK-002" "DONE"
+create_review_dir "TASK-001"
+create_review_dir "TASK-002"
+run_hook
+assert_exit_code "learning gate blocks completion: exit 2" "$HOOK_EC" 2
+assert_contains "gate names the learner" "$HOOK_OUTPUT" "nazgul:learner"
+assert_contains "gate names the marker" "$HOOK_OUTPUT" "nazgul/learning/.distilled"
+# Attempt counter is created and scoped to the objective
+assert_file_exists "attempts file created" "$TEST_DIR/nazgul/learning/.distill-attempts"
+assert_contains "attempts scoped to objective" "$(cat "$TEST_DIR/nazgul/learning/.distill-attempts")" "FEAT-007"
+teardown_temp_dir
+
+# --- Test 3c: All DONE + marker matches objective — exit 0 ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-007"'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+mkdir -p "$TEST_DIR/nazgul/learning"
+echo "FEAT-007" > "$TEST_DIR/nazgul/learning/.distilled"
+run_hook
+assert_exit_code "distilled marker present: exit 0" "$HOOK_EC" 0
+teardown_temp_dir
+
+# --- Test 3d: Stale marker (different objective) still gates — exit 2 ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-008"'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+mkdir -p "$TEST_DIR/nazgul/learning"
+echo "FEAT-007" > "$TEST_DIR/nazgul/learning/.distilled"
+run_hook
+assert_exit_code "stale marker re-gates new objective: exit 2" "$HOOK_EC" 2
+teardown_temp_dir
+
+# --- Test 3e: Backstop — after 3 attempts the gate gives up — exit 0 ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-009"'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+mkdir -p "$TEST_DIR/nazgul/learning"
+echo "FEAT-009 3" > "$TEST_DIR/nazgul/learning/.distill-attempts"
+run_hook
+assert_exit_code "learning gate backstop completes: exit 0" "$HOOK_EC" 0
+assert_contains "backstop warns" "$HOOK_OUTPUT" "gave up"
 teardown_temp_dir
 
 # --- Test 4: Max iterations — exit 0 ---
@@ -362,7 +424,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.afk.yolo = true' '.afk.task_pr = false' '.current_iteration = 1'
+create_config '.afk.yolo = true' '.afk.task_pr = false' '.current_iteration = 1' '.learning.auto_distill_post_loop = false'
 create_plan
 create_task_file "TASK-001" "APPROVED"
 create_task_file "TASK-002" "APPROVED"

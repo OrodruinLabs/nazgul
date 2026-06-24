@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.0] - 2026-06-24
+
+### Added
+- **Post-loop learning gate — distilling Learned Rules is now mandatory, not advisory.** Previously the learner ran only because the `/nazgul:start` OBJECTIVE_COMPLETE prose asked for it (config `learning.auto_distill_post_loop`), so it silently got skipped and no candidate rules were ever proposed. `stop-hook.sh` now **gates loop completion** on it: when all tasks are DONE (or APPROVED/DONE in YOLO) but the learner has not run for the current objective, the stop is blocked with a `DELEGATE: spawn nazgul:learner` instruction (mirroring the review-board dispatch). The learner records completion by writing the objective id (`feat_id`) to `nazgul/learning/.distilled`; the loop reaches `NAZGUL_COMPLETE` only once that marker matches. The marker is keyed to the objective, so a new objective re-triggers distillation. Honors the existing opt-out — a no-op when `learning.enabled` or `learning.auto_distill_post_loop` is `false`. A bounded attempt counter (`nazgul/learning/.distill-attempts`, scoped per objective) lets the loop complete with a loud warning after 3 attempts, so an unwritable marker can never brick an unattended loop (this exit path precedes the max-iteration backstop).
+
+### Changed
+- `agents/learner.md` now writes the `.distilled` completion marker as its final step (always, even on a clean no-rules run). `skills/start/SKILL.md` OBJECTIVE_COMPLETE documents the gate. New `tests/test-stop-hook.sh` coverage: gate blocks when undistilled, allows when the marker matches, re-gates a new objective with a stale marker, honors the opt-out, and the attempt backstop completes.
+
 ## [2.2.0] - 2026-06-24
 
 ### Added
