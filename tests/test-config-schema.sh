@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "13"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "14"
 assert_json_field "has .default_mode" "$CONFIG" ".default_mode" "null"
 assert_json_field "project has smoke_command" "$CONFIG" ".project.smoke_command" "null"
 assert_json_field "has .budget.enabled" "$CONFIG" ".budget.enabled" "false"
@@ -97,5 +97,16 @@ assert_eq "has .simplify object" "$val" "object"
 assert_json_field "has .simplify.post_loop" "$CONFIG" ".simplify.post_loop" "true"
 val=$(jq -r '.simplify.focus' "$CONFIG")
 assert_eq "has .simplify.focus null" "$val" "null"
+
+# Nested: .telemetry (v14 — Loop Telemetry Bus block)
+val=$(jq -r '.telemetry | type' "$CONFIG")
+assert_eq "has .telemetry object" "$val" "object"
+assert_json_field "has .telemetry.bus_enabled" "$CONFIG" ".telemetry.bus_enabled" "true"
+assert_json_field "has .telemetry.record_metered_cost" "$CONFIG" ".telemetry.record_metered_cost" "false"
+# Exactly 2 fields — no legacy_write (single-write design, Section 6)
+val=$(jq '.telemetry | keys | length' "$CONFIG")
+assert_eq "telemetry has exactly 2 fields" "$val" "2"
+val=$(jq '.telemetry | has("legacy_write")' "$CONFIG")
+assert_eq "telemetry has no legacy_write field" "$val" "false"
 
 report_results
