@@ -152,11 +152,15 @@ if ! is_task_manifest "$FILE_PATH"; then
     SCOPE_MATCH=false
     for token in $SCOPE_TOKENS; do
       [ -z "$token" ] && continue
-      # Match token against FILE_PATH: exact match, basename match, or suffix match
+      # Reject path-traversal tokens
+      case "$token" in
+        *".."*) continue ;;
+      esac
+      # Anchored path-suffix matching (exact, suffix, or directory-prefix)
       FILE_BASENAME=$(basename "$FILE_PATH")
       TOKEN_BASENAME=$(basename "$token")
       case "$FILE_PATH" in
-        *"$token"*) SCOPE_MATCH=true; break ;;
+        "$token"|*/"$token"|"$token"/*) SCOPE_MATCH=true; break ;;
       esac
       case "$FILE_BASENAME" in
         "$TOKEN_BASENAME") SCOPE_MATCH=true; break ;;

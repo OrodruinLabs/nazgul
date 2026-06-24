@@ -690,6 +690,7 @@ input=$(jq -n --arg fp "$TEST_DIR/scripts/unrelated.sh" \
 run_guard "$input"
 assert_exit_code "file-scope: out-of-scope Write blocked" "$GUARD_EC" 2
 assert_contains "file-scope: out-of-scope message mentions scope" "$GUARD_STDERR" "file scope"
+assert_contains "file-scope: block message names the blocked file path" "$GUARD_STDERR" "unrelated.sh"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------

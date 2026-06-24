@@ -188,9 +188,9 @@ Tunable via `guards.lean_comments` (default `true`) and `guards.max_consecutive_
 
 ## 10. Branch Isolation
 
-- **Never commit to the base branch during a loop.** `[enforced]` Blocked by `base-branch-commit-guard.sh` (PreToolUse on Bash): a commit targeting `branch.base` while `branch.feature` is set exits 2 with an actionable error.
+- **Never commit to the base branch during a loop.** `[hook-driven only]` Blocked by `base-branch-commit-guard.sh` (PreToolUse on Bash): a commit targeting `branch.base` while `branch.feature` is set exits 2 with an actionable error. PreToolUse guard pending TASK-002 (`base-branch-commit-guard.sh`)
 - **Never stage `nazgul/` paths in local mode.** `[enforced]` Blocked by `local-mode-tracking-guard.sh` (PreToolUse on Bash): when `install_mode == "local"`, any `git add`/`git commit` touching a `nazgul/` path exits 2.
-- **Feature branch:** `[enforced]` `feat/<id>-<slug>` -- integration point. Written to `branch.feature` in config; guards read this field to validate commits.
+- **Feature branch:** `[hook-driven only]` `feat/<id>-<slug>` -- integration point. Written to `branch.feature` in config; guards read this field to validate commits. PreToolUse guard pending TASK-002
 - **Task worktrees:** `[hook-driven only]` `feat/<id>/TASK-NNN` -- merge back to feature. Created by stop-hook worktree utilities; naming enforced by convention in AFK mode.
 - **Worktrees live in** `../<project>-worktrees/TASK-NNN/` -- `[hook-driven only]` Path written to `branch.worktree_dir` in config; used by stop-hook worktree utilities.
 - **On conflict:** `[hook-driven only]` `git merge --abort`, task BLOCKED. Applied by stop-hook on merge failure detection.

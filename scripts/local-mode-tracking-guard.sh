@@ -40,7 +40,7 @@ if ! echo "$CMD" | grep -qiE 'git\s+(add|stage|commit)'; then
   exit 0
 fi
 
-if ! echo "$CMD" | grep -qE 'nazgul/'; then
+if ! echo "$CMD" | grep -qiE 'nazgul/'; then
   exit 0
 fi
 

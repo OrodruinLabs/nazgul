@@ -28,8 +28,8 @@ debug_log() {
 
 # Returns 0 (skip) when the file is a nazgul/ path in local install mode.
 should_skip_local_nazgul() {
-    local file="$1"
-    if [[ "$INSTALL_MODE" == "local" && "$file" == nazgul/* ]]; then
+    local file="$1" mode="${2:-}"
+    if [[ "$mode" == "local" && "$file" == nazgul/* ]]; then
         debug_log "Skipping nazgul/ path in local mode: $file"
         return 0
     fi
@@ -76,7 +76,7 @@ STAGED_COUNT=0
 # Modified but not staged
 while IFS= read -r file; do
     if [[ -n "$file" && -e "$file" ]]; then
-        should_skip_local_nazgul "$file" && continue
+        should_skip_local_nazgul "$file" "$INSTALL_MODE" && continue
         if git add "$file" 2>/dev/null; then
             STAGED_COUNT=$((STAGED_COUNT + 1))
             debug_log "Staged: $file"
@@ -87,7 +87,7 @@ done < <(git diff --name-only 2>/dev/null)
 # Untracked files (excluding ignored)
 while IFS= read -r file; do
     if [[ -n "$file" && -e "$file" ]]; then
-        should_skip_local_nazgul "$file" && continue
+        should_skip_local_nazgul "$file" "$INSTALL_MODE" && continue
         # Skip sensitive files
         case "$file" in
             *.env|*.env.*|credentials*|*secret*|*.pem|*.key)

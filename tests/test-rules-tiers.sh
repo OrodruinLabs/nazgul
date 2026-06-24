@@ -41,6 +41,28 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Test (d): every "- **rule**" bullet carries a tier annotation
+# (Section 10 Branch Isolation uses bullet format, not numbered format)
+# Excludes lines inside fenced code blocks (Recovery Pointer template, etc.)
+# and mode-name bullets that are plain descriptors, not enforcement rules.
+# ---------------------------------------------------------------------------
+missing_bullet_tier=0
+while IFS= read -r line; do
+  if ! echo "$line" | grep -qE '\[(enforced|hook-driven only|advisory)\]'; then
+    printf "  MISSING TIER (bullet): %s\n" "$line"
+    missing_bullet_tier=1
+  fi
+done < <(awk '/^```/{in_fence=!in_fence;next} !in_fence && /^- \*\*/' "$RULES_FILE" \
+           | grep -v '^- \*\*\(HITL\|AFK\|YOLO\)\b')
+
+if [ "$missing_bullet_tier" -eq 0 ]; then
+  _pass "every bullet-format rule line carries a tier annotation"
+else
+  _fail "every bullet-format rule line carries a tier annotation" \
+    "one or more bullet-format rule lines above are missing a tier label"
+fi
+
+# ---------------------------------------------------------------------------
 # Test (c): the count of [advisory] annotations is at most 4
 # The legend table itself contains [advisory] as a label definition (1 count).
 # Rule annotations add to that. Total must be <= 4.
