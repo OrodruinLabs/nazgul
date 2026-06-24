@@ -80,4 +80,52 @@ for bad_cmd in \
   assert_contains "reason for '$bad_cmd'" "$output" "NAZGUL SAFETY"
 done
 
+# --- Task manifest write protection: BLOCK cases (should exit 2) ---
+# Block R1: echo with >> redirect into manifest
+ec=$(get_exit_code 'echo "Status: IN_PROGRESS" >> nazgul/tasks/TASK-001.md')
+assert_exit_code "blocked Block R1: echo >> manifest" "$ec" 2
+output=$(run_guard 'echo "Status: IN_PROGRESS" >> nazgul/tasks/TASK-001.md')
+assert_contains "reason Block R1" "$output" "NAZGUL SAFETY"
+
+# Block R2: echo with > redirect into manifest
+ec=$(get_exit_code 'echo "Status: DONE" > nazgul/tasks/TASK-001.md')
+assert_exit_code "blocked Block R2: echo > manifest" "$ec" 2
+output=$(run_guard 'echo "Status: DONE" > nazgul/tasks/TASK-001.md')
+assert_contains "reason Block R2" "$output" "NAZGUL SAFETY"
+
+# Block R3: printf with >> redirect into manifest
+ec=$(get_exit_code 'printf "Status: DONE\n" >> nazgul/tasks/TASK-002.md')
+assert_exit_code "blocked Block R3: printf >> manifest" "$ec" 2
+output=$(run_guard 'printf "Status: DONE\n" >> nazgul/tasks/TASK-002.md')
+assert_contains "reason Block R3" "$output" "NAZGUL SAFETY"
+
+# Block R4: tee into manifest (existing tee rule)
+ec=$(get_exit_code 'tee nazgul/tasks/TASK-003.md')
+assert_exit_code "blocked Block R4: tee manifest" "$ec" 2
+output=$(run_guard 'tee nazgul/tasks/TASK-003.md')
+assert_contains "reason Block R4" "$output" "NAZGUL SAFETY"
+
+# Block R5: sed reading manifest and piping to grep Status (existing sed rule fires when path precedes Status)
+ec=$(get_exit_code 'sed -n p nazgul/tasks/TASK-001.md | grep Status')
+assert_exit_code "blocked Block R5: sed manifest | grep Status" "$ec" 2
+output=$(run_guard 'sed -n p nazgul/tasks/TASK-001.md | grep Status')
+assert_contains "reason Block R5" "$output" "NAZGUL SAFETY"
+
+# --- Task manifest write protection: ALLOW cases (false-positives now fixed) ---
+# Allow FP-1: echo + mention of manifest path, no redirect into manifest
+ec=$(get_exit_code 'echo "Status: IN_PROGRESS"; grep nazgul/tasks/TASK-001.md')
+assert_exit_code "allowed Allow FP-1: echo Status + grep manifest (no redirect)" "$ec" 0
+
+# Allow FP-2: printf + cat manifest (no redirect into manifest)
+ec=$(get_exit_code 'printf "Current Status: DONE\n"; cat nazgul/tasks/TASK-001.md')
+assert_exit_code "allowed Allow FP-2: printf Status + cat manifest (no redirect)" "$ec" 0
+
+# Allow FP-3: echo mentioning manifest path, no redirect
+ec=$(get_exit_code 'echo "Checking Status of nazgul/tasks/TASK-001.md..."')
+assert_exit_code "allowed Allow FP-3: echo mentioning manifest path (no redirect)" "$ec" 0
+
+# Allow FP-4: grep only, no echo/printf at all
+ec=$(get_exit_code 'grep "Status" nazgul/tasks/TASK-001.md')
+assert_exit_code "allowed Allow FP-4: grep Status in manifest (read-only)" "$ec" 0
+
 report_results

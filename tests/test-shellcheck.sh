@@ -26,6 +26,7 @@ SCRIPTS=(
   "scripts/local-mode-tracking-guard.sh"
   "scripts/base-branch-commit-guard.sh"
   "scripts/session-staging.sh"
+  "tests/test-pre-tool-guard.sh"
 )
 
 # bash -n syntax checks
