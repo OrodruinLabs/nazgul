@@ -800,13 +800,13 @@ EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_json_field "v16→v17 wave_execution absent→true" "$NAZGUL_DIR/config.json" ".parallelism.wave_execution" "true"
 
-# wave_execution: false → true
+# wave_execution: explicit false is PRESERVED (false is the supported opt-out — additive-only)
 NAZGUL_DIR=$(setup_nazgul_dir "v16-to-17-wave-false")
 cat > "$NAZGUL_DIR/config.json" << 'EOF'
 { "schema_version": 16, "parallelism": { "wave_execution": false } }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
-assert_json_field "v16→v17 wave_execution false→true" "$NAZGUL_DIR/config.json" ".parallelism.wave_execution" "true"
+assert_json_field "v16→v17 explicit wave_execution=false preserved (opt-out)" "$NAZGUL_DIR/config.json" ".parallelism.wave_execution" "false"
 
 # wave_execution: true → true (idempotent)
 NAZGUL_DIR=$(setup_nazgul_dir "v16-to-17-wave-true")

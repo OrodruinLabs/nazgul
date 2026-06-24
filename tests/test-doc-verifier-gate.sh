@@ -115,7 +115,9 @@ mkdir -p "$TEST_DIR/nazgul/logs"
 printf '%s\n' "FEAT-DV5" > "$TEST_DIR/nazgul/logs/.docs-verified"
 run_hook
 assert_exit_code "DV-5: marker matches → exit 0" "$HOOK_EC" 0
-assert_not_contains "DV-5: no block when marker matches" "$HOOK_OUTPUT" '"decision":"block"'
+# A passing run emits no decision-block JSON at all; match the actual jq output
+# (pretty-printed with a space after the colon — the compact needle never matched).
+assert_not_contains "DV-5: no block when marker matches" "$HOOK_OUTPUT" '"decision": "block"'
 teardown_temp_dir
 
 # --- Test DV-6: stale marker (different feat_id) — re-gates, exit 2 ---

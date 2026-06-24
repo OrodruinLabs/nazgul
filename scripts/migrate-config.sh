@@ -335,10 +335,13 @@ migrate_15_to_16() {
 migrate_16_to_17() {
   local tmp
   tmp=$(mktemp)
-  # Conditional defaults: flip each setting ONLY when the live value still equals
-  # the old default. A hand-set value (including a deliberate old-default choice)
-  # is preserved. All four changes are also additive (add key if absent).
-  # Exception: wave_execution is always set to true (no old default to preserve).
+  # Defaults overhaul (ADR-002). Two different rules:
+  # - granularity / post_loop: flip when ABSENT or still at the OLD default
+  #   (task / haiku). A deliberately-chosen old default is indistinguishable from
+  #   untouched and IS flipped — accepted limitation, recorded in the log.
+  # - wave_execution / docs.verify_post_loop: ADDITIVE ONLY — set the new default
+  #   when the key is absent, but PRESERVE any explicit value (including false).
+  #   false is the supported opt-out, so it must never be overwritten.
   jq '
     .review_gate = ((if (.review_gate | type) == "object" then .review_gate else {} end)
       | .granularity = (
@@ -353,12 +356,12 @@ migrate_16_to_17() {
           else .post_loop
           end))
     | .parallelism = ((if (.parallelism | type) == "object" then .parallelism else {} end)
-      | .wave_execution = true)
+      | .wave_execution = (if has("wave_execution") then .wave_execution else true end))
     | .docs = ((if (.docs | type) == "object" then .docs else {} end)
       | .verify_post_loop = (if has("verify_post_loop") then .verify_post_loop else true end))
     | .schema_version = 17
   ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
-  log_migration "v16→v17: granularity task→group (if unset); post_loop haiku→sonnet (if unset); wave_execution→true; added docs.verify_post_loop: true"
+  log_migration "v16→v17: granularity task→group + post_loop haiku→sonnet (when absent or at old default); wave_execution defaults true only when absent (explicit value incl. false preserved); added docs.verify_post_loop: true"
 }
 
 # --- Run incremental migrations ---
