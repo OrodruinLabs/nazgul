@@ -37,14 +37,18 @@ artifact in the codebase. Verify each one exists in source. The four reference c
 ### 1. Event names
 
 The canonical event taxonomy is defined by callers of `emit_event` in
-`scripts/lib/emit-event.sh` and `scripts/emit-event-cli.sh`. The complete real set is:
+`scripts/lib/emit-event.sh`, `scripts/emit-event-cli.sh`, and agents that call
+`emit-event-cli.sh` directly. The complete real set is:
 
 ```
 iteration_boundary  objective_complete  blocked  budget_threshold
 task_completed      subagent_stop       stop_failure  compaction
+reviewer_verdict    retry
 ```
 
-Verify by running: `grep -rn 'emit_event "' scripts/ skills/ agents/ | grep -v '#'`
+Verify by running both:
+- `grep -rn 'emit_event "' scripts/ skills/ agents/ | grep -v '#'`  (hook-emitted events)
+- `grep -rn 'emit-event-cli.sh' agents/ | grep -v '#'`  (agent-emitted events)
 
 Any doc naming an event type NOT in this list is drift — flag it.
 

@@ -832,10 +832,7 @@ GRAN_BLOCK_MSG
         printf '%s\n' "$GRAN_OBJ_ID" > "$GRAN_MARKER"
       fi
     fi
-    # --- Post-loop doc-verifier gate (mandatory; honors opt-out) -----------------
-    # Mirrors the learning gate above: marker, bounded attempt counter (max 3),
-    # decision-block JSON + exit 2 on violation, graceful pass on backstop.
-    # Degrades to allow when no .md docs exist — never blocks when nothing to check.
+    # Post-loop doc-verifier gate: marker + bounded backstop (≤3); degrades-to-allow when no docs.
     DOC_VERIFY_ENABLED=$(jq -r 'if .docs.verify_post_loop == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
     if [ "$DOC_VERIFY_ENABLED" = "true" ]; then
       DV_OBJ_ID=$(jq -r '.feat_id // "default"' "$CONFIG" 2>/dev/null || echo "default")

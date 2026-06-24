@@ -338,6 +338,7 @@ migrate_16_to_17() {
   # Conditional defaults: flip each setting ONLY when the live value still equals
   # the old default. A hand-set value (including a deliberate old-default choice)
   # is preserved. All four changes are also additive (add key if absent).
+  # Exception: wave_execution is always set to true (no old default to preserve).
   jq '
     .review_gate = ((if (.review_gate | type) == "object" then .review_gate else {} end)
       | .granularity = (
@@ -352,11 +353,7 @@ migrate_16_to_17() {
           else .post_loop
           end))
     | .parallelism = ((if (.parallelism | type) == "object" then .parallelism else {} end)
-      | .wave_execution = (
-          if (has("wave_execution") and .wave_execution == true)
-          then true
-          else true
-          end))
+      | .wave_execution = true)
     | .docs = ((if (.docs | type) == "object" then .docs else {} end)
       | .verify_post_loop = (if has("verify_post_loop") then .verify_post_loop else true end))
     | .schema_version = 17
