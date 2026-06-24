@@ -332,6 +332,38 @@ migrate_15_to_16() {
   log_migration "v15→v16: Added review_gate.enforce_granularity (default block; warn downgrades violation to warning)"
 }
 
+migrate_16_to_17() {
+  local tmp
+  tmp=$(mktemp)
+  # Defaults overhaul (ADR-002). Two different rules:
+  # - granularity / post_loop: flip when ABSENT or still at the OLD default
+  #   (task / haiku). A deliberately-chosen old default is indistinguishable from
+  #   untouched and IS flipped — accepted limitation, recorded in the log.
+  # - wave_execution / docs.verify_post_loop: ADDITIVE ONLY — set the new default
+  #   when the key is absent, but PRESERVE any explicit value (including false).
+  #   false is the supported opt-out, so it must never be overwritten.
+  jq '
+    .review_gate = ((if (.review_gate | type) == "object" then .review_gate else {} end)
+      | .granularity = (
+          if (.granularity == "task" or (.granularity | not))
+          then "group"
+          else .granularity
+          end))
+    | .models = ((if (.models | type) == "object" then .models else {} end)
+      | .post_loop = (
+          if (.post_loop == "haiku" or (.post_loop | not))
+          then "sonnet"
+          else .post_loop
+          end))
+    | .parallelism = ((if (.parallelism | type) == "object" then .parallelism else {} end)
+      | .wave_execution = (if has("wave_execution") then .wave_execution else true end))
+    | .docs = ((if (.docs | type) == "object" then .docs else {} end)
+      | .verify_post_loop = (if has("verify_post_loop") then .verify_post_loop else true end))
+    | .schema_version = 17
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v16→v17: granularity task→group + post_loop haiku→sonnet (when absent or at old default); wave_execution defaults true only when absent (explicit value incl. false preserved); added docs.verify_post_loop: true"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"

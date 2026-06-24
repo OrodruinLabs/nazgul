@@ -832,7 +832,52 @@ GRAN_BLOCK_MSG
         printf '%s\n' "$GRAN_OBJ_ID" > "$GRAN_MARKER"
       fi
     fi
-    # Granularity gate passed, opted out, or backstop exhausted — allow completion.
+    # Post-loop doc-verifier gate: marker + bounded backstop (≤3); degrades-to-allow when no docs.
+    DOC_VERIFY_ENABLED=$(jq -r 'if .docs.verify_post_loop == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+    if [ "$DOC_VERIFY_ENABLED" = "true" ]; then
+      DV_OBJ_ID=$(jq -r '.feat_id // "default"' "$CONFIG" 2>/dev/null || echo "default")
+      DOCS_DIR="$NAZGUL_DIR/docs"
+      DV_MARKER="$NAZGUL_DIR/logs/.docs-verified"
+      DV_ATTEMPTS_FILE="$NAZGUL_DIR/logs/.docs-verify-attempts"
+      VERIFIED_FOR=""
+      [ -f "$DV_MARKER" ] && VERIFIED_FOR=$(cat "$DV_MARKER" 2>/dev/null || echo "")
+      if [ "$VERIFIED_FOR" != "$DV_OBJ_ID" ]; then
+        if [ ! -d "$DOCS_DIR" ] || ! find "$DOCS_DIR" -maxdepth 1 -name "*.md" -print -quit 2>/dev/null | grep -q .; then
+          mkdir -p "$NAZGUL_DIR/logs"
+          printf '%s\n' "$DV_OBJ_ID" > "$DV_MARKER"
+        else
+          DV_ATTEMPTS=0
+          if [ -f "$DV_ATTEMPTS_FILE" ]; then
+            read -r DV_OBJ DV_CNT < "$DV_ATTEMPTS_FILE" 2>/dev/null || true
+            if [ "${DV_OBJ:-}" = "$DV_OBJ_ID" ]; then
+              case "${DV_CNT:-0}" in ''|*[!0-9]*) DV_CNT=0 ;; esac
+              DV_ATTEMPTS="$DV_CNT"
+            fi
+          fi
+          if [ "$DV_ATTEMPTS" -lt 3 ]; then
+            mkdir -p "$NAZGUL_DIR/logs"
+            printf '%s %s\n' "$DV_OBJ_ID" "$((DV_ATTEMPTS + 1))" > "$DV_ATTEMPTS_FILE"
+            cat >&2 << DV_MSG
+Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP DOC-VERIFIER GATE (mandatory).
+Generated docs have NOT been verified for this objective (${DV_OBJ_ID}) yet.
+DELEGATE: Spawn the doc-verifier agent (nazgul:doc-verifier) to cross-check nazgul/docs/*.md
+and CHANGELOG.md against source. It checks that every event type, config key, command, and
+named script referenced in docs exists in the codebase.
+When it finishes it MUST record completion: echo "${DV_OBJ_ID}" > nazgul/logs/.docs-verified
+Do NOT output NAZGUL_COMPLETE until verification has run and the marker is written.
+Opt out for future objectives with docs.verify_post_loop=false in nazgul/config.json.
+DV_MSG
+            jq -n --arg r "Post-loop doc-verifier gate: docs not yet verified for ${DV_OBJ_ID}" '{"decision":"block","reason":$r}'
+            exit 2
+          else
+            echo "Nazgul: doc-verifier gate gave up after ${DV_ATTEMPTS} attempts for ${DV_OBJ_ID} — completing without doc verification. Run /nazgul:doc-verifier manually." >&2
+            mkdir -p "$NAZGUL_DIR/logs"
+            printf '%s\n' "$DV_OBJ_ID" > "$DV_MARKER"
+          fi
+        fi
+      fi
+    fi
+    # Doc-verifier gate passed, opted out, or backstop exhausted — allow completion.
     # Emit objective_complete before exit (pure observer; state is already final).
     emit_event "objective_complete" \
       total_tasks:n "$TOTAL_COUNT" \

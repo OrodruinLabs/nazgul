@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "16"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "17"
 assert_json_field "review_gate.simplify_before_review default false" "$CONFIG" ".review_gate.simplify_before_review" "false"
 assert_json_field "review_gate.enforce_granularity default block" "$CONFIG" ".review_gate.enforce_granularity" "block"
 assert_json_field "has .default_mode" "$CONFIG" ".default_mode" "null"
@@ -40,8 +40,8 @@ assert_eq "has .agents.reviewers array" "$val" "array"
 
 # Nested: .review_gate.confidence_threshold
 assert_json_field "has .review_gate.confidence_threshold" "$CONFIG" ".review_gate.confidence_threshold" "80"
-# Nested: .review_gate.granularity (default "task")
-assert_json_field "has .review_gate.granularity" "$CONFIG" ".review_gate.granularity" "task"
+# Nested: .review_gate.granularity (v17 default "group")
+assert_json_field "has .review_gate.granularity" "$CONFIG" ".review_gate.granularity" "group"
 
 # Nested: .guards
 val=$(jq -r '.guards | type' "$CONFIG")
@@ -108,5 +108,12 @@ assert_json_field "has .telemetry.record_metered_cost" "$CONFIG" ".telemetry.rec
 # Exactly 2 fields — no legacy_write (single-write design, Section 6)
 assert_json_field "telemetry has exactly 2 fields" "$CONFIG" '.telemetry | keys | length' "2"
 assert_json_field "telemetry has no legacy_write field" "$CONFIG" '.telemetry | has("legacy_write")' "false"
+
+# v17 new defaults
+assert_json_field "v17 models.post_loop is sonnet" "$CONFIG" ".models.post_loop" "sonnet"
+assert_json_field "v17 parallelism.wave_execution is true" "$CONFIG" ".parallelism.wave_execution" "true"
+val=$(jq -r '.docs | type' "$CONFIG")
+assert_eq "v17 has .docs object" "$val" "object"
+assert_json_field "v17 docs.verify_post_loop is true" "$CONFIG" ".docs.verify_post_loop" "true"
 
 report_results

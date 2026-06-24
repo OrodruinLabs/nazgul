@@ -1,5 +1,5 @@
 {
-  "schema_version": 16,
+  "schema_version": 17,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -73,7 +73,7 @@
     "dir": "nazgul/docs"
   },
   "review_gate": {
-    "granularity": "task",
+    "granularity": "group",
     "require_all_approve": true,
     "max_retries_per_task": 3,
     "current_task_retries": 0,
@@ -143,7 +143,8 @@
     "use_agent_teams": true,
     "parallel_reviews": true,
     "parallel_independent_tasks": true,
-    "max_parallel_teammates": 4
+    "max_parallel_teammates": 4,
+    "wave_execution": true
   },
   "models": {
     "planning": "opus",
@@ -152,7 +153,7 @@
     "review": "sonnet",
     "implementation": "sonnet",
     "specialists": "sonnet",
-    "post_loop": "haiku",
+    "post_loop": "sonnet",
     "default": "sonnet"
   },
   "board": {
@@ -176,5 +177,8 @@
   "telemetry": {
     "bus_enabled": true,
     "record_metered_cost": false
+  },
+  "docs": {
+    "verify_post_loop": true
   }
 }

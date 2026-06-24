@@ -166,6 +166,8 @@ Tunable via `guards.lean_comments` (default `true`) and `guards.max_consecutive_
 | ADR | Key decisions | New decisions | Why refactor | -- | Why migrate |
 | Test Plan | Full | Feature tests | Regression | Regression | Validation |
 
+**Doc-accuracy is enforced at the post-loop completion gate.** `[enforced]` Generated docs and CHANGELOG must reference only artifacts that exist in source — event types, config keys, commands, scripts, and schema versions named in a doc must be findable in the codebase. After the post-loop documentation and release-manager agents run, a separate `agents/doc-verifier.md` agent cross-checks every named artifact against source and writes an objective-scoped marker (`nazgul/logs/.docs-verified`, containing the current `feat_id`) when all references are clean. The stop-hook blocks `NAZGUL_COMPLETE` until this marker is present and matches the active `feat_id`. The gate has a bounded backstop (≤3 attempts) after which it emits a loud warning and allows completion — it never deadlocks an unattended loop. When `docs.verify_post_loop` is `false` in `nazgul/config.json` (default `true`), the gate is a complete no-op: no marker is required and no block is issued. When `nazgul/docs/` is absent or empty the verifier exits allow without blocking (degrade-to-allow).
+
 ---
 
 ## 8. File Scope Restrictions

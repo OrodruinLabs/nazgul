@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.7.0] - 2026-06-24
+
+### Added
+- **Post-loop doc-accuracy verifier gate (FEAT-004).** A new read-only `doc-verifier` agent cross-checks the generated docs and CHANGELOG against the source — every event type, config key, command/skill, named script, and schema version a doc references must actually exist in the codebase. On a clean pass it writes an objective-scoped marker (`nazgul/logs/.docs-verified`), and the stop-hook now **blocks `NAZGUL_COMPLETE` until that marker matches the active objective** — catching invented facts (e.g. the kind of hallucinated CHANGELOG event names this project previously shipped) before release instead of relying on an external reviewer. Bounded backstop (≤3 attempts) so it can never deadlock an unattended loop; opt-out `docs.verify_post_loop` (default `true`) makes it a clean no-op. Wired into the post-loop sequence after documentation/release. Schema 16 → 17.
+
+### Changed
+- **Better defaults (FEAT-004), applied additively and only when still at the old default (hand-set values are preserved):**
+  - `review_gate.granularity`: `task` → **`group`** — per-task review boards were the expensive default; group review matches how waves already run.
+  - `models.post_loop`: `haiku` → **`sonnet`** — the cheap post-loop model shipped invented documentation facts; the new doc-verifier gate plus a stronger model close that gap.
+  - `parallelism.wave_execution`: now defaults **`true`** — real parallel waves are safe now that the FEAT-003 granularity completion-gate backstops wrong-granularity reviews.
+  - Unchanged (they behaved correctly): `confidence_threshold` (80), `require_all_approve`, `auto_approve_concerns`, `default_mode` (null), `formatter` (off).
+- **Honest RULES.md.** Documentation accuracy is now recorded as `[enforced]` (via the post-loop verifier gate).
+
 ## [2.6.0] - 2026-06-24
 
 ### Added
