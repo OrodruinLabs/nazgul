@@ -25,9 +25,9 @@ per project convention.
 | TASK-001 | Emit library + CLI wrapper + unit tests | none | 1 | DONE |
 | TASK-002 | Config schema v13→v14 migration + telemetry block + gitignore | none | 1 | DONE |
 | TASK-003 | Shell hook wiring — replace legacy writes with emit_event (5 hooks) | TASK-001 | 2 | DONE |
-| TASK-004 | Review-gate agent emit wiring (reviewer_verdict / retry / blocked) | TASK-001 | 2 | IMPLEMENTED |
-| TASK-005 | Consumer migration — metrics + log skills dual-read | TASK-003, TASK-004 | 3 | PLANNED |
-| TASK-006 | Version-bump hygiene (plugin.json 2.3.0→2.4.0 + README + CHANGELOG) | TASK-002, TASK-003, TASK-004, TASK-005 | 4 | PLANNED |
+| TASK-004 | Review-gate agent emit wiring (reviewer_verdict / retry / blocked) | TASK-001 | 2 | DONE |
+| TASK-005 | Consumer migration — metrics + log skills dual-read | TASK-003, TASK-004 | 3 | DONE |
+| TASK-006 | Version-bump hygiene (plugin.json 2.3.0→2.4.0 + README + CHANGELOG) | TASK-002, TASK-003, TASK-004, TASK-005 | 4 | DONE |
 
 ## Parallel Groups
 
@@ -82,9 +82,12 @@ Every PRD acceptance criterion maps to at least one task:
 - TASK-001 ✦ DONE @ 6b0c7f7 (2026-06-24) — emit library + CLI wrapper + 20 tests; 4 reviewer board APPROVE
 - TASK-002 ✦ DONE @ 5e0b692 (2026-06-24) — config schema v13→v14, telemetry block, 139+41 tests; 4 reviewer board APPROVE
 - TASK-003 ✦ DONE @ cae3136 (2026-06-24) — 5 producer hooks wired to emit_event, legacy iterations/subagents.jsonl writes removed; simplify pass + review-board auto-remediation (lean comment, emit `|| true` exit-code safety, +14 observability tests / +18 stop-hook tests); 4 reviewer board APPROVE (security 96, full suite 34/34)
+- TASK-004 ✦ DONE @ 684a408 (2026-06-24) — review-gate agent emit wiring (reviewer_verdict/retry/blocked), CONCERN 1 mitigation + simplify pass (6 improvements); 4 reviewer board APPROVE (unanimous, all confs 92-96, 0 blocking findings); 34/34 tests
+- TASK-005 ✦ DONE @ 8bd3f99 (2026-06-24) — consumer migration (metrics + log skills dual-read events.jsonl), simplify pass (4 improvements), auto-fix (tolerant-parse grep pre-filter); 4 reviewer board: architect APPROVE/90, code CHANGES_REQUESTED/85 → AUTO-FIX applied, security APPROVE/93, qa APPROVE/88; 34/34 tests
+- TASK-006 ✦ DONE @ 0a0c723 (2026-06-24) — version-bump hygiene (plugin.json 2.3.0→2.4.0, README badge, CHANGELOG 2.4.0); simplify pass (CHANGELOG bullet format); 4 reviewer board APPROVE (architect 99, code 98, security 97, qa 97); 34/34 tests
 
 ## Recovery Pointer
-- **Active task**: TASK-004 (IMPLEMENTED @ 88f3add)
-- **Next action**: Review gate for TASK-004; TASK-003 also IMPLEMENTED (Wave 2 parallel) — await both reviews before TASK-005
+- **Active task**: ALL TASKS DONE — FEAT-001 complete, ready for post-loop
+- **Next action**: Post-loop phase (documentation, release-manager agents + feature branch PR)
 - **Plan written**: 2026-06-24 (re-plan — replaces the prior dual-write→cutover plan)
-- **Last updated**: 2026-06-24T19:15:00Z
+- **Last updated**: 2026-06-24T18:30:00Z
