@@ -68,6 +68,7 @@ Review for code quality issues:
 - Stringly-typed code that should use enums/constants
 - Unnecessary nesting that can be flattened
 - Dead code or unused imports
+- **Comment bloat (LEAN comments).** Run `"${CLAUDE_PLUGIN_ROOT}/scripts/lean-comments-guard.sh" --check <changed source files>` and flag every reported violation. Cut to a one-line quirk note or delete: banner/separator comments, runs of 3+ line comments, comments that restate the next line (incl. micro-optimization noise), and `<remarks>`/multi-paragraph doc blocks on private/internal/protected or test members. Full XML/JSDoc/docstring stays on PUBLIC interface members only (`<inheritdoc/>` on implementations). A single short domain/venue-quirk comment is fine — leave it.
 
 #### Efficiency Agent
 Review for performance and efficiency:

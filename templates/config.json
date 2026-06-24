@@ -1,5 +1,5 @@
 {
-  "schema_version": 12,
+  "schema_version": 13,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -86,7 +86,9 @@
     "focus": null
   },
   "guards": {
-    "requireActiveTask": true
+    "requireActiveTask": true,
+    "lean_comments": true,
+    "max_consecutive_comment_lines": 2
   },
   "safety": {
     "block_destructive_commands": true,

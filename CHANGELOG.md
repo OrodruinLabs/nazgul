@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.0] - 2026-06-24
+
+### Added
+- **Lean-comments guard — comment bloat is now mechanically blocked, not just discouraged.** A new deterministic guard (`scripts/lean-comments-guard.sh`) is wired into the plugin hooks as a `PreToolUse` matcher on `Write|Edit|MultiEdit` (alongside `task-state-guard`), and is also runnable as a pre-commit-style check (`scripts/lean-comments-guard.sh --check <files>`) that the implementer and simplifier run before review. It inspects source content (C#, TS/JS, Python, and other `//`/`#` languages; shell and config formats are intentionally exempt) and BLOCKS the write when a change introduces any of:
+  - a run of 3+ consecutive line comments that is not a license header;
+  - a `<remarks>`/multi-paragraph doc block on a private/internal/protected or test member;
+  - a banner/separator comment (`// ── Helpers ──────`, `// =======`);
+  - a comment that restates or narrates the next line of code (incl. micro-optimization noise).
+
+  Full XML/JSDoc/docstring on PUBLIC interface members is expected (`<inheritdoc/>` on implementations), and a single short domain/venue-quirk comment is allowed. The block message names the file and offending comment and instructs the author to cut it to a one-line note or delete it. Tunable and fully opt-out-able via `guards.lean_comments` (default `true`) and `guards.max_consecutive_comment_lines` (default `2`) — when `lean_comments` is `false` the guard is a no-op, so existing projects can opt out without breaking.
+
+- **Enforced three ways (defense in depth).** Previously the "lean comments" rule lived only as advisory prose and the review gate downgraded comment bloat to a low-confidence CONCERN that `auto_approve_concerns` waved through. Now: (1) the hook blocks the write; (2) the **code reviewer** treats comment bloat as an ALWAYS-BLOCKING finding reported at confidence >= the gate threshold (never a sub-threshold CONCERN), with explicit bad-vs-good examples — propagated to every project via `agents/templates/reviewer-domains.json` and the reviewer base template; (3) the **implementer** and **simplifier** agents carry an upfront comment-discipline rule with the same examples and run the `--check` pass before review.
+
+### Changed
+- **Schema version 12 → 13.** Added `guards.lean_comments` (default `true`) and `guards.max_consecutive_comment_lines` (default `2`). `migrate_12_to_13` sets them additively only when absent — an existing opt-out (`lean_comments: false`) or tuned threshold survives, and a non-object `guards` is clamped to `{}` first. `templates/config.json`, `scripts/migrate-config.sh`, `hooks/hooks.json`, `agents/implementer.md`, `agents/simplifier.md`, `agents/templates/reviewer-base.md`, `agents/templates/reviewer-domains.json`, `RULES.md`, `templates/CLAUDE.md.template`, and `docs/CONFIGURATION.md` updated. New `tests/test-lean-comments-guard.sh` (19 assertions covering each bad/good/allowed example, opt-out, threshold tuning, and hook mode); migration + schema coverage added to `tests/test-migrate-config.sh` and `tests/test-config-schema.sh`; the new script is registered in `tests/test-shellcheck.sh`.
+
 ## [2.1.0] - 2026-06-22
 
 ### Added

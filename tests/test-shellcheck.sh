@@ -16,6 +16,7 @@ SCRIPTS=(
   "scripts/session-context.sh"
   "scripts/migrate-config.sh"
   "scripts/task-state-guard.sh"
+  "scripts/lean-comments-guard.sh"
 )
 
 # bash -n syntax checks

@@ -100,6 +100,18 @@ The Recovery Pointer is read first by every agent on every start.
 - `git push --force main/master` -- shared branch destruction
 - Fork bombs, `curl | sh` -- unsafe execution
 - `chmod -R 777` -- permission degradation
+- Comment bloat in source writes -- blocked by `lean-comments-guard.sh` (PreToolUse on Write/Edit/MultiEdit), opt-out via `guards.lean_comments`
+
+### Lean Comments (enforced)
+
+Comments must be LEAN. Full XML/JSDoc/docstring belongs on **PUBLIC interface members only**; implementations use `<inheritdoc/>`. A single short comment explaining a non-obvious domain/venue quirk is allowed. Everything else is bloat and is blocked at write time and rejected by the code reviewer (always-blocking, never an auto-approved CONCERN):
+
+- A run of 3+ consecutive `//`/`#` line comments that is not a license header.
+- A `<remarks>`/multi-paragraph doc block on a private/internal/protected or test member.
+- A banner/separator comment (`// ── Helpers ──────`, `// =======`).
+- A comment that restates or narrates the next line of code.
+
+Tunable via `guards.lean_comments` (default `true`) and `guards.max_consecutive_comment_lines` (default `2`).
 
 ### Soft Limits
 

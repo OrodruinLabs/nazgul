@@ -34,6 +34,34 @@ Format ALL user-facing output per `references/ui-brand.md`:
 - Always show Next Up block after task completions
 - Never use emoji — only the defined symbols
 
+## Comment Discipline (BLOCKING — read before writing any code)
+
+Write LEAN comments. The `lean-comments-guard.sh` PreToolUse hook will **reject your Write/Edit** if you introduce comment bloat, and the code reviewer treats it as an always-blocking finding. Do not waste a round-trip — get it right the first time.
+
+Rules:
+- Full XML/JSDoc/docstring (`/// <summary>`, `/** */`, `"""..."""`) goes on **PUBLIC interface members only**. On implementations use `<inheritdoc/>` (or nothing).
+- NO `<remarks>`/`<para>` or multi-paragraph doc blocks on private/internal/protected methods, fields, locals, or test members.
+- NO banner/separator comments (`// ── Helpers ──────`, `// =======`).
+- NO runs of 3+ line comments, and NO comment that restates or narrates the next line (including micro-optimization noise).
+- A single short comment explaining a non-obvious domain/venue quirk IS allowed.
+
+```csharp
+GOOD:  /// <summary>One subscribe frame covering all requests, or null if the venue can't batch this set.</summary>
+
+BAD (restates code / micro-opt noise):
+       // Pre-size to avoid resizes: prefix (~20) + method + per-token avg (~20) + suffix (~10).
+       var sb = new StringBuilder(method.Length + requests.Count * 20 + 32);
+GOOD:  var sb = new StringBuilder(method.Length + requests.Count * 20 + 32);   // (no comment)
+
+BAD (banner):  // ── Helpers ──────────────
+GOOD:          (delete it)
+
+ALLOWED (one-line venue quirk):
+       // Binance closes above 5 inbound msgs/sec; 200 ms ⇒ 5 msg/s with margin.
+```
+
+If a comment you want to keep is being blocked, cut it to a one-line quirk note or delete it — do not disable the guard.
+
 ## Recovery Protocol
 
 Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified order before doing ANY work. If task is CHANGES_REQUESTED, also read `nazgul/reviews/[TASK-ID]/consolidated-feedback.md`. Never rely on conversational memory — files are truth.
@@ -65,6 +93,7 @@ Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified o
 7. Write tests as you go (same framework, same style as existing tests)
 8. Run tests after every change — do NOT proceed if tests fail
 9. Run linter after implementation — fix all errors
+9.5. Run the lean-comments check on every changed source file: `"${CLAUDE_PLUGIN_ROOT}/scripts/lean-comments-guard.sh" --check <changed files>`. Fix every reported violation before proceeding — the reviewer will block on it otherwise.
 10. Update task manifest with implementation log
 11. Set status to IMPLEMENTED when all acceptance criteria met, tests pass, lint clean. **The task manifest MUST contain a `## Commits` section with at least one commit SHA — the state guard will block the transition without it.**
 12. Capture the diff for reviewers:
@@ -138,6 +167,7 @@ After setting a task to IMPLEMENTED, if `self_improvement.enabled` is true in `n
 - Do NOT output NAZGUL_COMPLETE — only the review gate decides advancement
 - Do NOT skip tests or linting
 - Do NOT modify files outside the task's file scope without updating the manifest
+- Do NOT write banner comments, comment runs that restate code, or `<remarks>`/multi-paragraph docs on non-public members — the lean-comments guard blocks the write (see Comment Discipline)
 - ALWAYS update plan.md Recovery Pointer after any state change
 
 ## Context Management Rules
