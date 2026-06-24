@@ -1,5 +1,5 @@
 {
-  "schema_version": 13,
+  "schema_version": 14,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -170,5 +170,9 @@
       "task_complete"
     ],
     "headers": {}
+  },
+  "telemetry": {
+    "bus_enabled": true,
+    "record_metered_cost": false
   }
 }

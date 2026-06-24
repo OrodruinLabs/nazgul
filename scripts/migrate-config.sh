@@ -283,6 +283,21 @@ migrate_12_to_13() {
   log_migration "v12→v13: Added guards.lean_comments (default true) + max_consecutive_comment_lines (default 2)"
 }
 
+migrate_13_to_14() {
+  local tmp
+  tmp=$(mktemp)
+  # Add telemetry.bus_enabled + record_metered_cost. Same ADDITIVE ONLY +
+  # type-guard pattern as migrate_12_to_13. NO legacy_write — single-write +
+  # dual-read design (Section 6).
+  jq '
+    .telemetry = ((if (.telemetry | type) == "object" then .telemetry else {} end)
+      | .bus_enabled = (if has("bus_enabled") then .bus_enabled else true end)
+      | .record_metered_cost = (if has("record_metered_cost") then .record_metered_cost else false end))
+    | .schema_version = 14
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v13→v14: Added telemetry.bus_enabled (default true) + record_metered_cost (default false)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"
