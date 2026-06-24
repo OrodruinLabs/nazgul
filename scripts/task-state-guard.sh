@@ -82,10 +82,7 @@ if ! is_task_manifest "$FILE_PATH"; then
 
   # Documentation and plan files are always allowed (design docs, ADRs, plans, etc.)
   case "$FILE_PATH" in
-    */docs/*|*/plans/*|*/doc/*|*/.claude/*) exit 0 ;;
-  esac
-  # Also check relative paths
-  case "$FILE_PATH" in
+    */docs/*|*/plans/*|*/doc/*|*/.claude/*|\
     docs/*|plans/*|doc/*|.claude/*) exit 0 ;;
   esac
 
@@ -259,6 +256,10 @@ if ! valid_transition "$OLD_STATUS" "$NEW_STATUS"; then
   exit 2
 fi
 
+# Derive task identity once — used by both evidence gates and the review gate below
+TASK_ID=$(basename "$FILE_PATH" .md)
+NAZGUL_DIR=$(dirname "$(dirname "$FILE_PATH")")
+
 # --- ENFORCE EVIDENCE GATES ---
 # IN_PROGRESS -> IMPLEMENTED requires a commit SHA in the manifest content
 # For Write, NEW_CONTENT is the full post-edit file.
@@ -287,9 +288,7 @@ fi
 # IMPLEMENTED/BLOCKED -> IN_REVIEW requires review directory to exist
 # (BLOCKED -> IN_REVIEW is the /nazgul:review --materialize repair path)
 if { [ "$OLD_STATUS" = "IMPLEMENTED" ] || [ "$OLD_STATUS" = "BLOCKED" ]; } && [ "$NEW_STATUS" = "IN_REVIEW" ]; then
-  TASK_ID_CHECK=$(basename "$FILE_PATH" .md)
-  NAZGUL_DIR_CHECK=$(dirname "$(dirname "$FILE_PATH")")
-  REVIEW_DIR_CHECK="$NAZGUL_DIR_CHECK/reviews/$TASK_ID_CHECK"
+  REVIEW_DIR_CHECK="$NAZGUL_DIR/reviews/$TASK_ID"
   if [ ! -d "$REVIEW_DIR_CHECK" ]; then
     echo "NAZGUL STATE GUARD: BLOCKED — Cannot move to IN_REVIEW without a review directory" >&2
     echo "Expected: ${REVIEW_DIR_CHECK}/" >&2
@@ -313,8 +312,6 @@ fi
 # --- ENFORCE REVIEW GATE (Constitution Article IV) ---
 # In YOLO mode, gate APPROVED; in non-YOLO, gate DONE
 # APPROVED → DONE in YOLO needs no review checks (PR merge is external validation)
-TASK_ID=$(basename "$FILE_PATH" .md)
-NAZGUL_DIR=$(dirname "$(dirname "$FILE_PATH")")
 CONFIG="$NAZGUL_DIR/config.json"
 YOLO_MODE="false"
 if [ -f "$CONFIG" ]; then

@@ -14,10 +14,7 @@ PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 CONFIG="$PROJECT_ROOT/nazgul/config.json"
 
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
-INPUT="${1:-}"
-if [ -z "$INPUT" ]; then
-  INPUT=$(cat 2>/dev/null || echo "")
-fi
+INPUT=$(cat 2>/dev/null || echo "")
 
 # No input — allow
 if [ -z "$INPUT" ]; then
@@ -37,6 +34,16 @@ if [ -z "$CMD" ]; then
   exit 0
 fi
 
+# Only block git add / git stage / git commit commands that touch nazgul/ paths.
+# Check these before reading config — the vast majority of Bash calls exit here.
+if ! echo "$CMD" | grep -qiE 'git\s+(add|stage|commit)'; then
+  exit 0
+fi
+
+if ! echo "$CMD" | grep -qE 'nazgul/'; then
+  exit 0
+fi
+
 # Degrade gracefully: config absent → allow
 if [ ! -f "$CONFIG" ]; then
   exit 0
@@ -45,15 +52,6 @@ fi
 # Read install_mode — absent or non-local → allow
 INSTALL_MODE=$(jq -r '.install_mode // ""' "$CONFIG" 2>/dev/null || echo "")
 if [ "$INSTALL_MODE" != "local" ]; then
-  exit 0
-fi
-
-# Only block git add / git stage / git commit commands that touch nazgul/ paths
-if ! echo "$CMD" | grep -qiE 'git\s+(add|stage|commit)'; then
-  exit 0
-fi
-
-if ! echo "$CMD" | grep -qE 'nazgul/'; then
   exit 0
 fi
 

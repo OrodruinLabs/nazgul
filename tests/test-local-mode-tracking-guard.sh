@@ -24,12 +24,6 @@ run_guard_json() {
   GUARD_STDERR=$(echo "$input" | bash "$GUARD" 2>&1 >/dev/null) && GUARD_EC=0 || GUARD_EC=$?
 }
 
-# Helper: run guard with plain-text input (fallback mode)
-run_guard_plain() {
-  local cmd="$1"
-  GUARD_STDERR=$(echo "$cmd" | bash "$GUARD" 2>&1 >/dev/null) && GUARD_EC=0 || GUARD_EC=$?
-}
-
 # ---------------------------------------------------------------------------
 # BLOCK cases: local mode + git add/commit on nazgul/ paths → exit 2
 # ---------------------------------------------------------------------------
