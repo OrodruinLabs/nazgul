@@ -8,10 +8,11 @@ tools:
   - Bash
 # `tools:` (above) is the honored subagent allowlist; `allowed-tools:` is a
 # SKILL field and is ignored on subagents, so it was removed. Reviewers keep
-# Bash to run the project's test/lint commands; destructive commands are
-# blocked by the PreToolUse guard (scripts/pre-tool-guard.sh). To hard-scope
-# Bash to specific test commands, add rules to permissions.allow in settings.
-maxTurns: 30
+# Bash for TARGETED inspection (grep, reading a specific file/command output) —
+# NOT for re-running the full test suite, which the review gate's pre-checks
+# already ran before dispatch (see "How to Review"). Destructive commands are
+# blocked by the PreToolUse guard (scripts/pre-tool-guard.sh).
+maxTurns: 15
 # {{^bundle_mode}}
 hooks:
   SubagentStop:
@@ -47,6 +48,7 @@ lines, keeping the inverse-branch content.
 {{^bundle_mode}}
 1. Read `nazgul/reviews/[TASK-ID]/diff.patch` FIRST — focus on what specifically changed
 2. For each changed hunk, read the surrounding context in the full file if needed
+3. **Do NOT re-run the full test suite.** The review gate's pre-checks already ran `project.test_command` and confirmed it passes before you were dispatched — re-running it 4× (once per reviewer) is the single biggest source of wasted review time. Reason about the diff; use Bash only for targeted inspection (a `grep`, a single file read, one specific command), never to re-execute `tests/run-tests.sh`.
 {{/bundle_mode}}
 {{#bundle_mode}}
 1. Identify the changed files and diff from the current conversation or user request

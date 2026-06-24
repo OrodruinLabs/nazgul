@@ -10,7 +10,7 @@ tools:
   - Agent
   - EnterWorktree
   - ExitWorktree
-maxTurns: 60
+maxTurns: 40
 ---
 
 # Review Gate Agent
@@ -33,7 +33,7 @@ Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified o
 
 ## Review Granularity & Scope
 
-The review *unit* is set by `nazgul/config.json → review_gate.granularity` (default `task`). The stop-hook's DELEGATE instruction tells you which unit you are reviewing — read it. The granularity changes only the **scope of the diff** and **which tasks a CHANGES_REQUESTED re-opens**; every other gate below (Step 0 simplify, pre-checks, evidence check, `require_all_approve`, `confidence_threshold`, `block_on_security_reject`) applies identically in all three modes.
+The review *unit* is set by `nazgul/config.json → review_gate.granularity` (default `task`). The stop-hook's DELEGATE instruction tells you which unit you are reviewing — read it. The granularity changes only the **scope of the diff** and **which tasks a CHANGES_REQUESTED re-opens**; every other gate below (pre-checks, evidence check, `require_all_approve`, `confidence_threshold`, `block_on_security_reject`) applies identically in all three modes.
 
 - **`task`** (default — current behavior): you are dispatched for ONE task at IMPLEMENTED. Review scope is that task's diff. `[TASK-ID]` below is that single task.
 - **`group`**: you are dispatched ONCE per planner-defined parallel wave/group, after ALL tasks in that group are IMPLEMENTED. Review scope is the group's **combined diff** — the union of every group task's commits. The stop-hook passes the group's task list (`covering tasks: TASK-00X TASK-00Y …`).
@@ -54,9 +54,11 @@ Pass the diff plus the unit's task→file-scope map to the reviewers and (in Ste
 
 ## Review Pipeline
 
-### Step 0: Simplify Pass (ALWAYS RUNS — DO NOT SKIP)
+### Step 0: Simplify Pass (OPT-IN — skipped by default)
 
-**You MUST dispatch the simplifier before reviewers. This is not optional and not configurable.**
+Read `review_gate.simplify_before_review` from `nazgul/config.json` (default **false** when absent). **If it is not `true`, SKIP this step entirely and go straight to Step 1.** Simplification is a code-mutation concern, not a review concern, and the post-loop simplify pass (`simplify.post_loop`) already cleans up modified files after the loop — running a full simplifier agent before every review board is wasteful and is off by default.
+
+When `review_gate.simplify_before_review` is `true`:
 
 1. Read the task worktree path from config: `<worktree_dir>/TASK-NNN`
 2. Read `simplify.focus` from `nazgul/config.json` (if set, pass as focus argument)
@@ -67,9 +69,7 @@ Pass the diff plus the unit's task→file-scope map to the reviewers and (in Ste
    - Focus argument from `simplify.focus` (if set)
 4. Wait for the simplifier to complete
 5. Log the result (files changed, tests status)
-6. Proceed to Step 1 regardless of simplifier outcome
-
-Step 0 is non-blocking on failure — if simplify errors or reverts, always proceed to Step 1. But you MUST always run it.
+6. Proceed to Step 1 regardless of simplifier outcome (non-blocking on failure)
 
 ### Step 1: Pre-Review Automated Checks (SEQUENTIAL, NON-NEGOTIABLE)
 
@@ -98,7 +98,7 @@ Before spawning reviewers, verify `nazgul/reviews/[TASK-ID]/diff.patch` exists a
 ### Step 2: Delegate to Reviewers
 
 Read `nazgul/config.json → agents.reviewers` to get the active reviewer list.
-Read `nazgul/config.json → models.review` for the model to assign reviewers (default: `"sonnet"`). Pass this as the `model` parameter when spawning each reviewer via the Task tool.
+Read `nazgul/config.json → models.review` for the model to assign reviewers (default: `"sonnet"`). Pass this as the `model` parameter when spawning each reviewer via the Agent tool — **except `security-reviewer`, which is ALWAYS pinned to `sonnet`** regardless of `models.review`. This lets you set `models.review` to a cheaper model (e.g. `haiku`) for the mechanical reviewers (architect/code/qa) to cut cost, while the security review stays sharp.
 
 #### What Each Reviewer Receives
 1. `nazgul/reviews/[TASK-ID]/diff.patch` — the unified diff showing exactly what changed. **Reviewers MUST read this FIRST.**
@@ -113,14 +113,16 @@ Read `nazgul/config.json → models.review` for the model to assign reviewers (d
 
 #### Parallel Review Mode (when parallelism.parallel_reviews is true)
 
-1. Create an agent team for the review
-2. Each reviewer: reads diff.patch FIRST, then changed files for context, reads their definition in `.claude/agents/generated/`, reads relevant context, writes review to `nazgul/reviews/[TASK-ID]/[reviewer-name].md`
-3. Wait for ALL reviewers to complete
-4. Read all review files
+**Spawn ALL reviewers concurrently by emitting one Agent tool call per reviewer in a SINGLE message — all the tool calls in the same assistant turn.** This is the difference between a 10-minute board and a 40-minute one: if you instead spawn them one-per-turn (an Agent call, wait, the next Agent call), they run *serially* and the board takes 4× as long. Do NOT spawn them one at a time. The harness runs same-message tool calls in parallel.
+
+1. In one message, dispatch every reviewer in `agents.reviewers` (each as its own Task call, with its computed model + scoped learned rules).
+2. Each reviewer: reads diff.patch FIRST, then changed files for context, reads their definition in `.claude/agents/generated/`, reads relevant context, writes review to `nazgul/reviews/[TASK-ID]/[reviewer-name].md`.
+3. The single message returns once ALL reviewers have completed.
+4. Read all review files.
 
 #### Sequential Fallback (when parallel_reviews is false)
 
-Run each reviewer as a subagent, one at a time. Write results to same location.
+Run each reviewer as a subagent, one at a time. Write results to same location. (Slower — only used when `parallelism.parallel_reviews` is explicitly false.)
 
 ### Step 2.5: Evidence Check (MANDATORY — before any verdict)
 
