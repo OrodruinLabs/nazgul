@@ -37,7 +37,7 @@ If the typed arguments (`$ARGUMENTS`, the substituted value — not this literal
 
 ### Collect Data
 
-**Telemetry source selection (dual-read):** Check whether `nazgul/logs/events.jsonl` is present and non-empty (the "Events bus" line in Current State indicates this). Use tolerant parsing: `jq -sc '[.[]|select(.event!=null)]' nazgul/logs/events.jsonl 2>/dev/null || true`. If `events.jsonl` is present and non-empty, it is the authoritative source for sources 2, 5, and 6 below. If absent/empty, fall back to the legacy files for those sources (frozen pre-upgrade history).
+**Telemetry source selection (dual-read):** Check whether `nazgul/logs/events.jsonl` is present and non-empty (the "Events bus" line in Current State indicates this). Use tolerant parsing: `grep -E '^\{' nazgul/logs/events.jsonl 2>/dev/null | jq -sc '[.[]|select(.event!=null)]' 2>/dev/null || true`. If `events.jsonl` is present and non-empty, it is the authoritative source for sources 2, 5, and 6 below. If absent/empty, fall back to the legacy files for those sources (frozen pre-upgrade history).
 
 Read these sources to compute metrics:
 

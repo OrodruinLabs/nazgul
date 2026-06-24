@@ -28,7 +28,7 @@ Build a unified timeline from all Nazgul activity sources and present it as a fo
 
 Set `TIMELINE_SOURCE` based on whether the events bus is available:
 
-- **`TIMELINE_SOURCE=events`**: `nazgul/logs/events.jsonl` is present and non-empty (the "Events bus" line shows "present"). Use it as the primary timeline spine. The unified stream is already multi-event-type and sorted: `jq -sc 'sort_by(.ts)[]' nazgul/logs/events.jsonl`.
+- **`TIMELINE_SOURCE=events`**: `nazgul/logs/events.jsonl` is present and non-empty (the "Events bus" line shows "present"). Use it as the primary timeline spine. The unified stream is already multi-event-type and sorted: `grep -E '^\{' nazgul/logs/events.jsonl 2>/dev/null | jq -sc 'sort_by(.ts)[]' 2>/dev/null || true`.
 
 - **`TIMELINE_SOURCE=legacy`**: `events.jsonl` is absent/empty. Fall back to `nazgul/logs/iterations.jsonl`. These lines are heterogeneous in shape — iteration-boundary lines carry `iteration`, `timestamp`, `active_task`, `status`, `done`, `total`, `git_sha`, `blocked_reason`; some lines from other writers carry an `event` field (e.g. `stop_failure`, `task_completed`) plus `timestamp`. Use the `timestamp` field for sorting regardless of shape.
 
