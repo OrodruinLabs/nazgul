@@ -54,6 +54,29 @@ assert_exit_code "block: local mode + git commit nazgul/ path (JSON)" "$GUARD_EC
 assert_contains "block message mentions NAZGUL GUARD" "$GUARD_STDERR" "NAZGUL GUARD"
 teardown_temp_dir
 
+# Block case 3: a QUOTED nazgul/ pathspec must still be blocked (stripping the
+# message must not strip a quoted path — policy-bypass regression guard)
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'git add "nazgul/config.json"')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block: local mode + git add quoted nazgul/ path" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block case 4: commit with a quoted message AND a real nazgul/ pathspec → block
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input "git commit -m 'unrelated message' nazgul/plan.md")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block: message stripped but nazgul/ pathspec still blocks" "$GUARD_EC" 2
+teardown_temp_dir
+
 # ---------------------------------------------------------------------------
 # ALLOW cases: shared mode, local mode non-nazgul path, and uninitialised
 # ---------------------------------------------------------------------------

@@ -140,9 +140,14 @@ Set `UNIT_ID` to the review unit's ID (e.g., `TASK-003`, `GROUP-1`) before runni
 for r in $(jq -r '.agents.reviewers[]' nazgul/config.json); do
   f="nazgul/reviews/$UNIT_ID/$r.md"
   if [ ! -f "$f" ]; then echo "MISSING: $r"; continue; fi
-  head -5 "$f" | grep -qE '^verdict:[[:space:]]*(APPROVE|CHANGES_REQUESTED)' || echo "MALFORMED: $r"
+  hdr=$(head -8 "$f")
+  printf '%s\n' "$hdr" | grep -qE '^verdict:[[:space:]]*(APPROVE|CHANGES_REQUESTED)[[:space:]]*$' \
+    && printf '%s\n' "$hdr" | grep -qE '^confidence:[[:space:]]*[0-9]+[[:space:]]*$' \
+    || echo "MALFORMED: $r"
 done
 ```
+
+This is the orchestrator's fast pre-check (verdict + integer confidence present in the frontmatter). The AUTHORITATIVE validation is `scripts/lib/review-evidence.sh`, which the stop-hook evidence gate runs before any task can reach DONE — a review that slips past this quick check is still rejected there.
 
 - A file is MISSING only if you failed to persist a reviewer's return, or
   MALFORMED if a reviewer returned text without a usable frontmatter verdict.

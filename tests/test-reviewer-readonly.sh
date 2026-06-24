@@ -25,7 +25,11 @@ assert_file_contains "template: instructs return-based output" "$TEMPLATE" "Retu
 assert_file_not_contains "template: no reviews/[TASK-ID] paths" "$TEMPLATE" 'nazgul/reviews/\[TASK-ID\]'
 assert_file_contains "template: diff.patch read path uses [UNIT-ID]" "$TEMPLATE" 'nazgul/reviews/\[UNIT-ID\]/diff.patch'
 
-# Generated reviewers (rendered from the template) must hold the same invariants
+# Generated reviewers (rendered from the template) must hold the same invariants.
+# These are gitignored per-project runtime artifacts — absent in a fresh clone /
+# CI, present only after discovery has rendered them locally. The template
+# assertions above are the authoritative, always-run check; this loop is a
+# best-effort local guard that runs when generated reviewers exist.
 for f in "$REPO_ROOT"/.claude/agents/generated/*-reviewer.md; do
   [ -e "$f" ] || continue
   rn=$(basename "$f")

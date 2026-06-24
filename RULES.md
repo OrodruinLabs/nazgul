@@ -171,7 +171,7 @@ Tunable via `guards.lean_comments` (default `true`) and `guards.max_consecutive_
 ## 8. File Scope Restrictions
 
 - **Implementer**: `[enforced]` Only files in the task's `file_scope`. `task-state-guard.sh` (PreToolUse on Write/Edit) blocks edits outside declared scope. Must update manifest before expanding.
-- **Reviewers**: `[enforced]` Read-only. Write only to `nazgul/reviews/`. Enforced via tool allowlist.
+- **Reviewers**: `[enforced]` Read-only — `Read`/`Glob`/`Grep` only, no `Write` and no `Bash` (tool-allowlist enforced). Reviewers do not write any file; they RETURN their review and the review-gate orchestrator persists it to `nazgul/reviews/` (see §3.3).
 - **Parallel tasks**: `[hook-driven only]` Zero file overlap. Team Orchestrator validates before assigning; bypassable by manual task dispatch.
 - **Specialists**: `[hook-driven only]` Only files in the delegation brief's scope. Validated by the Team Orchestrator when stop-hook drives dispatch.
 
