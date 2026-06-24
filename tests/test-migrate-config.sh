@@ -541,7 +541,7 @@ cat > "$NAZGUL_DIR/config.json" <<'EOF'
 { "schema_version": 9, "mode": "hitl" }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
-assert_json_field "v9 → v14 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "15"
+assert_json_field "v9 → v15 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "15"
 assert_json_field "v9 → v10 learning.enabled" "$NAZGUL_DIR/config.json" ".learning.enabled" "true"
 assert_json_field "v9 → v10 learning.rules_doc" "$NAZGUL_DIR/config.json" ".learning.rules_doc" "nazgul/learning/learned-rules.md"
 assert_json_field "v9 → v10 learning.min_recurrence" "$NAZGUL_DIR/config.json" ".learning.min_recurrence" "2"
@@ -575,7 +575,7 @@ cat > "$NAZGUL_DIR/config.json" <<'EOF'
 { "schema_version": 10, "mode": "hitl" }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
-assert_json_field "v10 → v14 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "15"
+assert_json_field "v10 → v15 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "15"
 assert_json_field "v10 → v11 default_mode null" "$NAZGUL_DIR/config.json" ".default_mode" "null"
 
 NAZGUL_DIR=$(setup_nazgul_dir "v10-to-11-existing")
@@ -607,7 +607,7 @@ cat > "$NAZGUL_DIR/config.json" <<'EOF'
 { "schema_version": 11, "review_gate": { "require_all_approve": true, "max_retries_per_task": 3, "confidence_threshold": 80 } }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
-assert_json_field "v11 → v14 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "15"
+assert_json_field "v11 → v15 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "15"
 assert_json_field "v11 → v12 granularity defaults to task" "$NAZGUL_DIR/config.json" ".review_gate.granularity" "task"
 assert_json_field "v11 → v12 preserves require_all_approve" "$NAZGUL_DIR/config.json" ".review_gate.require_all_approve" "true"
 assert_json_field "v11 → v12 preserves max_retries_per_task" "$NAZGUL_DIR/config.json" ".review_gate.max_retries_per_task" "3"
@@ -676,7 +676,7 @@ cat > "$NAZGUL_DIR/config.json" <<'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "unversioned modern → migrated" "$OUTPUT" "migrated"
-assert_json_field "unversioned modern → reaches v14" "$NAZGUL_DIR/config.json" ".schema_version" "15"
+assert_json_field "unversioned modern → reaches v15" "$NAZGUL_DIR/config.json" ".schema_version" "15"
 # Branch survived migrate_2_to_3 (no wholesale clobber)
 assert_json_field "branch.feature survives full chain" "$NAZGUL_DIR/config.json" ".branch.feature" "feat/FEAT-007-payments"
 assert_json_field "branch.base survives full chain" "$NAZGUL_DIR/config.json" ".branch.base" "main"
