@@ -127,6 +127,14 @@ The Recovery Pointer is read first by every agent on every start. `[enforced]` E
 
 Tunable via `guards.lean_comments` (default `true`) and `guards.max_consecutive_comment_lines` (default `2`).
 
+### FEAT-005 Guard Audit (Bash-matched vs. Write/Edit-matched guards)
+
+`[enforced]` FEAT-005 audited all four PreToolUse guards for whole-command-substring brittleness — matching on text that appears in a Bash command string rather than on the real action being taken.
+
+**Bash-matched guards (fixed in FEAT-005):** `local-mode-tracking-guard.sh` and `pre-tool-guard.sh` receive `tool_input.command` (the raw Bash string) and previously used substring presence to infer intent (e.g., `nazgul/` anywhere in the command string, or `echo.*Status.*nazgul/tasks/` regardless of redirect). Both guards were updated to inspect the real action: `local-mode-tracking-guard.sh` now parses actual git positional pathspecs (skipping flag values like `-m` messages); `pre-tool-guard.sh`'s manifest-write rule now requires a genuine `>`/`>>` redirect targeting a `nazgul/tasks/TASK-*.md` path.
+
+**Write/Edit-matched guards (structurally immune — no fix required):** `task-state-guard.sh` and `lean-comments-guard.sh` operate on Write/Edit/MultiEdit tool JSON (`tool_input.file_path`, `tool_input.content`, `tool_input.new_string`). They never inspect a Bash command string. The whole-command-substring class of false-positive is structurally absent; the FEAT-005 precision fixes do not apply to them and no change was made.
+
 ### Soft Limits
 
 `[enforced]` Iteration, retry, and failure ceilings are enforced by `stop-hook.sh`; the loop cannot advance past them regardless of mode.
