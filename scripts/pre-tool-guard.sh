@@ -118,6 +118,9 @@ function flush_tok(    t) {
     return
   }
   if (!found_cmd) {
+    # Leading VAR=value env assignments precede the command word in bash — skip
+    # them so a later echo/printf is still recognised as the command.
+    if (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/) return
     found_cmd = 1
     if (t == "echo" || t == "printf") seg_has_cmd = 1
   }

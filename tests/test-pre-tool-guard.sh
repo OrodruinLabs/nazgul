@@ -259,4 +259,13 @@ assert_exit_code "blocked N-3: echo foo 1> manifest (fd-numbered redirect)" "$ec
 ec=$(get_exit_code '2>/tmp/e echo foo')
 assert_exit_code "allowed N-4: 2>/tmp/e echo foo (no manifest target)" "$ec" 0
 
+# --- Category 9: leading VAR=value env assignments ---
+# Block O-1: a leading assignment must not steal the command word from echo
+ec=$(get_exit_code 'FOO=1 echo ok > nazgul/tasks/TASK-001.md')
+assert_exit_code "blocked O-1: FOO=1 echo ok > manifest (leading env assignment)" "$ec" 2
+
+# Block O-2: multiple leading assignments then echo
+ec=$(get_exit_code 'A=1 B=2 echo ok > nazgul/tasks/TASK-001.md')
+assert_exit_code "blocked O-2: A=1 B=2 echo ok > manifest" "$ec" 2
+
 report_results

@@ -93,6 +93,9 @@ function emit(t,    is_value_flag, is_global_val_flag, is_global_flag) {
   if (skip_next) { skip_next = 0; return }
   if (skip_global_val) { skip_global_val = 0; return }
   if (!git_seen) {
+    # Leading VAR=value env assignments precede the command — skip without marking
+    # the segment not_git, so a following git still registers.
+    if (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/) return
     if (t != "git") { not_git = 1; return }
     git_seen = 1
     return

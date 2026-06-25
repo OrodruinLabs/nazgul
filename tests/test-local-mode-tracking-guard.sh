@@ -495,4 +495,15 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "allow M-8: cat foo > nazgul/out.txt (non-git, redirect not a stage)" "$GUARD_EC" 0
 teardown_temp_dir
 
+# Block M-9: a leading VAR=value env assignment must not mark the segment not_git
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'FOO=1 git add nazgul/config.json')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block M-9: FOO=1 git add nazgul/ (leading env assignment)" "$GUARD_EC" 2
+teardown_temp_dir
+
 report_results
