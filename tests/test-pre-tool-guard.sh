@@ -18,19 +18,21 @@ run_guard() {
   echo "$output"
 }
 
+# Capture the guard's exit code explicitly via `|| ec=$?` so a non-zero (blocked)
+# exit is "tested" and never aborts the function under `set -e`/`inherit_errexit`.
 get_exit_code() {
-  local cmd="$1"
-  echo "$cmd" | bash "$GUARD" >/dev/null 2>&1
-  echo $?
+  local cmd="$1" ec=0
+  echo "$cmd" | bash "$GUARD" >/dev/null 2>&1 || ec=$?
+  echo "$ec"
 }
 
 # Production path: the hook receives a JSON envelope {tool_input:{command:...}}
 # on stdin (not the raw command). The guard must extract .tool_input.command
 # before tokenizing — otherwise the whole command is one JSON-quoted string.
 get_exit_code_json() {
-  local cmd="$1"
-  printf '%s' "$cmd" | jq -Rs '{tool_input:{command:.}}' | bash "$GUARD" >/dev/null 2>&1
-  echo $?
+  local cmd="$1" ec=0
+  printf '%s' "$cmd" | jq -Rs '{tool_input:{command:.}}' | bash "$GUARD" >/dev/null 2>&1 || ec=$?
+  echo "$ec"
 }
 
 # --- Safe commands (should exit 0) ---
@@ -267,5 +269,15 @@ assert_exit_code "blocked O-1: FOO=1 echo ok > manifest (leading env assignment)
 # Block O-2: multiple leading assignments then echo
 ec=$(get_exit_code 'A=1 B=2 echo ok > nazgul/tasks/TASK-001.md')
 assert_exit_code "blocked O-2: A=1 B=2 echo ok > manifest" "$ec" 2
+
+# --- Category 10: single-quote atomicity (a > inside single quotes is DATA) ---
+# Allow P-1: the >> lives inside single quotes → not a redirect → no manifest write.
+# (Regression guard: confirms in_sq toggles correctly via the '\'' shell-escape idiom.)
+ec=$(get_exit_code "printf '%s' '>> nazgul/tasks/TASK-001.md'")
+assert_exit_code "allowed P-1: printf '%s' '>> manifest' (redirect is single-quoted data)" "$ec" 0
+
+# Block P-2: a real redirect AFTER a single-quoted span still blocks (sq closes properly).
+ec=$(get_exit_code "echo 'hi there' > nazgul/tasks/TASK-001.md")
+assert_exit_code "blocked P-2: echo 'hi there' > manifest (real redirect after sq span)" "$ec" 2
 
 report_results
