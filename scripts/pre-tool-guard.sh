@@ -59,11 +59,17 @@ check_pattern 'cat.*>.*nazgul/tasks/TASK-' "Direct cat redirect to task manifest
 check_pattern 'tee.*nazgul/tasks/TASK-' "Direct tee to task manifest (use Write/Edit tools)"
 
 # Task manifest write protection for echo/printf: detect a REAL redirect operator
-# (> or >> outside quotes) whose target resolves to a nazgul/tasks/TASK-*.md path.
-# An awk tokenizer tracks single/double-quote state so a > inside quotes is data,
-# not a redirect — fixing both the false-positive (quoted > as data) and the
-# false-negatives (quoted target path, ./nazgul/ prefix). Scoped to echo/printf only;
-# the sibling sed/cat/tee rules above handle those commands separately.
+# (>, >>, >|, >>| outside quotes) whose target resolves to a nazgul/tasks/TASK-*.md
+# path. The awk tokenizer tracks single/double-quote state so a > inside quotes is
+# data, not a redirect. Compound commands (;, &&, ||, |, newline outside quotes) reset
+# per-segment state so each segment is checked independently — a non-echo/printf segment
+# is skipped without false-positives. Scoped to echo/printf; sed/cat/tee rules above
+# handle those commands separately.
+#
+# Defense-in-depth note: primary protection is the Write/Edit tool hooks and
+# task-state guard. This is a best-effort secondary layer. Deeply exotic shell forms
+# (process substitution, eval'd strings, fd-numbered redirects like 1>, nested
+# subshells) are out of scope by design and degrade to allow.
 _check_echo_redirect() {
   printf '%s' "$INPUT" | awk '
 BEGIN {
@@ -94,6 +100,12 @@ function flush_tok(    t) {
   }
 }
 
+function reset_segment() {
+  flush_tok()
+  found_cmd = 0
+  redirect_pending = 0
+}
+
 {
   n = length($0)
   for (i = 1; i <= n; i++) {
@@ -112,8 +124,22 @@ function flush_tok(    t) {
       in_dq = 1
     } else if (c == ">" && found_cmd) {
       flush_tok()
-      if (i < n && substr($0, i+1, 1) == ">") i++
+      nxt1 = (i < n) ? substr($0, i+1, 1) : ""
+      nxt2 = (i+1 < n) ? substr($0, i+2, 1) : ""
+      if (nxt1 == ">") {
+        i++
+        if (nxt2 == "|") i++
+      } else if (nxt1 == "|") {
+        # >| noclobber-override redirect
+        i++
+      }
       redirect_pending = 1
+    } else if ((c == ";" || c == "\n") && !in_sq && !in_dq) {
+      reset_segment()
+    } else if (c == "&" && !in_sq && !in_dq) {
+      reset_segment()
+    } else if (c == "|" && !in_sq && !in_dq) {
+      reset_segment()
     } else if (c == " " || c == "\t") {
       flush_tok()
     } else {
