@@ -506,4 +506,29 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block M-9: FOO=1 git add nazgul/ (leading env assignment)" "$GUARD_EC" 2
 teardown_temp_dir
 
+# --- Category W: portable word-boundary pre-filter (no \b dependency) ---
+# Allow W-1: "git"/"add" only as substrings (legitimate, addendum) must not pass the
+# pre-filter as whole words — and even if they did, no real pathspec is staged.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'echo "this legitimate addendum mentions nazgul/x"')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "allow W-1: 'legitimate addendum' substrings + nazgul/ (no whole-word git/add)" "$GUARD_EC" 0
+teardown_temp_dir
+
+# Block W-2: a real whole-word git add on a nazgul/ path still passes the boundary
+# pre-filter and blocks (confirms the portable pattern matches genuine commands).
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'git add nazgul/config.json')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block W-2: git add nazgul/ (portable boundary still matches real cmd)" "$GUARD_EC" 2
+teardown_temp_dir
+
 report_results

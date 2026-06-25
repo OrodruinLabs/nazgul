@@ -45,10 +45,13 @@ fi
 # subcommands. Both must appear for any segment to be checkable. This is deliberately
 # loose — the awk tokenizer below is the correctness gate. The pattern allows
 # "git -C repo add nazgul/x" because git and add both appear.
-if ! echo "$CMD" | grep -qiE '\bgit\b'; then
+# Word boundaries use explicit POSIX ERE character classes ((^|[^[:alnum:]_])…) rather
+# than \b, which is a GNU/BSD extension undefined in POSIX ERE (it can match a backspace
+# on some platforms, which would silently disable the whole guard).
+if ! echo "$CMD" | grep -qiE '(^|[^[:alnum:]_])git([^[:alnum:]_]|$)'; then
   exit 0
 fi
-if ! echo "$CMD" | grep -qiE '\b(add|stage|commit)\b'; then
+if ! echo "$CMD" | grep -qiE '(^|[^[:alnum:]_])(add|stage|commit)([^[:alnum:]_]|$)'; then
   exit 0
 fi
 
