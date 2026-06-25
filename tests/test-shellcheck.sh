@@ -27,6 +27,9 @@ SCRIPTS=(
   "scripts/base-branch-commit-guard.sh"
   "scripts/session-staging.sh"
 )
+# tests/ files use dynamic `source` and are not standalone scripts; shellcheck
+# cannot resolve the sourced paths without annotations. The SCRIPTS array is
+# intentionally scoped to scripts/ only to keep the convention consistent.
 
 # bash -n syntax checks
 for script in "${SCRIPTS[@]}"; do

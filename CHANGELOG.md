@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.7.1] - 2026-06-25
+
+### Fixed
+- **Guard precision — no more false-positive blocks on read-only commands and commit messages (FEAT-005).** The two Bash-matched PreToolUse guards matched command *substrings* instead of the real action, so legitimate commands were blocked:
+  - `local-mode-tracking-guard.sh` blocked any command containing `git add`/`stage`/`commit` and the literal `nazgul/` anywhere — including a commit whose **message** mentioned `nazgul/`, a **multiline** message, or even a read-only command whose grep *pattern* contained those tokens. It now parses the actual git **pathspec** with a no-`eval` tokenizer (skipping the subcommand and the values of message flags like `-m`/`-F`) and blocks only when a real `nazgul/` path is being staged in local mode.
+  - `pre-tool-guard.sh` blocked any command where `echo`/`printf` co-occurred with `Status` and a `nazgul/tasks/TASK-` path — even a read-only `echo …; grep nazgul/tasks/TASK-*.md`. It now blocks only on an actual redirect (`>`, `>>`, the noclobber-override `>|`/`>>|`, and the combined `&>`/`&>>`) writing **into** a task manifest.
+  - The Write/Edit-matched guards (`task-state-guard.sh`, `lean-comments-guard.sh`) were audited and are structurally immune (they inspect the tool's JSON input, not command strings) — recorded in RULES.md.
+  No safety regression: every genuine block still blocks (verified by retained + new BLOCK tests alongside the new ALLOW false-positive tests).
+- **`pre-tool-guard.sh` now reads the command from the PreToolUse JSON envelope.** The echo/printf manifest-write check tokenized raw stdin — which in production is `{"tool_input":{"command":"…"}}` JSON, so the command sat inside JSON quotes and the check never fired outside the (raw-command) test harness. The guard now extracts `.tool_input.command` (falling back to raw input for the test path, matching `local-mode-tracking-guard.sh`), and a new JSON-envelope test locks in the production contract.
+- **Both Bash-matched guards harden their no-`eval` tokenizers against realistic shell forms** (surfaced by PR review): compound commands (`;`, `&&`, `||`, `|`) and unquoted newlines reset per-segment state so a later segment can't be skipped; redirect targets are reconstructed from adjacent quoted+unquoted fragments (`> "nazgul/tasks/"TASK-001.md`) and resolved before the command word (leading redirects); git global options (`-C`, `-c`, `--work-tree=`, `-p`, …) and leading `VAR=value` env assignments are skipped before the subcommand; backslash-escaped quotes inside double-quoted spans don't desync quote state; and fd-numbered/combined redirects (`1>`, `2>`, `2>&1`, `>&2`, `&>`) are handled rather than mistaken for command separators or command words. Genuinely exotic forms (process substitution, `eval`, command substitution, nested subshells) remain out of scope by design and degrade to allow — the primary protection is `.gitignore` + the session-staging chokepoint.
+
 ## [2.7.0] - 2026-06-24
 
 ### Added
