@@ -88,6 +88,29 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block: mixed pathspec with nazgul/ still blocks" "$GUARD_EC" 2
 teardown_temp_dir
 
+# Block C-1: ./nazgul/config.json — leading ./ prefix must not bypass detection
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input "git add ./nazgul/config.json")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block C-1: git add ./nazgul/config.json (leading ./ not stripped)" "$GUARD_EC" 2
+assert_contains "block C-1 message mentions NAZGUL GUARD" "$GUARD_STDERR" "NAZGUL GUARD"
+teardown_temp_dir
+
+# Block C-2: ./nazgul bare directory with leading ./
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input "git add ./nazgul")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block C-2: git add ./nazgul (bare dir with leading ./)" "$GUARD_EC" 2
+teardown_temp_dir
+
 # ---------------------------------------------------------------------------
 # ALLOW cases: shared mode, local mode non-nazgul path, and uninitialised
 # ---------------------------------------------------------------------------
@@ -170,6 +193,44 @@ EOF
 input=$(make_bash_input "grep -r 'git add.*nazgul/' scripts/")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "allow FP-4: grep pattern containing nazgul/ does not block" "$GUARD_EC" 0
+teardown_temp_dir
+
+# Allow A-1: non-git command where token[0] is "grep" and token[1] would be "git" —
+# the tokenizer must not treat a non-git first word as a git invocation.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input "grep git add nazgul/ docs/")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "allow A-1: grep git add nazgul/ (non-git first token) does not block" "$GUARD_EC" 0
+teardown_temp_dir
+
+# Allow A-2: echo whose text contains "git commit" and "nazgul/x" — first token is echo,
+# not git; verified by the tokenizer not just the pre-filter.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input "echo git commit nazgul/x")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "allow A-2: echo git commit nazgul/x (non-git first token) does not block" "$GUARD_EC" 0
+teardown_temp_dir
+
+# Allow B-1: multiline commit message where a continuation line starts with nazgul/ —
+# tr flattens newlines so the line stays inside the quoted span and is never emitted
+# as a positional pathspec token.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+multiline_commit=$(printf "git commit -m 'first line\nnazgul/evil continuation'")
+input=$(jq -n --arg cmd "$multiline_commit" '{"tool_name":"Bash","tool_input":{"command":$cmd}}')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "allow B-1: multiline -m message with nazgul/ on continuation line does not block" "$GUARD_EC" 0
 teardown_temp_dir
 
 # Allow FP-5: git commit -F with a nazgul/ path as the message FILE — the -F flag

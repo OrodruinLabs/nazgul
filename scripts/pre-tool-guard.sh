@@ -55,9 +55,83 @@ check_pattern 'curl\s+.*\|\s*sudo' "Piped internet execution with sudo"
 
 # Task manifest status protection — prevent bypassing Write/Edit hooks
 check_pattern 'sed.*nazgul/tasks/TASK-.*Status' "Direct sed on task manifest status (use Write/Edit tools)"
-check_pattern '(echo|printf).*>>?\s*nazgul/tasks/TASK-[^[:space:]]' "Direct echo/printf redirect to task manifest (use Write/Edit tools)"
 check_pattern 'cat.*>.*nazgul/tasks/TASK-' "Direct cat redirect to task manifest (use Write/Edit tools)"
 check_pattern 'tee.*nazgul/tasks/TASK-' "Direct tee to task manifest (use Write/Edit tools)"
+
+# Task manifest write protection for echo/printf: detect a REAL redirect operator
+# (> or >> outside quotes) whose target resolves to a nazgul/tasks/TASK-*.md path.
+# An awk tokenizer tracks single/double-quote state so a > inside quotes is data,
+# not a redirect — fixing both the false-positive (quoted > as data) and the
+# false-negatives (quoted target path, ./nazgul/ prefix). Scoped to echo/printf only;
+# the sibling sed/cat/tee rules above handle those commands separately.
+_check_echo_redirect() {
+  printf '%s' "$INPUT" | awk '
+BEGIN {
+  in_sq = 0; in_dq = 0; tok = ""; found_cmd = 0
+  redirect_pending = 0; found = 0
+}
+
+function is_manifest_path(t) {
+  if (substr(t,1,1) == "\"" && substr(t,length(t),1) == "\"")
+    t = substr(t, 2, length(t)-2)
+  else if (substr(t,1,1) == "'\''" && substr(t,length(t),1) == "'\''")
+    t = substr(t, 2, length(t)-2)
+  while (substr(t,1,2) == "./") t = substr(t, 3)
+  return (t ~ /^nazgul\/tasks\/TASK-[^[:space:]]*\.md$/)
+}
+
+function flush_tok(    t) {
+  t = tok; tok = ""
+  if (t == "") return
+  if (!found_cmd) {
+    if (t == "echo" || t == "printf") found_cmd = 1
+    return
+  }
+  if (redirect_pending) {
+    if (is_manifest_path(t)) found = 1
+    redirect_pending = 0
+    return
+  }
+}
+
+{
+  n = length($0)
+  for (i = 1; i <= n; i++) {
+    c = substr($0, i, 1)
+    if (in_sq) {
+      if (c == "'\''") { in_sq = 0; flush_tok() }
+      else tok = tok c
+    } else if (in_dq) {
+      if (c == "\"") { in_dq = 0; flush_tok() }
+      else tok = tok c
+    } else if (c == "'\''") {
+      flush_tok()
+      in_sq = 1
+    } else if (c == "\"") {
+      flush_tok()
+      in_dq = 1
+    } else if (c == ">" && found_cmd) {
+      flush_tok()
+      if (i < n && substr($0, i+1, 1) == ">") i++
+      redirect_pending = 1
+    } else if (c == " " || c == "\t") {
+      flush_tok()
+    } else {
+      tok = tok c
+    }
+  }
+  flush_tok()
+}
+
+END { exit (found ? 2 : 0) }
+'
+}
+
+if ! _check_echo_redirect; then
+  echo "NAZGUL SAFETY: Blocked — Direct echo/printf redirect to task manifest (use Write/Edit tools)" >&2
+  echo "Command: $INPUT" >&2
+  exit 2
+fi
 
 # All checks passed
 exit 0

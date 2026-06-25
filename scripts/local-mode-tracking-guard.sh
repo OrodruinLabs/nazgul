@@ -38,32 +38,48 @@ if [ -z "$CMD" ]; then
   exit 0
 fi
 
-# Only block git add / git stage / git commit commands that touch nazgul/ paths.
-# Check these before reading config — the vast majority of Bash calls exit here.
+# Cheap pre-filter: skip commands that don't mention git add/stage/commit at all.
+# Correctness comes from the tokenizer below (token[0]==git, token[1]==add|stage|commit).
 if ! echo "$CMD" | grep -qiE 'git[[:space:]]+(add|stage|commit)'; then
   exit 0
 fi
 
+# Normalize newlines to spaces so a multiline commit message stays one awk record
+# and a continuation line starting with nazgul/ is never treated as a fresh token.
+CMD_FLAT=$(printf '%s' "$CMD" | tr '\n' ' ')
+
 # Parse POSITIONAL pathspec arguments — excluding flags and their value tokens.
 # The awk tokenizer splits on whitespace while collapsing single- and double-quoted
 # spans (strips the outermost quote pair). It then:
-#   1. Skips the "git" token itself.
-#   2. Skips the subcommand (add/stage/commit).
+#   1. Verifies token[0] is exactly "git" — any other first token sets not_git=1
+#      and stops processing (allows the command).
+#   2. Verifies token[1] matches ^(add|stage|commit)$ — any other subcommand stops
+#      processing (allows the command).
 #   3. Consumes value-taking flags (-m/-am/--message, -F/--file, -C/--reuse-message,
 #      --author, --date) plus their next token (or inline --flag=value), so a commit
 #      message mentioning nazgul/ is never mistaken for a pathspec.
 #   4. After a -- end-of-options marker, treats every remaining token as a pathspec.
-#   5. Reports 1 if any positional token equals "nazgul" or starts with "nazgul/".
-HAS_NAZGUL_PATH=$(printf '%s' "$CMD" | awk '
+#   5. Reports 1 if any positional token equals "nazgul" or starts with "nazgul/"
+#      (after stripping a leading ./ prefix).
+HAS_NAZGUL_PATH=$(printf '%s' "$CMD_FLAT" | awk '
 BEGIN {
   in_sq = 0; in_dq = 0; tok = ""; found = 0
-  git_seen = 0; subcmd_seen = 0; end_of_opts = 0; skip_next = 0
+  git_seen = 0; subcmd_seen = 0; end_of_opts = 0; skip_next = 0; not_git = 0
 }
 
 function emit(t,    is_value_flag) {
+  if (not_git) return
   if (skip_next) { skip_next = 0; return }
-  if (!git_seen)    { git_seen = 1;    return }
-  if (!subcmd_seen) { subcmd_seen = 1; return }
+  if (!git_seen) {
+    if (t != "git") { not_git = 1; return }
+    git_seen = 1
+    return
+  }
+  if (!subcmd_seen) {
+    if (t !~ /^(add|stage|commit)$/) { not_git = 1; return }
+    subcmd_seen = 1
+    return
+  }
   if (end_of_opts)  { check_path(t);   return }
   if (t == "--")    { end_of_opts = 1; return }
   is_value_flag = (t ~ /^(-[a-zA-Z]*m|--message|--message=.*|-F|--file|-C|--reuse-message|--author|--date)$/)
@@ -76,6 +92,8 @@ function emit(t,    is_value_flag) {
 }
 
 function check_path(t) {
+  # Strip one or more leading ./ prefixes before comparing
+  while (substr(t, 1, 2) == "./") t = substr(t, 3)
   if (t == "nazgul" || index(t, "nazgul/") == 1) found = 1
 }
 
