@@ -10,9 +10,11 @@ set -euo pipefail
 # Degradation: exits 0 when config absent, install_mode absent/non-local,
 # command has no nazgul/ pathspec, or stdin is empty.
 #
-# Known limitation: the awk tokenizer strips single- and double-quoted spans only.
-# It does not handle $'...' ANSI-C quoting or backslash-escaped spaces in unquoted
-# tokens. Those edge cases degrade to allow, which is acceptable for Nazgul loop usage.
+# Defense-in-depth note: primary protection is .gitignore + the session-staging
+# install_mode chokepoint. This guard is a best-effort secondary layer. Deeply exotic
+# shell forms (process substitution, eval'd strings, fd-numbered redirects like 1>,
+# nested subshells, $'...' ANSI-C quoting) are out of scope by design and degrade to
+# allow — acceptable for normal Nazgul loop usage.
 
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 CONFIG="$PROJECT_ROOT/nazgul/config.json"
@@ -38,9 +40,14 @@ if [ -z "$CMD" ]; then
   exit 0
 fi
 
-# Cheap pre-filter: skip commands that don't mention git add/stage/commit at all.
-# Correctness comes from the tokenizer below (token[0]==git, token[1]==add|stage|commit).
-if ! echo "$CMD" | grep -qiE 'git[[:space:]]+(add|stage|commit)'; then
+# Cheap pre-filter: skip commands that contain neither "git" nor one of the tracked
+# subcommands. Both must appear for any segment to be checkable. This is deliberately
+# loose — the awk tokenizer below is the correctness gate. The pattern allows
+# "git -C repo add nazgul/x" because git and add both appear.
+if ! echo "$CMD" | grep -qiE '\bgit\b'; then
+  exit 0
+fi
+if ! echo "$CMD" | grep -qiE '\b(add|stage|commit)\b'; then
   exit 0
 fi
 
@@ -48,34 +55,49 @@ fi
 # and a continuation line starting with nazgul/ is never treated as a fresh token.
 CMD_FLAT=$(printf '%s' "$CMD" | tr '\n' ' ')
 
-# Parse POSITIONAL pathspec arguments — excluding flags and their value tokens.
-# The awk tokenizer splits on whitespace while collapsing single- and double-quoted
-# spans (strips the outermost quote pair). It then:
-#   1. Verifies token[0] is exactly "git" — any other first token sets not_git=1
-#      and stops processing (allows the command).
-#   2. Verifies token[1] matches ^(add|stage|commit)$ — any other subcommand stops
-#      processing (allows the command).
-#   3. Consumes value-taking flags (-m/-am/--message, -F/--file, -C/--reuse-message,
-#      --author, --date) plus their next token (or inline --flag=value), so a commit
-#      message mentioning nazgul/ is never mistaken for a pathspec.
-#   4. After a -- end-of-options marker, treats every remaining token as a pathspec.
-#   5. Reports 1 if any positional token equals "nazgul" or starts with "nazgul/"
-#      (after stripping a leading ./ prefix).
+# Tokenizer: splits on whitespace while respecting single- and double-quoted spans.
+# Handles compound commands by resetting per-segment state on shell separators
+# (;  &&  ||  |  that occur OUTSIDE quotes) so each pipeline segment is checked
+# independently. A segment whose first unquoted token is NOT "git" is skipped —
+# preserving the false-positive fixes for grep/echo/etc.
+#
+# git global options: after "git", the subcommand is identified by skipping known
+# globals: value-taking -C/-c consume the next token; --work-tree=/--git-dir=/
+# --exec-path=/--namespace= (with =) are single tokens; flag-only globals
+# (-p/--paginate/--no-pager/--bare/--no-replace-objects/--literal-pathspecs) are
+# skipped; the first remaining token is the subcommand.
 HAS_NAZGUL_PATH=$(printf '%s' "$CMD_FLAT" | awk '
 BEGIN {
   in_sq = 0; in_dq = 0; tok = ""; found = 0
-  git_seen = 0; subcmd_seen = 0; end_of_opts = 0; skip_next = 0; not_git = 0
+  git_seen = 0; subcmd_seen = 0; end_of_opts = 0
+  skip_next = 0; not_git = 0; skip_global_val = 0
 }
 
-function emit(t,    is_value_flag) {
+function reset_segment() {
+  git_seen = 0; subcmd_seen = 0; end_of_opts = 0
+  skip_next = 0; not_git = 0; skip_global_val = 0
+}
+
+function emit(t,    is_value_flag, is_global_val_flag, is_global_flag) {
   if (not_git) return
   if (skip_next) { skip_next = 0; return }
+  if (skip_global_val) { skip_global_val = 0; return }
   if (!git_seen) {
     if (t != "git") { not_git = 1; return }
     git_seen = 1
     return
   }
   if (!subcmd_seen) {
+    # Skip git global options before the subcommand.
+    # Value-taking globals: -C <dir> and -c <name=value> consume the next token.
+    is_global_val_flag = (t ~ /^(-C|-c)$/)
+    if (is_global_val_flag) { skip_global_val = 1; return }
+    # Single-token globals with = (--work-tree=X, --git-dir=X, --exec-path=X, --namespace=X)
+    if (t ~ /^--(work-tree|git-dir|exec-path|namespace)=/) return
+    # Flag-only globals (no value consumed)
+    is_global_flag = (t ~ /^(-p|--paginate|--no-pager|--bare|--no-replace-objects|--literal-pathspecs)$/)
+    if (is_global_flag) return
+    # Anything else is the subcommand
     if (t !~ /^(add|stage|commit)$/) { not_git = 1; return }
     subcmd_seen = 1
     return
@@ -92,13 +114,13 @@ function emit(t,    is_value_flag) {
 }
 
 function check_path(t) {
-  # Strip one or more leading ./ prefixes before comparing
   while (substr(t, 1, 2) == "./") t = substr(t, 3)
   if (t == "nazgul" || index(t, "nazgul/") == 1) found = 1
 }
 
 {
-  for (i = 1; i <= length($0); i++) {
+  n = length($0)
+  for (i = 1; i <= n; i++) {
     c = substr($0, i, 1)
     if (in_sq) {
       if (c == "'\''") { in_sq = 0; emit(tok); tok = "" }
@@ -114,6 +136,16 @@ function check_path(t) {
       in_dq = 1
     } else if (c == " " || c == "\t") {
       if (tok != "") { emit(tok); tok = "" }
+    } else if (c == ";" || c == "|" || c == "\n") {
+      # Shell separator outside quotes — flush current token then reset segment state.
+      # For "&&" and "||", the second char is also a separator; either way we reset.
+      if (tok != "") { emit(tok); tok = "" }
+      reset_segment()
+    } else if (c == "&") {
+      # "&&" — the leading & is not a separator alone, but paired with another &.
+      # Flush and reset; the trailing & will also flush (empty tok, reset again — harmless).
+      if (tok != "") { emit(tok); tok = "" }
+      reset_segment()
     } else {
       tok = tok c
     }

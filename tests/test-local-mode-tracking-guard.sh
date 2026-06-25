@@ -290,4 +290,113 @@ GUARD_STDERR=$(echo "" | bash "$GUARD" 2>&1 >/dev/null) && GUARD_EC=0 || GUARD_E
 assert_exit_code "degrade: empty stdin → exit 0" "$GUARD_EC" 0
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# Category 1: Compound commands — real git add inside a compound must block
+# ---------------------------------------------------------------------------
+
+# Block E-1: semicolon compound; second segment is git add on nazgul/
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'echo ok; git add nazgul/config.json')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block E-1: echo ok; git add nazgul/config.json (compound semicolon)" "$GUARD_EC" 2
+assert_contains "block E-1 message mentions NAZGUL GUARD" "$GUARD_STDERR" "NAZGUL GUARD"
+teardown_temp_dir
+
+# Block E-2: && compound; second segment is git add on nazgul/
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'cd repo && git add nazgul/config.json')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block E-2: cd repo && git add nazgul/config.json (compound &&)" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block E-3: pipe compound; second segment is git add on nazgul/
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'foo | git add nazgul/config.json')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block E-3: foo | git add nazgul/config.json (compound pipe)" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Allow E-4: grep whose pattern mentions git add — first token is grep, not git → allow
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input "grep 'git add' nazgul/x.sh")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "allow E-4: grep 'git add' nazgul/x.sh (compound non-git segment)" "$GUARD_EC" 0
+teardown_temp_dir
+
+# Allow E-5: echo with quoted "git add nazgul/" text — the segment first token is echo → allow
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'echo "git add nazgul/"; ls')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "allow E-5: echo \"git add nazgul/\"; ls (quoted string, non-git first token)" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Category 2: git global options — subcommand after globals must still block
+# ---------------------------------------------------------------------------
+
+# Block F-1: git -C <dir> add nazgul/
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'git -C repo add nazgul/config.json')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block F-1: git -C repo add nazgul/config.json (global -C)" "$GUARD_EC" 2
+assert_contains "block F-1 message mentions NAZGUL GUARD" "$GUARD_STDERR" "NAZGUL GUARD"
+teardown_temp_dir
+
+# Block F-2: git -c name=value commit -- nazgul/
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'git -c x=y commit -- nazgul/x')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block F-2: git -c x=y commit -- nazgul/x (global -c)" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block F-3: git --work-tree=. add nazgul/
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'git --work-tree=. add nazgul/config.json')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block F-3: git --work-tree=. add nazgul/config.json (global --work-tree=)" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block F-4: git -p add nazgul/ (flag-only global)
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'git -p add nazgul/config.json')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block F-4: git -p add nazgul/config.json (flag-only global -p)" "$GUARD_EC" 2
+teardown_temp_dir
+
 report_results

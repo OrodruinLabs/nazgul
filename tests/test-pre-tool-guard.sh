@@ -150,4 +150,26 @@ assert_exit_code "blocked D-FN-2: echo foo > ./nazgul/tasks/TASK-001.md (./ pref
 output=$(run_guard 'echo foo > ./nazgul/tasks/TASK-001.md')
 assert_contains "reason D-FN-2" "$output" "NAZGUL SAFETY"
 
+# --- Category 3: >| and >>| noclobber-override redirects (should exit 2) ---
+# Block G-1: >| noclobber-override redirect to manifest
+ec=$(get_exit_code 'echo foo >| nazgul/tasks/TASK-001.md')
+assert_exit_code "blocked G-1: echo foo >| nazgul/tasks/TASK-001.md (noclobber >|)" "$ec" 2
+output=$(run_guard 'echo foo >| nazgul/tasks/TASK-001.md')
+assert_contains "reason G-1" "$output" "NAZGUL SAFETY"
+
+# Block G-2: >>| noclobber-override append redirect to manifest
+ec=$(get_exit_code 'echo foo >>| nazgul/tasks/TASK-001.md')
+assert_exit_code "blocked G-2: echo foo >>| nazgul/tasks/TASK-001.md (noclobber >>|)" "$ec" 2
+output=$(run_guard 'echo foo >>| nazgul/tasks/TASK-001.md')
+assert_contains "reason G-2" "$output" "NAZGUL SAFETY"
+
+# --- Category 1: compound echo — non-echo/printf segments are ignored (allow regression) ---
+# Allow H-1: grep with manifest path piped to head (no echo/printf, no redirect)
+ec=$(get_exit_code 'grep Status scripts/foo.sh | head')
+assert_exit_code "allowed H-1: grep manifest | head (no echo/printf)" "$ec" 0
+
+# Allow H-2: echo in compound with no redirect into manifest
+ec=$(get_exit_code 'echo "checking"; grep Status scripts/foo.sh')
+assert_exit_code "allowed H-2: echo checking; grep (no redirect into manifest)" "$ec" 0
+
 report_results
