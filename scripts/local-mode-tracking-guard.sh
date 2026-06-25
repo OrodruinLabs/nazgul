@@ -51,22 +51,25 @@ if ! echo "$CMD" | grep -qiE '\b(add|stage|commit)\b'; then
   exit 0
 fi
 
-# Normalize newlines to spaces so a multiline commit message stays one awk record
-# and a continuation line starting with nazgul/ is never treated as a fresh token.
-CMD_FLAT=$(printf '%s' "$CMD" | tr '\n' ' ')
-
 # Tokenizer: splits on whitespace while respecting single- and double-quoted spans.
+# Each input LINE is one awk record. A newline INSIDE a quote continues the token
+# (so a multiline commit message stays one skipped token); an UNQUOTED newline is a
+# command separator that resets per-segment state — otherwise a multi-line input like
+# `echo ok\n git add nazgul/x` would be read as one non-git segment and the real
+# `git add` would slip through.
 # Handles compound commands by resetting per-segment state on shell separators
-# (;  &&  ||  |  that occur OUTSIDE quotes) so each pipeline segment is checked
-# independently. A segment whose first unquoted token is NOT "git" is skipped —
-# preserving the false-positive fixes for grep/echo/etc.
+# (;  &&  ||  |  newline  that occur OUTSIDE quotes) so each pipeline segment is
+# checked independently. A segment whose first unquoted token is NOT "git" is skipped
+# — preserving the false-positive fixes for grep/echo/etc. Redirect tokens that embed
+# `&` (2>&1, >&2, &>) are NOT treated as separators, so a pathspec after them is still
+# checked.
 #
 # git global options: after "git", the subcommand is identified by skipping known
 # globals: value-taking -C/-c consume the next token; --work-tree=/--git-dir=/
 # --exec-path=/--namespace= (with =) are single tokens; flag-only globals
 # (-p/--paginate/--no-pager/--bare/--no-replace-objects/--literal-pathspecs) are
 # skipped; the first remaining token is the subcommand.
-HAS_NAZGUL_PATH=$(printf '%s' "$CMD_FLAT" | awk '
+HAS_NAZGUL_PATH=$(printf '%s' "$CMD" | awk '
 BEGIN {
   in_sq = 0; in_dq = 0; tok = ""; found = 0
   git_seen = 0; subcmd_seen = 0; end_of_opts = 0
@@ -136,21 +139,34 @@ function check_path(t) {
       in_dq = 1
     } else if (c == " " || c == "\t") {
       if (tok != "") { emit(tok); tok = "" }
-    } else if (c == ";" || c == "|" || c == "\n") {
+    } else if (c == ";" || c == "|") {
       # Shell separator outside quotes — flush current token then reset segment state.
-      # For "&&" and "||", the second char is also a separator; either way we reset.
+      # For "||", the second "|" also resets (empty tok, harmless).
       if (tok != "") { emit(tok); tok = "" }
       reset_segment()
     } else if (c == "&") {
-      # "&&" — the leading & is not a separator alone, but paired with another &.
-      # Flush and reset; the trailing & will also flush (empty tok, reset again — harmless).
-      if (tok != "") { emit(tok); tok = "" }
-      reset_segment()
+      prevc = (i > 1) ? substr($0, i-1, 1) : ""
+      nxtc  = (i < n) ? substr($0, i+1, 1) : ""
+      if (prevc == ">" || nxtc ~ /^[0-9>]$/) {
+        # part of a redirect (2>&1, >&2, &>) — NOT a command separator
+        if (tok != "") { emit(tok); tok = "" }
+      } else {
+        # "&&" (logical) or background "&" — segment separator
+        if (tok != "") { emit(tok); tok = "" }
+        reset_segment()
+      }
     } else {
       tok = tok c
     }
   }
-  if (tok != "") { emit(tok); tok = "" }
+  # End of record (line). A newline inside a quote continues the token; an unquoted
+  # newline is a command separator, so flush and reset per-segment state.
+  if (in_sq || in_dq) {
+    # quoted string spans the newline — keep accumulating
+  } else {
+    if (tok != "") { emit(tok); tok = "" }
+    reset_segment()
+  }
 }
 
 END { print found }

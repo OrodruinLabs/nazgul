@@ -399,4 +399,31 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block F-4: git -p add nazgul/config.json (flag-only global -p)" "$GUARD_EC" 2
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# Category M: multi-line input and &-bearing redirect tokens
+# ---------------------------------------------------------------------------
+
+# Block M-1: multi-line input — a non-git line then the real git add (per-line reset).
+# Regression: previously newlines were flattened to spaces, hiding the git add.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input "$(printf 'echo ok\ngit add nazgul/config.json')")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block M-1: multiline echo then git add nazgul/ (per-line reset)" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block M-2: a 2>&1 redirect token must NOT act as a separator that drops the pathspec
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'git add nazgul/config.json 2>&1')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block M-2: git add nazgul/ 2>&1 (redirect dup, not a separator)" "$GUARD_EC" 2
+teardown_temp_dir
+
 report_results

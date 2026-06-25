@@ -16,6 +16,16 @@ if [ -z "$INPUT" ]; then
   exit 0
 fi
 
+# Extract the command from the PreToolUse JSON envelope. In production the hook
+# receives {"tool_input":{"command":"..."}} on stdin; the test harness passes the
+# raw command. Fall back to INPUT when it is not JSON so both paths work. The awk
+# tokenizer below MUST tokenize the real command — feeding it the JSON wrapper
+# would make the whole command one quoted string and the echo/printf check a no-op.
+CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+if [ -z "$CMD" ]; then
+  CMD="$INPUT"
+fi
+
 # Destructive patterns to block
 check_pattern() {
   local pattern="$1"
@@ -73,7 +83,7 @@ check_pattern 'tee.*nazgul/tasks/TASK-' "Direct tee to task manifest (use Write/
 # (process substitution, eval'd strings, fd-numbered redirects like 1>, nested
 # subshells) are out of scope by design and degrade to allow.
 _check_echo_redirect() {
-  printf '%s' "$INPUT" | awk '
+  printf '%s' "$CMD" | awk '
 BEGIN {
   in_sq = 0; in_dq = 0; tok = ""; found_cmd = 0
   redirect_pending = 0; found = 0
@@ -145,10 +155,25 @@ function reset_segment() {
         i++
       }
       redirect_pending = 1
-    } else if (c == ";" || c == "\n") {
+    } else if (c == ";") {
       reset_segment()
     } else if (c == "&") {
-      reset_segment()
+      nxtc = (i < n) ? substr($0, i+1, 1) : ""
+      prevc = (i > 1) ? substr($0, i-1, 1) : ""
+      if (nxtc == ">") {
+        # &> / &>> redirect (stdout+stderr) — treat as a redirect operator
+        flush_tok()
+        i++                                            # consume the >
+        if (i < n && substr($0, i+1, 1) == ">") i++    # &>>
+        redirect_pending = 1
+      } else if (prevc == ">" || nxtc ~ /^[0-9]$/) {
+        # fd duplication (2>&1, >&2) — not a separator, not a file target
+        flush_tok()
+        redirect_pending = 0
+      } else {
+        # && (logical) or background & — segment separator
+        reset_segment()
+      }
     } else if (c == "|") {
       reset_segment()
     } else if (c == " " || c == "\t") {
@@ -157,7 +182,15 @@ function reset_segment() {
       tok = tok c
     }
   }
-  end_segment()
+  # End of record (line). A newline inside a quote continues the token; an
+  # unquoted newline is a command separator, so reset per-segment state to avoid
+  # carrying found_cmd/seg_* across multi-line commands (else a later echo/printf
+  # segment could be mis-attributed and a manifest write slip through).
+  if (in_sq || in_dq) {
+    # quoted string spans the newline — keep accumulating
+  } else {
+    reset_segment()
+  }
 }
 
 END { exit (found ? 2 : 0) }
@@ -166,7 +199,7 @@ END { exit (found ? 2 : 0) }
 
 if ! _check_echo_redirect; then
   echo "NAZGUL SAFETY: Blocked — Direct echo/printf redirect to task manifest (use Write/Edit tools)" >&2
-  echo "Command: $INPUT" >&2
+  echo "Command: $CMD" >&2
   exit 2
 fi
 

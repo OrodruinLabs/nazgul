@@ -24,6 +24,15 @@ get_exit_code() {
   echo $?
 }
 
+# Production path: the hook receives a JSON envelope {tool_input:{command:...}}
+# on stdin (not the raw command). The guard must extract .tool_input.command
+# before tokenizing — otherwise the whole command is one JSON-quoted string.
+get_exit_code_json() {
+  local cmd="$1"
+  printf '%s' "$cmd" | jq -Rs '{tool_input:{command:.}}' | bash "$GUARD" >/dev/null 2>&1
+  echo $?
+}
+
 # --- Safe commands (should exit 0) ---
 for safe_cmd in \
   "ls -la" \
@@ -192,5 +201,35 @@ assert_exit_code "allowed I-3: > /tmp/out.log echo ok (non-manifest target)" "$e
 # Allow I-4: split fragments that do NOT form a manifest path
 ec=$(get_exit_code 'echo ok > "/tmp/"out.log')
 assert_exit_code "allowed I-4: echo ok > \"/tmp/\"out.log (non-manifest split target)" "$ec" 0
+
+# --- Category 5: production JSON-envelope path (regression for command extraction) ---
+# Block J-1: JSON envelope with a real echo>manifest must fire (prod hook contract)
+ec=$(get_exit_code_json 'echo "Status: DONE" > nazgul/tasks/TASK-001.md')
+assert_exit_code "blocked J-1: JSON envelope echo > manifest (production path)" "$ec" 2
+
+# Allow J-2: JSON envelope read-only echo of a manifest path (no redirect)
+ec=$(get_exit_code_json 'echo "checking nazgul/tasks/TASK-001.md"')
+assert_exit_code "allowed J-2: JSON envelope read-only echo (production path)" "$ec" 0
+
+# --- Category 6: & redirects (2>&1, &>) and multi-line segment reset ---
+# Block K-1: fd-dup 2>&1 before a real > into manifest (the & must not eat the redirect)
+ec=$(get_exit_code 'echo foo 2>&1 > nazgul/tasks/TASK-001.md')
+assert_exit_code "blocked K-1: echo foo 2>&1 > manifest" "$ec" 2
+
+# Block K-2: &> combined stdout+stderr redirect into manifest
+ec=$(get_exit_code 'echo foo &> nazgul/tasks/TASK-001.md')
+assert_exit_code "blocked K-2: echo foo &> manifest" "$ec" 2
+
+# Allow K-3: 2>&1 with no manifest redirect (no false-positive)
+ec=$(get_exit_code 'echo foo 2>&1')
+assert_exit_code "allowed K-3: echo foo 2>&1 (no manifest redirect)" "$ec" 0
+
+# Block K-4: multi-line — a non-echo segment then echo > manifest (per-line reset)
+ec=$(get_exit_code "$(printf 'ls x\necho b > nazgul/tasks/TASK-001.md')")
+assert_exit_code "blocked K-4: multiline ls; then echo > manifest" "$ec" 2
+
+# Allow K-5: multi-line echos with no manifest redirect
+ec=$(get_exit_code "$(printf 'echo a\necho b')")
+assert_exit_code "allowed K-5: multiline echos, no redirect" "$ec" 0
 
 report_results
