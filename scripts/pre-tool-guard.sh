@@ -58,13 +58,15 @@ check_pattern 'sed.*nazgul/tasks/TASK-.*Status' "Direct sed on task manifest sta
 check_pattern 'cat.*>.*nazgul/tasks/TASK-' "Direct cat redirect to task manifest (use Write/Edit tools)"
 check_pattern 'tee.*nazgul/tasks/TASK-' "Direct tee to task manifest (use Write/Edit tools)"
 
-# Task manifest write protection for echo/printf: detect a REAL redirect operator
-# (>, >>, >|, >>| outside quotes) whose target resolves to a nazgul/tasks/TASK-*.md
-# path. The awk tokenizer tracks single/double-quote state so a > inside quotes is
-# data, not a redirect. Compound commands (;, &&, ||, |, newline outside quotes) reset
-# per-segment state so each segment is checked independently — a non-echo/printf segment
-# is skipped without false-positives. Scoped to echo/printf; sed/cat/tee rules above
-# handle those commands separately.
+# Task manifest write protection for echo/printf: a segment is blocked when it BOTH
+# invokes echo/printf AND has a REAL redirect operator (>, >>, >|, >>| outside quotes)
+# whose target resolves to a nazgul/tasks/TASK-*.md path — in either order, so a leading
+# redirect (`> nazgul/tasks/TASK-001.md echo ok`) is caught too. The awk tokenizer tracks
+# single/double-quote state (a > inside quotes is data, not a redirect) and reconstructs
+# the full shell word from adjacent quoted+unquoted fragments, so a split target like
+# `> "nazgul/tasks/"TASK-001.md` rejoins to one path before validation. Compound commands
+# (;, &&, ||, |, newline outside quotes) reset per-segment state so each segment is checked
+# independently. Scoped to echo/printf; sed/cat/tee rules above handle those separately.
 #
 # Defense-in-depth note: primary protection is the Write/Edit tool hooks and
 # task-state guard. This is a best-effort secondary layer. Deeply exotic shell forms
@@ -75,35 +77,45 @@ _check_echo_redirect() {
 BEGIN {
   in_sq = 0; in_dq = 0; tok = ""; found_cmd = 0
   redirect_pending = 0; found = 0
+  seg_has_cmd = 0; seg_writes_manifest = 0
 }
 
 function is_manifest_path(t) {
-  if (substr(t,1,1) == "\"" && substr(t,length(t),1) == "\"")
-    t = substr(t, 2, length(t)-2)
-  else if (substr(t,1,1) == "'\''" && substr(t,length(t),1) == "'\''")
-    t = substr(t, 2, length(t)-2)
+  # tok already has quotes stripped during accumulation — check the whole word.
   while (substr(t,1,2) == "./") t = substr(t, 3)
   return (t ~ /^nazgul\/tasks\/TASK-[^[:space:]]*\.md$/)
 }
 
+# Flush the accumulated word. A word may be built from adjacent quoted and
+# unquoted fragments (e.g. "nazgul/tasks/"TASK-001.md) — quote chars are stripped
+# during accumulation, so the reconstructed shell word is validated as a whole.
+# Redirect targets are resolved BEFORE the command-word check so a leading
+# redirect (> file echo ok) attributes its target correctly.
 function flush_tok(    t) {
   t = tok; tok = ""
   if (t == "") return
-  if (!found_cmd) {
-    if (t == "echo" || t == "printf") found_cmd = 1
-    return
-  }
   if (redirect_pending) {
-    if (is_manifest_path(t)) found = 1
+    if (is_manifest_path(t)) seg_writes_manifest = 1
     redirect_pending = 0
     return
   }
+  if (!found_cmd) {
+    found_cmd = 1
+    if (t == "echo" || t == "printf") seg_has_cmd = 1
+  }
+}
+
+# A segment blocks when it BOTH invokes echo/printf AND redirects into a manifest,
+# in either order (handles leading redirects).
+function end_segment() {
+  flush_tok()
+  if (seg_has_cmd && seg_writes_manifest) found = 1
 }
 
 function reset_segment() {
-  flush_tok()
-  found_cmd = 0
-  redirect_pending = 0
+  end_segment()
+  found_cmd = 0; redirect_pending = 0
+  seg_has_cmd = 0; seg_writes_manifest = 0
 }
 
 {
@@ -111,18 +123,17 @@ function reset_segment() {
   for (i = 1; i <= n; i++) {
     c = substr($0, i, 1)
     if (in_sq) {
-      if (c == "'\''") { in_sq = 0; flush_tok() }
+      # Stay in the same token across the closing quote so adjacent fragments join.
+      if (c == "'\''") in_sq = 0
       else tok = tok c
     } else if (in_dq) {
-      if (c == "\"") { in_dq = 0; flush_tok() }
+      if (c == "\"") in_dq = 0
       else tok = tok c
     } else if (c == "'\''") {
-      flush_tok()
       in_sq = 1
     } else if (c == "\"") {
-      flush_tok()
       in_dq = 1
-    } else if (c == ">" && found_cmd) {
+    } else if (c == ">") {
       flush_tok()
       nxt1 = (i < n) ? substr($0, i+1, 1) : ""
       nxt2 = (i+1 < n) ? substr($0, i+2, 1) : ""
@@ -134,11 +145,11 @@ function reset_segment() {
         i++
       }
       redirect_pending = 1
-    } else if ((c == ";" || c == "\n") && !in_sq && !in_dq) {
+    } else if (c == ";" || c == "\n") {
       reset_segment()
-    } else if (c == "&" && !in_sq && !in_dq) {
+    } else if (c == "&") {
       reset_segment()
-    } else if (c == "|" && !in_sq && !in_dq) {
+    } else if (c == "|") {
       reset_segment()
     } else if (c == " " || c == "\t") {
       flush_tok()
@@ -146,7 +157,7 @@ function reset_segment() {
       tok = tok c
     }
   }
-  flush_tok()
+  end_segment()
 }
 
 END { exit (found ? 2 : 0) }

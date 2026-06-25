@@ -172,4 +172,25 @@ assert_exit_code "allowed H-1: grep manifest | head (no echo/printf)" "$ec" 0
 ec=$(get_exit_code 'echo "checking"; grep Status scripts/foo.sh')
 assert_exit_code "allowed H-2: echo checking; grep (no redirect into manifest)" "$ec" 0
 
+# --- Category 4: full-word redirect-target resolution (leading redirect + split fragments) ---
+# Block I-1: leading redirect before the command word (> target echo ok)
+ec=$(get_exit_code '> nazgul/tasks/TASK-001.md echo ok')
+assert_exit_code "blocked I-1: > nazgul/tasks/TASK-001.md echo ok (leading redirect)" "$ec" 2
+output=$(run_guard '> nazgul/tasks/TASK-001.md echo ok')
+assert_contains "reason I-1" "$output" "NAZGUL SAFETY"
+
+# Block I-2: target split across adjacent quoted + unquoted fragments
+ec=$(get_exit_code 'echo ok > "nazgul/tasks/"TASK-001.md')
+assert_exit_code "blocked I-2: echo ok > \"nazgul/tasks/\"TASK-001.md (split target)" "$ec" 2
+output=$(run_guard 'echo ok > "nazgul/tasks/"TASK-001.md')
+assert_contains "reason I-2" "$output" "NAZGUL SAFETY"
+
+# Allow I-3: leading redirect to a NON-manifest target (no false-positive)
+ec=$(get_exit_code '> /tmp/out.log echo ok')
+assert_exit_code "allowed I-3: > /tmp/out.log echo ok (non-manifest target)" "$ec" 0
+
+# Allow I-4: split fragments that do NOT form a manifest path
+ec=$(get_exit_code 'echo ok > "/tmp/"out.log')
+assert_exit_code "allowed I-4: echo ok > \"/tmp/\"out.log (non-manifest split target)" "$ec" 0
+
 report_results
