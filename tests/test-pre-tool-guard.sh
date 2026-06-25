@@ -128,4 +128,26 @@ assert_exit_code "allowed Allow FP-3: echo mentioning manifest path (no redirect
 ec=$(get_exit_code 'grep "Status" nazgul/tasks/TASK-001.md')
 assert_exit_code "allowed Allow FP-4: grep Status in manifest (read-only)" "$ec" 0
 
+# --- D: echo/printf redirect: false-positive fixes (quoted > is data, not redirect) ---
+# Allow D-FP-1: > is DATA inside double quotes — must not block
+ec=$(get_exit_code 'echo "> nazgul/tasks/TASK-001.md"')
+assert_exit_code "allowed D-FP-1: echo with > inside double quotes (data, not redirect)" "$ec" 0
+
+# Allow D-FP-2: >> is DATA inside single quotes — must not block
+ec=$(get_exit_code "printf '%s' '>> nazgul/tasks/TASK-001.md'")
+assert_exit_code "allowed D-FP-2: printf with >> inside single quotes (data, not redirect)" "$ec" 0
+
+# --- D: echo/printf redirect: false-negative fixes (quoted/./target must block) ---
+# Block D-FN-1: real redirect with double-quoted target path
+ec=$(get_exit_code 'echo foo > "nazgul/tasks/TASK-001.md"')
+assert_exit_code "blocked D-FN-1: echo foo > \"nazgul/tasks/TASK-001.md\" (quoted target)" "$ec" 2
+output=$(run_guard 'echo foo > "nazgul/tasks/TASK-001.md"')
+assert_contains "reason D-FN-1" "$output" "NAZGUL SAFETY"
+
+# Block D-FN-2: real redirect with ./nazgul/ prefixed target
+ec=$(get_exit_code 'echo foo > ./nazgul/tasks/TASK-001.md')
+assert_exit_code "blocked D-FN-2: echo foo > ./nazgul/tasks/TASK-001.md (./ prefix)" "$ec" 2
+output=$(run_guard 'echo foo > ./nazgul/tasks/TASK-001.md')
+assert_contains "reason D-FN-2" "$output" "NAZGUL SAFETY"
+
 report_results
