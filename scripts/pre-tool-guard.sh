@@ -135,7 +135,7 @@ function end_segment() {
 
 function reset_segment() {
   end_segment()
-  found_cmd = 0; redirect_pending = 0
+  found_cmd = 0; redirect_pending = 0; fd_target_pending = 0
   seg_has_cmd = 0; seg_writes_manifest = 0
 }
 

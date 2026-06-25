@@ -4,7 +4,7 @@ description: Interactively build a project specification. Guides you through tie
 allowed-tools: Read, Write, Bash, Glob, Grep, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 2.1.0
+  version: 2.7.1
 ---
 
 # Nazgul Generate Project Spec

@@ -280,4 +280,11 @@ assert_exit_code "allowed P-1: printf '%s' '>> manifest' (redirect is single-quo
 ec=$(get_exit_code "echo 'hi there' > nazgul/tasks/TASK-001.md")
 assert_exit_code "blocked P-2: echo 'hi there' > manifest (real redirect after sq span)" "$ec" 2
 
+# --- Category 11: fd_target_pending must not leak across a segment separator ---
+# Block Q-1: an fd-dup (>&) as the last token of segment 1 leaves fd_target_pending
+# set; reset_segment() must clear it so the echo in segment 2 still registers and the
+# manifest write blocks. (Defensive — the minimal valid-shell trigger is a syntax error.)
+ec=$(get_exit_code 'echo x >& ; echo y > nazgul/tasks/TASK-001.md')
+assert_exit_code "blocked Q-1: fd-dup before ';' does not swallow next segment's echo" "$ec" 2
+
 report_results
