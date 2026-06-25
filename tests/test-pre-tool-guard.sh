@@ -242,4 +242,21 @@ assert_exit_code "blocked L-1: echo \"foo\\\"bar\" > manifest (escaped quote)" "
 ec=$(get_exit_code 'echo "foo\"bar baz"')
 assert_exit_code "allowed L-2: echo \"foo\\\"bar baz\" (escaped quote, no redirect)" "$ec" 0
 
+# --- Category 8: fd-numbered and leading redirects ---
+# Block N-1: a leading 2>&1 must not steal the command word from a later echo
+ec=$(get_exit_code '2>&1 echo foo > nazgul/tasks/TASK-001.md')
+assert_exit_code "blocked N-1: leading 2>&1 then echo > manifest" "$ec" 2
+
+# Block N-2: a leading fd redirect (1>file) before echo
+ec=$(get_exit_code '1>/tmp/x echo foo > nazgul/tasks/TASK-001.md')
+assert_exit_code "blocked N-2: leading 1>/tmp/x then echo > manifest" "$ec" 2
+
+# Block N-3: echo with a fd-numbered redirect (1>) directly into a manifest
+ec=$(get_exit_code 'echo foo 1> nazgul/tasks/TASK-001.md')
+assert_exit_code "blocked N-3: echo foo 1> manifest (fd-numbered redirect)" "$ec" 2
+
+# Allow N-4: leading fd redirect to a non-manifest target, no manifest write
+ec=$(get_exit_code '2>/tmp/e echo foo')
+assert_exit_code "allowed N-4: 2>/tmp/e echo foo (no manifest target)" "$ec" 0
+
 report_results

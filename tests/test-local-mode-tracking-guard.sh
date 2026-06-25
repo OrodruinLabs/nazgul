@@ -461,4 +461,38 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block M-5: git add \"nazgul/\"config.json (fragments form a real pathspec)" "$GUARD_EC" 2
 teardown_temp_dir
 
+# Block M-6: a leading redirect must not skip the segment and hide the git add
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input '> /tmp/out git add nazgul/config.json')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block M-6: > /tmp/out git add nazgul/ (leading redirect skipped)" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block M-7: a leading fd redirect (2>file) before the git add
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input '2>/tmp/e git add nazgul/config.json')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block M-7: 2>/tmp/e git add nazgul/ (leading fd redirect)" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Allow M-8: a non-git leading command with a redirect into a nazgul/ file is not a
+# git staging op — the segment is non-git, so the guard does not block.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'cat foo > nazgul/out.txt')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "allow M-8: cat foo > nazgul/out.txt (non-git, redirect not a stage)" "$GUARD_EC" 0
+teardown_temp_dir
+
 report_results

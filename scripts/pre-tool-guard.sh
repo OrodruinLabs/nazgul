@@ -26,11 +26,13 @@ if [ -z "$CMD" ]; then
   CMD="$INPUT"
 fi
 
-# Destructive patterns to block
+# Destructive patterns to block. Scan the extracted command ($CMD), not the raw
+# stdin — in production stdin is the JSON envelope, whose escaping/encoding could
+# hide or distort a pattern match.
 check_pattern() {
   local pattern="$1"
   local reason="$2"
-  if echo "$INPUT" | grep -qiE "$pattern"; then
+  if echo "$CMD" | grep -qiE "$pattern"; then
     echo "NAZGUL SAFETY: Blocked — $reason" >&2
     echo "Command contained: $pattern" >&2
     exit 2
@@ -79,14 +81,15 @@ check_pattern 'tee.*nazgul/tasks/TASK-' "Direct tee to task manifest (use Write/
 # independently. Scoped to echo/printf; sed/cat/tee rules above handle those separately.
 #
 # Defense-in-depth note: primary protection is the Write/Edit tool hooks and
-# task-state guard. This is a best-effort secondary layer. Deeply exotic shell forms
-# (process substitution, eval'd strings, fd-numbered redirects like 1>, nested
-# subshells) are out of scope by design and degrade to allow.
+# task-state guard. This is a best-effort secondary layer. fd-numbered and combined
+# redirects (1>, 2>, &>, 2>&1) ARE handled. Deeply exotic shell forms (process
+# substitution, eval'd strings, nested subshells, command substitution) are out of
+# scope by design and degrade to allow.
 _check_echo_redirect() {
   printf '%s' "$CMD" | awk '
 BEGIN {
   in_sq = 0; in_dq = 0; tok = ""; found_cmd = 0
-  redirect_pending = 0; found = 0
+  redirect_pending = 0; found = 0; fd_target_pending = 0
   seg_has_cmd = 0; seg_writes_manifest = 0
 }
 
@@ -104,6 +107,11 @@ function is_manifest_path(t) {
 function flush_tok(    t) {
   t = tok; tok = ""
   if (t == "") return
+  if (fd_target_pending) {
+    # fd-duplication target (the 1 in 2>&1, the - in >&-) — never a command word
+    fd_target_pending = 0
+    return
+  }
   if (redirect_pending) {
     if (is_manifest_path(t)) seg_writes_manifest = 1
     redirect_pending = 0
@@ -147,7 +155,10 @@ function reset_segment() {
     } else if (c == "\"") {
       in_dq = 1
     } else if (c == ">") {
-      flush_tok()
+      # An all-digit token glued before > is an fd descriptor (1>, 2>), not a
+      # command word — discard it so the real command later still registers.
+      if (tok ~ /^[0-9]+$/) tok = ""
+      else flush_tok()
       nxt1 = (i < n) ? substr($0, i+1, 1) : ""
       nxt2 = (i+1 < n) ? substr($0, i+2, 1) : ""
       if (nxt1 == ">") {
@@ -170,9 +181,11 @@ function reset_segment() {
         if (i < n && substr($0, i+1, 1) == ">") i++    # &>>
         redirect_pending = 1
       } else if (prevc == ">" || nxtc ~ /^[0-9]$/) {
-        # fd duplication (2>&1, >&2) — not a separator, not a file target
+        # fd duplication (2>&1, >&2) — not a separator, not a file target. The
+        # following fd number/- is a dup target, not the command word.
         flush_tok()
         redirect_pending = 0
+        fd_target_pending = 1
       } else {
         # && (logical) or background & — segment separator
         reset_segment()

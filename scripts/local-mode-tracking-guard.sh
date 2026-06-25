@@ -11,10 +11,11 @@ set -euo pipefail
 # command has no nazgul/ pathspec, or stdin is empty.
 #
 # Defense-in-depth note: primary protection is .gitignore + the session-staging
-# install_mode chokepoint. This guard is a best-effort secondary layer. Deeply exotic
-# shell forms (process substitution, eval'd strings, fd-numbered redirects like 1>,
-# nested subshells, $'...' ANSI-C quoting) are out of scope by design and degrade to
-# allow — acceptable for normal Nazgul loop usage.
+# install_mode chokepoint. This guard is a best-effort secondary layer. Leading and
+# fd-numbered redirects (1>, 2>, &>) ARE skipped so they cannot hide a pathspec.
+# Deeply exotic shell forms (process substitution, eval'd strings, nested subshells,
+# command substitution, $'...' ANSI-C quoting) are out of scope by design and degrade
+# to allow — acceptable for normal Nazgul loop usage.
 
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 CONFIG="$PROJECT_ROOT/nazgul/config.json"
@@ -75,15 +76,19 @@ HAS_NAZGUL_PATH=$(printf '%s' "$CMD" | awk '
 BEGIN {
   in_sq = 0; in_dq = 0; tok = ""; found = 0
   git_seen = 0; subcmd_seen = 0; end_of_opts = 0
-  skip_next = 0; not_git = 0; skip_global_val = 0
+  skip_next = 0; not_git = 0; skip_global_val = 0; redir_skip_next = 0
 }
 
 function reset_segment() {
   git_seen = 0; subcmd_seen = 0; end_of_opts = 0
-  skip_next = 0; not_git = 0; skip_global_val = 0
+  skip_next = 0; not_git = 0; skip_global_val = 0; redir_skip_next = 0
 }
 
 function emit(t,    is_value_flag, is_global_val_flag, is_global_flag) {
+  # A redirect target (file after >, or fd after >&) is neither the command word
+  # nor a pathspec — skip it FIRST, before the not_git/git_seen logic, so a
+  # leading redirect never marks the segment not_git.
+  if (redir_skip_next) { redir_skip_next = 0; return }
   if (not_git) return
   if (skip_next) { skip_next = 0; return }
   if (skip_global_val) { skip_global_val = 0; return }
@@ -142,6 +147,21 @@ function check_path(t) {
       in_sq = 1
     } else if (c == "\"") {
       in_dq = 1
+    } else if (c == ">" || c == "<") {
+      # Redirect operator. An all-digit token glued before it is an fd descriptor
+      # (1>, 2<) — discard it; otherwise flush the preceding word normally. Consume
+      # multi-char forms (>>, >|, >>|) and skip the following redirect target so a
+      # leading redirect cannot hide the real git pathspec, and a target file is
+      # never mistaken for a pathspec.
+      if (tok ~ /^[0-9]+$/) tok = ""
+      else if (tok != "") { emit(tok); tok = "" }
+      if (c == ">") {
+        rn1 = (i < n) ? substr($0, i+1, 1) : ""
+        rn2 = (i+1 < n) ? substr($0, i+2, 1) : ""
+        if (rn1 == ">") { i++; if (rn2 == "|") i++ }
+        else if (rn1 == "|") i++
+      }
+      redir_skip_next = 1
     } else if (c == " " || c == "\t") {
       if (tok != "") { emit(tok); tok = "" }
     } else if (c == ";" || c == "|") {
