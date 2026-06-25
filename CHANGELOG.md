@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.7.1] - 2026-06-25
+
+### Fixed
+- **Guard precision — no more false-positive blocks on read-only commands and commit messages (FEAT-005).** The two Bash-matched PreToolUse guards matched command *substrings* instead of the real action, so legitimate commands were blocked:
+  - `local-mode-tracking-guard.sh` blocked any command containing `git add`/`stage`/`commit` and the literal `nazgul/` anywhere — including a commit whose **message** mentioned `nazgul/`, a **multiline** message, or even a read-only command whose grep *pattern* contained those tokens. It now parses the actual git **pathspec** with a no-`eval` tokenizer (skipping the subcommand and the values of message flags like `-m`/`-F`) and blocks only when a real `nazgul/` path is being staged in local mode.
+  - `pre-tool-guard.sh` blocked any command where `echo`/`printf` co-occurred with `Status` and a `nazgul/tasks/TASK-` path — even a read-only `echo …; grep nazgul/tasks/TASK-*.md`. It now blocks only on an actual redirect (`>`/`>>`) writing **into** a task manifest.
+  - The Write/Edit-matched guards (`task-state-guard.sh`, `lean-comments-guard.sh`) were audited and are structurally immune (they inspect the tool's JSON input, not command strings) — recorded in RULES.md.
+  No safety regression: every genuine block still blocks (verified by retained + new BLOCK tests alongside the new ALLOW false-positive tests).
+
 ## [2.7.0] - 2026-06-24
 
 ### Added
