@@ -438,4 +438,27 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block M-3: -m with escaped quotes then -- nazgul/x (escaped quote)" "$GUARD_EC" 2
 teardown_temp_dir
 
+# Allow M-4: adjacent quoted+unquoted fragments in a -m value form ONE message
+# word (foonazgul/x), not a pathspec — must not false-positive.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'git commit -m "foo"nazgul/x')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "allow M-4: -m \"foo\"nazgul/x (adjacent fragments form the message)" "$GUARD_EC" 0
+teardown_temp_dir
+
+# Block M-5: adjacent fragments that DO form a real nazgul/ pathspec still block.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'git add "nazgul/"config.json')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block M-5: git add \"nazgul/\"config.json (fragments form a real pathspec)" "$GUARD_EC" 2
+teardown_temp_dir
+
 report_results

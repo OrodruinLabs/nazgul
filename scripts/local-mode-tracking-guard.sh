@@ -51,8 +51,10 @@ if ! echo "$CMD" | grep -qiE '\b(add|stage|commit)\b'; then
   exit 0
 fi
 
-# Tokenizer: splits on whitespace while respecting single- and double-quoted spans.
-# Each input LINE is one awk record. A newline INSIDE a quote continues the token
+# Tokenizer: splits on whitespace/separators while respecting single- and double-
+# quoted spans. Adjacent quoted+unquoted fragments form ONE word (a closing quote
+# does not flush), so a value like -m "foo"nazgul/x stays one message token and is
+# never mis-split into a phantom nazgul/ pathspec. Each input LINE is one awk record. A newline INSIDE a quote continues the token
 # (so a multiline commit message stays one skipped token); an UNQUOTED newline is a
 # command separator that resets per-segment state — otherwise a multi-line input like
 # `echo ok\n git add nazgul/x` would be read as one non-git segment and the real
@@ -126,19 +128,19 @@ function check_path(t) {
   for (i = 1; i <= n; i++) {
     c = substr($0, i, 1)
     if (in_sq) {
-      if (c == "'\''") { in_sq = 0; emit(tok); tok = "" }
+      # Closing quote does NOT flush — adjacent quoted+unquoted fragments form one
+      # shell word (e.g. -m "foo"nazgul/x is one message value, not a pathspec).
+      if (c == "'\''") in_sq = 0
       else tok = tok c
     } else if (in_dq) {
       # Inside double quotes a backslash escapes the next char (\" \\ …), so it
       # must not toggle quote state — append the escaped char literally.
       if (c == "\\" && i < n) { i++; tok = tok substr($0, i, 1) }
-      else if (c == "\"") { in_dq = 0; emit(tok); tok = "" }
+      else if (c == "\"") in_dq = 0
       else tok = tok c
     } else if (c == "'\''") {
-      if (tok != "") { emit(tok); tok = "" }
       in_sq = 1
     } else if (c == "\"") {
-      if (tok != "") { emit(tok); tok = "" }
       in_dq = 1
     } else if (c == " " || c == "\t") {
       if (tok != "") { emit(tok); tok = "" }

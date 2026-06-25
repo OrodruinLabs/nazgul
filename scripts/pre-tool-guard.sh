@@ -200,7 +200,12 @@ END { exit (found ? 2 : 0) }
 '
 }
 
-if ! _check_echo_redirect; then
+# Block ONLY on the specific "found a manifest redirect" signal (awk exit 2).
+# Any other non-zero (e.g. an awk runtime error) degrades to allow, per the
+# defense-in-depth contract — the guard never blocks on its own malfunction.
+echo_redirect_ec=0
+_check_echo_redirect || echo_redirect_ec=$?
+if [ "$echo_redirect_ec" -eq 2 ]; then
   echo "NAZGUL SAFETY: Blocked — Direct echo/printf redirect to task manifest (use Write/Edit tools)" >&2
   echo "Command: $CMD" >&2
   exit 2
