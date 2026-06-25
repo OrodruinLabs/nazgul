@@ -426,4 +426,16 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block M-2: git add nazgul/ 2>&1 (redirect dup, not a separator)" "$GUARD_EC" 2
 teardown_temp_dir
 
+# Block M-3: backslash-escaped quotes inside the -m message must not desync the
+# quote state and hide a real nazgul/ pathspec after '--'.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'git commit -m "msg with \"quote\"" -- nazgul/x')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block M-3: -m with escaped quotes then -- nazgul/x (escaped quote)" "$GUARD_EC" 2
+teardown_temp_dir
+
 report_results

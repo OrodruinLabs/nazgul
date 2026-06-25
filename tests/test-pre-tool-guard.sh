@@ -232,4 +232,14 @@ assert_exit_code "blocked K-4: multiline ls; then echo > manifest" "$ec" 2
 ec=$(get_exit_code "$(printf 'echo a\necho b')")
 assert_exit_code "allowed K-5: multiline echos, no redirect" "$ec" 0
 
+# --- Category 7: backslash-escaped quotes inside double-quoted spans ---
+# Block L-1: an escaped \" inside the echoed string must not desync in_dq and hide
+# the redirect (the > into the manifest must still be detected).
+ec=$(get_exit_code 'echo "foo\"bar" > nazgul/tasks/TASK-001.md')
+assert_exit_code "blocked L-1: echo \"foo\\\"bar\" > manifest (escaped quote)" "$ec" 2
+
+# Allow L-2: escaped quote, no redirect → no false-positive
+ec=$(get_exit_code 'echo "foo\"bar baz"')
+assert_exit_code "allowed L-2: echo \"foo\\\"bar baz\" (escaped quote, no redirect)" "$ec" 0
+
 report_results

@@ -129,7 +129,10 @@ function check_path(t) {
       if (c == "'\''") { in_sq = 0; emit(tok); tok = "" }
       else tok = tok c
     } else if (in_dq) {
-      if (c == "\"") { in_dq = 0; emit(tok); tok = "" }
+      # Inside double quotes a backslash escapes the next char (\" \\ …), so it
+      # must not toggle quote state — append the escaped char literally.
+      if (c == "\\" && i < n) { i++; tok = tok substr($0, i, 1) }
+      else if (c == "\"") { in_dq = 0; emit(tok); tok = "" }
       else tok = tok c
     } else if (c == "'\''") {
       if (tok != "") { emit(tok); tok = "" }

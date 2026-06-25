@@ -137,7 +137,10 @@ function reset_segment() {
       if (c == "'\''") in_sq = 0
       else tok = tok c
     } else if (in_dq) {
-      if (c == "\"") in_dq = 0
+      # Inside double quotes a backslash escapes the next char (\" \\ …), so it
+      # must not toggle quote state — append the escaped char literally.
+      if (c == "\\" && i < n) { i++; tok = tok substr($0, i, 1) }
+      else if (c == "\"") in_dq = 0
       else tok = tok c
     } else if (c == "'\''") {
       in_sq = 1
