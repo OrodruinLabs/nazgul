@@ -155,4 +155,25 @@ run_hook
 assert_eq "PG-6 group manifest absent: resets to IMPLEMENTED" "$(task_status TASK-001)" "IMPLEMENTED"
 teardown_temp_dir
 
+# --- PG-7: stale evidence-reset counter is cleared on a provenance-only violation ---
+# Evidence passes (so the evidence branch is never entered) but a pre-existing
+# _review_reset_counts entry (from an earlier, now-resolved evidence violation)
+# must not survive into the provenance branch and over-escalate a later evidence issue.
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG7"' \
+  '.review_gate.require_provenance = true' '.safety._review_reset_counts = {"TASK-001": 1}'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_task_file "TASK-002" "READY"
+write_review_token "TASK-001" "code-reviewer" "deadbeefdeadbeef"   # token, no manifest → provenance invalid
+run_hook
+assert_exit_code "PG-7 first violation: exit 2" "$HOOK_EC" 2
+assert_contains "PG-7 first violation: names provenance" "$HOOK_OUTPUT" "review provenance invalid"
+assert_eq "PG-7 first violation: reset to IMPLEMENTED" "$(task_status TASK-001)" "IMPLEMENTED"
+prov_count=$(jq -r '.safety._provenance_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
+assert_eq "PG-7 first violation: provenance reset count set" "$prov_count" "1"
+evid_count=$(jq -r 'if (.safety._review_reset_counts | has("TASK-001")) then .safety._review_reset_counts["TASK-001"] else "absent" end' "$TEST_DIR/nazgul/config.json")
+assert_eq "PG-7 first violation: stale evidence reset count cleared" "$evid_count" "absent"
+teardown_temp_dir
+
 report_results

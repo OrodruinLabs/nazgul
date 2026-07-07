@@ -212,8 +212,11 @@ status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | s
 assert_eq "CV-9: reset to IMPLEMENTED, not escalated" "$status" "IMPLEMENTED"
 prov_count=$(jq -r '.safety._provenance_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
 assert_eq "CV-9: provenance counter starts its own ladder at 1" "$prov_count" "1"
-evid_count=$(jq -r '.safety._review_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
-assert_eq "CV-9: unrelated evidence counter untouched" "$evid_count" "1"
+# Evidence passed to reach the provenance branch, so its stale counter must be
+# cleared here — leaving it would over-escalate a later, genuinely-first evidence
+# violation straight to BLOCKED.
+evid_count=$(jq -r 'if (.safety._review_reset_counts | has("TASK-001")) then .safety._review_reset_counts["TASK-001"] else "absent" end' "$TEST_DIR/nazgul/config.json")
+assert_eq "CV-9: stale evidence counter cleared on provenance branch" "$evid_count" "absent"
 teardown_temp_dir
 
 report_results

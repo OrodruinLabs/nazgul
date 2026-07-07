@@ -1100,4 +1100,107 @@ run_guard "$input"
 assert_exit_code "IMPLEMENTED->BLOCKED allowed" "$GUARD_EC" 0
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# Test 67: BLOCKED — .dispatch.json write while its OWN unit's task is IN_PROGRESS
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IN_PROGRESS"
+input=$(jq -n --arg fp "$TEST_DIR/nazgul/reviews/TASK-001/.dispatch.json" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"{}"}}')
+run_guard "$input"
+assert_exit_code "dispatch manifest write blocked during IN_PROGRESS" "$GUARD_EC" 2
+assert_contains "dispatch manifest blocked message" "$GUARD_STDERR" "IN_PROGRESS"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 68: ALLOWED — .dispatch.json write with no task IN_PROGRESS
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IMPLEMENTED"
+input=$(jq -n --arg fp "$TEST_DIR/nazgul/reviews/TASK-001/.dispatch.json" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"{}"}}')
+run_guard "$input"
+assert_exit_code "dispatch manifest write allowed without active task" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 69: BLOCKED — diff.patch write while its OWN unit's task is IN_PROGRESS
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IN_PROGRESS"
+input=$(jq -n --arg fp "$TEST_DIR/nazgul/reviews/TASK-001/diff.patch" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"diff --git a b"}}')
+run_guard "$input"
+assert_exit_code "diff.patch write blocked during IN_PROGRESS" "$GUARD_EC" 2
+assert_contains "diff.patch blocked message" "$GUARD_STDERR" "IN_PROGRESS"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 70: ALLOWED — diff.patch write with no task IN_PROGRESS
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IMPLEMENTED"
+input=$(jq -n --arg fp "$TEST_DIR/nazgul/reviews/TASK-001/diff.patch" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"diff --git a b"}}')
+run_guard "$input"
+assert_exit_code "diff.patch write allowed without active task" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 71: ALLOWED (unit-scoped) — dispatch write for TASK-001's own unit while
+# a DIFFERENT task (TASK-002, a parallel Agent-Teams wave) is IN_PROGRESS
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IMPLEMENTED"
+create_task_file "TASK-002" "IN_PROGRESS"
+input=$(jq -n --arg fp "$TEST_DIR/nazgul/reviews/TASK-001/.dispatch.json" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"{}"}}')
+run_guard "$input"
+assert_exit_code "dispatch write for unrelated finished unit not blocked by another IN_PROGRESS task" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 72: BLOCKED (group-scoped) — GROUP-1 dispatch write blocked when a
+# Group-1 task is IN_PROGRESS
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IN_PROGRESS"   # create_task_file defaults to Group: 1
+input=$(jq -n --arg fp "$TEST_DIR/nazgul/reviews/GROUP-1/.dispatch.json" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"{}"}}')
+run_guard "$input"
+assert_exit_code "GROUP-1 dispatch write blocked when a group-1 task is IN_PROGRESS" "$GUARD_EC" 2
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 73: ALLOWED (group-scoped) — GROUP-2 dispatch write NOT blocked when
+# only a Group-1 task is IN_PROGRESS
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IN_PROGRESS"   # Group: 1
+input=$(jq -n --arg fp "$TEST_DIR/nazgul/reviews/GROUP-2/.dispatch.json" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"{}"}}')
+run_guard "$input"
+assert_exit_code "GROUP-2 dispatch write allowed when only group-1 has an IN_PROGRESS task" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 74: BLOCKED (fallback) — FEATURE-* dispatch write blocked when ANY
+# task is IN_PROGRESS (feature review spans the whole branch)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IN_PROGRESS"
+input=$(jq -n --arg fp "$TEST_DIR/nazgul/reviews/FEATURE-FEAT-001/.dispatch.json" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"{}"}}')
+run_guard "$input"
+assert_exit_code "FEATURE-* dispatch write blocked when any task is IN_PROGRESS" "$GUARD_EC" 2
+teardown_temp_dir
+
 report_results

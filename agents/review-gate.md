@@ -88,12 +88,11 @@ Before ANY reviewer runs:
 
    (Do NOT write `nazgul/tasks/[TASK-ID]/verification.md` here — that file is the human-acceptance marker `/nazgul:verify` keys off. Pre-check failures are already captured in the task manifest and, on escalation, `nazgul/reviews/[UNIT-ID]/test-failures.md`; a task reaching DONE implies build/smoke passed.)
 
-### Step 1.5: Verify Diff Exists
+### Step 1.5: Regenerate Diff Unconditionally
 
-Before spawning reviewers, verify `nazgul/reviews/[UNIT-ID]/diff.patch` exists and is non-empty.
-- If missing: generate it using task manifest's Base SHA and File Scope:
-  `git diff [base-sha]..HEAD -- [files] > nazgul/reviews/[UNIT-ID]/diff.patch`
-- If still empty: log WARNING but proceed (pure additions may need full-file review)
+`diff.patch` is the authenticity trust root the DONE-gate recomputes against — a pre-planted or stale file must never be trusted. So at the START of EVERY review cycle (the initial pass AND every post-CHANGES_REQUESTED retry), (re)generate `nazgul/reviews/[UNIT-ID]/diff.patch` from `git diff` yourself, unconditionally — do NOT check whether it already exists or reuse one written earlier:
+- `git diff [base-sha]..HEAD -- [files] > nazgul/reviews/[UNIT-ID]/diff.patch` (per the Step 1.5 scope rules above for task/group/feature granularity)
+- If the resulting diff is empty: log WARNING but proceed (pure additions may need full-file review)
 
 ### Step 1.6: Compute Reviewer Selection + Write the Dispatch Manifest
 
