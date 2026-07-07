@@ -22,6 +22,10 @@ whole objective wave by wave inside one long-lived session, dispatching each uni
 sub-sessions instead of holding their file bodies yourself. This is what lets a full-system build scale
 past a single context window: your own context stays bounded to graph-shaped state.
 
+`maxTurns: 100` (vs. the 40 used by sibling pipeline agents) because one invocation drives a whole
+multi-wave objective, not a single unit; Step 7's self-checkpoint after every wave means a turn-exhausted
+session still resumes cleanly via Self-Recovery below.
+
 ## GRAPH-ONLY INVARIANT (read first, honor always)
 
 You hold ONLY: task ids, deps, wave assignment, status, a one-line verdict string, and a bare commit SHA
@@ -125,7 +129,8 @@ Take the first wave in `WAVES_JSON` as the current wave (`{"wave": N, "units": [
    `BLOCKED` task and any non-APPROVE `security-reviewer.md` verdict. If it returns non-zero, STOP. Print
    every line it emitted (`BLOCKED_TASK <id>`, `SECURITY_REJECTION <id>`, or an `*_AMBIGUOUS`/`*_UNREADABLE`
    line — ambiguity fails closed too) and halt for a human. This is unconditional: it overrides every
-   `conductor.gates` value and every mode, **including yolo**. Do not route around it.
+   `conductor.gates` value and every mode, **including yolo**. Do not route around it. This same check is
+   repeated at every batch boundary within the wave too — see Step 5.3 — not just here at wave start.
 2. **Wave-approval gate.** `conductor_should_pause "$CONFIG" approve_each_wave "$MODE"` — if it should
    pause, checkpoint (Step 8) and present the wave's units to the human before dispatching.
 3. **Final-PR gate, checked here for the objective's last wave only.** If this wave's units are the last
@@ -154,12 +159,14 @@ ROUTE=$(route_wave "$units_json" "$marked_parallel" "$CONFIG")
 `ROUTE` is `{dispatch, reason, batches}` — `dispatch` is `"sequential"` or `"parallel"`, `batches` is an
 ordered array of task-id arrays (each batch ≤ `conductor.max_parallel`, sequential batches are always
 `[[id], [id], ...]`). For each unit, also call `route_unit '{"kind": "task", "isolation": "..."}'` to get
-its `{backend, dispatch}` — `subagent` (Task/Agent dispatch — the default for bounded work and always for
-reviews), `worktree` (parallel file-mutating unit — reuse `EnterWorktree`/`ExitWorktree`), or `team`
-(parallel wave needing live `SendMessage` — reuse `team-orchestrator`). Follow the batch's routed backend
-for every unit's implementation dispatch; the Review Board dispatch for every unit is always `subagent`
-regardless of the unit's own backend (`route_backend` hardcodes reviews to `subagent`, reviewers are
-read-only and independent).
+its `{backend, dispatch}` — `subagent` (Task/Agent dispatch — the default for bounded work), `worktree` (parallel file-mutating unit —
+reuse `EnterWorktree`/`ExitWorktree`), or `team` (parallel wave needing live `SendMessage` — reuse
+`team-orchestrator`). Follow the batch's routed backend for every unit's implementation dispatch. For
+review dispatch, call `route_unit '{"kind": "review"}'` once per wave and use its returned `backend` for
+every unit's Review Board dispatch in this wave, regardless of the unit's own implementation backend —
+today that resolves to `subagent` (`route_backend` hardcodes reviews to `subagent`, reviewers are
+read-only and independent), but sourcing it from the router keeps this in sync if that branch ever
+changes.
 
 ## Step 5: Dispatch synchronously — own the dispatch AND the collection
 
@@ -193,14 +200,15 @@ For each batch in `ROUTE.batches`, in order:
      review-gate exhausts its own retry cycle) CHANGES_REQUESTED escalated to BLOCKED — before moving to
      the next unit or the next batch. review-gate owns the full pre-check/dispatch/verdict/retry cycle
      internally; you only need its final result.
-3. Only after every unit in the batch has a terminal outcome, proceed to the next batch (sequential
-   dispatch) or the next wave (parallel dispatch, all batches of this wave done).
+3. Only after every unit in the batch has a terminal outcome, **re-run `conductor_should_halt
+   "$NAZGUL_DIR"`** (the same unconditional check as Step 3.1) before dispatching the next batch. If it
+   returns non-zero, stop here — print its lines and halt for a human without dispatching any further
+   batch in this wave. Otherwise proceed to the next batch (sequential dispatch) or the next wave (parallel
+   dispatch, all batches of this wave done).
 
-If any unit in the batch reaches BLOCKED (implementer failure or review-gate exhausting retries), that
-trips the hard stop at the top of the NEXT wave's Step 3 — you do not need to check it again mid-wave, but
-do not silently continue past a BLOCKED unit into more work in the same wave either; finish collecting the
-rest of the current batch's outcomes, then let Step 3's `conductor_should_halt` catch it before the next
-dispatch.
+If any unit in a batch reaches BLOCKED (implementer failure or review-gate exhausting retries), the
+re-check above catches it before the next batch is dispatched — a BLOCKED or security-rejected unit never
+lets more work start in the same wave, whether the remaining batches are sequential or parallel.
 
 ## Step 6: Record the result — graph-only
 
