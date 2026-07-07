@@ -32,6 +32,7 @@ agents/                              # Subagent definitions
 │   ├── review-gate.md               # Pipeline: orchestrates review board
 │   ├── feedback-aggregator.md       # Pipeline: consolidates review feedback
 │   ├── team-orchestrator.md         # Pipeline: manages Agent Teams
+│   ├── conductor.md                 # Pipeline: opt-in graph-only driver (execution.engine=conductor)
 │   ├── designer.md                  # Specialist: design system, visual direction
 │   ├── frontend-dev.md              # Specialist: UI component implementation
 │   ├── mobile-dev.md                # Specialist: mobile platform implementation
@@ -72,7 +73,10 @@ scripts/                             # Shell scripts for hooks
 │       ├── bootstrap-preflight.sh   # bootstrap-project: pre-flight gate checks
 │       ├── bootstrap-relocate.sh    # bootstrap-project: atomic staged relocation
 │       ├── review-provenance.sh     # Diff-bound dispatch manifest + provenance validation
-│       └── reviewer-selection.sh    # Deterministic diff-aware reviewer selection
+│       ├── reviewer-selection.sh    # Deterministic diff-aware reviewer selection
+│       ├── conductor-graph.sh       # Conductor: wave computation + graph.json state/recovery
+│       ├── conductor-gates.sh       # Conductor: gate config + the two unconditional hard stops
+│       └── conductor-router.sh      # Conductor: unit → backend (subagent/team/worktree) routing
 templates/                           # Objective + document templates
 │   ├── CLAUDE.md.template           # Injected into target projects by /nazgul:init
 │   ├── feature.md / tdd.md / bugfix.md / refactor.md / greenfield.md / migration.md
@@ -105,7 +109,7 @@ tests/                               # Plugin validation tests
 
 3. **Shell scripts must be POSIX-safe.** All scripts in `scripts/` should pass `bash -n` and `shellcheck`. They use `jq` for JSON manipulation.
 
-4. **Runtime files are NOT part of the plugin.** The `nazgul/` directory (config.json, plan.md, tasks/, checkpoints/, etc.) is created per-project by `/nazgul:init`. This repo contains only the plugin code.
+4. **Runtime files are NOT part of the plugin.** The `nazgul/` directory (config.json, plan.md, tasks/, checkpoints/, conductor/graph.json, etc.) is created per-project by `/nazgul:init`. This repo contains only the plugin code.
 
 ## Code Style
 
@@ -123,7 +127,9 @@ tests/                               # Plugin validation tests
 
 **Documents before code.** After classification, the Doc Generator creates PRDs, TRDs, ADRs before any planning happens.
 
-**Conditional agent roster.** Discovery generates only the agents this project needs. 21 core agents exist as specs, plus a reviewer template that spawns project-specific reviewers. Only relevant ones are instantiated per-project.
+**Conditional agent roster.** Discovery generates only the agents this project needs. 22 core agents exist as specs, plus a reviewer template that spawns project-specific reviewers. Only relevant ones are instantiated per-project.
+
+**One pipeline, two engines.** `execution.engine` selects how the pipeline runs: `"sequential"` (default) drives the loop one task at a time via the stop-hook; `"conductor"` (opt-in via `/nazgul:start --conductor`) hands the whole objective to `agents/conductor.md`, a graph-only driver that computes waves from the Planner's task graph and dispatches each unit to a fresh sub-session, reusing the same Review Board per unit. Both engines share the same Planner output, task state machine, and review gate — the conductor only changes who drives, not what "done" means.
 
 **State machine is sacred.** Tasks follow: PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> DONE (or CHANGES_REQUESTED -> retry, or BLOCKED). No skipping states.
 
@@ -168,11 +174,12 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 - `nazgul/reviews/` — Review artifacts per task
 - `nazgul/context/` — Project context from Discovery
 - `nazgul/docs/` — Generated project documents (PRD, TRD, ADRs)
+- `nazgul/conductor/graph.json` — Conductor engine state (waves, per-task verdict + commit SHA), only when `execution.engine: "conductor"`
 
 ## Commands
 - `/nazgul-init` — First-time setup: run Discovery, generate reviewers, create runtime dirs
 - `/nazgul-start` — Auto-detects project state and continues or starts work (derives objective from context)
-- `/nazgul-start "objective"` — Override: start a specific new objective (flags: --afk, --yolo, --hitl, --max N)
+- `/nazgul-start "objective"` — Override: start a specific new objective (flags: --afk, --yolo, --hitl, --max N, --conductor)
 - `/nazgul-status` — Check loop progress, task counts, reviewer board
 - `/nazgul-task` — Task lifecycle: skip, unblock, add, prioritize, info, list
 - `/nazgul-pause` — Gracefully pause the loop at next iteration boundary
