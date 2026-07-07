@@ -26,6 +26,7 @@ SCRIPTS=(
   "scripts/lib/review-provenance.sh"
   "scripts/lib/reviewer-selection.sh"
   "scripts/lib/conductor-graph.sh"
+  "scripts/lib/conductor-gates.sh"
   "scripts/local-mode-tracking-guard.sh"
   "scripts/base-branch-commit-guard.sh"
   "scripts/session-staging.sh"
