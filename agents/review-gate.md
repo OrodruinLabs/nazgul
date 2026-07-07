@@ -447,7 +447,7 @@ After all tasks are DONE, run a cross-task simplification pass across ALL modifi
 
 Reviewer teammates must NEVER modify project files. They only:
 - Read source code and context files
-- Run tests/linters (read-only verification)
+- Read the tests/linters output already captured by Step 1 pre-checks (never re-run them)
 - Write their review to nazgul/reviews/
 
 ## Context Management Rules

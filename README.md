@@ -26,7 +26,7 @@ Nazgul runs a complete autonomous SDLC pipeline — from scanning your codebase 
 
 - **Auto-detects your project** — classifies it (greenfield, brownfield, bugfix, refactor, migration) and tailors the pipeline
 - **Generates docs before code** — PRDs, TRDs, and ADRs so agents build with context
-- **Multi-agent review board** — Architect, Security, Code Quality + project-specific reviewers must ALL approve every task
+- **Multi-agent review board** — Architect, Security, Code Quality + project-specific reviewers; all SELECTED reviewers must approve every task (opt-in diff-aware dispatch can skip domains the change does not touch)
 - **Fix-first review** — auto-fixes mechanical issues (dead code, style), only asks about risky changes (security, architecture)
 - **Per-stage model routing** — assign Opus, Sonnet, or Haiku to each pipeline stage for the right balance of cost, speed, and quality
 - **Tamper-evident, cost-optimized reviews** — diff-bound provenance manifests catch a skipped or stale review board, a `comment-verifier` gate blocks templated or restated doc-comments, and diff-only reviewer context plus per-reviewer model tiering cut review token cost
@@ -114,7 +114,7 @@ Different pipeline stages have different complexity needs. Nazgul lets you assig
 | Review | Haiku (Sonnet for security/architect) | Diff-only context keeps most reviewers cheap; the state-machine and security gates stay on Sonnet |
 | Implementation | Sonnet | Code generation is Sonnet's sweet spot |
 | Specialists | Sonnet | Same as implementation |
-| Post-loop | Haiku | Changelog and docs updates are mechanical |
+| Post-loop | Sonnet | Doc accuracy matters — the doc-verifier cross-checks docs against source |
 
 Configure during init or anytime after with `/nazgul:config`:
 

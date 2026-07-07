@@ -253,15 +253,19 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
             else
               echo "- **Blocked reason**: ${BLOCKED_REASON_TEXT}" >> "$task_file"
             fi
-            jq --arg t "$TASK_ID" 'del(.safety._provenance_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+            # Evidence passed to reach this branch — clear its (now-stale) counter too,
+            # so a later fresh evidence issue doesn't over-escalate as a 2nd strike.
+            jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | del(.safety._provenance_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
             DONE_COUNT=$((DONE_COUNT - 1))
             BLOCKED_COUNT=$((BLOCKED_COUNT + 1))
             REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} escalated to BLOCKED — review provenance invalid: ${PROVENANCE_LIST}. Re-run review-gate so a fresh diff-bound dispatch manifest is written for ${TASK_ID}
 "
           else
-            # First violation — reset to IMPLEMENTED with diagnostics
+            # First violation — reset to IMPLEMENTED with diagnostics.
+            # Evidence passed to reach this branch — clear its (now-stale) counter so
+            # the two gates' ladders stay independent (evidence is currently valid).
             set_task_status "$task_file" "DONE" "IMPLEMENTED"
-            jq --arg t "$TASK_ID" '.safety._provenance_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+            jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | .safety._provenance_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
             DONE_COUNT=$((DONE_COUNT - 1))
             IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
             REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} reset DONE → IMPLEMENTED — review provenance invalid: ${PROVENANCE_LIST}. Fix: re-run review-gate so a fresh diff-bound dispatch manifest is written for ${TASK_ID}
