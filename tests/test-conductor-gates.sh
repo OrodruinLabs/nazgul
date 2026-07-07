@@ -143,6 +143,60 @@ assert_contains "unreadable nazgul_dir: names tasks unreadable" "$HALT_OUT" "BLO
 assert_contains "unreadable nazgul_dir: names security unreadable" "$HALT_OUT" "SECURITY_REVIEWS_UNREADABLE"
 teardown_temp_dir
 
+# --- Test 9b: security-reviewer.md present with no verdict field (rc=1) is ambiguous -> fails closed ---
+setup_temp_dir
+setup_nazgul_dir
+create_task_file TASK-001 IN_REVIEW none
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+cat > "$TEST_DIR/nazgul/reviews/TASK-001/security-reviewer.md" << 'EOF'
+# Security Review
+
+No frontmatter, no verdict field at all.
+EOF
+HALT_OUT=$(conductor_should_halt "$TEST_DIR/nazgul") && HALT_EC=0 || HALT_EC=$?
+assert_exit_code "no-verdict security file: halts" "$HALT_EC" 1
+assert_contains "no-verdict security file: reports ambiguous" "$HALT_OUT" "SECURITY_REJECTION_AMBIGUOUS TASK-001"
+teardown_temp_dir
+
+# --- Test 9c: INVALID task status is ambiguous -> fails closed ---
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/tasks/TASK-001.md" << 'EOF'
+---
+status: NOT_A_REAL_STATUS
+---
+# TASK-001: Test task
+EOF
+HALT_OUT=$(conductor_should_halt "$TEST_DIR/nazgul") && HALT_EC=0 || HALT_EC=$?
+assert_exit_code "INVALID task status: halts" "$HALT_EC" 1
+assert_contains "INVALID task status: reports ambiguous" "$HALT_OUT" "BLOCKED_TASKS_AMBIGUOUS TASK-001"
+teardown_temp_dir
+
+# --- Test 9d: malformed-JSON config -> execution.engine/max_parallel still degrade to allow ---
+setup_temp_dir
+setup_nazgul_dir
+CONFIG="$TEST_DIR/nazgul/config.json"
+echo "not valid json" > "$CONFIG"
+assert_eq "malformed config: engine defaults sequential" "$(conductor_execution_engine "$CONFIG")" "sequential"
+assert_eq "malformed config: max_parallel defaults 3" "$(conductor_max_parallel "$CONFIG")" "3"
+teardown_temp_dir
+
+# --- Test 9e: unreadable tasks_dir (exists but chmod 000) fails closed ---
+if [ "$(id -u)" -ne 0 ]; then
+  setup_temp_dir
+  setup_nazgul_dir
+  create_config
+  NAZGUL_DIR="$TEST_DIR/nazgul"
+  chmod 000 "$NAZGUL_DIR/tasks"
+  HALT_OUT=$(conductor_should_halt "$NAZGUL_DIR") && HALT_EC=0 || HALT_EC=$?
+  chmod 755 "$NAZGUL_DIR/tasks"
+  assert_exit_code "unreadable tasks_dir: halts" "$HALT_EC" 1
+  assert_contains "unreadable tasks_dir: reports unreadable" "$HALT_OUT" "BLOCKED_TASKS_UNREADABLE"
+  teardown_temp_dir
+else
+  echo "SKIP: unreadable tasks_dir test (running as root, chmod 000 has no effect)"
+fi
+
 # --- Test 9: a non-evaluable ordinary gate degrades to allow ---
 setup_temp_dir
 setup_nazgul_dir

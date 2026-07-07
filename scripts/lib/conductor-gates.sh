@@ -66,12 +66,14 @@ conductor_should_pause() {
 }
 
 # _cgate_blocked_tasks <tasks_dir> -> one "BLOCKED_TASK <id>" line per task
-# whose status is BLOCKED; 1 if any found. Fails CLOSED (prints
-# "BLOCKED_TASKS_UNREADABLE", returns 1) when tasks_dir does not exist —
-# ambiguity about BLOCKED state is never degraded to allow.
+# whose status is BLOCKED, or "BLOCKED_TASKS_AMBIGUOUS <id>" for a task whose
+# status is INVALID/unparseable (also fails closed); 1 if any found. Fails
+# CLOSED (prints "BLOCKED_TASKS_UNREADABLE", returns 1) when tasks_dir does
+# not exist or is not readable — ambiguity about BLOCKED state is never
+# degraded to allow.
 _cgate_blocked_tasks() {
   local tasks_dir="$1" file id status found=0
-  if [ ! -d "$tasks_dir" ]; then
+  if [ ! -d "$tasks_dir" ] || [ ! -r "$tasks_dir" ]; then
     echo "BLOCKED_TASKS_UNREADABLE"
     return 1
   fi
@@ -79,36 +81,41 @@ _cgate_blocked_tasks() {
     [ -f "$file" ] || continue
     id=$(basename "$file" .md)
     status=$(get_task_status "$file" "")
-    if [ "$status" = "BLOCKED" ]; then
-      echo "BLOCKED_TASK $id"
-      found=1
-    fi
+    case "$status" in
+      BLOCKED) echo "BLOCKED_TASK $id"; found=1 ;;
+      INVALID|"") echo "BLOCKED_TASKS_AMBIGUOUS $id"; found=1 ;;
+    esac
   done
   [ "$found" -eq 0 ]
 }
 
 # _cgate_security_rejections <nazgul_dir> -> one "SECURITY_REJECTION <id>"
 # line per task whose reviews/<id>/security-reviewer.md is not an APPROVE,
-# or "SECURITY_REJECTION_AMBIGUOUS <id>" for a malformed verdict (also fails
-# closed); 1 if any found. Fails CLOSED (prints
-# "SECURITY_REVIEWS_UNREADABLE", returns 1) when nazgul_dir does not exist.
-# A missing reviews/ dir, or a task with no security-reviewer.md yet, is a
+# or "SECURITY_REJECTION_AMBIGUOUS <id>" when the file is present but its
+# verdict is missing (rc=1) or unparseable (rc=2) — both fail closed; 1 if
+# any found. Fails CLOSED (prints "SECURITY_REVIEWS_UNREADABLE", returns 1)
+# when nazgul_dir or reviews_dir exists but is not readable. A missing
+# nazgul_dir/reviews_dir, or a task with no security-reviewer.md yet, is a
 # normal not-yet-reviewed state — not ambiguous, no halt.
 _cgate_security_rejections() {
   local nazgul_dir="$1" reviews_dir file id verdict rc found=0
-  if [ ! -d "$nazgul_dir" ]; then
+  if [ ! -d "$nazgul_dir" ] || [ ! -r "$nazgul_dir" ]; then
     echo "SECURITY_REVIEWS_UNREADABLE"
     return 1
   fi
   reviews_dir="$nazgul_dir/reviews"
   [ -d "$reviews_dir" ] || return 0
+  if [ ! -r "$reviews_dir" ]; then
+    echo "SECURITY_REVIEWS_UNREADABLE"
+    return 1
+  fi
   for file in "$reviews_dir"/*/security-reviewer.md; do
     [ -f "$file" ] || continue
     id=$(basename "$(dirname "$file")")
     verdict=$(read_verdict "$file") && rc=0 || rc=$?
     case "$rc" in
       0) [ "$verdict" = "APPROVE" ] || { echo "SECURITY_REJECTION $id"; found=1; } ;;
-      2) echo "SECURITY_REJECTION_AMBIGUOUS $id"; found=1 ;;
+      1|2) echo "SECURITY_REJECTION_AMBIGUOUS $id"; found=1 ;;
       *) : ;;
     esac
   done
