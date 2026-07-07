@@ -4,7 +4,7 @@ set -euo pipefail
 # feature. Single source of truth for reading the learned-rules registry.
 #
 # Usage:
-#   learned-rules.sh select --agent <name> --files "<space-list>" [--doc <path>]
+#   learned-rules.sh select --agent <name> --files "<space-list>" [--doc <path>] [--max <N>]
 #   learned-rules.sh parse   [--doc <path>]
 #   learned-rules.sh next-id [--doc <path>]
 #   learned-rules.sh bump-hits <LR-NNN> [--doc <path>]
@@ -21,6 +21,9 @@ set -euo pipefail
 #   <body until next "## " heading>
 
 DEFAULT_DOC="nazgul/learning/learned-rules.md"
+# Injection cap: an unbounded match set would grow the reviewer prompt without
+# bound, so `select` emits only the top-N matched rules, ranked by Hits desc.
+DEFAULT_MAX_SELECT_RULES=5
 
 # _rule_meta <doc> -> TSV: id \t status \t agents \t globs \t hits \t title
 # (metadata only — no body, so no newline-in-field hazard)
@@ -137,19 +140,23 @@ _rule_block() {
   ' "$doc"
 }
 
-# cmd_select <doc> <agent> <files>
+# cmd_select <doc> <agent> <files> [max]
 cmd_select() {
-  local doc="$1" agent="$2" files="$3"
+  local doc="$1" agent="$2" files="$3" max="${4:-$DEFAULT_MAX_SELECT_RULES}"
   [ -f "$doc" ] || return 0
-  local matches="" id status agents globs hits title
+  local id status agents globs hits title
+  local -a ranked=()
   while IFS=$'\037' read -r id status agents globs hits title; do
     [ "$status" = "active" ] || continue
     _agent_in_scope "$agents" "$agent" || continue
     _glob_in_scope "$globs" "$files" || continue
-    matches="$matches $id"
+    ranked+=("${hits:-0}"$'\t'"$id")
   done < <(_rule_meta "$doc")
 
-  matches=$(_trim "$matches")
+  [ ${#ranked[@]} -gt 0 ] || return 0
+
+  local matches
+  matches=$(printf '%s\n' "${ranked[@]}" | sort -t $'\t' -k1,1nr | head -n "$max" | cut -f2)
   [ -n "$matches" ] || return 0
 
   printf '## Learned Rules (cite any you apply, by LR number)\n\n'
@@ -196,16 +203,17 @@ main() {
       [ "${1:-}" = "--doc" ] && doc="$2"
       cmd_parse "$doc" ;;
     select)
-      local doc="$DEFAULT_DOC" agent="" files=""
+      local doc="$DEFAULT_DOC" agent="" files="" max="$DEFAULT_MAX_SELECT_RULES"
       while [ $# -gt 0 ]; do
         case "$1" in
           --agent) agent="$2"; shift 2 ;;
           --files) files="$2"; shift 2 ;;
           --doc)   doc="$2";   shift 2 ;;
+          --max)   max="$2";   shift 2 ;;
           *) shift ;;
         esac
       done
-      cmd_select "$doc" "$agent" "$files" ;;
+      cmd_select "$doc" "$agent" "$files" "$max" ;;
     bump-hits)
       local id="${1:-}" doc="$DEFAULT_DOC"
       shift || true

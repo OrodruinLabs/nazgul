@@ -98,18 +98,19 @@ Before spawning reviewers, verify `nazgul/reviews/[UNIT-ID]/diff.patch` exists a
 ### Step 2: Delegate to Reviewers
 
 Read `nazgul/config.json → agents.reviewers` to get the active reviewer list.
-Read `nazgul/config.json → models.review` for the model to assign reviewers (default: `"sonnet"`). Pass this as the `model` parameter when spawning each reviewer via the Agent tool — **except `security-reviewer`, which is ALWAYS pinned to `sonnet`** regardless of `models.review`. This lets you set `models.review` to a cheaper model (e.g. `haiku`) for the mechanical reviewers (architect/code/qa) to cut cost, while the security review stays sharp.
+Read `nazgul/config.json → models.review` for the default reviewer model (default: `"haiku"`). Read `nazgul/config.json → models.review_by_reviewer` — an optional per-reviewer model map. For each reviewer, resolve its model as `models.review_by_reviewer[<reviewer-name>]` if that key is present, else fall back to `models.review`. Pass the resolved value as the `model` parameter when spawning that reviewer via the Agent tool. By default the map pins **both `security-reviewer` and `architect-reviewer` to `sonnet`** — security guards the BLOCKED gate and architect guards the sacred state machine, so both stay sharp even when `models.review` is a cheaper model (e.g. `haiku`) for the mechanical reviewers (code/qa). If `models.review_by_reviewer` is absent entirely, fall back to the prior behavior: `models.review` for everyone except `security-reviewer`, which is still ALWAYS pinned to `sonnet`.
 
 #### What Each Reviewer Receives
-1. `nazgul/reviews/[UNIT-ID]/diff.patch` — the unified diff showing exactly what changed. **Reviewers MUST read this FIRST.**
-2. The changed file list from the task manifest's File Scope — for full-file context when needed
+1. `nazgul/reviews/[UNIT-ID]/diff.patch` — the unified diff showing exactly what changed, and by default the ONLY source a reviewer reads. **Reviewers MUST read this FIRST.**
+2. Full-file context is NOT granted by default. A reviewer may read a full file ONLY when a hunk in diff.patch is truncated mid-function and the surrounding code is needed to judge it — it must NEVER crawl the broader codebase for related code, and NEVER re-run tests or linters (Step 1 pre-checks already ran them).
 3. Their agent definition from `.claude/agents/generated/`
 4. Relevant context from `nazgul/context/`
 5. **Inject scoped learned rules.** For each reviewer, compute its rule slice:
    `${CLAUDE_PLUGIN_ROOT}/scripts/lib/learned-rules.sh select --agent <reviewer-name> --files "<space-separated list of the changed files from diff.patch>"`
-   (add `--doc <learning.rules_doc>` if config sets a non-default path). If the
-   command prints anything, include it verbatim in that reviewer's dispatch prompt
-   alongside the changed-files context. If it prints nothing, inject nothing.
+   (add `--doc <learning.rules_doc>` if config sets a non-default path). The
+   selector caps its own output (top-N by Hits), so no truncation is needed here.
+   If the command prints anything, include it verbatim in that reviewer's dispatch
+   prompt alongside diff.patch. If it prints nothing, inject nothing.
 
 #### Parallel Review Mode (when parallelism.parallel_reviews is true)
 
