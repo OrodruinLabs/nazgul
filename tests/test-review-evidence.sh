@@ -13,15 +13,17 @@ echo "=== $TEST_NAME ==="
 
 source "$REPO_ROOT/scripts/lib/review-evidence.sh"
 
-# Helper: build a nazgul dir with config listing given reviewers
-# Usage: setup_evidence_env "code-reviewer qa-reviewer"
+# Helper: build a nazgul dir with config listing given reviewers, plus any
+# extra jq override expressions applied to the same config.
+# Usage: setup_evidence_env "code-reviewer qa-reviewer" ['.review_gate.x = true']
 setup_evidence_env() {
   setup_temp_dir
   setup_nazgul_dir
+  local reviewers_raw="$1"; shift
   local reviewers_json
   # shellcheck disable=SC2086 # intentional word-splitting on space-separated reviewer list
-  reviewers_json=$(printf '%s\n' $1 | jq -R . | jq -s .)
-  create_config ".agents.reviewers = $reviewers_json"
+  reviewers_json=$(printf '%s\n' $reviewers_raw | jq -R . | jq -s .)
+  create_config ".agents.reviewers = $reviewers_json" "$@"
 }
 
 # Helper: write a review file with the given verdict
@@ -280,11 +282,25 @@ write_manifest() {
     > "$TEST_DIR/nazgul/reviews/$unit/.dispatch.json"
 }
 
-# --- Test 18: authorized SKIPPED stub (in manifest skipped[]) — gate satisfied ---
-setup_evidence_env "code-reviewer qa-reviewer"
+# Helper: write a diff.patch with `diff --git a/X b/X` headers for given files
+# (enough for review-evidence.sh's recompute-and-compare to classify them).
+# Usage: write_diff_patch TASK-001 "src/app.py" "tests/test_app.py"
+write_diff_patch() {
+  local unit="$1"; shift
+  mkdir -p "$TEST_DIR/nazgul/reviews/$unit"
+  local f out=""
+  for f in "$@"; do
+    out="${out}diff --git a/${f} b/${f}\n--- a/${f}\n+++ b/${f}\n"
+  done
+  printf '%b' "$out" > "$TEST_DIR/nazgul/reviews/$unit/diff.patch"
+}
+
+# --- Test 18: authorized SKIPPED stub reproducible from the diff — gate satisfied ---
+setup_evidence_env "code-reviewer qa-reviewer" '.review_gate.conditional_dispatch = true'
 write_review "TASK-001" "code-reviewer" "APPROVED"
 mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
 printf -- '---\nverdict: SKIPPED\n---\nskipped: no tests changed\n' > "$TEST_DIR/nazgul/reviews/TASK-001/qa-reviewer.md"
+write_diff_patch "TASK-001" "src/app.py"
 write_manifest "TASK-001" "qa-reviewer:no tests changed"
 run_validate "TASK-001"
 assert_exit_code "authorized SKIPPED: exit 0" "$VAL_EC" 0
@@ -293,8 +309,9 @@ assert_not_contains "authorized SKIPPED: not UNAPPROVED" "$VAL_OUTPUT" "UNAPPROV
 teardown_temp_dir
 
 # --- Test 19: authorized SKIPPED with no stub file yet — still gate-satisfying (not MISSING) ---
-setup_evidence_env "code-reviewer qa-reviewer"
+setup_evidence_env "code-reviewer qa-reviewer" '.review_gate.conditional_dispatch = true'
 write_review "TASK-001" "code-reviewer" "APPROVED"
+write_diff_patch "TASK-001" "src/app.py"
 write_manifest "TASK-001" "qa-reviewer:no tests changed"
 run_validate "TASK-001"
 assert_exit_code "authorized SKIPPED, no stub: exit 0" "$VAL_EC" 0
@@ -319,6 +336,40 @@ write_manifest "TASK-001" "security-reviewer:no security-relevant changes"
 run_validate "TASK-001"
 assert_exit_code "security-reviewer skip not honored: exit 1" "$VAL_EC" 1
 assert_contains "security-reviewer skip not honored: UNAPPROVED" "$VAL_OUTPUT" "UNAPPROVED security-reviewer"
+teardown_temp_dir
+
+# --- Test 22 (SECURITY, GROUP-2 CRITICAL/82): forged manifest skipping qa on a
+# diff that touches tests/ is REJECTED — the skip is not reproducible ---
+setup_evidence_env "code-reviewer qa-reviewer" '.review_gate.conditional_dispatch = true'
+write_review "TASK-001" "code-reviewer" "APPROVED"
+write_diff_patch "TASK-001" "tests/test_app.py"
+write_manifest "TASK-001" "qa-reviewer:no tests changed"
+run_validate "TASK-001"
+assert_exit_code "forged qa skip on tests/ diff: exit 1" "$VAL_EC" 1
+assert_contains "forged qa skip on tests/ diff: not honored" "$VAL_OUTPUT" "MISSING qa-reviewer"
+teardown_temp_dir
+
+# --- Test 23: manifest whose skipped[] exactly matches the recompute is HONORED
+# for a different reviewer (architect-reviewer, tests-only diff) ---
+setup_evidence_env "code-reviewer qa-reviewer architect-reviewer" '.review_gate.conditional_dispatch = true'
+write_review "TASK-001" "code-reviewer" "APPROVED"
+write_review "TASK-001" "qa-reviewer" "APPROVED"
+write_diff_patch "TASK-001" "tests/test_app.py"
+write_manifest "TASK-001" "architect-reviewer:no architecture-surface change"
+run_validate "TASK-001"
+assert_exit_code "matching recompute honored: exit 0" "$VAL_EC" 0
+assert_not_contains "matching recompute honored: not MISSING" "$VAL_OUTPUT" "MISSING architect-reviewer"
+teardown_temp_dir
+
+# --- Test 24 (SECURITY): conditional_dispatch=false + any skip stub is REJECTED,
+# even when the diff would otherwise legitimately support the skip ---
+setup_evidence_env "code-reviewer qa-reviewer" '.review_gate.conditional_dispatch = false'
+write_review "TASK-001" "code-reviewer" "APPROVED"
+write_diff_patch "TASK-001" "src/app.py"
+write_manifest "TASK-001" "qa-reviewer:no tests changed"
+run_validate "TASK-001"
+assert_exit_code "conditional_dispatch=false rejects any skip: exit 1" "$VAL_EC" 1
+assert_contains "conditional_dispatch=false rejects any skip: not honored" "$VAL_OUTPUT" "MISSING qa-reviewer"
 teardown_temp_dir
 
 report_results

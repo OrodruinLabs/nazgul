@@ -73,8 +73,30 @@ is_task_manifest() {
   [[ "$p" =~ (^|/)nazgul/tasks/TASK-[0-9]+\.md$ ]]
 }
 
+# Helper: check if path is a review-unit dispatch manifest
+is_dispatch_manifest() {
+  local p="$1"
+  [[ "$p" =~ (^|/)nazgul/reviews/[^/]+/\.dispatch\.json$ ]]
+}
+
 # If this is NOT a task manifest, check if it needs the active-task guard
 if ! is_task_manifest "$FILE_PATH"; then
+  # Defense-in-depth (recompute-and-compare in review-evidence.sh is the real
+  # fix): .dispatch.json is written by the review-gate orchestrator only,
+  # which never runs while a task is IN_PROGRESS — the implementer's active
+  # turn. Block writes/edits to it while any task is IN_PROGRESS, narrowing
+  # the trivial forge path (implementer has Bash+Write under nazgul/).
+  if is_dispatch_manifest "$FILE_PATH" && [ -d "$PROJECT_ROOT/nazgul/tasks" ]; then
+    for _dm_task_file in "$PROJECT_ROOT/nazgul/tasks"/TASK-*.md "$PROJECT_ROOT/nazgul/tasks"/patches/PATCH-*.md; do
+      [ -f "$_dm_task_file" ] || continue
+      if [ "$(get_task_status "$_dm_task_file" "")" = "IN_PROGRESS" ]; then
+        echo "NAZGUL STATE GUARD: BLOCKED — .dispatch.json may not be written while a task is IN_PROGRESS" >&2
+        echo "This file is written by the review-gate orchestrator only, after a task reaches IMPLEMENTED." >&2
+        exit 2
+      fi
+    done
+  fi
+
   # Files inside nazgul/ are always allowed (config, plan, reviews, etc.)
   if is_nazgul_path "$FILE_PATH"; then
     exit 0
