@@ -391,6 +391,26 @@ migrate_17_to_18() {
   log_migration "v17→v18: added review_gate.require_provenance (default true) + conditional_dispatch (default false); docs.verify_comments (default true); models.review sonnet→haiku (only when absent or at old default sonnet); added models.review_by_reviewer pinning security-reviewer+architect-reviewer to sonnet"
 }
 
+migrate_18_to_19() {
+  local tmp
+  tmp=$(mktemp)
+  # FEAT-007: conductor engine config surface. ADDITIVE ONLY — set when absent,
+  # any explicit value (incl. false) preserved. Non-object execution/conductor
+  # sections are first clamped to {} (invalid types NOT preserved).
+  jq '
+    .execution = ((if (.execution | type) == "object" then .execution else {} end)
+      | .engine = (if has("engine") then .engine else "sequential" end))
+    | .conductor = ((if (.conductor | type) == "object" then .conductor else {} end)
+      | .gates = ((if (.gates | type) == "object" then .gates else {} end)
+          | .approve_graph = (if has("approve_graph") then .approve_graph else false end)
+          | .approve_each_wave = (if has("approve_each_wave") then .approve_each_wave else false end)
+          | .approve_final_pr = (if has("approve_final_pr") then .approve_final_pr else false end))
+      | .max_parallel = (if has("max_parallel") then .max_parallel else 3 end))
+    | .schema_version = 19
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v18→v19: added execution.engine (default sequential); added conductor.gates.{approve_graph,approve_each_wave,approve_final_pr} (default false); added conductor.max_parallel (default 3)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"

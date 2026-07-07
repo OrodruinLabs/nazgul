@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "18"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "19"
 assert_json_field "review_gate.simplify_before_review default false" "$CONFIG" ".review_gate.simplify_before_review" "false"
 assert_json_field "review_gate.enforce_granularity default block" "$CONFIG" ".review_gate.enforce_granularity" "block"
 assert_json_field "has .default_mode" "$CONFIG" ".default_mode" "null"
@@ -125,5 +125,18 @@ val=$(jq -r '.models.review_by_reviewer | type' "$CONFIG")
 assert_eq "v18 has .models.review_by_reviewer object" "$val" "object"
 assert_json_field "v18 models.review_by_reviewer security-reviewer is sonnet" "$CONFIG" '.models.review_by_reviewer["security-reviewer"]' "sonnet"
 assert_json_field "v18 models.review_by_reviewer architect-reviewer is sonnet" "$CONFIG" '.models.review_by_reviewer["architect-reviewer"]' "sonnet"
+
+# v19 new defaults (FEAT-007: conductor engine config surface)
+val=$(jq -r '.execution | type' "$CONFIG")
+assert_eq "v19 has .execution object" "$val" "object"
+assert_json_field "v19 execution.engine is sequential" "$CONFIG" ".execution.engine" "sequential"
+val=$(jq -r '.conductor | type' "$CONFIG")
+assert_eq "v19 has .conductor object" "$val" "object"
+val=$(jq -r '.conductor.gates | type' "$CONFIG")
+assert_eq "v19 has .conductor.gates object" "$val" "object"
+assert_json_field "v19 conductor.gates.approve_graph is false" "$CONFIG" ".conductor.gates.approve_graph" "false"
+assert_json_field "v19 conductor.gates.approve_each_wave is false" "$CONFIG" ".conductor.gates.approve_each_wave" "false"
+assert_json_field "v19 conductor.gates.approve_final_pr is false" "$CONFIG" ".conductor.gates.approve_final_pr" "false"
+assert_json_field "v19 conductor.max_parallel is 3" "$CONFIG" ".conductor.max_parallel" "3"
 
 report_results
