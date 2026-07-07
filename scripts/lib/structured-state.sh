@@ -8,7 +8,7 @@
 [ -n "${_NAZGUL_STRUCTURED_STATE_SOURCED:-}" ] && return 0
 _NAZGUL_STRUCTURED_STATE_SOURCED=1
 
-VALID_VERDICTS="APPROVE CHANGES_REQUESTED"
+VALID_VERDICTS="APPROVE CHANGES_REQUESTED SKIPPED"
 VALID_STATUSES="PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED"
 
 # read_frontmatter_field <file> <key> -> prints trimmed value; 0 if found & non-empty, else 1.
@@ -36,7 +36,7 @@ _in_list() {
   return 1
 }
 
-# read_verdict <file> -> APPROVE|CHANGES_REQUESTED (0) | INVALID (2) | NONE (1)
+# read_verdict <file> -> APPROVE|CHANGES_REQUESTED|SKIPPED (0) | INVALID (2) | NONE (1)
 read_verdict() {
   local file="$1" v
   if ! v=$(read_frontmatter_field "$file" verdict); then
