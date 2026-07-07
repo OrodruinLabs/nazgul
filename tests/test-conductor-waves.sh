@@ -120,4 +120,13 @@ assert_json_field "graph.json input: wave1 unit" "$TEST_DIR/waves.json" ".[0].un
 assert_json_field "graph.json input: wave2 unit" "$TEST_DIR/waves.json" ".[1].units[0]" "TASK-002"
 teardown_temp_dir
 
+# --- Test 9: unknown dependency id -> rejected, not silently dropped or looped ---
+setup_temp_dir
+setup_nazgul_dir
+create_task_file TASK-001 READY TASK-999
+run_compute "$TEST_DIR/nazgul/tasks"
+assert_exit_code "unknown dep: non-zero exit" "$COMPUTE_EC" 1
+assert_contains "unknown dep: stderr names unknown dependency" "$COMPUTE_ERR" "unknown dependency"
+teardown_temp_dir
+
 report_results

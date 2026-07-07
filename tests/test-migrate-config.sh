@@ -738,7 +738,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_json_field "v16→v17 granularity task→group (old default flip)" "$NAZGUL_DIR/config.json" ".review_gate.granularity" "group"
-assert_json_field "v16→v17 granularity task→group schema=18 (via v17)" "$NAZGUL_DIR/config.json" ".schema_version" "19"
+assert_json_field "v16→v17 granularity task→group schema=19 (via v17)" "$NAZGUL_DIR/config.json" ".schema_version" "19"
 
 # granularity: "group" (new default) → "group" (idempotent / new value unchanged)
 NAZGUL_DIR=$(setup_nazgul_dir "v16-to-17-granularity-group")
