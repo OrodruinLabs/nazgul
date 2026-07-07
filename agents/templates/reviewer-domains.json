@@ -15,8 +15,7 @@
     ],
     "review_steps": [
       "Find corresponding test files",
-      "Run the test suite to verify all pass",
-      "Check coverage if tool available",
+      "Judge coverage and assertions from the diff and test files — do not re-run the suite (Step 1 pre-checks already ran it)",
       "Evaluate test quality against checklist"
     ],
     "category": "Testing",
@@ -373,7 +372,7 @@
     ],
     "review_steps": [
       "Read the diff and identify the unit of change",
-      "Read full files for any non-trivial change to understand context",
+      "Read a full file only when a diff hunk is truncated mid-function; never crawl the broader codebase",
       "Run linters and formatters if available",
       "Cross-check against existing patterns in neighboring files",
       "Run scripts/lean-comments-guard.sh --check on every changed source file; treat any reported violation as an ALWAYS-BLOCKING finding"
