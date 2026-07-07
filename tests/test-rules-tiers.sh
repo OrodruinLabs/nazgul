@@ -63,16 +63,37 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test (c): the count of [advisory] annotations is at most 4
+# Test (c): the count of [advisory] annotations is at most 6
 # The legend table itself contains [advisory] as a label definition (1 count).
-# Rule annotations add to that. Total must be <= 4.
+# Rule annotations add to that (incl. §11 Conductor's gates + graph-only-invariant
+# bullets, FEAT-007). Total must be <= 6.
 # ---------------------------------------------------------------------------
 ADVISORY_COUNT=$(grep -c '\[advisory\]' "$RULES_FILE" || true)
-if [ "$ADVISORY_COUNT" -le 4 ]; then
-  _pass "[advisory] annotation count is at most 4 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -le 6 ]; then
+  _pass "[advisory] annotation count is at most 6 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is at most 4" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected <= 4"
+  _fail "[advisory] annotation count is at most 6" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected <= 6"
 fi
+
+# ---------------------------------------------------------------------------
+# Test (e): the Conductor section exists with honest tiers — the two hard
+# stops are [enforced], the graph-only invariant is [advisory] (test-backed,
+# not a mechanical guard).
+# ---------------------------------------------------------------------------
+assert_file_contains \
+  "RULES.md has a Conductor Execution Engine section" \
+  "$RULES_FILE" \
+  "## 11. Conductor Execution Engine"
+
+assert_file_contains \
+  "Conductor hard stops are tagged [enforced]" \
+  "$RULES_FILE" \
+  "hard stops are unconditional"
+
+assert_file_contains \
+  "Conductor graph-only invariant is tagged [advisory], not a mechanical guard" \
+  "$RULES_FILE" \
+  "Graph-only invariant: the Conductor never holds file bodies"
 
 report_results
