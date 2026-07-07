@@ -186,6 +186,7 @@ fi
 # First violation: reset DONE → IMPLEMENTED with diagnostics. Second consecutive
 # violation for the same task: escalate to BLOCKED with remediation (no livelock).
 # In YOLO mode, APPROVED tasks have been locally reviewed; DONE only happens via PR merge
+REQUIRE_PROVENANCE=$(jq -r 'if .review_gate.require_provenance == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
 REVIEW_VIOLATIONS=""
 if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NAZGUL_DIR/tasks" ]; then
   for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
@@ -224,9 +225,45 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
           REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} reset DONE → IMPLEMENTED — missing/unapproved reviews: ${MISSING_LIST}. Fix: spawn review-gate for ${TASK_ID}, or run /nazgul:review --materialize ${TASK_ID}
 "
         fi
-      elif [ "$RESET_COUNT" != "0" ]; then
-        # Evidence is now valid — clear the stale counter
-        jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+      else
+        # Evidence passed — gate on tamper/staleness provenance next (same bounded
+        # reset→IMPLEMENTED→BLOCKED counter; require_provenance=false or a valid/legacy
+        # manifest is a no-op).
+        PROVENANCE_PROBLEMS=""
+        if [ "$REQUIRE_PROVENANCE" = "true" ]; then
+          PROVENANCE_PROBLEMS=$(validate_review_provenance "$NAZGUL_DIR" "$TASK_ID") || true
+        fi
+        if [ -n "$PROVENANCE_PROBLEMS" ]; then
+          PROVENANCE_LIST=$(echo "$PROVENANCE_PROBLEMS" | tr '\n' ',' | sed 's/,$//; s/,/, /g')
+          if [ "$RESET_COUNT" -ge 1 ]; then
+            # Second consecutive violation — escalate to BLOCKED with remediation
+            set_task_status "$task_file" "DONE" "BLOCKED"
+            BLOCKED_REASON_TEXT="review provenance invalid (${PROVENANCE_LIST}) — re-run review-gate so a fresh diff-bound dispatch manifest is written"
+            if grep -q '^\- \*\*Blocked reason\*\*:' "$task_file" 2>/dev/null; then
+              awk -v reason="- **Blocked reason**: ${BLOCKED_REASON_TEXT}" \
+                '/^\- \*\*Blocked reason\*\*:/ { print reason; next } { print }' \
+                "$task_file" > "${task_file}.tmp" && mv "${task_file}.tmp" "$task_file"
+            else
+              echo "- **Blocked reason**: ${BLOCKED_REASON_TEXT}" >> "$task_file"
+            fi
+            jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+            DONE_COUNT=$((DONE_COUNT - 1))
+            BLOCKED_COUNT=$((BLOCKED_COUNT + 1))
+            REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} escalated to BLOCKED — review provenance invalid: ${PROVENANCE_LIST}. Re-run review-gate so a fresh diff-bound dispatch manifest is written for ${TASK_ID}
+"
+          else
+            # First violation — reset to IMPLEMENTED with diagnostics
+            set_task_status "$task_file" "DONE" "IMPLEMENTED"
+            jq --arg t "$TASK_ID" '.safety._review_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+            DONE_COUNT=$((DONE_COUNT - 1))
+            IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
+            REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} reset DONE → IMPLEMENTED — review provenance invalid: ${PROVENANCE_LIST}. Fix: re-run review-gate so a fresh diff-bound dispatch manifest is written for ${TASK_ID}
+"
+          fi
+        elif [ "$RESET_COUNT" != "0" ]; then
+          # Evidence and provenance are both now valid — clear the stale counter
+          jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+        fi
       fi
     elif [ "$RESET_COUNT" != "0" ] && [ "$STATUS" != "IMPLEMENTED" ] && [ "$STATUS" != "IN_REVIEW" ]; then
       # Task left DONE for a non-repair state — clear the stale counter.
