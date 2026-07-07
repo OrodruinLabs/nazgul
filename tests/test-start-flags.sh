@@ -63,6 +63,26 @@ assert_eq "--hitl --yolo clears afk.task_pr" "$(jq -r .afk.task_pr "$TMP/c.json"
 out=$(bash "$APPLY" "$TMP/none.json" "--yolo" 2>/dev/null || true)
 assert_eq "missing config → hitl"  "$out" "hitl"
 
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--conductor" >/dev/null
+assert_eq "--conductor sets execution.engine" "$(jq -r .execution.engine "$TMP/c.json")" "conductor"
+assert_eq "--conductor mode unchanged"        "$(jq -r .mode "$TMP/c.json")" "hitl"
+
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--afk" >/dev/null
+assert_eq "no --conductor leaves execution.engine unset" "$(jq -r '.execution.engine // "unset"' "$TMP/c.json")" "unset"
+
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--conductor --hitl" >/dev/null
+assert_eq "--conductor --hitl mode=hitl"          "$(jq -r .mode "$TMP/c.json")" "hitl"
+assert_eq "--conductor --hitl execution.engine"   "$(jq -r .execution.engine "$TMP/c.json")" "conductor"
+
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--conductor --yolo" >/dev/null
+assert_eq "--conductor --yolo mode=afk"           "$(jq -r .mode "$TMP/c.json")" "afk"
+assert_eq "--conductor --yolo afk.yolo"           "$(jq -r .afk.yolo "$TMP/c.json")" "true"
+assert_eq "--conductor --yolo execution.engine"   "$(jq -r .execution.engine "$TMP/c.json")" "conductor"
+
+# A --conductor token INSIDE the quoted objective must NOT be parsed as a flag
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" '"try the --conductor engine"' >/dev/null
+assert_eq "--conductor inside objective ignored" "$(jq -r '.execution.engine // "unset"' "$TMP/c.json")" "unset"
+
 # Switching modes CLEARS stale autonomous sub-flags (the runtime gates on them).
 prioryolo='{"mode":"afk","afk":{"enabled":true,"yolo":true,"task_pr":true},"max_iterations":40}'
 mkcfg "$prioryolo"; bash "$APPLY" "$TMP/c.json" "--afk" >/dev/null
