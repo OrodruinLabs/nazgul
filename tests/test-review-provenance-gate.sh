@@ -36,7 +36,7 @@ write_review_token() {
 # genuinely exits 0 (not the DELEGATE-more-work exit 2 a READY task or the
 # post-loop learning gate would otherwise produce).
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG1"' '.learning.auto_distill_post_loop = false'
+create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG1"' '.learning.auto_distill_post_loop = false' '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 DIFF="$TEST_DIR/nazgul/reviews/TASK-001/diff.patch"
@@ -62,7 +62,7 @@ assert_exit_code "PG-2 first violation: exit 2" "$HOOK_EC" 2
 assert_contains "PG-2 first violation: logged" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
 assert_contains "PG-2 first violation: names provenance" "$HOOK_OUTPUT" "review provenance invalid"
 assert_eq "PG-2 first violation: reset to IMPLEMENTED" "$(task_status TASK-001)" "IMPLEMENTED"
-count=$(jq -r '.safety._review_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
+count=$(jq -r '.safety._provenance_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
 assert_eq "PG-2 first violation: reset count recorded" "$count" "1"
 
 # Second consecutive run: task is back at DONE (simulating a re-completion without fixing
@@ -78,14 +78,15 @@ assert_contains "PG-2 second violation: escalated" "$HOOK_OUTPUT" "escalated to 
 assert_eq "PG-2 second violation: escalated to BLOCKED" "$(task_status TASK-001)" "BLOCKED"
 assert_contains "PG-2 second violation: blocked reason names remedy" \
   "$(cat "$TEST_DIR/nazgul/tasks/TASK-001.md")" "re-run review-gate"
-count=$(jq -r '.safety._review_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
+count=$(jq -r '.safety._provenance_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
 assert_eq "PG-2 second violation: count cleared" "$count" "0"
 teardown_temp_dir
 
 # --- PG-3: require_provenance=false → invalid provenance ignored, DONE preserved ---
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
 create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG3"' \
-  '.review_gate.require_provenance = false' '.learning.auto_distill_post_loop = false'
+  '.review_gate.require_provenance = false' '.learning.auto_distill_post_loop = false' \
+  '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 write_review_token "TASK-001" "code-reviewer" "deadbeefdeadbeef"
@@ -97,7 +98,7 @@ teardown_temp_dir
 
 # --- PG-4: legacy review (no token, no manifest) → degrade-to-allow, DONE preserved ---
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG4"' '.learning.auto_distill_post_loop = false'
+create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG4"' '.learning.auto_distill_post_loop = false' '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
