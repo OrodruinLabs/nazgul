@@ -4,10 +4,14 @@
 # Canonical evidence is per-reviewer files: nazgul/reviews/<TASK-ID>/<reviewer>.md
 # A consolidated summary.md is NOT evidence — it is a meta-file, excluded below.
 
-# Source structured-state for canonical verdict reading.
+# Source structured-state for canonical verdict reading, and review-provenance
+# so every sourcer (stop-hook, task-state-guard) transitively gains
+# validate_review_provenance and the dispatch-manifest reader.
 _NAZGUL_RE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$_NAZGUL_RE_DIR/structured-state.sh"
+# shellcheck source=/dev/null
+source "$_NAZGUL_RE_DIR/review-provenance.sh"
 
 # Meta-files in a review dir that are NOT reviewer verdicts.
 # Usage: _is_review_meta_file <basename>
@@ -48,6 +52,20 @@ _has_approved_verdict() {
   grep -qiE '^[[:space:]#>*`_-]*approve(d|s)?([^[:alpha:]]|$)' "$file" 2>/dev/null
 }
 
+# A reviewer counts as authorized-skipped (gate-satisfying despite no APPROVED
+# verdict) when reviews/<unit>/.dispatch.json exists and lists it in skipped[].
+# security-reviewer is never honored here, even if listed (defense in depth —
+# the selector must never skip it, but the gate also refuses to trust it).
+# With no manifest present this always fails, preserving the legacy contract.
+# Usage: _re_is_authorized_skipped <review_dir> <reviewer>
+_re_is_authorized_skipped() {
+  local review_dir="$1" reviewer="$2"
+  local manifest="$review_dir/.dispatch.json"
+  [ -f "$manifest" ] || return 1
+  [ "$reviewer" = "security-reviewer" ] && return 1
+  jq -r '.skipped[]?.name // empty' "$manifest" 2>/dev/null | grep -qxF "$reviewer"
+}
+
 # Validate review evidence for a task.
 # Usage: validate_review_evidence <nazgul_dir> <task_id>
 # Returns 0 and prints nothing if evidence is complete.
@@ -56,6 +74,8 @@ _has_approved_verdict() {
 #   NO_REVIEWERS_CONFIGURED   — config.json agents.reviewers is empty
 #   MISSING <reviewer>        — no reviews/<task_id>/<reviewer>.md
 #   UNAPPROVED <reviewer>     — file exists but lacks an APPROVED verdict
+# A reviewer authorized-skipped via the dispatch manifest (see
+# _re_is_authorized_skipped) is exempt from both MISSING and UNAPPROVED.
 validate_review_evidence() {
   local nazgul_dir="$1" task_id="$2"
   local review_dir="$nazgul_dir/reviews/$task_id"
@@ -81,9 +101,11 @@ validate_review_evidence() {
   while IFS= read -r reviewer; do
     [ -z "$reviewer" ] && continue
     if [ ! -f "$review_dir/${reviewer}.md" ]; then
+      _re_is_authorized_skipped "$review_dir" "$reviewer" && continue
       echo "MISSING $reviewer"
       problems=$((problems + 1))
     elif ! _has_approved_verdict "$review_dir/${reviewer}.md"; then
+      _re_is_authorized_skipped "$review_dir" "$reviewer" && continue
       echo "UNAPPROVED $reviewer"
       problems=$((problems + 1))
     fi

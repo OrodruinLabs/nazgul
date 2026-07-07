@@ -212,7 +212,7 @@ validate_review_provenance() {
   manifest_token=$(jq -r '.token // empty' "$manifest" 2>/dev/null)
   skipped_names=$(jq -r '.skipped[]?.name // empty' "$manifest" 2>/dev/null)
 
-  local problems=0 name file_token
+  local problems=0 name file_token rf2
   for rf2 in "${reviewer_files[@]}"; do
     name=$(basename "$rf2" .md)
     if grep -qxF "$name" <<< "$skipped_names"; then

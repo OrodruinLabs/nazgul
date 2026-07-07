@@ -103,6 +103,18 @@ if [ "$T1" = "$T3" ]; then
 else
   _pass "token differs when nonce differs"
 fi
+T4=$(compute_review_token "nonceA" "hashB" "TASK-001")
+if [ "$T1" = "$T4" ]; then
+  _fail "token differs when diff_hash differs" "tokens matched unexpectedly: $T1"
+else
+  _pass "token differs when diff_hash differs"
+fi
+T5=$(compute_review_token "nonceA" "hashA" "TASK-002")
+if [ "$T1" = "$T5" ]; then
+  _fail "token differs when unit_id differs" "tokens matched unexpectedly: $T1"
+else
+  _pass "token differs when unit_id differs"
+fi
 if [ "${#T1}" -eq 16 ]; then
   _pass "token is 16 chars"
 else
@@ -122,13 +134,23 @@ assert_exit_code "compute_review_token degrades to allow (no hash tool)" "$DEGRA
 assert_eq "compute_review_token degrades to allow: no output" "$DEGRADE_OUT" ""
 
 # --- Test 7: write_dispatch_manifest degrades to allow when no sha256 tool exists ---
+# A bare PATH="" would fail mkdir (the FIRST external call) before the hash step is
+# ever reached, proving nothing about hash-tool degradation specifically. Build a
+# minimal PATH with every OTHER external tool the function needs (mkdir, dirname,
+# mktemp, mv, date, jq, and head/od/tr for the /dev/urandom nonce fallback) but
+# WITHOUT sha256sum/shasum/openssl, so the failure is isolated to the hash step.
 setup_temp_dir
 setup_nazgul_dir
 DIFF="$TEST_DIR/diff.patch"; printf 'x\n' > "$DIFF"
+FAKEBIN="$TEST_DIR/fakebin"
+mkdir -p "$FAKEBIN"
+for tool in mkdir dirname mktemp mv rm date jq head od tr; do
+  toolpath=$(command -v "$tool" 2>/dev/null) && ln -s "$toolpath" "$FAKEBIN/$tool"
+done
 WD_EC=0
-PATH="" "$BASH_BIN" -c "source '$REPO_ROOT/scripts/lib/review-provenance.sh'; write_dispatch_manifest '$TEST_DIR/nazgul' TASK-005 '$DIFF' FEAT-006 1 -- code-reviewer" \
+PATH="$FAKEBIN" "$BASH_BIN" -c "source '$REPO_ROOT/scripts/lib/review-provenance.sh'; write_dispatch_manifest '$TEST_DIR/nazgul' TASK-005 '$DIFF' FEAT-006 1 -- code-reviewer" \
   >/dev/null 2>&1 || WD_EC=$?
-assert_exit_code "write_dispatch_manifest degrades to allow (no hash tool)" "$WD_EC" 1
+assert_exit_code "write_dispatch_manifest degrades to allow (hash tool missing, scaffolding present)" "$WD_EC" 1
 assert_file_not_exists "no manifest written when hash tool missing" "$TEST_DIR/nazgul/reviews/TASK-005/.dispatch.json"
 teardown_temp_dir
 

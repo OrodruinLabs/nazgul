@@ -259,4 +259,66 @@ rc=0; validate_review_evidence "$SS_DIR" "TASK-900" >/dev/null || rc=$?
 assert_exit_code "legacy APPROVED line still passes (fallback)" "$rc" 0
 rm -rf "$SS_DIR"
 
+# --- Manifest-aware SKIPPED authorization ---
+
+# Helper: write a .dispatch.json manifest with a given skipped[] name list
+# Usage: write_manifest TASK-001 "qa-reviewer:no tests changed"
+write_manifest() {
+  local unit="$1" skipped_raw="$2"
+  mkdir -p "$TEST_DIR/nazgul/reviews/$unit"
+  local entries=() entry sname sreason skip_objs=()
+  IFS=';' read -ra entries <<< "$skipped_raw"
+  for entry in "${entries[@]}"; do
+    [ -z "$entry" ] && continue
+    sname="${entry%%:*}"
+    sreason="${entry#*:}"
+    skip_objs+=("$(jq -n --arg n "$sname" --arg r "$sreason" '{name:$n, reason:$r}')")
+  done
+  local skipped_json="[]"
+  [ "${#skip_objs[@]}" -gt 0 ] && skipped_json=$(printf '%s\n' "${skip_objs[@]}" | jq -s '.')
+  jq -n --argjson skipped "$skipped_json" '{unit:"'"$unit"'", skipped:$skipped}' \
+    > "$TEST_DIR/nazgul/reviews/$unit/.dispatch.json"
+}
+
+# --- Test 18: authorized SKIPPED stub (in manifest skipped[]) — gate satisfied ---
+setup_evidence_env "code-reviewer qa-reviewer"
+write_review "TASK-001" "code-reviewer" "APPROVED"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf -- '---\nverdict: SKIPPED\n---\nskipped: no tests changed\n' > "$TEST_DIR/nazgul/reviews/TASK-001/qa-reviewer.md"
+write_manifest "TASK-001" "qa-reviewer:no tests changed"
+run_validate "TASK-001"
+assert_exit_code "authorized SKIPPED: exit 0" "$VAL_EC" 0
+assert_not_contains "authorized SKIPPED: not MISSING" "$VAL_OUTPUT" "MISSING qa-reviewer"
+assert_not_contains "authorized SKIPPED: not UNAPPROVED" "$VAL_OUTPUT" "UNAPPROVED qa-reviewer"
+teardown_temp_dir
+
+# --- Test 19: authorized SKIPPED with no stub file yet — still gate-satisfying (not MISSING) ---
+setup_evidence_env "code-reviewer qa-reviewer"
+write_review "TASK-001" "code-reviewer" "APPROVED"
+write_manifest "TASK-001" "qa-reviewer:no tests changed"
+run_validate "TASK-001"
+assert_exit_code "authorized SKIPPED, no stub: exit 0" "$VAL_EC" 0
+assert_not_contains "authorized SKIPPED, no stub: not MISSING" "$VAL_OUTPUT" "MISSING qa-reviewer"
+teardown_temp_dir
+
+# --- Test 20: SKIPPED stub with NO manifest — legacy contract intact (still UNAPPROVED) ---
+setup_evidence_env "code-reviewer"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf -- '---\nverdict: SKIPPED\n---\nskipped: no tests changed\n' > "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md"
+run_validate "TASK-001"
+assert_exit_code "SKIPPED no manifest: exit 1" "$VAL_EC" 1
+assert_contains "SKIPPED no manifest: still UNAPPROVED" "$VAL_OUTPUT" "UNAPPROVED code-reviewer"
+teardown_temp_dir
+
+# --- Test 21: security-reviewer in skipped[] is never honored — still required ---
+setup_evidence_env "code-reviewer security-reviewer"
+write_review "TASK-001" "code-reviewer" "APPROVED"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf -- '---\nverdict: SKIPPED\n---\nskipped: no security-relevant changes\n' > "$TEST_DIR/nazgul/reviews/TASK-001/security-reviewer.md"
+write_manifest "TASK-001" "security-reviewer:no security-relevant changes"
+run_validate "TASK-001"
+assert_exit_code "security-reviewer skip not honored: exit 1" "$VAL_EC" 1
+assert_contains "security-reviewer skip not honored: UNAPPROVED" "$VAL_OUTPUT" "UNAPPROVED security-reviewer"
+teardown_temp_dir
+
 report_results
