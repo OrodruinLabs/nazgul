@@ -43,7 +43,10 @@ _nrs_is_doc_file() {
 _nrs_is_architecture_surface() {
   case "$1" in
     skills/*|agents/*|scripts/*|hooks/*) return 0 ;;
-    templates/config.json|*config*.json) return 0 ;;
+    # Config SCHEMA files only (per the documented policy) — the plugin's config
+    # template + any config.json / *.schema.json. NOT any *config*.json (that would
+    # pull architect onto unrelated files like tsconfig.json / jest.config.json).
+    templates/config.json|config.json|*/config.json|*.schema.json) return 0 ;;
     *) return 1 ;;
   esac
 }

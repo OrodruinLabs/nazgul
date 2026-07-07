@@ -90,8 +90,10 @@ if ! is_task_manifest "$FILE_PATH"; then
   # Defense-in-depth (recompute-and-compare in review-evidence.sh is the real
   # fix): .dispatch.json and diff.patch are written by the review-gate
   # orchestrator only, which never runs while a task is IN_PROGRESS — the
-  # implementer's active turn. Block writes/edits to either while any task is
-  # IN_PROGRESS, narrowing the trivial forge path (implementer has Bash+Write
+  # implementer's active turn. Block writes/edits to either while the covering
+  # task(s) are IN_PROGRESS — unit-scoped for TASK-*/PATCH-* (that task) and
+  # GROUP-* (that group's tasks), falling back to any-task-IN_PROGRESS only for
+  # unrecognized unit ids — narrowing the trivial forge path (implementer has Bash+Write
   # under nazgul/).
   if { is_dispatch_manifest "$FILE_PATH" || is_review_diff "$FILE_PATH"; } && [ -d "$PROJECT_ROOT/nazgul/tasks" ]; then
     # Narrow to the review unit's own task(s) so a parallel Agent-Teams wave
