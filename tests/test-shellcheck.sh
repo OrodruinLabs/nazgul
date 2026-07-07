@@ -23,6 +23,7 @@ SCRIPTS=(
   "scripts/lean-comments-guard.sh"
   "scripts/emit-event-cli.sh"
   "scripts/lib/emit-event.sh"
+  "scripts/lib/review-provenance.sh"
   "scripts/local-mode-tracking-guard.sh"
   "scripts/base-branch-commit-guard.sh"
   "scripts/session-staging.sh"
