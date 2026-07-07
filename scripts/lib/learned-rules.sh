@@ -143,6 +143,10 @@ _rule_block() {
 # cmd_select <doc> <agent> <files> [max]
 cmd_select() {
   local doc="$1" agent="$2" files="$3" max="${4:-$DEFAULT_MAX_SELECT_RULES}"
+  # Validate max is a positive integer — a non-numeric/empty value errors `head -n`,
+  # and a negative (e.g. -1) makes `head` print all-but-last-N, silently defeating the cap.
+  case "$max" in ''|*[!0-9]*) max="$DEFAULT_MAX_SELECT_RULES" ;; esac
+  [ "$max" -gt 0 ] 2>/dev/null || max="$DEFAULT_MAX_SELECT_RULES"
   [ -f "$doc" ] || return 0
   local id status agents globs hits title
   local -a ranked=()
