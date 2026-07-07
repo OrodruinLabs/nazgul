@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "17"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "18"
 assert_json_field "review_gate.simplify_before_review default false" "$CONFIG" ".review_gate.simplify_before_review" "false"
 assert_json_field "review_gate.enforce_granularity default block" "$CONFIG" ".review_gate.enforce_granularity" "block"
 assert_json_field "has .default_mode" "$CONFIG" ".default_mode" "null"
@@ -115,5 +115,15 @@ assert_json_field "v17 parallelism.wave_execution is true" "$CONFIG" ".paralleli
 val=$(jq -r '.docs | type' "$CONFIG")
 assert_eq "v17 has .docs object" "$val" "object"
 assert_json_field "v17 docs.verify_post_loop is true" "$CONFIG" ".docs.verify_post_loop" "true"
+
+# v18 new defaults (FEAT-006: provenance + comment-verify + model map + conditional-dispatch)
+assert_json_field "v18 review_gate.require_provenance is true" "$CONFIG" ".review_gate.require_provenance" "true"
+assert_json_field "v18 review_gate.conditional_dispatch is false" "$CONFIG" ".review_gate.conditional_dispatch" "false"
+assert_json_field "v18 docs.verify_comments is true" "$CONFIG" ".docs.verify_comments" "true"
+assert_json_field "v18 models.review is haiku" "$CONFIG" ".models.review" "haiku"
+val=$(jq -r '.models.review_by_reviewer | type' "$CONFIG")
+assert_eq "v18 has .models.review_by_reviewer object" "$val" "object"
+assert_json_field "v18 models.review_by_reviewer security-reviewer is sonnet" "$CONFIG" '.models.review_by_reviewer["security-reviewer"]' "sonnet"
+assert_json_field "v18 models.review_by_reviewer architect-reviewer is sonnet" "$CONFIG" '.models.review_by_reviewer["architect-reviewer"]' "sonnet"
 
 report_results
