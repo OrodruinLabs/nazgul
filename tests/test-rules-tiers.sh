@@ -63,23 +63,25 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test (c): the count of [advisory] annotations is at most 6
+# Test (c): the count of [advisory] annotations is exactly 8
 # The legend table itself contains [advisory] as a label definition (1 count).
-# Rule annotations add to that (incl. §11 Conductor's gates + graph-only-invariant
-# bullets, FEAT-007). Total must be <= 6.
+# Rule annotations add to that (incl. §11 Conductor's engine-selection, hard-stops,
+# wave-parallelism, and graph-only-invariant bullets — all four are agent-invoked,
+# not hook-gated, per FEAT-007's tier-honesty correction). Total must be exactly 8.
 # ---------------------------------------------------------------------------
 ADVISORY_COUNT=$(grep -c '\[advisory\]' "$RULES_FILE" || true)
-if [ "$ADVISORY_COUNT" -le 6 ]; then
-  _pass "[advisory] annotation count is at most 6 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 8 ]; then
+  _pass "[advisory] annotation count is exactly 8 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is at most 6" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected <= 6"
+  _fail "[advisory] annotation count is exactly 8" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 8"
 fi
 
 # ---------------------------------------------------------------------------
-# Test (e): the Conductor section exists with honest tiers — the two hard
-# stops are [enforced], the graph-only invariant is [advisory] (test-backed,
-# not a mechanical guard).
+# Test (e): the Conductor section exists with honest tiers. The two hard
+# stops and wave parallelism are agent-invoked (no PreToolUse guard or
+# stop-hook forces the call), so per the legend they are [advisory], not
+# [enforced]/[hook-driven only] — same as the graph-only invariant.
 # ---------------------------------------------------------------------------
 assert_file_contains \
   "RULES.md has a Conductor Execution Engine section" \
@@ -87,9 +89,14 @@ assert_file_contains \
   "## 11. Conductor Execution Engine"
 
 assert_file_contains \
-  "Conductor hard stops are tagged [enforced]" \
+  "Conductor hard stops are tagged [advisory] (agent-invoked, not hook-gated)" \
   "$RULES_FILE" \
-  "hard stops are unconditional"
+  'hard stops are unconditional.*`\[advisory\]`'
+
+assert_file_contains \
+  "Conductor wave parallelism is tagged [advisory] (agent-invoked, not hook-gated)" \
+  "$RULES_FILE" \
+  'Wave parallelism.*`\[advisory\]`'
 
 assert_file_contains \
   "Conductor graph-only invariant is tagged [advisory], not a mechanical guard" \
