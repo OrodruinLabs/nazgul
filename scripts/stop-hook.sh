@@ -193,14 +193,21 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
     [ -f "$task_file" ] || continue
     STATUS=$(get_task_status "$task_file")
     TASK_ID=$(basename "$task_file" .md)
-    RESET_COUNT=$(jq -r --arg t "$TASK_ID" '.safety._review_reset_counts[$t] // 0' "$CONFIG" 2>/dev/null || echo "0")
-    case "$RESET_COUNT" in (*[!0-9]*|'') RESET_COUNT=0 ;; esac
+    # Independent 2-strike ladders: evidence violations (_review_reset_counts)
+    # and provenance violations (_provenance_reset_counts) no longer share a
+    # counter, so a genuinely-first provenance violation right after an
+    # evidence violation gets its own grace reset instead of escalating
+    # straight to BLOCKED.
+    EVID_RESET_COUNT=$(jq -r --arg t "$TASK_ID" '.safety._review_reset_counts[$t] // 0' "$CONFIG" 2>/dev/null || echo "0")
+    case "$EVID_RESET_COUNT" in (*[!0-9]*|'') EVID_RESET_COUNT=0 ;; esac
+    PROV_RESET_COUNT=$(jq -r --arg t "$TASK_ID" '.safety._provenance_reset_counts[$t] // 0' "$CONFIG" 2>/dev/null || echo "0")
+    case "$PROV_RESET_COUNT" in (*[!0-9]*|'') PROV_RESET_COUNT=0 ;; esac
 
     if [ "$STATUS" = "DONE" ]; then
       EVIDENCE_PROBLEMS=$(validate_review_evidence "$NAZGUL_DIR" "$TASK_ID") || true
       if [ -n "$EVIDENCE_PROBLEMS" ]; then
         MISSING_LIST=$(echo "$EVIDENCE_PROBLEMS" | awk 'NF>1 {out = out sep $2; sep = ", "} NF==1 {out = out sep $1; sep = ", "} END {print out}')
-        if [ "$RESET_COUNT" -ge 1 ]; then
+        if [ "$EVID_RESET_COUNT" -ge 1 ]; then
           # Second consecutive violation — escalate to BLOCKED with remediation
           set_task_status "$task_file" "DONE" "BLOCKED"
           BLOCKED_REASON_TEXT="review evidence missing (${MISSING_LIST}) — run /nazgul:review --materialize ${TASK_ID}"
@@ -226,7 +233,7 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
 "
         fi
       else
-        # Evidence passed — gate on tamper/staleness provenance next (same bounded
+        # Evidence passed — gate on tamper/staleness provenance next (own bounded
         # reset→IMPLEMENTED→BLOCKED counter; require_provenance=false or a valid/legacy
         # manifest is a no-op).
         PROVENANCE_PROBLEMS=""
@@ -235,7 +242,7 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
         fi
         if [ -n "$PROVENANCE_PROBLEMS" ]; then
           PROVENANCE_LIST=$(echo "$PROVENANCE_PROBLEMS" | tr '\n' ',' | sed 's/,$//; s/,/, /g')
-          if [ "$RESET_COUNT" -ge 1 ]; then
+          if [ "$PROV_RESET_COUNT" -ge 1 ]; then
             # Second consecutive violation — escalate to BLOCKED with remediation
             set_task_status "$task_file" "DONE" "BLOCKED"
             BLOCKED_REASON_TEXT="review provenance invalid (${PROVENANCE_LIST}) — re-run review-gate so a fresh diff-bound dispatch manifest is written"
@@ -246,7 +253,7 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
             else
               echo "- **Blocked reason**: ${BLOCKED_REASON_TEXT}" >> "$task_file"
             fi
-            jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+            jq --arg t "$TASK_ID" 'del(.safety._provenance_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
             DONE_COUNT=$((DONE_COUNT - 1))
             BLOCKED_COUNT=$((BLOCKED_COUNT + 1))
             REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} escalated to BLOCKED — review provenance invalid: ${PROVENANCE_LIST}. Re-run review-gate so a fresh diff-bound dispatch manifest is written for ${TASK_ID}
@@ -254,23 +261,23 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
           else
             # First violation — reset to IMPLEMENTED with diagnostics
             set_task_status "$task_file" "DONE" "IMPLEMENTED"
-            jq --arg t "$TASK_ID" '.safety._review_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+            jq --arg t "$TASK_ID" '.safety._provenance_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
             DONE_COUNT=$((DONE_COUNT - 1))
             IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
             REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} reset DONE → IMPLEMENTED — review provenance invalid: ${PROVENANCE_LIST}. Fix: re-run review-gate so a fresh diff-bound dispatch manifest is written for ${TASK_ID}
 "
           fi
-        elif [ "$RESET_COUNT" != "0" ]; then
-          # Evidence and provenance are both now valid — clear the stale counter
-          jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+        elif [ "$EVID_RESET_COUNT" != "0" ] || [ "$PROV_RESET_COUNT" != "0" ]; then
+          # Evidence and provenance are both now valid — clear both stale counters
+          jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | del(.safety._provenance_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
         fi
       fi
-    elif [ "$RESET_COUNT" != "0" ] && [ "$STATUS" != "IMPLEMENTED" ] && [ "$STATUS" != "IN_REVIEW" ]; then
-      # Task left DONE for a non-repair state — clear the stale counter.
+    elif { [ "$EVID_RESET_COUNT" != "0" ] || [ "$PROV_RESET_COUNT" != "0" ]; } && [ "$STATUS" != "IMPLEMENTED" ] && [ "$STATUS" != "IN_REVIEW" ]; then
+      # Task left DONE for a non-repair state — clear both stale counters.
       # IMPLEMENTED/IN_REVIEW are the repair path the reset itself creates: the
       # counter must survive them, or a later bad DONE restarts at zero and
       # never escalates. Valid evidence (branch above) still clears it.
-      jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+      jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | del(.safety._provenance_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
     fi
   done
   # Emitted here (in addition to CONTINUE_MSG) so violations are visible even on
@@ -914,7 +921,60 @@ DV_MSG
         fi
       fi
     fi
-    # Doc-verifier gate passed, opted out, or backstop exhausted — allow completion.
+    # Post-loop comment-verifier gate: marker + bounded backstop (≤3); degrades-to-allow
+    # when no source files changed on the feature branch (nothing new to check).
+    COMMENT_VERIFY_ENABLED=$(jq -r 'if .docs.verify_comments == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+    if [ "$COMMENT_VERIFY_ENABLED" = "true" ]; then
+      CV_OBJ_ID=$(jq -r '.feat_id // "default"' "$CONFIG" 2>/dev/null || echo "default")
+      CV_MARKER="$NAZGUL_DIR/logs/.comments-verified"
+      CV_ATTEMPTS_FILE="$NAZGUL_DIR/logs/.comments-verify-attempts"
+      CV_VERIFIED_FOR=""
+      [ -f "$CV_MARKER" ] && CV_VERIFIED_FOR=$(cat "$CV_MARKER" 2>/dev/null || echo "")
+      if [ "$CV_VERIFIED_FOR" != "$CV_OBJ_ID" ]; then
+        # Filter out docs/config/lockfiles — mirrors the comment-verifier agent's own
+        # scope filter, so this cheap backstop doesn't spawn the agent for doc-only diffs.
+        CV_CHANGED_JSON=$(files_modified_json "$PROJECT_ROOT" "$BASE_BRANCH" 2>/dev/null || echo '[]')
+        CV_CHANGED_COUNT=$(printf '%s' "$CV_CHANGED_JSON" | jq '[ .[] | select(
+            (test("^nazgul/docs/") or test("^docs/") or endswith(".json") or endswith(".lock")) | not
+          ) ] | length' 2>/dev/null || echo 0)
+        case "$CV_CHANGED_COUNT" in (*[!0-9]*|'') CV_CHANGED_COUNT=0 ;; esac
+        if [ "$CV_CHANGED_COUNT" -eq 0 ]; then
+          mkdir -p "$NAZGUL_DIR/logs"
+          printf '%s\n' "$CV_OBJ_ID" > "$CV_MARKER"
+        else
+          CV_ATTEMPTS=0
+          if [ -f "$CV_ATTEMPTS_FILE" ]; then
+            read -r CV_ATT_OBJ CV_ATT_CNT < "$CV_ATTEMPTS_FILE" 2>/dev/null || true
+            if [ "${CV_ATT_OBJ:-}" = "$CV_OBJ_ID" ]; then
+              case "${CV_ATT_CNT:-0}" in ''|*[!0-9]*) CV_ATT_CNT=0 ;; esac
+              CV_ATTEMPTS="$CV_ATT_CNT"
+            fi
+          fi
+          if [ "$CV_ATTEMPTS" -lt 3 ]; then
+            mkdir -p "$NAZGUL_DIR/logs"
+            printf '%s %s\n' "$CV_OBJ_ID" "$((CV_ATTEMPTS + 1))" > "$CV_ATTEMPTS_FILE"
+            cat >&2 << CV_MSG
+Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP COMMENT-VERIFIER GATE (mandatory).
+Inline doc-comments have NOT been verified for this objective (${CV_OBJ_ID}) yet.
+DELEGATE: Spawn the comment-verifier agent (nazgul:comment-verifier) to cross-check inline
+source doc-comments (XML <summary>, JSDoc, docstrings) changed by this objective for
+templated, restatement, or contradiction defects.
+When it finishes it MUST record completion: echo "${CV_OBJ_ID}" > nazgul/logs/.comments-verified
+Do NOT output NAZGUL_COMPLETE until verification has run and the marker is written.
+Opt out for future objectives with docs.verify_comments=false in nazgul/config.json.
+CV_MSG
+            jq -n --arg r "Post-loop comment-verifier gate: comments not yet verified for ${CV_OBJ_ID}" '{"decision":"block","reason":$r}'
+            exit 2
+          else
+            echo "Nazgul: comment-verifier gate gave up after ${CV_ATTEMPTS} attempts for ${CV_OBJ_ID} — completing without comment verification. Run /nazgul:comment-verifier manually." >&2
+            mkdir -p "$NAZGUL_DIR/logs"
+            printf '%s\n' "$CV_OBJ_ID" > "$CV_MARKER"
+          fi
+        fi
+      fi
+    fi
+    # Doc-verifier and comment-verifier gates passed, opted out, or backstop
+    # exhausted — allow completion.
     # Emit objective_complete before exit (pure observer; state is already final).
     emit_event "objective_complete" \
       total_tasks:n "$TOTAL_COUNT" \
