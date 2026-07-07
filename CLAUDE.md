@@ -123,7 +123,7 @@ tests/                               # Plugin validation tests
 
 **Documents before code.** After classification, the Doc Generator creates PRDs, TRDs, ADRs before any planning happens.
 
-**Conditional agent roster.** Discovery generates only the agents this project needs. 18 core agents exist as specs, plus a reviewer template that spawns project-specific reviewers. Only relevant ones are instantiated per-project.
+**Conditional agent roster.** Discovery generates only the agents this project needs. 21 core agents exist as specs, plus a reviewer template that spawns project-specific reviewers. Only relevant ones are instantiated per-project.
 
 **State machine is sacred.** Tasks follow: PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> DONE (or CHANGES_REQUESTED -> retry, or BLOCKED). No skipping states.
 
