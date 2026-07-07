@@ -10,17 +10,17 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.8.0-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-2.9.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-Plugin-7c3aed?style=flat-square" alt="Claude Code Plugin">
-  <img src="https://img.shields.io/badge/agents-21-orange?style=flat-square" alt="Agents">
+  <img src="https://img.shields.io/badge/agents-22-orange?style=flat-square" alt="Agents">
 </p>
 
 <br>
 
 ---
 
-Nazgul runs a complete autonomous SDLC pipeline — from scanning your codebase to shipping reviewed code — with 21 core agents plus project-specific reviewers.
+Nazgul runs a complete autonomous SDLC pipeline — from scanning your codebase to shipping reviewed code — with 22 core agents plus project-specific reviewers.
 
 ## What Nazgul Does
 
@@ -31,6 +31,7 @@ Nazgul runs a complete autonomous SDLC pipeline — from scanning your codebase 
 - **Per-stage model routing** — assign Opus, Sonnet, or Haiku to each pipeline stage for the right balance of cost, speed, and quality
 - **Tamper-evident, cost-optimized reviews** — diff-bound provenance manifests catch a skipped or stale review board, a `comment-verifier` gate blocks templated or restated doc-comments, and diff-only reviewer context plus per-reviewer model tiering cut review token cost
 - **Survives interruptions** — checkpoints, recovery pointers, session tracking, and hooks mean you can close your laptop and resume later
+- **Opt-in conductor engine** — `/nazgul:start --conductor` runs independent plan waves through a graph-only driver agent instead of the sequential loop, with autonomous-first approval gates, two unconditional human-in-the-loop hard stops, and self-recovering state; sequential stays the default
 
 ## Install
 
