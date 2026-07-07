@@ -364,6 +364,33 @@ migrate_16_to_17() {
   log_migration "v16→v17: granularity task→group + post_loop haiku→sonnet (when absent or at old default); wave_execution defaults true only when absent (explicit value incl. false preserved); added docs.verify_post_loop: true"
 }
 
+migrate_17_to_18() {
+  local tmp
+  tmp=$(mktemp)
+  # FEAT-006: unified bump for Gap A (require_provenance), Gap B (verify_comments),
+  # and Gap C Lever 2/3 (model tiering + conditional dispatch). All four flags are
+  # ADDITIVE ONLY — set when absent, any explicit value (incl. false) preserved. A
+  # non-object review_gate/docs/models section is first clamped to {} (invalid types NOT preserved).
+  # models.review flips sonnet→haiku ONLY if it still equals the prior default,
+  # mirroring the models.post_loop "change-only-if-still-default" rule from v16→v17.
+  jq '
+    .review_gate = ((if (.review_gate | type) == "object" then .review_gate else {} end)
+      | .require_provenance = (if has("require_provenance") then .require_provenance else true end)
+      | .conditional_dispatch = (if has("conditional_dispatch") then .conditional_dispatch else false end))
+    | .docs = ((if (.docs | type) == "object" then .docs else {} end)
+      | .verify_comments = (if has("verify_comments") then .verify_comments else true end))
+    | .models = ((if (.models | type) == "object" then .models else {} end)
+      | .review = (if (.review == "sonnet" or (.review | not)) then "haiku" else .review end)
+      | .review_by_reviewer = (
+          if (.review_by_reviewer | type) == "object"
+          then .review_by_reviewer
+          else {"security-reviewer": "sonnet", "architect-reviewer": "sonnet"}
+          end))
+    | .schema_version = 18
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v17→v18: added review_gate.require_provenance (default true) + conditional_dispatch (default false); docs.verify_comments (default true); models.review sonnet→haiku (only when absent or at old default sonnet); added models.review_by_reviewer pinning security-reviewer+architect-reviewer to sonnet"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"

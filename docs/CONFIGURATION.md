@@ -25,12 +25,28 @@ Different pipeline stages have different complexity needs. Assign the right mode
 | Planning | Opus | Decomposition and dependency ordering need deep reasoning |
 | Discovery | Sonnet | Codebase scanning is pattern matching |
 | Docs | Sonnet | Technical writing is well within Sonnet's capability |
-| Review | Sonnet | Structured checklists, Sonnet handles them well |
+| Review | Haiku | Mechanical reviewers (code, qa) run checklists cheaply |
 | Implementation | Sonnet | Code generation is Sonnet's sweet spot |
 | Specialists | Sonnet | Same as implementation |
-| Post-loop | Haiku | Changelog and docs updates are mechanical |
+| Post-loop | Sonnet | Changelog and docs updates need judgment |
 
 Three presets are available: **Balanced** (default), **Quality** (all Opus), and **Fast/cheap** (Haiku where possible). Or pick per stage.
+
+`models.review_by_reviewer` overrides `models.review` per reviewer name. The default pins the two judgment reviewers to Sonnet even when `models.review` is a cheaper tier:
+
+```json
+{
+  "models": {
+    "review": "haiku",
+    "review_by_reviewer": {
+      "security-reviewer": "sonnet",
+      "architect-reviewer": "sonnet"
+    }
+  }
+}
+```
+
+`security-reviewer` guards the BLOCKED gate and `architect-reviewer` guards the state machine — both need deeper reasoning than the mechanical code/qa reviewers. Add other reviewer names to the map to override their model individually; any reviewer not listed falls back to `models.review`.
 
 ### Review Granularity
 
@@ -46,12 +62,22 @@ Three presets are available: **Balanced** (default), **Quality** (all Opus), and
 
 The other review settings apply identically in all modes:
 
-- `require_all_approve` — every reviewer must APPROVE before the unit passes.
+- `require_all_approve` — **informational only, not read by any script.** The effective policy is hard-coded in `scripts/lib/review-evidence.sh`: every non-skipped reviewer must APPROVE before the unit passes (with `review_gate.conditional_dispatch`, "non-skipped" excludes reviewers carrying an authorized `verdict: SKIPPED` stub). This key documents that policy for humans; changing it has no effect.
 - `confidence_threshold` (default 80) — findings below this become non-blocking CONCERNs.
 - `block_on_security_reject` — a security REJECT blocks (in AFK mode → BLOCKED for human review).
 - `max_retries_per_task` — interpreted **per review unit** (task / group / feature). In group/feature mode it counts retries of the whole unit's review cycle.
 
 In `group`/`feature` mode a CHANGES_REQUESTED re-opens **only the implicated tasks** — the feedback aggregator attributes each finding to the owning task by file scope, so tasks with no findings stay IMPLEMENTED.
+
+### Review Provenance
+
+`review_gate.require_provenance` (default `true`) gates task completion on evidence that the review board actually ran against the current diff. Before spawning reviewers, review-gate writes a diff-bound dispatch manifest (`nazgul/reviews/<unit>/.dispatch.json`) and stamps a matching `review_token:` into each reviewer's persisted file. The stop-hook DONE gate rejects completions that never ran the review-gate code path (no manifest) or whose review is stale against HEAD, routing violations through the existing bounded reset→IMPLEMENTED→BLOCKED escalation.
+
+This is **tamper-evidence and diff-staleness detection, not authentication** — the verifier and the orchestrator share the filesystem, and the token scheme is public. It catches the common accidental cases (board skipped, code changed after approval), not a malicious actor. Set to `false` to disable the gate and degrade to the legacy shape-only check.
+
+### Conditional Review Dispatch
+
+`review_gate.conditional_dispatch` (default `false`) opts into diff-aware reviewer selection: a deterministic helper (`scripts/lib/reviewer-selection.sh select`, not LLM judgment) skips reviewers whose domain the changed files don't touch — `security-reviewer` always runs; `architect-reviewer` only when the scope touches `skills/`, `agents/`, `scripts/`, `hooks/`, or the config schema; `qa-reviewer` only when `tests/` changed; `code-reviewer` on any non-doc change. Any ambiguity falls back to the full board. Skipped reviewers get a `[reviewer].md` stub with `verdict: SKIPPED` and a reason, which the evidence gate treats as gate-satisfying (a missing or unapproved file still hard-fails). Defaults off, mirroring `review_gate.simplify_before_review`.
 
 ## Lean Comments Guard
 
@@ -70,6 +96,10 @@ Full XML/JSDoc/docstring on PUBLIC interface members is expected (`<inheritdoc/>
 |-----|---------|---------|
 | `guards.lean_comments` | `true` | Master switch. Set to `false` to opt out entirely (the guard becomes a no-op). |
 | `guards.max_consecutive_comment_lines` | `2` | Longest run of line comments allowed before it's flagged as bloat. |
+
+## Comment Quality Gate
+
+`docs.verify_comments` (default `true`) blocks `NAZGUL_COMPLETE` until a post-loop `comment-verifier` agent grades inline source doc-comments (XML `<summary>`, JSDoc, docstrings) across the objective's changed files. Reviewers can already flag comment issues, but only as sub-80 non-blocking concerns; this gate makes templated, restatement, and contradiction defects blocking, mirroring the FEAT-004 doc-accuracy verifier. Bounded to at most 3 backstop retries; on exhaustion it degrades to allow rather than bricking an unattended run. Set to `false` to opt out.
 
 ## Post-Loop Learning Gate
 

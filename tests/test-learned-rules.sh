@@ -177,4 +177,43 @@ assert_eq "omitted line: agents empty" "$(bash "$LR" parse --doc "$OMIT" | jq -r
 selo=$(bash "$LR" select --agent implementer --files "src/api/x.ts" --doc "$OMIT")
 assert_not_contains "rule with empty agents matches no one" "$selo" "LR-001"
 
+# Cap: with >N matching active rules, select emits only the top-N (default 5),
+# ranked by Hits desc, so injection can't grow unbounded.
+CAP="$TMP/cap.md"
+{
+  echo "# Cap doc"
+  echo
+  for i in 1 2 3 4 5 6 7; do
+    printf '## LR-%03d: Rule number %d\n\n' "$i" "$i"
+    printf -- '- **Status**: active\n- **Scope-Agents**: implementer\n- **Scope-Globs**: **\n- **Hits**: %d\n- **Added**: 2026-06-18\n- **Evidence**: TASK-0%d\n\nBody %d.\n\n' "$((i * 3))" "$i" "$i"
+  done
+} > "$CAP"
+
+selcap=$(bash "$LR" select --agent implementer --files "anything.ts" --doc "$CAP")
+assert_eq "cap: emits exactly 5 rules by default" "$(printf '%s\n' "$selcap" | grep -c '^## LR-')" "5"
+assert_contains "cap: highest-hits LR-007 included" "$selcap" "LR-007"
+assert_contains "cap: LR-006 included" "$selcap" "LR-006"
+assert_contains "cap: LR-003 (5th highest) included" "$selcap" "LR-003"
+assert_not_contains "cap: LR-002 excluded" "$selcap" "LR-002"
+assert_not_contains "cap: lowest-hits LR-001 excluded" "$selcap" "LR-001"
+
+# --max overrides the default cap
+selcap2=$(bash "$LR" select --agent implementer --files "anything.ts" --doc "$CAP" --max 2)
+assert_eq "cap: --max 2 emits exactly 2 rules" "$(printf '%s\n' "$selcap2" | grep -c '^## LR-')" "2"
+assert_contains "cap: --max 2 keeps top-hit LR-007" "$selcap2" "LR-007"
+assert_not_contains "cap: --max 2 excludes LR-005" "$selcap2" "LR-005"
+
+# Existing behavior preserved when matches <= N (single match, no truncation)
+selsmall=$(bash "$LR" select --agent implementer --files "src/api/auth.ts" --doc "$DOC")
+assert_eq "cap: matches<=N unaffected" "$(printf '%s\n' "$selsmall" | grep -c '^## LR-')" "1"
+
+# --max validation: invalid values fall back to the default cap, never defeat it
+# (negative -1 would make `head -n` print all-but-last; non-numeric/zero would error/uncap)
+selneg=$(bash "$LR" select --agent implementer --files "anything.ts" --doc "$CAP" --max -1)
+assert_eq "cap: --max -1 falls back to default 5 (not all-but-last)" "$(printf '%s\n' "$selneg" | grep -c '^## LR-')" "5"
+selzero=$(bash "$LR" select --agent implementer --files "anything.ts" --doc "$CAP" --max 0)
+assert_eq "cap: --max 0 falls back to default 5" "$(printf '%s\n' "$selzero" | grep -c '^## LR-')" "5"
+selnan=$(bash "$LR" select --agent implementer --files "anything.ts" --doc "$CAP" --max abc)
+assert_eq "cap: --max abc falls back to default 5" "$(printf '%s\n' "$selnan" | grep -c '^## LR-')" "5"
+
 report_results

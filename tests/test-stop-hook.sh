@@ -50,7 +50,8 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.learning.auto_distill_post_loop = false'
+create_config '.agents.reviewers = ["code-reviewer"]' '.learning.auto_distill_post_loop = false' \
+  '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_task_file "TASK-002" "DONE"
@@ -93,7 +94,8 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-007"'
+create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-007"' \
+  '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -121,7 +123,8 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-009"'
+create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-009"' \
+  '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -438,7 +441,8 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.afk.yolo = true' '.afk.task_pr = false' '.current_iteration = 1' '.learning.auto_distill_post_loop = false'
+create_config '.afk.yolo = true' '.afk.task_pr = false' '.current_iteration = 1' '.learning.auto_distill_post_loop = false' \
+  '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "APPROVED"
 create_task_file "TASK-002" "APPROVED"
@@ -837,7 +841,8 @@ create_config '.feat_id = "FEAT-INT2"' \
   '.review_gate.granularity = "group"' \
   '.review_gate.enforce_granularity = "block"' \
   '.learning.auto_distill_post_loop = false' \
-  '.agents.reviewers = ["code-reviewer"]'
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -858,7 +863,8 @@ create_config '.feat_id = "FEAT-INT3"' \
   '.review_gate.granularity = "group"' \
   '.review_gate.enforce_granularity = "block"' \
   '.learning.auto_distill_post_loop = false' \
-  '.agents.reviewers = ["code-reviewer"]'
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"

@@ -15,8 +15,7 @@
     ],
     "review_steps": [
       "Find corresponding test files",
-      "Run the test suite to verify all pass",
-      "Check coverage if tool available",
+      "Judge coverage and assertions from the diff and test files — do not re-run the suite (Step 1 pre-checks already ran it)",
       "Evaluate test quality against checklist"
     ],
     "category": "Testing",
@@ -47,7 +46,7 @@
       "Check that input validation is present (using the project's validation library)",
       "Verify auth middleware is applied to protected routes",
       "Check for pagination on list endpoints",
-      "Run API tests if available",
+      "Judge API test coverage from the diff and test files — do not re-run the suite (Step 1 pre-checks already ran it)",
       "Verify OpenAPI spec is updated (if applicable)"
     ],
     "category": "API Design",
@@ -93,7 +92,7 @@
       "Check data fetching hooks for cache key consistency and error/loading aggregation",
       "Verify form inputs are fully wired through the form library",
       "Check useEffect hooks for missing cleanup",
-      "Run tests if available (jest, vitest, testing-library)"
+      "Judge test coverage from the diff and test files (jest, vitest, testing-library) — do not re-run the suite (Step 1 pre-checks already ran it)"
     ],
     "category": "Null Safety | Data Fetching | Form Handling | Component Patterns | Error Handling",
     "approved_criteria": "Frontend code is null-safe, data fetching is correct, forms are complete",
@@ -122,7 +121,7 @@
       "Analyze imports for bundle size impact (large dependencies)",
       "Look for missing cleanup in lifecycle hooks (useEffect, componentWillUnmount, __del__)",
       "Check for unnecessary computation in hot paths",
-      "Run performance-related tests if available"
+      "Judge performance-test coverage from the diff — do not re-run benchmarks (Step 1 pre-checks already ran the suite)"
     ],
     "category": "Performance",
     "approved_criteria": "No significant performance issues, concerns are minor",
@@ -150,7 +149,7 @@
       "Grep for `any` usage and verify each instance is justified",
       "Check union types for proper discrimination and exhaustive handling",
       "Verify function signatures have explicit types",
-      "Run the type checker (tsc --noEmit, mypy, etc.) to verify no type errors",
+      "Judge type-correctness from the diff — do not re-run the type checker (Step 1 pre-checks already ran it); flag any signature that reads as unsound",
       "Check that new interfaces/types follow existing naming conventions",
       "Verify generated types are not hand-edited"
     ],
@@ -181,7 +180,7 @@
       "Analyze queries for efficiency (look for missing indexes, N+1 patterns)",
       "Verify transaction boundaries around multi-step operations",
       "Check for data integrity constraints on new columns/tables",
-      "Run migration tests if available (migrate up, verify, migrate down, verify)",
+      "Judge migration reversibility and safety from the diff — do not re-run migrations (Step 1 pre-checks already ran them)",
       "Look for raw SQL and verify parameterization"
     ],
     "category": "Database",
@@ -212,7 +211,7 @@
       "Check for keyboard event handlers alongside click handlers",
       "Verify focus management in modals, dropdowns, and dynamic content",
       "Check color values against contrast ratio requirements",
-      "Run accessibility tests if configured (axe, jest-axe, pa11y)"
+      "Judge accessibility-test coverage from the diff and test files (axe, jest-axe, pa11y) — do not re-run accessibility tooling (Step 1 pre-checks already ran it)"
     ],
     "category": "Accessibility",
     "approved_criteria": "Accessibility requirements met, concerns are minor",
@@ -238,7 +237,7 @@
     ],
     "review_steps": [
       "Identify new and updated dependencies",
-      "Run security audit (npm audit, pip audit, cargo audit, govulncheck)",
+      "Judge dependency risk from the diff (name, version, known-CVE familiarity) — a read-only reviewer cannot run a live audit tool (npm audit, pip audit, cargo audit, govulncheck); Step 1 pre-checks cover build/lint only",
       "Check license compatibility for each new dependency",
       "Evaluate necessity (is this dependency justified or could existing tools cover it?)",
       "Verify lockfile is updated and consistent",
@@ -288,7 +287,7 @@
       "Verify Kubernetes manifests have resource limits and health probes",
       "Check security groups and network policies for overly permissive rules",
       "Verify no secrets are hardcoded (grep for API keys, passwords, tokens in configs)",
-      "Run infrastructure linters if available (hadolint, tflint, kubelinter, checkov, tfsec)"
+      "Judge infra-linter concerns (pinned versions, non-root users, resource limits) directly from the diff — do not re-run linters (Step 1 pre-checks already ran them)"
     ],
     "category": "Infrastructure",
     "approved_criteria": "Infrastructure configuration is secure, scalable, and follows best practices",
@@ -319,7 +318,7 @@
       "Verify permission requests are contextual with graceful denial handling",
       "Look for memory leaks (unreleased listeners, unbounded caches, circular references)",
       "Check navigation flow for platform-appropriate patterns",
-      "Run mobile tests if available (detox, XCTest, Espresso)"
+      "Judge test coverage from the diff and test files (detox, XCTest, Espresso) — do not re-run the suite (Step 1 pre-checks already ran it)"
     ],
     "category": "Mobile",
     "approved_criteria": "Mobile implementation follows platform guidelines and handles edge cases",
@@ -350,7 +349,7 @@
       "Check ML code for data leakage patterns",
       "Verify schema changes are backward compatible or properly migrated",
       "Check for proper error handling on data quality issues",
-      "Run data tests if available (great_expectations, dbt test, pytest data fixtures)"
+      "Judge data-test coverage from the diff and test files (great_expectations, dbt test, pytest data fixtures) — do not re-run the suite (Step 1 pre-checks already ran it)"
     ],
     "category": "Data Engineering | Machine Learning",
     "approved_criteria": "Data pipeline is validated, idempotent, and handles PII correctly",
@@ -373,8 +372,8 @@
     ],
     "review_steps": [
       "Read the diff and identify the unit of change",
-      "Read full files for any non-trivial change to understand context",
-      "Run linters and formatters if available",
+      "Read a full file only when a diff hunk is truncated mid-function; never crawl the broader codebase",
+      "Judge lint/format conformance from the diff — do not re-run linters or formatters (Step 1 pre-checks already ran them)",
       "Cross-check against existing patterns in neighboring files",
       "Run scripts/lean-comments-guard.sh --check on every changed source file; treat any reported violation as an ALWAYS-BLOCKING finding"
     ],

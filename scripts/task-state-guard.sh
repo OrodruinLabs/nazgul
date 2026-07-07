@@ -73,8 +73,71 @@ is_task_manifest() {
   [[ "$p" =~ (^|/)nazgul/tasks/TASK-[0-9]+\.md$ ]]
 }
 
+# Helper: check if path is a review-unit dispatch manifest
+is_dispatch_manifest() {
+  local p="$1"
+  [[ "$p" =~ (^|/)nazgul/reviews/[^/]+/\.dispatch\.json$ ]]
+}
+
+# Helper: check if path is a review-unit diff (the authenticity trust root)
+is_review_diff() {
+  local p="$1"
+  [[ "$p" =~ (^|/)nazgul/reviews/[^/]+/diff\.patch$ ]]
+}
+
 # If this is NOT a task manifest, check if it needs the active-task guard
 if ! is_task_manifest "$FILE_PATH"; then
+  # Defense-in-depth (recompute-and-compare in review-evidence.sh is the real
+  # fix): .dispatch.json and diff.patch are written by the review-gate
+  # orchestrator only, which never runs while a task is IN_PROGRESS — the
+  # implementer's active turn. Block writes/edits to either while the covering
+  # task(s) are IN_PROGRESS — unit-scoped for TASK-*/PATCH-* (that task) and
+  # GROUP-* (that group's tasks), falling back to any-task-IN_PROGRESS only for
+  # unrecognized unit ids — narrowing the trivial forge path (implementer has Bash+Write
+  # under nazgul/).
+  if { is_dispatch_manifest "$FILE_PATH" || is_review_diff "$FILE_PATH"; } && [ -d "$PROJECT_ROOT/nazgul/tasks" ]; then
+    # Narrow to the review unit's own task(s) so a parallel Agent-Teams wave
+    # with another unit's task IN_PROGRESS doesn't false-block this unit's
+    # already-finished review bookkeeping. GROUP-<n>/FEATURE-* unit IDs (and
+    # any unrecognized shape) fall back to the conservative any-task check.
+    _dm_unit_id=$(basename "$(dirname "$FILE_PATH")")
+    _dm_blocking=false
+    case "$_dm_unit_id" in
+      TASK-*|PATCH-*)
+        _dm_unit_task="$PROJECT_ROOT/nazgul/tasks/${_dm_unit_id}.md"
+        [ -f "$_dm_unit_task" ] || _dm_unit_task="$PROJECT_ROOT/nazgul/tasks/patches/${_dm_unit_id}.md"
+        if [ -f "$_dm_unit_task" ] && [ "$(get_task_status "$_dm_unit_task" "")" = "IN_PROGRESS" ]; then
+          _dm_blocking=true
+        fi
+        ;;
+      GROUP-*)
+        _dm_group_num="${_dm_unit_id#GROUP-}"
+        for _dm_task_file in "$PROJECT_ROOT/nazgul/tasks"/TASK-*.md; do
+          [ -f "$_dm_task_file" ] || continue
+          if [ "$(get_task_field "$_dm_task_file" "Group" "")" = "$_dm_group_num" ] \
+            && [ "$(get_task_status "$_dm_task_file" "")" = "IN_PROGRESS" ]; then
+            _dm_blocking=true
+            break
+          fi
+        done
+        ;;
+      *)
+        for _dm_task_file in "$PROJECT_ROOT/nazgul/tasks"/TASK-*.md "$PROJECT_ROOT/nazgul/tasks"/patches/PATCH-*.md; do
+          [ -f "$_dm_task_file" ] || continue
+          if [ "$(get_task_status "$_dm_task_file" "")" = "IN_PROGRESS" ]; then
+            _dm_blocking=true
+            break
+          fi
+        done
+        ;;
+    esac
+    if [ "$_dm_blocking" = true ]; then
+      echo "NAZGUL STATE GUARD: BLOCKED — $(basename "$FILE_PATH") may not be written while a task is IN_PROGRESS" >&2
+      echo "This file is written by the review-gate orchestrator only, after a task reaches IMPLEMENTED." >&2
+      exit 2
+    fi
+  fi
+
   # Files inside nazgul/ are always allowed (config, plan, reviews, etc.)
   if is_nazgul_path "$FILE_PATH"; then
     exit 0

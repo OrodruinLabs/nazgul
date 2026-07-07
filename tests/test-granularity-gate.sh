@@ -23,7 +23,8 @@ create_config '.feat_id = "FEAT-GG1"' \
   '.review_gate.granularity = "group"' \
   '.review_gate.enforce_granularity = "block"' \
   '.learning.auto_distill_post_loop = false' \
-  '.agents.reviewers = ["code-reviewer"]'
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -48,7 +49,8 @@ create_config '.feat_id = "FEAT-GG2"' \
   '.review_gate.granularity = "group"' \
   '.review_gate.enforce_granularity = "block"' \
   '.learning.auto_distill_post_loop = false' \
-  '.agents.reviewers = ["code-reviewer"]'
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -69,7 +71,8 @@ create_config '.feat_id = "FEAT-GG3"' \
   '.review_gate.granularity = "group"' \
   '.review_gate.enforce_granularity = "block"' \
   '.learning.auto_distill_post_loop = false' \
-  '.agents.reviewers = ["code-reviewer"]'
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -86,7 +89,8 @@ create_config '.feat_id = "FEAT-GG4"' \
   '.review_gate.granularity = "group"' \
   '.review_gate.enforce_granularity = "warn"' \
   '.learning.auto_distill_post_loop = false' \
-  '.agents.reviewers = ["code-reviewer"]'
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -107,7 +111,8 @@ create_config '.feat_id = "FEAT-GG5"' \
   '.review_gate.granularity = "group"' \
   '.review_gate.enforce_granularity = "block"' \
   '.learning.auto_distill_post_loop = false' \
-  '.agents.reviewers = ["code-reviewer"]'
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -129,7 +134,8 @@ create_config '.feat_id = "FEAT-GG6"' \
   '.review_gate.granularity = "group"' \
   '.review_gate.enforce_granularity = "block"' \
   '.learning.auto_distill_post_loop = false' \
-  '.agents.reviewers = ["code-reviewer"]'
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -150,7 +156,8 @@ create_config '.feat_id = "FEAT-GG7"' \
   '.review_gate.granularity = "group"' \
   '.review_gate.enforce_granularity = "block"' \
   '.learning.auto_distill_post_loop = false' \
-  '.agents.reviewers = ["code-reviewer"]'
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -170,7 +177,8 @@ setup_nazgul_dir
 create_config '.feat_id = "FEAT-GG8"' \
   '.review_gate.granularity = "group"' \
   '.learning.auto_distill_post_loop = false' \
-  '.agents.reviewers = ["code-reviewer"]'
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.docs.verify_comments = false'
 # Remove enforce_granularity so it falls back to default "block"
 jq 'del(.review_gate.enforce_granularity)' "$TEST_DIR/nazgul/config.json" \
   > "$TEST_DIR/nazgul/config.json.tmp" \
@@ -193,7 +201,8 @@ create_config '.feat_id = "FEAT-GG9"' \
   '.review_gate.granularity = "group"' \
   '.review_gate.enforce_granularity = "block"' \
   '.learning.auto_distill_post_loop = false' \
-  '.agents.reviewers = ["code-reviewer"]'
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
