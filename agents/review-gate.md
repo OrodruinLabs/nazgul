@@ -95,12 +95,40 @@ Before spawning reviewers, verify `nazgul/reviews/[UNIT-ID]/diff.patch` exists a
   `git diff [base-sha]..HEAD -- [files] > nazgul/reviews/[UNIT-ID]/diff.patch`
 - If still empty: log WARNING but proceed (pure additions may need full-file review)
 
+### Step 1.6: Compute Reviewer Selection + Write the Dispatch Manifest
+
+Before spawning any reviewer, source `scripts/lib/review-provenance.sh` and write the unit's dispatch manifest — this must happen at the START of EVERY fresh review cycle (initial dispatch AND every post-CHANGES_REQUESTED re-review), so the manifest's `diff_hash` binding always tracks the CURRENT diff, never a stale one.
+
+```bash
+NAZGUL_DIR="${CLAUDE_PROJECT_DIR}/nazgul"
+CONFIG="$NAZGUL_DIR/config.json"
+FEAT_ID=$(jq -r '.feat_id // "unknown"' "$CONFIG")
+CURRENT_ITERATION=$(jq -r '.current_iteration // "null"' "$CONFIG")
+source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/review-provenance.sh"
+source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/reviewer-selection.sh"
+```
+
+1. Read `review_gate.conditional_dispatch` from `$CONFIG` (default `false`):
+   - **`false`** (default): SELECTED = the full `agents.reviewers` roster, SKIPPED = empty. Lever 3 is a no-op — the manifest is still written so provenance (Step 2.5 / the DONE-gate) is always available.
+   - **`true`**: derive the changed-file list from `nazgul/reviews/[UNIT-ID]/diff.patch` (the `diff --git a/... b/...` header lines — `awk '/^diff --git a\//{...}'` pulling both the `a/` and `b/` path off each header) and call:
+     `"${CLAUDE_PLUGIN_ROOT}/scripts/lib/reviewer-selection.sh" select --files "<changed files>" --reviewers "<agents.reviewers>"`
+     Parse the printed `SELECTED:`/`SKIPPED:` lines (`SKIPPED:` is `name:reason;name:reason;...`). `security-reviewer` is never skippable — the selector already enforces this, do not override it.
+   - In group/feature mode the changed-file list is the UNIONED scope of every covered task, so a mixed group falls back toward the full board (broader diff → more selectors keep their reviewer) — this is intentional, not a bug.
+2. Write the manifest:
+   ```bash
+   TOKEN=$(write_dispatch_manifest "$NAZGUL_DIR" "$UNIT_ID" "$NAZGUL_DIR/reviews/$UNIT_ID/diff.patch" "$FEAT_ID" "$CURRENT_ITERATION" \
+     --selected "<SELECTED space-list>" --skipped "<SKIPPED name:reason;... list>" \
+     -- $(jq -r '.agents.reviewers[]' "$CONFIG"))
+   ```
+   This writes the ONE `nazgul/reviews/[UNIT-ID]/.dispatch.json` — co-located with the reviewer evidence for this unit, the exact dir the stop-hook DONE gate and `scripts/lib/review-evidence.sh` read. If it prints nothing (no sha256 tool on the box), proceed without a token — provenance degrades to allow, same as the legacy no-manifest path; do not block on this.
+
 ### Step 2: Delegate to Reviewers
 
-Read `nazgul/config.json → agents.reviewers` to get the active reviewer list.
-Read `nazgul/config.json → models.review` for the default reviewer model (default: `"haiku"`). Read `nazgul/config.json → models.review_by_reviewer` — an optional per-reviewer model map. For each reviewer, resolve its model as `models.review_by_reviewer[<reviewer-name>]` if that key is present, else fall back to `models.review`. Pass the resolved value as the `model` parameter when spawning that reviewer via the Agent tool. By default the map pins **both `security-reviewer` and `architect-reviewer` to `sonnet`** — security guards the BLOCKED gate and architect guards the sacred state machine, so both stay sharp even when `models.review` is a cheaper model (e.g. `haiku`) for the mechanical reviewers (code/qa). If `models.review_by_reviewer` is absent entirely, fall back to the prior behavior: `models.review` for everyone except `security-reviewer`, which is still ALWAYS pinned to `sonnet`.
+**Dispatch ONLY the SELECTED reviewers from Step 1.6** (all of `agents.reviewers` when `conditional_dispatch` is `false` — SKIPPED is always empty in that case).
 
-#### What Each Reviewer Receives
+Read `nazgul/config.json → models.review` for the default reviewer model (default: `"haiku"`). Read `nazgul/config.json → models.review_by_reviewer` — an optional per-reviewer model map. For each SELECTED reviewer, resolve its model as `models.review_by_reviewer[<reviewer-name>]` if that key is present, else fall back to `models.review`. Pass the resolved value as the `model` parameter when spawning that reviewer via the Agent tool. By default the map pins **both `security-reviewer` and `architect-reviewer` to `sonnet`** — security guards the BLOCKED gate and architect guards the sacred state machine, so both stay sharp even when `models.review` is a cheaper model (e.g. `haiku`) for the mechanical reviewers (code/qa). If `models.review_by_reviewer` is absent entirely, fall back to the prior behavior: `models.review` for everyone except `security-reviewer`, which is still ALWAYS pinned to `sonnet`.
+
+#### What Each SELECTED Reviewer Receives
 1. `nazgul/reviews/[UNIT-ID]/diff.patch` — the unified diff showing exactly what changed, and by default the ONLY source a reviewer reads. **Reviewers MUST read this FIRST.**
 2. Full-file context is NOT granted by default. A reviewer may read a full file ONLY when a hunk in diff.patch is truncated mid-function and the surrounding code is needed to judge it — it must NEVER crawl the broader codebase for related code, and NEVER re-run tests or linters (Step 1 pre-checks already ran them).
 3. Their agent definition from `.claude/agents/generated/`
@@ -114,16 +142,26 @@ Read `nazgul/config.json → models.review` for the default reviewer model (defa
 
 #### Parallel Review Mode (when parallelism.parallel_reviews is true)
 
-**Spawn ALL reviewers concurrently by emitting one Agent tool call per reviewer in a SINGLE message — all the tool calls in the same assistant turn.** This is the difference between a 10-minute board and a 40-minute one: if you instead spawn them one-per-turn (an Agent call, wait, the next Agent call), they run *serially* and the board takes 4× as long. Do NOT spawn them one at a time. The harness runs same-message tool calls in parallel.
+**Spawn ALL SELECTED reviewers concurrently by emitting one Agent tool call per reviewer in a SINGLE message — all the tool calls in the same assistant turn.** This is the difference between a 10-minute board and a 40-minute one: if you instead spawn them one-per-turn (an Agent call, wait, the next Agent call), they run *serially* and the board takes 4× as long. Do NOT spawn them one at a time. The harness runs same-message tool calls in parallel.
 
-1. In one message, dispatch every reviewer in `agents.reviewers` (each as its own Agent call, with its computed model + scoped learned rules).
-2. Each reviewer reads diff.patch + changed files (it has Read/Glob/Grep only — no Write, no Bash) and **RETURNS** its complete review (frontmatter `verdict:`/`confidence:` block first, then the narrative) as its final message. Reviewers do NOT write files — you do.
-3. The single message returns once ALL reviewers have completed; you now hold each reviewer's returned review text in the tool results.
-4. **You persist the reviews.** For each reviewer, write its returned text VERBATIM to `nazgul/reviews/[UNIT-ID]/[reviewer-name].md` (create the dir first). The reviewer's entire returned message is the file content. This is the single point of persistence — there is no "did the reviewer write its file?" failure mode because reviewers never write files.
+1. In one message, dispatch every reviewer in SELECTED (each as its own Agent call, with its computed model + scoped learned rules). Do NOT spawn a subagent for a SKIPPED reviewer.
+2. Each reviewer reads diff.patch + changed files (it has Read/Glob/Grep only — no Write, no Bash) and **RETURNS** its complete review (frontmatter `verdict:`/`confidence:` block first, then the narrative) as its final message. Reviewers do NOT write files — you do. Reviewers never write or echo `review_token:` — an LLM re-typing a 16-hex token is exactly the false-BLOCK hazard FEAT-005 removed; stamping is the orchestrator's job (step 4).
+3. The single message returns once ALL SELECTED reviewers have completed; you now hold each reviewer's returned review text in the tool results.
+4. **You persist the reviews and stamp the token.** For each SELECTED reviewer, take its returned text, insert `review_token: $TOKEN` into the YAML frontmatter block it authored (alongside `verdict:`/`confidence:`), and write the result to `nazgul/reviews/[UNIT-ID]/[reviewer-name].md` (create the dir first). This is the single point of persistence — there is no "did the reviewer write its file?" failure mode because reviewers never write files.
+5. **Write a SKIPPED stub for every SKIPPED reviewer** (no subagent dispatch):
+   ```bash
+   printf -- '---\nverdict: SKIPPED\nreview_token: %s\n---\nSkipped: %s\n' "$TOKEN" "<reason from SKIPPED:>" \
+     > "nazgul/reviews/$UNIT_ID/<reviewer-name>.md"
+   "${CLAUDE_PLUGIN_ROOT}/scripts/emit-event-cli.sh" reviewer_skipped \
+     task_id "$TASK_ID" reviewer "<reviewer-name>" reason "<reason>"
+   ```
+   Emit failures are non-fatal — log and continue. This stub, carrying the manifest token and matching the manifest's `skipped[]` entry, is what `_re_is_authorized_skipped` in `scripts/lib/review-evidence.sh` looks for — that gate independently RE-DERIVES whether the skip was legitimate by recomputing the selector against the current diff (trust by reproduction, not by origin; see that file's header). You do not need to duplicate that recomputation here — just write the stub honestly from what Step 1.6 already computed.
+
+**HONEST-TIER CAVEAT:** the SKIPPED authorization at the evidence gate proves the skip is reproducible from the current diff and the configured selection policy — it does NOT prove which agent wrote the manifest, only that skipping this reviewer for this diff is the deterministic outcome of the review-gate's own selector (see `scripts/lib/review-provenance.sh`'s header for the same caveat applied to token provenance).
 
 #### Sequential Fallback (when parallel_reviews is false)
 
-Run each reviewer as a subagent, one at a time; capture each one's returned review and write it to `nazgul/reviews/[UNIT-ID]/[reviewer-name].md` exactly as in parallel mode. (Slower — only used when `parallelism.parallel_reviews` is explicitly false.)
+Run each SELECTED reviewer as a subagent, one at a time; capture each one's returned review, stamp `review_token:` into its frontmatter, and write it to `nazgul/reviews/[UNIT-ID]/[reviewer-name].md` exactly as in parallel mode. Write SKIPPED stubs exactly as in parallel mode. (Slower — only used when `parallelism.parallel_reviews` is explicitly false.)
 
 ### Step 2.5: Evidence Check (MANDATORY — before any verdict)
 
@@ -131,9 +169,13 @@ Review evidence exists ONLY as per-reviewer files. A consolidated summary.md is
 NOT review evidence — never write one in place of per-reviewer files, and never
 treat one as proof that reviewers ran.
 
-You wrote one file per reviewer from its returned review in Step 2 (step 4).
-Verify each configured reviewer's file now exists AND begins with a valid
-frontmatter block (`verdict: APPROVE|CHANGES_REQUESTED` + integer `confidence:`):
+You wrote one file per reviewer — dispatched reviewers from their returned
+review (Step 2 parallel-mode step 4), SKIPPED reviewers as a stub (Step 2
+parallel-mode step 5). Verify each configured reviewer's file now exists AND
+begins with a valid frontmatter block: `verdict: APPROVE|CHANGES_REQUESTED` +
+integer `confidence:` for a dispatched reviewer, OR `verdict: SKIPPED` for a
+SKIPPED one (no `confidence:` required — there is no review to have a
+confidence about):
 
 Set `UNIT_ID` to the review unit's ID (e.g., `TASK-003`, `GROUP-1`) before running the check:
 
@@ -142,6 +184,9 @@ for r in $(jq -r '.agents.reviewers[]' nazgul/config.json); do
   f="nazgul/reviews/$UNIT_ID/$r.md"
   if [ ! -f "$f" ]; then echo "MISSING: $r"; continue; fi
   hdr=$(head -8 "$f")
+  if printf '%s\n' "$hdr" | grep -qE '^verdict:[[:space:]]*SKIPPED[[:space:]]*$'; then
+    continue
+  fi
   printf '%s\n' "$hdr" | grep -qE '^verdict:[[:space:]]*(APPROVE|CHANGES_REQUESTED)[[:space:]]*$' \
     && printf '%s\n' "$hdr" | grep -qE '^confidence:[[:space:]]*[0-9]+[[:space:]]*$' \
     || echo "MALFORMED: $r"
@@ -167,10 +212,36 @@ This is the orchestrator's fast pre-check (verdict + integer confidence present 
   if non-default). This feeds the citation/retirement signal. Failures here are
   non-fatal — log and continue; never block a verdict on a bump-hits error.
 
-#### Emit reviewer_verdict events (one per confirmed reviewer file)
+#### Token self-check (deterministic — fix-and-re-persist, never re-dispatch)
+
+After all reviewer files (dispatched + SKIPPED stubs) are confirmed present,
+confirm each one's `review_token:` equals the manifest's `TOKEN` from Step 1.6:
+
+```bash
+MANIFEST_TOKEN=$(jq -r '.token // empty' "nazgul/reviews/$UNIT_ID/.dispatch.json" 2>/dev/null)
+for r in $(jq -r '.agents.reviewers[]' nazgul/config.json); do
+  f="nazgul/reviews/$UNIT_ID/$r.md"
+  [ -f "$f" ] || continue
+  file_token=$(sed -n 's/^review_token:[[:space:]]*//p' "$f" | head -1 | tr -d '[:space:]')
+  [ "$file_token" = "$MANIFEST_TOKEN" ] || echo "TOKEN_MISMATCH: $r (has: $file_token)"
+done
+```
+
+A mismatch is an ORCHESTRATOR bug (you stamped the wrong value, or a manifest
+was regenerated after persisting) — **fix the stamp in that one file and
+re-persist it**, then move on. NEVER re-dispatch a reviewer or BLOCK the task
+because of a token mismatch; the authoritative backstop is
+`validate_review_provenance` (run by the stop-hook DONE gate), which degrades
+to allow on ambiguity rather than false-BLOCK. `validate_review_evidence`
+(the evidence gate itself) treats an authorized SKIPPED stub as
+gate-satisfying — see `scripts/lib/review-evidence.sh`.
+
+#### Emit reviewer_verdict events (one per confirmed, dispatched reviewer file)
 
 After all reviewer files are confirmed present, emit one `reviewer_verdict` event per
-reviewer. These are observational — do not alter verdicts or gate logic.
+DISPATCHED reviewer (skip SKIPPED-stub reviewers — they have no verdict to report;
+their `reviewer_skipped` event was already emitted in Step 2). These are
+observational — do not alter verdicts or gate logic.
 
 CLI arg convention: positional `event_type` first, then alternating `key val` pairs;
 a `:n` suffix on a key marks a numeric value (see `scripts/emit-event-cli.sh` header).
@@ -184,7 +255,9 @@ CURRENT_ITERATION=$(jq -r '.current_iteration // "null"' "${CLAUDE_PROJECT_DIR}/
 
 For each reviewer in `agents.reviewers`:
 
-1. Read `nazgul/reviews/[UNIT-ID]/[reviewer-name].md` and extract: `DECISION`
+1. Read `nazgul/reviews/[UNIT-ID]/[reviewer-name].md`. **If its `verdict:` is
+   `SKIPPED`, skip this reviewer entirely** — it has no verdict/confidence and
+   already emitted `reviewer_skipped` in Step 2. Otherwise extract: `DECISION`
    (APPROVE or CHANGES_REQUESTED), `CONFIDENCE` (integer), `BLOCKING` (count of
    blocking findings, integer), `CONCERNS` (count of non-blocking concerns, integer).
 2. Emit via Bash tool (using the `NAZGUL_DIR` and `CURRENT_ITERATION` set above):

@@ -32,17 +32,20 @@ write_review_token() {
 }
 
 # --- PG-1: valid manifest + matching stamped token → stays DONE ---
+# No other pending task and the learning gate disabled, so the happy path
+# genuinely exits 0 (not the DELEGATE-more-work exit 2 a READY task or the
+# post-loop learning gate would otherwise produce).
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG1"'
+create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG1"' '.learning.auto_distill_post_loop = false'
 create_plan
 create_task_file "TASK-001" "DONE"
-create_task_file "TASK-002" "READY"
 DIFF="$TEST_DIR/nazgul/reviews/TASK-001/diff.patch"
 mkdir -p "$(dirname "$DIFF")"
 printf 'diff content\n' > "$DIFF"
 TOKEN=$(write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-001" "$DIFF" "FEAT-PG1" "1" -- code-reviewer)
 write_review_token "TASK-001" "code-reviewer" "$TOKEN"
 run_hook
+assert_exit_code "PG-1: exit 0" "$HOOK_EC" 0
 assert_eq "PG-1: valid provenance stays DONE" "$(task_status TASK-001)" "DONE"
 assert_not_contains "PG-1: no violation noise" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
 teardown_temp_dir
@@ -81,24 +84,25 @@ teardown_temp_dir
 
 # --- PG-3: require_provenance=false → invalid provenance ignored, DONE preserved ---
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG3"' '.review_gate.require_provenance = false'
+create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG3"' \
+  '.review_gate.require_provenance = false' '.learning.auto_distill_post_loop = false'
 create_plan
 create_task_file "TASK-001" "DONE"
-create_task_file "TASK-002" "READY"
 write_review_token "TASK-001" "code-reviewer" "deadbeefdeadbeef"
 run_hook
+assert_exit_code "PG-3: exit 0" "$HOOK_EC" 0
 assert_eq "PG-3 opt-out: stays DONE" "$(task_status TASK-001)" "DONE"
 assert_not_contains "PG-3 opt-out: no violation noise" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
 teardown_temp_dir
 
 # --- PG-4: legacy review (no token, no manifest) → degrade-to-allow, DONE preserved ---
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG4"'
+create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG4"' '.learning.auto_distill_post_loop = false'
 create_plan
 create_task_file "TASK-001" "DONE"
-create_task_file "TASK-002" "READY"
 create_review_dir "TASK-001"
 run_hook
+assert_exit_code "PG-4: exit 0" "$HOOK_EC" 0
 assert_eq "PG-4 legacy: stays DONE" "$(task_status TASK-001)" "DONE"
 assert_not_contains "PG-4 legacy: no violation noise" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
 teardown_temp_dir

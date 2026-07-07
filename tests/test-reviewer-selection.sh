@@ -56,4 +56,33 @@ out=$(bash "$RS" select --files "src/app.py" --reviewers "security-reviewer code
 assert_not_contains "architect absent when not in roster" "$out" "architect-reviewer"
 assert_not_contains "qa absent when not in roster" "$out" "qa-reviewer"
 
+# --- verify subcommand (recompute-and-compare authenticity check) ---
+
+rc=0
+bash "$RS" verify --files "README.md" --reviewers "$ROSTER" \
+  --claimed-skipped "architect-reviewer qa-reviewer code-reviewer" || rc=$?
+assert_exit_code "verify: matching claim exits 0" "$rc" 0
+
+# claimed skip does NOT match (qa claimed skipped but files touch tests/)
+rc=0
+bash "$RS" verify --files "tests/test-foo.sh" --reviewers "$ROSTER" \
+  --claimed-skipped "qa-reviewer" || rc=$?
+assert_exit_code "verify: mismatched claim exits 1" "$rc" 1
+
+# claiming nothing skipped when a skip is legitimate -> set inequality
+rc=0
+bash "$RS" verify --files "README.md" --reviewers "$ROSTER" --claimed-skipped "" || rc=$?
+assert_exit_code "verify: under-claim (missing skip) exits 1" "$rc" 1
+
+# order independence of the claimed-skipped set
+rc=0
+bash "$RS" verify --files "README.md" --reviewers "$ROSTER" \
+  --claimed-skipped "code-reviewer qa-reviewer architect-reviewer" || rc=$?
+assert_exit_code "verify: claim order independent" "$rc" 0
+
+# empty files (degrade to full board, nothing skipped) -> empty claim matches
+rc=0
+bash "$RS" verify --files "" --reviewers "$ROSTER" --claimed-skipped "" || rc=$?
+assert_exit_code "verify: empty files + empty claim exits 0" "$rc" 0
+
 report_results

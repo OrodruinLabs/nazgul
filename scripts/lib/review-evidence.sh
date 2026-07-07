@@ -52,18 +52,80 @@ _has_approved_verdict() {
   grep -qiE '^[[:space:]#>*`_-]*approve(d|s)?([^[:alpha:]]|$)' "$file" 2>/dev/null
 }
 
+# _re_diff_files <diff_path> -> one changed path per line (from `diff --git
+# a/X b/X` header lines; both the a/ and b/ side, covering renames). Prints
+# nothing if the file is missing or has no such headers.
+_re_diff_files() {
+  local diff_path="$1"
+  [ -f "$diff_path" ] || return 0
+  awk '
+    /^diff --git a\// {
+      line = $0
+      sub(/^diff --git a\//, "", line)
+      idx = index(line, " b/")
+      if (idx > 0) {
+        print substr(line, 1, idx - 1)
+        print substr(line, idx + 3)
+      }
+    }
+  ' "$diff_path" | sort -u
+}
+
+# HONEST TIER: recomputation binds a skip claim to the diff and the configured
+# selection policy on disk, not to who wrote the manifest — a determined actor
+# with shell access could still reconstruct a diff that legitimately reproduces
+# a given skip. Its value is closing the CHEAP forge (naming a reviewer in
+# skipped[] with no diff to back it up), not authenticating the writer.
+#
+# _re_manifest_authentic <nazgul_dir> <review_dir> -> 0 iff review_dir's
+# .dispatch.json skipped[] name-set is reproducible by re-running the
+# deterministic selector against the unit's CURRENT diff.patch. When
+# review_gate.conditional_dispatch is not `true`, no skip is ever legitimate,
+# so this requires skipped[] to be empty. Assumes the manifest exists.
+_re_manifest_authentic() {
+  local nazgul_dir="$1" review_dir="$2"
+  local manifest="$review_dir/.dispatch.json"
+
+  local claimed
+  claimed=$(jq -r '.skipped[]?.name // empty' "$manifest" 2>/dev/null | tr '\n' ' ')
+  claimed="${claimed% }"
+
+  local config="$nazgul_dir/config.json" conditional="false"
+  [ -f "$config" ] && conditional=$(jq -r '.review_gate.conditional_dispatch // false' "$config" 2>/dev/null)
+  if [ "$conditional" != "true" ]; then
+    [ -z "$claimed" ]
+    return $?
+  fi
+
+  local roster=""
+  [ -f "$config" ] && roster=$(jq -r '.agents.reviewers // [] | .[]' "$config" 2>/dev/null | tr '\n' ' ')
+  roster="${roster% }"
+
+  local files=""
+  files=$(_re_diff_files "$review_dir/diff.patch" | tr '\n' ' ')
+  files="${files% }"
+
+  local rs="$_NAZGUL_RE_DIR/reviewer-selection.sh"
+  [ -f "$rs" ] || return 1
+  bash "$rs" verify --files "$files" --reviewers "$roster" --claimed-skipped "$claimed"
+}
+
 # A reviewer counts as authorized-skipped (gate-satisfying despite no APPROVED
-# verdict) when reviews/<unit>/.dispatch.json exists and lists it in skipped[].
-# security-reviewer is never honored here, even if listed (defense in depth —
-# the selector must never skip it, but the gate also refuses to trust it).
-# With no manifest present this always fails, preserving the legacy contract.
-# Usage: _re_is_authorized_skipped <review_dir> <reviewer>
+# verdict) when reviews/<unit>/.dispatch.json exists, lists it in skipped[],
+# AND that skip is reproducible from the current diff (_re_manifest_authentic
+# — trust by reproduction, not by origin; see its header for the honest-tier
+# caveat). security-reviewer is never honored here, even if listed (defense
+# in depth — the selector must never skip it, but the gate also refuses to
+# trust it). With no manifest present this always fails, preserving the
+# legacy contract.
+# Usage: _re_is_authorized_skipped <nazgul_dir> <review_dir> <reviewer>
 _re_is_authorized_skipped() {
-  local review_dir="$1" reviewer="$2"
+  local nazgul_dir="$1" review_dir="$2" reviewer="$3"
   local manifest="$review_dir/.dispatch.json"
   [ -f "$manifest" ] || return 1
   [ "$reviewer" = "security-reviewer" ] && return 1
-  jq -r '.skipped[]?.name // empty' "$manifest" 2>/dev/null | grep -qxF "$reviewer"
+  jq -r '.skipped[]?.name // empty' "$manifest" 2>/dev/null | grep -qxF "$reviewer" || return 1
+  _re_manifest_authentic "$nazgul_dir" "$review_dir"
 }
 
 # Validate review evidence for a task.
@@ -101,11 +163,11 @@ validate_review_evidence() {
   while IFS= read -r reviewer; do
     [ -z "$reviewer" ] && continue
     if [ ! -f "$review_dir/${reviewer}.md" ]; then
-      _re_is_authorized_skipped "$review_dir" "$reviewer" && continue
+      _re_is_authorized_skipped "$nazgul_dir" "$review_dir" "$reviewer" && continue
       echo "MISSING $reviewer"
       problems=$((problems + 1))
     elif ! _has_approved_verdict "$review_dir/${reviewer}.md"; then
-      _re_is_authorized_skipped "$review_dir" "$reviewer" && continue
+      _re_is_authorized_skipped "$nazgul_dir" "$review_dir" "$reviewer" && continue
       echo "UNAPPROVED $reviewer"
       problems=$((problems + 1))
     fi

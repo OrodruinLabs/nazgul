@@ -4,10 +4,18 @@
 #
 # Usage:
 #   reviewer-selection.sh select --files "<space-list>" --reviewers "<space-list>"
+#   reviewer-selection.sh verify --files "<space-list>" --reviewers "<space-list>" \
+#     --claimed-skipped "<space-list of reviewer names>"
 #
-# Output (two lines, ordering follows --reviewers input order):
+# `select` output (two lines, ordering follows --reviewers input order):
 #   SELECTED: <space-list of reviewers to dispatch>
 #   SKIPPED: <name:reason>;<name:reason>...
+#
+# `verify` re-derives the legitimate skipped set from --files/--reviewers and
+# exits 0 only if it is EXACTLY the --claimed-skipped set (order-independent).
+# This is the recompute-and-compare authenticity check consumed by
+# review-evidence.sh: trust a dispatch manifest's skipped[] by reproduction,
+# not by origin.
 #
 # Policy is CONSERVATIVE — any classification ambiguity defaults to inclusion:
 #   security-reviewer   — always selected, never skippable.
@@ -114,6 +122,29 @@ cmd_select() {
   printf 'SKIPPED: %s\n' "$(_nrs_join ';' ${skipped[@]+"${skipped[@]}"})"
 }
 
+# cmd_verify <files-space-list> <reviewers-space-list> <claimed-skipped-names-space-list>
+# 0 iff the claimed skipped-name set exactly equals the deterministic recompute.
+cmd_verify() {
+  local files_raw="$1" reviewers_raw="$2" claimed_raw="$3"
+  local select_out skipped_line entries=() entry
+  select_out=$(cmd_select "$files_raw" "$reviewers_raw")
+  skipped_line=$(printf '%s\n' "$select_out" | sed -n '2p')
+  skipped_line="${skipped_line#SKIPPED: }"
+
+  local -a actual_names=() claimed_names=()
+  [ -n "$skipped_line" ] && IFS=';' read -ra entries <<< "$skipped_line"
+  for entry in ${entries[@]+"${entries[@]}"}; do
+    [ -z "$entry" ] && continue
+    actual_names+=("${entry%%:*}")
+  done
+  [ -n "$claimed_raw" ] && read -ra claimed_names <<< "$claimed_raw"
+
+  local sorted_actual sorted_claimed
+  sorted_actual=$(printf '%s\n' ${actual_names[@]+"${actual_names[@]}"} | sort -u)
+  sorted_claimed=$(printf '%s\n' ${claimed_names[@]+"${claimed_names[@]}"} | sort -u)
+  [ "$sorted_actual" = "$sorted_claimed" ]
+}
+
 main() {
   local sub="${1:-}"; shift || true
   case "$sub" in
@@ -127,8 +158,20 @@ main() {
         esac
       done
       cmd_select "$sel_files" "$sel_reviewers" ;;
+    verify)
+      local ver_files="" ver_reviewers="" ver_claimed=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --files)           ver_files="$2";     shift 2 ;;
+          --reviewers)       ver_reviewers="$2";  shift 2 ;;
+          --claimed-skipped) ver_claimed="$2";    shift 2 ;;
+          *) shift ;;
+        esac
+      done
+      cmd_verify "$ver_files" "$ver_reviewers" "$ver_claimed" ;;
     *)
       echo "usage: reviewer-selection.sh select --files \"<list>\" --reviewers \"<list>\"" >&2
+      echo "       reviewer-selection.sh verify --files \"<list>\" --reviewers \"<list>\" --claimed-skipped \"<list>\"" >&2
       exit 2 ;;
   esac
 }
