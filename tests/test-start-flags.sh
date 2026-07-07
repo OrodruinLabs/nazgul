@@ -83,6 +83,17 @@ assert_eq "--conductor --yolo execution.engine"   "$(jq -r .execution.engine "$T
 mkcfg "$base"; bash "$APPLY" "$TMP/c.json" '"try the --conductor engine"' >/dev/null
 assert_eq "--conductor inside objective ignored" "$(jq -r '.execution.engine // "unset"' "$TMP/c.json")" "unset"
 
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--conductor --max 20" >/dev/null
+assert_eq "--conductor --max engine"   "$(jq -r .execution.engine "$TMP/c.json")" "conductor"
+assert_eq "--conductor --max 20"       "$(jq -r .max_iterations "$TMP/c.json")" "20"
+
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--conductor --task-pr" >/dev/null
+assert_eq "--conductor --task-pr engine"   "$(jq -r .execution.engine "$TMP/c.json")" "conductor"
+assert_eq "--conductor --task-pr afk flag" "$(jq -r .afk.task_pr "$TMP/c.json")" "true"
+
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--conductor --conductor" >/dev/null
+assert_eq "duplicate --conductor idempotent" "$(jq -r .execution.engine "$TMP/c.json")" "conductor"
+
 # Switching modes CLEARS stale autonomous sub-flags (the runtime gates on them).
 prioryolo='{"mode":"afk","afk":{"enabled":true,"yolo":true,"task_pr":true},"max_iterations":40}'
 mkcfg "$prioryolo"; bash "$APPLY" "$TMP/c.json" "--afk" >/dev/null
