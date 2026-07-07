@@ -1,5 +1,5 @@
 {
-  "schema_version": 18,
+  "schema_version": 19,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -71,6 +71,17 @@
   },
   "documents": {
     "dir": "nazgul/docs"
+  },
+  "execution": {
+    "engine": "sequential"
+  },
+  "conductor": {
+    "gates": {
+      "approve_graph": false,
+      "approve_each_wave": false,
+      "approve_final_pr": false
+    },
+    "max_parallel": 3
   },
   "review_gate": {
     "granularity": "group",
