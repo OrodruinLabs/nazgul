@@ -42,6 +42,7 @@ agents/                              # Subagent definitions
 │   ├── documentation.md             # Post-loop: README, API docs, changelog
 │   ├── release-manager.md           # Post-loop: versioning, release notes
 │   ├── observability.md             # Post-loop: logging, metrics, error tracking
+│   ├── comment-verifier.md          # Post-loop: inline doc-comment quality gate
 │   └── templates/                   # Reviewer base template + domain config
 hooks/hooks.json                     # Hook configuration
 scripts/                             # Shell scripts for hooks
@@ -69,7 +70,9 @@ scripts/                             # Shell scripts for hooks
 │       ├── bootstrap-scrub-map.sh   # bootstrap-project: scrub rules data
 │       ├── bootstrap-render.sh      # bootstrap-project: prompt rendering + domain helpers
 │       ├── bootstrap-preflight.sh   # bootstrap-project: pre-flight gate checks
-│       └── bootstrap-relocate.sh    # bootstrap-project: atomic staged relocation
+│       ├── bootstrap-relocate.sh    # bootstrap-project: atomic staged relocation
+│       ├── review-provenance.sh     # Diff-bound dispatch manifest + provenance validation
+│       └── reviewer-selection.sh    # Deterministic diff-aware reviewer selection
 templates/                           # Objective + document templates
 │   ├── CLAUDE.md.template           # Injected into target projects by /nazgul:init
 │   ├── feature.md / tdd.md / bugfix.md / refactor.md / greenfield.md / migration.md
