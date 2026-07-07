@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.9.0] - 2026-07-08
+
+### Added
+- **Opt-in conductor execution engine (FEAT-007).** A new graph-only driver agent (`agents/conductor.md`) offers an alternative to the sequential stop-hook loop for objectives whose plan has independent waves: it reads `nazgul/plan.md`'s dependency graph, computes waves via `scripts/lib/conductor-graph.sh`, and dispatches each wave's tasks through the existing Implementer → Review Board pipeline — no new reviewer logic, and the conductor + its libs never read file bodies or diffs, only paths, scope, one-line verdicts, and commit SHAs (the graph-only invariant, mechanically validated). State lives in `nazgul/conductor/graph.json`, is self-recovering across restarts, and falls back to the checkpoint if the graph file is missing or invalid.
+- **`conductor.gates` — autonomous-first, opt-in approval checkpoints, plus two unconditional hard stops.** `conductor.gates.{approve_graph,approve_each_wave,approve_final_pr}` (all default `false`) let a human pause the conductor before dispatch, before each wave, or before the final PR; `scripts/lib/conductor-gates.sh` evaluates them. Independent of any gate setting or `mode` (including `yolo`), the conductor always halts for a human on a `BLOCKED` task or a security rejection — the same two hard stops the sequential engine enforces, now covered under conductor mode too.
+- **`conductor.max_parallel`** (default `3`) caps how many tasks in a wave the conductor dispatches concurrently, evaluated by `scripts/lib/conductor-router.sh`, which also selects the dispatch backend (subagent, Agent Team, or worktree) per task.
+- **`/nazgul:start --conductor`** opts a run into the new engine. It sets `execution.engine: "conductor"` orthogonally to `--afk`/`--hitl`/`--yolo` (composable, no interaction with `set_mode`) and is a pure no-op when omitted — `execution.engine` stays `"sequential"`, the existing default. `skills/start/SKILL.md` gained an "Engine Selection" section plus a dispatch gate at each of the four resume states.
+- **`docs/loop-engineering.md`** documents the conductor architecture: graph model, wave computation, gates, hard stops, and recovery.
+- **Config schema v18 → v19.** `migrate_18_to_19` adds `execution.engine` (default `"sequential"`) and `conductor.gates.{approve_graph,approve_each_wave,approve_final_pr}` (default `false`) and `conductor.max_parallel` (default `3`) additively.
+
+Sequential remains the default engine — zero behavior change for existing runs; no task in this objective edited `scripts/stop-hook.sh` or other sequential-path code.
+
 ## [2.8.0] - 2026-07-07
 
 ### Added
