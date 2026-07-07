@@ -111,4 +111,36 @@ assert_exit_code "bad scope: route_wave exit 0" "$ROUTE_EC" 0
 assert_json_field "bad scope: dispatch sequential" "$OUT_FILE" ".dispatch" "sequential"
 assert_json_field "bad scope: reason mentions invalid shape" "$OUT_FILE" ".reason" "invalid file_scope shape"
 
+# --- Test 8: exact-cap boundary — N == max_parallel stays a single batch ---
+UNITS_EXACT='[{"id":"T1","file_scope":["1.sh"]},{"id":"T2","file_scope":["2.sh"]},{"id":"T3","file_scope":["3.sh"]}]'
+run_route_wave "$UNITS_EXACT" "true" ""
+assert_exit_code "exact cap: route_wave exit 0" "$ROUTE_EC" 0
+assert_json_field "exact cap: dispatch parallel" "$OUT_FILE" ".dispatch" "parallel"
+assert_json_field "exact cap: single batch (no off-by-one split)" "$OUT_FILE" ".batches | length" "1"
+assert_json_field "exact cap: batch holds all 3 units" "$OUT_FILE" ".batches[0] | length" "3"
+
+# --- Test 9: empty wave -> batches: [] (not [[]]) ---
+run_route_wave "[]" "true" ""
+assert_exit_code "empty wave: route_wave exit 0" "$ROUTE_EC" 0
+assert_json_field "empty wave: batches is an empty array" "$OUT_FILE" ".batches | length" "0"
+
+# --- Test 10: single-unit marked-parallel wave -> parallel, one batch of one ---
+UNITS_SINGLE='[{"id":"T1","file_scope":["1.sh"]}]'
+run_route_wave "$UNITS_SINGLE" "true" ""
+assert_exit_code "single unit: route_wave exit 0" "$ROUTE_EC" 0
+assert_json_field "single unit: dispatch parallel" "$OUT_FILE" ".dispatch" "parallel"
+assert_json_field "single unit: one batch" "$OUT_FILE" ".batches | length" "1"
+assert_json_field "single unit: batch has one unit" "$OUT_FILE" ".batches[0] | length" "1"
+
+# --- Test 11: malformed units_json (not an array) forces sequential fail-safe ---
+run_route_wave '{' "true" ""
+assert_exit_code "malformed json: route_wave exit 0" "$ROUTE_EC" 0
+assert_json_field "malformed json: dispatch sequential" "$OUT_FILE" ".dispatch" "sequential"
+assert_json_field "malformed json: reason mentions malformed" "$OUT_FILE" ".reason" "malformed units_json"
+
+run_route_wave "not json" "true" ""
+assert_exit_code "not json: route_wave exit 0" "$ROUTE_EC" 0
+assert_json_field "not json: dispatch sequential" "$OUT_FILE" ".dispatch" "sequential"
+assert_json_field "not json: reason mentions malformed" "$OUT_FILE" ".reason" "malformed units_json"
+
 report_results

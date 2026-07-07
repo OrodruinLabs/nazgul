@@ -100,12 +100,18 @@ route_unit() {
 
 # _router_has_overlap <units_json> -> 0 (found) iff any file_scope path is
 # shared by two or more units; 1 (none) otherwise. Duplicates within a single
-# unit's own file_scope are not overlap.
+# unit's own file_scope are not overlap. A jq error (rc >1, e.g. malformed
+# JSON) is also reported as "found" — fail-safe, never read a parse error as
+# zero-overlap.
 _router_has_overlap() {
+  local rc
   jq -e '
     [ .[] | (.file_scope // [] | unique)[] ] as $all
     | ($all | length) != ($all | unique | length)
   ' <<< "$1" > /dev/null 2>&1
+  rc=$?
+  [ "$rc" -eq 1 ] && return 1
+  return 0
 }
 
 # _router_sequential_result <ids_json_array> <reason> -> prints the
@@ -118,12 +124,13 @@ _router_sequential_result() {
 
 # _router_parallel_result <ids_json_array> <max_parallel> -> prints the
 # {dispatch, reason, batches} result for a parallel wave, chunked into
-# ordered batches never exceeding max_parallel (cap floors at 1).
+# ordered batches never exceeding max_parallel (cap floors at 1). An empty
+# ids array yields batches: [] (not [[]]).
 _router_parallel_result() {
   local ids_json="$1" cap="$2"
   [ "$cap" -ge 1 ] 2>/dev/null || cap=1
   jq -n --argjson ids "$ids_json" --argjson cap "$cap" '
-    def chunk(n): def c: if length <= n then [.] else [.[0:n]] + (.[n:] | c) end; c;
+    def chunk(n): def c: if length == 0 then [] elif length <= n then [.] else [.[0:n]] + (.[n:] | c) end; c;
     { dispatch: "parallel", reason: "zero-overlap Planner-marked parallel group", batches: ($ids | chunk($cap)) }
   '
 }
@@ -140,8 +147,13 @@ route_wave() {
   local units_json="$1" marked_parallel="$2" config_file="${3:-}" max_parallel
   max_parallel=$(conductor_max_parallel "$config_file")
 
+  if ! jq -e 'type == "array"' <<< "$units_json" > /dev/null 2>&1; then
+    _router_sequential_result "[]" "malformed units_json"
+    return 0
+  fi
+
   local ids
-  ids=$(jq -c '[.[].id]' <<< "$units_json")
+  ids=$(jq -c '[.[].id]' <<< "$units_json" 2>/dev/null) || ids="[]"
 
   local n i fs
   n=$(jq 'length' <<< "$units_json" 2>/dev/null) || n=0
