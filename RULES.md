@@ -283,3 +283,60 @@ These five layers sit underneath, not instead of, the two unconditional hard sto
 §11: even with `conductor.enforce.dispatch_guard`/`rework_guard` both set `false`, `conductor_should_halt`
 (`scripts/lib/conductor-gates.sh`) still fails closed on any `BLOCKED` task or non-`APPROVE`
 `security-reviewer.md` verdict, mirroring §3.5/§5's hard-block posture for the sequential engine.
+
+---
+
+## 13. Automation Heartbeat
+
+`scripts/heartbeat.sh` (FEAT-008) is a trigger-agnostic tick engine: one POSIX-safe script that reuses
+the Conductor's own hard-stop and session-tracker libraries rather than reimplementing them, fired
+either by hand (`/nazgul:heartbeat`, `skills/heartbeat/SKILL.md`) or by an opt-in Claude Code native
+scheduled agent (routine) configured entirely outside this plugin. `hooks/hooks.json` does not wire it to
+any Claude Code hook event, so whether a tick ever runs at all is a trigger the operator chooses, not
+something Nazgul schedules itself.
+
+- **Opt-in and default-off.** `[advisory]` `automation.heartbeat.enabled` defaults to `false` (`jq -r
+  '.automation.heartbeat.enabled // false'`). No PreToolUse guard or stop-hook forces or blocks the
+  routine that fires `scripts/heartbeat.sh` in the first place — the same "config-read, not hook-blocked"
+  posture §11 already gives `execution.engine`/Conductor gate selection. Once a tick DOES run, the
+  `enabled` check is a plain, unconditional bash `if` near the top of the script: false means a
+  `decision: disabled` record and `exit 0` before any inbox read, triage, or side effect.
+- **The concurrency guard: never a second loop.** `[enforced]` `scripts/heartbeat.sh` calls
+  `count_active_sessions` (`scripts/lib/session-tracker.sh`) — the identical session-lock mechanism
+  `stop-hook.sh` uses — before archiving or starting anything; any active session forces `decision:
+  skipped, reason: active_session` and `exit 0`. This is a single top-of-flow bash conditional the
+  interpreter always evaluates on every invocation, not a step an agent's own protocol could choose to
+  skip (contrast the Conductor's use of a sibling check in §11) — the same class of internal script gate
+  `[enforced]` already credits `stop-hook.sh` with elsewhere in this document (§1 Rule 4). Covered by
+  `tests/test-heartbeat-session-guard.sh`.
+- **The two hard stops are unconditional — independent of `enabled` and of `mode`, including `yolo`.** `[enforced]`
+  `scripts/heartbeat.sh` calls `conductor_should_halt` (`scripts/lib/conductor-gates.sh`, the
+  identical fail-closed function §11/§12 document for the Conductor) as the very first thing it does on
+  every invocation — before even reading `automation.heartbeat.enabled` — so a `BLOCKED` task or a
+  non-`APPROVE` security-reviewer verdict halts the tick (`decision: hard_stop`) regardless of whether
+  heartbeat is enabled or what `mode` is set to. Unlike §11's Conductor usage of this same function
+  (advisory there because an LLM-driven agent prompt calls it and could skip the step), this
+  call site is a single bash line the interpreter executes unconditionally every time the script runs —
+  no agent judgment intervenes, mirroring the distinction this document already draws between
+  agent-protocol-invoked checks and plain script-level gates. Covered by
+  `tests/test-heartbeat-hard-stops.sh` across `enabled: true`, `enabled: false`, and `mode: yolo`.
+- **Idempotent atomic claim-then-archive.** `[enforced]` The picked candidate is moved into
+  `<inbox>/archive/` via a single `mv -f` (`inbox_archive`, `scripts/lib/inbox-provider.sh`) BEFORE
+  `/nazgul:start` is invoked — archive-then-start, so the move itself is the atomic claim: a crash
+  between the two leaves the item archived (not lost, not re-pickable), and a re-run can never
+  double-start it. This is a fixed, single-outcome filesystem operation in the script's own flow, not
+  agent discretion. Covered by `tests/test-heartbeat-idempotency.sh` (archive-not-delete, single start
+  invocation, crash-between-claim-and-start consistency).
+- **No `eval` on inbox/objective text.** `[advisory]` Candidate title/body only ever reach `jq` via
+  `--arg`/`--argjson`/`--rawfile`, never `eval`'d or shell-interpolated (`scripts/lib/inbox-provider.sh`,
+  `scripts/lib/heartbeat-triage.sh`), and `tests/test-heartbeat-triage.sh` proves a metacharacter-laden
+  title/body produces no side effect. That test proves today's code is safe; it is not a mechanical guard
+  against a future edit reintroducing `eval` — `shellcheck` (registered for every heartbeat script in
+  `tests/test-shellcheck.sh`) catches quoting and expansion hazards but does not forbid the `eval`
+  builtin itself, so this stays a discipline the tests currently confirm rather than a hook that blocks
+  regression.
+
+Branch isolation (§10) applies unchanged: `scripts/heartbeat.sh` never commits or touches a git branch —
+it only reads the inbox, moves files within it, and shells out to `/nazgul:start`, which is subject to
+the same §10 tiers (`base-branch-commit-guard.sh`, `local-mode-tracking-guard.sh`) as every other
+objective start. No new guard and no new tier is introduced here.

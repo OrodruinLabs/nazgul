@@ -63,20 +63,22 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test (c): the count of [advisory] annotations is exactly 9
+# Test (c): the count of [advisory] annotations is exactly 11
 # The legend table itself contains [advisory] as a label definition (1 count).
 # Rule annotations add to that (incl. §11 Conductor's engine-selection, hard-stops,
 # wave-parallelism, and graph-only-invariant bullets — all four are agent-invoked,
 # not hook-gated, per FEAT-007's tier-honesty correction; plus §12's wave-digest
-# bullet, the one Enforced-Conductor layer that stays advisory). Total must be
-# exactly 9.
+# bullet, the one Enforced-Conductor layer that stays advisory; plus §13's
+# opt-in/default-off and no-eval heartbeat bullets — nothing schedules the tick,
+# and the eval-safety claim is test-backed today but not regression-guarded).
+# Total must be exactly 11.
 # ---------------------------------------------------------------------------
 ADVISORY_COUNT=$(grep -c '\[advisory\]' "$RULES_FILE" || true)
-if [ "$ADVISORY_COUNT" -eq 9 ]; then
-  _pass "[advisory] annotation count is exactly 9 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 11 ]; then
+  _pass "[advisory] annotation count is exactly 11 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 9" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 9"
+  _fail "[advisory] annotation count is exactly 11" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 11"
 fi
 
 # ---------------------------------------------------------------------------
@@ -148,5 +150,49 @@ assert_file_contains \
   "Conductor Enforcement cross-references the two unconditional hard stops" \
   "$RULES_FILE" \
   "unconditional hard stops"
+
+# ---------------------------------------------------------------------------
+# Test (g): the Automation Heartbeat section (FEAT-008) exists with honest
+# tiers. The concurrency guard and the two hard stops are plain, unconditional
+# bash checked by the tick script itself (no agent judgment involved) -> [en-
+# forced], same class as stop-hook.sh's own internal gates. Atomic claim-then-
+# archive is a fixed single-outcome filesystem operation in that same flow ->
+# [enforced]. Opt-in/default-off and no-eval are agent/config discipline with
+# no mechanical guard against regression -> [advisory].
+# ---------------------------------------------------------------------------
+assert_file_contains \
+  "RULES.md has an Automation Heartbeat section" \
+  "$RULES_FILE" \
+  "## 13. Automation Heartbeat"
+
+assert_file_contains \
+  "Heartbeat opt-in/default-off is tagged [advisory]" \
+  "$RULES_FILE" \
+  'Opt-in and default-off.*`\[advisory\]`'
+
+assert_file_contains \
+  "Heartbeat concurrency guard is tagged [enforced]" \
+  "$RULES_FILE" \
+  'concurrency guard: never a second loop.*`\[enforced\]`'
+
+assert_file_contains \
+  "Heartbeat's two hard stops are tagged [enforced]" \
+  "$RULES_FILE" \
+  'two hard stops are unconditional.*`\[enforced\]`'
+
+assert_file_contains \
+  "Heartbeat atomic claim-then-archive is tagged [enforced]" \
+  "$RULES_FILE" \
+  'Idempotent atomic claim-then-archive.*`\[enforced\]`'
+
+assert_file_contains \
+  "Heartbeat no-eval discipline is tagged [advisory]" \
+  "$RULES_FILE" \
+  'No `eval` on inbox/objective text.*`\[advisory\]`'
+
+assert_file_contains \
+  "Automation Heartbeat references branch isolation (§10) as unchanged" \
+  "$RULES_FILE" \
+  "Branch isolation (§10) applies unchanged"
 
 report_results
