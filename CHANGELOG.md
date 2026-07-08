@@ -14,6 +14,10 @@ All notable changes to this project will be documented in this file.
 
 Sequential remains the default engine — zero behavior change for existing runs; no task in this objective edited `scripts/stop-hook.sh` or other sequential-path code.
 
+### Fixed
+- **`task-state-guard.sh` multi-line `old_string` (macOS/BSD awk).** The guard reconstructed an Edit's `old_string` via `awk -v old=...`, which throws `awk: newline in string` on BSD awk whenever the value spans multiple lines (e.g. the `---`/`status:`/`---` frontmatter block) — silently no-opping the state-transition check. It now passes the value via `ENVIRON[...]`, portable on GNU and BSD awk; validation semantics are unchanged.
+- **Transient-artifact hygiene on new plans.** `/nazgul:plan` previously proceeded past a *completed* prior objective without clearing its `nazgul/reviews/` and `nazgul/learning/proposed-rules.md`, so a new objective could read the prior one's review verdicts and learner proposals as current. A new `scripts/scrub-stale-review-artifacts.sh` (archive-then-clear, `mv`-only, guarded to no-op while any task is active, `feat_id` path-sanitized) is now invoked by `/nazgul:plan` before task generation, and the learner overwrites (never appends) `proposed-rules.md` scoped to the current objective.
+
 ## [2.8.0] - 2026-07-07
 
 ### Added
