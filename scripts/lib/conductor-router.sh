@@ -69,33 +69,42 @@ router_validate_file_scope() {
   [ "$problems" -eq 0 ]
 }
 
-# route_backend <kind> [isolation] -> prints the in-session backend:
-#   kind == "review"        -> subagent (always, reviews are read-only)
-#   isolation == "mutation"    -> worktree (parallel file-mutating unit)
+# route_backend <kind> [isolation] [group] -> prints the in-session backend:
+#   kind == "review"          -> subagent (always, reviews are read-only)
+#   isolation == "mutation"      group == "parallel" -> team (Layer 4: a parallel
+#                                 multi-unit mutating batch reuses team-orchestrator's
+#                                 proven Agent-Teams path instead of one bespoke
+#                                 worktree per unit)
+#                                 group != "parallel" -> worktree (a lone mutating unit)
 #   isolation == "coordination" -> team (parallel wave needing live SendMessage)
-#   anything else/unclear      -> subagent (bounded/read-heavy fallback)
+#   anything else/unclear       -> subagent (bounded/read-heavy fallback)
+# group defaults to "single" so every pre-Layer-4 2-arg call site is unaffected.
 route_backend() {
-  local kind="$1" isolation="${2:-}"
+  local kind="$1" isolation="${2:-}" group="${3:-single}"
   if [ "$kind" = "review" ]; then
     echo "subagent"
     return 0
   fi
   case "$isolation" in
-    mutation)     echo "worktree" ;;
+    mutation)
+      if [ "$group" = "parallel" ]; then echo "team"; else echo "worktree"; fi ;;
     coordination) echo "team" ;;
     *)            echo "subagent" ;;
   esac
 }
 
-# route_unit <unit_json> -> prints {"backend", "dispatch"} where dispatch
-# names the concrete mechanism a backend reuses. Single backend-agnostic
-# choke point: agents/conductor.md calls only this, never route_backend
-# directly, for unit-level decisions.
+# route_unit <unit_json> [group] -> prints {"backend", "dispatch"} where
+# dispatch names the concrete mechanism a backend reuses. Single
+# backend-agnostic choke point: agents/conductor.md calls only this, never
+# route_backend directly, for unit-level decisions. group is "parallel" or
+# "single" (default) — the caller (route_wave's batch consumer) knows whether
+# this unit sits in a multi-unit parallel batch; route_unit only forwards that
+# signal to route_backend, it does not compute it.
 route_unit() {
-  local unit_json="$1" kind isolation backend dispatch
+  local unit_json="$1" group="${2:-single}" kind isolation backend dispatch
   kind=$(jq -r '.kind // "task"' <<< "$unit_json" 2>/dev/null)
   isolation=$(jq -r '.isolation // ""' <<< "$unit_json" 2>/dev/null)
-  backend=$(route_backend "$kind" "$isolation")
+  backend=$(route_backend "$kind" "$isolation" "$group")
   case "$backend" in
     team)     dispatch="team-orchestrator" ;;
     worktree) dispatch="EnterWorktree" ;;

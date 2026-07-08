@@ -38,6 +38,74 @@ orthogonal to `--afk`/`--hitl`/`--yolo`. `conductor.gates` (`approve_graph`, `ap
 `approve_final_pr`) default `false` for an autonomous-first posture; two hard stops — any `BLOCKED` task,
 any security rejection — always halt for a human regardless of gate config or mode.
 
+## Mechanical enforcement (Enforced Conductor follow-up)
+
+FEAT-007 shipped the Conductor as a working driver whose correct behavior was, in the end, prose in its
+own prompt: nothing stopped it from firing a work unit and moving on without waiting, or from
+re-implementing a unit it had already committed. A follow-up objective ("Enforced Conductor",
+`feat/conductor-enforcement`) closed that gap with five layers backing one headline invariant —
+**"completed = cached, never re-executed"**: a unit that reached `IMPLEMENTED`/`DONE` with a commit SHA is
+never re-dispatched or re-implemented.
+
+1. `scripts/conductor-dispatch-guard.sh` (PreToolUse on the `Agent` tool) denies background dispatch of a
+   work-unit subagent and denies re-dispatching a unit already `IMPLEMENTED`/`DONE` — dispatch is
+   synchronous and one-shot per unit.
+2. `scripts/conductor-rework-guard.sh` (PreToolUse on `Write|Edit|MultiEdit`) denies writing to a file
+   inside a committed unit's `file_scope`.
+3. `scripts/subagent-stop.sh` detects an orphaned wave (units dispatched but not yet terminal) on every
+   `SubagentStop` event and records a `nazgul/conductor/.resume-needed` marker plus a
+   `conductor_orphan_detected` event.
+4. `scripts/lib/conductor-router.sh` routes a Planner-marked, zero-overlap parallel wave to
+   `team-orchestrator` instead of one bespoke worktree per unit, reusing the sequential engine's proven
+   Agent-Teams path and its zero-file-overlap validation.
+5. `scripts/lib/conductor-graph.sh`'s `graph_wave_digest` gives the Conductor a cheap per-turn orientation
+   snapshot (`{current_wave, next_unit, units}`) instead of a full wave recomputation.
+
+Both guards are scoped to an active conductor run — `nazgul/conductor/.session` present and
+`execution.engine == "conductor"` — and gated by an additive kill-switch,
+`conductor.enforce.{dispatch_guard,rework_guard}` (both default `true`, config schema v20). See RULES.md
+§12 for the full, honest tier breakdown: layers 1-2 are mechanically `[enforced]`; layers 3-4 are
+`[hook-driven only]` (wired into a real hook, but detection/routing rather than a block); layer 5 stays
+`[advisory]`, same as the rest of §11. The two unconditional hard stops from §11 — any `BLOCKED` task, any
+security rejection — are unchanged and sit underneath all five layers regardless of the kill-switch.
+
+### Nazgul's Conductor vs. native dynamic Workflows
+
+Claude Code ships a native dynamic-workflow runtime (`agent()`/`pipeline()`/`parallel()` primitives,
+deterministic "plan-in-code," runtime-cached resumption). Before hardening the Conductor with guards, we
+evaluated rebuilding it on that runtime instead — the caching model is exactly the "completed = cached,
+never re-executed" invariant above, for free. It's the right tool for **one-off, single-session fan-outs**:
+audits, migrations, `/deep-research`-style research, anything that starts and finishes inside one session
+with no need to survive a restart. We recommend it for those.
+
+We did not build the Conductor on it, for four reasons found during that investigation:
+
+1. **Plugins cannot ship a workflow.** Plugin component types are `skills/ commands/ agents/ hooks/
+   .mcp.json .lsp.json monitors/ bin/ settings.json` — there is no `workflows/`. Saved workflows live in
+   `.claude/workflows/`, undistributable via the Nazgul plugin.
+2. **Workflows don't survive a session exit.** Resume is same-session only; a new session starts fresh.
+   This collides with Nazgul's foundational disk-based cross-session/compaction recovery (RULES.md §4) —
+   the Conductor's whole reason to exist.
+3. **No mid-run human input**, which breaks HITL's `approve_each_wave`/`approve_final_pr` gates
+   (`conductor.gates`, §11).
+4. **The `Workflow` tool is main-session-only, not available to subagents.** The Conductor is itself a
+   subagent (dispatched by `/nazgul:start`), so it can never invoke `Workflow` — this alone rules out
+   "Conductor launches inline workflows per wave" as a mechanism.
+
+We adopted the Workflow *patterns* (result caching, plan-in-code) — via mechanical guards, since we get
+none of it from the runtime — not the runtime itself.
+
+### Deferred: Review Board robustness (not part of this release)
+
+The `/deep-research` pattern of treating a claim the verifier *could not check* as **unverified**, not
+**refuted**, surfaced a real gap in the shared Review Board (`agents/review-gate.md`, used by both
+engines): a reviewer that errors, rate-limits, or otherwise can't assess a change is not currently
+distinguished from one that reviewed and rejected it. Two follow-ups are captured for a future objective —
+a non-blocking `unverified` verdict distinct from `REJECT`, and an adversarial cross-check/voting posture
+across reviewers. Both touch code shared by the sequential and Conductor engines, so they are deliberately
+**out of scope here** to avoid destabilizing the sequential engine; nothing in this release implements
+them.
+
 ## Run it as a loop
 
 ```bash

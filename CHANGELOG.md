@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.10.0] - 2026-07-08
+
+### Added
+- **Enforced Conductor — mechanical dispatch guards, closing the FEAT-007 double-dispatch/orphan gap.** FEAT-007's Conductor engine was a working driver whose correct dispatch behavior was prose in its own prompt; five layers now back one headline invariant, **"completed = cached, never re-executed"**:
+  1. `scripts/conductor-dispatch-guard.sh` — new PreToolUse guard on the `Agent` tool — denies (exit 2) running a work-unit subagent (`implementer`, `review-gate`, `team-orchestrator`) in the background, and denies re-dispatching a unit whose `graph.json` status is already `IMPLEMENTED`/`DONE`, matched via the `NAZGUL_UNIT: TASK-NNN` marker `agents/conductor.md` now emits with every unit dispatch.
+  2. `scripts/conductor-rework-guard.sh` — new PreToolUse guard on `Write|Edit|MultiEdit` — denies writing to a file inside a committed unit's `file_scope`.
+  3. `scripts/subagent-stop.sh` gained conductor orphan detection: on every `SubagentStop` event it checks `graph.json` for units marked `dispatched` but not yet terminal, writing `nazgul/conductor/.resume-needed` and emitting `conductor_orphan_detected`.
+  4. `scripts/lib/conductor-router.sh`'s `route_backend`/`route_wave` now route a Planner-marked, zero-overlap parallel wave to `team-orchestrator` instead of one bespoke worktree per unit, reusing the sequential engine's proven Agent-Teams path.
+  5. `scripts/lib/conductor-graph.sh` gained `graph_wave_digest`, a cheap `{current_wave, next_unit, units}` orientation snapshot so the Conductor doesn't pay for a full wave recomputation every turn.
+
+  Both guards are scoped to an active conductor session (`nazgul/conductor/.session`, written/removed by `agents/conductor.md`) and no-op outside it — a stray Nazgul agent or a sequential-engine run is never touched. RULES.md gained a new §12 "Conductor Enforcement" documenting the honest tier for each layer: guards 1-2 are `[enforced]`, orphan detection and team routing are `[hook-driven only]`, the wave digest stays `[advisory]`. The two unconditional hard stops (any `BLOCKED` task, any security rejection) are unchanged and sit underneath all five layers.
+- **Config schema v19 → v20.** `migrate_19_to_20` adds `conductor.enforce.{dispatch_guard,rework_guard}` (both default `true`) additively — an explicit kill-switch for either guard, existing values preserved.
+- **`docs/loop-engineering.md`** gained a "Mechanical enforcement" section describing the five layers, plus a subsection contrasting Nazgul's durable Conductor with Claude Code's native dynamic Workflow runtime: Workflows are the right tool for one-off, single-session fan-outs (audits, migrations, `/deep-research`-style research), but the Conductor isn't built on them — plugins can't ship a `workflows/` directory, Workflows don't survive a session exit (breaking Nazgul's cross-session recovery), there's no mid-run human input for HITL gates, and the `Workflow` tool is main-session-only (the Conductor is itself a subagent). A "Review Board robustness" follow-up — treating a reviewer's unverified assessment as distinct from a rejection, plus adversarial cross-checking — is noted as deferred future work, not implemented in this release.
+
 ## [2.9.0] - 2026-07-08
 
 ### Added

@@ -82,6 +82,21 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/lean-comments-guard.sh\"",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/conductor-rework-guard.sh\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/conductor-dispatch-guard.sh\"",
+            "timeout": 10
           }
         ]
       }

@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "19"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "20"
 assert_json_field "review_gate.simplify_before_review default false" "$CONFIG" ".review_gate.simplify_before_review" "false"
 assert_json_field "review_gate.enforce_granularity default block" "$CONFIG" ".review_gate.enforce_granularity" "block"
 assert_json_field "has .default_mode" "$CONFIG" ".default_mode" "null"
@@ -138,5 +138,11 @@ assert_json_field "v19 conductor.gates.approve_graph is false" "$CONFIG" ".condu
 assert_json_field "v19 conductor.gates.approve_each_wave is false" "$CONFIG" ".conductor.gates.approve_each_wave" "false"
 assert_json_field "v19 conductor.gates.approve_final_pr is false" "$CONFIG" ".conductor.gates.approve_final_pr" "false"
 assert_json_field "v19 conductor.max_parallel is 3" "$CONFIG" ".conductor.max_parallel" "3"
+
+# v20 new defaults (conductor enforcement toggles)
+val=$(jq -r '.conductor.enforce | type' "$CONFIG")
+assert_eq "v20 has .conductor.enforce object" "$val" "object"
+assert_json_field "v20 conductor.enforce.dispatch_guard is true" "$CONFIG" ".conductor.enforce.dispatch_guard" "true"
+assert_json_field "v20 conductor.enforce.rework_guard is true" "$CONFIG" ".conductor.enforce.rework_guard" "true"
 
 report_results

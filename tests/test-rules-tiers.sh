@@ -63,18 +63,20 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test (c): the count of [advisory] annotations is exactly 8
+# Test (c): the count of [advisory] annotations is exactly 9
 # The legend table itself contains [advisory] as a label definition (1 count).
 # Rule annotations add to that (incl. §11 Conductor's engine-selection, hard-stops,
 # wave-parallelism, and graph-only-invariant bullets — all four are agent-invoked,
-# not hook-gated, per FEAT-007's tier-honesty correction). Total must be exactly 8.
+# not hook-gated, per FEAT-007's tier-honesty correction; plus §12's wave-digest
+# bullet, the one Enforced-Conductor layer that stays advisory). Total must be
+# exactly 9.
 # ---------------------------------------------------------------------------
 ADVISORY_COUNT=$(grep -c '\[advisory\]' "$RULES_FILE" || true)
-if [ "$ADVISORY_COUNT" -eq 8 ]; then
-  _pass "[advisory] annotation count is exactly 8 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 9 ]; then
+  _pass "[advisory] annotation count is exactly 9 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 8" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 8"
+  _fail "[advisory] annotation count is exactly 9" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 9"
 fi
 
 # ---------------------------------------------------------------------------
@@ -102,5 +104,49 @@ assert_file_contains \
   "Conductor graph-only invariant is tagged [advisory], not a mechanical guard" \
   "$RULES_FILE" \
   "Graph-only invariant: the Conductor never holds file bodies"
+
+# ---------------------------------------------------------------------------
+# Test (f): the Conductor Enforcement section (FEAT-007 follow-up, "Enforced
+# Conductor") exists with honest tiers. Dispatch + re-work guards are real
+# PreToolUse hooks that deny (exit 2) mechanically -> [enforced]. Orphan
+# detection and team routing are wired into real hook events / an existing
+# hook-driven mechanism but only detect/observe rather than block -> [hook-
+# driven only]. The wave digest is read-only convenience nothing forces the
+# Conductor to consult -> [advisory], same as §11.
+# ---------------------------------------------------------------------------
+assert_file_contains \
+  "RULES.md has a Conductor Enforcement section" \
+  "$RULES_FILE" \
+  "## 12. Conductor Enforcement"
+
+assert_file_contains \
+  "Dispatch guard is tagged [enforced]" \
+  "$RULES_FILE" \
+  'Dispatch guard.*`\[enforced\]`'
+
+assert_file_contains \
+  "Re-work guard is tagged [enforced]" \
+  "$RULES_FILE" \
+  'Re-work guard.*`\[enforced\]`'
+
+assert_file_contains \
+  "Orphan detection is tagged [hook-driven only]" \
+  "$RULES_FILE" \
+  'Orphan detection.*`\[hook-driven only\]`'
+
+assert_file_contains \
+  "Team routing is tagged [hook-driven only]" \
+  "$RULES_FILE" \
+  'Team routing.*`\[hook-driven only\]`'
+
+assert_file_contains \
+  "Wave digest is tagged [advisory]" \
+  "$RULES_FILE" \
+  'Wave digest.*`\[advisory\]`'
+
+assert_file_contains \
+  "Conductor Enforcement cross-references the two unconditional hard stops" \
+  "$RULES_FILE" \
+  "unconditional hard stops"
 
 report_results
