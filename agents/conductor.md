@@ -158,15 +158,20 @@ ROUTE=$(route_wave "$units_json" "$marked_parallel" "$CONFIG")
 
 `ROUTE` is `{dispatch, reason, batches}` — `dispatch` is `"sequential"` or `"parallel"`, `batches` is an
 ordered array of task-id arrays (each batch ≤ `conductor.max_parallel`, sequential batches are always
-`[[id], [id], ...]`). For each unit, also call `route_unit '{"kind": "task", "isolation": "..."}'` to get
-its `{backend, dispatch}` — `subagent` (Task/Agent dispatch — the default for bounded work), `worktree` (parallel file-mutating unit —
-reuse `EnterWorktree`/`ExitWorktree`), or `team` (parallel wave needing live `SendMessage` — reuse
-`team-orchestrator`). Follow the batch's routed backend for every unit's implementation dispatch. For
-review dispatch, call `route_unit '{"kind": "review"}'` once per wave and use its returned `backend` for
-every unit's Review Board dispatch in this wave, regardless of the unit's own implementation backend —
-today that resolves to `subagent` (`route_backend` hardcodes reviews to `subagent`, reviewers are
-read-only and independent), but sourcing it from the router keeps this in sync if that branch ever
-changes.
+`[[id], [id], ...]`). For each unit, also derive `GROUP` — `"parallel"` when the batch (from
+`ROUTE.batches`) containing that unit holds more than one task id, `"single"` otherwise. This is a
+per-batch check, not the wave-level `ROUTE.dispatch` value: a marked-parallel wave whose only batch
+happens to hold one unit still yields `GROUP="single"` for that unit. Then call
+`route_unit '{"kind": "task", "isolation": "..."}' "$GROUP"` to get its `{backend, dispatch}` —
+`subagent` (Task/Agent dispatch — the default for bounded work), `worktree` (a lone file-mutating
+unit — reuse `EnterWorktree`/`ExitWorktree`), or `team` (**Layer 4**: a parallel multi-unit mutating
+batch, or any `coordination`-isolation batch — reuse `team-orchestrator`'s "Spawning an Implementation
+Team" protocol instead of one bespoke worktree per unit). Follow the batch's routed backend for every
+unit's implementation dispatch. For review dispatch, call `route_unit '{"kind": "review"}'` once per wave
+and use its returned `backend` for every unit's Review Board dispatch in this wave, regardless of the
+unit's own implementation backend — today that resolves to `subagent` (`route_backend` hardcodes reviews
+to `subagent`, reviewers are read-only and independent), but sourcing it from the router keeps this in
+sync if that branch ever changes.
 
 ## Step 5: Dispatch synchronously — own the dispatch AND the collection
 
@@ -176,17 +181,27 @@ and every Review Board call in this wave completes and reports its result back t
 For each batch in `ROUTE.batches`, in order:
 
 1. **Implement.** Dispatch each unit in the batch per its routed backend:
-   - `subagent`/`worktree`: one Agent-tool call per unit (a worktree unit additionally uses
+   - `team`: this is now the routed backend for a **parallel multi-unit mutating batch** (Layer 4 — the
+     fix for "why wasn't the conductor using team agents") as well as any `coordination`-isolation batch.
+     Delegate the WHOLE batch, in one dispatch, to `team-orchestrator` per its existing "Spawning an
+     Implementation Team" protocol: it does `git worktree add` per teammate (never a bespoke
+     `EnterWorktree` call of your own for these units), then owns spawn → monitor → collect → cleanup for
+     the whole team. **Wait for `team-orchestrator` to return and report every teammate's outcome**
+     (status + commit SHA per unit, or BLOCKED) before starting any of this batch's reviews — same
+     synchronous rule as below, just satisfied by one delegated call instead of N Agent-tool calls.
+   - `subagent`/`worktree`: only ever a single-unit batch now (a multi-unit mutating batch routes to
+     `team` above). One Agent-tool call per unit (a `worktree` unit additionally uses
      `EnterWorktree`/`ExitWorktree` around its dispatch, exactly as `agents/team-orchestrator.md`'s
-     "Spawning an Implementation Team" section does). A single-unit batch is one call; a multi-unit
-     parallel batch is one call per unit, all emitted in the SAME message so they run concurrently — the
-     same pattern `agents/review-gate.md`'s parallel reviewer dispatch uses.
-   - `team`: delegate the whole batch to `team-orchestrator` per its existing "Spawning an Implementation
-     Team" protocol; wait for it to report every teammate's outcome.
+     "Spawning an Implementation Team" section does). Any residual multi-unit `subagent`/`worktree`
+     batch (there should not be one, per the routing above, but if the router ever falls back to it) is
+     still one call per unit, all emitted in the SAME message so they run concurrently — the same pattern
+     `agents/review-gate.md`'s parallel reviewer dispatch uses. Never fire these and move on before they
+     return.
    - Give each dispatch ONLY the task ID, its file scope, and its manifest path — never a diff, never
      another unit's files.
    - **Wait for every dispatch in the batch to return** (status IMPLEMENTED + commit SHA, or BLOCKED)
-     before proceeding. Do not start the batch's reviews until every implementer in it has returned.
+     before proceeding. Do not start the batch's reviews until every implementer in it has returned —
+     this applies whether the batch was one `team-orchestrator` delegation or N individual dispatches.
 2. **Review.** For each unit in the batch that reached IMPLEMENTED:
    - **Scrub its review dir first**: `rm -rf "$NAZGUL_DIR/reviews/<unit-id>"` before dispatching Review
      Board for it. This is the second hard lesson — a stale `diff.patch` or reviewer file left over from
