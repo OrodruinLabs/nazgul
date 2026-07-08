@@ -58,21 +58,43 @@ assert_eq "idempotent — no duplicate archive dir" "$ARCHIVE_COUNT" "1"
 NAZGUL_DIR=$(setup_nazgul_dir "empty")
 OUTPUT3=$("$SCRUB" --for-new-objective FEAT-003 "$NAZGUL_DIR")
 assert_contains "empty state no-ops" "$OUTPUT3" "nothing stale to scrub"
-assert_file_not_exists "no archive dir created" "$NAZGUL_DIR/archive"
+assert_dir_not_exists "no archive dir created" "$NAZGUL_DIR/archive"
 
-# --- Test 4: active objective with an open task → refuses to scrub ---
-NAZGUL_DIR=$(setup_nazgul_dir "active")
-mkdir -p "$NAZGUL_DIR/reviews/TASK-001"
-echo "junk" > "$NAZGUL_DIR/reviews/TASK-001/consolidated-feedback.md"
-cat > "$NAZGUL_DIR/tasks/TASK-001.md" << 'EOF'
+# --- Test 4: active objective with an open task → refuses to scrub, for each open status ---
+for open_status in READY IN_PROGRESS IN_REVIEW IMPLEMENTED CHANGES_REQUESTED; do
+  NAZGUL_DIR=$(setup_nazgul_dir "active-$open_status")
+  mkdir -p "$NAZGUL_DIR/reviews/TASK-001"
+  echo "junk" > "$NAZGUL_DIR/reviews/TASK-001/consolidated-feedback.md"
+  cat > "$NAZGUL_DIR/tasks/TASK-001.md" << EOF
 ---
-status: IN_PROGRESS
+status: $open_status
 ---
 # TASK-001
 EOF
-OUTPUT4=$("$SCRUB" --for-new-objective FEAT-004 "$NAZGUL_DIR" 2>&1)
-assert_contains "active objective refuses scrub" "$OUTPUT4" "refusing"
-assert_file_exists "active reviews left untouched" "$NAZGUL_DIR/reviews/TASK-001/consolidated-feedback.md"
+  OUTPUT4=$("$SCRUB" --for-new-objective FEAT-004 "$NAZGUL_DIR" 2>&1)
+  assert_contains "active objective ($open_status) refuses scrub" "$OUTPUT4" "refusing"
+  assert_file_exists "active reviews left untouched ($open_status)" "$NAZGUL_DIR/reviews/TASK-001/consolidated-feedback.md"
+  assert_dir_not_exists "no archive dir created ($open_status)" "$NAZGUL_DIR/archive"
+done
+
+# --- Test 4b: nonexistent nazgul_dir → clean exit 0, no archive ---
+NONEXISTENT_DIR="$TMPDIR_BASE/does-not-exist/nazgul"
+set +e
+OUTPUT4B=$("$SCRUB" --for-new-objective FEAT-004B "$NONEXISTENT_DIR" 2>&1)
+EXIT_CODE_4B=$?
+set -e
+assert_exit_code "nonexistent nazgul_dir exits 0" "$EXIT_CODE_4B" "0"
+assert_eq "nonexistent nazgul_dir: no output" "$OUTPUT4B" ""
+assert_dir_not_exists "nonexistent nazgul_dir: no archive created" "$NONEXISTENT_DIR/archive"
+
+# --- Test 4c: FOR_FEAT_ID with path traversal → rejected ---
+NAZGUL_DIR=$(setup_nazgul_dir "traversal")
+set +e
+OUTPUT4C=$("$SCRUB" --for-new-objective "../evil" "$NAZGUL_DIR" 2>&1)
+EXIT_CODE_4C=$?
+set -e
+assert_exit_code "path-traversal feat_id rejected" "$EXIT_CODE_4C" "1"
+assert_contains "path-traversal feat_id error message" "$OUTPUT4C" "invalid"
 
 # --- Test 5: missing --for-new-objective → usage error ---
 NAZGUL_DIR=$(setup_nazgul_dir "no-flag")

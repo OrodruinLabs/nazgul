@@ -61,8 +61,10 @@ never append. Recompute the full candidate set from scratch each run: a stale
 or partial file from a prior/failed run (its `<!-- feat_id: ... -->` marker
 differs from the current objective's `.feat_id`, or is missing) must be
 replaced wholesale, never merged into. Tag the file with the current feat_id
-so the next run — and `scripts/scrub-stale-review-artifacts.sh` — can tell
-which objective it belongs to:
+so the next `nazgul:learner` run (and `/nazgul:learn`) can tell which
+objective it belongs to. Note: `scripts/scrub-stale-review-artifacts.sh`
+does NOT read this marker — it gates purely on open-task count, and
+archives/clears `proposed-rules.md` unconditionally once no task is open.
 
 ```markdown
 <!-- feat_id: FEAT-014 -->

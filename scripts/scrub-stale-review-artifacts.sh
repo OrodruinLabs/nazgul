@@ -28,6 +28,13 @@ if [ -z "$FOR_FEAT_ID" ]; then
   exit 1
 fi
 
+case "$FOR_FEAT_ID" in
+  *[!A-Za-z0-9._-]*|*..*)
+    echo "scrub-stale-review-artifacts: invalid --for-new-objective '$FOR_FEAT_ID' (expected [A-Za-z0-9._-]+)" >&2
+    exit 1
+    ;;
+esac
+
 if [ ! -d "$NAZGUL_DIR" ]; then
   exit 0
 fi

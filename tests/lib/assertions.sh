@@ -76,6 +76,24 @@ assert_file_not_exists() {
   fi
 }
 
+assert_dir_exists() {
+  local name="$1" path="$2"
+  if [ -d "$path" ]; then
+    _pass "$name"
+  else
+    _fail "$name" "directory does not exist: $path"
+  fi
+}
+
+assert_dir_not_exists() {
+  local name="$1" path="$2"
+  if [ ! -d "$path" ]; then
+    _pass "$name"
+  else
+    _fail "$name" "directory should not exist: $path"
+  fi
+}
+
 assert_json_field() {
   local name="$1" file="$2" jq_path="$3" expected="$4"
   if [ ! -f "$file" ]; then
