@@ -23,6 +23,7 @@ skills/                              # User-facing commands (/nazgul:*)
 │   ├── patch/SKILL.md
 │   ├── verify/SKILL.md
 │   ├── metrics/SKILL.md
+│   ├── heartbeat/SKILL.md           # Opt-in automation-heartbeat tick (inbox triage + auto-start)
 │   └── bootstrap-project/SKILL.md   # Emit portable Nazgul-free bundle (one-shot)
 agents/                              # Subagent definitions
 │   ├── discovery.md                 # Pipeline: scans codebase, classifies project
@@ -67,6 +68,7 @@ scripts/                             # Shell scripts for hooks
 │   ├── file-improvement-report.sh   # Self-improvement: write JSON reports
 │   ├── gen-skill-docs.sh            # Skill template: resolve {{PARTIAL:name}}
 │   ├── bootstrap-transform.sh       # bootstrap-project: Nazgul-token scrub pass
+│   ├── heartbeat.sh                 # Opt-in automation-heartbeat tick engine (separate entry path)
 │   └── lib/                         # Shared libraries
 │       ├── task-utils.sh            # Task status parsing (4 formats) + counting
 │       ├── session-tracker.sh       # Concurrent session lock management
@@ -78,7 +80,9 @@ scripts/                             # Shell scripts for hooks
 │       ├── reviewer-selection.sh    # Deterministic diff-aware reviewer selection
 │       ├── conductor-graph.sh       # Conductor: wave computation + graph.json state/recovery
 │       ├── conductor-gates.sh       # Conductor: gate config + the two unconditional hard stops
-│       └── conductor-router.sh      # Conductor: unit → backend (subagent/team/worktree) routing
+│       ├── conductor-router.sh      # Conductor: unit → backend (subagent/team/worktree) routing
+│       ├── inbox-provider.sh        # Heartbeat: file-based work-inbox provider seam (list/get/archive)
+│       └── heartbeat-triage.sh      # Heartbeat: source-agnostic candidate selection policy
 templates/                           # Objective + document templates
 │   ├── CLAUDE.md.template           # Injected into target projects by /nazgul:init
 │   ├── feature.md / tdd.md / bugfix.md / refactor.md / greenfield.md / migration.md
@@ -177,6 +181,8 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 - `nazgul/context/` — Project context from Discovery
 - `nazgul/docs/` — Generated project documents (PRD, TRD, ADRs)
 - `nazgul/conductor/graph.json` — Conductor engine state (waves, per-task verdict + commit SHA), only when `execution.engine: "conductor"`
+- `nazgul/inbox/` (+ `nazgul/inbox/archive/`) — Automation-heartbeat work inbox: candidate `.md`/`.json` files picked up by `scripts/heartbeat.sh` and archived on claim; only populated/consumed when `automation.heartbeat.enabled: true`
+- `nazgul/logs/heartbeat-*.jsonl` — One decision record per heartbeat tick (one file per UTC day)
 
 ## Commands
 - `/nazgul-init` — First-time setup: run Discovery, generate reviewers, create runtime dirs
@@ -195,6 +201,7 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 - `/nazgul-docs` — View or regenerate project documents
 - `/nazgul-patch` — Lightweight task mode for bug fixes, config changes, and small features
 - `/nazgul-verify` — Human acceptance testing for completed tasks
+- `/nazgul-heartbeat` — Run one automation-heartbeat tick by hand: triages `nazgul/inbox/` and auto-starts the next objective if idle and clear. Opt-in and default-off (`automation.heartbeat.enabled: false`); a separate entry path from the main loop with no changes to the sequential or Conductor execution path
 - `/nazgul-help` — Quick reference for all commands and modes
 
 ## The 10 Rules for the Nazgul Loop

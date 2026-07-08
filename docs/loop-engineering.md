@@ -12,7 +12,7 @@ one gap that was missing.
 | 1 | Automations / heartbeat | The `Stop` hook (`hooks/hooks.json` → `scripts/stop-hook.sh`) re-fires after every turn, reads `nazgul/plan.md`, and either continues the loop (exit 2) or lets it end (exit 0). This is the loop's heartbeat — it never needs a human to press "continue." |
 | 2 | Worktrees | The `EnterWorktree`/`ExitWorktree` tools give each task (or Conductor unit) an isolated git worktree and branch, so parallel work never collides on the working tree. See `agents/team-orchestrator.md` for the pattern; `agents/implementer.md` and `agents/conductor.md` both use it. |
 | 3 | Skills | `skills/*/SKILL.md` are the user-facing entry points (`/nazgul:init`, `/nazgul:start`, `/nazgul:status`, etc.) — the operator's interface to the loop, independent of which execution engine is driving underneath. |
-| 4 | Connectors | Not yet first-class loop I/O (pull work in, push results out via Linear/Slack/CI) — deferred to FEAT-009. Today the only connector-shaped piece is `scripts/board-sync-github.sh` (GitHub Projects board sync), a one-way status mirror rather than a two-way work inbox. |
+| 4 | Connectors | FEAT-008 shipped the pull side: `scripts/heartbeat.sh` triages a local work inbox (`nazgul/inbox/`) behind a provider seam (`scripts/lib/inbox-provider.sh`, the `file` provider; selection policy in `scripts/lib/heartbeat-triage.sh`) and auto-starts the next objective when idle. Real connectors — a GitHub/Linear/Slack provider pulling work in, and pushing results back out (two-way sync) — stay deferred to FEAT-009; `scripts/board-sync-github.sh` remains a one-way GitHub Projects status mirror, not a work inbox. |
 | 5 | Maker/checker sub-agents | `agents/implementer.md` (maker) builds one task; `agents/review-gate.md` (checker) orchestrates the review board and `agents/feedback-aggregator.md` consolidates findings before any retry. No task reaches DONE without the checker's approval — this split is structural, not optional. |
 | 6 | Persistent, on-disk state | `nazgul/` is the loop's only memory: `nazgul/config.json`, `nazgul/plan.md` (with its Recovery Pointer), `nazgul/tasks/*.md`, `nazgul/checkpoints/`. Context is ephemeral; files are truth (CLAUDE.md's Key Concepts, RULES.md §4 Recovery Protocol). |
 
@@ -123,10 +123,13 @@ FEAT-007 (Conductor) is the first of three sub-projects that together build out 
 picture:
 
 1. **Conductor** (this doc, FEAT-007) — the top-level driver that scales a build past one context window.
-2. **Automation Heartbeat** (FEAT-008) — a cron-driven triage → work-inbox → auto-start path, so the loop
-   can pick up new work without a human invoking `/nazgul:start`.
-3. **Connectors** (FEAT-009) — first-class loop I/O (Linear/Slack/CI pull and push), completing component 4
-   above beyond the current one-way GitHub board sync.
+2. **Automation Heartbeat** (FEAT-008, delivered) — a trigger-agnostic tick (`scripts/heartbeat.sh`,
+   `/nazgul:heartbeat`) that triages a local work inbox behind a provider seam and auto-starts the loop
+   when idle and clear, so the loop can pick up new work without a human invoking `/nazgul:start` each
+   time. Opt-in and default-off (`automation.heartbeat.enabled: false`); see RULES.md §13.
+3. **Connectors** (FEAT-009, deferred) — real remote providers (GitHub/Linear/Slack pull and push,
+   two-way sync), completing component 4 above beyond FEAT-008's local file inbox and the current
+   one-way GitHub board sync.
 
-None of FEAT-008 or FEAT-009 is implemented yet; both build on the Conductor's graph-only state as their
-foundation.
+FEAT-008 builds on the Conductor's graph-only state and reuses its hard-stop/session-tracker libraries;
+FEAT-009 remains the only undelivered piece of this roadmap.
