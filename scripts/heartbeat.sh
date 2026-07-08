@@ -91,7 +91,12 @@ _hb_start() {
   if [ -n "${NAZGUL_HEARTBEAT_START_CMD:-}" ]; then
     "$NAZGUL_HEARTBEAT_START_CMD" "$objective"
   else
-    (cd "$PROJECT_ROOT" && claude -p "/nazgul:start \"$objective\" --yolo --conductor")
+    # apply-start-flags.sh later strips this span with a literal-quote-paired
+    # sed scan. A raw `"` in the objective would close the span early and
+    # expose the rest as bare flag tokens, so drop embedded double quotes
+    # here to keep the span a single unbroken pair downstream.
+    local safe_objective="${objective//\"/\'}"
+    (cd "$PROJECT_ROOT" && claude -p "/nazgul:start \"$safe_objective\" --yolo --conductor")
   fi
 }
 
