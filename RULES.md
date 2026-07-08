@@ -245,7 +245,7 @@ window, so a stray Nazgul agent or a sequential-engine run is never touched.
   the `Agent` tool — denies (exit 2) dispatching a work-unit subagent (`implementer`, `review-gate`,
   `team-orchestrator`) with `run_in_background: true`, and denies re-dispatching a unit whose `graph.json`
   status is already `IMPLEMENTED`/`DONE`, matched via the `NAZGUL_UNIT: TASK-NNN` marker
-  `agents/conductor.md` puts in every dispatch prompt (greped as data, never `eval`'d). A detected
+  `agents/conductor.md` puts in every dispatch prompt (grepped as data, never `eval`'d). A detected
   violation denies (exit 2) — that half is fail-closed — but the guard fails OPEN when it cannot evaluate:
   absent `jq`, an unreadable config, or a missing marker all degrade to allow rather than a false block.
   Kill-switch: `conductor.enforce.dispatch_guard` (default `true`, config schema v20).

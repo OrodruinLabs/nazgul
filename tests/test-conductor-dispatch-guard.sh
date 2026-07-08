@@ -47,4 +47,15 @@ setup; rm -f "$WORK/nazgul/conductor/.session"
 assert_eq "no session marker no-op" "$(guard_ec "nazgul:implementer" true "NAZGUL_UNIT: TASK-001")" "0"
 teardown
 
+# 7. kill-switch: dispatch_guard=false -> ALLOW everything (operator safety valve)
+setup; jq '.conductor.enforce.dispatch_guard=false' "$WORK/nazgul/config.json" > "$WORK/c" && mv "$WORK/c" "$WORK/nazgul/config.json"
+assert_eq "kill-switch allows background implementer" "$(guard_ec "nazgul:implementer" true "NAZGUL_UNIT: TASK-001")" "0"
+assert_eq "kill-switch allows DONE re-dispatch" "$(guard_ec "nazgul:implementer" false "NAZGUL_UNIT: TASK-002")" "0"
+teardown
+
+# 8. kill-switch absent (default) -> still ENFORCES (deny background implementer)
+setup; jq 'del(.conductor.enforce.dispatch_guard)' "$WORK/nazgul/config.json" > "$WORK/c" && mv "$WORK/c" "$WORK/nazgul/config.json"
+assert_eq "absent kill-switch still enforces" "$(guard_ec "nazgul:implementer" true "NAZGUL_UNIT: TASK-001")" "2"
+teardown
+
 report_results

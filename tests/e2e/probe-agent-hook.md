@@ -19,7 +19,7 @@ only for a dispatch from the main session. This was the one unproven inference i
 
 ## Result (verbatim log)
 
-```
+```text
 FIRED tool=Agent bg=? type=general-purpose desc=Parent that dispatches a child
 FIRED tool=Agent bg=? type=general-purpose desc=CHILD-probe
 ```
