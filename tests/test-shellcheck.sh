@@ -33,6 +33,7 @@ SCRIPTS=(
   "scripts/session-staging.sh"
   "scripts/scrub-stale-review-artifacts.sh"
   "scripts/conductor-dispatch-guard.sh"
+  "scripts/conductor-rework-guard.sh"
 )
 # tests/ files use dynamic `source` and are not standalone scripts; shellcheck
 # cannot resolve the sourced paths without annotations. The SCRIPTS array is
