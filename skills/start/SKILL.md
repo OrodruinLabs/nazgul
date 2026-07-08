@@ -1,11 +1,11 @@
 ---
 name: nazgul:start
 description: Start or resume a Nazgul autonomous development loop. Use when user says "start nazgul", "run nazgul", "begin development", "resume the loop", or passes an objective for new work. Auto-detects project state — no arguments needed.
-argument-hint: "[\"objective\"] [--afk|--yolo|--hitl] [--max N] [--task-pr]"
+argument-hint: "[\"objective\"] [--afk|--yolo|--hitl] [--max N] [--task-pr] [--conductor]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 2.7.1
+  version: 2.9.0
 ---
 
 # Nazgul Start
@@ -16,6 +16,7 @@ metadata:
 - `/nazgul:start --afk --max 20` — Run autonomously for up to 20 iterations
 - `/nazgul:start --yolo` — Full autonomous mode with no permission prompts
 - `/nazgul:start --yolo --task-pr` — YOLO mode with stacked per-task PRs
+- `/nazgul:start --conductor` — Opt into the Conductor execution engine (default: sequential); composes with any mode flag, e.g. `--conductor --afk`
 
 ## Arguments
 $ARGUMENTS
@@ -43,7 +44,7 @@ Format all output per `references/ui-brand.md` — use stage banners, status sym
 ### Parse Arguments
 - `$ARGUMENTS` may contain:
   - An objective string (optional — override for new work)
-  - Flags: `--afk`, `--hitl`, `--max N`, `--yolo`, `--task-pr`, `--continue`
+  - Flags: `--afk`, `--hitl`, `--max N`, `--yolo`, `--task-pr`, `--continue`, `--conductor`
   - Or nothing at all (smart mode — this is the default)
 
 ### YOLO Mode Pre-flight (--yolo)
@@ -90,7 +91,7 @@ Persist the CLI flags to config via the tested helper, so every mode-gated branc
 ```bash
 [ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "$ARGUMENTS"
 ```
-This sets `mode` (`--yolo`/`--afk` → `afk`, `--hitl` → `hitl`), `afk.enabled`, `afk.yolo`, `afk.task_pr`, and `max_iterations` (`--max N`, positive integer). `--hitl` wins if combined with `--afk`/`--yolo`. Do NOT separately hand-edit these fields from flags anywhere else in this skill — this helper is the single source of truth.
+This sets `mode` (`--yolo`/`--afk` → `afk`, `--hitl` → `hitl`), `afk.enabled`, `afk.yolo`, `afk.task_pr`, `max_iterations` (`--max N`, positive integer), and `execution.engine` (`--conductor` → `"conductor"`; absent leaves it at its default `"sequential"`). `--hitl` wins if combined with `--afk`/`--yolo`; `--conductor` is orthogonal to mode and composes with any of them. Do NOT separately hand-edit these fields from flags anywhere else in this skill — this helper is the single source of truth.
 
 ### Resolve Run Mode (MANDATORY — before state detection)
 **Pre-load:** run `ToolSearch` with query `select:AskUserQuestion` (the prompt tool is deferred by default).
@@ -116,6 +117,12 @@ Determine the run mode:
      `jq --arg m "<hitl|afk|yolo>" '.default_mode=$m' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json`
 3. Non-interactive fallback: if `AskUserQuestion` is unavailable and `default_mode` is null, default to **HITL** and print a note. Never default to YOLO.
    - If a path resolves to YOLO (explicit `--yolo`, or `default_mode: "yolo"`) but `AskUserQuestion` is unavailable to collect the confirmation, do NOT run YOLO. Force HITL: `[ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--hitl"`, and print a note that interactive YOLO consent could not be collected. (YOLO never runs without an interactive YES.)
+
+### Engine Selection (MANDATORY — after Resolve Run Mode)
+
+Read `nazgul/config.json → execution.engine`:
+- `"sequential"` (default, or unset) — no change. Every "Delegate to Implementer" / "Stop hook takes over" step in the states below runs exactly as written.
+- `"conductor"` (opted in via `--conductor`) — wherever a state below reaches its final "Delegate to Implementer" / "Stop hook takes over" step, dispatch the conductor agent instead (Agent tool, `subagent_type: "nazgul:conductor"`) and stop. The conductor is self-recovering and self-contained: it reads `nazgul/config.json`, `nazgul/plan.md`, and `nazgul/tasks/TASK-*.md` itself and drives the whole objective wave by wave (Review Board included) with no further input from this skill. Discovery/Doc Generator/Planner steps still run first as written — the conductor only replaces the Implementer/stop-hook hand-off once a task graph exists.
 
 ### Reset Loop Counters (MANDATORY)
 
@@ -172,12 +179,12 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
      e. `git checkout -b feat/<display_id>-<slug>`
      f. Create worktree dir, store paths in config
 6. Mode was already applied from flags by the **Apply Flags** step above; do not re-derive it here. (Loop counters were already reset by the mandatory **Reset Loop Counters** step above.)
-7. Delegate to the appropriate agent based on active task status:
+7. Per **Engine Selection** above: if `execution.engine == "conductor"`, dispatch the conductor agent and stop. Otherwise, delegate to the appropriate agent based on active task status:
    - READY/IN_PROGRESS → Implementer
    - IMPLEMENTED/IN_REVIEW → Review Gate
    - CHANGES_REQUESTED → Implementer (read consolidated feedback first)
    - BLOCKED → Show to user, ask what to do
-8. The stop hook takes over from here.
+8. The stop hook takes over from here (sequential engine only).
 
 ---
 
@@ -250,8 +257,8 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 7. Tell user: "Docs ready. Running planner..."
 8. Delegate to Planner agent
 9. Review Plan (HITL mode: show plan for approval. AFK: continue.)
-10. Delegate to Implementer
-11. Stop hook takes over.
+10. Per **Engine Selection** above: if `execution.engine == "conductor"`, dispatch the conductor agent and stop. Otherwise, delegate to Implementer.
+11. Stop hook takes over (sequential engine only).
 
 ---
 
@@ -270,8 +277,8 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 4. Tell user: "Discovery complete. Generating documents, then planning..."
 5. Delegate to Doc Generator agent. In HITL mode, pause for doc review.
 6. Delegate to Planner agent. In HITL mode, pause for plan review.
-7. Delegate to Implementer
-8. Stop hook takes over.
+7. Per **Engine Selection** above: if `execution.engine == "conductor"`, dispatch the conductor agent and stop. Otherwise, delegate to Implementer.
+8. Stop hook takes over (sequential engine only).
 
 ---
 
@@ -304,8 +311,8 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
    - In AFK mode: skip board prompt (user must run `/nazgul:board` explicitly)
 8. Delegate to Planner: Planner reads context + docs, decomposes into tasks.
 9. Review Plan (HITL): Show plan for approval. AFK: continue.
-10. Delegate to Implementer: Start working on the first READY task.
-11. Stop hook takes over.
+10. Per **Engine Selection** above: if `execution.engine == "conductor"`, dispatch the conductor agent and stop. Otherwise, delegate to Implementer: start working on the first READY task.
+11. Stop hook takes over (sequential engine only).
 
 ---
 

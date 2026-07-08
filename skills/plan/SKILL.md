@@ -70,10 +70,11 @@ Don't over-ask; once you can state the idea crisply, confirm your understanding 
 3. Show the spec and get the user's approval before generating tasks (HITL checkpoint). On changes, revise and re-confirm.
 
 ### Step 3: Generate tasks (reuse the pipeline)
-1. If `nazgul/context/discovery-summary.md` is absent, dispatch `nazgul:discovery` (Task tool) to profile the project.
-2. Dispatch `nazgul:doc-generator` (Task tool) — it reads the per-idea spec as PRIMARY and produces feature-scoped docs.
-3. Dispatch `nazgul:planner` (Task tool) — it decomposes the objective into `nazgul/tasks/TASK-*.md`.
-4. If any of these fail, report the failure and STOP (do not offer to run a broken plan).
+1. Scrub the superseded objective's transient artifacts (the pre-flight check above already guarantees no open tasks): run `"$CLAUDE_PLUGIN_ROOT/scripts/scrub-stale-review-artifacts.sh" --for-new-objective "$FEAT_ID"`. This archives stale `nazgul/reviews/` and `nazgul/learning/proposed-rules.md`/`.distilled` from the completed prior objective into `nazgul/archive/`, so `nazgul:doc-generator`/`nazgul:planner` never read stale verdicts or rules as current. It no-ops cleanly if nothing is stale.
+2. If `nazgul/context/discovery-summary.md` is absent, dispatch `nazgul:discovery` (Task tool) to profile the project.
+3. Dispatch `nazgul:doc-generator` (Task tool) — it reads the per-idea spec as PRIMARY and produces feature-scoped docs.
+4. Dispatch `nazgul:planner` (Task tool) — it decomposes the objective into `nazgul/tasks/TASK-*.md`.
+5. If any of these fail, report the failure and STOP (do not offer to run a broken plan).
 5. Show the generated task list (ids + titles) for the user to review.
 
 ### Step 4: Offer to run

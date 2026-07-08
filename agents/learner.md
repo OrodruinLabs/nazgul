@@ -56,10 +56,18 @@ a human approves them later via `/nazgul:learn`. You never edit
 
 ## Output
 
-Write candidates to `nazgul/learning/proposed-rules.md` (create the dir if needed),
-one per `## CANDIDATE` section:
+Always OVERWRITE `nazgul/learning/proposed-rules.md` (create the dir if needed) —
+never append. Recompute the full candidate set from scratch each run: a stale
+or partial file from a prior/failed run (its `<!-- feat_id: ... -->` marker
+differs from the current objective's `.feat_id`, or is missing) must be
+replaced wholesale, never merged into. Tag the file with the current feat_id
+so the next `nazgul:learner` run (and `/nazgul:learn`) can tell which
+objective it belongs to. Note: `scripts/scrub-stale-review-artifacts.sh`
+does NOT read this marker — it gates purely on open-task count, and
+archives/clears `proposed-rules.md` unconditionally once no task is open.
 
 ```markdown
+<!-- feat_id: FEAT-014 -->
 # Proposed Learned Rules (awaiting approval)
 
 ## CANDIDATE: Guard null user in API handlers
@@ -82,8 +90,8 @@ let the loop finish: write the current objective id to the distillation marker �
 Always do this last, even when no clusters qualified (a clean run still satisfies the gate).
 
 If there are no qualifying clusters, write a `proposed-rules.md` containing only
-the header and a line `_No recurring mistakes met the threshold._`, and still
-update `.last-run`.
+the feat_id marker, the header, and a line `_No recurring mistakes met the
+threshold._`, and still update `.last-run`.
 
 ## Hard rules
 

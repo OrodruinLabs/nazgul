@@ -25,9 +25,13 @@ SCRIPTS=(
   "scripts/lib/emit-event.sh"
   "scripts/lib/review-provenance.sh"
   "scripts/lib/reviewer-selection.sh"
+  "scripts/lib/conductor-graph.sh"
+  "scripts/lib/conductor-gates.sh"
+  "scripts/lib/conductor-router.sh"
   "scripts/local-mode-tracking-guard.sh"
   "scripts/base-branch-commit-guard.sh"
   "scripts/session-staging.sh"
+  "scripts/scrub-stale-review-artifacts.sh"
 )
 # tests/ files use dynamic `source` and are not standalone scripts; shellcheck
 # cannot resolve the sourced paths without annotations. The SCRIPTS array is

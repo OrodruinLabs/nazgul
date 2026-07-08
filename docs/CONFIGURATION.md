@@ -79,6 +79,25 @@ This is **tamper-evidence and diff-staleness detection, not authentication** —
 
 `review_gate.conditional_dispatch` (default `false`) opts into diff-aware reviewer selection: a deterministic helper (`scripts/lib/reviewer-selection.sh select`, not LLM judgment) skips reviewers whose domain the changed files don't touch — `security-reviewer` always runs; `architect-reviewer` only when the scope touches `skills/`, `agents/`, `scripts/`, `hooks/`, or the config schema; `qa-reviewer` only when `tests/` changed; `code-reviewer` on any non-doc change. Any ambiguity falls back to the full board. Skipped reviewers get a `[reviewer].md` stub with `verdict: SKIPPED` and a reason, which the evidence gate treats as gate-satisfying (a missing or unapproved file still hard-fails). Defaults off, mirroring `review_gate.simplify_before_review`.
 
+## Execution Engine
+
+`execution.engine` selects which engine drives the objective: `"sequential"` (default) is today's one-task-at-a-time main-session loop; `"conductor"` opts into the graph-only driver that decomposes the Planner's task graph into waves and farms each unit to a fresh sub-session. `sequential` behavior is unchanged either way.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `execution.engine` | `"sequential"` | `"sequential"` or `"conductor"`. |
+
+The `conductor` block configures the conductor engine's gates and parallelism, autonomous-first (all gates default `false`):
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `conductor.gates.approve_graph` | `false` | Pause for human approval of the computed task graph before dispatch. |
+| `conductor.gates.approve_each_wave` | `false` | Pause for human approval before dispatching each wave. |
+| `conductor.gates.approve_final_pr` | `false` | Pause for human approval before opening the final PR. |
+| `conductor.max_parallel` | `3` | Maximum units dispatched concurrently within a wave. |
+
+In `--hitl` mode, `scripts/lib/conductor-gates.sh` forces the *effective* `approve_graph` gate to `true` regardless of the stored value — the stored config default stays `false`. Every other gate always equals its stored value in every mode.
+
 ## Lean Comments Guard
 
 `scripts/lean-comments-guard.sh` is a deterministic PreToolUse guard (on `Write`/`Edit`/`MultiEdit`) that **blocks comment bloat at write time**, so verbose comments can't reach the review board and get auto-approved as a low-confidence CONCERN. The code reviewer also treats the same violations as always-blocking. The implementer and simplifier run it as a pre-commit-style check: `scripts/lean-comments-guard.sh --check <files>`.
