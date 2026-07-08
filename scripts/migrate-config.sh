@@ -424,6 +424,26 @@ migrate_19_to_20() {
   log_migration "v19→v20: added conductor.enforce.{dispatch_guard,rework_guard} (default true)"
 }
 
+migrate_20_to_21() {
+  local tmp; tmp=$(mktemp)
+  # FEAT-008: automation heartbeat config surface. ADDITIVE — set when absent, explicit values (incl. false) preserved.
+  # Non-object automation/heartbeat/inbox/auto_start sections are first clamped to {} (invalid types NOT preserved).
+  jq '
+    .automation = ((if (.automation | type) == "object" then .automation else {} end)
+      | .heartbeat = ((if (.heartbeat | type) == "object" then .heartbeat else {} end)
+          | .enabled = (if has("enabled") then .enabled else false end)
+          | .interval = (if has("interval") then .interval else "30m" end)
+          | .inbox = ((if (.inbox | type) == "object" then .inbox else {} end)
+              | .provider = (if has("provider") then .provider else "file" end)
+              | .dir = (if has("dir") then .dir else "nazgul/inbox" end))
+          | .auto_start = ((if (.auto_start | type) == "object" then .auto_start else {} end)
+              | .mode = (if has("mode") then .mode else "yolo" end)
+              | .engine = (if has("engine") then .engine else "conductor" end))))
+    | .schema_version = 21
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v20→v21: added automation.heartbeat (enabled default false; interval 30m; inbox provider file dir nazgul/inbox; auto_start mode yolo engine conductor)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"

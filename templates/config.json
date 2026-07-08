@@ -1,5 +1,5 @@
 {
-  "schema_version": 20,
+  "schema_version": 21,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -85,6 +85,20 @@
     "enforce": {
       "dispatch_guard": true,
       "rework_guard": true
+    }
+  },
+  "automation": {
+    "heartbeat": {
+      "enabled": false,
+      "interval": "30m",
+      "inbox": {
+        "provider": "file",
+        "dir": "nazgul/inbox"
+      },
+      "auto_start": {
+        "mode": "yolo",
+        "engine": "conductor"
+      }
     }
   },
   "review_gate": {

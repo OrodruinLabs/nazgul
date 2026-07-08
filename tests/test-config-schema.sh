@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "20"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "21"
 assert_json_field "review_gate.simplify_before_review default false" "$CONFIG" ".review_gate.simplify_before_review" "false"
 assert_json_field "review_gate.enforce_granularity default block" "$CONFIG" ".review_gate.enforce_granularity" "block"
 assert_json_field "has .default_mode" "$CONFIG" ".default_mode" "null"
@@ -144,5 +144,17 @@ val=$(jq -r '.conductor.enforce | type' "$CONFIG")
 assert_eq "v20 has .conductor.enforce object" "$val" "object"
 assert_json_field "v20 conductor.enforce.dispatch_guard is true" "$CONFIG" ".conductor.enforce.dispatch_guard" "true"
 assert_json_field "v20 conductor.enforce.rework_guard is true" "$CONFIG" ".conductor.enforce.rework_guard" "true"
+
+# v21 new defaults (FEAT-008: automation heartbeat, default off)
+val=$(jq -r '.automation | type' "$CONFIG")
+assert_eq "v21 has .automation object" "$val" "object"
+val=$(jq -r '.automation.heartbeat | type' "$CONFIG")
+assert_eq "v21 has .automation.heartbeat object" "$val" "object"
+assert_json_field "v21 automation.heartbeat.enabled defaults false" "$CONFIG" ".automation.heartbeat.enabled" "false"
+assert_json_field "v21 automation.heartbeat.interval is 30m" "$CONFIG" ".automation.heartbeat.interval" "30m"
+assert_json_field "v21 automation.heartbeat.inbox.provider is file" "$CONFIG" ".automation.heartbeat.inbox.provider" "file"
+assert_json_field "v21 automation.heartbeat.inbox.dir is nazgul/inbox" "$CONFIG" ".automation.heartbeat.inbox.dir" "nazgul/inbox"
+assert_json_field "v21 automation.heartbeat.auto_start.mode is yolo" "$CONFIG" ".automation.heartbeat.auto_start.mode" "yolo"
+assert_json_field "v21 automation.heartbeat.auto_start.engine is conductor" "$CONFIG" ".automation.heartbeat.auto_start.engine" "conductor"
 
 report_results
