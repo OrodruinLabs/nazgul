@@ -212,4 +212,17 @@ assert_eq "degrade-to-allow: missing config max_parallel defaults 3" "$(conducto
 assert_eq "degrade-to-allow: hitl still flips approve_graph with malformed config" "$(conductor_gate_effective "$CONFIG" approve_graph hitl)" "true"
 teardown_temp_dir
 
+# --- Test 10: an unexpected read_verdict rc from the catch-all fails closed, not open ---
+setup_temp_dir
+setup_nazgul_dir
+create_task_file TASK-001 IN_REVIEW none
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+: > "$TEST_DIR/nazgul/reviews/TASK-001/security-reviewer.md"
+read_verdict() { return 3; }
+HALT_OUT=$(conductor_should_halt "$TEST_DIR/nazgul") && HALT_EC=0 || HALT_EC=$?
+unset -f read_verdict
+assert_exit_code "unexpected read_verdict rc: halts" "$HALT_EC" 1
+assert_contains "unexpected read_verdict rc: reports ambiguous" "$HALT_OUT" "SECURITY_REJECTION_AMBIGUOUS TASK-001"
+teardown_temp_dir
+
 report_results

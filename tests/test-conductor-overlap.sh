@@ -143,4 +143,21 @@ assert_exit_code "not json: route_wave exit 0" "$ROUTE_EC" 0
 assert_json_field "not json: dispatch sequential" "$OUT_FILE" ".dispatch" "sequential"
 assert_json_field "not json: reason mentions malformed" "$OUT_FILE" ".reason" "malformed units_json"
 
+# --- Test 12: non-string file_scope entries (number/object) rejected, not stringified ---
+if router_validate_file_scope '[3, {"x":1}]' > /dev/null; then
+  _fail "shape guard: non-string entries rejected"
+else
+  _pass "shape guard: non-string entries rejected"
+fi
+assert_contains "shape guard: rejects numeric entry by index" \
+  "$(router_validate_file_scope '[3, "a.sh"]')" "INVALID_FILE_SCOPE_ENTRY 0"
+assert_contains "shape guard: rejects object entry by index" \
+  "$(router_validate_file_scope '["a.sh", {"x":1}]')" "INVALID_FILE_SCOPE_ENTRY 1"
+
+UNITS_NONSTRING='[{"id":"T1","file_scope":[3,{"x":1}]},{"id":"T2","file_scope":["b.sh"]}]'
+run_route_wave "$UNITS_NONSTRING" "true" ""
+assert_exit_code "non-string scope: route_wave exit 0" "$ROUTE_EC" 0
+assert_json_field "non-string scope: dispatch sequential" "$OUT_FILE" ".dispatch" "sequential"
+assert_json_field "non-string scope: reason mentions invalid shape" "$OUT_FILE" ".reason" "invalid file_scope shape"
+
 report_results

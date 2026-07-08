@@ -92,6 +92,7 @@ init_graph_json "$GRAPH" "FEAT-007"
 graph_upsert_task "$GRAPH" "TASK-001" "[]" 1 "DONE" '["a.sh"]' "APPROVE" "not-a-sha!!" 2>/dev/null
 UPSERT_EC=$?
 assert_exit_code "non-SHA commit rejected: exit 1" "$UPSERT_EC" 1
+assert_json_field "non-SHA commit rejected: task not written" "$GRAPH" '.tasks | has("TASK-001")' "false"
 teardown_temp_dir
 
 # --- Test 7: validate_graph_json itself flags a hand-crafted graph-only violation ---
@@ -205,6 +206,32 @@ setup_temp_dir
 setup_nazgul_dir
 reload_conductor_state "$TEST_DIR/nazgul" >/dev/null 2>/dev/null
 assert_exit_code "reload with nothing on disk: exit 1" "$?" 1
+teardown_temp_dir
+
+# --- Test 15: reload_conductor_state — parseable but schema-invalid graph.json
+# falls back to a valid checkpoint (validate, not just parse) ---
+setup_temp_dir
+setup_nazgul_dir
+GRAPH="$TEST_DIR/nazgul/conductor/graph.json"
+init_graph_json "$GRAPH" "FEAT-007"
+graph_upsert_task "$GRAPH" "TASK-001" "[]" 1 "DONE" '["a.sh"]' "APPROVE" "abc1234"
+write_conductor_checkpoint "$TEST_DIR/nazgul" > /dev/null
+jq '.tasks["TASK-001"].status = "NOT_A_REAL_STATUS"' "$GRAPH" > "$GRAPH.tmp" && mv "$GRAPH.tmp" "$GRAPH"
+RELOAD_OUT=$(reload_conductor_state "$TEST_DIR/nazgul")
+RELOAD_EC=$?
+assert_exit_code "reload: schema-invalid graph.json falls back, exit 0" "$RELOAD_EC" 0
+printf '%s' "$RELOAD_OUT" > "$TEST_DIR/reload.json"
+assert_json_field "reload: source falls back to checkpoint on schema-invalid graph.json" \
+  "$TEST_DIR/reload.json" ".source" "$TEST_DIR/nazgul/checkpoints/conductor-checkpoint.json"
+teardown_temp_dir
+
+# --- Test 16: init_graph_json clamps a non-numeric max_parallel to 3 ---
+setup_temp_dir
+setup_nazgul_dir
+GRAPH="$TEST_DIR/nazgul/conductor/graph.json"
+init_graph_json "$GRAPH" "FEAT-007" "conductor" "not-a-number"
+assert_file_exists "clamp: graph.json still created" "$GRAPH"
+assert_json_field "clamp: non-numeric max_parallel defaults to 3" "$GRAPH" ".max_parallel" "3"
 teardown_temp_dir
 
 report_results

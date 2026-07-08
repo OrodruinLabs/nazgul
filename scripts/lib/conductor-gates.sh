@@ -116,7 +116,7 @@ _cgate_security_rejections() {
     case "$rc" in
       0) [ "$verdict" = "APPROVE" ] || { echo "SECURITY_REJECTION $id"; found=1; } ;;
       1|2) echo "SECURITY_REJECTION_AMBIGUOUS $id"; found=1 ;;
-      *) : ;;
+      *) echo "SECURITY_REJECTION_AMBIGUOUS $id"; found=1 ;;
     esac
   done
   [ "$found" -eq 0 ]

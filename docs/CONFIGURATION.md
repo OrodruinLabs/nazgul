@@ -96,6 +96,8 @@ The `conductor` block configures the conductor engine's gates and parallelism, a
 | `conductor.gates.approve_final_pr` | `false` | Pause for human approval before opening the final PR. |
 | `conductor.max_parallel` | `3` | Maximum units dispatched concurrently within a wave. |
 
+In `--hitl` mode, `scripts/lib/conductor-gates.sh` forces the *effective* `approve_graph` gate to `true` regardless of the stored value — the stored config default stays `false`. Every other gate always equals its stored value in every mode.
+
 ## Lean Comments Guard
 
 `scripts/lean-comments-guard.sh` is a deterministic PreToolUse guard (on `Write`/`Edit`/`MultiEdit`) that **blocks comment bloat at write time**, so verbose comments can't reach the review board and get auto-approved as a low-confidence CONCERN. The code reviewer also treats the same violations as always-blocking. The implementer and simplifier run it as a pre-commit-style check: `scripts/lean-comments-guard.sh --check <files>`.

@@ -53,6 +53,12 @@ router_validate_file_scope() {
   count=$(jq 'length' <<< "$file_scope_json" 2>/dev/null) || { echo "INVALID_FILE_SCOPE_SHAPE"; return 1; }
   i=0
   while [ "$i" -lt "$count" ]; do
+    if ! jq -e --argjson i "$i" '.[$i] | type == "string"' <<< "$file_scope_json" > /dev/null 2>&1; then
+      echo "INVALID_FILE_SCOPE_ENTRY $i"
+      problems=1
+      i=$((i + 1))
+      continue
+    fi
     entry=$(jq -r --argjson i "$i" '.[$i]' <<< "$file_scope_json" 2>/dev/null)
     if ! _router_entry_valid "$entry"; then
       echo "INVALID_FILE_SCOPE_ENTRY $i"

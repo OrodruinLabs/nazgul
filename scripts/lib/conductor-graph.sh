@@ -160,6 +160,10 @@ _cg_commit_valid() {
 init_graph_json() {
   local graph_file="$1" objective="$2" engine="${3:-conductor}" max_parallel="${4:-3}" tmp
   [ -f "$graph_file" ] && return 0
+  case "$max_parallel" in
+    ''|*[!0-9]*) max_parallel=3 ;;
+    0) max_parallel=3 ;;
+  esac
   mkdir -p "$(dirname "$graph_file")" || return 1
   tmp=$(mktemp) || return 1
   if ! jq -n \
@@ -325,9 +329,9 @@ reload_conductor_state() {
   graph_file="$nazgul_dir/conductor/graph.json"
   checkpoint_file="$nazgul_dir/checkpoints/conductor-checkpoint.json"
 
-  if [ -f "$graph_file" ] && jq empty "$graph_file" 2>/dev/null; then
+  if [ -f "$graph_file" ] && validate_graph_json "$graph_file" > /dev/null 2>&1; then
     source_file="$graph_file"
-  elif [ -f "$checkpoint_file" ] && jq empty "$checkpoint_file" 2>/dev/null; then
+  elif [ -f "$checkpoint_file" ] && validate_graph_json "$checkpoint_file" > /dev/null 2>&1; then
     source_file="$checkpoint_file"
   else
     echo "reload_conductor_state: no graph.json or checkpoint found under $nazgul_dir" >&2
