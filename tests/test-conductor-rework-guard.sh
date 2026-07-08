@@ -61,4 +61,27 @@ setup; jq '.tasks["TASK-001"].status="IMPLEMENTED"' "$WORK/nazgul/conductor/grap
 assert_eq "IMPLEMENTED with commit denied" "$(guard_ec "scripts/lib/inbox-provider.sh")" "2"
 teardown
 
+# 9. suffix-collision false positive: editing other/scripts/heartbeat.sh must
+# NOT be treated as owned by a unit committed+scoped to scripts/heartbeat.sh,
+# even though the edited path ends with "/scripts/heartbeat.sh". Make
+# TASK-002 committed for this case so the collision is actually exercised.
+setup
+jq '.tasks["TASK-002"].status="DONE" | .tasks["TASK-002"].commit_sha="def5678"' \
+  "$WORK/nazgul/conductor/graph.json" > "$WORK/g" && mv "$WORK/g" "$WORK/nazgul/conductor/graph.json"
+assert_eq "suffix-collision path allowed" "$(guard_ec "other/scripts/heartbeat.sh")" "0"
+teardown
+
+# 10. /private-symlink false negative (macOS): CLAUDE_PROJECT_DIR is reported
+# without the /private prefix but the tool gives back the symlink-normalized
+# absolute path (/private$WORK/...). The normalized-relative form must still
+# resolve to the scoped, committed file and be DENIED. This is the exact
+# false-negative from the review finding: pre-fix, REL stays absolute (the
+# case-prefix-strip misses because "$WORK" != "/private$WORK"), no scope
+# entry matches "/private$WORK/scripts/lib/inbox-provider.sh" verbatim, and
+# the edit is silently ALLOWED.
+setup
+assert_eq "private-symlink absolute path denied" \
+  "$(guard_ec "/private${WORK}/scripts/lib/inbox-provider.sh")" "2"
+teardown
+
 report_results

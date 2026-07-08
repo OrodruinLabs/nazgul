@@ -28,19 +28,39 @@ ENFORCE=$(jq -r 'if .conductor.enforce.rework_guard == null then "true" else (.c
 
 FILE_PATH=$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null || echo "")
 [ -n "$FILE_PATH" ] || exit 0
+
+# Strip a leading /private symmetrically from the incoming path, the project
+# dir, and the nazgul dir. macOS symlink-normalizes /var, /tmp, etc. under
+# /private, so CLAUDE_PROJECT_DIR (e.g. /var/...) and a tool-reported absolute
+# file_path (e.g. /private/var/...) can disagree on the same real file; without
+# this the prefix-strip below misses and the file is fail-open ALLOWED even
+# though it belongs to a committed unit. No realpath dependency — the file may
+# not exist yet for a Write.
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+FP="${FILE_PATH#/private}"
+PD="${PROJECT_DIR#/private}"
+ND="${NAZGUL_DIR#/private}"
+
 # Normalise to a repo-relative path (strip project dir prefix if present).
-REL="$FILE_PATH"
-case "$FILE_PATH" in
-  "$NAZGUL_DIR"/*) ;;
-  /*) REL="${FILE_PATH#"${CLAUDE_PROJECT_DIR:-$(pwd)}"/}" ;;
+REL="$FP"
+case "$FP" in
+  "$ND"/*) ;;
+  /*) REL="${FP#"$PD"/}" ;;
 esac
 
-# Find a committed unit that owns this file (exact match or suffix match on
-# the absolute path, to tolerate either relative or absolute tool_input paths).
-OWNER=$(jq -r --arg f "$FILE_PATH" --arg r "$REL" '
+# Find a committed unit that owns this file. file_scope entries are always
+# repo-relative, so only an exact match against the repo-relative form (or
+# against the normalized absolute path, in case a scope entry is itself
+# absolute) counts. Deliberately no suffix/endswith match: piping $f into
+# `any(...)` rebinds jq's `.` to the array element, not the outer $f, so a
+# naive `$f | endswith("/" + .)` branch is dead code AND, if written the
+# "obvious" correct way instead (`. | endswith("/" + $f)`), it reintroduces
+# false positives — e.g. editing other/scripts/heartbeat.sh would match a
+# scope of scripts/heartbeat.sh because it ends with "/scripts/heartbeat.sh".
+OWNER=$(jq -r --arg f "$FP" --arg r "$REL" '
   .tasks | to_entries[]
   | select((.value.status=="DONE" or .value.status=="IMPLEMENTED") and (.value.commit_sha // "") != "")
-  | select((.value.file_scope // []) | any(. == $f or . == $r or ($f | endswith("/" + .))))
+  | select((.value.file_scope // []) | any(. == $f or . == $r))
   | .key' "$GRAPH" 2>/dev/null | head -1 || true)
 
 if [ -n "$OWNER" ]; then
