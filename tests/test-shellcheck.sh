@@ -31,6 +31,7 @@ SCRIPTS=(
   "scripts/local-mode-tracking-guard.sh"
   "scripts/base-branch-commit-guard.sh"
   "scripts/session-staging.sh"
+  "scripts/scrub-stale-review-artifacts.sh"
 )
 # tests/ files use dynamic `source` and are not standalone scripts; shellcheck
 # cannot resolve the sourced paths without annotations. The SCRIPTS array is
