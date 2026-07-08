@@ -59,12 +59,12 @@ esac
 # scope of scripts/heartbeat.sh because it ends with "/scripts/heartbeat.sh".
 OWNER=$(jq -r --arg f "$FP" --arg r "$REL" '
   .tasks | to_entries[]
-  | select((.value.status=="DONE" or .value.status=="IMPLEMENTED") and (.value.commit_sha // "") != "")
+  | select((.value.status=="DONE" or .value.status=="IMPLEMENTED") and (.value.commit // "") != "")
   | select((.value.file_scope // []) | any(. == $f or . == $r))
   | .key' "$GRAPH" 2>/dev/null | head -1 || true)
 
 if [ -n "$OWNER" ]; then
-  SHA=$(jq -r --arg id "$OWNER" '.tasks[$id].commit_sha // "?"' "$GRAPH" 2>/dev/null || echo "?")
+  SHA=$(jq -r --arg id "$OWNER" '.tasks[$id].commit // "?"' "$GRAPH" 2>/dev/null || echo "?")
   echo "NAZGUL CONDUCTOR: Blocked — $FILE_PATH belongs to $OWNER, already implemented at $SHA; re-work blocked (agents/conductor.md Step 5)." >&2
   exit 2
 fi
