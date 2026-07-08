@@ -85,19 +85,22 @@ assert_eq "skipped: session_active true" "$(line_field "$LOG" 1 '.session_active
 assert_eq "skipped: objective from title" "$(line_field "$LOG" 1 '.objective')" "FEAT-999 test objective"
 teardown_temp_dir
 
-# --- actionable: candidate present, no active session ---
+# --- started: candidate present, no active session -> claim+archive+auto-start ---
 setup_temp_dir
 setup_nazgul_dir
 create_config '.automation.heartbeat.enabled = true'
 mkdir -p "$TEST_DIR/nazgul/inbox"
 jq -n '{title:"FEAT-999 test objective", body:"do the thing", priority:1}' > "$TEST_DIR/nazgul/inbox/cand.json"
-bash "$REPO_ROOT/scripts/heartbeat.sh"
+NAZGUL_HEARTBEAT_START_CMD="true" bash "$REPO_ROOT/scripts/heartbeat.sh"
 LOG=$(latest_log)
-assert_valid_ndjson "actionable" "$LOG" 1
-assert_eq "actionable: decision" "$(line_field "$LOG" 1 '.decision')" "actionable"
-assert_eq "actionable: picked" "$(line_field "$LOG" 1 '.picked')" "cand.json"
-assert_eq "actionable: session_active false" "$(line_field "$LOG" 1 '.session_active')" "false"
-assert_eq "actionable: started is false" "$(line_field "$LOG" 1 '.started')" "false"
+assert_valid_ndjson "started" "$LOG" 1
+assert_eq "started: decision" "$(line_field "$LOG" 1 '.decision')" "started"
+assert_eq "started: picked" "$(line_field "$LOG" 1 '.picked')" "cand.json"
+assert_eq "started: session_active false" "$(line_field "$LOG" 1 '.session_active')" "false"
+assert_eq "started: started is true" "$(line_field "$LOG" 1 '.started')" "true"
+assert_eq "started: archived_to" "$(line_field "$LOG" 1 '.archived_to')" "nazgul/inbox/archive/cand.json"
+assert_file_not_exists "started: candidate removed from active inbox" "$TEST_DIR/nazgul/inbox/cand.json"
+assert_file_exists "started: candidate moved into archive/" "$TEST_DIR/nazgul/inbox/archive/cand.json"
 teardown_temp_dir
 
 # --- hard_stop: BLOCKED task, no inbox listing performed ---

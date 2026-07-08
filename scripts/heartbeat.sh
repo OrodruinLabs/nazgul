@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Nazgul heartbeat tick engine (FEAT-008) — decide half. Gates on
-# automation.heartbeat.enabled, enforces the two unconditional hard stops
-# (reused from conductor-gates.sh, independent of enabled/mode incl. yolo),
-# triages the inbox, and enforces the concurrency guard. Appends one decision
-# record per tick to nazgul/logs/heartbeat-<date>.jsonl. The actionable path
-# stops at a sentinel `decision: actionable` record — TASK-005 adds the
-# side-effecting claim+archive+start.
+# Nazgul heartbeat tick engine (FEAT-008). Gates on automation.heartbeat.enabled,
+# enforces the two unconditional hard stops (reused from conductor-gates.sh,
+# independent of enabled/mode incl. yolo), triages the inbox, and enforces the
+# concurrency guard. On actionable+clear it atomically archives the picked item
+# (the archive move IS the claim) then auto-starts it — archive-then-start so a
+# crash between the two leaves the inbox consistent: the item never reappears
+# in inbox_list once archived, so a re-run can't repick or double-start it.
+# Appends one decision record per tick to nazgul/logs/heartbeat-<date>.jsonl.
 
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 NAZGUL_DIR="$PROJECT_ROOT/nazgul"
@@ -33,11 +34,13 @@ LOG_FILE="$LOG_DIR/heartbeat-$(date -u +"%Y-%m-%d").jsonl"
 ENABLED=$(jq -r '.automation.heartbeat.enabled // false' "$CONFIG" 2>/dev/null || echo false)
 [ "$ENABLED" = "true" ] && ENABLED_BOOL=true || ENABLED_BOOL=false
 
-# _hb_emit <decision> <reason> <objective> <seen> <triaged_json> <picked> <session_active>
-# Appends one decision record. `started`/`archived_to` are always false/null
-# in this task — the side-effecting act half lands in TASK-005.
+# _hb_emit <decision> <reason> <objective> <seen> <triaged_json> <picked>
+#          <session_active> [started] [archived_to]
+# Appends one decision record. `started`/`archived_to` default to false/null
+# for the no-op gate paths; the actionable+clear path passes the real outcome.
 _hb_emit() {
   local decision="$1" reason="$2" objective="$3" seen="$4" triaged_json="$5" picked="$6" session_active="$7"
+  local started="${8:-false}" archived_to="${9:-}"
   mkdir -p "$LOG_DIR"
   jq -cn \
     --arg ts "$TS" \
@@ -50,6 +53,8 @@ _hb_emit() {
     --arg reason "$reason" \
     --arg objective "$objective" \
     --argjson session_active "$session_active" \
+    --argjson started "$started" \
+    --arg archived_to "$archived_to" \
     '{
       ts: $ts,
       tick: $tick,
@@ -61,8 +66,8 @@ _hb_emit() {
       reason: (if $reason == "" then null else $reason end),
       objective: (if $objective == "" then null else $objective end),
       session_active: $session_active,
-      started: false,
-      archived_to: null
+      started: $started,
+      archived_to: (if $archived_to == "" then null else $archived_to end)
     }' >> "$LOG_FILE"
 }
 
@@ -75,6 +80,19 @@ _hb_objective() {
     if (.title // "") != "" then .title
     elif (.body // "") != "" then (.body | split("\n")[0])
     else "" end'
+}
+
+# _hb_start <objective> -> invoke the auto-start command with the objective
+# passed as a single argv argument (data, never eval'd/shell-interpolated).
+# Injectable via NAZGUL_HEARTBEAT_START_CMD (called as `$CMD "$objective"`) for
+# testing; defaults to the real `/nazgul:start --yolo --conductor` invocation.
+_hb_start() {
+  local objective="$1"
+  if [ -n "${NAZGUL_HEARTBEAT_START_CMD:-}" ]; then
+    "$NAZGUL_HEARTBEAT_START_CMD" "$objective"
+  else
+    (cd "$PROJECT_ROOT" && claude -p "/nazgul:start \"$objective\" --yolo --conductor")
+  fi
 }
 
 # Hard stops — reused from conductor-gates.sh, unconditional: independent of
@@ -125,5 +143,16 @@ if [ "$SESSION_COUNT" -gt 0 ]; then
 fi
 
 OBJECTIVE=$(_hb_objective "$INBOX_DIR" "$PICKED")
-_hb_emit actionable "" "$OBJECTIVE" "$SEEN_COUNT" "$TRIAGED_JSON" "$PICKED" false
+
+# Archive-then-start: the archive move is the atomic claim. A crash here
+# before start leaves the item archived (not lost, not re-pickable) — a
+# re-run degrades to nothing_actionable/a different candidate, never a
+# double-start of this one.
+if inbox_archive "$INBOX_DIR" "$PICKED"; then
+  ARCHIVED_TO="$INBOX_REL/archive/$PICKED"
+  _hb_start "$OBJECTIVE" || true
+  _hb_emit started "" "$OBJECTIVE" "$SEEN_COUNT" "$TRIAGED_JSON" "$PICKED" false true "$ARCHIVED_TO"
+else
+  _hb_emit skipped archive_failed "$OBJECTIVE" "$SEEN_COUNT" "$TRIAGED_JSON" "$PICKED" false
+fi
 exit 0
