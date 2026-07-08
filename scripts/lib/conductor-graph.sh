@@ -374,6 +374,6 @@ graph_wave_digest() {
   jq -c '{
     current_wave: (.current_wave // null),
     next_unit: ( [ (.tasks // {}) | to_entries[] | select((.value.status // "") as $s | ($s != "DONE" and $s != "BLOCKED")) ] | sort_by(.value.wave // 9999) | (.[0].key // null) ),
-    units: ( (.tasks // {}) | map_values({status: (.status // "PLANNED"), sha: (.commit_sha // null), wave: (.wave // null)}) )
+    units: ( (.tasks // {}) | map_values({status: (.status // "PLANNED"), sha: (.commit // null), wave: (.wave // null)}) )
   }' "$graph_file" 2>/dev/null || echo '{}'
 }

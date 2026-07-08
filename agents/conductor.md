@@ -69,6 +69,25 @@ This file is what activates `conductor-dispatch-guard.sh` (Layer 1) and `conduct
 (Layer 2) — both no-op when it is absent, so a stray Nazgul agent or a sequential-engine run is never
 guarded as if it were a live conductor session. It is removed at Step 9 (completion) below.
 
+## Model Selection — resolve once, pass explicitly on every dispatch
+
+You do not inherit the right tier for the agents you dispatch just because you inherited one yourself.
+Resolve these once, alongside the other config reads above, and pass them as the `model` parameter on
+every matching Agent-tool call in Step 5 — never omit `model` and let a dispatch default to your own:
+
+```bash
+MODEL_IMPLEMENTATION=$(jq -r '.models.implementation // "sonnet"' "$CONFIG")
+MODEL_REVIEW=$(jq -r '.models.review // "sonnet"' "$CONFIG")
+```
+
+- `MODEL_IMPLEMENTATION` — pass as `model` for every `implementer` dispatch in Step 5.1 (`subagent`/
+  `worktree` backends). The `team` backend is unaffected: `team-orchestrator` already reads
+  `models.implementation` itself for its teammates.
+- `MODEL_REVIEW` — pass as `model` for the `agents/review-gate.md` dispatch in Step 5.2. This selects the
+  orchestrator's own tier only, mirroring what `/nazgul:start`'s Model Selection table does for the
+  sequential engine — it has no effect on individual reviewer tiers, which `review-gate.md` already
+  resolves itself from `models.review`/`models.review_by_reviewer` per reviewer.
+
 ## Output Formatting
 Format ALL user-facing output per `references/ui-brand.md`:
 - Stage banners: `─── ◈ NAZGUL ▸ CONDUCTOR ─────────────────────────────`
@@ -232,6 +251,8 @@ For each batch in `ROUTE.batches`, in order:
      still one call per unit, all emitted in the SAME message so they run concurrently — the same pattern
      `agents/review-gate.md`'s parallel reviewer dispatch uses. Never fire these and move on before they
      return.
+   - Pass `model: "$MODEL_IMPLEMENTATION"` (resolved in Model Selection above) on every one of these
+     Agent-tool calls — omitting it lets the dispatch inherit your own tier instead of the configured one.
    - Give each dispatch ONLY the task ID, its file scope, and its manifest path — never a diff, never
      another unit's files. Include `NAZGUL_UNIT: <task id>` per the contract above.
    - **Wait for every dispatch in the batch to return** (status IMPLEMENTED + commit SHA, or BLOCKED)
@@ -243,10 +264,12 @@ For each batch in `ROUTE.batches`, in order:
      a previous objective or a previous conductor run over the same task ID must never be read by a
      reviewer as if it were current.
    - Dispatch `agents/review-gate.md` for that unit exactly as the sequential loop would — no new
-     reviewer logic, no shortcuts. Include `NAZGUL_UNIT: <task id>` in the dispatch prompt per the
-     contract above. Multiple units in a parallel batch get one review-gate dispatch each, emitted in the
-     same message (reviews are always independent and read-only, batch it regardless of how the
-     implementation was routed).
+     reviewer logic, no shortcuts. Pass `model: "$MODEL_REVIEW"` (resolved in Model Selection above) for
+     the orchestrator's own tier — this is separate from, and does not change, the per-reviewer model
+     resolution `review-gate.md` already does internally. Include `NAZGUL_UNIT: <task id>` in the dispatch
+     prompt per the contract above. Multiple units in a parallel batch get one review-gate dispatch each,
+     emitted in the same message (reviews are always independent and read-only, batch it regardless of how
+     the implementation was routed).
    - **Wait for review-gate to return** its terminal outcome for that unit — DONE, or BLOCKED, or (if
      review-gate exhausts its own retry cycle) CHANGES_REQUESTED escalated to BLOCKED — before moving to
      the next unit or the next batch. review-gate owns the full pre-check/dispatch/verdict/retry cycle

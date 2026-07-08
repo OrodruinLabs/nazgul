@@ -239,7 +239,7 @@ setup_temp_dir
 setup_nazgul_dir
 GRAPH="$TEST_DIR/nazgul/conductor/graph.json"
 mkdir -p "$(dirname "$GRAPH")"
-jq -n '{current_wave:2,tasks:{"TASK-001":{status:"DONE",commit_sha:"aaa111",wave:1,body:"...file contents...",diff:"--- a/x",verdict:"APPROVE"},"TASK-003":{status:"READY",wave:2}}}' > "$GRAPH"
+jq -n '{current_wave:2,tasks:{"TASK-001":{status:"DONE",commit:"aaa111",wave:1,body:"...file contents...",diff:"--- a/x",verdict:"APPROVE"},"TASK-003":{status:"READY",wave:2}}}' > "$GRAPH"
 DIGEST=$(graph_wave_digest "$GRAPH")
 printf '%s' "$DIGEST" > "$TEST_DIR/digest.json"
 assert_json_field "digest current_wave" "$TEST_DIR/digest.json" ".current_wave" "2"
