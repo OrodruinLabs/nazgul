@@ -228,3 +228,50 @@ same `EnterWorktree`/`ExitWorktree` + feature-branch-only merge rules as every o
 - **The two hard stops are unconditional within the Conductor's own protocol — never gated, never yolo-bypassable by config.** `[advisory]` Any `BLOCKED` task or any non-`APPROVE` `security-reviewer.md` verdict halts the Conductor for a human. `conductor_should_halt` (`scripts/lib/conductor-gates.sh`) fails CLOSED on ambiguity (`BLOCKED_TASKS_AMBIGUOUS`, `SECURITY_REJECTION_AMBIGUOUS`, `*_UNREADABLE`) and ignores every `conductor.gates` value and mode, including `yolo` — this extends §3.5's AFK security-rejection stop and §5's hard-block list into the Conductor engine. `agents/conductor.md` calls it unconditionally at the top of every wave (Step 3.1) and again at every batch boundary within a wave (Step 5.3), so a BLOCKED or security-rejected unit can never let more work start once called. Per this legend that is `[advisory]`, not `[enforced]`: the lib fails closed whenever invoked, but no PreToolUse guard or `stop-hook.sh` gate forces the invocation — it depends entirely on `agents/conductor.md`'s own protocol, same honest limit as the rest of this section.
 - **Wave parallelism: Planner-marked and zero-overlap only, capped at `conductor.max_parallel`.** `[advisory]` A wave runs parallel only when `nazgul/plan.md`'s `## Wave Groups` section marks it explicitly AND `route_wave` (`scripts/lib/conductor-router.sh`) finds zero file-scope overlap across the wave's units; any overlap, or an unmarked wave, aborts the whole wave to sequential — the identical rule §8 already gives Team Orchestrator ("Parallel tasks... Zero file overlap... bypassable by manual task dispatch"), not reimplemented here. Batches never exceed `conductor.max_parallel` (default `3`, read via `conductor_max_parallel`). `route_wave` fails closed to sequential whenever called, but that call happens inside `agents/conductor.md`'s own Step 4 protocol, not behind `stop-hook.sh` — per this legend that makes it `[advisory]`, bypassable by an orchestrator that dispatches units directly without going through the router, same caveat as §8's Team Orchestrator entry.
 - **Graph-only invariant: the Conductor never holds file bodies.** `[advisory]` `graph_upsert_task`/`graph_set_verdict` (`scripts/lib/conductor-graph.sh`) refuse to write a multi-line or diff-shaped verdict, or a non-SHA commit (`tests/test-conductor-recovery.sh` covers the rejection cases). This is a backstop on those two setters, not a hard guard on the Conductor itself: the agent holds `Write`/`Edit` directly and could bypass `conductor-graph.sh` to hand-write `graph.json`. The real invariant — never `Read` a diff, a changed source file, or reviewer prose into its own context — is agent discipline, spelled out in `agents/conductor.md`'s "GRAPH-ONLY INVARIANT" section and test-backed, not mechanically blocked.
+
+---
+
+## 12. Conductor Enforcement
+
+The "Enforced Conductor" follow-up (feat/conductor-enforcement) closes the gap between §11's prose
+contract and what actually stops the Conductor from misbehaving. Five layers back one headline
+invariant — **"completed = cached, never re-executed"**: a unit that reached `IMPLEMENTED`/`DONE` with a
+commit SHA in `nazgul/conductor/graph.json` is never re-dispatched or re-implemented. All five layers
+are scoped to an active conductor run (`nazgul/conductor/.session` present, written and removed by
+`agents/conductor.md`, AND `execution.engine == "conductor"`) — every guard below no-ops outside that
+window, so a stray Nazgul agent or a sequential-engine run is never touched.
+
+- **Dispatch guard (Layer 1).** `[enforced]` `scripts/conductor-dispatch-guard.sh` — a PreToolUse guard on
+  the `Agent` tool — denies (exit 2) dispatching a work-unit subagent (`implementer`, `review-gate`,
+  `team-orchestrator`) with `run_in_background: true`, and denies re-dispatching a unit whose `graph.json`
+  status is already `IMPLEMENTED`/`DONE`, matched via the `NAZGUL_UNIT: TASK-NNN` marker
+  `agents/conductor.md` puts in every dispatch prompt (greped as data, never `eval`'d). Fails closed:
+  absent `jq`, an unreadable config, or a missing marker all degrade to allow rather than a false block.
+  Kill-switch: `conductor.enforce.dispatch_guard` (default `true`, config schema v20).
+- **Re-work guard (Layer 2).** `[enforced]` `scripts/conductor-rework-guard.sh` — a PreToolUse guard on
+  `Write|Edit|MultiEdit` — denies (exit 2) any write to a file inside the `file_scope` of a unit already
+  `DONE`/`IMPLEMENTED` with a commit SHA recorded in `graph.json`. This is the mechanical floor half of
+  the headline invariant, keyed off the Conductor's own graph rather than the task manifest §8 already
+  covers for the sequential engine. Kill-switch: `conductor.enforce.rework_guard` (default `true`).
+- **Orphan detection (Layer 3).** `[hook-driven only]` `scripts/subagent-stop.sh` runs on every real
+  `SubagentStop` event — an unconditional Claude Code hook, not gated behind `stop-hook.sh` — and, when
+  the stopping agent is the Conductor, checks `graph.json` for units marked `dispatched` but not yet
+  `DONE`/`BLOCKED`. On a hit it writes `nazgul/conductor/.resume-needed` and emits
+  `conductor_orphan_detected`. This is detection and evidence only — it never blocks a tool call and never
+  resumes anything itself, so a human or the next Conductor invocation still has to act on the marker.
+- **Team routing (Layer 4).** `[hook-driven only]` When a wave is Planner-marked parallel and zero-overlap
+  (§11 Wave parallelism), `route_backend`/`route_wave` (`scripts/lib/conductor-router.sh`) route the whole
+  batch to `team-orchestrator` instead of one bespoke worktree per unit. Once dispatched, Team Orchestrator
+  applies the same zero-file-overlap validation before assigning teammates that §8 already documents for
+  the sequential engine's parallel-task path — the Conductor reuses that mechanism rather than
+  reimplementing it, so it inherits the identical bypass caveat (manual dispatch can route around it).
+- **Wave digest (Layer 5).** `[advisory]` `graph_wave_digest` (`scripts/lib/conductor-graph.sh`) prints a
+  compact `{current_wave, next_unit, units}` snapshot from `graph.json` for cheap per-turn orientation —
+  cheaper than a full wave recomputation. It is read-only convenience for the Conductor's own prompt loop;
+  nothing forces the Conductor to actually call it before acting, so per the legend it stays advisory, the
+  same tier as the rest of §11.
+
+These five layers sit underneath, not instead of, the two unconditional hard stops already documented in
+§11: even with `conductor.enforce.dispatch_guard`/`rework_guard` both set `false`, `conductor_should_halt`
+(`scripts/lib/conductor-gates.sh`) still fails closed on any `BLOCKED` task or non-`APPROVE`
+`security-reviewer.md` verdict, mirroring §3.5/§5's hard-block posture for the sequential engine.

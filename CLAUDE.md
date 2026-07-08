@@ -52,6 +52,8 @@ scripts/                             # Shell scripts for hooks
 │   ├── post-compact.sh              # PostCompact: re-inject state after compaction
 │   ├── pre-tool-guard.sh            # PreToolUse: block destructive commands
 │   ├── task-state-guard.sh          # PreToolUse: verify task state before edits
+│   ├── conductor-dispatch-guard.sh  # PreToolUse(Agent): block background/duplicate conductor unit dispatch
+│   ├── conductor-rework-guard.sh    # PreToolUse(Write/Edit): block re-editing a committed conductor unit
 │   ├── prompt-guard.sh              # UserPromptSubmit: validate user prompts
 │   ├── session-context.sh           # SessionStart: inject loop state + session tracking
 │   ├── session-staging.sh           # SessionEnd: stage files for AFK safety
