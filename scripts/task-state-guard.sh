@@ -367,9 +367,11 @@ if [ "$OLD_STATUS" = "IN_PROGRESS" ] && [ "$NEW_STATUS" = "IMPLEMENTED" ]; then
   if [ "$TOOL_NAME" = "Write" ]; then
     MANIFEST_TEXT="$NEW_CONTENT"
   elif [ -f "$FILE_PATH" ] && [ -n "$OLD_STRING" ]; then
-    # Reconstruct post-edit file: replace old_string with new_string in on-disk content
-    MANIFEST_TEXT=$(awk -v old="$OLD_STRING" -v new="$NEW_CONTENT" '
-      BEGIN { buf="" }
+    # Reconstruct post-edit file: replace old_string with new_string in on-disk content.
+    # old/new travel via ENVIRON, not -v: BSD awk rejects literal newlines in -v assignments,
+    # which silently no-ops the guard on multi-line old_string (e.g. the frontmatter fence).
+    MANIFEST_TEXT=$(OLD_STRING="$OLD_STRING" NEW_CONTENT="$NEW_CONTENT" awk '
+      BEGIN { buf=""; old=ENVIRON["OLD_STRING"]; new=ENVIRON["NEW_CONTENT"] }
       { buf = buf (NR>1 ? "\n" : "") $0 }
       END { idx = index(buf, old); if (idx) print substr(buf, 1, idx-1) new substr(buf, idx+length(old)); else print buf }
     ' "$FILE_PATH")

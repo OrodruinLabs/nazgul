@@ -1203,4 +1203,54 @@ run_guard "$input"
 assert_exit_code "FEATURE-* dispatch write blocked when any task is IN_PROGRESS" "$GUARD_EC" 2
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# Test 75: Multi-line old_string spanning the YAML frontmatter fence —
+# IN_PROGRESS -> IMPLEMENTED with commit SHA on disk — allowed (regression
+# test for BSD/macOS awk "newline in string" on -v with embedded newlines)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+cat > "$TASK_PATH" << 'EOF'
+---
+status: IN_PROGRESS
+---
+# TASK-001: Test
+
+## Commits
+- abc1234def
+EOF
+input=$(jq -n --arg fp "$TASK_PATH" \
+  --arg os $'---\nstatus: IN_PROGRESS\n---' \
+  --arg ns $'---\nstatus: IMPLEMENTED\n---' \
+  '{"tool_name":"Edit","tool_input":{"file_path":$fp,"old_string":$os,"new_string":$ns}}')
+run_guard "$input"
+assert_exit_code "multi-line frontmatter old_string, SHA on disk, allowed" "$GUARD_EC" 0
+assert_not_contains "no raw awk crash on multi-line old_string" "$GUARD_STDERR" "newline in string"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 76: Multi-line old_string spanning the frontmatter fence — no commit
+# SHA anywhere in file — guard evaluates and blocks with the proper message
+# (not a silent no-op, not a raw awk crash)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+cat > "$TASK_PATH" << 'EOF'
+---
+status: IN_PROGRESS
+---
+# TASK-001: Test
+EOF
+input=$(jq -n --arg fp "$TASK_PATH" \
+  --arg os $'---\nstatus: IN_PROGRESS\n---' \
+  --arg ns $'---\nstatus: IMPLEMENTED\n---' \
+  '{"tool_name":"Edit","tool_input":{"file_path":$fp,"old_string":$os,"new_string":$ns}}')
+run_guard "$input"
+assert_exit_code "multi-line frontmatter old_string, no SHA, blocked" "$GUARD_EC" 2
+assert_contains "blocked for the right reason (missing commit SHA)" "$GUARD_STDERR" "commit SHA"
+assert_not_contains "no raw awk crash on multi-line old_string" "$GUARD_STDERR" "newline in string"
+teardown_temp_dir
+
 report_results
