@@ -239,13 +239,17 @@ setup_temp_dir
 setup_nazgul_dir
 GRAPH="$TEST_DIR/nazgul/conductor/graph.json"
 mkdir -p "$(dirname "$GRAPH")"
-jq -n '{current_wave:2,tasks:{"TASK-001":{status:"DONE",commit:"aaa111",wave:1,body:"...file contents...",diff:"--- a/x",verdict:"APPROVE"},"TASK-003":{status:"READY",wave:2}}}' > "$GRAPH"
+jq -n '{current_wave:2,tasks:{"TASK-001":{status:"DONE",commit:"aaa111",wave:1,body:"...file contents...",diff:"--- a/x",verdict:"APPROVE"},"TASK-003":{status:"READY",wave:2,commit:""}}}' > "$GRAPH"
 DIGEST=$(graph_wave_digest "$GRAPH")
 printf '%s' "$DIGEST" > "$TEST_DIR/digest.json"
 assert_json_field "digest current_wave" "$TEST_DIR/digest.json" ".current_wave" "2"
 assert_json_field "digest carries sha" "$TEST_DIR/digest.json" '.units["TASK-001"].sha' "aaa111"
 assert_json_field "digest carries wave" "$TEST_DIR/digest.json" '.units["TASK-001"].wave' "1"
 assert_json_field "digest next_unit skips DONE" "$TEST_DIR/digest.json" ".next_unit" "TASK-003"
+# graph_upsert_task defaults an uncommitted task's `commit` field to "" (empty string), never absent —
+# the digest must normalize that to null, not surface the empty string as if it were a real sha.
+assert_json_field "digest normalizes empty-string commit to null sha" "$TEST_DIR/digest.json" \
+  '.units["TASK-003"].sha' "null"
 # Fixture task carries poison fields (body/diff/verdict) that graph_wave_digest must strip.
 # Sanity check: if the digest ever merged the raw task object instead of building an explicit
 # {status, sha, wave} literal, these three assertions would flip to FAIL against "true".

@@ -48,8 +48,10 @@ re-implementing a unit it had already committed. A follow-up objective ("Enforce
 never re-dispatched or re-implemented.
 
 1. `scripts/conductor-dispatch-guard.sh` (PreToolUse on the `Agent` tool) denies background dispatch of a
-   work-unit subagent and denies re-dispatching a unit already `IMPLEMENTED`/`DONE` — dispatch is
-   synchronous and one-shot per unit.
+   work-unit subagent and denies re-dispatching a unit whose status makes that dispatch wasted work —
+   `implementer`/`team-orchestrator` at `IMPLEMENTED`/`DONE`, but `review-gate` only at `DONE` (an
+   `IMPLEMENTED` unit still legitimately needs its review dispatched, not re-implemented). Dispatch is
+   synchronous and one-shot per unit per subagent kind.
 2. `scripts/conductor-rework-guard.sh` (PreToolUse on `Write|Edit|MultiEdit`) denies writing to a file
    inside a committed unit's `file_scope`.
 3. `scripts/subagent-stop.sh` detects an orphaned wave (units dispatched but not yet terminal) on every
