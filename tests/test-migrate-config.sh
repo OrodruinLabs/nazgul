@@ -1188,4 +1188,46 @@ assert_json_field "v19 → v20 conductor.enforce.dispatch_guard defaults true" "
 assert_json_field "v19 → v20 conductor.enforce.rework_guard defaults true" "$TMPDIR_V20/nazgul/config.json" ".conductor.enforce.rework_guard" "true"
 rm -rf "$TMPDIR_V20"
 
+# --- migrate_19_to_20: conductor.enforce equivalence partitions ---
+
+# dispatch_guard: explicit false preserved (kill-switch), rework_guard still backfilled true
+NAZGUL_DIR=$(setup_nazgul_dir "v19-to-20-dispatch-guard-false")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{ "schema_version": 19, "conductor": { "enforce": { "dispatch_guard": false } } }
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_json_field "v19→v20 conductor.enforce.dispatch_guard=false preserved (kill-switch, hand-set)" "$NAZGUL_DIR/config.json" ".conductor.enforce.dispatch_guard" "false"
+assert_json_field "v19→v20 conductor.enforce.rework_guard still defaults true alongside hand-set sibling" "$NAZGUL_DIR/config.json" ".conductor.enforce.rework_guard" "true"
+
+# non-object conductor clamped to object
+NAZGUL_DIR=$(setup_nazgul_dir "v19-to-20-conductor-garbage")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{ "schema_version": 19, "conductor": "oops" }
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_json_field "v19→v20 non-object conductor clamped to object" "$NAZGUL_DIR/config.json" ".conductor | type" "object"
+assert_json_field "v19→v20 clamped conductor gets enforce.dispatch_guard=true" "$NAZGUL_DIR/config.json" ".conductor.enforce.dispatch_guard" "true"
+assert_json_field "v19→v20 clamped conductor gets enforce.rework_guard=true" "$NAZGUL_DIR/config.json" ".conductor.enforce.rework_guard" "true"
+
+# non-object conductor.enforce clamped to object
+NAZGUL_DIR=$(setup_nazgul_dir "v19-to-20-enforce-garbage")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{ "schema_version": 19, "conductor": { "enforce": "oops" } }
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_json_field "v19→v20 non-object conductor.enforce clamped to object" "$NAZGUL_DIR/config.json" ".conductor.enforce | type" "object"
+assert_json_field "v19→v20 clamped conductor.enforce gets dispatch_guard=true" "$NAZGUL_DIR/config.json" ".conductor.enforce.dispatch_guard" "true"
+assert_json_field "v19→v20 clamped conductor.enforce gets rework_guard=true" "$NAZGUL_DIR/config.json" ".conductor.enforce.rework_guard" "true"
+
+# --- migrate_19_to_20: full idempotency — run twice yields same output ---
+NAZGUL_DIR=$(setup_nazgul_dir "v19-to-20-idempotent")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{ "schema_version": 19, "conductor": { "enforce": { "dispatch_guard": false } } }
+EOF
+CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" >/dev/null 2>/dev/null
+FIRST=$(jq -c '.' "$NAZGUL_DIR/config.json")
+CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" >/dev/null 2>/dev/null
+SECOND=$(jq -c '.' "$NAZGUL_DIR/config.json")
+assert_eq "v19→v20 full idempotency (run twice = run once)" "$FIRST" "$SECOND"
+
 report_results
