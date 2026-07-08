@@ -77,7 +77,7 @@ _hb_objective() {
   local inbox_dir="$1" id="$2" json
   json=$(inbox_get "$inbox_dir" "$id" 2>/dev/null) || { echo ""; return 0; }
   printf '%s' "$json" | jq -r '
-    if (.title // "") != "" then .title
+    if (.title // "") != "" then (.title | split("\n")[0])
     elif (.body // "") != "" then (.body | split("\n")[0])
     else "" end'
 }
@@ -92,10 +92,12 @@ _hb_start() {
     "$NAZGUL_HEARTBEAT_START_CMD" "$objective"
   else
     # apply-start-flags.sh later strips this span with a literal-quote-paired
-    # sed scan. A raw `"` in the objective would close the span early and
-    # expose the rest as bare flag tokens, so drop embedded double quotes
-    # here to keep the span a single unbroken pair downstream.
+    # sed scan that is inherently line-bounded, so a raw `"` or an embedded
+    # newline in the objective would close/split the span early and expose
+    # the rest as bare flag tokens. Neutralize both before interpolation.
     local safe_objective="${objective//\"/\'}"
+    safe_objective="${safe_objective//$'\n'/ }"
+    safe_objective="${safe_objective//$'\r'/ }"
     (cd "$PROJECT_ROOT" && claude -p "/nazgul:start \"$safe_objective\" --yolo --conductor")
   fi
 }
