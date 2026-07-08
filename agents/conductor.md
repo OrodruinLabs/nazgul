@@ -218,6 +218,12 @@ For each batch in `ROUTE.batches`, in order:
      the whole team. **Wait for `team-orchestrator` to return and report every teammate's outcome**
      (status + commit SHA per unit, or BLOCKED) before starting any of this batch's reviews — same
      synchronous rule as below, just satisfied by one delegated call instead of N Agent-tool calls.
+     **Known limitation:** `team-orchestrator`'s teammates are naturally backgrounded for concurrency, but
+     Layer 1 (`conductor-dispatch-guard.sh`, RULES.md §12) denies `run_in_background: true` for
+     `implementer`/`team-orchestrator` subagent dispatches during a conductor run. This interaction is
+     unresolved — until it is, route this batch's teammates synchronously, or expect the guard needs a
+     caller-aware exemption for the team-backend path. The single-unit `subagent`/`worktree` path below is
+     unaffected and fully enforced.
    - `subagent`/`worktree`: only ever a single-unit batch now (a multi-unit mutating batch routes to
      `team` above). One Agent-tool call per unit (a `worktree` unit additionally uses
      `EnterWorktree`/`ExitWorktree` around its dispatch, exactly as `agents/team-orchestrator.md`'s

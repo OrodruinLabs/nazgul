@@ -245,7 +245,8 @@ window, so a stray Nazgul agent or a sequential-engine run is never touched.
   the `Agent` tool — denies (exit 2) dispatching a work-unit subagent (`implementer`, `review-gate`,
   `team-orchestrator`) with `run_in_background: true`, and denies re-dispatching a unit whose `graph.json`
   status is already `IMPLEMENTED`/`DONE`, matched via the `NAZGUL_UNIT: TASK-NNN` marker
-  `agents/conductor.md` puts in every dispatch prompt (greped as data, never `eval`'d). Fails closed:
+  `agents/conductor.md` puts in every dispatch prompt (greped as data, never `eval`'d). A detected
+  violation denies (exit 2) — that half is fail-closed — but the guard fails OPEN when it cannot evaluate:
   absent `jq`, an unreadable config, or a missing marker all degrade to allow rather than a false block.
   Kill-switch: `conductor.enforce.dispatch_guard` (default `true`, config schema v20).
 - **Re-work guard (Layer 2).** `[enforced]` `scripts/conductor-rework-guard.sh` — a PreToolUse guard on
@@ -265,6 +266,13 @@ window, so a stray Nazgul agent or a sequential-engine run is never touched.
   applies the same zero-file-overlap validation before assigning teammates that §8 already documents for
   the sequential engine's parallel-task path — the Conductor reuses that mechanism rather than
   reimplementing it, so it inherits the identical bypass caveat (manual dispatch can route around it).
+- *Known limitation (documented follow-up, not a tiered enforcement rule): Layer 1 vs. Layer 4.* Layer 1's dispatch guard denies `run_in_background: true` for
+  `implementer`/`team-orchestrator`/`review-gate` subagents during a conductor run, but Layer 4 routes
+  parallel zero-overlap waves to `team-orchestrator`, which spawns implementer teammates that are
+  naturally backgrounded for concurrency — so the guard could block the very teammates Layer 4's own
+  routing produces. This interaction is unresolved: until it is, conductor-spawned team teammates must run
+  synchronously, or the guard needs a caller-aware exemption for the team-backend path. Documented as a
+  follow-up, not shipped behavior; the single-unit (non-team) dispatch path is fully enforced today.
 - **Wave digest (Layer 5).** `[advisory]` `graph_wave_digest` (`scripts/lib/conductor-graph.sh`) prints a
   compact `{current_wave, next_unit, units}` snapshot from `graph.json` for cheap per-turn orientation —
   cheaper than a full wave recomputation. It is read-only convenience for the Conductor's own prompt loop;
