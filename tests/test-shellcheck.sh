@@ -30,6 +30,7 @@ SCRIPTS=(
   "scripts/lib/conductor-router.sh"
   "scripts/lib/inbox-provider.sh"
   "scripts/lib/heartbeat-triage.sh"
+  "scripts/heartbeat.sh"
   "scripts/local-mode-tracking-guard.sh"
   "scripts/base-branch-commit-guard.sh"
   "scripts/session-staging.sh"
