@@ -411,6 +411,19 @@ migrate_18_to_19() {
   log_migration "v18→v19: added execution.engine (default sequential); added conductor.gates.{approve_graph,approve_each_wave,approve_final_pr} (default false); added conductor.max_parallel (default 3)"
 }
 
+migrate_19_to_20() {
+  local tmp; tmp=$(mktemp)
+  # Conductor enforcement toggles. ADDITIVE — set when absent, explicit values (incl. false) preserved.
+  jq '
+    .conductor = ((if (.conductor | type) == "object" then .conductor else {} end)
+      | .enforce = ((if (.enforce | type) == "object" then .enforce else {} end)
+          | .dispatch_guard = (if has("dispatch_guard") then .dispatch_guard else true end)
+          | .rework_guard = (if has("rework_guard") then .rework_guard else true end)))
+    | .schema_version = 20
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v19→v20: added conductor.enforce.{dispatch_guard,rework_guard} (default true)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"
