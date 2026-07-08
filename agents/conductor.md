@@ -37,7 +37,7 @@ back only their one-line verdict and commit SHA. `graph_upsert_task`/`graph_set_
 values — but the invariant is a discipline you keep before that: never open a `diff.patch`, never `Read`
 a task's changed source files, never ask a sub-session to paste its diff back to you.
 
-## Opt-in — the sequential engine is untouched
+## Step 0: Opt-in — the sequential engine is untouched
 
 Read `nazgul/config.json → execution.engine` before anything else:
 
@@ -56,6 +56,19 @@ unchanged. You are dispatched only when `execution.engine: "conductor"` (opted i
 `/nazgul:start --conductor`, or the config default). Never edit `scripts/stop-hook.sh` or any other
 sequential-engine file, even to "help."
 
+Once `ENGINE == "conductor"` is confirmed, write the session marker before anything else touches the
+graph:
+
+```bash
+RUN_ID="${CLAUDE_SESSION_ID:-$(date +%s)-$$}"
+mkdir -p "$NAZGUL_DIR/conductor"
+printf '%s' "$RUN_ID" > "$NAZGUL_DIR/conductor/.session"
+```
+
+This file is what activates `conductor-dispatch-guard.sh` (Layer 1) and `conductor-rework-guard.sh`
+(Layer 2) — both no-op when it is absent, so a stray Nazgul agent or a sequential-engine run is never
+guarded as if it were a live conductor session. It is removed at Step 9 (completion) below.
+
 ## Output Formatting
 Format ALL user-facing output per `references/ui-brand.md`:
 - Stage banners: `─── ◈ NAZGUL ▸ CONDUCTOR ─────────────────────────────`
@@ -72,6 +85,12 @@ Follow RULES.md §4 Recovery Protocol read order, then reconstruct conductor-spe
 2. `nazgul/plan.md` Recovery Pointer — last wave/unit you were on
 3. `nazgul/checkpoints/conductor-checkpoint.json` — your own last self-checkpoint
 4. `nazgul/tasks/TASK-*.md` — per-task manifests (status is canonical there; graph.json mirrors it)
+
+Before paying for that full reload, get a cheap orientation snapshot (**Layer 5**):
+`DIGEST=$(graph_wave_digest "$NAZGUL_DIR/conductor/graph.json")` — a compact, graph-only
+`{current_wave, next_unit, units:{ID:{status,sha,wave}}}` view, never file bodies. Use it to quickly
+assess at turn start whether you are mid-build and roughly where, without a `compute_waves` pass. It is
+an orientation aid only — it is not authoritative and never substitutes for the full reload below.
 
 Then call `reload_conductor_state "$NAZGUL_DIR"` — it reads `nazgul/conductor/graph.json`, falls back to
 the checkpoint if graph.json is missing/invalid, and returns `{source, waves, next_unit}`. `next_unit` is
@@ -178,9 +197,19 @@ sync if that branch ever changes.
 **This is the hard lesson: never fire a nested dispatch and move on before it returns.** Every implementer
 and every Review Board call in this wave completes and reports its result back to you before you advance.
 
+**Contract:** every implementer and Review Board dispatch prompt in this step MUST include a line
+`NAZGUL_UNIT: TASK-NNN` naming the unit it is for. `conductor-dispatch-guard.sh` (Layer 1) greps this
+line to detect and block re-dispatch of a unit already IMPLEMENTED/DONE, and `subagent-stop.sh`'s orphan
+detector (Layer 3) correlates it against `graph.json`'s `dispatched` flag — omitting it silently disables
+both guards for that dispatch.
+
 For each batch in `ROUTE.batches`, in order:
 
-1. **Implement.** Dispatch each unit in the batch per its routed backend:
+1. **Implement.** For each unit in the batch, immediately BEFORE dispatching its implementer, mark it
+   dispatched so Layer 3's orphan detector can see the wave is in flight if this session stops mid-batch:
+   `graph_mark_dispatched "$NAZGUL_DIR/conductor/graph.json" "$UNIT_ID"`. Never clear it afterward — the
+   orphan check also requires non-terminal status, so a unit reaching DONE/BLOCKED naturally stops
+   matching. Then dispatch each unit in the batch per its routed backend:
    - `team`: this is now the routed backend for a **parallel multi-unit mutating batch** (Layer 4 — the
      fix for "why wasn't the conductor using team agents") as well as any `coordination`-isolation batch.
      Delegate the WHOLE batch, in one dispatch, to `team-orchestrator` per its existing "Spawning an
@@ -198,7 +227,7 @@ For each batch in `ROUTE.batches`, in order:
      `agents/review-gate.md`'s parallel reviewer dispatch uses. Never fire these and move on before they
      return.
    - Give each dispatch ONLY the task ID, its file scope, and its manifest path — never a diff, never
-     another unit's files.
+     another unit's files. Include `NAZGUL_UNIT: <task id>` per the contract above.
    - **Wait for every dispatch in the batch to return** (status IMPLEMENTED + commit SHA, or BLOCKED)
      before proceeding. Do not start the batch's reviews until every implementer in it has returned —
      this applies whether the batch was one `team-orchestrator` delegation or N individual dispatches.
@@ -208,9 +237,10 @@ For each batch in `ROUTE.batches`, in order:
      a previous objective or a previous conductor run over the same task ID must never be read by a
      reviewer as if it were current.
    - Dispatch `agents/review-gate.md` for that unit exactly as the sequential loop would — no new
-     reviewer logic, no shortcuts. Multiple units in a parallel batch get one review-gate dispatch each,
-     emitted in the same message (reviews are always independent and read-only, batch it regardless of
-     how the implementation was routed).
+     reviewer logic, no shortcuts. Include `NAZGUL_UNIT: <task id>` in the dispatch prompt per the
+     contract above. Multiple units in a parallel batch get one review-gate dispatch each, emitted in the
+     same message (reviews are always independent and read-only, batch it regardless of how the
+     implementation was routed).
    - **Wait for review-gate to return** its terminal outcome for that unit — DONE, or BLOCKED, or (if
      review-gate exhausts its own retry cycle) CHANGES_REQUESTED escalated to BLOCKED — before moving to
      the next unit or the next batch. review-gate owns the full pre-check/dispatch/verdict/retry cycle
@@ -263,7 +293,10 @@ When `compute_waves` returns `[]`, re-verify from disk before declaring anything
 not DONE, do not proceed — return to the loop with that task's unit. If all are DONE, the last unit's
 Review Board dispatch already ran Post-Loop Phase (`agents/review-gate.md` Step 5 — post-loop agents,
 push, PR) as part of its own Step 4 handling, gated by `approve_final_pr` back in Step 3 of this wave.
-Output `NAZGUL_COMPLETE`.
+
+Remove the session marker written at Step 0 so `conductor-dispatch-guard.sh` (Layer 1) and
+`conductor-rework-guard.sh` (Layer 2) no-op once this run has ended: `rm -f
+"$NAZGUL_DIR/conductor/.session"`. Then output `NAZGUL_COMPLETE`.
 
 ## What the Conductor Does Not Do
 

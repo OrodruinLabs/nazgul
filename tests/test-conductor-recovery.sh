@@ -234,4 +234,34 @@ assert_file_exists "clamp: graph.json still created" "$GRAPH"
 assert_json_field "clamp: non-numeric max_parallel defaults to 3" "$GRAPH" ".max_parallel" "3"
 teardown_temp_dir
 
+# --- Test 17: graph_wave_digest — compact graph-only orientation snapshot ---
+setup_temp_dir
+setup_nazgul_dir
+GRAPH="$TEST_DIR/nazgul/conductor/graph.json"
+mkdir -p "$(dirname "$GRAPH")"
+jq -n '{current_wave:2,tasks:{"TASK-001":{status:"DONE",commit_sha:"aaa111",wave:1},"TASK-003":{status:"READY",wave:2}}}' > "$GRAPH"
+DIGEST=$(graph_wave_digest "$GRAPH")
+printf '%s' "$DIGEST" > "$TEST_DIR/digest.json"
+assert_json_field "digest current_wave" "$TEST_DIR/digest.json" ".current_wave" "2"
+assert_json_field "digest carries sha" "$TEST_DIR/digest.json" '.units["TASK-001"].sha' "aaa111"
+assert_json_field "digest carries wave" "$TEST_DIR/digest.json" '.units["TASK-001"].wave' "1"
+assert_json_field "digest next_unit skips DONE" "$TEST_DIR/digest.json" ".next_unit" "TASK-003"
+assert_json_field "digest holds no file bodies (graph-only)" "$TEST_DIR/digest.json" \
+  '.units["TASK-001"] | has("body")' "false"
+teardown_temp_dir
+
+# --- Test 18: graph_mark_dispatched sets .tasks[id].dispatched = true ---
+setup_temp_dir
+setup_nazgul_dir
+GRAPH="$TEST_DIR/nazgul/conductor/graph.json"
+init_graph_json "$GRAPH" "FEAT-007"
+graph_upsert_task "$GRAPH" "TASK-001" "[]" 1 "READY" '["a.sh"]'
+assert_json_field "dispatched unset before marking" "$GRAPH" '.tasks["TASK-001"] | has("dispatched")' "false"
+graph_mark_dispatched "$GRAPH" "TASK-001"
+assert_json_field "dispatched set true after marking" "$GRAPH" '.tasks["TASK-001"].dispatched' "true"
+assert_json_field "status untouched by mark_dispatched" "$GRAPH" '.tasks["TASK-001"].status' "READY"
+graph_mark_dispatched "$GRAPH" "TASK-999" 2>/dev/null
+assert_exit_code "unknown task mark_dispatched rejected" "$?" 1
+teardown_temp_dir
+
 report_results

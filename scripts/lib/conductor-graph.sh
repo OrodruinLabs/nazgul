@@ -258,6 +258,24 @@ graph_set_verdict() {
   mv "$tmp" "$graph_file"
 }
 
+# graph_mark_dispatched <graph_file> <task_id> -> sets .tasks[id].dispatched =
+# true (never cleared — subagent-stop.sh's orphan detector also requires
+# non-terminal status, so a unit reaching DONE/BLOCKED naturally stops
+# matching). 1 if the task is not present in .tasks, mirroring
+# graph_update_task_status's shape.
+graph_mark_dispatched() {
+  local graph_file="$1" task_id="$2" exists tmp
+  [ -f "$graph_file" ] || return 1
+  exists=$(jq --arg id "$task_id" '(.tasks // {}) | has($id)' "$graph_file")
+  [ "$exists" = "true" ] || return 1
+  tmp=$(mktemp) || return 1
+  if ! jq --arg id "$task_id" '.tasks[$id].dispatched = true' "$graph_file" > "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv "$tmp" "$graph_file"
+}
+
 # validate_graph_json <graph_file> -> 0 silently if valid; else 1 with one
 # machine-parseable line per problem:
 #   NOT_JSON | MISSING_FIELD <name> | INVALID_TASK_STATUS <id> |
@@ -343,4 +361,19 @@ reload_conductor_state() {
 
   jq -n --arg source "$source_file" --argjson waves "$waves_json" --arg next "$next_unit" \
     '{ source: $source, waves: $waves, next_unit: (if $next == "" then null else $next end) }'
+}
+
+# graph_wave_digest <graph_file> -> compact per-turn orientation digest.
+# Graph-only: ids/status/sha/wave + the next actionable unit. Never file
+# bodies. Cheaper than reload_conductor_state (no compute_waves call) — meant
+# for a quick orientation check at turn start, not the authoritative wave
+# recomputation. Prints "{}" if graph_file is missing or unparseable.
+graph_wave_digest() {
+  local graph_file="$1"
+  [ -f "$graph_file" ] || { echo '{}'; return 0; }
+  jq -c '{
+    current_wave: (.current_wave // null),
+    next_unit: ( [ .tasks | to_entries[] | select((.value.status // "") as $s | ($s != "DONE" and $s != "BLOCKED")) ] | sort_by(.value.wave // 9999) | (.[0].key // null) ),
+    units: ( .tasks | map_values({status: (.status // "PLANNED"), sha: (.commit_sha // null), wave: (.wave // null)}) )
+  }' "$graph_file" 2>/dev/null || echo '{}'
 }
