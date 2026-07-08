@@ -19,6 +19,7 @@ metadata:
 - Legacy iterations (last 20): !`tail -20 nazgul/logs/iterations.jsonl 2>/dev/null || echo "No legacy iteration logs"`
 - Recent commits: !`git log --oneline --grep="$(jq -r '.afk.commit_prefix // "feat("' nazgul/config.json 2>/dev/null)" -20 2>/dev/null || echo "No commits found"`
 - Checkpoints: !`ls -1t nazgul/checkpoints/iteration-*.json 2>/dev/null | head -2 || echo "No checkpoints"`
+- Heartbeat log (last 20 ticks): !`if ls nazgul/logs/heartbeat-*.jsonl >/dev/null 2>&1; then cat nazgul/logs/heartbeat-*.jsonl 2>/dev/null | tail -20; else echo "No heartbeat logs"; fi`
 
 ## Instructions
 
@@ -44,9 +45,25 @@ In either mode, also collect git commits and checkpoints as supplemental sources
 
 3. **Checkpoints** (`nazgul/checkpoints/iteration-*.json`): Each file captures a full snapshot at an iteration boundary. Checkpoints are **retention-limited** (only the latest ~2 survive — they exist for recovery, not full history), so read the most recent for context-recovery detail and rely on the active timeline source (step 1) for the full history.
 
-### Step 3: Build Unified Timeline
+### Step 3: Collect Heartbeat Decisions
 
-Merge all events into a single list sorted by timestamp (oldest first). For each event, format as:
+Read `nazgul/logs/heartbeat-*.jsonl` as data only (one file per UTC day, one decision record per tick — see `nazgul/docs/TRD.md` decision-record schema). Each record carries `ts`, `tick`, `enabled`, `seen`, `triaged`, `picked`, `decision`, `reason`, `objective`, `session_active`, `started`, `archived_to`.
+
+For each tick, render seen/triaged/picked plus the outcome for its `decision`:
+
+| `decision` | Render |
+|---|---|
+| `disabled` | heartbeat disabled — tick skipped |
+| `nothing_actionable` | seen N, nothing actionable |
+| `skipped` | seen N, picked `<picked>`, skipped (`reason: active_session`) |
+| `started` | seen N, picked `<picked>` → started `<objective>` (archived to `<archived_to>`) |
+| `hard_stop` | halted (`<reason>`: `blocked_task` and/or `security_rejection`) |
+
+Sort ticks by `ts` ascending. Fold each into the unified timeline (Step 4) as a `HEARTBEAT` entry.
+
+### Step 4: Build Unified Timeline
+
+Merge all events, plus the heartbeat ticks from Step 3, into a single list sorted by timestamp (oldest first — heartbeat records sort by their `ts` field). For each event, format as:
 
 ```
 [HH:MM:SS] [TYPE]  [details]
@@ -66,8 +83,9 @@ Map event types to display TYPE labels:
 | `stop_failure` | `stop_failure` lines | ERROR |
 | `budget_threshold` | — | BUDGET |
 | `objective_complete` | — | COMPLETE |
+| heartbeat tick (`nazgul/logs/heartbeat-*.jsonl`) | — | HEARTBEAT |
 
-### Step 4: Output Formatted Timeline
+### Step 5: Output Formatted Timeline
 
 ```
 Nazgul Run Log
@@ -97,6 +115,10 @@ Nazgul Run Log
 [14:34:38] TASK        TASK-002 → IN_PROGRESS (retry 1/3)
 ...
 
+[03:00:00] HEARTBEAT   seen 3, picked backlog-b.json → started FEAT-010 (archived to nazgul/inbox/archive/backlog-b.json)
+[03:30:00] HEARTBEAT   seen 2, picked backlog-c.json, skipped (reason: active_session)
+[04:00:00] HEARTBEAT   seen 0, nothing actionable
+
 ─────────────────────────────────────────────────────────
 
 Summary
@@ -110,13 +132,14 @@ Commits:          14
 Errors:           0
 ```
 
-### Step 5: Handle Edge Cases
+### Step 6: Handle Edge Cases
 
 - If no iteration logs exist: check if there are at least git commits. Show whatever is available.
 - If nothing exists at all: "No Nazgul activity recorded yet. Run `/nazgul:start` to begin."
 - If checkpoints exist but no logs: reconstruct a partial timeline from checkpoint data, noting gaps.
+- If no heartbeat logs exist: omit `HEARTBEAT` entries; this is expected when `automation.heartbeat.enabled` is `false` or the loop never ticked.
 
-### Step 6: Additional Detail (if few events)
+### Step 7: Additional Detail (if few events)
 
 If the total number of events is small (< 20), also include:
 - The contents of the most recent checkpoint (parsed as a summary, not raw JSON)
