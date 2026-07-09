@@ -82,6 +82,10 @@ fi
 # Orphaned conductor-marker self-heal — clear .session/.resume-needed only when
 # the objective they reference is complete (feat_id mismatch or all tasks DONE)
 # or the referenced session is dead. Never touch a live session / open objective.
+# Known limitation: if a live session runs beyond session-tracker's stale-lock
+# age-out (7200s) and its lock gets GC'd right before this check, the marker
+# will be wrongly treated as dead. Hardening that requires touching
+# session-tracker.sh's age-out policy, out of scope here.
 CONDUCTOR_DIR="$NAZGUL_DIR/conductor"
 CONDUCTOR_SESSION_MARKER="$CONDUCTOR_DIR/.session"
 CONDUCTOR_RESUME_MARKER="$CONDUCTOR_DIR/.resume-needed"

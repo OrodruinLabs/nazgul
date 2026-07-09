@@ -103,6 +103,33 @@ set -e
 assert_exit_code "no markers: exit 0" "$ec" 0
 teardown_temp_dir
 
+# --- Test 6b: tasks/ absent, live session -> markers left untouched ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+rm -rf "$TEST_DIR/nazgul/tasks"
+write_conductor_markers "live-session-4"
+register_live_session "live-session-4"
+bash "$SESSION_SCRIPT" >/dev/null 2>&1
+assert_file_exists "tasks/ absent, live session: .session untouched" "$TEST_DIR/nazgul/conductor/.session"
+assert_file_exists "tasks/ absent, live session: .resume-needed untouched" "$TEST_DIR/nazgul/conductor/.resume-needed"
+teardown_temp_dir
+
+# --- Test 6c: malformed graph.json, live session -> markers left untouched (jq error path) ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_task_file "TASK-001" "READY"
+write_conductor_markers "live-session-5"
+register_live_session "live-session-5"
+printf '{not valid json' > "$TEST_DIR/nazgul/conductor/graph.json"
+bash "$SESSION_SCRIPT" >/dev/null 2>&1
+assert_file_exists "malformed graph.json, live session: .session untouched" "$TEST_DIR/nazgul/conductor/.session"
+assert_file_exists "malformed graph.json, live session: .resume-needed untouched" "$TEST_DIR/nazgul/conductor/.resume-needed"
+teardown_temp_dir
+
 # --- Test 7: scrub archives prior tasks/ even when reviews+learning are empty ---
 setup_temp_dir
 setup_nazgul_dir
@@ -124,6 +151,27 @@ setup_nazgul_dir
 OUTPUT8=$("$SCRUB" --for-new-objective FEAT-011 "$TEST_DIR/nazgul")
 assert_contains "all-empty run still no-ops" "$OUTPUT8" "nothing stale to scrub"
 assert_dir_not_exists "all-empty: no archive dir" "$TEST_DIR/nazgul/archive"
+teardown_temp_dir
+
+# --- Test 8b: guard refuses archival while a READY task is open ---
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "READY"
+create_task_file "TASK-002" "DONE"
+OUTPUT_GUARD=$("$SCRUB" --for-new-objective FEAT-012 "$TEST_DIR/nazgul" 2>&1)
+assert_contains "guard refuses: output mentions refusing" "$OUTPUT_GUARD" "refusing"
+assert_file_exists "guard refuses: READY task not archived" "$TEST_DIR/nazgul/tasks/TASK-001.md"
+assert_dir_not_exists "guard refuses: no archive dir created" "$TEST_DIR/nazgul/archive"
+teardown_temp_dir
+
+# --- Test 8c: BLOCKED task also counts as open and prevents archival ---
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "BLOCKED" "none" "test blocker"
+OUTPUT_BLOCKED=$("$SCRUB" --for-new-objective FEAT-013 "$TEST_DIR/nazgul" 2>&1)
+assert_contains "BLOCKED guard: output mentions refusing" "$OUTPUT_BLOCKED" "refusing"
+assert_file_exists "BLOCKED guard: task not archived" "$TEST_DIR/nazgul/tasks/TASK-001.md"
+assert_dir_not_exists "BLOCKED guard: no archive dir created" "$TEST_DIR/nazgul/archive"
 teardown_temp_dir
 
 # --- Test 9: CLAUDE.md Commands list is colon form (no dash-form command refs) ---

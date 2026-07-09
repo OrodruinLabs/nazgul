@@ -43,7 +43,7 @@ fi
 # new one or, if called by mistake, an old one) still has live work in it.
 OPEN_TASKS=0
 if [ -d "$NAZGUL_DIR/tasks" ]; then
-  for status in READY IN_PROGRESS IN_REVIEW IMPLEMENTED CHANGES_REQUESTED; do
+  for status in READY IN_PROGRESS IN_REVIEW IMPLEMENTED CHANGES_REQUESTED BLOCKED; do
     OPEN_TASKS=$((OPEN_TASKS + $(count_tasks_by_status "$NAZGUL_DIR/tasks" "$status")))
   done
 fi
