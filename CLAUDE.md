@@ -201,7 +201,7 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 - `/nazgul-docs` — View or regenerate project documents
 - `/nazgul-patch` — Lightweight task mode for bug fixes, config changes, and small features
 - `/nazgul-verify` — Human acceptance testing for completed tasks
-- `/nazgul-heartbeat` — Run one automation-heartbeat tick by hand: triages `nazgul/inbox/` and auto-starts the next objective if idle and clear. Opt-in and default-off (`automation.heartbeat.enabled: false`); a separate entry path from the main loop with no changes to the sequential or Conductor execution path
+- `/nazgul:heartbeat` — Run one automation-heartbeat tick by hand: triages `nazgul/inbox/` and auto-starts the next objective if idle and clear. Opt-in and default-off (`automation.heartbeat.enabled: false`); a separate entry path from the main loop with no changes to the sequential or Conductor execution path
 - `/nazgul-help` — Quick reference for all commands and modes
 
 ## The 10 Rules for the Nazgul Loop

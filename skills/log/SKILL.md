@@ -55,8 +55,8 @@ For each tick, render seen/triaged/picked plus the outcome for its `decision`:
 |---|---|
 | `disabled` | heartbeat disabled — tick skipped |
 | `nothing_actionable` | seen N, nothing actionable |
-| `skipped` | seen N, picked `<picked>`, skipped (`reason: active_session`) |
-| `started` | seen N, picked `<picked>` → started `<objective>` (archived to `<archived_to>`) |
+| `skipped` | seen N, picked `<picked>`, skipped (`reason: <reason>` — e.g. `active_session`, `unsupported_provider:<value>`, `archive_failed`) |
+| `started` | seen N, picked `<picked>` → started `<objective>` (archived to `<archived_to>`); if `started` is `false`, render as a failed start (`reason: start_command_failed`) instead |
 | `hard_stop` | halted (`<reason>`: `blocked_task` and/or `security_rejection`) |
 
 Sort ticks by `ts` ascending. Fold each into the unified timeline (Step 4) as a `HEARTBEAT` entry.

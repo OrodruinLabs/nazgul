@@ -88,12 +88,24 @@ _hb_objective() {
 # _hb_start <objective> -> invoke the auto-start command with the objective
 # passed as a single argv argument (data, never eval'd/shell-interpolated).
 # Injectable via NAZGUL_HEARTBEAT_START_CMD (called as `$CMD "$objective"`) for
-# testing; defaults to the real `/nazgul:start --yolo --conductor` invocation.
+# testing; defaults to the real `/nazgul:start` invocation, mode/engine flags
+# taken from automation.heartbeat.auto_start.{mode,engine} (default yolo/conductor).
 _hb_start() {
   local objective="$1"
   if [ -n "${NAZGUL_HEARTBEAT_START_CMD:-}" ]; then
     "$NAZGUL_HEARTBEAT_START_CMD" "$objective"
   else
+    local mode engine mode_flag=""
+    mode=$(jq -r '.automation.heartbeat.auto_start.mode // "yolo"' "$CONFIG" 2>/dev/null || echo "yolo")
+    engine=$(jq -r '.automation.heartbeat.auto_start.engine // "conductor"' "$CONFIG" 2>/dev/null || echo "conductor")
+    case "$mode" in
+      afk) mode_flag="--afk" ;;
+      hitl) mode_flag="--hitl" ;;
+      *) mode_flag="--yolo" ;;
+    esac
+    local engine_flag=""
+    [ "$engine" = "conductor" ] && engine_flag="--conductor"
+
     # apply-start-flags.sh later strips this span with a literal-quote-paired
     # sed scan that is inherently line-bounded, so a raw `"` or an embedded
     # newline in the objective would close/split the span early and expose
@@ -101,7 +113,7 @@ _hb_start() {
     local safe_objective="${objective//\"/\'}"
     safe_objective="${safe_objective//$'\n'/ }"
     safe_objective="${safe_objective//$'\r'/ }"
-    (cd "$PROJECT_ROOT" && claude -p "/nazgul:start \"$safe_objective\" --yolo --conductor")
+    (cd "$PROJECT_ROOT" && claude -p "/nazgul:start \"$safe_objective\" $mode_flag $engine_flag")
   fi
 }
 

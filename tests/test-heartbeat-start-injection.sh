@@ -124,4 +124,53 @@ run_injection_scenario() {
 run_injection_scenario "quote-breakout" 'evil" --max 999999 --afk "x'
 run_injection_scenario "newline-breakout" $'evil\n--max 999999 --afk x'
 
+# --- auto_start.{mode,engine} must actually be read, not hardcoded ---
+run_auto_start_scenario() {
+  local label="$1" mode="$2" engine="$3" expect_present="$4" expect_absent="$5"
+
+  setup_temp_dir
+  setup_nazgul_dir
+  create_config ".automation.heartbeat.enabled = true | .automation.heartbeat.auto_start.mode = \"$mode\" | .automation.heartbeat.auto_start.engine = \"$engine\""
+  mkdir -p "$TEST_DIR/nazgul/inbox"
+  jq -n '{title:"FEAT-999 test objective", body:"do the thing", priority:1}' > "$TEST_DIR/nazgul/inbox/cand.json"
+  write_fake_claude
+  export PATH="$FAKEBIN:$PATH"
+  export NAZGUL_TEST_CLAUDE_ARGV="$TEST_DIR/claude-argv.txt"
+  unset NAZGUL_HEARTBEAT_START_CMD 2>/dev/null || true
+
+  local resolved_claude
+  resolved_claude=$(command -v claude)
+  if [ "$resolved_claude" != "$FAKEBIN/claude" ]; then
+    _fail "[$label] PATH resolves to the fake claude (safety gate)" \
+      "expected: '$FAKEBIN/claude'" "  actual: '$resolved_claude'"
+    teardown_temp_dir
+    rm -rf "$FAKEBIN"
+    report_results
+    exit 1
+  fi
+
+  bash "$REPO_ROOT/scripts/heartbeat.sh"
+  local startcmd
+  startcmd=$(cat "$NAZGUL_TEST_CLAUDE_ARGV.prompt")
+  # Not assert_contains: its grep -qF chokes on a needle starting with "--"
+  # (grep parses it as an unrecognized option). Plain case-pattern match instead.
+  case "$startcmd" in
+    *"$expect_present"*) assert_eq "[$label] $expect_present present" "found" "found" ;;
+    *) assert_eq "[$label] $expect_present present" "not found" "found" ;;
+  esac
+  case "$startcmd" in
+    *"$expect_absent"*) assert_eq "[$label] $expect_absent absent" "found" "not found" ;;
+    *) assert_eq "[$label] $expect_absent absent" "not found" "not found" ;;
+  esac
+
+  unset NAZGUL_TEST_CLAUDE_ARGV
+  teardown_temp_dir
+  rm -rf "$FAKEBIN"
+}
+
+run_auto_start_scenario "default mode/engine" "yolo" "conductor" "--yolo" "--afk"
+run_auto_start_scenario "mode=afk" "afk" "conductor" "--afk" "--yolo"
+run_auto_start_scenario "mode=hitl" "hitl" "sequential" "--hitl" "--conductor"
+run_auto_start_scenario "engine=sequential omits --conductor" "yolo" "sequential" "--yolo" "--conductor"
+
 report_results
