@@ -98,6 +98,23 @@ The `conductor` block configures the conductor engine's gates and parallelism, a
 
 In `--hitl` mode, `scripts/lib/conductor-gates.sh` forces the *effective* `approve_graph` gate to `true` regardless of the stored value — the stored config default stays `false`. Every other gate always equals its stored value in every mode.
 
+## Automation Heartbeat
+
+`automation.heartbeat` configures an opt-in, default-off tick engine (`scripts/heartbeat.sh`) that triages a local work inbox (`nazgul/inbox/`) and auto-starts the next objective when idle. Fire a tick by hand with `/nazgul:heartbeat`, or point an opt-in Claude Code native scheduled agent (routine) at that skill on your chosen interval — the plugin itself wires no OS cron / `claude -p` scheduling (deferred to FEAT-009).
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `automation.heartbeat.enabled` | `false` | Master switch. `false` means every tick is a `decision: disabled` no-op before any inbox read. |
+| `automation.heartbeat.interval` | `"30m"` | Suggested firing interval for the scheduled-agent routine you configure outside the plugin — not enforced by the script itself. |
+| `automation.heartbeat.inbox.provider` | `"file"` | Inbox provider behind the `inbox_list`/`inbox_get`/`inbox_archive` seam (`scripts/lib/inbox-provider.sh`). Only `file` ships today; a GitHub/Linear provider is the FEAT-009 slot. |
+| `automation.heartbeat.inbox.dir` | `"nazgul/inbox"` | Directory scanned for `.md`/`.json` candidates; claimed candidates move to `<dir>/archive/`. |
+| `automation.heartbeat.auto_start.mode` | `"yolo"` | Mode passed to `/nazgul:start` when a candidate is picked and no session is active. |
+| `automation.heartbeat.auto_start.engine` | `"conductor"` | Execution engine passed to `/nazgul:start` for the auto-started objective. |
+
+Two unconditional hard stops (a `BLOCKED` task, a non-`APPROVE` security-reviewer verdict) halt every tick regardless of `enabled` or `mode` — see RULES.md §13. The session-tracker concurrency guard (`scripts/lib/session-tracker.sh`) refuses to auto-start over an active session, and the picked candidate is archived before `/nazgul:start` is invoked (atomic claim-then-archive, never double-started). Every tick appends one decision record to `nazgul/logs/heartbeat-<date>.jsonl`, surfaced via `/nazgul:log`.
+
+Added by the additive `migrate_20_to_21` migration (schema v20→v21); existing projects upgrade automatically — see Config Upgrades below.
+
 ## Lean Comments Guard
 
 `scripts/lean-comments-guard.sh` is a deterministic PreToolUse guard (on `Write`/`Edit`/`MultiEdit`) that **blocks comment bloat at write time**, so verbose comments can't reach the review board and get auto-approved as a low-confidence CONCERN. The code reviewer also treats the same violations as always-blocking. The implementer and simplifier run it as a pre-commit-style check: `scripts/lean-comments-guard.sh --check <files>`.
