@@ -14,7 +14,7 @@ setup() {
   jq -n '{schema_version:20,execution:{engine:"conductor"},conductor:{enforce:{rework_guard:true}}}' > "$WORK/nazgul/config.json"
   : > "$WORK/nazgul/conductor/.session"
   jq -n '{tasks:{
-    "TASK-001":{status:"DONE",commit_sha:"abc1234",file_scope:["scripts/lib/inbox-provider.sh"]},
+    "TASK-001":{status:"DONE",commit:"abc1234",file_scope:["scripts/lib/inbox-provider.sh"]},
     "TASK-002":{status:"READY",file_scope:["scripts/heartbeat.sh"]}
   }}' > "$WORK/nazgul/conductor/graph.json"
 }
@@ -56,7 +56,7 @@ setup; jq 'del(.conductor.enforce.rework_guard)' "$WORK/nazgul/config.json" > "$
 assert_eq "absent enforce key still denies" "$(guard_ec "scripts/lib/inbox-provider.sh")" "2"
 teardown
 
-# 8. IMPLEMENTED status (not just DONE) with commit_sha -> DENY
+# 8. IMPLEMENTED status (not just DONE) with a commit -> DENY
 setup; jq '.tasks["TASK-001"].status="IMPLEMENTED"' "$WORK/nazgul/conductor/graph.json" > "$WORK/g" && mv "$WORK/g" "$WORK/nazgul/conductor/graph.json"
 assert_eq "IMPLEMENTED with commit denied" "$(guard_ec "scripts/lib/inbox-provider.sh")" "2"
 teardown
@@ -66,7 +66,7 @@ teardown
 # even though the edited path ends with "/scripts/heartbeat.sh". Make
 # TASK-002 committed for this case so the collision is actually exercised.
 setup
-jq '.tasks["TASK-002"].status="DONE" | .tasks["TASK-002"].commit_sha="def5678"' \
+jq '.tasks["TASK-002"].status="DONE" | .tasks["TASK-002"].commit="def5678"' \
   "$WORK/nazgul/conductor/graph.json" > "$WORK/g" && mv "$WORK/g" "$WORK/nazgul/conductor/graph.json"
 assert_eq "suffix-collision path allowed" "$(guard_ec "other/scripts/heartbeat.sh")" "0"
 teardown
