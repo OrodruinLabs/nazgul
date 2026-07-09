@@ -63,7 +63,11 @@ for rel in learning/proposed-rules.md learning/.distilled logs/.docs-verified; d
   [ -f "$NAZGUL_DIR/$rel" ] && STALE_LEARNING+=("$rel")
 done
 
-if [ "$STALE_REVIEWS" -eq 0 ] && [ "${#STALE_LEARNING[@]}" -eq 0 ]; then
+shopt -s nullglob
+STALE_TASKS=("$NAZGUL_DIR"/tasks/TASK-*.md)
+shopt -u nullglob
+
+if [ "$STALE_REVIEWS" -eq 0 ] && [ "${#STALE_LEARNING[@]}" -eq 0 ] && [ "${#STALE_TASKS[@]}" -eq 0 ]; then
   echo "scrub-stale-review-artifacts: nothing stale to scrub."
   exit 0
 fi
@@ -83,6 +87,11 @@ if [ "${#STALE_LEARNING[@]}" -gt 0 ]; then
   done
 fi
 
-mkdir -p "$NAZGUL_DIR/reviews"
+if [ "${#STALE_TASKS[@]}" -gt 0 ]; then
+  mkdir -p "$ARCHIVE_DIR/tasks"
+  mv "${STALE_TASKS[@]}" "$ARCHIVE_DIR/tasks/"
+fi
+
+mkdir -p "$NAZGUL_DIR/reviews" "$NAZGUL_DIR/tasks"
 
 echo "scrub-stale-review-artifacts: archived stale artifacts to $ARCHIVE_DIR"
