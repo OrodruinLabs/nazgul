@@ -26,10 +26,13 @@ set -euo pipefail
 # recurse into quoted strings or command substitutions, so `bash -c 'git
 # commit'` or `true "$(git commit)"` are invisible to it (same documented
 # blind spot as `scripts/local-mode-tracking-guard.sh`). As a compensating
-# fallback, when no segment is tokenized as a commit, a raw substring check
-# for `git` + `commit` (adjacent, whitespace-separated) is run against the
-# ORIGINAL command text; a match is resolved against `$CLAUDE_PROJECT_DIR`
-# itself (erring toward block) rather than silently allowed.
+# control, a raw substring check for `git` + `commit` (adjacent,
+# whitespace-separated) always runs against the ORIGINAL command text, in
+# ADDITION to the precise per-segment pass, not only when the precise pass
+# finds nothing — a tokenizer-visible commit segment elsewhere in the same
+# compound command must not suppress detection of a co-occurring
+# interpreter-wrapped one. A substring hit is resolved against
+# `$CLAUDE_PROJECT_DIR` itself (erring toward block) rather than allowed.
 
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 CONFIG="$PROJECT_ROOT/nazgul/config.json"
@@ -195,14 +198,16 @@ if [ -n "$DETECT_OUT" ]; then
   done <<< "$DETECT_OUT"
 fi
 
-# Fallback pass (B2): the precise tokenizer found no top-level `git ... commit`
-# segment at all, meaning this command may be wrapping a real commit inside an
-# interpreter (`bash -c '...'`) or command substitution (`$(...)`, backticks)
-# that the bounded tokenizer intentionally does not recurse into. Restore the
-# old whole-string substring trigger against the RAW command text; on a match,
+# Fallback pass (B2/B3): the bounded tokenizer does not recurse into quotes or
+# command substitutions, so a real commit wrapped in an interpreter
+# (`bash -c '...'`) or substitution (`$(...)`, backticks) is invisible to it —
+# regardless of whether ANOTHER, tokenizer-visible commit segment is also
+# present in the same compound command (B3: a decoy/allowed segment must not
+# suppress this check for the rest of the command). Always run the old
+# whole-string substring trigger against the RAW command text; on a match,
 # resolve conservatively against `$CLAUDE_PROJECT_DIR` itself rather than
 # silently allowing.
-if [ -z "$DETECT_OUT" ] && printf '%s' "$CMD" | grep -qiE 'git\s+commit'; then
+if printf '%s' "$CMD" | grep -qiE 'git\s+commit'; then
   block_if_target_on_base "$PROJECT_ROOT"
 fi
 

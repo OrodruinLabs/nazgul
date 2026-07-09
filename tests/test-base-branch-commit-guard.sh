@@ -333,4 +333,68 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "B2: bash -c 'git commit' on feature branch → exit 0" "$GUARD_EC" 0
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# B3 REGRESSION FIX: a tokenizer-visible allowed/decoy commit segment must not
+# suppress the fallback for a co-occurring interpreter-wrapped real commit in
+# the SAME compound command.
+# ---------------------------------------------------------------------------
+
+# B3: bogus-path decoy segment (tokenizer-visible, resolves to allow) followed
+# by a wrapped real commit on base branch → still BLOCKED (the fallback must
+# run regardless of the decoy).
+setup_temp_dir
+setup_nazgul_dir
+init_git_on_branch "main"
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"branch":{"base":"main","feature":"feat/FEAT-002-x"}}
+EOF
+input=$(make_bash_input "git -C /nazgul-test-does-not-exist-xyz commit -m 'decoy' ; bash -c 'git commit -m real'")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "B3: tokenizer-visible decoy + wrapped real commit on base → exit 2" "$GUARD_EC" 2
+teardown_temp_dir
+
+# B3: a genuine other-repo commit segment (tokenizer-visible, correctly
+# allowed) followed by a wrapped real commit on base branch → still BLOCKED.
+setup_temp_dir
+setup_nazgul_dir
+init_git_on_branch "main"
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"branch":{"base":"main","feature":"feat/FEAT-002-x"}}
+EOF
+setup_other_repo
+input=$(make_bash_input "git -C $OTHER_DIR commit -m 'decoy' ; bash -c 'git commit -m real'")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "B3: genuine other-repo decoy + wrapped real commit on base → exit 2" "$GUARD_EC" 2
+teardown_other_repo
+teardown_temp_dir
+
+# B3: same combined shape, but on the FEATURE branch (not base) → still
+# ALLOWED — confirms the unconditional fallback does not over-block.
+setup_temp_dir
+setup_nazgul_dir
+init_git_on_branch "feat/FEAT-002-x"
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"branch":{"base":"main","feature":"feat/FEAT-002-x"}}
+EOF
+input=$(make_bash_input "git -C /nazgul-test-does-not-exist-xyz commit -m 'decoy' ; bash -c 'git commit -m real'")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "B3: decoy + wrapped commit on feature branch → exit 0" "$GUARD_EC" 0
+teardown_temp_dir
+
+# B3: genuine other-repo commit alone (no hidden real commit) on base branch
+# → still ALLOWED — the unconditional fallback must not fire when the raw
+# text has no `git`+`commit` adjacency (an intervening `-C <path>` breaks it).
+setup_temp_dir
+setup_nazgul_dir
+init_git_on_branch "main"
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"branch":{"base":"main","feature":"feat/FEAT-002-x"}}
+EOF
+setup_other_repo
+input=$(make_bash_input "git -C $OTHER_DIR commit -m 'genuinely unrelated'")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "B3: standalone genuine other-repo commit on base → exit 0 (no over-block)" "$GUARD_EC" 0
+teardown_other_repo
+teardown_temp_dir
+
 report_results
