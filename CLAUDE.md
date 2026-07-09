@@ -185,24 +185,24 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 - `nazgul/logs/heartbeat-*.jsonl` — One decision record per heartbeat tick (one file per UTC day)
 
 ## Commands
-- `/nazgul-init` — First-time setup: run Discovery, generate reviewers, create runtime dirs
-- `/nazgul-start` — Auto-detects project state and continues or starts work (derives objective from context)
-- `/nazgul-start "objective"` — Override: start a specific new objective (flags: --afk, --yolo, --hitl, --max N, --conductor)
-- `/nazgul-status` — Check loop progress, task counts, reviewer board
-- `/nazgul-task` — Task lifecycle: skip, unblock, add, prioritize, info, list
-- `/nazgul-pause` — Gracefully pause the loop at next iteration boundary
-- `/nazgul-log` — View run history: iterations, commits, reviews, blockers
-- `/nazgul-reset` — Archive current state and reset to clean slate
-- `/nazgul-clean` — Fully remove Nazgul from this project
-- `/nazgul-review` — Manually trigger review for a task
-- `/nazgul-discover` — Re-run codebase discovery
-- `/nazgul-context` — Collect targeted context for an objective type
-- `/nazgul-simplify` — Post-loop cleanup pass on modified files
-- `/nazgul-docs` — View or regenerate project documents
-- `/nazgul-patch` — Lightweight task mode for bug fixes, config changes, and small features
-- `/nazgul-verify` — Human acceptance testing for completed tasks
+- `/nazgul:init` — First-time setup: run Discovery, generate reviewers, create runtime dirs
+- `/nazgul:start` — Auto-detects project state and continues or starts work (derives objective from context)
+- `/nazgul:start "objective"` — Override: start a specific new objective (flags: --afk, --yolo, --hitl, --max N, --conductor)
+- `/nazgul:status` — Check loop progress, task counts, reviewer board
+- `/nazgul:task` — Task lifecycle: skip, unblock, add, prioritize, info, list
+- `/nazgul:pause` — Gracefully pause the loop at next iteration boundary
+- `/nazgul:log` — View run history: iterations, commits, reviews, blockers
+- `/nazgul:reset` — Archive current state and reset to clean slate
+- `/nazgul:clean` — Fully remove Nazgul from this project
+- `/nazgul:review` — Manually trigger review for a task
+- `/nazgul:discover` — Re-run codebase discovery
+- `/nazgul:context` — Collect targeted context for an objective type
+- `/nazgul:simplify` — Post-loop cleanup pass on modified files
+- `/nazgul:docs` — View or regenerate project documents
+- `/nazgul:patch` — Lightweight task mode for bug fixes, config changes, and small features
+- `/nazgul:verify` — Human acceptance testing for completed tasks
 - `/nazgul:heartbeat` — Run one automation-heartbeat tick by hand: triages `nazgul/inbox/` and auto-starts the next objective if idle and clear. Opt-in and default-off (`automation.heartbeat.enabled: false`); a separate entry path from the main loop with no changes to the sequential or Conductor execution path
-- `/nazgul-help` — Quick reference for all commands and modes
+- `/nazgul:help` — Quick reference for all commands and modes
 
 ## The 10 Rules for the Nazgul Loop
 
