@@ -56,9 +56,15 @@ setup; jq 'del(.conductor.enforce.rework_guard)' "$WORK/nazgul/config.json" > "$
 assert_eq "absent enforce key still denies" "$(guard_ec "scripts/lib/inbox-provider.sh")" "2"
 teardown
 
-# 8. IMPLEMENTED status (not just DONE) with a commit -> DENY
-setup; jq '.tasks["TASK-001"].status="IMPLEMENTED"' "$WORK/nazgul/conductor/graph.json" > "$WORK/g" && mv "$WORK/g" "$WORK/nazgul/conductor/graph.json"
-assert_eq "IMPLEMENTED with commit denied" "$(guard_ec "scripts/lib/inbox-provider.sh")" "2"
+# 8. IMPLEMENTED status (not just DONE) with a commit AND dispatched:true (the
+# real production shape through the whole review window, since dispatched is
+# never cleared) -> still DENY. Without excluding committed tasks from the
+# CURRENT filter, TASK-001 would match itself as CURRENT (OWNER==CURRENT
+# self-collision) and wrongly exit 0.
+setup
+jq '.tasks["TASK-001"].status="IMPLEMENTED" | .tasks["TASK-001"].dispatched=true' \
+  "$WORK/nazgul/conductor/graph.json" > "$WORK/g" && mv "$WORK/g" "$WORK/nazgul/conductor/graph.json"
+assert_eq "IMPLEMENTED+dispatched with commit denied (no self-collision)" "$(guard_ec "scripts/lib/inbox-provider.sh")" "2"
 teardown
 
 # 9. suffix-collision false positive: editing other/scripts/heartbeat.sh must
@@ -102,6 +108,20 @@ setup
 jq '.tasks["TASK-003"]={status:"IN_PROGRESS",dispatched:true,file_scope:["scripts/other.sh"]}' \
   "$WORK/nazgul/conductor/graph.json" > "$WORK/g" && mv "$WORK/g" "$WORK/nazgul/conductor/graph.json"
 assert_eq "rework outside current task's own scope still denied" \
+  "$(guard_ec "scripts/lib/inbox-provider.sh")" "2"
+teardown
+
+# 13. ambiguous CURRENT (parallel wave): TWO simultaneously-dispatched,
+# uncommitted units (TASK-003 and TASK-004) both declare the target file in
+# their own file_scope. The guard has no caller-identity signal to tell which
+# one is actually issuing the write, so it must fail closed and DENY rather
+# than trust either borrowed scope — this is the exact "unit A's scope
+# exempts unit B's edit" hole the exemption must not reopen.
+setup
+jq '.tasks["TASK-003"]={status:"IN_PROGRESS",dispatched:true,file_scope:["scripts/lib/inbox-provider.sh"]}
+  | .tasks["TASK-004"]={status:"IN_PROGRESS",dispatched:true,file_scope:["scripts/lib/inbox-provider.sh"]}' \
+  "$WORK/nazgul/conductor/graph.json" > "$WORK/g" && mv "$WORK/g" "$WORK/nazgul/conductor/graph.json"
+assert_eq "ambiguous two-unit CURRENT match denied (fail closed)" \
   "$(guard_ec "scripts/lib/inbox-provider.sh")" "2"
 teardown
 
