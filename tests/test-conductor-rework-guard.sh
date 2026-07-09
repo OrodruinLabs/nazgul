@@ -84,4 +84,25 @@ assert_eq "private-symlink absolute path denied" \
   "$(guard_ec "/private${WORK}/scripts/lib/inbox-provider.sh")" "2"
 teardown
 
+# 11. cross-cutting exemption: TASK-003 is the current in-progress unit and
+# ALSO declares scripts/lib/inbox-provider.sh in its own file_scope (a
+# cross-cutting task touching a file TASK-001 already committed). The edit
+# must be ALLOWED even though TASK-001 owns and committed that same file.
+setup
+jq '.tasks["TASK-003"]={status:"IN_PROGRESS",dispatched:true,file_scope:["scripts/lib/inbox-provider.sh"]}' \
+  "$WORK/nazgul/conductor/graph.json" > "$WORK/g" && mv "$WORK/g" "$WORK/nazgul/conductor/graph.json"
+assert_eq "cross-cutting edit in current task's own scope allowed" \
+  "$(guard_ec "scripts/lib/inbox-provider.sh")" "0"
+teardown
+
+# 12. true rework still blocked: TASK-003 is in-progress but does NOT declare
+# scripts/lib/inbox-provider.sh in its own scope, so editing it is still
+# rework of TASK-001's committed file, not a cross-cutting edit.
+setup
+jq '.tasks["TASK-003"]={status:"IN_PROGRESS",dispatched:true,file_scope:["scripts/other.sh"]}' \
+  "$WORK/nazgul/conductor/graph.json" > "$WORK/g" && mv "$WORK/g" "$WORK/nazgul/conductor/graph.json"
+assert_eq "rework outside current task's own scope still denied" \
+  "$(guard_ec "scripts/lib/inbox-provider.sh")" "2"
+teardown
+
 report_results
