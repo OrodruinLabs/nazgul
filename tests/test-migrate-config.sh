@@ -1165,25 +1165,25 @@ assert_eq "v21 config → no output (terminal no-op)" "$OUTPUT" ""
 assert_json_field "v21 terminal → schema_version still 21" "$NAZGUL_DIR/config.json" ".schema_version" "21"
 
 # --- chain test: v1 → v21 completes ---
-NAZGUL_DIR=$(setup_nazgul_dir "v1-to-19-chain")
+NAZGUL_DIR=$(setup_nazgul_dir "v1-to-21-chain")
 cat > "$NAZGUL_DIR/config.json" << 'EOF'
 { "mode": "hitl" }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
-assert_contains "v1→v19 chain migrated" "$OUTPUT" "migrated"
+assert_contains "v1→v21 chain migrated" "$OUTPUT" "migrated"
 assert_json_field "v1→v21 chain reaches schema_version 21" "$NAZGUL_DIR/config.json" ".schema_version" "21"
-assert_json_field "v1→v19 chain granularity is group" "$NAZGUL_DIR/config.json" ".review_gate.granularity" "group"
-assert_json_field "v1→v19 chain post_loop is sonnet" "$NAZGUL_DIR/config.json" ".models.post_loop" "sonnet"
-assert_json_field "v1→v19 chain wave_execution is true" "$NAZGUL_DIR/config.json" ".parallelism.wave_execution" "true"
-assert_json_field "v1→v19 chain docs.verify_post_loop is true" "$NAZGUL_DIR/config.json" ".docs.verify_post_loop" "true"
-assert_json_field "v1→v19 chain review_gate.require_provenance is true" "$NAZGUL_DIR/config.json" ".review_gate.require_provenance" "true"
-assert_json_field "v1→v19 chain review_gate.conditional_dispatch is false" "$NAZGUL_DIR/config.json" ".review_gate.conditional_dispatch" "false"
-assert_json_field "v1→v19 chain docs.verify_comments is true" "$NAZGUL_DIR/config.json" ".docs.verify_comments" "true"
-assert_json_field "v1→v19 chain models.review is haiku" "$NAZGUL_DIR/config.json" ".models.review" "haiku"
-assert_json_field "v1→v19 chain models.review_by_reviewer security-reviewer is sonnet" "$NAZGUL_DIR/config.json" '.models.review_by_reviewer["security-reviewer"]' "sonnet"
-assert_json_field "v1→v19 chain execution.engine is sequential" "$NAZGUL_DIR/config.json" ".execution.engine" "sequential"
-assert_json_field "v1→v19 chain conductor.gates.approve_graph is false" "$NAZGUL_DIR/config.json" ".conductor.gates.approve_graph" "false"
-assert_json_field "v1→v19 chain conductor.max_parallel is 3" "$NAZGUL_DIR/config.json" ".conductor.max_parallel" "3"
+assert_json_field "v1→v21 chain granularity is group" "$NAZGUL_DIR/config.json" ".review_gate.granularity" "group"
+assert_json_field "v1→v21 chain post_loop is sonnet" "$NAZGUL_DIR/config.json" ".models.post_loop" "sonnet"
+assert_json_field "v1→v21 chain wave_execution is true" "$NAZGUL_DIR/config.json" ".parallelism.wave_execution" "true"
+assert_json_field "v1→v21 chain docs.verify_post_loop is true" "$NAZGUL_DIR/config.json" ".docs.verify_post_loop" "true"
+assert_json_field "v1→v21 chain review_gate.require_provenance is true" "$NAZGUL_DIR/config.json" ".review_gate.require_provenance" "true"
+assert_json_field "v1→v21 chain review_gate.conditional_dispatch is false" "$NAZGUL_DIR/config.json" ".review_gate.conditional_dispatch" "false"
+assert_json_field "v1→v21 chain docs.verify_comments is true" "$NAZGUL_DIR/config.json" ".docs.verify_comments" "true"
+assert_json_field "v1→v21 chain models.review is haiku" "$NAZGUL_DIR/config.json" ".models.review" "haiku"
+assert_json_field "v1→v21 chain models.review_by_reviewer security-reviewer is sonnet" "$NAZGUL_DIR/config.json" '.models.review_by_reviewer["security-reviewer"]' "sonnet"
+assert_json_field "v1→v21 chain execution.engine is sequential" "$NAZGUL_DIR/config.json" ".execution.engine" "sequential"
+assert_json_field "v1→v21 chain conductor.gates.approve_graph is false" "$NAZGUL_DIR/config.json" ".conductor.gates.approve_graph" "false"
+assert_json_field "v1→v21 chain conductor.max_parallel is 3" "$NAZGUL_DIR/config.json" ".conductor.max_parallel" "3"
 assert_json_field "v1→v20 chain conductor.enforce.dispatch_guard is true" "$NAZGUL_DIR/config.json" ".conductor.enforce.dispatch_guard" "true"
 assert_json_field "v1→v21 chain automation.heartbeat.enabled is false" "$NAZGUL_DIR/config.json" ".automation.heartbeat.enabled" "false"
 assert_json_field "v1→v21 chain automation.heartbeat.auto_start.engine is conductor" "$NAZGUL_DIR/config.json" ".automation.heartbeat.auto_start.engine" "conductor"

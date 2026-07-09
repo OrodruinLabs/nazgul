@@ -292,7 +292,8 @@ These five layers sit underneath, not instead of, the two unconditional hard sto
 
 ## 13. Automation Heartbeat
 
-`scripts/heartbeat.sh` (FEAT-008) is a trigger-agnostic tick engine: one POSIX-safe script that reuses
+`scripts/heartbeat.sh` (FEAT-008) is a trigger-agnostic tick engine: a single `bash` script (`#!/usr/bin/env bash`,
+not portable POSIX `sh` — it uses bash-only parameter expansion) that reuses
 the Conductor's own hard-stop and session-tracker libraries rather than reimplementing them, fired
 either by hand (`/nazgul:heartbeat`, `skills/heartbeat/SKILL.md`) or by an opt-in Claude Code native
 scheduled agent (routine) configured entirely outside this plugin. `hooks/hooks.json` does not wire it to

@@ -137,7 +137,11 @@ INBOX_DIR="$PROJECT_ROOT/$INBOX_REL"
 
 SEEN_LIST=$(inbox_list "$INBOX_DIR" 2>/dev/null || true)
 if [ -n "$SEEN_LIST" ]; then
-  SEEN_COUNT=$(printf '%s\n' "$SEEN_LIST" | grep -c '.')
+  # grep -c exits 1 on zero matches (e.g. a provider ever yielding a blank
+  # entry) — under set -e that would abort the tick with no decision record
+  # at all. `|| true` keeps the correct "0" grep already prints on stdout
+  # without letting its exit status kill the script.
+  SEEN_COUNT=$(printf '%s\n' "$SEEN_LIST" | grep -c '.' || true)
   TRIAGED_JSON=$(printf '%s\n' "$SEEN_LIST" | jq -R . | jq -s .)
 else
   SEEN_COUNT=0
