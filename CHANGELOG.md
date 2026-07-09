@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.11.0] - 2026-07-09
+
+### Added
+- **Opt-in Automation Heartbeat (FEAT-008).** A default-off (`automation.heartbeat.enabled: false`), trigger-agnostic tick engine (`scripts/heartbeat.sh`) lets Nazgul pick up unattended work between sessions. It is fired by hand via `/nazgul:heartbeat` (`skills/heartbeat/SKILL.md`) or by an opt-in Claude Code native scheduled agent configured outside the plugin — the heartbeat is never wired to any hook, and running it is a no-op change to the sequential or Conductor execution paths.
+- **Inbox-provider seam.** `scripts/lib/inbox-provider.sh` ships a file provider (`nazgul/inbox/*.md|json`, archived on claim to `nazgul/inbox/archive/`) behind a seam a future GitHub/Linear provider can drop into without touching the tick engine; those real connectors are deferred to FEAT-009.
+- **Deterministic triage.** `scripts/lib/heartbeat-triage.sh` picks one objective (or reports "nothing actionable") from the inbox candidates using `jq` only — no `eval` is run over inbox or objective text at any point in the pipeline.
+- **Session-guarded, hardened auto-start.** When `count_active_sessions` (`scripts/lib/session-tracker.sh`) reports no active session, the heartbeat starts the picked objective via `/nazgul:start --yolo --conductor`; otherwise it logs a no-op rather than colliding with a running loop. The auto-start objective is truncated to its first line and has embedded `"`/`\n`/`\r` neutralized before being spliced into the `claude -p` command, closing both a quote-breakout and a newline flag-injection vector (`tests/test-heartbeat-start-injection.sh`).
+- **Two unconditional hard stops carried over to heartbeat mode.** Any `BLOCKED` task or any security rejection halts the tick regardless of `enabled` or `mode` (including yolo), reusing the same `conductor_should_halt` (`scripts/lib/conductor-gates.sh`) the Conductor engine already enforces.
+- **Atomic, idempotent consumption.** Inbox items are claimed via `mv -f` into `nazgul/inbox/archive/` before start, so a crash mid-tick can't double-process a candidate (`tests/test-heartbeat-idempotency.sh`).
+- **Auditable decision records.** Every tick writes one JSON line to `nazgul/logs/heartbeat-*.jsonl` (one file per UTC day), surfaced via `/nazgul:log` (`skills/log/SKILL.md`).
+- **Config schema v20 → v21.** `migrate_20_to_21` adds `automation.heartbeat` additively: `enabled` (default `false`), `interval` (`"30m"`), `inbox.{provider,dir}` (`"file"`, `"nazgul/inbox"`), `auto_start.{mode,engine}` (`"yolo"`, `"conductor"`) — existing values preserved.
+- **RULES.md gained an Automation Heartbeat section** documenting the tick lifecycle, the hardened auto-start sink, and the honest tier of each control (session guard and hard stops are `[enforced]`; interval scheduling itself is `[advisory]`, left to the external trigger).
+
+Real connectors (Linear/Slack/CI), two-way sync, the GitHub inbox provider, OS cron/`claude -p` scheduling, and any default-flip to "on" are deferred to FEAT-009.
+
 ## [2.10.0] - 2026-07-08
 
 ### Added
