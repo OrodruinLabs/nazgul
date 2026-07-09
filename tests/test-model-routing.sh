@@ -66,4 +66,53 @@ assert_contains "discovery references models.review" "$discovery_content" "model
 help_content=$(cat "$REPO_ROOT/skills/help/SKILL.md")
 assert_contains "help lists /nazgul:config" "$help_content" "nazgul:config"
 
+# ── Test: conductor dispatch passes models.conductor explicitly (ADR-002 Option 2) ──
+start_content=$(cat "$REPO_ROOT/skills/start/SKILL.md")
+assert_contains "start dispatches nazgul:conductor with explicit model" "$start_content" \
+  'subagent_type: "nazgul:conductor"`, `model: "$(jq -r '\''.models.conductor // "sonnet"'\'' nazgul/config.json)"`'
+assert_contains "start Model Selection table lists a Conductor row" "$start_content" "| Conductor"
+assert_contains "start Model Selection table Conductor row keys off models.conductor" "$start_content" "models.conductor"
+assert_contains "start Model Selection table Review Gate row keys off models.review_orchestrator" "$start_content" "models.review_orchestrator"
+
+# ── Test: agents/conductor.md resolves MODEL_REVIEW via the orchestrator fallback chain ──
+conductor_content=$(cat "$REPO_ROOT/agents/conductor.md")
+assert_contains "conductor MODEL_REVIEW reads review_orchestrator with legacy fallback" "$conductor_content" \
+  'MODEL_REVIEW=$(jq -r '"'"'.models.review_orchestrator // .models.review // "sonnet"'"'"' "$CONFIG")'
+
+# ── Test: agents/review-gate.md resolves reviewer-default + feedback-aggregator via the reviewer-default fallback chain ──
+review_gate_content=$(cat "$REPO_ROOT/agents/review-gate.md")
+assert_contains "review-gate reviewer-default fallback reads review_default with legacy fallback" "$review_gate_content" \
+  'models.review_default // models.review // "haiku"'
+assert_contains "review-gate reviewer-default fallback still pins security/architect to sonnet" "$review_gate_content" \
+  "ALWAYS resolve to \`sonnet\`"
+assert_contains "review-gate feedback-aggregator model uses the same fallback chain" "$review_gate_content" \
+  'feedback-aggregator to consolidate feedback (use `models.review_default // models.review // "haiku"`'
+
+# ── Test: three-way fallback resolution (legacy-only / new-only / neither) ──
+resolve_review_orchestrator() {
+  jq -r '.models.review_orchestrator // .models.review // "sonnet"' <<<"$1"
+}
+resolve_review_default() {
+  jq -r '.models.review_default // .models.review // "haiku"' <<<"$1"
+}
+
+legacy_only='{"models":{"review":"opus"}}'
+new_only='{"models":{"review_orchestrator":"opus","review_default":"opus"}}'
+neither='{"models":{}}'
+
+assert_eq "orchestrator fallback: legacy-only models.review wins" \
+  "$(resolve_review_orchestrator "$legacy_only")" "opus"
+assert_eq "reviewer-default fallback: legacy-only models.review wins" \
+  "$(resolve_review_default "$legacy_only")" "opus"
+
+assert_eq "orchestrator fallback: new-only models.review_orchestrator wins" \
+  "$(resolve_review_orchestrator "$new_only")" "opus"
+assert_eq "reviewer-default fallback: new-only models.review_default wins" \
+  "$(resolve_review_default "$new_only")" "opus"
+
+assert_eq "orchestrator fallback: neither key set defaults to sonnet" \
+  "$(resolve_review_orchestrator "$neither")" "sonnet"
+assert_eq "reviewer-default fallback: neither key set defaults to haiku" \
+  "$(resolve_review_default "$neither")" "haiku"
+
 report_results

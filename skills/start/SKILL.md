@@ -74,7 +74,8 @@ Read `nazgul/config.json → models` to determine which model to assign each pip
 | Doc Generator     | `models.docs`         | sonnet  |
 | Planner           | `models.planning`     | opus    |
 | Implementer       | `models.implementation` | sonnet |
-| Review Gate       | `models.review`       | sonnet  |
+| Review Gate       | `models.review_orchestrator` | sonnet |
+| Conductor         | `models.conductor`    | sonnet  |
 
 If the `models` section is missing from config.json, use `"sonnet"` as the fallback for all agents.
 
@@ -122,7 +123,7 @@ Determine the run mode:
 
 Read `nazgul/config.json → execution.engine`:
 - `"sequential"` (default, or unset) — no change. Every "Delegate to Implementer" / "Stop hook takes over" step in the states below runs exactly as written.
-- `"conductor"` (opted in via `--conductor`) — wherever a state below reaches its final "Delegate to Implementer" / "Stop hook takes over" step, dispatch the conductor agent instead (Agent tool, `subagent_type: "nazgul:conductor"`) and stop. The conductor is self-recovering and self-contained: it reads `nazgul/config.json`, `nazgul/plan.md`, and `nazgul/tasks/TASK-*.md` itself and drives the whole objective wave by wave (Review Board included) with no further input from this skill. Discovery/Doc Generator/Planner steps still run first as written — the conductor only replaces the Implementer/stop-hook hand-off once a task graph exists.
+- `"conductor"` (opted in via `--conductor`) — wherever a state below reaches its final "Delegate to Implementer" / "Stop hook takes over" step, dispatch the conductor agent instead (Agent tool, `subagent_type: "nazgul:conductor"`, `model: "$(jq -r '.models.conductor // "sonnet"' nazgul/config.json)"`) and stop. The conductor is self-recovering and self-contained: it reads `nazgul/config.json`, `nazgul/plan.md`, and `nazgul/tasks/TASK-*.md` itself and drives the whole objective wave by wave (Review Board included) with no further input from this skill. Discovery/Doc Generator/Planner steps still run first as written — the conductor only replaces the Implementer/stop-hook hand-off once a task graph exists.
 
 ### Reset Loop Counters (MANDATORY)
 

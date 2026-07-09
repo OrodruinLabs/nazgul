@@ -77,7 +77,7 @@ every matching Agent-tool call in Step 5 — never omit `model` and let a dispat
 
 ```bash
 MODEL_IMPLEMENTATION=$(jq -r '.models.implementation // "sonnet"' "$CONFIG")
-MODEL_REVIEW=$(jq -r '.models.review // "sonnet"' "$CONFIG")
+MODEL_REVIEW=$(jq -r '.models.review_orchestrator // .models.review // "sonnet"' "$CONFIG")
 ```
 
 - `MODEL_IMPLEMENTATION` — pass as `model` for every `implementer` dispatch in Step 5.1 (`subagent`/
@@ -86,7 +86,7 @@ MODEL_REVIEW=$(jq -r '.models.review // "sonnet"' "$CONFIG")
 - `MODEL_REVIEW` — pass as `model` for the `agents/review-gate.md` dispatch in Step 5.2. This selects the
   orchestrator's own tier only, mirroring what `/nazgul:start`'s Model Selection table does for the
   sequential engine — it has no effect on individual reviewer tiers, which `review-gate.md` already
-  resolves itself from `models.review`/`models.review_by_reviewer` per reviewer.
+  resolves itself from `models.review_default`/`models.review_by_reviewer` per reviewer.
 
 ## Output Formatting
 Format ALL user-facing output per `references/ui-brand.md`:

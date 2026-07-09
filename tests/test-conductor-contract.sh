@@ -19,7 +19,7 @@ assert_file_contains "Step 5 wires graph_mark_dispatched before dispatch" "$COND
 
 # Model Selection: implementer/review-gate dispatches must not silently inherit the Conductor's own tier.
 assert_file_contains "resolves models.implementation for implementer dispatch" "$CONDUCTOR_MD" 'MODEL_IMPLEMENTATION=$(jq -r '"'"'\.models\.implementation // "sonnet"'"'"' "$CONFIG")'
-assert_file_contains "resolves models.review for review-gate dispatch" "$CONDUCTOR_MD" 'MODEL_REVIEW=$(jq -r '"'"'\.models\.review // "sonnet"'"'"' "$CONFIG")'
+assert_file_contains "resolves models.review_orchestrator for review-gate dispatch" "$CONDUCTOR_MD" 'MODEL_REVIEW=$(jq -r '"'"'\.models\.review_orchestrator // \.models\.review // "sonnet"'"'"' "$CONFIG")'
 assert_file_contains "Step 5.1 passes MODEL_IMPLEMENTATION to implementer dispatch" "$CONDUCTOR_MD" 'model: "$MODEL_IMPLEMENTATION"'
 assert_file_contains "Step 5.2 passes MODEL_REVIEW to review-gate dispatch" "$CONDUCTOR_MD" 'model: "$MODEL_REVIEW"'
 
