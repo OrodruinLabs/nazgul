@@ -327,14 +327,24 @@ something Nazgul schedules itself.
   double-start it. This is a fixed, single-outcome filesystem operation in the script's own flow, not
   agent discretion. Covered by `tests/test-heartbeat-idempotency.sh` (archive-not-delete, single start
   invocation, crash-between-claim-and-start consistency).
-- **No `eval` on inbox/objective text.** `[advisory]` Candidate title/body only ever reach `jq` via
-  `--arg`/`--argjson`/`--rawfile`, never `eval`'d or shell-interpolated (`scripts/lib/inbox-provider.sh`,
-  `scripts/lib/heartbeat-triage.sh`), and `tests/test-heartbeat-triage.sh` proves a metacharacter-laden
-  title/body produces no side effect. That test proves today's code is safe; it is not a mechanical guard
-  against a future edit reintroducing `eval` — `shellcheck` (registered for every heartbeat script in
-  `tests/test-shellcheck.sh`) catches quoting and expansion hazards but does not forbid the `eval`
-  builtin itself, so this stays a discipline the tests currently confirm rather than a hook that blocks
-  regression.
+- **No `eval` on inbox/objective text.** `[advisory]` During triage, candidate title/body only ever reach
+  `jq` via `--arg`/`--argjson`/`--rawfile`, never `eval`'d or shell-interpolated
+  (`scripts/lib/inbox-provider.sh`, `scripts/lib/heartbeat-triage.sh`), and
+  `tests/test-heartbeat-triage.sh` proves a metacharacter-laden title/body produces no side effect. The
+  one place objective text is spliced into a command string — `_hb_start`'s
+  `claude -p "/nazgul:start \"$objective\" --yolo --conductor"` (`scripts/heartbeat.sh`) — is hardened
+  against that splice being broken out of (FEAT-008 TASK-011): `_hb_objective` truncates the objective to
+  its first line at the source (`.title`/`.body` both `split("\n")[0]`), and `_hb_start` additionally
+  neutralizes every embedded `"`, `\n`, and `\r` before interpolation, so a crafted title can no longer
+  close the quoted span early and smuggle flags (e.g. `--max`, `--afk`) past
+  `scripts/apply-start-flags.sh`'s line-bounded quoted-span strip into an unattended `--yolo` auto-start;
+  the `NAZGUL_HEARTBEAT_START_CMD` override passes the objective as a single argv element and is
+  injection-safe by construction. `tests/test-heartbeat-start-injection.sh` exercises the real
+  `_hb_start` path against both the quote- and newline-breakout vectors. All of this proves today's code
+  is safe; it is not a mechanical guard against a future edit reintroducing `eval` or an unescaped
+  interpolation — `shellcheck` (registered for every heartbeat script in `tests/test-shellcheck.sh`)
+  catches quoting and expansion hazards but does not forbid the `eval` builtin itself, so this stays a
+  discipline the tests currently confirm rather than a hook that blocks regression.
 
 Branch isolation (§10) applies unchanged: `scripts/heartbeat.sh` never commits or touches a git branch —
 it only reads the inbox, moves files within it, and shells out to `/nazgul:start`, which is subject to
