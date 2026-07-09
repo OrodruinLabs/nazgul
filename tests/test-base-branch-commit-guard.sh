@@ -127,4 +127,133 @@ GUARD_STDERR=$(echo "" | bash "$GUARD" 2>&1 >/dev/null) && GUARD_EC=0 || GUARD_E
 assert_exit_code "degrade: empty stdin → exit 0" "$GUARD_EC" 0
 teardown_temp_dir
 
+
+# ---------------------------------------------------------------------------
+# ADR-003: resolve the ACTUAL target repo/branch of the commit, not just
+# $CLAUDE_PROJECT_DIR.
+# ---------------------------------------------------------------------------
+
+# Helper: a second, wholly unrelated git repo (also on its own base branch),
+# to prove `-C <other-repo>` is judged on its own identity, not this project's.
+setup_other_repo() {
+  OTHER_DIR=$(mktemp -d "${TMPDIR:-/tmp}/nazgul:other-XXXXXX")
+  export OTHER_DIR
+  git -C "$OTHER_DIR" init -q
+  git -C "$OTHER_DIR" config user.email "t@t.t"
+  git -C "$OTHER_DIR" config user.name "t"
+  git -C "$OTHER_DIR" checkout -q -b main
+  git -C "$OTHER_DIR" commit -q --allow-empty -m "init"
+}
+
+teardown_other_repo() {
+  [ -n "${OTHER_DIR:-}" ] && [ -d "$OTHER_DIR" ] && rm -rf "$OTHER_DIR"
+  OTHER_DIR=""
+}
+
+# FALSE POSITIVE FIX: `git -C <other-repo> commit` — the active-loop project
+# ($TEST_DIR) is on the base branch, but the command targets a completely
+# different repo. Must be allowed: the commit never touches this project.
+setup_temp_dir
+setup_nazgul_dir
+init_git_on_branch "main"
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"branch":{"base":"main","feature":"feat/FEAT-002-x"}}
+EOF
+setup_other_repo
+input=$(make_bash_input "git -C $OTHER_DIR commit -m 'unrelated repo'")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "ADR-003 false-positive fix: -C <other-repo> commit → exit 0" "$GUARD_EC" 0
+teardown_other_repo
+teardown_temp_dir
+
+# ALLOW: an unrelated cwd/repo entirely, invoked without any active-loop
+# project context lining up with it — same false-positive shape, no -C.
+setup_temp_dir
+setup_nazgul_dir
+init_git_on_branch "main"
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"branch":{"base":"main","feature":"feat/FEAT-002-x"}}
+EOF
+setup_other_repo
+input=$(make_bash_input "git -C $OTHER_DIR status && git -C $OTHER_DIR commit -m 'still unrelated'")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "ADR-003: unrelated repo via -C in compound command → exit 0" "$GUARD_EC" 0
+teardown_other_repo
+teardown_temp_dir
+
+# PRESERVED BLOCK: plain cwd (no -C), active-loop repo, base branch → still
+# blocked exactly as before the fix.
+setup_temp_dir
+setup_nazgul_dir
+init_git_on_branch "main"
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"branch":{"base":"main","feature":"feat/FEAT-002-x"}}
+EOF
+input=$(make_bash_input "git commit -m 'oops, still on main'")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "ADR-003: preserved block, plain cwd, base branch → exit 2" "$GUARD_EC" 2
+teardown_temp_dir
+
+# FALSE NEGATIVE FIX: `-C <active-loop-repo>` explicitly naming the
+# active-loop project's own path, still on the base branch. The old guard's
+# whole-string `git\s+commit` pre-filter did not even recognize this as a
+# git-commit invocation (an intervening `-C <path>` broke the adjacency
+# match), so it was allowed unconditionally, regardless of branch. The new
+# tokenizer must recognize it and resolve the TARGET's branch → still blocked.
+setup_temp_dir
+setup_nazgul_dir
+init_git_on_branch "main"
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"branch":{"base":"main","feature":"feat/FEAT-002-x"}}
+EOF
+input=$(make_bash_input "git -C $TEST_DIR commit -m 'via -C, still main'")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "ADR-003 false-negative fix: -C <active-loop-repo> base branch → exit 2" "$GUARD_EC" 2
+assert_contains "false-negative-fix block message names base branch" "$GUARD_STDERR" "main"
+teardown_temp_dir
+
+# ALLOW: `-C <active-loop-repo>` but the repo is on the feature branch, not
+# the base branch — still correctly allowed (the fix must not over-block).
+setup_temp_dir
+setup_nazgul_dir
+init_git_on_branch "feat/FEAT-002-x"
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"branch":{"base":"main","feature":"feat/FEAT-002-x"}}
+EOF
+input=$(make_bash_input "git -C $TEST_DIR commit -m 'via -C, on feature branch'")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "ADR-003: -C <active-loop-repo> on feature branch → exit 0" "$GUARD_EC" 0
+teardown_temp_dir
+
+# DEGRADE: `-C <path>` targets something that is not a git repo at all (a
+# bogus/nonexistent path) → allow, exactly like the guard's existing
+# not-a-git-repo degrade posture.
+setup_temp_dir
+setup_nazgul_dir
+init_git_on_branch "main"
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"branch":{"base":"main","feature":"feat/FEAT-002-x"}}
+EOF
+input=$(make_bash_input "git -C /nazgul-test-does-not-exist-xyz commit -m 'bogus target'")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "ADR-003: -C <not-a-git-repo> degrades to allow → exit 0" "$GUARD_EC" 0
+teardown_temp_dir
+
+# METACHARACTER SAFETY: a `-C` value stuffed with shell metacharacters must
+# produce NO side effect (it is only ever handed to `git -C` as one quoted
+# argument — never eval'd or re-interpreted by a shell).
+setup_temp_dir
+setup_nazgul_dir
+init_git_on_branch "main"
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"branch":{"base":"main","feature":"feat/FEAT-002-x"}}
+EOF
+SIDE_EFFECT_MARKER="$TEST_DIR/side-effect-marker"
+rm -f "$SIDE_EFFECT_MARKER"
+input=$(make_bash_input "git -C \$(touch $SIDE_EFFECT_MARKER) commit -m 'metachar -C'")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "ADR-003: metacharacter -C value degrades to allow → exit 0" "$GUARD_EC" 0
+assert_file_not_exists "ADR-003: metacharacter -C value never side-effected (no eval)" "$SIDE_EFFECT_MARKER"
+teardown_temp_dir
+
 report_results
