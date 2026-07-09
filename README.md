@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.10.1-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-2.11.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-Plugin-7c3aed?style=flat-square" alt="Claude Code Plugin">
   <img src="https://img.shields.io/badge/agents-22-orange?style=flat-square" alt="Agents">
@@ -32,6 +32,7 @@ Nazgul runs a complete autonomous SDLC pipeline — from scanning your codebase 
 - **Tamper-evident, cost-optimized reviews** — diff-bound provenance manifests catch a skipped or stale review board, a `comment-verifier` gate blocks templated or restated doc-comments, and diff-only reviewer context plus per-reviewer model tiering cut review token cost
 - **Survives interruptions** — checkpoints, recovery pointers, session tracking, and hooks mean you can close your laptop and resume later
 - **Opt-in conductor engine** — `/nazgul:start --conductor` runs independent plan waves through a graph-only driver agent instead of the sequential loop, with autonomous-first approval gates, two unconditional human-in-the-loop hard stops, and self-recovering state; sequential stays the default
+- **Opt-in automation heartbeat** — `/nazgul:heartbeat` (or an opt-in Claude Code scheduled-agent routine) triages a local work inbox and auto-starts the next objective when idle, behind the same two unconditional hard stops; default off
 
 ## Install
 
@@ -94,6 +95,7 @@ Nazgul auto-detects project state: active work resumes, existing docs trigger pl
 | `/nazgul:enhance` | Research Claude Code releases, propose Nazgul improvements |
 | `/nazgul:metrics` | View loop performance — velocity, approval rates, self-improvement reports |
 | `/nazgul:verify` | Human acceptance testing for completed tasks |
+| `/nazgul:heartbeat` | Run one automation-heartbeat tick by hand — triage inbox, auto-start if idle (opt-in, default off) |
 | `/nazgul:help` | Quick reference for all commands and modes |
 | `/nazgul:bootstrap-project` | Generate a portable, Nazgul-free bundle (docs + Claude subagents) |
 | `/nazgul:learn` | Distill recurring mistakes into numbered, human-approved Learned Rules |

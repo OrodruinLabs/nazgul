@@ -24,6 +24,7 @@
 - **Board sync isolation**: Sync failures never block local work — auto-disables after 5 consecutive failures
 - **Fix-first auto-remediation**: Mechanical review findings (dead code, style) are applied automatically; only risky changes (security, architecture) require human judgment
 - **Concurrent session detection**: Filesystem locks warn when multiple Nazgul sessions run on the same project, preventing state corruption
+- **Automation heartbeat hard stops**: `scripts/heartbeat.sh` (opt-in, default off) halts unconditionally on a BLOCKED task or a security-reviewer rejection — the same two hard stops as the Conductor engine — checked before it even reads `automation.heartbeat.enabled`; the auto-start objective text is hardened against quote/newline breakout into `/nazgul:start`'s flag parsing (RULES.md §13)
 
 ## Troubleshooting
 
@@ -44,3 +45,5 @@
 **Context degradation** — If the agent seems confused after many iterations, run `/compact` with Nazgul-specific instructions, then the session-context hook will re-inject state.
 
 **Concurrent session warning** (e.g., "WARNING: N concurrent Nazgul sessions detected. State corruption risk.") — Ensure only one Nazgul session per project at a time. Stale locks are cleaned after 2 hours, or delete `nazgul/sessions/*.lock` manually.
+
+**Heartbeat tick did nothing** — Check `automation.heartbeat.enabled` in `nazgul/config.json` (defaults to `false`) and the latest `decision` in `nazgul/logs/heartbeat-*.jsonl` via `/nazgul:log`: `disabled` means the feature is off, `hard_stop` means a BLOCKED task or security rejection halted it, `skipped` with `reason: active_session` means another Nazgul session was already running.
