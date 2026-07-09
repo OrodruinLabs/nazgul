@@ -256,4 +256,81 @@ assert_exit_code "ADR-003: metacharacter -C value degrades to allow → exit 0" 
 assert_file_not_exists "ADR-003: metacharacter -C value never side-effected (no eval)" "$SIDE_EFFECT_MARKER"
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# B1 REGRESSION FIX: every commit segment in a compound command is evaluated
+# independently — an earlier decoy/unrelated commit segment must not hide a
+# later real base-branch commit.
+# ---------------------------------------------------------------------------
+
+# B1: decoy commit segment targets a nonexistent path, real commit follows,
+# on base branch → still BLOCKED (the whole point of Finding 1).
+setup_temp_dir
+setup_nazgul_dir
+init_git_on_branch "main"
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"branch":{"base":"main","feature":"feat/FEAT-002-x"}}
+EOF
+input=$(make_bash_input "git -C /nazgul-test-does-not-exist-xyz commit -m 'decoy' && git commit -m 'real'")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "B1: decoy commit segment (bogus -C) then real commit on base → exit 2" "$GUARD_EC" 2
+teardown_temp_dir
+
+# B1: decoy commit segment targets a genuinely different repo, real commit
+# follows, on base branch → still BLOCKED.
+setup_temp_dir
+setup_nazgul_dir
+init_git_on_branch "main"
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"branch":{"base":"main","feature":"feat/FEAT-002-x"}}
+EOF
+setup_other_repo
+input=$(make_bash_input "git -C $OTHER_DIR commit -m 'decoy' && git commit -m 'real'")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "B1: decoy commit segment (other repo) then real commit on base → exit 2" "$GUARD_EC" 2
+teardown_other_repo
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# B2 REGRESSION FIX: interpreter-wrapped / command-substitution `git commit`
+# invocations are not visible to the precise tokenizer; the raw-substring
+# fallback must still block them on the base branch.
+# ---------------------------------------------------------------------------
+
+# B2: `bash -c 'git commit ...'` on base branch → BLOCKED.
+setup_temp_dir
+setup_nazgul_dir
+init_git_on_branch "main"
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"branch":{"base":"main","feature":"feat/FEAT-002-x"}}
+EOF
+input=$(make_bash_input "bash -c 'git commit -m wrapped'")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "B2: bash -c 'git commit' on base → exit 2" "$GUARD_EC" 2
+teardown_temp_dir
+
+# B2: `true "$(git commit ...)"` (command substitution) on base branch → BLOCKED.
+setup_temp_dir
+setup_nazgul_dir
+init_git_on_branch "main"
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"branch":{"base":"main","feature":"feat/FEAT-002-x"}}
+EOF
+input=$(make_bash_input 'true "$(git commit -m substituted)"')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'B2: true "$(git commit)" on base → exit 2' "$GUARD_EC" 2
+teardown_temp_dir
+
+# B2: the same wrapped forms on the FEATURE branch (not base) → still ALLOWED
+# — the conservative fallback must not over-block.
+setup_temp_dir
+setup_nazgul_dir
+init_git_on_branch "feat/FEAT-002-x"
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"branch":{"base":"main","feature":"feat/FEAT-002-x"}}
+EOF
+input=$(make_bash_input "bash -c 'git commit -m wrapped'")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "B2: bash -c 'git commit' on feature branch → exit 0" "$GUARD_EC" 0
+teardown_temp_dir
+
 report_results

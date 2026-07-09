@@ -11,22 +11,25 @@ set -euo pipefail
 # target repo is not on the base branch, the command is not a git commit,
 # empty stdin, or the target of a `-C` flag is not a git repo at all.
 #
-# ADR-003: resolves the ACTUAL target repo of the `git commit` command instead
-# of trusting `$CLAUDE_PROJECT_DIR` alone. A bounded, no-`eval`, no-whole-
-# string-regex tokenizer (FEAT-005 discipline) walks the command's own
-# argument list — per `;`/`&&`/`||`/`|`/`&`/newline-separated segment, quote
-# aware — to (a) determine whether a segment is actually a `git ... commit`
-# invocation (a plain substring/regex check like the previous `git\s+commit`
-# filter cannot see past an intervening `-C <path>` or other global option)
-# and (b) extract that segment's `-C <path>` value, if any. The target's
-# canonical repo root (`git rev-parse --show-toplevel`) is then compared
-# against the active-loop project's own resolved root — a different repo is
-# allowed immediately (closes the false positive: `git -C /unrelated/repo
-# commit` never touches this project). Only when the roots match does the
-# guard resolve the TARGET's current branch (not `$CLAUDE_PROJECT_DIR`'s) for
-# the base-branch decision (closes the false negative: a `-C` pointing at
-# this project's own base-branch checkout is now correctly inspected instead
-# of blindly trusting whatever branch `$CLAUDE_PROJECT_DIR` happens to be on).
+# ADR-003: resolves the ACTUAL target repo of each `git commit` invocation
+# instead of trusting `$CLAUDE_PROJECT_DIR` alone. A bounded, no-`eval`,
+# no-whole-string-regex tokenizer (FEAT-005 discipline) walks the command's
+# own argument list — per `;`/`&&`/`||`/`|`/`&`/newline-separated segment,
+# quote aware — and reports EVERY segment that is a `git ... commit`
+# invocation (not just the first) along with its `-C <path>` value, if any.
+# Each reported segment is resolved and checked independently via
+# `git rev-parse --show-toplevel`; the command is blocked if ANY segment
+# resolves to this project's own base branch, so a decoy/unrelated commit
+# segment earlier in a compound command cannot hide a real one later.
+#
+# The tokenizer only recognizes a literal top-level `git` word — it does not
+# recurse into quoted strings or command substitutions, so `bash -c 'git
+# commit'` or `true "$(git commit)"` are invisible to it (same documented
+# blind spot as `scripts/local-mode-tracking-guard.sh`). As a compensating
+# fallback, when no segment is tokenized as a commit, a raw substring check
+# for `git` + `commit` (adjacent, whitespace-separated) is run against the
+# ORIGINAL command text; a match is resolved against `$CLAUDE_PROJECT_DIR`
+# itself (erring toward block) rather than silently allowed.
 
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 CONFIG="$PROJECT_ROOT/nazgul/config.json"
@@ -52,34 +55,33 @@ if [ -z "$CMD" ]; then
   exit 0
 fi
 
-# --- Bounded, no-eval tokenizer: is this a `git commit` invocation, and does
-# it carry a `-C <path>`? -----------------------------------------------------
+# --- Bounded, no-eval tokenizer: which segments are `git commit` invocations,
+# and what `-C <path>` (if any) does each carry? ------------------------------
 # Splits the command into words on whitespace while respecting single/double
 # quotes (a closing quote does not flush — an adjacent quoted+unquoted
 # fragment stays one word), resetting per-segment state on shell separators
 # (`;` `&&` `||` `|` `&` newline, outside quotes) so each pipeline segment is
 # evaluated independently — the same discipline already used by
-# `scripts/local-mode-tracking-guard.sh` (FEAT-005). For the FIRST segment
-# whose command word is "git", it skips known global options (value-taking
+# `scripts/local-mode-tracking-guard.sh` (FEAT-005). For each segment whose
+# command word is "git", it skips known global options (value-taking
 # `-C`/`-c`, single-token `--work-tree=`/`--git-dir=`/`--exec-path=`/
 # `--namespace=`, flag-only `-p`/`--paginate`/`--no-pager`/`--bare`/
 # `--no-replace-objects`/`--literal-pathspecs`, and any other unrecognized
-# `-`-prefixed flag) to find the subcommand. If that subcommand is "commit",
-# prints `1` then the segment's last-seen `-C` value (possibly empty);
-# otherwise prints `0` and an empty second line. No `eval`, no whole-string
-# regex extraction of untrusted content: the only use of the extracted `-C`
-# value is as a single quoted argument to `git -C`, so shell metacharacters
-# embedded in it (e.g. `$(...)`, `;`, backticks) are inert.
-detect_commit_and_dash_c() {
+# `-`-prefixed flag) to find the subcommand. Every segment whose subcommand is
+# "commit" emits one tab-separated record line (`1<TAB><-C value, possibly
+# empty>`) — no segment is skipped once an earlier one matches. No `eval`,
+# no whole-string regex extraction of untrusted content: the only
+# use of an extracted `-C` value is as a single quoted argument to `git -C`,
+# so shell metacharacters embedded in it (e.g. `$(...)`, `;`, backticks) are
+# inert.
+detect_commit_segments() {
   printf '%s' "$1" | awk '
 BEGIN {
   in_sq = 0; in_dq = 0; tok = ""
   seg_git = 0; seg_subcmd = ""; seg_cpath = ""; seg_skipval = 0; skipval_is_C = 0
-  found_commit = 0; final_cpath = ""
 }
 function reset_seg() { seg_git = 0; seg_subcmd = ""; seg_cpath = ""; seg_skipval = 0; skipval_is_C = 0 }
 function handle_tok(t) {
-  if (found_commit) return
   if (seg_skipval) {
     seg_skipval = 0
     if (skipval_is_C) seg_cpath = t
@@ -98,7 +100,7 @@ function handle_tok(t) {
     if (t ~ /^(-p|--paginate|--no-pager|--bare|--no-replace-objects|--literal-pathspecs)$/) return
     if (t ~ /^-/) return
     seg_subcmd = t
-    if (seg_subcmd == "commit") { found_commit = 1; final_cpath = seg_cpath }
+    if (seg_subcmd == "commit") { printf "1\t%s\n", seg_cpath }
     return
   }
 }
@@ -136,34 +138,8 @@ function handle_tok(t) {
     reset_seg()
   }
 }
-END {
-  print found_commit
-  print final_cpath
-}
 '
 }
-
-DETECT_OUT=$(detect_commit_and_dash_c "$CMD")
-IS_COMMIT=$(printf '%s\n' "$DETECT_OUT" | sed -n '1p')
-CPATH=$(printf '%s\n' "$DETECT_OUT" | sed -n '2p')
-
-# Not a `git commit` invocation (in any segment we recognize) — allow.
-if [ "$IS_COMMIT" != "1" ]; then
-  exit 0
-fi
-
-# Resolve the actual target of this commit: the `-C` value if present,
-# otherwise `$CLAUDE_PROJECT_DIR`.
-TARGET_DIR="${CPATH:-$PROJECT_ROOT}"
-
-# Degrade gracefully: target is not a git repo at all (bogus/nonexistent path,
-# including a `-C` value stuffed with shell metacharacters — it is never
-# evaluated, just handed to `git -C` as a literal argument, so it simply fails
-# to resolve and we allow, with zero side effects).
-TARGET_ROOT=$(git -C "$TARGET_DIR" rev-parse --show-toplevel 2>/dev/null || echo "")
-if [ -z "$TARGET_ROOT" ]; then
-  exit 0
-fi
 
 # Degrade gracefully: config absent → allow
 if [ ! -f "$CONFIG" ]; then
@@ -176,37 +152,58 @@ if [ -z "$FEATURE" ]; then
   exit 0
 fi
 
-# Resolve the active-loop project's own canonical root the same way.
+BASE=$(jq -r '.branch.base // "main"' "$CONFIG" 2>/dev/null || echo "main")
 PROJECT_ROOT_RESOLVED=$(git -C "$PROJECT_ROOT" rev-parse --show-toplevel 2>/dev/null || echo "")
 
-# Different repo (or the active-loop project itself isn't a git repo) — the
-# command never touches this project. Allow immediately (closes the false
-# positive: `git -C /unrelated/repo commit` was previously blocked solely
-# because $CLAUDE_PROJECT_DIR happened to be on the base branch).
-if [ -z "$PROJECT_ROOT_RESOLVED" ] || [ "$TARGET_ROOT" != "$PROJECT_ROOT_RESOLVED" ]; then
-  exit 0
+# Resolve one candidate target dir; block (and exit 2) if it is THIS project,
+# currently checked out on the base branch. Any other outcome returns (allow
+# this candidate, caller keeps checking the rest).
+block_if_target_on_base() {
+  local target_dir="$1"
+  [ -n "$PROJECT_ROOT_RESOLVED" ] || return 0
+
+  local target_root
+  target_root=$(git -C "$target_dir" rev-parse --show-toplevel 2>/dev/null || echo "")
+  [ -n "$target_root" ] || return 0
+  [ "$target_root" = "$PROJECT_ROOT_RESOLVED" ] || return 0
+
+  local current
+  current=$(git -C "$target_dir" branch --show-current 2>/dev/null || echo "")
+  [ "$current" = "$BASE" ] || return 0
+
+  echo "NAZGUL GUARD: Blocked — cannot commit to the base branch '$BASE' during an active loop." >&2
+  echo "" >&2
+  echo "  Command: $CMD" >&2
+  echo "" >&2
+  echo "  An objective is in progress on feature branch '$FEATURE'. Loop commits" >&2
+  echo "  must land on the feature branch, never on the base branch directly." >&2
+  echo "" >&2
+  echo "  Switch to the feature branch and commit there:" >&2
+  echo "    git checkout $FEATURE" >&2
+  exit 2
+}
+
+DETECT_OUT=$(detect_commit_segments "$CMD")
+
+# Precise pass: evaluate EVERY tokenized commit segment independently (fixes
+# the B1 first-match short-circuit — no segment is allowed to hide a later
+# one).
+if [ -n "$DETECT_OUT" ]; then
+  while IFS=$'\t' read -r marker cpath; do
+    [ "$marker" = "1" ] || continue
+    block_if_target_on_base "${cpath:-$PROJECT_ROOT}"
+  done <<< "$DETECT_OUT"
 fi
 
-# Base branch (default "main")
-BASE=$(jq -r '.branch.base // "main"' "$CONFIG" 2>/dev/null || echo "main")
-
-# Same repo — resolve the TARGET's current branch (not $CLAUDE_PROJECT_DIR's)
-# for the actual decision (closes the false negative: a `-C` pointing at this
-# project's own base-branch checkout is now inspected on its own terms).
-# Empty result (detached HEAD, error) degrades to allow.
-CURRENT=$(git -C "$TARGET_DIR" branch --show-current 2>/dev/null || echo "")
-if [ -z "$CURRENT" ] || [ "$CURRENT" != "$BASE" ]; then
-  exit 0
+# Fallback pass (B2): the precise tokenizer found no top-level `git ... commit`
+# segment at all, meaning this command may be wrapping a real commit inside an
+# interpreter (`bash -c '...'`) or command substitution (`$(...)`, backticks)
+# that the bounded tokenizer intentionally does not recurse into. Restore the
+# old whole-string substring trigger against the RAW command text; on a match,
+# resolve conservatively against `$CLAUDE_PROJECT_DIR` itself rather than
+# silently allowing.
+if [ -z "$DETECT_OUT" ] && printf '%s' "$CMD" | grep -qiE 'git\s+commit'; then
+  block_if_target_on_base "$PROJECT_ROOT"
 fi
 
-# Block: committing to the base branch while a feature branch is active.
-echo "NAZGUL GUARD: Blocked — cannot commit to the base branch '$BASE' during an active loop." >&2
-echo "" >&2
-echo "  Command: $CMD" >&2
-echo "" >&2
-echo "  An objective is in progress on feature branch '$FEATURE'. Loop commits" >&2
-echo "  must land on the feature branch, never on the base branch directly." >&2
-echo "" >&2
-echo "  Switch to the feature branch and commit there:" >&2
-echo "    git checkout $FEATURE" >&2
-exit 2
+exit 0
