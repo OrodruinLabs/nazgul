@@ -19,7 +19,7 @@ metadata:
 - Legacy iterations (last 20): !`tail -20 nazgul/logs/iterations.jsonl 2>/dev/null || echo "No legacy iteration logs"`
 - Recent commits: !`git log --oneline --grep="$(jq -r '.afk.commit_prefix // "feat("' nazgul/config.json 2>/dev/null)" -20 2>/dev/null || echo "No commits found"`
 - Checkpoints: !`ls -1t nazgul/checkpoints/iteration-*.json 2>/dev/null | head -2 || echo "No checkpoints"`
-- Heartbeat log (last 20 ticks): !`if ls nazgul/logs/heartbeat-*.jsonl >/dev/null 2>&1; then cat nazgul/logs/heartbeat-*.jsonl 2>/dev/null | tail -20; else echo "No heartbeat logs"; fi`
+- Heartbeat log (last 20 ticks): !`if ls nazgul/logs/heartbeat-*.jsonl >/dev/null 2>&1; then ls -1 nazgul/logs/heartbeat-*.jsonl | tail -2 | xargs cat 2>/dev/null | tail -20; else echo "No heartbeat logs"; fi`
 
 ## Instructions
 
