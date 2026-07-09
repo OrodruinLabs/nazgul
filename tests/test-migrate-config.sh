@@ -1184,7 +1184,7 @@ assert_json_field "v1→v21 chain models.review_by_reviewer security-reviewer is
 assert_json_field "v1→v21 chain execution.engine is sequential" "$NAZGUL_DIR/config.json" ".execution.engine" "sequential"
 assert_json_field "v1→v21 chain conductor.gates.approve_graph is false" "$NAZGUL_DIR/config.json" ".conductor.gates.approve_graph" "false"
 assert_json_field "v1→v21 chain conductor.max_parallel is 3" "$NAZGUL_DIR/config.json" ".conductor.max_parallel" "3"
-assert_json_field "v1→v20 chain conductor.enforce.dispatch_guard is true" "$NAZGUL_DIR/config.json" ".conductor.enforce.dispatch_guard" "true"
+assert_json_field "v1→v21 chain conductor.enforce.dispatch_guard is true" "$NAZGUL_DIR/config.json" ".conductor.enforce.dispatch_guard" "true"
 assert_json_field "v1→v21 chain automation.heartbeat.enabled is false" "$NAZGUL_DIR/config.json" ".automation.heartbeat.enabled" "false"
 assert_json_field "v1→v21 chain automation.heartbeat.auto_start.engine is conductor" "$NAZGUL_DIR/config.json" ".automation.heartbeat.auto_start.engine" "conductor"
 
