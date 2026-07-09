@@ -337,12 +337,14 @@ something Nazgul schedules itself.
   (`scripts/lib/inbox-provider.sh`, `scripts/lib/heartbeat-triage.sh`), and
   `tests/test-heartbeat-triage.sh` proves a metacharacter-laden title/body produces no side effect. The
   one place objective text is spliced into a command string — `_hb_start`'s
-  `claude -p "/nazgul:start \"$objective\" --yolo --conductor"` (`scripts/heartbeat.sh`) — is hardened
-  against that splice being broken out of (FEAT-008 TASK-011): `_hb_objective` truncates the objective to
-  its first line at the source (`.title`/`.body` both `split("\n")[0]`), and `_hb_start` additionally
-  neutralizes every embedded `"`, `\n`, and `\r` before interpolation, so a crafted title can no longer
-  close the quoted span early and smuggle flags (e.g. `--max`, `--afk`) past
-  `scripts/apply-start-flags.sh`'s line-bounded quoted-span strip into an unattended `--yolo` auto-start;
+  `claude -p "/nazgul:start \"$objective\" $mode_flag $engine_flag"` (`scripts/heartbeat.sh`, where
+  `$mode_flag`/`$engine_flag` derive from `automation.heartbeat.auto_start.{mode,engine}` — `--yolo
+  --conductor` by default, but e.g. `afk`/`sequential` resolve to `--afk` with no `--conductor` flag at
+  all) — is hardened against that splice being broken out of (FEAT-008 TASK-011): `_hb_objective`
+  truncates the objective to its first line at the source (`.title`/`.body` both `split("\n")[0]`), and
+  `_hb_start` additionally neutralizes every embedded `"`, `\n`, and `\r` before interpolation, so a
+  crafted title can no longer close the quoted span early and smuggle flags (e.g. `--max`, `--afk`) past
+  `scripts/apply-start-flags.sh`'s line-bounded quoted-span strip into an unattended auto-start;
   the `NAZGUL_HEARTBEAT_START_CMD` override passes the objective as a single argv element and is
   injection-safe by construction. `tests/test-heartbeat-start-injection.sh` exercises the real
   `_hb_start` path against both the quote- and newline-breakout vectors. All of this proves today's code
