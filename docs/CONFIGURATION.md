@@ -106,7 +106,7 @@ In `--hitl` mode, `scripts/lib/conductor-gates.sh` forces the *effective* `appro
 |-----|---------|---------|
 | `automation.heartbeat.enabled` | `false` | Master switch. `false` means every tick is a `decision: disabled` no-op before any inbox read. |
 | `automation.heartbeat.interval` | `"30m"` | Suggested firing interval for the scheduled-agent routine you configure outside the plugin — not enforced by the script itself. |
-| `automation.heartbeat.inbox.provider` | `"file"` | Inbox provider behind the `inbox_list`/`inbox_get`/`inbox_archive` seam (`scripts/lib/inbox-provider.sh`). Only `file` ships today; a GitHub/Linear provider is the FEAT-009 slot. |
+| `automation.heartbeat.inbox.provider` | `"file"` | Inbox provider behind the `inbox_list`/`inbox_get`/`inbox_archive` seam (`scripts/lib/inbox-provider.sh`). Only `file` ships today; a GitHub/Linear provider is the FEAT-009 slot. Any other value fails closed — the tick logs `decision: skipped, reason: unsupported_provider:<value>` and exits without touching the inbox, rather than silently falling back to the file provider. |
 | `automation.heartbeat.inbox.dir` | `"nazgul/inbox"` | Directory scanned for `.md`/`.json` candidates; claimed candidates move to `<dir>/archive/`. |
 | `automation.heartbeat.auto_start.mode` | `"yolo"` | Mode passed to `/nazgul:start` when a candidate is picked and no session is active. |
 | `automation.heartbeat.auto_start.engine` | `"conductor"` | Execution engine passed to `/nazgul:start` for the auto-started objective. |

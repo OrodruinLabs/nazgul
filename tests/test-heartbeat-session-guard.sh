@@ -43,4 +43,31 @@ assert_json_field "active-session: picked candidate" "$LOG" '.picked' "cand.json
 assert_json_field "active-session: session_active true" "$LOG" '.session_active' "true"
 teardown_temp_dir
 
+# --- Test 3: unsupported inbox.provider -> skipped/unsupported_provider, fails closed ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.automation.heartbeat.enabled = true | .automation.heartbeat.inbox.provider = "github"'
+mkdir -p "$TEST_DIR/nazgul/inbox"
+jq -n '{title:"FEAT-999 test objective", body:"do the thing", priority:1}' > "$TEST_DIR/nazgul/inbox/cand.json"
+bash "$REPO_ROOT/scripts/heartbeat.sh"
+LOG=$(latest_log)
+assert_file_exists "unsupported-provider: log file written" "$LOG"
+assert_json_field "unsupported-provider: decision is skipped" "$LOG" '.decision' "skipped"
+assert_json_field "unsupported-provider: reason names the provider" "$LOG" '.reason' "unsupported_provider:github"
+assert_json_field "unsupported-provider: no candidate picked" "$LOG" '.picked' "null"
+teardown_temp_dir
+
+# --- Test 4: provider unset -> defaults to "file", normal triage still runs ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.automation.heartbeat.enabled = true | .automation.heartbeat.inbox.provider = "file"'
+mkdir -p "$TEST_DIR/nazgul/inbox"
+jq -n '{title:"FEAT-999 test objective", body:"do the thing", priority:1}' > "$TEST_DIR/nazgul/inbox/cand.json"
+mkdir -p "$TEST_DIR/nazgul/sessions"
+echo '{"pid":"1","session":"s1","started":"now"}' > "$TEST_DIR/nazgul/sessions/s1.lock"
+bash "$REPO_ROOT/scripts/heartbeat.sh"
+LOG=$(latest_log)
+assert_json_field "file-provider: triage still runs (picked candidate)" "$LOG" '.picked' "cand.json"
+teardown_temp_dir
+
 report_results

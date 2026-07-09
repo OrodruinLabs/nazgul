@@ -29,7 +29,10 @@ source "$SCRIPT_DIR/lib/heartbeat-triage.sh"
 TICK="hb-$(date -u +%s)"
 TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 LOG_DIR="$NAZGUL_DIR/logs"
-LOG_FILE="$LOG_DIR/heartbeat-$(date -u +"%Y-%m-%d").jsonl"
+# Derive the log file's date from $TS itself, not a second `date` call — a
+# fresh call here could cross UTC midnight after $TS was captured, filing a
+# record's `ts` under a different day's file than its own timestamp claims.
+LOG_FILE="$LOG_DIR/heartbeat-${TS%%T*}.jsonl"
 
 ENABLED=$(jq -r '.automation.heartbeat.enabled // false' "$CONFIG" 2>/dev/null || echo false)
 [ "$ENABLED" = "true" ] && ENABLED_BOOL=true || ENABLED_BOOL=false
@@ -119,6 +122,16 @@ if [ "$ENABLED_BOOL" != "true" ]; then
   exit 0
 fi
 
+# Fail closed on an unsupported provider rather than silently falling back to
+# the file provider — the config key would otherwise be misleading (setting
+# a non-"file" provider today does nothing, since no other provider exists
+# yet; GitHub/Linear providers are deferred to FEAT-009).
+INBOX_PROVIDER=$(jq -r '.automation.heartbeat.inbox.provider // "file"' "$CONFIG" 2>/dev/null || echo "file")
+if [ "$INBOX_PROVIDER" != "file" ]; then
+  _hb_emit skipped "unsupported_provider:$INBOX_PROVIDER" "" 0 "[]" "" false
+  exit 0
+fi
+
 INBOX_REL=$(jq -r '.automation.heartbeat.inbox.dir // "nazgul/inbox"' "$CONFIG" 2>/dev/null || echo "nazgul/inbox")
 INBOX_DIR="$PROJECT_ROOT/$INBOX_REL"
 
@@ -157,8 +170,16 @@ OBJECTIVE=$(_hb_objective "$INBOX_DIR" "$PICKED")
 # double-start of this one.
 if inbox_archive "$INBOX_DIR" "$PICKED"; then
   ARCHIVED_TO="$INBOX_REL/archive/$PICKED"
-  _hb_start "$OBJECTIVE" || true
-  _hb_emit started "" "$OBJECTIVE" "$SEEN_COUNT" "$TRIAGED_JSON" "$PICKED" false true "$ARCHIVED_TO"
+  START_OK=true
+  _hb_start "$OBJECTIVE" || START_OK=false
+  if [ "$START_OK" = "true" ]; then
+    _hb_emit started "" "$OBJECTIVE" "$SEEN_COUNT" "$TRIAGED_JSON" "$PICKED" false true "$ARCHIVED_TO"
+  else
+    # The candidate is already archived (the claim happened), so it will never
+    # be re-picked even though the start command itself failed — record the
+    # real outcome rather than a decision record that always claims success.
+    _hb_emit started start_command_failed "$OBJECTIVE" "$SEEN_COUNT" "$TRIAGED_JSON" "$PICKED" false false "$ARCHIVED_TO"
+  fi
 else
   _hb_emit skipped archive_failed "$OBJECTIVE" "$SEEN_COUNT" "$TRIAGED_JSON" "$PICKED" false
 fi

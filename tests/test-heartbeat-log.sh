@@ -103,6 +103,24 @@ assert_file_not_exists "started: candidate removed from active inbox" "$TEST_DIR
 assert_file_exists "started: candidate moved into archive/" "$TEST_DIR/nazgul/inbox/archive/cand.json"
 teardown_temp_dir
 
+# --- started (start command fails): claim+archive still happened, but the
+# decision record must say so honestly (started: false), not claim success
+# just because `_hb_start ... || true` swallowed the failure ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.automation.heartbeat.enabled = true'
+mkdir -p "$TEST_DIR/nazgul/inbox"
+jq -n '{title:"FEAT-999 test objective", body:"do the thing", priority:1}' > "$TEST_DIR/nazgul/inbox/cand.json"
+NAZGUL_HEARTBEAT_START_CMD="false" bash "$REPO_ROOT/scripts/heartbeat.sh"
+LOG=$(latest_log)
+assert_valid_ndjson "start-failed" "$LOG" 1
+assert_eq "start-failed: decision" "$(line_field "$LOG" 1 '.decision')" "started"
+assert_eq "start-failed: reason" "$(line_field "$LOG" 1 '.reason')" "start_command_failed"
+assert_eq "start-failed: started is false" "$(line_field "$LOG" 1 '.started')" "false"
+assert_eq "start-failed: archived_to still recorded" "$(line_field "$LOG" 1 '.archived_to')" "nazgul/inbox/archive/cand.json"
+assert_file_exists "start-failed: candidate still archived (claim happened)" "$TEST_DIR/nazgul/inbox/archive/cand.json"
+teardown_temp_dir
+
 # --- hard_stop: BLOCKED task, no inbox listing performed ---
 setup_temp_dir
 setup_nazgul_dir
