@@ -446,9 +446,8 @@ migrate_20_to_21() {
 
 migrate_21_to_22() {
   local tmp; tmp=$(mktemp)
-  # FEAT-009: model-tier + review-key split + self-audit config surface. ADDITIVE —
-  # set when absent, explicit values preserved. models.review is left untouched
-  # (kept as the seed source / fallback for the two new review keys).
+  # FEAT-009: model-tier + review-key split + self-audit config. ADDITIVE — set when absent,
+  # explicit values preserved; models.review untouched (seed source for the two new review keys).
   local review
   review=$(jq -r '.models.review? // empty' "$CONFIG")
   jq --arg review "$review" '
