@@ -182,6 +182,10 @@ This guard governs comment QUANTITY at write time. See §7 for the complementary
 
 **Inline doc-comment quality is enforced at the post-loop completion gate.** `[enforced]` `agents/comment-verifier.md` — a language-generic agent — grades inline source doc-comments (XML `<summary>`, JSDoc, docstrings) changed by the objective for templated, restatement, and contradiction defects; this is distinct from the Lean Comments quantity guard in §5 (write-time bloat vs. post-loop quality — see the cross-reference there). It records completion by writing `nazgul/logs/.comments-verified` containing the current `feat_id`. The stop-hook blocks `NAZGUL_COMPLETE` until this marker is present and matches the active `feat_id`, with its own bounded backstop (≤3 attempts) after which it warns and allows completion. When `docs.verify_comments` is `false` in `nazgul/config.json` (default `true`), or no non-doc/config source file changed on the feature branch, the gate degrades to allow without requiring the marker.
 
+**Self-audit runs at the post-loop completion gate.** `[enforced]` (FEAT-009, ADR-001) After the doc/comment verifiers, `agents/self-audit.md` mines this objective's own signals — review rejections, retries, blocks, best-effort transcript token cost, and any first-party findings in `nazgul/logs/findings.jsonl` (§14) — and appends one structured entry per finding to the durable, append-only backlog at `nazgul/improvements.md` (path from `self_audit.backlog_path`). Its testable core `scripts/self-audit.sh` never fails the run: every source degrades to a no-op when absent. The agent records completion by writing `nazgul/logs/.self-audited` containing the current `feat_id`; the stop-hook blocks `NAZGUL_COMPLETE` until that marker matches, with a bounded ≤3-attempt backstop so it can never deadlock an unattended loop. When `self_audit.enabled` is `false` in `nazgul/config.json` (default `true`), the gate is a complete no-op.
+
+**Model tiers are config-read, not hook-enforced.** `[advisory]` (FEAT-009) `models.conductor` (default `sonnet`) pins the Conductor's own tier — `/nazgul:start` passes it as the `model` on the `agents/conductor.md` dispatch rather than letting the Conductor inherit the launching session's tier. The single review tier is now two keys: `models.review_orchestrator` (review-gate/conductor orchestrator) and `models.review_default` (default per-reviewer tier for the mechanical code/qa reviewers). Both resolve with the exact fallback chain **new key → legacy `models.review` → hardcoded** (`sonnet` for the orchestrator, `haiku` for the default reviewer), so a config still carrying only `models.review` is honored unchanged; `models.review_by_reviewer` pins `security-reviewer`/`architect-reviewer` to `sonnet` on top of this (§3 Rule 11). These are agent/skill config reads, not hook checks — advisory, like the rest of the model routing.
+
 ---
 
 ## 8. File Scope Restrictions
@@ -257,26 +261,32 @@ window, so a stray Nazgul agent or a sequential-engine run is never touched.
   `Write|Edit|MultiEdit` — denies (exit 2) any write to a file inside the `file_scope` of a unit already
   `DONE`/`IMPLEMENTED` with a commit SHA recorded in `graph.json`. This is the mechanical floor half of
   the headline invariant, keyed off the Conductor's own graph rather than the task manifest §8 already
-  covers for the sequential engine. Kill-switch: `conductor.enforce.rework_guard` (default `true`).
+  covers for the sequential engine. **Current-task-scope exemption (FEAT-009 H3, ADR-006):** the
+  actively-dispatched unit is never blocked from writing inside its OWN `file_scope` — the guard only
+  blocks writes into the scope of a *different*, already-committed unit — so an in-flight unit whose files
+  overlap the cross-cutting check is not falsely stalled. Kill-switch: `conductor.enforce.rework_guard`
+  (default `true`).
 - **Orphan detection (Layer 3).** `[hook-driven only]` `scripts/subagent-stop.sh` runs on every real
   `SubagentStop` event — an unconditional Claude Code hook, not gated behind `stop-hook.sh` — and, when
   the stopping agent is the Conductor, checks `graph.json` for units marked `dispatched` but not yet
   `DONE`/`BLOCKED`. On a hit it writes `nazgul/conductor/.resume-needed` and emits
   `conductor_orphan_detected`. This is detection and evidence only — it never blocks a tool call and never
   resumes anything itself, so a human or the next Conductor invocation still has to act on the marker.
-- **Team routing (Layer 4).** `[hook-driven only]` When a wave is Planner-marked parallel and zero-overlap
-  (§11 Wave parallelism), `route_backend`/`route_wave` (`scripts/lib/conductor-router.sh`) route the whole
-  batch to `team-orchestrator` instead of one bespoke worktree per unit. Once dispatched, Team Orchestrator
-  applies the same zero-file-overlap validation before assigning teammates that §8 already documents for
-  the sequential engine's parallel-task path — the Conductor reuses that mechanism rather than
-  reimplementing it, so it inherits the identical bypass caveat (manual dispatch can route around it).
-- *Known limitation (documented follow-up, not a tiered enforcement rule): Layer 1 vs. Layer 4.* Layer 1's dispatch guard denies `run_in_background: true` for
-  `implementer`/`team-orchestrator`/`review-gate` subagents during a conductor run, but Layer 4 routes
-  parallel zero-overlap waves to `team-orchestrator`, which spawns implementer teammates that are
-  naturally backgrounded for concurrency — so the guard could block the very teammates Layer 4's own
-  routing produces. This interaction is unresolved: until it is, conductor-spawned team teammates must run
-  synchronously, or the guard needs a caller-aware exemption for the team-backend path. Documented as a
-  follow-up, not shipped behavior; the single-unit (non-team) dispatch path is fully enforced today.
+- **Per-unit fan-out routing (Layer 4).** `[hook-driven only]` (updated FEAT-009 H1, ADR-004) When a wave is
+  Planner-marked parallel and zero-overlap (§11 Wave parallelism), `route_backend`/`route_wave`
+  (`scripts/lib/conductor-router.sh`) now resolve the mutating batch to the **`subagent`** backend: the
+  Conductor dispatches each unit as its own concurrent Agent-tool implementer call in one message and waits
+  for every one to return before starting that batch's reviews — reusing the conductor's existing Step 5
+  synchronous-dispatch contract rather than routing to `team-orchestrator`. A lone mutating unit still
+  routes to `worktree`; reviews always route to `subagent`. The `team` backend is retained only for a
+  currently-unused `coordination`-isolation batch and is **deprecated from the mutating-batch path** —
+  `team-orchestrator` has no `Agent`/`Task` tool and cannot fan out to teammates, so routing a parallel
+  wave to it silently serialized the wave (the H1 defect that drove this re-drive). The zero-file-overlap
+  invariant §8/§11 already document still holds; it is now enforced per-unit by the same file_scope the
+  Conductor tracks in `graph.json`, not delegated to a non-spawning team backend. This closes the former
+  "Layer 1 vs. Layer 4" limitation: Layer 1's `run_in_background` denial no longer collides with team-spawned
+  teammates, because the mutating path no longer produces any — every dispatch is a foreground, same-message
+  Agent-tool call.
 - **Wave digest (Layer 5).** `[advisory]` `graph_wave_digest` (`scripts/lib/conductor-graph.sh`) prints a
   compact `{current_wave, next_unit, units}` snapshot from `graph.json` for cheap per-turn orientation —
   cheaper than a full wave recomputation. It is read-only convenience for the Conductor's own prompt loop;

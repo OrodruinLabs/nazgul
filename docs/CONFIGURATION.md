@@ -25,19 +25,32 @@ Different pipeline stages have different complexity needs. Assign the right mode
 | Planning | Opus | Decomposition and dependency ordering need deep reasoning |
 | Discovery | Sonnet | Codebase scanning is pattern matching |
 | Docs | Sonnet | Technical writing is well within Sonnet's capability |
-| Review | Haiku | Mechanical reviewers (code, qa) run checklists cheaply |
+| Review (default reviewer) | Haiku | Mechanical reviewers (code, qa) run checklists cheaply |
+| Review (orchestrator) | Sonnet | The review-gate/conductor orchestrator coordinates the board |
 | Implementation | Sonnet | Code generation is Sonnet's sweet spot |
 | Specialists | Sonnet | Same as implementation |
+| Conductor | Sonnet | The conductor drives waves and dispatch, not code |
 | Post-loop | Sonnet | Changelog and docs updates need judgment |
 
 Three presets are available: **Balanced** (default), **Quality** (all Opus), and **Fast/cheap** (Haiku where possible). Or pick per stage.
 
-`models.review_by_reviewer` overrides `models.review` per reviewer name. The default pins the two judgment reviewers to Sonnet even when `models.review` is a cheaper tier:
+**Conductor tier.** `models.conductor` (default `sonnet`) pins the Conductor's own model tier. `/nazgul:start` dispatches `agents/conductor.md` with `model: $(jq -r '.models.conductor // "sonnet"')`, so a Conductor run does not silently inherit the launching session's tier. It selects only the Conductor's own tier — the implementers and review-gate it dispatches resolve their tiers independently (`models.implementation`, and the review keys below).
+
+**Review tiers — two keys, with a legacy fallback.** The single `models.review` tier is now split into two keys:
+
+- `models.review_default` (default `haiku`) — the default per-reviewer tier for the mechanical code/qa reviewers.
+- `models.review_orchestrator` (default `sonnet`) — the review-gate and conductor review orchestrator tier.
+
+Both resolve with the exact fallback order **new key → legacy `models.review` → hardcoded default** (`review_orchestrator` falls back to `sonnet`, `review_default` to `haiku`). A config still carrying only `models.review` is therefore honored unchanged — it seeds both new keys — so no manual migration is needed.
+
+`models.review_by_reviewer` overrides `models.review_default` (and legacy `models.review`) per reviewer name. The default pins the two judgment reviewers to Sonnet even when `models.review_default` is a cheaper tier:
 
 ```json
 {
   "models": {
-    "review": "haiku",
+    "review_default": "haiku",
+    "review_orchestrator": "sonnet",
+    "conductor": "sonnet",
     "review_by_reviewer": {
       "security-reviewer": "sonnet",
       "architect-reviewer": "sonnet"
@@ -46,7 +59,7 @@ Three presets are available: **Balanced** (default), **Quality** (all Opus), and
 }
 ```
 
-`security-reviewer` guards the BLOCKED gate and `architect-reviewer` guards the state machine — both need deeper reasoning than the mechanical code/qa reviewers. Add other reviewer names to the map to override their model individually; any reviewer not listed falls back to `models.review`.
+`security-reviewer` guards the BLOCKED gate and `architect-reviewer` guards the state machine — both need deeper reasoning than the mechanical code/qa reviewers. Add other reviewer names to the map to override their model individually; any reviewer not listed falls back to `models.review_default` (then legacy `models.review`, then `haiku`).
 
 ### Review Granularity
 
@@ -145,6 +158,15 @@ When an objective finishes, Nazgul distills recurring mistakes (review rejection
 |-----|---------|---------|
 | `learning.enabled` | `true` | Master switch for the learning subsystem. |
 | `learning.auto_distill_post_loop` | `true` | Run (and gate completion on) the learner at objective completion. Set either flag to `false` to opt out — the gate becomes a no-op. |
+
+## Self-Audit Gate
+
+When an objective finishes, a post-loop `self-audit` agent (`agents/self-audit.md`, core `scripts/self-audit.sh`) mines the objective's own signals — review rejections, retries, blocks, best-effort transcript token cost, and any first-party findings raised into `nazgul/logs/findings.jsonl` (see `scripts/lib/raise-finding.sh`) — and appends one structured entry per finding to a durable, append-only backlog. `stop-hook.sh` blocks `NAZGUL_COMPLETE` until the agent writes an objective-scoped `nazgul/logs/.self-audited` marker, with a bounded ≤3-attempt backstop so it can never deadlock an unattended run. The audit core never fails the run: every signal source degrades to a no-op when absent.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `self_audit.enabled` | `true` | Master switch. Set to `false` and the gate becomes a complete no-op — no marker required, no block. |
+| `self_audit.backlog_path` | `nazgul/improvements.md` | Path (relative to the project root, or absolute) of the append-only improvements backlog the audit writes findings to. |
 
 ## Telemetry Bus
 
