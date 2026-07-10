@@ -262,7 +262,9 @@ _ingest_findings_jsonl() {
     if grep -qxF "$key" "$seen_file" 2>/dev/null; then
       continue
     fi
-    printf '%s\n' "$key" >> "$seen_file"
+    # Best-effort dedup write: a failure (full tmpfs) at worst allows a duplicate
+    # backlog entry — never abort the run for it (mirrors the other miners).
+    printf '%s\n' "$key" >> "$seen_file" 2>/dev/null || true
     severity=$(printf '%s' "$line" | jq -r '.severity // "medium"' 2>/dev/null) || severity="medium"
     category=$(printf '%s' "$line" | jq -r '.category // "general"' 2>/dev/null) || category="general"
     fix=$(printf '%s' "$line" | jq -r '.suggested_fix // "(none provided)"' 2>/dev/null) || fix="(none provided)"
