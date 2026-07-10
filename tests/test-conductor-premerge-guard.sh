@@ -89,13 +89,33 @@ teardown
 setup
 BASH_BIN=$(command -v bash)
 FAKEBIN="$WORK/fakebin"; mkdir -p "$FAKEBIN"
-for tool in bash cat printf grep head; do
+for tool in bash cat printf grep head awk sort; do
   toolpath=$(command -v "$tool" 2>/dev/null) && ln -s "$toolpath" "$FAKEBIN/$tool"
 done
 PAYLOAD=$(jq -n --arg c "$MERGE_001" '{tool_name:"Bash",tool_input:{command:$c}}')
 ec=0
 PATH="$FAKEBIN" "$BASH_BIN" "$GUARD" <<<"$PAYLOAD" >/dev/null 2>&1 || ec=$?
 assert_eq "no jq degrades to allow" "$ec" "0"
+teardown
+
+# 14. message-collision: an APPROVED unit's feat/.../TASK-NNN string sits inside the
+# -m message while the real merge target is a DIFFERENT, unreviewed unit -> DENY
+setup
+assert_eq "message-collision denied" \
+  "$(guard_ec 'git merge -m "ref feat/FEAT-009/TASK-002 for context" feat/FEAT-009/TASK-003 --no-ff')" "2"
+teardown
+
+# 15. &&-chained merges: each segment evaluated independently; second (unreviewed)
+# merge must still be caught -> DENY
+setup
+assert_eq "chained merge denied" \
+  "$(guard_ec 'git merge feat/FEAT-009/TASK-002 --no-ff && git merge feat/FEAT-009/TASK-003 --no-ff')" "2"
+teardown
+
+# 16. octopus merge: two branches in one invocation, one unreviewed -> DENY
+setup
+assert_eq "octopus merge denied" \
+  "$(guard_ec 'git merge feat/FEAT-009/TASK-002 feat/FEAT-009/TASK-003 --no-ff')" "2"
 teardown
 
 report_results
