@@ -36,10 +36,21 @@ esac
 
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-mkdir -p "$(dirname "$BACKLOG_PATH")"
+# Backlog writes are best-effort: the script's contract is "never fails the run".
+# Under `set -euo pipefail` an unwritable backlog path/dir (bad self_audit.backlog_path,
+# read-only FS, path swapped to a dir, disk full) would otherwise abort here — so any
+# creation/init failure logs and exits 0 (the stop-hook gate is non-blocking; the agent
+# still writes its completion marker), and each append degrades to a logged no-op.
+if ! mkdir -p "$(dirname "$BACKLOG_PATH")" 2>/dev/null; then
+  echo "self-audit: cannot create backlog dir for ${BACKLOG_PATH} — skipping (run not failed)" >&2
+  exit 0
+fi
 if [ ! -f "$BACKLOG_PATH" ]; then
-  printf '# Improvements Backlog\n\nAppend-only findings surfaced by the self-audit post-loop gate.\nOne `##` section per finding; `Status` starts `open`.\n' \
-    > "$BACKLOG_PATH"
+  if ! printf '# Improvements Backlog\n\nAppend-only findings surfaced by the self-audit post-loop gate.\nOne `##` section per finding; `Status` starts `open`.\n' \
+      > "$BACKLOG_PATH" 2>/dev/null; then
+    echo "self-audit: backlog ${BACKLOG_PATH} not writable — skipping (run not failed)" >&2
+    exit 0
+  fi
 fi
 
 # _append_finding <severity> <leverage> <title> <evidence> <suggested_fix>
@@ -50,7 +61,10 @@ _append_finding() {
     printf -- '- **Evidence**: %s\n' "$4"
     printf -- '- **Suggested fix**: %s\n' "$5"
     printf -- '- **Status**: open\n'
-  } >> "$BACKLOG_PATH"
+  } >> "$BACKLOG_PATH" 2>/dev/null || {
+    echo "self-audit: append to ${BACKLOG_PATH} failed — skipping this finding (run not failed)" >&2
+    return 0
+  }
 }
 
 _mine_review_rejections() {

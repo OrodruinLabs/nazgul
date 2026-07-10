@@ -172,4 +172,24 @@ assert_exit_code "T10: bare dir exits 0" "$SA_EC" 0
 assert_file_exists "T10: backlog created" "$BARE/nazgul/improvements.md"
 assert_contains "T10: backlog has header" "$(cat "$BARE/nazgul/improvements.md")" "Improvements Backlog"
 
+# --- Test 11: unwritable backlog dir -> degrades cleanly (exit 0), never aborts the run ---
+# The script runs under `set -euo pipefail` and promises "never fails the run".
+# Force the backlog's parent-dir creation to fail deterministically for ANY user
+# (incl. root in CI) by pointing self_audit.backlog_path at a path whose parent is
+# a regular FILE — `mkdir -p` then cannot create the directory.
+T11=$(mk_project "t11")
+# Seed a real finding so the script would WANT to append (proves it's the write,
+# not "nothing to do", that we're exercising).
+mkdir -p "$T11/nazgul/reviews/TASK-001"
+printf -- '---\nverdict: CHANGES_REQUESTED\nconfidence: 90\n---\nSome finding.\n' \
+  > "$T11/nazgul/reviews/TASK-001/code-reviewer.md"
+printf 'i am a file, not a dir\n' > "$T11/blk"   # parent of the configured backlog
+jq '.self_audit.backlog_path = "blk/improvements.md"' \
+  "$T11/nazgul/config.json" > "$T11/nazgul/config.json.tmp" \
+  && mv "$T11/nazgul/config.json.tmp" "$T11/nazgul/config.json"
+run_self_audit "$T11/nazgul"
+assert_exit_code "T11: unwritable backlog exits 0 (never fails the run)" "$SA_EC" 0
+assert_contains "T11: logs a skip message" "$SA_OUTPUT" "run not failed"
+assert_file_not_exists "T11: no backlog created at the blocked path" "$T11/blk/improvements.md"
+
 report_results
