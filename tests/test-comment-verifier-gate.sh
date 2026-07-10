@@ -34,7 +34,8 @@ create_config \
   '.agents.reviewers = ["code-reviewer"]' \
   '.feat_id = "FEAT-CV1"' \
   '.learning.auto_distill_post_loop = false' \
-  '.docs.verify_comments = false'
+  '.docs.verify_comments = false' \
+  '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -51,7 +52,8 @@ setup_nazgul_dir
 create_config \
   '.agents.reviewers = ["code-reviewer"]' \
   '.feat_id = "FEAT-CV2"' \
-  '.learning.auto_distill_post_loop = false'
+  '.learning.auto_distill_post_loop = false' \
+  '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -69,7 +71,8 @@ setup_nazgul_dir
 create_config \
   '.agents.reviewers = ["code-reviewer"]' \
   '.feat_id = "FEAT-CV3"' \
-  '.learning.auto_distill_post_loop = false'
+  '.learning.auto_distill_post_loop = false' \
+  '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -110,7 +113,8 @@ setup_nazgul_dir
 create_config \
   '.agents.reviewers = ["code-reviewer"]' \
   '.feat_id = "FEAT-CV5"' \
-  '.learning.auto_distill_post_loop = false'
+  '.learning.auto_distill_post_loop = false' \
+  '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -165,7 +169,8 @@ setup_nazgul_dir
 create_config \
   '.agents.reviewers = ["code-reviewer"]' \
   '.feat_id = "FEAT-CV8"' \
-  '.learning.auto_distill_post_loop = false'
+  '.learning.auto_distill_post_loop = false' \
+  '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"

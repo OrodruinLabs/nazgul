@@ -977,8 +977,48 @@ CV_MSG
         fi
       fi
     fi
-    # Doc-verifier and comment-verifier gates passed, opted out, or backstop
-    # exhausted — allow completion.
+    # Post-loop self-audit gate (ADR-001): marker + bounded backstop (≤3); never a hard
+    # block — proposes-only findings can't be allowed to deadlock an unattended loop.
+    SELF_AUDIT_ENABLED=$(jq -r 'if .self_audit.enabled == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+    if [ "$SELF_AUDIT_ENABLED" = "true" ]; then
+      SA_OBJ_ID=$(jq -r '.feat_id // "default"' "$CONFIG" 2>/dev/null || echo "default")
+      SA_MARKER="$NAZGUL_DIR/logs/.self-audited"
+      SA_ATTEMPTS_FILE="$NAZGUL_DIR/logs/.self-audit-attempts"
+      SA_AUDITED_FOR=""
+      [ -f "$SA_MARKER" ] && SA_AUDITED_FOR=$(cat "$SA_MARKER" 2>/dev/null || echo "")
+      if [ "$SA_AUDITED_FOR" != "$SA_OBJ_ID" ]; then
+        SA_ATTEMPTS=0
+        if [ -f "$SA_ATTEMPTS_FILE" ]; then
+          read -r SA_ATT_OBJ SA_ATT_CNT < "$SA_ATTEMPTS_FILE" 2>/dev/null || true
+          if [ "${SA_ATT_OBJ:-}" = "$SA_OBJ_ID" ]; then
+            case "${SA_ATT_CNT:-0}" in ''|*[!0-9]*) SA_ATT_CNT=0 ;; esac
+            SA_ATTEMPTS="$SA_ATT_CNT"
+          fi
+        fi
+        if [ "$SA_ATTEMPTS" -lt 3 ]; then
+          mkdir -p "$NAZGUL_DIR/logs"
+          printf '%s %s\n' "$SA_OBJ_ID" "$((SA_ATTEMPTS + 1))" > "$SA_ATTEMPTS_FILE"
+          cat >&2 << SA_MSG
+Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP SELF-AUDIT GATE (mandatory).
+Self-audit findings have NOT been recorded for this objective (${SA_OBJ_ID}) yet.
+DELEGATE: Spawn the self-audit agent (nazgul:self-audit) to mine cost/perf/correctness
+signals from this objective and append findings to nazgul/improvements.md. It proposes
+only — it never edits code or approves anything.
+When it finishes it MUST record completion: echo "${SA_OBJ_ID}" > nazgul/logs/.self-audited
+Do NOT output NAZGUL_COMPLETE until self-audit has run and the marker is written.
+Opt out for future objectives with self_audit.enabled=false in nazgul/config.json.
+SA_MSG
+          jq -n --arg r "Post-loop self-audit gate: findings not yet recorded for ${SA_OBJ_ID}" '{"decision":"block","reason":$r}'
+          exit 2
+        else
+          echo "Nazgul: self-audit gate gave up after ${SA_ATTEMPTS} attempts for ${SA_OBJ_ID} — completing without self-audit. Run scripts/self-audit.sh manually." >&2
+          mkdir -p "$NAZGUL_DIR/logs"
+          printf '%s\n' "$SA_OBJ_ID" > "$SA_MARKER"
+        fi
+      fi
+    fi
+    # Doc-verifier, comment-verifier, and self-audit gates passed, opted out, or
+    # backstop exhausted — allow completion.
     # Emit objective_complete before exit (pure observer; state is already final).
     emit_event "objective_complete" \
       total_tasks:n "$TOTAL_COUNT" \

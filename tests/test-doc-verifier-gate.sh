@@ -30,7 +30,8 @@ create_config \
   '.agents.reviewers = ["code-reviewer"]' \
   '.feat_id = "FEAT-DV1"' \
   '.learning.auto_distill_post_loop = false' \
-  '.docs = {"verify_post_loop": false, "verify_comments": false}'
+  '.docs = {"verify_post_loop": false, "verify_comments": false}' \
+  '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -49,7 +50,8 @@ create_config \
   '.agents.reviewers = ["code-reviewer"]' \
   '.feat_id = "FEAT-DV2"' \
   '.learning.auto_distill_post_loop = false' \
-  '.docs.verify_comments = false'
+  '.docs.verify_comments = false' \
+  '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -68,7 +70,8 @@ create_config \
   '.agents.reviewers = ["code-reviewer"]' \
   '.feat_id = "FEAT-DV3"' \
   '.learning.auto_distill_post_loop = false' \
-  '.docs.verify_comments = false'
+  '.docs.verify_comments = false' \
+  '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -109,7 +112,8 @@ create_config \
   '.agents.reviewers = ["code-reviewer"]' \
   '.feat_id = "FEAT-DV5"' \
   '.learning.auto_distill_post_loop = false' \
-  '.docs.verify_comments = false'
+  '.docs.verify_comments = false' \
+  '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -170,7 +174,8 @@ create_config \
   '.agents.reviewers = ["code-reviewer"]' \
   '.feat_id = "FEAT-DV8"' \
   '.learning.auto_distill_post_loop = false' \
-  '.docs.verify_comments = false'
+  '.docs.verify_comments = false' \
+  '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
