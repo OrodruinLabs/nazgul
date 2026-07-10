@@ -67,11 +67,6 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/base-branch-commit-guard.sh\"",
             "timeout": 10
-          },
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/conductor-premerge-guard.sh\"",
-            "timeout": 10
           }
         ]
       },
