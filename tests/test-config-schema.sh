@@ -166,6 +166,5 @@ val=$(jq -r '.self_audit | type' "$CONFIG")
 assert_eq "v22 has .self_audit object" "$val" "object"
 assert_json_field "v22 self_audit.enabled is true" "$CONFIG" ".self_audit.enabled" "true"
 assert_json_field "v22 self_audit.backlog_path is nazgul/improvements.md" "$CONFIG" ".self_audit.backlog_path" "nazgul/improvements.md"
-assert_json_field "v22 conductor.enforce.premerge_guard is true" "$CONFIG" ".conductor.enforce.premerge_guard" "true"
 
 report_results

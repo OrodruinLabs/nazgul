@@ -1192,7 +1192,6 @@ assert_json_field "v1→v22 chain models.review_orchestrator seeded from review 
 assert_json_field "v1→v22 chain models.review_default seeded from review (haiku)" "$NAZGUL_DIR/config.json" ".models.review_default" "haiku"
 assert_json_field "v1→v22 chain self_audit.enabled is true" "$NAZGUL_DIR/config.json" ".self_audit.enabled" "true"
 assert_json_field "v1→v22 chain self_audit.backlog_path" "$NAZGUL_DIR/config.json" ".self_audit.backlog_path" "nazgul/improvements.md"
-assert_json_field "v1→v22 chain conductor.enforce.premerge_guard is true" "$NAZGUL_DIR/config.json" ".conductor.enforce.premerge_guard" "true"
 
 # --- v19 -> v20: conductor.enforce (additive, default true) ---
 TMPDIR_V20=$(mktemp -d)
@@ -1302,7 +1301,7 @@ CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" >/dev/null 2>/dev/null
 SECOND=$(jq -c '.' "$NAZGUL_DIR/config.json")
 assert_eq "v20→v21 full idempotency (run twice = run once)" "$FIRST" "$SECOND"
 
-# --- migrate_21_to_22: models.conductor / review split / self_audit / premerge_guard (additive) ---
+# --- migrate_21_to_22: models.conductor / review split / self_audit (additive) ---
 
 # absent → full defaults; models.review absent so review_orchestrator/review_default fall back
 NAZGUL_DIR=$(setup_nazgul_dir "v21-to-22-absent")
@@ -1316,7 +1315,6 @@ assert_json_field "v21→v22 models.review_orchestrator absent review→sonnet" 
 assert_json_field "v21→v22 models.review_default absent review→haiku" "$NAZGUL_DIR/config.json" ".models.review_default" "haiku"
 assert_json_field "v21→v22 self_audit.enabled absent→true" "$NAZGUL_DIR/config.json" ".self_audit.enabled" "true"
 assert_json_field "v21→v22 self_audit.backlog_path absent→nazgul/improvements.md" "$NAZGUL_DIR/config.json" ".self_audit.backlog_path" "nazgul/improvements.md"
-assert_json_field "v21→v22 conductor.enforce.premerge_guard absent→true" "$NAZGUL_DIR/config.json" ".conductor.enforce.premerge_guard" "true"
 
 # explicit models.review value is inherited as the seed for both new review keys
 NAZGUL_DIR=$(setup_nazgul_dir "v21-to-22-review-seed")
@@ -1331,14 +1329,13 @@ assert_json_field "v21→v22 models.review_default seeded from models.review" "$
 # explicit opt-outs / overrides preserved (hand-set values incl. self_audit.enabled=false)
 NAZGUL_DIR=$(setup_nazgul_dir "v21-to-22-optout")
 cat > "$NAZGUL_DIR/config.json" << 'EOF'
-{ "schema_version": 21, "models": { "conductor": "haiku", "review_orchestrator": "haiku" }, "self_audit": { "enabled": false }, "conductor": { "enforce": { "premerge_guard": false } } }
+{ "schema_version": 21, "models": { "conductor": "haiku", "review_orchestrator": "haiku" }, "self_audit": { "enabled": false } }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_json_field "v21→v22 hand-set models.conductor preserved" "$NAZGUL_DIR/config.json" ".models.conductor" "haiku"
 assert_json_field "v21→v22 hand-set models.review_orchestrator preserved" "$NAZGUL_DIR/config.json" ".models.review_orchestrator" "haiku"
 assert_json_field "v21→v22 review_default sibling still backfilled (absent review)" "$NAZGUL_DIR/config.json" ".models.review_default" "haiku"
 assert_json_field "v21→v22 hand-set self_audit.enabled=false preserved" "$NAZGUL_DIR/config.json" ".self_audit.enabled" "false"
-assert_json_field "v21→v22 hand-set conductor.enforce.premerge_guard=false preserved (kill-switch)" "$NAZGUL_DIR/config.json" ".conductor.enforce.premerge_guard" "false"
 
 # non-object models / self_audit clamped to object
 NAZGUL_DIR=$(setup_nazgul_dir "v21-to-22-models-garbage")
@@ -1390,7 +1387,6 @@ assert_json_field "v17→v22 walk v19 step execution.engine present" "$NAZGUL_DI
 assert_json_field "v17→v22 walk v20 step conductor.enforce.dispatch_guard present" "$NAZGUL_DIR/config.json" ".conductor.enforce.dispatch_guard" "true"
 assert_json_field "v17→v22 walk v21 step automation.heartbeat present" "$NAZGUL_DIR/config.json" ".automation.heartbeat.enabled" "false"
 assert_json_field "v17→v22 walk v22 step models.conductor present" "$NAZGUL_DIR/config.json" ".models.conductor" "sonnet"
-assert_json_field "v17→v22 walk v22 step conductor.enforce.premerge_guard present" "$NAZGUL_DIR/config.json" ".conductor.enforce.premerge_guard" "true"
 # idempotent re-run over the already-migrated config leaves it unchanged
 FIRST=$(jq -c '.' "$NAZGUL_DIR/config.json")
 CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" >/dev/null 2>/dev/null

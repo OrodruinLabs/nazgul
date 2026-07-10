@@ -84,8 +84,7 @@
     "max_parallel": 3,
     "enforce": {
       "dispatch_guard": true,
-      "rework_guard": true,
-      "premerge_guard": true
+      "rework_guard": true
     }
   },
   "automation": {

@@ -460,12 +460,9 @@ migrate_21_to_22() {
     | .self_audit = ((if (.self_audit | type) == "object" then .self_audit else {} end)
         | .enabled = (if has("enabled") then .enabled else true end)
         | .backlog_path = (if has("backlog_path") then .backlog_path else "nazgul/improvements.md" end))
-    | .conductor = ((if (.conductor | type) == "object" then .conductor else {} end)
-        | .enforce = ((if (.enforce | type) == "object" then .enforce else {} end)
-            | .premerge_guard = (if has("premerge_guard") then .premerge_guard else true end)))
     | .schema_version = 22
   ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
-  log_migration "v21→v22: added models.conductor (sonnet); split models.review into models.review_orchestrator/models.review_default (seeded from existing models.review, else sonnet/haiku; models.review untouched); added self_audit.{enabled:true,backlog_path:nazgul/improvements.md}; added conductor.enforce.premerge_guard (default true, TASK-011 H2 kill-switch)"
+  log_migration "v21→v22: added models.conductor (sonnet); split models.review into models.review_orchestrator/models.review_default (seeded from existing models.review, else sonnet/haiku; models.review untouched); added self_audit.{enabled:true,backlog_path:nazgul/improvements.md}"
 }
 
 # --- Run incremental migrations ---
