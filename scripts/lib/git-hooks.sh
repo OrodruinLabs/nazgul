@@ -67,12 +67,13 @@ SHIM
 
 # install_git_hooks <project_root> <config>
 # No-op if `guards.git_hooks` is false. Otherwise, on the FIRST install of a
-# cycle (`branch.prior_hooks_path` not yet present), records the live
-# `core.hooksPath` into it — empty string sentinel for "was unset". A later
-# install in the same cycle never overwrites an already-recorded value, even
-# if `core.hooksPath` has since drifted externally. Installs the two guard
-# templates + dispatcher + shims for every other standard hook name into
-# `nazgul/.githooks/`, then points `core.hooksPath` at it. Safe to call
+# cycle (`branch.prior_hooks_path` is `null` — absent or explicit-null both
+# read that way in jq — meaning "not yet recorded"), records the live
+# `core.hooksPath` into it — empty string means "recorded, and it was unset".
+# A later install in the same cycle never overwrites an already-recorded
+# value, even if `core.hooksPath` has since drifted externally. Installs the
+# two guard templates + dispatcher + shims for every other standard hook name
+# into `nazgul/.githooks/`, then points `core.hooksPath` at it. Safe to call
 # repeatedly (idempotent).
 install_git_hooks() {
   local project_root="${1:?install_git_hooks: project_root required}"
@@ -80,9 +81,9 @@ install_git_hooks() {
   [ -f "$config" ] || return 0
   [ "$(_gh_enabled "$config")" = "true" ] || return 0
 
-  local field_present
-  field_present=$(jq -r '(.branch // {}) | has("prior_hooks_path")' "$config" 2>/dev/null || echo "false")
-  if [ "$field_present" != "true" ]; then
+  local not_recorded
+  not_recorded=$(jq -r '(.branch // {}).prior_hooks_path == null' "$config" 2>/dev/null || echo "true")
+  if [ "$not_recorded" = "true" ]; then
     local current
     current=$(_gh_current_hooks_path "$project_root")
     local tmp
@@ -113,8 +114,10 @@ install_git_hooks() {
 # uninstall_git_hooks <project_root> <config>
 # Restores the recorded prior `core.hooksPath` exactly — unsets it when the
 # recorded value is the empty "was unset" sentinel, otherwise sets it back.
-# Clears the recorded field afterward. Leaves the managed dir's contents on
-# disk (harmless once unreferenced).
+# Re-arms the recorded field to `null` afterward ("not yet recorded" for the
+# next cycle) — NOT empty string, which would mean "recorded, was unset" and
+# poison the next install's presence gate. Leaves the managed dir's contents
+# on disk (harmless once unreferenced).
 uninstall_git_hooks() {
   local project_root="${1:?uninstall_git_hooks: project_root required}"
   local config="${2:?uninstall_git_hooks: config required}"
@@ -131,16 +134,16 @@ uninstall_git_hooks() {
 
   local tmp
   tmp=$(mktemp)
-  jq '.branch.prior_hooks_path = ""' "$config" > "$tmp" && mv "$tmp" "$config"
+  jq '.branch.prior_hooks_path = null' "$config" > "$tmp" && mv "$tmp" "$config"
 }
 
 # self_heal_git_hooks <project_root> <config>
 # Re-asserts the managed `core.hooksPath` ONLY when a loop is actively
-# tracked (`guards.git_hooks` true, `branch.feature` set, schema has been
-# migrated to carry `branch.prior_hooks_path`) AND the actual value has
-# drifted from the managed dir. No-ops on an explicit `guards.git_hooks:
-# false`, no active objective, or when already correct — never a blind
-# overwrite.
+# tracked (`guards.git_hooks` true, `branch.feature` set, `branch.
+# prior_hooks_path` has actually been recorded — i.e. non-null) AND the
+# actual value has drifted from the managed dir. No-ops on an explicit
+# `guards.git_hooks: false`, no active objective, or when already correct —
+# never a blind overwrite.
 self_heal_git_hooks() {
   local project_root="${1:?self_heal_git_hooks: project_root required}"
   local config="${2:?self_heal_git_hooks: config required}"
@@ -151,9 +154,9 @@ self_heal_git_hooks() {
   feature=$(jq -r '.branch.feature // ""' "$config" 2>/dev/null || echo "")
   [ -n "$feature" ] || return 0
 
-  local field_present
-  field_present=$(jq -r '(.branch // {}) | has("prior_hooks_path")' "$config" 2>/dev/null || echo "false")
-  [ "$field_present" = "true" ] || return 0
+  local recorded
+  recorded=$(jq -r '(.branch // {}).prior_hooks_path != null' "$config" 2>/dev/null || echo "false")
+  [ "$recorded" = "true" ] || return 0
 
   local current
   current=$(_gh_current_hooks_path "$project_root")

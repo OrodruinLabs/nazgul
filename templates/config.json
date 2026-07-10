@@ -154,7 +154,7 @@
     "created_at": null,
     "auto_pr_on_complete": true,
     "sparse_paths": null,
-    "prior_hooks_path": ""
+    "prior_hooks_path": null
   },
   "afk": {
     "enabled": false,

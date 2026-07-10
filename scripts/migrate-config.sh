@@ -477,12 +477,12 @@ migrate_22_to_23() {
       | .enforce = ((if (.enforce | type) == "object" then .enforce else {} end)
           | .premerge_guard = (if has("premerge_guard") then .premerge_guard else true end)))
     | .branch = ((if (.branch | type) == "object" then .branch else {} end)
-        | .prior_hooks_path = (if has("prior_hooks_path") then .prior_hooks_path else "" end))
+        | .prior_hooks_path = (if has("prior_hooks_path") then .prior_hooks_path else null end))
     | .guards = ((if (.guards | type) == "object" then .guards else {} end)
         | .git_hooks = (if has("git_hooks") then .git_hooks else true end))
     | .schema_version = 23
   ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
-  log_migration "v22→v23: added conductor.enforce.premerge_guard (default true); added branch.prior_hooks_path (default \"\", empty-string sentinel for was-unset); added guards.git_hooks (default true)"
+  log_migration "v22→v23: added conductor.enforce.premerge_guard (default true); added branch.prior_hooks_path (default null, not-yet-recorded sentinel; empty string means recorded-and-was-unset); added guards.git_hooks (default true)"
 }
 
 # --- Run incremental migrations ---

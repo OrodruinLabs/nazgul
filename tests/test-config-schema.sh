@@ -169,7 +169,7 @@ assert_json_field "v22 self_audit.backlog_path is nazgul/improvements.md" "$CONF
 
 # v23 new defaults (FEAT-010: git-level hook enforcement config)
 assert_json_field "v23 conductor.enforce.premerge_guard is true" "$CONFIG" ".conductor.enforce.premerge_guard" "true"
-assert_json_field "v23 branch.prior_hooks_path is empty string" "$CONFIG" ".branch.prior_hooks_path" ""
+assert_json_field "v23 branch.prior_hooks_path is null" "$CONFIG" ".branch.prior_hooks_path" "null"
 assert_json_field "v23 guards.git_hooks is true" "$CONFIG" ".guards.git_hooks" "true"
 
 report_results

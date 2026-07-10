@@ -111,6 +111,45 @@ assert_exit_code "bf1: uninstall restores the true original (unset), not the dri
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
+# NULL-SENTINEL REGRESSION: a config seeded the way real init/migration ships
+# it — `prior_hooks_path: null` PRESENT (not the key omitted) — must still be
+# treated as "not yet recorded" so a real prior `core.hooksPath` gets
+# captured on first install, not skipped.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+git -C "$TEST_DIR/repo" config core.hooksPath ".husky"
+write_config "$TEST_DIR/repo" '{"branch":{"base":"main","feature":"feat/x","prior_hooks_path":null},"guards":{"git_hooks":true}}'
+install_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
+RECORDED_PRIOR=$(jq -r '.branch.prior_hooks_path' "$TEST_DIR/repo/nazgul/config.json")
+assert_eq "null-sentinel: template-seeded null field still records true prior" "$RECORDED_PRIOR" ".husky"
+uninstall_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
+RESTORED=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
+assert_eq "null-sentinel: uninstall restores the true prior exactly" "$RESTORED" ".husky"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# TWO-CYCLE SURVIVAL: install -> uninstall -> install -> uninstall with a
+# real non-empty prior must restore the true original on BOTH cycles (the
+# re-arm after uninstall must be `null`, not "", or cycle 2 would corrupt).
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+git -C "$TEST_DIR/repo" config core.hooksPath ".husky"
+write_config "$TEST_DIR/repo" '{"branch":{"base":"main","feature":"feat/x"},"guards":{"git_hooks":true}}'
+install_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
+uninstall_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
+RESTORED=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
+assert_eq "two-cycle: cycle 1 restores true prior" "$RESTORED" ".husky"
+REARMED=$(jq -r '.branch.prior_hooks_path' "$TEST_DIR/repo/nazgul/config.json")
+assert_eq "two-cycle: uninstall re-arms field to null, not empty string" "$REARMED" "null"
+install_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
+uninstall_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
+RESTORED=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
+assert_eq "two-cycle: cycle 2 still restores true prior (not corrupted)" "$RESTORED" ".husky"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
 # guards.git_hooks: false -> install is a no-op.
 # ---------------------------------------------------------------------------
 setup_temp_dir

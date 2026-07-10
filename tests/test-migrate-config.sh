@@ -1193,7 +1193,7 @@ assert_json_field "v1→v23 chain models.review_default seeded from review (haik
 assert_json_field "v1→v23 chain self_audit.enabled is true" "$NAZGUL_DIR/config.json" ".self_audit.enabled" "true"
 assert_json_field "v1→v23 chain self_audit.backlog_path" "$NAZGUL_DIR/config.json" ".self_audit.backlog_path" "nazgul/improvements.md"
 assert_json_field "v1→v23 chain conductor.enforce.premerge_guard is true" "$NAZGUL_DIR/config.json" ".conductor.enforce.premerge_guard" "true"
-assert_json_field "v1→v23 chain branch.prior_hooks_path is empty string" "$NAZGUL_DIR/config.json" ".branch.prior_hooks_path" ""
+assert_json_field "v1→v23 chain branch.prior_hooks_path is null" "$NAZGUL_DIR/config.json" ".branch.prior_hooks_path" "null"
 assert_json_field "v1→v23 chain guards.git_hooks is true" "$NAZGUL_DIR/config.json" ".guards.git_hooks" "true"
 
 # --- v19 -> v20: conductor.enforce (additive, default true) ---
@@ -1399,7 +1399,7 @@ EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v22 → v23 output" "$OUTPUT" "migrated"
 assert_json_field "v22→v23 conductor.enforce.premerge_guard absent→true" "$NAZGUL_DIR/config.json" ".conductor.enforce.premerge_guard" "true"
-assert_json_field "v22→v23 branch.prior_hooks_path absent→empty string" "$NAZGUL_DIR/config.json" ".branch.prior_hooks_path" ""
+assert_json_field "v22→v23 branch.prior_hooks_path absent→null" "$NAZGUL_DIR/config.json" ".branch.prior_hooks_path" "null"
 assert_json_field "v22→v23 guards.git_hooks absent→true" "$NAZGUL_DIR/config.json" ".guards.git_hooks" "true"
 
 # explicit opt-outs / overrides preserved (hand-set values incl. a real prior hooks path)
@@ -1421,7 +1421,7 @@ OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) |
 assert_json_field "v22→v23 non-object conductor.enforce clamped to object" "$NAZGUL_DIR/config.json" ".conductor.enforce | type" "object"
 assert_json_field "v22→v23 clamped conductor.enforce gets premerge_guard=true" "$NAZGUL_DIR/config.json" ".conductor.enforce.premerge_guard" "true"
 assert_json_field "v22→v23 non-object branch clamped to object" "$NAZGUL_DIR/config.json" ".branch | type" "object"
-assert_json_field "v22→v23 clamped branch gets prior_hooks_path=empty string" "$NAZGUL_DIR/config.json" ".branch.prior_hooks_path" ""
+assert_json_field "v22→v23 clamped branch gets prior_hooks_path=null" "$NAZGUL_DIR/config.json" ".branch.prior_hooks_path" "null"
 assert_json_field "v22→v23 non-object guards clamped to object" "$NAZGUL_DIR/config.json" ".guards | type" "object"
 assert_json_field "v22→v23 clamped guards gets git_hooks=true" "$NAZGUL_DIR/config.json" ".guards.git_hooks" "true"
 
@@ -1467,7 +1467,7 @@ assert_json_field "v17→v23 walk v20 step conductor.enforce.dispatch_guard pres
 assert_json_field "v17→v23 walk v21 step automation.heartbeat present" "$NAZGUL_DIR/config.json" ".automation.heartbeat.enabled" "false"
 assert_json_field "v17→v23 walk v22 step models.conductor present" "$NAZGUL_DIR/config.json" ".models.conductor" "sonnet"
 assert_json_field "v17→v23 walk v23 step conductor.enforce.premerge_guard present" "$NAZGUL_DIR/config.json" ".conductor.enforce.premerge_guard" "true"
-assert_json_field "v17→v23 walk v23 step branch.prior_hooks_path present" "$NAZGUL_DIR/config.json" ".branch.prior_hooks_path" ""
+assert_json_field "v17→v23 walk v23 step branch.prior_hooks_path present" "$NAZGUL_DIR/config.json" ".branch.prior_hooks_path" "null"
 assert_json_field "v17→v23 walk v23 step guards.git_hooks present" "$NAZGUL_DIR/config.json" ".guards.git_hooks" "true"
 # idempotent re-run over the already-migrated config leaves it unchanged
 FIRST=$(jq -c '.' "$NAZGUL_DIR/config.json")
