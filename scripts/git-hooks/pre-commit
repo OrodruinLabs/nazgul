@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Nazgul pre-commit guard — blocks a commit on the base branch while a loop
+# is active (branch.feature set). Runs inside the repo git invoked it in, so
+# "current branch" is unambiguous — no cwd/`-C` confusion is possible here.
+#
+# git pre-commit contract: no argv, no stdin read, exit 0 = allow, nonzero =
+# block (message on stderr).
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
+[ -n "$REPO_ROOT" ] || exit 0
+
+CONFIG="$REPO_ROOT/nazgul/config.json"
+DISPATCH="$(cd "$(dirname "$0")" && pwd)/_dispatch.sh"
+
+_dispatch_and_exit() {
+  if [ -f "$DISPATCH" ]; then
+    export CLAUDE_PROJECT_DIR="$REPO_ROOT"
+    # shellcheck source=/dev/null
+    source "$DISPATCH"
+    dispatch_prior_hook pre-commit
+    exit $?
+  fi
+  exit 0
+}
+
+[ -f "$CONFIG" ] || _dispatch_and_exit
+
+# `// true` would treat a literal `false` as falsy too (jq quirk), so compare
+# explicitly — only an explicit `false` disables the guard.
+GIT_HOOKS_ENABLED=$(jq -r 'if .guards.git_hooks == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+[ "$GIT_HOOKS_ENABLED" = "true" ] || _dispatch_and_exit
+
+FEATURE=$(jq -r '.branch.feature // ""' "$CONFIG" 2>/dev/null || echo "")
+[ -n "$FEATURE" ] || _dispatch_and_exit
+
+BASE=$(jq -r '.branch.base // "main"' "$CONFIG" 2>/dev/null || echo "main")
+
+CURRENT=$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null || echo "")
+[ -n "$CURRENT" ] && [ "$CURRENT" = "$BASE" ] || _dispatch_and_exit
+
+echo "NAZGUL GUARD: Blocked — cannot commit to the base branch '$BASE' during an active loop." >&2
+echo "" >&2
+echo "  An objective is in progress on feature branch '$FEATURE'. Loop commits" >&2
+echo "  must land on the feature branch, never on the base branch directly." >&2
+echo "" >&2
+echo "  Switch to the feature branch and commit there:" >&2
+echo "    git checkout $FEATURE" >&2
+exit 1
