@@ -92,6 +92,25 @@ assert_eq "re-install: prior value not clobbered" "$RECORDED_PRIOR" ".husky"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
+# BF-1 REGRESSION: install -> external drift -> re-install must NOT re-record
+# the drifted value over the true original (incl. the "was unset" case).
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" '{"branch":{"base":"main","feature":"feat/x"},"guards":{"git_hooks":true}}'
+install_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
+RECORDED_PRIOR=$(jq -r '.branch.prior_hooks_path' "$TEST_DIR/repo/nazgul/config.json")
+assert_eq "bf1: first install records true prior (unset sentinel)" "$RECORDED_PRIOR" ""
+git -C "$TEST_DIR/repo" config core.hooksPath "/some/other/dir"
+install_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
+RECORDED_PRIOR=$(jq -r '.branch.prior_hooks_path' "$TEST_DIR/repo/nazgul/config.json")
+assert_eq "bf1: reinstall after drift does not clobber true prior" "$RECORDED_PRIOR" ""
+uninstall_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
+git -C "$TEST_DIR/repo" config --get core.hooksPath >/dev/null 2>&1
+assert_exit_code "bf1: uninstall restores the true original (unset), not the drifted value" "$?" 1
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
 # guards.git_hooks: false -> install is a no-op.
 # ---------------------------------------------------------------------------
 setup_temp_dir

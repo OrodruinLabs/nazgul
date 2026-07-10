@@ -66,22 +66,25 @@ SHIM
 }
 
 # install_git_hooks <project_root> <config>
-# No-op if `guards.git_hooks` is false. Otherwise, when the live
-# `core.hooksPath` differs from the managed dir (i.e. not already installed),
-# records it into `branch.prior_hooks_path` — empty string sentinel for "was
-# unset". Installs the two guard templates + dispatcher + shims for every
-# other standard hook name into `nazgul/.githooks/`, then points
-# `core.hooksPath` at it. Safe to call repeatedly (idempotent).
+# No-op if `guards.git_hooks` is false. Otherwise, on the FIRST install of a
+# cycle (`branch.prior_hooks_path` not yet present), records the live
+# `core.hooksPath` into it — empty string sentinel for "was unset". A later
+# install in the same cycle never overwrites an already-recorded value, even
+# if `core.hooksPath` has since drifted externally. Installs the two guard
+# templates + dispatcher + shims for every other standard hook name into
+# `nazgul/.githooks/`, then points `core.hooksPath` at it. Safe to call
+# repeatedly (idempotent).
 install_git_hooks() {
   local project_root="${1:?install_git_hooks: project_root required}"
   local config="${2:?install_git_hooks: config required}"
   [ -f "$config" ] || return 0
   [ "$(_gh_enabled "$config")" = "true" ] || return 0
 
-  local current
-  current=$(_gh_current_hooks_path "$project_root")
-
-  if [ "$current" != "$_GH_MANAGED_RELDIR" ]; then
+  local field_present
+  field_present=$(jq -r '(.branch // {}) | has("prior_hooks_path")' "$config" 2>/dev/null || echo "false")
+  if [ "$field_present" != "true" ]; then
+    local current
+    current=$(_gh_current_hooks_path "$project_root")
     local tmp
     tmp=$(mktemp)
     jq --arg prior "$current" '.branch.prior_hooks_path = $prior' "$config" > "$tmp" && mv "$tmp" "$config"
