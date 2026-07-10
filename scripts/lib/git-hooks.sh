@@ -24,7 +24,8 @@ _GH_OTHER_HOOKS=(
   applypatch-msg pre-applypatch post-applypatch prepare-commit-msg commit-msg
   post-commit pre-rebase post-checkout post-merge pre-push pre-receive update
   post-receive post-update push-to-checkout pre-auto-gc post-rewrite
-  sendemail-validate fsmonitor-watchman push-to-mirror reference-transaction
+  sendemail-validate fsmonitor-watchman proc-receive post-index-change
+  reference-transaction
 )
 
 _gh_enabled() {

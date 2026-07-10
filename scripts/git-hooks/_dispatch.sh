@@ -61,8 +61,10 @@ dispatch_prior_hook() {
   prior_dir="$(_dispatch_prior_hooks_dir)" || return 0
   [ -n "$prior_dir" ] || return 0
 
-  local hook_base
-  hook_base="$(basename -- "$hook_name")"
+  # Strip any directory components via parameter expansion (no external
+  # `basename`, no `--` portability concern) so the name can't traverse out
+  # of the prior-hooks dir.
+  local hook_base="${hook_name##*/}"
   local prior_hook="$prior_dir/$hook_base"
 
   # Trust boundary: only exec an existing, executable, non-symlink regular
