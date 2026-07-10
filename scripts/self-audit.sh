@@ -166,6 +166,11 @@ _expected_model_for() {
       else
         jq -r '.models.review_default // .models.review // "haiku"' "$CONFIG" 2>/dev/null || echo "haiku"
       fi ;;
+    *feedback-aggregator*)
+      # review-gate dispatches feedback-aggregator on the reviewer-default chain,
+      # NOT models.default — without this it would fall through to sonnet and
+      # falsely flag every haiku feedback-aggregator transcript as tier drift.
+      jq -r '.models.review_default // .models.review // "haiku"' "$CONFIG" 2>/dev/null || echo "haiku" ;;
     *conductor*)
       jq -r '.models.conductor // "sonnet"' "$CONFIG" 2>/dev/null || echo "sonnet" ;;
     *planner*|*planning*)
@@ -204,11 +209,22 @@ _mine_token_cost() {
     echo "self-audit: cost data unavailable (transcript dir not found: ${dir:-unset})"
     return 0
   fi
+  # Scope to the MOST RECENT session dir (best-effort): the transcript root
+  # accumulates one dir per session across ALL objectives, so globbing every
+  # session would mine prior objectives' transcripts and emit tier-drift
+  # findings unrelated to the just-finished run. Newest-by-mtime is the closest
+  # proxy for "this objective's session" without a session-id handshake.
+  local newest
+  newest=$(ls -dt "$dir"/*/ 2>/dev/null | head -1)
+  if [ -z "$newest" ]; then
+    echo "self-audit: cost data unavailable (no session dirs under ${dir})"
+    return 0
+  fi
   shopt -s nullglob
-  files=("$dir"/*/subagents/*.jsonl)
+  files=("${newest}subagents"/*.jsonl)
   shopt -u nullglob
   if [ "${#files[@]}" -eq 0 ]; then
-    echo "self-audit: cost data unavailable (no subagent transcripts under ${dir})"
+    echo "self-audit: cost data unavailable (no subagent transcripts under ${newest})"
     return 0
   fi
   for f in "${files[@]}"; do

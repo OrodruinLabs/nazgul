@@ -192,4 +192,31 @@ assert_exit_code "T11: unwritable backlog exits 0 (never fails the run)" "$SA_EC
 assert_contains "T11: logs a skip message" "$SA_OUTPUT" "run not failed"
 assert_file_not_exists "T11: no backlog created at the blocked path" "$T11/blk/improvements.md"
 
+# --- Test 12: feedback-aggregator on haiku is NOT flagged as tier drift ---
+# review-gate dispatches feedback-aggregator on the review_default chain (haiku),
+# so _expected_model_for must resolve it to haiku, not fall through to sonnet.
+T12ROOT=$(mk_project "t12")
+T12T="$TMPDIR_BASE/t12-transcripts/session1/subagents"
+mkdir -p "$T12T"
+printf '{"message":{"model":"haiku"}}\n' > "$T12T/feedback-aggregator.jsonl"
+run_self_audit_with_transcripts "$T12ROOT/nazgul" "$TMPDIR_BASE/t12-transcripts"
+assert_exit_code "T12: exits 0" "$SA_EC" 0
+assert_not_contains "T12: feedback-aggregator on haiku not flagged as drift (review_default)" \
+  "$(cat "$T12ROOT/nazgul/improvements.md")" "Model-tier drift: feedback-aggregator"
+
+# --- Test 13: cost mining scopes to the MOST RECENT session dir only ---
+# A prior session's drift must NOT bleed into this objective's backlog.
+T13ROOT=$(mk_project "t13")
+T13T="$TMPDIR_BASE/t13-transcripts"
+mkdir -p "$T13T/session-old/subagents" "$T13T/session-new/subagents"
+printf '{"message":{"model":"opus"}}\n'   > "$T13T/session-old/subagents/code-reviewer.jsonl"  # would drift (opus vs haiku)
+printf '{"message":{"model":"sonnet"}}\n' > "$T13T/session-new/subagents/implementer.jsonl"     # matches, no drift
+# Force mtime ordering AFTER writing contents (writes bump the dir mtime).
+touch -t 202601010000 "$T13T/session-old"
+touch -t 202601020000 "$T13T/session-new"
+run_self_audit_with_transcripts "$T13ROOT/nazgul" "$T13T"
+assert_exit_code "T13: exits 0" "$SA_EC" 0
+assert_not_contains "T13: prior-session drift NOT mined (newest session dir only)" \
+  "$(cat "$T13ROOT/nazgul/improvements.md")" "Model-tier drift: code-reviewer"
+
 report_results

@@ -449,7 +449,10 @@ migrate_21_to_22() {
   # FEAT-009: model-tier + review-key split + self-audit config. ADDITIVE — set when absent,
   # explicit values preserved; models.review untouched (seed source for the two new review keys).
   local review
-  review=$(jq -r '.models.review? // empty' "$CONFIG")
+  # Only a non-empty STRING models.review is a valid seed. `// empty` already
+  # drops JSON null, but a non-string (number/object/bool) would otherwise be
+  # printed by `jq -r` and seed review_orchestrator/review_default with garbage.
+  review=$(jq -r '(.models.review? | select(type=="string")) // empty' "$CONFIG")
   jq --arg review "$review" '
     .models = ((if (.models | type) == "object" then .models else {} end)
       | .conductor = (if has("conductor") then .conductor else "sonnet" end)

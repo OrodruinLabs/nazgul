@@ -18,7 +18,7 @@ metadata:
 - Iteration: !`jq -r '"\(.current_iteration // 0)/\(.max_iterations // 40)"' nazgul/config.json 2>/dev/null || echo "0/40"`
 - Classification: !`jq -r '.project.classification // "unknown"' nazgul/config.json 2>/dev/null || echo "unknown"`
 - Execution engine: !`jq -r '.execution.engine // "sequential"' nazgul/config.json 2>/dev/null || echo "sequential"`
-- Conductor graph digest: !`E=$(jq -r '.execution.engine // "sequential"' nazgul/config.json 2>/dev/null); if [ "$E" = "conductor" ] && [ -f nazgul/conductor/graph.json ]; then source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/conductor-graph.sh" 2>/dev/null && graph_wave_digest nazgul/conductor/graph.json; else echo "{}"; fi`
+- Conductor graph digest: !`E=$(jq -r '.execution.engine // "sequential"' nazgul/config.json 2>/dev/null); if [ "$E" = "conductor" ] && [ -f nazgul/conductor/graph.json ]; then { source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/conductor-graph.sh" 2>/dev/null && graph_wave_digest nazgul/conductor/graph.json; } || echo "{}"; else echo "{}"; fi`
 - AFK: !`jq -r 'if .afk.enabled then "enabled" else "disabled" end' nazgul/config.json 2>/dev/null || echo "disabled"`
 - Paused: !`jq -r '.paused // false' nazgul/config.json 2>/dev/null || echo "false"`
 - Reviewers: !`jq -r '.agents.reviewers // [] | join(", ")' nazgul/config.json 2>/dev/null || echo "none"`
