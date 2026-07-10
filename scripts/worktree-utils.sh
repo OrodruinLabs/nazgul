@@ -6,6 +6,12 @@ set -euo pipefail
 
 # Requires: NAZGUL_DIR and CONFIG to be set by the caller
 
+_WU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_WU_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$_WU_DIR/.." && pwd)}"
+_WU_GIT_HOOKS_LIB="$_WU_PLUGIN_ROOT/scripts/lib/git-hooks.sh"
+# shellcheck source=./lib/git-hooks.sh
+[ -f "$_WU_GIT_HOOKS_LIB" ] && source "$_WU_GIT_HOOKS_LIB"
+
 slugify_objective() {
   local input="$1"
   echo "$input" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | cut -c1-50
@@ -52,6 +58,10 @@ create_feature_branch() {
     --arg prefix "feat(${display_id}):" \
     '.branch.feature = $feat | .branch.base = $base | .branch.main_worktree_path = $mwp | .branch.created_at = $ts | .feat_id = $fid | .feat_display_id = $did | .afk.commit_prefix = $prefix' \
     "$config" > "$tmp" && mv "$tmp" "$config"
+
+  if declare -F install_git_hooks >/dev/null 2>&1; then
+    install_git_hooks "$project_root" "$config" || true
+  fi
 
   echo "$branch_name"
 }
@@ -170,18 +180,27 @@ cleanup_all_worktrees() {
   local worktree_dir
   worktree_dir=$(jq -r '.branch.worktree_dir // ""' "$config")
 
-  if [ -z "$worktree_dir" ] || [ ! -d "$worktree_dir" ]; then
-    return 0
+  if [ -n "$worktree_dir" ] && [ -d "$worktree_dir" ]; then
+    # Remove all task worktrees
+    for task_dir in "$worktree_dir"/TASK-*; do
+      [ -d "$task_dir" ] || continue
+      local task_id
+      task_id=$(basename "$task_dir")
+      cleanup_task_worktree "$task_id" "$project_root" "$config"
+    done
+
+    # Remove the parent worktree directory if empty
+    rmdir "$worktree_dir" 2>/dev/null || true
   fi
 
-  # Remove all task worktrees
-  for task_dir in "$worktree_dir"/TASK-*; do
-    [ -d "$task_dir" ] || continue
-    local task_id
-    task_id=$(basename "$task_dir")
-    cleanup_task_worktree "$task_id" "$project_root" "$config"
-  done
-
-  # Remove the parent worktree directory if empty
-  rmdir "$worktree_dir" 2>/dev/null || true
+  # uninstall_git_hooks unconditionally restores core.hooksPath — only call it
+  # when this objective actually installed (prior_hooks_path recorded), so a
+  # repo/objective that never installed can't have its hooksPath touched.
+  if declare -F uninstall_git_hooks >/dev/null 2>&1 && [ -f "$config" ]; then
+    local hooks_installed
+    hooks_installed=$(jq -r '(.branch // {}).prior_hooks_path != null' "$config" 2>/dev/null || echo "false")
+    if [ "$hooks_installed" = "true" ]; then
+      uninstall_git_hooks "$project_root" "$config" || true
+    fi
+  fi
 }
