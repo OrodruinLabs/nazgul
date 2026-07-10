@@ -32,6 +32,16 @@ _gh_enabled() {
   jq -r 'if .guards.git_hooks == false then "false" else "true" end' "$config" 2>/dev/null || echo "true"
 }
 
+# True only when jq is available AND the config parses as valid JSON. Every
+# lifecycle function must gate on this before touching `core.hooksPath` —
+# a malformed config or missing jq means we can't safely read/record the
+# prior value, so the only safe move is a no-op.
+_gh_config_readable() {
+  local config="$1"
+  command -v jq >/dev/null 2>&1 || return 1
+  jq -e . "$config" >/dev/null 2>&1
+}
+
 # Prints the live `core.hooksPath` for the repo, or "" if unset/unreadable.
 _gh_current_hooks_path() {
   local project_root="$1"
@@ -79,6 +89,7 @@ install_git_hooks() {
   local project_root="${1:?install_git_hooks: project_root required}"
   local config="${2:?install_git_hooks: config required}"
   [ -f "$config" ] || return 0
+  _gh_config_readable "$config" || return 0
   [ "$(_gh_enabled "$config")" = "true" ] || return 0
 
   local not_recorded
@@ -113,18 +124,26 @@ install_git_hooks() {
 
 # uninstall_git_hooks <project_root> <config>
 # Restores the recorded prior `core.hooksPath` exactly — unsets it when the
-# recorded value is the empty "was unset" sentinel, otherwise sets it back.
-# Re-arms the recorded field to `null` afterward ("not yet recorded" for the
-# next cycle) — NOT empty string, which would mean "recorded, was unset" and
-# poison the next install's presence gate. Leaves the managed dir's contents
-# on disk (harmless once unreferenced).
+# recorded value is the empty "was unset" sentinel, sets it back when it's a
+# real path, and no-ops when it was never recorded (`null`/absent, meaning
+# install never ran) — never treating jq failure, "never recorded", and
+# "recorded as unset" as the same case. Re-arms the recorded field to `null`
+# afterward ("not yet recorded" for the next cycle) — NOT empty string, which
+# would mean "recorded, was unset" and poison the next install's presence
+# gate. Leaves the managed dir's contents on disk (harmless once
+# unreferenced).
 uninstall_git_hooks() {
   local project_root="${1:?uninstall_git_hooks: project_root required}"
   local config="${2:?uninstall_git_hooks: config required}"
   [ -f "$config" ] || return 0
+  _gh_config_readable "$config" || return 0
+
+  local was_recorded
+  was_recorded=$(jq -r '(.branch // {}).prior_hooks_path != null' "$config" 2>/dev/null) || return 0
+  [ "$was_recorded" = "true" ] || return 0
 
   local prior
-  prior=$(jq -r '.branch.prior_hooks_path // ""' "$config" 2>/dev/null || echo "")
+  prior=$(jq -r '.branch.prior_hooks_path' "$config" 2>/dev/null) || return 0
 
   if [ -z "$prior" ]; then
     git -C "$project_root" config --unset core.hooksPath 2>/dev/null || true
@@ -148,6 +167,7 @@ self_heal_git_hooks() {
   local project_root="${1:?self_heal_git_hooks: project_root required}"
   local config="${2:?self_heal_git_hooks: config required}"
   [ -f "$config" ] || return 0
+  _gh_config_readable "$config" || return 0
   [ "$(_gh_enabled "$config")" = "true" ] || return 0
 
   local feature

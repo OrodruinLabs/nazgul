@@ -431,8 +431,9 @@ actually asked to do.
 - **Activation: `core.hooksPath` → `nazgul/.githooks/`.** `[hook-driven only]` `scripts/lib/git-hooks.sh`
   installs the two guards, the dispatcher, and the pass-through shims into the per-project managed
   directory `nazgul/.githooks/`, then points `git config core.hooksPath` at it — never editing a file
-  the user owns. Gated on `guards.git_hooks` (default `true`); an explicit `false` makes install,
-  uninstall, and self-heal all no-ops.
+  the user owns. Gated on `guards.git_hooks` (default `true`); an explicit `false` makes install and
+  self-heal no-ops. `uninstall_git_hooks` is not gated on the toggle — it always restores whatever
+  prior `core.hooksPath` was recorded, so flipping the toggle mid-loop can't strand a recorded value.
 - **Install/uninstall/self-heal lifecycle, tied to the loop's own boundaries.** `[hook-driven only]`
   `install_git_hooks` runs inside `create_feature_branch`/`setup_worktree_dir`
   (`scripts/worktree-utils.sh`) at the moment `branch.feature` is assigned, first durably recording the
@@ -453,5 +454,7 @@ PreToolUse guard here (the Legend's tier-1 row now notes this). *Installation* i
 not itself mechanically forced onto every code path that could start a loop or invoke git; it depends on
 the loop's own protocol calling `create_feature_branch()`/`setup_worktree_dir()`, same limit this
 document already applies to other protocol-invoked checks (e.g. §12's Conductor hard-stop call sites). A
-repo where install never ran has no guard at all until the next `SessionStart` self-heal observes drift
-and a feature branch is already active.
+repo where install never ran has no guard at all — self-heal only re-asserts a *previously installed*
+managed path (it requires `branch.prior_hooks_path` to actually be recorded, i.e. `install_git_hooks`
+already ran once), so a repo that never installed stays unguarded indefinitely, not just until the next
+`SessionStart`.

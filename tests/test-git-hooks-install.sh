@@ -289,4 +289,47 @@ assert_exit_code "chain-dispatch: prior pre-push exit code propagates" "$PUSH_EC
 assert_contains "chain-dispatch: prior pre-push actually ran" "$PUSH_STDERR" "prior pre-push ran"
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# MALFORMED CONFIG: install must NOT touch core.hooksPath when config.json
+# doesn't parse as JSON — jq can't safely record a prior for later restore.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+mkdir -p "$TEST_DIR/repo/nazgul"
+printf '%s' '{not valid json' > "$TEST_DIR/repo/nazgul/config.json"
+install_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
+git -C "$TEST_DIR/repo" config --get core.hooksPath >/dev/null 2>&1
+assert_exit_code "install: malformed config -> core.hooksPath untouched" "$?" 1
+assert_dir_not_exists "install: malformed config -> no managed dir created" "$TEST_DIR/repo/nazgul/.githooks"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# MALFORMED CONFIG: uninstall must NOT touch a pre-existing real
+# core.hooksPath when config.json doesn't parse as JSON.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+git -C "$TEST_DIR/repo" config core.hooksPath ".husky"
+mkdir -p "$TEST_DIR/repo/nazgul"
+printf '%s' '{not valid json' > "$TEST_DIR/repo/nazgul/config.json"
+uninstall_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
+STILL_HUSKY=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
+assert_eq "uninstall: malformed config -> pre-existing core.hooksPath unchanged" "$STILL_HUSKY" ".husky"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# NEVER-RECORDED PRIOR: uninstall with `prior_hooks_path: null` (install
+# never ran for this cycle) must NOT touch a pre-existing real
+# core.hooksPath — only "" (recorded-as-unset) or a real recorded path may
+# act.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+git -C "$TEST_DIR/repo" config core.hooksPath ".husky"
+write_config "$TEST_DIR/repo" '{"branch":{"base":"main","feature":"feat/x","prior_hooks_path":null},"guards":{"git_hooks":true}}'
+uninstall_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
+STILL_HUSKY=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
+assert_eq "uninstall: never-recorded prior (null) leaves pre-existing core.hooksPath alone" "$STILL_HUSKY" ".husky"
+teardown_temp_dir
+
 report_results
