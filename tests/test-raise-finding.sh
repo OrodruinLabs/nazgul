@@ -106,4 +106,23 @@ assert_eq "test 5: unit populated when set" "$(line_n "$FINDINGS_FILE" 2 | jq -r
 unset NAZGUL_AGENT NAZGUL_UNIT
 teardown_temp_dir
 
+# --- Test 6: best-effort — an unwritable NAZGUL_DIR must NOT abort a `set -e` caller ---
+# raise_finding is sourced into arbitrary sub-session shells; an environmental
+# failure (here: logs parent is a regular FILE, so mkdir -p fails for any user)
+# must degrade to a logged no-op and return 0, never propagate under set -e.
+setup_temp_dir
+printf 'i am a file\n' > "$TEST_DIR/blk"   # blocks mkdir -p "$TEST_DIR/blk/nazgul/logs"
+T6_OUT=$(NAZGUL_DIR="$TEST_DIR/blk/nazgul" bash -c '
+  set -euo pipefail
+  source "'"$REPO_ROOT"'/scripts/lib/raise-finding.sh"
+  raise_finding high process "T6 title" "T6 detail"
+  echo "CALLER-SURVIVED"
+' 2>&1)
+T6_EC=$?
+assert_eq "test 6: unwritable NAZGUL_DIR does not abort a set -e caller" "$T6_EC" "0"
+assert_contains "test 6: caller continued past raise_finding" "$T6_OUT" "CALLER-SURVIVED"
+assert_contains "test 6: logged the skip" "$T6_OUT" "finding NOT recorded"
+assert_file_not_exists "test 6: no findings file at the blocked path" "$TEST_DIR/blk/nazgul/logs/findings.jsonl"
+teardown_temp_dir
+
 report_results

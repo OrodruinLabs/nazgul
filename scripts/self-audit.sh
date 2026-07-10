@@ -215,7 +215,10 @@ _mine_token_cost() {
   # findings unrelated to the just-finished run. Newest-by-mtime is the closest
   # proxy for "this objective's session" without a session-id handshake.
   local newest
-  newest=$(ls -dt "$dir"/*/ 2>/dev/null | head -1)
+  # `|| true`: when the root has no session subdirs the glob fails and, under
+  # `set -euo pipefail`, the failing pipeline in a command substitution would
+  # otherwise abort the whole script — degrade to the empty-check below instead.
+  newest=$(ls -dt "$dir"/*/ 2>/dev/null | head -1) || true
   if [ -z "$newest" ]; then
     echo "self-audit: cost data unavailable (no session dirs under ${dir})"
     return 0
@@ -245,7 +248,11 @@ _ingest_findings_jsonl() {
   local f="$NAZGUL_DIR/logs/findings.jsonl" line seen_file key
   local severity category title detail fix evidence agent unit ev
   [ -f "$f" ] || return 0
-  seen_file=$(mktemp)
+  # Degrade cleanly if no writable tmpdir — never abort the run for a dedup file.
+  seen_file=$(mktemp 2>/dev/null) || {
+    echo "self-audit: mktemp failed — skipping findings.jsonl ingest (run not failed)" >&2
+    return 0
+  }
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     printf '%s' "$line" | jq -e . >/dev/null 2>&1 || continue
