@@ -6,7 +6,7 @@ Enforceable operating rules for the Nazgul Framework. Each rule carries a tier l
 
 | Tier | Label | Meaning |
 |------|-------|---------|
-| 1 | `[enforced]` | A PreToolUse guard, stop-hook gate, evidence check, or tool-allowlist restriction blocks violations mechanically — independent of who drives the loop. |
+| 1 | `[enforced]` | A PreToolUse guard, stop-hook gate, evidence check, tool-allowlist restriction, or real git hook (`core.hooksPath`, §15) blocks violations mechanically — independent of who drives the loop. A git hook is strictly stronger than the others in this tier (it runs outside the Claude Code session entirely, after the shell has fully resolved the command), but *installing* one is itself only `[hook-driven only]` — see §15. |
 | 2 | `[hook-driven only]` | Enforced when `stop-hook.sh` drives the loop (AFK/YOLO). A human or orchestrator that dispatches agents directly can route around it. |
 | 3 | `[advisory]` | Depends on agent and reviewer discipline. No mechanical block exists. |
 
@@ -209,9 +209,9 @@ This guard governs comment QUANTITY at write time. See §7 for the complementary
 
 ## 10. Branch Isolation
 
-- **Never commit to the base branch during a loop.** `[hook-driven only]` Blocked by `base-branch-commit-guard.sh` (PreToolUse on Bash): a commit targeting `branch.base` while `branch.feature` is set exits 2 with an actionable error. PreToolUse guard pending TASK-002 (`base-branch-commit-guard.sh`)
+- **Never commit to the base branch during a loop.** `[enforced]` Blocked by the `pre-commit` git hook (`scripts/git-hooks/pre-commit`, §15, installed via `core.hooksPath`): a commit targeting `branch.base` while `branch.feature` is set exits nonzero with an actionable error. The old command-string `base-branch-commit-guard.sh` (PreToolUse on Bash) is deleted — it proved non-convergent against shell-expansion bypasses (ADR-001) and is fully replaced by this git-level hook.
 - **Never stage `nazgul/` paths in local mode.** `[enforced]` Blocked by `local-mode-tracking-guard.sh` (PreToolUse on Bash): when `install_mode == "local"`, any `git add`/`git commit` touching a `nazgul/` path exits 2.
-- **Feature branch:** `[hook-driven only]` `feat/<id>-<slug>` -- integration point. Written to `branch.feature` in config; guards read this field to validate commits. PreToolUse guard pending TASK-002
+- **Feature branch:** `[hook-driven only]` `feat/<id>-<slug>` -- integration point. Written to `branch.feature` in config; the git-level `pre-commit` hook (§15) reads this field to validate commits.
 - **Task worktrees:** `[hook-driven only]` `feat/<id>/TASK-NNN` -- merge back to feature. Created by stop-hook worktree utilities; naming enforced by convention in AFK mode.
 - **Worktrees live in** `../<project>-worktrees/TASK-NNN/` -- `[hook-driven only]` Path written to `branch.worktree_dir` in config; used by stop-hook worktree utilities.
 - **On conflict:** `[hook-driven only]` `git merge --abort`, task BLOCKED. Applied by stop-hook on merge failure detection.
@@ -365,7 +365,7 @@ something Nazgul schedules itself.
 
 Branch isolation (§10) applies unchanged: `scripts/heartbeat.sh` never commits or touches a git branch —
 it only reads the inbox, moves files within it, and shells out to `/nazgul:start`, which is subject to
-the same §10 tiers (`base-branch-commit-guard.sh`, `local-mode-tracking-guard.sh`) as every other
+the same §10 tiers (the `pre-commit` git hook, §15; `local-mode-tracking-guard.sh`) as every other
 objective start. No new guard and no new tier is introduced here.
 
 ## 14. Raising Findings
@@ -398,3 +398,60 @@ out-of-scope problem or inventing unplanned scope creep to fix it mid-task.
   (mirrors `scripts/lib/emit-event.sh`). Consumed by `scripts/self-audit.sh` (TASK-001),
   which ingests the file into the improvements backlog; this task is producer-only and
   never edits that consumer.
+
+## 15. Git-Level Guards
+
+FEAT-010 (ADR-001) replaces the two guards that tried to infer git intent by parsing an arbitrary Bash
+command string — the old `base-branch-commit-guard.sh` and the deferred H2 conductor pre-merge guard —
+with real git hooks. Both proved non-convergent across three review rounds each: shell parameter
+expansion, line continuation, and wrapper forms (`eval`, `bash -c`, path-qualified `git`) kept
+reopening bypasses no finite tokenizer closed. Moving enforcement inside git itself removes the command
+string from the equation entirely — a hook only runs once the shell has fully resolved what git was
+actually asked to do.
+
+- **`pre-commit` — base-branch guard.** `[enforced]` `scripts/git-hooks/pre-commit` blocks a commit
+  on `branch.base` while `branch.feature` is set, reading `nazgul/config.json` from the repo the hook
+  itself runs in (`git rev-parse --show-toplevel`) — this is the fix for the old guard's cwd
+  false-positive (it always resolved `$CLAUDE_PROJECT_DIR`'s branch, blocking commits to an unrelated
+  repo) and its `git -C` false-negative (which routed around a Bash-string check entirely). A git hook
+  has no such ambiguity: "current branch" is whatever repo git itself is invoked in.
+- **`pre-merge-commit` — H2 conductor verdict guard.** `[enforced]` `scripts/git-hooks/pre-merge-commit`
+  blocks `git merge --no-ff` of a Conductor unit whose `nazgul/conductor/graph.json` record lacks a
+  `DONE` status + `APPROVE` verdict. Only active when `execution.engine == "conductor"` and
+  `conductor.enforce.premerge_guard` (default `true`) is not explicitly `false`. Identity is resolved
+  from git's `GITHEAD_<sha>` environment variables (keyed by the actual merged commit's content hash,
+  so a decoy value can't relabel an unapproved unit as an approved one) rather than
+  `GIT_REFLOG_ACTION`, which a caller can pre-set to spoof the same claim.
+- **Generic chain-dispatcher preserves user hooks.** `[enforced]` Pointing `core.hooksPath` at a
+  managed directory would otherwise silently disable any hook a user already had installed under every
+  *other* standard githooks(5) name. `scripts/git-hooks/_dispatch.sh` forwards argv/stdin/exit code to
+  whatever hook previously occupied that name (recorded prior `core.hooksPath`/`.git/hooks` location),
+  and every standard hook name Nazgul does not itself define ships as a thin shim that does nothing but
+  call the dispatcher — so a pre-existing `commit-msg` or `pre-push` hook keeps running unmodified.
+- **Activation: `core.hooksPath` → `nazgul/.githooks/`.** `[hook-driven only]` `scripts/lib/git-hooks.sh`
+  installs the two guards, the dispatcher, and the pass-through shims into the per-project managed
+  directory `nazgul/.githooks/`, then points `git config core.hooksPath` at it — never editing a file
+  the user owns. Gated on `guards.git_hooks` (default `true`); an explicit `false` makes install,
+  uninstall, and self-heal all no-ops.
+- **Install/uninstall/self-heal lifecycle, tied to the loop's own boundaries.** `[hook-driven only]`
+  `install_git_hooks` runs inside `create_feature_branch`/`setup_worktree_dir`
+  (`scripts/worktree-utils.sh`) at the moment `branch.feature` is assigned, first durably recording the
+  live `core.hooksPath` (or its absence) into `branch.prior_hooks_path` so uninstall can restore it
+  exactly. `uninstall_git_hooks` runs inside `cleanup_all_worktrees` at objective completion, restoring
+  that recorded value verbatim. `self_heal_git_hooks` runs from `scripts/session-context.sh`'s
+  `SessionStart` self-heal block, re-asserting the managed path only when it has drifted from what
+  installation set — never a blind overwrite of an intentional mid-session change. All three call sites
+  are agent-protocol/skill-driven (worktree setup, objective completion, session start), not a
+  PreToolUse guard, so a manually-dispatched agent that never calls `create_feature_branch()` gets no
+  guard installed at all — the honest gap this tier label exists to state.
+
+**Enforcement tier, stated honestly (ADR-001 Consequences).** Once installed, the two guards above are
+tagged `[enforced]` — but they are stronger than every other `[enforced]` entry in this document: they
+run outside the Claude Code session entirely, after the shell has fully resolved the command, so they
+hold even against a human typing `git commit`/`git merge` directly or a hypothetical bypass of every
+PreToolUse guard here (the Legend's tier-1 row now notes this). *Installation* is the honest gap: it is
+not itself mechanically forced onto every code path that could start a loop or invoke git; it depends on
+the loop's own protocol calling `create_feature_branch()`/`setup_worktree_dir()`, same limit this
+document already applies to other protocol-invoked checks (e.g. §12's Conductor hard-stop call sites). A
+repo where install never ran has no guard at all until the next `SessionStart` self-heal observes drift
+and a feature branch is already active.
