@@ -84,6 +84,15 @@ confidence: 92
 
 `verdict` MUST be exactly `APPROVE` or `CHANGES_REQUESTED`; `confidence` is an integer 0-100. Any other verdict value is rejected by the review-evidence gate and blocks the task.
 
+### Raising Out-of-Scope Findings
+
+If you notice an improvement candidate that is genuinely outside this review's scope
+(a process gap, a missing test convention, doc drift) rather than something to review
+here, do not silently work around it or fix it yourself. You have no Bash tool and
+cannot call `raise_finding` (`scripts/lib/raise-finding.sh`) directly, so note it as its
+own `Out-of-scope candidate:` line in your returned review for a Bash-capable
+sub-session to raise on your behalf.
+
 ### Always-Blocking Findings
 
 Some findings are designated **ALWAYS-BLOCKING** by your "What You Review" section (e.g. comment bloat for the code reviewer). For any always-blocking finding you MUST emit `verdict: CHANGES_REQUESTED` with `confidence` >= the project's `review_gate.confidence_threshold` (default 80). Never downgrade an always-blocking finding to a `CONCERN` or sub-threshold confidence — `auto_approve_concerns` would silently wave it through, which is exactly the failure mode these rules exist to prevent.

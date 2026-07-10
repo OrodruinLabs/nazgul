@@ -357,3 +357,34 @@ Branch isolation (§10) applies unchanged: `scripts/heartbeat.sh` never commits 
 it only reads the inbox, moves files within it, and shells out to `/nazgul:start`, which is subject to
 the same §10 tiers (`base-branch-commit-guard.sh`, `local-mode-tracking-guard.sh`) as every other
 objective start. No new guard and no new tier is introduced here.
+
+## 14. Raising Findings
+
+`scripts/lib/raise-finding.sh` (FEAT-009 TASK-009) is the PRODUCER side of a first-party
+finding-raise channel: any sub-session that sources it can call `raise_finding <severity>
+<category> <title> <detail> [suggested_fix] [evidence]` to surface an in-the-moment
+improvement candidate that survives it exiting, rather than silently working around an
+out-of-scope problem or inventing unplanned scope creep to fix it mid-task.
+
+- **Use it instead of working around out-of-scope findings.** `[advisory]` Depends on
+  agent discipline — no mechanical guard forces a sub-session to call `raise_finding`
+  rather than silently ignoring or ad-hoc-fixing something outside its task's file scope.
+  Implementer, team-orchestrator, debugger, and conductor sub-sessions all have Bash and
+  can source the helper directly; reviewer sub-sessions cannot — `agents/templates/reviewer-base.md`
+  restricts them to `Read`/`Glob`/`Grep` (§3.3) — so a reviewer instead notes the candidate
+  as its own line in the returned review for a Bash-capable sub-session to raise on its behalf.
+- **Data-only, no `eval`.** `[advisory]` Every field is built via `jq --arg` — no `eval`,
+  no shell interpolation of caller-supplied text into a command — and embedded `\n`/`\r`
+  in every value are neutralized to a space before storage (the same neutralize-before-splice
+  discipline as `scripts/heartbeat.sh`'s `_hb_start`, §13), so a metacharacter- or
+  newline-laden title can never execute or break the markdown-backlog `##`-section
+  structure `self-audit.sh` later renders it into. `tests/test-raise-finding.sh` proves
+  today's code is safe; like §13's equivalent note, this is not a mechanical guard against
+  a future edit reintroducing `eval`.
+- **Append-only sink.** `[advisory]` One JSONL line — `ts`, `agent` (`$NAZGUL_AGENT`, empty
+  when unset), `unit` (`$NAZGUL_UNIT`, empty when unset), `severity`, `category`, `title`,
+  `detail`, `suggested_fix`, `evidence` — is appended per call to
+  `nazgul/logs/findings.jsonl` (created if absent), guarded by `flock` when available
+  (mirrors `scripts/lib/emit-event.sh`). Consumed by `scripts/self-audit.sh` (TASK-001),
+  which ingests the file into the improvements backlog; this task is producer-only and
+  never edits that consumer.
