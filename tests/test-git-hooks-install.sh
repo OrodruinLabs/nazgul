@@ -216,6 +216,35 @@ assert_eq "self-heal: already correct is a no-op" "$STILL" "nazgul/.githooks"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
+# SELF-HEAL: fresh project (never installed, prior_hooks_path null) -> no-op.
+# Guards the != null gate: it must never blind-overwrite a user's real
+# core.hooksPath (e.g. .husky) on a project that never ran install.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+git -C "$TEST_DIR/repo" config core.hooksPath ".husky"
+write_config "$TEST_DIR/repo" '{"branch":{"base":"main","feature":"feat/x","prior_hooks_path":null},"guards":{"git_hooks":true}}'
+self_heal_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
+STILL_HUSKY=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
+assert_eq "self-heal: fresh (never installed, null field) leaves user hooksPath alone" "$STILL_HUSKY" ".husky"
+assert_dir_not_exists "self-heal: fresh (never installed, null field) does not create managed dir" "$TEST_DIR/repo/nazgul/.githooks"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# SELF-HEAL: never-installed (null field) with drift during an active loop ->
+# still a no-op. The null gate wins over drift: you only self-heal something
+# you installed.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" '{"branch":{"base":"main","feature":"feat/x","prior_hooks_path":null},"guards":{"git_hooks":true}}'
+git -C "$TEST_DIR/repo" config core.hooksPath ".git/hooks-other"
+self_heal_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
+UNTOUCHED_NULL=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
+assert_eq "self-heal: never-installed (null field) with drift is still a no-op" "$UNTOUCHED_NULL" ".git/hooks-other"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
 # CHAIN-DISPATCH via a real commit: a pre-existing user pre-commit hook still
 # runs after install, and its exit code still propagates.
 # ---------------------------------------------------------------------------
