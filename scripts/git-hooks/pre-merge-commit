@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Nazgul pre-merge-commit guard — H2 conductor verdict check. Blocks
+# `git merge --no-ff` of a conductor unit branch (feat/<ref>/TASK-NNN) whose
+# nazgul/conductor/graph.json record lacks a DONE status + APPROVE verdict.
+# Reuses the verdict-resolution semantics of the reverted
+# scripts/conductor-premerge-guard.sh (git show b3816b5:...); replaces its
+# command-string-parsing detection with git's own pre-merge-commit hook.
+#
+# git pre-merge-commit contract: no argv, no stdin read, exit 0 = allow,
+# nonzero = block (message on stderr).
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
+[ -n "$REPO_ROOT" ] || exit 0
+
+CONFIG="$REPO_ROOT/nazgul/config.json"
+GRAPH="$REPO_ROOT/nazgul/conductor/graph.json"
+DISPATCH="$(cd "$(dirname "$0")" && pwd)/_dispatch.sh"
+
+_dispatch_and_exit() {
+  if [ -f "$DISPATCH" ]; then
+    export CLAUDE_PROJECT_DIR="$REPO_ROOT"
+    # shellcheck source=/dev/null
+    source "$DISPATCH"
+    dispatch_prior_hook pre-merge-commit
+    exit $?
+  fi
+  exit 0
+}
+
+[ -f "$CONFIG" ] || _dispatch_and_exit
+
+# `// true` would treat a literal `false` as falsy too (jq quirk), so compare
+# explicitly — only an explicit `false` disables the guard.
+GIT_HOOKS_ENABLED=$(jq -r 'if .guards.git_hooks == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+[ "$GIT_HOOKS_ENABLED" = "true" ] || _dispatch_and_exit
+
+ENGINE=$(jq -r '.execution.engine // "sequential"' "$CONFIG" 2>/dev/null || echo "sequential")
+[ "$ENGINE" = "conductor" ] || _dispatch_and_exit
+
+[ -f "$GRAPH" ] || _dispatch_and_exit
+jq -e . "$GRAPH" >/dev/null 2>&1 || _dispatch_and_exit
+
+ENFORCE=$(jq -r 'if .conductor.enforce.premerge_guard == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+[ "$ENFORCE" = "true" ] || _dispatch_and_exit
+
+# Resolve the merge's source branch: primary GIT_REFLOG_ACTION (git sets it
+# to e.g. "merge feat/<ref>/TASK-NNN" during the merge), fallback to parsing
+# .git/MERGE_MSG ("Merge branch 'feat/<ref>/TASK-NNN'"). Unresolvable ->
+# degrade to allow (a false block is worse than a missed check here).
+SOURCE_BRANCH=""
+if [ -n "${GIT_REFLOG_ACTION:-}" ]; then
+  case "$GIT_REFLOG_ACTION" in
+    merge\ *) SOURCE_BRANCH="${GIT_REFLOG_ACTION#merge }" ;;
+  esac
+fi
+
+if [ -z "$SOURCE_BRANCH" ]; then
+  MERGE_MSG_FILE="$REPO_ROOT/.git/MERGE_MSG"
+  if [ -f "$MERGE_MSG_FILE" ]; then
+    SOURCE_BRANCH=$(sed -nE "s/^Merge branch '([^']+)'.*/\1/p" "$MERGE_MSG_FILE" | head -n1)
+  fi
+fi
+
+[ -n "$SOURCE_BRANCH" ] || _dispatch_and_exit
+
+# Unit-branch pattern: feat/<feat_ref>/TASK-NNN (same family constructed by
+# merge_task_to_feature() in scripts/worktree-utils.sh). Non-matching source
+# (unrelated merge, e.g. main into a worktree) -> allow.
+case "$SOURCE_BRANCH" in
+  */TASK-*) : ;;
+  *) _dispatch_and_exit ;;
+esac
+
+UNIT_ID=$(printf '%s' "$SOURCE_BRANCH" | sed -nE 's#.*/(TASK-[0-9]+)$#\1#p')
+[ -n "$UNIT_ID" ] || _dispatch_and_exit
+
+STATUS=$(jq -r --arg id "$UNIT_ID" '.tasks[$id].status // ""' "$GRAPH" 2>/dev/null || echo "")
+VERDICT=$(jq -r --arg id "$UNIT_ID" '.tasks[$id].verdict // ""' "$GRAPH" 2>/dev/null || echo "")
+
+if [ "$STATUS" = "DONE" ] && printf '%s' "$VERDICT" | grep -qiE '^APPROVE'; then
+  _dispatch_and_exit
+fi
+
+echo "NAZGUL GUARD: Blocked — merge of unit branch '$SOURCE_BRANCH' has no recorded DONE+APPROVE verdict in nazgul/conductor/graph.json (status='${STATUS:-none}', verdict='${VERDICT:-none}')." >&2
+echo "" >&2
+echo "  A conductor unit must clear the review board (status DONE, verdict matching ^APPROVE) before" >&2
+echo "  it can be merged into the feature branch." >&2
+exit 1
