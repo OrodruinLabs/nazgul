@@ -51,7 +51,7 @@ error. If Execution engine is `sequential`, always use the sequential Status Rep
 
 ### Status Report Format (sequential engine, or conductor with no graph yet)
 
-```
+```text
 Nazgul Status
 ═══════════════════════════════════════
 Objective:      [current objective, truncated to 80 chars]
@@ -107,7 +107,7 @@ Replaces the Task Progress block only; parse the Conductor graph digest JSON (`c
 `units: {ID: {status, sha, wave}}`) to fill it in. One line per unit, status symbol per `references/ui-brand.md`
 (✦ DONE, ◆ IN_PROGRESS/IMPLEMENTED/IN_REVIEW, ✗ BLOCKED, ◇ otherwise); `sha` shown short (7 chars) or `-` if null.
 
-```
+```text
 Conductor Wave Progress
 ─────────────────────────────────────
 Current wave: [current_wave or "-"]
