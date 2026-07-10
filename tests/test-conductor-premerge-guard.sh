@@ -89,7 +89,7 @@ teardown
 setup
 BASH_BIN=$(command -v bash)
 FAKEBIN="$WORK/fakebin"; mkdir -p "$FAKEBIN"
-for tool in bash cat printf grep head awk sort; do
+for tool in bash cat printf grep awk sort; do
   toolpath=$(command -v "$tool" 2>/dev/null) && ln -s "$toolpath" "$FAKEBIN/$tool"
 done
 PAYLOAD=$(jq -n --arg c "$MERGE_001" '{tool_name:"Bash",tool_input:{command:$c}}')
@@ -116,6 +116,34 @@ teardown
 setup
 assert_eq "octopus merge denied" \
   "$(guard_ec 'git merge feat/FEAT-009/TASK-002 feat/FEAT-009/TASK-003 --no-ff')" "2"
+teardown
+
+# 17-24: fail-closed on detected-but-unresolvable merge forms (board-cited bypasses).
+# All wrap or obscure a real, unreviewed (TASK-003) merge and must DENY.
+setup
+assert_eq "eval-wrapped merge denied" \
+  "$(guard_ec 'eval "git merge feat/FEAT-009/TASK-003 --no-ff"')" "2"
+assert_eq "bash -c wrapped merge denied" \
+  "$(guard_ec "bash -c 'git merge feat/FEAT-009/TASK-003 --no-ff'")" "2"
+assert_eq "sh -c wrapped merge denied" \
+  "$(guard_ec "sh -c 'git merge feat/FEAT-009/TASK-003 --no-ff'")" "2"
+assert_eq "bare subshell merge denied" \
+  "$(guard_ec '(git merge feat/FEAT-009/TASK-003 --no-ff)')" "2"
+assert_eq "env-wrapped merge denied" \
+  "$(guard_ec 'env git merge feat/FEAT-009/TASK-003 --no-ff')" "2"
+assert_eq "path-qualified git merge denied" \
+  "$(guard_ec '/usr/bin/git merge feat/FEAT-009/TASK-003 --no-ff')" "2"
+assert_eq "git -c global-option merge denied" \
+  "$(guard_ec 'git -c x=y merge feat/FEAT-009/TASK-003 --no-ff')" "2"
+assert_eq "git -C global-option merge denied" \
+  "$(guard_ec 'git -C /some/path merge feat/FEAT-009/TASK-003 --no-ff')" "2"
+teardown
+
+# 25: reviewed merge via git -c global option still resolves and ALLOWs (proves
+# the line-17 loosening doesn't over-block a resolvable reviewed merge).
+setup
+assert_eq "reviewed merge via git -c allowed" \
+  "$(guard_ec 'git -c x=y merge feat/FEAT-009/TASK-002 --no-ff')" "0"
 teardown
 
 report_results

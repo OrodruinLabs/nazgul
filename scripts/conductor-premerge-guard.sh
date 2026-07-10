@@ -5,6 +5,15 @@ set -euo pipefail
 # without a recorded DONE + APPROVE verdict in graph.json — exactly how
 # TASK-004 got merged unreviewed this session (the review-gate bypass).
 # No-op unless a conductor run is active. Exit 0 = allow. Exit 2 = deny (reason on stderr).
+#
+# Fail-closed posture: detection of a possible merge is broad (any textual
+# `merge` token); only a command that the tokenizer can positively resolve to
+# a plain `git ... merge ...` invocation (global options like -c/-C tolerated)
+# is evaluated against the graph. Anything textually referencing `merge` that
+# the tokenizer can't resolve that way — eval/bash -c/sh -c, a bare subshell,
+# env/command wrappers, a path-qualified git binary — is DENIED, not allowed
+# through. This closes the whole bypass class at once instead of special-
+# casing each wrapper form.
 
 INPUT="${1:-}"
 [ -z "$INPUT" ] && INPUT=$(cat 2>/dev/null || echo "")
@@ -14,7 +23,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
 [ -z "$CMD" ] && CMD="$INPUT"
 [ -z "$CMD" ] && exit 0
-printf '%s' "$CMD" | grep -qE 'git[[:space:]]+merge' || exit 0
+printf '%s' "$CMD" | grep -qF 'merge' || exit 0
 
 NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
 CONFIG="$NAZGUL_DIR/config.json"
@@ -32,24 +41,31 @@ ENGINE=$(jq -r '.execution.engine // "sequential"' "$CONFIG" 2>/dev/null || echo
 ENFORCE=$(jq -r 'if .conductor.enforce.premerge_guard == null then "true" else (.conductor.enforce.premerge_guard|tostring) end' "$CONFIG" 2>/dev/null || echo "true")
 [ "$ENFORCE" = "false" ] && exit 0
 
-# Identify EVERY unit actually being merged: the positional (non-flag) branch
-# arguments of each `git merge` invocation, split on ;/&/&&/| so a compound or
-# octopus command is evaluated segment-by-segment. Value-taking flags
-# (-m/--message/-F/--file/-s/--strategy/-X/--strategy-option/--into-name) have
-# their value token skipped so a unit-shaped string inside a commit message can
-# never be mistaken for the actual merge target — matched as DATA (awk), never
-# eval'd against the command string.
-UNITS=$(printf '%s' "$CMD" | awk '
+# Walk the command, splitting into segments on unquoted ;/&/&&/| (a compound
+# or octopus command is evaluated segment-by-segment). Only a segment whose
+# leading token is the exact literal `git` is resolved via the merge FSM
+# (global options -c/-C tolerated; value-taking flags -m/--message/-F/--file/
+# -s/--strategy/-X/--strategy-option/--into-name have their value token
+# skipped so a unit-shaped string inside a commit message is never mistaken
+# for the merge target). Any other segment that textually contains `merge`
+# anywhere — wrapped in eval/bash -c/sh -c, a bare subshell, env/command, or a
+# path-qualified git binary — is reported AMBIGUOUS (detected but unresolvable)
+# rather than silently skipped. Matched as DATA (awk), never eval'd.
+RESULT=$(printf '%s' "$CMD" | awk '
 function reset_segment() {
   git_seen = 0; subcmd_seen = 0; not_relevant = 0
-  skip_next = 0; skip_global_val = 0; end_of_opts = 0
+  skip_next = 0; skip_global_val = 0; end_of_opts = 0; seg_has_merge = 0
+}
+function finish_segment() {
+  if (!git_seen && seg_has_merge) print "AMBIGUOUS"
 }
 function check_positional(t) {
   if (t !~ /feat\/[A-Za-z0-9_.-]+\/TASK-[0-9]+/) return
   match(t, /TASK-[0-9]+/)
-  print substr(t, RSTART, RLENGTH)
+  print "UNIT:" substr(t, RSTART, RLENGTH)
 }
 function emit(t,   is_value_flag) {
+  if (index(t, "merge") > 0) seg_has_merge = 1
   if (not_relevant) return
   if (skip_next) { skip_next = 0; return }
   if (skip_global_val) { skip_global_val = 0; return }
@@ -93,10 +109,10 @@ BEGIN { reset_segment(); tok = ""; in_sq = 0; in_dq = 0 }
       if (tok != "") { emit(tok); tok = "" }
     } else if (c == ";" || c == "|") {
       if (tok != "") { emit(tok); tok = "" }
-      reset_segment()
+      finish_segment(); reset_segment()
     } else if (c == "&") {
       if (tok != "") { emit(tok); tok = "" }
-      reset_segment()
+      finish_segment(); reset_segment()
     } else {
       tok = tok c
     }
@@ -105,11 +121,17 @@ BEGIN { reset_segment(); tok = ""; in_sq = 0; in_dq = 0 }
     # quoted string spans the newline — keep accumulating
   } else {
     if (tok != "") { emit(tok); tok = "" }
-    reset_segment()
+    finish_segment(); reset_segment()
   }
 }
-' | sort -u)
+')
 
+if printf '%s\n' "$RESULT" | grep -q '^AMBIGUOUS$'; then
+  echo "NAZGUL CONDUCTOR: Blocked — command textually references a merge but cannot be resolved to a plain, checkable 'git merge' invocation (wrapped in eval/bash -c/sh -c/a subshell/env/command, or a path-qualified git binary); failing closed per FEAT-009 H2 (ADR-005)." >&2
+  exit 2
+fi
+
+UNITS=$(printf '%s\n' "$RESULT" | { grep '^UNIT:' || true; } | sed 's/^UNIT://' | sort -u)
 [ -n "$UNITS" ] || exit 0
 
 DENIED=""
