@@ -1,5 +1,5 @@
 {
-  "schema_version": 21,
+  "schema_version": 22,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -84,7 +84,8 @@
     "max_parallel": 3,
     "enforce": {
       "dispatch_guard": true,
-      "rework_guard": true
+      "rework_guard": true,
+      "premerge_guard": true
     }
   },
   "automation": {
@@ -186,10 +187,17 @@
       "security-reviewer": "sonnet",
       "architect-reviewer": "sonnet"
     },
+    "review_orchestrator": "sonnet",
+    "review_default": "haiku",
     "implementation": "sonnet",
     "specialists": "sonnet",
     "post_loop": "sonnet",
+    "conductor": "sonnet",
     "default": "sonnet"
+  },
+  "self_audit": {
+    "enabled": true,
+    "backlog_path": "nazgul/improvements.md"
   },
   "board": {
     "enabled": false,
