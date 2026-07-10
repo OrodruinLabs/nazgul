@@ -468,6 +468,23 @@ migrate_21_to_22() {
   log_migration "v21→v22: added models.conductor (sonnet); split models.review into models.review_orchestrator/models.review_default (seeded from existing models.review, else sonnet/haiku; models.review untouched); added self_audit.{enabled:true,backlog_path:nazgul/improvements.md}"
 }
 
+migrate_22_to_23() {
+  local tmp; tmp=$(mktemp)
+  # FEAT-010: git-level hook enforcement config. ADDITIVE — set when absent, explicit values
+  # (incl. false) preserved; sibling conductor.enforce/guards keys untouched.
+  jq '
+    .conductor = ((if (.conductor | type) == "object" then .conductor else {} end)
+      | .enforce = ((if (.enforce | type) == "object" then .enforce else {} end)
+          | .premerge_guard = (if has("premerge_guard") then .premerge_guard else true end)))
+    | .branch = ((if (.branch | type) == "object" then .branch else {} end)
+        | .prior_hooks_path = (if has("prior_hooks_path") then .prior_hooks_path else "" end))
+    | .guards = ((if (.guards | type) == "object" then .guards else {} end)
+        | .git_hooks = (if has("git_hooks") then .git_hooks else true end))
+    | .schema_version = 23
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v22→v23: added conductor.enforce.premerge_guard (default true); added branch.prior_hooks_path (default \"\", empty-string sentinel for was-unset); added guards.git_hooks (default true)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"
