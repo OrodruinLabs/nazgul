@@ -444,6 +444,30 @@ migrate_20_to_21() {
   log_migration "v20→v21: added automation.heartbeat (enabled default false; interval 30m; inbox provider file dir nazgul/inbox; auto_start mode yolo engine conductor)"
 }
 
+migrate_21_to_22() {
+  local tmp; tmp=$(mktemp)
+  # FEAT-009: model-tier + review-key split + self-audit config. ADDITIVE — set when absent,
+  # explicit values preserved; models.review untouched (seed source for the two new review keys).
+  local review
+  # Only a non-empty STRING models.review is a valid seed. `// empty` already
+  # drops JSON null, but a non-string (number/object/bool) would otherwise be
+  # printed by `jq -r` and seed review_orchestrator/review_default with garbage.
+  review=$(jq -r '(.models.review? | select(type=="string")) // empty' "$CONFIG")
+  jq --arg review "$review" '
+    .models = ((if (.models | type) == "object" then .models else {} end)
+      | .conductor = (if has("conductor") then .conductor else "sonnet" end)
+      | .review_orchestrator = (if has("review_orchestrator") then .review_orchestrator
+                                elif $review != "" then $review else "sonnet" end)
+      | .review_default = (if has("review_default") then .review_default
+                           elif $review != "" then $review else "haiku" end))
+    | .self_audit = ((if (.self_audit | type) == "object" then .self_audit else {} end)
+        | .enabled = (if has("enabled") then .enabled else true end)
+        | .backlog_path = (if has("backlog_path") then .backlog_path else "nazgul/improvements.md" end))
+    | .schema_version = 22
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v21→v22: added models.conductor (sonnet); split models.review into models.review_orchestrator/models.review_default (seeded from existing models.review, else sonnet/haiku; models.review untouched); added self_audit.{enabled:true,backlog_path:nazgul/improvements.md}"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"

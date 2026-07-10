@@ -79,6 +79,44 @@ if [ -d "$NAZGUL_DIR/tasks" ]; then
   done
 fi
 
+# Orphaned conductor-marker self-heal — clear .session/.resume-needed only when
+# the objective they reference is complete (feat_id mismatch or all tasks DONE)
+# or the referenced session is dead. Never touch a live session / open objective.
+# Known limitation: if a live session runs beyond session-tracker's stale-lock
+# age-out (7200s) and its lock gets GC'd right before this check, the marker
+# will be wrongly treated as dead. Hardening that requires touching
+# session-tracker.sh's age-out policy, out of scope here.
+CONDUCTOR_DIR="$NAZGUL_DIR/conductor"
+CONDUCTOR_SESSION_MARKER="$CONDUCTOR_DIR/.session"
+CONDUCTOR_RESUME_MARKER="$CONDUCTOR_DIR/.resume-needed"
+if [ -f "$CONDUCTOR_SESSION_MARKER" ] || [ -f "$CONDUCTOR_RESUME_MARKER" ]; then
+  MARKER_SESSION_DEAD=1
+  if [ -f "$CONDUCTOR_SESSION_MARKER" ]; then
+    MARKER_SESSION_ID=$(cat "$CONDUCTOR_SESSION_MARKER" 2>/dev/null || echo "")
+    if [ -n "$MARKER_SESSION_ID" ]; then
+      MARKER_SANITIZED_ID=$(_sanitize_session_id "$MARKER_SESSION_ID")
+      [ -f "$SESSIONS_DIR/${MARKER_SANITIZED_ID}.lock" ] && MARKER_SESSION_DEAD=0
+    fi
+  fi
+
+  MARKER_OBJECTIVE_COMPLETE=0
+  CONDUCTOR_GRAPH="$CONDUCTOR_DIR/graph.json"
+  CURRENT_FEAT_ID=$(jq -r '.feat_id // ""' "$CONFIG" 2>/dev/null || echo "")
+  if [ -f "$CONDUCTOR_GRAPH" ] && [ -n "$CURRENT_FEAT_ID" ]; then
+    GRAPH_OBJECTIVE=$(jq -r '.objective // ""' "$CONDUCTOR_GRAPH" 2>/dev/null || echo "")
+    if [ -n "$GRAPH_OBJECTIVE" ] && [ "$GRAPH_OBJECTIVE" != "$CURRENT_FEAT_ID" ]; then
+      MARKER_OBJECTIVE_COMPLETE=1
+    fi
+  fi
+  if [ "$TOTAL_COUNT" -gt 0 ] && [ "$DONE_COUNT" -eq "$TOTAL_COUNT" ]; then
+    MARKER_OBJECTIVE_COMPLETE=1
+  fi
+
+  if [ "$MARKER_SESSION_DEAD" -eq 1 ] || [ "$MARKER_OBJECTIVE_COMPLETE" -eq 1 ]; then
+    rm -f "$CONDUCTOR_SESSION_MARKER" "$CONDUCTOR_RESUME_MARKER"
+  fi
+fi
+
 # Compaction counter (GAP-008 context rot detection)
 COMPACTION_FILE="$NAZGUL_DIR/.compaction_count"
 HOOK_EVENT="${CLAUDE_HOOK_EVENT:-}"

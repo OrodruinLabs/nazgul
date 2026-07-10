@@ -17,6 +17,8 @@ metadata:
 - Mode: !`jq -r '.mode // "unknown"' nazgul/config.json 2>/dev/null || echo "unknown"`
 - Iteration: !`jq -r '"\(.current_iteration // 0)/\(.max_iterations // 40)"' nazgul/config.json 2>/dev/null || echo "0/40"`
 - Classification: !`jq -r '.project.classification // "unknown"' nazgul/config.json 2>/dev/null || echo "unknown"`
+- Execution engine: !`jq -r '.execution.engine // "sequential"' nazgul/config.json 2>/dev/null || echo "sequential"`
+- Conductor graph digest: !`E=$(jq -r '.execution.engine // "sequential"' nazgul/config.json 2>/dev/null); if [ "$E" = "conductor" ] && [ -f nazgul/conductor/graph.json ]; then { source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/conductor-graph.sh" 2>/dev/null && graph_wave_digest nazgul/conductor/graph.json; } || echo "{}"; else echo "{}"; fi`
 - AFK: !`jq -r 'if .afk.enabled then "enabled" else "disabled" end' nazgul/config.json 2>/dev/null || echo "disabled"`
 - Paused: !`jq -r '.paused // false' nazgul/config.json 2>/dev/null || echo "false"`
 - Reviewers: !`jq -r '.agents.reviewers // [] | join(", ")' nazgul/config.json 2>/dev/null || echo "none"`
@@ -38,11 +40,18 @@ metadata:
 
 Format all output per `references/ui-brand.md` — use stage banners, status symbols, progress bars, and task status display patterns defined there.
 
-Using the live data above, produce a formatted status report:
+Using the live data above, produce a formatted status report.
 
-### Status Report Format
+**Conductor-mode branch**: if Execution engine is `conductor` AND Conductor graph digest is not `{}`, render the
+Conductor Wave Progress format below in place of the Task Progress block (everything else — header, Active
+Task, Review Board, Context Health, Git, Board Sync — stays the same). If Execution engine is `conductor` but
+the digest IS `{}` (no `nazgul/conductor/graph.json` yet — planning phase), show a one-line "no graph yet"
+notice under Task Progress's position and fall back to the sequential Status Report Format below; never
+error. If Execution engine is `sequential`, always use the sequential Status Report Format below unchanged.
 
-```
+### Status Report Format (sequential engine, or conductor with no graph yet)
+
+```text
 Nazgul Status
 ═══════════════════════════════════════
 Objective:      [current objective, truncated to 80 chars]
@@ -92,8 +101,26 @@ Tasks mapped: [N]
 Failures:     [N]
 ```
 
+### Conductor Wave Progress Format (conductor engine with a graph)
+
+Replaces the Task Progress block only; parse the Conductor graph digest JSON (`current_wave`, `next_unit`,
+`units: {ID: {status, sha, wave}}`) to fill it in. One line per unit, status symbol per `references/ui-brand.md`
+(✦ DONE, ◆ IN_PROGRESS/IMPLEMENTED/IN_REVIEW, ✗ BLOCKED, ◇ otherwise); `sha` shown short (7 chars) or `-` if null.
+
+```text
+Conductor Wave Progress
+─────────────────────────────────────
+Current wave: [current_wave or "-"]
+Next unit:    [next_unit or "none — all units done"]
+
+  [symbol] [UNIT-ID]  wave [N]  sha [short sha or "-"]
+  ...
+```
+
 1. Parse the config JSON for mode, iteration count, max iterations
 2. Parse plan.md to count tasks by status
 3. Check nazgul/reviews/ for any active review feedback
 4. Check nazgul/checkpoints/ for the latest checkpoint
-5. Output the formatted status summary
+5. When Execution engine is `conductor` and the graph digest is non-empty, parse it for the Conductor Wave
+   Progress block instead of recomputing wave/unit state — never reimplement `graph_wave_digest`
+6. Output the formatted status summary

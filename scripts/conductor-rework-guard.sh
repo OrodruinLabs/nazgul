@@ -64,6 +64,26 @@ OWNER=$(jq -r --arg f "$FP" --arg r "$REL" '
   | .key' "$GRAPH" 2>/dev/null | head -1 || true)
 
 if [ -n "$OWNER" ]; then
+  # Cross-cutting exemption: if the file is ALSO in the current in-progress
+  # unit's own declared file_scope, this is a legitimate cross-cutting edit
+  # (e.g. RULES.md), not rework. "Current" excludes any task carrying a
+  # commit — disjoint from OWNER, since dispatched is never cleared and a unit
+  # would otherwise match its own OWNER row through its whole IMPLEMENTED
+  # review window. The guard has no caller-identity binding (stdin carries no
+  # unit id), so a match is only trusted when it is the UNIQUE candidate;
+  # zero or 2+ matches (e.g. a parallel wave lending scope) fail closed to the
+  # OWNER deny below rather than risk exempting the wrong unit's edit.
+  CURRENT_COUNT=$(jq -r --arg f "$FP" --arg r "$REL" '
+    [ .tasks | to_entries[]
+      | select((.value.commit // "") == "")
+      | select(
+          (.value.status // "") == "IN_PROGRESS"
+          or ((.value.dispatched // false) == true and ((.value.status // "") as $s | ($s != "DONE" and $s != "BLOCKED")))
+        )
+      | select((.value.file_scope // []) | any(. == $f or . == $r))
+    ] | length' "$GRAPH" 2>/dev/null || echo 0)
+  [ "$CURRENT_COUNT" = "1" ] && exit 0
+
   SHA=$(jq -r --arg id "$OWNER" '.tasks[$id].commit // "?"' "$GRAPH" 2>/dev/null || echo "?")
   echo "NAZGUL CONDUCTOR: Blocked — $FILE_PATH belongs to $OWNER, already implemented at $SHA; re-work blocked (agents/conductor.md Step 5)." >&2
   exit 2

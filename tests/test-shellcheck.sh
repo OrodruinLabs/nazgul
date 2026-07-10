@@ -37,6 +37,8 @@ SCRIPTS=(
   "scripts/scrub-stale-review-artifacts.sh"
   "scripts/conductor-dispatch-guard.sh"
   "scripts/conductor-rework-guard.sh"
+  "scripts/self-audit.sh"
+  "scripts/lib/raise-finding.sh"
 )
 # tests/ files use dynamic `source` and are not standalone scripts; shellcheck
 # cannot resolve the sourced paths without annotations. The SCRIPTS array is

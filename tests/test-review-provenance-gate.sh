@@ -36,7 +36,7 @@ write_review_token() {
 # genuinely exits 0 (not the DELEGATE-more-work exit 2 a READY task or the
 # post-loop learning gate would otherwise produce).
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG1"' '.learning.auto_distill_post_loop = false' '.docs.verify_comments = false'
+create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG1"' '.learning.auto_distill_post_loop = false' '.docs.verify_comments = false' '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 DIFF="$TEST_DIR/nazgul/reviews/TASK-001/diff.patch"
@@ -86,7 +86,7 @@ teardown_temp_dir
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
 create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG3"' \
   '.review_gate.require_provenance = false' '.learning.auto_distill_post_loop = false' \
-  '.docs.verify_comments = false'
+  '.docs.verify_comments = false' '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 write_review_token "TASK-001" "code-reviewer" "deadbeefdeadbeef"
@@ -98,7 +98,7 @@ teardown_temp_dir
 
 # --- PG-4: legacy review (no token, no manifest) → degrade-to-allow, DONE preserved ---
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG4"' '.learning.auto_distill_post_loop = false' '.docs.verify_comments = false'
+create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG4"' '.learning.auto_distill_post_loop = false' '.docs.verify_comments = false' '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"

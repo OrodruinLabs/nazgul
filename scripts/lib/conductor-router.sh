@@ -71,14 +71,16 @@ router_validate_file_scope() {
 
 # route_backend <kind> [isolation] [group] -> prints the in-session backend:
 #   kind == "review"          -> subagent (always, reviews are read-only)
-#   isolation == "mutation"      group == "parallel" -> team (Layer 4: a parallel
-#                                 multi-unit mutating batch reuses team-orchestrator's
-#                                 proven Agent-Teams path instead of one bespoke
-#                                 worktree per unit)
+#   isolation == "mutation"      group == "parallel" -> subagent (ADR-004: the
+#                                 conductor owns per-unit fan-out for a zero-overlap
+#                                 parallel batch itself — one concurrent Task-tool
+#                                 call per unit — since team-orchestrator has no
+#                                 Agent/Task tool and cannot fan out to teammates)
 #                                 group != "parallel" -> worktree (a lone mutating unit)
-#   isolation == "coordination" -> team (parallel wave needing live SendMessage)
+#   isolation == "coordination" -> team (parallel wave needing live SendMessage;
+#                                 no current caller produces this isolation value)
 #   anything else/unclear       -> subagent (bounded/read-heavy fallback)
-# group defaults to "single" so every pre-Layer-4 2-arg call site is unaffected.
+# group defaults to "single" so every pre-ADR-004 2-arg call site is unaffected.
 route_backend() {
   local kind="$1" isolation="${2:-}" group="${3:-single}"
   if [ "$kind" = "review" ]; then
@@ -87,7 +89,7 @@ route_backend() {
   fi
   case "$isolation" in
     mutation)
-      if [ "$group" = "parallel" ]; then echo "team"; else echo "worktree"; fi ;;
+      if [ "$group" = "parallel" ]; then echo "subagent"; else echo "worktree"; fi ;;
     coordination) echo "team" ;;
     *)            echo "subagent" ;;
   esac

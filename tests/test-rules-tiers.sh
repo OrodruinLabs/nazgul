@@ -63,22 +63,26 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test (c): the count of [advisory] annotations is exactly 11
+# Test (c): the count of [advisory] annotations is exactly 15
 # The legend table itself contains [advisory] as a label definition (1 count).
 # Rule annotations add to that (incl. §11 Conductor's engine-selection, hard-stops,
 # wave-parallelism, and graph-only-invariant bullets — all four are agent-invoked,
 # not hook-gated, per FEAT-007's tier-honesty correction; plus §12's wave-digest
 # bullet, the one Enforced-Conductor layer that stays advisory; plus §13's
 # opt-in/default-off and no-eval heartbeat bullets — nothing schedules the tick,
-# and the eval-safety claim is test-backed today but not regression-guarded).
-# Total must be exactly 11.
+# and the eval-safety claim is test-backed today but not regression-guarded; plus
+# §14's use-it-don't-work-around-it, data-only-no-eval, and append-only-sink
+# raise-finding bullets — a helper agents are told to use, not a mechanical guard;
+# plus §7's FEAT-009 model-tier note — models.conductor / the review-key split are
+# config reads, not hook checks).
+# Total must be exactly 15.
 # ---------------------------------------------------------------------------
 ADVISORY_COUNT=$(grep -c '\[advisory\]' "$RULES_FILE" || true)
-if [ "$ADVISORY_COUNT" -eq 11 ]; then
-  _pass "[advisory] annotation count is exactly 11 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 15 ]; then
+  _pass "[advisory] annotation count is exactly 15 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 11" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 11"
+  _fail "[advisory] annotation count is exactly 15" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 15"
 fi
 
 # ---------------------------------------------------------------------------
@@ -111,9 +115,11 @@ assert_file_contains \
 # Test (f): the Conductor Enforcement section (FEAT-007 follow-up, "Enforced
 # Conductor") exists with honest tiers. Dispatch + re-work guards are real
 # PreToolUse hooks that deny (exit 2) mechanically -> [enforced]. Orphan
-# detection and team routing are wired into real hook events / an existing
-# hook-driven mechanism but only detect/observe rather than block -> [hook-
-# driven only]. The wave digest is read-only convenience nothing forces the
+# detection and per-unit fan-out routing are wired into real hook events / an
+# existing hook-driven mechanism but only detect/observe rather than block ->
+# [hook-driven only]. (FEAT-009 ADR-004 renamed the former "Team routing (Layer
+# 4)" bullet to per-unit fan-out; the team backend is deprecated from the
+# mutating path.) The wave digest is read-only convenience nothing forces the
 # Conductor to consult -> [advisory], same as §11.
 # ---------------------------------------------------------------------------
 assert_file_contains \
@@ -137,9 +143,9 @@ assert_file_contains \
   'Orphan detection.*`\[hook-driven only\]`'
 
 assert_file_contains \
-  "Team routing is tagged [hook-driven only]" \
+  "Per-unit fan-out routing is tagged [hook-driven only]" \
   "$RULES_FILE" \
-  'Team routing.*`\[hook-driven only\]`'
+  'Per-unit fan-out routing.*`\[hook-driven only\]`'
 
 assert_file_contains \
   "Wave digest is tagged [advisory]" \
@@ -194,5 +200,32 @@ assert_file_contains \
   "Automation Heartbeat references branch isolation (§10) as unchanged" \
   "$RULES_FILE" \
   "Branch isolation (§10) applies unchanged"
+
+# ---------------------------------------------------------------------------
+# Test (h): the Raising Findings section (FEAT-009 TASK-009) exists with
+# honest tiers. Nothing forces a sub-session to call raise_finding instead of
+# working around a finding, and the no-eval/neutralization safety is
+# test-backed today but not regression-guarded -> both [advisory], same class
+# as §13's no-eval bullet.
+# ---------------------------------------------------------------------------
+assert_file_contains \
+  "RULES.md has a Raising Findings section" \
+  "$RULES_FILE" \
+  "## 14. Raising Findings"
+
+assert_file_contains \
+  "Use-it-instead-of-working-around-it is tagged [advisory]" \
+  "$RULES_FILE" \
+  'Use it instead of working around out-of-scope findings.*`\[advisory\]`'
+
+assert_file_contains \
+  "Raising findings no-eval discipline is tagged [advisory]" \
+  "$RULES_FILE" \
+  'Data-only, no `eval`.*`\[advisory\]`'
+
+assert_file_contains \
+  "Raising findings append-only sink is tagged [advisory]" \
+  "$RULES_FILE" \
+  'Append-only sink.*`\[advisory\]`'
 
 report_results

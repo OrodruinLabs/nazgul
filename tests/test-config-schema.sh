@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "21"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "22"
 assert_json_field "review_gate.simplify_before_review default false" "$CONFIG" ".review_gate.simplify_before_review" "false"
 assert_json_field "review_gate.enforce_granularity default block" "$CONFIG" ".review_gate.enforce_granularity" "block"
 assert_json_field "has .default_mode" "$CONFIG" ".default_mode" "null"
@@ -156,5 +156,15 @@ assert_json_field "v21 automation.heartbeat.inbox.provider is file" "$CONFIG" ".
 assert_json_field "v21 automation.heartbeat.inbox.dir is nazgul/inbox" "$CONFIG" ".automation.heartbeat.inbox.dir" "nazgul/inbox"
 assert_json_field "v21 automation.heartbeat.auto_start.mode is yolo" "$CONFIG" ".automation.heartbeat.auto_start.mode" "yolo"
 assert_json_field "v21 automation.heartbeat.auto_start.engine is conductor" "$CONFIG" ".automation.heartbeat.auto_start.engine" "conductor"
+
+# v22 new defaults (FEAT-009: model-tier + review-key split + self-audit)
+assert_json_field "v22 models.conductor is sonnet" "$CONFIG" ".models.conductor" "sonnet"
+assert_json_field "v22 models.review_orchestrator is sonnet" "$CONFIG" ".models.review_orchestrator" "sonnet"
+assert_json_field "v22 models.review_default is haiku" "$CONFIG" ".models.review_default" "haiku"
+assert_json_field "v22 models.review still present (retained fallback)" "$CONFIG" ".models.review" "haiku"
+val=$(jq -r '.self_audit | type' "$CONFIG")
+assert_eq "v22 has .self_audit object" "$val" "object"
+assert_json_field "v22 self_audit.enabled is true" "$CONFIG" ".self_audit.enabled" "true"
+assert_json_field "v22 self_audit.backlog_path is nazgul/improvements.md" "$CONFIG" ".self_audit.backlog_path" "nazgul/improvements.md"
 
 report_results

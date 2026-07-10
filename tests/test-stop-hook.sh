@@ -51,7 +51,7 @@ setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
 create_config '.agents.reviewers = ["code-reviewer"]' '.learning.auto_distill_post_loop = false' \
-  '.docs.verify_comments = false'
+  '.docs.verify_comments = false' '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_task_file "TASK-002" "DONE"
@@ -95,7 +95,7 @@ setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
 create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-007"' \
-  '.docs.verify_comments = false'
+  '.docs.verify_comments = false' '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -124,7 +124,7 @@ setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
 create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-009"' \
-  '.docs.verify_comments = false'
+  '.docs.verify_comments = false' '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -442,7 +442,7 @@ setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
 create_config '.afk.yolo = true' '.afk.task_pr = false' '.current_iteration = 1' '.learning.auto_distill_post_loop = false' \
-  '.docs.verify_comments = false'
+  '.docs.verify_comments = false' '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "APPROVED"
 create_task_file "TASK-002" "APPROVED"
@@ -842,7 +842,7 @@ create_config '.feat_id = "FEAT-INT2"' \
   '.review_gate.enforce_granularity = "block"' \
   '.learning.auto_distill_post_loop = false' \
   '.agents.reviewers = ["code-reviewer"]' \
-  '.docs.verify_comments = false'
+  '.docs.verify_comments = false' '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -864,12 +864,158 @@ create_config '.feat_id = "FEAT-INT3"' \
   '.review_gate.enforce_granularity = "block"' \
   '.learning.auto_distill_post_loop = false' \
   '.agents.reviewers = ["code-reviewer"]' \
-  '.docs.verify_comments = false'
+  '.docs.verify_comments = false' '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
 run_hook
 assert_exit_code "gran gate integration: no coverage degrades: exit 0" "$HOOK_EC" 0
+teardown_temp_dir
+
+# === SELF-AUDIT GATE (self_audit.enabled) ===
+
+# --- SA-1: opt-out (self_audit.enabled=false) — no-op, exit 0, no marker ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config \
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.feat_id = "FEAT-SA1"' \
+  '.learning.auto_distill_post_loop = false' \
+  '.docs.verify_comments = false' \
+  '.self_audit.enabled = false'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+run_hook
+assert_exit_code "SA-1: opt-out → exit 0" "$HOOK_EC" 0
+assert_file_not_exists "SA-1: no marker when opted out" "$TEST_DIR/nazgul/logs/.self-audited"
+assert_not_contains "SA-1: no decision JSON when opted out" "$HOOK_OUTPUT" '"decision"'
+teardown_temp_dir
+
+# --- SA-2: marker absent — block, exit 2, DELEGATE on stderr ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config \
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.feat_id = "FEAT-SA2"' \
+  '.learning.auto_distill_post_loop = false' \
+  '.docs.verify_comments = false'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+run_hook
+assert_exit_code "SA-2: marker absent → exit 2" "$HOOK_EC" 2
+assert_contains "SA-2: decision block in stdout" "$HOOK_OUTPUT" '"decision": "block"'
+assert_contains "SA-2: reason mentions feat_id" "$HOOK_OUTPUT" "FEAT-SA2"
+assert_contains "SA-2: DELEGATE instruction emitted" "$HOOK_OUTPUT" "nazgul:self-audit"
+assert_file_exists "SA-2: attempts file created" "$TEST_DIR/nazgul/logs/.self-audit-attempts"
+assert_contains "SA-2: attempts scoped to feat_id" "$(cat "$TEST_DIR/nazgul/logs/.self-audit-attempts")" "FEAT-SA2"
+teardown_temp_dir
+
+# --- SA-3: marker matches feat_id — pass immediately, exit 0 ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config \
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.feat_id = "FEAT-SA3"' \
+  '.learning.auto_distill_post_loop = false' \
+  '.docs.verify_comments = false'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+mkdir -p "$TEST_DIR/nazgul/logs"
+printf '%s\n' "FEAT-SA3" > "$TEST_DIR/nazgul/logs/.self-audited"
+run_hook
+assert_exit_code "SA-3: marker matches → exit 0" "$HOOK_EC" 0
+assert_not_contains "SA-3: no block when marker matches" "$HOOK_OUTPUT" '"decision": "block"'
+teardown_temp_dir
+
+# --- SA-4: stale marker (different feat_id) — re-gates, exit 2 ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config \
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.feat_id = "FEAT-SA4"' \
+  '.learning.auto_distill_post_loop = false' \
+  '.docs.verify_comments = false'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+mkdir -p "$TEST_DIR/nazgul/logs"
+printf '%s\n' "FEAT-STALE" > "$TEST_DIR/nazgul/logs/.self-audited"
+run_hook
+assert_exit_code "SA-4: stale marker → exit 2" "$HOOK_EC" 2
+assert_contains "SA-4: decision block for stale marker" "$HOOK_OUTPUT" '"decision": "block"'
+teardown_temp_dir
+
+# --- SA-5: attempts increment 0→1→2 (still blocking) ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config \
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.feat_id = "FEAT-SA5"' \
+  '.learning.auto_distill_post_loop = false' \
+  '.docs.verify_comments = false'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+mkdir -p "$TEST_DIR/nazgul/logs"
+printf '%s %s\n' "FEAT-SA5" "2" > "$TEST_DIR/nazgul/logs/.self-audit-attempts"
+run_hook
+assert_exit_code "SA-5: attempts=2 → still exit 2" "$HOOK_EC" 2
+assert_eq "SA-5: attempts incremented to 3" \
+  "$(awk '{print $2}' "$TEST_DIR/nazgul/logs/.self-audit-attempts")" "3"
+teardown_temp_dir
+
+# --- SA-6: backstop (attempts≥3) — completes with warning, exit 0, marker written ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config \
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.feat_id = "FEAT-SA6"' \
+  '.learning.auto_distill_post_loop = false' \
+  '.docs.verify_comments = false'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+mkdir -p "$TEST_DIR/nazgul/logs"
+printf '%s %s\n' "FEAT-SA6" "3" > "$TEST_DIR/nazgul/logs/.self-audit-attempts"
+run_hook
+assert_exit_code "SA-6: backstop → exit 0" "$HOOK_EC" 0
+assert_contains "SA-6: backstop warns" "$HOOK_OUTPUT" "gave up"
+assert_file_exists "SA-6: backstop writes marker" "$TEST_DIR/nazgul/logs/.self-audited"
+assert_eq "SA-6: backstop marker contains feat_id" \
+  "$(cat "$TEST_DIR/nazgul/logs/.self-audited")" "FEAT-SA6"
+teardown_temp_dir
+
+# --- SA-7: attempts reset when feat_id changes ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config \
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.feat_id = "FEAT-SA7"' \
+  '.learning.auto_distill_post_loop = false' \
+  '.docs.verify_comments = false'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+mkdir -p "$TEST_DIR/nazgul/logs"
+# attempts file belongs to a different objective
+printf '%s %s\n' "FEAT-OLD" "3" > "$TEST_DIR/nazgul/logs/.self-audit-attempts"
+run_hook
+# Old attempts (3) belonged to different obj — counter resets to 0, so this attempt = 1 → still blocks
+assert_exit_code "SA-7: reset attempts on new feat_id → exit 2" "$HOOK_EC" 2
+assert_eq "SA-7: attempts written as 1 after reset" \
+  "$(awk '{print $2}' "$TEST_DIR/nazgul/logs/.self-audit-attempts")" "1"
+assert_eq "SA-7: attempts scoped to new feat_id" \
+  "$(awk '{print $1}' "$TEST_DIR/nazgul/logs/.self-audit-attempts")" "FEAT-SA7"
 teardown_temp_dir
 
 report_results
