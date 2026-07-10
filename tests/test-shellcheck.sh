@@ -39,7 +39,6 @@ SCRIPTS=(
   "scripts/conductor-rework-guard.sh"
   "scripts/self-audit.sh"
   "scripts/lib/raise-finding.sh"
-  "scripts/conductor-premerge-guard.sh"
 )
 # tests/ files use dynamic `source` and are not standalone scripts; shellcheck
 # cannot resolve the sourced paths without annotations. The SCRIPTS array is
