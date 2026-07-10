@@ -31,6 +31,14 @@ _rf_neutralize() {
 # $CLAUDE_PROJECT_DIR/nazgul, then ./nazgul, when NAZGUL_DIR is unset).
 # ts is UTC now; agent/unit come from $NAZGUL_AGENT/$NAZGUL_UNIT (empty when unset).
 raise_finding() {
+  # Argc guard FIRST: this is sourced into caller shells that may run `set -u`,
+  # where expanding an unset $1..$4 would raise "unbound variable" and abort the
+  # CALLER. Fail with a usage message and a nonzero return instead — never let a
+  # mis-call take down the sub-session that raised the finding.
+  if [ "$#" -lt 4 ]; then
+    printf 'raise_finding: need >=4 args: <severity> <category> <title> <detail> [suggested_fix] [evidence]\n' >&2
+    return 2
+  fi
   local severity="$1" category="$2" title="$3" detail="$4"
   local suggested_fix="${5:-}" evidence="${6:-}"
   local nazgul_dir="${NAZGUL_DIR:-${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul}"

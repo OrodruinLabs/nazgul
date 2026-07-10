@@ -232,8 +232,12 @@ _ingest_findings_jsonl() {
     evidence=$(printf '%s' "$line" | jq -r '.evidence // ""' 2>/dev/null) || evidence=""
     agent=$(printf '%s' "$line" | jq -r '.agent // "unknown"' 2>/dev/null) || agent="unknown"
     unit=$(printf '%s' "$line" | jq -r '.unit // ""' 2>/dev/null) || unit=""
-    ev="raised by ${agent}${unit:+ (unit: ${unit})}: ${detail}${evidence:+ | evidence: ${evidence}}"
-    _append_finding "$severity" "$category" "$title" "$ev" "$fix"
+    # `category` is a taxonomy tag (reliability/observability/cost/…), NOT a
+    # leverage signal — surface it in the evidence line, and pass "n/a" for the
+    # leverage slot (raise_finding's producer schema doesn't collect leverage),
+    # so the backlog never renders "Severity/Leverage: medium / reliability".
+    ev="[${category}] raised by ${agent}${unit:+ (unit: ${unit})}: ${detail}${evidence:+ | evidence: ${evidence}}"
+    _append_finding "$severity" "n/a" "$title" "$ev" "$fix"
   done < "$f"
   rm -f "$seen_file"
 }

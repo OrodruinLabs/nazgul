@@ -982,6 +982,10 @@ CV_MSG
     SELF_AUDIT_ENABLED=$(jq -r 'if .self_audit.enabled == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
     if [ "$SELF_AUDIT_ENABLED" = "true" ]; then
       SA_OBJ_ID=$(jq -r '.feat_id // "default"' "$CONFIG" 2>/dev/null || echo "default")
+      # Honor a configured backlog path so the DELEGATE message points at the
+      # real file (self-audit.sh writes to self_audit.backlog_path); default it.
+      SA_BACKLOG=$(jq -r '.self_audit.backlog_path // "nazgul/improvements.md"' "$CONFIG" 2>/dev/null || echo "nazgul/improvements.md")
+      [ -n "$SA_BACKLOG" ] || SA_BACKLOG="nazgul/improvements.md"
       SA_MARKER="$NAZGUL_DIR/logs/.self-audited"
       SA_ATTEMPTS_FILE="$NAZGUL_DIR/logs/.self-audit-attempts"
       SA_AUDITED_FOR=""
@@ -1002,7 +1006,7 @@ CV_MSG
 Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP SELF-AUDIT GATE (mandatory).
 Self-audit findings have NOT been recorded for this objective (${SA_OBJ_ID}) yet.
 DELEGATE: Spawn the self-audit agent (nazgul:self-audit) to mine cost/perf/correctness
-signals from this objective and append findings to nazgul/improvements.md. It proposes
+signals from this objective and append findings to ${SA_BACKLOG}. It proposes
 only — it never edits code or approves anything.
 When it finishes it MUST record completion: echo "${SA_OBJ_ID}" > nazgul/logs/.self-audited
 Do NOT output NAZGUL_COMPLETE until self-audit has run and the marker is written.
