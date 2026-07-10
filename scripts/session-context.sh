@@ -117,6 +117,18 @@ if [ -f "$CONDUCTOR_SESSION_MARKER" ] || [ -f "$CONDUCTOR_RESUME_MARKER" ]; then
   fi
 fi
 
+# Git-hooks self-heal — re-assert the managed core.hooksPath only on detected
+# drift during an active loop; self_heal_git_hooks itself no-ops when
+# guards.git_hooks is off, no objective is active, or nothing was installed.
+GIT_HOOKS_LIB="$PLUGIN_ROOT/scripts/lib/git-hooks.sh"
+if [ -f "$GIT_HOOKS_LIB" ]; then
+  # shellcheck source=./lib/git-hooks.sh
+  source "$GIT_HOOKS_LIB"
+  if declare -F self_heal_git_hooks >/dev/null 2>&1; then
+    self_heal_git_hooks "$NAZGUL_DIR/.." "$CONFIG" || true
+  fi
+fi
+
 # Compaction counter (GAP-008 context rot detection)
 COMPACTION_FILE="$NAZGUL_DIR/.compaction_count"
 HOOK_EVENT="${CLAUDE_HOOK_EVENT:-}"
