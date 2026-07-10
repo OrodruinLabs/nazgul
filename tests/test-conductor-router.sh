@@ -3,7 +3,7 @@ set -uo pipefail
 # Note: NOT using set -e because we test exit codes explicitly
 
 # Test: conductor-router.sh — backend router + overlap-abort + max_parallel cap
-TEST_NAME="test-conductor-overlap"
+TEST_NAME="test-conductor-router"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/assertions.sh"
@@ -160,27 +160,30 @@ assert_exit_code "non-string scope: route_wave exit 0" "$ROUTE_EC" 0
 assert_json_field "non-string scope: dispatch sequential" "$OUT_FILE" ".dispatch" "sequential"
 assert_json_field "non-string scope: reason mentions invalid shape" "$OUT_FILE" ".reason" "invalid file_scope shape"
 
-# --- Test 13: Layer 4 — parallel mutation routes to team, single mutation to worktree ---
-assert_eq "route_backend: parallel mutation -> team" "$(route_backend implement mutation parallel)" "team"
+# --- Test 13: ADR-004 — parallel mutation routes to subagent (conductor-owned fan-out),
+# single mutation to worktree, coordination isolation still routes to team ---
+assert_eq "route_backend: parallel mutation -> subagent" "$(route_backend implement mutation parallel)" "subagent"
 assert_eq "route_backend: single mutation -> worktree" "$(route_backend implement mutation single)" "worktree"
 assert_eq "route_backend: review always subagent (parallel group ignored)" "$(route_backend review "" parallel)" "subagent"
 assert_eq "route_backend: mutation with no group arg defaults to single -> worktree" "$(route_backend implement mutation)" "worktree"
+assert_eq "route_backend: coordination isolation still -> team" "$(route_backend implement coordination parallel)" "team"
 
 run_route_unit_grouped() {
   route_unit "$1" "$2" > "$OUT_FILE"
 }
 run_route_unit_grouped '{"kind":"task","isolation":"mutation"}' "parallel"
-assert_json_field "route_unit: mutation + parallel group -> team" "$OUT_FILE" ".backend" "team"
-assert_json_field "route_unit: mutation + parallel group -> dispatch team-orchestrator" "$OUT_FILE" ".dispatch" "team-orchestrator"
+assert_json_field "route_unit: mutation + parallel group -> subagent" "$OUT_FILE" ".backend" "subagent"
+assert_json_field "route_unit: mutation + parallel group -> dispatch Task tool" "$OUT_FILE" ".dispatch" "Task tool"
 run_route_unit_grouped '{"kind":"task","isolation":"mutation"}' "single"
 assert_json_field "route_unit: mutation + single group -> worktree" "$OUT_FILE" ".backend" "worktree"
 run_route_unit '{"kind":"task","isolation":"mutation"}'
 assert_json_field "route_unit: mutation, no group arg (back-compat) -> worktree" "$OUT_FILE" ".backend" "worktree"
 
 # --- Test 14: choke-point integration — a real parallel multi-unit mutating batch
-# ends up routed to team, a single-unit mutating wave routes to worktree. This
-# exercises route_wave()'s batches feeding route_unit(), the actual call shape
-# agents/conductor.md's Step 4/5 use — not route_backend() in isolation.
+# ends up routed to per-unit subagent (never team), a single-unit mutating wave
+# routes to worktree. This exercises route_wave()'s batches feeding route_unit(),
+# the actual call shape agents/conductor.md's Step 4/5 use — not route_backend()
+# in isolation.
 route_batch_backends() {
   # $1 = ROUTE json ({dispatch, reason, batches}); prints one backend per unit,
   # in batch/unit order, exactly as agents/conductor.md's Step 4 would derive
@@ -206,8 +209,8 @@ UNITS_PARALLEL_MUTATION='[{"id":"TASK-001","file_scope":["a.sh"]},{"id":"TASK-00
 run_route_wave "$UNITS_PARALLEL_MUTATION" "true" ""
 ROUTE_JSON=$(cat "$OUT_FILE")
 BACKENDS=$(route_batch_backends "$ROUTE_JSON")
-assert_eq "choke point: parallel multi-unit mutating batch -> both units route to team" \
-  "$(echo "$BACKENDS" | sort -u | tr '\n' ' ' | sed 's/ $//')" "team"
+assert_eq "choke point: parallel multi-unit mutating batch -> both units route to subagent (never team)" \
+  "$(echo "$BACKENDS" | sort -u | tr '\n' ' ' | sed 's/ $//')" "subagent"
 
 UNITS_SINGLE_MUTATION='[{"id":"TASK-001","file_scope":["a.sh"]}]'
 run_route_wave "$UNITS_SINGLE_MUTATION" "false" ""

@@ -201,11 +201,12 @@ ordered array of task-id arrays (each batch ≤ `conductor.max_parallel`, sequen
 per-batch check, not the wave-level `ROUTE.dispatch` value: a marked-parallel wave whose only batch
 happens to hold one unit still yields `GROUP="single"` for that unit. Then call
 `route_unit '{"kind": "task", "isolation": "..."}' "$GROUP"` to get its `{backend, dispatch}` —
-`subagent` (Task/Agent dispatch — the default for bounded work), `worktree` (a lone file-mutating
-unit — reuse `EnterWorktree`/`ExitWorktree`), or `team` (**Layer 4**: a parallel multi-unit mutating
-batch, or any `coordination`-isolation batch — reuse `team-orchestrator`'s "Spawning an Implementation
-Team" protocol instead of one bespoke worktree per unit). Follow the batch's routed backend for every
-unit's implementation dispatch. For review dispatch, call `route_unit '{"kind": "review"}'` once per wave
+`subagent` (Task/Agent dispatch — both the default for bounded single-unit work AND, per ADR-004, a
+parallel multi-unit mutating batch: YOU dispatch each unit's implementer as its own concurrent
+Task-tool call, never delegating the whole batch to `team-orchestrator`, which has no `Agent`/`Task`
+tool to fan out with), `worktree` (a lone file-mutating unit — reuse `EnterWorktree`/`ExitWorktree`),
+or `team` (a `coordination`-isolation batch needing live `SendMessage` — no current caller produces
+this isolation value). Follow the batch's routed backend for every unit's implementation dispatch. For review dispatch, call `route_unit '{"kind": "review"}'` once per wave
 and use its returned `backend` for every unit's Review Board dispatch in this wave, regardless of the
 unit's own implementation backend — today that resolves to `subagent` (`route_backend` hardcodes reviews
 to `subagent`, reviewers are read-only and independent), but sourcing it from the router keeps this in
@@ -229,35 +230,25 @@ For each batch in `ROUTE.batches`, in order:
    `graph_mark_dispatched "$NAZGUL_DIR/conductor/graph.json" "$UNIT_ID"`. Never clear it afterward — the
    orphan check also requires non-terminal status, so a unit reaching DONE/BLOCKED naturally stops
    matching. Then dispatch each unit in the batch per its routed backend:
-   - `team`: this is now the routed backend for a **parallel multi-unit mutating batch** (Layer 4 — the
-     fix for "why wasn't the conductor using team agents") as well as any `coordination`-isolation batch.
-     Delegate the WHOLE batch, in one dispatch, to `team-orchestrator` per its existing "Spawning an
-     Implementation Team" protocol: it does `git worktree add` per teammate (never a bespoke
-     `EnterWorktree` call of your own for these units), then owns spawn → monitor → collect → cleanup for
-     the whole team. **Wait for `team-orchestrator` to return and report every teammate's outcome**
-     (status + commit SHA per unit, or BLOCKED) before starting any of this batch's reviews — same
-     synchronous rule as below, just satisfied by one delegated call instead of N Agent-tool calls.
-     **Known limitation:** `team-orchestrator`'s teammates are naturally backgrounded for concurrency, but
-     Layer 1 (`conductor-dispatch-guard.sh`, RULES.md §12) denies `run_in_background: true` for
-     `implementer`/`team-orchestrator` subagent dispatches during a conductor run. This interaction is
-     unresolved — until it is, route this batch's teammates synchronously, or expect the guard needs a
-     caller-aware exemption for the team-backend path. The single-unit `subagent`/`worktree` path below is
-     unaffected and fully enforced.
-   - `subagent`/`worktree`: only ever a single-unit batch now (a multi-unit mutating batch routes to
-     `team` above). One Agent-tool call per unit (a `worktree` unit additionally uses
-     `EnterWorktree`/`ExitWorktree` around its dispatch, exactly as `agents/team-orchestrator.md`'s
-     "Spawning an Implementation Team" section does). Any residual multi-unit `subagent`/`worktree`
-     batch (there should not be one, per the routing above, but if the router ever falls back to it) is
-     still one call per unit, all emitted in the SAME message so they run concurrently — the same pattern
-     `agents/review-gate.md`'s parallel reviewer dispatch uses. Never fire these and move on before they
-     return.
+   - `subagent`: the routed backend for a **parallel multi-unit mutating batch** (ADR-004 — conductor-
+     owned fan-out) as well as the ordinary single-unit bounded case. YOU dispatch one Agent-tool call
+     per unit, ALL emitted in the SAME message so a multi-unit batch runs concurrently — the same
+     pattern `agents/review-gate.md`'s parallel reviewer dispatch uses. Never delegate a multi-unit batch
+     to `team-orchestrator` as a whole: it has no `Agent`/`Task` tool and silently degrades to serial
+     self-implementation if handed one — the exact defect ADR-004 fixes.
+   - `worktree`: a lone mutating unit (single-unit batch only). One Agent-tool call, wrapped in
+     `EnterWorktree`/`ExitWorktree` around the dispatch, exactly as `agents/team-orchestrator.md`'s
+     "Spawning an Implementation Team" section does for its own teammates.
+   - `team`: reserved for a `coordination`-isolation batch needing live `SendMessage` between units — no
+     current caller produces this isolation value. `team-orchestrator` still has no `Agent`/`Task` tool,
+     so per ADR-004 this path is not exercised for any mutating batch today.
    - Pass `model: "$MODEL_IMPLEMENTATION"` (resolved in Model Selection above) on every one of these
      Agent-tool calls — omitting it lets the dispatch inherit your own tier instead of the configured one.
    - Give each dispatch ONLY the task ID, its file scope, and its manifest path — never a diff, never
      another unit's files. Include `NAZGUL_UNIT: <task id>` per the contract above.
    - **Wait for every dispatch in the batch to return** (status IMPLEMENTED + commit SHA, or BLOCKED)
-     before proceeding. Do not start the batch's reviews until every implementer in it has returned —
-     this applies whether the batch was one `team-orchestrator` delegation or N individual dispatches.
+     before proceeding. Do not start the batch's reviews until every implementer in it has returned,
+     regardless of how many individual Agent-tool calls this batch's implementation required.
 2. **Review.** For each unit in the batch that reached IMPLEMENTED:
    - **Scrub its review dir first**: `rm -rf "$NAZGUL_DIR/reviews/<unit-id>"` before dispatching Review
      Board for it. This is the second hard lesson — a stale `diff.patch` or reviewer file left over from
