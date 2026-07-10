@@ -314,6 +314,12 @@ not DONE, do not proceed — return to the loop with that task's unit. If all ar
 Review Board dispatch already ran Post-Loop Phase (`agents/review-gate.md` Step 5 — post-loop agents,
 push, PR) as part of its own Step 4 handling, gated by `approve_final_pr` back in Step 3 of this wave.
 
+If you summarize post-loop gate outcomes (self-audit, doc-verifier, comment-verifier, learner) to the
+user, report from the authoritative artifacts — `nazgul/logs/.self-audited` (does it match `feat_id`?),
+`self_audit.backlog_path`'s entry count, and the equivalent markers for the other gates — not from a
+subagent's prose return. Inferring from a return message risks reporting a gate as skipped when it in
+fact ran and only a best-effort sub-step (e.g. self-audit's transcript cost mining) degraded.
+
 Remove the session marker written at Step 0 so `conductor-dispatch-guard.sh` (Layer 1) and
 `conductor-rework-guard.sh` (Layer 2) no-op once this run has ended: `rm -f
 "$NAZGUL_DIR/conductor/.session"`. Then output `NAZGUL_COMPLETE`.

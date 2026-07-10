@@ -1015,7 +1015,7 @@ SA_MSG
           jq -n --arg r "Post-loop self-audit gate: findings not yet recorded for ${SA_OBJ_ID}" '{"decision":"block","reason":$r}'
           exit 2
         else
-          echo "Nazgul: self-audit gate gave up after ${SA_ATTEMPTS} attempts for ${SA_OBJ_ID} — completing without self-audit. Run scripts/self-audit.sh manually." >&2
+          echo "Nazgul: self-audit gate gave up after ${SA_ATTEMPTS} attempts for ${SA_OBJ_ID} — completing without self-audit. Run \${CLAUDE_PLUGIN_ROOT}/scripts/self-audit.sh manually." >&2
           mkdir -p "$NAZGUL_DIR/logs"
           printf '%s\n' "$SA_OBJ_ID" > "$SA_MARKER"
         fi
