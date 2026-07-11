@@ -304,6 +304,38 @@ assert_dir_not_exists "install: malformed config -> no managed dir created" "$TE
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
+# NON-OBJECT .branch: install with valid-JSON but `.branch` a scalar must
+# NO-OP entirely (not silently coerce and proceed) — a corrupt `.branch`
+# field is not a trustworthy place to record a restorable prior.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+git -C "$TEST_DIR/repo" config core.hooksPath ".husky"
+write_config "$TEST_DIR/repo" '{"branch":"x","guards":{"git_hooks":true}}'
+install_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
+STILL_HUSKY=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
+assert_eq "install: non-object .branch -> core.hooksPath untouched" "$STILL_HUSKY" ".husky"
+assert_dir_not_exists "install: non-object .branch -> no managed dir created" "$TEST_DIR/repo/nazgul/.githooks"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# PERSIST FAILURE: if the prior value can't be durably written (e.g. the
+# nazgul dir is not writable), install must NOT set core.hooksPath — a
+# later uninstall would have nothing real to restore.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+git -C "$TEST_DIR/repo" config core.hooksPath ".husky"
+write_config "$TEST_DIR/repo" '{"branch":{"base":"main"},"guards":{"git_hooks":true}}'
+chmod 555 "$TEST_DIR/repo/nazgul"
+install_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json" 2>/dev/null
+chmod 755 "$TEST_DIR/repo/nazgul"
+STILL_HUSKY=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
+assert_eq "install: persist failure -> core.hooksPath untouched" "$STILL_HUSKY" ".husky"
+assert_dir_not_exists "install: persist failure -> no managed dir created" "$TEST_DIR/repo/nazgul/.githooks"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
 # MALFORMED CONFIG: uninstall must NOT touch a pre-existing real
 # core.hooksPath when config.json doesn't parse as JSON.
 # ---------------------------------------------------------------------------
@@ -330,6 +362,33 @@ write_config "$TEST_DIR/repo" '{"branch":{"base":"main","feature":"feat/x","prio
 uninstall_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
 STILL_HUSKY=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
 assert_eq "uninstall: never-recorded prior (null) leaves pre-existing core.hooksPath alone" "$STILL_HUSKY" ".husky"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# NON-OBJECT .branch: uninstall with valid-JSON but `.branch` a scalar must
+# NO-OP — pre-existing core.hooksPath left exactly as-is.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+git -C "$TEST_DIR/repo" config core.hooksPath ".husky"
+write_config "$TEST_DIR/repo" '{"branch":5,"guards":{"git_hooks":true}}'
+uninstall_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
+STILL_HUSKY=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
+assert_eq "uninstall: non-object .branch -> pre-existing core.hooksPath unchanged" "$STILL_HUSKY" ".husky"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# NON-OBJECT .branch: self-heal with valid-JSON but `.branch` a scalar must
+# NO-OP — never blind-overwrite because it can't safely read `feature` or
+# the recorded prior.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" '{"branch":"x","guards":{"git_hooks":true}}'
+git -C "$TEST_DIR/repo" config core.hooksPath ".git/hooks-other"
+self_heal_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
+UNTOUCHED=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
+assert_eq "self-heal: non-object .branch leaves core.hooksPath alone" "$UNTOUCHED" ".git/hooks-other"
 teardown_temp_dir
 
 report_results

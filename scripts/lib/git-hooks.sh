@@ -93,14 +93,34 @@ install_git_hooks() {
   _gh_config_readable "$config" || return 0
   [ "$(_gh_enabled "$config")" = "true" ] || return 0
 
+  # `.branch` present but not an object (hand-edited/corrupt config) can't be
+  # safely read or written by any of the jq filters below (indexing a
+  # scalar/array errors) — treat exactly like an unreadable config: no-op,
+  # never touch core.hooksPath. Absent/null `.branch` is fine (jq auto-
+  # vivifies it to an object on write).
+  local branch_type
+  branch_type=$(jq -r '.branch | type' "$config" 2>/dev/null) || return 0
+  case "$branch_type" in
+    object | null) : ;;
+    *) return 0 ;;
+  esac
+
   local not_recorded
-  not_recorded=$(jq -r '(.branch // {}).prior_hooks_path == null' "$config" 2>/dev/null || echo "true")
+  not_recorded=$(jq -r '(.branch // {}).prior_hooks_path == null' "$config" 2>/dev/null) || return 0
   if [ "$not_recorded" = "true" ]; then
     local current
     current=$(_gh_current_hooks_path "$project_root")
     local tmp
     tmp=$(mktemp)
-    jq --arg prior "$current" '.branch.prior_hooks_path = $prior' "$config" > "$tmp" && mv "$tmp" "$config"
+    if jq --arg prior "$current" '.branch.prior_hooks_path = $prior' "$config" > "$tmp" && mv "$tmp" "$config"; then
+      :
+    else
+      # Couldn't durably persist the prior value -> must not point
+      # core.hooksPath anywhere; a later uninstall would have nothing to
+      # restore and would clobber the user's real setting.
+      rm -f "$tmp"
+      return 0
+    fi
   fi
 
   local managed_dir="$project_root/$_GH_MANAGED_RELDIR"
@@ -139,8 +159,10 @@ uninstall_git_hooks() {
   [ -f "$config" ] || return 0
   _gh_config_readable "$config" || return 0
 
+  # A non-object `.branch` (malformed/hand-edited config) reads as "never
+  # recorded", same as absent/null — never touches core.hooksPath.
   local was_recorded
-  was_recorded=$(jq -r '(.branch // {}).prior_hooks_path != null' "$config" 2>/dev/null) || return 0
+  was_recorded=$(jq -r 'if (.branch|type) == "object" then (.branch.prior_hooks_path != null) else false end' "$config" 2>/dev/null) || return 0
   [ "$was_recorded" = "true" ] || return 0
 
   local prior
@@ -171,12 +193,14 @@ self_heal_git_hooks() {
   _gh_config_readable "$config" || return 0
   [ "$(_gh_enabled "$config")" = "true" ] || return 0
 
+  # A non-object `.branch` reads as "no feature" / "never recorded" here too
+  # — same fail-safe treatment as uninstall_git_hooks.
   local feature
-  feature=$(jq -r '.branch.feature // ""' "$config" 2>/dev/null || echo "")
+  feature=$(jq -r 'if (.branch|type) == "object" then (.branch.feature // "") else "" end' "$config" 2>/dev/null || echo "")
   [ -n "$feature" ] || return 0
 
   local recorded
-  recorded=$(jq -r '(.branch // {}).prior_hooks_path != null' "$config" 2>/dev/null || echo "false")
+  recorded=$(jq -r 'if (.branch|type) == "object" then (.branch.prior_hooks_path != null) else false end' "$config" 2>/dev/null || echo "false")
   [ "$recorded" = "true" ] || return 0
 
   local current

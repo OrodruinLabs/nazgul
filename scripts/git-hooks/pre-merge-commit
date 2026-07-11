@@ -40,6 +40,10 @@ _dispatch_and_exit() {
   exit 0
 }
 
+# Every check below reads config/graph via jq. No jq -> nothing downstream is
+# safely readable -> degrade to allow immediately, before any config read.
+command -v jq >/dev/null 2>&1 || _dispatch_and_exit
+
 [ -f "$CONFIG" ] || _dispatch_and_exit
 
 # `// true` would treat a literal `false` as falsy too (jq quirk), so compare
@@ -57,10 +61,11 @@ ENFORCE=$(jq -r 'if .conductor.enforce.premerge_guard == false then "false" else
 [ "$ENFORCE" = "true" ] || _dispatch_and_exit
 
 # Candidate merged-head SHAs: one GITHEAD_<sha> per head git is merging,
-# name-keyed by the actual content hash. No candidates -> no merge in
-# progress / unrecognized invocation -> degrade to allow.
-CANDIDATE_SHAS_JSON=$(env | sed -nE 's/^GITHEAD_([0-9a-f]{40,64})=.*/\1/p' | jq -R -s 'split("\n") | map(select(length>0))')
-[ "$(printf '%s' "$CANDIDATE_SHAS_JSON" | jq 'length')" -gt 0 ] || _dispatch_and_exit
+# name-keyed by the actual content hash. Any failure in this pipeline (jq
+# choking on a hostile/unexpected env) -> treat as no candidates, same as
+# "no merge in progress" -> degrade to allow.
+CANDIDATE_SHAS_JSON=$(env | sed -nE 's/^GITHEAD_([0-9a-f]{40,64})=.*/\1/p' | jq -R -s 'split("\n") | map(select(length>0))' 2>/dev/null) || CANDIDATE_SHAS_JSON='[]'
+[ "$(printf '%s' "$CANDIDATE_SHAS_JSON" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ] || _dispatch_and_exit
 
 # Map each candidate to a conductor unit via graph.json's recorded commit (a
 # bare, possibly-abbreviated SHA). Units with no matching candidate are
@@ -77,12 +82,12 @@ MATCHED_UNITS=$(jq -c --argjson shas "$CANDIDATE_SHAS_JSON" '
 
 # Block if ANY matched unit lacks DONE+APPROVE — a decoy GITHEAD_<sha> for an
 # approved unit cannot suppress the genuine, unapproved one also present.
-BLOCKING=$(printf '%s' "$MATCHED_UNITS" | jq -c '[.[] | select(.status != "DONE" or (.verdict | test("^APPROVE"; "i") | not))] | (.[0] // empty)')
+BLOCKING=$(printf '%s' "$MATCHED_UNITS" | jq -c '[.[] | select(.status != "DONE" or (.verdict | test("^APPROVE"; "i") | not))] | (.[0] // empty)' 2>/dev/null) || _dispatch_and_exit
 [ -n "$BLOCKING" ] || _dispatch_and_exit
 
-UNIT_ID=$(printf '%s' "$BLOCKING" | jq -r '.id')
-STATUS=$(printf '%s' "$BLOCKING" | jq -r '.status')
-VERDICT=$(printf '%s' "$BLOCKING" | jq -r '.verdict')
+UNIT_ID=$(printf '%s' "$BLOCKING" | jq -r '.id' 2>/dev/null || echo "?")
+STATUS=$(printf '%s' "$BLOCKING" | jq -r '.status' 2>/dev/null || echo "")
+VERDICT=$(printf '%s' "$BLOCKING" | jq -r '.verdict' 2>/dev/null || echo "")
 
 echo "NAZGUL GUARD: Blocked — merge includes unit $UNIT_ID, which has no recorded DONE+APPROVE verdict in nazgul/conductor/graph.json (status='${STATUS:-none}', verdict='${VERDICT:-none}')." >&2
 echo "" >&2

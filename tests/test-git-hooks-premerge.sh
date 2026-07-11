@@ -84,6 +84,37 @@ do_merge_githead_spoofed() {
   git -C "$repo" merge --abort 2>/dev/null || true
 }
 
+# Builds a directory containing every /usr/bin binary EXCEPT jq (as symlinks),
+# for prepending to PATH to simulate "jq not installed" without breaking git
+# itself (git and jq are typically both resolvable from /usr/bin on macOS).
+make_no_jq_bin_dir() {
+  local dir="$1" bin name
+  mkdir -p "$dir"
+  for bin in /usr/bin/*; do
+    name="${bin##*/}"
+    [ "$name" = "jq" ] && continue
+    ln -sf "$bin" "$dir/$name" 2>/dev/null || true
+  done
+}
+
+# Builds a directory with a `jq` wrapper that fails ONLY for invocations
+# carrying the `-s` flag (the raw-slurp mode used solely by the
+# GITHEAD_* candidate-SHA pipeline) and delegates every other call to the
+# real jq — a targeted, non-total failure of one pipeline in the hook.
+make_flaky_jq_bin_dir() {
+  local dir="$1" real_jq
+  real_jq="$(command -v jq)"
+  mkdir -p "$dir"
+  cat > "$dir/jq" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  [ "\$a" = "-s" ] && exit 1
+done
+exec "$real_jq" "\$@"
+EOF
+  chmod +x "$dir/jq"
+}
+
 CONDUCTOR_CONFIG='{"execution":{"engine":"conductor"},"guards":{"git_hooks":true}}'
 
 # ---------------------------------------------------------------------------
@@ -300,6 +331,45 @@ write_graph "$TEST_DIR/repo" "{\"tasks\":{\"TASK-001\":{\"status\":\"DONE\",\"ve
 do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
 assert_exit_code "chain-dispatch: prior hook exit 1 propagates on allow path" "$MERGE_EC" 1
 assert_contains "chain-dispatch: prior hook actually ran" "$MERGE_STDERR" "prior hook ran"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# DEGRADE: jq unavailable on PATH -> the hook must never abort under
+# `set -e` and block the merge; it must fail open (allow).
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+UNIT_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$CONDUCTOR_CONFIG"
+write_graph "$TEST_DIR/repo" "{\"tasks\":{\"TASK-001\":{\"status\":\"IN_REVIEW\",\"verdict\":\"\",\"commit\":\"$UNIT_SHA\"}}}"
+# A dir under TEST_DIR would embed the literal ":" in "nazgul:test-XXXXXX"
+# (from setup_temp_dir), corrupting PATH — use a colon-free temp dir instead.
+NO_JQ_BIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-no-jq-XXXXXX")
+make_no_jq_bin_dir "$NO_JQ_BIN"
+PATH="$NO_JQ_BIN:/usr/local/bin:/bin:/usr/sbin:/sbin" do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+assert_exit_code "degrade: jq missing from PATH -> exit 0 (never blocks)" "$MERGE_EC" 0
+rm -rf "$NO_JQ_BIN"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# DEGRADE: the GITHEAD_* candidate-SHA pipeline fails (jq errors on its `-s`
+# invocation specifically) -> under `set -e` this must not abort the script
+# and block the merge; it must degrade to allow, same as "no candidates".
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+UNIT_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$CONDUCTOR_CONFIG"
+write_graph "$TEST_DIR/repo" "{\"tasks\":{\"TASK-001\":{\"status\":\"IN_REVIEW\",\"verdict\":\"\",\"commit\":\"$UNIT_SHA\"}}}"
+FLAKY_JQ_BIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-flaky-jq-XXXXXX")
+make_flaky_jq_bin_dir "$FLAKY_JQ_BIN"
+PATH="$FLAKY_JQ_BIN:$PATH" do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+assert_exit_code "degrade: candidate-SHA pipeline failure -> exit 0 (never blocks)" "$MERGE_EC" 0
+rm -rf "$FLAKY_JQ_BIN"
 teardown_temp_dir
 
 report_results
