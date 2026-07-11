@@ -88,12 +88,22 @@ do_merge_githead_spoofed() {
 # for prepending to PATH to simulate "jq not installed" without breaking git
 # itself (git and jq are typically both resolvable from /usr/bin on macOS).
 make_no_jq_bin_dir() {
-  local dir="$1" bin name
+  local dir="$1" srcdir bin name
   mkdir -p "$dir"
-  for bin in /usr/bin/*; do
-    name="${bin##*/}"
-    [ "$name" = "jq" ] && continue
-    ln -sf "$bin" "$dir/$name" 2>/dev/null || true
+  # Farm every tool from all standard bin dirs EXCEPT jq into an isolated dir,
+  # so PATH can point at ONLY this dir and genuinely lose jq on any platform.
+  # We must NOT keep /bin etc. on PATH: on usrmerge Linux /bin -> /usr/bin, so
+  # /bin/jq would reappear and the guard would never fire (macOS hid this
+  # because its jq lives in a Homebrew dir separate from /usr/bin).
+  for srcdir in /usr/bin /bin /usr/local/bin /opt/homebrew/bin /usr/sbin /sbin; do
+    [ -d "$srcdir" ] || continue
+    for bin in "$srcdir"/*; do
+      [ -e "$bin" ] || continue
+      name="${bin##*/}"
+      [ "$name" = "jq" ] && continue
+      [ -e "$dir/$name" ] && continue
+      ln -sf "$bin" "$dir/$name" 2>/dev/null || true
+    done
   done
 }
 
@@ -348,7 +358,7 @@ write_graph "$TEST_DIR/repo" "{\"tasks\":{\"TASK-001\":{\"status\":\"IN_REVIEW\"
 # (from setup_temp_dir), corrupting PATH — use a colon-free temp dir instead.
 NO_JQ_BIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-no-jq-XXXXXX")
 make_no_jq_bin_dir "$NO_JQ_BIN"
-PATH="$NO_JQ_BIN:/usr/local/bin:/bin:/usr/sbin:/sbin" do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+PATH="$NO_JQ_BIN" do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
 assert_exit_code "degrade: jq missing from PATH -> exit 0 (never blocks)" "$MERGE_EC" 0
 rm -rf "$NO_JQ_BIN"
 teardown_temp_dir
