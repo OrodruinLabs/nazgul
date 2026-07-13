@@ -121,9 +121,7 @@ assert_exit_code "archive: re-run is idempotent success" "$?" 0
 assert_file_exists "archive: still present after re-run" "$INBOX/archive/first.md"
 teardown_temp_dir
 
-# --- Test 7.5: the file-provider path never sources the github connector ---
-# All tests above ran the file provider (default/unset); the connector must stay
-# untouched so existing projects have zero github surface.
+# --- Test 7.5: file provider never sources the github connector (existing projects have zero github surface) ---
 assert_eq "file provider: connector never sourced" "${_NAZGUL_CONNECTOR_GITHUB_SOURCED:-unset}" "unset"
 
 # --- GitHub-provider dispatch (provider="github") ---
@@ -132,8 +130,7 @@ export NAZGUL_CGH_RETRY_DELAY=0
 FAKEBIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-fakebin-XXXXXX")
 cat > "$FAKEBIN/gh" << 'GH_EOF'
 #!/usr/bin/env bash
-# Mock gh for inbox-provider dispatch tests. Effective labels = base (DB) + labels
-# added via `issue edit`. Env switches inject auth/repo/failure states.
+# Mock gh: effective labels = base (DB) + labels added via `issue edit`; env switches inject auth/repo/failure states.
 DB="${NAZGUL_TEST_GH_DB:-}"
 LS="${NAZGUL_TEST_GH_LABELS:-}"
 sub="${1:-}"; shift || true
