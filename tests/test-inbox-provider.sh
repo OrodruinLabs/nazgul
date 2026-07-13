@@ -121,4 +121,188 @@ assert_exit_code "archive: re-run is idempotent success" "$?" 0
 assert_file_exists "archive: still present after re-run" "$INBOX/archive/first.md"
 teardown_temp_dir
 
+# --- Test 7.5: the file-provider path never sources the github connector ---
+# All tests above ran the file provider (default/unset); the connector must stay
+# untouched so existing projects have zero github surface.
+assert_eq "file provider: connector never sourced" "${_NAZGUL_CONNECTOR_GITHUB_SOURCED:-unset}" "unset"
+
+# ============================================================================
+# GitHub-provider dispatch (provider="github"). `gh` is a PATH-shim mock reading
+# a fixture issue DB + mutable label state (NO network), mirroring the pattern in
+# tests/test-connector-github.sh. FAKEBIN is a colon-free mktemp dir so PATH parses.
+# ============================================================================
+export NAZGUL_CGH_RETRY_DELAY=0
+FAKEBIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-fakebin-XXXXXX")
+cat > "$FAKEBIN/gh" << 'GH_EOF'
+#!/usr/bin/env bash
+# Mock gh for inbox-provider dispatch tests. Effective labels = base (DB) + labels
+# added via `issue edit`. Env switches inject auth/repo/failure states.
+DB="${NAZGUL_TEST_GH_DB:-}"
+LS="${NAZGUL_TEST_GH_LABELS:-}"
+sub="${1:-}"; shift || true
+case "$sub" in
+  auth)
+    [ "${NAZGUL_TEST_GH_AUTH:-ok}" = "ok" ] && exit 0 || exit 1 ;;
+  repo)
+    [ "${NAZGUL_TEST_GH_REPO:-ok}" = "ok" ] || exit 1
+    printf '%s' '{"name":"nazgul"}'; exit 0 ;;
+  issue)
+    [ "${NAZGUL_TEST_GH_FAIL:-0}" = "1" ] && exit 1
+    action="${1:-}"; shift || true
+    case "$action" in
+      list)
+        state=""; label=""; limit=1000000
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --state) state="${2:-}"; shift 2 || true ;;
+            --label) label="${2:-}"; shift 2 || true ;;
+            --limit) limit="${2:-1000000}"; shift 2 || true ;;
+            --json)  shift 2 || true ;;
+            *) shift || true ;;
+          esac
+        done
+        jq -c --arg label "$label" --arg state "$state" --argjson limit "$limit" --slurpfile ls "$LS" '
+          ($ls[0] // {}) as $sm
+          | [ .[]
+              | . as $iss
+              | (($sm[($iss.number|tostring)] // []) | map({name:.})) as $added
+              | ($iss.labels + $added) as $lbls
+              | select((.state|ascii_downcase) == ($state|ascii_downcase))
+              | select(any($lbls[]; .name == $label))
+              | {number: $iss.number, labels: $lbls} ]
+          | .[0:$limit]
+        ' "$DB"
+        ;;
+      view)
+        num="${1:-}"
+        jq -c --argjson n "$num" --arg ns "$num" --slurpfile ls "$LS" '
+          ($ls[0] // {}) as $sm
+          | (.[] | select(.number == $n)) as $iss
+          | (($sm[$ns] // []) | map({name:.})) as $added
+          | {title: $iss.title, body: $iss.body, labels: ($iss.labels + $added)}
+        ' "$DB"
+        ;;
+      edit)
+        num="${1:-}"; shift || true
+        add=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --add-label) add="${2:-}"; shift 2 || true ;;
+            *) shift || true ;;
+          esac
+        done
+        cur='{}'; [ -f "$LS" ] && cur=$(cat "$LS")
+        [ -n "$add" ] && cur=$(printf '%s' "$cur" | jq --arg n "$num" --arg l "$add" '.[$n] = ((.[$n] // []) + [$l] | unique)')
+        printf '%s' "$cur" > "$LS.tmp" && mv "$LS.tmp" "$LS"
+        exit 0
+        ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  *) exit 1 ;;
+esac
+GH_EOF
+chmod +x "$FAKEBIN/gh"
+
+seed_gh_db() {
+  # Two open+labeled issues: 42 unclaimed (priority:high/type:bug), 43 already claimed.
+  jq -n '[
+    {number:42, state:"OPEN", title:"Add feature X", body:"Please add X.", labels:[{name:"nazgul"},{name:"priority:high"},{name:"type:bug"}]},
+    {number:43, state:"OPEN", title:"already claimed", body:"y", labels:[{name:"nazgul"},{name:"nazgul-claimed"}]}
+  ]' > "$NAZGUL_TEST_GH_DB"
+  echo '{}' > "$NAZGUL_TEST_GH_LABELS"
+}
+
+BASE_PATH="$PATH"
+export PATH="$FAKEBIN:$PATH"
+
+# Safety gate: refuse to proceed unless PATH resolves to the fake gh.
+resolved_gh=$(command -v gh)
+if [ "$resolved_gh" != "$FAKEBIN/gh" ]; then
+  _fail "PATH resolves to the fake gh (safety gate)" "expected: '$FAKEBIN/gh'" "  actual: '$resolved_gh'"
+  export PATH="$BASE_PATH"; rm -rf "$FAKEBIN"; report_results; exit 1
+fi
+_pass "PATH resolves to the fake gh (safety gate)"
+
+# --- Test 8: provider="github" routes list/get/archive to the connector ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.automation.heartbeat.inbox.provider = "github"' '.connectors.github.enabled = true'
+INBOX="$TEST_DIR/nazgul/inbox"
+export NAZGUL_TEST_GH_DB="$TEST_DIR/gh-db.json"
+export NAZGUL_TEST_GH_LABELS="$TEST_DIR/gh-labels.json"
+seed_gh_db
+
+GH_LIST=$(inbox_list "$INBOX")
+assert_contains     "github list: routes to connector (unclaimed issue 42 lists)" "$GH_LIST" "42"
+assert_not_contains "github list: excludes the claimed issue 43"                  "$GH_LIST" "43"
+
+GH_GET=$(inbox_get "$INBOX" 42)
+GH_GET_RC=$?
+assert_exit_code "github get: routes to connector (returns 0)" "$GH_GET_RC" 0
+assert_eq "github get: title via connector"    "$(echo "$GH_GET" | jq -r '.title')"    "Add feature X"
+assert_eq "github get: body via connector"     "$(echo "$GH_GET" | jq -r '.body')"     "Please add X."
+assert_eq "github get: priority via connector" "$(echo "$GH_GET" | jq -r '.priority')" "high"
+assert_eq "github get: type via connector"     "$(echo "$GH_GET" | jq -r '.type')"     "bug"
+
+inbox_archive "$INBOX" 42
+GH_ARCH_RC=$?
+assert_exit_code "github archive: routes to connector (returns 0)" "$GH_ARCH_RC" 0
+assert_eq "github archive: connector added the claimed label to issue 42" \
+  "$(jq -r '."42" | index("nazgul-claimed") != null' "$NAZGUL_TEST_GH_LABELS")" "true"
+assert_not_contains "github archive: the just-claimed issue 42 no longer lists" "$(inbox_list "$INBOX")" "42"
+teardown_temp_dir
+
+# --- Test 9: provider="github" but connector unhealthy → safe degrade ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.automation.heartbeat.inbox.provider = "github"' '.connectors.github.enabled = true'
+INBOX="$TEST_DIR/nazgul/inbox"
+export NAZGUL_TEST_GH_DB="$TEST_DIR/gh-db.json"
+export NAZGUL_TEST_GH_LABELS="$TEST_DIR/gh-labels.json"
+seed_gh_db
+export NAZGUL_TEST_GH_AUTH=fail
+assert_eq "github degrade (unhealthy): list yields nothing" "$(inbox_list "$INBOX")" ""
+inbox_get "$INBOX" 42 >/dev/null 2>&1
+assert_exit_code "github degrade (unhealthy): get returns 1" "$?" 1
+inbox_archive "$INBOX" 42 >/dev/null 2>&1
+assert_exit_code "github degrade (unhealthy): archive returns 1" "$?" 1
+assert_eq "github degrade (unhealthy): no label mutation" "$(cat "$NAZGUL_TEST_GH_LABELS")" "{}"
+unset NAZGUL_TEST_GH_AUTH
+teardown_temp_dir
+
+# --- Test 10: provider="github" but connectors.github.enabled=false → safe degrade ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.automation.heartbeat.inbox.provider = "github"' '.connectors.github.enabled = false'
+INBOX="$TEST_DIR/nazgul/inbox"
+export NAZGUL_TEST_GH_DB="$TEST_DIR/gh-db.json"
+export NAZGUL_TEST_GH_LABELS="$TEST_DIR/gh-labels.json"
+seed_gh_db
+assert_eq "github degrade (enabled=false): list yields nothing" "$(inbox_list "$INBOX")" ""
+inbox_get "$INBOX" 42 >/dev/null 2>&1
+assert_exit_code "github degrade (enabled=false): get returns 1" "$?" 1
+inbox_archive "$INBOX" 42 >/dev/null 2>&1
+assert_exit_code "github degrade (enabled=false): archive returns 1" "$?" 1
+teardown_temp_dir
+
+# --- Test 11: {title,body,priority,type} shape parity between file and github get ---
+setup_temp_dir
+setup_nazgul_dir
+INBOX="$TEST_DIR/nazgul/inbox"
+seed_inbox "$INBOX"
+# No config yet -> file provider. Capture the file-get shape first.
+FILE_SHAPE=$(inbox_get "$INBOX" second.json | jq -cS 'keys')
+create_config '.automation.heartbeat.inbox.provider = "github"' '.connectors.github.enabled = true'
+export NAZGUL_TEST_GH_DB="$TEST_DIR/gh-db.json"
+export NAZGUL_TEST_GH_LABELS="$TEST_DIR/gh-labels.json"
+seed_gh_db
+GH_SHAPE=$(inbox_get "$INBOX" 42 | jq -cS 'keys')
+assert_eq "shape parity: file get exposes {title,body,priority,type}" "$FILE_SHAPE" '["body","priority","title","type"]'
+assert_eq "shape parity: github get shape matches file get" "$GH_SHAPE" "$FILE_SHAPE"
+teardown_temp_dir
+
+export PATH="$BASE_PATH"
+rm -rf "$FAKEBIN"
+
 report_results
