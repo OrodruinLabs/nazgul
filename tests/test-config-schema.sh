@@ -172,4 +172,14 @@ assert_json_field "v23 conductor.enforce.premerge_guard is true" "$CONFIG" ".con
 assert_json_field "v23 branch.prior_hooks_path is null" "$CONFIG" ".branch.prior_hooks_path" "null"
 assert_json_field "v23 guards.git_hooks is true" "$CONFIG" ".guards.git_hooks" "true"
 
+# v24 new defaults (FEAT-011: review board robustness — unverified verdict + adversarial cross-check)
+assert_json_field "v24 review_gate.unverified_retries is 2" "$CONFIG" ".review_gate.unverified_retries" "2"
+assert_json_field "v24 review_gate.allow_unverified_nonblocking is true" "$CONFIG" ".review_gate.allow_unverified_nonblocking" "true"
+assert_json_field "v24 review_gate.critical_reviewers[0] is security-reviewer" "$CONFIG" ".review_gate.critical_reviewers[0]" "security-reviewer"
+assert_json_field "v24 review_gate.critical_reviewers[1] is architect-reviewer" "$CONFIG" ".review_gate.critical_reviewers[1]" "architect-reviewer"
+assert_json_field "v24 review_gate.critical_reviewers length is 2" "$CONFIG" ".review_gate.critical_reviewers | length" "2"
+assert_json_field "v24 review_gate.adversarial_crosscheck is true" "$CONFIG" ".review_gate.adversarial_crosscheck" "true"
+assert_json_field "v24 review_gate.adversarial_margin is 10" "$CONFIG" ".review_gate.adversarial_margin" "10"
+assert_json_field "v24 review_gate.adversarial_max is 3" "$CONFIG" ".review_gate.adversarial_max" "3"
+
 report_results

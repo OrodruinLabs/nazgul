@@ -1494,6 +1494,7 @@ assert_json_field "v23→v24 custom critical_reviewers preserved" "$NAZGUL_DIR/c
 assert_json_field "v23→v24 custom critical_reviewers length preserved" "$NAZGUL_DIR/config.json" ".review_gate.critical_reviewers | length" "1"
 assert_json_field "v23→v24 hand-set unverified_retries=5 preserved" "$NAZGUL_DIR/config.json" ".review_gate.unverified_retries" "5"
 assert_json_field "v23→v24 explicit-case backfills adversarial_margin=10" "$NAZGUL_DIR/config.json" ".review_gate.adversarial_margin" "10"
+assert_json_field "v23→v24 explicit-case backfills adversarial_max=3" "$NAZGUL_DIR/config.json" ".review_gate.adversarial_max" "3"
 
 # non-object review_gate clamped to object, then backfilled
 NAZGUL_DIR=$(setup_nazgul_dir "v23-to-24-garbage")
