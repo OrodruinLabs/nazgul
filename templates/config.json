@@ -1,5 +1,5 @@
 {
-  "schema_version": 23,
+  "schema_version": 24,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -113,7 +113,13 @@
     "simplify_before_review": false,
     "enforce_granularity": "block",
     "require_provenance": true,
-    "conditional_dispatch": false
+    "conditional_dispatch": false,
+    "unverified_retries": 2,
+    "allow_unverified_nonblocking": true,
+    "critical_reviewers": ["security-reviewer", "architect-reviewer"],
+    "adversarial_crosscheck": true,
+    "adversarial_margin": 10,
+    "adversarial_max": 3
   },
   "simplify": {
     "post_loop": true,

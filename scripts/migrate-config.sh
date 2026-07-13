@@ -485,6 +485,23 @@ migrate_22_to_23() {
   log_migration "v22→v23: added conductor.enforce.premerge_guard (default true); added branch.prior_hooks_path (default null, not-yet-recorded sentinel; empty string means recorded-and-was-unset); added guards.git_hooks (default true)"
 }
 
+migrate_23_to_24() {
+  local tmp; tmp=$(mktemp)
+  # FEAT-011: review-board robustness config. ADDITIVE — set when absent, explicit values
+  # (incl. false and a custom critical_reviewers array) preserved; sibling review_gate keys untouched.
+  jq '
+    .review_gate = ((if (.review_gate | type) == "object" then .review_gate else {} end)
+      | .unverified_retries = (if has("unverified_retries") then .unverified_retries else 2 end)
+      | .allow_unverified_nonblocking = (if has("allow_unverified_nonblocking") then .allow_unverified_nonblocking else true end)
+      | .critical_reviewers = (if has("critical_reviewers") then .critical_reviewers else ["security-reviewer","architect-reviewer"] end)
+      | .adversarial_crosscheck = (if has("adversarial_crosscheck") then .adversarial_crosscheck else true end)
+      | .adversarial_margin = (if has("adversarial_margin") then .adversarial_margin else 10 end)
+      | .adversarial_max = (if has("adversarial_max") then .adversarial_max else 3 end))
+    | .schema_version = 24
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v23→v24: added review_gate.{unverified_retries:2, allow_unverified_nonblocking:true, critical_reviewers:[security-reviewer,architect-reviewer], adversarial_crosscheck:true, adversarial_margin:10, adversarial_max:3} (additive; explicit values incl. false and custom critical_reviewers preserved)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"
