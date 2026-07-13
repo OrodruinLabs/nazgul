@@ -258,13 +258,11 @@ export NAZGUL_TEST_GH_FAIL=1
 assert_eq "pull_list degrades to empty on gh failure" "$(connector_github_pull_list "$CONFIG")" ""
 unset NAZGUL_TEST_GH_FAIL
 
-# ============================================================
-# PUSH side: push_status / push_pr — gated, idempotent, sync-loop guard.
+# --- PUSH side: push_status / push_pr — gated, idempotent, sync-loop guard ---
 # Issue 43 is OPEN + carries both "nazgul" and "nazgul-claimed" (base DB labels),
 # and is mapped local FEAT-012 -> 43. A correct push touches only the
 # nazgul-status:* namespace / a marked PR comment and NEVER the claimed label,
 # so pull_list must keep excluding 43 (no re-pull storm).
-# ============================================================
 
 PUSH_CONFIG="$TEST_DIR/nazgul/config-push.json"
 jq '.connectors.github.enabled = true
