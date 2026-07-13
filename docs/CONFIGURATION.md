@@ -119,7 +119,7 @@ In `--hitl` mode, `scripts/lib/conductor-gates.sh` forces the *effective* `appro
 |-----|---------|---------|
 | `automation.heartbeat.enabled` | `false` | Master switch. `false` means every tick is a `decision: disabled` no-op before any inbox read. |
 | `automation.heartbeat.interval` | `"30m"` | Suggested firing interval for the scheduled-agent routine you configure outside the plugin — not enforced by the script itself. |
-| `automation.heartbeat.inbox.provider` | `"file"` | Inbox provider behind the `inbox_list`/`inbox_get`/`inbox_archive` seam (`scripts/lib/inbox-provider.sh`). Only `file` ships today; a GitHub/Linear provider is the FEAT-009 slot. Any other value fails closed — the tick logs `decision: skipped, reason: unsupported_provider:<value>` and exits without touching the inbox, rather than silently falling back to the file provider. |
+| `automation.heartbeat.inbox.provider` | `"file"` | Inbox provider behind the `inbox_list`/`inbox_get`/`inbox_archive` seam (`scripts/lib/inbox-provider.sh`). The seam recognizes `"file"` (local dir, default) and `"github"` (the GitHub connector — see **Connectors** below). The heartbeat *tick engine* itself currently consumes only `"file"`: any other value fails closed — the tick logs `decision: skipped, reason: unsupported_provider:<value>` and exits without touching the inbox, rather than silently falling back to the file provider. |
 | `automation.heartbeat.inbox.dir` | `"nazgul/inbox"` | Directory scanned for `.md`/`.json` candidates; claimed candidates move to `<dir>/archive/`. |
 | `automation.heartbeat.auto_start.mode` | `"yolo"` | Mode passed to `/nazgul:start` when a candidate is picked and no session is active. |
 | `automation.heartbeat.auto_start.engine` | `"conductor"` | Execution engine passed to `/nazgul:start` for the auto-started objective. |
@@ -235,6 +235,30 @@ Nazgul can sync task progress to external project boards so your team has visibi
 - **Provider-pluggable**: GitHub Projects V2 is the first provider. Adding new providers (ADO, Trello) requires only a new `scripts/board-sync-{provider}.sh` — no changes to config schema or agents.
 
 Each Nazgul task becomes a GitHub Issue with `nazgul:*` labels and custom project fields (Nazgul Status, Task ID, Group). Issues close automatically when tasks reach DONE.
+
+## Connectors
+
+`connectors` configures an opt-in, **default-OFF** two-way sync between Nazgul and an external issue tracker. **GitHub is the only shipped connector** (`scripts/lib/connector-github.sh`); Linear/Slack are planned behind the same contract but are **not** shipped. This is distinct from **External Board Sync** above (one-way push of task status to a GitHub *Projects V2 board*): the connector pulls opt-in-labelled *issues* into the objective-inbox seam and pushes status + PR links back onto the originating issue.
+
+**Provider selection reuses the existing heartbeat key — there is no new selector.** Set `automation.heartbeat.inbox.provider` to `"github"` to route the inbox-provider seam (`scripts/lib/inbox-provider.sh` — `inbox_list`/`inbox_get`/`inbox_archive`) to the GitHub connector, and set `connectors.github.enabled` to `true` to arm it. Both are required; with either unset the seam keeps its default local-`file` behavior.
+
+**Credentials come from `gh auth` / env only** — no token is ever read from, written to, or logged via `config.json`. Run `gh auth login` before enabling. Remote issue title/body are treated strictly as data (passed to `jq` via `--arg`/`--rawfile`, never `eval`'d) and the body is byte-capped (`pull.max_body_bytes`).
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `connectors.github.enabled` | `false` | Master switch. Must be `true` (together with `inbox.provider="github"`) to arm the connector. |
+| `connectors.github.pull.label` | `"nazgul"` | Opt-in label. Only OPEN issues carrying this label are pull candidates. |
+| `connectors.github.pull.claimed_label` | `"nazgul-claimed"` | Nazgul's "I took this" marker, added on claim (`pull_archive`). A claimed issue is excluded from future pulls and is **never** removed by a push, so a pushed update can't make the issue re-enter the pull list. |
+| `connectors.github.pull.max_body_bytes` | `65536` | Byte cap applied to a pulled issue body, bounding memory against a hostile huge issue. |
+| `connectors.github.push.enabled` | `true` | Push-half toggle. Only effective under the top-level `enabled` (which defaults `false`); an explicit `false` disables push while leaving pull on. |
+| `connectors.github.pull_failures` | `0` | Consecutive-pull-failure counter. Increments on a terminal `gh` failure, resets to `0` on a good pull, and auto-disables the connector (`enabled=false`) at `5` — pull failures never block or crash the loop. |
+| `connectors.github.map` | `{}` | Remote-issue# ↔ local-feat/task-id map recorded on claim. Authoritative for idempotency: a mapped issue stays out of the pull list even if its remote claimed label lags or is stripped. |
+
+**Two-way flow:** a pull candidate is an OPEN issue that carries `pull.label` and neither carries `pull.claimed_label` nor appears in `map`. On claim the connector adds the claimed label and records `map[issue#]=feat_id`; the pulled issue surfaces through the inbox-provider seam as an objective-inbox candidate. The push side reflects a local task/objective status onto the mapped issue as a single `nazgul-status:<status>` label and upserts one `<!-- nazgul-pr -->`-marked PR-link comment — each idempotent, and neither ever touches the opt-in or claimed labels (so a push can never re-trigger a pull). The heartbeat tick engine consumes only the local `file` inbox (see **Automation Heartbeat**); the GitHub pull side is exercised through the inbox-provider seam.
+
+**Failure degradation:** every connector operation is degrade-safe — a missing/unauthenticated `gh`, a network/rate-limit error, or malformed remote JSON logs and no-ops rather than blocking the loop, and `pull_failures` auto-disables pull after 5 consecutive failures (mirroring `board.sync_failures`).
+
+Added by the additive `migrate_24_to_25` migration (schema v24→v25); existing projects upgrade automatically with `connectors.github` default-off — see Config Upgrades below.
 
 ## Config Upgrades
 

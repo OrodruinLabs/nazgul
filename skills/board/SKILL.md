@@ -130,3 +130,18 @@ Tasks will auto-sync to the board on every state transition.
 Run `/nazgul:board status` to check sync health.
 Run `/nazgul:board disconnect` to remove sync.
 ```
+
+## GitHub Connector (two-way issue sync)
+
+Board sync above is **one-way**: Nazgul pushes task status to a GitHub *Projects V2 board*. The separate, opt-in **GitHub connector** (`scripts/lib/connector-github.sh`) adds **two-way sync with GitHub *Issues*** and is **default-OFF**. GitHub is the only shipped connector — Linear/Slack are planned behind the same contract but are NOT shipped.
+
+- **Pull**: OPEN issues carrying the opt-in label (`connectors.github.pull.label`, default `nazgul`) surface through the objective-inbox seam as work candidates. On claim, Nazgul adds the claimed label (`connectors.github.pull.claimed_label`, default `nazgul-claimed`) — its "I took this" marker, which a push never removes.
+- **Push**: local task/objective status and PR links reflect back onto the mapped issue (a `nazgul-status:*` label plus a single PR-link comment).
+
+**Enable it:**
+1. `gh auth login` — credentials live in `gh auth`/env only; no token is stored in `nazgul/config.json`.
+2. Set `connectors.github.enabled` to `true`.
+3. Set `automation.heartbeat.inbox.provider` to `"github"` — this existing key is the provider selector; there is no new key.
+4. Apply the `nazgul` label to the issues you want Nazgul to pick up.
+
+Pull failures never block work: after 5 consecutive failures (`connectors.github.pull_failures`) the connector auto-disables. Full key reference: the **Connectors** section in `docs/CONFIGURATION.md`.
