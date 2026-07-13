@@ -135,8 +135,8 @@ Run `/nazgul:board disconnect` to remove sync.
 
 Board sync above is **one-way**: Nazgul pushes task status to a GitHub *Projects V2 board*. The separate, opt-in **GitHub connector** (`scripts/lib/connector-github.sh`) adds **two-way sync with GitHub *Issues*** and is **default-OFF**. GitHub is the only shipped connector — Linear/Slack are planned behind the same contract but are NOT shipped.
 
-- **Pull**: OPEN issues carrying the opt-in label (`connectors.github.pull.label`, default `nazgul`) surface through the objective-inbox seam as work candidates. On claim, Nazgul adds the claimed label (`connectors.github.pull.claimed_label`, default `nazgul-claimed`) — its "I took this" marker, which a push never removes.
-- **Push**: local task/objective status and PR links reflect back onto the mapped issue (a `nazgul-status:*` label plus a single PR-link comment).
+- **Pull**: OPEN issues carrying the opt-in label (`connectors.github.pull.label`, default `nazgul`) surface through the objective-inbox seam as work candidates. With `automation.heartbeat.inbox.provider="github"` the heartbeat tick engine triages and auto-starts them like local inbox items. On claim, Nazgul adds the claimed label (`connectors.github.pull.claimed_label`, default `nazgul-claimed`) — its "I took this" marker, which a push never removes.
+- **Push**: on each loop iteration the stop-hook pushes any changed task status back onto the mapped issue (a single `nazgul-status:*` label, plus a `<!-- nazgul-pr -->`-marked PR-link comment when the task manifest carries a `- **PR**:` URL). Unchanged statuses are not re-pushed, and a push failure never blocks the loop.
 
 **Enable it:**
 1. `gh auth login` — credentials live in `gh auth`/env only; no token is stored in `nazgul/config.json`.

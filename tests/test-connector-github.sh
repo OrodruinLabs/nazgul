@@ -459,6 +459,109 @@ limit_count=$(printf '%s' "$limit_out" | grep -c '^[0-9]')
 assert_eq "pull_list honors max_items limit (returns at most 2 of 5)" "$limit_count" "2"
 build_db  # restore fixtures
 
+# --- HEARTBEAT WIRING (TASK-008): provider=github tick pulls + auto-starts an issue ---
+# Runtime pull caller is scripts/heartbeat.sh; auto-start captured via NAZGUL_HEARTBEAT_START_CMD.
+teardown_temp_dir
+setup_temp_dir
+setup_nazgul_dir
+create_config \
+  '.automation.heartbeat.enabled = true' \
+  '.automation.heartbeat.inbox.provider = "github"' \
+  '.connectors.github.enabled = true'
+export NAZGUL_TEST_GH_DB="$TEST_DIR/gh-db.json"
+export NAZGUL_TEST_GH_LABELS="$TEST_DIR/gh-labels.json"
+export NAZGUL_TEST_GH_COMMENTS="$TEST_DIR/gh-comments.json"
+export NAZGUL_TEST_GH_EDIT_COUNT="$TEST_DIR/gh-edit-count.txt"
+jq -n '[{number:77, state:"OPEN", title:"FEAT-777 pull me", body:"do it", labels:[{name:"nazgul"},{name:"priority:1"}]}]' > "$NAZGUL_TEST_GH_DB"
+echo '{}' > "$NAZGUL_TEST_GH_LABELS"; echo '{}' > "$NAZGUL_TEST_GH_COMMENTS"; echo '0' > "$NAZGUL_TEST_GH_EDIT_COUNT"
+
+HB_CAP="$TEST_DIR/hb-start.txt"
+cat > "$TEST_DIR/fake-start.sh" << EOF
+#!/usr/bin/env bash
+printf '%s' "\$1" > "$HB_CAP"
+EOF
+chmod +x "$TEST_DIR/fake-start.sh"
+
+rc=0
+NAZGUL_HEARTBEAT_START_CMD="$TEST_DIR/fake-start.sh" CLAUDE_PROJECT_DIR="$TEST_DIR" \
+  bash "$REPO_ROOT/scripts/heartbeat.sh" >/dev/null 2>&1 || rc=$?
+assert_exit_code "heartbeat(github): tick exits 0" "$rc" 0
+assert_file_exists "heartbeat(github): a labeled remote issue was auto-started" "$HB_CAP"
+assert_contains "heartbeat(github): auto-start objective is the pulled issue title" \
+  "$(cat "$HB_CAP" 2>/dev/null || echo "")" "FEAT-777 pull me"
+assert_eq "heartbeat(github): the pulled issue was claimed (nazgul-claimed added)" \
+  "$(jq -r '."77" | index("nazgul-claimed") != null' "$NAZGUL_TEST_GH_LABELS")" "true"
+HB_LOG=$(ls -1 "$TEST_DIR/nazgul/logs"/heartbeat-*.jsonl 2>/dev/null | tail -1)
+assert_eq "heartbeat(github): decision recorded as started" \
+  "$(tail -1 "$HB_LOG" | jq -r '.decision')" "started"
+
+# --- HEARTBEAT WIRING: an unhealthy github connector degrades to a clean skip ---
+echo '{}' > "$NAZGUL_TEST_GH_LABELS"
+rm -f "$HB_CAP"
+rc=0
+NAZGUL_TEST_GH_AUTH=fail NAZGUL_HEARTBEAT_START_CMD="$TEST_DIR/fake-start.sh" CLAUDE_PROJECT_DIR="$TEST_DIR" \
+  bash "$REPO_ROOT/scripts/heartbeat.sh" >/dev/null 2>&1 || rc=$?
+assert_exit_code "heartbeat(github): unhealthy connector still exits 0 (no crash)" "$rc" 0
+assert_file_not_exists "heartbeat(github): unhealthy connector auto-started nothing" "$HB_CAP"
+HB_LOG=$(ls -1 "$TEST_DIR/nazgul/logs"/heartbeat-*.jsonl 2>/dev/null | tail -1)
+assert_eq "heartbeat(github): unhealthy connector degrades to nothing_actionable" \
+  "$(tail -1 "$HB_LOG" | jq -r '.decision')" "nothing_actionable"
+
+# --- STOP-HOOK WIRING (TASK-008): push-on-transition fires push_status/push_pr ---
+# Runtime push caller is scripts/stop-hook.sh: changed status pushes once, unchanged is skipped.
+teardown_temp_dir
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config \
+  '.connectors.github.enabled = true' \
+  '.connectors.github.push.enabled = true' \
+  '.connectors.github.map = {"43":"TASK-101"}'
+WIRE_CFG="$TEST_DIR/nazgul/config.json"
+export NAZGUL_TEST_GH_DB="$TEST_DIR/gh-db.json"
+export NAZGUL_TEST_GH_LABELS="$TEST_DIR/gh-labels.json"
+export NAZGUL_TEST_GH_COMMENTS="$TEST_DIR/gh-comments.json"
+export NAZGUL_TEST_GH_EDIT_COUNT="$TEST_DIR/gh-edit-count.txt"
+jq -n '[{number:43, state:"OPEN", title:"mapped", body:"b", labels:[{name:"nazgul"},{name:"nazgul-claimed"}]}]' > "$NAZGUL_TEST_GH_DB"
+echo '{}' > "$NAZGUL_TEST_GH_LABELS"; echo '{}' > "$NAZGUL_TEST_GH_COMMENTS"; echo '0' > "$NAZGUL_TEST_GH_EDIT_COUNT"
+
+# A manifest with an ID field (mirrors board-sync's `- **ID**:` read) and a PR URL.
+cat > "$TEST_DIR/nazgul/tasks/TASK-101.md" << 'TASK_EOF'
+# TASK-101: wiring probe
+
+- **ID**: TASK-101
+- **Status**: IMPLEMENTED
+- **Depends on**: none
+- **Group**: 1
+- **Retry count**: 0/3
+- **PR**: https://github.com/o/r/pull/101
+
+## Commits
+- abc1234
+TASK_EOF
+
+echo '{}' | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO_ROOT/scripts/stop-hook.sh" >/dev/null 2>&1 || true
+assert_eq "stop-hook: push_status set nazgul-status:implemented on mapped issue 43" \
+  "$(jq -r '."43" | index("nazgul-status:implemented") != null' "$NAZGUL_TEST_GH_LABELS")" "true"
+assert_eq "stop-hook: per-task push cache records the pushed status" \
+  "$(jq -r '.connectors.github._last_pushed_status["TASK-101"] // ""' "$WIRE_CFG")" "IMPLEMENTED"
+assert_eq "stop-hook: push_pr added a nazgul-marked PR comment to issue 43" \
+  "$(jq -r '[."43"[]? | select((.body // "") | contains("<!-- nazgul-pr -->"))] | length' "$NAZGUL_TEST_GH_COMMENTS")" "1"
+
+# Idempotency: a second iteration with an unchanged status must NOT re-push.
+LABELS_BEFORE=$(cat "$NAZGUL_TEST_GH_LABELS")
+echo '{}' | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO_ROOT/scripts/stop-hook.sh" >/dev/null 2>&1 || true
+assert_eq "stop-hook: unchanged status is NOT re-pushed (labels stable)" \
+  "$(cat "$NAZGUL_TEST_GH_LABELS")" "$LABELS_BEFORE"
+
+# A gh push failure must not break the loop or mutate remote state.
+echo '{}' > "$NAZGUL_TEST_GH_LABELS"
+jq '.connectors.github._last_pushed_status = {}' "$WIRE_CFG" > "$WIRE_CFG.tmp" && mv "$WIRE_CFG.tmp" "$WIRE_CFG"
+rc=0
+echo '{}' | NAZGUL_TEST_GH_FAIL=1 CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO_ROOT/scripts/stop-hook.sh" >/dev/null 2>&1 || rc=$?
+_pass "stop-hook: completed despite a gh push failure (rc=$rc, loop unbroken)"
+assert_eq "stop-hook: gh push failure left no label mutation" "$(cat "$NAZGUL_TEST_GH_LABELS")" "{}"
+
 teardown_temp_dir
 rm -rf "$FAKEBIN"
 report_results

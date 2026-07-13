@@ -134,15 +134,16 @@ if [ "$ENABLED_BOOL" != "true" ]; then
   exit 0
 fi
 
-# Fail closed on an unsupported provider rather than silently falling back to
-# the file provider — the config key would otherwise be misleading (setting
-# a non-"file" provider today does nothing, since no other provider exists
-# yet; GitHub/Linear providers are deferred to FEAT-009).
+# "file"/"github" route through the provider-aware seam below; a disabled or
+# unhealthy github connector degrades there to an empty list. Others fail closed.
 INBOX_PROVIDER=$(jq -r '.automation.heartbeat.inbox.provider // "file"' "$CONFIG" 2>/dev/null || echo "file")
-if [ "$INBOX_PROVIDER" != "file" ]; then
-  _hb_emit skipped "unsupported_provider:$INBOX_PROVIDER" "" 0 "[]" "" false
-  exit 0
-fi
+case "$INBOX_PROVIDER" in
+  file | github) : ;;
+  *)
+    _hb_emit skipped "unsupported_provider:$INBOX_PROVIDER" "" 0 "[]" "" false
+    exit 0
+    ;;
+esac
 
 INBOX_REL=$(jq -r '.automation.heartbeat.inbox.dir // "nazgul/inbox"' "$CONFIG" 2>/dev/null || echo "nazgul/inbox")
 INBOX_DIR="$PROJECT_ROOT/$INBOX_REL"
