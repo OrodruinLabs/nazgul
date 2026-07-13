@@ -502,6 +502,28 @@ migrate_23_to_24() {
   log_migration "v23→v24: added review_gate.{unverified_retries:2, allow_unverified_nonblocking:true, critical_reviewers:[security-reviewer,architect-reviewer], adversarial_crosscheck:true, adversarial_margin:10, adversarial_max:3} (additive; explicit values incl. false and custom critical_reviewers preserved)"
 }
 
+migrate_24_to_25() {
+  local tmp; tmp=$(mktemp)
+  # FEAT-012: connectors.github (default-OFF remote connector). ADDITIVE — set when absent, explicit
+  # values (incl. enabled:false, push.enabled:false, and a populated map) preserved; no token/credential
+  # key is ever written. Nested pull/push objects guarded defensively so custom values survive.
+  jq '
+    .connectors = ((if (.connectors | type) == "object" then .connectors else {} end)
+      | .github = ((if (.github | type) == "object" then .github else {} end)
+          | .enabled = (if has("enabled") then .enabled else false end)
+          | .pull = ((if (.pull | type) == "object" then .pull else {} end)
+              | .label = (if has("label") then .label else "nazgul" end)
+              | .claimed_label = (if has("claimed_label") then .claimed_label else "nazgul-claimed" end)
+              | .max_body_bytes = (if has("max_body_bytes") then .max_body_bytes else 65536 end))
+          | .push = ((if (.push | type) == "object" then .push else {} end)
+              | .enabled = (if has("enabled") then .enabled else true end))
+          | .pull_failures = (if has("pull_failures") then .pull_failures else 0 end)
+          | .map = (if has("map") then .map else {} end)))
+    | .schema_version = 25
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v24→v25: added connectors.github.{enabled:false, pull.{label:nazgul, claimed_label:nazgul-claimed, max_body_bytes:65536}, push.enabled:true, pull_failures:0, map:{}} (additive, default-off; explicit values incl. enabled:true, push.enabled:false, and a populated map preserved; no credential key added)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"

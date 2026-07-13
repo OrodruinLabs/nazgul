@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "24"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "25"
 assert_json_field "review_gate.simplify_before_review default false" "$CONFIG" ".review_gate.simplify_before_review" "false"
 assert_json_field "review_gate.enforce_granularity default block" "$CONFIG" ".review_gate.enforce_granularity" "block"
 assert_json_field "has .default_mode" "$CONFIG" ".default_mode" "null"
@@ -181,5 +181,14 @@ assert_json_field "v24 review_gate.critical_reviewers length is 2" "$CONFIG" ".r
 assert_json_field "v24 review_gate.adversarial_crosscheck is true" "$CONFIG" ".review_gate.adversarial_crosscheck" "true"
 assert_json_field "v24 review_gate.adversarial_margin is 10" "$CONFIG" ".review_gate.adversarial_margin" "10"
 assert_json_field "v24 review_gate.adversarial_max is 3" "$CONFIG" ".review_gate.adversarial_max" "3"
+
+# v25 new defaults (FEAT-012: connectors — GitHub remote connector, default-off)
+assert_json_field "v25 connectors.github.enabled is false" "$CONFIG" ".connectors.github.enabled" "false"
+assert_json_field "v25 connectors.github.pull.label is nazgul" "$CONFIG" ".connectors.github.pull.label" "nazgul"
+assert_json_field "v25 connectors.github.pull.claimed_label is nazgul-claimed" "$CONFIG" ".connectors.github.pull.claimed_label" "nazgul-claimed"
+assert_json_field "v25 connectors.github.pull.max_body_bytes is 65536" "$CONFIG" ".connectors.github.pull.max_body_bytes" "65536"
+assert_json_field "v25 connectors.github.push.enabled is true" "$CONFIG" ".connectors.github.push.enabled" "true"
+assert_json_field "v25 connectors.github.pull_failures is 0" "$CONFIG" ".connectors.github.pull_failures" "0"
+assert_json_field "v25 connectors.github.map is empty object" "$CONFIG" ".connectors.github.map | length" "0"
 
 report_results

@@ -41,7 +41,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null)
 assert_contains "v1 → v2 output" "$OUTPUT" "migrated"
-assert_json_field "v1 config → v24 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v1 config → v25 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 val=$(jq -r '.models | type' "$NAZGUL_DIR/config.json")
 assert_eq "v1 → v2 models section added" "$val" "object"
 assert_json_field "v1 → v2 models.default" "$NAZGUL_DIR/config.json" ".models.default" "sonnet"
@@ -65,7 +65,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v2 → v3 output" "$OUTPUT" "migrated"
-assert_json_field "v2 config → v24 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v2 config → v25 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 val=$(jq -r '.branch | type' "$NAZGUL_DIR/config.json")
 assert_eq "v2 → v3 branch section added" "$val" "object"
 val=$(jq -r '.afk | has("branch_per_task")' "$NAZGUL_DIR/config.json")
@@ -111,7 +111,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v3 → v4 output" "$OUTPUT" "migrated"
-assert_json_field "v3 config → v24 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v3 config → v25 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 val=$(jq -r '.webhooks | type' "$NAZGUL_DIR/config.json")
 assert_eq "v3 → v4 webhooks section added" "$val" "object"
 assert_json_field "v3 → v4 webhooks.enabled" "$NAZGUL_DIR/config.json" ".webhooks.enabled" "false"
@@ -172,7 +172,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v4 → v5 output" "$OUTPUT" "migrated"
-assert_json_field "v4 config → v24 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v4 config → v25 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 # install_mode is stripped at 4→5 but RESTORED at 6→7 (default "shared")
 assert_json_field "v4 → v7 install_mode restored to shared" "$NAZGUL_DIR/config.json" ".install_mode" "shared"
 # Verify the other v4→v5-removed fields stay gone through the full chain
@@ -223,7 +223,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v5 → v6 output" "$OUTPUT" "migrated"
-assert_json_field "v5 config → v24 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v5 config → v25 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 val=$(jq -r '.simplify | type' "$NAZGUL_DIR/config.json")
 assert_eq "v5 → v6 simplify section added" "$val" "object"
 assert_json_field "v5 → v6 simplify.post_loop" "$NAZGUL_DIR/config.json" ".simplify.post_loop" "true"
@@ -264,7 +264,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v6 → v7 output" "$OUTPUT" "migrated"
-assert_json_field "v6 config → v24 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v6 config → v25 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 assert_json_field "v6 → v7 install_mode defaults to shared" "$NAZGUL_DIR/config.json" ".install_mode" "shared"
 
 # --- Test 3e-b: v6 config with install_mode=local → preserved through v7 ---
@@ -277,7 +277,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
-assert_json_field "v6 config → v24 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v6 config → v25 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 assert_json_field "v6 → v7 install_mode=local preserved" "$NAZGUL_DIR/config.json" ".install_mode" "local"
 
 # --- Test 3e-c: v6 config with invalid install_mode → clamped to shared ---
@@ -303,7 +303,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v7 → v8 output" "$OUTPUT" "migrated"
-assert_json_field "v7 → v24 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v7 → v25 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 assert_json_field "v7 → v8 budget.enabled defaults false" "$NAZGUL_DIR/config.json" ".budget.enabled" "false"
 
 # --- Test 3g: existing budget preserved through v8 ---
@@ -325,7 +325,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v8 → v9 output" "$OUTPUT" "migrated"
-assert_json_field "v8 → v24 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v8 → v25 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 assert_json_field "v8 → v9 smoke_command added (null)" "$NAZGUL_DIR/config.json" ".project.smoke_command" "null"
 assert_json_field "v8 → v9 preserves existing project field" "$NAZGUL_DIR/config.json" ".project.test_command" "npm test"
 
@@ -353,7 +353,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v12 → v13 output" "$OUTPUT" "migrated"
-assert_json_field "v12 → v24 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v12 → v25 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 assert_json_field "v12 → v13 lean_comments defaults true" "$NAZGUL_DIR/config.json" ".guards.lean_comments" "true"
 assert_json_field "v12 → v13 max_consecutive_comment_lines defaults 2" "$NAZGUL_DIR/config.json" ".guards.max_consecutive_comment_lines" "2"
 assert_json_field "v12 → v13 preserves existing guards field" "$NAZGUL_DIR/config.json" ".guards.requireActiveTask" "true"
@@ -383,7 +383,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v13 → v14 output" "$OUTPUT" "migrated"
-assert_json_field "v13 → v24 (full chain) schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v13 → v25 (full chain) schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 assert_json_field "v13 → v14 telemetry.bus_enabled defaults true" "$NAZGUL_DIR/config.json" ".telemetry.bus_enabled" "true"
 assert_json_field "v13 → v14 telemetry.record_metered_cost defaults false" "$NAZGUL_DIR/config.json" ".telemetry.record_metered_cost" "false"
 assert_json_field "v13 → v14 no legacy_write field added" "$NAZGUL_DIR/config.json" '.telemetry | has("legacy_write")' "false"
@@ -422,7 +422,7 @@ cat > "$NAZGUL_DIR/config.json" <<'EOF'
 { "schema_version": 14, "telemetry": { "bus_enabled": true, "record_metered_cost": false } }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
-assert_json_field "v14 → v24 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v14 → v25 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 assert_json_field "v14 → v15 telemetry.bus_enabled preserved" "$NAZGUL_DIR/config.json" ".telemetry.bus_enabled" "true"
 assert_json_field "v14 → v15 adds review_gate.simplify_before_review=false" "$NAZGUL_DIR/config.json" ".review_gate.simplify_before_review" "false"
 
@@ -452,7 +452,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v14 → v15 output" "$OUTPUT" "migrated"
-assert_json_field "v14 → v24 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v14 → v25 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 assert_json_field "v14 → v15 simplify_before_review defaults false" "$NAZGUL_DIR/config.json" ".review_gate.simplify_before_review" "false"
 assert_json_field "v14 → v15 preserves review_gate.granularity" "$NAZGUL_DIR/config.json" ".review_gate.granularity" "group"
 
@@ -471,7 +471,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v16 → v17 output" "$OUTPUT" "migrated"
-assert_json_field "v16 → v24 schema_version (via v17)" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v16 → v25 schema_version (via v17)" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 
 # --- Test 4: Backup file created on migration ---
 NAZGUL_DIR=$(setup_nazgul_dir "backup-check")
@@ -542,7 +542,7 @@ cat > "$NAZGUL_DIR/config.json" <<'EOF'
 { "schema_version": 9, "mode": "hitl" }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
-assert_json_field "v9 → v24 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v9 → v25 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 assert_json_field "v9 → v10 learning.enabled" "$NAZGUL_DIR/config.json" ".learning.enabled" "true"
 assert_json_field "v9 → v10 learning.rules_doc" "$NAZGUL_DIR/config.json" ".learning.rules_doc" "nazgul/learning/learned-rules.md"
 assert_json_field "v9 → v10 learning.min_recurrence" "$NAZGUL_DIR/config.json" ".learning.min_recurrence" "2"
@@ -576,7 +576,7 @@ cat > "$NAZGUL_DIR/config.json" <<'EOF'
 { "schema_version": 10, "mode": "hitl" }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
-assert_json_field "v10 → v24 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v10 → v25 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 assert_json_field "v10 → v11 default_mode null" "$NAZGUL_DIR/config.json" ".default_mode" "null"
 
 NAZGUL_DIR=$(setup_nazgul_dir "v10-to-11-existing")
@@ -608,7 +608,7 @@ cat > "$NAZGUL_DIR/config.json" <<'EOF'
 { "schema_version": 11, "review_gate": { "require_all_approve": true, "max_retries_per_task": 3, "confidence_threshold": 80 } }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
-assert_json_field "v11 → v24 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v11 → v25 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 assert_json_field "v11 → v12 granularity set task then v17 flips to group" "$NAZGUL_DIR/config.json" ".review_gate.granularity" "group"
 assert_json_field "v11 → v12 preserves require_all_approve" "$NAZGUL_DIR/config.json" ".review_gate.require_all_approve" "true"
 assert_json_field "v11 → v12 preserves max_retries_per_task" "$NAZGUL_DIR/config.json" ".review_gate.max_retries_per_task" "3"
@@ -677,7 +677,7 @@ cat > "$NAZGUL_DIR/config.json" <<'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "unversioned modern → migrated" "$OUTPUT" "migrated"
-assert_json_field "unversioned modern → reaches v24" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "unversioned modern → reaches v24" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 # Branch survived migrate_2_to_3 (no wholesale clobber)
 assert_json_field "branch.feature survives full chain" "$NAZGUL_DIR/config.json" ".branch.feature" "feat/FEAT-007-payments"
 assert_json_field "branch.base survives full chain" "$NAZGUL_DIR/config.json" ".branch.base" "main"
@@ -698,7 +698,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v15 → v16 output" "$OUTPUT" "migrated"
-assert_json_field "v15 → v24 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v15 → v25 schema_version (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 assert_json_field "v15 → v16 enforce_granularity defaults block" "$NAZGUL_DIR/config.json" ".review_gate.enforce_granularity" "block"
 assert_json_field "v15 → v16 preserves review_gate.granularity" "$NAZGUL_DIR/config.json" ".review_gate.granularity" "group"
 
@@ -717,7 +717,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v16 → v17 migrates (enforce test)" "$OUTPUT" "migrated"
-assert_json_field "v16 → v24 schema_version (via v17)" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v16 → v25 schema_version (via v17)" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 assert_json_field "v16 → v17 enforce_granularity preserved" "$NAZGUL_DIR/config.json" ".review_gate.enforce_granularity" "block"
 
 # --- migrate_15_to_16: non-object review_gate clamped to object at v16 ---
@@ -738,7 +738,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_json_field "v16→v17 granularity task→group (old default flip)" "$NAZGUL_DIR/config.json" ".review_gate.granularity" "group"
-assert_json_field "v16→v17 granularity task→group schema=21 (via v17)" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v16→v17 granularity task→group schema=21 (via v17)" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 
 # granularity: "group" (new default) → "group" (idempotent / new value unchanged)
 NAZGUL_DIR=$(setup_nazgul_dir "v16-to-17-granularity-group")
@@ -877,7 +877,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v17 → v18 output" "$OUTPUT" "migrated"
-assert_json_field "v17 → v24 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v17 → v25 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 
 # --- migrate_17_to_18: review_gate.require_provenance equivalence partitions ---
 
@@ -1032,7 +1032,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v18 → v19 output" "$OUTPUT" "migrated"
-assert_json_field "v18 → v24 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v18 → v25 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 
 # --- migrate_18_to_19: execution.engine equivalence partitions ---
 
@@ -1152,36 +1152,46 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v20 → v21 output" "$OUTPUT" "migrated"
-assert_json_field "v20 → v24 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v20 → v25 schema_version" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 assert_json_field "v20 → v21 automation.heartbeat.enabled defaults false" "$NAZGUL_DIR/config.json" ".automation.heartbeat.enabled" "false"
 assert_json_field "v20 → v21 conductor.enforce.dispatch_guard preserved" "$NAZGUL_DIR/config.json" ".conductor.enforce.dispatch_guard" "true"
 
-# --- v24 config → no-op (terminal schema) ---
-NAZGUL_DIR=$(setup_nazgul_dir "v24-terminal")
+# --- v25 config → no-op (terminal schema) ---
+NAZGUL_DIR=$(setup_nazgul_dir "v25-terminal")
 cp "$REPO_ROOT/templates/config.json" "$NAZGUL_DIR/config.json"
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null); MIG_EC=$?
-assert_exit_code "v24 terminal no-op: migrator exits 0 (not a crash)" "$MIG_EC" 0
-assert_eq "v24 config → no output (terminal no-op)" "$OUTPUT" ""
-assert_json_field "v24 terminal → schema_version still 24" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_exit_code "v25 terminal no-op: migrator exits 0 (not a crash)" "$MIG_EC" 0
+assert_eq "v25 config → no output (terminal no-op)" "$OUTPUT" ""
+assert_json_field "v25 terminal → schema_version still 25" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 
-# --- v23 config → v24 (v23 is no longer terminal) ---
-NAZGUL_DIR=$(setup_nazgul_dir "v23-to-24")
+# --- v24 config → v25 (v24 is no longer terminal) ---
+NAZGUL_DIR=$(setup_nazgul_dir "v24-to-25")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{ "schema_version": 24, "mode": "hitl" }
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null); MIG_EC=$?
+assert_exit_code "v24 → v25: migrator exits 0" "$MIG_EC" 0
+assert_contains "v24 → v25 output" "$OUTPUT" "migrated"
+assert_json_field "v24 → v25 schema_version reaches 25" "$NAZGUL_DIR/config.json" ".schema_version" "25"
+
+# --- v23 config → v25 (v23 is no longer terminal) ---
+NAZGUL_DIR=$(setup_nazgul_dir "v23-to-25")
 cat > "$NAZGUL_DIR/config.json" << 'EOF'
 { "schema_version": 23, "mode": "hitl" }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null); MIG_EC=$?
-assert_exit_code "v23 → v24: migrator exits 0" "$MIG_EC" 0
-assert_contains "v23 → v24 output" "$OUTPUT" "migrated"
-assert_json_field "v23 → v24 schema_version reaches 24" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_exit_code "v23 → v25: migrator exits 0" "$MIG_EC" 0
+assert_contains "v23 → v25 output" "$OUTPUT" "migrated"
+assert_json_field "v23 → v25 schema_version reaches 25" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 
-# --- chain test: v1 → v24 completes ---
+# --- chain test: v1 → v25 completes ---
 NAZGUL_DIR=$(setup_nazgul_dir "v1-to-22-chain")
 cat > "$NAZGUL_DIR/config.json" << 'EOF'
 { "mode": "hitl" }
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v1→v23 chain migrated" "$OUTPUT" "migrated"
-assert_json_field "v1→v24 chain reaches schema_version 24" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v1→v25 chain reaches schema_version 25" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 assert_json_field "v1→v23 chain granularity is group" "$NAZGUL_DIR/config.json" ".review_gate.granularity" "group"
 assert_json_field "v1→v23 chain post_loop is sonnet" "$NAZGUL_DIR/config.json" ".models.post_loop" "sonnet"
 assert_json_field "v1→v23 chain wave_execution is true" "$NAZGUL_DIR/config.json" ".parallelism.wave_execution" "true"
@@ -1211,6 +1221,13 @@ assert_json_field "v1→v24 chain review_gate.critical_reviewers[0]" "$NAZGUL_DI
 assert_json_field "v1→v24 chain review_gate.adversarial_crosscheck is true" "$NAZGUL_DIR/config.json" ".review_gate.adversarial_crosscheck" "true"
 assert_json_field "v1→v24 chain review_gate.adversarial_margin is 10" "$NAZGUL_DIR/config.json" ".review_gate.adversarial_margin" "10"
 assert_json_field "v1→v24 chain review_gate.adversarial_max is 3" "$NAZGUL_DIR/config.json" ".review_gate.adversarial_max" "3"
+assert_json_field "v1→v25 chain connectors.github.enabled is false" "$NAZGUL_DIR/config.json" ".connectors.github.enabled" "false"
+assert_json_field "v1→v25 chain connectors.github.pull.label is nazgul" "$NAZGUL_DIR/config.json" ".connectors.github.pull.label" "nazgul"
+assert_json_field "v1→v25 chain connectors.github.pull.claimed_label is nazgul-claimed" "$NAZGUL_DIR/config.json" ".connectors.github.pull.claimed_label" "nazgul-claimed"
+assert_json_field "v1→v25 chain connectors.github.pull.max_body_bytes is 65536" "$NAZGUL_DIR/config.json" ".connectors.github.pull.max_body_bytes" "65536"
+assert_json_field "v1→v25 chain connectors.github.push.enabled is true" "$NAZGUL_DIR/config.json" ".connectors.github.push.enabled" "true"
+assert_json_field "v1→v25 chain connectors.github.pull_failures is 0" "$NAZGUL_DIR/config.json" ".connectors.github.pull_failures" "0"
+assert_json_field "v1→v25 chain connectors.github.map is empty object" "$NAZGUL_DIR/config.json" ".connectors.github.map | length" "0"
 
 # --- v19 -> v20: conductor.enforce (additive, default true) ---
 TMPDIR_V20=$(mktemp -d)
@@ -1219,7 +1236,7 @@ cp "$REPO_ROOT/templates/config.json" "$TMPDIR_V20/config.json"
 jq '.schema_version = 19 | del(.conductor.enforce)' "$TMPDIR_V20/config.json" > "$TMPDIR_V20/c.tmp" && mv "$TMPDIR_V20/c.tmp" "$TMPDIR_V20/config.json"
 mkdir -p "$TMPDIR_V20/nazgul"; mv "$TMPDIR_V20/config.json" "$TMPDIR_V20/nazgul/config.json"
 CLAUDE_PLUGIN_ROOT="$REPO_ROOT" bash "$REPO_ROOT/scripts/migrate-config.sh" "$TMPDIR_V20/nazgul" >/dev/null 2>&1 || true
-assert_json_field "v19 → v24 schema_version (walks to terminal)" "$TMPDIR_V20/nazgul/config.json" ".schema_version" "24"
+assert_json_field "v19 → v25 schema_version (walks to terminal)" "$TMPDIR_V20/nazgul/config.json" ".schema_version" "25"
 assert_json_field "v19 → v20 conductor.enforce.dispatch_guard defaults true" "$TMPDIR_V20/nazgul/config.json" ".conductor.enforce.dispatch_guard" "true"
 assert_json_field "v19 → v20 conductor.enforce.rework_guard defaults true" "$TMPDIR_V20/nazgul/config.json" ".conductor.enforce.rework_guard" "true"
 rm -rf "$TMPDIR_V20"
@@ -1480,7 +1497,7 @@ assert_json_field "v23→v24 review_gate.critical_reviewers[1] absent→architec
 assert_json_field "v23→v24 review_gate.adversarial_crosscheck absent→true" "$NAZGUL_DIR/config.json" ".review_gate.adversarial_crosscheck" "true"
 assert_json_field "v23→v24 review_gate.adversarial_margin absent→10" "$NAZGUL_DIR/config.json" ".review_gate.adversarial_margin" "10"
 assert_json_field "v23→v24 review_gate.adversarial_max absent→3" "$NAZGUL_DIR/config.json" ".review_gate.adversarial_max" "3"
-assert_json_field "v23→v24 schema_version is 24" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v23→v25 schema_version is 24" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 
 # explicit false / custom array preserved (opt-outs and overrides not clobbered)
 NAZGUL_DIR=$(setup_nazgul_dir "v23-to-24-explicit")
@@ -1537,7 +1554,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v17→v23 walk migrated" "$OUTPUT" "migrated"
-assert_json_field "v17→v24 walk reaches schema_version 24" "$NAZGUL_DIR/config.json" ".schema_version" "24"
+assert_json_field "v17→v24 walk reaches schema_version 24" "$NAZGUL_DIR/config.json" ".schema_version" "25"
 assert_json_field "v17→v23 walk hand-set marker preserved (no key lost)" "$NAZGUL_DIR/config.json" ".marker" "keep-me"
 assert_json_field "v17→v23 walk v18 step review_gate.require_provenance present" "$NAZGUL_DIR/config.json" ".review_gate.require_provenance" "true"
 assert_json_field "v17→v23 walk v19 step execution.engine present" "$NAZGUL_DIR/config.json" ".execution.engine" "sequential"
@@ -1549,10 +1566,89 @@ assert_json_field "v17→v23 walk v23 step branch.prior_hooks_path present" "$NA
 assert_json_field "v17→v23 walk v23 step guards.git_hooks present" "$NAZGUL_DIR/config.json" ".guards.git_hooks" "true"
 assert_json_field "v17→v24 walk v24 step review_gate.unverified_retries present" "$NAZGUL_DIR/config.json" ".review_gate.unverified_retries" "2"
 assert_json_field "v17→v24 walk v24 step review_gate.adversarial_max present" "$NAZGUL_DIR/config.json" ".review_gate.adversarial_max" "3"
+assert_json_field "v17→v25 walk v25 step connectors.github.enabled present" "$NAZGUL_DIR/config.json" ".connectors.github.enabled" "false"
+assert_json_field "v17→v25 walk v25 step connectors.github.pull.max_body_bytes present" "$NAZGUL_DIR/config.json" ".connectors.github.pull.max_body_bytes" "65536"
 # idempotent re-run over the already-migrated config leaves it unchanged
 FIRST=$(jq -c '.' "$NAZGUL_DIR/config.json")
 CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" >/dev/null 2>/dev/null
 SECOND=$(jq -c '.' "$NAZGUL_DIR/config.json")
-assert_eq "v17→v23 walk idempotent re-run (terminal no-op)" "$FIRST" "$SECOND"
+assert_eq "v17→v25 walk idempotent re-run (terminal no-op)" "$FIRST" "$SECOND"
+
+# --- migrate_24_to_25: connectors.github block (additive, default-off) ---
+
+# absent → full defaults
+NAZGUL_DIR=$(setup_nazgul_dir "v24-to-25-absent")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{ "schema_version": 24, "mode": "hitl" }
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_contains "v24 → v25 output" "$OUTPUT" "migrated"
+assert_json_field "v24→v25 connectors.github.enabled absent→false" "$NAZGUL_DIR/config.json" ".connectors.github.enabled" "false"
+assert_json_field "v24→v25 connectors.github.pull.label absent→nazgul" "$NAZGUL_DIR/config.json" ".connectors.github.pull.label" "nazgul"
+assert_json_field "v24→v25 connectors.github.pull.claimed_label absent→nazgul-claimed" "$NAZGUL_DIR/config.json" ".connectors.github.pull.claimed_label" "nazgul-claimed"
+assert_json_field "v24→v25 connectors.github.pull.max_body_bytes absent→65536" "$NAZGUL_DIR/config.json" ".connectors.github.pull.max_body_bytes" "65536"
+assert_json_field "v24→v25 connectors.github.push.enabled absent→true" "$NAZGUL_DIR/config.json" ".connectors.github.push.enabled" "true"
+assert_json_field "v24→v25 connectors.github.pull_failures absent→0" "$NAZGUL_DIR/config.json" ".connectors.github.pull_failures" "0"
+assert_json_field "v24→v25 connectors.github.map absent→empty object" "$NAZGUL_DIR/config.json" ".connectors.github.map | length" "0"
+assert_json_field "v24→v25 schema_version is 25" "$NAZGUL_DIR/config.json" ".schema_version" "25"
+
+# explicit enabled=true preserved (opt-in not clobbered)
+NAZGUL_DIR=$(setup_nazgul_dir "v24-to-25-enabled")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{ "schema_version": 24, "connectors": { "github": { "enabled": true } } }
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_json_field "v24→v25 hand-set connectors.github.enabled=true preserved" "$NAZGUL_DIR/config.json" ".connectors.github.enabled" "true"
+assert_json_field "v24→v25 enabled-case backfills pull.label" "$NAZGUL_DIR/config.json" ".connectors.github.pull.label" "nazgul"
+assert_json_field "v24→v25 enabled-case backfills push.enabled" "$NAZGUL_DIR/config.json" ".connectors.github.push.enabled" "true"
+
+# explicit custom pull.label preserved (nested value not clobbered, siblings backfilled)
+NAZGUL_DIR=$(setup_nazgul_dir "v24-to-25-custom-label")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{ "schema_version": 24, "connectors": { "github": { "pull": { "label": "triage" } } } }
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_json_field "v24→v25 custom pull.label preserved" "$NAZGUL_DIR/config.json" ".connectors.github.pull.label" "triage"
+assert_json_field "v24→v25 custom-label case backfills claimed_label" "$NAZGUL_DIR/config.json" ".connectors.github.pull.claimed_label" "nazgul-claimed"
+assert_json_field "v24→v25 custom-label case backfills max_body_bytes" "$NAZGUL_DIR/config.json" ".connectors.github.pull.max_body_bytes" "65536"
+
+# explicit push.enabled=false preserved (push kill-switch not clobbered)
+NAZGUL_DIR=$(setup_nazgul_dir "v24-to-25-push-off")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{ "schema_version": 24, "connectors": { "github": { "push": { "enabled": false } } } }
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_json_field "v24→v25 hand-set push.enabled=false preserved" "$NAZGUL_DIR/config.json" ".connectors.github.push.enabled" "false"
+assert_json_field "v24→v25 push-off case still defaults enabled=false" "$NAZGUL_DIR/config.json" ".connectors.github.enabled" "false"
+
+# populated map preserved (claim state not wiped)
+NAZGUL_DIR=$(setup_nazgul_dir "v24-to-25-map")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{ "schema_version": 24, "connectors": { "github": { "pull_failures": 4, "map": { "42": "FEAT-012", "7": "FEAT-011" } } } }
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_json_field "v24→v25 populated map preserved (length)" "$NAZGUL_DIR/config.json" ".connectors.github.map | length" "2"
+assert_json_field "v24→v25 populated map entry preserved" "$NAZGUL_DIR/config.json" '.connectors.github.map["42"]' "FEAT-012"
+assert_json_field "v24→v25 hand-set pull_failures=4 preserved" "$NAZGUL_DIR/config.json" ".connectors.github.pull_failures" "4"
+
+# non-object connectors clamped to object, then backfilled
+NAZGUL_DIR=$(setup_nazgul_dir "v24-to-25-garbage")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{ "schema_version": 24, "connectors": "oops" }
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_json_field "v24→v25 non-object connectors clamped to object" "$NAZGUL_DIR/config.json" ".connectors | type" "object"
+assert_json_field "v24→v25 clamped connectors gets github.enabled=false" "$NAZGUL_DIR/config.json" ".connectors.github.enabled" "false"
+
+# --- migrate_24_to_25: full idempotency — run twice yields same output ---
+NAZGUL_DIR=$(setup_nazgul_dir "v24-to-25-idempotent")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{ "schema_version": 24, "connectors": { "github": { "enabled": true, "map": { "9": "FEAT-012" } } } }
+EOF
+CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" >/dev/null 2>/dev/null
+FIRST=$(jq -c '.' "$NAZGUL_DIR/config.json")
+CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" >/dev/null 2>/dev/null
+SECOND=$(jq -c '.' "$NAZGUL_DIR/config.json")
+assert_eq "v24→v25 full idempotency (run twice = run once)" "$FIRST" "$SECOND"
 
 report_results
