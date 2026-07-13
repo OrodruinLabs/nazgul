@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.13.0] - 2026-07-10
+
+### Added
+- **Git-level enforcement of git-action guards (FEAT-010, ADR-001, RULES.md §15).** The base-branch commit guard and the H2 conductor pre-merge verdict guard move from `PreToolUse(Bash)` command-string parsing to real git hooks activated via `git config core.hooksPath` pointing at a plugin-managed directory (`nazgul/.githooks/`, per project). Two proven-non-convergent command-string guards — three review rounds each found new shell-expansion/wrapper bypasses — are replaced by hooks that run after the shell has fully resolved the command, closing the class of bypass entirely rather than patching another rule into a tokenizer.
+- **`pre-commit` base-branch guard.** `scripts/git-hooks/pre-commit` blocks a commit on `branch.base` while `branch.feature` is set, resolving "current branch" from the repo the hook itself runs in — fixing the old guard's cwd false-positive (always resolved `$CLAUDE_PROJECT_DIR`'s branch) and its `git -C` false-negative.
+- **`pre-merge-commit` H2 conductor verdict guard.** `scripts/git-hooks/pre-merge-commit` blocks `git merge --no-ff` of a Conductor unit whose `nazgul/conductor/graph.json` record lacks a `DONE` status + `APPROVE` verdict, identified via git's content-hash-keyed `GITHEAD_<sha>` environment variables (resistant to the `GIT_REFLOG_ACTION` spoof that defeated the earlier command-string design). Gated by the new `conductor.enforce.premerge_guard` (default `true`) and only active when `execution.engine == "conductor"`.
+- **Generic chain-dispatcher preserves user hooks.** `scripts/git-hooks/_dispatch.sh` forwards argv/stdin/exit code to any hook that previously occupied `core.hooksPath`/`.git/hooks`; every other standard githooks(5) name ships as a pass-through shim, so pointing `core.hooksPath` at the managed dir never silently disables a user's own `commit-msg`, `pre-push`, etc.
+- **Install/uninstall/self-heal lifecycle.** `scripts/lib/git-hooks.sh` installs the managed hooks inside `create_feature_branch`/`setup_worktree_dir` (`scripts/worktree-utils.sh`) at the moment `branch.feature` is assigned — durably recording the live `core.hooksPath` into the new `branch.prior_hooks_path` first — uninstalls and restores that recorded value at objective completion (`cleanup_all_worktrees`), and self-heals (re-asserts only on detected drift) from `scripts/session-context.sh`'s `SessionStart` block. Gated on the new `guards.git_hooks` toggle (default `true`).
+- **Config schema v22 → v23.** `migrate_22_to_23` additively re-adds `conductor.enforce.premerge_guard` (default `true`), adds `branch.prior_hooks_path` (default `null`, the not-yet-recorded sentinel; empty string means recorded-and-was-unset), and adds `guards.git_hooks` (default `true`). Existing values are preserved.
+
+### Removed
+- **`scripts/base-branch-commit-guard.sh`.** The old command-string `PreToolUse(Bash)` guard and its `hooks/hooks.json` registration are deleted outright, fully superseded by the `pre-commit` git hook above — see ADR-001 for why it is not retained as a redundant advisory layer.
+
 ## [2.12.0] - 2026-07-10
 
 ### Added

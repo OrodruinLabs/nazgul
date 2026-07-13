@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Nazgul pre-merge-commit guard — H2 conductor verdict check. Blocks
+# `git merge --no-ff` of a conductor unit whose nazgul/conductor/graph.json
+# record lacks a DONE status + APPROVE verdict.
+#
+# Identity is resolved from GITHEAD_<sha> environment variables, not
+# GIT_REFLOG_ACTION: git's setenv(..., overwrite=0) only sets REFLOG_ACTION
+# when absent, so a caller can pre-set it to claim an approved unit while
+# merging different, unreviewed content. GITHEAD_<sha> keys are different:
+# git names the variable itself after the actual merged commit's SHA (one
+# per head being merged), so the key can't be relabeled — only extra decoy
+# keys can be added alongside it. We therefore treat ANY GITHEAD_<sha> whose
+# SHA matches a graph-recorded unit as a candidate, and BLOCK if any
+# candidate is not DONE+APPROVE, so a decoy claiming an approved unit cannot
+# mask the genuine, unapproved one. (MERGE_HEAD is not usable here: git only
+# writes it for a stopped/conflicted or --no-commit merge, not for the clean
+# auto-committed merges this guard runs on — confirmed empirically, git
+# 2.48, ort strategy.)
+#
+# git pre-merge-commit contract: no argv, no stdin read, exit 0 = allow,
+# nonzero = block (message on stderr).
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
+[ -n "$REPO_ROOT" ] || exit 0
+
+CONFIG="$REPO_ROOT/nazgul/config.json"
+GRAPH="$REPO_ROOT/nazgul/conductor/graph.json"
+DISPATCH="$(cd "$(dirname "$0")" && pwd)/_dispatch.sh"
+
+_dispatch_and_exit() {
+  if [ -f "$DISPATCH" ]; then
+    export CLAUDE_PROJECT_DIR="$REPO_ROOT"
+    # shellcheck source=/dev/null
+    source "$DISPATCH"
+    dispatch_prior_hook pre-merge-commit
+    exit $?
+  fi
+  exit 0
+}
+
+# Every check below reads config/graph via jq. No jq -> nothing downstream is
+# safely readable -> degrade to allow immediately, before any config read.
+command -v jq >/dev/null 2>&1 || _dispatch_and_exit
+
+[ -f "$CONFIG" ] || _dispatch_and_exit
+
+# `// true` would treat a literal `false` as falsy too (jq quirk), so compare
+# explicitly — only an explicit `false` disables the guard.
+GIT_HOOKS_ENABLED=$(jq -r 'if .guards.git_hooks == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+[ "$GIT_HOOKS_ENABLED" = "true" ] || _dispatch_and_exit
+
+ENGINE=$(jq -r '.execution.engine // "sequential"' "$CONFIG" 2>/dev/null || echo "sequential")
+[ "$ENGINE" = "conductor" ] || _dispatch_and_exit
+
+[ -f "$GRAPH" ] || _dispatch_and_exit
+jq -e . "$GRAPH" >/dev/null 2>&1 || _dispatch_and_exit
+
+ENFORCE=$(jq -r 'if .conductor.enforce.premerge_guard == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+[ "$ENFORCE" = "true" ] || _dispatch_and_exit
+
+# Candidate merged-head SHAs: one GITHEAD_<sha> per head git is merging,
+# name-keyed by the actual content hash. Any failure in this pipeline (jq
+# choking on a hostile/unexpected env) -> treat as no candidates, same as
+# "no merge in progress" -> degrade to allow.
+CANDIDATE_SHAS_JSON=$(env | sed -nE 's/^GITHEAD_([0-9a-f]{40,64})=.*/\1/p' | jq -R -s 'split("\n") | map(select(length>0))' 2>/dev/null) || CANDIDATE_SHAS_JSON='[]'
+[ "$(printf '%s' "$CANDIDATE_SHAS_JSON" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ] || _dispatch_and_exit
+
+# Map each candidate to a conductor unit via graph.json's recorded commit (a
+# bare, possibly-abbreviated SHA). Units with no matching candidate are
+# irrelevant; candidates matching no unit are untracked merges (ignored).
+MATCHED_UNITS=$(jq -c --argjson shas "$CANDIDATE_SHAS_JSON" '
+  (.tasks // {}) | to_entries
+  | map(select(.value.commit as $c | $c != null and $c != "" and ($shas | any(startswith($c)))))
+  | map({id: .key, status: (.value.status // ""), verdict: (.value.verdict // "")})
+' "$GRAPH" 2>/dev/null || echo "[]")
+
+# No unit among the merged heads is tracked -> untracked/unrelated merge ->
+# allow.
+[ "$(printf '%s' "$MATCHED_UNITS" | jq 'length')" -gt 0 ] || _dispatch_and_exit
+
+# Block if ANY matched unit lacks DONE+APPROVE — a decoy GITHEAD_<sha> for an
+# approved unit cannot suppress the genuine, unapproved one also present.
+BLOCKING=$(printf '%s' "$MATCHED_UNITS" | jq -c '[.[] | select(.status != "DONE" or (.verdict | test("^APPROVE"; "i") | not))] | (.[0] // empty)' 2>/dev/null) || _dispatch_and_exit
+[ -n "$BLOCKING" ] || _dispatch_and_exit
+
+UNIT_ID=$(printf '%s' "$BLOCKING" | jq -r '.id' 2>/dev/null || echo "?")
+STATUS=$(printf '%s' "$BLOCKING" | jq -r '.status' 2>/dev/null || echo "")
+VERDICT=$(printf '%s' "$BLOCKING" | jq -r '.verdict' 2>/dev/null || echo "")
+
+echo "NAZGUL GUARD: Blocked — merge includes unit $UNIT_ID, which has no recorded DONE+APPROVE verdict in nazgul/conductor/graph.json (status='${STATUS:-none}', verdict='${VERDICT:-none}')." >&2
+echo "" >&2
+echo "  A conductor unit must clear the review board (status DONE, verdict matching ^APPROVE) before" >&2
+echo "  it can be merged into the feature branch." >&2
+exit 1

@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "22"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "23"
 assert_json_field "review_gate.simplify_before_review default false" "$CONFIG" ".review_gate.simplify_before_review" "false"
 assert_json_field "review_gate.enforce_granularity default block" "$CONFIG" ".review_gate.enforce_granularity" "block"
 assert_json_field "has .default_mode" "$CONFIG" ".default_mode" "null"
@@ -166,5 +166,10 @@ val=$(jq -r '.self_audit | type' "$CONFIG")
 assert_eq "v22 has .self_audit object" "$val" "object"
 assert_json_field "v22 self_audit.enabled is true" "$CONFIG" ".self_audit.enabled" "true"
 assert_json_field "v22 self_audit.backlog_path is nazgul/improvements.md" "$CONFIG" ".self_audit.backlog_path" "nazgul/improvements.md"
+
+# v23 new defaults (FEAT-010: git-level hook enforcement config)
+assert_json_field "v23 conductor.enforce.premerge_guard is true" "$CONFIG" ".conductor.enforce.premerge_guard" "true"
+assert_json_field "v23 branch.prior_hooks_path is null" "$CONFIG" ".branch.prior_hooks_path" "null"
+assert_json_field "v23 guards.git_hooks is true" "$CONFIG" ".guards.git_hooks" "true"
 
 report_results
