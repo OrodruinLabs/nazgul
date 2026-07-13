@@ -63,7 +63,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test (c): the count of [advisory] annotations is exactly 15
+# Test (c): the count of [advisory] annotations is exactly 16
 # The legend table itself contains [advisory] as a label definition (1 count).
 # Rule annotations add to that (incl. §11 Conductor's engine-selection, hard-stops,
 # wave-parallelism, and graph-only-invariant bullets — all four are agent-invoked,
@@ -74,15 +74,16 @@ fi
 # §14's use-it-don't-work-around-it, data-only-no-eval, and append-only-sink
 # raise-finding bullets — a helper agents are told to use, not a mechanical guard;
 # plus §7's FEAT-009 model-tier note — models.conductor / the review-key split are
-# config reads, not hook checks).
-# Total must be exactly 15.
+# config reads, not hook checks; plus §3's FEAT-011 adversarial cross-check rule —
+# review-gate orchestrator behavior, not a hook check).
+# Total must be exactly 16.
 # ---------------------------------------------------------------------------
 ADVISORY_COUNT=$(grep -c '\[advisory\]' "$RULES_FILE" || true)
-if [ "$ADVISORY_COUNT" -eq 15 ]; then
-  _pass "[advisory] annotation count is exactly 15 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 16 ]; then
+  _pass "[advisory] annotation count is exactly 16 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 15" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 15"
+  _fail "[advisory] annotation count is exactly 16" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 16"
 fi
 
 # ---------------------------------------------------------------------------

@@ -144,7 +144,7 @@ tests/                               # Plugin validation tests
 
 **State machine is sacred.** Tasks follow: PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> DONE (or CHANGES_REQUESTED -> retry, or BLOCKED). No skipping states.
 
-**Review board is non-negotiable.** ALL reviewers must approve before a task can be DONE. Confidence scores below 80 become non-blocking warnings instead of rejections.
+**Review board is non-negotiable.** ALL reviewers must approve before a task can be DONE. Confidence scores below 80 become non-blocking warnings instead of rejections. A fourth `UNVERIFIED` verdict marks a review that genuinely could not run (reviewer errored/timed out, or self-reported it couldn't assess) — distinct from a rejection and bounded by its own `review_gate.unverified_retries` counter, not the CHANGES_REQUESTED `retry_count`. Its resolution is role-aware: a critical reviewer (`review_gate.critical_reviewers`, default security/architect) still `UNVERIFIED` after retries fails closed to BLOCKED; a non-critical one becomes a non-blocking warning under `review_gate.allow_unverified_nonblocking` (default true). Borderline blocking findings near the confidence threshold get one bounded adversarial cross-check (`review_gate.adversarial_crosscheck`/`adversarial_margin`/`adversarial_max`). These six `review_gate` keys are additive (config schema v24).
 
 **Fix-first review.** Feedback aggregator classifies findings as AUTO-FIX (mechanical — applied automatically) or ASK (risky — requires judgment). Review gate Step 3.75 applies auto-fixes before presenting remaining items.
 
