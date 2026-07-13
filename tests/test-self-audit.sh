@@ -259,4 +259,19 @@ T16RESULT=$(unset CLAUDE_CONFIG_DIR; HOME="$T16FAKEHOME" call_transcripts_dir "$
 assert_eq "T16: falls back to basename glob match" "$T16RESULT" \
   "$T16FAKEHOME/.claude/projects/-some-other-prefix-t16-drift-project"
 
+# --- Test 17: an AMBIGUOUS basename glob (two projects share the leaf slug)
+# must NOT arbitrarily pick one — it degrades to the computed (missing) expected
+# path so mining reports cost-unavailable rather than mining an unrelated
+# project's transcripts (PR #55 review) ---
+T17ROOT="$TMPDIR_BASE/t17 drift project"
+mkdir -p "$T17ROOT/nazgul"
+cp "$REPO_ROOT/templates/config.json" "$T17ROOT/nazgul/config.json"
+T17FAKEHOME="$TMPDIR_BASE/t17-home"
+mkdir -p "$T17FAKEHOME/.claude/projects/-prefix-a-t17-drift-project"
+mkdir -p "$T17FAKEHOME/.claude/projects/-prefix-b-t17-drift-project"
+T17SLUG=$(cd "$T17ROOT" && pwd | sed 's/[^A-Za-z0-9]/-/g')
+T17RESULT=$(unset CLAUDE_CONFIG_DIR; HOME="$T17FAKEHOME" call_transcripts_dir "$T17ROOT/nazgul")
+assert_eq "T17: ambiguous glob degrades to computed expected path" "$T17RESULT" \
+  "$T17FAKEHOME/.claude/projects/$T17SLUG"
+
 report_results

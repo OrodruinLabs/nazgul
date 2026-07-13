@@ -202,7 +202,7 @@ _transcripts_dir() {
     printf '%s\n' "$NAZGUL_TRANSCRIPTS_DIR"
     return 0
   fi
-  local base slug expected fallback base_slug
+  local base slug expected base_slug
   base="${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}"
   slug=$(printf '%s' "$PROJECT_ROOT" | sed 's/[^A-Za-z0-9]/-/g')
   expected="$base/projects/$slug"
@@ -211,9 +211,18 @@ _transcripts_dir() {
     return 0
   fi
   base_slug=$(basename "$PROJECT_ROOT" | sed 's/[^A-Za-z0-9]/-/g')
-  fallback=$(ls -d "$base/projects/"*"$base_slug" 2>/dev/null | head -1) || true
-  if [ -n "$fallback" ] && [ -d "$fallback" ]; then
-    printf '%s\n' "$fallback"
+  # Only trust the glob fallback when EXACTLY ONE project dir matches: several
+  # projects can share a basename slug (same leaf name under different parents),
+  # and arbitrarily taking one (the old `head -1`) could mine an unrelated
+  # project's transcripts and emit wrong cost/tier findings. On 0 or >1 matches,
+  # fall through to the (missing) expected path so mining reports "cost data
+  # unavailable" instead of potentially unrelated data.
+  local matches=() d
+  for d in "$base/projects/"*"$base_slug"; do
+    [ -d "$d" ] && matches+=("$d")
+  done
+  if [ "${#matches[@]}" -eq 1 ]; then
+    printf '%s\n' "${matches[0]}"
     return 0
   fi
   printf '%s\n' "$expected"
