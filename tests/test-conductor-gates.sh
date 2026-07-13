@@ -100,6 +100,27 @@ assert_exit_code "security-reject/gates-flipped: still halts" "$HALT_EC" 1
 assert_contains "security-reject/gates-flipped: names TASK-001" "$HALT_OUT" "SECURITY_REJECTION TASK-001"
 teardown_temp_dir
 
+# --- Test 5b: UNVERIFIED security verdict emits a distinct SECURITY_UNVERIFIED line but still halts ---
+setup_temp_dir
+setup_nazgul_dir
+create_task_file TASK-001 IN_REVIEW none
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+cat > "$TEST_DIR/nazgul/reviews/TASK-001/security-reviewer.md" << 'EOF'
+---
+verdict: UNVERIFIED
+---
+# Security Review
+
+Reviewer could not assess.
+EOF
+GATE_OUT=$(_cgate_security_rejections "$TEST_DIR/nazgul") && GATE_EC=0 || GATE_EC=$?
+assert_exit_code "unverified security: _cgate returns non-zero" "$GATE_EC" 1
+assert_eq "unverified security: distinct SECURITY_UNVERIFIED line" "$GATE_OUT" "SECURITY_UNVERIFIED TASK-001"
+HALT_OUT=$(conductor_should_halt "$TEST_DIR/nazgul") && HALT_EC=0 || HALT_EC=$?
+assert_exit_code "unverified security: conductor_should_halt halts" "$HALT_EC" 1
+assert_contains "unverified security: halt names SECURITY_UNVERIFIED" "$HALT_OUT" "SECURITY_UNVERIFIED TASK-001"
+teardown_temp_dir
+
 # --- Test 6: malformed security verdict is ambiguous -> fails closed ---
 setup_temp_dir
 setup_nazgul_dir
