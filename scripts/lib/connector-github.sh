@@ -40,6 +40,48 @@ _cgh_gh_retry() {
   return 1
 }
 
+# _cgh_bump_pull_failures <config> -> bump connectors.github.pull_failures (tmp+mv);
+# at >=5 auto-disable (enabled=false) + warn. Degrade-safe, always returns 0.
+_cgh_bump_pull_failures() {
+  local config="$1" current new tmp
+  [ -f "$config" ] || return 0
+  current=$(jq -r '.connectors.github.pull_failures // 0' "$config" 2>/dev/null) || current=0
+  case "$current" in ''|*[!0-9]*) current=0 ;; esac
+  new=$((current + 1))
+  tmp="${config}.tmp.$$"
+  if jq --argjson n "$new" '.connectors.github.pull_failures = $n' "$config" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$config" 2>/dev/null || rm -f "$tmp"
+  else
+    rm -f "$tmp"; return 0
+  fi
+  if [ "$new" -ge 5 ]; then
+    printf 'connector-github: WARNING: 5 consecutive pull failures — disabling github connector\n' >&2
+    tmp="${config}.tmp.$$"
+    if jq '.connectors.github.enabled = false' "$config" > "$tmp" 2>/dev/null; then
+      mv "$tmp" "$config" 2>/dev/null || rm -f "$tmp"
+    else
+      rm -f "$tmp"
+    fi
+  fi
+  return 0
+}
+
+# _cgh_reset_pull_failures <config> -> clear pull_failures to 0 after a good pull
+# (no config write when already 0). Degrade-safe: always returns 0.
+_cgh_reset_pull_failures() {
+  local config="$1" current tmp
+  [ -f "$config" ] || return 0
+  current=$(jq -r '.connectors.github.pull_failures // 0' "$config" 2>/dev/null) || current=0
+  [ "$current" = "0" ] && return 0
+  tmp="${config}.tmp.$$"
+  if jq '.connectors.github.pull_failures = 0' "$config" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$config" 2>/dev/null || rm -f "$tmp"
+  else
+    rm -f "$tmp"
+  fi
+  return 0
+}
+
 # _cgh_map_put <config> <id> [feat_id] -> idempotently record the remote-issue# ↔
 # local mapping via tmp+mv. Keyed by <id>, so a repeat claim never duplicates; a
 # later real feat_id (3rd arg) upserts in place, else a null stub is created.
@@ -91,10 +133,11 @@ _cgh_map_resolve() {
 # never spams and a change updates in place. Only touches the nazgul-status:*
 # namespace: the pull opt-in label and the claimed label are never removed, so a
 # push can never make the issue re-enter pull_list. No-op (0) when the push gate
-# is off or nothing is mapped; degrade-safe on gh failure.
+# is off, status is empty, or nothing is mapped; degrade-safe on gh failure.
 connector_github_push_status() {
   local config="$1" local_id="$2" status="$3" issue want json
   _cgh_push_enabled "$config" || return 0
+  [ -n "$status" ] || return 0
   issue=$(_cgh_map_resolve "$config" "$local_id")
   [ -n "$issue" ] || return 0
 
@@ -139,21 +182,30 @@ Nazgul PR: $pr_url"
   fi
 }
 
-# connector_github_pull_list <config> -> one candidate id (issue number) per line
-# for each OPEN issue carrying pull.label (default "nazgul") and NOT carrying
-# pull.claimed_label (default "nazgul-claimed"). Zero output on any gh failure.
-# Bounded by pull.max_items (default 100) so a large backlog can't starve older
-# candidates behind gh's own default page size.
+# connector_github_pull_list <config> -> one candidate issue number per line: OPEN,
+# carrying pull.label, and NOT already handled (see the "handled" note at the filter).
 connector_github_pull_list() {
-  local config="$1" label claimed max_items json
+  local config="$1" label claimed max_items json map_keys
   label=$(_cgh_cfg "$config" '.connectors.github.pull.label' 'nazgul')
   claimed=$(_cgh_cfg "$config" '.connectors.github.pull.claimed_label' 'nazgul-claimed')
   max_items=$(_cgh_cfg "$config" '.connectors.github.pull.max_items' '100')
   case "$max_items" in ''|*[!0-9]*) max_items=100 ;; esac
   [ "$max_items" -gt 0 ] || max_items=100
-  json=$(_cgh_gh_retry gh issue list --state open --label "$label" --limit "$max_items" --json number,labels) || return 0
-  printf '%s' "$json" | jq -r --arg claimed "$claimed" '
-    .[]? | select(any(.labels[]?; .name == $claimed) | not) | .number
+  json=$(_cgh_gh_retry gh issue list --state open --label "$label" --limit "$max_items" --json number,labels) || {
+    _cgh_bump_pull_failures "$config"    # gh failure after retry -> degrade-safe counter bump, empty output
+    return 0
+  }
+  _cgh_reset_pull_failures "$config"     # a good pull clears the consecutive-failure counter
+  map_keys=$(jq -c '(.connectors.github.map // {}) | keys' "$config" 2>/dev/null) || map_keys='[]'
+  case "$map_keys" in ''|null) map_keys='[]' ;; esac
+  # "Handled" = claimed label present OR number is a map key; the local map keeps an
+  # item suppressed even if the remote claimed label lags or was stripped (storm guard).
+  printf '%s' "$json" | jq -r --arg claimed "$claimed" --argjson mapped "$map_keys" '
+    .[]?
+    | select(any(.labels[]?; .name == $claimed) | not)
+    | (.number | tostring) as $n
+    | select(($mapped | index($n)) == null)
+    | .number
   ' 2>/dev/null || return 0
 }
 

@@ -344,6 +344,111 @@ connector_github_push_pr "$PUSHOFF_CONFIG" "FEAT-012" "https://github.com/o/r/pu
 assert_eq "push_status no-op when push.enabled=false (parent enabled)" "$(cat "$NAZGUL_TEST_GH_LABELS")" "{}"
 assert_eq "push_pr no-op when push.enabled=false (parent enabled)" "$(cat "$NAZGUL_TEST_GH_COMMENTS")" "{}"
 
+# --- INTEGRATION: full two-way cycle pull→claim→push must NOT re-pull (D-012-C) ---
+# Fresh config + label state so issue 42 starts OPEN, labeled, unclaimed, unmapped.
+INT_CONFIG="$TEST_DIR/nazgul/config-int.json"
+jq '.connectors.github.enabled = true
+    | .connectors.github.push.enabled = true
+    | .connectors.github.map = {}' "$CONFIG" > "$INT_CONFIG"
+echo '{}' > "$NAZGUL_TEST_GH_LABELS"
+echo '{}' > "$NAZGUL_TEST_GH_COMMENTS"
+
+assert_contains "cycle step 1: pull_list lists candidate 42" "$(connector_github_pull_list "$INT_CONFIG")" "42"
+connector_github_pull_get "$INT_CONFIG" 42 >/dev/null; cyc_get_rc=$?
+assert_exit_code "cycle step 2: pull_get(42) succeeds" "$cyc_get_rc" 0
+connector_github_pull_archive "$INT_CONFIG" 42; cyc_arch_rc=$?
+assert_exit_code "cycle step 3: pull_archive(42) claims + maps" "$cyc_arch_rc" 0
+assert_eq "cycle: claimed label recorded for 42" \
+  "$(jq -r '."42" | index("nazgul-claimed") != null' "$NAZGUL_TEST_GH_LABELS")" "true"
+# Bind the map stub to a local id (as objective creation would) so push can resolve.
+jq '.connectors.github.map["42"] = "FEAT-INT"' "$INT_CONFIG" > "$INT_CONFIG.tmp" && mv "$INT_CONFIG.tmp" "$INT_CONFIG"
+
+connector_github_push_status "$INT_CONFIG" "FEAT-INT" "IN_PROGRESS"; cyc_ps_rc=$?
+assert_exit_code "cycle step 4: push_status succeeds" "$cyc_ps_rc" 0
+connector_github_push_pr "$INT_CONFIG" "FEAT-INT" "https://github.com/o/r/pull/42"; cyc_pr_rc=$?
+assert_exit_code "cycle step 5: push_pr succeeds" "$cyc_pr_rc" 0
+
+# Headline invariant: after claim + both pushes, 42 is gone from pull_list.
+assert_not_contains "cycle step 6: push provably cannot re-enter pull_list (issue 42 absent)" \
+  "$(connector_github_pull_list "$INT_CONFIG")" "42"
+assert_eq "cycle: claimed label still present after BOTH pushes" \
+  "$(jq -r '."42" | index("nazgul-claimed") != null' "$NAZGUL_TEST_GH_LABELS")" "true"
+assert_eq "cycle: push only touched the nazgul-status namespace (single status label)" \
+  "$(jq -r '[."42"[]? | select(startswith("nazgul-status:"))] | length' "$NAZGUL_TEST_GH_LABELS")" "1"
+
+# --- storm guard: local map suppresses re-pull even if the remote claimed label is stripped ---
+echo '{}' > "$NAZGUL_TEST_GH_LABELS"
+assert_not_contains "map entry alone suppresses re-pull of 42 (remote label lag/removal)" \
+  "$(connector_github_pull_list "$INT_CONFIG")" "42"
+
+# --- DEGRADATION: pull_failures increments, auto-disables at 5, resets on success ---
+FAIL_CONFIG="$TEST_DIR/nazgul/config-fail.json"
+jq '.connectors.github.enabled = true | .connectors.github.pull_failures = 0' "$CONFIG" > "$FAIL_CONFIG"
+export NAZGUL_TEST_GH_FAIL=1
+for expect in 1 2 3 4; do
+  out=$(connector_github_pull_list "$FAIL_CONFIG"); rc=$?
+  assert_exit_code "degrade: pull_list returns 0 (never blocks) on gh failure #$expect" "$rc" 0
+  assert_eq "degrade: pull_list emits nothing on gh failure #$expect" "$out" ""
+  assert_eq "degrade: pull_failures incremented to $expect" \
+    "$(jq -r '.connectors.github.pull_failures' "$FAIL_CONFIG")" "$expect"
+  assert_eq "degrade: connector still enabled before threshold (#$expect)" \
+    "$(jq -r '.connectors.github.enabled' "$FAIL_CONFIG")" "true"
+done
+connector_github_pull_list "$FAIL_CONFIG" >/dev/null; rc5=$?
+assert_exit_code "degrade: 5th failure still returns 0 (loop unblocked)" "$rc5" 0
+assert_eq "degrade: pull_failures reached 5" "$(jq -r '.connectors.github.pull_failures' "$FAIL_CONFIG")" "5"
+assert_eq "degrade: connector AUTO-DISABLED at 5 consecutive failures" \
+  "$(jq -r '.connectors.github.enabled' "$FAIL_CONFIG")" "false"
+unset NAZGUL_TEST_GH_FAIL
+
+# A subsequent successful pull resets the counter to 0.
+echo '{}' > "$NAZGUL_TEST_GH_LABELS"
+connector_github_pull_list "$FAIL_CONFIG" >/dev/null; rc_ok=$?
+assert_exit_code "degrade: successful pull after failures returns 0" "$rc_ok" 0
+assert_eq "degrade: successful pull resets pull_failures to 0" \
+  "$(jq -r '.connectors.github.pull_failures' "$FAIL_CONFIG")" "0"
+
+# --- pull_get degrades to non-zero on gh IO failure (T3 regression guard) ---
+export NAZGUL_TEST_GH_FAIL=1
+connector_github_pull_get "$FAIL_CONFIG" 42 >/dev/null; pg_fail_rc=$?
+if [ "$pg_fail_rc" -ne 0 ]; then
+  _pass "pull_get returns non-zero on gh IO failure"
+else
+  _fail "pull_get returns non-zero on gh IO failure" "rc: $pg_fail_rc"
+fi
+unset NAZGUL_TEST_GH_FAIL
+
+# --- push under gh failure: no crash, no mutation, degrade-safe return ---
+GHFAIL_PUSH="$TEST_DIR/nazgul/config-ghfail-push.json"
+jq '.connectors.github.enabled = true
+    | .connectors.github.push.enabled = true
+    | .connectors.github.map = {"43":"FEAT-012"}' "$CONFIG" > "$GHFAIL_PUSH"
+echo '{}' > "$NAZGUL_TEST_GH_LABELS"
+echo '{}' > "$NAZGUL_TEST_GH_COMMENTS"
+export NAZGUL_TEST_GH_FAIL=1
+connector_github_push_status "$GHFAIL_PUSH" "FEAT-012" "IN_PROGRESS"; psf_rc=$?
+connector_github_push_pr "$GHFAIL_PUSH" "FEAT-012" "https://github.com/o/r/pull/7"; prf_rc=$?
+unset NAZGUL_TEST_GH_FAIL
+assert_eq "push_status under gh failure made no label mutation" "$(cat "$NAZGUL_TEST_GH_LABELS")" "{}"
+assert_eq "push_pr under gh failure made no comment mutation" "$(cat "$NAZGUL_TEST_GH_COMMENTS")" "{}"
+# Non-zero return is fine (caller ignores it); the contract is "no crash, no mutation".
+_pass "push under gh failure returned without crashing (ps=$psf_rc pr=$prf_rc)"
+
+# --- push to an UNMAPPED local_id is a safe no-op (no gh mutation) ---
+echo '{}' > "$NAZGUL_TEST_GH_LABELS"
+echo '{}' > "$NAZGUL_TEST_GH_COMMENTS"
+connector_github_push_status "$GHFAIL_PUSH" "FEAT-NOPE" "IN_PROGRESS"; unmapped_ps=$?
+connector_github_push_pr "$GHFAIL_PUSH" "FEAT-NOPE" "https://github.com/o/r/pull/1"; unmapped_pr=$?
+assert_exit_code "push_status unmapped local_id returns 0 (no-op)" "$unmapped_ps" 0
+assert_exit_code "push_pr unmapped local_id returns 0 (no-op)" "$unmapped_pr" 0
+assert_eq "push_status unmapped local_id made no label mutation" "$(cat "$NAZGUL_TEST_GH_LABELS")" "{}"
+assert_eq "push_pr unmapped local_id made no comment mutation" "$(cat "$NAZGUL_TEST_GH_COMMENTS")" "{}"
+
+# --- push_status with an empty status arg is a safe no-op ---
+connector_github_push_status "$GHFAIL_PUSH" "FEAT-012" ""; empty_ps=$?
+assert_exit_code "push_status empty status returns 0 (no-op)" "$empty_ps" 0
+assert_eq "push_status empty status made no label mutation" "$(cat "$NAZGUL_TEST_GH_LABELS")" "{}"
+
 # --- pull_list honors pull.max_items (--limit): a >limit backlog is capped ---
 jq -n '[ range(201;206) | {number:., state:"OPEN", title:("t"+(.|tostring)), body:"b", labels:[{name:"nazgul"}]} ]' > "$NAZGUL_TEST_GH_DB"
 echo '{}' > "$NAZGUL_TEST_GH_LABELS"
