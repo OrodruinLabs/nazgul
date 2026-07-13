@@ -33,6 +33,15 @@ write_review() {
   printf '# Review: %s\n\n## Verdict: %s\n' "$1" "$3" > "$TEST_DIR/nazgul/reviews/$1/$2.md"
 }
 
+# Helper: write a review file with a canonical YAML frontmatter verdict block.
+# write_review writes a legacy `## Verdict:` body; UNVERIFIED is only read from
+# the structured frontmatter block, so these cases need this form.
+# Usage: write_frontmatter_verdict TASK-001 code-reviewer UNVERIFIED
+write_frontmatter_verdict() {
+  mkdir -p "$TEST_DIR/nazgul/reviews/$1"
+  printf -- '---\nverdict: %s\n---\nbody\n' "$3" > "$TEST_DIR/nazgul/reviews/$1/$2.md"
+}
+
 # Helper: run validation capturing output and exit code
 # Sets: VAL_OUTPUT, VAL_EC
 run_validate() {
@@ -370,6 +379,74 @@ write_manifest "TASK-001" "qa-reviewer:no tests changed"
 run_validate "TASK-001"
 assert_exit_code "conditional_dispatch=false rejects any skip: exit 1" "$VAL_EC" 1
 assert_contains "conditional_dispatch=false rejects any skip: not honored" "$VAL_OUTPUT" "MISSING qa-reviewer"
+teardown_temp_dir
+
+# --- UNVERIFIED role-aware DONE-gate (FEAT-011 TASK-002) ---
+
+# UNVERIFIED reads as NOT approved (regardless of gate exemption)
+setup_evidence_env "code-reviewer"
+write_frontmatter_verdict "TASK-001" "code-reviewer" "UNVERIFIED"
+rc=0; _has_approved_verdict "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md" || rc=$?
+assert_exit_code "UNVERIFIED is not approved" "$rc" 1
+teardown_temp_dir
+
+# --- Test 25: non-critical UNVERIFIED + toggle default(true) — gate satisfied ---
+setup_evidence_env "code-reviewer qa-reviewer"
+write_review "TASK-001" "qa-reviewer" "APPROVED"
+write_frontmatter_verdict "TASK-001" "code-reviewer" "UNVERIFIED"
+run_validate "TASK-001"
+assert_exit_code "non-critical UNVERIFIED default toggle: exit 0" "$VAL_EC" 0
+assert_not_contains "non-critical UNVERIFIED: not UNAPPROVED" "$VAL_OUTPUT" "UNAPPROVED code-reviewer"
+teardown_temp_dir
+
+# --- Test 26: same UNVERIFIED with allow_unverified_nonblocking=false — blocks ---
+setup_evidence_env "code-reviewer qa-reviewer" '.review_gate.allow_unverified_nonblocking = false'
+write_review "TASK-001" "qa-reviewer" "APPROVED"
+write_frontmatter_verdict "TASK-001" "code-reviewer" "UNVERIFIED"
+run_validate "TASK-001"
+assert_exit_code "UNVERIFIED toggle off: exit 1" "$VAL_EC" 1
+assert_contains "UNVERIFIED toggle off: UNAPPROVED" "$VAL_OUTPUT" "UNAPPROVED code-reviewer"
+teardown_temp_dir
+
+# --- Test 27: security-reviewer UNVERIFIED always blocks (even toggle on) ---
+setup_evidence_env "code-reviewer security-reviewer"
+write_review "TASK-001" "code-reviewer" "APPROVED"
+write_frontmatter_verdict "TASK-001" "security-reviewer" "UNVERIFIED"
+run_validate "TASK-001"
+assert_exit_code "security-reviewer UNVERIFIED: exit 1" "$VAL_EC" 1
+assert_contains "security-reviewer UNVERIFIED: UNAPPROVED" "$VAL_OUTPUT" "UNAPPROVED security-reviewer"
+teardown_temp_dir
+
+# --- Test 28: architect-reviewer UNVERIFIED blocks (default critical list) ---
+setup_evidence_env "code-reviewer architect-reviewer"
+write_review "TASK-001" "code-reviewer" "APPROVED"
+write_frontmatter_verdict "TASK-001" "architect-reviewer" "UNVERIFIED"
+run_validate "TASK-001"
+assert_exit_code "architect UNVERIFIED default: exit 1" "$VAL_EC" 1
+assert_contains "architect UNVERIFIED default: UNAPPROVED" "$VAL_OUTPUT" "UNAPPROVED architect-reviewer"
+teardown_temp_dir
+
+# --- Test 29: custom critical_reviewers list honored — architect drops out of it ---
+# With critical_reviewers=["security-reviewer"], architect UNVERIFIED is now
+# gate-satisfying, while security-reviewer UNVERIFIED still blocks (never honored).
+setup_evidence_env "code-reviewer architect-reviewer security-reviewer" \
+  '.review_gate.critical_reviewers = ["security-reviewer"]'
+write_review "TASK-001" "code-reviewer" "APPROVED"
+write_frontmatter_verdict "TASK-001" "architect-reviewer" "UNVERIFIED"
+write_frontmatter_verdict "TASK-001" "security-reviewer" "UNVERIFIED"
+run_validate "TASK-001"
+assert_exit_code "custom critical list: exit 1 (security still blocks)" "$VAL_EC" 1
+assert_not_contains "custom critical list: architect honored" "$VAL_OUTPUT" "UNAPPROVED architect-reviewer"
+assert_contains "custom critical list: security still blocks" "$VAL_OUTPUT" "UNAPPROVED security-reviewer"
+teardown_temp_dir
+
+# --- Test 30 (REGRESSION): APPROVE / CHANGES_REQUESTED outcomes unchanged ---
+setup_evidence_env "code-reviewer qa-reviewer"
+write_review "TASK-001" "code-reviewer" "APPROVED"
+write_review "TASK-001" "qa-reviewer" "APPROVED"
+run_validate "TASK-001"
+assert_exit_code "regression APPROVE: exit 0" "$VAL_EC" 0
+assert_eq "regression APPROVE: no output" "$VAL_OUTPUT" ""
 teardown_temp_dir
 
 report_results
