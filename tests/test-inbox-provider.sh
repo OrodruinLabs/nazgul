@@ -126,11 +126,8 @@ teardown_temp_dir
 # untouched so existing projects have zero github surface.
 assert_eq "file provider: connector never sourced" "${_NAZGUL_CONNECTOR_GITHUB_SOURCED:-unset}" "unset"
 
-# ============================================================================
-# GitHub-provider dispatch (provider="github"). `gh` is a PATH-shim mock reading
-# a fixture issue DB + mutable label state (NO network), mirroring the pattern in
-# tests/test-connector-github.sh. FAKEBIN is a colon-free mktemp dir so PATH parses.
-# ============================================================================
+# --- GitHub-provider dispatch (provider="github") ---
+# `gh` is a PATH-shim mock over a fixture issue DB + mutable labels (no network); FAKEBIN is a colon-free mktemp dir so PATH parses.
 export NAZGUL_CGH_RETRY_DELAY=0
 FAKEBIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-fakebin-XXXXXX")
 cat > "$FAKEBIN/gh" << 'GH_EOF'
