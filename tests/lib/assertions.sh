@@ -33,7 +33,11 @@ assert_eq() {
 
 assert_contains() {
   local name="$1" haystack="$2" needle="$3"
-  if echo "$haystack" | grep -qF "$needle"; then
+  # Here-string (not `echo "$haystack" | grep`): under `set -o pipefail`, grep's
+  # early `-q` exit closes the pipe and `echo` takes a SIGPIPE, which pipefail
+  # then reports as a pipeline failure — a false negative that only triggers once
+  # the haystack exceeds the OS pipe buffer (~64KB on Linux). No pipe, no SIGPIPE.
+  if grep -qF "$needle" <<<"$haystack"; then
     _pass "$name"
   else
     _fail "$name" "expected to contain: '$needle'" "  in: '${haystack:0:200}'"
@@ -42,7 +46,7 @@ assert_contains() {
 
 assert_not_contains() {
   local name="$1" haystack="$2" needle="$3"
-  if echo "$haystack" | grep -qF "$needle"; then
+  if grep -qF "$needle" <<<"$haystack"; then
     _fail "$name" "expected NOT to contain: '$needle'" "  in: '${haystack:0:200}'"
   else
     _pass "$name"
