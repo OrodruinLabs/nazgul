@@ -29,6 +29,7 @@ write_fake_gh() {
 DB="${NAZGUL_TEST_GH_DB:-}"
 LS="${NAZGUL_TEST_GH_LABELS:-}"
 EC="${NAZGUL_TEST_GH_EDIT_COUNT:-}"
+CM="${NAZGUL_TEST_GH_COMMENTS:-}"
 
 sub="${1:-}"; shift || true
 case "$sub" in
@@ -42,16 +43,17 @@ case "$sub" in
     action="${1:-}"; shift || true
     case "$action" in
       list)
-        state=""; label=""
+        state=""; label=""; limit=1000000
         while [ $# -gt 0 ]; do
           case "$1" in
             --state) state="${2:-}"; shift 2 || true ;;
             --label) label="${2:-}"; shift 2 || true ;;
+            --limit) limit="${2:-1000000}"; shift 2 || true ;;
             --json)  shift 2 || true ;;
             *) shift || true ;;
           esac
         done
-        jq -c --arg label "$label" --arg state "$state" --slurpfile ls "$LS" '
+        jq -c --arg label "$label" --arg state "$state" --argjson limit "$limit" --slurpfile ls "$LS" '
           ($ls[0] // {}) as $sm
           | [ .[]
               | . as $iss
@@ -60,30 +62,60 @@ case "$sub" in
               | select((.state|ascii_downcase) == ($state|ascii_downcase))
               | select(any($lbls[]; .name == $label))
               | {number: $iss.number, labels: $lbls} ]
+          | .[0:$limit]
         ' "$DB"
         ;;
       view)
         num="${1:-}"
         [ "${NAZGUL_TEST_GH_MALFORMED_VIEW:-0}" = "1" ] && { printf '%s' '{ this is : not json'; exit 0; }
-        jq -c --argjson n "$num" --arg ns "$num" --slurpfile ls "$LS" '
+        cmts='{}'; [ -n "$CM" ] && [ -f "$CM" ] && cmts=$(cat "$CM")
+        jq -c --argjson n "$num" --arg ns "$num" --slurpfile ls "$LS" --argjson cm "$cmts" '
           ($ls[0] // {}) as $sm
           | (.[] | select(.number == $n)) as $iss
           | (($sm[$ns] // []) | map({name:.})) as $added
-          | {title: $iss.title, body: $iss.body, labels: ($iss.labels + $added)}
+          | {title: $iss.title, body: $iss.body, labels: ($iss.labels + $added), comments: ($cm[$ns] // [])}
         ' "$DB"
         ;;
       edit)
         num="${1:-}"; shift || true
-        add=""
+        add=""; rm_label=""
         while [ $# -gt 0 ]; do
           case "$1" in
-            --add-label) add="${2:-}"; shift 2 || true ;;
+            --add-label)    add="${2:-}"; shift 2 || true ;;
+            --remove-label) rm_label="${2:-}"; shift 2 || true ;;
             *) shift || true ;;
           esac
         done
         if [ -n "$EC" ]; then c=0; [ -f "$EC" ] && c=$(cat "$EC"); echo $((c + 1)) > "$EC"; fi
         cur='{}'; [ -f "$LS" ] && cur=$(cat "$LS")
-        printf '%s' "$cur" | jq --arg n "$num" --arg l "$add" '.[$n] = ((.[$n] // []) + [$l] | unique)' > "$LS.tmp" && mv "$LS.tmp" "$LS"
+        if [ -n "$add" ]; then
+          cur=$(printf '%s' "$cur" | jq --arg n "$num" --arg l "$add" '.[$n] = ((.[$n] // []) + [$l] | unique)')
+        fi
+        if [ -n "$rm_label" ]; then
+          cur=$(printf '%s' "$cur" | jq --arg n "$num" --arg l "$rm_label" '.[$n] = ((.[$n] // []) - [$l])')
+        fi
+        printf '%s' "$cur" > "$LS.tmp" && mv "$LS.tmp" "$LS"
+        exit 0
+        ;;
+      comment)
+        num="${1:-}"; shift || true
+        body=""; edit_last=0
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --body)      body="${2:-}"; shift 2 || true ;;
+            --edit-last) edit_last=1; shift || true ;;
+            *) shift || true ;;
+          esac
+        done
+        [ -n "$CM" ] || exit 0
+        cur='{}'; [ -f "$CM" ] && cur=$(cat "$CM")
+        if [ "$edit_last" = "1" ]; then
+          printf '%s' "$cur" | jq --arg n "$num" --arg b "$body" '
+            .[$n] = ((.[$n] // []) | if length > 0 then (.[:-1] + [{body:$b}]) else [{body:$b}] end)
+          ' > "$CM.tmp" && mv "$CM.tmp" "$CM"
+        else
+          printf '%s' "$cur" | jq --arg n "$num" --arg b "$body" '.[$n] = ((.[$n] // []) + [{body:$b}])' > "$CM.tmp" && mv "$CM.tmp" "$CM"
+        fi
         exit 0
         ;;
       *) exit 1 ;;
@@ -108,6 +140,7 @@ HOSTILE='inj $(touch '"$SENTINEL"') `touch '"$SENTINEL"'` ${IFS} ; rm -rf ./__na
 export NAZGUL_TEST_GH_DB="$TEST_DIR/gh-db.json"
 export NAZGUL_TEST_GH_LABELS="$TEST_DIR/gh-labels.json"
 export NAZGUL_TEST_GH_EDIT_COUNT="$TEST_DIR/gh-edit-count.txt"
+export NAZGUL_TEST_GH_COMMENTS="$TEST_DIR/gh-comments.json"
 
 build_db() {
   jq -n --arg htitle "$HOSTILE" '[
@@ -122,6 +155,7 @@ build_db() {
 build_db
 echo '{}' > "$NAZGUL_TEST_GH_LABELS"
 echo '0'  > "$NAZGUL_TEST_GH_EDIT_COUNT"
+echo '{}' > "$NAZGUL_TEST_GH_COMMENTS"
 
 write_fake_gh
 export PATH="$FAKEBIN:$PATH"
@@ -223,6 +257,104 @@ fi
 export NAZGUL_TEST_GH_FAIL=1
 assert_eq "pull_list degrades to empty on gh failure" "$(connector_github_pull_list "$CONFIG")" ""
 unset NAZGUL_TEST_GH_FAIL
+
+# ============================================================
+# PUSH side: push_status / push_pr — gated, idempotent, sync-loop guard.
+# Issue 43 is OPEN + carries both "nazgul" and "nazgul-claimed" (base DB labels),
+# and is mapped local FEAT-012 -> 43. A correct push touches only the
+# nazgul-status:* namespace / a marked PR comment and NEVER the claimed label,
+# so pull_list must keep excluding 43 (no re-pull storm).
+# ============================================================
+
+PUSH_CONFIG="$TEST_DIR/nazgul/config-push.json"
+jq '.connectors.github.enabled = true
+    | .connectors.github.push.enabled = true
+    | .connectors.github.map = {"43":"FEAT-012"}' "$CONFIG" > "$PUSH_CONFIG"
+echo '{}' > "$NAZGUL_TEST_GH_LABELS"
+echo '{}' > "$NAZGUL_TEST_GH_COMMENTS"
+
+# --- push_status: single nazgul-status:* label upsert on the mapped issue ---
+connector_github_push_status "$PUSH_CONFIG" "FEAT-012" "IN_PROGRESS"; ps_rc=$?
+assert_exit_code "push_status(FEAT-012) succeeds" "$ps_rc" 0
+assert_eq "push_status set nazgul-status:in-progress on mapped issue 43" \
+  "$(jq -r '."43" | index("nazgul-status:in-progress") != null' "$NAZGUL_TEST_GH_LABELS")" "true"
+assert_eq "push_status wrote exactly one nazgul-status:* label" \
+  "$(jq -r '[."43"[]? | select(startswith("nazgul-status:"))] | length' "$NAZGUL_TEST_GH_LABELS")" "1"
+
+# --- push_status idempotent: re-push same status → no duplicate ---
+connector_github_push_status "$PUSH_CONFIG" "FEAT-012" "IN_PROGRESS"
+assert_eq "push_status re-push keeps a single nazgul-status:* label" \
+  "$(jq -r '[."43"[]? | select(startswith("nazgul-status:"))] | length' "$NAZGUL_TEST_GH_LABELS")" "1"
+
+# --- push_status update-in-place: new status replaces the stale marker ---
+connector_github_push_status "$PUSH_CONFIG" "FEAT-012" "IMPLEMENTED"
+assert_eq "push_status still a single nazgul-status:* label after a change" \
+  "$(jq -r '[."43"[]? | select(startswith("nazgul-status:"))] | length' "$NAZGUL_TEST_GH_LABELS")" "1"
+assert_eq "push_status update-in-place set nazgul-status:implemented" \
+  "$(jq -r '."43" | index("nazgul-status:implemented") != null' "$NAZGUL_TEST_GH_LABELS")" "true"
+assert_eq "push_status removed the stale nazgul-status:in-progress" \
+  "$(jq -r '."43" | index("nazgul-status:in-progress") == null' "$NAZGUL_TEST_GH_LABELS")" "true"
+
+# --- sync-loop guard: claimed label never removed → pull_list still excludes 43 ---
+assert_not_contains "push never removed claimed label: pull_list still excludes issue 43" \
+  "$(connector_github_pull_list "$PUSH_CONFIG")" "43"
+
+# --- push_pr: single nazgul-marked PR comment on the mapped issue ---
+connector_github_push_pr "$PUSH_CONFIG" "FEAT-012" "https://github.com/o/r/pull/7"; pr_rc=$?
+assert_exit_code "push_pr(FEAT-012) succeeds" "$pr_rc" 0
+assert_eq "push_pr added exactly one nazgul-marked PR comment to issue 43" \
+  "$(jq -r '[."43"[]? | select((.body // "") | contains("<!-- nazgul-pr -->"))] | length' "$NAZGUL_TEST_GH_COMMENTS")" "1"
+assert_contains "push_pr comment carries the PR url" \
+  "$(jq -r '."43"[0].body' "$NAZGUL_TEST_GH_COMMENTS")" "https://github.com/o/r/pull/7"
+
+# --- push_pr idempotent: re-push edits in place, no duplicate comment ---
+connector_github_push_pr "$PUSH_CONFIG" "FEAT-012" "https://github.com/o/r/pull/8"
+assert_eq "push_pr re-push keeps a single PR comment (edit-in-place)" \
+  "$(jq -r '."43" | length' "$NAZGUL_TEST_GH_COMMENTS")" "1"
+assert_contains "push_pr edit-in-place updated the url" \
+  "$(jq -r '."43"[0].body' "$NAZGUL_TEST_GH_COMMENTS")" "https://github.com/o/r/pull/8"
+
+# --- push_pr rejects a non-URL argument safely (data-only, no mutation, no eval) ---
+before_pr=$(cat "$NAZGUL_TEST_GH_COMMENTS")
+connector_github_push_pr "$PUSH_CONFIG" "FEAT-012" 'not-a-url $(touch '"$SENTINEL"')'; nurl_rc=$?
+assert_exit_code "push_pr non-URL arg returns 0 (safe ignore)" "$nurl_rc" 0
+assert_eq "push_pr non-URL arg made no comment mutation" "$(cat "$NAZGUL_TEST_GH_COMMENTS")" "$before_pr"
+assert_file_not_exists "push_pr non-URL arg did not execute injected command" "$SENTINEL"
+
+# --- push gate: no-op when connectors.github.enabled=false ---
+OFF_CONFIG="$TEST_DIR/nazgul/config-off.json"
+jq '.connectors.github.enabled = false
+    | .connectors.github.push.enabled = true
+    | .connectors.github.map = {"43":"FEAT-012"}' "$CONFIG" > "$OFF_CONFIG"
+echo '{}' > "$NAZGUL_TEST_GH_LABELS"
+echo '{}' > "$NAZGUL_TEST_GH_COMMENTS"
+connector_github_push_status "$OFF_CONFIG" "FEAT-012" "DONE"; goff_rc=$?
+connector_github_push_pr "$OFF_CONFIG" "FEAT-012" "https://github.com/o/r/pull/9"
+assert_exit_code "push_status no-op returns 0 when enabled=false" "$goff_rc" 0
+assert_eq "push_status made no label mutation when enabled=false" "$(cat "$NAZGUL_TEST_GH_LABELS")" "{}"
+assert_eq "push_pr made no comment mutation when enabled=false" "$(cat "$NAZGUL_TEST_GH_COMMENTS")" "{}"
+
+# --- push gate: no-op when push.enabled=false even under parent enabled=true ---
+PUSHOFF_CONFIG="$TEST_DIR/nazgul/config-pushoff.json"
+jq '.connectors.github.enabled = true
+    | .connectors.github.push.enabled = false
+    | .connectors.github.map = {"43":"FEAT-012"}' "$CONFIG" > "$PUSHOFF_CONFIG"
+echo '{}' > "$NAZGUL_TEST_GH_LABELS"
+echo '{}' > "$NAZGUL_TEST_GH_COMMENTS"
+connector_github_push_status "$PUSHOFF_CONFIG" "FEAT-012" "DONE"
+connector_github_push_pr "$PUSHOFF_CONFIG" "FEAT-012" "https://github.com/o/r/pull/9"
+assert_eq "push_status no-op when push.enabled=false (parent enabled)" "$(cat "$NAZGUL_TEST_GH_LABELS")" "{}"
+assert_eq "push_pr no-op when push.enabled=false (parent enabled)" "$(cat "$NAZGUL_TEST_GH_COMMENTS")" "{}"
+
+# --- pull_list honors pull.max_items (--limit): a >limit backlog is capped ---
+jq -n '[ range(201;206) | {number:., state:"OPEN", title:("t"+(.|tostring)), body:"b", labels:[{name:"nazgul"}]} ]' > "$NAZGUL_TEST_GH_DB"
+echo '{}' > "$NAZGUL_TEST_GH_LABELS"
+LIMIT_CONFIG="$TEST_DIR/nazgul/config-limit.json"
+jq '.connectors.github.pull.max_items = 2' "$CONFIG" > "$LIMIT_CONFIG"
+limit_out=$(connector_github_pull_list "$LIMIT_CONFIG")
+limit_count=$(printf '%s' "$limit_out" | grep -c '^[0-9]')
+assert_eq "pull_list honors max_items limit (returns at most 2 of 5)" "$limit_count" "2"
+build_db  # restore fixtures
 
 teardown_temp_dir
 rm -rf "$FAKEBIN"

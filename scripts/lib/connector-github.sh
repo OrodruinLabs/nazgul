@@ -56,14 +56,102 @@ _cgh_map_put() {
   fi
 }
 
+# _cgh_push_enabled <config> -> 0 iff BOTH connectors.github.enabled and
+# connectors.github.push.enabled are true. push.enabled defaults true, so it is
+# only ever reached under the parent enabled that defaults false — the push gate
+# is the conjunction, never push.enabled alone.
+_cgh_push_enabled() {
+  local config="$1" enabled push
+  [ -f "$config" ] || return 1
+  # `//` can't supply these defaults: it also fires on an explicit false. enabled
+  # defaults false (absent/null -> off); push.enabled defaults true (only an
+  # explicit false disables it) so the effective gate is their conjunction.
+  enabled=$(jq -r 'if (.connectors.github.enabled == true) then "true" else "false" end' "$config" 2>/dev/null) || return 1
+  push=$(jq -r 'if (.connectors.github.push.enabled == false) then "false" else "true" end' "$config" 2>/dev/null) || return 1
+  [ "$enabled" = "true" ] || return 1
+  [ "$push" = "true" ] || return 1
+  return 0
+}
+
+# _cgh_map_resolve <config> <local_id> -> the mapped issue number for a local
+# feat/task id (reverse of the issue#->feat map recorded by pull_archive), or
+# empty when nothing is mapped. First match wins.
+_cgh_map_resolve() {
+  local config="$1" local_id="$2"
+  [ -f "$config" ] || return 0
+  jq -r --arg id "$local_id" '
+    (.connectors.github.map // {}) | to_entries
+    | map(select(.value == $id)) | .[0].key // empty
+  ' "$config" 2>/dev/null || return 0
+}
+
+# connector_github_push_status <config> <local_id> <status> -> reflect a local
+# task/objective status onto the MAPPED issue as a single nazgul-status:<status>
+# label (removing any stale nazgul-status:* first), so re-pushing the same status
+# never spams and a change updates in place. Only touches the nazgul-status:*
+# namespace: the pull opt-in label and the claimed label are never removed, so a
+# push can never make the issue re-enter pull_list. No-op (0) when the push gate
+# is off or nothing is mapped; degrade-safe on gh failure.
+connector_github_push_status() {
+  local config="$1" local_id="$2" status="$3" issue want json
+  _cgh_push_enabled "$config" || return 0
+  issue=$(_cgh_map_resolve "$config" "$local_id")
+  [ -n "$issue" ] || return 0
+
+  want="nazgul-status:$(printf '%s' "$status" | tr '[:upper:]' '[:lower:]' | tr '_ ' '--' | tr -cd 'a-z0-9:._-')"
+  json=$(_cgh_gh_retry gh issue view "$issue" --json labels) || json=""
+  if [ -n "$json" ]; then
+    local old
+    while IFS= read -r old; do
+      [ -n "$old" ] || continue
+      [ "$old" = "$want" ] && continue
+      _cgh_gh_retry gh issue edit "$issue" --remove-label "$old" || true
+    done < <(printf '%s' "$json" | jq -r '.labels[]?.name | select(type == "string" and startswith("nazgul-status:"))' 2>/dev/null)
+  fi
+  _cgh_gh_retry gh issue edit "$issue" --add-label "$want" || return 1
+}
+
+# connector_github_push_pr <config> <local_id> <pr_url> -> upsert a single
+# nazgul-marked PR-link comment on the MAPPED issue. pr_url is DATA: validated to
+# be a plausible http(s) URL and only ever passed as a gh argv element, never
+# eval'd. Idempotent via the marker — an existing marked comment is edited in
+# place instead of duplicated. Never touches labels, so the claimed label stays.
+# No-op (0) when the push gate is off, nothing is mapped, or pr_url is not a URL.
+connector_github_push_pr() {
+  local config="$1" local_id="$2" pr_url="$3" issue marker body json has
+  _cgh_push_enabled "$config" || return 0
+  case "$pr_url" in
+    http://*|https://*) : ;;
+    *) return 0 ;;
+  esac
+  issue=$(_cgh_map_resolve "$config" "$local_id")
+  [ -n "$issue" ] || return 0
+
+  marker="<!-- nazgul-pr -->"
+  body="$marker
+Nazgul PR: $pr_url"
+  json=$(_cgh_gh_retry gh issue view "$issue" --json comments) || json=""
+  has=$(printf '%s' "$json" | jq -r --arg m "$marker" '[.comments[]? | select((.body // "") | contains($m))] | length' 2>/dev/null) || has=0
+  if [ "${has:-0}" -gt 0 ]; then
+    _cgh_gh_retry gh issue comment "$issue" --edit-last --body "$body" || return 1
+  else
+    _cgh_gh_retry gh issue comment "$issue" --body "$body" || return 1
+  fi
+}
+
 # connector_github_pull_list <config> -> one candidate id (issue number) per line
 # for each OPEN issue carrying pull.label (default "nazgul") and NOT carrying
 # pull.claimed_label (default "nazgul-claimed"). Zero output on any gh failure.
+# Bounded by pull.max_items (default 100) so a large backlog can't starve older
+# candidates behind gh's own default page size.
 connector_github_pull_list() {
-  local config="$1" label claimed json
+  local config="$1" label claimed max_items json
   label=$(_cgh_cfg "$config" '.connectors.github.pull.label' 'nazgul')
   claimed=$(_cgh_cfg "$config" '.connectors.github.pull.claimed_label' 'nazgul-claimed')
-  json=$(_cgh_gh_retry gh issue list --state open --label "$label" --json number,labels) || return 0
+  max_items=$(_cgh_cfg "$config" '.connectors.github.pull.max_items' '100')
+  case "$max_items" in ''|*[!0-9]*) max_items=100 ;; esac
+  [ "$max_items" -gt 0 ] || max_items=100
+  json=$(_cgh_gh_retry gh issue list --state open --label "$label" --limit "$max_items" --json number,labels) || return 0
   printf '%s' "$json" | jq -r --arg claimed "$claimed" '
     .[]? | select(any(.labels[]?; .name == $claimed) | not) | .number
   ' 2>/dev/null || return 0
@@ -98,7 +186,10 @@ connector_github_pull_get() {
   bytes=$(wc -c < "$body_tmp")
   bytes=${bytes//[[:space:]]/}
   if [ "${bytes:-0}" -gt "$max_body" ]; then
-    head -c "$max_body" "$body_tmp" > "$body_tmp.cap" 2>/dev/null && mv "$body_tmp.cap" "$body_tmp"
+    if ! { head -c "$max_body" "$body_tmp" > "$body_tmp.cap" 2>/dev/null && mv "$body_tmp.cap" "$body_tmp"; }; then
+      rm -f "$gh_tmp" "$body_tmp" "$body_tmp.cap"
+      return 1
+    fi
   fi
 
   title=$(jq -r '.title // ""' "$gh_tmp" 2>/dev/null) || title=""
