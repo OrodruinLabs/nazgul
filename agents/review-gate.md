@@ -294,8 +294,16 @@ when a key is absent):
 ```bash
 CONFIG="${CLAUDE_PROJECT_DIR}/nazgul/config.json"
 UNVERIFIED_RETRIES=$(jq -r '.review_gate.unverified_retries // 2' "$CONFIG")
-ALLOW_NONBLOCKING=$(jq -r 'if .review_gate.allow_unverified_nonblocking == false then "false" else "true" end' "$CONFIG")
-CRITICAL_REVIEWERS=$(jq -r '.review_gate.critical_reviewers // ["security-reviewer","architect-reviewer"] | .[]' "$CONFIG" 2>/dev/null | tr '\n' ' ')
+# Identity `== false` test, not `//` — jq treats false like null, so `// true` would
+# false-coalesce an explicit false back to true. Fallback to "true" on a parse error.
+ALLOW_NONBLOCKING=$(jq -r 'if .review_gate.allow_unverified_nonblocking == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+# Capture jq's exit status directly — a trailing `| tr` masks a parse error and leaves
+# CRITICAL_REVIEWERS empty (fail OPEN). Parse error ⇒ default list; a valid [] stays empty.
+if CRIT_JSON=$(jq -r '.review_gate.critical_reviewers // ["security-reviewer","architect-reviewer"] | .[]' "$CONFIG" 2>/dev/null); then
+  CRITICAL_REVIEWERS="${CRIT_JSON//$'\n'/ }"
+else
+  CRITICAL_REVIEWERS="security-reviewer architect-reviewer"
+fi
 ```
 
 `allow_unverified_nonblocking` is tested by identity (an explicit `false` must be
