@@ -90,11 +90,14 @@ _cgate_blocked_tasks() {
 }
 
 # _cgate_security_rejections <nazgul_dir> -> one "SECURITY_REJECTION <id>"
-# line per task whose reviews/<id>/security-reviewer.md is not an APPROVE,
-# or "SECURITY_REJECTION_AMBIGUOUS <id>" when the file is present but its
-# verdict is missing (rc=1) or unparseable (rc=2) — both fail closed; 1 if
-# any found. Fails CLOSED (prints "SECURITY_REVIEWS_UNREADABLE", returns 1)
-# when nazgul_dir or reviews_dir exists but is not readable. A missing
+# line per task whose reviews/<id>/security-reviewer.md is a non-APPROVE,
+# assessed verdict (e.g. CHANGES_REQUESTED), or a distinct "SECURITY_UNVERIFIED
+# <id>" when the verdict is UNVERIFIED — a security reviewer that could not
+# assess also HALTS (never proceeds), the line just separates "couldn't assess"
+# from "rejected". "SECURITY_REJECTION_AMBIGUOUS <id>" covers a file present but
+# its verdict missing (rc=1) or unparseable (rc=2) — both fail closed; 1 if any
+# found. Fails CLOSED (prints "SECURITY_REVIEWS_UNREADABLE", returns 1) when
+# nazgul_dir or reviews_dir exists but is not readable. A missing
 # nazgul_dir/reviews_dir, or a task with no security-reviewer.md yet, is a
 # normal not-yet-reviewed state — not ambiguous, no halt.
 _cgate_security_rejections() {
@@ -114,7 +117,13 @@ _cgate_security_rejections() {
     id=$(basename "$(dirname "$file")")
     verdict=$(read_verdict "$file") && rc=0 || rc=$?
     case "$rc" in
-      0) [ "$verdict" = "APPROVE" ] || { echo "SECURITY_REJECTION $id"; found=1; } ;;
+      0)
+        case "$verdict" in
+          APPROVE) ;;
+          UNVERIFIED) echo "SECURITY_UNVERIFIED $id"; found=1 ;;
+          *) echo "SECURITY_REJECTION $id"; found=1 ;;
+        esac
+        ;;
       1|2) echo "SECURITY_REJECTION_AMBIGUOUS $id"; found=1 ;;
       *) echo "SECURITY_REJECTION_AMBIGUOUS $id"; found=1 ;;
     esac

@@ -173,8 +173,9 @@ review (Step 2 parallel-mode step 4), SKIPPED reviewers as a stub (Step 2
 parallel-mode step 5). Verify each configured reviewer's file now exists AND
 begins with a valid frontmatter block: `verdict: APPROVE|CHANGES_REQUESTED` +
 integer `confidence:` for a dispatched reviewer, OR `verdict: SKIPPED` for a
-SKIPPED one (no `confidence:` required — there is no review to have a
-confidence about):
+SKIPPED one, OR `verdict: UNVERIFIED` for a reviewer that self-reported it could
+not assess (per TASK-004 template) — SKIPPED and UNVERIFIED both need no
+`confidence:` (there is no completed review to have a confidence about):
 
 Set `UNIT_ID` to the review unit's ID (e.g., `TASK-003`, `GROUP-1`) before running the check:
 
@@ -183,7 +184,7 @@ for r in $(jq -r '.agents.reviewers[]' nazgul/config.json); do
   f="nazgul/reviews/$UNIT_ID/$r.md"
   if [ ! -f "$f" ]; then echo "MISSING: $r"; continue; fi
   hdr=$(head -8 "$f")
-  if printf '%s\n' "$hdr" | grep -qE '^verdict:[[:space:]]*SKIPPED[[:space:]]*$'; then
+  if printf '%s\n' "$hdr" | grep -qE '^verdict:[[:space:]]*(SKIPPED|UNVERIFIED)[[:space:]]*$'; then
     continue
   fi
   printf '%s\n' "$hdr" | grep -qE '^verdict:[[:space:]]*(APPROVE|CHANGES_REQUESTED)[[:space:]]*$' \
@@ -192,16 +193,23 @@ for r in $(jq -r '.agents.reviewers[]' nazgul/config.json); do
 done
 ```
 
-This is the orchestrator's fast pre-check (verdict + integer confidence present in the frontmatter). The AUTHORITATIVE validation is `scripts/lib/review-evidence.sh`, which the stop-hook evidence gate runs before any task can reach DONE — a review that slips past this quick check is still rejected there.
+This is the orchestrator's fast pre-check (verdict + integer confidence present in the frontmatter). `UNVERIFIED` is a recognized verdict here — like `SKIPPED` it needs no `confidence:` — not a MALFORMED value. The AUTHORITATIVE validation is `scripts/lib/review-evidence.sh`, which the stop-hook evidence gate runs before any task can reach DONE — a review that slips past this quick check is still rejected there.
 
 - A file is MISSING only if you failed to persist a reviewer's return, or
   MALFORMED if a reviewer returned text without a usable frontmatter verdict.
   Either way, **re-dispatch ONLY that reviewer** (max 1 retry each) and re-persist
-  its return, then re-run the check. There is no longer a re-dispatch storm from
-  reviewers silently not writing files — they don't write files.
-- Still missing/malformed after the retry: set the task to BLOCKED with reason
-  `review evidence incomplete — no usable review from: <names>`. Do NOT proceed
-  to Step 3.
+  its return, then re-run the check.
+- Still MISSING/MALFORMED after that one retry (reviewer errored, timed out, or
+  keeps returning unparseable text): do NOT jump to BLOCKED. Instead **write a
+  token-stamped `UNVERIFIED` stub for that one reviewer** — "could not assess" is
+  distinct from "rejected" — then resolve it in Step 2.6 below:
+  ```bash
+  printf -- '---\nverdict: UNVERIFIED\nreview_token: %s\n---\nUnverified: %s\n' \
+    "$TOKEN" "<short reason — errored / timed out / unparseable return>" \
+    > "nazgul/reviews/$UNIT_ID/<reviewer-name>.md"
+  ```
+  The stub MUST carry the manifest `$TOKEN` (same provenance requirement as any
+  real verdict file — the token self-check below and the DONE-gate both read it).
 - NEVER aggregate verdicts from partial evidence. NEVER substitute your own
   summary for a missing reviewer file.
 - **Record rule citations.** After reviews are collected, scan every
@@ -255,8 +263,10 @@ CURRENT_ITERATION=$(jq -r '.current_iteration // "null"' "${CLAUDE_PROJECT_DIR}/
 For each reviewer in `agents.reviewers`:
 
 1. Read `nazgul/reviews/[UNIT-ID]/[reviewer-name].md`. **If its `verdict:` is
-   `SKIPPED`, skip this reviewer entirely** — it has no verdict/confidence and
-   already emitted `reviewer_skipped` in Step 2. Otherwise extract: `DECISION`
+   `SKIPPED` or `UNVERIFIED`, skip this reviewer entirely** — it has no
+   assessed decision/confidence to report (`SKIPPED` already emitted
+   `reviewer_skipped` in Step 2; `UNVERIFIED` emits `reviewer_unverified` in
+   Step 2.6). Otherwise extract: `DECISION`
    (APPROVE or CHANGES_REQUESTED), `CONFIDENCE` (integer), `BLOCKING` (count of
    blocking findings, integer), `CONCERNS` (count of non-blocking concerns, integer).
 2. Emit via Bash tool (using the `NAZGUL_DIR` and `CURRENT_ITERATION` set above):
@@ -270,11 +280,162 @@ For each reviewer in `agents.reviewers`:
 
 Emit failures are non-fatal — log and continue; never block a verdict on an emit error.
 
+### Step 2.6: Resolve `UNVERIFIED` verdicts (retry-bounded, role-aware finalize)
+
+Any reviewer whose current verdict file reads `verdict: UNVERIFIED` — whether it
+self-reported it (TASK-004 template) or you stubbed it in Step 2.5 because the
+dispatched reviewer errored/timed-out/returned unparseable text — is UNRESOLVED.
+`UNVERIFIED` means "could not assess," which is NOT a rejection. Resolve every
+such reviewer here before any verdict is determined.
+
+Read the resolution config from `nazgul/config.json` (use the stated defaults
+when a key is absent):
+
+```bash
+CONFIG="${CLAUDE_PROJECT_DIR}/nazgul/config.json"
+UNVERIFIED_RETRIES=$(jq -r '.review_gate.unverified_retries // 2' "$CONFIG" 2>/dev/null || echo 2)
+# Identity `== false` test, not `//` — jq treats false like null, so `// true` would
+# false-coalesce an explicit false back to true. Fallback to "true" on a parse error.
+ALLOW_NONBLOCKING=$(jq -r 'if .review_gate.allow_unverified_nonblocking == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+# Capture jq's exit status directly — a trailing `| tr` masks a parse error and leaves
+# CRITICAL_REVIEWERS empty (fail OPEN). Parse error ⇒ default list; a valid [] stays empty.
+if CRIT_JSON=$(jq -r '.review_gate.critical_reviewers // ["security-reviewer","architect-reviewer"] | .[]' "$CONFIG" 2>/dev/null); then
+  CRITICAL_REVIEWERS="${CRIT_JSON//$'\n'/ }"
+else
+  CRITICAL_REVIEWERS="security-reviewer architect-reviewer"
+fi
+```
+
+`allow_unverified_nonblocking` is tested by identity (an explicit `false` must be
+honored, not false-coalesced back to true) and `critical_reviewers` degrades to
+the default list on a parse error — matching `_re_is_authorized_unverified` in
+`scripts/lib/review-evidence.sh` exactly. `security-reviewer` is critical
+regardless of the configured list (defense in depth).
+
+For EACH reviewer currently `UNVERIFIED`:
+
+1. **Retry that ONE reviewer up to `unverified_retries` times** (default 2),
+   hoping for a real `APPROVE`/`CHANGES_REQUESTED`. Re-dispatch only that
+   reviewer, re-persist its return, and re-stamp the manifest `$TOKEN` each time
+   (Step 2 persistence). If any attempt yields a usable `APPROVE`/`CHANGES_REQUESTED`,
+   the reviewer is resolved — treat it as a normal verdict (emit its
+   `reviewer_verdict` per the Step 2.5 block) and STOP retrying it.
+   - This retry uses its OWN bounded counter, SEPARATE from the CHANGES_REQUESTED
+     task `retry_count`. **Do NOT increment the task `retry_count` for an
+     `UNVERIFIED`** — the change isn't wrong, the review didn't happen. Bumping
+     `retry_count` here would burn a task's `max_retries_per_task` budget on a
+     failure that isn't the implementer's.
+
+2. **If still `UNVERIFIED` after the retries are exhausted, finalize role-aware:**
+   - **Critical reviewer** (in `CRITICAL_REVIEWERS`, and `security-reviewer`
+     always): set the task **BLOCKED** with reason
+     `review unverified — critical reviewer could not assess: <name>`
+     (fail-closed). Do NOT mark the task DONE. This mirrors the DONE-gate, where
+     `_re_is_authorized_unverified` refuses to honor a critical reviewer's
+     `UNVERIFIED`, and the conductor security hard-stop (`SECURITY_UNVERIFIED`).
+   - **Non-critical reviewer** (code, qa, generated domain reviewers):
+     - `allow_unverified_nonblocking=true` (default): **leave the `UNVERIFIED`
+       stub in place** — the DONE-gate's `_re_is_authorized_unverified` treats it
+       as gate-satisfying — and record a **distinct NON-BLOCKING warning** in the
+       review dir (append to the reviewer's `.md` note and to
+       `nazgul/reviews/[UNIT-ID]/consolidated-feedback.md`). Do NOT block on it.
+     - `allow_unverified_nonblocking=false`: treat as **blocking** — the task
+       cannot pass. Handle exactly like the missing-evidence path: set the task
+       BLOCKED with reason `review unverified — non-critical reviewer could not
+       assess (allow_unverified_nonblocking=false): <name>`.
+
+3. **Emit one `reviewer_unverified` event per reviewer finalized as `UNVERIFIED`**
+   (i.e. still UNVERIFIED after retries — not those that resolved to a real
+   verdict in step 1), alongside the existing `reviewer_verdict`/`reviewer_skipped`
+   emit convention and the same non-fatal-on-error posture:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/emit-event-cli.sh" reviewer_unverified \
+  task_id "$TASK_ID" reviewer "$REVIEWER_NAME" \
+  critical "<true|false>" final "<blocked|nonblocking-warning>"
+```
+
+Where `critical` is whether the reviewer is in `CRITICAL_REVIEWERS`, and `final`
+is `blocked` (critical, or non-critical with the toggle false) or
+`nonblocking-warning` (non-critical with the toggle on). Emit failures are
+non-fatal — log and continue; never block on an emit error.
+
+If ANY reviewer finalized as BLOCKED here, the task is BLOCKED — do NOT proceed
+to Step 3 for a DONE verdict; go to Step 4's BLOCKED handling.
+
 ### Step 3: Determine Verdict
 
-- Task passes ONLY when ALL reviewers return APPROVED (no blocking findings)
+- A task passes to DONE ONLY when EVERY reviewer is one of: **APPROVED** (no
+  blocking findings), an **authorized-SKIPPED** stub, or an **authorized
+  non-blocking `UNVERIFIED`** (a non-critical reviewer with
+  `allow_unverified_nonblocking=true`, finalized in Step 2.6). A **critical
+  reviewer `UNVERIFIED`** and a **non-critical `UNVERIFIED` with
+  `allow_unverified_nonblocking=false`** both PREVENT DONE (task is BLOCKED per
+  Step 2.6) — these are the fail-closed paths and match
+  `_re_is_authorized_unverified` / `validate_review_evidence` in
+  `scripts/lib/review-evidence.sh`.
 - Apply confidence threshold: findings with confidence < 80 → non-blocking CONCERN (⚠️)
 - Findings with confidence >= 80 AND severity HIGH/MEDIUM → blocking REJECT (❌)
+
+### Step 3.6: Borderline Adversarial Cross-Check (bounded)
+
+**Position (despite the number):** this sub-step runs immediately AFTER Step 3 (Determine Verdict) and BEFORE Step 3.75 (Fix-First Auto-Remediation) — it is numbered 3.6 only because "Step 3.5" is already taken by Human Verification below, which physically runs later. Any finding downgraded here is reflected before fix-first runs and before the final verdict tally, so a downgraded finding flows through the rest of the pipeline as a non-blocking CONCERN.
+
+Targets the least-reliable blocking calls: a blocking finding whose confidence sits just over the bar is where a single reviewer's judgment is weakest. Per FEAT-006 cost discipline this does NOT re-review anything else and NEVER runs a second board — it dispatches at most `adversarial_max` single-finding confirm/refute checks per review unit (worst-case added cost: `adversarial_max` single-finding dispatches).
+
+Read the config (use the stated defaults when a key is absent):
+
+```bash
+CONFIG="${CLAUDE_PROJECT_DIR}/nazgul/config.json"
+# Identity `== false` test, not `//` — jq treats false like null, so `// true` would
+# false-coalesce an explicit false back to true. Fallback to "true" on a parse error.
+ADVERSARIAL_CROSSCHECK=$(jq -r 'if .review_gate.adversarial_crosscheck == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+CONFIDENCE_THRESHOLD=$(jq -r '.review_gate.confidence_threshold // 80' "$CONFIG" 2>/dev/null || echo 80)
+ADVERSARIAL_MARGIN=$(jq -r '.review_gate.adversarial_margin // 10' "$CONFIG" 2>/dev/null || echo 10)
+ADVERSARIAL_MAX=$(jq -r '.review_gate.adversarial_max // 3' "$CONFIG" 2>/dev/null || echo 3)
+```
+
+**If `ADVERSARIAL_CROSSCHECK` is `false`, SKIP this entire sub-step** — no dispatch, no cost, no behavior change; go straight to Step 3.75. It defaults `true` (bounded), so the cross-check runs unless a project opts out.
+
+#### Eligible findings (the borderline band)
+
+Collect the BLOCKING findings from Step 3 (verdict REJECT, confidence >= `CONFIDENCE_THRESHOLD`) that ALSO satisfy BOTH:
+1. Confidence is in the borderline band `[CONFIDENCE_THRESHOLD, CONFIDENCE_THRESHOLD + ADVERSARIAL_MARGIN)` — i.e. `>= threshold` (already true for a blocking finding) AND `< threshold + margin`. Just barely over the bar. A finding below threshold is already a non-blocking CONCERN (Step 3) and is never eligible.
+2. Severity is HIGH **OR** the finding is on a security-relevant file.
+
+Everything outside this band is untouched — no cross-check, verdict unchanged.
+
+#### Cross-check dispatch (hard cap `ADVERSARIAL_MAX`)
+
+Total adversarial dispatches per review unit MUST NOT exceed `ADVERSARIAL_MAX` (default 3) — this is the cap that keeps robustness from reintroducing N×N review cost. If more eligible findings exist than the cap, order them by **highest severity, then lowest confidence** (the shakiest blocking calls first), cross-check the first `ADVERSARIAL_MAX`, and **LOG the remainder as not cross-checked** (they stay blocking) — no silent caps.
+
+For each finding to cross-check (up to the cap), dispatch EXACTLY ONE adversarial reviewer as a fresh instance via the Agent tool:
+- Prefer a reviewer of a DIFFERENT role than the finding's author (a fresh second opinion); if no other role fits the finding's domain, use a fresh same-role instance.
+- Resolve its model exactly as in Step 2 (`models.review_by_reviewer` override → `security-reviewer`/`architect-reviewer` pinned to `sonnet` → `models.review_default // models.review // "haiku"`).
+- Give it ONLY the relevant diff hunk (from `nazgul/reviews/[UNIT-ID]/diff.patch`) plus the finding text, and ask: **"Is this blocking finding correct? Confirm or refute it. Default to CONFIRM if the original reasoning holds."** It returns a small verdict — `CONFIRM` or `REFUTE` — plus an integer `confidence:`. It reads only (Read/Glob/Grep, no Write); you persist its return to `nazgul/reviews/[UNIT-ID]/adversarial-<finding-ref>.md`.
+
+#### Resolution
+
+- **REFUTE with confidence >= `CONFIDENCE_THRESHOLD`** → DOWNGRADE the finding from blocking REJECT to a non-blocking CONCERN. Record why (the cross-check verdict + confidence + the reviewer that refuted it) in the finding's `adversarial-<finding-ref>.md` and append a note to `nazgul/reviews/[UNIT-ID]/consolidated-feedback.md`.
+- **CONFIRM, or REFUTE with confidence < `CONFIDENCE_THRESHOLD`** → the finding STAYS blocking. Record the cross-check result; nothing changes.
+
+After all cross-checks, re-tally: a downgrade can flip the unit from CHANGES_REQUESTED to APPROVED ONLY if the downgraded finding was the SOLE remaining blocker. If any other blocking finding remains, the unit stays CHANGES_REQUESTED. Feed the updated (post-downgrade) finding set into Step 3.75 and Step 4.
+
+#### Security findings stay fail-closed
+
+Do NOT weaken any existing gate. A security-categorized blocking finding still routes to BLOCKED in AFK per `block_on_security_reject` (Step 4). A security finding may be downgraded here ONLY if the cross-check GENUINELY refutes it at confidence >= `CONFIDENCE_THRESHOLD` — a confirm, or a refute below threshold, leaves it blocking and it proceeds to the BLOCKED path unchanged. Any downgrade of a security REJECT MUST be logged prominently (a clearly-marked entry in `consolidated-feedback.md` and the finding's adversarial file). If in doubt, keep a security finding blocking — err fail-closed.
+
+#### Emit one `adversarial_crosscheck` event per cross-check
+
+Observational only — do not alter gate logic. Set `NAZGUL_DIR` and `CURRENT_ITERATION` as in earlier steps if not already set. For each cross-check performed:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/emit-event-cli.sh" adversarial_crosscheck \
+  task_id "$TASK_ID" finding "$FINDING_REF" \
+  result "$RESULT" downgraded "$DOWNGRADED"
+```
+
+Where `$RESULT` is `confirm` or `refute` and `$DOWNGRADED` is `true` or `false`. Emit failures are non-fatal — log and continue; never block a verdict on an emit error.
 
 ### Step 3.75: Fix-First Auto-Remediation
 
@@ -343,7 +504,9 @@ Skip this step entirely if mode is `"afk"` or if any reviewer returned CHANGES_R
 
 ### Step 4: Handle Results
 
-**ALL APPROVED:**
+**ALL APPROVED** (per Step 3, every reviewer is APPROVED, authorized-SKIPPED, or
+authorized non-blocking `UNVERIFIED` — no reviewer was finalized BLOCKED in
+Step 2.6):
 1. Read `nazgul/config.json → afk.yolo`, `afk.task_pr`, `branch.feature`, `branch.main_worktree_path`, `branch.worktree_dir`, `feat_display_id`, `afk.commit_prefix`
 2. **If YOLO mode WITH task_pr (`afk.yolo: true` AND `afk.task_pr: true`):**
    - Set task status to APPROVED (not DONE)
@@ -391,7 +554,10 @@ Set `NAZGUL_DIR` and `CURRENT_ITERATION` as above if not already set in this Ste
 ```
 
 Where `$BLOCKED_REASON` is `"max retries exhausted"` or `"security rejection"` as
-appropriate. Emit failures are non-fatal — log and continue; never block a state transition on an emit error.
+appropriate. A task BLOCKED by Step 2.6 for an unresolved critical (or
+toggle-off non-critical) `UNVERIFIED` follows this same `blocked` emit, with
+`$BLOCKED_REASON` set to that step's reason string; its `reviewer_unverified`
+event was already emitted in Step 2.6. Emit failures are non-fatal — log and continue; never block a state transition on an emit error.
 
 ### Step 5: Post-Loop Phase
 

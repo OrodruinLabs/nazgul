@@ -81,8 +81,21 @@ confidence: 92
 
 - `verdict: APPROVE` — {{approved_criteria}}
 - `verdict: CHANGES_REQUESTED` — {{rejected_criteria}}
+- `verdict: UNVERIFIED` — you genuinely could not assess the change; see "When to report UNVERIFIED" below. This is NOT an approval and NOT a rejection.
 
-`verdict` MUST be exactly `APPROVE` or `CHANGES_REQUESTED`; `confidence` is an integer 0-100. Any other verdict value is rejected by the review-evidence gate and blocks the task.
+`verdict` MUST be exactly `APPROVE`, `CHANGES_REQUESTED`, or `UNVERIFIED`; `confidence` is an integer 0-100 (optional for `UNVERIFIED`, since there is no assessment to be confident about). Any other verdict value is rejected by the review-evidence gate and blocks the task.
+
+### When to report UNVERIFIED
+
+Report `UNVERIFIED` ONLY when you truly cannot assess the change — for example the diff hunk is truncated beyond what you may read, the change is in a domain you cannot judge, or context you need is unavailable. It is NOT a soft rejection and NOT a way to dodge a hard call. Always PREFER a real `APPROVE` or `CHANGES_REQUESTED`; use `UNVERIFIED` only as a genuine last resort.
+
+`UNVERIFIED` means "could not assess" — the change is not refuted, but it was not verified either. The review-gate resolves it role-aware after a bounded number of re-dispatches (`review_gate.unverified_retries`, default 2): a critical reviewer's terminal `UNVERIFIED` still fails closed (blocks the task), while a non-critical reviewer's terminal `UNVERIFIED` becomes a non-blocking warning when the project allows it (`review_gate.allow_unverified_nonblocking`). `UNVERIFIED` has its own bounded counter and does not increment the `CHANGES_REQUESTED` retry count.
+
+```yaml
+---
+verdict: UNVERIFIED
+---
+```
 
 ### Raising Out-of-Scope Findings
 
@@ -95,6 +108,6 @@ sub-session to raise on your behalf.
 
 ### Always-Blocking Findings
 
-Some findings are designated **ALWAYS-BLOCKING** by your "What You Review" section (e.g. comment bloat for the code reviewer). For any always-blocking finding you MUST emit `verdict: CHANGES_REQUESTED` with `confidence` >= the project's `review_gate.confidence_threshold` (default 80). Never downgrade an always-blocking finding to a `CONCERN` or sub-threshold confidence — `auto_approve_concerns` would silently wave it through, which is exactly the failure mode these rules exist to prevent.
+Some findings are designated **ALWAYS-BLOCKING** by your "What You Review" section (e.g. comment bloat for the code reviewer). For any always-blocking finding you MUST emit `verdict: CHANGES_REQUESTED` with `confidence` >= the project's `review_gate.confidence_threshold` (default 80). Never downgrade an always-blocking finding to a `CONCERN`, to `UNVERIFIED`, or to sub-threshold confidence — `auto_approve_concerns` would silently wave it through, which is exactly the failure mode these rules exist to prevent. An always-blocking finding is a definite assessment, not an inability to assess, so `UNVERIFIED` never applies to it.
 
 **Return your review as your final message** — the frontmatter block first, then the narrative, structured exactly as shown above. Do NOT attempt to write a file: you have no Write tool, and the review-gate orchestrator persists your returned review to `nazgul/reviews/[UNIT-ID]/{{reviewer_name}}.md` for you. Your entire final message IS the review file's content.

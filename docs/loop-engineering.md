@@ -97,16 +97,17 @@ We did not build the Conductor on it, for four reasons found during that investi
 We adopted the Workflow *patterns* (result caching, plan-in-code) — via mechanical guards, since we get
 none of it from the runtime — not the runtime itself.
 
-### Deferred: Review Board robustness (not part of this release)
+### Shipped in 2.14.0: Review Board robustness (FEAT-011)
 
 The `/deep-research` pattern of treating a claim the verifier *could not check* as **unverified**, not
 **refuted**, surfaced a real gap in the shared Review Board (`agents/review-gate.md`, used by both
-engines): a reviewer that errors, rate-limits, or otherwise can't assess a change is not currently
-distinguished from one that reviewed and rejected it. Two follow-ups are captured for a future objective —
-a non-blocking `unverified` verdict distinct from `REJECT`, and an adversarial cross-check/voting posture
-across reviewers. Both touch code shared by the sequential and Conductor engines, so they are deliberately
-**out of scope here** to avoid destabilizing the sequential engine; nothing in this release implements
-them.
+engines): a reviewer that errors, rate-limits, or otherwise can't assess a change was not distinguished
+from one that reviewed and rejected it. FEAT-011 (2.14.0) delivered both follow-ups additively and
+default-safe: a fourth `UNVERIFIED` verdict distinct from `CHANGES_REQUESTED` — role-aware and fail-closed
+(critical reviewers escalate to BLOCKED, non-critical become non-blocking warnings), retry-bounded by its
+own counter — and a bounded borderline adversarial cross-check that spends at most `adversarial_max`
+single-finding confirm/refute dispatches on the shakiest blocking calls. Six additive `review_gate` config
+keys (schema v24) keep the sequential and Conductor happy path byte-identical. See RULES.md §3 and ADR-001.
 
 ## Run it as a loop
 

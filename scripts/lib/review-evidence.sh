@@ -42,7 +42,7 @@ _has_approved_verdict() {
   v=$(read_verdict "$file") && rc=0 || rc=$?   # capture rc without tripping set -e
   if [ "$rc" -eq 0 ]; then
     [ "$v" = "APPROVE" ] && return 0
-    return 1   # CHANGES_REQUESTED
+    return 1   # CHANGES_REQUESTED / SKIPPED / UNVERIFIED — any non-APPROVE verdict is not approved
   fi
   if [ "$rc" -eq 2 ]; then
     return 1   # INVALID block — fail loud (not approved)
@@ -128,6 +128,48 @@ _re_is_authorized_skipped() {
   _re_manifest_authentic "$nazgul_dir" "$review_dir"
 }
 
+# A reviewer counts as authorized-unverified (gate-satisfying despite no APPROVED
+# verdict) when its file reads verdict: UNVERIFIED — meaning it could not assess,
+# distinct from CHANGES_REQUESTED — AND UNVERIFIED is honored non-blocking for
+# this reviewer. It is honored ONLY for a non-critical reviewer:
+# review_gate.allow_unverified_nonblocking must not be false (default true when
+# absent), and the reviewer must not be in review_gate.critical_reviewers
+# (default ["security-reviewer","architect-reviewer"] when absent). A critical
+# reviewer's terminal UNVERIFIED fails closed. security-reviewer is never honored
+# here regardless of the configured critical list (defense in depth). Config is
+# read via jq; a missing OR unparseable config degrades the critical list to the
+# default (fail closed), while a well-formed empty critical_reviewers list is
+# honored as empty.
+# Usage: _re_is_authorized_unverified <nazgul_dir> <review_dir> <reviewer>
+_re_is_authorized_unverified() {
+  local nazgul_dir="$1" review_dir="$2" reviewer="$3"
+  local file="$review_dir/${reviewer}.md"
+  [ -f "$file" ] || return 1
+  [ "$(read_verdict "$file" 2>/dev/null)" = "UNVERIFIED" ] || return 1
+  [ "$reviewer" = "security-reviewer" ] && return 1
+
+  local config="$nazgul_dir/config.json" allow="true" critical="" crit_json
+  if [ -f "$config" ]; then
+    # `// true` would false-coalesce an explicit false back to true (jq treats
+    # false like null); test the key by identity so an explicit false is honored.
+    allow=$(jq -r 'if .review_gate.allow_unverified_nonblocking == false then "false" else "true" end' "$config" 2>/dev/null || echo "true")
+    # Capture jq's status directly — a trailing `| tr` masks a parse error and
+    # leaves critical empty (fail OPEN). Parse error ⇒ default list; valid [] stays empty.
+    if crit_json=$(jq -r '.review_gate.critical_reviewers // ["security-reviewer","architect-reviewer"] | .[]' "$config" 2>/dev/null); then
+      critical="${crit_json//$'\n'/ }"
+    else
+      critical="security-reviewer architect-reviewer"
+    fi
+  else
+    critical="security-reviewer architect-reviewer"
+  fi
+  critical="${critical% }"
+
+  [ "$allow" = "false" ] && return 1
+  _in_list "$reviewer" "$critical" && return 1
+  return 0
+}
+
 # Validate review evidence for a task.
 # Usage: validate_review_evidence <nazgul_dir> <task_id>
 # Returns 0 and prints nothing if evidence is complete.
@@ -137,7 +179,10 @@ _re_is_authorized_skipped() {
 #   MISSING <reviewer>        — no reviews/<task_id>/<reviewer>.md
 #   UNAPPROVED <reviewer>     — file exists but lacks an APPROVED verdict
 # A reviewer authorized-skipped via the dispatch manifest (see
-# _re_is_authorized_skipped) is exempt from both MISSING and UNAPPROVED.
+# _re_is_authorized_skipped) is exempt from both MISSING and UNAPPROVED. A
+# non-critical reviewer whose file reads verdict: UNVERIFIED with the
+# allow_unverified_nonblocking toggle on (see _re_is_authorized_unverified) is
+# likewise exempt from UNAPPROVED; a critical reviewer's UNVERIFIED still blocks.
 validate_review_evidence() {
   local nazgul_dir="$1" task_id="$2"
   local review_dir="$nazgul_dir/reviews/$task_id"
@@ -168,6 +213,7 @@ validate_review_evidence() {
       problems=$((problems + 1))
     elif ! _has_approved_verdict "$review_dir/${reviewer}.md"; then
       _re_is_authorized_skipped "$nazgul_dir" "$review_dir" "$reviewer" && continue
+      _re_is_authorized_unverified "$nazgul_dir" "$review_dir" "$reviewer" && continue
       echo "UNAPPROVED $reviewer"
       problems=$((problems + 1))
     fi
@@ -184,6 +230,7 @@ validate_review_evidence() {
     name="${base%.md}"
     if ! grep -qxF "$name" <<< "$configured_reviewers"; then
       if ! _has_approved_verdict "$rf"; then
+        _re_is_authorized_unverified "$nazgul_dir" "$review_dir" "$name" && continue
         echo "UNAPPROVED $name"
         problems=$((problems + 1))
       fi

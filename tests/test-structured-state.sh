@@ -34,6 +34,10 @@ printf -- '---\nverdict: SKIPPED\n---\n' > "$TMP/v_skip.md"
 out=$(read_verdict "$TMP/v_skip.md"); rc=$?
 assert_eq "skipped verdict value" "$out" "SKIPPED"; assert_exit_code "skipped verdict rc" "$rc" 0
 
+printf -- '---\nverdict: UNVERIFIED\n---\n' > "$TMP/v_unver.md"
+out=$(read_verdict "$TMP/v_unver.md"); rc=$?
+assert_eq "unverified verdict value" "$out" "UNVERIFIED"; assert_exit_code "unverified verdict rc" "$rc" 0
+
 printf -- '---\nverdict: MAYBE\n---\n' > "$TMP/v_bad.md"
 assert_eq "off-enum verdict -> INVALID" "$(read_verdict "$TMP/v_bad.md" || true)" "INVALID"
 rc=0; read_verdict "$TMP/v_bad.md" >/dev/null || rc=$?
@@ -87,7 +91,7 @@ assert_exit_code "single-quoted status rc" "$sq_rc" 0
 # FIX B: idempotent source guard — a second source is a safe no-op and leaves
 # functions/enums intact (the file `return 0`s early instead of re-defining).
 source "$REPO_ROOT/scripts/lib/structured-state.sh"
-assert_eq "double-source: enum intact" "$VALID_VERDICTS" "APPROVE CHANGES_REQUESTED SKIPPED"
+assert_eq "double-source: enum intact" "$VALID_VERDICTS" "APPROVE CHANGES_REQUESTED SKIPPED UNVERIFIED"
 assert_eq "double-source: function still works" "$(read_verdict "$TMP/v_ok.md")" "APPROVE"
 
 # Shipped templates must carry valid canonical frontmatter
