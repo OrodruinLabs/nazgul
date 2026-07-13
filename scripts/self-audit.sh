@@ -192,14 +192,40 @@ _expected_model_for() {
 
 # _transcripts_dir -> the host session-transcript root for this project.
 # NAZGUL_TRANSCRIPTS_DIR overrides for testability; otherwise
-# ~/.claude/projects/<slug>, where <slug> is PROJECT_ROOT with '/' -> '-'
-# (Claude Code's own project-directory encoding).
+# <CLAUDE_CONFIG_DIR or ~/.claude>/projects/<slug>, where <slug> is
+# PROJECT_ROOT with every non-alphanumeric char (not just '/') mapped to '-'
+# (Claude Code's own project-directory encoding — it also encodes spaces).
+# If the computed dir doesn't exist, fall back to a basename glob match so
+# minor encoding drift still resolves.
 _transcripts_dir() {
   if [ -n "${NAZGUL_TRANSCRIPTS_DIR:-}" ]; then
     printf '%s\n' "$NAZGUL_TRANSCRIPTS_DIR"
     return 0
   fi
-  printf '%s\n' "${HOME:-}/.claude/projects/$(printf '%s' "$PROJECT_ROOT" | tr '/' '-')"
+  local base slug expected base_slug
+  base="${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}"
+  slug=$(printf '%s' "$PROJECT_ROOT" | sed 's/[^A-Za-z0-9]/-/g')
+  expected="$base/projects/$slug"
+  if [ -d "$expected" ]; then
+    printf '%s\n' "$expected"
+    return 0
+  fi
+  base_slug=$(basename "$PROJECT_ROOT" | sed 's/[^A-Za-z0-9]/-/g')
+  # Only trust the glob fallback when EXACTLY ONE project dir matches: several
+  # projects can share a basename slug (same leaf name under different parents),
+  # and arbitrarily taking one (the old `head -1`) could mine an unrelated
+  # project's transcripts and emit wrong cost/tier findings. On 0 or >1 matches,
+  # fall through to the (missing) expected path so mining reports "cost data
+  # unavailable" instead of potentially unrelated data.
+  local matches=() d
+  for d in "$base/projects/"*"$base_slug"; do
+    [ -d "$d" ] && matches+=("$d")
+  done
+  if [ "${#matches[@]}" -eq 1 ]; then
+    printf '%s\n' "${matches[0]}"
+    return 0
+  fi
+  printf '%s\n' "$expected"
 }
 
 _mine_token_cost() {
@@ -281,12 +307,16 @@ _ingest_findings_jsonl() {
   rm -f "$seen_file"
 }
 
-_mine_review_rejections || true
-_mine_guard_blocks || true
-_mine_todo_delta || true
-_mine_task_retries || true
-_mine_token_cost || true
-_ingest_findings_jsonl || true
+# Guarded so tests can `source` this file (e.g. to call _transcripts_dir
+# directly) without triggering the full mining pipeline or its `exit 0`.
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
+  _mine_review_rejections || true
+  _mine_guard_blocks || true
+  _mine_todo_delta || true
+  _mine_task_retries || true
+  _mine_token_cost || true
+  _ingest_findings_jsonl || true
 
-echo "self-audit: mining complete for ${FEAT_ID}; backlog at ${BACKLOG_PATH}"
-exit 0
+  echo "self-audit: mining complete for ${FEAT_ID}; backlog at ${BACKLOG_PATH}"
+  exit 0
+fi

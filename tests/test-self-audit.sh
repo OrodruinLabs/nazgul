@@ -219,4 +219,59 @@ assert_exit_code "T13: exits 0" "$SA_EC" 0
 assert_not_contains "T13: prior-session drift NOT mined (newest session dir only)" \
   "$(cat "$T13ROOT/nazgul/improvements.md")" "Model-tier drift: code-reviewer"
 
+# call_transcripts_dir <nazgul_dir> -> sources self-audit.sh (guarded to skip its
+# main pipeline when sourced) and prints _transcripts_dir's resolved path.
+call_transcripts_dir() {
+  local nazgul_dir="$1"
+  ( unset NAZGUL_TRANSCRIPTS_DIR
+    # shellcheck disable=SC1090
+    source "$SELF_AUDIT" "$nazgul_dir" >/dev/null 2>&1
+    _transcripts_dir
+  )
+}
+
+# --- Test 14: _transcripts_dir honors CLAUDE_CONFIG_DIR over ~/.claude ---
+T14ROOT=$(mk_project "t14")
+T14CONFIGDIR="$TMPDIR_BASE/t14-config-dir"
+T14SLUG=$(printf '%s' "$T14ROOT" | sed 's/[^A-Za-z0-9]/-/g')
+mkdir -p "$T14CONFIGDIR/projects/$T14SLUG"
+T14RESULT=$(CLAUDE_CONFIG_DIR="$T14CONFIGDIR" call_transcripts_dir "$T14ROOT/nazgul")
+assert_eq "T14: CLAUDE_CONFIG_DIR honored" "$T14RESULT" "$T14CONFIGDIR/projects/$T14SLUG"
+
+# --- Test 15: _transcripts_dir encodes a SPACE in the project path to '-' ---
+T15ROOT="$TMPDIR_BASE/t15 space project"
+mkdir -p "$T15ROOT/nazgul"
+cp "$REPO_ROOT/templates/config.json" "$T15ROOT/nazgul/config.json"
+T15FAKEHOME="$TMPDIR_BASE/t15-home"
+T15SLUG=$(printf '%s' "$T15ROOT" | sed 's/[^A-Za-z0-9]/-/g')
+mkdir -p "$T15FAKEHOME/.claude/projects/$T15SLUG"
+T15RESULT=$(unset CLAUDE_CONFIG_DIR; HOME="$T15FAKEHOME" call_transcripts_dir "$T15ROOT/nazgul")
+assert_eq "T15: space in project path encoded to '-'" "$T15RESULT" "$T15FAKEHOME/.claude/projects/$T15SLUG"
+
+# --- Test 16: _transcripts_dir falls back to a basename glob match when the
+# computed slug doesn't exist on disk (encoding drift tolerance) ---
+T16ROOT="$TMPDIR_BASE/t16 drift project"
+mkdir -p "$T16ROOT/nazgul"
+cp "$REPO_ROOT/templates/config.json" "$T16ROOT/nazgul/config.json"
+T16FAKEHOME="$TMPDIR_BASE/t16-home"
+mkdir -p "$T16FAKEHOME/.claude/projects/-some-other-prefix-t16-drift-project"
+T16RESULT=$(unset CLAUDE_CONFIG_DIR; HOME="$T16FAKEHOME" call_transcripts_dir "$T16ROOT/nazgul")
+assert_eq "T16: falls back to basename glob match" "$T16RESULT" \
+  "$T16FAKEHOME/.claude/projects/-some-other-prefix-t16-drift-project"
+
+# --- Test 17: an AMBIGUOUS basename glob (two projects share the leaf slug)
+# must NOT arbitrarily pick one — it degrades to the computed (missing) expected
+# path so mining reports cost-unavailable rather than mining an unrelated
+# project's transcripts (PR #55 review) ---
+T17ROOT="$TMPDIR_BASE/t17 drift project"
+mkdir -p "$T17ROOT/nazgul"
+cp "$REPO_ROOT/templates/config.json" "$T17ROOT/nazgul/config.json"
+T17FAKEHOME="$TMPDIR_BASE/t17-home"
+mkdir -p "$T17FAKEHOME/.claude/projects/-prefix-a-t17-drift-project"
+mkdir -p "$T17FAKEHOME/.claude/projects/-prefix-b-t17-drift-project"
+T17SLUG=$(cd "$T17ROOT" && pwd | sed 's/[^A-Za-z0-9]/-/g')
+T17RESULT=$(unset CLAUDE_CONFIG_DIR; HOME="$T17FAKEHOME" call_transcripts_dir "$T17ROOT/nazgul")
+assert_eq "T17: ambiguous glob degrades to computed expected path" "$T17RESULT" \
+  "$T17FAKEHOME/.claude/projects/$T17SLUG"
+
 report_results
