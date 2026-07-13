@@ -562,6 +562,43 @@ echo '{}' | NAZGUL_TEST_GH_FAIL=1 CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO_ROO
 _pass "stop-hook: completed despite a gh push failure (rc=$rc, loop unbroken)"
 assert_eq "stop-hook: gh push failure left no label mutation" "$(cat "$NAZGUL_TEST_GH_LABELS")" "{}"
 
+# --- STOP-HOOK WIRING (TASK-008): a status change with NO PR URL must NOT call push_pr ---
+# Bidirectional proof of "PR push only when a PR URL exists": status pushes, push_pr stays silent.
+teardown_temp_dir
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config \
+  '.connectors.github.enabled = true' \
+  '.connectors.github.push.enabled = true' \
+  '.connectors.github.map = {"44":"TASK-102"}'
+export NAZGUL_TEST_GH_DB="$TEST_DIR/gh-db.json"
+export NAZGUL_TEST_GH_LABELS="$TEST_DIR/gh-labels.json"
+export NAZGUL_TEST_GH_COMMENTS="$TEST_DIR/gh-comments.json"
+export NAZGUL_TEST_GH_EDIT_COUNT="$TEST_DIR/gh-edit-count.txt"
+jq -n '[{number:44, state:"OPEN", title:"mapped", body:"b", labels:[{name:"nazgul"},{name:"nazgul-claimed"}]}]' > "$NAZGUL_TEST_GH_DB"
+echo '{}' > "$NAZGUL_TEST_GH_LABELS"; echo '{}' > "$NAZGUL_TEST_GH_COMMENTS"; echo '0' > "$NAZGUL_TEST_GH_EDIT_COUNT"
+
+# A manifest with a status change but deliberately NO `- **PR**:` line.
+cat > "$TEST_DIR/nazgul/tasks/TASK-102.md" << 'TASK_EOF'
+# TASK-102: wiring probe (no PR URL)
+
+- **ID**: TASK-102
+- **Status**: IMPLEMENTED
+- **Depends on**: none
+- **Group**: 1
+- **Retry count**: 0/3
+
+## Commits
+- abc1234
+TASK_EOF
+
+echo '{}' | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO_ROOT/scripts/stop-hook.sh" >/dev/null 2>&1 || true
+assert_eq "stop-hook: push_status set nazgul-status:implemented on mapped issue 44 (status still pushes)" \
+  "$(jq -r '."44" | index("nazgul-status:implemented") != null' "$NAZGUL_TEST_GH_LABELS")" "true"
+assert_eq "stop-hook: missing PR URL prevents push_pr call (0 nazgul-pr comments on issue 44)" \
+  "$(jq -r '[."44"[]? | select((.body // "") | contains("<!-- nazgul-pr -->"))] | length' "$NAZGUL_TEST_GH_COMMENTS")" "0"
+
 teardown_temp_dir
 rm -rf "$FAKEBIN"
 report_results
