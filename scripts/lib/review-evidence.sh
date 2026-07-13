@@ -137,7 +137,9 @@ _re_is_authorized_skipped() {
 # (default ["security-reviewer","architect-reviewer"] when absent). A critical
 # reviewer's terminal UNVERIFIED fails closed. security-reviewer is never honored
 # here regardless of the configured critical list (defense in depth). Config is
-# read via jq; a missing config degrades to the defaults.
+# read via jq; a missing OR unparseable config degrades the critical list to the
+# default (fail closed), while a well-formed empty critical_reviewers list is
+# honored as empty.
 # Usage: _re_is_authorized_unverified <nazgul_dir> <review_dir> <reviewer>
 _re_is_authorized_unverified() {
   local nazgul_dir="$1" review_dir="$2" reviewer="$3"
@@ -146,12 +148,18 @@ _re_is_authorized_unverified() {
   [ "$(read_verdict "$file" 2>/dev/null)" = "UNVERIFIED" ] || return 1
   [ "$reviewer" = "security-reviewer" ] && return 1
 
-  local config="$nazgul_dir/config.json" allow="true" critical=""
+  local config="$nazgul_dir/config.json" allow="true" critical="" crit_json
   if [ -f "$config" ]; then
     # `// true` would false-coalesce an explicit false back to true (jq treats
     # false like null); test the key by identity so an explicit false is honored.
     allow=$(jq -r 'if .review_gate.allow_unverified_nonblocking == false then "false" else "true" end' "$config" 2>/dev/null || echo "true")
-    critical=$(jq -r '.review_gate.critical_reviewers // ["security-reviewer","architect-reviewer"] | .[]' "$config" 2>/dev/null | tr '\n' ' ')
+    # Capture jq's status directly — a trailing `| tr` masks a parse error and
+    # leaves critical empty (fail OPEN). Parse error ⇒ default list; valid [] stays empty.
+    if crit_json=$(jq -r '.review_gate.critical_reviewers // ["security-reviewer","architect-reviewer"] | .[]' "$config" 2>/dev/null); then
+      critical="${crit_json//$'\n'/ }"
+    else
+      critical="security-reviewer architect-reviewer"
+    fi
   else
     critical="security-reviewer architect-reviewer"
   fi

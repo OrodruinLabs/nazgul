@@ -449,4 +449,38 @@ assert_exit_code "regression APPROVE: exit 0" "$VAL_EC" 0
 assert_eq "regression APPROVE: no output" "$VAL_OUTPUT" ""
 teardown_temp_dir
 
+# --- Test 31 (REGRESSION): corrupt review_gate fails CLOSED for architect ---
+# `.review_gate` a wrong type (string) makes the critical_reviewers jq read exit
+# non-zero while the roster still parses; it must degrade to the safe default,
+# not to empty — so architect-reviewer UNVERIFIED still blocks (no fail-open).
+setup_evidence_env "code-reviewer architect-reviewer" \
+  '.review_gate = "corrupt-not-an-object"'
+write_review "TASK-001" "code-reviewer" "APPROVED"
+write_frontmatter_verdict "TASK-001" "architect-reviewer" "UNVERIFIED"
+run_validate "TASK-001"
+assert_exit_code "corrupt review_gate: exit 1 (fail closed)" "$VAL_EC" 1
+assert_contains "corrupt review_gate: architect blocks" "$VAL_OUTPUT" "UNAPPROVED architect-reviewer"
+teardown_temp_dir
+
+# --- Test 31b (REGRESSION): fully unparseable config never fails open ---
+setup_evidence_env "code-reviewer architect-reviewer"
+write_review "TASK-001" "code-reviewer" "APPROVED"
+write_frontmatter_verdict "TASK-001" "architect-reviewer" "UNVERIFIED"
+printf '{invalid' > "$TEST_DIR/nazgul/config.json"
+run_validate "TASK-001"
+assert_exit_code "unparseable config: exit 1 (fail closed)" "$VAL_EC" 1
+teardown_temp_dir
+
+# --- Test 32: well-formed empty critical_reviewers honors architect UNVERIFIED ---
+# Distinct from Test 31's parse failure: an operator-set `[]` means nothing is
+# critical, so architect UNVERIFIED is gate-satisfying.
+setup_evidence_env "code-reviewer architect-reviewer" \
+  '.review_gate.critical_reviewers = []'
+write_review "TASK-001" "code-reviewer" "APPROVED"
+write_frontmatter_verdict "TASK-001" "architect-reviewer" "UNVERIFIED"
+run_validate "TASK-001"
+assert_exit_code "empty critical list: exit 0" "$VAL_EC" 0
+assert_not_contains "empty critical list: architect honored" "$VAL_OUTPUT" "UNAPPROVED architect-reviewer"
+teardown_temp_dir
+
 report_results
