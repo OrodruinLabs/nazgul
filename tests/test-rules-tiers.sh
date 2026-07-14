@@ -63,27 +63,14 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test (c): the count of [advisory] annotations is exactly 16
-# The legend table itself contains [advisory] as a label definition (1 count).
-# Rule annotations add to that (incl. §11 Conductor's engine-selection, hard-stops,
-# wave-parallelism, and graph-only-invariant bullets — all four are agent-invoked,
-# not hook-gated, per FEAT-007's tier-honesty correction; plus §12's wave-digest
-# bullet, the one Enforced-Conductor layer that stays advisory; plus §13's
-# opt-in/default-off and no-eval heartbeat bullets — nothing schedules the tick,
-# and the eval-safety claim is test-backed today but not regression-guarded; plus
-# §14's use-it-don't-work-around-it, data-only-no-eval, and append-only-sink
-# raise-finding bullets — a helper agents are told to use, not a mechanical guard;
-# plus §7's FEAT-009 model-tier note — models.conductor / the review-key split are
-# config reads, not hook checks; plus §3's FEAT-011 adversarial cross-check rule —
-# review-gate orchestrator behavior, not a hook check).
-# Total must be exactly 16.
-# ---------------------------------------------------------------------------
+# Test (c): [advisory] count is exactly 19 — the prior 16 (§§3/7/11/12/13/14 + legend row)
+# plus §16's FEAT-012 GitHub-connector opt-in, gh-auth-only, and remote-content-is-data bullets.
 ADVISORY_COUNT=$(grep -c '\[advisory\]' "$RULES_FILE" || true)
-if [ "$ADVISORY_COUNT" -eq 16 ]; then
-  _pass "[advisory] annotation count is exactly 16 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 19 ]; then
+  _pass "[advisory] annotation count is exactly 19 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 16" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 16"
+  _fail "[advisory] annotation count is exactly 19" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 19"
 fi
 
 # ---------------------------------------------------------------------------

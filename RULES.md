@@ -460,3 +460,44 @@ repo where install never ran has no guard at all — self-heal only re-asserts a
 managed path (it requires `branch.prior_hooks_path` to actually be recorded, i.e. `install_git_hooks`
 already ran once), so a repo that never installed stays unguarded indefinitely, not just until the next
 `SessionStart`.
+
+## 16. GitHub Connector
+
+`scripts/lib/connector-github.sh` (FEAT-012, ADR-001) is the first real remote provider behind the
+generalized provider seam FEAT-008 introduced (`scripts/lib/inbox-provider.sh`). It is a two-way GitHub
+connector: PULL (`connector_github_pull_list`/`pull_get`/`pull_archive`) turns opt-in-labeled issues into
+inbox candidates, and PUSH (`connector_github_push_status`/`push_pr`) reflects local task status and PR
+links back onto the mapped issue. `scripts/lib/inbox-provider.sh` routes the `inbox_*` calls to the
+connector only when `automation.heartbeat.inbox.provider == "github"`; the `file` provider path stays
+byte-identical. Both directions are wired into the running loop (FEAT-012 TASK-008): `scripts/heartbeat.sh`
+consumes the `github` provider on the pull side, and `scripts/stop-hook.sh` pushes on a task transition.
+Linear/Slack are follow-on providers behind the same seam; they are not shipped.
+
+- **Opt-in and default-off.** `[advisory]` `connectors.github.enabled` defaults to `false` (and push is
+  separately gated by `connectors.github.push.enabled`, default `true` but only active under the
+  top-level `enabled`). No PreToolUse guard forces or blocks the connector; the gate is a plain `jq`
+  read near the top of each entry point (`heartbeat.sh`'s provider dispatch, `stop-hook.sh`'s push
+  block) — disabled means the loop behaves exactly as it did before, with the `file` inbox and no push.
+- **Credentials via `gh auth` only — never stored or logged.** `[advisory]` Every GitHub call shells out
+  to the `gh` CLI, which reads its own auth; no token is ever written to `config.json`, printed to a log,
+  or `eval`'d. `migrate_24_to_25` adds no credential key. This is a code-and-review discipline confirmed
+  by `tests/test-connector-github.sh`, not a mechanical secret-scanner.
+- **Remote content is DATA.** `[advisory]` Issue title/body reach `jq` only via `--arg`/`--rawfile` and
+  are only ever passed as `gh` argv elements — never shell-interpolated or `eval`'d. A hostile body is
+  bounded by `connectors.github.pull.max_body_bytes` (default 65536), and malformed/absent JSON skips the
+  candidate rather than crashing. Same honest tier as §13's inbox data-only rule: `shellcheck` catches
+  quoting hazards but does not forbid a future `eval`, so the tests confirm today's code, not a regression
+  block.
+- **Sync-storm guard: a push never un-claims an issue.** `[enforced]` (in-script) On claim,
+  `connector_github_pull_archive` adds `connectors.github.pull.claimed_label` (default `nazgul-claimed`)
+  and records a remote-issue ↔ local-id entry in `connectors.github.map`; `pull_list` excludes both the
+  claimed set and mapped issues. `push_status` only ever touches the `nazgul-status:*` label namespace
+  (removing stale ones, upserting one) and `push_pr` only upserts a single `<!-- nazgul-pr -->`-marked
+  comment — neither removes the opt-in or claimed label, so a pushed update can never make an issue
+  re-enter `pull_list`. This is a fixed property of the script's own label/namespace separation, not a
+  hook.
+- **Degrade-safe failure counter.** `[enforced]` (in-script) A failed pull after retry bumps
+  `connectors.github.pull_failures`; at 5 consecutive failures the connector auto-disables
+  (`enabled=false`) with a `stderr` warning, and a good pull resets the counter to 0. Auth/network/
+  rate-limit faults degrade to a no-op — the heartbeat tick and the stop-hook push are wrapped so a
+  connector error never blocks or crashes the loop. Covered by `tests/test-connector-github.sh`.
