@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.15.0] - 2026-07-14
+
+### Added
+- **GitHub two-way connector (FEAT-012, ADR-001, RULES.md §16).** Completes component 4 of the loop-engineering roadmap: a real remote provider that both pulls work in and pushes results back out. `scripts/lib/connector-github.sh` implements the provider contract — `connector_github_pull_list` (open issues carrying the opt-in label, minus the already-handled set), `connector_github_pull_get` (issue → normalized `{title,body,priority,type}` JSON, byte-capped at `connectors.github.pull.max_body_bytes`, default 65536), `connector_github_pull_archive` (add the claimed label — the idempotent "I took this" signal), `connector_github_push_status` (reflect a local task/objective status onto the mapped issue as a single `nazgul-status:<status>` label), `connector_github_push_pr` (upsert one `<!-- nazgul-pr -->`-marked PR-link comment), and `connector_github_health` (gh-auth + rate-limit check). Both directions are **wired into the running loop** (FEAT-012 TASK-008): `scripts/heartbeat.sh` now consumes the `github` provider so labeled issues pull into the inbox and the heartbeat can auto-start them, and `scripts/stop-hook.sh` pushes task status (and the PR link when one exists) back to the mapped issue on a transition.
+- **Generalized provider seam (file vs github).** `scripts/lib/inbox-provider.sh` routes `inbox_list`/`inbox_get`/`inbox_archive` to the GitHub connector when `automation.heartbeat.inbox.provider == "github"`, and keeps the local `file` provider behavior byte-identical otherwise. Linear/Slack are follow-on providers that slot in behind this same seam as sibling `connector-*.sh` — they are **not** shipped in this release.
+- **Opt-in and default-off.** The connector is gated by `connectors.github.enabled` (default `false`); no existing project changes behavior until it is explicitly enabled. Push is separately gated by `connectors.github.push.enabled` (default `true`, but only active under the top-level `enabled`).
+- **gh-auth-only security model.** Credentials come exclusively from `gh auth`/env — no token is ever written to `config.json` or logged. Remote issue title/body are treated as DATA (reach `jq` only via `--arg`/`--rawfile`, never `eval`'d), and a hostile body is bounded by `max_body_bytes`.
+- **Failure degradation.** A failed pull (after retry) bumps `connectors.github.pull_failures`; at 5 consecutive failures the connector auto-disables (`enabled=false`) with a warning, and a good pull resets the counter to 0 — a network/auth/rate-limit fault degrades to a no-op tick, never a crashed hook or a stalled loop.
+- **Config schema v24 → v25.** `migrate_24_to_25` (`scripts/migrate-config.sh`) additively adds `connectors.github.{enabled:false, pull.{label:"nazgul", claimed_label:"nazgul-claimed", max_body_bytes:65536}, push.{enabled:true}, pull_failures:0, map:{}}`. Additive (set only when absent); explicit values including `enabled:true`, `push.enabled:false`, and a populated `map` are preserved, and no credential key is ever added. The existing `automation.heartbeat.inbox.provider` key selects `"github"` — no new provider-selection key was needed.
+
 ## [2.14.0] - 2026-07-13
 
 ### Added

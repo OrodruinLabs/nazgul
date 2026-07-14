@@ -12,7 +12,7 @@ one gap that was missing.
 | 1 | Automations / heartbeat | The `Stop` hook (`hooks/hooks.json` → `scripts/stop-hook.sh`) re-fires after every turn, reads `nazgul/plan.md`, and either continues the loop (exit 2) or lets it end (exit 0). This is the loop's heartbeat — it never needs a human to press "continue." |
 | 2 | Worktrees | The `EnterWorktree`/`ExitWorktree` tools give each task (or Conductor unit) an isolated git worktree and branch, so parallel work never collides on the working tree. See `agents/team-orchestrator.md` for the pattern; `agents/implementer.md` and `agents/conductor.md` both use it. |
 | 3 | Skills | `skills/*/SKILL.md` are the user-facing entry points (`/nazgul:init`, `/nazgul:start`, `/nazgul:status`, etc.) — the operator's interface to the loop, independent of which execution engine is driving underneath. |
-| 4 | Connectors | FEAT-008 shipped the pull side: `scripts/heartbeat.sh` triages a local work inbox (`nazgul/inbox/`) behind a provider seam (`scripts/lib/inbox-provider.sh`, the `file` provider; selection policy in `scripts/lib/heartbeat-triage.sh`) and auto-starts the next objective when idle. Real connectors — a GitHub/Linear/Slack provider pulling work in, and pushing results back out (two-way sync) — stay deferred to FEAT-009; `scripts/board-sync-github.sh` remains a one-way GitHub Projects status mirror, not a work inbox. |
+| 4 | Connectors | FEAT-008 shipped the pull side over a local file inbox; FEAT-012 (2.15.0) added the first real remote provider: `scripts/lib/connector-github.sh` is a two-way GitHub connector that pulls labeled issues into the inbox (so the heartbeat auto-starts them) and pushes task status + PR links back to the mapped issue, routed through the generalized `file`/`github` provider seam (`scripts/lib/inbox-provider.sh`). Opt-in and default-off (`connectors.github.enabled`), gh-auth-only (no tokens stored). Linear/Slack are the remaining follow-on providers behind the same seam; `scripts/board-sync-github.sh` remains a separate one-way GitHub Projects status mirror. |
 | 5 | Maker/checker sub-agents | `agents/implementer.md` (maker) builds one task; `agents/review-gate.md` (checker) orchestrates the review board and `agents/feedback-aggregator.md` consolidates findings before any retry. No task reaches DONE without the checker's approval — this split is structural, not optional. |
 | 6 | Persistent, on-disk state | `nazgul/` is the loop's only memory: `nazgul/config.json`, `nazgul/plan.md` (with its Recovery Pointer), `nazgul/tasks/*.md`, `nazgul/checkpoints/`. Context is ephemeral; files are truth (CLAUDE.md's Key Concepts, RULES.md §4 Recovery Protocol). |
 
@@ -130,9 +130,14 @@ picture:
    `/nazgul:heartbeat`) that triages a local work inbox behind a provider seam and auto-starts the loop
    when idle and clear, so the loop can pick up new work without a human invoking `/nazgul:start` each
    time. Opt-in and default-off (`automation.heartbeat.enabled: false`); see RULES.md §13.
-3. **Connectors** (FEAT-009, deferred) — real remote providers (GitHub/Linear/Slack pull and push,
-   two-way sync), completing component 4 above beyond FEAT-008's local file inbox and the current
-   one-way GitHub board sync.
+3. **Connectors** (delivered in 2.15.0, FEAT-012) — real remote providers pulling work in and pushing
+   results back out (two-way sync), completing component 4 above beyond FEAT-008's local file inbox.
+   The first provider — a two-way GitHub connector (`scripts/lib/connector-github.sh`) — ships behind the
+   generalized `file`/`github` provider seam (`scripts/lib/inbox-provider.sh`), opt-in and default-off
+   (`connectors.github.enabled`); see RULES.md §16. Linear/Slack are the remaining follow-on providers
+   behind the same seam. `scripts/board-sync-github.sh` stays a separate one-way GitHub Projects status
+   mirror.
 
 FEAT-008 builds on the Conductor's graph-only state and reuses its hard-stop/session-tracker libraries;
-FEAT-009 remains the only undelivered piece of this roadmap.
+FEAT-012 delivered the last roadmap piece, generalizing FEAT-008's provider seam to a real remote
+connector.

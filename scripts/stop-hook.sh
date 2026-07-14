@@ -682,6 +682,35 @@ if [ "$BOARD_ENABLED" = "true" ]; then
   fi
 fi
 
+# --- CONNECTOR PUSH (github) — additive to and independent of board-sync ---
+CONN_GH_ENABLED=$(jq -r 'if (.connectors.github.enabled == true) then "true" else "false" end' "$CONFIG" 2>/dev/null || echo "false")
+CONN_GH_PUSH=$(jq -r 'if (.connectors.github.push.enabled == false) then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+if [ "$CONN_GH_ENABLED" = "true" ] && [ "$CONN_GH_PUSH" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
+  # shellcheck source=lib/connector-github.sh
+  . "$SCRIPT_DIR/lib/connector-github.sh"
+  # Own _last_pushed_status cache (board-sync's is separate and may not run when
+  # board.enabled=false) so a status unchanged since the last push is never re-pushed.
+  CONN_UPDATES=""
+  for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
+    [ -f "$task_file" ] || continue
+    task_id=$(grep -m1 '^\- \*\*ID\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "")
+    current_status=$(get_task_status "$task_file")
+    [ -n "$task_id" ] || continue
+    cached_status=$(jq -r --arg t "$task_id" '.connectors.github._last_pushed_status[$t] // ""' "$CONFIG" 2>/dev/null || echo "")
+    [ "$current_status" = "$cached_status" ] && continue
+    connector_github_push_status "$CONFIG" "$task_id" "$current_status" || true
+    pr_url=$(grep -m1 '^\- \*\*PR\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "")
+    [ -n "$pr_url" ] && { connector_github_push_pr "$CONFIG" "$task_id" "$pr_url" || true; }
+    CONN_UPDATES="${CONN_UPDATES}${task_id}\t${current_status}\n"
+  done
+  if [ -n "$CONN_UPDATES" ]; then
+    CONN_UPDATES_JSON=$(printf '%b' "$CONN_UPDATES" | awk -F'\t' 'NF==2{printf "%s\"%s\":\"%s\"", (NR>1?",":""), $1, $2}' | sed 's/^/{/;s/$/}/')
+    jq --argjson updates "$CONN_UPDATES_JSON" \
+      '.connectors.github._last_pushed_status = (.connectors.github._last_pushed_status // {} | . + $updates)' \
+      "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+  fi
+fi
+
 # Checkpoint rotation — keep last 2 (recovery reads only the latest; one extra for diff-base)
 if [ -d "$NAZGUL_DIR/checkpoints" ]; then
   ls -1t "$NAZGUL_DIR/checkpoints/iteration-"*.json 2>/dev/null | tail -n +3 | xargs rm -f 2>/dev/null || true

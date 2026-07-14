@@ -139,4 +139,31 @@ assert_exit_code "traversal: all-malicious inbox is nothing actionable" "$PICK_E
 assert_eq "traversal: all-malicious inbox has no output" "$PICK_OUT" ""
 teardown_temp_dir
 
+# --- Provider gate (TASK-008): github degrades safe, unknown fails closed (full tick) ---
+hb_last_decision() {
+  local f
+  f=$(ls -1 "$1"/heartbeat-*.jsonl 2>/dev/null | tail -1) || return 1
+  [ -n "$f" ] || return 1
+  tail -1 "$f" | jq -r '.decision + "|" + (.reason // "")'
+}
+
+setup_temp_dir
+setup_nazgul_dir
+create_config '.automation.heartbeat.enabled = true' \
+  '.automation.heartbeat.inbox.provider = "github"' '.connectors.github.enabled = false'
+GATE_RC=0; bash "$REPO_ROOT/scripts/heartbeat.sh" >/dev/null 2>&1 || GATE_RC=$?
+assert_exit_code "gate: provider=github + connector disabled exits 0 (clean skip)" "$GATE_RC" 0
+assert_eq "gate: disabled github degrades to nothing_actionable (no file fallback)" \
+  "$(hb_last_decision "$TEST_DIR/nazgul/logs")" "nothing_actionable|"
+teardown_temp_dir
+
+setup_temp_dir
+setup_nazgul_dir
+create_config '.automation.heartbeat.enabled = true' '.automation.heartbeat.inbox.provider = "linear"'
+GATE_RC=0; bash "$REPO_ROOT/scripts/heartbeat.sh" >/dev/null 2>&1 || GATE_RC=$?
+assert_exit_code "gate: unknown provider exits 0" "$GATE_RC" 0
+assert_eq "gate: unknown provider still fails closed" \
+  "$(hb_last_decision "$TEST_DIR/nazgul/logs")" "skipped|unsupported_provider:linear"
+teardown_temp_dir
+
 report_results

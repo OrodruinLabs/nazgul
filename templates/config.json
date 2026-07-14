@@ -1,5 +1,5 @@
 {
-  "schema_version": 24,
+  "schema_version": 25,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -100,6 +100,21 @@
         "mode": "yolo",
         "engine": "conductor"
       }
+    }
+  },
+  "connectors": {
+    "github": {
+      "enabled": false,
+      "pull": {
+        "label": "nazgul",
+        "claimed_label": "nazgul-claimed",
+        "max_body_bytes": 65536
+      },
+      "push": {
+        "enabled": true
+      },
+      "pull_failures": 0,
+      "map": {}
     }
   },
   "review_gate": {

@@ -29,6 +29,7 @@ SCRIPTS=(
   "scripts/lib/conductor-gates.sh"
   "scripts/lib/conductor-router.sh"
   "scripts/lib/inbox-provider.sh"
+  "scripts/lib/connector-github.sh"
   "scripts/lib/heartbeat-triage.sh"
   "scripts/heartbeat.sh"
   "scripts/local-mode-tracking-guard.sh"
