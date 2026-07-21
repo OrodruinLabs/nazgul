@@ -99,23 +99,29 @@ assert_exit_code "overlap: blocks stop" "$HOOK_EC" 2
 assert_contains "overlap: sequential delegate" "$HOOK_OUTPUT" "DELEGATE: Spawn implementer agent"
 teardown_temp_dir
 
-# --- 6: parallel on + default granularity ("group") -> never batches ---
-# Pinned interaction: templates/config.json defaults review_gate.granularity to
-# "group", and the batch-override block only fires under "task" granularity
-# (group/feature granularity owns its own aggregate-review cycle instead — see
-# the batch-override comment in stop-hook.sh). A user who flips execution.parallel
-# on a default config should get the existing sequential single-task DELEGATE,
-# not a silent no-op — this is intended behavior, not a surprise.
+# --- 6: parallel on + group granularity (default template config) -> degrades
+#        to sequential, never batches ---
+# Pinned interaction: templates/config.json SHIPS review_gate.granularity =
+# "group" (distinct from stop-hook.sh's own absent-key default of "task" — an
+# unset key would resolve differently). This fixture sets '.review_gate.granularity
+# = "group"' explicitly so it represents the actual default template config
+# regardless of what the template ships later, not whatever the key happens to
+# default to when omitted. The batch-override block only fires under "task"
+# granularity (group/feature granularity owns its own aggregate-review cycle
+# instead — see the batch-override comment in stop-hook.sh). A user who flips
+# execution.parallel on a default (group-granularity) config should get the
+# existing sequential single-task DELEGATE, not a silent no-op — this is
+# intended behavior, not a surprise.
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
-create_config '.execution.parallel = true' '.mode = "afk"'
+create_config '.execution.parallel = true' '.mode = "afk"' '.review_gate.granularity = "group"'
 make_parallel_pair
 run_hook
-assert_exit_code "default granularity: blocks stop" "$HOOK_EC" 2
-assert_contains "default granularity: sequential single-task delegate" "$HOOK_OUTPUT" "DELEGATE: Spawn implementer agent (nazgul:implementer) for TASK-001."
+assert_exit_code "group granularity: blocks stop" "$HOOK_EC" 2
+assert_contains "group granularity: sequential single-task delegate" "$HOOK_OUTPUT" "DELEGATE: Spawn implementer agent (nazgul:implementer) for TASK-001."
 if printf '%s' "$HOOK_OUTPUT" | grep -q "PARALLEL BATCH"; then
-  _fail "default granularity: no batch instruction"
+  _fail "group granularity: no batch instruction"
 else
-  _pass "default granularity: no batch instruction"
+  _pass "group granularity: no batch instruction"
 fi
 teardown_temp_dir
 
