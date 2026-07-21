@@ -533,9 +533,9 @@ migrate_25_to_26() {
   # nazgul/conductor runtime dir (graph.json was a mirror of task manifests).
   jq '
     . as $root
-    | ($root.conductor // {}) as $c
-    | ($c.gates // {}) as $cg
-    | ($c.enforce // {}) as $ce
+    | ((if ($root.conductor | type) == "object" then $root.conductor else {} end)) as $c
+    | ((if ($c.gates | type) == "object" then $c.gates else {} end)) as $cg
+    | ((if ($c.enforce | type) == "object" then $c.enforce else {} end)) as $ce
     | .execution = ((if (.execution | type) == "object" then .execution else {} end)
       | .parallel = (if has("parallel") then .parallel
                      else (($root.execution.engine // "sequential") == "conductor") end)

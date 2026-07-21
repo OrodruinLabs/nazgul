@@ -1696,4 +1696,19 @@ EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_eq "v26 seq: parallel false" "$(jq -r '.execution.parallel' "$NAZGUL_DIR/config.json")" "false"
 
+# --- v25 -> v26: non-object conductor value clamps to {} instead of erroring ---
+NAZGUL_DIR=$(setup_nazgul_dir "v25-to-26-garbage-conductor")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{"schema_version": 25, "execution": {"engine": "sequential"}, "conductor": "garbage-string"}
+EOF
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>&1); MIG_EC=$?
+CFG="$NAZGUL_DIR/config.json"
+assert_exit_code "v26 garbage conductor: migrator exits 0" "$MIG_EC" 0
+assert_json_field "v26 garbage conductor: schema_version reaches 26" "$CFG" ".schema_version" "26"
+assert_eq "v26 garbage conductor: parallel defaults false" "$(jq -r '.execution.parallel' "$CFG")" "false"
+assert_eq "v26 garbage conductor: max_parallel defaults 3" "$(jq -r '.execution.max_parallel' "$CFG")" "3"
+assert_eq "v26 garbage conductor: approve_plan defaults false" "$(jq -r '.execution.gates.approve_plan' "$CFG")" "false"
+assert_eq "v26 garbage conductor: dispatch_guard defaults true" "$(jq -r '.execution.enforce.dispatch_guard' "$CFG")" "true"
+assert_eq "v26 garbage conductor: conductor key deleted" "$(jq -r 'has("conductor")' "$CFG")" "false"
+
 report_results

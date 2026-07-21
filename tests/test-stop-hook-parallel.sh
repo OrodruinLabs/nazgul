@@ -50,6 +50,7 @@ make_parallel_pair
 run_hook
 assert_exit_code "sequential: blocks stop" "$HOOK_EC" 2
 assert_contains "sequential: single-task delegate" "$HOOK_OUTPUT" "DELEGATE: Spawn implementer agent (nazgul:implementer) for TASK-001."
+assert_contains "sequential: Active task line present" "$HOOK_OUTPUT" "Active task: nazgul/tasks/TASK-001.md (READY)"
 if printf '%s' "$HOOK_OUTPUT" | grep -q "PARALLEL BATCH"; then
   _fail "sequential: no batch instruction"
 else
@@ -132,6 +133,26 @@ if printf '%s' "$HOOK_OUTPUT" | grep -q "PARALLEL BATCH"; then
 else
   _pass "group granularity: no batch instruction"
 fi
+teardown_temp_dir
+
+# --- 7: parallel batch fires while an earlier-glob-order READY task exists
+#        outside the batch's wave line -> Active task line must not name it,
+#        and must instead reflect the batch (or be suppressed) ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.execution.parallel = true' '.execution.max_parallel = 3' '.mode = "afk"' \
+  '.review_gate.granularity = "task"'
+create_task_file TASK-000 READY
+printf -- '- **Files modified**: src/z.sh\n' >> "$TEST_DIR/nazgul/tasks/TASK-000.md"
+make_parallel_pair
+run_hook
+assert_exit_code "batch+outsider: blocks stop" "$HOOK_EC" 2
+assert_contains "batch+outsider: batch instruction fires" "$HOOK_OUTPUT" "DELEGATE (PARALLEL BATCH"
+if printf '%s' "$HOOK_OUTPUT" | grep -q "Active task: nazgul/tasks/TASK-000.md"; then
+  _fail "batch+outsider: active task line does not name the non-batch task"
+else
+  _pass "batch+outsider: active task line does not name the non-batch task"
+fi
+assert_contains "batch+outsider: message reflects the batch" "$HOOK_OUTPUT" "Batch tasks: TASK-001, TASK-002"
 teardown_temp_dir
 
 report_results

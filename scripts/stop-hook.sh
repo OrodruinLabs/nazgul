@@ -1141,22 +1141,31 @@ elif [ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ]; then
 IMPORTANT: Read nazgul/reviews/${ACTIVE_TASK}/consolidated-feedback.md before re-implementing."
 fi
 
+# Default Active-task line (sequential mode / no batch). Only overridden below
+# when a parallel batch actually fires, so this text stays byte-identical to
+# the historical inline heredoc expression in the non-batch case.
+ACTIVE_LINE=$([ -n "$ACTIVE_TASK" ] && echo "Active task: nazgul/tasks/${ACTIVE_TASK}.md (${ACTIVE_STATUS})" || echo "No active task — find first READY task in nazgul/plan.md")
+
 # Parallel batch override: only for a fresh READY dispatch in task granularity.
 # compute_dispatch_batch falls back to a single task on any doubt, in which
 # case the sequential DISPATCH_INSTR above stands unchanged.
 if [ "$EXEC_PARALLEL" = "true" ] && [ "$GRANULARITY" = "task" ] \
    && [ "$ACTIVE_STATUS" = "READY" ]; then
   EXEC_MAX_PARALLEL=$(execution_max_parallel "$CONFIG")
-  BATCH_JSON=$(compute_dispatch_batch "$NAZGUL_DIR/tasks" "$PLAN" "$EXEC_MAX_PARALLEL" 2>/dev/null \
-    || echo '{"tasks":[],"parallel":false}')
+  BATCH_JSON=$(compute_dispatch_batch "$NAZGUL_DIR/tasks" "$PLAN" "$EXEC_MAX_PARALLEL" 2>/dev/null) \
+    || BATCH_JSON='{"tasks":[],"parallel":false}'
   if [ "$(jq -r '.parallel' <<< "$BATCH_JSON")" = "true" ]; then
     BATCH_TASKS=$(jq -r '.tasks | join(", ")' <<< "$BATCH_JSON")
     BATCH_COUNT=$(jq -r '.tasks | length' <<< "$BATCH_JSON")
+    # Batch fired: the earlier-computed ACTIVE_TASK (first READY task in glob
+    # order) may not be a member of this batch — naming it as "Active task"
+    # would contradict "Do not start any task outside this batch" below.
+    ACTIVE_LINE="Batch tasks: ${BATCH_TASKS}"
     DISPATCH_INSTR="DELEGATE (PARALLEL BATCH of ${BATCH_COUNT}): ${BATCH_TASKS}.
 0. Crash recovery first: if a batch task already has a worktree/branch feat/<display_id>/<id> left by an interrupted batch — a branch WITH commits is resumed (merge it per step 2, skip re-implementing), a dirty/commit-less one is removed (git worktree remove --force, delete the branch) before dispatching. Deterministic rule, no judgment.
 1. Dispatch ONE implementer agent (nazgul:implementer) PER task — ALL Agent calls in a SINGLE message so they run concurrently. Each prompt gets ONLY its task id, its manifest path nazgul/tasks/<id>.md, its file scope, and the line 'NAZGUL_UNIT: <id>'. Each implementer works in its OWN git worktree (branch feat/<display_id>/<id> off the feature branch) and commits there — NEVER in the shared working tree.
 2. WAIT for every implementer to return. Then merge each task branch into the feature branch sequentially (git merge --no-ff). On conflict: git merge --abort, set that task CHANGES_REQUESTED with a note, keep its branch for inspection — never force-merge.
-3. Record each merged task's commit SHA under its manifest's ## Commits and set Status: IMPLEMENTED.
+3. Record each merged task's FULL 40-character commit SHA (never abbreviated — the pre-merge guard matches full SHAs only) under its manifest's ## Commits and set Status: IMPLEMENTED.
 4. Dispatch ONE review-gate agent (nazgul:review-gate) PER merged task — all in a single message — each prompt carrying 'NAZGUL_UNIT: <id>'.
 Do not start any task outside this batch until every batch task reaches a terminal state."
     if execution_should_pause "$CONFIG" approve_batch "$MODE"; then
@@ -1183,7 +1192,7 @@ $([ -n "$REVIEW_VIOLATIONS" ] && printf '%s' "$REVIEW_VIOLATIONS" || true)
 $([ -n "$FEATURE_BRANCH" ] && echo "Branch: ${FEATURE_BRANCH} → ${BASE_BRANCH} | Worktrees: ${WORKTREE_COUNT}" || true)
 
 Read nazgul/plan.md → Recovery Pointer section for current state.
-$([ -n "$ACTIVE_TASK" ] && echo "Active task: nazgul/tasks/${ACTIVE_TASK}.md (${ACTIVE_STATUS})" || echo "No active task — find first READY task in nazgul/plan.md")
+${ACTIVE_LINE}
 $([ -n "$AGGREGATE_MARKER" ] && echo "$AGGREGATE_MARKER" || true)
 $([ -n "$DISPATCH_INSTR" ] && echo "$DISPATCH_INSTR" || true)
 $([ "$GIT_CONFLICT_DETECTED" = true ] && echo "WARNING: Git conflicts detected. Resolve unmerged files before continuing.")
