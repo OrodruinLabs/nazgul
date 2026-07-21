@@ -1,5 +1,5 @@
 {
-  "schema_version": 25,
+  "schema_version": 26,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -73,15 +73,13 @@
     "dir": "nazgul/docs"
   },
   "execution": {
-    "engine": "sequential"
-  },
-  "conductor": {
+    "parallel": false,
+    "max_parallel": 3,
     "gates": {
-      "approve_graph": false,
-      "approve_each_wave": false,
+      "approve_plan": false,
+      "approve_batch": false,
       "approve_final_pr": false
     },
-    "max_parallel": 3,
     "enforce": {
       "dispatch_guard": true,
       "rework_guard": true,
@@ -98,7 +96,7 @@
       },
       "auto_start": {
         "mode": "yolo",
-        "engine": "conductor"
+        "parallel": true
       }
     }
   },
@@ -215,7 +213,6 @@
     "implementation": "sonnet",
     "specialists": "sonnet",
     "post_loop": "sonnet",
-    "conductor": "sonnet",
     "default": "sonnet"
   },
   "self_audit": {

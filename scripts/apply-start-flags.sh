@@ -7,7 +7,7 @@ CONFIG="${1:?usage: apply-start-flags.sh <config.json> <args>}"
 ARGS="${2:-}"
 [ -f "$CONFIG" ] || { echo "hitl"; exit 0; }
 
-yolo=false; afk=false; hitl=false; task_pr=false; conductor=false
+yolo=false; afk=false; hitl=false; task_pr=false; parallel=false
 # Strip quoted spans first so a flag token INSIDE the objective string is not
 # misread as a flag (e.g. /nazgul:start "fix the --yolo bug" must NOT enable yolo).
 SCAN=$(printf '%s' "$ARGS" | sed -E 's/"[^"]*"//g; s/'"'"'[^'"'"']*'"'"'//g')
@@ -20,7 +20,8 @@ for tok in $SCAN; do
     --afk) afk=true ;;
     --hitl) hitl=true ;;
     --task-pr) task_pr=true ;;
-    --conductor) conductor=true ;;
+    --parallel) parallel=true ;;
+    --conductor) parallel=true; echo "Nazgul: --conductor is deprecated; treating as --parallel." >&2 ;;
   esac
 done
 maxn=$(printf '%s\n' "$SCAN" | grep -oE -- '--max[[:space:]]+[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
@@ -51,9 +52,8 @@ else
   [ "$task_pr" = true ] && jqp="$jqp | .afk.task_pr=true"
 fi
 [ -n "$maxn" ] && jqp="$jqp | .max_iterations=($maxn)"
-# --conductor is orthogonal to mode (an operator can pair it with --afk/--hitl/--yolo);
-# absent, execution.engine is left untouched (defaults to "sequential").
-[ "$conductor" = true ] && jqp="$jqp | .execution.engine=\"conductor\""
+# --parallel is orthogonal to mode (an operator can pair it with --afk/--hitl/--yolo)
+[ "$parallel" = true ] && jqp="$jqp | .execution.parallel=true"
 
 tmp=$(mktemp)
 if jq "$jqp" "$CONFIG" > "$tmp" 2>/dev/null; then mv "$tmp" "$CONFIG"; else rm -f "$tmp"; fi

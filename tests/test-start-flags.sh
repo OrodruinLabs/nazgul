@@ -63,36 +63,61 @@ assert_eq "--hitl --yolo clears afk.task_pr" "$(jq -r .afk.task_pr "$TMP/c.json"
 out=$(bash "$APPLY" "$TMP/none.json" "--yolo" 2>/dev/null || true)
 assert_eq "missing config → hitl"  "$out" "hitl"
 
+# --conductor is a deprecated alias for --parallel (Parallel Execution Collapse)
 mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--conductor" >/dev/null
-assert_eq "--conductor sets execution.engine" "$(jq -r .execution.engine "$TMP/c.json")" "conductor"
-assert_eq "--conductor mode unchanged"        "$(jq -r .mode "$TMP/c.json")" "hitl"
+assert_eq "--conductor sets execution.parallel" "$(jq -r .execution.parallel "$TMP/c.json")" "true"
+assert_eq "--conductor mode unchanged"          "$(jq -r .mode "$TMP/c.json")" "hitl"
 
 mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--afk" >/dev/null
-assert_eq "no --conductor leaves execution.engine unset" "$(jq -r '.execution.engine // "unset"' "$TMP/c.json")" "unset"
+assert_eq "no --conductor leaves execution.parallel unset" "$(jq -r '.execution.parallel // "unset"' "$TMP/c.json")" "unset"
 
 mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--conductor --hitl" >/dev/null
-assert_eq "--conductor --hitl mode=hitl"          "$(jq -r .mode "$TMP/c.json")" "hitl"
-assert_eq "--conductor --hitl execution.engine"   "$(jq -r .execution.engine "$TMP/c.json")" "conductor"
+assert_eq "--conductor --hitl mode=hitl"            "$(jq -r .mode "$TMP/c.json")" "hitl"
+assert_eq "--conductor --hitl execution.parallel"   "$(jq -r .execution.parallel "$TMP/c.json")" "true"
 
 mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--conductor --yolo" >/dev/null
-assert_eq "--conductor --yolo mode=afk"           "$(jq -r .mode "$TMP/c.json")" "afk"
-assert_eq "--conductor --yolo afk.yolo"           "$(jq -r .afk.yolo "$TMP/c.json")" "true"
-assert_eq "--conductor --yolo execution.engine"   "$(jq -r .execution.engine "$TMP/c.json")" "conductor"
+assert_eq "--conductor --yolo mode=afk"             "$(jq -r .mode "$TMP/c.json")" "afk"
+assert_eq "--conductor --yolo afk.yolo"             "$(jq -r .afk.yolo "$TMP/c.json")" "true"
+assert_eq "--conductor --yolo execution.parallel"   "$(jq -r .execution.parallel "$TMP/c.json")" "true"
 
 # A --conductor token INSIDE the quoted objective must NOT be parsed as a flag
 mkcfg "$base"; bash "$APPLY" "$TMP/c.json" '"try the --conductor engine"' >/dev/null
-assert_eq "--conductor inside objective ignored" "$(jq -r '.execution.engine // "unset"' "$TMP/c.json")" "unset"
+assert_eq "--conductor inside objective ignored" "$(jq -r '.execution.parallel // "unset"' "$TMP/c.json")" "unset"
 
 mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--conductor --max 20" >/dev/null
-assert_eq "--conductor --max engine"   "$(jq -r .execution.engine "$TMP/c.json")" "conductor"
+assert_eq "--conductor --max parallel" "$(jq -r .execution.parallel "$TMP/c.json")" "true"
 assert_eq "--conductor --max 20"       "$(jq -r .max_iterations "$TMP/c.json")" "20"
 
 mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--conductor --task-pr" >/dev/null
-assert_eq "--conductor --task-pr engine"   "$(jq -r .execution.engine "$TMP/c.json")" "conductor"
-assert_eq "--conductor --task-pr afk flag" "$(jq -r .afk.task_pr "$TMP/c.json")" "true"
+assert_eq "--conductor --task-pr parallel"  "$(jq -r .execution.parallel "$TMP/c.json")" "true"
+assert_eq "--conductor --task-pr afk flag"  "$(jq -r .afk.task_pr "$TMP/c.json")" "true"
 
 mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--conductor --conductor" >/dev/null
-assert_eq "duplicate --conductor idempotent" "$(jq -r .execution.engine "$TMP/c.json")" "conductor"
+assert_eq "duplicate --conductor idempotent" "$(jq -r .execution.parallel "$TMP/c.json")" "true"
+
+# --parallel: the real (non-deprecated) flag, same semantics as --conductor above
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--parallel" >/dev/null
+assert_eq "--parallel sets execution.parallel" "$(jq -r .execution.parallel "$TMP/c.json")" "true"
+assert_eq "--parallel mode unchanged"          "$(jq -r .mode "$TMP/c.json")" "hitl"
+
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--afk" >/dev/null
+assert_eq "no --parallel leaves execution.parallel unset" "$(jq -r '.execution.parallel // "unset"' "$TMP/c.json")" "unset"
+
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--parallel --hitl" >/dev/null
+assert_eq "--parallel --hitl mode=hitl"            "$(jq -r .mode "$TMP/c.json")" "hitl"
+assert_eq "--parallel --hitl execution.parallel"   "$(jq -r .execution.parallel "$TMP/c.json")" "true"
+
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--parallel --yolo" >/dev/null
+assert_eq "--parallel --yolo mode=afk"             "$(jq -r .mode "$TMP/c.json")" "afk"
+assert_eq "--parallel --yolo afk.yolo"             "$(jq -r .afk.yolo "$TMP/c.json")" "true"
+assert_eq "--parallel --yolo execution.parallel"   "$(jq -r .execution.parallel "$TMP/c.json")" "true"
+
+# A --parallel token INSIDE the quoted objective must NOT be parsed as a flag
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" '"try the --parallel engine"' >/dev/null
+assert_eq "--parallel inside objective ignored" "$(jq -r '.execution.parallel // "unset"' "$TMP/c.json")" "unset"
+
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--parallel --conductor" >/dev/null
+assert_eq "--parallel and deprecated --conductor together idempotent" "$(jq -r .execution.parallel "$TMP/c.json")" "true"
 
 # Switching modes CLEARS stale autonomous sub-flags (the runtime gates on them).
 prioryolo='{"mode":"afk","afk":{"enabled":true,"yolo":true,"task_pr":true},"max_iterations":40}'

@@ -524,6 +524,51 @@ migrate_24_to_25() {
   log_migration "v24→v25: added connectors.github.{enabled:false, pull.{label:nazgul, claimed_label:nazgul-claimed, max_body_bytes:65536}, push.enabled:true, pull_failures:0, map:{}} (additive, default-off; explicit values incl. enabled:true, push.enabled:false, and a populated map preserved; no credential key added)"
 }
 
+migrate_25_to_26() {
+  local tmp; tmp=$(mktemp)
+  # Parallel Execution Collapse: conductor engine removed; one engine with an
+  # execution.parallel option. Seeds execution.* from conductor.* (explicit
+  # values incl. false preserved via has()), then deletes .execution.engine,
+  # .conductor, .models.conductor, and auto_start.engine. Also removes the
+  # nazgul/conductor runtime dir (graph.json was a mirror of task manifests).
+  jq '
+    . as $root
+    | ($root.conductor // {}) as $c
+    | ($c.gates // {}) as $cg
+    | ($c.enforce // {}) as $ce
+    | .execution = ((if (.execution | type) == "object" then .execution else {} end)
+      | .parallel = (if has("parallel") then .parallel
+                     else (($root.execution.engine // "sequential") == "conductor") end)
+      | .max_parallel = (if has("max_parallel") then .max_parallel
+                         else (if ($c | has("max_parallel")) then $c.max_parallel else 3 end) end)
+      | .gates = ((if (.gates | type) == "object" then .gates else {} end)
+          | .approve_plan = (if has("approve_plan") then .approve_plan
+                             else (if ($cg | has("approve_graph")) then $cg.approve_graph else false end) end)
+          | .approve_batch = (if has("approve_batch") then .approve_batch
+                              else (if ($cg | has("approve_each_wave")) then $cg.approve_each_wave else false end) end)
+          | .approve_final_pr = (if has("approve_final_pr") then .approve_final_pr
+                                 else (if ($cg | has("approve_final_pr")) then $cg.approve_final_pr else false end) end))
+      | .enforce = ((if (.enforce | type) == "object" then .enforce else {} end)
+          | .dispatch_guard = (if has("dispatch_guard") then .dispatch_guard
+                               else (if ($ce | has("dispatch_guard")) then $ce.dispatch_guard else true end) end)
+          | .rework_guard = (if has("rework_guard") then .rework_guard
+                             else (if ($ce | has("rework_guard")) then $ce.rework_guard else true end) end)
+          | .premerge_guard = (if has("premerge_guard") then .premerge_guard
+                               else (if ($ce | has("premerge_guard")) then $ce.premerge_guard else true end) end))
+      | del(.engine))
+    | del(.conductor)
+    | (if (.models | type) == "object" then .models |= del(.conductor) else . end)
+    | (if (.automation.heartbeat.auto_start | type) == "object"
+       then .automation.heartbeat.auto_start |=
+         ((.parallel = (if has("parallel") then .parallel else ((.engine // "conductor") == "conductor") end))
+          | del(.engine))
+       else . end)
+    | .schema_version = 26
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  rm -rf "$(dirname "$CONFIG")/conductor"
+  log_migration "v25→v26: conductor engine collapsed — execution.parallel/max_parallel/gates{approve_plan,approve_batch,approve_final_pr}/enforce{dispatch,rework,premerge} seeded from conductor.* (explicit values incl. false preserved); deleted execution.engine, conductor.*, models.conductor, auto_start.engine (→auto_start.parallel); removed nazgul/conductor dir"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"
