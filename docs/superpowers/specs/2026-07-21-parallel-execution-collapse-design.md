@@ -50,7 +50,7 @@ reinvented: *nested subagents are not re-engageable drivers; only the main sessi
   (int, default 3; inherits old `conductor.max_parallel` on migration).
 - `/nazgul:start --parallel` enables it. `--conductor` remains as a deprecated alias
   (sets `parallel: true`, prints a deprecation note).
-- `migrate-config.sh` bumps schema v24 → v25:
+- `migrate-config.sh` bumps schema v25 → v26 (v25 was taken by FEAT-012):
   - `execution.engine == "conductor"` → `execution.parallel: true`
   - `conductor.max_parallel` → `execution.max_parallel`
   - `conductor.gates.approve_graph` → `execution.gates.approve_plan` (approve the
