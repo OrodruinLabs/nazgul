@@ -68,6 +68,55 @@ write_task() {
 EOF
 }
 
+# Writes a task manifest in the REAL production shape: a leading YAML
+# frontmatter block with the canonical `status:` field (what
+# scripts/lib/task-utils.sh's get_task_status/read_task_status treat as
+# authoritative) plus a `- **Status**:` list-item metadata line that may be
+# stale/placeholder. Proves the hook's frontmatter-first precedence.
+write_task_frontmatter() {
+  local repo="$1" id="$2" fm_status="$3" li_status="$4" sha="$5"
+  mkdir -p "$repo/nazgul/tasks"
+  cat > "$repo/nazgul/tasks/$id.md" <<EOF
+---
+status: $fm_status
+---
+
+# $id
+
+- **Status**: $li_status
+
+## Commits
+
+- $sha task work
+EOF
+}
+
+# Writes a task manifest whose ## Commits section is longer than 10 lines
+# (a realistic multi-retry history), with the candidate SHA on the LAST
+# line of the section, followed by another ## heading. Proves the
+# section-bounded extraction (stops at the next ## heading) finds it, where
+# a fixed grep -A10 window would not.
+write_task_long_commits() {
+  local repo="$1" id="$2" status="$3" sha="$4" i
+  mkdir -p "$repo/nazgul/tasks"
+  {
+    echo "# $id"
+    echo
+    echo "- **Status**: $status"
+    echo
+    echo "## Commits"
+    echo
+    for i in $(seq 1 12); do
+      echo "- placeholder-retry-$i (superseded)"
+    done
+    echo "- $sha final retry commit"
+    echo
+    echo "## Notes"
+    echo
+    echo "nothing relevant here"
+  } > "$repo/nazgul/tasks/$id.md"
+}
+
 do_merge() {
   local repo="$1" branch="$2"
   MERGE_STDERR=$(git -C "$repo" merge --no-ff -m "merge $branch" "$branch" 2>&1) && MERGE_EC=0 || MERGE_EC=$?
@@ -380,6 +429,56 @@ make_flaky_jq_bin_dir "$FLAKY_JQ_BIN"
 PATH="$FLAKY_JQ_BIN:$PATH" do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
 assert_exit_code "degrade: candidate-SHA pipeline failure -> exit 0 (never blocks)" "$MERGE_EC" 0
 rm -rf "$FLAKY_JQ_BIN"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# FRONTMATTER-FIRST: canonical YAML frontmatter status (DONE) overrides a
+# stale **Status** list-item metadata line still reading IN_REVIEW -> allow.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+UNIT_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task_frontmatter "$TEST_DIR/repo" "TASK-001" "DONE" "IN_REVIEW" "$UNIT_SHA"
+do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+assert_exit_code "frontmatter-first: fm DONE overrides stale list-item IN_REVIEW -> exit 0" "$MERGE_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# FRONTMATTER-FIRST: canonical YAML frontmatter status (IN_REVIEW) overrides
+# a stale **Status** list-item metadata line falsely reading DONE -> block.
+# Proves the canonical frontmatter source governs the gate, not the
+# placeholder list-item line that a real manifest can leave behind stale.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+UNIT_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task_frontmatter "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "DONE" "$UNIT_SHA"
+do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+assert_exit_code "frontmatter-first: fm IN_REVIEW overrides stale list-item DONE -> nonzero" "$MERGE_EC" 1
+assert_contains "frontmatter-first block message names the unit" "$MERGE_STDERR" "TASK-001"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# BOUNDED COMMITS WINDOW: a ## Commits section longer than 10 lines (a
+# realistic multi-retry manifest) with the candidate SHA on its LAST line,
+# followed by another ## heading -> still matched. A fixed grep -A10 window
+# would have missed it.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+UNIT_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task_long_commits "$TEST_DIR/repo" "TASK-001" "DONE" "$UNIT_SHA"
+do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+assert_exit_code "bounded Commits window: SHA past line 10 of a long section still matched -> exit 0" "$MERGE_EC" 0
 teardown_temp_dir
 
 report_results

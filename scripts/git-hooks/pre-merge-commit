@@ -70,14 +70,26 @@ CANDIDATE_SHAS_JSON=$(env | sed -nE 's/^GITHEAD_([0-9a-f]{40,64})=.*/\1/p' | jq 
 # DONE unit can't mask a genuine, unapproved candidate also present in the
 # same merge. Candidates matching no manifest are untracked/unrelated
 # commits (ignored); a matched task whose Status is not DONE blocks.
+#
+# The ## Commits section is bounded to the next ## heading (not a fixed line
+# count) — multi-retry manifests can carry commit lists well past 10 lines.
+#
+# Status is read frontmatter-first, mirroring scripts/lib/task-utils.sh's
+# get_task_status/read_task_status (canonical `status:` inside the leading
+# --- fence wins over the legacy `- **Status**:` list-item line, which can go
+# stale). This hook can't source that lib — it runs standalone in target
+# repos — so the same precedence is replicated inline via awk/grep.
 UNIT_ID=""
 STATUS=""
 while IFS= read -r CANDIDATE_SHA; do
   [ -n "$CANDIDATE_SHA" ] || continue
   for tf in "$REPO_ROOT/nazgul/tasks"/TASK-*.md; do
     [ -f "$tf" ] || continue
-    grep -A10 '^## Commits' "$tf" 2>/dev/null | grep -q "$CANDIDATE_SHA" || continue
-    tf_status=$(grep -E '^\- \*\*Status\*\*:' "$tf" 2>/dev/null | head -1 | sed 's/^.*: *//' | tr -d ' ')
+    awk '/^## Commits/{f=1;next} /^## /{f=0} f' "$tf" 2>/dev/null | grep -q "$CANDIDATE_SHA" || continue
+    tf_status=$(awk '/^---[[:space:]]*$/{fm++; next} fm==1 && /^status:/{sub(/^status:[[:space:]]*/, ""); sub(/\r$/, ""); print; exit}' "$tf" 2>/dev/null)
+    if [ -z "$tf_status" ]; then
+      tf_status=$(grep -E '^\- \*\*Status\*\*:' "$tf" 2>/dev/null | head -1 | sed 's/^.*: *//' | tr -d ' \r')
+    fi
     if [ "$tf_status" != "DONE" ]; then
       UNIT_ID=$(basename "$tf" .md)
       STATUS="$tf_status"
