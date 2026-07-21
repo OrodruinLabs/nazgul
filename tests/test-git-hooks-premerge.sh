@@ -52,10 +52,20 @@ write_config() {
   printf '%s' "$json" > "$repo/nazgul/config.json"
 }
 
-write_graph() {
-  local repo="$1" json="$2"
-  mkdir -p "$repo/nazgul/conductor"
-  printf '%s' "$json" > "$repo/nazgul/conductor/graph.json"
+# Writes a task manifest with a ## Commits section (the commit-lookup source
+# the hook greps) and a list-item ## Status line (the verdict source).
+write_task() {
+  local repo="$1" id="$2" status="$3" sha="$4"
+  mkdir -p "$repo/nazgul/tasks"
+  cat > "$repo/nazgul/tasks/$id.md" <<EOF
+# $id
+
+- **Status**: $status
+
+## Commits
+
+- $sha task work
+EOF
 }
 
 do_merge() {
@@ -125,42 +135,42 @@ EOF
   chmod +x "$dir/jq"
 }
 
-CONDUCTOR_CONFIG='{"execution":{"engine":"conductor"},"guards":{"git_hooks":true}}'
+PARALLEL_CONFIG='{"execution":{"parallel":true},"guards":{"git_hooks":true}}'
 
 # ---------------------------------------------------------------------------
-# BLOCK: content-matched unit, graph status != DONE -> merge fails.
+# BLOCK: content-matched unit, manifest Status != DONE -> merge fails.
 # ---------------------------------------------------------------------------
 setup_temp_dir
 init_repo "$TEST_DIR/repo"
 make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
 UNIT_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
 install_hooks "$TEST_DIR/repo"
-write_config "$TEST_DIR/repo" "$CONDUCTOR_CONFIG"
-write_graph "$TEST_DIR/repo" "{\"tasks\":{\"TASK-001\":{\"status\":\"IN_REVIEW\",\"verdict\":\"\",\"commit\":\"$UNIT_SHA\"}}}"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "$UNIT_SHA"
 do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
-assert_exit_code "block: non-APPROVED unit merge -> nonzero" "$MERGE_EC" 1
+assert_exit_code "block: non-DONE unit merge -> nonzero" "$MERGE_EC" 1
 assert_contains "block message names the unit" "$MERGE_STDERR" "TASK-001"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# ALLOW (content-match happy path): the merged commit == graph-recorded
-# commit of a DONE+APPROVE unit -> allowed.
+# ALLOW (content-match happy path): the merged commit is listed under a
+# DONE unit's ## Commits section -> allowed.
 # ---------------------------------------------------------------------------
 setup_temp_dir
 init_repo "$TEST_DIR/repo"
 make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
 UNIT_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
 install_hooks "$TEST_DIR/repo"
-write_config "$TEST_DIR/repo" "$CONDUCTOR_CONFIG"
-write_graph "$TEST_DIR/repo" "{\"tasks\":{\"TASK-001\":{\"status\":\"DONE\",\"verdict\":\"APPROVE — all reviewers passed\",\"commit\":\"$UNIT_SHA\"}}}"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-001" "DONE" "$UNIT_SHA"
 do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
-assert_exit_code "allow: content-matched DONE+APPROVE unit -> exit 0" "$MERGE_EC" 0
+assert_exit_code "allow: content-matched DONE unit -> exit 0" "$MERGE_EC" 0
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# SPOOF (primary): a decoy GITHEAD_<sha>=<label> falsely claims an APPROVED
-# unit (TASK-999) while the actual merged content is a DIFFERENT, unapproved
-# unit (TASK-888) — git itself still sets the genuine GITHEAD_<real-sha> for
+# SPOOF (primary): a decoy GITHEAD_<sha>=<label> falsely claims a DONE unit
+# (TASK-999) while the actual merged content is a DIFFERENT, unapproved unit
+# (TASK-888) — git itself still sets the genuine GITHEAD_<real-sha> for
 # TASK-888 alongside the decoy. The guard must resolve identity from the
 # real content match, not accept the decoy label, so the unreviewed content
 # must NOT be admitted under TASK-999's approval.
@@ -172,17 +182,18 @@ APPROVED_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-999")
 make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-888"
 MALICIOUS_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-888")
 install_hooks "$TEST_DIR/repo"
-write_config "$TEST_DIR/repo" "$CONDUCTOR_CONFIG"
-write_graph "$TEST_DIR/repo" "{\"tasks\":{\"TASK-999\":{\"status\":\"DONE\",\"verdict\":\"APPROVE — ok\",\"commit\":\"$APPROVED_SHA\"},\"TASK-888\":{\"status\":\"IN_REVIEW\",\"verdict\":\"\",\"commit\":\"$MALICIOUS_SHA\"}}}"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-999" "DONE" "$APPROVED_SHA"
+write_task "$TEST_DIR/repo" "TASK-888" "IN_REVIEW" "$MALICIOUS_SHA"
 do_merge_githead_spoofed "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-888" "$APPROVED_SHA"
-assert_exit_code "spoof: decoy GITHEAD for approved unit does not admit unapproved content -> nonzero" "$MERGE_EC" 1
+assert_exit_code "spoof: decoy GITHEAD for DONE unit does not admit unapproved content -> nonzero" "$MERGE_EC" 1
 assert_contains "spoof: block message names the REAL (content-resolved) unit, not the decoy" "$MERGE_STDERR" "TASK-888"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# SPOOF (secondary): GIT_REFLOG_ACTION falsely claims an APPROVED unit
-# (TASK-999) while the actual merge content is the DIFFERENT, unapproved
-# TASK-888 -> proves GIT_REFLOG_ACTION carries zero identity weight at all.
+# SPOOF (secondary): GIT_REFLOG_ACTION falsely claims a DONE unit (TASK-999)
+# while the actual merge content is the DIFFERENT, unapproved TASK-888 ->
+# proves GIT_REFLOG_ACTION carries zero identity weight at all.
 # ---------------------------------------------------------------------------
 setup_temp_dir
 init_repo "$TEST_DIR/repo"
@@ -191,91 +202,80 @@ APPROVED_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-999")
 make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-888"
 MALICIOUS_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-888")
 install_hooks "$TEST_DIR/repo"
-write_config "$TEST_DIR/repo" "$CONDUCTOR_CONFIG"
-write_graph "$TEST_DIR/repo" "{\"tasks\":{\"TASK-999\":{\"status\":\"DONE\",\"verdict\":\"APPROVE — ok\",\"commit\":\"$APPROVED_SHA\"},\"TASK-888\":{\"status\":\"IN_REVIEW\",\"verdict\":\"\",\"commit\":\"$MALICIOUS_SHA\"}}}"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-999" "DONE" "$APPROVED_SHA"
+write_task "$TEST_DIR/repo" "TASK-888" "IN_REVIEW" "$MALICIOUS_SHA"
 do_merge_reflog_spoofed "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-888" "feat/FEAT-010-x/TASK-999"
-assert_exit_code "spoof: claimed-approved reflog label does not admit unapproved content -> nonzero" "$MERGE_EC" 1
+assert_exit_code "spoof: claimed-DONE reflog label does not admit unapproved content -> nonzero" "$MERGE_EC" 1
 assert_contains "spoof: block message names the REAL (content-resolved) unit, not the claimed one" "$MERGE_STDERR" "TASK-888"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# NO-OP: sequential engine -> unit merge allowed regardless of graph verdict.
+# NO-OP: execution.parallel=false -> unit merge allowed regardless of
+# manifest status.
 # ---------------------------------------------------------------------------
 setup_temp_dir
 init_repo "$TEST_DIR/repo"
 make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
 UNIT_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
 install_hooks "$TEST_DIR/repo"
-write_config "$TEST_DIR/repo" '{"execution":{"engine":"sequential"},"guards":{"git_hooks":true}}'
-write_graph "$TEST_DIR/repo" "{\"tasks\":{\"TASK-001\":{\"status\":\"IN_REVIEW\",\"verdict\":\"\",\"commit\":\"$UNIT_SHA\"}}}"
+write_config "$TEST_DIR/repo" '{"execution":{"parallel":false},"guards":{"git_hooks":true}}'
+write_task "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "$UNIT_SHA"
 do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
-assert_exit_code "no-op: sequential engine -> exit 0" "$MERGE_EC" 0
+assert_exit_code "no-op: execution.parallel=false -> exit 0" "$MERGE_EC" 0
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# DEGRADE: absent graph.json -> allowed even under conductor engine.
+# DEGRADE: no nazgul/tasks manifests at all -> allowed even under parallel.
 # ---------------------------------------------------------------------------
 setup_temp_dir
 init_repo "$TEST_DIR/repo"
 make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
 install_hooks "$TEST_DIR/repo"
-write_config "$TEST_DIR/repo" "$CONDUCTOR_CONFIG"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
 do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
-assert_exit_code "degrade: absent graph.json -> exit 0" "$MERGE_EC" 0
+assert_exit_code "degrade: no task manifests -> exit 0" "$MERGE_EC" 0
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# DEGRADE: malformed graph.json -> allowed.
-# ---------------------------------------------------------------------------
-setup_temp_dir
-init_repo "$TEST_DIR/repo"
-make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
-install_hooks "$TEST_DIR/repo"
-write_config "$TEST_DIR/repo" "$CONDUCTOR_CONFIG"
-mkdir -p "$TEST_DIR/repo/nazgul/conductor"
-printf 'not json {{{' > "$TEST_DIR/repo/nazgul/conductor/graph.json"
-do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
-assert_exit_code "degrade: malformed graph.json -> exit 0" "$MERGE_EC" 0
-teardown_temp_dir
-
-# ---------------------------------------------------------------------------
-# DEGRADE: untracked merge commit (not recorded against any unit) -> allowed.
+# DEGRADE: untracked merge commit (not recorded against any manifest) ->
+# allowed.
 # ---------------------------------------------------------------------------
 setup_temp_dir
 init_repo "$TEST_DIR/repo"
 make_unit_branch "$TEST_DIR/repo" "topic-branch"
 install_hooks "$TEST_DIR/repo"
-write_config "$TEST_DIR/repo" "$CONDUCTOR_CONFIG"
-write_graph "$TEST_DIR/repo" '{"tasks":{}}'
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
 do_merge "$TEST_DIR/repo" "topic-branch"
-assert_exit_code "degrade: untracked commit, no unit match -> exit 0" "$MERGE_EC" 0
+assert_exit_code "degrade: untracked commit, no manifest match -> exit 0" "$MERGE_EC" 0
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
 # FALSE-BLOCK REGRESSION: a /TASK-NNN-suffixed branch WITHOUT the feat/
-# prefix, whose commit was never recorded as any unit's commit, must degrade
-# to allow — content-based resolution means branch shape never gates.
+# prefix, whose commit was never recorded in any manifest's ## Commits
+# section, must degrade to allow — content-based resolution means branch
+# shape never gates.
 # ---------------------------------------------------------------------------
 setup_temp_dir
 init_repo "$TEST_DIR/repo"
 make_unit_branch "$TEST_DIR/repo" "docs/TASK-001"
 install_hooks "$TEST_DIR/repo"
-write_config "$TEST_DIR/repo" "$CONDUCTOR_CONFIG"
-write_graph "$TEST_DIR/repo" '{"tasks":{"TASK-001":{"status":"IN_REVIEW","verdict":"","commit":"0000000"}}}'
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "0000000"
 do_merge "$TEST_DIR/repo" "docs/TASK-001"
 assert_exit_code "false-block regression: docs/TASK-001 (non-feat/ prefix) -> exit 0" "$MERGE_EC" 0
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# DEGRADE: kill-switch conductor.enforce.premerge_guard=false -> allowed.
+# DEGRADE: kill-switch execution.enforce.premerge_guard=false -> allowed.
 # ---------------------------------------------------------------------------
 setup_temp_dir
 init_repo "$TEST_DIR/repo"
 make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
 UNIT_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
 install_hooks "$TEST_DIR/repo"
-write_config "$TEST_DIR/repo" '{"execution":{"engine":"conductor"},"guards":{"git_hooks":true},"conductor":{"enforce":{"premerge_guard":false}}}'
-write_graph "$TEST_DIR/repo" "{\"tasks\":{\"TASK-001\":{\"status\":\"IN_REVIEW\",\"verdict\":\"\",\"commit\":\"$UNIT_SHA\"}}}"
+write_config "$TEST_DIR/repo" '{"execution":{"parallel":true,"enforce":{"premerge_guard":false}},"guards":{"git_hooks":true}}'
+write_task "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "$UNIT_SHA"
 do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
 assert_exit_code "degrade: kill-switch premerge_guard=false -> exit 0" "$MERGE_EC" 0
 teardown_temp_dir
@@ -288,8 +288,8 @@ init_repo "$TEST_DIR/repo"
 make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
 UNIT_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
 install_hooks "$TEST_DIR/repo"
-write_config "$TEST_DIR/repo" '{"execution":{"engine":"conductor"},"guards":{"git_hooks":false}}'
-write_graph "$TEST_DIR/repo" "{\"tasks\":{\"TASK-001\":{\"status\":\"IN_REVIEW\",\"verdict\":\"\",\"commit\":\"$UNIT_SHA\"}}}"
+write_config "$TEST_DIR/repo" '{"execution":{"parallel":true},"guards":{"git_hooks":false}}'
+write_task "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "$UNIT_SHA"
 do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
 assert_exit_code "degrade: guards.git_hooks=false -> exit 0" "$MERGE_EC" 0
 teardown_temp_dir
@@ -314,15 +314,15 @@ teardown_temp_dir
 setup_temp_dir
 init_repo "$TEST_DIR/repo"
 install_hooks "$TEST_DIR/repo"
-write_config "$TEST_DIR/repo" "$CONDUCTOR_CONFIG"
-write_graph "$TEST_DIR/repo" '{"tasks":{"TASK-001":{"status":"IN_REVIEW","verdict":"","commit":"0000000"}}}'
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "0000000"
 (cd "$TEST_DIR/repo" && "$TEST_DIR/repo/.githooks/pre-merge-commit" >/dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 assert_exit_code "degrade: no GITHEAD_* identity (no merge in progress) -> exit 0" "$HOOK_EC" 0
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# CHAIN-DISPATCH: after allowing (content-matched DONE+APPROVE unit), the
-# prior pre-merge-commit hook still runs; if it blocks, its exit propagates.
+# CHAIN-DISPATCH: after allowing (content-matched DONE unit), the prior
+# pre-merge-commit hook still runs; if it blocks, its exit propagates.
 # ---------------------------------------------------------------------------
 setup_temp_dir
 init_repo "$TEST_DIR/repo"
@@ -336,8 +336,8 @@ exit 1
 EOF
 chmod +x "$TEST_DIR/prior-hooks/pre-merge-commit"
 install_hooks "$TEST_DIR/repo"
-write_config "$TEST_DIR/repo" "{\"execution\":{\"engine\":\"conductor\"},\"branch\":{\"prior_hooks_path\":\"$TEST_DIR/prior-hooks\"},\"guards\":{\"git_hooks\":true}}"
-write_graph "$TEST_DIR/repo" "{\"tasks\":{\"TASK-001\":{\"status\":\"DONE\",\"verdict\":\"APPROVE — ok\",\"commit\":\"$UNIT_SHA\"}}}"
+write_config "$TEST_DIR/repo" "{\"execution\":{\"parallel\":true},\"branch\":{\"prior_hooks_path\":\"$TEST_DIR/prior-hooks\"},\"guards\":{\"git_hooks\":true}}"
+write_task "$TEST_DIR/repo" "TASK-001" "DONE" "$UNIT_SHA"
 do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
 assert_exit_code "chain-dispatch: prior hook exit 1 propagates on allow path" "$MERGE_EC" 1
 assert_contains "chain-dispatch: prior hook actually ran" "$MERGE_STDERR" "prior hook ran"
@@ -352,8 +352,8 @@ init_repo "$TEST_DIR/repo"
 make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
 UNIT_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
 install_hooks "$TEST_DIR/repo"
-write_config "$TEST_DIR/repo" "$CONDUCTOR_CONFIG"
-write_graph "$TEST_DIR/repo" "{\"tasks\":{\"TASK-001\":{\"status\":\"IN_REVIEW\",\"verdict\":\"\",\"commit\":\"$UNIT_SHA\"}}}"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "$UNIT_SHA"
 # A dir under TEST_DIR would embed the literal ":" in "nazgul:test-XXXXXX"
 # (from setup_temp_dir), corrupting PATH — use a colon-free temp dir instead.
 NO_JQ_BIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-no-jq-XXXXXX")
@@ -373,8 +373,8 @@ init_repo "$TEST_DIR/repo"
 make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
 UNIT_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
 install_hooks "$TEST_DIR/repo"
-write_config "$TEST_DIR/repo" "$CONDUCTOR_CONFIG"
-write_graph "$TEST_DIR/repo" "{\"tasks\":{\"TASK-001\":{\"status\":\"IN_REVIEW\",\"verdict\":\"\",\"commit\":\"$UNIT_SHA\"}}}"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "$UNIT_SHA"
 FLAKY_JQ_BIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-flaky-jq-XXXXXX")
 make_flaky_jq_bin_dir "$FLAKY_JQ_BIN"
 PATH="$FLAKY_JQ_BIN:$PATH" do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
