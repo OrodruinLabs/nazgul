@@ -76,7 +76,7 @@ Task-PR:     PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> APPR
 9. **Review granularity is enforced at the completion gate.** `[enforced]` `review_gate.granularity` (`task`/`group`/`feature`) controls the review unit. The stop-hook drives dispatch at the configured granularity in AFK/YOLO, so it holds up front there. But a human or orchestrator dispatching `nazgul:review-gate` directly (e.g. `/nazgul:review`) bypasses that **sequencing** — so a `SubagentStop` detector records the unit each review actually covered (`nazgul/logs/review-coverage.jsonl`, derived from `reviewer_verdict` events) and the stop-hook's granularity reconciliation gate blocks (or warns, per `review_gate.enforce_granularity`) `NAZGUL_COMPLETE` when a DONE task was reviewed at the wrong granularity. The gate is post-hoc defense-in-depth (the review already ran at the wrong scope) with a bounded backstop so it can never deadlock an unattended loop. Subagent **dispatch** itself cannot be pre-gated (no PreToolUse matcher for the Task tool), so completion-gate enforcement is the available mechanism.
 10. **Review attestation is diff-bound.** `[hook-driven only]` Before spawning reviewers, review-gate writes a diff-bound dispatch manifest (`nazgul/reviews/<unit>/.dispatch.json`, co-located with the reviewer evidence the DONE gate reads) via `write_dispatch_manifest` (`scripts/lib/review-provenance.sh`): a nonce, a diff-hash, and a derived `token`. The orchestrator — never the reviewer — stamps the matching `review_token:` into each reviewer's frontmatter when it persists the returned review (see §3.3). `validate_review_provenance`, gated by `review_gate.require_provenance` (default `true`), re-scans every DONE task on each stop-hook Stop event and detects a missing manifest or a diff that moved since review (`DIFF_HASH_STALE`), routing violations through its own bounded reset→IMPLEMENTED→BLOCKED escalation (`_provenance_reset_counts`, tracked independently of the pre-existing evidence ladder `_review_reset_counts` so a first-time provenance violation right after an evidence violation still gets its own grace reset). **Honest limit: this is tamper-evidence and diff-staleness detection, not authentication** — the stop-hook verifier and the review-gate orchestrator share the same filesystem and the token derivation is public, so a determined actor with shell access could forge one; its real value is catching the common accidental cases (board skipped, code changed after approval). Degrades to allow for legacy reviews where no reviewer file carries a `review_token:`. Because this check runs only inside the stop-hook's post-hoc scan, a human or orchestrator that hand-writes `status: DONE` without ever invoking stop-hook is not provenance-checked (only evidence-checked, per §3.1). `[enforced]` separately: `task-state-guard.sh` blocks (PreToolUse, independent of driver) any Write/Edit to `.dispatch.json` while the owning task is IN_PROGRESS, closing the window where an implementer could plant a favorable manifest before review starts.
 11. **Reviewer dispatch is diff-aware and cost-tiered.** `[enforced]` When `review_gate.conditional_dispatch` is `true` (default `false`), `scripts/lib/reviewer-selection.sh select` deterministically — no LLM judgment — picks which configured reviewers run for the changed-file set: `security-reviewer` always runs; `architect-reviewer` only when scope touches `skills/`, `agents/`, `scripts/`, `hooks/`, or a config-schema file; `qa-reviewer` only when `tests/` changed; `code-reviewer` is skipped only when every changed file is doc/markdown/text; any classification ambiguity defaults to the full board. The orchestrator writes an authorized `verdict: SKIPPED` stub (with a matching `review_token:`) for each skipped reviewer, and `validate_review_evidence` treats a manifest-authorized SKIPPED as gate-satisfying — but only by **recompute-and-compare**: `_re_manifest_authentic` (`scripts/lib/review-evidence.sh`) re-derives the legitimate skip set from the unit's CURRENT `diff.patch` and the live selection policy (`reviewer-selection.sh verify`), so a `skipped[]` entry that is not reproducible from the current diff is rejected; `security-reviewer` is never honored as skipped even if a manifest claims it (defense in depth). This check runs inside `validate_review_evidence`, called from `task-state-guard.sh`'s PreToolUse guard on the DONE-status write — independent of who drives the loop, mirroring §3.1/§3.6. **Honest limit (accepted):** recompute-and-compare binds a skip to the diff and selection policy *on disk*, not to who wrote the manifest — `diff.patch` itself is an unauthenticated trust root, so a determined actor with shell access could pre-plant a diff that legitimizes a forged skip. This closes the cheap forge (naming a reviewer as skipped with nothing backing it), not authenticating the writer, consistent with the plugin's shared-filesystem threat model. Model selection is cost-tiered but not hook-enforced: `models.review` defaults mechanical reviewers to `haiku`; `models.review_by_reviewer` is a review-gate agent instruction (Step 2), not a hook check, that pins both `security-reviewer` and `architect-reviewer` to `sonnet` regardless of the default. `review_gate.require_all_approve` is **informational only — no script reads it**; the effective policy is the hard-coded "every non-skipped reviewer must APPROVE" loop inside `validate_review_evidence` itself (see §3.1).
-12. **The `UNVERIFIED` verdict separates "could not assess" from "rejected."** `[enforced]` at the DONE gate; the retry loop + role-aware finalize are review-gate orchestrator steps, not a hook. A fourth verdict `UNVERIFIED` (`VALID_VERDICTS`, `scripts/lib/structured-state.sh`) is emitted either by a reviewer that self-reports it genuinely could not assess the change (`agents/templates/reviewer-base.md`) OR by the review-gate orchestrator as a token-stamped stub when a dispatched reviewer errors, times out, or returns unparseable text (`agents/review-gate.md` Step 2.5). It is distinct from `CHANGES_REQUESTED` (a real rejection) and carries its **own bounded counter**: a terminal `UNVERIFIED` re-dispatches that one reviewer up to `review_gate.unverified_retries` (default 2) times and **never increments** the CHANGES_REQUESTED `retry_count` — the change isn't wrong, the review didn't happen (Step 2.6). Role-aware finalize once retries are exhausted: a **critical reviewer** (`review_gate.critical_reviewers`, default `["security-reviewer","architect-reviewer"]`) still `UNVERIFIED` escalates to **BLOCKED** (fail-closed); a **non-critical reviewer** (code, qa, generated domain reviewers) becomes a **non-blocking warning** that satisfies the DONE gate only when `review_gate.allow_unverified_nonblocking` is `true` (default) — set it `false` for a conservative posture where `UNVERIFIED` blocks for everyone. The DONE-gate half is enforced: `_has_approved_verdict` treats `UNVERIFIED` as not-approved and `_re_is_authorized_unverified` (`scripts/lib/review-evidence.sh`) admits a non-critical `UNVERIFIED` only under the toggle, falls back to the default critical list on a malformed/ambiguous config (fail closed, not open), and never admits `security-reviewer` (hard-coded, pre-config-read). Each finalized `UNVERIFIED` emits a `reviewer_unverified` event; the conductor security hard-stop `_cgate_security_rejections` (`scripts/lib/conductor-gates.sh`) emits a distinct `SECURITY_UNVERIFIED` line (same halt) so logs separate "could not assess" from "rejected."
+12. **The `UNVERIFIED` verdict separates "could not assess" from "rejected."** `[enforced]` at the DONE gate; the retry loop + role-aware finalize are review-gate orchestrator steps, not a hook. A fourth verdict `UNVERIFIED` (`VALID_VERDICTS`, `scripts/lib/structured-state.sh`) is emitted either by a reviewer that self-reports it genuinely could not assess the change (`agents/templates/reviewer-base.md`) OR by the review-gate orchestrator as a token-stamped stub when a dispatched reviewer errors, times out, or returns unparseable text (`agents/review-gate.md` Step 2.5). It is distinct from `CHANGES_REQUESTED` (a real rejection) and carries its **own bounded counter**: a terminal `UNVERIFIED` re-dispatches that one reviewer up to `review_gate.unverified_retries` (default 2) times and **never increments** the CHANGES_REQUESTED `retry_count` — the change isn't wrong, the review didn't happen (Step 2.6). Role-aware finalize once retries are exhausted: a **critical reviewer** (`review_gate.critical_reviewers`, default `["security-reviewer","architect-reviewer"]`) still `UNVERIFIED` escalates to **BLOCKED** (fail-closed); a **non-critical reviewer** (code, qa, generated domain reviewers) becomes a **non-blocking warning** that satisfies the DONE gate only when `review_gate.allow_unverified_nonblocking` is `true` (default) — set it `false` for a conservative posture where `UNVERIFIED` blocks for everyone. The DONE-gate half is enforced: `_has_approved_verdict` treats `UNVERIFIED` as not-approved and `_re_is_authorized_unverified` (`scripts/lib/review-evidence.sh`) admits a non-critical `UNVERIFIED` only under the toggle, falls back to the default critical list on a malformed/ambiguous config (fail closed, not open), and never admits `security-reviewer` (hard-coded, pre-config-read). Each finalized `UNVERIFIED` emits a `reviewer_unverified` event; the parallel-mode security hard-stop `_pb_security_rejections` (`scripts/lib/parallel-batch.sh`, §11) emits a distinct `SECURITY_UNVERIFIED` line (same halt) so logs separate "could not assess" from "rejected."
 13. **Borderline blocking findings get one bounded adversarial cross-check.** `[advisory]` — review-gate orchestrator behavior (`agents/review-gate.md` Step 3), not a hook check. When `review_gate.adversarial_crosscheck` is `true` (default), a blocking finding (confidence ≥ `confidence_threshold`) whose confidence lands within `review_gate.adversarial_margin` (default 10) of the threshold **and** is HIGH severity or on a security-relevant file gets **exactly one** fresh confirm-or-refute reviewer dispatched for that single finding. If it refutes at ≥ threshold confidence the finding downgrades to a non-blocking CONCERN; if it confirms (or by default) it stays blocking. Bounded by `review_gate.adversarial_max` (default 3) cross-checks per review unit — eligible findings past the cap are logged as not-cross-checked and stay blocking. Per FEAT-006 cost discipline this deliberately does NOT re-review anything else and NEVER runs a second board; worst-case added cost is `adversarial_max` single-finding dispatches, and it is a one-line opt-out.
 
 ---
@@ -186,7 +186,7 @@ This guard governs comment QUANTITY at write time. See §7 for the complementary
 
 **Self-audit runs at the post-loop completion gate.** `[enforced]` (FEAT-009, ADR-001) After the doc/comment verifiers, `agents/self-audit.md` mines this objective's own signals — review rejections, retries, blocks, best-effort transcript token cost, and any first-party findings in `nazgul/logs/findings.jsonl` (§14) — and appends one structured entry per finding to the durable, append-only backlog at `nazgul/improvements.md` (path from `self_audit.backlog_path`). Its testable core `scripts/self-audit.sh` never fails the run: every source degrades to a no-op when absent. The agent records completion by writing `nazgul/logs/.self-audited` containing the current `feat_id`; the stop-hook blocks `NAZGUL_COMPLETE` until that marker matches, with a bounded ≤3-attempt backstop so it can never deadlock an unattended loop. When `self_audit.enabled` is `false` in `nazgul/config.json` (default `true`), the gate is a complete no-op.
 
-**Model tiers are config-read, not hook-enforced.** `[advisory]` (FEAT-009) `models.conductor` (default `sonnet`) pins the Conductor's own tier — `/nazgul:start` passes it as the `model` on the `agents/conductor.md` dispatch rather than letting the Conductor inherit the launching session's tier. The single review tier is now two keys: `models.review_orchestrator` (review-gate/conductor orchestrator) and `models.review_default` (default per-reviewer tier for the mechanical code/qa reviewers). Both resolve with the exact fallback chain **new key → legacy `models.review` → hardcoded** (`sonnet` for the orchestrator, `haiku` for the default reviewer), so a config still carrying only `models.review` is honored unchanged; `models.review_by_reviewer` pins `security-reviewer`/`architect-reviewer` to `sonnet` on top of this (§3 Rule 11). These are agent/skill config reads, not hook checks — advisory, like the rest of the model routing.
+**Model tiers are config-read, not hook-enforced.** `[advisory]` (FEAT-009) The single review tier is now two keys: `models.review_orchestrator` (the review-gate orchestrator) and `models.review_default` (default per-reviewer tier for the mechanical code/qa reviewers). Both resolve with the exact fallback chain **new key → legacy `models.review` → hardcoded** (`sonnet` for the orchestrator, `haiku` for the default reviewer), so a config still carrying only `models.review` is honored unchanged; `models.review_by_reviewer` pins `security-reviewer`/`architect-reviewer` to `sonnet` on top of this (§3 Rule 11). These are agent/skill config reads, not hook checks — advisory, like the rest of the model routing.
 
 ---
 
@@ -220,85 +220,36 @@ This guard governs comment QUANTITY at write time. See §7 for the complementary
 
 ---
 
-## 11. Conductor Execution Engine (opt-in)
+## 11. Parallel Dispatch (opt-in)
 
-`agents/conductor.md` is a graph-only alternative driver: one long-lived session that computes waves
-from the Planner's task graph and dispatches each unit's implementation and Review Board itself, holding
-only `nazgul/conductor/graph.json` (ids, deps, wave, status, a one-line verdict, a bare commit SHA — never
-a diff or file body). It reuses Review Board (§3) unmodified — every unit still goes through
-`agents/review-gate.md` exactly as the sequential loop does — and any `worktree`-backend unit follows the
-same `EnterWorktree`/`ExitWorktree` + feature-branch-only merge rules as every other Nazgul worktree
-(§10); it never merges to `main`. The sequential stop-hook loop is untouched either way.
+`execution.parallel` (default `false`) is an opt-in batch-dispatch option inside the single sequential
+stop-hook loop — there is no separate driver agent or engine choice. `scripts/stop-hook.sh` reads the
+flag on every Stop-hook invocation and, when set, layers concurrent task dispatch on top of the same
+state machine, Review Board (§3), and worktree/branch rules (§10) the sequential loop already uses. This
+replaces the former opt-in Conductor engine (FEAT-007 through FEAT-009), deleted along with its dedicated
+driver agent, `nazgul/conductor/graph.json` state, and engine-specific guards in favor of one engine with
+an optional parallel-batch mode (the Parallel Execution Collapse).
 
-- **Opt-in engine selection and pause gates are config-read, not hook-blocked.** `[advisory]` `execution.engine` defaults to `"sequential"`; `/nazgul:start --conductor` (`skills/start/SKILL.md` Engine Selection) is what dispatches `agents/conductor.md` instead of the Implementer, only when `execution.engine == "conductor"`. `conductor.gates.approve_graph`/`approve_each_wave`/`approve_final_pr` default `false` (autonomous-first); `conductor_gate_effective` (`scripts/lib/conductor-gates.sh`) computes the EFFECTIVE value at read time — `mode == "hitl"` flips `approve_graph` on without mutating the stored config — and `conductor_should_pause` is checked at Steps 1.5/3.2/3.3 of `agents/conductor.md`. Both the engine choice and every gate pause are protocol steps inside the Conductor's own prompt: no PreToolUse guard stops a human or orchestrator from dispatching `agents/conductor.md` directly regardless of the stored `execution.engine` value, or from skipping a gate pause.
-- **The two hard stops are unconditional within the Conductor's own protocol — never gated, never yolo-bypassable by config.** `[advisory]` Any `BLOCKED` task or any non-`APPROVE` `security-reviewer.md` verdict halts the Conductor for a human. `conductor_should_halt` (`scripts/lib/conductor-gates.sh`) fails CLOSED on ambiguity (`BLOCKED_TASKS_AMBIGUOUS`, `SECURITY_REJECTION_AMBIGUOUS`, `*_UNREADABLE`) and ignores every `conductor.gates` value and mode, including `yolo` — this extends §3.5's AFK security-rejection stop and §5's hard-block list into the Conductor engine. `agents/conductor.md` calls it unconditionally at the top of every wave (Step 3.1) and again at every batch boundary within a wave (Step 5.3), so a BLOCKED or security-rejected unit can never let more work start once called. Per this legend that is `[advisory]`, not `[enforced]`: the lib fails closed whenever invoked, but no PreToolUse guard or `stop-hook.sh` gate forces the invocation — it depends entirely on `agents/conductor.md`'s own protocol, same honest limit as the rest of this section.
-- **Wave parallelism: Planner-marked and zero-overlap only, capped at `conductor.max_parallel`.** `[advisory]` A wave runs parallel only when `nazgul/plan.md`'s `## Wave Groups` section marks it explicitly AND `route_wave` (`scripts/lib/conductor-router.sh`) finds zero file-scope overlap across the wave's units; any overlap, or an unmarked wave, aborts the whole wave to sequential — the identical rule §8 already gives Team Orchestrator ("Parallel tasks... Zero file overlap... bypassable by manual task dispatch"), not reimplemented here. Batches never exceed `conductor.max_parallel` (default `3`, read via `conductor_max_parallel`). `route_wave` fails closed to sequential whenever called, but that call happens inside `agents/conductor.md`'s own Step 4 protocol, not behind `stop-hook.sh` — per this legend that makes it `[advisory]`, bypassable by an orchestrator that dispatches units directly without going through the router, same caveat as §8's Team Orchestrator entry.
-- **Graph-only invariant: the Conductor never holds file bodies.** `[advisory]` `graph_upsert_task`/`graph_set_verdict` (`scripts/lib/conductor-graph.sh`) refuse to write a multi-line or diff-shaped verdict, or a non-SHA commit (`tests/test-conductor-recovery.sh` covers the rejection cases). This is a backstop on those two setters, not a hard guard on the Conductor itself: the agent holds `Write`/`Edit` directly and could bypass `conductor-graph.sh` to hand-write `graph.json`. The real invariant — never `Read` a diff, a changed source file, or reviewer prose into its own context — is agent discipline, spelled out in `agents/conductor.md`'s "GRAPH-ONLY INVARIANT" section and test-backed, not mechanically blocked.
+- **Batch selection: Planner-marked and zero-overlap only, capped at `execution.max_parallel`.** `[enforced]` `compute_dispatch_batch` (`scripts/lib/parallel-batch.sh`) runs as a plain, unconditional bash conditional inside `stop-hook.sh`'s own continuation-message construction whenever `execution.parallel` is `true` and the active task is a fresh `READY` dispatch in `task` granularity — the interpreter always evaluates it, no agent judgment gates whether the check runs (the same "script-level gate" class §13 already credits `[enforced]` for `scripts/heartbeat.sh`, not the agent-protocol-invoked `[advisory]` tier the deleted Conductor's equivalent wave rule carried). A batch requires `>=2` `READY` candidates (all deps `DONE`) named TOGETHER on one `nazgul/plan.md` `## Wave Groups` line with pairwise-disjoint `Files modified` scopes; any doubt — missing scope, overlap, no Wave Groups section, different wave lines — falls back to a batch of one, the proven sequential behavior. Batches never exceed `execution.max_parallel` (default `3`).
+- **The two hard stops are unconditional — never gated, never yolo-bypassable by config.** `[enforced]` Any `BLOCKED` task or any non-`APPROVE` `security-reviewer.md` verdict halts the loop for a human. `execution_should_halt` (`scripts/lib/parallel-batch.sh`) fails CLOSED on ambiguity (`BLOCKED_TASKS_AMBIGUOUS`, `SECURITY_REJECTION_AMBIGUOUS`, `*_UNREADABLE`) and ignores every `execution.gates` value and mode, including `yolo`. `stop-hook.sh` calls it as a plain, unconditional bash `if` whenever `execution.parallel` is `true`, before any dispatch instruction is built — this extends §3.5's AFK security-rejection stop and §5's hard-block list into parallel mode, and (unlike the deleted Conductor's own agent-protocol-invoked use of the equivalent check) no LLM judgment intervenes at this call site.
+- **`execution.gates.{approve_plan,approve_batch,approve_final_pr}`** (all default `false`, autonomous-first) let a human pause before the plan is accepted, before a parallel batch dispatches, or before the final PR. `[hook-driven only]` `execution_gate_effective`/`execution_should_pause` (`scripts/lib/parallel-batch.sh`) compute the EFFECTIVE value — `mode == "hitl"` flips `approve_plan` on without mutating the stored config — and `stop-hook.sh` prepends a `GATE approve_batch: ... WAIT for explicit approval` instruction ahead of the batch `DISPATCH_INSTR` when the gate is active. This is a continuation-message instruction, not a PreToolUse block: a human or orchestrator that dispatches implementers directly, bypassing the stop-hook's suggested batch, is not stopped from proceeding without approval.
 
 ---
 
-## 12. Conductor Enforcement
+## 12. Parallel Dispatch Enforcement
 
-The "Enforced Conductor" follow-up (feat/conductor-enforcement) closes the gap between §11's prose
-contract and what actually stops the Conductor from misbehaving. Five layers back one headline
-invariant — **"completed = cached, never re-executed"**: a unit that reached `IMPLEMENTED`/`DONE` with a
-commit SHA in `nazgul/conductor/graph.json` is never re-dispatched or re-implemented. All five layers
-are scoped to an active conductor run (`nazgul/conductor/.session` present, written and removed by
-`agents/conductor.md`, AND `execution.engine == "conductor"`) — every guard below no-ops outside that
-window, so a stray Nazgul agent or a sequential-engine run is never touched.
+Two PreToolUse guards back the same headline invariant the deleted Conductor's dispatch/rework guards
+gave the old engine — **"completed = cached, never re-executed," and a merged task's file scope stays
+closed** — now keyed directly off task manifests (`nazgul/tasks/TASK-NNN.md`) instead of a separate stored
+graph, since parallel dispatch has no `graph.json` mirror to go stale. Both guards no-op unless
+`execution.parallel` is `true`, so a sequential-mode run is never touched.
 
-- **Dispatch guard (Layer 1).** `[enforced]` `scripts/conductor-dispatch-guard.sh` — a PreToolUse guard on
-  the `Agent` tool — denies (exit 2) dispatching a work-unit subagent (`implementer`, `review-gate`,
-  `team-orchestrator`) with `run_in_background: true`, and denies re-dispatching a unit whose `graph.json`
-  status makes that dispatch wasted work, matched via the `NAZGUL_UNIT: TASK-NNN` marker
-  `agents/conductor.md` puts in every dispatch prompt (grepped as data, never `eval`'d). The "already done"
-  threshold differs by subagent kind: `implementer`/`team-orchestrator` are denied once status reaches
-  `IMPLEMENTED`/`DONE` (the implementation is already finished), but `review-gate` is denied only at
-  `DONE` — dispatching `review-gate` for an `IMPLEMENTED` unit is the required next step (Step 5.2), not a
-  re-dispatch, and blocking it would strand that unit permanently on resume-after-crash. A detected
-  violation denies (exit 2) — that half is fail-closed — but the guard fails OPEN when it cannot evaluate:
-  absent `jq`, an unreadable config, or a missing marker all degrade to allow rather than a false block.
-  Kill-switch: `conductor.enforce.dispatch_guard` (default `true`, config schema v20).
-- **Re-work guard (Layer 2).** `[enforced]` `scripts/conductor-rework-guard.sh` — a PreToolUse guard on
-  `Write|Edit|MultiEdit` — denies (exit 2) any write to a file inside the `file_scope` of a unit already
-  `DONE`/`IMPLEMENTED` with a commit SHA recorded in `graph.json`. This is the mechanical floor half of
-  the headline invariant, keyed off the Conductor's own graph rather than the task manifest §8 already
-  covers for the sequential engine. **Current-task-scope exemption (FEAT-009 H3, ADR-006):** the
-  actively-dispatched unit is never blocked from writing inside its OWN `file_scope` — the guard only
-  blocks writes into the scope of a *different*, already-committed unit — so an in-flight unit whose files
-  overlap the cross-cutting check is not falsely stalled. Kill-switch: `conductor.enforce.rework_guard`
-  (default `true`).
-- **Orphan detection (Layer 3).** `[hook-driven only]` `scripts/subagent-stop.sh` runs on every real
-  `SubagentStop` event — an unconditional Claude Code hook, not gated behind `stop-hook.sh` — and, when
-  the stopping agent is the Conductor, checks `graph.json` for units marked `dispatched` but not yet
-  `DONE`/`BLOCKED`. On a hit it writes `nazgul/conductor/.resume-needed` and emits
-  `conductor_orphan_detected`. This is detection and evidence only — it never blocks a tool call and never
-  resumes anything itself, so a human or the next Conductor invocation still has to act on the marker.
-- **Per-unit fan-out routing (Layer 4).** `[hook-driven only]` (updated FEAT-009 H1, ADR-004) When a wave is
-  Planner-marked parallel and zero-overlap (§11 Wave parallelism), `route_backend`/`route_wave`
-  (`scripts/lib/conductor-router.sh`) now resolve the mutating batch to the **`subagent`** backend: the
-  Conductor dispatches each unit as its own concurrent Agent-tool implementer call in one message and waits
-  for every one to return before starting that batch's reviews — reusing the conductor's existing Step 5
-  synchronous-dispatch contract rather than routing to `team-orchestrator`. A lone mutating unit still
-  routes to `worktree`; reviews always route to `subagent`. The `team` backend is retained only for a
-  currently-unused `coordination`-isolation batch and is **deprecated from the mutating-batch path** —
-  `team-orchestrator` has no `Agent`/`Task` tool and cannot fan out to teammates, so routing a parallel
-  wave to it silently serialized the wave (the H1 defect that drove this re-drive). The zero-file-overlap
-  invariant §8/§11 already document still holds; it is now enforced per-unit by the same file_scope the
-  Conductor tracks in `graph.json`, not delegated to a non-spawning team backend. This closes the former
-  "Layer 1 vs. Layer 4" limitation: Layer 1's `run_in_background` denial no longer collides with team-spawned
-  teammates, because the mutating path no longer produces any — every dispatch is a foreground, same-message
-  Agent-tool call.
-- **Wave digest (Layer 5).** `[advisory]` `graph_wave_digest` (`scripts/lib/conductor-graph.sh`) prints a
-  compact `{current_wave, next_unit, units}` snapshot from `graph.json` for cheap per-turn orientation —
-  cheaper than a full wave recomputation. It is read-only convenience for the Conductor's own prompt loop;
-  nothing forces the Conductor to actually call it before acting, so per the legend it stays advisory, the
-  same tier as the rest of §11.
+- **Dispatch guard.** `[enforced]` `scripts/parallel-dispatch-guard.sh` — a PreToolUse guard on the `Agent` tool — denies (exit 2) re-dispatching a work unit (`implementer`, `review-gate`, `team-orchestrator`) whose task manifest status makes that dispatch wasted work, matched via the `NAZGUL_UNIT: TASK-NNN` marker every dispatch prompt carries (grepped as data, never `eval`'d). The "already done" threshold differs by subagent kind: `implementer`/`team-orchestrator` are denied once status reaches `IMPLEMENTED`/`DONE`, but `review-gate` is denied only at `DONE` — dispatching `review-gate` for an `IMPLEMENTED` unit is the required next step, not a re-dispatch. Kill-switch: `execution.enforce.dispatch_guard` (default `true`).
+- **Re-work guard.** `[enforced]` `scripts/parallel-rework-guard.sh` — a PreToolUse guard on `Write|Edit|MultiEdit` — denies (exit 2) a write to a file inside the `file_scope` of a *different* task already `DONE`/`IMPLEMENTED` with a merged commit recorded in its own manifest; the actively-dispatched task is never blocked from writing inside its own scope. Kill-switch: `execution.enforce.rework_guard` (default `true`).
 
-These five layers sit underneath, not instead of, the two unconditional hard stops already documented in
-§11: even with `conductor.enforce.dispatch_guard`/`rework_guard` both set `false`, `conductor_should_halt`
-(`scripts/lib/conductor-gates.sh`) still fails closed on any `BLOCKED` task or non-`APPROVE`
-`security-reviewer.md` verdict, mirroring §3.5/§5's hard-block posture for the sequential engine.
+These two guards sit underneath, not instead of, the two unconditional hard stops in §11: even with both
+kill-switches set `false`, `execution_should_halt` (`scripts/lib/parallel-batch.sh`) still fails closed on
+any `BLOCKED` task or non-`APPROVE` `security-reviewer.md` verdict.
 
 ---
 
@@ -306,8 +257,9 @@ These five layers sit underneath, not instead of, the two unconditional hard sto
 
 `scripts/heartbeat.sh` (FEAT-008) is a trigger-agnostic tick engine: a single `bash` script (`#!/usr/bin/env bash`,
 not portable POSIX `sh` — it uses bash-only parameter expansion) that reuses
-the Conductor's own hard-stop and session-tracker libraries rather than reimplementing them, fired
-either by hand (`/nazgul:heartbeat`, `skills/heartbeat/SKILL.md`) or by an opt-in Claude Code native
+the same `scripts/lib/parallel-batch.sh` hard-stop and `scripts/lib/session-tracker.sh` session libraries
+§11 documents rather than reimplementing them, fired either by hand (`/nazgul:heartbeat`,
+`skills/heartbeat/SKILL.md`) or by an opt-in Claude Code native
 scheduled agent (routine) configured entirely outside this plugin. `hooks/hooks.json` does not wire it to
 any Claude Code hook event, so whether a tick ever runs at all is a trigger the operator chooses, not
 something Nazgul schedules itself.
@@ -315,7 +267,7 @@ something Nazgul schedules itself.
 - **Opt-in and default-off.** `[advisory]` `automation.heartbeat.enabled` defaults to `false` (`jq -r
   '.automation.heartbeat.enabled // false'`). No PreToolUse guard or stop-hook forces or blocks the
   routine that fires `scripts/heartbeat.sh` in the first place — the same "config-read, not hook-blocked"
-  posture §11 already gives `execution.engine`/Conductor gate selection. Once a tick DOES run, the
+  posture §11 already gives `execution.parallel`/gate selection. Once a tick DOES run, the
   `enabled` check is a plain, unconditional bash `if` near the top of the script: false means a
   `decision: disabled` record and `exit 0` before any inbox read, triage, or side effect.
 - **The concurrency guard: never a second loop.** `[enforced]` `scripts/heartbeat.sh` calls
@@ -323,19 +275,17 @@ something Nazgul schedules itself.
   `stop-hook.sh` uses — before archiving or starting anything; any active session forces `decision:
   skipped, reason: active_session` and `exit 0`. This is a single top-of-flow bash conditional the
   interpreter always evaluates on every invocation, not a step an agent's own protocol could choose to
-  skip (contrast the Conductor's use of a sibling check in §11) — the same class of internal script gate
-  `[enforced]` already credits `stop-hook.sh` with elsewhere in this document (§1 Rule 4). Covered by
-  `tests/test-heartbeat-session-guard.sh`.
+  skip — the same class of internal script gate `[enforced]` already credits `stop-hook.sh` with
+  elsewhere in this document (§1 Rule 4). Covered by `tests/test-heartbeat-session-guard.sh`.
 - **The two hard stops are unconditional — independent of `enabled` and of `mode`, including `yolo`.** `[enforced]`
-  `scripts/heartbeat.sh` calls `conductor_should_halt` (`scripts/lib/conductor-gates.sh`, the
-  identical fail-closed function §11/§12 document for the Conductor) as the very first thing it does on
-  every invocation — before even reading `automation.heartbeat.enabled` — so a `BLOCKED` task or a
+  `scripts/heartbeat.sh` calls `execution_should_halt` (`scripts/lib/parallel-batch.sh`, the
+  identical fail-closed function §11/§12 document for parallel dispatch) as the very first thing it does
+  on every invocation — before even reading `automation.heartbeat.enabled` — so a `BLOCKED` task or a
   non-`APPROVE` security-reviewer verdict halts the tick (`decision: hard_stop`) regardless of whether
-  heartbeat is enabled or what `mode` is set to. Unlike §11's Conductor usage of this same function
-  (advisory there because an LLM-driven agent prompt calls it and could skip the step), this
-  call site is a single bash line the interpreter executes unconditionally every time the script runs —
-  no agent judgment intervenes, mirroring the distinction this document already draws between
-  agent-protocol-invoked checks and plain script-level gates. Covered by
+  heartbeat is enabled or what `mode` is set to. Same reasoning as §11's parallel-dispatch usage of this
+  function: this call site is a single bash line the interpreter executes unconditionally every time the
+  script runs — no agent judgment intervenes, mirroring the distinction this document already draws
+  between agent-protocol-invoked checks and plain script-level gates. Covered by
   `tests/test-heartbeat-hard-stops.sh` across `enabled: true`, `enabled: false`, and `mode: yolo`.
 - **Idempotent atomic claim-then-archive.** `[enforced]` The picked candidate is moved into
   `<inbox>/archive/` via a single `mv -f` (`inbox_archive`, `scripts/lib/inbox-provider.sh`) BEFORE
@@ -349,10 +299,10 @@ something Nazgul schedules itself.
   (`scripts/lib/inbox-provider.sh`, `scripts/lib/heartbeat-triage.sh`), and
   `tests/test-heartbeat-triage.sh` proves a metacharacter-laden title/body produces no side effect. The
   one place objective text is spliced into a command string — `_hb_start`'s
-  `claude -p "/nazgul:start \"$objective\" $mode_flag $engine_flag"` (`scripts/heartbeat.sh`, where
-  `$mode_flag`/`$engine_flag` derive from `automation.heartbeat.auto_start.{mode,engine}` — `--yolo
-  --conductor` by default, but e.g. `afk`/`sequential` resolve to `--afk` with no `--conductor` flag at
-  all) — is hardened against that splice being broken out of (FEAT-008 TASK-011): `_hb_objective`
+  `claude -p "/nazgul:start \"$objective\" $mode_flag $par_flag"` (`scripts/heartbeat.sh`, where
+  `$mode_flag`/`$par_flag` derive from `automation.heartbeat.auto_start.{mode,parallel}` — `--yolo
+  --parallel` by default, but e.g. `mode: afk`/`parallel: false` resolve to `--afk` with no `--parallel`
+  flag at all) — is hardened against that splice being broken out of (FEAT-008 TASK-011): `_hb_objective`
   truncates the objective to its first line at the source (`.title`/`.body` both `split("\n")[0]`), and
   `_hb_start` additionally neutralizes every embedded `"`, `\n`, and `\r` before interpolation, so a
   crafted title can no longer close the quoted span early and smuggle flags (e.g. `--max`, `--afk`) past
@@ -381,7 +331,7 @@ out-of-scope problem or inventing unplanned scope creep to fix it mid-task.
 - **Use it instead of working around out-of-scope findings.** `[advisory]` Depends on
   agent discipline — no mechanical guard forces a sub-session to call `raise_finding`
   rather than silently ignoring or ad-hoc-fixing something outside its task's file scope.
-  Implementer, team-orchestrator, debugger, and conductor sub-sessions all have Bash and
+  Implementer, team-orchestrator, and debugger sub-sessions all have Bash and
   can source the helper directly; reviewer sub-sessions cannot — `agents/templates/reviewer-base.md`
   restricts them to `Read`/`Glob`/`Grep` (§3.3) — so a reviewer instead notes the candidate
   as its own line in the returned review for a Bash-capable sub-session to raise on its behalf.
@@ -404,7 +354,7 @@ out-of-scope problem or inventing unplanned scope creep to fix it mid-task.
 ## 15. Git-Level Guards
 
 FEAT-010 (ADR-001) replaces the two guards that tried to infer git intent by parsing an arbitrary Bash
-command string — the old `base-branch-commit-guard.sh` and the deferred H2 conductor pre-merge guard —
+command string — the old `base-branch-commit-guard.sh` and the deferred H2 pre-merge verdict guard —
 with real git hooks. Both proved non-convergent across three review rounds each: shell parameter
 expansion, line continuation, and wrapper forms (`eval`, `bash -c`, path-qualified `git`) kept
 reopening bypasses no finite tokenizer closed. Moving enforcement inside git itself removes the command
@@ -417,13 +367,13 @@ actually asked to do.
   false-positive (it always resolved `$CLAUDE_PROJECT_DIR`'s branch, blocking commits to an unrelated
   repo) and its `git -C` false-negative (which routed around a Bash-string check entirely). A git hook
   has no such ambiguity: "current branch" is whatever repo git itself is invoked in.
-- **`pre-merge-commit` — H2 conductor verdict guard.** `[enforced]` `scripts/git-hooks/pre-merge-commit`
-  blocks `git merge --no-ff` of a Conductor unit whose `nazgul/conductor/graph.json` record lacks a
-  `DONE` status + `APPROVE` verdict. Only active when `execution.engine == "conductor"` and
-  `conductor.enforce.premerge_guard` (default `true`) is not explicitly `false`. Identity is resolved
-  from git's `GITHEAD_<sha>` environment variables (keyed by the actual merged commit's content hash,
-  so a decoy value can't relabel an unapproved unit as an approved one) rather than
-  `GIT_REFLOG_ACTION`, which a caller can pre-set to spoof the same claim.
+- **`pre-merge-commit` — H2 parallel-unit verdict guard.** `[enforced]` `scripts/git-hooks/pre-merge-commit`
+  blocks `git merge --no-ff` of a parallel-dispatched task unit whose manifest under `nazgul/tasks/`
+  records the merged commit in its `## Commits` section but is not yet `Status: DONE`. Only active when
+  `execution.parallel == true` and `execution.enforce.premerge_guard` (default `true`) is not explicitly
+  `false`. Identity is resolved from git's `GITHEAD_<sha>` environment variables (keyed by the actual
+  merged commit's content hash, so a decoy value can't relabel an unapproved unit as an approved one)
+  rather than `GIT_REFLOG_ACTION`, which a caller can pre-set to spoof the same claim.
 - **Generic chain-dispatcher preserves user hooks.** `[enforced]` Pointing `core.hooksPath` at a
   managed directory would otherwise silently disable any hook a user already had installed under every
   *other* standard githooks(5) name. `scripts/git-hooks/_dispatch.sh` forwards argv/stdin/exit code to
@@ -455,7 +405,7 @@ hold even against a human typing `git commit`/`git merge` directly or a hypothet
 PreToolUse guard here (the Legend's tier-1 row now notes this). *Installation* is the honest gap: it is
 not itself mechanically forced onto every code path that could start a loop or invoke git; it depends on
 the loop's own protocol calling `create_feature_branch()`/`setup_worktree_dir()`, same limit this
-document already applies to other protocol-invoked checks (e.g. §12's Conductor hard-stop call sites). A
+document already applies to other protocol-invoked checks (e.g. §14's `raise_finding` call sites). A
 repo where install never ran has no guard at all — self-heal only re-asserts a *previously installed*
 managed path (it requires `branch.prior_hooks_path` to actually be recorded, i.e. `install_git_hooks`
 already ran once), so a repo that never installed stays unguarded indefinitely, not just until the next

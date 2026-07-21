@@ -142,7 +142,7 @@ Add a `## Wave Groups` section to plan.md:
 - TASK-004 (depends on TASK-002 and TASK-003)
 ```
 
-This section is read by the loop orchestrator to determine parallel execution order.
+This section is read by the stop-hook's `compute_dispatch_batch` (`scripts/lib/parallel-batch.sh`) to determine parallel execution order.
 
 ## Context Management Rules
 

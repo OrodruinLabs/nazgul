@@ -1,134 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Test: hygiene bundle — orphaned conductor-marker self-heal (session-context.sh),
-# prior-objective task archival (scrub-stale-review-artifacts.sh), and the
-# CLAUDE.md colon-command-form / stale migration-name fixes.
+# Test: hygiene bundle — prior-objective task archival
+# (scrub-stale-review-artifacts.sh), and the CLAUDE.md colon-command-form /
+# stale migration-name fixes.
+#
+# Note: this file previously also covered the orphaned conductor-marker
+# self-heal in session-context.sh (.session/.resume-needed). That reader was
+# dead code after the conductor engine's only writer (subagent-stop.sh's
+# orphan detector) was deleted as part of the Parallel Execution Collapse, so
+# both the reader and its tests were removed together.
 TEST_NAME="test-hygiene"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/assertions.sh"
 source "$SCRIPT_DIR/lib/setup.sh"
-# shellcheck source=lib/session-tracker.sh
-source "$REPO_ROOT/scripts/lib/session-tracker.sh"
 
 echo "=== $TEST_NAME ==="
 
-SESSION_SCRIPT="$REPO_ROOT/scripts/session-context.sh"
 SCRUB="$REPO_ROOT/scripts/scrub-stale-review-artifacts.sh"
-
-write_conductor_markers() {
-  mkdir -p "$TEST_DIR/nazgul/conductor"
-  [ -n "${1:-}" ] && printf '%s' "$1" > "$TEST_DIR/nazgul/conductor/.session"
-  printf '{"wave":1,"units":["TASK-001"],"reason":"test"}' > "$TEST_DIR/nazgul/conductor/.resume-needed"
-}
-
-register_live_session() {
-  register_session "$1" "$TEST_DIR/nazgul/sessions"
-}
-
-# --- Test 1: dead session, open objective -> markers cleared ---
-setup_temp_dir
-setup_git_repo
-setup_nazgul_dir
-create_config
-create_task_file "TASK-001" "READY"
-write_conductor_markers "dead-session-1"
-bash "$SESSION_SCRIPT" >/dev/null 2>&1
-assert_file_not_exists "dead session: .session cleared" "$TEST_DIR/nazgul/conductor/.session"
-assert_file_not_exists "dead session: .resume-needed cleared" "$TEST_DIR/nazgul/conductor/.resume-needed"
-teardown_temp_dir
-
-# --- Test 2: live session, open objective -> markers left alone ---
-setup_temp_dir
-setup_git_repo
-setup_nazgul_dir
-create_config
-create_task_file "TASK-001" "READY"
-write_conductor_markers "live-session-1"
-register_live_session "live-session-1"
-bash "$SESSION_SCRIPT" >/dev/null 2>&1
-assert_file_exists "live session: .session untouched" "$TEST_DIR/nazgul/conductor/.session"
-assert_file_exists "live session: .resume-needed untouched" "$TEST_DIR/nazgul/conductor/.resume-needed"
-teardown_temp_dir
-
-# --- Test 3: live session, but objective complete (all tasks DONE) -> markers cleared ---
-setup_temp_dir
-setup_git_repo
-setup_nazgul_dir
-create_config
-create_task_file "TASK-001" "DONE"
-write_conductor_markers "live-session-2"
-register_live_session "live-session-2"
-bash "$SESSION_SCRIPT" >/dev/null 2>&1
-assert_file_not_exists "completed objective: .session cleared" "$TEST_DIR/nazgul/conductor/.session"
-assert_file_not_exists "completed objective: .resume-needed cleared" "$TEST_DIR/nazgul/conductor/.resume-needed"
-teardown_temp_dir
-
-# --- Test 4: live session, feat_id mismatch (graph belongs to a prior objective) -> cleared ---
-setup_temp_dir
-setup_git_repo
-setup_nazgul_dir
-create_config '.feat_id = "FEAT-NEW"'
-create_task_file "TASK-001" "READY"
-write_conductor_markers "live-session-3"
-register_live_session "live-session-3"
-printf '{"schema":1,"objective":"FEAT-OLD","tasks":{}}' > "$TEST_DIR/nazgul/conductor/graph.json"
-bash "$SESSION_SCRIPT" >/dev/null 2>&1
-assert_file_not_exists "feat_id mismatch: .session cleared" "$TEST_DIR/nazgul/conductor/.session"
-teardown_temp_dir
-
-# --- Test 5: resume-needed only (no .session), dead objective -> cleared ---
-setup_temp_dir
-setup_git_repo
-setup_nazgul_dir
-create_config
-create_task_file "TASK-001" "DONE"
-mkdir -p "$TEST_DIR/nazgul/conductor"
-printf '{"wave":1,"units":["TASK-001"],"reason":"test"}' > "$TEST_DIR/nazgul/conductor/.resume-needed"
-bash "$SESSION_SCRIPT" >/dev/null 2>&1
-assert_file_not_exists "resume-needed only, dead: cleared" "$TEST_DIR/nazgul/conductor/.resume-needed"
-teardown_temp_dir
-
-# --- Test 6: no markers present -> no-op, no error ---
-setup_temp_dir
-setup_git_repo
-setup_nazgul_dir
-create_config
-create_task_file "TASK-001" "READY"
-set +e
-bash "$SESSION_SCRIPT" >/dev/null 2>&1
-ec=$?
-set -e
-assert_exit_code "no markers: exit 0" "$ec" 0
-teardown_temp_dir
-
-# --- Test 6b: tasks/ absent, live session -> markers left untouched ---
-setup_temp_dir
-setup_git_repo
-setup_nazgul_dir
-create_config
-rm -rf "$TEST_DIR/nazgul/tasks"
-write_conductor_markers "live-session-4"
-register_live_session "live-session-4"
-bash "$SESSION_SCRIPT" >/dev/null 2>&1
-assert_file_exists "tasks/ absent, live session: .session untouched" "$TEST_DIR/nazgul/conductor/.session"
-assert_file_exists "tasks/ absent, live session: .resume-needed untouched" "$TEST_DIR/nazgul/conductor/.resume-needed"
-teardown_temp_dir
-
-# --- Test 6c: malformed graph.json, live session -> markers left untouched (jq error path) ---
-setup_temp_dir
-setup_git_repo
-setup_nazgul_dir
-create_config
-create_task_file "TASK-001" "READY"
-write_conductor_markers "live-session-5"
-register_live_session "live-session-5"
-printf '{not valid json' > "$TEST_DIR/nazgul/conductor/graph.json"
-bash "$SESSION_SCRIPT" >/dev/null 2>&1
-assert_file_exists "malformed graph.json, live session: .session untouched" "$TEST_DIR/nazgul/conductor/.session"
-assert_file_exists "malformed graph.json, live session: .resume-needed untouched" "$TEST_DIR/nazgul/conductor/.resume-needed"
-teardown_temp_dir
 
 # --- Test 7: scrub archives prior tasks/ even when reviews+learning are empty ---
 setup_temp_dir

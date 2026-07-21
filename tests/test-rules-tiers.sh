@@ -63,57 +63,58 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test (c): [advisory] count is exactly 19 — the prior 16 (§§3/7/11/12/13/14 + legend row)
-# plus §16's FEAT-012 GitHub-connector opt-in, gh-auth-only, and remote-content-is-data bullets.
+# Test (c): [advisory] count is exactly 15 — the Parallel Execution Collapse
+# deleted the Conductor engine's 4 advisory bullets in the old §11 (opt-in
+# engine selection, two hard stops, wave parallelism, graph-only invariant);
+# their replacements in the new §11/§12 are [enforced]/[hook-driven only]
+# because the checks now run as unconditional stop-hook/script conditionals
+# instead of agent-protocol-invoked steps. 19 - 4 = 15.
 ADVISORY_COUNT=$(grep -c '\[advisory\]' "$RULES_FILE" || true)
-if [ "$ADVISORY_COUNT" -eq 19 ]; then
-  _pass "[advisory] annotation count is exactly 19 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 15 ]; then
+  _pass "[advisory] annotation count is exactly 15 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 19" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 19"
+  _fail "[advisory] annotation count is exactly 15" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 15"
 fi
 
 # ---------------------------------------------------------------------------
-# Test (e): the Conductor section exists with honest tiers. The two hard
-# stops and wave parallelism are agent-invoked (no PreToolUse guard or
-# stop-hook forces the call), so per the legend they are [advisory], not
-# [enforced]/[hook-driven only] — same as the graph-only invariant.
+# Test (e): the Parallel Dispatch section exists with honest tiers. Batch
+# selection and the two hard stops are computed by unconditional stop-hook
+# bash conditionals (no agent judgment gates whether they run), so per the
+# legend they are [enforced] — unlike the deleted Conductor's agent-invoked
+# equivalents, which were [advisory]. The approval gates remain a
+# continuation-message instruction a direct dispatch can bypass ->
+# [hook-driven only].
 # ---------------------------------------------------------------------------
 assert_file_contains \
-  "RULES.md has a Conductor Execution Engine section" \
+  "RULES.md has a Parallel Dispatch section" \
   "$RULES_FILE" \
-  "## 11. Conductor Execution Engine"
+  "## 11. Parallel Dispatch"
 
 assert_file_contains \
-  "Conductor hard stops are tagged [advisory] (agent-invoked, not hook-gated)" \
+  "Parallel batch selection is tagged [enforced]" \
   "$RULES_FILE" \
-  'hard stops are unconditional.*`\[advisory\]`'
+  'Batch selection.*`\[enforced\]`'
 
 assert_file_contains \
-  "Conductor wave parallelism is tagged [advisory] (agent-invoked, not hook-gated)" \
+  "Parallel hard stops are tagged [enforced] (stop-hook-invoked, not agent-gated)" \
   "$RULES_FILE" \
-  'Wave parallelism.*`\[advisory\]`'
+  'hard stops are unconditional.*`\[enforced\]`'
 
 assert_file_contains \
-  "Conductor graph-only invariant is tagged [advisory], not a mechanical guard" \
+  "Parallel dispatch gates are tagged [hook-driven only]" \
   "$RULES_FILE" \
-  "Graph-only invariant: the Conductor never holds file bodies"
+  'approve_plan,approve_batch,approve_final_pr.*`\[hook-driven only\]`'
 
 # ---------------------------------------------------------------------------
-# Test (f): the Conductor Enforcement section (FEAT-007 follow-up, "Enforced
-# Conductor") exists with honest tiers. Dispatch + re-work guards are real
-# PreToolUse hooks that deny (exit 2) mechanically -> [enforced]. Orphan
-# detection and per-unit fan-out routing are wired into real hook events / an
-# existing hook-driven mechanism but only detect/observe rather than block ->
-# [hook-driven only]. (FEAT-009 ADR-004 renamed the former "Team routing (Layer
-# 4)" bullet to per-unit fan-out; the team backend is deprecated from the
-# mutating path.) The wave digest is read-only convenience nothing forces the
-# Conductor to consult -> [advisory], same as §11.
+# Test (f): the Parallel Dispatch Enforcement section exists with honest
+# tiers. Both guards are real PreToolUse hooks that deny (exit 2)
+# mechanically -> [enforced].
 # ---------------------------------------------------------------------------
 assert_file_contains \
-  "RULES.md has a Conductor Enforcement section" \
+  "RULES.md has a Parallel Dispatch Enforcement section" \
   "$RULES_FILE" \
-  "## 12. Conductor Enforcement"
+  "## 12. Parallel Dispatch Enforcement"
 
 assert_file_contains \
   "Dispatch guard is tagged [enforced]" \
@@ -126,24 +127,14 @@ assert_file_contains \
   'Re-work guard.*`\[enforced\]`'
 
 assert_file_contains \
-  "Orphan detection is tagged [hook-driven only]" \
-  "$RULES_FILE" \
-  'Orphan detection.*`\[hook-driven only\]`'
-
-assert_file_contains \
-  "Per-unit fan-out routing is tagged [hook-driven only]" \
-  "$RULES_FILE" \
-  'Per-unit fan-out routing.*`\[hook-driven only\]`'
-
-assert_file_contains \
-  "Wave digest is tagged [advisory]" \
-  "$RULES_FILE" \
-  'Wave digest.*`\[advisory\]`'
-
-assert_file_contains \
-  "Conductor Enforcement cross-references the two unconditional hard stops" \
+  "Parallel Dispatch Enforcement cross-references the two unconditional hard stops" \
   "$RULES_FILE" \
   "unconditional hard stops"
+
+assert_file_not_contains \
+  "RULES.md no longer describes the deleted Conductor engine as live" \
+  "$RULES_FILE" \
+  "\`agents/conductor.md\`"
 
 # ---------------------------------------------------------------------------
 # Test (g): the Automation Heartbeat section (FEAT-008) exists with honest

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Nazgul heartbeat tick engine (FEAT-008). Gates on automation.heartbeat.enabled,
-# enforces the two unconditional hard stops (reused from conductor-gates.sh,
+# enforces the two unconditional hard stops (reused from parallel-batch.sh,
 # independent of enabled/mode incl. yolo), triages the inbox, and enforces the
 # concurrency guard. On actionable+clear it atomically archives the picked item
 # (the archive move IS the claim) then auto-starts it — archive-then-start so a
@@ -14,8 +14,8 @@ PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 NAZGUL_DIR="$PROJECT_ROOT/nazgul"
 CONFIG="$NAZGUL_DIR/config.json"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# shellcheck source=lib/conductor-gates.sh
-source "$SCRIPT_DIR/lib/conductor-gates.sh"
+# shellcheck source=lib/parallel-batch.sh
+source "$SCRIPT_DIR/lib/parallel-batch.sh"
 # shellcheck source=lib/session-tracker.sh
 source "$SCRIPT_DIR/lib/session-tracker.sh"
 # shellcheck source=lib/inbox-provider.sh
@@ -119,9 +119,9 @@ _hb_start() {
   fi
 }
 
-# Hard stops — reused from conductor-gates.sh, unconditional: independent of
+# Hard stops — reused from parallel-batch.sh, unconditional: independent of
 # automation.heartbeat.enabled and of mode (including yolo).
-if ! HALT_OUT=$(conductor_should_halt "$NAZGUL_DIR" 2>/dev/null); then
+if ! HALT_OUT=$(execution_should_halt "$NAZGUL_DIR" 2>/dev/null); then
   REASON=""
   printf '%s\n' "$HALT_OUT" | grep -q '^BLOCKED_TASK' && REASON="blocked_task"
   if printf '%s\n' "$HALT_OUT" | grep -qE '^SECURITY_REJECTION|^SECURITY_REVIEWS_UNREADABLE'; then

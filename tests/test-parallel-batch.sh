@@ -144,4 +144,27 @@ assert_eq "waves: TASK-001 in wave 1" "$(jq -r '.[0].units[0]' <<< "$WAVES")" "T
 assert_eq "waves: TASK-002 in wave 2" "$(jq -r '.[1].units[0]' <<< "$WAVES")" "TASK-002"
 teardown_temp_dir
 
+# --- 13: compute_waves rejects a cycle rather than looping (ported from the
+# deleted tests/test-conductor-waves.sh Test 6) ---
+setup_temp_dir; setup_nazgul_dir
+create_task_file TASK-001 READY TASK-002
+create_task_file TASK-002 READY TASK-001
+WAVES_ERRFILE=$(mktemp)
+WAVES_OUT=$(compute_waves "$TEST_DIR/nazgul/tasks" 2>"$WAVES_ERRFILE") && WAVES_EC=0 || WAVES_EC=$?
+WAVES_ERR=$(cat "$WAVES_ERRFILE" 2>/dev/null); rm -f "$WAVES_ERRFILE"
+assert_exit_code "cycle: non-zero exit" "$WAVES_EC" 1
+assert_contains "cycle: stderr mentions cycle" "$WAVES_ERR" "cycle"
+teardown_temp_dir
+
+# --- 14: compute_waves rejects an unknown dependency id rather than dropping
+# it silently (ported from the deleted tests/test-conductor-waves.sh Test 9) ---
+setup_temp_dir; setup_nazgul_dir
+create_task_file TASK-001 READY TASK-999
+WAVES_ERRFILE=$(mktemp)
+WAVES_OUT=$(compute_waves "$TEST_DIR/nazgul/tasks" 2>"$WAVES_ERRFILE") && WAVES_EC=0 || WAVES_EC=$?
+WAVES_ERR=$(cat "$WAVES_ERRFILE" 2>/dev/null); rm -f "$WAVES_ERRFILE"
+assert_exit_code "unknown dep: non-zero exit" "$WAVES_EC" 1
+assert_contains "unknown dep: stderr names unknown dependency" "$WAVES_ERR" "unknown dependency"
+teardown_temp_dir
+
 report_results

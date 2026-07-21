@@ -7,7 +7,7 @@
 # user already had (husky, lefthook, a hand-written pre-push, etc.).
 #
 # Idempotent source guard, NOT `set -euo pipefail` when sourced — mirrors
-# scripts/lib/git-utils.sh / conductor-gates.sh, which are sourced into
+# scripts/lib/git-utils.sh / parallel-batch.sh, which are sourced into
 # hook shells that own their own strict-mode setting. Enables strict mode
 # only when this file is executed directly.
 if [ "${BASH_SOURCE[0]:-$0}" = "${0}" ]; then
