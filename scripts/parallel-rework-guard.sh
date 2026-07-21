@@ -60,7 +60,7 @@ _scope_has() {
   IFS=',' read -ra _arr <<< "$files"
   for f in "${_arr[@]}"; do
     f="${f#"${f%%[![:space:]]*}"}"; f="${f%"${f##*[![:space:]]}"}"
-    [ "$f" = "$abs" ] || [ "$f" = "$rel" ] && return 0
+    { [ "$f" = "$abs" ] || [ "$f" = "$rel" ]; } && return 0
   done
   return 1
 }
