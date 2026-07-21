@@ -80,8 +80,12 @@ assert_contains "gate: approval demanded before dispatch" "$HOOK_OUTPUT" "GATE a
 teardown_temp_dir
 
 # --- 5: parallel on but overlap -> falls back to sequential instruction ---
+# NOTE: granularity forced to "task" — without this GRANULARITY resolves to
+# the template's "group" default, the batch-override block never runs, and
+# this test would duplicate case 2 instead of exercising compute_dispatch_batch's
+# overlap fallback through the stop-hook (same reasoning as cases 1/4).
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
-create_config '.execution.parallel = true' '.mode = "afk"'
+create_config '.execution.parallel = true' '.mode = "afk"' '.review_gate.granularity = "task"'
 create_task_file TASK-001 READY
 printf -- '- **Files modified**: src/shared.sh\n' >> "$TEST_DIR/nazgul/tasks/TASK-001.md"
 create_task_file TASK-002 READY
@@ -97,6 +101,11 @@ EOF
 run_hook
 assert_exit_code "overlap: blocks stop" "$HOOK_EC" 2
 assert_contains "overlap: sequential delegate" "$HOOK_OUTPUT" "DELEGATE: Spawn implementer agent"
+if printf '%s' "$HOOK_OUTPUT" | grep -q "PARALLEL BATCH"; then
+  _fail "overlap: no batch instruction"
+else
+  _pass "overlap: no batch instruction"
+fi
 teardown_temp_dir
 
 # --- 6: parallel on + group granularity (default template config) -> degrades
