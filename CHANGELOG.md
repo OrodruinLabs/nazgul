@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.16.0] - 2026-07-21
+
+### Removed
+- **Conductor execution engine.** `agents/conductor.md`, its libraries
+  (`scripts/lib/conductor-graph.sh`, `scripts/lib/conductor-gates.sh`,
+  `scripts/lib/conductor-router.sh`), its guards (`scripts/conductor-dispatch-guard.sh`,
+  `scripts/conductor-rework-guard.sh`), and their tests are deleted outright. `execution.engine`
+  is removed from the config schema. See `docs/DECISION-LOG-2026-07-21-parallel-execution-collapse.md`
+  for the platform rationale: since Claude Code v2.1.198 subagents run in the background by
+  default, nested `Agent` calls from inside a subagent do not block, and background-completion
+  notifications are documented to re-engage only the main session — there is no documented
+  mechanism giving a nested parent subagent a fresh turn when its children finish. That made the
+  Conductor's own "wait for every dispatch to return" step stall at every wave boundary,
+  post-commit review dispatch, and review tally.
+
+### Added
+- **`execution.parallel` batch dispatch in the sequential loop.** There is now one engine — the
+  existing stop-hook loop — with an opt-in parallel-batch option computed deterministically by
+  `compute_dispatch_batch` (`scripts/lib/parallel-batch.sh`, absorbing the wave-layering logic
+  from the retired conductor libs). `/nazgul:start --parallel` enables it (composes with any mode
+  flag, e.g. `--parallel --afk`); `--conductor` is now a deprecated alias that sets
+  `execution.parallel: true` and prints a deprecation note. New keys: `execution.parallel` (bool,
+  default `false`) and `execution.max_parallel` (int, default 3).
+- **Config schema v25 → v26**, migrating conductor configs automatically: `execution.engine ==
+  "conductor"` → `execution.parallel: true`; `conductor.max_parallel` → `execution.max_parallel`;
+  `conductor.gates.approve_graph`/`approve_each_wave`/`approve_final_pr` → `execution.gates.
+  approve_plan`/`approve_batch`/`approve_final_pr`; the `nazgul/conductor/` runtime directory
+  (including `graph.json`) is deleted by the migration. In-flight conductor runs resume from task
+  manifests via the ordinary loop — there is no separate graph state to recover.
+- **Guards and the premerge git hook re-keyed to task manifests.** `scripts/parallel-dispatch-guard.sh`
+  and `scripts/parallel-rework-guard.sh` replace the conductor dispatch/rework guards, keyed off
+  task manifests instead of `graph.json`. `scripts/git-hooks/pre-merge-commit` now parses a task
+  manifest's YAML frontmatter `status:` field first (falling back to the legacy `- **Status**:`
+  line only when frontmatter is absent) — there is no conductor graph left to read a unit's status
+  from.
+- **`review_gate.granularity` gates parallel batching.** Batch dispatch only reviews per task when
+  `review_gate.granularity` is `"task"`; the template default, `"group"`, stays fully sequential
+  even with `execution.parallel: true` — a project opts into both independently.
+
 ## [2.15.0] - 2026-07-14
 
 ### Added

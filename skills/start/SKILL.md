@@ -5,7 +5,7 @@ argument-hint: "[\"objective\"] [--afk|--yolo|--hitl] [--max N] [--task-pr] [--p
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 2.11.0
+  version: 2.16.0
 ---
 
 # Nazgul Start
