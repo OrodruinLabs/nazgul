@@ -481,4 +481,21 @@ do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
 assert_exit_code "bounded Commits window: SHA past line 10 of a long section still matched -> exit 0" "$MERGE_EC" 0
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# FRONTMATTER TRAILING WHITESPACE: `status: DONE ` (trailing space) must
+# normalize to DONE and allow the merge — read_task_status trims trailing
+# whitespace, and the hook's inline parse must match it, or a hand-edited
+# manifest with an invisible trailing space would false-block forever.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+UNIT_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task_frontmatter "$TEST_DIR/repo" "TASK-001" "DONE " "IN_REVIEW" "$UNIT_SHA"
+do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+assert_exit_code "frontmatter trailing space: 'DONE ' normalizes to DONE -> exit 0" "$MERGE_EC" 0
+teardown_temp_dir
+
 report_results

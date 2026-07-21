@@ -26,7 +26,7 @@ metadata:
 | `/nazgul:start` | Auto-detect state and continue work |
 | `/nazgul:start "objective"` | Start a specific objective |
 
-**Flags for `/nazgul:start`:** `--afk` (autonomous), `--yolo` (no reviews), `--hitl` (human-in-the-loop, default), `--max N` (iteration limit)
+**Flags for `/nazgul:start`:** `--afk` (autonomous), `--yolo` (no reviews), `--hitl` (human-in-the-loop, default), `--max N` (iteration limit), `--parallel` (batch dispatch of independent tasks; requires `review_gate.granularity: "task"`; `--conductor` is a deprecated alias)
 
 ## Monitoring
 

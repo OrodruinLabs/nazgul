@@ -178,7 +178,7 @@ Task manifests were always canonical (graph.json only mirrored them), so the nex
   single-candidate passthrough.
 - Stop-hook tests: parallel config emits the batch instruction; sequential config emits
   today's instruction **byte-identical** (regression guarantee).
-- Migration test: v24 conductor config → v25, including gates mapping and
+- Migration test: v25 conductor config → v26, including gates mapping and
   `nazgul/conductor/` cleanup.
 - Guard tests re-pointed at the new activation key; conductor-specific tests deleted
   with the code they covered.
