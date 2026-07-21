@@ -1,11 +1,11 @@
 ---
 name: nazgul:start
 description: Start or resume a Nazgul autonomous development loop. Use when user says "start nazgul", "run nazgul", "begin development", "resume the loop", or passes an objective for new work. Auto-detects project state — no arguments needed.
-argument-hint: "[\"objective\"] [--afk|--yolo|--hitl] [--max N] [--task-pr] [--conductor]"
+argument-hint: "[\"objective\"] [--afk|--yolo|--hitl] [--max N] [--task-pr] [--parallel]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 2.10.0
+  version: 2.11.0
 ---
 
 # Nazgul Start
@@ -16,7 +16,7 @@ metadata:
 - `/nazgul:start --afk --max 20` — Run autonomously for up to 20 iterations
 - `/nazgul:start --yolo` — Full autonomous mode with no permission prompts
 - `/nazgul:start --yolo --task-pr` — YOLO mode with stacked per-task PRs
-- `/nazgul:start --conductor` — Opt into the Conductor execution engine (default: sequential); composes with any mode flag, e.g. `--conductor --afk`
+- `/nazgul:start --parallel` — Opt into stop-hook parallel batch dispatch (default: sequential); composes with any mode flag, e.g. `--parallel --afk`. `--conductor` is a deprecated alias for `--parallel`.
 
 ## Arguments
 $ARGUMENTS
@@ -44,7 +44,7 @@ Format all output per `references/ui-brand.md` — use stage banners, status sym
 ### Parse Arguments
 - `$ARGUMENTS` may contain:
   - An objective string (optional — override for new work)
-  - Flags: `--afk`, `--hitl`, `--max N`, `--yolo`, `--task-pr`, `--continue`, `--conductor`
+  - Flags: `--afk`, `--hitl`, `--max N`, `--yolo`, `--task-pr`, `--continue`, `--parallel` (`--conductor` is a deprecated alias for `--parallel`)
   - Or nothing at all (smart mode — this is the default)
 
 ### YOLO Mode Pre-flight (--yolo)
@@ -75,7 +75,6 @@ Read `nazgul/config.json → models` to determine which model to assign each pip
 | Planner           | `models.planning`     | opus    |
 | Implementer       | `models.implementation` | sonnet |
 | Review Gate       | `models.review_orchestrator` | sonnet |
-| Conductor         | `models.conductor`    | sonnet  |
 
 If the `models` section is missing from config.json, use `"sonnet"` as the fallback for all agents.
 
@@ -92,7 +91,7 @@ Persist the CLI flags to config via the tested helper, so every mode-gated branc
 ```bash
 [ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "$ARGUMENTS"
 ```
-This sets `mode` (`--yolo`/`--afk` → `afk`, `--hitl` → `hitl`), `afk.enabled`, `afk.yolo`, `afk.task_pr`, `max_iterations` (`--max N`, positive integer), and `execution.engine` (`--conductor` → `"conductor"`; absent leaves it at its default `"sequential"`). `--hitl` wins if combined with `--afk`/`--yolo`; `--conductor` is orthogonal to mode and composes with any of them. Do NOT separately hand-edit these fields from flags anywhere else in this skill — this helper is the single source of truth.
+This sets `mode` (`--yolo`/`--afk` → `afk`, `--hitl` → `hitl`), `afk.enabled`, `afk.yolo`, `afk.task_pr`, `max_iterations` (`--max N`, positive integer), and `execution.parallel` (`--parallel` → `true`; `--conductor` is a deprecated alias for `--parallel`; absent leaves it at its default `false`). `--hitl` wins if combined with `--afk`/`--yolo`; `--parallel` is orthogonal to mode and composes with any of them. Do NOT separately hand-edit these fields from flags anywhere else in this skill — this helper is the single source of truth.
 
 ### Resolve Run Mode (MANDATORY — before state detection)
 **Pre-load:** run `ToolSearch` with query `select:AskUserQuestion` (the prompt tool is deferred by default).
@@ -119,11 +118,23 @@ Determine the run mode:
 3. Non-interactive fallback: if `AskUserQuestion` is unavailable and `default_mode` is null, default to **HITL** and print a note. Never default to YOLO.
    - If a path resolves to YOLO (explicit `--yolo`, or `default_mode: "yolo"`) but `AskUserQuestion` is unavailable to collect the confirmation, do NOT run YOLO. Force HITL: `[ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--hitl"`, and print a note that interactive YOLO consent could not be collected. (YOLO never runs without an interactive YES.)
 
-### Engine Selection (MANDATORY — after Resolve Run Mode)
+### Parallel Option (after Resolve Run Mode)
 
-Read `nazgul/config.json → execution.engine`:
-- `"sequential"` (default, or unset) — no change. Every "Delegate to Implementer" / "Stop hook takes over" step in the states below runs exactly as written.
-- `"conductor"` (opted in via `--conductor`) — wherever a state below reaches its final "Delegate to Implementer" / "Stop hook takes over" step, dispatch the conductor agent instead (Agent tool, `subagent_type: "nazgul:conductor"`, `model: "$(jq -r '.models.conductor // "sonnet"' nazgul/config.json)"`) and stop. The conductor is self-recovering and self-contained: it reads `nazgul/config.json`, `nazgul/plan.md`, and `nazgul/tasks/TASK-*.md` itself and drives the whole objective wave by wave (Review Board included) with no further input from this skill. Discovery/Doc Generator/Planner steps still run first as written — the conductor only replaces the Implementer/stop-hook hand-off once a task graph exists.
+Read `nazgul/config.json → execution.parallel` (set by `--parallel`; `--conductor` is a
+deprecated alias). No dispatch decision happens here — the stop-hook computes parallel
+batches itself via `compute_dispatch_batch` (scripts/lib/parallel-batch.sh). Every state
+below runs its "Delegate to Implementer / Stop hook takes over" step exactly as written
+in BOTH modes; when a parallel batch is eligible the stop-hook's continuation message
+carries a `DELEGATE (PARALLEL BATCH ...)` instruction instead of the single-task one.
+Follow that instruction exactly: all batch Agent dispatches in ONE message, each prompt
+carrying its `NAZGUL_UNIT: <task id>` line, one worktree per task, sequential merges,
+then the batch's review-gates in one message.
+
+Parallel batch dispatch only fires when `review_gate.granularity` is `"task"`. The
+project template ships granularity `"group"`, so `--parallel` on a default config stays
+fully sequential — this is intentional and pinned by test. Users who want batching should
+set `review_gate.granularity: "task"`; with `"group"`/`"feature"` granularity the loop
+stays sequential with aggregate reviews regardless of `execution.parallel`.
 
 ### Reset Loop Counters (MANDATORY)
 
@@ -180,12 +191,12 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
      e. `git checkout -b feat/<display_id>-<slug>`
      f. Create worktree dir, store paths in config
 6. Mode was already applied from flags by the **Apply Flags** step above; do not re-derive it here. (Loop counters were already reset by the mandatory **Reset Loop Counters** step above.)
-7. Per **Engine Selection** above: if `execution.engine == "conductor"`, dispatch the conductor agent and stop. Otherwise, delegate to the appropriate agent based on active task status:
+7. Delegate to the appropriate agent based on active task status:
    - READY/IN_PROGRESS → Implementer
    - IMPLEMENTED/IN_REVIEW → Review Gate
    - CHANGES_REQUESTED → Implementer (read consolidated feedback first)
    - BLOCKED → Show to user, ask what to do
-8. The stop hook takes over from here (sequential engine only).
+8. The stop hook takes over from here.
 
 ---
 
@@ -258,8 +269,8 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 7. Tell user: "Docs ready. Running planner..."
 8. Delegate to Planner agent
 9. Review Plan (HITL mode: show plan for approval. AFK: continue.)
-10. Per **Engine Selection** above: if `execution.engine == "conductor"`, dispatch the conductor agent and stop. Otherwise, delegate to Implementer.
-11. Stop hook takes over (sequential engine only).
+10. Delegate to Implementer.
+11. Stop hook takes over.
 
 ---
 
@@ -278,8 +289,8 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 4. Tell user: "Discovery complete. Generating documents, then planning..."
 5. Delegate to Doc Generator agent. In HITL mode, pause for doc review.
 6. Delegate to Planner agent. In HITL mode, pause for plan review.
-7. Per **Engine Selection** above: if `execution.engine == "conductor"`, dispatch the conductor agent and stop. Otherwise, delegate to Implementer.
-8. Stop hook takes over (sequential engine only).
+7. Delegate to Implementer.
+8. Stop hook takes over.
 
 ---
 
@@ -312,8 +323,8 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
    - In AFK mode: skip board prompt (user must run `/nazgul:board` explicitly)
 8. Delegate to Planner: Planner reads context + docs, decomposes into tasks.
 9. Review Plan (HITL): Show plan for approval. AFK: continue.
-10. Per **Engine Selection** above: if `execution.engine == "conductor"`, dispatch the conductor agent and stop. Otherwise, delegate to Implementer: start working on the first READY task.
-11. Stop hook takes over (sequential engine only).
+10. Delegate to Implementer: start working on the first READY task.
+11. Stop hook takes over.
 
 ---
 
@@ -408,38 +419,8 @@ If no active tasks found: "Nothing to continue. Run `/nazgul:start` to auto-dete
 
 ### Wave-Based Execution
 
-Before dispatching the implementer, check for wave-based parallel execution:
-
-1. Read `nazgul/plan.md` for a `## Wave Groups` section
-2. Read `nazgul/config.json` for `parallelism.wave_execution` and `parallelism.enabled`
-
-**If wave groups exist AND wave_execution is true AND parallelism is enabled:**
-
-a. Identify the current wave — the lowest wave number with READY tasks
-b. Collect all READY tasks in that wave
-c. If only 1 task: dispatch implementer normally (no parallelism overhead)
-d. If 2+ tasks: dispatch parallel Agent Teams:
-   - Create a worktree per task: `git worktree add <worktree_dir>/TASK-NNN -b feat/<display_id>/TASK-NNN <feature-branch>`
-   - One implementer per task, each working in its own worktree with fresh context
-   - Pass worktree path to each implementer teammate
-   - Team name: `nazgul-impl-wave-[N]`
-   - Max parallel agents: `parallelism.max_parallel_teammates` from config
-   - Each agent commits in its own worktree
-e. Wait for all agents in the wave to complete
-f. After wave completion:
-   - Merge each task branch into feature branch: `git merge --no-ff feat/<display_id>/TASK-NNN`
-   - If merge conflict: `git merge --abort`, mark conflicting task BLOCKED with conflict details
-   - Clean up completed task worktrees and delete task branches
-   - Promote next wave's tasks from PLANNED to READY (via dependency check)
-g. Continue to next wave
-
-**If wave groups don't exist OR wave_execution is false:**
-- Fall back to sequential execution (current behavior — pick next READY task, dispatch implementer)
-
-**Safety rules:**
-- If any task in a wave fails, complete remaining tasks in that wave but don't start next wave
-- If dependency analysis is missing, default to sequential
-- Never run more agents than `max_parallel_teammates`
+Superseded: parallel execution is now the stop-hook's `execution.parallel` batch
+dispatch (see "Parallel Option" above). The `parallelism.*` config keys are inert.
 
 ---
 
