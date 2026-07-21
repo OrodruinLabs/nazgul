@@ -5,7 +5,7 @@ context: fork
 allowed-tools: Read, Bash, Glob
 metadata:
   author: Jose Mejia
-  version: 2.7.1
+  version: 2.16.0
 ---
 
 # Nazgul Status
@@ -17,8 +17,10 @@ metadata:
 - Mode: !`jq -r '.mode // "unknown"' nazgul/config.json 2>/dev/null || echo "unknown"`
 - Iteration: !`jq -r '"\(.current_iteration // 0)/\(.max_iterations // 40)"' nazgul/config.json 2>/dev/null || echo "0/40"`
 - Classification: !`jq -r '.project.classification // "unknown"' nazgul/config.json 2>/dev/null || echo "unknown"`
-- Execution engine: !`jq -r '.execution.engine // "sequential"' nazgul/config.json 2>/dev/null || echo "sequential"`
-- Conductor graph digest: !`E=$(jq -r '.execution.engine // "sequential"' nazgul/config.json 2>/dev/null); if [ "$E" = "conductor" ] && [ -f nazgul/conductor/graph.json ]; then { source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/conductor-graph.sh" 2>/dev/null && graph_wave_digest nazgul/conductor/graph.json; } || echo "{}"; else echo "{}"; fi`
+- Parallel execution: !`jq -r 'if .execution.parallel then "enabled" else "disabled" end' nazgul/config.json 2>/dev/null || echo "disabled"`
+- Review granularity: !`jq -r '.review_gate.granularity // "group"' nazgul/config.json 2>/dev/null || echo "group"`
+- Dispatch batch: !`P=$(jq -r '.execution.parallel // false' nazgul/config.json 2>/dev/null); if [ "$P" = "true" ] && [ -d nazgul/tasks ]; then { source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/parallel-batch.sh" 2>/dev/null && MAXP=$(execution_max_parallel nazgul/config.json) && compute_dispatch_batch nazgul/tasks nazgul/plan.md "$MAXP"; } 2>/dev/null || echo '{"tasks":[],"parallel":false}'; else echo '{"tasks":[],"parallel":false}'; fi`
+- Wave layout: !`P=$(jq -r '.execution.parallel // false' nazgul/config.json 2>/dev/null); if [ "$P" = "true" ] && [ -d nazgul/tasks ]; then { source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/parallel-batch.sh" 2>/dev/null && compute_waves nazgul/tasks; } 2>/dev/null || echo "[]"; else echo "[]"; fi`
 - AFK: !`jq -r 'if .afk.enabled then "enabled" else "disabled" end' nazgul/config.json 2>/dev/null || echo "disabled"`
 - Paused: !`jq -r '.paused // false' nazgul/config.json 2>/dev/null || echo "false"`
 - Reviewers: !`jq -r '.agents.reviewers // [] | join(", ")' nazgul/config.json 2>/dev/null || echo "none"`
@@ -42,14 +44,15 @@ Format all output per `references/ui-brand.md` — use stage banners, status sym
 
 Using the live data above, produce a formatted status report.
 
-**Conductor-mode branch**: if Execution engine is `conductor` AND Conductor graph digest is not `{}`, render the
-Conductor Wave Progress format below in place of the Task Progress block (everything else — header, Active
-Task, Review Board, Context Health, Git, Board Sync — stays the same). If Execution engine is `conductor` but
-the digest IS `{}` (no `nazgul/conductor/graph.json` yet — planning phase), show a one-line "no graph yet"
-notice under Task Progress's position and fall back to the sequential Status Report Format below; never
-error. If Execution engine is `sequential`, always use the sequential Status Report Format below unchanged.
+**Parallel-mode branch**: if Parallel execution is `enabled`, render the Parallel Batch Progress format below in
+place of the Task Progress block (everything else — header, Active Task, Review Board, Context Health, Git,
+Board Sync — stays the same), using the Dispatch batch and Wave layout data above. If Review granularity is
+not `task`, batch dispatch never fires even with `--parallel` set — say so explicitly (e.g. "parallel enabled
+but granularity is 'group': loop stays sequential with aggregate reviews") rather than showing an empty batch
+as if it were meaningful. If Parallel execution is `disabled`, always use the sequential Status Report Format
+below unchanged.
 
-### Status Report Format (sequential engine, or conductor with no graph yet)
+### Status Report Format (default — parallel execution disabled)
 
 ```text
 Nazgul Status
@@ -101,19 +104,23 @@ Tasks mapped: [N]
 Failures:     [N]
 ```
 
-### Conductor Wave Progress Format (conductor engine with a graph)
+### Parallel Batch Progress Format (execution.parallel enabled)
 
-Replaces the Task Progress block only; parse the Conductor graph digest JSON (`current_wave`, `next_unit`,
-`units: {ID: {status, sha, wave}}`) to fill it in. One line per unit, status symbol per `references/ui-brand.md`
-(✦ DONE, ◆ IN_PROGRESS/IMPLEMENTED/IN_REVIEW, ✗ BLOCKED, ◇ otherwise); `sha` shown short (7 chars) or `-` if null.
+Replaces the Task Progress block only; parse the Dispatch batch JSON (`tasks`, `parallel`, `reason`) and the
+Wave layout JSON (array of `{wave, units}`) to fill it in. `Next batch` lists the task ids `compute_dispatch_batch`
+would dispatch together right now (a batch of 1 is still valid — it just means no multi-task batch was eligible);
+`Batch reason` surfaces why (e.g. disjoint file scopes not found, only one READY candidate).
 
 ```text
-Conductor Wave Progress
+Parallel Batch Progress
 ─────────────────────────────────────
-Current wave: [current_wave or "-"]
-Next unit:    [next_unit or "none — all units done"]
+Granularity:  [review_gate.granularity]
+Next batch:   [N] task(s) — [task ids, or "none ready"]
+Reason:       [reason from compute_dispatch_batch, or "-"]
 
-  [symbol] [UNIT-ID]  wave [N]  sha [short sha or "-"]
+Wave  Units
+─────────────────────────────────────
+  [N]   [UNIT-ID, UNIT-ID, ...]
   ...
 ```
 
@@ -121,6 +128,7 @@ Next unit:    [next_unit or "none — all units done"]
 2. Parse plan.md to count tasks by status
 3. Check nazgul/reviews/ for any active review feedback
 4. Check nazgul/checkpoints/ for the latest checkpoint
-5. When Execution engine is `conductor` and the graph digest is non-empty, parse it for the Conductor Wave
-   Progress block instead of recomputing wave/unit state — never reimplement `graph_wave_digest`
+5. When Parallel execution is `enabled`, parse the Dispatch batch and Wave layout JSON for the Parallel Batch
+   Progress block instead of recomputing batch/wave state — never reimplement `compute_dispatch_batch` or
+   `compute_waves`
 6. Output the formatted status summary

@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "25"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "26"
 assert_json_field "review_gate.simplify_before_review default false" "$CONFIG" ".review_gate.simplify_before_review" "false"
 assert_json_field "review_gate.enforce_granularity default block" "$CONFIG" ".review_gate.enforce_granularity" "block"
 assert_json_field "has .default_mode" "$CONFIG" ".default_mode" "null"
@@ -126,24 +126,26 @@ assert_eq "v18 has .models.review_by_reviewer object" "$val" "object"
 assert_json_field "v18 models.review_by_reviewer security-reviewer is sonnet" "$CONFIG" '.models.review_by_reviewer["security-reviewer"]' "sonnet"
 assert_json_field "v18 models.review_by_reviewer architect-reviewer is sonnet" "$CONFIG" '.models.review_by_reviewer["architect-reviewer"]' "sonnet"
 
-# v19 new defaults (FEAT-007: conductor engine config surface)
+# v19-era default: conductor engine config surface. Superseded in place by the
+# Parallel Execution Collapse (v26) — execution.engine and .conductor are gone,
+# but the intent they carried flows forward into execution.{parallel,max_parallel,gates}:
+# execution.engine="sequential" → execution.parallel=false;
+# conductor.gates.{approve_graph,approve_each_wave,approve_final_pr} → execution.gates.{approve_plan,approve_batch,approve_final_pr}.
 val=$(jq -r '.execution | type' "$CONFIG")
 assert_eq "v19 has .execution object" "$val" "object"
-assert_json_field "v19 execution.engine is sequential" "$CONFIG" ".execution.engine" "sequential"
-val=$(jq -r '.conductor | type' "$CONFIG")
-assert_eq "v19 has .conductor object" "$val" "object"
-val=$(jq -r '.conductor.gates | type' "$CONFIG")
-assert_eq "v19 has .conductor.gates object" "$val" "object"
-assert_json_field "v19 conductor.gates.approve_graph is false" "$CONFIG" ".conductor.gates.approve_graph" "false"
-assert_json_field "v19 conductor.gates.approve_each_wave is false" "$CONFIG" ".conductor.gates.approve_each_wave" "false"
-assert_json_field "v19 conductor.gates.approve_final_pr is false" "$CONFIG" ".conductor.gates.approve_final_pr" "false"
-assert_json_field "v19 conductor.max_parallel is 3" "$CONFIG" ".conductor.max_parallel" "3"
+assert_json_field "v19→v26 execution.engine=sequential → execution.parallel is false" "$CONFIG" ".execution.parallel" "false"
+assert_json_field "v19→v26 conductor.max_parallel → execution.max_parallel is 3" "$CONFIG" ".execution.max_parallel" "3"
+val=$(jq -r '.execution.gates | type' "$CONFIG")
+assert_eq "v19→v26 has .execution.gates object" "$val" "object"
+assert_json_field "v19→v26 conductor.gates.approve_graph → execution.gates.approve_plan is false" "$CONFIG" ".execution.gates.approve_plan" "false"
+assert_json_field "v19→v26 conductor.gates.approve_each_wave → execution.gates.approve_batch is false" "$CONFIG" ".execution.gates.approve_batch" "false"
+assert_json_field "v19→v26 conductor.gates.approve_final_pr → execution.gates.approve_final_pr is false" "$CONFIG" ".execution.gates.approve_final_pr" "false"
 
-# v20 new defaults (conductor enforcement toggles)
-val=$(jq -r '.conductor.enforce | type' "$CONFIG")
-assert_eq "v20 has .conductor.enforce object" "$val" "object"
-assert_json_field "v20 conductor.enforce.dispatch_guard is true" "$CONFIG" ".conductor.enforce.dispatch_guard" "true"
-assert_json_field "v20 conductor.enforce.rework_guard is true" "$CONFIG" ".conductor.enforce.rework_guard" "true"
+# v20-era default: conductor enforcement toggles, now execution.enforce.* (v26)
+val=$(jq -r '.execution.enforce | type' "$CONFIG")
+assert_eq "v20→v26 has .execution.enforce object" "$val" "object"
+assert_json_field "v20→v26 conductor.enforce.dispatch_guard → execution.enforce.dispatch_guard is true" "$CONFIG" ".execution.enforce.dispatch_guard" "true"
+assert_json_field "v20→v26 conductor.enforce.rework_guard → execution.enforce.rework_guard is true" "$CONFIG" ".execution.enforce.rework_guard" "true"
 
 # v21 new defaults (FEAT-008: automation heartbeat, default off)
 val=$(jq -r '.automation | type' "$CONFIG")
@@ -155,10 +157,11 @@ assert_json_field "v21 automation.heartbeat.interval is 30m" "$CONFIG" ".automat
 assert_json_field "v21 automation.heartbeat.inbox.provider is file" "$CONFIG" ".automation.heartbeat.inbox.provider" "file"
 assert_json_field "v21 automation.heartbeat.inbox.dir is nazgul/inbox" "$CONFIG" ".automation.heartbeat.inbox.dir" "nazgul/inbox"
 assert_json_field "v21 automation.heartbeat.auto_start.mode is yolo" "$CONFIG" ".automation.heartbeat.auto_start.mode" "yolo"
-assert_json_field "v21 automation.heartbeat.auto_start.engine is conductor" "$CONFIG" ".automation.heartbeat.auto_start.engine" "conductor"
+# v21-era default: auto_start.engine="conductor", now auto_start.parallel (v26)
+assert_json_field "v21→v26 auto_start.engine=conductor → auto_start.parallel is true" "$CONFIG" ".automation.heartbeat.auto_start.parallel" "true"
 
 # v22 new defaults (FEAT-009: model-tier + review-key split + self-audit)
-assert_json_field "v22 models.conductor is sonnet" "$CONFIG" ".models.conductor" "sonnet"
+# (models.conductor removed by v26 — no successor field; see the v26 block below)
 assert_json_field "v22 models.review_orchestrator is sonnet" "$CONFIG" ".models.review_orchestrator" "sonnet"
 assert_json_field "v22 models.review_default is haiku" "$CONFIG" ".models.review_default" "haiku"
 assert_json_field "v22 models.review still present (retained fallback)" "$CONFIG" ".models.review" "haiku"
@@ -168,9 +171,10 @@ assert_json_field "v22 self_audit.enabled is true" "$CONFIG" ".self_audit.enable
 assert_json_field "v22 self_audit.backlog_path is nazgul/improvements.md" "$CONFIG" ".self_audit.backlog_path" "nazgul/improvements.md"
 
 # v23 new defaults (FEAT-010: git-level hook enforcement config)
-assert_json_field "v23 conductor.enforce.premerge_guard is true" "$CONFIG" ".conductor.enforce.premerge_guard" "true"
 assert_json_field "v23 branch.prior_hooks_path is null" "$CONFIG" ".branch.prior_hooks_path" "null"
 assert_json_field "v23 guards.git_hooks is true" "$CONFIG" ".guards.git_hooks" "true"
+# v23-era default: conductor.enforce.premerge_guard, now execution.enforce.premerge_guard (v26)
+assert_json_field "v23→v26 conductor.enforce.premerge_guard → execution.enforce.premerge_guard is true" "$CONFIG" ".execution.enforce.premerge_guard" "true"
 
 # v24 new defaults (FEAT-011: review board robustness — unverified verdict + adversarial cross-check)
 assert_json_field "v24 review_gate.unverified_retries is 2" "$CONFIG" ".review_gate.unverified_retries" "2"
@@ -190,5 +194,14 @@ assert_json_field "v25 connectors.github.pull.max_body_bytes is 65536" "$CONFIG"
 assert_json_field "v25 connectors.github.push.enabled is true" "$CONFIG" ".connectors.github.push.enabled" "true"
 assert_json_field "v25 connectors.github.pull_failures is 0" "$CONFIG" ".connectors.github.pull_failures" "0"
 assert_json_field "v25 connectors.github.map is empty object" "$CONFIG" ".connectors.github.map | length" "0"
+
+# v26 new defaults (Parallel Execution Collapse: conductor engine removed,
+# execution.parallel replaces it on the one sequential engine). Value-equivalence
+# assertions for the migrated keys live inline above (v19/v20/v21/v23 sections);
+# this block covers only what's new to v26 — the old keys' removal.
+assert_json_field "v26 execution.engine no longer exists" "$CONFIG" '.execution | has("engine")' "false"
+assert_json_field "v26 conductor section no longer exists" "$CONFIG" 'has("conductor")' "false"
+assert_json_field "v26 models.conductor no longer exists" "$CONFIG" '.models | has("conductor")' "false"
+assert_json_field "v26 auto_start.engine no longer exists" "$CONFIG" '.automation.heartbeat.auto_start | has("engine")' "false"
 
 report_results

@@ -66,18 +66,16 @@ assert_contains "discovery references models.review" "$discovery_content" "model
 help_content=$(cat "$REPO_ROOT/skills/help/SKILL.md")
 assert_contains "help lists /nazgul:config" "$help_content" "nazgul:config"
 
-# ── Test: conductor dispatch passes models.conductor explicitly (ADR-002 Option 2) ──
+# ── Test: start's Model Selection table has no leftover Conductor row and
+# still keys Review Gate off models.review_orchestrator (the deleted Conductor
+# engine's own dispatch/model-resolution was removed with agents/conductor.md
+# as part of the Parallel Execution Collapse — there is no separate driver
+# agent left to pin a model tier for) ──
 start_content=$(cat "$REPO_ROOT/skills/start/SKILL.md")
-assert_contains "start dispatches nazgul:conductor with explicit model" "$start_content" \
-  'subagent_type: "nazgul:conductor"`, `model: "$(jq -r '\''.models.conductor // "sonnet"'\'' nazgul/config.json)"`'
-assert_contains "start Model Selection table lists a Conductor row" "$start_content" "| Conductor"
-assert_contains "start Model Selection table Conductor row keys off models.conductor" "$start_content" "models.conductor"
+assert_file_not_exists "agents/conductor.md no longer exists" "$REPO_ROOT/agents/conductor.md"
+assert_not_contains "start Model Selection table has no Conductor row" "$start_content" "| Conductor"
+assert_not_contains "start no longer dispatches nazgul:conductor" "$start_content" "nazgul:conductor"
 assert_contains "start Model Selection table Review Gate row keys off models.review_orchestrator" "$start_content" "models.review_orchestrator"
-
-# ── Test: agents/conductor.md resolves MODEL_REVIEW via the orchestrator fallback chain ──
-conductor_content=$(cat "$REPO_ROOT/agents/conductor.md")
-assert_contains "conductor MODEL_REVIEW reads review_orchestrator with legacy fallback" "$conductor_content" \
-  'MODEL_REVIEW=$(jq -r '"'"'.models.review_orchestrator // .models.review // "sonnet"'"'"' "$CONFIG")'
 
 # ── Test: agents/review-gate.md resolves reviewer-default + feedback-aggregator via the reviewer-default fallback chain ──
 review_gate_content=$(cat "$REPO_ROOT/agents/review-gate.md")

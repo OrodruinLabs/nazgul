@@ -26,7 +26,7 @@ metadata:
 | `/nazgul:start` | Auto-detect state and continue work |
 | `/nazgul:start "objective"` | Start a specific objective |
 
-**Flags for `/nazgul:start`:** `--afk` (autonomous), `--yolo` (no reviews), `--hitl` (human-in-the-loop, default), `--max N` (iteration limit)
+**Flags for `/nazgul:start`:** `--afk` (autonomous), `--yolo` (no reviews), `--hitl` (human-in-the-loop, default), `--max N` (iteration limit), `--parallel` (batch dispatch of independent tasks; requires `review_gate.granularity: "task"`; `--conductor` is a deprecated alias)
 
 ## Monitoring
 
@@ -84,7 +84,7 @@ metadata:
 4. Tests are mandatory — run after every change
 5. Never skip the review gate — ALL reviewers must approve
 6. Address ALL blocking feedback — fix every REJECT item
-7. One task at a time — unless using parallel Agent Teams
+7. One task at a time — unless `execution.parallel` batch dispatch is enabled
 8. Update Recovery Pointer on every state change
 9. Commit in AFK mode — every state transition gets a `nazgul:` commit
 10. NAZGUL_COMPLETE means ALL tasks DONE and post-loop finished

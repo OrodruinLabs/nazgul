@@ -125,37 +125,4 @@ case "$AGENT" in
     ;;
 esac
 
-# Conductor orphan detector: if the conductor stops with a wave that has units
-# dispatched but not terminal, record a resume marker + emit a loud event.
-# Detection only — never blocks; every failure mode below is a silent return.
-_detect_conductor_orphan() {
-  command -v jq >/dev/null 2>&1 || return 0
-  local graph="$NAZGUL_DIR/conductor/graph.json"
-  [ -f "$graph" ] || return 0
-  local engine
-  engine=$(jq -r '.execution.engine // "sequential"' "$CONFIG" 2>/dev/null || echo "sequential")
-  [ "$engine" = "conductor" ] || return 0
-
-  # Units that were dispatched but never reached a terminal state (DONE/BLOCKED).
-  local incomplete
-  incomplete=$(jq -rc '
-    [ .tasks // {} | to_entries[]
-      | select((.value.dispatched // false) == true)
-      | select((.value.status // "") as $s | ($s != "DONE" and $s != "BLOCKED"))
-      | .key ]' "$graph" 2>/dev/null) || incomplete="[]"
-  [ -n "$incomplete" ] && [ "$incomplete" != "[]" ] || return 0
-
-  local wave
-  wave=$(jq -r '.current_wave // "?"' "$graph" 2>/dev/null || echo "?")
-  mkdir -p "$NAZGUL_DIR/conductor" 2>/dev/null || true
-  jq -n --argjson units "$incomplete" --arg wave "$wave" \
-    '{wave:$wave, units:$units, reason:"conductor stopped with incomplete wave"}' \
-    > "$NAZGUL_DIR/conductor/.resume-needed" 2>/dev/null || true
-  emit_event "conductor_orphan_detected" wave "$wave"
-}
-
-case "$AGENT" in
-  *conductor*) _detect_conductor_orphan || true ;;
-esac
-
 exit 0

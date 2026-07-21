@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.15.0-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-2.16.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-Plugin-7c3aed?style=flat-square" alt="Claude Code Plugin">
   <img src="https://img.shields.io/badge/agents-22-orange?style=flat-square" alt="Agents">
@@ -31,7 +31,7 @@ Nazgul runs a complete autonomous SDLC pipeline — from scanning your codebase 
 - **Per-stage model routing** — assign Opus, Sonnet, or Haiku to each pipeline stage for the right balance of cost, speed, and quality
 - **Tamper-evident, cost-optimized reviews** — diff-bound provenance manifests catch a skipped or stale review board, a `comment-verifier` gate blocks templated or restated doc-comments, and diff-only reviewer context plus per-reviewer model tiering cut review token cost
 - **Survives interruptions** — checkpoints, recovery pointers, session tracking, and hooks mean you can close your laptop and resume later
-- **Opt-in conductor engine** — `/nazgul:start --conductor` runs independent plan waves through a graph-only driver agent instead of the sequential loop, with autonomous-first approval gates, two unconditional human-in-the-loop hard stops, and self-recovering state; sequential stays the default
+- **Opt-in parallel dispatch** — `/nazgul:start --parallel` lets the same sequential stop-hook loop batch-dispatch independent, zero-file-overlap plan waves together instead of one task at a time, with autonomous-first approval gates and two unconditional human-in-the-loop hard stops; sequential single-task dispatch stays the default
 - **Opt-in automation heartbeat** — `/nazgul:heartbeat` (or an opt-in Claude Code scheduled-agent routine) triages a local work inbox and auto-starts the next objective when idle, behind the same two unconditional hard stops; default off
 - **Opt-in GitHub two-way connector** — pulls labeled issues into the inbox so the heartbeat can auto-start them and pushes task status + PR links back to the mapped issue, behind a generalized provider seam (`file`/`github`); gh-auth-only (no tokens stored), auto-disables after repeated failures; default off (Linear/Slack are follow-on providers behind the same seam)
 

@@ -171,8 +171,6 @@ _expected_model_for() {
       # NOT models.default — without this it would fall through to sonnet and
       # falsely flag every haiku feedback-aggregator transcript as tier drift.
       jq -r '.models.review_default // .models.review // "haiku"' "$CONFIG" 2>/dev/null || echo "haiku" ;;
-    *conductor*)
-      jq -r '.models.conductor // "sonnet"' "$CONFIG" 2>/dev/null || echo "sonnet" ;;
     *planner*|*planning*)
       jq -r '.models.planning // "opus"' "$CONFIG" 2>/dev/null || echo "opus" ;;
     *discovery*)

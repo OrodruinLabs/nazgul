@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Nazgul git-hooks — install/uninstall/self-heal lifecycle for the managed
 # `core.hooksPath` guards (pre-commit base-branch, pre-merge-commit H2
-# conductor verdict). Sourced by worktree-utils.sh (install/uninstall) and
+# parallel-unit verdict). Sourced by worktree-utils.sh (install/uninstall) and
 # session-context.sh (self-heal).
 #
 # Idempotent source guard; NOT `set -euo pipefail` — sourced into caller
-# shells that own their own strict-mode setting (mirrors conductor-gates.sh).
+# shells that own their own strict-mode setting (mirrors parallel-batch.sh).
 
 [ -n "${_NAZGUL_GIT_HOOKS_SOURCED:-}" ] && return 0
 _NAZGUL_GIT_HOOKS_SOURCED=1

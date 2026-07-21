@@ -33,7 +33,6 @@ agents/                              # Subagent definitions
 │   ├── review-gate.md               # Pipeline: orchestrates review board
 │   ├── feedback-aggregator.md       # Pipeline: consolidates review feedback
 │   ├── team-orchestrator.md         # Pipeline: manages Agent Teams
-│   ├── conductor.md                 # Pipeline: opt-in graph-only driver (execution.engine=conductor)
 │   ├── designer.md                  # Specialist: design system, visual direction
 │   ├── frontend-dev.md              # Specialist: UI component implementation
 │   ├── mobile-dev.md                # Specialist: mobile platform implementation
@@ -53,8 +52,8 @@ scripts/                             # Shell scripts for hooks
 │   ├── post-compact.sh              # PostCompact: re-inject state after compaction
 │   ├── pre-tool-guard.sh            # PreToolUse: block destructive commands
 │   ├── task-state-guard.sh          # PreToolUse: verify task state before edits
-│   ├── conductor-dispatch-guard.sh  # PreToolUse(Agent): block background/duplicate conductor unit dispatch
-│   ├── conductor-rework-guard.sh    # PreToolUse(Write/Edit): block re-editing a committed conductor unit
+│   ├── parallel-dispatch-guard.sh   # PreToolUse(Agent): block re-dispatch of a completed parallel unit
+│   ├── parallel-rework-guard.sh     # PreToolUse(Write/Edit): block re-editing a committed parallel unit's scope
 │   ├── prompt-guard.sh              # UserPromptSubmit: validate user prompts
 │   ├── session-context.sh           # SessionStart: inject loop state + session tracking
 │   ├── session-staging.sh           # SessionEnd: stage files for AFK safety
@@ -72,7 +71,7 @@ scripts/                             # Shell scripts for hooks
 │   ├── git-hooks/                   # Templates installed into the managed core.hooksPath dir
 │   │   ├── _dispatch.sh             # Chain-dispatcher: forwards to any pre-existing user hook
 │   │   ├── pre-commit               # Git-level base-branch guard
-│   │   └── pre-merge-commit         # Git-level H2 conductor verdict guard
+│   │   └── pre-merge-commit         # Git-level H2 parallel-unit verdict guard
 │   └── lib/                         # Shared libraries
 │       ├── task-utils.sh            # Task status parsing (4 formats) + counting
 │       ├── session-tracker.sh       # Concurrent session lock management
@@ -82,9 +81,7 @@ scripts/                             # Shell scripts for hooks
 │       ├── bootstrap-relocate.sh    # bootstrap-project: atomic staged relocation
 │       ├── review-provenance.sh     # Diff-bound dispatch manifest + provenance validation
 │       ├── reviewer-selection.sh    # Deterministic diff-aware reviewer selection
-│       ├── conductor-graph.sh       # Conductor: wave computation + graph.json state/recovery
-│       ├── conductor-gates.sh       # Conductor: gate config + the two unconditional hard stops
-│       ├── conductor-router.sh      # Conductor: unit → backend (subagent/team/worktree) routing
+│       ├── parallel-batch.sh        # execution.parallel: batch selection, gates, hard stops (stop-hook + heartbeat)
 │       ├── inbox-provider.sh        # Heartbeat: work-inbox provider seam (list/get/archive), dispatches file vs github
 │       ├── heartbeat-triage.sh      # Heartbeat: source-agnostic candidate selection policy
 │       ├── connector-github.sh      # Connectors: two-way GitHub provider (pull issues in / push status + PR back)
@@ -102,7 +99,7 @@ references/                          # Shared reference docs for agents
 │   ├── fix-first-heuristic.md       # AUTO-FIX vs ASK classification rules
 │   └── self-improvement.md          # Agent self-rating protocol
 tests/                               # Plugin validation tests
-│   ├── run-tests.sh                 # Test runner (24 unit/integration files)
+│   ├── run-tests.sh                 # Test runner (65 unit/integration files)
 │   ├── test-*.sh                    # Unit/integration tests
 │   ├── fixtures/                    # Test fixtures (bootstrap-transform scrub cases)
 │   ├── lib/                         # Test assertions + setup helpers
@@ -121,7 +118,7 @@ tests/                               # Plugin validation tests
 
 3. **Shell scripts must be POSIX-safe.** All scripts in `scripts/` should pass `bash -n` and `shellcheck`. They use `jq` for JSON manipulation.
 
-4. **Runtime files are NOT part of the plugin.** The `nazgul/` directory (config.json, plan.md, tasks/, checkpoints/, conductor/graph.json, etc.) is created per-project by `/nazgul:init`. This repo contains only the plugin code.
+4. **Runtime files are NOT part of the plugin.** The `nazgul/` directory (config.json, plan.md, tasks/, checkpoints/, etc.) is created per-project by `/nazgul:init`. This repo contains only the plugin code.
 
 ## Code Style
 
@@ -141,7 +138,7 @@ tests/                               # Plugin validation tests
 
 **Conditional agent roster.** Discovery generates only the agents this project needs. 22 core agents exist as specs, plus a reviewer template that spawns project-specific reviewers. Only relevant ones are instantiated per-project.
 
-**One pipeline, two engines.** `execution.engine` selects how the pipeline runs: `"sequential"` (default) drives the loop one task at a time via the stop-hook; `"conductor"` (opt-in via `/nazgul:start --conductor`) hands the whole objective to `agents/conductor.md`, a graph-only driver that computes waves from the Planner's task graph and dispatches each unit to a fresh sub-session, reusing the same Review Board per unit. Both engines share the same Planner output, task state machine, and review gate — the conductor only changes who drives, not what "done" means.
+**One engine, optional parallel dispatch.** The stop-hook loop is the only driver — there is no separate engine to opt into. `execution.parallel` (opt-in via `/nazgul:start --parallel`, default `false`) layers concurrent batch dispatch on top of the same sequential loop: when `review_gate.granularity` is `"task"` (the template default `"group"` stays sequential with aggregate reviews) and a wave in `nazgul/plan.md`'s `## Wave Groups` section has `>=2` READY tasks whose dependencies are all DONE and whose file scopes are disjoint, the stop-hook's `compute_dispatch_batch` (`scripts/lib/parallel-batch.sh`) dispatches them together instead of one at a time, reusing the same Review Board per task. Sequential and parallel dispatch share the same Planner output, task state machine, and review gate — the option only changes how many tasks start at once, not what "done" means.
 
 **Connectors are opt-in and default-off.** `scripts/lib/connector-github.sh` (FEAT-012) is a two-way GitHub connector behind the generalized provider seam (`scripts/lib/inbox-provider.sh`): it pulls opt-in-labeled issues into the inbox so the heartbeat auto-starts them, and pushes task status + PR links back to the mapped issue. It is enabled only when `connectors.github.enabled` is `true` and selected via `automation.heartbeat.inbox.provider: "github"` (the `file` provider is the default). Credentials come from `gh auth` only — no token is ever stored in config or logged — and remote issue content is treated as data. Linear/Slack are follow-on providers behind the same seam. See RULES.md §16.
 
@@ -162,7 +159,7 @@ tests/                               # Plugin validation tests
 ## Testing
 
 ```bash
-tests/run-tests.sh                    # Run all unit/integration tests (24 files)
+tests/run-tests.sh                    # Run all unit/integration tests (65 files)
 tests/run-tests.sh --filter=stop-hook # Run specific test file
 tests/e2e/run-e2e.sh                  # Run E2E skill tests (requires claude CLI, costs money)
 ```
@@ -188,7 +185,6 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 - `nazgul/reviews/` — Review artifacts per task
 - `nazgul/context/` — Project context from Discovery
 - `nazgul/docs/` — Generated project documents (PRD, TRD, ADRs)
-- `nazgul/conductor/graph.json` — Conductor engine state (waves, per-task verdict + commit SHA), only when `execution.engine: "conductor"`
 - `nazgul/inbox/` (+ `nazgul/inbox/archive/`) — Automation-heartbeat work inbox: candidate `.md`/`.json` files picked up by `scripts/heartbeat.sh` and archived on claim; only populated/consumed when `automation.heartbeat.enabled: true`
 - `config.json → connectors.github` — GitHub two-way connector config (opt-in, `enabled: false` by default): `pull.{label, claimed_label, max_body_bytes}`, `push.enabled`, `pull_failures` counter, and the remote-issue ↔ local-id `map`. No credential is stored here — auth is `gh` only. Consumed by `scripts/lib/connector-github.sh` via the `scripts/lib/inbox-provider.sh` seam (`automation.heartbeat.inbox.provider: "github"`)
 - `nazgul/.githooks/` — Per-project managed git hooks dir (generated by `scripts/lib/git-hooks.sh`), pointed to by `core.hooksPath` when `guards.git_hooks: true`; holds the `pre-commit`/`pre-merge-commit` guards, the chain-dispatcher, and pass-through shims for every other githooks(5) name
@@ -197,7 +193,7 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 ## Commands
 - `/nazgul:init` — First-time setup: run Discovery, generate reviewers, create runtime dirs
 - `/nazgul:start` — Auto-detects project state and continues or starts work (derives objective from context)
-- `/nazgul:start "objective"` — Override: start a specific new objective (flags: --afk, --yolo, --hitl, --max N, --conductor)
+- `/nazgul:start "objective"` — Override: start a specific new objective (flags: --afk, --yolo, --hitl, --max N, --parallel; --conductor is a deprecated alias for --parallel)
 - `/nazgul:status` — Check loop progress, task counts, reviewer board
 - `/nazgul:task` — Task lifecycle: skip, unblock, add, prioritize, info, list
 - `/nazgul:pause` — Gracefully pause the loop at next iteration boundary
@@ -211,7 +207,7 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 - `/nazgul:docs` — View or regenerate project documents
 - `/nazgul:patch` — Lightweight task mode for bug fixes, config changes, and small features
 - `/nazgul:verify` — Human acceptance testing for completed tasks
-- `/nazgul:heartbeat` — Run one automation-heartbeat tick by hand: triages `nazgul/inbox/` and auto-starts the next objective if idle and clear. Opt-in and default-off (`automation.heartbeat.enabled: false`); a separate entry path from the main loop with no changes to the sequential or Conductor execution path
+- `/nazgul:heartbeat` — Run one automation-heartbeat tick by hand: triages `nazgul/inbox/` and auto-starts the next objective if idle and clear. Opt-in and default-off (`automation.heartbeat.enabled: false`); a separate entry path from the main loop with no changes to the sequential or parallel execution path
 - `/nazgul:help` — Quick reference for all commands and modes
 
 ## The 10 Rules for the Nazgul Loop

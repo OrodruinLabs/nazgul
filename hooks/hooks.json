@@ -80,7 +80,7 @@
           },
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/conductor-rework-guard.sh\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/parallel-rework-guard.sh\"",
             "timeout": 10
           }
         ]
@@ -90,7 +90,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/conductor-dispatch-guard.sh\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/parallel-dispatch-guard.sh\"",
             "timeout": 10
           }
         ]

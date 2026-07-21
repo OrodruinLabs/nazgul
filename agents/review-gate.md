@@ -332,7 +332,8 @@ For EACH reviewer currently `UNVERIFIED`:
      `review unverified — critical reviewer could not assess: <name>`
      (fail-closed). Do NOT mark the task DONE. This mirrors the DONE-gate, where
      `_re_is_authorized_unverified` refuses to honor a critical reviewer's
-     `UNVERIFIED`, and the conductor security hard-stop (`SECURITY_UNVERIFIED`).
+     `UNVERIFIED`, and the `execution_should_halt` security hard-stop
+     (`SECURITY_UNVERIFIED`, `scripts/lib/parallel-batch.sh`).
    - **Non-critical reviewer** (code, qa, generated domain reviewers):
      - `allow_unverified_nonblocking=true` (default): **leave the `UNVERIFIED`
        stub in place** — the DONE-gate's `_re_is_authorized_unverified` treats it

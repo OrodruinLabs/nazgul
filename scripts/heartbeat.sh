@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Nazgul heartbeat tick engine (FEAT-008). Gates on automation.heartbeat.enabled,
-# enforces the two unconditional hard stops (reused from conductor-gates.sh,
+# enforces the two unconditional hard stops (reused from parallel-batch.sh,
 # independent of enabled/mode incl. yolo), triages the inbox, and enforces the
 # concurrency guard. On actionable+clear it atomically archives the picked item
 # (the archive move IS the claim) then auto-starts it — archive-then-start so a
@@ -14,8 +14,8 @@ PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 NAZGUL_DIR="$PROJECT_ROOT/nazgul"
 CONFIG="$NAZGUL_DIR/config.json"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# shellcheck source=lib/conductor-gates.sh
-source "$SCRIPT_DIR/lib/conductor-gates.sh"
+# shellcheck source=lib/parallel-batch.sh
+source "$SCRIPT_DIR/lib/parallel-batch.sh"
 # shellcheck source=lib/session-tracker.sh
 source "$SCRIPT_DIR/lib/session-tracker.sh"
 # shellcheck source=lib/inbox-provider.sh
@@ -88,23 +88,25 @@ _hb_objective() {
 # _hb_start <objective> -> invoke the auto-start command with the objective
 # passed as a single argv argument (data, never eval'd/shell-interpolated).
 # Injectable via NAZGUL_HEARTBEAT_START_CMD (called as `$CMD "$objective"`) for
-# testing; defaults to the real `/nazgul:start` invocation, mode/engine flags
-# taken from automation.heartbeat.auto_start.{mode,engine} (default yolo/conductor).
+# testing; defaults to the real `/nazgul:start` invocation, mode/parallel flags
+# taken from automation.heartbeat.auto_start.{mode,parallel} (default yolo/true).
 _hb_start() {
   local objective="$1"
   if [ -n "${NAZGUL_HEARTBEAT_START_CMD:-}" ]; then
     "$NAZGUL_HEARTBEAT_START_CMD" "$objective"
   else
-    local mode engine mode_flag=""
+    local mode par mode_flag=""
     mode=$(jq -r '.automation.heartbeat.auto_start.mode // "yolo"' "$CONFIG" 2>/dev/null || echo "yolo")
-    engine=$(jq -r '.automation.heartbeat.auto_start.engine // "conductor"' "$CONFIG" 2>/dev/null || echo "conductor")
+    # NOT `// true`: jq's `//` treats an explicit `false` as absent, which would
+    # silently override a user's explicit auto_start.parallel=false opt-out.
+    par=$(jq -r '(.automation.heartbeat.auto_start | if has("parallel") then .parallel else true end)' "$CONFIG" 2>/dev/null || echo "true")
     case "$mode" in
       afk) mode_flag="--afk" ;;
       hitl) mode_flag="--hitl" ;;
       *) mode_flag="--yolo" ;;
     esac
-    local engine_flag=""
-    [ "$engine" = "conductor" ] && engine_flag="--conductor"
+    local par_flag=""
+    [ "$par" = "true" ] && par_flag="--parallel"
 
     # apply-start-flags.sh later strips this span with a literal-quote-paired
     # sed scan that is inherently line-bounded, so a raw `"` or an embedded
@@ -113,13 +115,13 @@ _hb_start() {
     local safe_objective="${objective//\"/\'}"
     safe_objective="${safe_objective//$'\n'/ }"
     safe_objective="${safe_objective//$'\r'/ }"
-    (cd "$PROJECT_ROOT" && claude -p "/nazgul:start \"$safe_objective\" $mode_flag $engine_flag")
+    (cd "$PROJECT_ROOT" && claude -p "/nazgul:start \"$safe_objective\" $mode_flag $par_flag")
   fi
 }
 
-# Hard stops — reused from conductor-gates.sh, unconditional: independent of
+# Hard stops — reused from parallel-batch.sh, unconditional: independent of
 # automation.heartbeat.enabled and of mode (including yolo).
-if ! HALT_OUT=$(conductor_should_halt "$NAZGUL_DIR" 2>/dev/null); then
+if ! HALT_OUT=$(execution_should_halt "$NAZGUL_DIR" 2>/dev/null); then
   REASON=""
   printf '%s\n' "$HALT_OUT" | grep -q '^BLOCKED_TASK' && REASON="blocked_task"
   if printf '%s\n' "$HALT_OUT" | grep -qE '^SECURITY_REJECTION|^SECURITY_REVIEWS_UNREADABLE'; then
