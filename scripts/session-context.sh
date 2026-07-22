@@ -44,12 +44,63 @@ OBJECTIVE=$(jq -r '.objective // "none"' "$CONFIG")
 ITERATION=$(jq -r '.current_iteration // 0' "$CONFIG")
 MAX_ITER=$(jq -r '.max_iterations // 40' "$CONFIG")
 
-# Count tasks + find active task, shared helper (MF-009) — sets DONE_COUNT,
-# READY_COUNT, IN_PROGRESS_COUNT, IN_REVIEW_COUNT, APPROVED_COUNT,
-# CHANGES_COUNT, BLOCKED_COUNT, PLANNED_COUNT, INVALID_COUNT, TOTAL_COUNT,
-# ACTIVE_TASK, ACTIVE_STATUS, ACTIVE_RETRY (PLANNED_COUNT/ACTIVE_RETRY unused
-# here, same as before the repoint)
+# Count tasks and find active task (shared helper; see task-utils.sh:145)
 count_tasks_and_find_active "$NAZGUL_DIR/tasks"
+
+# --- Telemetry-dark / stale plan.md detection (MF-060) ---
+# Compares plan.md's declared "## Status Summary" counts against the counts
+# just recomputed above. Catches an objective running outside the stop-hook
+# loop (e.g. Agent-Team SendMessage fan-out), where plan.md's Status Summary
+# and loop telemetry go stale/silent while the task manifests keep advancing
+# underneath it — the exact condition this repo's own FEAT-013 audit run
+# reproduced live. Detection-only and non-blocking: never rewrites plan.md
+# (the orchestrator owns it) and never fails session start.
+check_plan_staleness() {
+  local plan_file="$1"
+  local summary declared_total declared_planned declared_active actual_active
+  local total_diff active_diff
+
+  summary=$(awk '/^## Status Summary/{flag=1; next} /^## /{flag=0} flag' "$plan_file" 2>/dev/null) || true
+  if [ -z "$summary" ]; then
+    echo "WARNING: nazgul/plan.md has no parseable '## Status Summary' section — plan.md may be stale or the objective may be running outside the tracked loop (see MF-060)." >&2
+    return 0
+  fi
+
+  declared_total=$(printf '%s\n' "$summary" | grep -m1 -oE 'Total tasks:[[:space:]]*[0-9]+' | grep -oE '[0-9]+') || true
+  if [ -z "$declared_total" ]; then
+    echo "WARNING: nazgul/plan.md's Status Summary has no parseable 'Total tasks: N' line — cannot verify against the ${TOTAL_COUNT} actual task manifest(s). Objective may be running outside the tracked loop (see MF-060)." >&2
+    return 0
+  fi
+
+  declared_planned=$(printf '%s\n' "$summary" | grep -m1 -oE 'PLANNED:[[:space:]]*[0-9]+' | grep -oE '[0-9]+') || true
+  declared_planned="${declared_planned:-0}"
+  declared_active=$((declared_total - declared_planned))
+  actual_active=$((TOTAL_COUNT - PLANNED_COUNT))
+
+  if [ "$declared_total" -ge "$TOTAL_COUNT" ]; then
+    total_diff=$((declared_total - TOTAL_COUNT))
+  else
+    total_diff=$((TOTAL_COUNT - declared_total))
+  fi
+  if [ "$declared_active" -ge "$actual_active" ]; then
+    active_diff=$((declared_active - actual_active))
+  else
+    active_diff=$((actual_active - declared_active))
+  fi
+
+  # A drift of at most 1 (total count, or count of tasks that have left
+  # PLANNED) is normal single-iteration lag between the last plan.md write and
+  # this SessionStart. Beyond that — especially declared_active far below
+  # actual_active, the exact all-PLANNED-but-really-in-progress symptom
+  # MF-060 documents — is telemetry-dark and gets a loud, non-blocking flag.
+  if [ "$total_diff" -gt 1 ] || [ "$active_diff" -gt 1 ]; then
+    echo "WARNING: nazgul/plan.md's Status Summary is stale (declared: total=${declared_total} non-PLANNED=${declared_active} | actual: total=${TOTAL_COUNT} non-PLANNED=${actual_active}) — objective may be running outside the tracked loop (e.g. Agent-Team dispatch bypassing stop-hook.sh's recompute/emit). See MF-060." >&2
+  fi
+}
+
+if [ -f "$PLAN" ]; then
+  check_plan_staleness "$PLAN" || true
+fi
 
 # Git-hooks self-heal — re-assert the managed core.hooksPath only on detected
 # drift during an active loop; self_heal_git_hooks itself no-ops when
