@@ -5,7 +5,6 @@ argument-hint: "[\"idea or objective\"]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 2.7.1
 ---
 
 # Nazgul Plan

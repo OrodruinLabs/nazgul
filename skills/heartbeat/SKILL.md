@@ -5,7 +5,6 @@ context: fork
 allowed-tools: Read, Bash
 metadata:
   author: Jose Mejia
-  version: 2.7.1
 ---
 
 # Nazgul Heartbeat

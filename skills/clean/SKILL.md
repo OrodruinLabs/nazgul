@@ -4,7 +4,6 @@ description: Fully remove Nazgul from a project — deletes all runtime state, g
 allowed-tools: Read, Edit, Bash, Glob, Grep, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 2.7.1
 ---
 
 # Nazgul Clean
