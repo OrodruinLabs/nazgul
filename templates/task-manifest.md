@@ -10,14 +10,16 @@ status: PLANNED
 - **ID**: TASK-000
 - **Group**: 0
 - **Status**: (see `status:` in the frontmatter block at the top — that is canonical, read by scripts/lib/structured-state.sh; not duplicated here to avoid drift)
-<!-- Valid states: PLANNED | READY | IN_PROGRESS | IMPLEMENTED | IN_REVIEW | CHANGES_REQUESTED | DONE | BLOCKED
+<!-- Valid states: PLANNED | READY | IN_PROGRESS | IMPLEMENTED | IN_REVIEW | APPROVED | CHANGES_REQUESTED | DONE | BLOCKED
      State machine rules — NO skipping states:
-       PLANNED -> READY (when all depends_on tasks are DONE)
+       PLANNED -> READY (when all depends_on tasks are DONE, or APPROVED in YOLO)
        READY -> IN_PROGRESS (when implementer claims the task)
        IN_PROGRESS -> IMPLEMENTED (when code complete + tests pass + lint clean)
        IMPLEMENTED -> IN_REVIEW (when review gate picks up the task)
-       IN_REVIEW -> DONE (when ALL reviewers APPROVED)
+       IN_REVIEW -> DONE (when ALL reviewers APPROVED, non-YOLO)
+       IN_REVIEW -> APPROVED (when ALL reviewers APPROVED, YOLO + task-pr only)
        IN_REVIEW -> CHANGES_REQUESTED (when ANY reviewer rejects)
+       APPROVED -> DONE (when the Task-PR merges, YOLO + task-pr only)
        CHANGES_REQUESTED -> IN_PROGRESS (when implementer addresses feedback)
        IN_PROGRESS/CHANGES_REQUESTED -> BLOCKED (when max retries hit or unresolvable) -->
 - **Depends on**: none

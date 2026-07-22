@@ -8,8 +8,13 @@
 [ -n "${_NAZGUL_STRUCTURED_STATE_SOURCED:-}" ] && return 0
 _NAZGUL_STRUCTURED_STATE_SOURCED=1
 
-VALID_VERDICTS="APPROVE CHANGES_REQUESTED SKIPPED UNVERIFIED"
-VALID_STATUSES="PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED"
+# MF-063: APPROVED is a documented alias of the canonical APPROVE verdict token —
+# the review-gate/reviewers have been observed emitting the past-participle form.
+VALID_VERDICTS="APPROVE APPROVED CHANGES_REQUESTED SKIPPED UNVERIFIED"
+# MF-001: APPROVED is a real Task-PR/YOLO status between IN_REVIEW and DONE (RULES.md:34).
+# This is the single source of truth for the status vocabulary — scripts/task-state-guard.sh
+# derives its accepted-status regex from this var rather than hand-maintaining a second list.
+VALID_STATUSES="PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW APPROVED CHANGES_REQUESTED DONE BLOCKED"
 
 # read_frontmatter_field <file> <key> -> prints trimmed value; 0 if found & non-empty, else 1.
 # <key> must be a literal field name: it is interpolated into grep/sed patterns.

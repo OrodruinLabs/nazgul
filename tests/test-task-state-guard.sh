@@ -941,10 +941,9 @@ teardown_temp_dir
 setup_temp_dir
 setup_nazgul_dir
 create_config '.afk.yolo = true' '.agents.reviewers = ["code-reviewer"]'
-# FEAT-014: legacy fixture used deliberately — canonical status:APPROVED hits MF-001
-# (INVALID) until TASK-002 adds APPROVED to VALID_STATUSES. TASK-004 reverts this to
-# create_task_file as the APPROVED-completion regression proving the fix.
-create_task_file_legacy "TASK-001" "APPROVED"
+# MF-001 regression: canonical frontmatter (not the legacy list-item fixture) now
+# that structured-state.sh's VALID_STATUSES includes APPROVED — proves the fix.
+create_task_file "TASK-001" "APPROVED"
 create_review_dir "TASK-001"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "DONE")
@@ -1255,5 +1254,56 @@ assert_exit_code "multi-line frontmatter old_string, no SHA, blocked" "$GUARD_EC
 assert_contains "blocked for the right reason (missing commit SHA)" "$GUARD_STDERR" "commit SHA"
 assert_not_contains "no raw awk crash on multi-line old_string" "$GUARD_STDERR" "newline in string"
 teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 77: Single-source parity — structured-state.sh's VALID_STATUSES and
+# task-state-guard.sh's accepted-status vocabulary must agree (ADR-002
+# Decision 1 / SC3). Guards against the two lists drifting apart again the
+# way MF-001 originated: one hand-maintained list gained APPROVED, the other
+# didn't. Rather than scraping the guard's source text (fragile against how
+# derivation is implemented), this drives the guard's real frontmatter-status
+# recognition path for every token in VALID_STATUSES plus one off-vocabulary
+# token, and asserts recognition matches exactly — i.e. the guard's live
+# accepted set really does track the library's, not a second hand-copy of it.
+# ---------------------------------------------------------------------------
+source "$REPO_ROOT/scripts/lib/structured-state.sh"
+
+# recognize_status <token> -> prints "recognized" (guard treated it as a status
+# transition — either allowed a fresh PLANNED/READY file, or blocked it with the
+# "must start as PLANNED or READY" message) or "unrecognized" (guard fell through
+# to "not a status change" and silently allowed with no message).
+recognize_status() {
+  local token="$1"
+  setup_temp_dir
+  setup_nazgul_dir
+  TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-999.md"
+  local content
+  content=$(printf -- '---\nstatus: %s\n---\n# TASK-999: Test\n' "$token")
+  local input
+  input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
+    '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
+  run_guard "$input"
+  teardown_temp_dir
+  if [ "$token" = "PLANNED" ] || [ "$token" = "READY" ]; then
+    [ "$GUARD_EC" -eq 0 ] && echo "recognized" || echo "unrecognized"
+  else
+    if [ "$GUARD_EC" -eq 2 ] && printf '%s' "$GUARD_STDERR" | grep -q "must start as PLANNED or READY, not ${token}"; then
+      echo "recognized"
+    else
+      echo "unrecognized"
+    fi
+  fi
+}
+
+ALL_RECOGNIZED="yes"
+for token in $VALID_STATUSES; do
+  if [ "$(recognize_status "$token")" != "recognized" ]; then
+    ALL_RECOGNIZED="no ($token)"
+  fi
+done
+assert_eq "guard recognizes every VALID_STATUSES token as a status" "$ALL_RECOGNIZED" "yes"
+
+assert_eq "guard does not recognize an off-vocabulary token" \
+  "$(recognize_status "FROBNICATED")" "unrecognized"
 
 report_results
