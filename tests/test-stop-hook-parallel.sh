@@ -41,6 +41,7 @@ assert_contains "parallel: batch instruction" "$HOOK_OUTPUT" "DELEGATE (PARALLEL
 assert_contains "parallel: both tasks named" "$HOOK_OUTPUT" "TASK-002"
 assert_contains "parallel: NAZGUL_UNIT contract" "$HOOK_OUTPUT" "NAZGUL_UNIT"
 assert_contains "parallel: worktree isolation" "$HOOK_OUTPUT" "worktree"
+assert_contains "batch dispatch carries report contract" "$HOOK_OUTPUT" "Report Contract"
 teardown_temp_dir
 
 # --- 2: parallel off -> sequential instruction byte-identical (regression) ---

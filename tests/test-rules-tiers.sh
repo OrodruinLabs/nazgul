@@ -63,18 +63,19 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test (c): [advisory] count is exactly 15 — the Parallel Execution Collapse
+# Test (c): [advisory] count is exactly 17 — the Parallel Execution Collapse
 # deleted the Conductor engine's 4 advisory bullets in the old §11 (opt-in
 # engine selection, two hard stops, wave parallelism, graph-only invariant);
 # their replacements in the new §11/§12 are [enforced]/[hook-driven only]
 # because the checks now run as unconditional stop-hook/script conditionals
-# instead of agent-protocol-invoked steps. 19 - 4 = 15.
+# instead of agent-protocol-invoked steps. 19 - 4 = 15, then +2 from §17
+# Teammate Report Contract (Prompt contract + Dispatch manifest layers) = 17.
 ADVISORY_COUNT=$(grep -c '\[advisory\]' "$RULES_FILE" || true)
-if [ "$ADVISORY_COUNT" -eq 15 ]; then
-  _pass "[advisory] annotation count is exactly 15 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 17 ]; then
+  _pass "[advisory] annotation count is exactly 17 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 15" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 15"
+  _fail "[advisory] annotation count is exactly 17" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 17"
 fi
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 {
-  "description": "Nazgul Framework hooks — stop loop management, pre/post-compact state management, safety guards, session context injection, auto-formatting, notifications, webhook forwarding, session staging, task completion, prompt validation",
+  "description": "Nazgul Framework hooks — stop loop management, pre/post-compact state management, safety guards, session context injection, auto-formatting, notifications, webhook forwarding, session staging, task completion, prompt validation, teammate report contract enforcement",
   "hooks": {
     "Stop": [
       {
@@ -169,6 +169,17 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/subagent-stop.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "TeammateIdle": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/teammate-idle-guard.sh\"",
             "timeout": 10
           }
         ]
