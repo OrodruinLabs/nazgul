@@ -108,6 +108,107 @@ count_tasks_by_status() {
   echo "$count"
 }
 
+# Count every task's status into named buckets AND find the single active task,
+# in one pass each — the shared replacement for the near-identical inline blocks
+# duplicated across scripts/stop-hook.sh, pre-compact.sh, post-compact.sh, and
+# session-context.sh (MF-009). Faithful refactor of the canonical reference —
+# stop-hook.sh's counting block (bucket set, TOTAL_COUNT-increments-before-case
+# order) and its active-task-scan block (iteration order, first-match-wins tie-
+# break) — with exactly one new behavior: a loud INVALID/off-vocabulary arm
+# (MF-002, MF-011).
+#
+# Output contract (consumed directly by callers after invocation — TASK-004
+# repoints the four call sites at this instead of returning via stdout, so the
+# existing `DONE_COUNT`/`ACTIVE_TASK`/etc. variable names already used inline at
+# every call site keep working unchanged):
+#   Sets these globals (not `local` — intentionally visible to the caller):
+#     DONE_COUNT READY_COUNT IN_PROGRESS_COUNT IN_REVIEW_COUNT APPROVED_COUNT
+#     CHANGES_COUNT BLOCKED_COUNT PLANNED_COUNT INVALID_COUNT TOTAL_COUNT
+#       - one bucket per canonical status (IMPLEMENTED and IN_REVIEW both land
+#         in IN_REVIEW_COUNT, matching the existing case blocks); TOTAL_COUNT is
+#         incremented for every manifest found, INCLUDING invalid ones (faithful
+#         to the original unconditional increment) — INVALID_COUNT makes that
+#         inflation visible/trackable instead of an untracked black hole.
+#     ACTIVE_TASK ACTIVE_STATUS ACTIVE_RETRY
+#       - the single active task (first file, in iteration order, whose status
+#         is IN_PROGRESS/CHANGES_REQUESTED/IN_REVIEW/IMPLEMENTED); empty string
+#         when none exists. ACTIVE_RETRY is read from the manifest's
+#         `- **Retry count**:` field, defaulting to 0.
+#     INVALID_TASKS
+#       - newline-separated `<task_id>:<raw_status>` entries, one per task whose
+#         status resolved to INVALID; empty string when none. Callers that want
+#         more than the stderr diagnostic (e.g. a summary report) read this.
+#   Diagnostic: for every INVALID task, prints one line to stderr naming the
+#   task id, its raw off-vocabulary status, and the source file — this is the
+#   loud MF-002 arm; nothing is silently dropped.
+# Usage: count_tasks_and_find_active <tasks_dir>
+count_tasks_and_find_active() {
+  local tasks_dir="$1"
+  local task_file status task_id raw_status
+
+  DONE_COUNT=0; READY_COUNT=0; IN_PROGRESS_COUNT=0; IN_REVIEW_COUNT=0
+  APPROVED_COUNT=0; CHANGES_COUNT=0; BLOCKED_COUNT=0; PLANNED_COUNT=0
+  INVALID_COUNT=0; TOTAL_COUNT=0
+  ACTIVE_TASK=""; ACTIVE_STATUS=""; ACTIVE_RETRY=0
+  INVALID_TASKS=""
+
+  if [ -d "$tasks_dir" ]; then
+    for task_file in "$tasks_dir"/TASK-*.md; do
+      [ -f "$task_file" ] || continue
+      TOTAL_COUNT=$((TOTAL_COUNT + 1))
+      status=$(get_task_status "$task_file" "PLANNED")
+      case "$status" in
+        DONE) DONE_COUNT=$((DONE_COUNT + 1)) ;;
+        READY) READY_COUNT=$((READY_COUNT + 1)) ;;
+        IN_PROGRESS) IN_PROGRESS_COUNT=$((IN_PROGRESS_COUNT + 1)) ;;
+        IMPLEMENTED) IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1)) ;;
+        IN_REVIEW) IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1)) ;;
+        APPROVED) APPROVED_COUNT=$((APPROVED_COUNT + 1)) ;;
+        CHANGES_REQUESTED) CHANGES_COUNT=$((CHANGES_COUNT + 1)) ;;
+        BLOCKED) BLOCKED_COUNT=$((BLOCKED_COUNT + 1)) ;;
+        PLANNED) PLANNED_COUNT=$((PLANNED_COUNT + 1)) ;;
+        *)
+          task_id=$(basename "$task_file" .md)
+          # get_task_status() normalizes any off-vocabulary frontmatter value to
+          # the literal "INVALID" (structured-state.sh:read_task_status). Recover
+          # the actual offending string directly from the frontmatter so the
+          # diagnostic names the real raw status, not the normalized placeholder.
+          raw_status="$status"
+          if [ "$status" = "INVALID" ]; then
+            raw_status=$(read_frontmatter_field "$task_file" status 2>/dev/null) || raw_status="INVALID"
+          fi
+          INVALID_COUNT=$((INVALID_COUNT + 1))
+          if [ -n "$INVALID_TASKS" ]; then
+            INVALID_TASKS="${INVALID_TASKS}
+${task_id}:${raw_status}"
+          else
+            INVALID_TASKS="${task_id}:${raw_status}"
+          fi
+          echo "task-utils: ${task_id} has an invalid/off-vocabulary status '${raw_status}' — not counted into any tracked bucket (file: ${task_file})" >&2
+          ;;
+      esac
+    done
+  fi
+
+  if [ -d "$tasks_dir" ]; then
+    for task_file in "$tasks_dir"/TASK-*.md; do
+      [ -f "$task_file" ] || continue
+      status=$(get_task_status "$task_file")
+      if [ "$status" = "IN_PROGRESS" ] || [ "$status" = "CHANGES_REQUESTED" ] || [ "$status" = "IN_REVIEW" ] || [ "$status" = "IMPLEMENTED" ]; then
+        # ACTIVE_TASK/ACTIVE_STATUS/ACTIVE_RETRY are part of the output contract
+        # (see header comment) — read by callers after this function returns.
+        # shellcheck disable=SC2034
+        ACTIVE_TASK=$(basename "$task_file" .md)
+        # shellcheck disable=SC2034
+        ACTIVE_STATUS="$status"
+        # shellcheck disable=SC2034
+        ACTIVE_RETRY=$(grep -m1 '^\- \*\*Retry count\*\*:' "$task_file" 2>/dev/null | sed 's|.*: \([0-9]*\).*|\1|' || echo "0")
+        break
+      fi
+    done
+  fi
+}
+
 # Find the first task with IN_PROGRESS status. Returns task ID or empty string.
 # Usage: get_active_task <tasks_dir>
 get_active_task() {

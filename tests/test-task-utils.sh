@@ -174,4 +174,90 @@ set_task_status "$CAS" IN_REVIEW DONE   # old_status matches → transition
 assert_eq "frontmatter set transitions when old_status matches" "$(get_task_status "$CAS")" "DONE"
 rm -f "$CAS"
 
+# --- Test 10: count_tasks_and_find_active buckets a mixed set, incl. canonical APPROVED (MF-001/002/009/011, TASK-003) ---
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "DONE"
+create_task_file "TASK-002" "READY"
+create_task_file "TASK-003" "IN_PROGRESS"
+create_task_file "TASK-004" "IMPLEMENTED"
+create_task_file "TASK-005" "IN_REVIEW"
+create_task_file "TASK-006" "APPROVED"
+create_task_file "TASK-007" "CHANGES_REQUESTED"
+create_task_file "TASK-008" "BLOCKED"
+create_task_file "TASK-009" "PLANNED"
+source "$LIB"
+count_tasks_and_find_active "$TEST_DIR/nazgul/tasks"
+assert_eq "counting: DONE_COUNT" "$DONE_COUNT" "1"
+assert_eq "counting: READY_COUNT" "$READY_COUNT" "1"
+assert_eq "counting: IN_PROGRESS_COUNT" "$IN_PROGRESS_COUNT" "1"
+assert_eq "counting: IN_REVIEW_COUNT (IMPLEMENTED+IN_REVIEW)" "$IN_REVIEW_COUNT" "2"
+assert_eq "counting: APPROVED_COUNT (TASK-002 enum fix)" "$APPROVED_COUNT" "1"
+assert_eq "counting: CHANGES_COUNT" "$CHANGES_COUNT" "1"
+assert_eq "counting: BLOCKED_COUNT" "$BLOCKED_COUNT" "1"
+assert_eq "counting: PLANNED_COUNT" "$PLANNED_COUNT" "1"
+assert_eq "counting: INVALID_COUNT (none in this set)" "$INVALID_COUNT" "0"
+assert_eq "counting: TOTAL_COUNT" "$TOTAL_COUNT" "9"
+teardown_temp_dir
+
+# --- Test 11: off-vocabulary status hits the INVALID bucket + loud stderr diagnostic (MF-002) ---
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "DONE"
+create_task_file "TASK-002" "FROBNICATED"
+source "$LIB"
+STDERR_FILE=$(mktemp)
+count_tasks_and_find_active "$TEST_DIR/nazgul/tasks" 2>"$STDERR_FILE"
+STDERR_OUT=$(cat "$STDERR_FILE")
+rm -f "$STDERR_FILE"
+assert_eq "INVALID: DONE_COUNT unaffected" "$DONE_COUNT" "1"
+assert_eq "INVALID: INVALID_COUNT counts the off-vocab task" "$INVALID_COUNT" "1"
+assert_eq "INVALID: TOTAL_COUNT still includes it (faithful TOTAL_COUNT semantics)" "$TOTAL_COUNT" "2"
+assert_eq "INVALID: no bucket silently absorbs it (sum of tracked buckets == TOTAL_COUNT - INVALID_COUNT)" \
+  "$((DONE_COUNT + READY_COUNT + IN_PROGRESS_COUNT + IN_REVIEW_COUNT + APPROVED_COUNT + CHANGES_COUNT + BLOCKED_COUNT + PLANNED_COUNT))" "1"
+case "$STDERR_OUT" in
+  *TASK-002*FROBNICATED*) _pass "INVALID: stderr diagnostic names task + raw status" ;;
+  *) _fail "INVALID: stderr diagnostic names task + raw status" "got: $STDERR_OUT" ;;
+esac
+assert_eq "INVALID: INVALID_TASKS lists the offender" "$INVALID_TASKS" "TASK-002:FROBNICATED"
+teardown_temp_dir
+
+# --- Test 12: active-task selection matches stop-hook.sh's tie-break — first eligible in lexical iteration order ---
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "DONE"
+create_task_file "TASK-002" "IN_PROGRESS"
+create_task_file "TASK-003" "IN_REVIEW"
+source "$LIB"
+count_tasks_and_find_active "$TEST_DIR/nazgul/tasks"
+assert_eq "active-task: picks first eligible (TASK-002), not TASK-003" "$ACTIVE_TASK" "TASK-002"
+assert_eq "active-task: ACTIVE_STATUS matches" "$ACTIVE_STATUS" "IN_PROGRESS"
+teardown_temp_dir
+
+# --- Test 13: no active-eligible task -> ACTIVE_TASK stays empty (faithful refactor, no fallback-to-READY behavior in this helper) ---
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "DONE"
+create_task_file "TASK-002" "READY"
+source "$LIB"
+count_tasks_and_find_active "$TEST_DIR/nazgul/tasks"
+assert_eq "active-task: empty when none IN_PROGRESS/CHANGES_REQUESTED/IN_REVIEW/IMPLEMENTED" "$ACTIVE_TASK" ""
+teardown_temp_dir
+
+# --- Test 14: ACTIVE_RETRY reads the Retry count field for the selected active task ---
+setup_temp_dir
+setup_nazgul_dir
+mkdir -p "$TEST_DIR/nazgul/tasks"
+cat > "$TEST_DIR/nazgul/tasks/TASK-001.md" << 'EOF'
+---
+status: IN_PROGRESS
+---
+# TASK-001: Test
+- **Retry count**: 2/3
+EOF
+source "$LIB"
+count_tasks_and_find_active "$TEST_DIR/nazgul/tasks"
+assert_eq "active-task: ACTIVE_RETRY parses Retry count" "$ACTIVE_RETRY" "2"
+teardown_temp_dir
+
 report_results
