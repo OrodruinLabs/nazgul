@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.17.2] - 2026-07-22
+
+### Fixed
+- **Release-on-tag workflow checkout failure**: `fetch-tags: true` (added on
+  review advice, unverified) conflicts with checkout's trigger-ref mapping on
+  tag-push events (`Cannot fetch both <sha> and refs/tags/<tag>`), which
+  failed the v2.17.1 run before any step executed. Reverted to the default
+  shallow checkout; the release title's tag-annotation subject is now read
+  via the GitHub API (`git/ref/tags` → `git/tags`), removing every local-ref
+  dependence. The v2.17.1 Release itself was backfilled manually.
+
 ## [2.17.1] - 2026-07-22
 
 ### Added

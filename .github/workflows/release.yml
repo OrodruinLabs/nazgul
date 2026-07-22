@@ -20,12 +20,13 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      # Default shallow checkout only — CHANGELOG.md is all we need locally.
+      # Do NOT add fetch-tags: on tag-push events checkout maps the trigger
+      # ref to the commit SHA and fetch-tags then tries to fetch the real
+      # tag ref into the same name → "Cannot fetch both <sha> and
+      # refs/tags/<tag>" (broke the v2.17.1 run). The tag annotation is
+      # read via the API below instead of from the local checkout.
       - uses: actions/checkout@v4
-        with:
-          # Guarantee the triggering tag (and its annotation object) exists
-          # locally for the for-each-ref title derivation — checkout's
-          # shallow default fetches the trigger ref, but be explicit.
-          fetch-tags: true
 
       - name: Create GitHub Release from CHANGELOG
         env:
@@ -53,7 +54,14 @@ jobs:
 
           # Title: reuse the annotated tag subject when it follows a
           # release convention; otherwise fall back to the bare tag.
-          SUBJECT="$(git for-each-ref "refs/tags/$TAG" --format='%(contents:subject)' 2>/dev/null || echo "")"
+          # Read the annotation via the API — the local checkout's tag ref
+          # points at the commit, not the tag object, on tag-push events.
+          SUBJECT=""
+          OBJ_TYPE="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq '.object.type' 2>/dev/null || echo "")"
+          if [ "$OBJ_TYPE" = "tag" ]; then
+            OBJ_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq '.object.sha' 2>/dev/null || echo "")"
+            [ -n "$OBJ_SHA" ] && SUBJECT="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${OBJ_SHA}" --jq '.message' 2>/dev/null | head -1 || echo "")"
+          fi
           case "$SUBJECT" in
             "Release $TAG:"*) TITLE="$TAG —${SUBJECT#Release $TAG:}" ;;
             "$TAG — "*)       TITLE="$SUBJECT" ;;
