@@ -35,7 +35,12 @@ When asked to run parallel reviews for a task:
 3. Read the changed files for the task from the task manifest. Verify `nazgul/reviews/[TASK-ID]/diff.patch` exists.
 4. For each reviewer teammate, BEFORE spawning: write its dispatch manifest per
    the Report Contract (`templates/skill-partials/report-contract.md`) with
-   `report_path: nazgul/reviews/[TASK-ID]/[reviewer-name].md`.
+   `report_path: nazgul/reviews/[TASK-ID]/[reviewer-name].md`. Note: the §3.3
+   read-only guarantee applies to subagent-dispatched reviewers persisted by
+   the review-gate orchestrator — reviewer teammates spawned here must be
+   given Write access scoped to their single report file so they can persist
+   it themselves; if scoped Write is unavailable for this teammate, point
+   `report_path` at output the lead persists itself instead.
 5. Spawn a team with one teammate per reviewer:
    - Team name: `nazgul-review-[TASK-ID]`
    - Session naming: name each teammate session as `nazgul-[reviewer-name]-[TASK-ID]` using the `-n` flag — the dispatch manifest filename MUST match this session name exactly
@@ -47,7 +52,11 @@ When asked to run parallel reviews for a task:
    automatically by the TeammateIdle guard (≤3 times); if it still arrives
    file-less (guard escalated), nudge it once via SendMessage, then mark the
    review UNVERIFIED if it never lands.
-7. Clean up the team AND delete `nazgul/dispatch/*.json` manifests for this team.
+7. Clean up the team AND delete ONLY the `nazgul/dispatch/<session-name>.json`
+   manifests for the reviewer teammates THIS team spawned (the exact session
+   names from step 5) — never glob `nazgul/dispatch/*.json`, which would also
+   delete other concurrently active teams' manifests and silently disable
+   their TeammateIdle enforcement.
 
 ## Spawning an Implementation Team
 
@@ -86,7 +95,11 @@ When asked to run parallel implementations:
      c. If merge conflict: `git merge --abort`, mark task BLOCKED with conflict details
      d. If success: remove worktree, delete task branch
 10. Signal completion
-11. Clean up the team AND delete `nazgul/dispatch/*.json` manifests for this team.
+11. Clean up the team AND delete ONLY the `nazgul/dispatch/<session-name>.json`
+    manifests for the implementer teammates THIS team spawned (the exact
+    session names from step 7) — never glob `nazgul/dispatch/*.json`, which
+    would also delete other concurrently active teams' manifests and
+    silently disable their TeammateIdle enforcement.
 
 ## Fallback Behavior
 

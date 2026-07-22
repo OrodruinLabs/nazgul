@@ -1171,7 +1171,7 @@ cp "$REPO_ROOT/templates/config.json" "$NAZGUL_DIR/config.json"
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null); MIG_EC=$?
 assert_exit_code "v26 terminal no-op: migrator exits 0 (not a crash)" "$MIG_EC" 0
 assert_eq "v26 config → no output (terminal no-op)" "$OUTPUT" ""
-assert_json_field "v26 terminal → schema_version still 26" "$NAZGUL_DIR/config.json" ".schema_version" "27"
+assert_json_field "v26 terminal → schema_version still 27" "$NAZGUL_DIR/config.json" ".schema_version" "27"
 
 # --- v25 config → v26 (v25 is no longer terminal) ---
 NAZGUL_DIR=$(setup_nazgul_dir "v25-to-26")
@@ -1181,7 +1181,7 @@ EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null); MIG_EC=$?
 assert_exit_code "v25 → v26: migrator exits 0" "$MIG_EC" 0
 assert_contains "v25 → v26 output" "$OUTPUT" "migrated"
-assert_json_field "v25 → v26 schema_version reaches 26" "$NAZGUL_DIR/config.json" ".schema_version" "27"
+assert_json_field "v25 → v26 schema_version reaches 27" "$NAZGUL_DIR/config.json" ".schema_version" "27"
 
 # --- v24 config → v26 (v24 is no longer terminal) ---
 NAZGUL_DIR=$(setup_nazgul_dir "v24-to-26")
@@ -1191,7 +1191,7 @@ EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null); MIG_EC=$?
 assert_exit_code "v24 → v26: migrator exits 0" "$MIG_EC" 0
 assert_contains "v24 → v26 output" "$OUTPUT" "migrated"
-assert_json_field "v24 → v26 schema_version reaches 26" "$NAZGUL_DIR/config.json" ".schema_version" "27"
+assert_json_field "v24 → v26 schema_version reaches 27" "$NAZGUL_DIR/config.json" ".schema_version" "27"
 
 # --- chain test: v1 → v25 completes ---
 NAZGUL_DIR=$(setup_nazgul_dir "v1-to-22-chain")
@@ -1704,7 +1704,7 @@ EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>&1); MIG_EC=$?
 CFG="$NAZGUL_DIR/config.json"
 assert_exit_code "v26 garbage conductor: migrator exits 0" "$MIG_EC" 0
-assert_json_field "v26 garbage conductor: schema_version reaches 26" "$CFG" ".schema_version" "27"
+assert_json_field "v26 garbage conductor: schema_version reaches 27" "$CFG" ".schema_version" "27"
 assert_eq "v26 garbage conductor: parallel defaults false" "$(jq -r '.execution.parallel' "$CFG")" "false"
 assert_eq "v26 garbage conductor: max_parallel defaults 3" "$(jq -r '.execution.max_parallel' "$CFG")" "3"
 assert_eq "v26 garbage conductor: approve_plan defaults false" "$(jq -r '.execution.gates.approve_plan' "$CFG")" "false"

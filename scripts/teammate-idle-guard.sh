@@ -81,8 +81,10 @@ if [ -z "$REPORT_PATH" ]; then
   log_event "allow" "manifest has no report_path"
   exit 0
 fi
+# REPORT_PATH comes from the dispatch manifest and is joined onto PROJECT_DIR —
+# reject absolute paths and any ".." traversal segment, fail open.
 case "$REPORT_PATH" in
-  /*) log_event "allow" "absolute report_path unsupported"; exit 0 ;;
+  /*|*..*) log_event "allow" "unsafe report_path"; exit 0 ;;
 esac
 REPORT_ABS="$PROJECT_DIR/$REPORT_PATH"
 
@@ -91,10 +93,11 @@ REPORT_ABS="$PROJECT_DIR/$REPORT_PATH"
 if [ -s "$REPORT_ABS" ]; then
   SPAWNED_EPOCH=$(jq -r '.spawned_at_epoch // 0' "$MANIFEST" 2>/dev/null || echo 0)
   case "$SPAWNED_EPOCH" in ''|*[!0-9]*) SPAWNED_EPOCH=0 ;; esac
-  MTIME=$(stat -f %m "$REPORT_ABS" 2>/dev/null || stat -c %Y "$REPORT_ABS" 2>/dev/null || echo "")
+  MTIME=$(stat -c %Y "$REPORT_ABS" 2>/dev/null || stat -f %m "$REPORT_ABS" 2>/dev/null || echo "")
+  case "$MTIME" in ''|*[!0-9]*) MTIME="" ;; esac
   if [ -z "$MTIME" ] || [ "$MTIME" -ge "$SPAWNED_EPOCH" ]; then
     tmp=$(mktemp)
-    if jq '.delivered = true' "$MANIFEST" > "$tmp" 2>/dev/null; then mv "$tmp" "$MANIFEST"; else rm -f "$tmp"; fi
+    if jq '.delivered = true' "$MANIFEST" > "$tmp" 2>/dev/null; then mv "$tmp" "$MANIFEST" 2>/dev/null || rm -f "$tmp"; else rm -f "$tmp"; fi
     log_event "allow" "report delivered at $REPORT_PATH"
     exit 0
   fi
@@ -109,7 +112,7 @@ if [ "$BLOCKS" -ge 3 ]; then
   exit 0
 fi
 tmp=$(mktemp)
-if jq '.blocks = ((.blocks // 0) + 1)' "$MANIFEST" > "$tmp" 2>/dev/null; then mv "$tmp" "$MANIFEST"; else rm -f "$tmp"; fi
+if jq '.blocks = ((.blocks // 0) + 1)' "$MANIFEST" > "$tmp" 2>/dev/null; then mv "$tmp" "$MANIFEST" 2>/dev/null || rm -f "$tmp"; else rm -f "$tmp"; fi
 log_event "block" "report missing at $REPORT_PATH (block $((BLOCKS + 1))/3)"
 echo "NAZGUL TEAMMATE REPORT CONTRACT: Your report at ${REPORT_PATH} was not written — your final plain text is invisible to the parent. Write your full report to ${REPORT_PATH} now, then idle." >&2
 exit 2

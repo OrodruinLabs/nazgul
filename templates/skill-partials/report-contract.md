@@ -1,6 +1,10 @@
 ## Report Contract (teammate dispatch)
 
-Include this block verbatim at the END of every teammate prompt, substituting `<REPORT_PATH>`:
+Include this block verbatim at the END of every teammate prompt. Substitute
+BOTH placeholders used across this contract before use: `<REPORT_PATH>` (in
+the prompt block below, and again in the manifest snippet) and
+`<teammate-session-name>` (used twice in the manifest snippet) — the dispatch
+manifest filename MUST match the teammate's actual session name exactly:
 
 > REPORT CONTRACT: Your final plain text is NOT delivered to anyone. Your LAST
 > action MUST be writing your complete report to `<REPORT_PATH>` (create parent
@@ -21,5 +25,8 @@ jq -n --arg t "<teammate-session-name>" --arg rp "<REPORT_PATH>" \
 ```
 
 Completion signal = idle notification + report file on disk. Read the report
-from the file; never wait for a message. Delete `nazgul/dispatch/*.json` at
-team teardown.
+from the file; never wait for a message. At team teardown, delete ONLY the
+`nazgul/dispatch/<session-name>.json` manifests for the teammates THIS team
+spawned — never glob `nazgul/dispatch/*.json`, which would also delete
+manifests belonging to other concurrently active teams and silently disable
+their TeammateIdle enforcement.
