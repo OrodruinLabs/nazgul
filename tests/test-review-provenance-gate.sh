@@ -9,6 +9,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/assertions.sh"
 source "$SCRIPT_DIR/lib/setup.sh"
 source "$REPO_ROOT/scripts/lib/review-provenance.sh"
+# get_task_status/set_task_status: frontmatter-first status accessors (matches
+# production, unlike a raw legacy-list-item grep/sed) — used by task_status()
+# and set_task_status_helper() below.
+source "$REPO_ROOT/scripts/lib/task-utils.sh"
 
 echo "=== $TEST_NAME ==="
 
@@ -19,7 +23,7 @@ run_hook() {
 }
 
 task_status() {
-  grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/$1.md" | sed 's/.*: //'
+  get_task_status "$TEST_DIR/nazgul/tasks/$1.md"
 }
 
 # Helper: reviewer file stamped with a review_token (mirrors review-gate's persist step)
@@ -67,9 +71,14 @@ assert_eq "PG-2 first violation: reset count recorded" "$count" "1"
 
 # Second consecutive run: task is back at DONE (simulating a re-completion without fixing
 # provenance) with the reset counter still set — escalates to BLOCKED.
+# Force a manifest to a given status regardless of its current value (simulates
+# an out-of-band re-completion). Reads the current value first so set_task_status's
+# compare-and-swap contract is satisfied for either fixture shape (frontmatter
+# or legacy list-item).
 set_task_status_helper() {
-  sed -i.bak "s/^- \*\*Status\*\*:.*/- **Status**: $2/" "$TEST_DIR/nazgul/tasks/$1.md" \
-    && rm -f "$TEST_DIR/nazgul/tasks/$1.md.bak"
+  local file="$TEST_DIR/nazgul/tasks/$1.md" new="$2" current
+  current=$(get_task_status "$file")
+  set_task_status "$file" "$current" "$new"
 }
 set_task_status_helper "TASK-001" "DONE"
 run_hook

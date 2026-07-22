@@ -7,6 +7,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/assertions.sh"
 source "$SCRIPT_DIR/lib/setup.sh"
+# get_task_status: frontmatter-first status reader (matches production, unlike a
+# raw legacy-list-item grep) — used below to read back manifests the hook wrote.
+source "$REPO_ROOT/scripts/lib/task-utils.sh"
 
 echo "=== $TEST_NAME ==="
 
@@ -213,7 +216,7 @@ run_hook
 # evidence reset count (1) must not escalate it straight to BLOCKED.
 assert_exit_code "CV-9: independent ladder → exit 2 (reset, not BLOCKED)" "$HOOK_EC" 2
 assert_contains "CV-9: names provenance" "$HOOK_OUTPUT" "review provenance invalid"
-status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "CV-9: reset to IMPLEMENTED, not escalated" "$status" "IMPLEMENTED"
 prov_count=$(jq -r '.safety._provenance_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
 assert_eq "CV-9: provenance counter starts its own ladder at 1" "$prov_count" "1"

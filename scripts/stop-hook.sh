@@ -762,7 +762,14 @@ if echo "$GIT_PORCELAIN" | grep -qE '^(U.|.U|AA|DD) '; then
   GIT_CONFLICT_DETECTED=true
   # Set the active task to BLOCKED with reason "git conflict"
   if [ -n "$ACTIVE_TASK" ] && [ -f "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" ]; then
-    set_task_status "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" ".*" "BLOCKED"
+    # Force-block regardless of current status: read it first and pass it back as
+    # old_status. A literal ".*" old_status (the prior approach) only worked by
+    # accident on the sed-based legacy branches of set_task_status, which treat
+    # old_status as a regex fragment; the canonical-frontmatter branch does a
+    # strict string compare and silently no-ops against ".*", so every real
+    # (frontmatter) manifest never actually reached BLOCKED on a git conflict.
+    _active_task_status=$(get_task_status "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md")
+    set_task_status "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" "$_active_task_status" "BLOCKED"
     # Add or update blocked reason
     if grep -q '^\- \*\*Blocked reason\*\*:' "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" 2>/dev/null; then
       sed -i.bak 's/^\(- \*\*Blocked reason\*\*:\) .*/\1 git conflict — unmerged files detected/' "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" && rm -f "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md.bak"

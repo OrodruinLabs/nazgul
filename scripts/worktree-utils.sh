@@ -26,7 +26,8 @@ create_feature_branch() {
   # Compute feat_id from objectives_history length
   local feat_num
   feat_num=$(jq '(.objectives_history // [] | length) + 1' "$config")
-  local feat_id="FEAT-$(printf '%03d' "$feat_num")"
+  local feat_id
+  feat_id="FEAT-$(printf '%03d' "$feat_num")"
 
   # Check for board issue number
   local board_issue
