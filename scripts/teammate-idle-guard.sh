@@ -96,8 +96,8 @@ if [ -s "$REPORT_ABS" ]; then
   MTIME=$(stat -c %Y "$REPORT_ABS" 2>/dev/null || stat -f %m "$REPORT_ABS" 2>/dev/null || echo "")
   case "$MTIME" in ''|*[!0-9]*) MTIME="" ;; esac
   if [ -z "$MTIME" ] || [ "$MTIME" -ge "$SPAWNED_EPOCH" ]; then
-    tmp=$(mktemp)
-    if jq '.delivered = true' "$MANIFEST" > "$tmp" 2>/dev/null; then mv "$tmp" "$MANIFEST" 2>/dev/null || rm -f "$tmp"; else rm -f "$tmp"; fi
+    tmp=$(mktemp 2>/dev/null) || tmp=""
+    if [ -n "$tmp" ] && jq '.delivered = true' "$MANIFEST" > "$tmp" 2>/dev/null; then mv "$tmp" "$MANIFEST" 2>/dev/null || rm -f "$tmp"; else rm -f "$tmp"; fi
     log_event "allow" "report delivered at $REPORT_PATH"
     exit 0
   fi
@@ -111,8 +111,8 @@ if [ "$BLOCKS" -ge 3 ]; then
   log_event "allow" "escalation: $NAME idled 3x without report at $REPORT_PATH — giving up (manual nudge required)"
   exit 0
 fi
-tmp=$(mktemp)
-if jq '.blocks = ((.blocks // 0) + 1)' "$MANIFEST" > "$tmp" 2>/dev/null; then mv "$tmp" "$MANIFEST" 2>/dev/null || rm -f "$tmp"; else rm -f "$tmp"; fi
+tmp=$(mktemp 2>/dev/null) || tmp=""
+if [ -n "$tmp" ] && jq --argjson b "$((BLOCKS + 1))" '.blocks = $b' "$MANIFEST" > "$tmp" 2>/dev/null; then mv "$tmp" "$MANIFEST" 2>/dev/null || rm -f "$tmp"; else rm -f "$tmp"; fi
 log_event "block" "report missing at $REPORT_PATH (block $((BLOCKS + 1))/3)"
 echo "NAZGUL TEAMMATE REPORT CONTRACT: Your report at ${REPORT_PATH} was not written — your final plain text is invisible to the parent. Write your full report to ${REPORT_PATH} now, then idle." >&2
 exit 2

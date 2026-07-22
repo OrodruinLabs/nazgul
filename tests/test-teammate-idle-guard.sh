@@ -113,5 +113,34 @@ else
   _fail "corrupt manifest does not crash" "expected exit 0 or 2, got $EC"
 fi
 
+
+# 18. non-numeric .blocks (corrupted/manually edited) -> still blocks (exit 2)
+# AND self-heals .blocks back to numeric 1 (the shell-sanitized counter is
+# reused for the write, not the raw jq `// 0` fallback which leaves a
+# non-null non-numeric value untouched and would loop forever).
+jq -n --arg t "rev-blockscorrupt" --arg rp "nazgul/reviews/TASK-001/rev-blockscorrupt.md" \
+  --arg f "FEAT-013" --arg sa "2026-07-22T00:00:00Z" --argjson sae 0 \
+  '{teammate:$t, report_path:$rp, feat_id:$f, spawned_at:$sa, spawned_at_epoch:$sae, blocks:"corrupt"}' \
+  > "$TEST_DIR/nazgul/dispatch/rev-blockscorrupt.json"
+BC_EC="$(guard_ec rev-blockscorrupt)"
+BC_BLOCKS="$(jq -r '.blocks' "$TEST_DIR/nazgul/dispatch/rev-blockscorrupt.json")"
+if [ "$BC_EC" = "2" ] && [ "$BC_BLOCKS" = "1" ]; then
+  _pass "non-numeric blocks blocked and self-healed to numeric 1"
+else
+  _fail "non-numeric blocks blocked and self-healed to numeric 1" \
+    "expected exit 2 + blocks=1, got exit $BC_EC + blocks=$BC_BLOCKS"
+fi
+
+# 19. mktemp failure (unwritable TMPDIR) must not propagate an undocumented
+# exit code -- the delivered-report path must still exit 0. On some machines
+# mktemp may fall back and still succeed under an unwritable TMPDIR; either
+# way the exit-code-0 contract on the delivered path must hold.
+make_manifest "rev-tmpdirfail" "nazgul/reviews/TASK-001/rev-tmpdirfail.md" "FEAT-013" 0
+echo "# review: APPROVED" > "$TEST_DIR/nazgul/reviews/TASK-001/rev-tmpdirfail.md"
+EC=0
+jq -n --arg n "rev-tmpdirfail" '{type:"idle_notification", from:$n, idleReason:"available"}' \
+  | TMPDIR=/nonexistent/subdir bash "$GUARD" >/dev/null 2>&1 || EC=$?
+assert_eq "mktemp failure under unwritable TMPDIR still exits 0 on delivered path" "$EC" "0"
+
 teardown
 report_results
