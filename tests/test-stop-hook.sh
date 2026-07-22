@@ -518,23 +518,41 @@ status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "DONE with reviews stays DONE" "$status" "DONE"
 teardown_temp_dir
 
-# --- Test: YOLO without task-pr — all APPROVED exits cleanly ---
+# --- Test: YOLO without task-pr — all APPROVED exits cleanly (MF-005 regression) ---
+# Canonical-frontmatter fixtures (create_task_file). Proves the MF-001 fix (TASK-002,
+# APPROVED added to VALID_STATUSES) and the MF-009 counting repoint (TASK-003/004) land
+# together: APPROVED_COUNT + DONE_COUNT == TOTAL_COUNT drives completion on the real
+# frontmatter path, and the transition registers as progress (consecutive_failures resets).
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
 create_config '.afk.yolo = true' '.afk.task_pr = false' '.current_iteration = 1' '.learning.auto_distill_post_loop = false' \
-  '.docs.verify_comments = false' '.self_audit.enabled = false'
+  '.docs.verify_comments = false' '.self_audit.enabled = false' \
+  '.safety.consecutive_failures = 3' '.safety._prev_done_count = 0'
 create_plan
-# FEAT-014: legacy fixtures used deliberately. On the canonical-frontmatter path a
-# status:APPROVED manifest hits MF-001 (APPROVED absent from VALID_STATUSES -> INVALID)
-# and this exits 2 instead of 0. TASK-002 fixes MF-001; TASK-004 reverts these two to
-# create_task_file (canonical) as the APPROVED-completion regression proving the fix.
-create_task_file_legacy "TASK-001" "APPROVED"
-create_task_file_legacy "TASK-002" "APPROVED"
+create_task_file "TASK-001" "APPROVED"
+create_task_file "TASK-002" "APPROVED"
 create_review_dir "TASK-001"
 create_review_dir "TASK-002"
 run_hook
-assert_exit_code "YOLO no task-pr: all APPROVED exits 0" "$HOOK_EC" 0
+assert_exit_code "MF-005: YOLO no task-pr, all APPROVED exits 0 (canonical frontmatter)" "$HOOK_EC" 0
+consec=$(jq -r '.safety.consecutive_failures' "$TEST_DIR/nazgul/config.json")
+assert_eq "MF-005: all-APPROVED completion counts as progress (failures reset to 0)" "$consec" "0"
+teardown_temp_dir
+
+# --- Test: MF-004 — YOLO promotes PLANNED -> READY when dependency is APPROVED ---
+# The dep-promotion gate (stop-hook.sh's auto-promote block) must accept APPROVED, not
+# just DONE, as a satisfied dependency in YOLO mode. Canonical-frontmatter fixtures.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.afk.yolo = true'
+create_plan
+create_task_file "TASK-001" "APPROVED"
+create_task_file "TASK-002" "PLANNED" "TASK-001"
+run_hook
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-002.md")
+assert_eq "MF-004: PLANNED promoted to READY when dep is APPROVED (YOLO)" "$status" "READY"
 teardown_temp_dir
 
 # --- Reset diagnostics: first violation names missing reviewers in output ---

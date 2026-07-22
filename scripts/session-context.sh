@@ -44,40 +44,12 @@ OBJECTIVE=$(jq -r '.objective // "none"' "$CONFIG")
 ITERATION=$(jq -r '.current_iteration // 0' "$CONFIG")
 MAX_ITER=$(jq -r '.max_iterations // 40' "$CONFIG")
 
-# Count tasks
-DONE_COUNT=0
-READY_COUNT=0
-IN_PROGRESS_COUNT=0
-IN_REVIEW_COUNT=0
-APPROVED_COUNT=0
-CHANGES_COUNT=0
-BLOCKED_COUNT=0
-TOTAL_COUNT=0
-ACTIVE_TASK=""
-ACTIVE_STATUS=""
-
-if [ -d "$NAZGUL_DIR/tasks" ]; then
-  for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
-    [ -f "$task_file" ] || continue
-    TOTAL_COUNT=$((TOTAL_COUNT + 1))
-    STATUS=$(get_task_status "$task_file" "PLANNED")
-    case "$STATUS" in
-      DONE) DONE_COUNT=$((DONE_COUNT + 1)) ;;
-      READY) READY_COUNT=$((READY_COUNT + 1)) ;;
-      IN_PROGRESS) IN_PROGRESS_COUNT=$((IN_PROGRESS_COUNT + 1)) ;;
-      IN_REVIEW|IMPLEMENTED) IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1)) ;;
-      APPROVED) APPROVED_COUNT=$((APPROVED_COUNT + 1)) ;;
-      CHANGES_REQUESTED) CHANGES_COUNT=$((CHANGES_COUNT + 1)) ;;
-      BLOCKED) BLOCKED_COUNT=$((BLOCKED_COUNT + 1)) ;;
-    esac
-    if [ -z "$ACTIVE_TASK" ]; then
-      if [ "$STATUS" = "IN_PROGRESS" ] || [ "$STATUS" = "CHANGES_REQUESTED" ] || [ "$STATUS" = "IN_REVIEW" ] || [ "$STATUS" = "IMPLEMENTED" ]; then
-        ACTIVE_TASK=$(basename "$task_file" .md)
-        ACTIVE_STATUS="$STATUS"
-      fi
-    fi
-  done
-fi
+# Count tasks + find active task, shared helper (MF-009) — sets DONE_COUNT,
+# READY_COUNT, IN_PROGRESS_COUNT, IN_REVIEW_COUNT, APPROVED_COUNT,
+# CHANGES_COUNT, BLOCKED_COUNT, PLANNED_COUNT, INVALID_COUNT, TOTAL_COUNT,
+# ACTIVE_TASK, ACTIVE_STATUS, ACTIVE_RETRY (PLANNED_COUNT/ACTIVE_RETRY unused
+# here, same as before the repoint)
+count_tasks_and_find_active "$NAZGUL_DIR/tasks"
 
 # Git-hooks self-heal — re-assert the managed core.hooksPath only on detected
 # drift during an active loop; self_heal_git_hooks itself no-ops when
