@@ -1,5 +1,5 @@
 {
-  "schema_version": 26,
+  "schema_version": 27,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -83,7 +83,8 @@
     "enforce": {
       "dispatch_guard": true,
       "rework_guard": true,
-      "premerge_guard": true
+      "premerge_guard": true,
+      "teammate_report_guard": true
     }
   },
   "automation": {

@@ -569,6 +569,19 @@ migrate_25_to_26() {
   log_migration "v25→v26: conductor engine collapsed — execution.parallel/max_parallel/gates{approve_plan,approve_batch,approve_final_pr}/enforce{dispatch,rework,premerge} seeded from conductor.* (explicit values incl. false preserved); deleted execution.engine, conductor.*, models.conductor, auto_start.engine (→auto_start.parallel); removed nazgul/conductor dir"
 }
 
+migrate_26_to_27() {
+  local tmp; tmp=$(mktemp)
+  # Teammate Report Contract: additive kill-switch for the TeammateIdle guard.
+  # Explicit values (incl. false) preserved; non-object execution/enforce clamped.
+  jq '
+    .execution = ((if (.execution | type) == "object" then .execution else {} end)
+      | .enforce = ((if (.enforce | type) == "object" then .enforce else {} end)
+          | .teammate_report_guard = (if has("teammate_report_guard") then .teammate_report_guard else true end)))
+    | .schema_version = 27
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v26→v27: added execution.enforce.teammate_report_guard:true (additive; explicit false preserved) — TeammateIdle report-contract guard kill-switch"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"
