@@ -97,5 +97,18 @@ rm -rf "$TEST_DIR/nazgul"
 EC=0; jq -n '{from:"rev-a"}' | bash "$GUARD" >/dev/null 2>&1 || EC=$?
 assert_eq "no nazgul dir allowed" "$EC" "0"
 
+# Re-setup nazgul dir for test 13
+mkdir -p "$TEST_DIR/nazgul/dispatch" "$TEST_DIR/nazgul/logs" "$TEST_DIR/nazgul/reviews/TASK-001"
+create_config '.feat_id = "FEAT-013"'
+
+# 13. corrupt manifest JSON -> script continues (fail-soft), still exits 0 or 2 (not crash)
+printf 'not json' > "$TEST_DIR/nazgul/dispatch/rev-corrupt.json"
+EC=0; jq -n '{from:"rev-corrupt"}' | bash "$GUARD" >/dev/null 2>&1 || EC=$?
+if [ "$EC" -eq 0 ] || [ "$EC" -eq 2 ]; then
+  _pass "corrupt manifest does not crash (exit $EC)"
+else
+  _fail "corrupt manifest does not crash" "expected exit 0 or 2, got $EC"
+fi
+
 teardown
 report_results

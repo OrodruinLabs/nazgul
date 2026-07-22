@@ -35,6 +35,7 @@ SCRIPTS=(
   "scripts/scrub-stale-review-artifacts.sh"
   "scripts/parallel-dispatch-guard.sh"
   "scripts/parallel-rework-guard.sh"
+  "scripts/teammate-idle-guard.sh"
   "scripts/self-audit.sh"
   "scripts/lib/raise-finding.sh"
   "scripts/lib/git-hooks.sh"

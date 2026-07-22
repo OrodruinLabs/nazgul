@@ -86,7 +86,7 @@ if [ -s "$REPORT_ABS" ]; then
   MTIME=$(stat -f %m "$REPORT_ABS" 2>/dev/null || stat -c %Y "$REPORT_ABS" 2>/dev/null || echo "")
   if [ -z "$MTIME" ] || [ "$MTIME" -ge "$SPAWNED_EPOCH" ]; then
     tmp=$(mktemp)
-    jq '.delivered = true' "$MANIFEST" > "$tmp" && mv "$tmp" "$MANIFEST"
+    if jq '.delivered = true' "$MANIFEST" > "$tmp" 2>/dev/null; then mv "$tmp" "$MANIFEST"; else rm -f "$tmp"; fi
     log_event "allow" "report delivered at $REPORT_PATH"
     exit 0
   fi
@@ -101,7 +101,7 @@ if [ "$BLOCKS" -ge 3 ]; then
   exit 0
 fi
 tmp=$(mktemp)
-jq '.blocks = ((.blocks // 0) + 1)' "$MANIFEST" > "$tmp" && mv "$tmp" "$MANIFEST"
+if jq '.blocks = ((.blocks // 0) + 1)' "$MANIFEST" > "$tmp" 2>/dev/null; then mv "$tmp" "$MANIFEST"; else rm -f "$tmp"; fi
 log_event "block" "report missing at $REPORT_PATH (block $((BLOCKS + 1))/3)"
 echo "NAZGUL TEAMMATE REPORT CONTRACT: Your report at ${REPORT_PATH} was not written — your final plain text is invisible to the parent. Write your full report to ${REPORT_PATH} now, then idle." >&2
 exit 2
