@@ -21,6 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Guarantee the triggering tag (and its annotation object) exists
+          # locally for the for-each-ref title derivation — checkout's
+          # shallow default fetches the trigger ref, but be explicit.
+          fetch-tags: true
 
       - name: Create GitHub Release from CHANGELOG
         env:
