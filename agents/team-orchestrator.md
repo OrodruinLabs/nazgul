@@ -33,15 +33,21 @@ When asked to run parallel reviews for a task:
 2. Read the reviewer list from `nazgul/config.json → agents.reviewers`
 3. Read `nazgul/config.json → models.review` for the model to assign each reviewer teammate (default: `"sonnet"`). Pass this as the `model` parameter when spawning each teammate via the Task tool.
 3. Read the changed files for the task from the task manifest. Verify `nazgul/reviews/[TASK-ID]/diff.patch` exists.
-4. Spawn a team with one teammate per reviewer:
+4. For each reviewer teammate, BEFORE spawning: write its dispatch manifest per
+   the Report Contract (`templates/skill-partials/report-contract.md`) with
+   `report_path: nazgul/reviews/[TASK-ID]/[reviewer-name].md`.
+5. Spawn a team with one teammate per reviewer:
    - Team name: `nazgul-review-[TASK-ID]`
-   - Session naming: name each teammate session as `nazgul-[reviewer-name]-[TASK-ID]` using the `-n` flag for identification in Agent Teams UI
+   - Session naming: name each teammate session as `nazgul-[reviewer-name]-[TASK-ID]` using the `-n` flag — the dispatch manifest filename MUST match this session name exactly
    - Each teammate gets: their agent definition, the diff file path (`nazgul/reviews/[TASK-ID]/diff.patch`), the file list, relevant context paths
    - Instruct each teammate: "Read diff.patch FIRST to understand what changed, then read full files only for additional context"
-   - Each teammate writes their review to `nazgul/reviews/[TASK-ID]/[name].md`
-5. Monitor the shared task list until all reviewers complete
-6. Signal completion to the caller
-7. Clean up the team
+   - END each teammate prompt with the Report Contract block, `<REPORT_PATH>` = `nazgul/reviews/[TASK-ID]/[reviewer-name].md`
+6. Completion signal = idle notification + report file on disk. When a teammate
+   idles, read its report file. A teammate idling without its file is blocked
+   automatically by the TeammateIdle guard (≤3 times); if it still arrives
+   file-less (guard escalated), nudge it once via SendMessage, then mark the
+   review UNVERIFIED if it never lands.
+7. Clean up the team AND delete `nazgul/dispatch/*.json` manifests for this team.
 
 ## Spawning an Implementation Team
 
@@ -55,21 +61,32 @@ When asked to run parallel implementations:
    - Read `branch.feature` and `branch.worktree_dir` from config
    - Prefer `EnterWorktree` tool for native isolation; fallback to `git worktree add <worktree_dir>/TASK-NNN -b feat/<display_id>/TASK-NNN <feature-branch>`
    - Pass the worktree path to each implementer teammate
-6. Spawn a team with one implementer per task:
+6. For each implementer teammate, BEFORE spawning: write its dispatch manifest
+   per the Report Contract (`templates/skill-partials/report-contract.md`)
+   with `report_path: nazgul/tasks/[TASK-ID].md` — the task manifest itself is
+   the implementer's deliverable (its Status/Commits update), not a separate
+   report file.
+7. Spawn a team with one implementer per task:
    - Team name: `nazgul-impl-group-[N]`
-   - Session naming: name each teammate session as `nazgul-impl-[TASK-ID]` using the `-n` flag for identification in Agent Teams UI
+   - Session naming: name each teammate session as `nazgul-impl-[TASK-ID]` using the `-n` flag — the dispatch manifest filename MUST match this session name exactly
    - Each teammate gets: their task details, their file scope, implementer rules, AND their worktree path
    - Each teammate works in its own worktree and references nazgul runtime via `branch.main_worktree_path`
    - Each teammate commits in its own worktree
-7. Monitor until all implementers set status to IMPLEMENTED or BLOCKED
-8. **Merge completed tasks to feature branch:**
+   - END each teammate prompt with the Report Contract block, `<REPORT_PATH>` = `nazgul/tasks/[TASK-ID].md`
+8. Completion signal = idle notification + task manifest on disk showing
+   Status: IMPLEMENTED or BLOCKED with a commit SHA recorded under ## Commits.
+   A teammate idling without that manifest update is blocked automatically by
+   the TeammateIdle guard (≤3 times); if it still arrives without a landed
+   Status update (guard escalated), nudge it once via SendMessage, then mark
+   the task BLOCKED if it never lands.
+9. **Merge completed tasks to feature branch:**
    - For each IMPLEMENTED task:
      a. Checkout feature branch in main worktree
      b. `git merge --no-ff feat/<display_id>/TASK-NNN -m "<commit_prefix> merge TASK-NNN — [title]"`
      c. If merge conflict: `git merge --abort`, mark task BLOCKED with conflict details
      d. If success: remove worktree, delete task branch
-9. Signal completion
-10. Clean up the team
+10. Signal completion
+11. Clean up the team AND delete `nazgul/dispatch/*.json` manifests for this team.
 
 ## Fallback Behavior
 
@@ -102,6 +119,7 @@ Use `SendMessage` for direct teammate communication when running Agent Teams:
 - **Wave completion**: Signal all teammates when a wave completes and the next wave is ready
 - **Status queries**: Request status from teammates instead of polling files
 
-Prefer `SendMessage` over file-based coordination when teammates are actively running. Fall back to file-based coordination when teammates may have stopped.
-
-### Discovery: ONLY for large codebases (500+ files)
+SendMessage is for coordination signals only (merge results, conflict alerts,
+wave completion). It is NEVER the delivery channel for a report — reports are
+files, per the Report Contract. Final plain text of a teammate is delivered to
+no one; do not rely on it.
