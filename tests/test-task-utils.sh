@@ -11,13 +11,33 @@ echo "=== $TEST_NAME ==="
 
 LIB="$REPO_ROOT/scripts/lib/task-utils.sh"
 
-# --- Test 1: get_task_status reads list-item format ---
+# --- Test 1: get_task_status reads list-item format (via legacy fixture helper) ---
 setup_temp_dir
 setup_nazgul_dir
-create_task_file "TASK-001" "IN_PROGRESS"
+create_task_file_legacy "TASK-001" "IN_PROGRESS"
 source "$LIB"
 result=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "get_task_status list-item format" "$result" "IN_PROGRESS"
+teardown_temp_dir
+
+# --- Test 1a: create_task_file (default fixture helper) emits canonical frontmatter (MF-052) ---
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-FM" "IN_PROGRESS"
+assert_file_contains "create_task_file emits frontmatter fence" "$TEST_DIR/nazgul/tasks/TASK-FM.md" "^---$"
+assert_file_contains "create_task_file emits status: line" "$TEST_DIR/nazgul/tasks/TASK-FM.md" "^status: IN_PROGRESS$"
+assert_file_not_contains "create_task_file does not emit legacy list-item status" "$TEST_DIR/nazgul/tasks/TASK-FM.md" '^\- \*\*Status\*\*:'
+source "$LIB"
+result=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-FM.md")
+assert_eq "get_task_status reads create_task_file's frontmatter" "$result" "IN_PROGRESS"
+teardown_temp_dir
+
+# --- Test 1b: create_task_file_legacy preserves the old list-item body verbatim ---
+setup_temp_dir
+setup_nazgul_dir
+create_task_file_legacy "TASK-LEGACY" "READY"
+assert_file_contains "create_task_file_legacy emits list-item status" "$TEST_DIR/nazgul/tasks/TASK-LEGACY.md" '^\- \*\*Status\*\*: READY$'
+assert_file_not_contains "create_task_file_legacy does not emit frontmatter fence" "$TEST_DIR/nazgul/tasks/TASK-LEGACY.md" "^---$"
 teardown_temp_dir
 
 # --- Test 2: get_task_status reads ATX heading format ---
@@ -44,7 +64,7 @@ teardown_temp_dir
 # --- Test 4: set_task_status updates list-item format ---
 setup_temp_dir
 setup_nazgul_dir
-create_task_file "TASK-003" "READY"
+create_task_file_legacy "TASK-003" "READY"
 source "$LIB"
 set_task_status "$TEST_DIR/nazgul/tasks/TASK-003.md" "READY" "IN_PROGRESS"
 result=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-003.md")

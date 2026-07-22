@@ -941,7 +941,10 @@ teardown_temp_dir
 setup_temp_dir
 setup_nazgul_dir
 create_config '.afk.yolo = true' '.agents.reviewers = ["code-reviewer"]'
-create_task_file "TASK-001" "APPROVED"
+# FEAT-014: legacy fixture used deliberately — canonical status:APPROVED hits MF-001
+# (INVALID) until TASK-002 adds APPROVED to VALID_STATUSES. TASK-004 reverts this to
+# create_task_file as the APPROVED-completion regression proving the fix.
+create_task_file_legacy "TASK-001" "APPROVED"
 create_review_dir "TASK-001"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "DONE")

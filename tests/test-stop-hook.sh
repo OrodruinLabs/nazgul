@@ -8,6 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/assertions.sh"
 source "$SCRIPT_DIR/lib/setup.sh"
+# get_task_status: frontmatter-first status reader (matches production, unlike a
+# raw legacy-list-item grep) — used below to read back manifests the hook wrote.
+source "$REPO_ROOT/scripts/lib/task-utils.sh"
 
 echo "=== $TEST_NAME ==="
 
@@ -305,7 +308,7 @@ create_config
 create_plan
 create_task_file "TASK-001" "PLANNED" "none"
 run_hook
-status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "PLANNED promoted to READY (no deps)" "$status" "READY"
 teardown_temp_dir
 
@@ -319,7 +322,7 @@ create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
 create_task_file "TASK-002" "PLANNED" "TASK-001"
 run_hook
-status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-002.md" | sed 's/.*: //')
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-002.md")
 assert_eq "PLANNED promoted to READY (deps met)" "$status" "READY"
 teardown_temp_dir
 
@@ -332,7 +335,7 @@ create_plan
 create_task_file "TASK-001" "READY"
 create_task_file "TASK-002" "PLANNED" "TASK-001"
 run_hook
-status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-002.md" | sed 's/.*: //')
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-002.md")
 assert_eq "PLANNED stays PLANNED (deps unmet)" "$status" "PLANNED"
 teardown_temp_dir
 
@@ -380,7 +383,7 @@ git -C "$TEST_DIR" merge conflict-branch --no-commit 2>/dev/null || true
 porcelain=$(git -C "$TEST_DIR" status --porcelain 2>/dev/null || echo "")
 if echo "$porcelain" | grep -qE '^(U.|.U|AA|DD) '; then
   run_hook
-  status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
+  status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
   assert_eq "git conflict blocks task" "$status" "BLOCKED"
   assert_file_contains "blocked event emitted on git conflict" \
     "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"blocked"'
@@ -418,7 +421,7 @@ create_task_file "TASK-001" "DONE"
 # Intentionally NO create_review_dir — simulate the violation
 create_task_file "TASK-002" "READY"
 run_hook
-status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "review gate violation resets DONE to IMPLEMENTED" "$status" "IMPLEMENTED"
 assert_contains "review gate violation logged" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
 teardown_temp_dir
@@ -433,7 +436,7 @@ create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
 create_task_file "TASK-002" "READY"
 run_hook
-status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "DONE with reviews stays DONE" "$status" "DONE"
 teardown_temp_dir
 
@@ -444,8 +447,12 @@ setup_nazgul_dir
 create_config '.afk.yolo = true' '.afk.task_pr = false' '.current_iteration = 1' '.learning.auto_distill_post_loop = false' \
   '.docs.verify_comments = false' '.self_audit.enabled = false'
 create_plan
-create_task_file "TASK-001" "APPROVED"
-create_task_file "TASK-002" "APPROVED"
+# FEAT-014: legacy fixtures used deliberately. On the canonical-frontmatter path a
+# status:APPROVED manifest hits MF-001 (APPROVED absent from VALID_STATUSES -> INVALID)
+# and this exits 2 instead of 0. TASK-002 fixes MF-001; TASK-004 reverts these two to
+# create_task_file (canonical) as the APPROVED-completion regression proving the fix.
+create_task_file_legacy "TASK-001" "APPROVED"
+create_task_file_legacy "TASK-002" "APPROVED"
 create_review_dir "TASK-001"
 create_review_dir "TASK-002"
 run_hook
@@ -466,7 +473,7 @@ assert_exit_code "first violation: exit 2" "$HOOK_EC" 2
 assert_contains "violation logged" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
 assert_contains "missing reviewer named" "$HOOK_OUTPUT" "qa-reviewer"
 assert_contains "remediation named" "$HOOK_OUTPUT" "materialize"
-status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "first violation: reset to IMPLEMENTED" "$status" "IMPLEMENTED"
 count=$(jq -r '.safety._review_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
 assert_eq "first violation: reset count recorded" "$count" "1"
@@ -485,7 +492,7 @@ run_hook
 assert_exit_code "second violation: exit 2" "$HOOK_EC" 2
 assert_contains "escalation logged" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
 assert_contains "escalation names BLOCKED" "$HOOK_OUTPUT" "escalated to BLOCKED"
-status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "second violation: escalated to BLOCKED" "$status" "BLOCKED"
 assert_contains "blocked reason written" "$(cat "$TEST_DIR/nazgul/tasks/TASK-001.md")" "review evidence missing"
 assert_contains "blocked reason names command" "$(cat "$TEST_DIR/nazgul/tasks/TASK-001.md")" "/nazgul:review --materialize TASK-001"
@@ -505,7 +512,7 @@ create_task_file "TASK-002" "READY"
 run_hook
 assert_exit_code "valid evidence: exit 2" "$HOOK_EC" 2
 assert_not_contains "valid evidence: no violation noise" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
-status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "valid evidence: stays DONE" "$status" "DONE"
 count=$(jq -r '.safety._review_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
 assert_eq "valid evidence: stale count cleared" "$count" "0"
