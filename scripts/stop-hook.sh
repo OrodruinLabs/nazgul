@@ -616,18 +616,27 @@ if [ -f "$PLAN" ]; then
     -v ckpt="$CHECKPOINT_NAME" \
     -v sha="$GIT_SHA" \
     -v msg="$GIT_MSG" \
-    'BEGIN { matched = 0 }
+    'BEGIN { m_ct=0; m_la=0; m_na=0; m_lc=0; m_lco=0 }
     {
-      if ($0 ~ /^- \*\*(Current Task:\*\*|Active task\*\*:)/) { print "- **Current Task:** " task; matched++ }
-      else if ($0 ~ /^- \*\*(Last Action:\*\*|Last completed\*\*:)/) { print "- **Last Action:** " action; matched++ }
-      else if ($0 ~ /^- \*\*Next Action:\*\*/) { print "- **Next Action:** " next_action; matched++ }
-      else if ($0 ~ /^- \*\*Last Checkpoint:\*\*/) { print "- **Last Checkpoint:** " ckpt; matched++ }
-      else if ($0 ~ /^- \*\*Last Commit:\*\*/) { print "- **Last Commit:** " sha " " msg; matched++ }
+      if ($0 ~ /^- \*\*(Current Task:\*\*|Active task\*\*:)/) { print "- **Current Task:** " task; m_ct=1 }
+      else if ($0 ~ /^- \*\*(Last Action:\*\*|Last completed\*\*:)/) { print "- **Last Action:** " action; m_la=1 }
+      else if ($0 ~ /^- \*\*Next Action:\*\*/) { print "- **Next Action:** " next_action; m_na=1 }
+      else if ($0 ~ /^- \*\*Last Checkpoint:\*\*/) { print "- **Last Checkpoint:** " ckpt; m_lc=1 }
+      else if ($0 ~ /^- \*\*Last Commit:\*\*/) { print "- **Last Commit:** " sha " " msg; m_lco=1 }
       else { print }
     }
     END {
-      if (matched == 0) {
-        print "Nazgul: Recovery Pointer not updated — no matching label found in plan.md for any of: Current Task (or Active task), Last Action (or Last completed), Next Action, Last Checkpoint, Last Commit. Update the label-synonym allow-list in scripts/stop-hook.sh or fix plan.md manually." > "/dev/stderr"
+      # Per-field, not all-or-nothing (WD-04 / PR#66 review): a PARTIAL match — one
+      # recognized label updated while others stay stale — must warn too, naming
+      # exactly which fields were not updated. Non-fatal; never blocks the loop.
+      miss=""
+      if (!m_ct)  { miss = miss "; Current Task (or Active task)" }
+      if (!m_la)  { miss = miss "; Last Action (or Last completed)" }
+      if (!m_na)  { miss = miss "; Next Action" }
+      if (!m_lc)  { miss = miss "; Last Checkpoint" }
+      if (!m_lco) { miss = miss "; Last Commit" }
+      if (miss != "") {
+        print "Nazgul: Recovery Pointer — no matching label found in plan.md for:" miss ". Those fields were NOT updated. Update the label-synonym allow-list in scripts/stop-hook.sh or fix plan.md manually. (non-fatal)" > "/dev/stderr"
       }
     }' "$PLAN" > "${PLAN}.tmp" && mv "${PLAN}.tmp" "$PLAN"
 fi

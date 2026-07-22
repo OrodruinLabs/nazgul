@@ -24,14 +24,17 @@ mapfile -t SCRIPTS < <(cd "$REPO_ROOT" && {
   find scripts -type f ! -name '*.sh' -exec grep -lE '^#!.*/(env )?(bash|sh)([[:space:]]|$)' {} \;
 } | sort -u)
 
-# Sanity check: the discovered set must be at least as large as a fresh count of
-# the same glob, so a future refactor of this discovery step can't silently
-# shrink coverage back down.
-LIVE_COUNT=$(cd "$REPO_ROOT" && find scripts -name '*.sh' | wc -l | tr -d '[:space:]')
-if [ "${#SCRIPTS[@]}" -ge "$LIVE_COUNT" ]; then
-  _pass "discovered script count (${#SCRIPTS[@]}) >= live glob count ($LIVE_COUNT)"
+# Sanity check: validate coverage by PATH, not by total count. A count-only check
+# (discovered >= live .sh count) can pass while a real .sh file is dropped, because
+# the discovered set also includes extensionless hooks that can mask the shortfall.
+# Instead, assert every scripts/**/*.sh path is present in the discovered set.
+MISSING_SH=$(comm -23 \
+  <(cd "$REPO_ROOT" && find scripts -type f -name '*.sh' | sort -u) \
+  <(printf '%s\n' "${SCRIPTS[@]}" | sort -u))
+if [ -z "$MISSING_SH" ]; then
+  _pass "every scripts/**/*.sh file is in the shellcheck set"
 else
-  _fail "discovered script count (${#SCRIPTS[@]}) >= live glob count ($LIVE_COUNT)" "coverage regression"
+  _fail "every scripts/**/*.sh file is in the shellcheck set" "missing: $(echo "$MISSING_SH" | tr '\n' ' ')"
 fi
 
 # bash -n syntax checks

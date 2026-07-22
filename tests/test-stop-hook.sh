@@ -378,6 +378,45 @@ assert_eq "no-match plan: file bytes unchanged (true no-op, correctly warned)" \
   "$AFTER_POINTER" "$BEFORE_POINTER"
 teardown_temp_dir
 
+# --- Test 15d: Recovery Pointer warns on a PARTIAL match (WD-04 / PR#66 review) ---
+# A plan.md with SOME recognized labels (Current Task, Last Action) but MISSING
+# others (Next Action, Last Checkpoint, Last Commit) must (a) update the present
+# fields, and (b) still warn — naming the missing fields — instead of staying
+# silent because at least one field matched. This is the partial-rewrite gap the
+# old all-or-nothing `matched == 0` check missed.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 0'
+cat > "$TEST_DIR/nazgul/plan.md" << 'PARTIAL_PLAN_EOF'
+# Nazgul Plan
+
+## Objective
+Test objective
+
+## Status Summary
+- Total tasks: 1
+- DONE: 0 | READY: 0 | IN_PROGRESS: 1
+
+## Recovery Pointer
+- **Current Task:** stale-value
+- **Last Action:** stale-value
+
+## Tasks
+PARTIAL_PLAN_EOF
+create_task_file "TASK-004" "IN_PROGRESS"
+run_hook
+assert_exit_code "partial plan: hook exits normally (2 = hitl continue)" "$HOOK_EC" 2
+# Present fields were updated (Current Task no longer 'stale-value')
+AFTER_PARTIAL=$(cat "$TEST_DIR/nazgul/plan.md")
+assert_not_contains "partial plan: present Current Task field was updated" "$AFTER_PARTIAL" "Current Task:** stale-value"
+# Warning fires naming a MISSING field, even though some fields matched
+assert_contains "partial plan: warns despite a partial match" "$HOOK_OUTPUT" "no matching label found"
+assert_contains "partial plan: names Last Commit as an unmatched field" "$HOOK_OUTPUT" "Last Commit"
+# And does NOT name a field that WAS matched
+assert_not_contains "partial plan: does not name the matched Current Task" "$HOOK_OUTPUT" "for:; Current Task"
+teardown_temp_dir
+
 # --- Test 16: Promote PLANNED -> READY (no deps) ---
 setup_temp_dir
 setup_git_repo

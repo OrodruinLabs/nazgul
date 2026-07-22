@@ -14,8 +14,8 @@ SESSION_SCRIPT="$REPO_ROOT/scripts/session-context.sh"
 
 # --- Test 1: No config — exit 0, no output ---
 setup_temp_dir
-output=$(bash "$SESSION_SCRIPT" 2>&1) || true
-ec=$?
+ec=0
+output=$(bash "$SESSION_SCRIPT" 2>&1) || ec=$?
 assert_exit_code "no config: exit 0" "$ec" 0
 teardown_temp_dir
 
@@ -206,8 +206,8 @@ Test objective, no Status Summary section at all
 ## Tasks
 PLAN_EOF
 create_task_file "TASK-001" "DONE"
-output=$(bash "$SESSION_SCRIPT" 2>&1) || true
-ec=$?
+ec=0
+output=$(bash "$SESSION_SCRIPT" 2>&1) || ec=$?
 assert_exit_code "unparseable Status Summary: exit 0 (non-blocking)" "$ec" 0
 assert_contains "unparseable Status Summary is flagged" "$output" "no parseable"
 teardown_temp_dir
