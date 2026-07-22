@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.17.1] - 2026-07-22
+
+### Added
+- **Release-on-tag workflow** (`.github/workflows/release.yml`): every pushed
+  `v*` tag now mechanically gets a GitHub Release — notes extracted from the
+  matching `CHANGELOG.md` section, title derived from the annotated tag
+  subject when it follows the release convention. Idempotent (no-op when the
+  Release already exists), so it composes with the release-manager agent's
+  own step 10. Closes the third instance of Releases drifting from tags
+  (v2.14.0/v2.15.0 backfilled late; v2.17.0 published only on request) —
+  instructions weren't enforcement, now the tag push is the trigger.
+
 ## [2.17.0] - 2026-07-22
 
 ### Added

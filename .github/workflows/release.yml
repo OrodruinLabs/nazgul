@@ -1,0 +1,58 @@
+name: Release on Tag
+
+# Mechanical guarantee that every pushed v* tag gets a GitHub Release.
+# The Releases page drifted from the tag history three times (versions,
+# then tags, then Releases — v2.14.0/v2.15.0 backfilled days late,
+# v2.17.0 only on request) because Release creation lived in
+# instructions, not automation. Idempotent: re-running on an existing
+# Release is a no-op, so the release-manager agent creating the Release
+# first (agents/release-manager.md step 10) never conflicts.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create GitHub Release from CHANGELOG
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — nothing to do."
+            exit 0
+          fi
+
+          # Notes: this version's CHANGELOG section (header exclusive,
+          # up to the next '## [' heading).
+          awk -v ver="$VERSION" '
+            index($0, "## [" ver "]") == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if ! [ -s notes.md ]; then
+            printf 'See CHANGELOG.md for %s.\n' "$TAG" > notes.md
+          fi
+
+          # Title: reuse the annotated tag subject when it follows a
+          # release convention; otherwise fall back to the bare tag.
+          SUBJECT="$(git for-each-ref "refs/tags/$TAG" --format='%(contents:subject)' 2>/dev/null || echo "")"
+          case "$SUBJECT" in
+            "Release $TAG:"*) TITLE="$TAG —${SUBJECT#Release $TAG:}" ;;
+            "$TAG — "*)       TITLE="$SUBJECT" ;;
+            *)                TITLE="$TAG" ;;
+          esac
+
+          gh release create "$TAG" --title "$TITLE" --notes-file notes.md --verify-tag
