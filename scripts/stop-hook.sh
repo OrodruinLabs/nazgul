@@ -633,6 +633,13 @@ if [ -f "$PLAN" ]; then
 
   # Update Recovery Pointer fields using awk (safe with arbitrary text in GIT_MSG)
   CHECKPOINT_NAME="nazgul/checkpoints/iteration-$(printf '%03d' "$NEW_ITER").json"
+  # MF-003: format-tolerant label matching. Each field matches the pristine
+  # templates/plan.md bold-label ("- **Current Task:**") OR a bounded
+  # synonym seen in this repo's own live plan.md history ("- **Active
+  # task**:", "- **Last completed**:") — a deliberate allow-list, not a
+  # catch-all, so unrelated lines are never touched. If a full pass matches
+  # zero fields, the END block warns loudly on stderr instead of silently
+  # writing the file back unchanged (non-fatal — never blocks the loop).
   awk \
     -v task="${ACTIVE_TASK:-none}" \
     -v action="Iteration ${NEW_ITER} completed" \
@@ -640,13 +647,19 @@ if [ -f "$PLAN" ]; then
     -v ckpt="$CHECKPOINT_NAME" \
     -v sha="$GIT_SHA" \
     -v msg="$GIT_MSG" \
-    '{
-      if ($0 ~ /^- \*\*Current Task:\*\*/) { print "- **Current Task:** " task }
-      else if ($0 ~ /^- \*\*Last Action:\*\*/) { print "- **Last Action:** " action }
-      else if ($0 ~ /^- \*\*Next Action:\*\*/) { print "- **Next Action:** " next_action }
-      else if ($0 ~ /^- \*\*Last Checkpoint:\*\*/) { print "- **Last Checkpoint:** " ckpt }
-      else if ($0 ~ /^- \*\*Last Commit:\*\*/) { print "- **Last Commit:** " sha " " msg }
+    'BEGIN { matched = 0 }
+    {
+      if ($0 ~ /^- \*\*(Current Task:\*\*|Active task\*\*:)/) { print "- **Current Task:** " task; matched++ }
+      else if ($0 ~ /^- \*\*(Last Action:\*\*|Last completed\*\*:)/) { print "- **Last Action:** " action; matched++ }
+      else if ($0 ~ /^- \*\*Next Action:\*\*/) { print "- **Next Action:** " next_action; matched++ }
+      else if ($0 ~ /^- \*\*Last Checkpoint:\*\*/) { print "- **Last Checkpoint:** " ckpt; matched++ }
+      else if ($0 ~ /^- \*\*Last Commit:\*\*/) { print "- **Last Commit:** " sha " " msg; matched++ }
       else { print }
+    }
+    END {
+      if (matched == 0) {
+        print "Nazgul: Recovery Pointer not updated — no matching label found in plan.md for any of: Current Task (or Active task), Last Action (or Last completed), Next Action, Last Checkpoint, Last Commit. Update the label-synonym allow-list in scripts/stop-hook.sh or fix plan.md manually." > "/dev/stderr"
+      }
     }' "$PLAN" > "${PLAN}.tmp" && mv "${PLAN}.tmp" "$PLAN"
 fi
 

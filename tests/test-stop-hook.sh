@@ -300,6 +300,84 @@ run_hook
 assert_file_contains "plan has TASK-002 in pointer" "$TEST_DIR/nazgul/plan.md" "TASK-002"
 teardown_temp_dir
 
+# --- Test 15b: Recovery Pointer updates a LIVE-format plan.md via label
+# synonyms (MF-003 regression) ---
+# The awk previously matched ONLY the pristine templates/plan.md bold-label
+# format and silently no-op'd against real-world label variants — e.g. this
+# repo's own FEAT-013 plan.md used "- **Active task**:" and
+# "- **Last completed**:" instead of "- **Current Task:**" / "- **Last
+# Action:**". Must actually rewrite the pointer (bytes change), not silently
+# leave it stale.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 0'
+cat > "$TEST_DIR/nazgul/plan.md" << 'LIVE_PLAN_EOF'
+# Nazgul Plan
+
+## Objective
+Test objective
+
+## Status Summary
+- Total tasks: 0
+- DONE: 0 | READY: 0 | IN_PROGRESS: 0
+
+## Recovery Pointer
+- **Last completed**: nothing yet
+- **Active task**: none
+
+## Tasks
+LIVE_PLAN_EOF
+create_task_file "TASK-003" "IN_PROGRESS"
+run_hook
+assert_file_contains "live-format plan gets TASK-003 via Active-task synonym" \
+  "$TEST_DIR/nazgul/plan.md" "TASK-003"
+assert_file_contains "live-format plan gets iteration text via Last-completed synonym" \
+  "$TEST_DIR/nazgul/plan.md" "Iteration 1 completed"
+assert_file_not_contains "live-format plan: stale 'nothing yet' value is gone" \
+  "$TEST_DIR/nazgul/plan.md" "nothing yet"
+teardown_temp_dir
+
+# --- Test 15c: Recovery Pointer warns on stderr when NO label matches
+# plan.md (MF-003 regression) ---
+# When a plan.md's Recovery Pointer uses labels entirely outside the synonym
+# allow-list, the awk must not silently no-op — it prints a loud warning to
+# stderr naming the unmatched fields, and must NOT block the loop (exit 0).
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 0'
+cat > "$TEST_DIR/nazgul/plan.md" << 'NOMATCH_PLAN_EOF'
+# Nazgul Plan
+
+## Objective
+Test objective
+
+## Status Summary
+- Total tasks: 0
+- DONE: 0 | READY: 0 | IN_PROGRESS: 0
+
+## Recovery Pointer
+- **Current phase**: Wave 2
+- **Objective**: FEAT-XYZ
+- **Blocked on**: nothing
+
+## Tasks
+NOMATCH_PLAN_EOF
+BEFORE_POINTER=$(cat "$TEST_DIR/nazgul/plan.md")
+create_task_file "TASK-004" "IN_PROGRESS"
+run_hook
+# Exit 2 here is the normal hitl "decision: block" continue-the-loop signal
+# (unfinished tasks) — unrelated to the Recovery Pointer warning; the warning
+# must not introduce any additional/different blocking behavior on top of it.
+assert_exit_code "no-match plan: hook exits normally (2 = hitl continue, not a new block)" "$HOOK_EC" 2
+assert_contains "no-match plan: warns Recovery Pointer was not updated" "$HOOK_OUTPUT" "no matching label found"
+assert_contains "no-match plan: names Current Task as an unmatched field" "$HOOK_OUTPUT" "Current Task"
+AFTER_POINTER=$(cat "$TEST_DIR/nazgul/plan.md")
+assert_eq "no-match plan: file bytes unchanged (true no-op, correctly warned)" \
+  "$AFTER_POINTER" "$BEFORE_POINTER"
+teardown_temp_dir
+
 # --- Test 16: Promote PLANNED -> READY (no deps) ---
 setup_temp_dir
 setup_git_repo
