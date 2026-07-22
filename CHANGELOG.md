@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.17.0] - 2026-07-22
+
+### Added
+- **Teammate Report Contract (3 layers).** In Agent Teams mode a teammate's
+  final text is delivered to no one, so teammates finished work then idled
+  without reporting, forcing a manual nudge per agent. Now: every teammate
+  dispatch ends with a Report Contract block naming an explicit report file
+  (`templates/skill-partials/report-contract.md`); dispatchers register the
+  expected deliverable in `nazgul/dispatch/<session-name>.json`; and a new
+  `TeammateIdle` hook guard (`scripts/teammate-idle-guard.sh`) blocks a
+  registered teammate from idling while its report file is missing — bounded
+  (≤3 blocks then fail-open escalation), fail-open on unknown payloads, and
+  kill-switchable via `execution.enforce.teammate_report_guard` (config
+  schema v26 → v27, additive). Completion signal is now idle notification +
+  report file on disk; SendMessage is coordination-only courtesy.
+- Telemetry: every TeammateIdle payload is appended to
+  `nazgul/logs/teammate-idle.jsonl` (ongoing payload-schema discovery).
+
+### Changed
+- `agents/team-orchestrator.md`: explicit dispatch-manifest lifecycle
+  (manifest before spawn → contract block in prompt → idle+file = complete →
+  teardown deletes manifests); "signal completion to the caller" vagueness
+  removed.
+- `scripts/stop-hook.sh` parallel-batch dispatch: carries the Report Contract
+  instruction for teammate-dispatched implementers.
+- RULES.md §3.9: corrected the stale claim that subagent dispatch cannot be
+  pre-gated (the PreToolUse `Agent` matcher exists and is in use).
+
 ## [2.16.0] - 2026-07-21
 
 ### Removed
