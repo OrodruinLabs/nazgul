@@ -101,7 +101,10 @@ assert_eq "no nazgul dir allowed" "$EC" "0"
 mkdir -p "$TEST_DIR/nazgul/dispatch" "$TEST_DIR/nazgul/logs" "$TEST_DIR/nazgul/reviews/TASK-001"
 create_config '.feat_id = "FEAT-013"'
 
-# 13. corrupt manifest JSON -> script continues (fail-soft), still exits 0 or 2 (not crash)
+# 13. corrupt manifest JSON -> whole-script robustness: jq reads on the corrupt
+# JSON fall back to their defaults, so this exits via the "manifest has no
+# report_path" fail-open branch (never reaches the fail-soft manifest writes)
+# — degrades to fail-open (exit 0), no crash under set -e.
 printf 'not json' > "$TEST_DIR/nazgul/dispatch/rev-corrupt.json"
 EC=0; jq -n '{from:"rev-corrupt"}' | bash "$GUARD" >/dev/null 2>&1 || EC=$?
 if [ "$EC" -eq 0 ] || [ "$EC" -eq 2 ]; then

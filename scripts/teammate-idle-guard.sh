@@ -56,6 +56,11 @@ if [ -z "$NAME" ]; then
   exit 0
 fi
 
+# NAME comes from the hook payload and is interpolated into a write path — never allow separators or dot-dot.
+case "$NAME" in
+  */*|*..*) log_event "allow" "unsafe teammate name"; exit 0 ;;
+esac
+
 # Manifest lookup — no manifest means not a Nazgul-dispatched teammate.
 MANIFEST="$DISPATCH_DIR/$NAME.json"
 if [ ! -f "$MANIFEST" ]; then
@@ -76,6 +81,9 @@ if [ -z "$REPORT_PATH" ]; then
   log_event "allow" "manifest has no report_path"
   exit 0
 fi
+case "$REPORT_PATH" in
+  /*) log_event "allow" "absolute report_path unsupported"; exit 0 ;;
+esac
 REPORT_ABS="$PROJECT_DIR/$REPORT_PATH"
 
 # Delivered: file exists and is non-empty. mtime >= spawned_at_epoch is checked

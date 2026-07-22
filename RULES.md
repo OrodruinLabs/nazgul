@@ -465,6 +465,11 @@ FILE, enforced in three layers:
 2. **Dispatch manifest** `[advisory]` — before spawning, the dispatcher writes
    `nazgul/dispatch/<session-name>.json` (`teammate`, `report_path`, `feat_id`,
    `spawned_at`, `spawned_at_epoch`, `blocks`). Deleted at team teardown.
+   Note: the §3.3 read-only guarantee applies to subagent-dispatched
+   reviewers persisted by the review-gate orchestrator; reviewer teammates in
+   Agent Teams mode must be spawned with Write access scoped to their single
+   report file, or the dispatcher must point `report_path` at lead-persisted
+   output.
 3. **TeammateIdle guard** `[enforced]` — `scripts/teammate-idle-guard.sh`
    blocks a manifest-registered teammate from idling while its `report_path`
    is missing/empty (exit 2 with the fix instruction), at most 3 times per
@@ -474,6 +479,12 @@ FILE, enforced in three layers:
    and stale `feat_id` — a deliberate inversion of the PreToolUse guards'
    fail-closed rule, because blocking on garbage strands live teammates.
    Kill-switch: `execution.enforce.teammate_report_guard` (default `true`).
+   Known limitation: the guard resolves `nazgul/` via
+   `CLAUDE_PROJECT_DIR`/cwd, so a teammate whose session resolves to a git
+   worktree without the shared `nazgul/` runtime exits untracked (no
+   enforcement, no telemetry) — worktree-aware resolution
+   (`git rev-parse --git-common-dir` / `branch.main_worktree_path`) is a
+   known follow-up.
 
 Completion signal = idle notification + report file on disk. SendMessage is
 coordination-only courtesy, never the report channel.
