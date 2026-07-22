@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.18.0] - 2026-07-22
+
+FEAT-014, the first repair wave from the FEAT-013 360 reliability audit (63
+verified findings). Seven commits (`c411880`..`2a4516d`).
+
+### Added
+- **Test-realism foundation** (MF-052, MF-055): `create_task_file()` now
+  emits canonical frontmatter by default instead of the legacy shape, with
+  `create_task_file_legacy()` preserved for tests that still need it.
+  `tests/test-shellcheck.sh` globs every script instead of a fixed list,
+  growing coverage from 64 to 105 checks. The realistic fixtures immediately
+  surfaced a real production bug (see Fixed).
+- **Telemetry-dark detection**: SessionStart now flags a stale `plan.md`
+  Status Summary against recomputed task counts instead of trusting a
+  number that could silently drift from reality (MF-060). Retired 4
+  already-fixed backlog items found stale during the sweep (MF-062).
+
+### Fixed
+- **`stop-hook.sh`'s git-conflict handler silently never set tasks
+  `BLOCKED`** on real frontmatter-shaped manifests — `set_task_status` was
+  comparing against a literal `".*"` instead of doing a proper
+  compare-and-swap against the current status. Found by the MF-052/MF-055
+  fixtures; this was live in production against real task files.
+- **Enum drift** (MF-001, MF-010, MF-063): `APPROVED` added to
+  `VALID_STATUSES`/`VALID_VERDICTS`; `task-state-guard.sh` now derives its
+  status list from `structured-state.sh` instead of hand-maintaining a
+  duplicate, closing the drift vector that produced MF-001. Fixes the YOLO
+  wedge and completion-unreachable bugs (MF-004, MF-005).
+- **Recovery Pointer**: format-tolerant label matching plus a loud no-op
+  warning so a mismatched format fails loudly instead of silently returning
+  nothing against a live `plan.md` (MF-003).
+
+### Changed
+- **Counting consolidation**: one shared `count_tasks_and_find_active()`
+  helper replaces four duplicated blocks across `stop-hook.sh`,
+  `pre-compact.sh`, `post-compact.sh`, and `session-context.sh`, with a loud
+  `INVALID` arm so an off-vocabulary status is diagnosed instead of silently
+  dropped (MF-002, MF-009, MF-011).
+
 ## [2.17.3] - 2026-07-22
 
 ### Removed
