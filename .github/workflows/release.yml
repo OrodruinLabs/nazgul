@@ -57,10 +57,11 @@ jobs:
           # Read the annotation via the API — the local checkout's tag ref
           # points at the commit, not the tag object, on tag-push events.
           SUBJECT=""
-          OBJ_TYPE="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq '.object.type' 2>/dev/null || echo "")"
-          if [ "$OBJ_TYPE" = "tag" ]; then
-            OBJ_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq '.object.sha' 2>/dev/null || echo "")"
-            [ -n "$OBJ_SHA" ] && SUBJECT="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${OBJ_SHA}" --jq '.message' 2>/dev/null | head -1 || echo "")"
+          REF_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" 2>/dev/null || echo "{}")"
+          OBJ_TYPE="$(printf '%s' "$REF_JSON" | jq -r '.object.type // ""')"
+          OBJ_SHA="$(printf '%s' "$REF_JSON" | jq -r '.object.sha // ""')"
+          if [ "$OBJ_TYPE" = "tag" ] && [ -n "$OBJ_SHA" ]; then
+            SUBJECT="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${OBJ_SHA}" --jq '.message | split("\n")[0]' 2>/dev/null || echo "")"
           fi
           case "$SUBJECT" in
             "Release $TAG:"*) TITLE="$TAG —${SUBJECT#Release $TAG:}" ;;

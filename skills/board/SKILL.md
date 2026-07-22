@@ -4,7 +4,6 @@ description: Connect Nazgul task tracking to an external project board (GitHub P
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, ToolSearch
 metadata:
   author: Jose Mejia
-  version: 2.7.1
 ---
 
 # Nazgul Board

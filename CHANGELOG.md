@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.17.3] - 2026-07-22
+
+### Removed
+- **Per-skill `metadata.version` fields (all 25 skills).** The "lockstep"
+  was an illusion: only `start`/`status` were ever bumped, 23 skills were
+  frozen at 2.7.1, and nothing — no script, test, or platform feature —
+  reads the field. Removing it closes the drift class instead of syncing 25
+  files on every release. `.claude-plugin/plugin.json` is the single
+  version of record.
+
+### Changed
+- Release workflow title derivation: single `git/ref/tags` API call (was
+  two) and first-line extraction via jq (was a `head -1` pipeline under
+  `pipefail`).
+
 ## [2.17.2] - 2026-07-22
 
 ### Fixed
