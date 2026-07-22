@@ -51,6 +51,37 @@ create_config() {
 
 create_task_file() {
   # Usage: create_task_file TASK-001 READY [depends] [blocked_reason]
+  # Emits canonical YAML frontmatter (---\nstatus: X\n---) as the manifest's status
+  # source of truth, matching agents/planner.md:86 and every real nazgul/tasks/*.md
+  # in this repo. get_task_status() (scripts/lib/task-utils.sh) prefers frontmatter
+  # transparently, so callers get realistic coverage with no per-site changes.
+  local id="$1"
+  local status="$2"
+  local deps="${3:-none}"
+  local blocked_reason="${4:-}"
+
+  cat > "$TEST_DIR/nazgul/tasks/${id}.md" << TASK_EOF
+---
+status: ${status}
+---
+# ${id}: Test task
+
+- **Depends on**: ${deps}
+- **Group**: 1
+- **Retry count**: 0/3
+- **Assigned to**: implementer
+TASK_EOF
+
+  if [ -n "$blocked_reason" ]; then
+    echo "- **Blocked reason**: ${blocked_reason}" >> "$TEST_DIR/nazgul/tasks/${id}.md"
+  fi
+}
+
+create_task_file_legacy() {
+  # Usage: create_task_file_legacy TASK-001 READY [depends] [blocked_reason]
+  # Preserves the pre-MF-052 legacy list-item body (`- **Status**: X`, no
+  # frontmatter) verbatim, for the specific tests that exist to prove
+  # get_task_status()'s list-item fallback parsing still works.
   local id="$1"
   local status="$2"
   local deps="${3:-none}"

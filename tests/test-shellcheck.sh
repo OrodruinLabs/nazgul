@@ -9,43 +9,33 @@ source "$SCRIPT_DIR/lib/assertions.sh"
 
 echo "=== $TEST_NAME ==="
 
-SCRIPTS=(
-  "scripts/stop-hook.sh"
-  "scripts/task-completed.sh"
-  "scripts/subagent-stop.sh"
-  "scripts/stop-failure.sh"
-  "scripts/post-compact.sh"
-  "scripts/pre-compact.sh"
-  "scripts/pre-tool-guard.sh"
-  "scripts/session-context.sh"
-  "scripts/migrate-config.sh"
-  "scripts/task-state-guard.sh"
-  "scripts/lean-comments-guard.sh"
-  "scripts/emit-event-cli.sh"
-  "scripts/lib/emit-event.sh"
-  "scripts/lib/review-provenance.sh"
-  "scripts/lib/reviewer-selection.sh"
-  "scripts/lib/parallel-batch.sh"
-  "scripts/lib/inbox-provider.sh"
-  "scripts/lib/connector-github.sh"
-  "scripts/lib/heartbeat-triage.sh"
-  "scripts/heartbeat.sh"
-  "scripts/local-mode-tracking-guard.sh"
-  "scripts/session-staging.sh"
-  "scripts/scrub-stale-review-artifacts.sh"
-  "scripts/parallel-dispatch-guard.sh"
-  "scripts/parallel-rework-guard.sh"
-  "scripts/teammate-idle-guard.sh"
-  "scripts/self-audit.sh"
-  "scripts/lib/raise-finding.sh"
-  "scripts/lib/git-hooks.sh"
-  "scripts/git-hooks/_dispatch.sh"
-  "scripts/git-hooks/pre-commit"
-  "scripts/git-hooks/pre-merge-commit"
-)
+# Discover scripts via glob (sorted, deterministic) rather than a hand-maintained
+# array, so every script under scripts/ — including libraries added after this
+# file was last touched — gets bash -n + shellcheck coverage automatically.
 # tests/ files use dynamic `source` and are not standalone scripts; shellcheck
-# cannot resolve the sourced paths without annotations. The SCRIPTS array is
+# cannot resolve the sourced paths without annotations. The glob is
 # intentionally scoped to scripts/ only to keep the convention consistent.
+# Git hook entry points (scripts/git-hooks/pre-commit, pre-merge-commit) are
+# bash scripts without a .sh suffix, by githooks(5) naming convention; a bare
+# `-name '*.sh'` glob would silently drop them, so they're picked up via their
+# shebang instead of a second hardcoded name list.
+mapfile -t SCRIPTS < <(cd "$REPO_ROOT" && {
+  find scripts -name '*.sh'
+  find scripts -type f ! -name '*.sh' -exec grep -lE '^#!.*/(env )?(bash|sh)([[:space:]]|$)' {} \;
+} | sort -u)
+
+# Sanity check: validate coverage by PATH, not by total count. A count-only check
+# (discovered >= live .sh count) can pass while a real .sh file is dropped, because
+# the discovered set also includes extensionless hooks that can mask the shortfall.
+# Instead, assert every scripts/**/*.sh path is present in the discovered set.
+MISSING_SH=$(comm -23 \
+  <(cd "$REPO_ROOT" && find scripts -type f -name '*.sh' | sort -u) \
+  <(printf '%s\n' "${SCRIPTS[@]}" | sort -u))
+if [ -z "$MISSING_SH" ]; then
+  _pass "every scripts/**/*.sh file is in the shellcheck set"
+else
+  _fail "every scripts/**/*.sh file is in the shellcheck set" "missing: $(echo "$MISSING_SH" | tr '\n' ' ')"
+fi
 
 # bash -n syntax checks
 for script in "${SCRIPTS[@]}"; do

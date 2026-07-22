@@ -63,6 +63,17 @@ rc=0; read_task_status "$TMP/s_none.md" >/dev/null || rc=$?
 assert_exit_code "no status block rc=1" "$rc" 1
 assert_eq "no status block prints nothing" "$(read_task_status "$TMP/s_none.md" || true)" ""
 
+# MF-001 regression: APPROVED is a real, canonical status (Task-PR YOLO flow, RULES.md:34).
+printf -- '---\nstatus: APPROVED\n---\n# TASK\n' > "$TMP/s_approved.md"
+out=$(read_task_status "$TMP/s_approved.md"); rc=$?
+assert_eq "APPROVED status value" "$out" "APPROVED"; assert_exit_code "APPROVED status rc" "$rc" 0
+
+# MF-063 regression: APPROVED is also accepted as a verdict alias alongside APPROVE
+# (review-gate has been observed emitting the past-participle form).
+printf -- '---\nverdict: APPROVED\n---\n' > "$TMP/v_approved.md"
+out=$(read_verdict "$TMP/v_approved.md"); rc=$?
+assert_eq "APPROVED verdict value" "$out" "APPROVED"; assert_exit_code "APPROVED verdict rc" "$rc" 0
+
 # FIX 1: IFS sensitivity — a caller with IFS=, must not break list membership.
 printf -- '---\nverdict: APPROVE\n---\n' > "$TMP/ifs.md"
 OLD_IFS="$IFS"; IFS=,
@@ -91,7 +102,7 @@ assert_exit_code "single-quoted status rc" "$sq_rc" 0
 # FIX B: idempotent source guard — a second source is a safe no-op and leaves
 # functions/enums intact (the file `return 0`s early instead of re-defining).
 source "$REPO_ROOT/scripts/lib/structured-state.sh"
-assert_eq "double-source: enum intact" "$VALID_VERDICTS" "APPROVE CHANGES_REQUESTED SKIPPED UNVERIFIED"
+assert_eq "double-source: enum intact" "$VALID_VERDICTS" "APPROVE APPROVED CHANGES_REQUESTED SKIPPED UNVERIFIED"
 assert_eq "double-source: function still works" "$(read_verdict "$TMP/v_ok.md")" "APPROVE"
 
 # Shipped templates must carry valid canonical frontmatter

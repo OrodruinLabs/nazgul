@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Bootstrap scrub map — Nazgul-token removal rules for /nazgul:bootstrap-project.
 # Sourced by scripts/bootstrap-transform.sh. No side effects on source.
+# shellcheck disable=SC2034  # every array below is consumed by the sourcing
+# script (bootstrap-transform.sh), which shellcheck can't see across the `source`.
 #
 # To add a new rule when the final assertion fires:
 #   1. Classify the token (path vs prose)

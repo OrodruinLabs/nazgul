@@ -155,35 +155,13 @@ if [ "$BUDGET_ENABLED" = "true" ]; then
   fi
 fi
 
-# Count tasks by status
-DONE_COUNT=0
-READY_COUNT=0
-IN_PROGRESS_COUNT=0
-IN_REVIEW_COUNT=0
-APPROVED_COUNT=0
-CHANGES_COUNT=0
-BLOCKED_COUNT=0
-PLANNED_COUNT=0
-TOTAL_COUNT=0
-
-if [ -d "$NAZGUL_DIR/tasks" ]; then
-  for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
-    [ -f "$task_file" ] || continue
-    TOTAL_COUNT=$((TOTAL_COUNT + 1))
-    STATUS=$(get_task_status "$task_file" "PLANNED")
-    case "$STATUS" in
-      DONE) DONE_COUNT=$((DONE_COUNT + 1)) ;;
-      READY) READY_COUNT=$((READY_COUNT + 1)) ;;
-      IN_PROGRESS) IN_PROGRESS_COUNT=$((IN_PROGRESS_COUNT + 1)) ;;
-      IMPLEMENTED) IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1)) ;;
-      IN_REVIEW) IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1)) ;;
-      APPROVED) APPROVED_COUNT=$((APPROVED_COUNT + 1)) ;;
-      CHANGES_REQUESTED) CHANGES_COUNT=$((CHANGES_COUNT + 1)) ;;
-      BLOCKED) BLOCKED_COUNT=$((BLOCKED_COUNT + 1)) ;;
-      PLANNED) PLANNED_COUNT=$((PLANNED_COUNT + 1)) ;;
-    esac
-  done
-fi
+# Count tasks by status (shared helper, MF-009 — sets DONE_COUNT, READY_COUNT,
+# IN_PROGRESS_COUNT, IN_REVIEW_COUNT, APPROVED_COUNT, CHANGES_COUNT,
+# BLOCKED_COUNT, PLANNED_COUNT, INVALID_COUNT, TOTAL_COUNT, plus
+# ACTIVE_TASK/ACTIVE_STATUS/ACTIVE_RETRY as a side effect; the active-task scan
+# below re-runs the helper after the review-gate loop may mutate task files, so
+# those three are recomputed and superseded there)
+count_tasks_and_find_active "$NAZGUL_DIR/tasks"
 
 # --- REVIEW GATE ENFORCEMENT (Layer 2 — reactive safety net) ---
 # Validate that no tasks are DONE without review evidence (shared lib: review-evidence.sh)
@@ -314,21 +292,12 @@ jq --argjson cf "$CONSEC_FAILURES" --argjson pd "$PROGRESS_COUNT" \
   '.safety.consecutive_failures = $cf | .safety._prev_done_count = $pd' \
   "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
 
-# Find active task
-ACTIVE_TASK=""
-ACTIVE_STATUS=""
-ACTIVE_RETRY=0
+# Find active task (shared helper, MF-009 — re-run after the review-gate loop
+# above may have mutated task files on disk; recomputes all counts too, which
+# reflect the same final state the review-gate loop's manual counter
+# adjustments already produced, so downstream *_COUNT reads are unaffected)
+count_tasks_and_find_active "$NAZGUL_DIR/tasks"
 ACTIVE_BLOCKED_REASON=""
-for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
-  [ -f "$task_file" ] || continue
-  STATUS=$(get_task_status "$task_file")
-  if [ "$STATUS" = "IN_PROGRESS" ] || [ "$STATUS" = "CHANGES_REQUESTED" ] || [ "$STATUS" = "IN_REVIEW" ] || [ "$STATUS" = "IMPLEMENTED" ]; then
-    ACTIVE_TASK=$(basename "$task_file" .md)
-    ACTIVE_STATUS="$STATUS"
-    ACTIVE_RETRY=$(grep -m1 '^\- \*\*Retry count\*\*:' "$task_file" 2>/dev/null | sed 's|.*: \([0-9]*\).*|\1|' || echo "0")
-    break
-  fi
-done
 
 # Check for BLOCKED tasks and capture blocked reason
 if [ -d "$NAZGUL_DIR/tasks" ]; then
@@ -633,6 +602,13 @@ if [ -f "$PLAN" ]; then
 
   # Update Recovery Pointer fields using awk (safe with arbitrary text in GIT_MSG)
   CHECKPOINT_NAME="nazgul/checkpoints/iteration-$(printf '%03d' "$NEW_ITER").json"
+  # MF-003: format-tolerant label matching. Each field matches the pristine
+  # templates/plan.md bold-label ("- **Current Task:**") OR a bounded
+  # synonym seen in this repo's own live plan.md history ("- **Active
+  # task**:", "- **Last completed**:") — a deliberate allow-list, not a
+  # catch-all, so unrelated lines are never touched. If a full pass matches
+  # zero fields, the END block warns loudly on stderr instead of silently
+  # writing the file back unchanged (non-fatal — never blocks the loop).
   awk \
     -v task="${ACTIVE_TASK:-none}" \
     -v action="Iteration ${NEW_ITER} completed" \
@@ -640,13 +616,28 @@ if [ -f "$PLAN" ]; then
     -v ckpt="$CHECKPOINT_NAME" \
     -v sha="$GIT_SHA" \
     -v msg="$GIT_MSG" \
-    '{
-      if ($0 ~ /^- \*\*Current Task:\*\*/) { print "- **Current Task:** " task }
-      else if ($0 ~ /^- \*\*Last Action:\*\*/) { print "- **Last Action:** " action }
-      else if ($0 ~ /^- \*\*Next Action:\*\*/) { print "- **Next Action:** " next_action }
-      else if ($0 ~ /^- \*\*Last Checkpoint:\*\*/) { print "- **Last Checkpoint:** " ckpt }
-      else if ($0 ~ /^- \*\*Last Commit:\*\*/) { print "- **Last Commit:** " sha " " msg }
+    'BEGIN { m_ct=0; m_la=0; m_na=0; m_lc=0; m_lco=0 }
+    {
+      if ($0 ~ /^- \*\*(Current Task:\*\*|Active task\*\*:)/) { print "- **Current Task:** " task; m_ct=1 }
+      else if ($0 ~ /^- \*\*(Last Action:\*\*|Last completed\*\*:)/) { print "- **Last Action:** " action; m_la=1 }
+      else if ($0 ~ /^- \*\*Next Action:\*\*/) { print "- **Next Action:** " next_action; m_na=1 }
+      else if ($0 ~ /^- \*\*Last Checkpoint:\*\*/) { print "- **Last Checkpoint:** " ckpt; m_lc=1 }
+      else if ($0 ~ /^- \*\*Last Commit:\*\*/) { print "- **Last Commit:** " sha " " msg; m_lco=1 }
       else { print }
+    }
+    END {
+      # Per-field, not all-or-nothing (WD-04 / PR#66 review): a PARTIAL match — one
+      # recognized label updated while others stay stale — must warn too, naming
+      # exactly which fields were not updated. Non-fatal; never blocks the loop.
+      miss=""
+      if (!m_ct)  { miss = miss "; Current Task (or Active task)" }
+      if (!m_la)  { miss = miss "; Last Action (or Last completed)" }
+      if (!m_na)  { miss = miss "; Next Action" }
+      if (!m_lc)  { miss = miss "; Last Checkpoint" }
+      if (!m_lco) { miss = miss "; Last Commit" }
+      if (miss != "") {
+        print "Nazgul: Recovery Pointer — no matching label found in plan.md for:" miss ". Those fields were NOT updated. Update the label-synonym allow-list in scripts/stop-hook.sh or fix plan.md manually. (non-fatal)" > "/dev/stderr"
+      }
     }' "$PLAN" > "${PLAN}.tmp" && mv "${PLAN}.tmp" "$PLAN"
 fi
 
@@ -762,7 +753,14 @@ if echo "$GIT_PORCELAIN" | grep -qE '^(U.|.U|AA|DD) '; then
   GIT_CONFLICT_DETECTED=true
   # Set the active task to BLOCKED with reason "git conflict"
   if [ -n "$ACTIVE_TASK" ] && [ -f "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" ]; then
-    set_task_status "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" ".*" "BLOCKED"
+    # Force-block regardless of current status: read it first and pass it back as
+    # old_status. A literal ".*" old_status (the prior approach) only worked by
+    # accident on the sed-based legacy branches of set_task_status, which treat
+    # old_status as a regex fragment; the canonical-frontmatter branch does a
+    # strict string compare and silently no-ops against ".*", so every real
+    # (frontmatter) manifest never actually reached BLOCKED on a git conflict.
+    _active_task_status=$(get_task_status "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md")
+    set_task_status "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" "$_active_task_status" "BLOCKED"
     # Add or update blocked reason
     if grep -q '^\- \*\*Blocked reason\*\*:' "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" 2>/dev/null; then
       sed -i.bak 's/^\(- \*\*Blocked reason\*\*:\) .*/\1 git conflict — unmerged files detected/' "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" && rm -f "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md.bak"

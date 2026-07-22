@@ -8,6 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/assertions.sh"
 source "$SCRIPT_DIR/lib/setup.sh"
+# get_task_status: frontmatter-first status reader (matches production, unlike a
+# raw legacy-list-item grep) — used below to read back manifests the hook wrote.
+source "$REPO_ROOT/scripts/lib/task-utils.sh"
 
 echo "=== $TEST_NAME ==="
 
@@ -297,6 +300,123 @@ run_hook
 assert_file_contains "plan has TASK-002 in pointer" "$TEST_DIR/nazgul/plan.md" "TASK-002"
 teardown_temp_dir
 
+# --- Test 15b: Recovery Pointer updates a LIVE-format plan.md via label
+# synonyms (MF-003 regression) ---
+# The awk previously matched ONLY the pristine templates/plan.md bold-label
+# format and silently no-op'd against real-world label variants — e.g. this
+# repo's own FEAT-013 plan.md used "- **Active task**:" and
+# "- **Last completed**:" instead of "- **Current Task:**" / "- **Last
+# Action:**". Must actually rewrite the pointer (bytes change), not silently
+# leave it stale.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 0'
+cat > "$TEST_DIR/nazgul/plan.md" << 'LIVE_PLAN_EOF'
+# Nazgul Plan
+
+## Objective
+Test objective
+
+## Status Summary
+- Total tasks: 0
+- DONE: 0 | READY: 0 | IN_PROGRESS: 0
+
+## Recovery Pointer
+- **Last completed**: nothing yet
+- **Active task**: none
+
+## Tasks
+LIVE_PLAN_EOF
+create_task_file "TASK-003" "IN_PROGRESS"
+run_hook
+assert_file_contains "live-format plan gets TASK-003 via Active-task synonym" \
+  "$TEST_DIR/nazgul/plan.md" "TASK-003"
+assert_file_contains "live-format plan gets iteration text via Last-completed synonym" \
+  "$TEST_DIR/nazgul/plan.md" "Iteration 1 completed"
+assert_file_not_contains "live-format plan: stale 'nothing yet' value is gone" \
+  "$TEST_DIR/nazgul/plan.md" "nothing yet"
+teardown_temp_dir
+
+# --- Test 15c: Recovery Pointer warns on stderr when NO label matches
+# plan.md (MF-003 regression) ---
+# When a plan.md's Recovery Pointer uses labels entirely outside the synonym
+# allow-list, the awk must not silently no-op — it prints a loud warning to
+# stderr naming the unmatched fields, and must NOT block the loop (exit 0).
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 0'
+cat > "$TEST_DIR/nazgul/plan.md" << 'NOMATCH_PLAN_EOF'
+# Nazgul Plan
+
+## Objective
+Test objective
+
+## Status Summary
+- Total tasks: 0
+- DONE: 0 | READY: 0 | IN_PROGRESS: 0
+
+## Recovery Pointer
+- **Current phase**: Wave 2
+- **Objective**: FEAT-XYZ
+- **Blocked on**: nothing
+
+## Tasks
+NOMATCH_PLAN_EOF
+BEFORE_POINTER=$(cat "$TEST_DIR/nazgul/plan.md")
+create_task_file "TASK-004" "IN_PROGRESS"
+run_hook
+# Exit 2 here is the normal hitl "decision: block" continue-the-loop signal
+# (unfinished tasks) — unrelated to the Recovery Pointer warning; the warning
+# must not introduce any additional/different blocking behavior on top of it.
+assert_exit_code "no-match plan: hook exits normally (2 = hitl continue, not a new block)" "$HOOK_EC" 2
+assert_contains "no-match plan: warns Recovery Pointer was not updated" "$HOOK_OUTPUT" "no matching label found"
+assert_contains "no-match plan: names Current Task as an unmatched field" "$HOOK_OUTPUT" "Current Task"
+AFTER_POINTER=$(cat "$TEST_DIR/nazgul/plan.md")
+assert_eq "no-match plan: file bytes unchanged (true no-op, correctly warned)" \
+  "$AFTER_POINTER" "$BEFORE_POINTER"
+teardown_temp_dir
+
+# --- Test 15d: Recovery Pointer warns on a PARTIAL match (WD-04 / PR#66 review) ---
+# A plan.md with SOME recognized labels (Current Task, Last Action) but MISSING
+# others (Next Action, Last Checkpoint, Last Commit) must (a) update the present
+# fields, and (b) still warn — naming the missing fields — instead of staying
+# silent because at least one field matched. This is the partial-rewrite gap the
+# old all-or-nothing `matched == 0` check missed.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 0'
+cat > "$TEST_DIR/nazgul/plan.md" << 'PARTIAL_PLAN_EOF'
+# Nazgul Plan
+
+## Objective
+Test objective
+
+## Status Summary
+- Total tasks: 1
+- DONE: 0 | READY: 0 | IN_PROGRESS: 1
+
+## Recovery Pointer
+- **Current Task:** stale-value
+- **Last Action:** stale-value
+
+## Tasks
+PARTIAL_PLAN_EOF
+create_task_file "TASK-004" "IN_PROGRESS"
+run_hook
+assert_exit_code "partial plan: hook exits normally (2 = hitl continue)" "$HOOK_EC" 2
+# Present fields were updated (Current Task no longer 'stale-value')
+AFTER_PARTIAL=$(cat "$TEST_DIR/nazgul/plan.md")
+assert_not_contains "partial plan: present Current Task field was updated" "$AFTER_PARTIAL" "Current Task:** stale-value"
+# Warning fires naming a MISSING field, even though some fields matched
+assert_contains "partial plan: warns despite a partial match" "$HOOK_OUTPUT" "no matching label found"
+assert_contains "partial plan: names Last Commit as an unmatched field" "$HOOK_OUTPUT" "Last Commit"
+# And does NOT name a field that WAS matched
+assert_not_contains "partial plan: does not name the matched Current Task" "$HOOK_OUTPUT" "for:; Current Task"
+teardown_temp_dir
+
 # --- Test 16: Promote PLANNED -> READY (no deps) ---
 setup_temp_dir
 setup_git_repo
@@ -305,7 +425,7 @@ create_config
 create_plan
 create_task_file "TASK-001" "PLANNED" "none"
 run_hook
-status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "PLANNED promoted to READY (no deps)" "$status" "READY"
 teardown_temp_dir
 
@@ -319,7 +439,7 @@ create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
 create_task_file "TASK-002" "PLANNED" "TASK-001"
 run_hook
-status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-002.md" | sed 's/.*: //')
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-002.md")
 assert_eq "PLANNED promoted to READY (deps met)" "$status" "READY"
 teardown_temp_dir
 
@@ -332,7 +452,7 @@ create_plan
 create_task_file "TASK-001" "READY"
 create_task_file "TASK-002" "PLANNED" "TASK-001"
 run_hook
-status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-002.md" | sed 's/.*: //')
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-002.md")
 assert_eq "PLANNED stays PLANNED (deps unmet)" "$status" "PLANNED"
 teardown_temp_dir
 
@@ -380,7 +500,7 @@ git -C "$TEST_DIR" merge conflict-branch --no-commit 2>/dev/null || true
 porcelain=$(git -C "$TEST_DIR" status --porcelain 2>/dev/null || echo "")
 if echo "$porcelain" | grep -qE '^(U.|.U|AA|DD) '; then
   run_hook
-  status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
+  status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
   assert_eq "git conflict blocks task" "$status" "BLOCKED"
   assert_file_contains "blocked event emitted on git conflict" \
     "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"blocked"'
@@ -418,7 +538,7 @@ create_task_file "TASK-001" "DONE"
 # Intentionally NO create_review_dir — simulate the violation
 create_task_file "TASK-002" "READY"
 run_hook
-status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "review gate violation resets DONE to IMPLEMENTED" "$status" "IMPLEMENTED"
 assert_contains "review gate violation logged" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
 teardown_temp_dir
@@ -433,23 +553,45 @@ create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
 create_task_file "TASK-002" "READY"
 run_hook
-status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "DONE with reviews stays DONE" "$status" "DONE"
 teardown_temp_dir
 
-# --- Test: YOLO without task-pr — all APPROVED exits cleanly ---
+# --- Test: YOLO without task-pr — all APPROVED exits cleanly (MF-005 regression) ---
+# Canonical-frontmatter fixtures (create_task_file). Proves the MF-001 fix (TASK-002,
+# APPROVED added to VALID_STATUSES) and the MF-009 counting repoint (TASK-003/004) land
+# together: APPROVED_COUNT + DONE_COUNT == TOTAL_COUNT drives completion on the real
+# frontmatter path, and the transition registers as progress (consecutive_failures resets).
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
 create_config '.afk.yolo = true' '.afk.task_pr = false' '.current_iteration = 1' '.learning.auto_distill_post_loop = false' \
-  '.docs.verify_comments = false' '.self_audit.enabled = false'
+  '.docs.verify_comments = false' '.self_audit.enabled = false' \
+  '.safety.consecutive_failures = 3' '.safety._prev_done_count = 0'
 create_plan
 create_task_file "TASK-001" "APPROVED"
 create_task_file "TASK-002" "APPROVED"
 create_review_dir "TASK-001"
 create_review_dir "TASK-002"
 run_hook
-assert_exit_code "YOLO no task-pr: all APPROVED exits 0" "$HOOK_EC" 0
+assert_exit_code "MF-005: YOLO no task-pr, all APPROVED exits 0 (canonical frontmatter)" "$HOOK_EC" 0
+consec=$(jq -r '.safety.consecutive_failures' "$TEST_DIR/nazgul/config.json")
+assert_eq "MF-005: all-APPROVED completion counts as progress (failures reset to 0)" "$consec" "0"
+teardown_temp_dir
+
+# --- Test: MF-004 — YOLO promotes PLANNED -> READY when dependency is APPROVED ---
+# The dep-promotion gate (stop-hook.sh's auto-promote block) must accept APPROVED, not
+# just DONE, as a satisfied dependency in YOLO mode. Canonical-frontmatter fixtures.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.afk.yolo = true'
+create_plan
+create_task_file "TASK-001" "APPROVED"
+create_task_file "TASK-002" "PLANNED" "TASK-001"
+run_hook
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-002.md")
+assert_eq "MF-004: PLANNED promoted to READY when dep is APPROVED (YOLO)" "$status" "READY"
 teardown_temp_dir
 
 # --- Reset diagnostics: first violation names missing reviewers in output ---
@@ -466,7 +608,7 @@ assert_exit_code "first violation: exit 2" "$HOOK_EC" 2
 assert_contains "violation logged" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
 assert_contains "missing reviewer named" "$HOOK_OUTPUT" "qa-reviewer"
 assert_contains "remediation named" "$HOOK_OUTPUT" "materialize"
-status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "first violation: reset to IMPLEMENTED" "$status" "IMPLEMENTED"
 count=$(jq -r '.safety._review_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
 assert_eq "first violation: reset count recorded" "$count" "1"
@@ -485,7 +627,7 @@ run_hook
 assert_exit_code "second violation: exit 2" "$HOOK_EC" 2
 assert_contains "escalation logged" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
 assert_contains "escalation names BLOCKED" "$HOOK_OUTPUT" "escalated to BLOCKED"
-status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "second violation: escalated to BLOCKED" "$status" "BLOCKED"
 assert_contains "blocked reason written" "$(cat "$TEST_DIR/nazgul/tasks/TASK-001.md")" "review evidence missing"
 assert_contains "blocked reason names command" "$(cat "$TEST_DIR/nazgul/tasks/TASK-001.md")" "/nazgul:review --materialize TASK-001"
@@ -505,7 +647,7 @@ create_task_file "TASK-002" "READY"
 run_hook
 assert_exit_code "valid evidence: exit 2" "$HOOK_EC" 2
 assert_not_contains "valid evidence: no violation noise" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
-status=$(grep -m1 '^\- \*\*Status\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md" | sed 's/.*: //')
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "valid evidence: stays DONE" "$status" "DONE"
 count=$(jq -r '.safety._review_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
 assert_eq "valid evidence: stale count cleared" "$count" "0"

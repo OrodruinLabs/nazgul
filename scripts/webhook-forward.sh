@@ -71,7 +71,7 @@ PAYLOAD=$(jq -n \
   --arg active_task "$ACTIVE_TASK" \
   --argjson iteration "$ITERATION" \
   --argjson max_iter "$MAX_ITER" \
-  --argjson done "$DONE_COUNT" \
+  --argjson "done" "$DONE_COUNT" \
   --argjson total "$TOTAL_COUNT" \
   --arg timestamp "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
   '{

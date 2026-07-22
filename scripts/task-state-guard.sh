@@ -9,6 +9,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/task-utils.sh"
 source "$SCRIPT_DIR/lib/review-evidence.sh"
 
+# Single source of truth (ADR-002 Decision 1): derive the accepted-status regex
+# alternation from structured-state.sh's VALID_STATUSES (sourced transitively via
+# task-utils.sh above) instead of hand-maintaining a second enumeration here — the
+# two DID drift apart once (MF-001: this file already had APPROVED, the library
+# didn't).
+STATUS_REGEX_ALT="(${VALID_STATUSES// /|})"
+
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
 INPUT=$(cat 2>/dev/null || echo "")
 if [ -z "$INPUT" ]; then
@@ -274,14 +281,14 @@ if [ -z "$NEW_STATUS" ]; then
     _fm_src=$(printf '%s\n' "$NEW_CONTENT" | awk 'NR==1 && /^---[[:space:]]*$/{infm=1; next} infm && /^---[[:space:]]*$/{exit} infm')
   fi
   _fm_line=$(printf '%s\n' "$_fm_src" | \
-    grep -m1 -E '^status:[[:space:]]*(PLANNED|READY|IN_PROGRESS|IMPLEMENTED|IN_REVIEW|APPROVED|CHANGES_REQUESTED|BLOCKED|DONE)[[:space:]]*$' 2>/dev/null || true)
+    grep -m1 -E "^status:[[:space:]]*${STATUS_REGEX_ALT}[[:space:]]*\$" 2>/dev/null || true)
   NEW_STATUS=$(printf '%s' "$_fm_line" | sed 's/^status:[[:space:]]*//' | tr -d '[:space:]')
 fi
 if [ -z "$NEW_STATUS" ]; then
   # Ordered last so frontmatter and structured headings take precedence; bare token
   # is a catch-all for any remaining inline formats that slip past earlier extractors.
   NEW_STATUS=$(printf '%s\n' "$NEW_CONTENT" | \
-    grep -m1 -E '^(PLANNED|READY|IN_PROGRESS|IMPLEMENTED|IN_REVIEW|APPROVED|CHANGES_REQUESTED|BLOCKED|DONE)[[:space:]]*$' 2>/dev/null \
+    grep -m1 -E "^${STATUS_REGEX_ALT}[[:space:]]*\$" 2>/dev/null \
     | tr -d '[:space:]' || true)
 fi
 if [ -z "$NEW_STATUS" ]; then
