@@ -1476,4 +1476,128 @@ run_guard "$input"
 assert_exit_code "feature mode: DONE with reviews/FEATURE-FEAT-016 evidence allowed" "$GUARD_EC" 0
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# TASK-009 / LR-001 / ADR-005 Decision 4: receipt-hash content gate,
+# end-to-end through the real guard (not just the library — see
+# tests/test-review-evidence.sh for the library-level cases). Reproduces the
+# FEAT-016/TASK-005 fabrication shape: a persisted reviewer verdict that
+# does not match what the reviewer actually returned (or was never
+# independently captured at all) must BLOCK the IN_REVIEW->DONE transition,
+# not silently pass because the file merely LOOKS like an approved review.
+# ---------------------------------------------------------------------------
+
+# Helper: sha256 via the same `printf '%s' ... | sha256sum` pattern
+# scripts/lib/review-provenance.sh's _rp_sha256 uses (see that file).
+_test_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$1" | sha256sum | awk '{print $1}'
+  else
+    printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
+  fi
+}
+
+# Helper: simulate one full dispatched-reviewer cycle exactly as production
+# does it (agents/review-gate.md Step 2 item 4 + scripts/subagent-stop.sh's
+# _record_reviewer_receipt) — a receipt for the reviewer's RAW returned
+# text, and a persisted file carrying that same text plus one
+# orchestrator-inserted review_token line.
+# Usage: write_dispatched_review_with_receipt <unit> <reviewer> <verdict> \
+#   <narrative> [--no-receipt] [--tamper]
+write_dispatched_review_with_receipt() {
+  local unit="$1" reviewer="$2" verdict="$3" narrative="$4"
+  shift 4
+  local no_receipt=false tamper=false
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --no-receipt) no_receipt=true ;;
+      --tamper) tamper=true ;;
+    esac
+    shift
+  done
+
+  local raw hash persisted_narrative
+  raw=$(printf -- '---\nverdict: %s\nconfidence: 90\n---\n%s\n' "$verdict" "$narrative")
+  hash=$(_test_sha256 "$raw")
+
+  persisted_narrative="$narrative"
+  [ "$tamper" = true ] && persisted_narrative="${narrative} TAMPERED AFTER REVIEW."
+
+  mkdir -p "$TEST_DIR/nazgul/reviews/$unit"
+  printf -- '---\nverdict: %s\nconfidence: 90\nreview_token: deadbeefcafef00d\n---\n%s\n' \
+    "$verdict" "$persisted_narrative" \
+    > "$TEST_DIR/nazgul/reviews/$unit/${reviewer}.md"
+  # Real review-gate runs always leave a .dispatch.json too (Step 1.6) —
+  # included for fixture realism even though the receipt check itself never
+  # reads it.
+  jq -cn --arg u "$unit" --arg r "$reviewer" \
+    '{unit:$u, token:"deadbeefcafef00d", selected:[$r], skipped:[]}' \
+    > "$TEST_DIR/nazgul/reviews/$unit/.dispatch.json"
+
+  if [ "$no_receipt" != true ]; then
+    mkdir -p "$TEST_DIR/nazgul/logs"
+    jq -cn --arg u "$unit" --arg r "$reviewer" --arg h "$hash" --arg ts "2026-07-23T00:00:00Z" \
+      '{unit:$u, reviewer:$r, hash:$h, ts:$ts}' \
+      >> "$TEST_DIR/nazgul/logs/review-receipts.jsonl"
+  fi
+}
+
+# Test 86 (FEAT-016/TASK-005 reproduction): a persisted APPROVE verdict whose
+# body doesn't match its captured receipt — BLOCKED, not silently DONE.
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"'
+create_task_file "TASK-001" "IN_REVIEW"
+write_dispatched_review_with_receipt "TASK-001" "code-reviewer" "APPROVE" \
+  "Looks good. No blocking issues found." --tamper
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "forged verdict content blocks DONE" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Test 87 (FEAT-016/TASK-005 reproduction, other half): a persisted APPROVE
+# verdict with NO matching receipt at all — the receipt-less fabrication
+# shape — BLOCKED.
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"'
+create_task_file "TASK-001" "IN_REVIEW"
+write_dispatched_review_with_receipt "TASK-001" "code-reviewer" "APPROVE" \
+  "Looks good. No blocking issues found." --no-receipt
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "receipt-less verdict blocks DONE" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Test 88: matching receipt (legitimate, unforged review) — DONE allowed.
+# Proves the gate isn't just failing every APPROVE verdict outright.
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"'
+create_task_file "TASK-001" "IN_REVIEW"
+write_dispatched_review_with_receipt "TASK-001" "code-reviewer" "APPROVE" \
+  "Looks good. No blocking issues found."
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "matching receipt: DONE allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# Test 89: review_gate.receipt_hash_enforcement: false — the kill switch
+# reverts to pre-gate behavior; a tampered, receipt-less body no longer
+# blocks DONE.
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"' \
+  '.review_gate.receipt_hash_enforcement = false'
+create_task_file "TASK-001" "IN_REVIEW"
+write_dispatched_review_with_receipt "TASK-001" "code-reviewer" "APPROVE" \
+  "Looks good. No blocking issues found." --tamper --no-receipt
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "enforcement off: DONE allowed despite tampered body" "$GUARD_EC" 0
+teardown_temp_dir
+
 report_results

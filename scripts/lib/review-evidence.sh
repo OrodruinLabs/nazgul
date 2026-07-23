@@ -116,6 +116,84 @@ _re_manifest_authentic() {
   bash "$rs" verify --files "$files" --reviewers "$roster" --claimed-skipped "$claimed"
 }
 
+# _re_reconstruct_pretoken_text <file> -> prints <file>'s content with any
+# `review_token:` line INSIDE the frontmatter block removed, everything else
+# byte-for-byte unchanged. This reproduces the EXACT text a dispatched
+# reviewer originally returned as its final message: per
+# agents/review-gate.md Step 2 item 4, the orchestrator persists a reviewer's
+# raw return by inserting `review_token: $TOKEN` into the frontmatter block
+# the REVIEWER authored (alongside its own `verdict:`/`confidence:`) — the
+# fences, the reviewer's own frontmatter fields, and the entire narrative
+# body are never otherwise touched. That raw return (frontmatter included)
+# is exactly what TASK-002's SubagentStop capture hashes in full (see
+# scripts/subagent-stop.sh's `_record_reviewer_receipt`), so undoing this one
+# insertion is the whole of the needed reconstruction — empirically verified
+# byte-for-byte against a `_rp_sha256` recompute (TASK-009 Implementation
+# Log). A file with no leading frontmatter fence (legacy format, never had a
+# token inserted) passes through unmodified. Only a line strictly inside the
+# frontmatter region is ever dropped — a body line that happens to start
+# with `review_token:` is left alone, since stripping it globally would let
+# injected body content hide from the hash it's supposed to be part of.
+_re_reconstruct_pretoken_text() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+  awk '
+    NR==1 {
+      l=$0; sub(/\r$/, "", l)
+      if (l ~ /^---[[:space:]]*$/) { infm=1; print; next }
+    }
+    infm==1 {
+      l=$0; sub(/\r$/, "", l)
+      if (l ~ /^---[[:space:]]*$/) { infm=0; print; next }
+      if ($0 ~ /^review_token[[:space:]]*:/) next
+      print; next
+    }
+    { print }
+  ' "$file"
+}
+
+# _re_receipt_matches <nazgul_dir> <unit> <reviewer> -> 0 iff
+# reviews/<unit>/<reviewer>.md's reconstructed pre-token text (see
+# _re_reconstruct_pretoken_text) hashes identically to the MOST RECENT
+# independently-captured receipt for (unit, reviewer) in
+# nazgul/logs/review-receipts.jsonl — TASK-002's SubagentStop-hook capture,
+# a hook the review-gate orchestrator (and thus a compromised or buggy gate)
+# cannot influence (LR-001 / ADR-005 Decision 4, Option 2). Both sides read
+# through a bash command substitution before hashing (`$(...)` strips
+# trailing newlines identically to how subagent-stop.sh's
+# `final_text=$(jq -rs ...)` already does on the capture side) so a
+# trailing-newline difference between a live transcript and a persisted file
+# is not a false mismatch.
+# Returns 1 (no match / no evidence — same as a mismatch) when: the
+# receipts file is missing, no receipt line matches (unit, reviewer) at all
+# (a receipt-less persisted verdict is the FEAT-016/TASK-005 fabrication
+# shape — an invented verdict for a reviewer that never actually completed),
+# or the recomputed hash disagrees with the receipt's hash. Also returns 1
+# if jq or a sha256 tool is unavailable — a check that cannot run must never
+# be silently treated as a check that passed.
+_re_receipt_matches() {
+  local nazgul_dir="$1" unit="$2" reviewer="$3"
+  local file="$nazgul_dir/reviews/$unit/${reviewer}.md"
+  local receipts_file="$nazgul_dir/logs/review-receipts.jsonl"
+
+  [ -f "$file" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  [ -f "$receipts_file" ] || return 1
+
+  local receipt_hash
+  receipt_hash=$(jq -rs --arg u "$unit" --arg r "$reviewer" \
+    '[ .[] | select(.unit == $u and .reviewer == $r) ] | last | .hash // empty' \
+    "$receipts_file" 2>/dev/null)
+  [ -n "$receipt_hash" ] || return 1
+
+  local content recomputed
+  content=$(_re_reconstruct_pretoken_text "$file") || return 1
+  recomputed=$(printf '%s' "$content" | _rp_sha256) || return 1
+  [ -n "$recomputed" ] || return 1
+
+  [ "$recomputed" = "$receipt_hash" ]
+}
+
 # A reviewer counts as authorized-skipped (gate-satisfying despite no APPROVED
 # verdict) when reviews/<unit>/.dispatch.json exists, lists it in skipped[],
 # AND that skip is reproducible from the current diff (_re_manifest_authentic
@@ -246,6 +324,16 @@ resolve_review_unit() {
 #   NO_REVIEWERS_CONFIGURED   — config.json agents.reviewers is empty
 #   MISSING <reviewer>        — no reviews/<unit>/<reviewer>.md
 #   UNAPPROVED <reviewer>     — file exists but lacks an APPROVED verdict
+#   RECEIPT_MISMATCH <reviewer> — review_gate.receipt_hash_enforcement is not
+#                             `false` (default true) and a dispatched
+#                             reviewer's persisted APPROVE/CHANGES_REQUESTED
+#                             verdict either has no matching receipt in
+#                             nazgul/logs/review-receipts.jsonl, or its
+#                             recomputed hash disagrees with the receipt's
+#                             (see _re_receipt_matches). Never emitted for
+#                             SKIPPED/UNVERIFIED files (orchestrator-authored
+#                             stubs, never independently captured) or when
+#                             the kill switch is `false`.
 # <unit> is resolve_review_unit(nazgul_dir, task_id): task_id unchanged in
 # "task" granularity (the common case), or the task's GROUP-<n>/FEATURE-<feat_id>
 # in "group"/"feature" granularity (MF-013) — the single resolution point every
@@ -257,8 +345,9 @@ resolve_review_unit() {
 # likewise exempt from UNAPPROVED; a critical reviewer's UNVERIFIED still blocks.
 validate_review_evidence() {
   local nazgul_dir="$1" task_id="$2"
-  local review_dir
-  review_dir="$nazgul_dir/reviews/$(resolve_review_unit "$nazgul_dir" "$task_id")"
+  local unit
+  unit=$(resolve_review_unit "$nazgul_dir" "$task_id")
+  local review_dir="$nazgul_dir/reviews/$unit"
   local config="$nazgul_dir/config.json"
   local problems=0
 
@@ -276,19 +365,46 @@ validate_review_evidence() {
     return 1
   fi
 
+  # ADR-005 Decision 4 / LR-001: receipt-hash content gate kill switch. Read
+  # by identity, not `//` — `//` treats jq's `false` like `null`, which would
+  # silently coalesce an explicit `false` back to `true`.
+  local receipt_enforced="true"
+  if [ -f "$config" ]; then
+    receipt_enforced=$(jq -r 'if .review_gate.receipt_hash_enforcement == false then "false" else "true" end' "$config" 2>/dev/null || echo "true")
+  fi
+
   # Every configured reviewer must have an APPROVED file
   local reviewer
   while IFS= read -r reviewer; do
     [ -z "$reviewer" ] && continue
-    if [ ! -f "$review_dir/${reviewer}.md" ]; then
+    local rf="$review_dir/${reviewer}.md"
+    if [ ! -f "$rf" ]; then
       _re_is_authorized_skipped "$nazgul_dir" "$review_dir" "$reviewer" && continue
       echo "MISSING $reviewer"
       problems=$((problems + 1))
-    elif ! _has_approved_verdict "$review_dir/${reviewer}.md"; then
+      continue
+    fi
+    if ! _has_approved_verdict "$rf"; then
       _re_is_authorized_skipped "$nazgul_dir" "$review_dir" "$reviewer" && continue
       _re_is_authorized_unverified "$nazgul_dir" "$review_dir" "$reviewer" && continue
       echo "UNAPPROVED $reviewer"
       problems=$((problems + 1))
+    fi
+    # Receipt-hash check: only for a verdict that came from an actual
+    # dispatched-reviewer return (APPROVE/APPROVED/CHANGES_REQUESTED).
+    # SKIPPED/UNVERIFIED stubs are orchestrator-authored, never captured by
+    # TASK-002's SubagentStop hook, and are already exempted above via
+    # `continue` (authorized-skipped/authorized-unverified) or otherwise
+    # never match this case — so they never need or get a receipt.
+    if [ "$receipt_enforced" = "true" ]; then
+      case "$(read_verdict "$rf" 2>/dev/null)" in
+        APPROVE|APPROVED|CHANGES_REQUESTED)
+          if ! _re_receipt_matches "$nazgul_dir" "$unit" "$reviewer"; then
+            echo "RECEIPT_MISMATCH $reviewer"
+            problems=$((problems + 1))
+          fi
+          ;;
+      esac
     fi
   done <<< "$configured_reviewers"
 

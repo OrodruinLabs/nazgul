@@ -234,9 +234,12 @@ assert_contains "approval denied flagged unapproved" "$VAL_OUTPUT" "UNAPPROVED c
 teardown_temp_dir
 
 # --- Structured-verdict path + historical livelock regressions ---
+# receipt_hash_enforcement explicitly off here: this block tests the
+# frontmatter-verdict parsing path itself (TASK-009 is additive on top of
+# it), not receipt-hash matching — none of these fixtures carry a receipt.
 SS_DIR=$(mktemp -d)
 mkdir -p "$SS_DIR/reviews/TASK-900"
-printf '{"agents":{"reviewers":["code-reviewer"]}}' > "$SS_DIR/config.json"
+printf '{"agents":{"reviewers":["code-reviewer"]},"review_gate":{"receipt_hash_enforcement":false}}' > "$SS_DIR/config.json"
 
 # Structured APPROVE passes the gate
 printf -- '---\nverdict: APPROVE\nconfidence: 95\n---\nlooks good\n' > "$SS_DIR/reviews/TASK-900/code-reviewer.md"
@@ -654,6 +657,178 @@ jq -n '{unit:"TASK-001", feat_id:"FEAT-009", reviewers:[{name:"security-reviewer
 run_validate "TASK-001"
 assert_exit_code "resolved:true without persisted file: exit 1" "$VAL_EC" 1
 assert_contains "resolved:true without persisted file: still MISSING" "$VAL_OUTPUT" "MISSING security-reviewer"
+teardown_temp_dir
+
+# ===========================================================================
+# TASK-009 / LR-001 / ADR-005 Decision 4: receipt-hash content gate.
+#
+# Production shape (verified against agents/review-gate.md Step 2 item 4 and
+# scripts/subagent-stop.sh's `_record_reviewer_receipt`, not just assumed):
+# a dispatched reviewer's ENTIRE final message (frontmatter fences +
+# verdict/confidence + narrative, as authored) is what TASK-002's
+# SubagentStop hook hashes into nazgul/logs/review-receipts.jsonl. The
+# review-gate orchestrator then persists that SAME text to
+# reviews/<unit>/<reviewer>.md with exactly one line, `review_token: TOKEN`,
+# inserted into the frontmatter the reviewer authored — fences, verdict,
+# confidence, and the entire narrative body are otherwise untouched.
+#
+# templates/config.json ships review_gate.receipt_hash_enforcement: true
+# (TASK-003, schema v30), so create_config/setup_evidence_env already default
+# enforcement ON — no override needed for the "on" cases below.
+# ===========================================================================
+
+# Helper: hash text via the exact pattern both the capture side
+# (subagent-stop.sh: `final_text=$(jq -rs ...)`) and the gate side use — a
+# bash command substitution strips trailing newlines before the text ever
+# reaches _rp_sha256, so this is the correct baseline for both sides.
+_test_receipt_hash() {
+  printf '%s' "$1" | _rp_sha256
+}
+
+# Helper: simulate one full dispatched-reviewer cycle exactly as production
+# does it — a receipt for the reviewer's RAW returned text, and a persisted
+# file carrying that same text plus one orchestrator-inserted review_token
+# line.
+# Usage: write_dispatched_review <unit> <reviewer> <verdict> <narrative>
+#   [--no-receipt]   never write a review-receipts.jsonl line (reproduces a
+#                     receipt-less persisted verdict — the FEAT-016/TASK-005
+#                     fabrication shape: an invented verdict for a reviewer
+#                     that never actually completed)
+#   [--tamper]       persist DIFFERENT narrative than what was hashed into
+#                     the receipt (reproduces a rewritten/forged verdict)
+write_dispatched_review() {
+  local unit="$1" reviewer="$2" verdict="$3" narrative="$4"
+  shift 4
+  local no_receipt=false tamper=false
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --no-receipt) no_receipt=true ;;
+      --tamper) tamper=true ;;
+    esac
+    shift
+  done
+
+  local raw hash token persisted_narrative
+  raw=$(printf -- '---\nverdict: %s\nconfidence: 90\n---\n%s\n' "$verdict" "$narrative")
+  hash=$(_test_receipt_hash "$raw")
+  token="deadbeefcafef00d"
+
+  persisted_narrative="$narrative"
+  [ "$tamper" = true ] && persisted_narrative="${narrative} TAMPERED AFTER REVIEW."
+
+  mkdir -p "$TEST_DIR/nazgul/reviews/$unit"
+  printf -- '---\nverdict: %s\nconfidence: 90\nreview_token: %s\n---\n%s\n' \
+    "$verdict" "$token" "$persisted_narrative" \
+    > "$TEST_DIR/nazgul/reviews/$unit/${reviewer}.md"
+
+  if [ "$no_receipt" != true ]; then
+    mkdir -p "$TEST_DIR/nazgul/logs"
+    jq -cn --arg u "$unit" --arg r "$reviewer" --arg h "$hash" --arg ts "2026-07-23T00:00:00Z" \
+      '{unit:$u, reviewer:$r, hash:$h, ts:$ts}' \
+      >> "$TEST_DIR/nazgul/logs/review-receipts.jsonl"
+  fi
+}
+
+# --- Test 47: matching content — persisted body reconstructs to the exact
+# receipt hash (the orchestrator's review_token insertion is the ONLY diff
+# between the raw captured text and the persisted file) — passes clean ---
+setup_evidence_env "code-reviewer"
+write_dispatched_review "TASK-001" "code-reviewer" "APPROVE" "Looks good. No blocking issues found."
+run_validate "TASK-001"
+assert_exit_code "receipt match: exit 0" "$VAL_EC" 0
+assert_eq "receipt match: no output" "$VAL_OUTPUT" ""
+teardown_temp_dir
+
+# --- Test 48 (FEAT-016/TASK-005 reproduction): persisted body hash does NOT
+# match the captured receipt — RECEIPT_MISMATCH, not a silent pass ---
+setup_evidence_env "code-reviewer"
+write_dispatched_review "TASK-001" "code-reviewer" "APPROVE" "Looks good. No blocking issues found." --tamper
+run_validate "TASK-001"
+assert_exit_code "receipt mismatch: exit 1" "$VAL_EC" 1
+assert_contains "receipt mismatch: RECEIPT_MISMATCH line" "$VAL_OUTPUT" "RECEIPT_MISMATCH code-reviewer"
+teardown_temp_dir
+
+# --- Test 49 (FEAT-016/TASK-005 reproduction, other half): a persisted
+# APPROVE verdict with NO matching receipt at all — the receipt-less
+# fabrication shape — is ALSO RECEIPT_MISMATCH ---
+setup_evidence_env "code-reviewer"
+write_dispatched_review "TASK-001" "code-reviewer" "APPROVE" "Looks good. No blocking issues found." --no-receipt
+run_validate "TASK-001"
+assert_exit_code "receipt-less verdict: exit 1" "$VAL_EC" 1
+assert_contains "receipt-less verdict: RECEIPT_MISMATCH line" "$VAL_OUTPUT" "RECEIPT_MISMATCH code-reviewer"
+teardown_temp_dir
+
+# --- Test 50: review_gate.receipt_hash_enforcement: false — kill switch
+# reverts to existence+verdict-only behavior; a tampered, receipt-less body
+# is never flagged RECEIPT_MISMATCH ---
+setup_evidence_env "code-reviewer" '.review_gate.receipt_hash_enforcement = false'
+write_dispatched_review "TASK-001" "code-reviewer" "APPROVE" "Looks good. No blocking issues found." --tamper --no-receipt
+run_validate "TASK-001"
+assert_exit_code "enforcement off: exit 0" "$VAL_EC" 0
+assert_not_contains "enforcement off: never RECEIPT_MISMATCH" "$VAL_OUTPUT" "RECEIPT_MISMATCH"
+teardown_temp_dir
+
+# --- Test 51: a CHANGES_REQUESTED verdict is ALSO receipt-checked — tampered
+# content adds RECEIPT_MISMATCH alongside the existing UNAPPROVED problem
+# (additive, per the MISSING/UNAPPROVED pattern) ---
+setup_evidence_env "code-reviewer"
+write_dispatched_review "TASK-001" "code-reviewer" "CHANGES_REQUESTED" "Found a blocking issue in foo.sh." --tamper
+run_validate "TASK-001"
+assert_exit_code "changes_requested tampered: exit 1" "$VAL_EC" 1
+assert_contains "changes_requested tampered: still UNAPPROVED" "$VAL_OUTPUT" "UNAPPROVED code-reviewer"
+assert_contains "changes_requested tampered: also RECEIPT_MISMATCH" "$VAL_OUTPUT" "RECEIPT_MISMATCH code-reviewer"
+teardown_temp_dir
+
+# --- Test 52: an authorized SKIPPED stub is NEVER receipt-checked — it is
+# orchestrator-authored (no dispatch, no transcript, no receipt ever exists
+# for it), so requiring one would break every legitimate skip ---
+setup_evidence_env "code-reviewer qa-reviewer" '.review_gate.conditional_dispatch = true'
+write_review "TASK-001" "code-reviewer" "APPROVED"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf -- '---\nverdict: SKIPPED\nreview_token: deadbeefcafef00d\n---\nskipped: no tests changed\n' \
+  > "$TEST_DIR/nazgul/reviews/TASK-001/qa-reviewer.md"
+write_diff_patch "TASK-001" "src/app.py"
+write_manifest "TASK-001" "qa-reviewer:no tests changed"
+# Deliberately NO nazgul/logs/review-receipts.jsonl at all.
+run_validate "TASK-001"
+assert_exit_code "SKIPPED never receipt-checked: exit 0" "$VAL_EC" 0
+assert_not_contains "SKIPPED never receipt-checked: not RECEIPT_MISMATCH" "$VAL_OUTPUT" "RECEIPT_MISMATCH"
+teardown_temp_dir
+
+# --- Test 53: an authorized UNVERIFIED stub is likewise never receipt-
+# checked (same orchestrator-stub reasoning as SKIPPED) ---
+setup_evidence_env "code-reviewer"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf -- '---\nverdict: UNVERIFIED\nreview_token: deadbeefcafef00d\n---\nUnverified: timed out\n' \
+  > "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md"
+# Deliberately NO nazgul/logs/review-receipts.jsonl at all.
+run_validate "TASK-001"
+assert_exit_code "UNVERIFIED never receipt-checked: exit 0" "$VAL_EC" 0
+assert_not_contains "UNVERIFIED never receipt-checked: not RECEIPT_MISMATCH" "$VAL_OUTPUT" "RECEIPT_MISMATCH"
+teardown_temp_dir
+
+# --- Test 54: _re_reconstruct_pretoken_text unit check — a legacy file with
+# NO frontmatter fence passes through byte-for-byte unmodified (never had a
+# token inserted, so there is nothing to undo) ---
+setup_temp_dir
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf '# Code Review\n\n## Verdict: APPROVED\n\nLegacy body text.\n' > "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md"
+RECON_OUT=$(_re_reconstruct_pretoken_text "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md")
+ORIG_CONTENT=$(cat "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md")
+assert_eq "no-frontmatter file: reconstruction is identity" "$RECON_OUT" "$ORIG_CONTENT"
+teardown_temp_dir
+
+# --- Test 55: _re_reconstruct_pretoken_text strips ONLY a review_token line
+# strictly inside the frontmatter — a body line that happens to start with
+# "review_token:" is left alone, so injected body content can't hide from
+# the hash it's supposed to be part of ---
+setup_temp_dir
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf -- '---\nverdict: APPROVE\nconfidence: 90\nreview_token: deadbeefcafef00d\n---\nNarrative.\nreview_token: not-really-frontmatter\n' \
+  > "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md"
+RECON_OUT=$(_re_reconstruct_pretoken_text "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md")
+assert_contains "body review_token-like line preserved" "$RECON_OUT" "review_token: not-really-frontmatter"
+assert_not_contains "frontmatter review_token line removed" "$RECON_OUT" "deadbeefcafef00d"
 teardown_temp_dir
 
 report_results
