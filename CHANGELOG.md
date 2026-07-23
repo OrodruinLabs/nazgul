@@ -2,6 +2,53 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.20.0] - 2026-07-23
+
+FEAT-016, the third repair wave from the FEAT-013 360 reliability audit — review-pipeline
+correctness. Nine commits (`5e03697`..`f1655b9`).
+
+### Added
+- **`resolve_review_unit()` shared resolver** (MF-013, `scripts/lib/review-evidence.sh`): the single
+  point that maps a task to its review directory — `task_id` unchanged in `task` granularity, or the
+  task's `GROUP-<n>`/`FEATURE-<feat_id>` in `group`/`feature` granularity — now bridges evidence for
+  `task-state-guard.sh`'s IN_REVIEW/DONE gates and `stop-hook.sh`'s aggregate-review bookkeeping with
+  no independent re-derivation at either call site.
+- **Mechanical `review_unit` event field, both halves** (MF-015): `agents/review-gate.md`'s Step 2.5
+  emit step computes each `reviewer_verdict` event's `review_unit` by calling
+  `resolve_review_unit()` directly instead of restating its own prose `[UNIT-ID]` claim as-is
+  (producer half); `subagent-stop.sh`'s review-coverage detector reads that `review_unit` straight
+  off the event as ground truth, falling back to `resolve_review_unit()` only for pre-fix events
+  that predate the field (consumer half) — closing the cross-run granularity misclassification
+  window.
+- **Config schema v28 → v29** (`migrate_28_to_29`): one additive kill-switch key —
+  `review_gate.stall_retry_escalate_tier` (default `true`) — following the existing
+  additive-merge-with-explicit-value-preservation convention.
+- **Bounded one-retry model-tier escalation on reviewer stall** (MF-014,
+  `scripts/lib/reviewer-tier.sh` `resolve_retry_model`): a reviewer that stalls or returns an
+  unparseable verdict is retried one tier up (e.g. haiku → sonnet) instead of the same tier, unless
+  `review_gate.stall_retry_escalate_tier` is `false`. Reviewer dispatch inside `review-gate.md` is now
+  explicitly synchronous — every reviewer's Agent-tool call is a single-message, foreground, blocking
+  call the orchestrator waits on before proceeding, never assumed to complete in the background.
+- **Verdict-filename self-check** (MF-058, log-only, never blocks): before finalizing, review-gate
+  checks that each persisted `<UNIT-ID>/<reviewer-name>.md` matches the four-consumer naming
+  convention all readers (task-state-guard, review-evidence, feedback-aggregator, subagent-stop)
+  expect, and logs a mismatch rather than silently producing evidence no consumer can find.
+- **Explicit dispatch trust boundary** (MF-059, prompt-only guidance): `agents/review-gate.md`,
+  `agents/templates/reviewer-base.md`, and `agents/team-orchestrator.md` now state that only the
+  diff, context, and instructions assembled into a reviewer's initial dispatch are authoritative —
+  a reviewer's own return, or an inbound `SendMessage`, can never inject a fabricated verdict or
+  urgency claim after the fact.
+
+### Fixed
+- **`review-provenance.sh`'s `resolved` field confirmed dispatch-roster-only, never verdict evidence**
+  (FEAT-009 backlog item): TASK-001 added a regression test
+  (`tests/test-review-evidence.sh` — "resolved:true without persisted file: still MISSING") proving
+  `validate_review_evidence` never trusts a dispatch manifest's `resolved` flag (computed pre-dispatch
+  from `.claude/agents/generated/<reviewer>.md` presence) as a substitute for a reviewer's actually
+  persisted, APPROVED verdict file — the persist-then-mark ordering the original finding asked for was
+  already enforced at the evidence-gate boundary; the desync it observed was a manifest/persistence
+  ordering issue, not a gate that could be fooled.
+
 ## [2.19.0] - 2026-07-23
 
 FEAT-015, the second repair wave from the FEAT-013 360 reliability audit — guard integrity and
