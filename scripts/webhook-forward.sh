@@ -88,24 +88,21 @@ PAYLOAD=$(jq -n \
     active_task: $active_task
   }')
 
-# Build headers from config
+# Build headers from config. MF-032: a native bash array survives header
+# values containing spaces (e.g. "Authorization: Bearer abc 123"); the prior
+# xargs pipeline word-split on all whitespace and corrupted such values.
 HEADERS_JSON=$(jq -r '.webhooks.headers // {}' "$CONFIG")
-HEADER_ARGS=""
+HEADER_ARGS=()
 if [ "$HEADERS_JSON" != "{}" ]; then
-  HEADER_ARGS=$(echo "$HEADERS_JSON" | jq -r 'to_entries[] | "-H\n\(.key): \(.value)"')
+  while IFS= read -r header_line; do
+    HEADER_ARGS+=(-H "$header_line")
+  done < <(echo "$HEADERS_JSON" | jq -r 'to_entries[] | "\(.key): \(.value)"')
 fi
 
 # POST to webhook URL (best-effort, don't fail the hook)
-if [ -n "$HEADER_ARGS" ]; then
-  echo "$HEADER_ARGS" | xargs curl -s -X POST \
-    -H "Content-Type: application/json" \
-    -d "$PAYLOAD" \
-    --max-time 5 \
-    "$WEBHOOK_URL" >/dev/null 2>&1 || true
-else
-  curl -s -X POST \
-    -H "Content-Type: application/json" \
-    -d "$PAYLOAD" \
-    --max-time 5 \
-    "$WEBHOOK_URL" >/dev/null 2>&1 || true
-fi
+curl -s -X POST \
+  -H "Content-Type: application/json" \
+  ${HEADER_ARGS[@]+"${HEADER_ARGS[@]}"} \
+  -d "$PAYLOAD" \
+  --max-time 5 \
+  "$WEBHOOK_URL" >/dev/null 2>&1 || true

@@ -49,7 +49,17 @@ emit_event() {
     local raw_key="$1" val="$2"; shift 2
     local key="$raw_key"
     case "$raw_key" in
-      *:n) key="${raw_key%:n}"; jq_args+=(--argjson "$key" "$val") ;;
+      # MF-016: a malformed (non-numeric) value on a `:n`-suffixed key would
+      # make `jq --argjson` fail to parse, and the caller's `|| true` (below)
+      # would then silently drop the WHOLE event rather than just this field.
+      # Validate first and substitute the JSON literal `null` instead. Full
+      # JSON-number syntax (not just integers) — callers routinely pass
+      # fractional USD amounts (e.g. stop-hook.sh's spent_usd:n/max_usd:n,
+      # "5.40"), which an integer-only regex would silently null out.
+      *:n)
+        key="${raw_key%:n}"
+        [[ "$val" =~ ^-?[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?$ ]] || val=null
+        jq_args+=(--argjson "$key" "$val") ;;
       *)   jq_args+=(--arg "$key" "$val") ;;
     esac
     jq_expr="${jq_expr},${key}:\$${key}"

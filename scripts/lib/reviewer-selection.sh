@@ -43,10 +43,15 @@ _nrs_is_doc_file() {
 _nrs_is_architecture_surface() {
   case "$1" in
     skills/*|agents/*|scripts/*|hooks/*) return 0 ;;
-    # Config SCHEMA files only (per the documented policy) — the plugin's config
-    # template + any config.json / *.schema.json. NOT any *config*.json (that would
-    # pull architect onto unrelated files like tsconfig.json / jest.config.json).
-    templates/config.json|config.json|*/config.json|*.schema.json) return 0 ;;
+    # MF-021: the plugin's actual architecture surface also includes shared
+    # templates/reference docs, CI workflows, and the two root governance
+    # files — all explicitly in-scope per this audit's own TRD.
+    templates/*|references/*|.github/workflows/*|RULES.md|CLAUDE.md) return 0 ;;
+    # Config SCHEMA files only (per the documented policy) — any config.json /
+    # *.schema.json. NOT any *config*.json (that would pull architect onto
+    # unrelated files like tsconfig.json / jest.config.json). templates/*
+    # above already covers templates/config.json.
+    config.json|*/config.json|*.schema.json) return 0 ;;
     *) return 1 ;;
   esac
 }

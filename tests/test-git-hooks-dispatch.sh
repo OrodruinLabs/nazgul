@@ -8,10 +8,31 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/assertions.sh"
 source "$SCRIPT_DIR/lib/setup.sh"
+# shellcheck source=../scripts/lib/git-hooks.sh
+source "$REPO_ROOT/scripts/lib/git-hooks.sh"
 
 echo "=== $TEST_NAME ==="
 
 DISPATCH="$REPO_ROOT/scripts/git-hooks/_dispatch.sh"
+
+# init_repo/write_config: same minimal helpers as test-git-hooks-install.sh,
+# needed here for the MF-036 install_git_hooks/self_heal_git_hooks coverage
+# (this file's original scope was _dispatch.sh only).
+init_repo() {
+  local repo="$1" branch="${2:-main}"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email "t@t.t"
+  git -C "$repo" config user.name "t"
+  git -C "$repo" checkout -q -b "$branch"
+  git -C "$repo" commit -q --allow-empty -m "init"
+}
+
+write_config() {
+  local repo="$1" json="$2"
+  mkdir -p "$repo/nazgul"
+  printf '%s' "$json" > "$repo/nazgul/config.json"
+}
 
 # Fixture prior hook: logs its argv, captures stdin, exits with $2.
 make_fixture_hook() {
@@ -181,6 +202,59 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" run_dispatch "../passwd" < /dev/null
 EC=$?
 assert_exit_code "trust boundary: path traversal in hook_name -> no-op exit 0" "$EC" 0
 assert_file_not_exists "trust boundary: traversal target never executed" "$TEST_DIR/dispatch.log"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# MF-036 (p4-*): all four git-p4 hook names are recognized by
+# _GH_OTHER_HOOKS and get real dispatcher shims installed, same as any other
+# standard githooks(5) name.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" '{"branch":{"base":"main","feature":"feat/x"},"guards":{"git_hooks":true}}'
+install_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
+for p4hook in p4-changelist p4-prepare-changelist p4-post-changelist p4-pre-submit; do
+  case " ${_GH_OTHER_HOOKS[*]} " in
+    *" $p4hook "*) _pass "MF-036: _GH_OTHER_HOOKS includes $p4hook" ;;
+    *) _fail "MF-036: _GH_OTHER_HOOKS includes $p4hook" "not found in: ${_GH_OTHER_HOOKS[*]}" ;;
+  esac
+  assert_file_exists "MF-036: install_git_hooks creates a $p4hook shim" "$TEST_DIR/repo/nazgul/.githooks/$p4hook"
+done
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# MF-036 (two-sided drift, non-flagged case): live core.hooksPath matches the
+# RECORDED PRIOR value exactly (e.g. an uninstall ran without Nazgul's
+# knowledge, restoring the pre-install setting) — self_heal_git_hooks still
+# reasserts the managed dir, but does NOT emit the "matches neither" drift
+# warning, since this is a recognized (not a surprising third) value.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" '{"branch":{"base":"main","feature":"feat/x","prior_hooks_path":".husky"},"guards":{"git_hooks":true}}'
+git -C "$TEST_DIR/repo" config core.hooksPath ".husky"
+HEAL_OUT=$(self_heal_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json" 2>&1)
+HEALED=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
+assert_eq "MF-036: current==recorded-prior still reasserts managed dir" "$HEALED" "nazgul/.githooks"
+assert_not_contains "MF-036: current==recorded-prior does NOT warn (recognized value)" "$HEAL_OUT" "matches neither"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# MF-036 (two-sided drift, flagged case): live core.hooksPath matches NEITHER
+# the managed dir NOR the recorded prior value — a genuine third value (e.g.
+# the user switched to a different hooks manager mid-cycle). self_heal_
+# git_hooks must flag this with a loud warning AND still reassert the
+# managed dir (the guard keeps firing regardless).
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" '{"branch":{"base":"main","feature":"feat/x","prior_hooks_path":""},"guards":{"git_hooks":true}}'
+git -C "$TEST_DIR/repo" config core.hooksPath ".lefthook"
+HEAL_OUT2=$(self_heal_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json" 2>&1)
+HEALED2=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
+assert_eq "MF-036: third-value drift still reasserts managed dir" "$HEALED2" "nazgul/.githooks"
+assert_contains "MF-036: third-value drift is flagged with a warning" "$HEAL_OUT2" "matches neither"
+assert_contains "MF-036: drift warning names the surprising value" "$HEAL_OUT2" ".lefthook"
 teardown_temp_dir
 
 report_results
