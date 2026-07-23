@@ -13,8 +13,10 @@ if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
-# Read the user's prompt from hook input
-USER_PROMPT="${CLAUDE_HOOK_USER_PROMPT:-}"
+# Read the user's prompt from the UserPromptSubmit stdin JSON envelope
+# ({"prompt":"...", ...}), mirroring pre-tool-guard.sh's stdin extraction.
+STDIN_JSON=$(cat 2>/dev/null || echo "")
+USER_PROMPT=$(printf '%s' "$STDIN_JSON" | jq -r '.prompt // empty' 2>/dev/null || echo "")
 
 # If no prompt content available, allow
 if [ -z "$USER_PROMPT" ]; then
