@@ -1,5 +1,5 @@
 {
-  "schema_version": 27,
+  "schema_version": 28,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -98,7 +98,8 @@
       "auto_start": {
         "mode": "yolo",
         "parallel": true
-      }
+      },
+      "lock_stale_seconds": 300
     }
   },
   "connectors": {
@@ -143,7 +144,8 @@
     "requireActiveTask": true,
     "lean_comments": true,
     "max_consecutive_comment_lines": 2,
-    "git_hooks": true
+    "git_hooks": true,
+    "bash_write_reconciliation": true
   },
   "safety": {
     "block_destructive_commands": true,

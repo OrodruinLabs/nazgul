@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "27"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "28"
 assert_json_field "review_gate.simplify_before_review default false" "$CONFIG" ".review_gate.simplify_before_review" "false"
 assert_json_field "review_gate.enforce_granularity default block" "$CONFIG" ".review_gate.enforce_granularity" "block"
 assert_json_field "has .default_mode" "$CONFIG" ".default_mode" "null"
@@ -206,5 +206,9 @@ assert_json_field "v26 auto_start.engine no longer exists" "$CONFIG" '.automatio
 
 # v27 new defaults (Teammate Report Contract: TeammateIdle guard kill-switch, default on)
 assert_json_field "v27 execution.enforce.teammate_report_guard is true" "$CONFIG" ".execution.enforce.teammate_report_guard" "true"
+
+# v28 new defaults (Reliability Wave 2: guard-hardening kill switches, both default on)
+assert_json_field "v28 guards.bash_write_reconciliation is true" "$CONFIG" ".guards.bash_write_reconciliation" "true"
+assert_json_field "v28 automation.heartbeat.lock_stale_seconds is 300" "$CONFIG" ".automation.heartbeat.lock_stale_seconds" "300"
 
 report_results
