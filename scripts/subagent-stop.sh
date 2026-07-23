@@ -21,6 +21,9 @@ CONFIG="$NAZGUL_DIR/config.json"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/emit-event.sh"
+# review-evidence.sh: source of resolve_review_unit(), the single shared
+# fallback resolver for pre-fix events (MF-015; ADR-004 Decision 1).
+source "$SCRIPT_DIR/lib/review-evidence.sh"
 
 # Best-effort extraction of an agent identifier; default to "unknown".
 AGENT="unknown"
@@ -46,33 +49,32 @@ _record_review_coverage() {
   local ts; ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   local iteration="${CURRENT_ITERATION:-null}"
 
-  local granularity feat_id cur_iter
-  granularity=$(jq -r '.review_gate.granularity // "task"' "$CONFIG" 2>/dev/null || echo "task")
-  case "$granularity" in task|group|feature) ;; *) granularity="task" ;; esac
+  local feat_id cur_iter
   feat_id=$(jq -r '.feat_id // "default"' "$CONFIG" 2>/dev/null || echo "default")
   cur_iter=$(jq -r '.current_iteration // "null"' "$CONFIG" 2>/dev/null || echo "null")
 
-  # Collect distinct task_ids for THIS review run's reviewer_verdict events.
-  # Scope to the current iteration when known — this isolates the current review
-  # from prior runs whose verdicts may still sit in the log tail (the cause of
+  # Collect THIS review run's reviewer_verdict events (not just task_ids) —
+  # ground truth for review_unit lives on the event itself (MF-015). Scope to
+  # the current iteration when known — this isolates the current review from
+  # prior runs whose verdicts may still sit in the log tail (the cause of
   # cross-run granularity misclassification). Fall back to the recent tail when
   # the iteration is unknown, so the detector never silently stops recording.
-  local task_ids
+  local verdict_events
   if [ "$cur_iter" != "null" ] && [ -n "$cur_iter" ]; then
-    task_ids=$(tail -400 "$events_file" \
-      | jq -r --argjson it "$cur_iter" 'select(.event == "reviewer_verdict" and .iteration == $it) | .task_id' 2>/dev/null \
-      | sort -u | grep -v '^$' | grep -v '^null$' || true)
+    verdict_events=$(tail -400 "$events_file" \
+      | jq -c --argjson it "$cur_iter" 'select(.event == "reviewer_verdict" and .iteration == $it)' 2>/dev/null || true)
   fi
-  if [ -z "${task_ids:-}" ]; then
-    task_ids=$(tail -200 "$events_file" \
-      | jq -r 'select(.event == "reviewer_verdict") | .task_id' 2>/dev/null \
-      | sort -u | grep -v '^$' | grep -v '^null$' || true)
+  if [ -z "${verdict_events:-}" ]; then
+    verdict_events=$(tail -200 "$events_file" \
+      | jq -c 'select(.event == "reviewer_verdict")' 2>/dev/null || true)
   fi
 
+  [ -n "${verdict_events:-}" ] || return 0
+
+  local task_ids
+  task_ids=$(printf '%s\n' "$verdict_events" \
+    | jq -r '.task_id' 2>/dev/null | sort -u | grep -v '^$' | grep -v '^null$' || true)
   [ -n "$task_ids" ] || return 0
-
-  local task_count
-  task_count=$(printf '%s\n' "$task_ids" | wc -l | tr -d ' ')
 
   mkdir -p "${coverage_file%/*}"
 
@@ -83,22 +85,23 @@ _record_review_coverage() {
       *) continue ;;
     esac
 
+    # Ground truth first: read review_unit directly off this task's
+    # reviewer_verdict event(s) when the emitting review-gate contract
+    # provides it. Only pre-fix events (no review_unit field) fall back to
+    # the shared resolver — no independent group/feature re-derivation here
+    # (ADR-004 Decision 1: resolve_review_unit is the single source).
     local review_unit granularity_used
-    if [ "$task_count" -eq 1 ]; then
-      review_unit="$task_id"
-      granularity_used="task"
-    elif [ "$granularity" = "feature" ]; then
-      local feat_id
-      feat_id=$(jq -r '.feat_id // "FEATURE"' "$CONFIG" 2>/dev/null || echo "FEATURE")
-      review_unit="FEATURE-${feat_id}"
-      granularity_used="feature"
-    else
-      local group
-      group=$(grep "^\*\*Group\*\*:\|^- \*\*Group\*\*:" "$NAZGUL_DIR/tasks/${task_id}.md" 2>/dev/null \
-        | grep -oE '[0-9]+' | head -1 || echo "1")
-      review_unit="GROUP-${group}"
-      granularity_used="group"
+    review_unit=$(printf '%s\n' "$verdict_events" \
+      | jq -r --arg tid "$task_id" 'select(.task_id == $tid) | .review_unit // empty' 2>/dev/null \
+      | grep -v '^$' | tail -1 || true)
+    if [ -z "$review_unit" ]; then
+      review_unit=$(resolve_review_unit "$NAZGUL_DIR" "$task_id")
     fi
+    case "$review_unit" in
+      GROUP-*) granularity_used="group" ;;
+      FEATURE-*) granularity_used="feature" ;;
+      *) granularity_used="task" ;;
+    esac
 
     local iter_json
     if [ "$iteration" = "null" ] || [ -z "$iteration" ]; then

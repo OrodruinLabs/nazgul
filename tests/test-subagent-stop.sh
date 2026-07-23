@@ -20,6 +20,16 @@ _seed_events() {
   done
 }
 
+# Seeds one reviewer_verdict event carrying an explicit review_unit field —
+# the post-fix emit contract (TASK-004) the coverage detector must read
+# directly instead of inferring.
+_seed_event_with_unit() {
+  local events_file="$1" task_id="$2" review_unit="$3"
+  mkdir -p "$(dirname "$events_file")"
+  printf '{"sv":1,"ts":"2026-01-01T00:00:00Z","event":"reviewer_verdict","task_id":"%s","review_unit":"%s","reviewer":"code-reviewer","decision":"APPROVE","confidence":95,"iteration":3}\n' \
+    "$task_id" "$review_unit" >> "$events_file"
+}
+
 # --- Test 1: review-gate subagent with one reviewer_verdict writes coverage record ---
 setup_temp_dir
 setup_nazgul_dir
@@ -159,7 +169,75 @@ while IFS= read -r line; do
 done < "$TEST_DIR/nazgul/logs/review-coverage.jsonl"
 teardown_temp_dir
 
-# --- Test 9: bash -n + shellcheck on subagent-stop.sh ---
+# --- Test 9: event carrying review_unit "GROUP-1" is read directly (ground
+# truth), not dropped by the unchanged TASK-[0-9]* task_id filter, and
+# granularity_used is sourced from the event rather than inferred ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+_seed_event_with_unit "$TEST_DIR/nazgul/logs/events.jsonl" "TASK-001" "GROUP-1"
+
+HOOK_INPUT='{"subagent_type":"review-gate"}'
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "ground-truth review_unit: exits 0" "$rc" "0"
+assert_file_exists "ground-truth review_unit: coverage file created" \
+  "$TEST_DIR/nazgul/logs/review-coverage.jsonl"
+coverage_line=$(tail -1 "$TEST_DIR/nazgul/logs/review-coverage.jsonl")
+assert_contains "ground-truth review_unit: task_id not dropped" "$coverage_line" '"task_id":"TASK-001"'
+assert_contains "ground-truth review_unit: review_unit is GROUP-1 from event" "$coverage_line" '"review_unit":"GROUP-1"'
+assert_contains "ground-truth review_unit: granularity_used is group (sourced from event)" \
+  "$coverage_line" '"granularity_used":"group"'
+teardown_temp_dir
+
+# --- Test 10: event carrying review_unit "FEATURE-FEAT-999" is read directly
+# even though config granularity says "task" — ground truth wins over config
+# inference ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+_seed_event_with_unit "$TEST_DIR/nazgul/logs/events.jsonl" "TASK-002" "FEATURE-FEAT-999"
+
+HOOK_INPUT='{"subagent_type":"review-gate"}'
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "ground-truth feature unit: exits 0" "$rc" "0"
+coverage_line=$(tail -1 "$TEST_DIR/nazgul/logs/review-coverage.jsonl")
+assert_contains "ground-truth feature unit: review_unit is FEATURE-FEAT-999" \
+  "$coverage_line" '"review_unit":"FEATURE-FEAT-999"'
+assert_contains "ground-truth feature unit: granularity_used is feature" \
+  "$coverage_line" '"granularity_used":"feature"'
+teardown_temp_dir
+
+# --- Test 11: mixed run — one task's event carries review_unit (ground truth
+# wins, no fallback call), the other task's event is pre-fix (no review_unit
+# field, falls back to resolve_review_unit reading the task manifest's Group
+# field) — both resolve correctly in the same review-gate invocation ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"group"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+_seed_event_with_unit "$TEST_DIR/nazgul/logs/events.jsonl" "TASK-001" "GROUP-5"
+_seed_events "$TEST_DIR/nazgul/logs/events.jsonl" "TASK-002"
+mkdir -p "$TEST_DIR/nazgul/tasks"
+printf -- '---\nstatus: IMPLEMENTED\n---\n# TASK-002\n- **Group**: 2\n' \
+  > "$TEST_DIR/nazgul/tasks/TASK-002.md"
+
+HOOK_INPUT='{"subagent_type":"review-gate"}'
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "mixed pre/post-fix events: exits 0" "$rc" "0"
+line_count=$(wc -l < "$TEST_DIR/nazgul/logs/review-coverage.jsonl" | tr -d ' ')
+assert_eq "mixed pre/post-fix events: two records written" "$line_count" "2"
+task001_line=$(grep '"task_id":"TASK-001"' "$TEST_DIR/nazgul/logs/review-coverage.jsonl")
+task002_line=$(grep '"task_id":"TASK-002"' "$TEST_DIR/nazgul/logs/review-coverage.jsonl")
+assert_contains "mixed: TASK-001 uses event's GROUP-5 (ground truth)" "$task001_line" '"review_unit":"GROUP-5"'
+assert_contains "mixed: TASK-002 falls back to resolver's GROUP-2 (manifest field)" "$task002_line" '"review_unit":"GROUP-2"'
+teardown_temp_dir
+
+# --- Test 12: bash -n + shellcheck on subagent-stop.sh ---
 bash -n "$HOOK" 2>/dev/null \
   && _pass "bash -n clean: subagent-stop.sh" \
   || _fail "bash -n clean: subagent-stop.sh" "syntax error detected"
