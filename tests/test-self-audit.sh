@@ -274,4 +274,43 @@ T17RESULT=$(unset CLAUDE_CONFIG_DIR; HOME="$T17FAKEHOME" call_transcripts_dir "$
 assert_eq "T17: ambiguous glob degrades to computed expected path" "$T17RESULT" \
   "$T17FAKEHOME/.claude/projects/$T17SLUG"
 
+# --- Test 18: MF-047 -- teammate spawn/manifest discrepancy surfaced when
+# fewer dispatch manifests exist than logged spawns (N=3 logged, M=1 manifest) ---
+ROOT=$(mk_project "t18")
+mkdir -p "$ROOT/nazgul/logs" "$ROOT/nazgul/dispatch"
+cat > "$ROOT/nazgul/logs/team-orchestrator.jsonl" << 'EOF'
+{"event":"teammate_spawned","session":"nazgul-code-reviewer-TASK-001"}
+{"event":"teammate_spawned","session":"nazgul-qa-reviewer-TASK-001"}
+{"event":"teammate_spawned","session":"nazgul-architect-reviewer-TASK-001"}
+EOF
+printf '{}' > "$ROOT/nazgul/dispatch/nazgul-code-reviewer-TASK-001.json"
+run_self_audit "$ROOT/nazgul"
+assert_exit_code "T18: exits 0" "$SA_EC" 0
+assert_contains "T18: discrepancy finding surfaced (3 spawned vs 1 manifest)" \
+  "$(cat "$ROOT/nazgul/improvements.md")" \
+  "Teammate spawn/manifest discrepancy: 3 logged spawn(s), 1 dispatch manifest(s)"
+
+# --- Test 19: MF-047 -- no discrepancy when manifest count meets/exceeds
+# logged spawns (N=2 logged, M=2 manifests) -> no finding, no false positive ---
+ROOT=$(mk_project "t19")
+mkdir -p "$ROOT/nazgul/logs" "$ROOT/nazgul/dispatch"
+cat > "$ROOT/nazgul/logs/team-orchestrator.jsonl" << 'EOF'
+{"event":"teammate_spawned","session":"nazgul-code-reviewer-TASK-002"}
+{"event":"teammate_spawned","session":"nazgul-qa-reviewer-TASK-002"}
+EOF
+printf '{}' > "$ROOT/nazgul/dispatch/nazgul-code-reviewer-TASK-002.json"
+printf '{}' > "$ROOT/nazgul/dispatch/nazgul-qa-reviewer-TASK-002.json"
+run_self_audit "$ROOT/nazgul"
+assert_exit_code "T19: exits 0" "$SA_EC" 0
+assert_file_not_contains "T19: no discrepancy finding when manifests cover spawns" \
+  "$ROOT/nazgul/improvements.md" "Teammate spawn/manifest discrepancy"
+
+# --- Test 20: MF-047 -- no teammate_spawned events logged at all -> no-op,
+# no finding (today's reality: nothing emits this event yet) ---
+ROOT=$(mk_project "t20")
+run_self_audit "$ROOT/nazgul"
+assert_exit_code "T20: exits 0" "$SA_EC" 0
+assert_file_not_contains "T20: no discrepancy finding with zero logged spawns" \
+  "$ROOT/nazgul/improvements.md" "Teammate spawn/manifest discrepancy"
+
 report_results
