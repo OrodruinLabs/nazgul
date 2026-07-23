@@ -39,10 +39,13 @@ check_pattern() {
   fi
 }
 
-# Filesystem destruction
-check_pattern 'rm\s+-rf\s+/' "Recursive delete of root filesystem"
-check_pattern 'rm\s+-rf\s+~' "Recursive delete of home directory"
-check_pattern 'rm\s+-rf\s+\$HOME' "Recursive delete of home directory"
+# Filesystem destruction. Anchored on a boundary (whitespace/end/;/&/|) after the
+# target so `rm -rf /tmp/x` and other legitimate absolute-path deletions are
+# allowed (MF-027) while the bare root, ~, and $HOME forms stay blocked.
+check_pattern 'rm\s+-rf\s+/(\s|$|;|&|\|)' "Recursive delete of root filesystem"
+check_pattern 'rm\s+-rf\s+/root(\s|$|;|&|\|)' "Recursive delete of root user home directory"
+check_pattern 'rm\s+-rf\s+~(\s|$|;|&|\|)' "Recursive delete of home directory"
+check_pattern 'rm\s+-rf\s+\$HOME(\s|$|;|&|\|)' "Recursive delete of home directory"
 check_pattern 'rm\s+-rf\s+\.\s*$' "Recursive delete of current directory"
 
 # Database destruction
@@ -50,9 +53,23 @@ check_pattern 'DROP\s+TABLE' "SQL table drop"
 check_pattern 'DROP\s+DATABASE' "SQL database drop"
 check_pattern 'TRUNCATE' "SQL table truncation"
 
-# Git force push to protected branches
-check_pattern 'git\s+push\s+.*--force.*\s+(main|master)' "Force push to main/master branch"
-check_pattern 'git\s+push\s+-f\s+.*\s+(main|master)' "Force push to main/master branch"
+# Git force push to protected branches (MF-028). The force flag and the branch
+# name can appear in either order (`git push origin main --force` is as idiomatic
+# as `git push --force origin main`), so this ANDs two independent presence checks
+# within one `git push` segment instead of matching one fixed ordering.
+check_force_push() {
+  local segment
+  while IFS= read -r segment; do
+    if echo "$segment" | grep -qiE 'git\s+push' \
+      && echo "$segment" | grep -qiE '(^|\s)(--force|-f)(\s|$)' \
+      && echo "$segment" | grep -qiE '(^|\s)(main|master)(\s|$)'; then
+      echo "NAZGUL SAFETY: Blocked — Force push to main/master branch" >&2
+      echo "Command contained: git push with --force/-f targeting main/master" >&2
+      exit 2
+    fi
+  done < <(printf '%s\n' "$CMD" | sed -E 's/(\&\&|\|\||;|\|)/\n/g')
+}
+check_force_push
 
 # Fork bombs and system destruction
 check_pattern ':\(\)\{' "Fork bomb"
@@ -70,27 +87,33 @@ check_pattern 'sed.*nazgul/tasks/TASK-.*Status' "Direct sed on task manifest sta
 check_pattern 'cat.*>.*nazgul/tasks/TASK-' "Direct cat redirect to task manifest (use Write/Edit tools)"
 check_pattern 'tee.*nazgul/tasks/TASK-' "Direct tee to task manifest (use Write/Edit tools)"
 
-# Task manifest write protection for echo/printf: a segment is blocked when it BOTH
-# invokes echo/printf AND has a REAL redirect operator (>, >>, >|, >>| outside quotes)
-# whose target resolves to a nazgul/tasks/TASK-*.md path — in either order, so a leading
-# redirect (`> nazgul/tasks/TASK-001.md echo ok`) is caught too. The awk tokenizer tracks
-# single/double-quote state (a > inside quotes is data, not a redirect) and reconstructs
-# the full shell word from adjacent quoted+unquoted fragments, so a split target like
-# `> "nazgul/tasks/"TASK-001.md` rejoins to one path before validation. Compound commands
-# (;, &&, ||, |, newline outside quotes) reset per-segment state so each segment is checked
-# independently. Scoped to echo/printf; sed/cat/tee rules above handle those separately.
+# Task manifest write protection: a segment is blocked when it EITHER (a) invokes
+# echo/printf AND has a REAL redirect operator (>, >>, >|, >>| outside quotes) whose
+# target resolves to a nazgul/tasks/TASK-*.md path — in either order, so a leading
+# redirect (`> nazgul/tasks/TASK-001.md echo ok`) is caught too — OR (b) invokes
+# mv/cp with a manifest path as its final non-flag argument (MF-022 funnel; the
+# common `mv/cp SRC nazgul/tasks/TASK-NNN.md` forgery shape). The awk tokenizer
+# tracks single/double-quote state (a > inside quotes is data, not a redirect) and
+# reconstructs the full shell word from adjacent quoted+unquoted fragments, so a
+# split target like `> "nazgul/tasks/"TASK-001.md` rejoins to one path before
+# validation. Compound commands (;, &&, ||, |, newline outside quotes) reset
+# per-segment state so each segment is checked independently. Scoped to
+# echo/printf/mv/cp; sed/cat/tee rules above handle those separately.
 #
 # Defense-in-depth note: primary protection is the Write/Edit tool hooks and
-# task-state guard. This is a best-effort secondary layer. fd-numbered and combined
-# redirects (1>, 2>, &>, 2>&1) ARE handled. Deeply exotic shell forms (process
-# substitution, eval'd strings, nested subshells, command substitution) are out of
-# scope by design and degrade to allow.
-_check_echo_redirect() {
+# task-state guard. This is a best-effort secondary layer — the structural fix for
+# MF-022 is the stop-hook-time recompute-and-compare reconciliation (ADR-003
+# Decision 2), not this funnel. fd-numbered and combined redirects (1>, 2>, &>,
+# 2>&1) ARE handled. Deeply exotic shell forms (process substitution, eval'd
+# strings, nested subshells, command substitution) are out of scope by design and
+# degrade to allow.
+_check_manifest_write_funnel() {
   printf '%s' "$CMD" | awk '
 BEGIN {
   in_sq = 0; in_dq = 0; tok = ""; found_cmd = 0
   redirect_pending = 0; found = 0; fd_target_pending = 0
   seg_has_cmd = 0; seg_writes_manifest = 0
+  seg_is_mv_cp = 0; mv_cp_target = ""
 }
 
 function is_manifest_path(t) {
@@ -117,26 +140,33 @@ function flush_tok(    t) {
     redirect_pending = 0
     return
   }
+  # mv/cp arguments: track the last non-flag word as the candidate destination
+  # (the common `mv/cp SRC DEST` shape — DEST is whatever word came last).
+  if (seg_is_mv_cp && t !~ /^-/) mv_cp_target = t
   if (!found_cmd) {
     # Leading VAR=value env assignments precede the command word in bash — skip
-    # them so a later echo/printf is still recognised as the command.
+    # them so a later echo/printf/mv/cp is still recognised as the command.
     if (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/) return
     found_cmd = 1
     if (t == "echo" || t == "printf") seg_has_cmd = 1
+    if (t == "mv" || t == "cp") seg_is_mv_cp = 1
   }
 }
 
-# A segment blocks when it BOTH invokes echo/printf AND redirects into a manifest,
-# in either order (handles leading redirects).
+# A segment blocks when it either (a) invokes echo/printf AND redirects into a
+# manifest, in either order (handles leading redirects), or (b) invokes mv/cp with
+# a manifest path as the final argument.
 function end_segment() {
   flush_tok()
   if (seg_has_cmd && seg_writes_manifest) found = 1
+  if (seg_is_mv_cp && is_manifest_path(mv_cp_target)) found = 1
 }
 
 function reset_segment() {
   end_segment()
   found_cmd = 0; redirect_pending = 0; fd_target_pending = 0
   seg_has_cmd = 0; seg_writes_manifest = 0
+  seg_is_mv_cp = 0; mv_cp_target = ""
 }
 
 {
@@ -216,13 +246,13 @@ END { exit (found ? 2 : 0) }
 '
 }
 
-# Block ONLY on the specific "found a manifest redirect" signal (awk exit 2).
-# Any other non-zero (e.g. an awk runtime error) degrades to allow, per the
+# Block ONLY on the specific "found a manifest write" signal (awk exit 2). Any
+# other non-zero (e.g. an awk runtime error) degrades to allow, per the
 # defense-in-depth contract — the guard never blocks on its own malfunction.
-echo_redirect_ec=0
-_check_echo_redirect || echo_redirect_ec=$?
-if [ "$echo_redirect_ec" -eq 2 ]; then
-  echo "NAZGUL SAFETY: Blocked — Direct echo/printf redirect to task manifest (use Write/Edit tools)" >&2
+manifest_funnel_ec=0
+_check_manifest_write_funnel || manifest_funnel_ec=$?
+if [ "$manifest_funnel_ec" -eq 2 ]; then
+  echo "NAZGUL SAFETY: Blocked — Direct write to task manifest via Bash (use Write/Edit tools)" >&2
   echo "Command: $CMD" >&2
   exit 2
 fi
