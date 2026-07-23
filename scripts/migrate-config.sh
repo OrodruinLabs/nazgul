@@ -597,6 +597,19 @@ migrate_27_to_28() {
   log_migration "v27→v28: added guards.bash_write_reconciliation:true (stop-hook recompute-and-compare kill switch) and automation.heartbeat.lock_stale_seconds:300 (heartbeat claim-lock staleness) (additive; explicit values incl. false/non-default preserved)"
 }
 
+migrate_28_to_29() {
+  local tmp; tmp=$(mktemp)
+  # Reliability Wave 3: additive kill-switch for TASK-004's Bundle 2 model-tier
+  # escalation on a reviewer's bounded stall/malformed-return retry. Explicit
+  # values (incl. false) preserved; non-object review_gate clamped.
+  jq '
+    .review_gate = ((if (.review_gate | type) == "object" then .review_gate else {} end)
+      | .stall_retry_escalate_tier = (if has("stall_retry_escalate_tier") then .stall_retry_escalate_tier else true end))
+    | .schema_version = 29
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v28→v29: added review_gate.stall_retry_escalate_tier:true (model-tier escalation on a reviewer's bounded stall/malformed-return retry kill switch) (additive; explicit value incl. false preserved)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"
