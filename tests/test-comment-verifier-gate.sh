@@ -35,7 +35,6 @@ setup_git_repo
 setup_nazgul_dir
 create_config \
   '.agents.reviewers = ["code-reviewer"]' \
-  '.review_gate.receipt_hash_enforcement = false' \
   '.feat_id = "FEAT-CV1"' \
   '.learning.auto_distill_post_loop = false' \
   '.docs.verify_comments = false' \
@@ -55,7 +54,6 @@ setup_git_repo
 setup_nazgul_dir
 create_config \
   '.agents.reviewers = ["code-reviewer"]' \
-  '.review_gate.receipt_hash_enforcement = false' \
   '.feat_id = "FEAT-CV2"' \
   '.learning.auto_distill_post_loop = false' \
   '.self_audit.enabled = false'
@@ -75,7 +73,6 @@ setup_git_repo
 setup_nazgul_dir
 create_config \
   '.agents.reviewers = ["code-reviewer"]' \
-  '.review_gate.receipt_hash_enforcement = false' \
   '.feat_id = "FEAT-CV3"' \
   '.learning.auto_distill_post_loop = false' \
   '.self_audit.enabled = false'
@@ -98,7 +95,6 @@ setup_git_repo
 setup_nazgul_dir
 create_config \
   '.agents.reviewers = ["code-reviewer"]' \
-  '.review_gate.receipt_hash_enforcement = false' \
   '.feat_id = "FEAT-CV4"' \
   '.learning.auto_distill_post_loop = false'
 create_plan
@@ -119,7 +115,6 @@ setup_git_repo
 setup_nazgul_dir
 create_config \
   '.agents.reviewers = ["code-reviewer"]' \
-  '.review_gate.receipt_hash_enforcement = false' \
   '.feat_id = "FEAT-CV5"' \
   '.learning.auto_distill_post_loop = false' \
   '.self_audit.enabled = false'
@@ -139,7 +134,6 @@ setup_git_repo
 setup_nazgul_dir
 create_config \
   '.agents.reviewers = ["code-reviewer"]' \
-  '.review_gate.receipt_hash_enforcement = false' \
   '.feat_id = "FEAT-CV6"' \
   '.learning.auto_distill_post_loop = false'
 create_plan
@@ -158,7 +152,6 @@ setup_git_repo
 setup_nazgul_dir
 create_config \
   '.agents.reviewers = ["code-reviewer"]' \
-  '.review_gate.receipt_hash_enforcement = false' \
   '.feat_id = "FEAT-CV7"' \
   '.learning.auto_distill_post_loop = false'
 create_plan
@@ -178,7 +171,6 @@ setup_git_repo
 setup_nazgul_dir
 create_config \
   '.agents.reviewers = ["code-reviewer"]' \
-  '.review_gate.receipt_hash_enforcement = false' \
   '.feat_id = "FEAT-CV8"' \
   '.learning.auto_distill_post_loop = false' \
   '.self_audit.enabled = false'

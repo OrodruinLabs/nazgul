@@ -234,8 +234,17 @@ _re_unit_has_any_receipt() {
 # reviews/<unit>/<reviewer>.md is consistent with the MOST RECENT
 # independently-captured receipt for (unit, reviewer) in
 # nazgul/logs/review-receipts.jsonl — TASK-002's SubagentStop-hook capture,
-# a hook the review-gate orchestrator (and thus a compromised or buggy gate)
-# cannot influence (LR-001 / ADR-005 Decision 4, Option 2).
+# a hook that fires outside the review-gate orchestrator's own dispatch turn
+# and that a fabricated or rewritten VERDICT (the FEAT-016/TASK-005 shape)
+# cannot retroactively alter, since it was already written before the gate
+# persists its verdict. HONEST TIER, matching review-provenance.sh's own
+# disclosure for the same limitation: this is tamper-EVIDENCE, not
+# tamper-AUTHENTICATION — review-gate has ordinary Bash access to
+# nazgul/logs/ and could in principle suppress or forge a receipts-file
+# entry outright; nothing here cryptographically prevents that. What this
+# DOES guarantee is that a receipt, once genuinely captured, cannot be
+# retroactively made to match arbitrary rewritten content — a hash
+# collision can't be forged (LR-001 / ADR-005 Decision 4, Option 2).
 #
 # Two candidate reconstructions are tried, in order:
 #   1. Token-stripped, verdict AS PERSISTED (_re_reconstruct_pretoken_text,
