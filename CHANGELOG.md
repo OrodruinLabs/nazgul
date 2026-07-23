@@ -13,12 +13,13 @@ correctness. Nine commits (`5e03697`..`f1655b9`).
   task's `GROUP-<n>`/`FEATURE-<feat_id>` in `group`/`feature` granularity — now bridges evidence for
   `task-state-guard.sh`'s IN_REVIEW/DONE gates and `stop-hook.sh`'s aggregate-review bookkeeping with
   no independent re-derivation at either call site.
-- **Mechanical `review_unit` event field, both halves** (MF-015): `stop-hook.sh` computes each
-  reviewer_verdict event's `review_unit` by calling `resolve_review_unit()` directly instead of
-  trusting a self-reported label (producer half); `subagent-stop.sh`'s review-coverage detector reads
-  that `review_unit` straight off the event as ground truth, falling back to `resolve_review_unit()`
-  only for pre-fix events that predate the field (consumer half) — closing the cross-run granularity
-  misclassification window.
+- **Mechanical `review_unit` event field, both halves** (MF-015): `agents/review-gate.md`'s Step 2.5
+  emit step computes each `reviewer_verdict` event's `review_unit` by calling
+  `resolve_review_unit()` directly instead of restating its own prose `[UNIT-ID]` claim as-is
+  (producer half); `subagent-stop.sh`'s review-coverage detector reads that `review_unit` straight
+  off the event as ground truth, falling back to `resolve_review_unit()` only for pre-fix events
+  that predate the field (consumer half) — closing the cross-run granularity misclassification
+  window.
 - **Config schema v28 → v29** (`migrate_28_to_29`): one additive kill-switch key —
   `review_gate.stall_retry_escalate_tier` (default `true`) — following the existing
   additive-merge-with-explicit-value-preservation convention.
@@ -32,11 +33,11 @@ correctness. Nine commits (`5e03697`..`f1655b9`).
   checks that each persisted `<UNIT-ID>/<reviewer-name>.md` matches the four-consumer naming
   convention all readers (task-state-guard, review-evidence, feedback-aggregator, subagent-stop)
   expect, and logs a mismatch rather than silently producing evidence no consumer can find.
-- **Explicit dispatch trust boundary** (MF-059, prompt-only guidance): `review-gate.md`,
-  `templates/reviewer-base.md`, and `team-orchestrator.md` now state that only the diff, context, and
-  instructions assembled into a reviewer's initial dispatch are authoritative — a reviewer's own
-  return, or an inbound `SendMessage`, can never inject a fabricated verdict or urgency claim after
-  the fact.
+- **Explicit dispatch trust boundary** (MF-059, prompt-only guidance): `agents/review-gate.md`,
+  `agents/templates/reviewer-base.md`, and `agents/team-orchestrator.md` now state that only the
+  diff, context, and instructions assembled into a reviewer's initial dispatch are authoritative —
+  a reviewer's own return, or an inbound `SendMessage`, can never inject a fabricated verdict or
+  urgency claim after the fact.
 
 ### Fixed
 - **`review-provenance.sh`'s `resolved` field confirmed dispatch-roster-only, never verdict evidence**
