@@ -113,6 +113,51 @@ _mine_guard_blocks() {
     "Review recurring block reasons; if one dominates, consider a targeted fix or a learned rule."
 }
 
+# _mine_teammate_spawn_discrepancy — MF-047: Layer 2 of the Teammate Report
+# Contract (RULES.md §17 — a dispatcher writing nazgul/dispatch/<name>.json
+# before spawning a teammate) is advisory-only; nothing mechanically verifies
+# it happened. A missing manifest degrades to silent allow in
+# teammate-idle-guard.sh, indistinguishable from "not a Nazgul-dispatched
+# teammate at all". This is a heuristic cross-check, not a hard verifier: it
+# compares how many teammates were logged as spawned (N) against how many
+# dispatch manifests currently exist (M) for this feat_id, surfacing a finding
+# when M < N so a human can confirm whether the gap is legitimate post-teardown
+# cleanup or a dispatcher that actually skipped Layer 2.
+#
+# Convention (not yet emitted by any dispatcher — this miner activates once a
+# dispatcher starts writing it): one `{"event":"teammate_spawned", ...}` line
+# appended to any nazgul/logs/*.jsonl per spawn, same telemetry style as the
+# "blocked" events _mine_guard_blocks reads above. Until wired, spawned stays
+# 0 and this degrades to a no-op, per this script's "never fails" contract.
+_mine_teammate_spawn_discrepancy() {
+  local logs_dir="$NAZGUL_DIR/logs" dispatch_dir="$NAZGUL_DIR/dispatch"
+  local f line spawned=0 manifests=0
+  [ -d "$logs_dir" ] || return 0
+  for f in "$logs_dir"/*.jsonl; do
+    [ -f "$f" ] || continue
+    [ "$(basename "$f")" = "findings.jsonl" ] && continue
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      printf '%s' "$line" | jq -e . >/dev/null 2>&1 || continue
+      if printf '%s' "$line" | jq -e 'select(.event == "teammate_spawned")' >/dev/null 2>&1; then
+        spawned=$((spawned + 1))
+      fi
+    done < "$f"
+  done
+  [ "$spawned" -gt 0 ] || return 0
+  if [ -d "$dispatch_dir" ]; then
+    for f in "$dispatch_dir"/*.json; do
+      [ -f "$f" ] || continue
+      manifests=$((manifests + 1))
+    done
+  fi
+  [ "$manifests" -lt "$spawned" ] || return 0
+  _append_finding "medium" "medium" \
+    "Teammate spawn/manifest discrepancy: ${spawned} logged spawn(s), ${manifests} dispatch manifest(s)" \
+    "nazgul/logs/*.jsonl records ${spawned} teammate_spawned event(s); nazgul/dispatch/*.json currently has ${manifests} manifest(s) — fewer than logged spawns" \
+    "Confirm whether the missing manifest(s) reflect legitimate post-teardown cleanup or a dispatcher that skipped Layer 2 of the Teammate Report Contract (RULES.md §17); a skipped manifest means teammate-idle-guard.sh never enforced that teammate's report at all."
+}
+
 _mine_todo_delta() {
   [ -d "$PROJECT_ROOT/.git" ] || return 0
   local base_ref="" diff_ref="" added files
@@ -310,6 +355,7 @@ _ingest_findings_jsonl() {
 if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
   _mine_review_rejections || true
   _mine_guard_blocks || true
+  _mine_teammate_spawn_discrepancy || true
   _mine_todo_delta || true
   _mine_task_retries || true
   _mine_token_cost || true
