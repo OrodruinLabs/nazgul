@@ -146,11 +146,20 @@ assert_eq "PG-5 second violation: escalated to BLOCKED" "$(task_status TASK-001)
 teardown_temp_dir
 
 # --- PG-6: group-mode co-location — task-keyed dir works identically under granularity=group ---
+# NOTE (MF-013/TASK-001): validate_review_provenance is still called with the raw
+# task_id (stop-hook.sh does not resolve it via resolve_review_unit — provenance
+# resolution is out of MF-013's scope, evidence-only), so the dispatch
+# manifest/token below stay task-id-keyed on purpose, unchanged. But
+# validate_review_evidence NOW correctly resolves group evidence to
+# reviews/GROUP-1 (this task's Group is 1), which runs BEFORE the provenance
+# check in stop-hook.sh's DONE-gate loop — so this fixture also needs a
+# real APPROVED reviewer file at GROUP-1 to reach the provenance branch at all.
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
 create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG6"' '.review_gate.granularity = "group"'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_task_file "TASK-002" "READY"
+create_review_dir "GROUP-1"
 DIFF="$TEST_DIR/nazgul/reviews/TASK-001/diff.patch"
 mkdir -p "$(dirname "$DIFF")"
 printf 'diff content\n' > "$DIFF"
