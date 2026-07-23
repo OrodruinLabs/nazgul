@@ -71,7 +71,10 @@ debug_log "Received input: ${INPUT:0:300}..."
 
 FILE_PATH=""
 if command -v jq &>/dev/null; then
-    FILE_PATH=$(echo "$INPUT" | jq -r '.tool_result.file_path // .file_path // .toolResult.file_path // .result.file_path // empty' 2>/dev/null || true)
+    # MF-030: query .tool_input.file_path first — the field every sibling
+    # guard uses (e.g. task-state-guard.sh) — before the other historical
+    # aliases; keep the blind recursive scan as a last-resort fallback only.
+    FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // .tool_result.file_path // .file_path // .toolResult.file_path // .result.file_path // empty' 2>/dev/null || true)
     if [[ -z "$FILE_PATH" || "$FILE_PATH" == "null" ]]; then
         FILE_PATH=$(echo "$INPUT" | jq -r '.. | strings | select(test("^/.*\\.[a-zA-Z0-9]+$"))' 2>/dev/null | head -1 || true)
     fi

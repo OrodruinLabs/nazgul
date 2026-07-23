@@ -60,6 +60,26 @@ str_val=$(echo "$line" | jq -r '.decision' 2>/dev/null)
 assert_eq "plain key value is string" "$str_val" "APPROVE"
 teardown_temp_dir
 
+# --- Test 2b: MF-016 — malformed (non-numeric) :n value still records the
+# event with `null` substituted, instead of the whole event being silently
+# dropped by the caller's `|| true`. ---
+setup_temp_dir
+setup_nazgul_dir
+export NAZGUL_DIR="$TEST_DIR/nazgul"
+export EVENTS_FILE="$TEST_DIR/nazgul/logs/events.jsonl"
+printf '{"telemetry":{"bus_enabled":true}}' > "$TEST_DIR/nazgul/config.json"
+export CURRENT_ITERATION=1
+_source_emit_lib
+emit_event "reviewer_verdict" confidence:n "not-a-number" decision "APPROVE"
+assert_file_exists "MF-016: malformed numeric still writes events.jsonl" "$EVENTS_FILE"
+line=$(tail -1 "$EVENTS_FILE")
+assert_contains "MF-016: event line is valid JSON" "$(echo "$line" | jq . 2>/dev/null)" "reviewer_verdict"
+confidence_val=$(echo "$line" | jq '.confidence' 2>/dev/null)
+assert_eq "MF-016: malformed numeric substitutes JSON null" "$confidence_val" "null"
+str_val2=$(echo "$line" | jq -r '.decision' 2>/dev/null)
+assert_eq "MF-016: sibling non-numeric field unaffected" "$str_val2" "APPROVE"
+teardown_temp_dir
+
 # --- Test 3: ts is ISO-8601 UTC timestamp (library-stamped) ---
 setup_temp_dir
 setup_nazgul_dir

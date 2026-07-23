@@ -30,6 +30,27 @@ assert_contains "agents/scripts skips qa" "$out" "qa-reviewer:no tests/ change"
 out=$(bash "$RS" select --files "templates/config.json" --reviewers "$ROSTER")
 assert_contains "config-schema selects architect" "$out" "SELECTED: security-reviewer architect-reviewer code-reviewer"
 
+# MF-021: the five path patterns the classifier previously missed all count
+# as architecture surface too — asserted via the SELECTED line only (several
+# of these are also *.md doc files, an independent axis that separately
+# controls whether code-reviewer is skipped as doc-only).
+for f in "templates/feature.md" "references/verification-patterns.md" \
+         ".github/workflows/test.yml" "RULES.md" "CLAUDE.md"; do
+  out=$(bash "$RS" select --files "$f" --reviewers "$ROSTER")
+  sel_line=$(printf '%s\n' "$out" | sed -n '1p')
+  assert_contains "MF-021: '$f' selects architect" "$sel_line" "architect-reviewer"
+done
+
+# .github/workflows/*.yml is also non-doc, so code-reviewer is selected too.
+out=$(bash "$RS" select --files ".github/workflows/test.yml" --reviewers "$ROSTER")
+assert_eq "MF-021: workflow file (non-doc) SELECTED" "$(printf '%s\n' "$out" | sed -n '1p')" "SELECTED: security-reviewer architect-reviewer code-reviewer"
+
+# RULES.md/CLAUDE.md are also *.md doc files, so code-reviewer is skipped
+# (doc-only change) even though architect-reviewer is selected.
+out=$(bash "$RS" select --files "RULES.md" --reviewers "$ROSTER")
+assert_eq "MF-021: RULES.md (doc) SELECTED" "$(printf '%s\n' "$out" | sed -n '1p')" "SELECTED: security-reviewer architect-reviewer"
+assert_contains "MF-021: RULES.md skips code-reviewer (doc-only)" "$out" "code-reviewer:doc-only change"
+
 # mixed scope: src + tests -> architect skipped, everything else selected;
 # unknown reviewers are always selected (never skipped on ambiguity)
 out=$(bash "$RS" select --files "src/app.py tests/test_app.py" --reviewers "$ROSTER custom-reviewer")

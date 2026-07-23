@@ -41,6 +41,11 @@ set -euo pipefail
 
 COMMAND_TIMEOUT=30
 
+# MF-031: resolve nazgul/ paths against the project root like every sibling
+# guard, instead of bare relative paths that only work when cwd happens to
+# already be the project root.
+PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+
 debug_log() {
     if [[ "${NAZGUL_NOTIFY_DEBUG:-0}" == "1" ]]; then
         echo "[NOTIFY $(date -Iseconds)] $1" >&2
@@ -88,7 +93,7 @@ export NAZGUL_OBJECTIVE
 NAZGUL_SESSION_ID=$(extract_field "session_id" "unknown")
 NAZGUL_CWD=$(extract_field "cwd" "$(pwd)")
 NAZGUL_TRANSCRIPT_PATH=$(extract_field "transcript_path" "unknown")
-NAZGUL_OBJECTIVE=$(jq -r '.objective // "unknown"' nazgul/config.json 2>/dev/null || echo "unknown")
+NAZGUL_OBJECTIVE=$(jq -r '.objective // "unknown"' "$PROJECT_ROOT/nazgul/config.json" 2>/dev/null || echo "unknown")
 
 # --- Check if loop is actually complete ---
 # Only notify on completion, not every iteration stop
@@ -104,9 +109,9 @@ if [[ "$NAZGUL_TRANSCRIPT_PATH" != "unknown" && -f "$NAZGUL_TRANSCRIPT_PATH" ]];
 fi
 
 # Check if all tasks are DONE
-if [[ "$LOOP_COMPLETE" != "true" && -d "nazgul/tasks" ]]; then
-    TOTAL=$( (ls nazgul/tasks/TASK-*.md 2>/dev/null || true) | wc -l | tr -d ' ')
-    DONE=$( (grep -rlE '(Status\*\*:[[:space:]]*DONE|^## Status:[[:space:]]*DONE)' nazgul/tasks/TASK-*.md 2>/dev/null || true) | wc -l | tr -d ' ')
+if [[ "$LOOP_COMPLETE" != "true" && -d "$PROJECT_ROOT/nazgul/tasks" ]]; then
+    TOTAL=$( (ls "$PROJECT_ROOT"/nazgul/tasks/TASK-*.md 2>/dev/null || true) | wc -l | tr -d ' ')
+    DONE=$( (grep -rlE '(Status\*\*:[[:space:]]*DONE|^## Status:[[:space:]]*DONE)' "$PROJECT_ROOT"/nazgul/tasks/TASK-*.md 2>/dev/null || true) | wc -l | tr -d ' ')
     if [[ "$TOTAL" -gt 0 && "$TOTAL" == "$DONE" ]]; then
         LOOP_COMPLETE="true"
         debug_log "All $TOTAL tasks DONE"
@@ -122,8 +127,8 @@ fi
 NOTIFY_CMD=""
 
 # Check config.json first
-if command -v jq &>/dev/null && [[ -f "nazgul/config.json" ]]; then
-    NOTIFY_CMD=$(jq -r '.notifications.on_complete // empty' nazgul/config.json 2>/dev/null || true)
+if command -v jq &>/dev/null && [[ -f "$PROJECT_ROOT/nazgul/config.json" ]]; then
+    NOTIFY_CMD=$(jq -r '.notifications.on_complete // empty' "$PROJECT_ROOT/nazgul/config.json" 2>/dev/null || true)
 fi
 
 # Fall back to env var
