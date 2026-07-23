@@ -132,8 +132,11 @@ assert_eq "session-context: self-heal reasserts managed dir on drift" "$HEALED" 
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# session-context.sh: never-installed (null prior_hooks_path field) leaves a
-# real pre-existing user core.hooksPath alone — no blind overwrite.
+# session-context.sh: never-installed (null prior_hooks_path field) + an
+# active objective (branch.feature set) is the MF-034 residual gap —
+# self_heal_git_hooks now performs a first-time install (not a blind
+# overwrite: the real pre-existing user hooksPath is durably recorded as
+# the value to restore later).
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_git_repo
@@ -141,8 +144,25 @@ setup_nazgul_dir
 create_config '.guards.git_hooks = true' '.branch.feature = "feat/x"' '.branch.prior_hooks_path = null'
 git -C "$TEST_DIR" config core.hooksPath ".husky"
 bash "$REPO_ROOT/scripts/session-context.sh" >/dev/null 2>&1
+INSTALLED=$(git -C "$TEST_DIR" config --get core.hooksPath)
+assert_eq "session-context: never-installed + active objective triggers first-time install" "$INSTALLED" "nazgul/.githooks"
+RECORDED=$(jq -r '.branch.prior_hooks_path' "$TEST_DIR/nazgul/config.json")
+assert_eq "session-context: first-time install records the real prior hooksPath" "$RECORDED" ".husky"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# session-context.sh: never-installed but NO active objective (branch.feature
+# unset) — no branch-setup call site could plausibly have run yet, so no
+# first-time install; a real pre-existing user hooksPath is left alone.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = true' '.branch.prior_hooks_path = null'
+git -C "$TEST_DIR" config core.hooksPath ".husky"
+bash "$REPO_ROOT/scripts/session-context.sh" >/dev/null 2>&1
 STILL=$(git -C "$TEST_DIR" config --get core.hooksPath)
-assert_eq "session-context: never-installed leaves user hooksPath alone" "$STILL" ".husky"
+assert_eq "session-context: never-installed with no active objective leaves user hooksPath alone" "$STILL" ".husky"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------

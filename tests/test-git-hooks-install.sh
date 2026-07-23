@@ -216,32 +216,36 @@ assert_eq "self-heal: already correct is a no-op" "$STILL" "nazgul/.githooks"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# SELF-HEAL: fresh project (never installed, prior_hooks_path null) -> no-op.
-# Guards the != null gate: it must never blind-overwrite a user's real
-# core.hooksPath (e.g. .husky) on a project that never ran install.
+# SELF-HEAL: active objective, never installed (prior_hooks_path null) ->
+# first-time install (MF-034 residual-gap broadening). A real pre-existing
+# user core.hooksPath (e.g. .husky) is durably recorded as the value to
+# restore later, not blind-overwritten.
 # ---------------------------------------------------------------------------
 setup_temp_dir
 init_repo "$TEST_DIR/repo"
 git -C "$TEST_DIR/repo" config core.hooksPath ".husky"
 write_config "$TEST_DIR/repo" '{"branch":{"base":"main","feature":"feat/x","prior_hooks_path":null},"guards":{"git_hooks":true}}'
 self_heal_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
-STILL_HUSKY=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
-assert_eq "self-heal: fresh (never installed, null field) leaves user hooksPath alone" "$STILL_HUSKY" ".husky"
-assert_dir_not_exists "self-heal: fresh (never installed, null field) does not create managed dir" "$TEST_DIR/repo/nazgul/.githooks"
+INSTALLED_NULL=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
+assert_eq "self-heal: active objective + never installed triggers first-time install" "$INSTALLED_NULL" "nazgul/.githooks"
+assert_dir_exists "self-heal: first-time install creates the managed dir" "$TEST_DIR/repo/nazgul/.githooks"
+RECORDED_NULL=$(jq -r '.branch.prior_hooks_path' "$TEST_DIR/repo/nazgul/config.json")
+assert_eq "self-heal: first-time install records the real prior hooksPath" "$RECORDED_NULL" ".husky"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# SELF-HEAL: never-installed (null field) with drift during an active loop ->
-# still a no-op. The null gate wins over drift: you only self-heal something
-# you installed.
+# SELF-HEAL: never installed (null field) and NO active objective
+# (branch.feature unset) -> no-op. The feature gate wins: only an active
+# objective's residual gap gets a first-time install.
 # ---------------------------------------------------------------------------
 setup_temp_dir
 init_repo "$TEST_DIR/repo"
-write_config "$TEST_DIR/repo" '{"branch":{"base":"main","feature":"feat/x","prior_hooks_path":null},"guards":{"git_hooks":true}}'
-git -C "$TEST_DIR/repo" config core.hooksPath ".git/hooks-other"
+git -C "$TEST_DIR/repo" config core.hooksPath ".husky"
+write_config "$TEST_DIR/repo" '{"branch":{"base":"main","prior_hooks_path":null},"guards":{"git_hooks":true}}'
 self_heal_git_hooks "$TEST_DIR/repo" "$TEST_DIR/repo/nazgul/config.json"
-UNTOUCHED_NULL=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
-assert_eq "self-heal: never-installed (null field) with drift is still a no-op" "$UNTOUCHED_NULL" ".git/hooks-other"
+STILL_HUSKY=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
+assert_eq "self-heal: never installed, no active objective leaves user hooksPath alone" "$STILL_HUSKY" ".husky"
+assert_dir_not_exists "self-heal: never installed, no active objective does not create managed dir" "$TEST_DIR/repo/nazgul/.githooks"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------

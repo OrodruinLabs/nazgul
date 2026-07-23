@@ -520,10 +520,9 @@ Step 2.6):
    - Update plan.md Recovery Pointer
    - Move to next task immediately
 3. **Otherwise (non-YOLO, OR YOLO without task_pr):**
-   - `cd <main_worktree_path>`, checkout feature branch
-   - `git merge feat/<display_id>/TASK-NNN --no-ff -m "<commit_prefix> merge TASK-NNN — [title]"`
-   - If merge conflict: `git merge --abort`, mark task BLOCKED with reason "merge conflict with feature branch", write conflict details to task manifest
-   - If merge succeeds:
+   - `source scripts/worktree-utils.sh` then call `merge_task_to_feature TASK-NNN "<main_worktree_path>" nazgul/config.json` — `git -C`-safe, so it merges correctly regardless of the invoking worktree's cwd (MF-035); it checks out the feature branch and merges `feat/<display_id>/TASK-NNN` with message `<commit_prefix> merge TASK-NNN`, aborting internally on conflict.
+   - If the call returns non-zero (merge conflict, already aborted internally): mark task BLOCKED with reason "merge conflict with feature branch", write conflict details to task manifest
+   - If the call returns 0:
      - Remove the task worktree: `git worktree remove <worktree_dir>/TASK-NNN --force`
      - Delete the task branch: `git branch -D feat/<display_id>/TASK-NNN`
      - Set task status to DONE

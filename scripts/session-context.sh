@@ -102,9 +102,10 @@ if [ -f "$PLAN" ]; then
   check_plan_staleness "$PLAN" || true
 fi
 
-# Git-hooks self-heal — re-assert the managed core.hooksPath only on detected
-# drift during an active loop; self_heal_git_hooks itself no-ops when
-# guards.git_hooks is off, no objective is active, or nothing was installed.
+# Git-hooks self-heal — first-time installs for an active loop that never
+# went through its SKILL.md install call site, else re-asserts on drift;
+# self_heal_git_hooks itself no-ops when guards.git_hooks is off or no
+# objective is active (MF-034 defense-in-depth, see git-hooks.sh).
 GIT_HOOKS_LIB="$PLUGIN_ROOT/scripts/lib/git-hooks.sh"
 if [ -f "$GIT_HOOKS_LIB" ]; then
   # shellcheck source=./lib/git-hooks.sh
