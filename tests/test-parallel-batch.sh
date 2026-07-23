@@ -12,10 +12,14 @@ echo "=== $TEST_NAME ==="
 
 source "$REPO_ROOT/scripts/lib/parallel-batch.sh"
 
-# Helper: manifest with Files modified + optional deps
+# Helper: manifest with Files modified (comma-separated arg -> real JSON
+# array, matching production manifests) + optional deps
 make_task() { # id status deps files
   create_task_file "$1" "$2" "${3:-none}"
-  printf -- '- **Files modified**: %s\n' "$4" >> "$TEST_DIR/nazgul/tasks/$1.md"
+  local json
+  json=$(IFS=,; for p in $4; do printf '%s\n' "$p" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; done \
+    | jq -R . | jq -s -c .)
+  printf -- '- **Files modified**: %s\n' "$json" >> "$TEST_DIR/nazgul/tasks/$1.md"
 }
 
 # Helper: plan.md with a Wave Groups section
@@ -76,6 +80,18 @@ assert_eq "overlap: single task" "$(jq -r '.tasks|length' <<< "$OUT")" "1"
 assert_contains "overlap: reason says overlap" "$OUT" "overlap"
 teardown_temp_dir
 
+# --- 5b: MF-025 — overlap detected via get_task_files_modified even when the
+# shared file sits at a DIFFERENT position in each task's JSON array (a naive
+# comma-split of the raw bracketed/quoted value would miss this) ---
+setup_temp_dir; setup_nazgul_dir
+make_task TASK-001 READY none "src/a.sh, src/shared.sh, src/c.sh"
+make_task TASK-002 READY none "src/shared.sh, src/b.sh"
+make_plan_waves "### Wave 1" "- TASK-001, TASK-002"
+OUT=$(compute_dispatch_batch "$TEST_DIR/nazgul/tasks" "$TEST_DIR/nazgul/plan.md" 3)
+assert_eq "mf-025 overlap: not parallel" "$(jq -r '.parallel' <<< "$OUT")" "false"
+assert_contains "mf-025 overlap: reason names shared file" "$OUT" "src/shared.sh"
+teardown_temp_dir
+
 # --- 6: missing Files modified -> fallback to single ---
 setup_temp_dir; setup_nazgul_dir
 create_task_file TASK-001 READY   # no Files modified
@@ -94,13 +110,36 @@ OUT=$(compute_dispatch_batch "$TEST_DIR/nazgul/tasks" "$TEST_DIR/nazgul/plan.md"
 assert_eq "no waves: not parallel" "$(jq -r '.parallel' <<< "$OUT")" "false"
 teardown_temp_dir
 
-# --- 8: candidates on DIFFERENT wave lines are never batched together ---
+# --- 8: candidates in DIFFERENT wave sections are never batched together ---
 setup_temp_dir; setup_nazgul_dir
 make_task TASK-001 READY none "src/a.sh"
 make_task TASK-002 READY none "src/b.sh"
 make_plan_waves "### Wave 1" "- TASK-001" "### Wave 2" "- TASK-002"
 OUT=$(compute_dispatch_batch "$TEST_DIR/nazgul/tasks" "$TEST_DIR/nazgul/plan.md" 3)
-assert_eq "separate lines: not parallel" "$(jq -r '.parallel' <<< "$OUT")" "false"
+assert_eq "separate waves: not parallel" "$(jq -r '.parallel' <<< "$OUT")" "false"
+teardown_temp_dir
+
+# --- 8b: MF-040 — one-bullet-per-task format under one Wave heading batches
+# together, same as the comma-grouped form (test 4) ---
+setup_temp_dir; setup_nazgul_dir
+make_task TASK-001 READY none "src/a.sh"
+make_task TASK-002 READY none "src/b.sh"
+make_plan_waves "### Wave 1" "- TASK-001" "- TASK-002"
+OUT=$(compute_dispatch_batch "$TEST_DIR/nazgul/tasks" "$TEST_DIR/nazgul/plan.md" 3)
+assert_eq "one-bullet-per-task: parallel true" "$(jq -r '.parallel' <<< "$OUT")" "true"
+assert_eq "one-bullet-per-task: both tasks" "$(jq -r '.tasks|join(",")' <<< "$OUT")" "TASK-001,TASK-002"
+teardown_temp_dir
+
+# --- 8c: MF-040 — mixed one-bullet-per-task and comma-grouped bullets under
+# the same Wave heading all count as members of that wave ---
+setup_temp_dir; setup_nazgul_dir
+make_task TASK-001 READY none "src/a.sh"
+make_task TASK-002 READY none "src/b.sh"
+make_task TASK-003 READY none "src/c.sh"
+make_plan_waves "### Wave 1" "- TASK-001" "- TASK-002, TASK-003 (independent)"
+OUT=$(compute_dispatch_batch "$TEST_DIR/nazgul/tasks" "$TEST_DIR/nazgul/plan.md" 3)
+assert_eq "mixed format: parallel true" "$(jq -r '.parallel' <<< "$OUT")" "true"
+assert_eq "mixed format: all three tasks" "$(jq -r '.tasks|join(",")' <<< "$OUT")" "TASK-001,TASK-002,TASK-003"
 teardown_temp_dir
 
 # --- 9: max_parallel caps the batch ---
