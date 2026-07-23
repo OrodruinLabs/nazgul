@@ -2,6 +2,60 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.19.0] - 2026-07-23
+
+FEAT-015, the second repair wave from the FEAT-013 360 reliability audit — guard integrity and
+enforcement. Sixteen commits (`6a8e9d0`..`2b685fa`).
+
+### Added
+- **`scripts/lib/task-transition-guard.sh`**: `valid_transition()`, the commit-SHA gate, and the
+  review-evidence check extracted out of `task-state-guard.sh` into a reusable library, callable
+  from both the PreToolUse path and a new stop-hook-time reconciliation pass (MF-022,
+  ADR-003 Decision 2). At the top of every `stop-hook.sh` iteration, each task manifest's live
+  status is diffed against the last checkpointed status; any change that didn't pass through the
+  shared transition-guard library since the last checkpoint is flagged `BLOCKED` with a named
+  diagnostic instead of silently trusted — closing the Bash-write forgery bypass. Gated by
+  `guards.bash_write_reconciliation` (default `true`).
+- **Config schema v27 → v28** (`migrate_27_to_28`): two additive kill-switch keys —
+  `guards.bash_write_reconciliation` (default `true`) and
+  `automation.heartbeat.lock_stale_seconds` (default `300`) — following the existing
+  additive-merge-with-explicit-value-preservation convention.
+- **Real commit-SHA evidence gate** (MF-026): the IMPLEMENTED transition now verifies the manifest's
+  `## Commits` SHA actually exists in the repo instead of trusting an unchecked string.
+- **Heartbeat atomic claim** (MF-039): `heartbeat.sh` now `mkdir`s an atomic lock directory as its
+  first action, so two concurrent ticks race on the `mkdir` itself instead of a stale `ls` read;
+  released via `trap ... EXIT`.
+
+### Fixed
+- **Git-hooks lifecycle activation + worktree cwd-safety** (MF-034, MF-035): `skills/start/SKILL.md`'s
+  five inline branch-setup prose blocks now call the existing `create_feature_branch` /
+  `cleanup_all_worktrees` library functions, which already install/uninstall the managed
+  `core.hooksPath` guards durably — closing both the dead-activation gap and the worktree-cwd merge
+  escape it created.
+- **Three dead guards revived**: `scripts/lib/task-utils.sh`'s new shared `get_task_files_modified()`
+  accessor (MF-025) replaces three independent ad hoc comma-split `Files modified` parsers across
+  `task-state-guard.sh`'s File Scope check, `parallel-batch.sh`'s disjoint-scope check, and
+  `parallel-rework-guard.sh`'s `_scope_has()` — all three now correctly match bracket/quote-laden
+  JSON arrays. `scripts/prompt-guard.sh` (MF-023) now reads the real `UserPromptSubmit` stdin JSON
+  envelope instead of an env var Claude Code never sets in production.
+- **Guard precision** (MF-027, MF-028): `pre-tool-guard.sh`'s `rm -rf` root/home patterns are now
+  anchored so legitimate absolute-path deletions (`rm -rf /tmp/build-cache`) are allowed while
+  `rm -rf /`, `rm -rf ~`, `rm -rf $HOME` stay blocked; the force-push check now ANDs two independent
+  boolean conditions instead of two ordered regexes, so `git push origin main --force` and
+  `git push origin main -f` are blocked alongside the previously-covered forms.
+- **Parallel guards fail closed** (MF-053, ADR-003 Decision 3): `parallel-dispatch-guard.sh` and
+  `parallel-rework-guard.sh` now distinguish "config missing" (safe no-op) from "config present but
+  unparseable" (fail closed with a loud diagnostic), replacing a silent `jq ... || echo "false"`
+  fallback that no-opped the guard on a torn/corrupt write.
+- **Wave Groups parsing** (MF-040): `parallel-batch.sh` now parses each `### Wave N` heading plus
+  all following `- TASK-NNN` bullets in any format (one-per-line or comma-grouped) instead of
+  requiring same-line comma-grouped bullets, which previously silently degraded a one-bullet-per-task
+  plan to fully sequential dispatch.
+- **Connector push local-id threading** (MF-038): `connector_github_pull_archive` now threads the
+  picked issue number through to a real local id via `heartbeat.sh`'s archive-then-start flow
+  (bounded poll of `nazgul/config.json → feat_id`), so `_cgh_map_resolve` can match and
+  `push_status`/`push_pr` are no longer unconditional no-ops.
+
 ## [2.18.0] - 2026-07-22
 
 FEAT-014, the first repair wave from the FEAT-013 360 reliability audit (63
