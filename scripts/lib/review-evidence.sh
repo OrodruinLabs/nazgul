@@ -213,6 +213,52 @@ _re_reconstruct_pretoken_text() {
   ' "$file"
 }
 
+# _re_strip_trailing_orchestrator_note <<< "$text" -> prints <text> with a
+# trailing "canonical orchestrator note" block removed, if one is present:
+# a line matching exactly `^---[[:space:]]*$` immediately followed by a line
+# starting with the literal `**Orchestrator note (review-gate Step 3` —
+# strip from that `---` line through EOF. This is a SECOND, INDEPENDENT
+# sanctioned resolution edit review-gate makes (Step 3 auto-downgrade below
+# `confidence_threshold`, Step 3.6 adversarial cross-check, or Step 3.75
+# auto-fix classification) — distinct from the top-of-file verdict-flip
+# note --revert-resolution undoes. Confirmed against the REAL
+# nazgul/reviews/TASK-002/*.md board (round-4 rework, TASK-009
+# Implementation Log): 3 of 4 files carry this trailing block with 3
+# DIFFERENT literal suffixes after "Step 3" (`)`, `/3.75)`,
+# `.6 — adversarial cross-check, resolved)`) — the marker below matches
+# their common literal prefix, DELIBERATELY BROADER than the single
+# "Step 3.6" example quoted in the round-4 instruction, since matching only
+# that one exact suffix would miss 2 of the 3 real occurrences (flagged
+# explicitly, not a silent divergence). This transform is INDEPENDENT of
+# --revert-resolution's verdict==APPROVE precondition — the trailing note
+# can legitimately appear on a still-CHANGES_REQUESTED file too (e.g. a
+# Step 3 confidence-threshold downgrade of ONE finding while OTHER
+# above-threshold findings still keep the overall verdict CHANGES_REQUESTED)
+# — so this function has no verdict precondition of its own; the caller
+# composes it with --revert-resolution's output only when BOTH transforms'
+# own preconditions independently hold. If more than one such `---`+marker
+# pair exists in the text (not observed in any real file — the trailing
+# block is always singular and terminal), the LAST one (closest to EOF) is
+# used, an unambiguous same-file tie-break (not the cross-file attribution
+# problem TASK-002's board flagged for the capture side). Returns 1 (no
+# output) if no such block is found — never silently a no-op producing
+# unchanged output, so callers can detect "this transform doesn't apply."
+_re_strip_trailing_orchestrator_note() {
+  awk '
+    { lines[NR] = $0 }
+    END {
+      n = NR
+      mark = 0
+      for (i = 1; i < n; i++) {
+        if (lines[i] ~ /^---[[:space:]]*$/ && lines[i+1] ~ /^\*\*Orchestrator note \(review-gate Step 3/) mark = i
+      }
+      if (mark == 0) exit 1
+      for (j = 1; j < mark; j++) print lines[j]
+      exit 0
+    }
+  '
+}
+
 # _re_unit_has_any_receipt <nazgul_dir> <unit> -> 0 iff
 # nazgul/logs/review-receipts.jsonl has AT LEAST ONE entry for this unit
 # (any reviewer). Used to distinguish "capture wasn't active for this board"
@@ -258,47 +304,66 @@ _re_unit_has_any_receipt() {
 # retroactively made to match arbitrary rewritten content — a hash
 # collision can't be forged (LR-001 / ADR-005 Decision 4, Option 2).
 #
-# Two candidate reconstructions are tried, in order:
-#   1. Token-stripped, verdict AS PERSISTED (_re_reconstruct_pretoken_text,
-#      no flag) — the common case: no gate-side editorial resolution at all.
-#   2. ONLY when the persisted verdict is currently APPROVE and a
-#      canonically-delimited resolution note is structurally present
-#      (_re_reconstruct_pretoken_text --revert-resolution): the note removed
-#      and the verdict DETERMINISTICALLY reverted CHANGES_REQUESTED (the
-#      only sanctioned flip direction — never a brute-forced enum). Content
-#      tampering is still caught unconditionally regardless of which
-#      candidate is tried: candidate 2 only ever changes the verdict LINE
-#      and removes the note block, never any byte of the narrative — so a
-#      rewritten body still fails both. Candidate 2 is gated on both the
-#      exact prior verdict AND the exact marker specifically so an
-#      UNDISCLOSED verdict flip (no note, or a flip in any other direction)
-#      is never tolerated — that is indistinguishable from the FEAT-016/
-#      TASK-005 fabrication shape and must always be caught by candidate 1
-#      failing with no candidate 2 attempted.
+# Up to FOUR candidate reconstructions are tried — the composition of two
+# INDEPENDENT sanctioned edits (round-4 rework: the top-of-file verdict-flip
+# note was the only one modeled through round 3; a real 3-of-4-file
+# TASK-002 board shape, a distinct TRAILING orchestrator note, was missed
+# and would have false-RECEIPT_MISMATCHed the moment enforcement turned on
+# — see _re_strip_trailing_orchestrator_note's header):
+#   1. As-persisted (_re_reconstruct_pretoken_text, no flag) — token
+#      stripped only. The common case: no gate-side editorial resolution.
+#   2. Top-reverted only (_re_reconstruct_pretoken_text --revert-resolution)
+#      — ONLY when the persisted verdict is currently APPROVE and the
+#      canonical top-of-file note is present; verdict deterministically
+#      reverted to CHANGES_REQUESTED (never brute-forced).
+#   3. Trailing-stripped only (_re_strip_trailing_orchestrator_note applied
+#      to candidate 1's output) — ONLY when the canonical trailing block is
+#      present; this transform has NO verdict precondition of its own (see
+#      its header — a Step 3 confidence-threshold downgrade of one finding
+#      can leave the overall verdict at CHANGES_REQUESTED).
+#   4. BOTH reverted — ONLY when candidate 2 is available; trailing-strip
+#      applied to candidate 2's output.
+# Each candidate is attempted independently (skipped, not treated as a
+# hash-comparable empty string, when its precondition doesn't hold) —
+# content tampering is caught unconditionally regardless of which candidate
+# would otherwise apply: every candidate only ever touches the verdict line
+# and/or removes a note block, never a byte of the narrative, so a
+# rewritten body fails all four.
 #
 #   HONEST RESIDUAL LIMITATION (disclosed, not fixed by this mechanism): a
-#   verdict flip with an intact, UNTAMPERED narrative but a FAKE resolution
-#   note (a note that opens with the exact marker but describes a
-#   resolution that never genuinely happened) matches candidate 2 — this is
-#   hash-undetectable BY DESIGN, since content integrity is exactly what the
-#   hash verifies, not the truth of a disclosure. The preserved-verbatim
-#   narrative remains the auditor's signal in that case (a human or a
-#   downstream process can still read the note and the findings it claims
-#   to resolve); whether a given resolution claim was legitimate is a
-#   policy/audit question this content-hash mechanism was never designed to
-#   answer, not a gap introduced here.
+#   verdict flip and/or trailing note with an intact, UNTAMPERED narrative
+#   but content that FALSELY claims a resolution that never genuinely
+#   happened matches its corresponding candidate — this is hash-undetectable
+#   BY DESIGN, since content integrity is exactly what the hash verifies,
+#   not the truth of a disclosure. The preserved-verbatim narrative remains
+#   the auditor's signal in that case; whether a given resolution claim was
+#   legitimate is a policy/audit question this content-hash mechanism was
+#   never designed to answer, not a gap introduced here.
 #
-# Both candidates read through a bash command substitution before hashing
+#   METHODOLOGY DISCLOSURE (round-4 correction — the earlier "verified
+#   byte-for-byte" framing overstated what was actually checked): every
+#   verification of this reconstruction against the real
+#   nazgul/reviews/TASK-002/*.md files was done by computing the receipt
+#   hash FROM this same reconstruction's own output, then confirming the
+#   check validates against a receipt built from that hash — i.e.
+#   internally self-consistent against the real bytes, not verified against
+#   an independently-captured ground-truth receipt, because none exists in
+#   this repo (nazgul/logs/review-receipts.jsonl has no entries for
+#   TASK-002 at all — see _re_unit_has_any_receipt's header). This is the
+#   best verification available without a live capture to compare against,
+#   and it is stated plainly rather than implied to be stronger.
+#
+# Every candidate reads through a bash command substitution before hashing
 # (`$(...)` strips trailing newlines identically to subagent-stop.sh's
 # `final_text=$(jq -rs ...)` on the capture side).
 #
 # Returns 1 (mismatch) when: jq or a sha256 tool is unavailable (a check
 # that cannot run must never be silently treated as passed); a receipt
-# exists for (unit, reviewer) but neither candidate's hash matches it
-# (content tampering — always checked whenever a comparable receipt
-# exists, with no exception); or no receipt exists for (unit, reviewer)
-# specifically WHILE the unit has at least one OTHER reviewer's receipt on
-# record (_re_unit_has_any_receipt) — the targeted-suppression shape.
+# exists for (unit, reviewer) but no candidate's hash matches it (content
+# tampering — always checked whenever a comparable receipt exists, with no
+# exception); or no receipt exists for (unit, reviewer) specifically WHILE
+# the unit has at least one OTHER reviewer's receipt on record
+# (_re_unit_has_any_receipt) — the targeted-suppression shape.
 # Returns 0 (treated as gate-satisfying, not a mismatch) when no receipt
 # exists for (unit, reviewer) AND the unit has no receipts at all — capture
 # was never active for this board; see _re_unit_has_any_receipt.
@@ -324,18 +389,42 @@ _re_receipt_matches() {
     return 0
   fi
 
-  # Candidate (i): as-persisted verdict, token stripped.
-  local content recomputed
-  content=$(_re_reconstruct_pretoken_text "$file") || return 1
-  recomputed=$(printf '%s' "$content" | _rp_sha256) || return 1
-  [ "$recomputed" = "$receipt_hash" ] && return 0
+  # Candidate 1: as-persisted verdict, token stripped. Always available.
+  local base base_hash
+  base=$(_re_reconstruct_pretoken_text "$file") || return 1
+  base_hash=$(printf '%s' "$base" | _rp_sha256) || return 1
+  [ "$base_hash" = "$receipt_hash" ] && return 0
 
-  # Candidate (ii): resolution-reverted — deterministic, single attempt.
-  local reverted rev_hash
-  reverted=$(_re_reconstruct_pretoken_text "$file" --revert-resolution) || return 1
-  [ -n "$reverted" ] || return 1
-  rev_hash=$(printf '%s' "$reverted" | _rp_sha256) || return 1
-  [ "$rev_hash" = "$receipt_hash" ]
+  # Candidate 2: top-reverted only. Available iff its own precondition
+  # (verdict==APPROVE + canonical top marker) holds.
+  local top top_hash
+  top=$(_re_reconstruct_pretoken_text "$file" --revert-resolution)
+  if [ -n "$top" ]; then
+    top_hash=$(printf '%s' "$top" | _rp_sha256) || return 1
+    [ "$top_hash" = "$receipt_hash" ] && return 0
+  fi
+
+  # Candidate 3: trailing-stripped only, applied to candidate 1's output.
+  # Available iff the canonical trailing marker is present.
+  local trailing_only trailing_only_hash
+  trailing_only=$(printf '%s\n' "$base" | _re_strip_trailing_orchestrator_note)
+  if [ -n "$trailing_only" ]; then
+    trailing_only_hash=$(printf '%s' "$trailing_only" | _rp_sha256) || return 1
+    [ "$trailing_only_hash" = "$receipt_hash" ] && return 0
+  fi
+
+  # Candidate 4: both reverted — only meaningful when candidate 2 was
+  # available (composes trailing-strip onto its output).
+  if [ -n "$top" ]; then
+    local both both_hash
+    both=$(printf '%s\n' "$top" | _re_strip_trailing_orchestrator_note)
+    if [ -n "$both" ]; then
+      both_hash=$(printf '%s' "$both" | _rp_sha256) || return 1
+      [ "$both_hash" = "$receipt_hash" ] && return 0
+    fi
+  fi
+
+  return 1
 }
 
 # A reviewer counts as authorized-skipped (gate-satisfying despite no APPROVED
@@ -468,18 +557,25 @@ resolve_review_unit() {
 #   NO_REVIEWERS_CONFIGURED   — config.json agents.reviewers is empty
 #   MISSING <reviewer>        — no reviews/<unit>/<reviewer>.md
 #   UNAPPROVED <reviewer>     — file exists but lacks an APPROVED verdict
-#   RECEIPT_MISMATCH <reviewer> — review_gate.receipt_hash_enforcement is not
-#                             `false` (default true) and a dispatched
+#   RECEIPT_MISMATCH <reviewer> — review_gate.receipt_hash_enforcement is
+#                             `true` (opt-in; default `false` as of TASK-009
+#                             round-3, pending a follow-up hardening pass on
+#                             TASK-002's carried-forward parallel-dispatch
+#                             receipt-attribution weakness) and a dispatched
 #                             reviewer's persisted APPROVE/CHANGES_REQUESTED
 #                             verdict fails _re_receipt_matches against
 #                             nazgul/logs/review-receipts.jsonl: content (the
-#                             narrative/findings) never matches, but a
-#                             DISCLOSED verdict-only resolution (a
-#                             structurally-recognized "review-gate resolution
+#                             narrative/findings) never matches across any of
+#                             its (up to four) candidate reconstructions, but
+#                             a DISCLOSED verdict-only resolution (a
+#                             structurally-recognized top-of-file or trailing
+#                             "review-gate resolution note" / "Orchestrator
 #                             note" — see _re_reconstruct_pretoken_text
-#                             --strip-note) is tolerated, since review-gate is
-#                             documented to legitimately flip ONLY the
-#                             verdict field during Step 3/3.6/3.75
+#                             --revert-resolution and
+#                             _re_strip_trailing_orchestrator_note) is
+#                             tolerated, since review-gate is documented to
+#                             legitimately flip ONLY the verdict field and/or
+#                             append a resolution note during Step 3/3.6/3.75
 #                             resolution. A missing receipt is flagged only
 #                             when the unit has at least one OTHER reviewer's
 #                             receipt on record (_re_unit_has_any_receipt) —
@@ -489,7 +585,7 @@ resolve_review_unit() {
 #                             Never emitted for SKIPPED/UNVERIFIED files
 #                             (orchestrator-authored stubs, never
 #                             independently captured) or when the kill
-#                             switch is `false`.
+#                             switch is `false` (the default).
 # <unit> is resolve_review_unit(nazgul_dir, task_id): task_id unchanged in
 # "task" granularity (the common case), or the task's GROUP-<n>/FEATURE-<feat_id>
 # in "group"/"feature" granularity (MF-013) — the single resolution point every

@@ -1745,4 +1745,69 @@ run_guard "$input"
 assert_exit_code "undisclosed flip, no note: DONE blocked" "$GUARD_EC" 2
 teardown_temp_dir
 
+# Test 93 (round-4: the real, untruncated nazgul/reviews/TASK-002/
+# security-reviewer.md, both top-of-file AND trailing orchestrator notes
+# present — architect round-2's exact finding, driven end-to-end through the
+# real guard). Confirms DONE is actually reachable for a real legitimately-
+# resolved board, not just a library-level check.
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["security-reviewer"]' '.review_gate.granularity = "task"' \
+  '.review_gate.receipt_hash_enforcement = true'
+create_task_file "TASK-001" "IN_REVIEW"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+cat > "$TEST_DIR/nazgul/reviews/TASK-001/security-reviewer.md" << 'REALFIXTURE'
+---
+verdict: APPROVE
+confidence: 75
+review_token: a32840175b088c96
+---
+
+> **review-gate resolution note:** `_has_approved_verdict` (`scripts/lib/review-evidence.sh`) is
+> VERDICT-ONLY by design — its own header comment states "confidence is handled by the review-gate
+> agent," i.e. review-gate resolves confidence-threshold/Step 3.6 outcomes into the persisted
+> `verdict:` field before the mechanical gate reads it. This reviewer's own self-authored header (as
+> originally returned) was `verdict: CHANGES_REQUESTED, confidence: 75`. Its one blocking finding
+> (unguarded jq under `set -e`, HIGH, confidence 82) was cross-checked per Step 3.6 and REFUTEd at
+> confidence 90 (see the trailing orchestrator note below and
+> `nazgul/reviews/TASK-002/adversarial/security-jq-guard.md`) — downgraded to a non-blocking CONCERN.
+> With zero blocking findings remaining, this review resolves to APPROVED for gating purposes. The
+> `verdict:` field above has been updated from the reviewer's original `CHANGES_REQUESTED` to
+> `APPROVE` to reflect that resolution — **every finding and all narrative content below is preserved
+> 100% verbatim, unedited, exactly as the reviewer returned it.** Full tally:
+> `nazgul/reviews/TASK-002/consolidated-feedback.md`.
+
+## Scope of review
+
+Read `nazgul/reviews/TASK-002/diff.patch`, the task manifest, the full current `scripts/subagent-stop.sh`.
+
+### Finding: Unguarded `jq` command substitutions
+- **Severity**: HIGH
+- **Confidence**: 82
+- **Verdict**: REJECT (downgraded to CONCERN per the Step 3.6 note above)
+
+## Final Verdict
+
+CHANGES_REQUESTED. Resolved per Step 3.6 above.
+
+---
+**Orchestrator note (review-gate Step 3.6 — adversarial cross-check, resolved):** the sole HIGH-severity REJECT finding above was cross-checked and REFUTEd at confidence 90. Per Step 3.6 resolution rules, this finding is DOWNGRADED from blocking REJECT to a non-blocking CONCERN.
+REALFIXTURE
+# Self-consistent ground-truth receipt (methodology disclosed in
+# scripts/lib/review-evidence.sh _re_receipt_matches header and the TASK-009
+# Implementation Log: derived from this same reconstruction, no
+# independently-captured ground truth exists in this repo).
+source "$REPO_ROOT/scripts/lib/review-evidence.sh"
+REAL_TOP=$(_re_reconstruct_pretoken_text "$TEST_DIR/nazgul/reviews/TASK-001/security-reviewer.md" --revert-resolution)
+REAL_BOTH=$(printf '%s\n' "$REAL_TOP" | _re_strip_trailing_orchestrator_note)
+REAL_HASH=$(printf '%s' "$REAL_BOTH" | _rp_sha256)
+mkdir -p "$TEST_DIR/nazgul/logs"
+jq -cn --arg u "TASK-001" --arg r "security-reviewer" --arg h "$REAL_HASH" --arg ts "2026-07-23T00:00:00Z" \
+  '{unit:$u, reviewer:$r, hash:$h, ts:$ts}' >> "$TEST_DIR/nazgul/logs/review-receipts.jsonl"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "real TASK-002-shape board (both notes): DONE allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
 report_results
