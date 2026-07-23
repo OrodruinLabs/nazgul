@@ -16,9 +16,12 @@ CONFIG="$NAZGUL_DIR/config.json"
 TASKS_DIR="$NAZGUL_DIR/tasks"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Scope: only when the parallel dispatch option is on.
+# Scope: only when the parallel dispatch option is on. A present-but-corrupt
+# config can't be trusted to say "parallel is off", so it fails closed instead
+# of silently no-opping (MF-053, ADR-003 Decision 3).
 [ -f "$CONFIG" ] || exit 0
-PARALLEL=$(jq -r '.execution.parallel // false' "$CONFIG" 2>/dev/null || echo "false")
+jq -e . "$CONFIG" >/dev/null 2>&1 || { echo "NAZGUL PARALLEL: Blocked — config.json is unreadable; cannot verify parallel-dispatch safety" >&2; exit 2; }
+PARALLEL=$(jq -r '.execution.parallel // false' "$CONFIG")
 [ "$PARALLEL" = "true" ] || exit 0
 
 # Kill-switch (explicit false disables; absent/true enabled).
@@ -52,16 +55,15 @@ source "$SCRIPT_DIR/lib/task-utils.sh"
 
 # _scope_has <manifest> <abs> <rel> -> 0 iff Files modified contains the file
 # (exact match against repo-relative or absolute form; no suffix matching —
-# see the false-positive note in the original conductor-rework-guard).
+# see the false-positive note in the original conductor-rework-guard). Uses
+# the shared JSON-array accessor (MF-025) instead of a comma-split that can
+# never match a bracket/quote-laden real manifest value.
 _scope_has() {
-  local mf="$1" abs="$2" rel="$3" files f
-  files=$(get_task_field "$mf" "Files modified" "")
-  [ -n "$files" ] || return 1
-  IFS=',' read -ra _arr <<< "$files"
-  for f in "${_arr[@]}"; do
-    f="${f#"${f%%[![:space:]]*}"}"; f="${f%"${f##*[![:space:]]}"}"
+  local mf="$1" abs="$2" rel="$3" f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
     { [ "$f" = "$abs" ] || [ "$f" = "$rel" ]; } && return 0
-  done
+  done < <(get_task_files_modified "$mf")
   return 1
 }
 

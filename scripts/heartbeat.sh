@@ -22,9 +22,43 @@ source "$SCRIPT_DIR/lib/session-tracker.sh"
 source "$SCRIPT_DIR/lib/inbox-provider.sh"
 # shellcheck source=lib/heartbeat-triage.sh
 source "$SCRIPT_DIR/lib/heartbeat-triage.sh"
+# shellcheck source=lib/connector-github.sh
+source "$SCRIPT_DIR/lib/connector-github.sh"
 
 # Degrade to a safe no-op when Nazgul is uninitialized, matching stop-hook.sh.
 [ -f "$CONFIG" ] || exit 0
+
+# MF-039: atomic concurrency claim, first action after the degrade gate and
+# ahead of count_active_sessions (which stays a secondary, non-primary check).
+# `mkdir` is atomic at the filesystem level, so two overlapping ticks race on
+# the mkdir itself rather than a stale `ls` read. Held for the tick's whole
+# lifetime (including the blocking _hb_start call) via `trap ... EXIT`.
+HB_LOCK_DIR="$NAZGUL_DIR/.heartbeat.lock"
+HB_LOCK_STALE=$(jq -r '.automation.heartbeat.lock_stale_seconds // 300' "$CONFIG" 2>/dev/null) || HB_LOCK_STALE=300
+case "$HB_LOCK_STALE" in ''|*[!0-9]*) HB_LOCK_STALE=300 ;; esac
+
+if [ -d "$HB_LOCK_DIR" ]; then
+  HB_LOCK_NOW=$(date +%s)
+  HB_LOCK_MTIME=$(stat -c %Y "$HB_LOCK_DIR" 2>/dev/null || stat -f %m "$HB_LOCK_DIR" 2>/dev/null || echo "$HB_LOCK_NOW")
+  case "$HB_LOCK_MTIME" in ''|*[!0-9]*) HB_LOCK_MTIME="$HB_LOCK_NOW" ;; esac
+  if [ $((HB_LOCK_NOW - HB_LOCK_MTIME)) -gt "$HB_LOCK_STALE" ]; then
+    # Age alone can't tell a crashed tick from a live long one — the dir mtime
+    # never advances while _hb_start runs. Reclaim only when the recorded
+    # owner is provably dead; a missing/garbled pid file (torn write) falls
+    # back to the age check alone.
+    HB_LOCK_PID=$(cat "$HB_LOCK_DIR/pid" 2>/dev/null || echo "")
+    case "$HB_LOCK_PID" in *[!0-9]*) HB_LOCK_PID="" ;; esac
+    if [ -z "$HB_LOCK_PID" ] || ! kill -0 "$HB_LOCK_PID" 2>/dev/null; then
+      rm -f "$HB_LOCK_DIR/pid" 2>/dev/null || true
+      rmdir "$HB_LOCK_DIR" 2>/dev/null || true
+    fi
+  fi
+fi
+
+# Lock held (and not stale) -> another tick owns this cycle; never a second loop.
+mkdir "$HB_LOCK_DIR" 2>/dev/null || exit 0
+echo "$$" > "$HB_LOCK_DIR/pid" 2>/dev/null || true
+trap 'rm -f "$HB_LOCK_DIR/pid" 2>/dev/null; rmdir "$HB_LOCK_DIR" 2>/dev/null || true' EXIT
 
 TICK="hb-$(date -u +%s)"
 TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -119,6 +153,28 @@ _hb_start() {
   fi
 }
 
+# _hb_poll_feat_id <prev> -> bounded-retry poll (mirrors _cgh_gh_retry's
+# backoff) of nazgul/config.json's feat_id until it differs from <prev>, for
+# the MF-038 write-back: _hb_start's claude -p call returns before or after
+# the new session's own feat_id write is visible depending on timing, and a
+# stale pre-existing feat_id must never be mistaken for the new one. Empty
+# output + non-zero on exhaustion.
+_hb_poll_feat_id() {
+  local prev="${1:-}" attempts="${NAZGUL_HB_FEATID_ATTEMPTS:-3}" delay="${NAZGUL_HB_FEATID_DELAY:-1}" i val
+  for i in $(seq 1 "$attempts"); do
+    val=$(jq -r '.feat_id // empty' "$CONFIG" 2>/dev/null) || val=""
+    if [ -n "$val" ] && [ "$val" != "$prev" ]; then
+      printf '%s' "$val"
+      return 0
+    fi
+    if [ "$i" -lt "$attempts" ] && [ "$delay" -gt 0 ] 2>/dev/null; then
+      sleep "$delay"
+      delay=$((delay * 2))
+    fi
+  done
+  return 1
+}
+
 # Hard stops — reused from parallel-batch.sh, unconditional: independent of
 # automation.heartbeat.enabled and of mode (including yolo).
 if ! HALT_OUT=$(execution_should_halt "$NAZGUL_DIR" 2>/dev/null); then
@@ -189,8 +245,15 @@ OBJECTIVE=$(_hb_objective "$INBOX_DIR" "$PICKED")
 # double-start of this one.
 if inbox_archive "$INBOX_DIR" "$PICKED"; then
   ARCHIVED_TO="$INBOX_REL/archive/$PICKED"
+  PRE_FEAT_ID=$(jq -r '.feat_id // empty' "$CONFIG" 2>/dev/null) || PRE_FEAT_ID=""
   START_OK=true
   _hb_start "$OBJECTIVE" || START_OK=false
+  if [ "$START_OK" = "true" ] && [ "$INBOX_PROVIDER" = "github" ]; then
+    # MF-038: thread the picked issue# through to the real local id the
+    # auto-started session resolved, so push_status/push_pr can later match it.
+    NEW_FEAT_ID=$(_hb_poll_feat_id "$PRE_FEAT_ID") || NEW_FEAT_ID=""
+    [ -n "$NEW_FEAT_ID" ] && connector_github_map_local_id "$CONFIG" "$PICKED" "$NEW_FEAT_ID"
+  fi
   if [ "$START_OK" = "true" ]; then
     _hb_emit started "" "$OBJECTIVE" "$SEEN_COUNT" "$TRIAGED_JSON" "$PICKED" false true "$ARCHIVED_TO"
   else

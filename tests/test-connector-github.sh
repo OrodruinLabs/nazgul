@@ -225,6 +225,39 @@ assert_eq "pull_archive map still has a single entry for 42" \
 # A claimed issue must never reappear in pull_list (no sync storm).
 assert_not_contains "pull_list excludes the just-claimed issue 42" "$(connector_github_pull_list "$CONFIG")" "42"
 
+# --- MF-038: map_local_id upserts a REAL local id after pull_archive's stub,
+# and _cgh_map_resolve/push_status/push_pr then actually reach the mapped
+# issue — the exact end-to-end flow scripts/heartbeat.sh drives once a
+# github-sourced auto-start's feat_id resolves ---
+MF038_CONFIG="$TEST_DIR/nazgul/config-mf038.json"
+jq '.connectors.github.enabled = true
+    | .connectors.github.push.enabled = true
+    | .connectors.github.map = {}' "$CONFIG" > "$MF038_CONFIG"
+echo '{}' > "$NAZGUL_TEST_GH_LABELS"
+echo '{}' > "$NAZGUL_TEST_GH_COMMENTS"
+
+connector_github_pull_archive "$MF038_CONFIG" 42; mf038_arch_rc=$?
+assert_exit_code "MF-038: pull_archive(42) claims" "$mf038_arch_rc" 0
+assert_eq "MF-038: pull_archive's own map write stays a stub (pull-side contract unchanged)" \
+  "$(jq -r '.connectors.github.map["42"]' "$MF038_CONFIG")" "null"
+assert_eq "MF-038: stub map entry can't resolve yet (push would still be a no-op)" \
+  "$(_cgh_map_resolve "$MF038_CONFIG" "FEAT-042")" ""
+
+connector_github_map_local_id "$MF038_CONFIG" 42 "FEAT-042"
+assert_eq "MF-038: map_local_id upserts the real local id" \
+  "$(jq -r '.connectors.github.map["42"]' "$MF038_CONFIG")" "FEAT-042"
+assert_eq "MF-038: _cgh_map_resolve now matches the real local id" \
+  "$(_cgh_map_resolve "$MF038_CONFIG" "FEAT-042")" "42"
+
+connector_github_push_status "$MF038_CONFIG" "FEAT-042" "IN_PROGRESS"; mf038_ps_rc=$?
+assert_exit_code "MF-038: push_status(FEAT-042) succeeds — no longer a silent no-op" "$mf038_ps_rc" 0
+assert_eq "MF-038: push_status set nazgul-status:in-progress on issue 42" \
+  "$(jq -r '."42" | index("nazgul-status:in-progress") != null' "$NAZGUL_TEST_GH_LABELS")" "true"
+connector_github_push_pr "$MF038_CONFIG" "FEAT-042" "https://github.com/o/r/pull/99"; mf038_pr_rc=$?
+assert_exit_code "MF-038: push_pr(FEAT-042) succeeds" "$mf038_pr_rc" 0
+assert_contains "MF-038: push_pr comment reached issue 42" \
+  "$(jq -r '."42"[-1].body // ""' "$NAZGUL_TEST_GH_COMMENTS")" "https://github.com/o/r/pull/99"
+
 # --- no credential / token is ever written to config in any path ---
 assert_file_not_contains "config carries no ghp_ token"  "$CONFIG" "ghp_"
 assert_file_not_contains "config carries no github_pat"  "$CONFIG" "github_pat"
@@ -476,9 +509,14 @@ jq -n '[{number:77, state:"OPEN", title:"FEAT-777 pull me", body:"do it", labels
 echo '{}' > "$NAZGUL_TEST_GH_LABELS"; echo '{}' > "$NAZGUL_TEST_GH_COMMENTS"; echo '0' > "$NAZGUL_TEST_GH_EDIT_COUNT"
 
 HB_CAP="$TEST_DIR/hb-start.txt"
+# Simulates the real /nazgul:start writing config.json's feat_id once the
+# session resolves — the fixed point MF-038's write-back polls for.
 cat > "$TEST_DIR/fake-start.sh" << EOF
 #!/usr/bin/env bash
+set -euo pipefail
 printf '%s' "\$1" > "$HB_CAP"
+jq '.feat_id = "FEAT-777"' "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.tmp" \
+  && mv "$TEST_DIR/nazgul/config.json.tmp" "$TEST_DIR/nazgul/config.json"
 EOF
 chmod +x "$TEST_DIR/fake-start.sh"
 
@@ -491,6 +529,8 @@ assert_contains "heartbeat(github): auto-start objective is the pulled issue tit
   "$(cat "$HB_CAP" 2>/dev/null || echo "")" "FEAT-777 pull me"
 assert_eq "heartbeat(github): the pulled issue was claimed (nazgul-claimed added)" \
   "$(jq -r '."77" | index("nazgul-claimed") != null' "$NAZGUL_TEST_GH_LABELS")" "true"
+assert_eq "heartbeat(github) MF-038: write-back records the REAL resolved feat_id in the map" \
+  "$(jq -r '.connectors.github.map["77"]' "$TEST_DIR/nazgul/config.json")" "FEAT-777"
 HB_LOG=$(ls -1 "$TEST_DIR/nazgul/logs"/heartbeat-*.jsonl 2>/dev/null | tail -1)
 assert_eq "heartbeat(github): decision recorded as started" \
   "$(tail -1 "$HB_LOG" | jq -r '.decision')" "started"

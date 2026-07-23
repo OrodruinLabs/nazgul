@@ -15,7 +15,7 @@ Enforceable operating rules for the Nazgul Framework. Each rule carries a tier l
 ## 1. The 10 Rules
 
 1. **Always read plan.md first.** `[enforced]` The Recovery Pointer tells you exactly where you are. Source edits require an IN_PROGRESS task in the manifest (`task-state-guard.sh`), and state advances require evidence on disk (`review-evidence.sh`) — the guards enforce the principle that files must be read before work proceeds.
-2. **Files are truth, context is ephemeral.** `[enforced]` Write state to files immediately. Never rely on conversational memory. Evidence gates block state transitions that would rely on unwritten state (IMPLEMENTED requires a commit SHA in the manifest).
+2. **Files are truth, context is ephemeral.** `[enforced]` Write state to files immediately. Never rely on conversational memory. Evidence gates block state transitions that would rely on unwritten state (IMPLEMENTED requires a commit SHA in the manifest that resolves to a real, reachable commit via `git cat-file -e` — MF-026; a hex-looking-but-nonexistent SHA, or a manifest written when `git` is unavailable, now BLOCKS instead of passing a bare pattern match).
 3. **Follow existing patterns exactly.** `[advisory]` Read the pattern reference before implementing. Match the style.
 4. **Tests are mandatory.** `[enforced]` Every task includes tests. Run them after every change. Don't proceed if failing. `stop-hook.sh` tracks consecutive failures and blocks the loop after `safety.max_consecutive_failures` (default 5) consecutive failures.
 5. **Never skip the review gate.** `[enforced]` ALL reviewers must approve. No exceptions. `review-evidence.sh` blocks DONE until a review directory with `verdict: APPROVE` exists for every reviewer.
@@ -60,6 +60,10 @@ Task-PR:     PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> APPR
 - IN_PROGRESS -> IN_REVIEW (must go through IMPLEMENTED)
 - IN_REVIEW -> IN_PROGRESS (must go through CHANGES_REQUESTED)
 - DONE -> any state (terminal)
+
+### Bash-Write Reconciliation (MF-022, second layer)
+
+`[hook-driven only]` The table above is enforced at the tool level by `task-state-guard.sh` — but only for a status write that goes through Write/Edit/MultiEdit. A write that reaches a manifest by another path (`mv`/`cp` over the file, a raw shell redirect that evades the PreToolUse matcher) bypasses that tool-level gate entirely. `scripts/stop-hook.sh` closes this as a second, detection-only layer: at the top of every iteration it diffs each task manifest's live status against the status recorded in the previous checkpoint's `task_statuses` snapshot, and any change since then that is not traceable to a guarded transition — logged only by `task-state-guard.sh`'s PreToolUse path via `ttg_log_transition` (`scripts/lib/task-transition-guard.sh`) — is untrusted and flagged `BLOCKED` with a named diagnostic (task id, old→new status, "written outside the guarded Write/Edit/MultiEdit path"). It never rewrites a "corrected" status, only blocks. Both call sites share one library (`scripts/lib/task-transition-guard.sh`: `ttg_valid_transition`, `ttg_verify_commit_evidence`, `ttg_verify_review_evidence`, `ttg_log_transition`), so the transition rules can't drift out of sync between the two enforcement points. Runs only when `stop-hook.sh` drives the loop — a human or orchestrator that never invokes it is not caught by this layer, only by the tool-level block (when the write happens to go through a guarded tool). Kill-switch: `guards.bash_write_reconciliation` (default `true`, config schema v28).
 
 ---
 
@@ -192,7 +196,7 @@ This guard governs comment QUANTITY at write time. See §7 for the complementary
 
 ## 8. File Scope Restrictions
 
-- **Implementer**: `[enforced]` Only files in the task's `file_scope`. `task-state-guard.sh` (PreToolUse on Write/Edit) blocks edits outside declared scope. Must update manifest before expanding.
+- **Implementer**: `[enforced]` Only files listed in the task manifest's `Files modified` JSON array, read via the shared `get_task_files_modified` accessor (`scripts/lib/task-utils.sh`). `task-state-guard.sh` (PreToolUse on Write/Edit) blocks edits outside declared scope — a live restriction again (MF-024): the block previously queried a nonexistent `File Scope` field and never actually restricted anything. Must update the manifest before expanding scope.
 - **Reviewers**: `[enforced]` Read-only — `Read`/`Glob`/`Grep` only, no `Write` and no `Bash` (tool-allowlist enforced). Reviewers do not write any file; they RETURN their review and the review-gate orchestrator persists it to `nazgul/reviews/` (see §3.3).
 - **Parallel tasks**: `[hook-driven only]` Zero file overlap. Team Orchestrator validates before assigning; bypassable by manual task dispatch.
 - **Specialists**: `[hook-driven only]` Only files in the delegation brief's scope. Validated by the Team Orchestrator when stop-hook drives dispatch.
@@ -245,7 +249,9 @@ graph, since parallel dispatch has no `graph.json` mirror to go stale. Both guar
 `execution.parallel` is `true`, so a sequential-mode run is never touched.
 
 - **Dispatch guard.** `[enforced]` `scripts/parallel-dispatch-guard.sh` — a PreToolUse guard on the `Agent` tool — denies (exit 2) re-dispatching a work unit (`implementer`, `review-gate`, `team-orchestrator`) whose task manifest status makes that dispatch wasted work, matched via the `NAZGUL_UNIT: TASK-NNN` marker every dispatch prompt carries (grepped as data, never `eval`'d). The "already done" threshold differs by subagent kind: `implementer`/`team-orchestrator` are denied once status reaches `IMPLEMENTED`/`DONE`, but `review-gate` is denied only at `DONE` — dispatching `review-gate` for an `IMPLEMENTED` unit is the required next step, not a re-dispatch. Kill-switch: `execution.enforce.dispatch_guard` (default `true`).
-- **Re-work guard.** `[enforced]` `scripts/parallel-rework-guard.sh` — a PreToolUse guard on `Write|Edit|MultiEdit` — denies (exit 2) a write to a file inside the `file_scope` of a *different* task already `DONE`/`IMPLEMENTED` with a merged commit recorded in its own manifest; the actively-dispatched task is never blocked from writing inside its own scope. Kill-switch: `execution.enforce.rework_guard` (default `true`).
+- **Re-work guard.** `[enforced]` `scripts/parallel-rework-guard.sh` — a PreToolUse guard on `Write|Edit|MultiEdit` — denies (exit 2) a write to a file inside the `file_scope` of a *different* task already `DONE`/`IMPLEMENTED` with a merged commit recorded in its own manifest; the actively-dispatched task is never blocked from writing inside its own scope. Its scope check reads the `Files modified` JSON array via the shared `get_task_files_modified` accessor (MF-025), replacing a comma-split parser that could never match a real bracket/quote-laden manifest value. Kill-switch: `execution.enforce.rework_guard` (default `true`).
+
+**Both guards fail CLOSED on a genuinely unparseable config (MF-053, ADR-003 Decision 3).** `[enforced]` A *missing* `config.json` still safely no-ops as `parallel=false` (the existing `[ -f "$CONFIG" ] || exit 0` stays first). But a config that is *present* and fails `jq -e . "$CONFIG"` — a torn or corrupt write, not an absent file — now exits 2 with a named diagnostic in both `parallel-dispatch-guard.sh` and `parallel-rework-guard.sh`, instead of the prior `jq ... || echo "false"` fallback that silently disarmed the guard on exactly that ambiguity. This mirrors `scripts/lib/git-hooks.sh`'s `_gh_config_readable()` fail-closed precedent (§15).
 
 These two guards sit underneath, not instead of, the two unconditional hard stops in §11: even with both
 kill-switches set `false`, `execution_should_halt` (`scripts/lib/parallel-batch.sh`) still fails closed on
@@ -391,12 +397,20 @@ actually asked to do.
   (`scripts/worktree-utils.sh`) at the moment `branch.feature` is assigned, first durably recording the
   live `core.hooksPath` (or its absence) into `branch.prior_hooks_path` so uninstall can restore it
   exactly. `uninstall_git_hooks` runs inside `cleanup_all_worktrees` at objective completion, restoring
-  that recorded value verbatim. `self_heal_git_hooks` runs from `scripts/session-context.sh`'s
-  `SessionStart` self-heal block, re-asserting the managed path only when it has drifted from what
-  installation set — never a blind overwrite of an intentional mid-session change. All three call sites
-  are agent-protocol/skill-driven (worktree setup, objective completion, session start), not a
-  PreToolUse guard, so a manually-dispatched agent that never calls `create_feature_branch()` gets no
-  guard installed at all — the honest gap this tier label exists to state.
+  that recorded value verbatim. All five of `skills/start/SKILL.md`'s branch-setup sites call
+  `create_feature_branch` (MF-034: previously inline prose, so the lifecycle above was never actually
+  invoked in production despite the library functions being correct), and `agents/review-gate.md` /
+  `agents/team-orchestrator.md` merge tasks back via `merge_task_to_feature()` (`git -C`-safe, closing
+  the worktree-cwd escape MF-035 depended on) instead of a `cd <main_worktree_path>` convention.
+  `self_heal_git_hooks` runs from `scripts/session-context.sh`'s `SessionStart` self-heal block and is
+  now two layers: when `guards.git_hooks` is true, `branch.feature` is set, and `branch.prior_hooks_path`
+  is still `null` (an active objective whose branch-setup call site never installed), it performs a
+  first-time `install_git_hooks` — narrow defense-in-depth for the residual MF-034 gap; otherwise it
+  re-asserts the managed path only on detected drift, never a blind overwrite of an intentional
+  mid-session change. All call sites are agent-protocol/skill-driven (worktree setup, objective
+  completion, session start), not a PreToolUse guard, so a manually-dispatched agent that never calls
+  `create_feature_branch()` (or reaches `SessionStart` with `branch.feature` still unset) gets no guard
+  installed at all — the honest gap this tier label exists to state.
 
 **Enforcement tier, stated honestly (ADR-001 Consequences).** Once installed, the two guards above are
 tagged `[enforced]` — but they are stronger than every other `[enforced]` entry in this document: they
@@ -406,10 +420,10 @@ PreToolUse guard here (the Legend's tier-1 row now notes this). *Installation* i
 not itself mechanically forced onto every code path that could start a loop or invoke git; it depends on
 the loop's own protocol calling `create_feature_branch()`/`setup_worktree_dir()`, same limit this
 document already applies to other protocol-invoked checks (e.g. §14's `raise_finding` call sites). A
-repo where install never ran has no guard at all — self-heal only re-asserts a *previously installed*
-managed path (it requires `branch.prior_hooks_path` to actually be recorded, i.e. `install_git_hooks`
-already ran once), so a repo that never installed stays unguarded indefinitely, not just until the next
-`SessionStart`.
+repo where install never ran, and no `SessionStart` has fired since `branch.feature` was assigned, has no
+guard at all yet — self-heal's first-time-install layer (above) closes the common case (a loop whose
+branch-setup call site never ran `create_feature_branch`) at the next `SessionStart`, but a repo that
+never reaches either call site stays unguarded indefinitely.
 
 ## 16. GitHub Connector
 

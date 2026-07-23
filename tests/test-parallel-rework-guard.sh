@@ -17,12 +17,15 @@ setup() {
 }
 teardown() { teardown_temp_dir; }
 
-# helper: task manifest with a Files modified scope and an optional commit.
+# helper: task manifest with a real JSON-array `Files modified` scope (MF-025
+# consumer fixture-realism — a bare comma-split would never match a real
+# planner-shaped manifest) and an optional commit.
 # Usage: create_owned_task <id> <status> <files-csv> [commit-sha]
 create_owned_task() {
   local id="$1" status="$2" files="$3" commit="${4:-}"
-  create_task_file "$id" "$status"
-  printf -- '- **Files modified**: %s\n' "$files" >> "$TEST_DIR/nazgul/tasks/${id}.md"
+  local files_json
+  files_json=$(printf '%s' "$files" | jq -R -c 'split(",") | map(gsub("^\\s+|\\s+$";""))')
+  create_task_file_with_files_modified "$id" "$status" "$files_json"
   if [ -n "$commit" ]; then
     printf -- '\n## Commits\n- %s\n' "$commit" >> "$TEST_DIR/nazgul/tasks/${id}.md"
   fi
@@ -33,6 +36,11 @@ guard_ec() { # <file_path>
   local ec=0
   jq -n --arg f "$1" '{tool_name:"Edit",tool_input:{file_path:$f}}' | bash "$GUARD" >/dev/null 2>&1 || ec=$?
   echo "$ec"
+}
+
+# helper: same envelope, but return the guard's stderr instead of its exit code
+guard_stderr() { # <file_path>
+  jq -n --arg f "$1" '{tool_name:"Edit",tool_input:{file_path:$f}}' | bash "$GUARD" 2>&1 >/dev/null || true
 }
 
 setup
@@ -125,6 +133,46 @@ create_owned_task TASK-003 IN_PROGRESS "scripts/lib/inbox-provider.sh"
 create_owned_task TASK-004 IN_PROGRESS "scripts/lib/inbox-provider.sh"
 assert_eq "ambiguous two-unit CURRENT match denied (fail closed)" \
   "$(guard_ec "scripts/lib/inbox-provider.sh")" "2"
+teardown
+
+# 13. MF-025 accessor repoint: a real multi-item JSON-array `Files modified`
+# value (brackets/quotes/comma, the shape a real planner manifest actually
+# writes) must still be parsed correctly — the overlapping committed file is
+# detected and re-work is blocked. A bare comma-split parser (the pre-fix
+# behavior) could never match this shape.
+setup
+create_owned_task TASK-001 DONE "scripts/lib/inbox-provider.sh,scripts/heartbeat.sh" "abc1234"
+assert_eq "multi-item JSON-array scope match blocks rework" \
+  "$(guard_ec "scripts/heartbeat.sh")" "2"
+teardown
+
+# 14-17. MF-053 fail-closed: a present-but-unparseable config.json must BLOCK
+# an edit into an already-committed unit's scope (not silently no-op as
+# "parallel=false" would), across every torn/corrupt shape a real write can
+# leave on disk. A genuinely absent config is the one case that still safely
+# no-ops (case 18).
+for shape in corrupt empty truncated; do
+  setup
+  create_owned_task TASK-001 DONE "scripts/lib/inbox-provider.sh" "abc1234"
+  case "$shape" in
+    corrupt)   printf 'not json' > "$WORK/nazgul/config.json" ;;
+    empty)     : > "$WORK/nazgul/config.json" ;;
+    truncated) printf '{"execution": {"para' > "$WORK/nazgul/config.json" ;;
+  esac
+  assert_eq "$shape config fails closed (rework blocked)" \
+    "$(guard_ec "scripts/lib/inbox-provider.sh")" "2"
+  assert_contains "$shape config diagnostic names the reason" \
+    "$(guard_stderr "scripts/lib/inbox-provider.sh")" \
+    "config.json is unreadable"
+  teardown
+done
+
+# 18. missing config.json entirely -> still safely no-ops (ALLOW), distinct
+# from "present but unparseable" above.
+setup
+rm -f "$WORK/nazgul/config.json"
+create_owned_task TASK-001 DONE "scripts/lib/inbox-provider.sh" "abc1234"
+assert_eq "missing config still no-ops (allowed)" "$(guard_ec "scripts/lib/inbox-provider.sh")" "0"
 teardown
 
 report_results

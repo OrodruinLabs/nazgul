@@ -11,9 +11,9 @@ run_hook() { HOOK_OUTPUT=$(bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?; }
 
 make_parallel_pair() {
   create_task_file TASK-001 READY
-  printf -- '- **Files modified**: src/a.sh\n' >> "$TEST_DIR/nazgul/tasks/TASK-001.md"
+  printf -- '- **Files modified**: ["src/a.sh"]\n' >> "$TEST_DIR/nazgul/tasks/TASK-001.md"
   create_task_file TASK-002 READY
-  printf -- '- **Files modified**: src/b.sh\n' >> "$TEST_DIR/nazgul/tasks/TASK-002.md"
+  printf -- '- **Files modified**: ["src/b.sh"]\n' >> "$TEST_DIR/nazgul/tasks/TASK-002.md"
   cat > "$TEST_DIR/nazgul/plan.md" << 'EOF'
 # Plan
 
@@ -89,9 +89,9 @@ teardown_temp_dir
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
 create_config '.execution.parallel = true' '.mode = "afk"' '.review_gate.granularity = "task"'
 create_task_file TASK-001 READY
-printf -- '- **Files modified**: src/shared.sh\n' >> "$TEST_DIR/nazgul/tasks/TASK-001.md"
+printf -- '- **Files modified**: ["src/shared.sh"]\n' >> "$TEST_DIR/nazgul/tasks/TASK-001.md"
 create_task_file TASK-002 READY
-printf -- '- **Files modified**: src/shared.sh\n' >> "$TEST_DIR/nazgul/tasks/TASK-002.md"
+printf -- '- **Files modified**: ["src/shared.sh"]\n' >> "$TEST_DIR/nazgul/tasks/TASK-002.md"
 cat > "$TEST_DIR/nazgul/plan.md" << 'EOF'
 # Plan
 
@@ -143,7 +143,7 @@ setup_temp_dir; setup_git_repo; setup_nazgul_dir
 create_config '.execution.parallel = true' '.execution.max_parallel = 3' '.mode = "afk"' \
   '.review_gate.granularity = "task"'
 create_task_file TASK-000 READY
-printf -- '- **Files modified**: src/z.sh\n' >> "$TEST_DIR/nazgul/tasks/TASK-000.md"
+printf -- '- **Files modified**: ["src/z.sh"]\n' >> "$TEST_DIR/nazgul/tasks/TASK-000.md"
 make_parallel_pair
 run_hook
 assert_exit_code "batch+outsider: blocks stop" "$HOOK_EC" 2

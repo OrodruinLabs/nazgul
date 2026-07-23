@@ -1160,4 +1160,78 @@ assert_eq "SA-7: attempts scoped to new feat_id" \
   "$(awk '{print $1}' "$TEST_DIR/nazgul/logs/.self-audit-attempts")" "FEAT-SA7"
 teardown_temp_dir
 
+# --- RECON-1: Bash-write bypass (status flipped by direct file rewrite, not
+# through task-state-guard.sh) is flagged BLOCKED at the next iteration
+# (MF-022) ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "IN_PROGRESS"
+run_hook
+sed -i.bak 's/^status: IN_PROGRESS/status: DONE/' "$TEST_DIR/nazgul/tasks/TASK-001.md" && rm -f "$TEST_DIR/nazgul/tasks/TASK-001.md.bak"
+run_hook
+assert_eq "recon: forged status flagged BLOCKED" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "BLOCKED"
+assert_contains "recon: diagnostic names the task id" "$HOOK_OUTPUT" "TASK-001"
+assert_contains "recon: diagnostic names outside guarded path" "$HOOK_OUTPUT" "outside the guarded Write/Edit/MultiEdit path"
+assert_contains "recon: blocked reason recorded on manifest" \
+  "$(grep -m1 '^\- \*\*Blocked reason\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md")" "outside the guarded"
+teardown_temp_dir
+
+# --- RECON-2: kill switch off — same forged write is NOT reconciled ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]' '.guards.bash_write_reconciliation = false'
+create_plan
+create_task_file "TASK-001" "IN_PROGRESS"
+run_hook
+sed -i.bak 's/^status: IN_PROGRESS/status: IMPLEMENTED/' "$TEST_DIR/nazgul/tasks/TASK-001.md" && rm -f "$TEST_DIR/nazgul/tasks/TASK-001.md.bak"
+run_hook
+assert_eq "recon: kill switch off — forged status left untouched" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "IMPLEMENTED"
+teardown_temp_dir
+
+# --- RECON-3: a legitimate Write-mediated transition (through
+# task-state-guard.sh, so it lands in the guarded-transition ledger) is NOT
+# flagged BLOCKED by the next iteration's reconciliation pass ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "IN_PROGRESS"
+run_hook
+REAL_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+RECON_TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+recon_content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- %s' "$REAL_SHA")
+recon_input=$(jq -n --arg fp "$RECON_TASK_PATH" --arg content "$recon_content" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
+echo "$recon_input" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO_ROOT/scripts/task-state-guard.sh" >/dev/null 2>&1
+printf '%s' "$recon_content" > "$RECON_TASK_PATH"
+run_hook
+assert_eq "recon: legitimate guarded transition not reconciled to BLOCKED" \
+  "$(get_task_status "$RECON_TASK_PATH")" "IMPLEMENTED"
+teardown_temp_dir
+
+# --- RECON-4: the stop-hook's OWN auto-promote (PLANNED -> READY) runs after
+# the iteration's checkpoint snapshot; it must ledger-log the write so the
+# NEXT iteration's reconciliation doesn't flag the hook's legitimate
+# promotion as a bash-write forgery ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "PLANNED"
+run_hook
+assert_eq "recon: auto-promote flipped PLANNED to READY" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "READY"
+run_hook
+assert_eq "recon: hook's own auto-promote not reconciled to BLOCKED" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "READY"
+teardown_temp_dir
+
 report_results

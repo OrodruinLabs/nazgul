@@ -8,6 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/task-utils.sh"
 source "$SCRIPT_DIR/lib/review-evidence.sh"
+source "$SCRIPT_DIR/lib/task-transition-guard.sh"
 
 # Single source of truth (ADR-002 Decision 1): derive the accepted-status regex
 # alternation from structured-state.sh's VALID_STATUSES (sourced transitively via
@@ -205,14 +206,17 @@ if ! is_task_manifest "$FILE_PATH"; then
   fi
 
   # --- FILE SCOPE GUARD ---
-  # If the active task declares a File Scope, block edits to paths outside it.
-  # Exemptions: nazgul/ paths (already returned exit 0 above) and docs/ paths.
-  # Degrade: if field absent or empty, allow (no restriction declared).
+  # If the active task declares files in scope, block edits to paths outside
+  # it. Exemptions: nazgul/ paths (already returned exit 0 above) and docs/
+  # paths. Degrade: if the field is absent/empty/malformed, allow (no
+  # restriction declared) — MF-024: fed by the shared `Files modified`
+  # JSON-array accessor, not the nonexistent "File Scope" field.
   ACTIVE_TASK_ID=""
   FILE_SCOPE=""
   if [ -n "$ACTIVE_TASK_FILE" ]; then
     ACTIVE_TASK_ID=$(basename "$ACTIVE_TASK_FILE" .md)
-    FILE_SCOPE=$(get_task_field "$ACTIVE_TASK_FILE" "File Scope" "") || FILE_SCOPE=""
+    FILE_SCOPE=$(get_task_files_modified "$ACTIVE_TASK_FILE" 2>/dev/null | tr '\n' ' ')
+    FILE_SCOPE="${FILE_SCOPE% }"
   fi
 
   if [ -n "$FILE_SCOPE" ]; then
@@ -240,7 +244,7 @@ if ! is_task_manifest "$FILE_PATH"; then
     if [ "$SCOPE_MATCH" = false ]; then
       echo "NAZGUL FILE SCOPE GUARD: BLOCKED — ${ACTIVE_TASK_ID} file scope does not include: $FILE_PATH" >&2
       echo "Active task scope: $FILE_SCOPE" >&2
-      echo "To edit this file, update '- **File Scope**:' in nazgul/tasks/${ACTIVE_TASK_ID}.md first." >&2
+      echo "To edit this file, update '- **Files modified**:' in nazgul/tasks/${ACTIVE_TASK_ID}.md first." >&2
       exit 2
     fi
   fi
@@ -317,35 +321,9 @@ if [ "$OLD_STATUS" = "$NEW_STATUS" ]; then
 fi
 
 # --- ENFORCE STATE MACHINE (Constitution Article III) ---
-valid_transition() {
-  local from="$1"
-  local to="$2"
-  case "${from}_${to}" in
-    PLANNED_READY)               return 0 ;;
-    PLANNED_BLOCKED)             return 0 ;;
-    READY_BLOCKED)               return 0 ;;
-    READY_IN_PROGRESS)           return 0 ;;
-    IN_PROGRESS_IMPLEMENTED)     return 0 ;;
-    IN_PROGRESS_BLOCKED)         return 0 ;;
-    IMPLEMENTED_BLOCKED)         return 0 ;;
-    IMPLEMENTED_IN_REVIEW)       return 0 ;;
-    IN_REVIEW_DONE)              return 0 ;;
-    IN_REVIEW_APPROVED)          return 0 ;;
-    IN_REVIEW_CHANGES_REQUESTED) return 0 ;;
-    IN_REVIEW_BLOCKED)           return 0 ;;
-    APPROVED_DONE)               return 0 ;;
-    APPROVED_BLOCKED)            return 0 ;;
-    CHANGES_REQUESTED_IN_PROGRESS) return 0 ;;
-    CHANGES_REQUESTED_BLOCKED)   return 0 ;;
-    # BLOCKED exits: READY via /nazgul:task unblock; IN_REVIEW via /nazgul:review --materialize
-    # (BLOCKED→IN_REVIEW still requires a review directory — enforced below)
-    BLOCKED_READY)               return 0 ;;
-    BLOCKED_IN_REVIEW)           return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-if ! valid_transition "$OLD_STATUS" "$NEW_STATUS"; then
+# ttg_valid_transition (scripts/lib/task-transition-guard.sh) is the single
+# source of truth, shared with stop-hook.sh's reconciliation pass (MF-022).
+if ! ttg_valid_transition "$OLD_STATUS" "$NEW_STATUS"; then
   echo "NAZGUL STATE GUARD: BLOCKED — Invalid state transition: ${OLD_STATUS} → ${NEW_STATUS}" >&2
   case "$OLD_STATUS" in
     PLANNED)           echo "  PLANNED allowed next: READY, BLOCKED" >&2 ;;
@@ -385,10 +363,10 @@ if [ "$OLD_STATUS" = "IN_PROGRESS" ] && [ "$NEW_STATUS" = "IMPLEMENTED" ]; then
   else
     MANIFEST_TEXT="$NEW_CONTENT"
   fi
-  if ! printf '%s' "$MANIFEST_TEXT" | grep -qE '[0-9a-f]{7,40}'; then
-    echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark IMPLEMENTED without a commit SHA" >&2
-    echo "Add a ## Commits section with at least one commit hash to the task manifest." >&2
-    echo "If you implemented the work, you should have committed it." >&2
+  if ! ttg_verify_commit_evidence "$MANIFEST_TEXT" "$PROJECT_ROOT"; then
+    echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark IMPLEMENTED without a verified commit SHA" >&2
+    echo "Add a ## Commits section with a real, reachable commit hash (verified via git cat-file) to the task manifest." >&2
+    echo "If you implemented the work, you should have committed it. If git is unavailable, this blocks by design (fail closed)." >&2
     exit 2
   fi
 fi
@@ -435,7 +413,7 @@ fi
 
 if [ "$NEEDS_REVIEW_CHECK" = true ]; then
   REVIEW_DIR="$NAZGUL_DIR/reviews/$TASK_ID"
-  EVIDENCE_PROBLEMS=$(validate_review_evidence "$NAZGUL_DIR" "$TASK_ID") || true
+  EVIDENCE_PROBLEMS=$(ttg_verify_review_evidence "$NAZGUL_DIR" "$TASK_ID") || true
   if [ -n "$EVIDENCE_PROBLEMS" ]; then
     echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
     # NO_REVIEW_DIR and NO_REVIEWERS_CONFIGURED are single-token outputs (the lib
@@ -468,5 +446,8 @@ if [ "$NEEDS_REVIEW_CHECK" = true ]; then
   fi
 fi
 
-# Valid transition — allow
+# Valid transition — allow. Record it in the guarded-transition ledger so
+# stop-hook.sh's reconciliation pass can tell this legitimate
+# Write/Edit/MultiEdit-mediated change apart from a Bash-write bypass (MF-022).
+ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "$OLD_STATUS" "$NEW_STATUS"
 exit 0

@@ -26,6 +26,13 @@ guard_ec() { # <subagent_type> <run_in_background> <prompt>
   echo "$ec"
 }
 
+# helper: same envelope, but return the guard's stderr instead of its exit code
+guard_stderr() { # <subagent_type> <run_in_background> <prompt>
+  jq -n --arg t "$1" --argjson bg "$2" --arg p "$3" \
+    '{tool_name:"Agent",tool_input:{subagent_type:$t,run_in_background:$bg,prompt:$p}}' \
+    | bash "$GUARD" 2>&1 >/dev/null || true
+}
+
 setup
 create_task_file TASK-001 READY
 create_task_file_with_commits TASK-002 DONE "abc1234"
@@ -73,6 +80,34 @@ setup
 create_task_file_with_commits TASK-002 DONE "abc1234"
 jq 'del(.execution.enforce.dispatch_guard)' "$WORK/nazgul/config.json" > "$WORK/c" && mv "$WORK/c" "$WORK/nazgul/config.json"
 assert_eq "absent kill-switch still enforces" "$(guard_ec "nazgul:implementer" false "NAZGUL_UNIT: TASK-002")" "2"
+teardown
+
+# 13-16. MF-053 fail-closed: a present-but-unparseable config.json must BLOCK
+# re-dispatch of an already-DONE unit (not silently no-op as "parallel=false"
+# would), across every torn/corrupt shape a real write can leave on disk. A
+# genuinely absent config is the one case that still safely no-ops (case 17).
+for shape in corrupt empty truncated; do
+  setup
+  create_task_file_with_commits TASK-002 DONE "abc1234"
+  case "$shape" in
+    corrupt)   printf 'not json' > "$WORK/nazgul/config.json" ;;
+    empty)     : > "$WORK/nazgul/config.json" ;;
+    truncated) printf '{"execution": {"para' > "$WORK/nazgul/config.json" ;;
+  esac
+  assert_eq "$shape config fails closed (DONE re-dispatch blocked)" \
+    "$(guard_ec "nazgul:implementer" false "NAZGUL_UNIT: TASK-002")" "2"
+  assert_contains "$shape config diagnostic names the reason" \
+    "$(guard_stderr "nazgul:implementer" false "NAZGUL_UNIT: TASK-002")" \
+    "config.json is unreadable"
+  teardown
+done
+
+# 17. missing config.json entirely -> still safely no-ops (ALLOW), distinct
+# from "present but unparseable" above.
+setup
+rm -f "$WORK/nazgul/config.json"
+create_task_file_with_commits TASK-002 DONE "abc1234"
+assert_eq "missing config still no-ops (allowed)" "$(guard_ec "nazgul:implementer" false "NAZGUL_UNIT: TASK-002")" "0"
 teardown
 
 report_results

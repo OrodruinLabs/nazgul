@@ -180,12 +180,14 @@ uninstall_git_hooks() {
 }
 
 # self_heal_git_hooks <project_root> <config>
-# Re-asserts the managed `core.hooksPath` ONLY when a loop is actively
-# tracked (`guards.git_hooks` true, `branch.feature` set, `branch.
-# prior_hooks_path` has actually been recorded — i.e. non-null) AND the
-# actual value has drifted from the managed dir. No-ops on an explicit
-# `guards.git_hooks: false`, no active objective, or when already correct —
-# never a blind overwrite.
+# Two layers, both gated on `guards.git_hooks` true and `branch.feature` set
+# (a non-object `.branch` reads as "no feature" — same fail-safe treatment as
+# uninstall_git_hooks): when `branch.prior_hooks_path` is still `null` (an
+# active objective whose branch-setup call site never installed — the
+# residual MF-034 gap), performs a first-time install via `install_git_hooks`;
+# otherwise re-asserts the managed `core.hooksPath` only on detected drift.
+# No-ops on an explicit `guards.git_hooks: false`, no active objective, or
+# when already correct — never a blind overwrite.
 self_heal_git_hooks() {
   local project_root="${1:?self_heal_git_hooks: project_root required}"
   local config="${2:?self_heal_git_hooks: config required}"
@@ -193,15 +195,16 @@ self_heal_git_hooks() {
   _gh_config_readable "$config" || return 0
   [ "$(_gh_enabled "$config")" = "true" ] || return 0
 
-  # A non-object `.branch` reads as "no feature" / "never recorded" here too
-  # — same fail-safe treatment as uninstall_git_hooks.
   local feature
   feature=$(jq -r 'if (.branch|type) == "object" then (.branch.feature // "") else "" end' "$config" 2>/dev/null || echo "")
   [ -n "$feature" ] || return 0
 
   local recorded
   recorded=$(jq -r 'if (.branch|type) == "object" then (.branch.prior_hooks_path != null) else false end' "$config" 2>/dev/null || echo "false")
-  [ "$recorded" = "true" ] || return 0
+  if [ "$recorded" != "true" ]; then
+    install_git_hooks "$project_root" "$config"
+    return 0
+  fi
 
   local current
   current=$(_gh_current_hooks_path "$project_root")

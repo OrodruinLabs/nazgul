@@ -160,6 +160,16 @@ Every branch-setup path below that needs a feature id MUST follow this rule inst
 - **If `config.feat_id` is already set** (e.g. `/nazgul:plan` created this objective up front, or a prior start path already assigned it): **reuse it.** Do NOT recompute the id, do NOT overwrite `feat_id`/`feat_display_id`/`afk.commit_prefix`, and do NOT append to `objectives_history` — all of that was done at creation time. Just proceed to create the git branch/worktree using the existing `feat_id`/`feat_display_id`/`afk.commit_prefix`. (Recomputing here would assign the wrong id — e.g. FEAT-002 when plan made FEAT-001 — and orphan the `objectives/FEAT-001-spec.md` the doc-generator reads.)
 - **Only when `config.feat_id` is null** do you assign identity: compute `FEAT-NNN` from `objectives_history.length + 1` (if board connected, prefer issue number as display_id), set `feat_id` + `feat_display_id` + `afk.commit_prefix` to `feat(<display_id>):`, and append the objective to `objectives_history` — exactly once.
 
+### Branch Setup via `create_feature_branch` (shared by every branch-setup site below)
+
+Every "Branch Setup" step referenced from a state below follows this same sequence — it replaces the old inline `git checkout -b`/config-write prose with the existing, already-correct `scripts/worktree-utils.sh` library (MF-034: this is what actually activates the managed git-hooks install, which the prose never did):
+
+1. `source scripts/worktree-utils.sh` then call `create_feature_branch "$OBJECTIVE" "$(pwd)" nazgul/config.json`. This performs the full branch-setup (captures `branch.base`, stores `branch.main_worktree_path`, slugifies, `git checkout -b`, sets `feat_id`/`feat_display_id`/`afk.commit_prefix`) and calls `install_git_hooks` internally — the managed `core.hooksPath` and `branch.prior_hooks_path` are now set as a direct consequence of this one call. The helper is identity-reuse-safe per the **Objective Identity** rule above: an already-set `config.feat_id` (and its display id/commit prefix) is reused verbatim for the branch name and config fields; a fresh `FEAT-NNN` is derived from `objectives_history.length + 1` only when `feat_id` is null.
+2. History append, per **Objective Identity (use existing or assign)** above:
+   - Reuse case (`feat_id` was already set): do NOT append to `objectives_history` — already done at original assignment time.
+   - Assign case (`feat_id` was null before step 1): append `{feat_id, objective, started_at}` to `objectives_history` exactly once.
+3. `setup_worktree_dir "$(pwd)" nazgul/config.json` to create the worktree dir and store its path in config.
+
 ### Smart State Detection
 
 Evaluate the preprocessor data above. Work through this state machine top-to-bottom — take the FIRST state that matches:
@@ -182,13 +192,7 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 4. Read the active task manifest
 5. **Branch Verification:** Read `nazgul/config.json → branch.feature`.
    - If set: verify current branch matches, `git checkout <feature>` if not on it
-   - If null (pre-v3 project): create feature branch now:
-     a. Capture current branch as `branch.base`
-     b. Store `pwd` as `branch.main_worktree_path`
-     c. Slugify objective → `feat/<display_id>-<slug>`
-     d. Assign objective identity per **Objective Identity (use existing or assign)** above: reuse `config.feat_id`/`feat_display_id`/`afk.commit_prefix` if already set (no recompute, no `objectives_history` append); only when `feat_id` is null compute `FEAT-NNN` from `objectives_history.length + 1`, set the id fields + `afk.commit_prefix`, and append to `objectives_history` once.
-     e. `git checkout -b feat/<display_id>-<slug>`
-     f. Create worktree dir, store paths in config
+   - If null (pre-v3 project): create feature branch now via the shared helper (see **Branch Setup via `create_feature_branch`** below).
 6. Mode was already applied from flags by the **Apply Flags** step above; do not re-derive it here. (Loop counters were already reset by the mandatory **Reset Loop Counters** step above.)
 7. Delegate to the appropriate agent based on active task status:
    - READY/IN_PROGRESS → Implementer
@@ -242,7 +246,7 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
      b. If feature branch exists:
         - Push the feature branch: `git push -u origin <feature-branch>`
         - Create PR: `gh pr create --base <base-branch> --head <feature-branch> --title "<objective> (<feat_display_id>)" --body "<task summary>"`
-        - Clean up all worktrees (remove task worktrees and worktree parent dir)
+        - Clean up all worktrees: `source scripts/worktree-utils.sh` then `cleanup_all_worktrees "$(pwd)" nazgul/config.json` — removes every task worktree plus the worktree parent dir, and uninstalls the managed git hooks (restoring the recorded prior `core.hooksPath`) when this objective actually installed them.
      c. Output NAZGUL_COMPLETE
 4. If post-loop already run:
    - Tell user: "Previous objective complete: [stored objective]. Starting objective derivation for next work..."
@@ -255,13 +259,7 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 **Action:** Documents exist but no plan yet — regenerate documents from current context, then run the planner.
 1. Read stored objective from config.json
 2. If no objective: read the PRD overview section as the objective, store it in config.json
-3. **Branch Setup** (if `branch.feature` is null):
-   a. Capture current branch as `branch.base`
-   b. Store `pwd` as `branch.main_worktree_path`
-   c. Slugify objective → `feat/<display_id>-<slug>`
-   d. Assign objective identity per **Objective Identity (use existing or assign)** above: reuse `config.feat_id`/`feat_display_id`/`afk.commit_prefix` if already set (no recompute, no `objectives_history` append); only when `feat_id` is null compute `FEAT-NNN` from `objectives_history.length + 1`, set the id fields + `afk.commit_prefix`, and append to `objectives_history` once.
-   e. `git checkout -b feat/<display_id>-<slug>`
-   f. Create worktree dir, store paths in config
+3. **Branch Setup** (if `branch.feature` is null): follow **Branch Setup via `create_feature_branch`** above.
 4. Tell user: "Regenerating documents from current context before planning..."
 5. Delegate to Doc Generator agent (regenerates all docs to reflect current objective and context)
 6. In HITL mode, pause for doc review.
@@ -278,13 +276,7 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 **Action:** Discovery ran but no docs or plan yet.
 1. Check if objective exists in config.json
 2. If no objective: run **Objective Derivation** (see below)
-3. **Branch Setup:**
-   a. Capture current branch as `branch.base`
-   b. Store `pwd` as `branch.main_worktree_path`
-   c. Slugify objective → `feat/<display_id>-<slug>`
-   d. Assign objective identity per **Objective Identity (use existing or assign)** above: reuse `config.feat_id`/`feat_display_id`/`afk.commit_prefix` if already set (no recompute, no `objectives_history` append); only when `feat_id` is null compute `FEAT-NNN` from `objectives_history.length + 1`, set the id fields + `afk.commit_prefix`, and append to `objectives_history` once.
-   e. `git checkout -b feat/<display_id>-<slug>`
-   f. Create worktree dir, store paths in config
+3. **Branch Setup:** follow **Branch Setup via `create_feature_branch`** above.
 4. Tell user: "Discovery complete. Generating documents, then planning..."
 5. Delegate to Doc Generator agent. In HITL mode, pause for doc review.
 6. Delegate to Planner agent. In HITL mode, pause for plan review.
@@ -297,13 +289,7 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 **Detection:** None of the above matched (config exists but discovery hasn't run)
 **Action:** Fresh project — need discovery + everything.
 1. Run **Objective Derivation** (see below) if no objective in config.json
-2. **Branch Setup:**
-   a. Capture current branch as `branch.base`
-   b. Store `pwd` as `branch.main_worktree_path`
-   c. Slugify objective → `feat/<display_id>-<slug>` (lowercase, non-alnum to hyphens, max 50 chars)
-   d. Assign objective identity per **Objective Identity (use existing or assign)** above: reuse `config.feat_id`/`feat_display_id`/`afk.commit_prefix` if already set (no recompute, no `objectives_history` append); only when `feat_id` is null compute `FEAT-NNN` from `objectives_history.length + 1`, set the id fields + `afk.commit_prefix`, and append to `objectives_history` once.
-   e. `git checkout -b feat/<display_id>-<slug>`
-   f. Create worktree dir at `../<project>-nazgul-worktrees/`, store path in config
+2. **Branch Setup:** follow **Branch Setup via `create_feature_branch`** above (worktree dir is created as a sibling of the project root, e.g. `../<project>-worktrees/`).
 3. Run Discovery agent (scans codebase, classifies project, generates reviewers)
 4. Classify Project: In HITL mode, confirm classification with user.
 5. Generate Documents: Delegate to Doc Generator. In HITL mode, pause for doc review.

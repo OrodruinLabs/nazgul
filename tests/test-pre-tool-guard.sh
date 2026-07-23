@@ -60,6 +60,39 @@ for bad_cmd in \
   assert_contains "reason for '$bad_cmd'" "$output" "NAZGUL SAFETY"
 done
 
+# --- MF-027: rm -rf precision — anchored root/home patterns must still block
+# every genuine destructive form (both boundary variants: whitespace, `;`, `&`) ---
+for bad_cmd in \
+  "rm -rf /" \
+  "rm -rf /;" \
+  "rm -rf / &&" \
+  "rm -rf //" \
+  "rm -rf /root" \
+  "rm -rf /root/" \
+  "rm -rf ~" \
+  "rm -rf ~/" \
+  'rm -rf $HOME' \
+  'rm -rf $HOME/'; do
+  ec=$(get_exit_code "$bad_cmd")
+  assert_exit_code "blocked MF-027: '$bad_cmd'" "$ec" 2
+  output=$(run_guard "$bad_cmd")
+  assert_contains "reason MF-027 for '$bad_cmd'" "$output" "NAZGUL SAFETY"
+done
+
+# --- MF-027: rm -rf precision — legitimate absolute/relative-path deletions
+# must NOT be over-matched by the root/home block (the false-positive fix;
+# trailing-slash whole-dir forms block above, real subpaths stay allowed) ---
+for safe_cmd in \
+  "rm -rf /tmp/x" \
+  "rm -rf ./build" \
+  "rm -rf ~/tmp" \
+  "rm -rf /root/subdir" \
+  'rm -rf $HOME/scratch' \
+  "rm -rf /tmp/build-cache"; do
+  ec=$(get_exit_code "$safe_cmd")
+  assert_exit_code "allowed MF-027: '$safe_cmd'" "$ec" 0
+done
+
 # --- Database destruction (should exit 2) ---
 for bad_cmd in \
   "psql -c 'DROP TABLE users'" \
@@ -79,6 +112,30 @@ for bad_cmd in \
   assert_exit_code "blocked: '$bad_cmd'" "$ec" 2
   output=$(run_guard "$bad_cmd")
   assert_contains "reason for '$bad_cmd'" "$output" "NAZGUL SAFETY"
+done
+
+# --- MF-028: force-push order independence — all four flag/branch orderings
+# must block, since real usage puts the flag before OR after the branch ---
+for bad_cmd in \
+  "git push --force origin main" \
+  "git push -f origin main" \
+  "git push origin main --force" \
+  "git push origin main -f" \
+  "git push origin master --force" \
+  "git push origin master -f"; do
+  ec=$(get_exit_code "$bad_cmd")
+  assert_exit_code "blocked MF-028: '$bad_cmd'" "$ec" 2
+  output=$(run_guard "$bad_cmd")
+  assert_contains "reason MF-028 for '$bad_cmd'" "$output" "NAZGUL SAFETY"
+done
+
+# --- MF-028: no false-positive — force-push to a non-protected branch, or a
+# plain push to main with no force flag, must both be allowed ---
+for safe_cmd in \
+  "git push origin feature-branch --force" \
+  "git push origin main"; do
+  ec=$(get_exit_code "$safe_cmd")
+  assert_exit_code "allowed MF-028: '$safe_cmd'" "$ec" 0
 done
 
 # --- Dangerous system commands (should exit 2) ---
@@ -286,5 +343,39 @@ assert_exit_code "blocked P-2: echo 'hi there' > manifest (real redirect after s
 # manifest write blocks. (Defensive — the minimal valid-shell trigger is a syntax error.)
 ec=$(get_exit_code 'echo x >& ; echo y > nazgul/tasks/TASK-001.md')
 assert_exit_code "blocked Q-1: fd-dup before ';' does not swallow next segment's echo" "$ec" 2
+
+# --- Category 12: MF-022 funnel — mv/cp targeting a task manifest (secondary,
+# defense-in-depth layer; the structural fix is the stop-hook reconciliation) ---
+# Block R-1: mv forging a manifest into place
+ec=$(get_exit_code 'mv fake.md nazgul/tasks/TASK-005.md')
+assert_exit_code "blocked R-1: mv fake.md nazgul/tasks/TASK-005.md (manifest funnel)" "$ec" 2
+output=$(run_guard 'mv fake.md nazgul/tasks/TASK-005.md')
+assert_contains "reason R-1" "$output" "NAZGUL SAFETY"
+
+# Block R-2: cp forging a manifest into place
+ec=$(get_exit_code 'cp fake.md nazgul/tasks/TASK-005.md')
+assert_exit_code "blocked R-2: cp fake.md nazgul/tasks/TASK-005.md (manifest funnel)" "$ec" 2
+output=$(run_guard 'cp fake.md nazgul/tasks/TASK-005.md')
+assert_contains "reason R-2" "$output" "NAZGUL SAFETY"
+
+# Block R-3: mv with a flag before the source (flag must not be mistaken for the target)
+ec=$(get_exit_code 'mv -f fake.md nazgul/tasks/TASK-005.md')
+assert_exit_code "blocked R-3: mv -f fake.md nazgul/tasks/TASK-005.md" "$ec" 2
+
+# Block R-4: ./ prefixed manifest target
+ec=$(get_exit_code 'cp fake.md ./nazgul/tasks/TASK-005.md')
+assert_exit_code "blocked R-4: cp fake.md ./nazgul/tasks/TASK-005.md (./ prefix)" "$ec" 2
+
+# Allow R-5: cp READING from a manifest (manifest is the source, not the target)
+ec=$(get_exit_code 'cp nazgul/tasks/TASK-005.md /tmp/backup.md')
+assert_exit_code "allowed R-5: cp nazgul/tasks/TASK-005.md /tmp/backup.md (manifest is source)" "$ec" 0
+
+# Allow R-6: mv/cp with no manifest path anywhere
+ec=$(get_exit_code 'mv src.txt /tmp/dest.txt')
+assert_exit_code "allowed R-6: mv src.txt /tmp/dest.txt (no manifest involved)" "$ec" 0
+
+# Allow R-7: mv reading from a manifest to a non-manifest destination
+ec=$(get_exit_code 'mv nazgul/tasks/TASK-005.md /tmp/archived-005.md')
+assert_exit_code "allowed R-7: mv nazgul/tasks/TASK-005.md /tmp/archived-005.md (manifest is source)" "$ec" 0
 
 report_results
