@@ -52,13 +52,18 @@ scripts/                             # Shell scripts for hooks
 │   ├── post-compact.sh              # PostCompact: re-inject state after compaction
 │   ├── pre-tool-guard.sh            # PreToolUse: block destructive commands
 │   ├── task-state-guard.sh          # PreToolUse: verify task state before edits
+│   ├── local-mode-tracking-guard.sh # PreToolUse(Bash): block git add/stage/commit on nazgul/ in local install mode
+│   ├── lean-comments-guard.sh       # PreToolUse(Write/Edit/MultiEdit): block comment bloat at write time
 │   ├── parallel-dispatch-guard.sh   # PreToolUse(Agent): block re-dispatch of a completed parallel unit
 │   ├── parallel-rework-guard.sh     # PreToolUse(Write/Edit): block re-editing a committed parallel unit's scope
+│   ├── teammate-idle-guard.sh       # TeammateIdle: enforce the dispatched-teammate report contract
 │   ├── prompt-guard.sh              # UserPromptSubmit: validate user prompts
 │   ├── session-context.sh           # SessionStart: inject loop state + session tracking
 │   ├── session-staging.sh           # SessionEnd: stage files for AFK safety
 │   ├── formatter.sh                 # PostToolUse: auto-format after edits (opt-in)
 │   ├── notify.sh                    # Stop: completion notifications
+│   ├── stop-failure.sh              # StopFailure: record + alert on a turn ending via API error
+│   ├── subagent-stop.sh             # SubagentStop: telemetry event per finished subagent
 │   ├── webhook-forward.sh           # Stop/Compact: forward events to HTTP endpoints
 │   ├── task-completed.sh            # TaskCompleted: update board, record metrics
 │   ├── board-sync-github.sh         # GitHub Projects board sync

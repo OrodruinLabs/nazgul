@@ -8,6 +8,7 @@
 - `--max N` — Maximum iterations (default: 40)
 - `--task-pr` — (with `--yolo`) Create stacked per-task PRs targeting the feature branch instead of a single PR at completion
 - `--continue` — Explicit resume (backward compat — bare `/nazgul:start` auto-detects this)
+- `--parallel` — Opt into stop-hook parallel batch dispatch on top of the same sequential loop (default: sequential); composes with any mode flag, e.g. `--parallel --afk`. `--conductor` is a deprecated alias for `--parallel`.
 
 ## Viewing & Changing Settings
 
@@ -26,20 +27,17 @@ Different pipeline stages have different complexity needs. Assign the right mode
 | Discovery | Sonnet | Codebase scanning is pattern matching |
 | Docs | Sonnet | Technical writing is well within Sonnet's capability |
 | Review (default reviewer) | Haiku | Mechanical reviewers (code, qa) run checklists cheaply |
-| Review (orchestrator) | Sonnet | The review-gate/conductor orchestrator coordinates the board |
+| Review (orchestrator) | Sonnet | The review-gate orchestrator coordinates the board |
 | Implementation | Sonnet | Code generation is Sonnet's sweet spot |
 | Specialists | Sonnet | Same as implementation |
-| Conductor | Sonnet | The conductor drives waves and dispatch, not code |
 | Post-loop | Sonnet | Changelog and docs updates need judgment |
 
 Three presets are available: **Balanced** (default), **Quality** (all Opus), and **Fast/cheap** (Haiku where possible). Or pick per stage.
 
-**Conductor tier.** `models.conductor` (default `sonnet`) pins the Conductor's own model tier. `/nazgul:start` dispatches `agents/conductor.md` with `model: $(jq -r '.models.conductor // "sonnet"')`, so a Conductor run does not silently inherit the launching session's tier. It selects only the Conductor's own tier — the implementers and review-gate it dispatches resolve their tiers independently (`models.implementation`, and the review keys below).
-
 **Review tiers — two keys, with a legacy fallback.** The single `models.review` tier is now split into two keys:
 
 - `models.review_default` (default `haiku`) — the default per-reviewer tier for the mechanical code/qa reviewers.
-- `models.review_orchestrator` (default `sonnet`) — the review-gate and conductor review orchestrator tier.
+- `models.review_orchestrator` (default `sonnet`) — the review-gate orchestrator tier.
 
 Both resolve with the exact fallback order **new key → legacy `models.review` → hardcoded default** (`review_orchestrator` falls back to `sonnet`, `review_default` to `haiku`). A config still carrying only `models.review` is therefore honored unchanged — it seeds both new keys — so no manual migration is needed.
 
@@ -50,7 +48,6 @@ Both resolve with the exact fallback order **new key → legacy `models.review` 
   "models": {
     "review_default": "haiku",
     "review_orchestrator": "sonnet",
-    "conductor": "sonnet",
     "review_by_reviewer": {
       "security-reviewer": "sonnet",
       "architect-reviewer": "sonnet"
@@ -98,24 +95,37 @@ This is **tamper-evidence and diff-staleness detection, not authentication** —
 
 `review_gate.stall_retry_escalate_tier` (default `true`, config schema v29) controls what happens when a dispatched reviewer stalls or returns an unparseable verdict. Its bounded one-shot retry (`scripts/lib/reviewer-tier.sh` `resolve_retry_model`) normally moves the retry up one model tier (e.g. `haiku` → `sonnet`) instead of re-dispatching on the same tier that just failed. Set this to `false` to keep the retry on the same tier as the original dispatch (the pre-v29 behavior). Reviewer dispatch itself is synchronous by construction — every reviewer's Agent-tool call in review-gate's dispatch message is a single foreground, blocking call the orchestrator waits on, never treated as still running in the background.
 
+### Receipt-Hash Enforcement
+
+`review_gate.receipt_hash_enforcement` (default `true`, config schema v30) is a kill switch for a receipt-hash content check in `scripts/lib/review-evidence.sh`'s DONE-gate evidence validation. When enabled, the evidence gate recomputes a SHA-256 over each approving reviewer's persisted verdict file (the body only, after the frontmatter fence) and compares it against the matching entry in `nazgul/logs/review-receipts.jsonl`, failing the check with a `RECEIPT_MISMATCH <reviewer>` problem line — alongside the existing `MISSING`/`UNAPPROVED` checks — on a mismatch. Set to `false` to disable the check and fall back to presence/verdict-only evidence validation.
+
 ## Execution Engine
 
-`execution.engine` selects which engine drives the objective: `"sequential"` (default) is today's one-task-at-a-time main-session loop; `"conductor"` opts into the graph-only driver that decomposes the Planner's task graph into waves and farms each unit to a fresh sub-session. `sequential` behavior is unchanged either way.
+There is one engine — the stop-hook loop is the only driver of an objective. `execution.parallel` (opt-in via `/nazgul:start --parallel`; `--conductor` is a deprecated alias) layers concurrent batch dispatch on top of the same sequential loop instead of switching to a separate engine: when `review_gate.granularity` is `"task"` and a wave in `nazgul/plan.md`'s `## Wave Groups` section has 2+ READY tasks whose dependencies are all DONE and whose file scopes are disjoint, the stop-hook's `compute_dispatch_batch` (`scripts/lib/parallel-batch.sh`) dispatches them together instead of one at a time, reusing the same Review Board per task. Sequential and parallel dispatch share the same Planner output, task state machine, and review gate — the option only changes how many tasks start at once, not what "done" means.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `execution.engine` | `"sequential"` | `"sequential"` or `"conductor"`. |
+| `execution.parallel` | `false` | Opt into stop-hook parallel batch dispatch (set by `--parallel`/`--conductor`). |
+| `execution.max_parallel` | `3` | Maximum units dispatched concurrently within a wave. |
 
-The `conductor` block configures the conductor engine's gates and parallelism, autonomous-first (all gates default `false`):
+The `execution.gates` block pauses for human approval at wave-execution checkpoints, autonomous-first (all default `false`):
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `conductor.gates.approve_graph` | `false` | Pause for human approval of the computed task graph before dispatch. |
-| `conductor.gates.approve_each_wave` | `false` | Pause for human approval before dispatching each wave. |
-| `conductor.gates.approve_final_pr` | `false` | Pause for human approval before opening the final PR. |
-| `conductor.max_parallel` | `3` | Maximum units dispatched concurrently within a wave. |
+| `execution.gates.approve_plan` | `false` | Pause for human approval of the computed task/wave plan before dispatch. |
+| `execution.gates.approve_batch` | `false` | Pause for human approval before dispatching each parallel batch. |
+| `execution.gates.approve_final_pr` | `false` | Pause for human approval before opening the final PR. |
 
-In `--hitl` mode, `scripts/lib/conductor-gates.sh` forces the *effective* `approve_graph` gate to `true` regardless of the stored value — the stored config default stays `false`. Every other gate always equals its stored value in every mode.
+In `--hitl` mode, `scripts/lib/parallel-batch.sh`'s `execution_gate_effective` forces the *effective* `approve_plan` gate to `true` regardless of the stored value — the stored config default stays `false`. Every other gate always equals its stored value in every mode.
+
+The `execution.enforce` block toggles the mechanical guards that back parallel dispatch, all default `true`:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `execution.enforce.dispatch_guard` | `true` | `scripts/parallel-dispatch-guard.sh` (PreToolUse/Agent) blocks re-dispatch of a parallel unit that already committed. |
+| `execution.enforce.rework_guard` | `true` | `scripts/parallel-rework-guard.sh` (PreToolUse/Write,Edit,MultiEdit) blocks re-editing a committed parallel unit's file scope. |
+| `execution.enforce.premerge_guard` | `true` | Git-level `pre-merge-commit` hook (`scripts/git-hooks/pre-merge-commit`) blocks merging a parallel unit without an approved review verdict. |
+| `execution.enforce.teammate_report_guard` | `true` | `scripts/teammate-idle-guard.sh` (TeammateIdle) blocks a dispatched teammate from going idle without writing its expected report file. |
 
 ## Automation Heartbeat
 
@@ -323,18 +333,6 @@ For monorepos, configure sparse checkout to speed up task worktree creation:
 
 When set, task worktrees only check out the specified directories instead of the full repo.
 
-## Fast Mode
-
-Enable fast mode for implementation agents to get faster inference at higher token cost:
-
-```json
-{
-  "models": {
-    "fast_mode_implementation": true
-  }
-}
-```
-
 ## Auto-Enhancement
 
 Nazgul can periodically check for new Claude Code features and propose improvements:
@@ -343,21 +341,6 @@ Nazgul can periodically check for new Claude Code features and propose improveme
 /nazgul:enhance              # One-time check
 /loop 2w /nazgul:enhance     # Auto-check every 2 weeks
 ```
-
-## Self-Improvement Mode
-
-Enable agent self-rating and improvement reports:
-
-```json
-{
-  "self_improvement": {
-    "enabled": true,
-    "threshold": 7
-  }
-}
-```
-
-Agents rating their experience below the threshold file structured JSON reports to `nazgul/improvement-reports/`. Reports include task ID, agent name, rating, summary, and improvement suggestions. View aggregated data with `/nazgul:metrics`.
 
 ## Concurrent Session Detection
 
