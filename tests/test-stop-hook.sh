@@ -819,6 +819,11 @@ run_hook
 assert_exit_code "task granularity: exit 2" "$HOOK_EC" 2
 assert_contains "task granularity: per-task review-gate dispatch" "$HOOK_OUTPUT" "Spawn review-gate agent (nazgul:review-gate) for TASK-001"
 assert_contains "task granularity: shown in banner" "$HOOK_OUTPUT" "Review granularity: task"
+# WS2 (LR-002 DELEGATE-text half): the per-task DELEGATE line restates the
+# models.review_orchestrator tier as defense-in-depth for the Agent-Teams
+# dispatch path, where a static frontmatter model: pin may not apply the
+# same way a Task-tool model= parameter does.
+assert_contains "task granularity: DELEGATE restates review_orchestrator tier" "$HOOK_OUTPUT" "models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context"
 teardown_temp_dir
 
 # --- Granularity group, unit INCOMPLETE: park IMPLEMENTED, keep implementing ---
@@ -848,6 +853,9 @@ assert_contains "group complete: review unit scope group 1" "$HOOK_OUTPUT" "grou
 assert_contains "group complete: aggregate review-gate dispatched" "$HOOK_OUTPUT" "AGGREGATE review unit"
 assert_contains "group complete: covers both tasks" "$HOOK_OUTPUT" "TASK-001"
 assert_contains "group complete: covers both tasks (002)" "$HOOK_OUTPUT" "TASK-002"
+# WS2 (LR-002 DELEGATE-text half): the aggregate-review-variant DELEGATE line
+# restates the same models.review_orchestrator tier requirement.
+assert_contains "group complete: DELEGATE restates review_orchestrator tier" "$HOOK_OUTPUT" "models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context"
 teardown_temp_dir
 
 # --- Granularity group, ORDERING: earlier group done, review the next group only ---
