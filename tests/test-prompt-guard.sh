@@ -13,16 +13,19 @@ echo "=== $TEST_NAME ==="
 
 GUARD_SCRIPT="$REPO_ROOT/scripts/prompt-guard.sh"
 
-# Helper: run guard script with given prompt, capturing stderr and exit code
+# Helper: run guard script piping a realistic UserPromptSubmit stdin JSON
+# envelope, capturing stderr and exit code (MF-023 — production reads stdin,
+# not an env var).
 run_guard() {
   local prompt="${1:-}"
-  GUARD_OUTPUT=$(CLAUDE_HOOK_USER_PROMPT="$prompt" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$GUARD_SCRIPT" 2>&1) \
+  GUARD_OUTPUT=$(jq -n --arg p "$prompt" '{prompt: $p}' \
+    | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$GUARD_SCRIPT" 2>&1) \
     && GUARD_EC=0 || GUARD_EC=$?
 }
 
-# Helper: run guard script with no CLAUDE_HOOK_USER_PROMPT set at all
-run_guard_no_prompt_var() {
-  GUARD_OUTPUT=$(CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$GUARD_SCRIPT" 2>&1) \
+# Helper: run guard script with empty stdin (no JSON envelope at all)
+run_guard_no_stdin() {
+  GUARD_OUTPUT=$(printf '' | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$GUARD_SCRIPT" 2>&1) \
     && GUARD_EC=0 || GUARD_EC=$?
 }
 
@@ -85,12 +88,21 @@ run_guard ""
 assert_exit_code "empty prompt: allowed (exit 0)" "$GUARD_EC" 0
 teardown_temp_dir
 
-# --- Test 8: No CLAUDE_HOOK_USER_PROMPT env var — allowed ---
+# --- Test 8: No stdin JSON envelope at all — allowed ---
 setup_temp_dir
 setup_nazgul_dir
 create_config
-run_guard_no_prompt_var
-assert_exit_code "no prompt env var: allowed (exit 0)" "$GUARD_EC" 0
+run_guard_no_stdin
+assert_exit_code "no stdin envelope: allowed (exit 0)" "$GUARD_EC" 0
+teardown_temp_dir
+
+# --- Test 9: env var alone (production never sets this) does NOT block — proves the fix is real ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+GUARD_OUTPUT=$(printf '' | CLAUDE_HOOK_USER_PROMPT="NAZGUL_COMPLETE" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$GUARD_SCRIPT" 2>&1) \
+  && GUARD_EC=0 || GUARD_EC=$?
+assert_exit_code "env var alone (no stdin): allowed, guard reads stdin not env" "$GUARD_EC" 0
 teardown_temp_dir
 
 report_results

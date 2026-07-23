@@ -102,6 +102,28 @@ TASK_EOF
   fi
 }
 
+create_task_file_with_files_modified() {
+  # Usage: create_task_file_with_files_modified TASK-001 IN_PROGRESS '["scripts/foo.sh","tests/test-foo.sh"]'
+  # Canonical frontmatter manifest with a real planner-shaped `Files modified`
+  # value (FEAT-014 fixture-realism precedent), for MF-025 accessor consumers.
+  local id="$1"
+  local status="$2"
+  local files_modified="$3"
+
+  cat > "$TEST_DIR/nazgul/tasks/${id}.md" << TASK_EOF
+---
+status: ${status}
+---
+# ${id}: Test task
+
+- **Files modified**: ${files_modified}
+- **Depends on**: none
+- **Group**: 1
+- **Retry count**: 0/3
+- **Assigned to**: implementer
+TASK_EOF
+}
+
 create_task_file_with_commits() {
   # Usage: create_task_file_with_commits TASK-001 IN_PROGRESS "abc1234"
   local id="$1"

@@ -93,6 +93,25 @@ get_task_field() {
   if [ -n "$result" ]; then echo "$result"; else echo "$default"; fi
 }
 
+# Extract the `Files modified` JSON-array field from a task manifest, one file
+# per output line. The single shared accessor for the File Scope guard, the
+# parallel rework guard, and the parallel-batch disjointness check (MF-025) —
+# replaces three independent ad hoc comma-split parsers that could never match
+# a real bracket/quote-laden value.
+# On a missing field, returns empty silently. On a present-but-malformed
+# (non-JSON, e.g. legacy comma-separated) value, returns empty AND emits a
+# loud stderr diagnostic — mirrors the ADR-002 Decision 1 loud-not-silent
+# degrade precedent; never a silent black hole.
+# Usage: get_task_files_modified <file>
+get_task_files_modified() {
+  local file="$1" raw
+  raw=$(get_task_field "$file" "Files modified")
+  [ -n "$raw" ] || return 0
+  if ! printf '%s\n' "$raw" | jq -r '.[]' 2>/dev/null; then
+    echo "WARN: get_task_files_modified: malformed/non-JSON 'Files modified' value in $file: $raw" >&2
+  fi
+}
+
 # Count tasks with a given status in a tasks directory.
 # Usage: count_tasks_by_status <tasks_dir> <status>
 count_tasks_by_status() {

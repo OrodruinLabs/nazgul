@@ -260,4 +260,51 @@ count_tasks_and_find_active "$TEST_DIR/nazgul/tasks"
 assert_eq "active-task: ACTIVE_RETRY parses Retry count" "$ACTIVE_RETRY" "2"
 teardown_temp_dir
 
+# --- Test 15: get_task_files_modified parses a real bracket/quote-laden JSON-array value (MF-025) ---
+setup_temp_dir
+setup_nazgul_dir
+create_task_file_with_files_modified "TASK-001" "IN_PROGRESS" '["scripts/foo.sh","tests/test-foo.sh"]'
+source "$LIB"
+result=$(get_task_files_modified "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "get_task_files_modified: parses JSON array to newline list" "$result" "$(printf 'scripts/foo.sh\ntests/test-foo.sh')"
+teardown_temp_dir
+
+# --- Test 16: get_task_files_modified on a single-entry array ---
+setup_temp_dir
+setup_nazgul_dir
+create_task_file_with_files_modified "TASK-001" "IN_PROGRESS" '["scripts/lib/task-utils.sh"]'
+source "$LIB"
+result=$(get_task_files_modified "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "get_task_files_modified: single-entry array" "$result" "scripts/lib/task-utils.sh"
+teardown_temp_dir
+
+# --- Test 17: get_task_files_modified on a legacy non-JSON value degrades loudly, not silently (MF-025 / TRD Risks row 3) ---
+setup_temp_dir
+setup_nazgul_dir
+create_task_file_with_files_modified "TASK-001" "IN_PROGRESS" "scripts/foo.sh, tests/test-foo.sh"
+source "$LIB"
+STDERR_FILE=$(mktemp)
+result=$(get_task_files_modified "$TEST_DIR/nazgul/tasks/TASK-001.md" 2>"$STDERR_FILE")
+STDERR_OUT=$(cat "$STDERR_FILE")
+rm -f "$STDERR_FILE"
+assert_eq "get_task_files_modified: legacy non-JSON value returns empty" "$result" ""
+case "$STDERR_OUT" in
+  *TASK-001.md*) _pass "get_task_files_modified: legacy value emits loud stderr diagnostic" ;;
+  *) _fail "get_task_files_modified: legacy value emits loud stderr diagnostic" "got: $STDERR_OUT" ;;
+esac
+teardown_temp_dir
+
+# --- Test 18: get_task_files_modified on a missing field returns empty silently ---
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IN_PROGRESS"
+source "$LIB"
+STDERR_FILE=$(mktemp)
+result=$(get_task_files_modified "$TEST_DIR/nazgul/tasks/TASK-001.md" 2>"$STDERR_FILE")
+STDERR_OUT=$(cat "$STDERR_FILE")
+rm -f "$STDERR_FILE"
+assert_eq "get_task_files_modified: missing field returns empty" "$result" ""
+assert_eq "get_task_files_modified: missing field emits no stderr diagnostic" "$STDERR_OUT" ""
+teardown_temp_dir
+
 report_results
