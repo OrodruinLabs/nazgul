@@ -264,6 +264,16 @@ connector_github_pull_get() {
   return "$rc"
 }
 
+# connector_github_map_local_id <config> <issue_id> <local_id> -> MF-038
+# write-back: upsert the map entry with a REAL local id once one is known
+# (called from scripts/heartbeat.sh after its auto-started session's feat_id
+# resolves), so _cgh_map_resolve can match it. Thin public wrapper around
+# _cgh_map_put's 3-arg real-value path; pull_archive's own 2-arg stub call
+# below is unchanged (FEAT-012 pull-side contract stays as-is).
+connector_github_map_local_id() {
+  _cgh_map_put "$1" "$2" "$3"
+}
+
 # connector_github_pull_archive <config> <id> -> claim the issue: add
 # pull.claimed_label and record the map stub. Idempotent — an already-claimed
 # issue skips the add-label (still records the map) and returns 0.
