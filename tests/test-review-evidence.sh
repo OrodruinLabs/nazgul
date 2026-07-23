@@ -483,4 +483,177 @@ assert_exit_code "empty critical list: exit 0" "$VAL_EC" 0
 assert_not_contains "empty critical list: architect honored" "$VAL_OUTPUT" "UNAPPROVED architect-reviewer"
 teardown_temp_dir
 
+# --- resolve_review_unit() (MF-013, TASK-001) ---
+# NOTE: these tests write a real nazgul/tasks/<id>.md manifest via
+# create_task_file, unlike setup_evidence_env's fixtures above (which have no
+# task file at all, so they exercise the "missing task file → degrade to
+# task_id" branch regardless of configured granularity — see Test G below,
+# which makes that degrade path explicit).
+
+# --- Test 33: task granularity (default) — returns task_id unchanged ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "task"'
+create_task_file "TASK-001" "IMPLEMENTED"
+set_task_group "TASK-001" "3"
+UNIT=$(resolve_review_unit "$TEST_DIR/nazgul" "TASK-001")
+assert_eq "task granularity: unit == task_id" "$UNIT" "TASK-001"
+teardown_temp_dir
+
+# --- Test 34: group granularity — Group field present → GROUP-<n> ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "group"'
+create_task_file "TASK-001" "IMPLEMENTED"
+set_task_group "TASK-001" "2"
+UNIT=$(resolve_review_unit "$TEST_DIR/nazgul" "TASK-001")
+assert_eq "group granularity: GROUP-2" "$UNIT" "GROUP-2"
+teardown_temp_dir
+
+# --- Test 35: group granularity — no Group field, falls back to Wave ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "group"'
+cat > "$TEST_DIR/nazgul/tasks/TASK-001.md" << 'TASK_EOF'
+---
+status: IMPLEMENTED
+---
+# TASK-001: Test task
+
+- **Wave**: 4
+- **Depends on**: none
+- **Retry count**: 0/3
+TASK_EOF
+UNIT=$(resolve_review_unit "$TEST_DIR/nazgul" "TASK-001")
+assert_eq "group granularity: Wave fallback GROUP-4" "$UNIT" "GROUP-4"
+teardown_temp_dir
+
+# --- Test 36: group granularity — neither Group nor Wave → default "1" ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "group"'
+cat > "$TEST_DIR/nazgul/tasks/TASK-001.md" << 'TASK_EOF'
+---
+status: IMPLEMENTED
+---
+# TASK-001: Test task
+
+- **Depends on**: none
+- **Retry count**: 0/3
+TASK_EOF
+UNIT=$(resolve_review_unit "$TEST_DIR/nazgul" "TASK-001")
+assert_eq "group granularity: no Group/Wave → GROUP-1 default" "$UNIT" "GROUP-1"
+teardown_temp_dir
+
+# --- Test 37: feature granularity — feat_id present → FEATURE-<feat_id> ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "feature"' '.feat_id = "FEAT-016"'
+create_task_file "TASK-001" "IMPLEMENTED"
+UNIT=$(resolve_review_unit "$TEST_DIR/nazgul" "TASK-001")
+assert_eq "feature granularity: FEATURE-FEAT-016" "$UNIT" "FEATURE-FEAT-016"
+teardown_temp_dir
+
+# --- Test 38: feature granularity — feat_id null/absent — degrades to task_id ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "feature"'
+create_task_file "TASK-001" "IMPLEMENTED"
+UNIT=$(resolve_review_unit "$TEST_DIR/nazgul" "TASK-001")
+assert_eq "feature granularity: null feat_id degrades to task_id" "$UNIT" "TASK-001"
+teardown_temp_dir
+
+# --- Test 39: group granularity — task manifest missing — degrades to task_id ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "group"'
+UNIT=$(resolve_review_unit "$TEST_DIR/nazgul" "TASK-999")
+assert_eq "group granularity: missing task file degrades to task_id" "$UNIT" "TASK-999"
+teardown_temp_dir
+
+# --- Test 40: config.json entirely absent — degrades to task_id (any mode) ---
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IMPLEMENTED"
+set_task_group "TASK-001" "2"
+UNIT=$(resolve_review_unit "$TEST_DIR/nazgul" "TASK-001")
+assert_eq "no config: degrades to task_id" "$UNIT" "TASK-001"
+teardown_temp_dir
+
+# --- Test 41: unparseable config.json — never fails open into group/feature mode ---
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IMPLEMENTED"
+set_task_group "TASK-001" "2"
+printf '{invalid' > "$TEST_DIR/nazgul/config.json"
+UNIT=$(resolve_review_unit "$TEST_DIR/nazgul" "TASK-001")
+assert_eq "unparseable config: degrades to task_id" "$UNIT" "TASK-001"
+teardown_temp_dir
+
+# --- Test 42: invalid granularity value falls back to task mode ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "bogus"'
+create_task_file "TASK-001" "IMPLEMENTED"
+set_task_group "TASK-001" "2"
+UNIT=$(resolve_review_unit "$TEST_DIR/nazgul" "TASK-001")
+assert_eq "invalid granularity: falls back to task_id" "$UNIT" "TASK-001"
+teardown_temp_dir
+
+# --- Test 43 (end-to-end, MF-013 core regression): validate_review_evidence
+# resolves reviews/GROUP-<n> in group granularity, not reviews/<task_id> ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "group"' '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "IMPLEMENTED"
+set_task_group "TASK-001" "1"
+write_review "GROUP-1" "code-reviewer" "APPROVED"
+run_validate "TASK-001"
+assert_exit_code "group mode: evidence found under GROUP-1: exit 0" "$VAL_EC" 0
+assert_eq "group mode: evidence found under GROUP-1: no output" "$VAL_OUTPUT" ""
+teardown_temp_dir
+
+# --- Test 44: group mode — evidence only under the WRONG group id still fails ---
+# (reviews/TASK-001 exists but is not the resolved unit — proves the fix isn't
+# accidentally falling back to the old task-id path.)
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "group"' '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "IMPLEMENTED"
+set_task_group "TASK-001" "1"
+write_review "TASK-001" "code-reviewer" "APPROVED"
+run_validate "TASK-001"
+assert_exit_code "group mode: task-id-only evidence not honored: exit 1" "$VAL_EC" 1
+assert_contains "group mode: task-id-only evidence not honored: NO_REVIEW_DIR" "$VAL_OUTPUT" "NO_REVIEW_DIR"
+teardown_temp_dir
+
+# --- Test 45 (end-to-end): validate_review_evidence resolves
+# reviews/FEATURE-<feat_id> in feature granularity ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "feature"' '.feat_id = "FEAT-016"' \
+  '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "IMPLEMENTED"
+write_review "FEATURE-FEAT-016" "code-reviewer" "APPROVED"
+run_validate "TASK-001"
+assert_exit_code "feature mode: evidence found under FEATURE-FEAT-016: exit 0" "$VAL_EC" 0
+teardown_temp_dir
+
+# --- Test 46 (Bundle 5, FEAT-009 backlog verification): a .dispatch.json
+# marking a reviewer resolved:true with NO persisted verdict file still
+# reports MISSING — the evidence gate never trusts the manifest's `resolved`
+# field (that field means "has a generated agent definition," computed at
+# manifest-write time, not "verdict captured"). Confirms the FEAT-009
+# incident's underlying concern is closed under the current schema; see
+# review-provenance.sh:9 for the resolved field's actual meaning. ---
+setup_evidence_env "security-reviewer"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+jq -n '{unit:"TASK-001", feat_id:"FEAT-009", reviewers:[{name:"security-reviewer", resolved:true}], selected:["security-reviewer"], skipped:[]}' \
+  > "$TEST_DIR/nazgul/reviews/TASK-001/.dispatch.json"
+# Deliberately NO security-reviewer.md written.
+run_validate "TASK-001"
+assert_exit_code "resolved:true without persisted file: exit 1" "$VAL_EC" 1
+assert_contains "resolved:true without persisted file: still MISSING" "$VAL_OUTPUT" "MISSING security-reviewer"
+teardown_temp_dir
+
 report_results

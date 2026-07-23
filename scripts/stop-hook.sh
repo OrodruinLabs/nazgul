@@ -388,13 +388,19 @@ AWAITING_AGGREGATE_REVIEW="false"
 if [ "$GRANULARITY" != "task" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
   # The "active group" is the group of the lowest-numbered task that is not yet
   # DONE (group mode reviews one wave/group at a time, in order). In feature mode
-  # the unit is ALL non-DONE tasks regardless of group.
+  # the unit is ALL non-DONE tasks regardless of group. Derived via
+  # resolve_review_unit (MF-013, ADR-004 Decision 1) — the SAME resolver
+  # review-evidence.sh uses — so dispatch-readiness and evidence-resolution are
+  # provably the same answer, never a second independent derivation. Only
+  # meaningful in "group" granularity (bare number, GROUP- prefix stripped);
+  # in "feature" granularity the resolved value is unused below.
   ACTIVE_GROUP=""
   for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     STATUS=$(get_task_status "$task_file")
     [ "$STATUS" = "DONE" ] && continue
-    ACTIVE_GROUP=$(get_task_field "$task_file" "Group" "$(get_task_field "$task_file" "Wave" "1")")
+    ACTIVE_GROUP=$(resolve_review_unit "$NAZGUL_DIR" "$(basename "$task_file" .md)")
+    ACTIVE_GROUP="${ACTIVE_GROUP#GROUP-}"
     break
   done
 
@@ -410,7 +416,8 @@ if [ "$GRANULARITY" != "task" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
     STATUS=$(get_task_status "$task_file")
     [ "$STATUS" = "DONE" ] && continue
     if [ "$GRANULARITY" = "group" ]; then
-      TGROUP=$(get_task_field "$task_file" "Group" "$(get_task_field "$task_file" "Wave" "1")")
+      TGROUP=$(resolve_review_unit "$NAZGUL_DIR" "$(basename "$task_file" .md)")
+      TGROUP="${TGROUP#GROUP-}"
       [ "$TGROUP" = "$ACTIVE_GROUP" ] || continue
     fi
     UNIT_TOTAL=$((UNIT_TOTAL + 1))

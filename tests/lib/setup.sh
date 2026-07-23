@@ -42,7 +42,21 @@ setup_nazgul_dir() {
 create_config() {
   # Creates a config.json from the template, then applies optional jq overrides
   # Usage: create_config '.mode = "yolo"' '.current_iteration = 5'
+  #
+  # Pins review_gate.granularity to "task" BEFORE any caller override is
+  # applied (MF-013/TASK-001). templates/config.json's shipped default has
+  # been "group" since v17, but almost every fixture across this suite plants
+  # review evidence at the task-id-keyed path (reviews/<task_id>/...) with no
+  # explicit granularity opinion — that was harmless only because the
+  # evidence gates used to ignore granularity entirely (the MF-013 bug).
+  # Now that resolve_review_unit() makes them honor it for real, an implicit
+  # "group" default would silently break every such fixture. Defaulting here
+  # (not by editing the template) restores the suite's long-standing implicit
+  # behavior; any test that explicitly wants group/feature semantics still
+  # gets it, since its own override runs after this one and wins.
   cp "$REPO_ROOT/templates/config.json" "$TEST_DIR/nazgul/config.json"
+  jq '.review_gate.granularity = "task"' "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.tmp" \
+    && mv "$TEST_DIR/nazgul/config.json.tmp" "$TEST_DIR/nazgul/config.json"
   for override in "$@"; do
     jq "$override" "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.tmp" \
       && mv "$TEST_DIR/nazgul/config.json.tmp" "$TEST_DIR/nazgul/config.json"

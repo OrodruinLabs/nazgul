@@ -27,7 +27,7 @@ create_config '.feat_id = "FEAT-GG1"' \
   '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "DONE"
-create_review_dir "TASK-001"
+create_review_dir "GROUP-1"   # MF-013: granularity=group + Group:1 → evidence gate resolves reviews/GROUP-1, not reviews/TASK-001
 # Coverage file: task reviewed at "task" granularity but config is "group" — violation
 mkdir -p "$TEST_DIR/nazgul/logs"
 printf '%s\n' '{"sv":1,"ts":"2026-06-24T00:00:00Z","task_id":"TASK-001","review_unit":"TASK-001","granularity_used":"task","iteration":1}' \
@@ -54,7 +54,7 @@ create_config '.feat_id = "FEAT-GG2"' \
   '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
-create_review_dir "TASK-001"
+create_review_dir "GROUP-1"   # MF-013: granularity=group + Group:1 → evidence gate resolves reviews/GROUP-1, not reviews/TASK-001
 mkdir -p "$TEST_DIR/nazgul/logs"
 printf '%s\n' '{"sv":1,"ts":"2026-06-24T00:00:00Z","task_id":"TASK-001","review_unit":"GROUP-1","granularity_used":"group","iteration":1}' \
   > "$TEST_DIR/nazgul/logs/review-coverage.jsonl"
@@ -77,7 +77,7 @@ create_config '.feat_id = "FEAT-GG3"' \
   '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
-create_review_dir "TASK-001"
+create_review_dir "GROUP-1"   # MF-013: granularity=group + Group:1 → evidence gate resolves reviews/GROUP-1, not reviews/TASK-001
 # No review-coverage.jsonl — gate must degrade to allow
 run_hook
 assert_exit_code "missing coverage file: exit 0 (degrade)" "$HOOK_EC" 0
@@ -96,7 +96,7 @@ create_config '.feat_id = "FEAT-GG4"' \
   '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
-create_review_dir "TASK-001"
+create_review_dir "GROUP-1"   # MF-013: granularity=group + Group:1 → evidence gate resolves reviews/GROUP-1, not reviews/TASK-001
 mkdir -p "$TEST_DIR/nazgul/logs"
 printf '%s\n' '{"sv":1,"ts":"2026-06-24T00:00:00Z","task_id":"TASK-001","review_unit":"TASK-001","granularity_used":"task","iteration":1}' \
   > "$TEST_DIR/nazgul/logs/review-coverage.jsonl"
@@ -119,7 +119,7 @@ create_config '.feat_id = "FEAT-GG5"' \
   '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
-create_review_dir "TASK-001"
+create_review_dir "GROUP-1"   # MF-013: granularity=group + Group:1 → evidence gate resolves reviews/GROUP-1, not reviews/TASK-001
 mkdir -p "$TEST_DIR/nazgul/logs"
 printf '%s\n' '{"sv":1,"ts":"2026-06-24T00:00:00Z","task_id":"TASK-001","review_unit":"TASK-001","granularity_used":"task","iteration":1}' \
   > "$TEST_DIR/nazgul/logs/review-coverage.jsonl"
@@ -143,7 +143,7 @@ create_config '.feat_id = "FEAT-GG6"' \
   '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
-create_review_dir "TASK-001"
+create_review_dir "GROUP-1"   # MF-013: granularity=group + Group:1 → evidence gate resolves reviews/GROUP-1, not reviews/TASK-001
 mkdir -p "$TEST_DIR/nazgul/logs"
 printf '%s\n' '{"sv":1,"ts":"2026-06-24T00:00:00Z","task_id":"TASK-001","review_unit":"TASK-001","granularity_used":"task","iteration":1}' \
   > "$TEST_DIR/nazgul/logs/review-coverage.jsonl"
@@ -165,7 +165,7 @@ create_config '.feat_id = "FEAT-GG7"' \
   '.docs.verify_comments = false'
 create_plan
 create_task_file "TASK-001" "DONE"
-create_review_dir "TASK-001"
+create_review_dir "GROUP-1"   # MF-013: granularity=group + Group:1 → evidence gate resolves reviews/GROUP-1, not reviews/TASK-001
 mkdir -p "$TEST_DIR/nazgul/logs"
 printf '%s\n' '{"sv":1,"ts":"2026-06-24T00:00:00Z","task_id":"TASK-001","review_unit":"TASK-001","granularity_used":"task","iteration":1}' \
   > "$TEST_DIR/nazgul/logs/review-coverage.jsonl"
@@ -190,7 +190,7 @@ jq 'del(.review_gate.enforce_granularity)' "$TEST_DIR/nazgul/config.json" \
   && mv "$TEST_DIR/nazgul/config.json.tmp" "$TEST_DIR/nazgul/config.json"
 create_plan
 create_task_file "TASK-001" "DONE"
-create_review_dir "TASK-001"
+create_review_dir "GROUP-1"   # MF-013: granularity=group + Group:1 → evidence gate resolves reviews/GROUP-1, not reviews/TASK-001
 mkdir -p "$TEST_DIR/nazgul/logs"
 printf '%s\n' '{"sv":1,"ts":"2026-06-24T00:00:00Z","task_id":"TASK-001","review_unit":"TASK-001","granularity_used":"task","iteration":1}' \
   > "$TEST_DIR/nazgul/logs/review-coverage.jsonl"
@@ -211,7 +211,7 @@ create_config '.feat_id = "FEAT-GG9"' \
   '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
-create_review_dir "TASK-001"
+create_review_dir "GROUP-1"   # MF-013: granularity=group + Group:1 → evidence gate resolves reviews/GROUP-1, not reviews/TASK-001
 mkdir -p "$TEST_DIR/nazgul/logs"
 # A violating record, but stamped with a DIFFERENT objective's feat_id — the
 # gate must ignore it and complete cleanly (no false block).
