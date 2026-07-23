@@ -221,8 +221,9 @@ execution_should_halt() {
 # -> {"tasks": [...], "parallel": bool, "reason": "..."}
 # Deterministic batch selection (spec §2). Every doubt falls back to a batch of
 # one (proven sequential behavior). A multi-task batch requires: >=2 candidates
-# (READY, all deps DONE) listed TOGETHER on one plan.md Wave Groups line, with
-# pairwise-disjoint "Files modified" scopes, capped at max_parallel.
+# (READY, all deps DONE) that are members of the same plan.md "### Wave N"
+# section (one-bullet-per-task or comma-grouped, any mix), with pairwise-
+# disjoint "Files modified" scopes, capped at max_parallel.
 compute_dispatch_batch() {
   local tasks_dir="$1" plan_md="$2" max_parallel="$3"
   case "$max_parallel" in ''|*[!0-9]*|0) max_parallel=3 ;; esac
@@ -262,38 +263,59 @@ compute_dispatch_batch() {
     _pb_single_result "no Wave Groups section in plan.md"; return 0
   fi
 
-  # First Wave Groups bullet line naming >=2 candidates together wins.
-  # Membership test via case over a padded string — POSIX-safe, no arrays-in-arrays.
-  local cand_padded=" ${candidates[*]} " line lid
-  local -a batch=()
+  # Membership: each "### Wave N" heading owns every "- TASK-NNN" bullet that
+  # follows it (until the next heading), one-per-line or comma-grouped or a
+  # mix of both. First wave (document order) with >=2 candidate members wins.
+  local cur_wave="" line lid
+  local -A wave_members=()
+  local -a wave_order=()
   while IFS= read -r line; do
-    batch=()
+    case "$line" in
+      '### '*)
+        cur_wave="$line"
+        wave_order+=("$cur_wave")
+        wave_members["$cur_wave"]=""
+        continue
+        ;;
+    esac
+    [ -n "$cur_wave" ] || continue
+    case "$line" in '- '*) ;; *) continue ;; esac
     for lid in $(printf '%s' "$line" | grep -oE 'TASK-[0-9]+'); do
-      case "$cand_padded" in
-        *" $lid "*) batch+=("$lid") ;;
-      esac
+      wave_members["$cur_wave"]+="$lid "
+    done
+  done < <(sed -n '/^## Wave Groups/,/^## [^#]/p' "$plan_md")
+
+  local cand_padded=" ${candidates[*]} "
+  local -a batch=()
+  for cur_wave in "${wave_order[@]}"; do
+    batch=()
+    for lid in ${wave_members[$cur_wave]}; do
+      case "$cand_padded" in *" $lid "*) ;; *) continue ;; esac
+      case " ${batch[*]:-} " in *" $lid "*) continue ;; esac
+      batch+=("$lid")
     done
     [ "${#batch[@]}" -ge 2 ] && break
     batch=()
-  done < <(sed -n '/^## Wave Groups/,/^## [^#]/p' "$plan_md" | grep -E '^- ')
+  done
 
   if [ "${#batch[@]}" -lt 2 ]; then
-    _pb_single_result "no wave line groups >=2 ready tasks"; return 0
+    _pb_single_result "no wave group with >=2 ready tasks"; return 0
   fi
 
-  # Cap at max_parallel, keep line order.
+  # Cap at max_parallel, keep membership order.
   if [ "${#batch[@]}" -gt "$max_parallel" ]; then
     batch=("${batch[@]:0:$max_parallel}")
   fi
 
-  # Pairwise-disjoint "Files modified" scopes; missing/empty scope -> fallback.
+  # Pairwise-disjoint "Files modified" scopes via the shared JSON-array
+  # accessor; missing/empty/malformed scope -> fallback.
   local m files all=""
   for m in "${batch[@]}"; do
-    files=$(get_task_field "$tasks_dir/$m.md" "Files modified" "")
+    files=$(get_task_files_modified "$tasks_dir/$m.md" 2>/dev/null)
     if [ -z "$files" ]; then
       _pb_single_result "missing file scope for $m"; return 0
     fi
-    all+="${files//,/$'\n'}"$'\n'
+    all+="$files"$'\n'
   done
   local dup
   dup=$(printf '%s\n' "$all" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
