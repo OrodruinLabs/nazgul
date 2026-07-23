@@ -787,6 +787,15 @@ assert_exit_code "enforcement off: exit 0" "$VAL_EC" 0
 assert_not_contains "enforcement off: never RECEIPT_MISMATCH" "$VAL_OUTPUT" "RECEIPT_MISMATCH"
 teardown_temp_dir
 
+# --- Test 50b: key entirely ABSENT — opt-in semantics mean enforcement stays
+# OFF (matches the template/migration default-false rollout posture) ---
+setup_evidence_env "code-reviewer" 'del(.review_gate.receipt_hash_enforcement)'
+write_dispatched_review "TASK-001" "code-reviewer" "APPROVE" "Looks good. No blocking issues found." --tamper --no-receipt
+run_validate "TASK-001"
+assert_exit_code "key absent: exit 0" "$VAL_EC" 0
+assert_not_contains "key absent: never RECEIPT_MISMATCH" "$VAL_OUTPUT" "RECEIPT_MISMATCH"
+teardown_temp_dir
+
 # --- Test 51: a CHANGES_REQUESTED verdict is ALSO receipt-checked — tampered
 # content adds RECEIPT_MISMATCH alongside the existing UNAPPROVED problem
 # (additive, per the MISSING/UNAPPROVED pattern) ---

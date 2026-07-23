@@ -617,12 +617,12 @@ validate_review_evidence() {
     return 1
   fi
 
-  # ADR-005 Decision 4 / LR-001: receipt-hash content gate kill switch. Read
-  # by identity, not `//` — `//` treats jq's `false` like `null`, which would
-  # silently coalesce an explicit `false` back to `true`.
-  local receipt_enforced="true"
+  # ADR-005 Decision 4 / LR-001: receipt-hash content gate, OPT-IN — enforce
+  # only on an explicit `true` (identity read); absent/false/missing config all
+  # stay off, matching the template/migration default-false rollout posture.
+  local receipt_enforced="false"
   if [ -f "$config" ]; then
-    receipt_enforced=$(jq -r 'if .review_gate.receipt_hash_enforcement == false then "false" else "true" end' "$config" 2>/dev/null || echo "true")
+    receipt_enforced=$(jq -r 'if .review_gate.receipt_hash_enforcement == true then "true" else "false" end' "$config" 2>/dev/null || echo "false")
   fi
 
   # Every configured reviewer must have an APPROVED file
