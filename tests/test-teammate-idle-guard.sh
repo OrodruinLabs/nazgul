@@ -34,9 +34,8 @@ guard_ec() {
 
 setup
 
-# 1. report file present and non-empty -> ALLOW. (MF-045: `.delivered` is no
-# longer written back to the manifest — it was write-only with zero production
-# consumers; the log line above is the sole durable delivery record now.)
+# 1. report file present and non-empty -> ALLOW. MF-045: `.delivered` is no
+# longer written back (was write-only, zero consumers); the log line is the durable record now.
 make_manifest "rev-a" "nazgul/reviews/TASK-001/rev-a.md" "FEAT-013" 0
 echo "# review: APPROVED" > "$TEST_DIR/nazgul/reviews/TASK-001/rev-a.md"
 assert_eq "report present allowed" "$(guard_ec rev-a)" "0"
@@ -147,8 +146,7 @@ jq -n --arg n "rev-tmpdirfail" '{type:"idle_notification", from:$n, idleReason:"
 assert_eq "mktemp failure under unwritable TMPDIR still exits 0 on delivered path" "$EC" "0"
 
 # 20. MF-041/MF-054: traversal NAME (contains "..") -> ALLOW (fail-open),
-# specific log message, and no file touched anywhere the traversal could
-# have escaped to (the dispatch dir itself, or one level above it).
+# specific log message, no file touched anywhere the traversal could escape to.
 EC=0
 jq -n '{from:"../evil"}' | bash "$GUARD" >/dev/null 2>&1 || EC=$?
 assert_eq "traversal NAME allowed (fail-open)" "$EC" "0"
@@ -168,15 +166,7 @@ assert_contains "separator NAME logs specific message" \
 assert_file_not_exists "separator NAME touches no file at the nested path" \
   "$TEST_DIR/nazgul/dispatch/sub/dir.json"
 
-# 22. MF-041/MF-054: traversal report_path (relative, contains "..") -> ALLOW
-# (fail-open), specific log message. A decoy non-empty file is planted at the
-# EXACT path the guard's own "$PROJECT_DIR/$REPORT_PATH" concatenation would
-# resolve to (computed here the same way, not asserted-and-guessed, so the
-# test can't drift from the real target) — this exercises the actual
-# read-based spoofing risk MF-041 worries about: if a future refactor moved
-# this case check after the delivered-report read, the decoy would get
-# misread as a legitimately delivered report. Today the check fires first,
-# so the log must say "unsafe report_path", never "report delivered".
+# Decoy planted at the exact path REPORT_ABS resolves to, so a future reorder of the checks vs the delivered-report read would be caught.
 TRAV_REPORT_PATH="../outside-marker-$$.md"
 TRAV_DECOY_TARGET="$TEST_DIR/$TRAV_REPORT_PATH"
 echo "decoy: must never be read as a delivered report" > "$TRAV_DECOY_TARGET"
@@ -203,10 +193,8 @@ assert_contains "absolute report_path logs specific message" "$ABS_LOG_TAIL" "un
 assert_not_contains "absolute report_path decoy not misread as delivered" "$ABS_LOG_TAIL" "report delivered"
 rm -f "$ABS_DECOY_TARGET"
 
-# 24. MF-056: BOTH `stat -c` (GNU) and `stat -f` (BSD) forms failing must not
-# crash the guard — the documented "treat as delivered" fallback must fire.
-# Shadow the real `stat` binary on PATH with one that always fails, regardless
-# of which flag it's called with, so neither form can succeed.
+# 24. MF-056: both `stat -c` (GNU) and `stat -f` (BSD) forms failing must not
+# crash the guard — shadow `stat` on PATH with one that always fails either way.
 FAKE_STAT_DIR="$TEST_DIR/fakebin"
 mkdir -p "$FAKE_STAT_DIR"
 cat > "$FAKE_STAT_DIR/stat" << 'FAKE_STAT_EOF'
