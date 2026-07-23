@@ -7,7 +7,7 @@ All notable changes to this project will be documented in this file.
 FEAT-017, the fourth and final repair wave from the FEAT-013 360 reliability audit — reliability wave 4:
 docs, config & residual findings. Closes the 62-item audit register (30 shipped in Waves 1-3, 26 fixed
 here, 1 confirmed already-fixed, 5 retired as wontfix with recorded rationale). Thirty-three commits
-(`4bb50e5`..`fe73660`).
+(`ca80fdb`..`fe73660`).
 
 ### Added
 - **Config schema v29 → v30** (`migrate_29_to_30`): additive kill-switched key
