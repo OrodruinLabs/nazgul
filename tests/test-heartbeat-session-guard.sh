@@ -70,4 +70,37 @@ LOG=$(latest_log)
 assert_json_field "file-provider: triage still runs (picked candidate)" "$LOG" '.picked' "cand.json"
 teardown_temp_dir
 
+# --- Test 5: MF-039 — atomic mkdir claim; two overlapping ticks, exactly one
+# proceeds to _hb_start. The recorder sleeps before recording, mirroring the
+# real gap between _hb_start's claude -p launch and the new session's own
+# SessionStart hook registering nazgul/sessions/*.lock — the exact TOCTOU
+# window count_active_sessions alone could not close.
+setup_temp_dir
+setup_nazgul_dir
+create_config '.automation.heartbeat.enabled = true'
+mkdir -p "$TEST_DIR/nazgul/inbox"
+jq -n '{title:"FEAT-999 test objective", body:"do the thing", priority:1}' > "$TEST_DIR/nazgul/inbox/cand.json"
+
+RECORDER="$TEST_DIR/recorder.sh"
+START_LOG="$TEST_DIR/start-invocations.log"
+cat > "$RECORDER" << EOF
+#!/usr/bin/env bash
+sleep 0.3
+echo "\$1" >> "$START_LOG"
+EOF
+chmod +x "$RECORDER"
+
+NAZGUL_HEARTBEAT_START_CMD="$RECORDER" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO_ROOT/scripts/heartbeat.sh" &
+PID1=$!
+NAZGUL_HEARTBEAT_START_CMD="$RECORDER" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO_ROOT/scripts/heartbeat.sh" &
+PID2=$!
+wait "$PID1"
+wait "$PID2"
+
+INVOCATIONS=0
+[ -f "$START_LOG" ] && INVOCATIONS=$(wc -l < "$START_LOG" | tr -d ' ')
+assert_eq "MF-039: exactly one overlapping tick proceeds to _hb_start" "$INVOCATIONS" "1"
+assert_file_not_exists "MF-039: lock dir released after both ticks exit" "$TEST_DIR/nazgul/.heartbeat.lock"
+teardown_temp_dir
+
 report_results
