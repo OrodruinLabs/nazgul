@@ -11,6 +11,7 @@ tools:
   - EnterWorktree
   - ExitWorktree
 maxTurns: 40
+model: sonnet
 ---
 
 # Review Gate Agent
@@ -43,7 +44,7 @@ When the unit is a group/feature (more than one task), use an aggregate review d
 
 **`max_retries_per_task` is interpreted per review unit.** In group/feature mode it counts retries of the *whole unit's* review cycle, not per individual task. A unit that exhausts its retries goes BLOCKED with the implicated tasks named.
 
-### Step 1.5 scope (granularity-aware diff)
+### Diff Scope by Granularity (feeds Step 1.5)
 
 Generate the review diff into `nazgul/reviews/[UNIT-ID]/diff.patch`:
 - **task**: `git diff [base-sha]..HEAD -- [task files]` (as today).
@@ -91,7 +92,7 @@ Before ANY reviewer runs:
 ### Step 1.5: Regenerate Diff Unconditionally
 
 `diff.patch` is the authenticity trust root the DONE-gate recomputes against — a pre-planted or stale file must never be trusted. So at the START of EVERY review cycle (the initial pass AND every post-CHANGES_REQUESTED retry), (re)generate `nazgul/reviews/[UNIT-ID]/diff.patch` from `git diff` yourself, unconditionally — do NOT check whether it already exists or reuse one written earlier:
-- `git diff [base-sha]..HEAD -- [files] > nazgul/reviews/[UNIT-ID]/diff.patch` (per the Step 1.5 scope rules above for task/group/feature granularity)
+- `git diff [base-sha]..HEAD -- [files] > nazgul/reviews/[UNIT-ID]/diff.patch` (per the granularity-aware diff-scope rules above for task/group/feature granularity)
 - If the resulting diff is empty: log WARNING but proceed (pure additions may need full-file review)
 
 ### Step 1.6: Compute Reviewer Selection + Write the Dispatch Manifest
@@ -503,7 +504,7 @@ to Step 3 for a DONE verdict; go to Step 4's BLOCKED handling.
 
 ### Step 3.6: Borderline Adversarial Cross-Check (bounded)
 
-**Position (despite the number):** this sub-step runs immediately AFTER Step 3 (Determine Verdict) and BEFORE Step 3.75 (Fix-First Auto-Remediation) — it is numbered 3.6 only because "Step 3.5" is already taken by Human Verification below, which physically runs later. Any finding downgraded here is reflected before fix-first runs and before the final verdict tally, so a downgraded finding flows through the rest of the pipeline as a non-blocking CONCERN.
+**Position:** this sub-step runs immediately AFTER Step 3 (Determine Verdict) and BEFORE Step 3.75 (Fix-First Auto-Remediation). Any finding downgraded here is reflected before fix-first runs and before the final verdict tally, so a downgraded finding flows through the rest of the pipeline as a non-blocking CONCERN.
 
 Targets the least-reliable blocking calls: a blocking finding whose confidence sits just over the bar is where a single reviewer's judgment is weakest. Per FEAT-006 cost discipline this does NOT re-review anything else and NEVER runs a second board — it dispatches at most `adversarial_max` single-finding confirm/refute checks per review unit (worst-case added cost: `adversarial_max` single-finding dispatches).
 
@@ -583,7 +584,7 @@ When verdict is CHANGES_REQUESTED and feedback-aggregator has classified finding
 
 This reduces review round-trips by fixing obvious issues without re-entering the full review cycle.
 
-### Step 3.5: Human Verification (HITL Mode Only)
+### Step 3.8: Human Verification (HITL Mode Only)
 
 **Condition:** ALL automated reviewers returned APPROVED AND config `mode` is `"hitl"`.
 

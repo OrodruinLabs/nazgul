@@ -32,8 +32,8 @@ When asked to run parallel reviews for a task:
 1. Verify Agent Teams is available: read `nazgul/config.json → parallelism.require_settings` and confirm the setting is enabled
 2. Read the reviewer list from `nazgul/config.json → agents.reviewers`
 3. Read `nazgul/config.json → models.review` for the model to assign each reviewer teammate (default: `"sonnet"`). Pass this as the `model` parameter when spawning each teammate via the Task tool.
-3. Read the changed files for the task from the task manifest. Verify `nazgul/reviews/[TASK-ID]/diff.patch` exists.
-4. For each reviewer teammate, BEFORE spawning: write its dispatch manifest per
+4. Read the changed files for the task from the task manifest. Verify `nazgul/reviews/[TASK-ID]/diff.patch` exists.
+5. For each reviewer teammate, BEFORE spawning: write its dispatch manifest per
    the Report Contract (`templates/skill-partials/report-contract.md`) with
    `report_path: nazgul/reviews/[TASK-ID]/[reviewer-name].md`. Note: the §3.3
    read-only guarantee applies to subagent-dispatched reviewers persisted by
@@ -41,20 +41,21 @@ When asked to run parallel reviews for a task:
    given Write access scoped to their single report file so they can persist
    it themselves; if scoped Write is unavailable for this teammate, point
    `report_path` at output the lead persists itself instead.
-5. Spawn a team with one teammate per reviewer:
+6. This spawn flow is where the Agent-Teams path performs `nazgul:review-gate`'s orchestrating role directly (rather than dispatching a separate `nazgul:review-gate` agent instance). Dispatch review-gate at `models.review_orchestrator` (default `sonnet`) — never inherit a lower tier from the calling context. This is defense-in-depth alongside `review-gate.md`'s own `model: sonnet` frontmatter pin, for this Agent-Teams path where a static frontmatter pin may not apply the same way.
+7. Spawn a team with one teammate per reviewer:
    - Team name: `nazgul-review-[TASK-ID]`
    - Session naming: name each teammate session as `nazgul-[reviewer-name]-[TASK-ID]` using the `-n` flag — the dispatch manifest filename MUST match this session name exactly
    - Each teammate gets: their agent definition, the diff file path (`nazgul/reviews/[TASK-ID]/diff.patch`), the file list, relevant context paths
    - Instruct each teammate: "Read diff.patch FIRST to understand what changed, then read full files only for additional context"
    - END each teammate prompt with the Report Contract block, `<REPORT_PATH>` = `nazgul/reviews/[TASK-ID]/[reviewer-name].md`
-6. Completion signal = idle notification + report file on disk. When a teammate
+8. Completion signal = idle notification + report file on disk. When a teammate
    idles, read its report file. A teammate idling without its file is blocked
    automatically by the TeammateIdle guard (≤3 times); if it still arrives
    file-less (guard escalated), nudge it once via SendMessage, then mark the
    review UNVERIFIED if it never lands.
-7. Clean up the team AND delete ONLY the `nazgul/dispatch/<session-name>.json`
+9. Clean up the team AND delete ONLY the `nazgul/dispatch/<session-name>.json`
    manifests for the reviewer teammates THIS team spawned (the exact session
-   names from step 5) — never glob `nazgul/dispatch/*.json`, which would also
+   names from step 7) — never glob `nazgul/dispatch/*.json`, which would also
    delete other concurrently active teams' manifests and silently disable
    their TeammateIdle enforcement.
 

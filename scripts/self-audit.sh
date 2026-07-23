@@ -113,6 +113,37 @@ _mine_guard_blocks() {
     "Review recurring block reasons; if one dominates, consider a targeted fix or a learned rule."
 }
 
+# _mine_teammate_spawn_discrepancy — MF-047 heuristic (RULES.md §17 Layer 2,
+# advisory not proof): flags M < N, fewer dispatch manifests than logged spawns; no-op until an emitter exists (see nazgul/tasks/TASK-005.md for the run-scoping caveat).
+_mine_teammate_spawn_discrepancy() {
+  local logs_dir="$NAZGUL_DIR/logs" dispatch_dir="$NAZGUL_DIR/dispatch"
+  local f line spawned=0 manifests=0
+  [ -d "$logs_dir" ] || return 0
+  for f in "$logs_dir"/*.jsonl; do
+    [ -f "$f" ] || continue
+    [ "$(basename "$f")" = "findings.jsonl" ] && continue
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      printf '%s' "$line" | jq -e . >/dev/null 2>&1 || continue
+      if printf '%s' "$line" | jq -e 'select(.event == "teammate_spawned")' >/dev/null 2>&1; then
+        spawned=$((spawned + 1))
+      fi
+    done < "$f"
+  done
+  [ "$spawned" -gt 0 ] || return 0
+  if [ -d "$dispatch_dir" ]; then
+    for f in "$dispatch_dir"/*.json; do
+      [ -f "$f" ] || continue
+      manifests=$((manifests + 1))
+    done
+  fi
+  [ "$manifests" -lt "$spawned" ] || return 0
+  _append_finding "medium" "medium" \
+    "Teammate spawn/manifest discrepancy: ${spawned} logged spawn(s), ${manifests} dispatch manifest(s)" \
+    "nazgul/logs/*.jsonl records ${spawned} teammate_spawned event(s); nazgul/dispatch/*.json currently has ${manifests} manifest(s) — fewer than logged spawns" \
+    "Confirm whether the missing manifest(s) reflect legitimate post-teardown cleanup or a dispatcher that skipped Layer 2 of the Teammate Report Contract (RULES.md §17); a skipped manifest means teammate-idle-guard.sh never enforced that teammate's report at all."
+}
+
 _mine_todo_delta() {
   [ -d "$PROJECT_ROOT/.git" ] || return 0
   local base_ref="" diff_ref="" added files
@@ -310,6 +341,7 @@ _ingest_findings_jsonl() {
 if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
   _mine_review_rejections || true
   _mine_guard_blocks || true
+  _mine_teammate_spawn_discrepancy || true
   _mine_todo_delta || true
   _mine_task_retries || true
   _mine_token_cost || true

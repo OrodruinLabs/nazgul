@@ -1822,7 +1822,11 @@ assert_exit_code "v29 garbage review_gate: migrator exits 0" "$MIG_EC" 0
 assert_eq "v29 garbage review_gate: stall_retry_escalate_tier defaults true" \
   "$(jq -r '.review_gate.stall_retry_escalate_tier' "$CFG")" "true"
 
-# --- receipt_hash_enforcement defaults true and preserves explicit false (migrate_29_to_30) ---
+# --- receipt_hash_enforcement defaults false (opt-in — TASK-009 round-2
+# correction: TASK-002's carried-forward parallel-dispatch receipt-
+# attribution weakness can false-trip in execution.parallel mode, this
+# repo's own actual run mode, until an attribution-hardening follow-up
+# lands) and preserves any explicit value (migrate_29_to_30) ---
 NAZGUL_DIR=$(setup_nazgul_dir "v29-to-30-default")
 cat > "$NAZGUL_DIR/config.json" << 'EOF'
 {"schema_version": 29, "review_gate": {"granularity": "group"}, "models": {"review_orchestrator": "sonnet"}}
@@ -1830,8 +1834,8 @@ EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 CFG="$NAZGUL_DIR/config.json"
 assert_json_field "v29->v30: schema_version reaches 30" "$CFG" ".schema_version" "30"
-assert_eq "receipt_hash_enforcement defaults true and preserves explicit false (default case)" \
-  "$(jq -r '.review_gate.receipt_hash_enforcement' "$CFG")" "true"
+assert_eq "receipt_hash_enforcement defaults false and preserves explicit values (default case)" \
+  "$(jq -r '.review_gate.receipt_hash_enforcement' "$CFG")" "false"
 assert_eq "receipt_hash_enforcement migration preserves sibling review_gate.granularity" \
   "$(jq -r '.review_gate.granularity' "$CFG")" "group"
 assert_eq "review_orchestrator is NOT re-touched by migrate_29_to_30 (already sonnet)" \
@@ -1843,7 +1847,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 CFG="$NAZGUL_DIR/config.json"
-assert_eq "receipt_hash_enforcement defaults true and preserves explicit false (explicit-false case)" \
+assert_eq "receipt_hash_enforcement preserves explicit false (explicit-false case)" \
   "$(jq -r '.review_gate.receipt_hash_enforcement' "$CFG")" "false"
 
 NAZGUL_DIR=$(setup_nazgul_dir "v29-to-30-explicit-true")
@@ -1852,7 +1856,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 CFG="$NAZGUL_DIR/config.json"
-assert_eq "receipt_hash_enforcement defaults true and preserves explicit true (explicit-true case)" \
+assert_eq "receipt_hash_enforcement preserves explicit true (explicit-true case)" \
   "$(jq -r '.review_gate.receipt_hash_enforcement' "$CFG")" "true"
 
 NAZGUL_DIR=$(setup_nazgul_dir "v29-to-30-review-orchestrator-custom")
@@ -1872,8 +1876,8 @@ EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>&1); MIG_EC=$?
 CFG="$NAZGUL_DIR/config.json"
 assert_exit_code "v29->v30 garbage review_gate: migrator exits 0" "$MIG_EC" 0
-assert_eq "v29->v30 garbage review_gate: receipt_hash_enforcement defaults true" \
-  "$(jq -r '.review_gate.receipt_hash_enforcement' "$CFG")" "true"
+assert_eq "v29->v30 garbage review_gate: receipt_hash_enforcement defaults false" \
+  "$(jq -r '.review_gate.receipt_hash_enforcement' "$CFG")" "false"
 
 # --- MF-051: dead safety keys removed on migration (values still at old default) ---
 NAZGUL_DIR=$(setup_nazgul_dir "v29-to-30-dead-safety-keys-default")
@@ -1967,8 +1971,8 @@ assert_eq "context.* values pass through migration completely untouched" \
 # --- template-shape assertion: templates/config.json reflects all of TASK-003's changes ---
 TEMPLATE_FILE="$REPO_ROOT/templates/config.json"
 assert_json_field "template: schema_version is 30" "$TEMPLATE_FILE" ".schema_version" "30"
-assert_json_field "template: review_gate.receipt_hash_enforcement is true" \
-  "$TEMPLATE_FILE" ".review_gate.receipt_hash_enforcement" "true"
+assert_json_field "template: review_gate.receipt_hash_enforcement is false (opt-in, TASK-009 round-2)" \
+  "$TEMPLATE_FILE" ".review_gate.receipt_hash_enforcement" "false"
 assert_json_field "template: models.review_orchestrator is still sonnet (not re-touched)" \
   "$TEMPLATE_FILE" ".models.review_orchestrator" "sonnet"
 assert_eq "template: dead key task_file is absent" "$(jq -r 'has("task_file")' "$TEMPLATE_FILE")" "false"

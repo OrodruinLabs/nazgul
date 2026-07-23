@@ -646,10 +646,10 @@ migrate_29_to_30() {
     | del(.task_file) | del(.log_dir) | del(.review_dir)
     | .safety = ($safety | del(.block_destructive_commands) | del(.require_tests_pass_before_review))
     | .review_gate = ((if (.review_gate | type) == "object" then .review_gate else {} end)
-        | .receipt_hash_enforcement = (if has("receipt_hash_enforcement") then .receipt_hash_enforcement else true end))
+        | .receipt_hash_enforcement = (if has("receipt_hash_enforcement") then .receipt_hash_enforcement else false end))
     | .schema_version = 30
   ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
-  log_migration "v29→v30: added review_gate.receipt_hash_enforcement:true (additive; explicit value incl. false preserved) — TASK-009 DONE-gate receipt-hash kill switch (ADR-005 Decision 4); models.review_orchestrator untouched (already sonnet since migrate_21_to_22). MF-051: removed dead keys task_file/log_dir/review_dir/safety.block_destructive_commands/safety.require_tests_pass_before_review (any customized non-default value preserved under ._deprecated_removed, not silently dropped); parallelism.*/context.* left untouched (deprecated-in-template-only per ADR-005 Risk table)"
+  log_migration "v29→v30: added review_gate.receipt_hash_enforcement:false (additive; explicit value incl. true preserved) — TASK-009 DONE-gate receipt-hash kill switch (ADR-005 Decision 4). DEFAULT OFF (opt-in), a TASK-009 round-2 correction to this same migration: TASK-002's carried-forward parallel-dispatch receipt-attribution weakness (most-recent-.dispatch.json-wins tie-break, no independent correlation) can false-trip mismatches in execution.parallel mode — this repo's own actual run mode — until an attribution-hardening follow-up lands; default-on waits for that. models.review_orchestrator untouched (already sonnet since migrate_21_to_22). MF-051: removed dead keys task_file/log_dir/review_dir/safety.block_destructive_commands/safety.require_tests_pass_before_review (any customized non-default value preserved under ._deprecated_removed, not silently dropped); parallelism.*/context.* left untouched (deprecated-in-template-only per ADR-005 Risk table)"
 }
 
 # --- Run incremental migrations ---
