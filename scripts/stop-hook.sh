@@ -772,6 +772,10 @@ if [ -d "$NAZGUL_DIR/checkpoints" ]; then
 fi
 
 # --- Auto-promote PLANNED -> READY when dependencies are met ---
+# These writes happen AFTER this iteration's checkpoint captured its
+# task_statuses baseline, so they must be ledger-logged (ttg_log_transition)
+# or the next iteration's bash-write reconciliation would flag its own
+# hook's legitimate promotion as an out-of-band forgery.
 if [ -d "$NAZGUL_DIR/tasks" ]; then
   for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
@@ -780,6 +784,7 @@ if [ -d "$NAZGUL_DIR/tasks" ]; then
       DEPS=$(grep -m1 '^\- \*\*Depends on\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "none")
       if [ "$DEPS" = "none" ] || [ -z "$DEPS" ]; then
         set_task_status "$task_file" "PLANNED" "READY"
+        ttg_log_transition "$NAZGUL_DIR" "$(basename "$task_file" .md)" "PLANNED" "READY"
         continue
       fi
       # Check if all dependencies are DONE (or APPROVED in YOLO mode)
@@ -801,6 +806,7 @@ if [ -d "$NAZGUL_DIR/tasks" ]; then
       done <<< "$(echo "$DEPS" | tr ',' '\n' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')"
       if [ "$ALL_DONE" = true ]; then
         set_task_status "$task_file" "PLANNED" "READY"
+        ttg_log_transition "$NAZGUL_DIR" "$(basename "$task_file" .md)" "PLANNED" "READY"
       fi
     fi
   done
@@ -821,6 +827,9 @@ if echo "$GIT_PORCELAIN" | grep -qE '^(U.|.U|AA|DD) '; then
     # (frontmatter) manifest never actually reached BLOCKED on a git conflict.
     _active_task_status=$(get_task_status "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md")
     set_task_status "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" "$_active_task_status" "BLOCKED"
+    # Post-checkpoint hook write — ledger-log it or next iteration's
+    # reconciliation flags this legitimate conflict-block as a forgery.
+    ttg_log_transition "$NAZGUL_DIR" "$ACTIVE_TASK" "$_active_task_status" "BLOCKED"
     # Add or update blocked reason
     if grep -q '^\- \*\*Blocked reason\*\*:' "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" 2>/dev/null; then
       sed -i.bak 's/^\(- \*\*Blocked reason\*\*:\) .*/\1 git conflict — unmerged files detected/' "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" && rm -f "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md.bak"

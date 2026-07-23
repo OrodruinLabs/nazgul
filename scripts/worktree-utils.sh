@@ -23,23 +23,37 @@ create_feature_branch() {
   local config="${3:-$CONFIG}"
   local slug
   slug=$(slugify_objective "$objective")
-  # Compute feat_id from objectives_history length
-  local feat_num
-  feat_num=$(jq '(.objectives_history // [] | length) + 1' "$config")
-  local feat_id
-  feat_id="FEAT-$(printf '%03d' "$feat_num")"
-
-  # Check for board issue number
-  local board_issue
-  board_issue=$(jq -r '.board.current_issue // ""' "$config")
-  local display_id
-  if [ -n "$board_issue" ] && [ "$board_issue" != "null" ]; then
-    display_id="#${board_issue}"
+  # Identity reuse (Objective Identity rule): a feat_id already in config is
+  # authoritative — /nazgul:plan or a prior start path assigned it, and specs
+  # (objectives/FEAT-NNN-spec.md) are keyed to it. Derive a fresh id ONLY when
+  # config has none; recomputing on reuse would rename the branch and prefix
+  # to a wrong, off-by-one id.
+  local feat_id display_id commit_prefix branch_component
+  feat_id=$(jq -r '.feat_id // ""' "$config")
+  if [ -n "$feat_id" ] && [ "$feat_id" != "null" ]; then
+    display_id=$(jq -r '.feat_display_id // ""' "$config")
+    { [ -n "$display_id" ] && [ "$display_id" != "null" ]; } || display_id="$feat_id"
+    commit_prefix=$(jq -r '.afk.commit_prefix // ""' "$config")
+    { [ -n "$commit_prefix" ] && [ "$commit_prefix" != "null" ]; } || commit_prefix="feat(${display_id}):"
+    branch_component="${display_id#\#}"
   else
-    display_id="$feat_id"
+    local feat_num
+    feat_num=$(jq '(.objectives_history // [] | length) + 1' "$config")
+    feat_id="FEAT-$(printf '%03d' "$feat_num")"
+    # Check for board issue number
+    local board_issue
+    board_issue=$(jq -r '.board.current_issue // ""' "$config")
+    if [ -n "$board_issue" ] && [ "$board_issue" != "null" ]; then
+      display_id="#${board_issue}"
+      branch_component="$board_issue"
+    else
+      display_id="$feat_id"
+      branch_component="$feat_id"
+    fi
+    commit_prefix="feat(${display_id}):"
   fi
 
-  local branch_name="feat/${board_issue:-$feat_id}-${slug}"
+  local branch_name="feat/${branch_component}-${slug}"
   local base_branch
   base_branch=$(git -C "$project_root" branch --show-current 2>/dev/null || echo "main")
   local main_worktree_path
@@ -56,7 +70,7 @@ create_feature_branch() {
     --arg ts "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
     --arg fid "$feat_id" \
     --arg did "$display_id" \
-    --arg prefix "feat(${display_id}):" \
+    --arg prefix "$commit_prefix" \
     '.branch.feature = $feat | .branch.base = $base | .branch.main_worktree_path = $mwp | .branch.created_at = $ts | .feat_id = $fid | .feat_display_id = $did | .afk.commit_prefix = $prefix' \
     "$config" > "$tmp" && mv "$tmp" "$config"
 

@@ -1216,4 +1216,22 @@ assert_eq "recon: legitimate guarded transition not reconciled to BLOCKED" \
   "$(get_task_status "$RECON_TASK_PATH")" "IMPLEMENTED"
 teardown_temp_dir
 
+# --- RECON-4: the stop-hook's OWN auto-promote (PLANNED -> READY) runs after
+# the iteration's checkpoint snapshot; it must ledger-log the write so the
+# NEXT iteration's reconciliation doesn't flag the hook's legitimate
+# promotion as a bash-write forgery ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "PLANNED"
+run_hook
+assert_eq "recon: auto-promote flipped PLANNED to READY" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "READY"
+run_hook
+assert_eq "recon: hook's own auto-promote not reconciled to BLOCKED" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "READY"
+teardown_temp_dir
+
 report_results

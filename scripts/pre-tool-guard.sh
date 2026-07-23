@@ -42,10 +42,13 @@ check_pattern() {
 # Filesystem destruction. Anchored on a boundary (whitespace/end/;/&/|) after the
 # target so `rm -rf /tmp/x` and other legitimate absolute-path deletions are
 # allowed (MF-027) while the bare root, ~, and $HOME forms stay blocked.
-check_pattern 'rm\s+-rf\s+/(\s|$|;|&|\|)' "Recursive delete of root filesystem"
-check_pattern 'rm\s+-rf\s+/root(\s|$|;|&|\|)' "Recursive delete of root user home directory"
-check_pattern 'rm\s+-rf\s+~(\s|$|;|&|\|)' "Recursive delete of home directory"
-check_pattern 'rm\s+-rf\s+\$HOME(\s|$|;|&|\|)' "Recursive delete of home directory"
+# `/?` (`/+` for root) covers the equivalent trailing-slash spellings
+# (`rm -rf ~/`, `rm -rf /root/`, `rm -rf //`) without touching real subpaths
+# like `~/tmp` or `/root/subdir`.
+check_pattern 'rm\s+-rf\s+/+(\s|$|;|&|\|)' "Recursive delete of root filesystem"
+check_pattern 'rm\s+-rf\s+/root/?(\s|$|;|&|\|)' "Recursive delete of root user home directory"
+check_pattern 'rm\s+-rf\s+~/?(\s|$|;|&|\|)' "Recursive delete of home directory"
+check_pattern 'rm\s+-rf\s+\$HOME/?(\s|$|;|&|\|)' "Recursive delete of home directory"
 check_pattern 'rm\s+-rf\s+\.\s*$' "Recursive delete of current directory"
 
 # Database destruction

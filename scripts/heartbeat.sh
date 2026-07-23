@@ -42,13 +42,23 @@ if [ -d "$HB_LOCK_DIR" ]; then
   HB_LOCK_MTIME=$(stat -c %Y "$HB_LOCK_DIR" 2>/dev/null || stat -f %m "$HB_LOCK_DIR" 2>/dev/null || echo "$HB_LOCK_NOW")
   case "$HB_LOCK_MTIME" in ''|*[!0-9]*) HB_LOCK_MTIME="$HB_LOCK_NOW" ;; esac
   if [ $((HB_LOCK_NOW - HB_LOCK_MTIME)) -gt "$HB_LOCK_STALE" ]; then
-    rmdir "$HB_LOCK_DIR" 2>/dev/null || true
+    # Age alone can't tell a crashed tick from a live long one — the dir mtime
+    # never advances while _hb_start runs. Reclaim only when the recorded
+    # owner is provably dead; a missing/garbled pid file (torn write) falls
+    # back to the age check alone.
+    HB_LOCK_PID=$(cat "$HB_LOCK_DIR/pid" 2>/dev/null || echo "")
+    case "$HB_LOCK_PID" in *[!0-9]*) HB_LOCK_PID="" ;; esac
+    if [ -z "$HB_LOCK_PID" ] || ! kill -0 "$HB_LOCK_PID" 2>/dev/null; then
+      rm -f "$HB_LOCK_DIR/pid" 2>/dev/null || true
+      rmdir "$HB_LOCK_DIR" 2>/dev/null || true
+    fi
   fi
 fi
 
 # Lock held (and not stale) -> another tick owns this cycle; never a second loop.
 mkdir "$HB_LOCK_DIR" 2>/dev/null || exit 0
-trap 'rmdir "$HB_LOCK_DIR" 2>/dev/null || true' EXIT
+echo "$$" > "$HB_LOCK_DIR/pid" 2>/dev/null || true
+trap 'rm -f "$HB_LOCK_DIR/pid" 2>/dev/null; rmdir "$HB_LOCK_DIR" 2>/dev/null || true' EXIT
 
 TICK="hb-$(date -u +%s)"
 TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"

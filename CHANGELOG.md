@@ -8,7 +8,7 @@ FEAT-015, the second repair wave from the FEAT-013 360 reliability audit — gua
 enforcement. Sixteen commits (`6a8e9d0`..`2b685fa`).
 
 ### Added
-- **`scripts/lib/task-transition-guard.sh`**: `valid_transition()`, the commit-SHA gate, and the
+- **`scripts/lib/task-transition-guard.sh`**: `ttg_valid_transition()`, the commit-SHA gate, and the
   review-evidence check extracted out of `task-state-guard.sh` into a reusable library, callable
   from both the PreToolUse path and a new stop-hook-time reconciliation pass (MF-022,
   ADR-003 Decision 2). At the top of every `stop-hook.sh` iteration, each task manifest's live

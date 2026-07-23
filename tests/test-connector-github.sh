@@ -513,6 +513,7 @@ HB_CAP="$TEST_DIR/hb-start.txt"
 # session resolves — the fixed point MF-038's write-back polls for.
 cat > "$TEST_DIR/fake-start.sh" << EOF
 #!/usr/bin/env bash
+set -euo pipefail
 printf '%s' "\$1" > "$HB_CAP"
 jq '.feat_id = "FEAT-777"' "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.tmp" \
   && mv "$TEST_DIR/nazgul/config.json.tmp" "$TEST_DIR/nazgul/config.json"

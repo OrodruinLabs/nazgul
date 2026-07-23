@@ -164,12 +164,11 @@ Every branch-setup path below that needs a feature id MUST follow this rule inst
 
 Every "Branch Setup" step referenced from a state below follows this same sequence — it replaces the old inline `git checkout -b`/config-write prose with the existing, already-correct `scripts/worktree-utils.sh` library (MF-034: this is what actually activates the managed git-hooks install, which the prose never did):
 
-1. If `config.feat_id` is already set (the **reuse** case above), snapshot it first: `jq '{feat_id, feat_display_id, commit_prefix: .afk.commit_prefix}' nazgul/config.json`. `create_feature_branch` (step 2) always (re)computes these three fields from `objectives_history.length + 1` — correct only for a fresh assignment, not a reuse.
-2. `source scripts/worktree-utils.sh` then call `create_feature_branch "$OBJECTIVE" "$(pwd)" nazgul/config.json`. This performs the full branch-setup (captures `branch.base`, stores `branch.main_worktree_path`, slugifies, `git checkout -b feat/<display_id>-<slug>`, sets `feat_id`/`feat_display_id`/`afk.commit_prefix`) and calls `install_git_hooks` internally — the managed `core.hooksPath` and `branch.prior_hooks_path` are now set as a direct consequence of this one call.
-3. Reconcile identity per **Objective Identity (use existing or assign)** above:
-   - Reuse case: restore the snapshot from step 1 via `jq` (do NOT append to `objectives_history` — already done at original assignment time).
-   - Assign case (`feat_id` was null before step 2): the id `create_feature_branch` just computed is correct — append `{feat_id, objective, started_at}` to `objectives_history` exactly once.
-4. `setup_worktree_dir "$(pwd)" nazgul/config.json` to create the worktree dir and store its path in config.
+1. `source scripts/worktree-utils.sh` then call `create_feature_branch "$OBJECTIVE" "$(pwd)" nazgul/config.json`. This performs the full branch-setup (captures `branch.base`, stores `branch.main_worktree_path`, slugifies, `git checkout -b`, sets `feat_id`/`feat_display_id`/`afk.commit_prefix`) and calls `install_git_hooks` internally — the managed `core.hooksPath` and `branch.prior_hooks_path` are now set as a direct consequence of this one call. The helper is identity-reuse-safe per the **Objective Identity** rule above: an already-set `config.feat_id` (and its display id/commit prefix) is reused verbatim for the branch name and config fields; a fresh `FEAT-NNN` is derived from `objectives_history.length + 1` only when `feat_id` is null.
+2. History append, per **Objective Identity (use existing or assign)** above:
+   - Reuse case (`feat_id` was already set): do NOT append to `objectives_history` — already done at original assignment time.
+   - Assign case (`feat_id` was null before step 1): append `{feat_id, objective, started_at}` to `objectives_history` exactly once.
+3. `setup_worktree_dir "$(pwd)" nazgul/config.json` to create the worktree dir and store its path in config.
 
 ### Smart State Detection
 

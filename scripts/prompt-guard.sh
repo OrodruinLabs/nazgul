@@ -8,14 +8,17 @@ set -euo pipefail
 NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
 CONFIG="$NAZGUL_DIR/config.json"
 
+# Read the user's prompt from the UserPromptSubmit stdin JSON envelope
+# ({"prompt":"...", ...}), mirroring pre-tool-guard.sh's stdin extraction.
+# Drained BEFORE any early exit: quitting while the harness is still writing
+# the envelope EPIPEs the writer (Linux jq: "writing output failed: Broken
+# pipe", turning the hook pipeline nonzero under pipefail).
+STDIN_JSON=$(cat 2>/dev/null || echo "")
+
 # If Nazgul not initialized, allow all prompts
 if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
-
-# Read the user's prompt from the UserPromptSubmit stdin JSON envelope
-# ({"prompt":"...", ...}), mirroring pre-tool-guard.sh's stdin extraction.
-STDIN_JSON=$(cat 2>/dev/null || echo "")
 USER_PROMPT=$(printf '%s' "$STDIN_JSON" | jq -r '.prompt // empty' 2>/dev/null || echo "")
 
 # If no prompt content available, allow

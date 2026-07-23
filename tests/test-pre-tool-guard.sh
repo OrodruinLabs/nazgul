@@ -66,9 +66,13 @@ for bad_cmd in \
   "rm -rf /" \
   "rm -rf /;" \
   "rm -rf / &&" \
+  "rm -rf //" \
   "rm -rf /root" \
+  "rm -rf /root/" \
   "rm -rf ~" \
-  'rm -rf $HOME'; do
+  "rm -rf ~/" \
+  'rm -rf $HOME' \
+  'rm -rf $HOME/'; do
   ec=$(get_exit_code "$bad_cmd")
   assert_exit_code "blocked MF-027: '$bad_cmd'" "$ec" 2
   output=$(run_guard "$bad_cmd")
@@ -76,10 +80,14 @@ for bad_cmd in \
 done
 
 # --- MF-027: rm -rf precision — legitimate absolute/relative-path deletions
-# must NOT be over-matched by the root/home block (the false-positive fix) ---
+# must NOT be over-matched by the root/home block (the false-positive fix;
+# trailing-slash whole-dir forms block above, real subpaths stay allowed) ---
 for safe_cmd in \
   "rm -rf /tmp/x" \
   "rm -rf ./build" \
+  "rm -rf ~/tmp" \
+  "rm -rf /root/subdir" \
+  'rm -rf $HOME/scratch' \
   "rm -rf /tmp/build-cache"; do
   ec=$(get_exit_code "$safe_cmd")
   assert_exit_code "allowed MF-027: '$safe_cmd'" "$ec" 0

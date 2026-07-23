@@ -184,4 +184,35 @@ UNTOUCHED2=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
 assert_eq "self-heal: no branch.feature still skips first-time install" "$UNTOUCHED2" ".husky"
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# Identity reuse: an already-assigned feat_id (e.g. from /nazgul:plan) is
+# authoritative — create_feature_branch must use it for the branch name and
+# leave feat_id/feat_display_id/afk.commit_prefix untouched, deriving a fresh
+# FEAT-NNN only when config carries none.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" \
+  '{"objectives_history":[{"feat_id":"FEAT-001"},{"feat_id":"FEAT-002"},{"feat_id":"FEAT-003"}],"feat_id":"FEAT-002","feat_display_id":"FEAT-002","afk":{"commit_prefix":"feat(FEAT-002):"},"guards":{"git_hooks":true}}'
+CONFIG="$TEST_DIR/repo/nazgul/config.json"
+BRANCH=$(create_feature_branch "Reuse my id" "$TEST_DIR/repo" "$CONFIG")
+assert_eq "identity reuse: branch named from the EXISTING feat_id, not history+1" \
+  "$BRANCH" "feat/FEAT-002-reuse-my-id"
+assert_eq "identity reuse: feat_id not recomputed" "$(jq -r '.feat_id' "$CONFIG")" "FEAT-002"
+assert_eq "identity reuse: display id preserved" "$(jq -r '.feat_display_id' "$CONFIG")" "FEAT-002"
+assert_eq "identity reuse: commit prefix preserved" "$(jq -r '.afk.commit_prefix' "$CONFIG")" "feat(FEAT-002):"
+teardown_temp_dir
+
+# Fresh-assignment path unchanged: null feat_id still derives history+1.
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" '{"objectives_history":[{"feat_id":"FEAT-001"}],"feat_id":null,"guards":{"git_hooks":true}}'
+CONFIG="$TEST_DIR/repo/nazgul/config.json"
+BRANCH=$(create_feature_branch "Fresh id" "$TEST_DIR/repo" "$CONFIG")
+assert_eq "identity fresh: null feat_id derives objectives_history.length + 1" \
+  "$BRANCH" "feat/FEAT-002-fresh-id"
+assert_eq "identity fresh: derived feat_id written" "$(jq -r '.feat_id' "$CONFIG")" "FEAT-002"
+assert_eq "identity fresh: derived commit prefix written" "$(jq -r '.afk.commit_prefix' "$CONFIG")" "feat(FEAT-002):"
+teardown_temp_dir
+
 report_results
