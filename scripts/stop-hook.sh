@@ -1203,11 +1203,11 @@ if [ "$GRANULARITY" != "task" ] && [ "$AGGREGATE_REVIEW_READY" = "true" ]; then
   else
     REVIEW_DIFF_HINT="the combined diff for ${AGGREGATE_REVIEW_SCOPE} (its tasks' commits)"
   fi
-  DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for the AGGREGATE review unit [${AGGREGATE_REVIEW_SCOPE}]. Review SCOPE is ${REVIEW_DIFF_HINT}, covering tasks: ${AGGREGATE_REVIEW_TASKS}. Pass granularity=${GRANULARITY} and the task list so feedback-aggregator can attribute findings back to the owning task by file scope. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition."
+  DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for the AGGREGATE review unit [${AGGREGATE_REVIEW_SCOPE}]. Review SCOPE is ${REVIEW_DIFF_HINT}, covering tasks: ${AGGREGATE_REVIEW_TASKS}. Pass granularity=${GRANULARITY} and the task list so feedback-aggregator can attribute findings back to the owning task by file scope. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition. Dispatch review-gate at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context."
 elif [ "$GRANULARITY" = "task" ] && [ "$ACTIVE_STATUS" = "IMPLEMENTED" ]; then
-  DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition."
+  DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition. Dispatch review-gate at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context."
 elif [ "$GRANULARITY" = "task" ] && [ "$ACTIVE_STATUS" = "IN_REVIEW" ]; then
-  DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}."
+  DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. Dispatch review-gate at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context."
 elif [ "$ACTIVE_STATUS" = "READY" ] || [ "$ACTIVE_STATUS" = "IN_PROGRESS" ]; then
   DISPATCH_INSTR="DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}."
 elif [ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ]; then
@@ -1236,12 +1236,12 @@ if [ "$EXEC_PARALLEL" = "true" ] && [ "$GRANULARITY" = "task" ] \
     # would contradict "Do not start any task outside this batch" below.
     ACTIVE_LINE="Batch tasks: ${BATCH_TASKS}"
     DISPATCH_INSTR="DELEGATE (PARALLEL BATCH of ${BATCH_COUNT}): ${BATCH_TASKS}.
-0. Crash recovery first: if a batch task already has a worktree/branch feat/<display_id>/<id> left by an interrupted batch — a branch WITH commits is resumed (merge it per step 2, skip re-implementing), a dirty/commit-less one is removed (git worktree remove --force, delete the branch) before dispatching. Deterministic rule, no judgment.
+0. Crash recovery first: if a batch task already has a worktree/branch feat/<display_id>/<id> left by an interrupted batch — a branch WITH commits is resumed (skip re-implementing, continue from step 2 using its existing commit), a dirty/commit-less one is removed (git worktree remove --force, delete the branch) before dispatching. Deterministic rule, no judgment.
 1. Dispatch ONE implementer agent (nazgul:implementer) PER task — ALL Agent calls in a SINGLE message so they run concurrently. Each prompt gets ONLY its task id, its manifest path nazgul/tasks/<id>.md, its file scope, and the line 'NAZGUL_UNIT: <id>'. Each implementer works in its OWN git worktree (branch feat/<display_id>/<id> off the feature branch) and commits there — NEVER in the shared working tree. If dispatching implementers as TEAMMATES (not foreground Agent calls): first write nazgul/dispatch/<session-name>.json per templates/skill-partials/report-contract.md with report_path nazgul/tasks/<id>.md, and END each prompt with the Report Contract block — a teammate's final text is delivered to NO ONE.
-2. WAIT for every implementer to return. Then merge each task branch into the feature branch sequentially (git merge --no-ff). On conflict: git merge --abort, set that task CHANGES_REQUESTED with a note, keep its branch for inspection — never force-merge.
-3. Record each merged task's FULL 40-character commit SHA (never abbreviated — the pre-merge guard matches full SHAs only) under its manifest's ## Commits and set Status: IMPLEMENTED.
-4. Dispatch ONE review-gate agent (nazgul:review-gate) PER merged task — all in a single message — each prompt carrying 'NAZGUL_UNIT: <id>'.
-Do not start any task outside this batch until every batch task reaches a terminal state."
+2. WAIT for every implementer to return. Then, for EACH task (no merge yet), record the implementer's own branch-tip FULL 40-character commit SHA (never abbreviated — the pre-merge guard matches full SHAs only) under its manifest's ## Commits and set Status: IMPLEMENTED — immediately after the implementer's own commit and BEFORE any merge.
+3. Dispatch ONE review-gate agent (nazgul:review-gate) PER task — all in a single message — each prompt carrying 'NAZGUL_UNIT: <id>' and reviewing that task's OWN branch diff (task branch vs. feature branch, unmerged) rather than a post-merge diff — the same diff-scoping already used for group/feature aggregate review of unmerged tasks' commits. Each review-gate dispatch must run at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context.
+4. WAIT for every review-gate to return. Merge (git merge --no-ff) ONLY a task whose manifest reaches Status: DONE — it already lists that branch's SHA under ## Commits, so the pre-merge-commit (H2) guard finds a match and correctly ALLOWS. On conflict: git merge --abort, set that task CHANGES_REQUESTED with a note, keep its branch for inspection — never force-merge. A task at CHANGES_REQUESTED or BLOCKED is NOT merged; its branch/worktree is kept for rework.
+Do not start any task outside this batch until every batch task reaches a terminal state — merged-after-DONE or left-unmerged-for-rework."
     if execution_should_pause "$CONFIG" approve_batch "$MODE"; then
       DISPATCH_INSTR="GATE approve_batch: present this batch to the human and WAIT for explicit approval BEFORE dispatching anything.
 ${DISPATCH_INSTR}"
