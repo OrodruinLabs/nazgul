@@ -257,9 +257,24 @@ if inbox_archive "$INBOX_DIR" "$PICKED"; then
   if [ "$START_OK" = "true" ]; then
     _hb_emit started "" "$OBJECTIVE" "$SEEN_COUNT" "$TRIAGED_JSON" "$PICKED" false true "$ARCHIVED_TO"
   else
-    # The candidate is already archived (the claim happened), so it will never
-    # be re-picked even though the start command itself failed — record the
-    # real outcome rather than a decision record that always claims success.
+    # MF-044: the candidate is already archived (the claim happened), so it
+    # will never be re-picked even though the start command itself failed —
+    # previously that meant a silent, permanent drop with only a dated JSONL
+    # log line nothing monitors. Relocate it to a visibly distinct
+    # nazgul/inbox/failed/ so an operator (or a future status/heartbeat pass)
+    # can actually find and requeue it. Only the "file" provider has a real
+    # on-disk archive path to move; github's "archive" is a label edit with
+    # nothing to relocate, so it keeps the log-line-only signal it already
+    # had. A failed relocation (e.g. permissions) leaves ARCHIVED_TO pointing
+    # at the archive/ path it's actually still sitting in, so the log record
+    # never claims a move that didn't happen.
+    if [ "$INBOX_PROVIDER" = "file" ]; then
+      FAILED_DIR="$INBOX_DIR/failed"
+      mkdir -p "$FAILED_DIR" 2>/dev/null || true
+      if mv -f "$INBOX_DIR/archive/$PICKED" "$FAILED_DIR/$PICKED" 2>/dev/null; then
+        ARCHIVED_TO="$INBOX_REL/failed/$PICKED"
+      fi
+    fi
     _hb_emit started start_command_failed "$OBJECTIVE" "$SEEN_COUNT" "$TRIAGED_JSON" "$PICKED" false false "$ARCHIVED_TO"
   fi
 else
