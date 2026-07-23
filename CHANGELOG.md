@@ -32,9 +32,10 @@ enforcement. Sixteen commits (`6a8e9d0`..`2b685fa`).
   `cleanup_all_worktrees` library functions, which already install/uninstall the managed
   `core.hooksPath` guards durably — closing both the dead-activation gap and the worktree-cwd merge
   escape it created.
-- **Three dead guards revived**: `scripts/lib/task-utils.sh`'s new shared `get_task_files_modified()`
-  accessor (MF-025) replaces three independent ad hoc comma-split `Files modified` parsers across
-  `task-state-guard.sh`'s File Scope check, `parallel-batch.sh`'s disjoint-scope check, and
+- **Three dead guards revived** (MF-023, MF-024, MF-025): `scripts/lib/task-utils.sh`'s new shared
+  `get_task_files_modified()` accessor (MF-025) replaces three independent ad hoc comma-split
+  `Files modified` parsers across `task-state-guard.sh`'s File Scope check (MF-024 — corrects the
+  field-name mismatch that left it silently dead), `parallel-batch.sh`'s disjoint-scope check, and
   `parallel-rework-guard.sh`'s `_scope_has()` — all three now correctly match bracket/quote-laden
   JSON arrays. `scripts/prompt-guard.sh` (MF-023) now reads the real `UserPromptSubmit` stdin JSON
   envelope instead of an env var Claude Code never sets in production.
