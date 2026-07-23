@@ -116,61 +116,162 @@ _re_manifest_authentic() {
   bash "$rs" verify --files "$files" --reviewers "$roster" --claimed-skipped "$claimed"
 }
 
-# _re_reconstruct_pretoken_text <file> -> prints <file>'s content with any
-# `review_token:` line INSIDE the frontmatter block removed, everything else
-# byte-for-byte unchanged. This reproduces the EXACT text a dispatched
-# reviewer originally returned as its final message: per
-# agents/review-gate.md Step 2 item 4, the orchestrator persists a reviewer's
-# raw return by inserting `review_token: $TOKEN` into the frontmatter block
-# the REVIEWER authored (alongside its own `verdict:`/`confidence:`) — the
-# fences, the reviewer's own frontmatter fields, and the entire narrative
-# body are never otherwise touched. That raw return (frontmatter included)
-# is exactly what TASK-002's SubagentStop capture hashes in full (see
-# scripts/subagent-stop.sh's `_record_reviewer_receipt`), so undoing this one
-# insertion is the whole of the needed reconstruction — empirically verified
-# byte-for-byte against a `_rp_sha256` recompute (TASK-009 Implementation
-# Log). A file with no leading frontmatter fence (legacy format, never had a
-# token inserted) passes through unmodified. Only a line strictly inside the
-# frontmatter region is ever dropped — a body line that happens to start
-# with `review_token:` is left alone, since stripping it globally would let
-# injected body content hide from the hash it's supposed to be part of.
+# _re_reconstruct_pretoken_text <file> [--strip-note] -> prints a
+# reconstruction of <file>'s content suitable for hashing against TASK-002's
+# receipt (LR-001 / ADR-005 Decision 4).
+#
+# (no flag): strips any `review_token:` line INSIDE the frontmatter block,
+# everything else byte-for-byte unchanged. Undoes the ONE edit
+# agents/review-gate.md Step 2 item 4 makes when persisting a reviewer's raw
+# return: inserting `review_token: $TOKEN` into the frontmatter block the
+# REVIEWER authored. A file with no leading frontmatter fence (legacy
+# format, never had a token inserted) passes through unmodified. Only a line
+# strictly inside the frontmatter region is ever dropped — a body line that
+# happens to start with `review_token:` is left alone, so injected body
+# content can't hide from the hash it's supposed to be part of.
+#
+# --strip-note: ADDITIONALLY requires and strips a disclosed "review-gate
+# resolution note" — review-gate is documented (nazgul/reviews/TASK-002/
+# {architect,code,security}-reviewer.md, the 2026-07-23 live board; see
+# TASK-009 Implementation Log) to legitimately overwrite ONLY the top-level
+# `verdict:` field's VALUE during Step 3/3.6/3.75 resolution (auto-fix
+# applied, adversarial cross-check refuted, confidence-threshold downgrade),
+# while inserting a disclosure directly below the frontmatter and preserving
+# the reviewer's findings/narrative 100% verbatim below THAT. The note is
+# structurally recognized as: a blank line, then a contiguous block of `>`
+# (blockquote) lines containing the case-insensitive marker phrase
+# "review-gate resolution note", then a blank line — collapsed back to the
+# single blank line that separates frontmatter from narrative in every
+# reviewer's own unedited return (verified byte-for-byte against
+# nazgul/reviews/TASK-002/qa-reviewer.md, which has no note, vs. its
+# note-bearing siblings). Returns 1 (no output) if --strip-note is requested
+# but no such note is found — callers must NEVER brute-force the verdict
+# field without a genuine, disclosed note backing it (an undisclosed verdict
+# flip with an otherwise-untouched body is exactly the FEAT-016/TASK-005
+# fabrication shape and must never be tolerated).
 _re_reconstruct_pretoken_text() {
-  local file="$1"
+  local file="$1" strip_note="false"
+  [ "${2:-}" = "--strip-note" ] && strip_note="true"
   [ -f "$file" ] || return 1
-  awk '
-    NR==1 {
-      l=$0; sub(/\r$/, "", l)
-      if (l ~ /^---[[:space:]]*$/) { infm=1; print; next }
+  awk -v strip_note="$strip_note" '
+    { lines[NR] = $0 }
+    END {
+      n = NR
+      # Build the full candidate output into out[] first — nothing is
+      # printed until we know whether --strip-note actually found a note.
+      # (A prior version printed the frontmatter incrementally as it went,
+      # so a --strip-note call that failed to find a note still emitted
+      # partial output before its non-zero exit — violating the documented
+      # "returns 1, no output" contract; caught by a test asserting the
+      # empty-output case, TASK-009 Implementation Log.)
+      if (n < 1 || lines[1] !~ /^---[[:space:]]*$/) {
+        if (strip_note == "true") exit 1
+        for (j = 1; j <= n; j++) print lines[j]
+        exit 0
+      }
+      m = 0
+      out[++m] = lines[1]
+      i = 2
+      while (i <= n && lines[i] !~ /^---[[:space:]]*$/) {
+        if (lines[i] !~ /^review_token[[:space:]]*:/) out[++m] = lines[i]
+        i++
+      }
+      if (i <= n) { out[++m] = lines[i]; i++ }   # closing fence
+      if (strip_note == "true") {
+        if (i <= n && lines[i] == "" && (i + 1) <= n && lines[i + 1] ~ /^>/) {
+          k = i + 1
+          found_marker = 0
+          while (k <= n && lines[k] ~ /^>/) {
+            low = tolower(lines[k])
+            if (index(low, "review-gate resolution note") > 0) found_marker = 1
+            k++
+          }
+          if (found_marker && k <= n && lines[k] == "") {
+            out[++m] = ""
+            for (j = k + 1; j <= n; j++) out[++m] = lines[j]
+            for (j = 1; j <= m; j++) print out[j]
+            exit 0
+          }
+        }
+        exit 1
+      }
+      for (j = i; j <= n; j++) out[++m] = lines[j]
+      for (j = 1; j <= m; j++) print out[j]
     }
-    infm==1 {
-      l=$0; sub(/\r$/, "", l)
-      if (l ~ /^---[[:space:]]*$/) { infm=0; print; next }
-      if ($0 ~ /^review_token[[:space:]]*:/) next
-      print; next
-    }
-    { print }
   ' "$file"
 }
 
+# _re_unit_has_any_receipt <nazgul_dir> <unit> -> 0 iff
+# nazgul/logs/review-receipts.jsonl has AT LEAST ONE entry for this unit
+# (any reviewer). Used to distinguish "capture wasn't active for this board"
+# (e.g. the board predates TASK-002, or ran in an environment where the
+# SubagentStop hook never fires) from "this one reviewer's receipt was
+# suppressed" — a missing receipt only counts as suspicious in the LATTER
+# case (see _re_receipt_matches). A per-file existence check alone cannot
+# make this distinction and would either (a) fail closed unconditionally,
+# which retroactively RECEIPT_MISMATCHes every already-DONE task in every
+# project that predates this feature — confirmed live: as of TASK-009,
+# THIS repo's own nazgul/logs/review-receipts.jsonl does not exist anywhere
+# on disk despite 6 tasks already DONE with full review boards — or
+# (b) degrade to allow on any missing file, which a compromised gate could
+# trivially exploit by deleting the whole receipts log. Per-unit scoping is
+# the narrow middle ground: a project/board with zero captures anywhere gets
+# a pass (nothing to compare against, expected and common), while a board
+# where SIBLING reviewers captured normally but one specific reviewer's
+# entry is conspicuously absent is exactly the targeted-suppression shape
+# and still fails closed.
+_re_unit_has_any_receipt() {
+  local nazgul_dir="$1" unit="$2"
+  local receipts_file="$nazgul_dir/logs/review-receipts.jsonl"
+  [ -f "$receipts_file" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  local any
+  any=$(jq -rs --arg u "$unit" 'any(.[]; .unit == $u)' "$receipts_file" 2>/dev/null)
+  [ "$any" = "true" ]
+}
+
 # _re_receipt_matches <nazgul_dir> <unit> <reviewer> -> 0 iff
-# reviews/<unit>/<reviewer>.md's reconstructed pre-token text (see
-# _re_reconstruct_pretoken_text) hashes identically to the MOST RECENT
+# reviews/<unit>/<reviewer>.md is consistent with the MOST RECENT
 # independently-captured receipt for (unit, reviewer) in
 # nazgul/logs/review-receipts.jsonl — TASK-002's SubagentStop-hook capture,
 # a hook the review-gate orchestrator (and thus a compromised or buggy gate)
-# cannot influence (LR-001 / ADR-005 Decision 4, Option 2). Both sides read
-# through a bash command substitution before hashing (`$(...)` strips
-# trailing newlines identically to how subagent-stop.sh's
-# `final_text=$(jq -rs ...)` already does on the capture side) so a
-# trailing-newline difference between a live transcript and a persisted file
-# is not a false mismatch.
-# Returns 1 (no match / no evidence — same as a mismatch) when: the
-# receipts file is missing, no receipt line matches (unit, reviewer) at all
-# (a receipt-less persisted verdict is the FEAT-016/TASK-005 fabrication
-# shape — an invented verdict for a reviewer that never actually completed),
-# or the recomputed hash disagrees with the receipt's hash. Also returns 1
-# if jq or a sha256 tool is unavailable — a check that cannot run must never
-# be silently treated as a check that passed.
+# cannot influence (LR-001 / ADR-005 Decision 4, Option 2).
+#
+# Two candidate reconstructions are tried, in order:
+#   1. Token-stripped, verdict AS PERSISTED (_re_reconstruct_pretoken_text,
+#      no flag) — the common case: no gate-side editorial resolution at all.
+#   2. ONLY when a disclosed resolution note is structurally present
+#      (_re_reconstruct_pretoken_text --strip-note): the note-stripped body
+#      with the frontmatter's verdict line substituted across the small,
+#      fixed reviewer-authorable verdict enum (APPROVE/APPROVED/
+#      CHANGES_REQUESTED — SKIPPED/UNVERIFIED are always orchestrator-
+#      authored stubs, never a reviewer's own verdict, so never tried here).
+#      This brute-force is cryptographically safe, not a weakening: only a
+#      body that ACTUALLY reproduces the receipt hash for SOME valid verdict
+#      value can pass — an attacker cannot forge a hash collision, so a
+#      rewritten narrative (the real LR-001 threat — confirmed it would
+#      still be caught: candidate 2 only ever varies the verdict LINE, never
+#      the body) is caught unconditionally regardless of which candidate is
+#      tried. Candidate 2 is gated on note-presence specifically so an
+#      UNDISCLOSED verdict flip (no note, body otherwise untouched) is never
+#      tolerated — that is indistinguishable from the FEAT-016/TASK-005
+#      fabrication shape and must always be caught by candidate 1 failing
+#      with no candidate 2 attempted.
+#
+# Both candidates read through a bash command substitution before hashing
+# (`$(...)` strips trailing newlines identically to subagent-stop.sh's
+# `final_text=$(jq -rs ...)` on the capture side).
+#
+# Returns 1 (mismatch) when: jq or a sha256 tool is unavailable (a check
+# that cannot run must never be silently treated as passed); a receipt
+# exists for (unit, reviewer) but neither candidate's hash matches it
+# (content tampering — always checked whenever a comparable receipt
+# exists, with no exception); or no receipt exists for (unit, reviewer)
+# specifically WHILE the unit has at least one OTHER reviewer's receipt on
+# record (_re_unit_has_any_receipt) — the targeted-suppression shape.
+# Returns 0 (treated as gate-satisfying, not a mismatch) when no receipt
+# exists for (unit, reviewer) AND the unit has no receipts at all — capture
+# was never active for this board; see _re_unit_has_any_receipt.
 _re_receipt_matches() {
   local nazgul_dir="$1" unit="$2" reviewer="$3"
   local file="$nazgul_dir/reviews/$unit/${reviewer}.md"
@@ -178,20 +279,43 @@ _re_receipt_matches() {
 
   [ -f "$file" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
-  [ -f "$receipts_file" ] || return 1
 
-  local receipt_hash
-  receipt_hash=$(jq -rs --arg u "$unit" --arg r "$reviewer" \
-    '[ .[] | select(.unit == $u and .reviewer == $r) ] | last | .hash // empty' \
-    "$receipts_file" 2>/dev/null)
-  [ -n "$receipt_hash" ] || return 1
+  local receipt_hash=""
+  if [ -f "$receipts_file" ]; then
+    receipt_hash=$(jq -rs --arg u "$unit" --arg r "$reviewer" \
+      '[ .[] | select(.unit == $u and .reviewer == $r) ] | last | .hash // empty' \
+      "$receipts_file" 2>/dev/null)
+  fi
 
+  if [ -z "$receipt_hash" ]; then
+    # No receipt for this exact (unit, reviewer). Gate-satisfying (not a
+    # mismatch) only when NOTHING was captured for this unit at all.
+    _re_unit_has_any_receipt "$nazgul_dir" "$unit" && return 1
+    return 0
+  fi
+
+  # Candidate 1: as-persisted verdict, token stripped.
   local content recomputed
   content=$(_re_reconstruct_pretoken_text "$file") || return 1
   recomputed=$(printf '%s' "$content" | _rp_sha256) || return 1
-  [ -n "$recomputed" ] || return 1
+  [ "$recomputed" = "$receipt_hash" ] && return 0
 
-  [ "$recomputed" = "$receipt_hash" ]
+  # Candidate 2: only when a disclosed resolution note is present.
+  local note_body candidate cand_text cand_hash
+  note_body=$(_re_reconstruct_pretoken_text "$file" --strip-note) || return 1
+  [ -n "$note_body" ] || return 1
+  for candidate in APPROVE APPROVED CHANGES_REQUESTED; do
+    cand_text=$(printf '%s\n' "$note_body" | awk -v v="$candidate" '
+      NR==1 { print; next }
+      !closed && /^verdict[[:space:]]*:/ { print "verdict: " v; next }
+      !closed && /^---[[:space:]]*$/ { closed=1 }
+      { print }
+    ')
+    cand_hash=$(printf '%s' "$cand_text" | _rp_sha256) || continue
+    [ "$cand_hash" = "$receipt_hash" ] && return 0
+  done
+
+  return 1
 }
 
 # A reviewer counts as authorized-skipped (gate-satisfying despite no APPROVED
@@ -327,13 +451,25 @@ resolve_review_unit() {
 #   RECEIPT_MISMATCH <reviewer> — review_gate.receipt_hash_enforcement is not
 #                             `false` (default true) and a dispatched
 #                             reviewer's persisted APPROVE/CHANGES_REQUESTED
-#                             verdict either has no matching receipt in
-#                             nazgul/logs/review-receipts.jsonl, or its
-#                             recomputed hash disagrees with the receipt's
-#                             (see _re_receipt_matches). Never emitted for
-#                             SKIPPED/UNVERIFIED files (orchestrator-authored
-#                             stubs, never independently captured) or when
-#                             the kill switch is `false`.
+#                             verdict fails _re_receipt_matches against
+#                             nazgul/logs/review-receipts.jsonl: content (the
+#                             narrative/findings) never matches, but a
+#                             DISCLOSED verdict-only resolution (a
+#                             structurally-recognized "review-gate resolution
+#                             note" — see _re_reconstruct_pretoken_text
+#                             --strip-note) is tolerated, since review-gate is
+#                             documented to legitimately flip ONLY the
+#                             verdict field during Step 3/3.6/3.75
+#                             resolution. A missing receipt is flagged only
+#                             when the unit has at least one OTHER reviewer's
+#                             receipt on record (_re_unit_has_any_receipt) —
+#                             a unit with zero captures anywhere (predates
+#                             TASK-002, or ran where the capture hook never
+#                             fires) is never flagged for that reason alone.
+#                             Never emitted for SKIPPED/UNVERIFIED files
+#                             (orchestrator-authored stubs, never
+#                             independently captured) or when the kill
+#                             switch is `false`.
 # <unit> is resolve_review_unit(nazgul_dir, task_id): task_id unchanged in
 # "task" granularity (the common case), or the task's GROUP-<n>/FEATURE-<feat_id>
 # in "group"/"feature" granularity (MF-013) — the single resolution point every
