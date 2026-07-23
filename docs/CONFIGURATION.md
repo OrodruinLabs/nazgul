@@ -123,8 +123,12 @@ In `--hitl` mode, `scripts/lib/conductor-gates.sh` forces the *effective* `appro
 | `automation.heartbeat.inbox.dir` | `"nazgul/inbox"` | Directory scanned for `.md`/`.json` candidates; claimed candidates move to `<dir>/archive/`. |
 | `automation.heartbeat.auto_start.mode` | `"yolo"` | Mode passed to `/nazgul:start` when a candidate is picked and no session is active. |
 | `automation.heartbeat.auto_start.engine` | `"conductor"` | Execution engine passed to `/nazgul:start` for the auto-started objective. |
+| `automation.heartbeat.lock_stale_seconds` | `300` | Staleness threshold (seconds) for the atomic `mkdir`-based claim-lock directory (`nazgul/.heartbeat.lock`) a tick holds for its whole run. A lock older than this is removed before a new tick claims it, recovering from a crashed tick without waiting on `session-tracker.sh`'s much longer 7200s staleness window. Added by `migrate_27_to_28` (schema v27→v28). |
 
-Two unconditional hard stops (a `BLOCKED` task, a non-`APPROVE` security-reviewer verdict) halt every tick regardless of `enabled` or `mode` — see RULES.md §13. The session-tracker concurrency guard (`scripts/lib/session-tracker.sh`) refuses to auto-start over an active session, and the picked candidate is archived before `/nazgul:start` is invoked (atomic claim-then-archive, never double-started). Every tick appends one decision record to `nazgul/logs/heartbeat-<date>.jsonl`, surfaced via `/nazgul:log`.
+Concurrency is guarded twice: `heartbeat.sh` `mkdir`-claims the lock directory as its very first action
+(before even `count_active_sessions`), releasing it via `trap ... EXIT`, so two overlapping ticks race on
+the atomic `mkdir` itself rather than a stale `ls` read — `count_active_sessions` stays a secondary,
+defense-in-depth check. Two unconditional hard stops (a `BLOCKED` task, a non-`APPROVE` security-reviewer verdict) halt every tick regardless of `enabled` or `mode` — see RULES.md §13. The session-tracker concurrency guard (`scripts/lib/session-tracker.sh`) refuses to auto-start over an active session, and the picked candidate is archived before `/nazgul:start` is invoked (atomic claim-then-archive, never double-started). Every tick appends one decision record to `nazgul/logs/heartbeat-<date>.jsonl`, surfaced via `/nazgul:log`.
 
 Added by the additive `migrate_20_to_21` migration (schema v20→v21); existing projects upgrade automatically — see Config Upgrades below.
 
@@ -145,6 +149,18 @@ Full XML/JSDoc/docstring on PUBLIC interface members is expected (`<inheritdoc/>
 |-----|---------|---------|
 | `guards.lean_comments` | `true` | Master switch. Set to `false` to opt out entirely (the guard becomes a no-op). |
 | `guards.max_consecutive_comment_lines` | `2` | Longest run of line comments allowed before it's flagged as bloat. |
+
+## Bash-Write Reconciliation
+
+`guards.bash_write_reconciliation` (default `true`) gates a second, detection-only layer behind
+`task-state-guard.sh`'s live PreToolUse gate. At the top of every `stop-hook.sh` iteration, it diffs
+each task manifest's live status against the status recorded in the previous checkpoint; a change since
+then that is not traceable to a guarded transition (logged by `task-state-guard.sh` via
+`scripts/lib/task-transition-guard.sh`'s `ttg_log_transition`) means the status was written outside the
+guarded Write/Edit/MultiEdit path — e.g. `mv`/`cp` over the manifest — and is flagged `BLOCKED` with a
+named diagnostic. It never rewrites a "corrected" status, only blocks. Set to `false` to disable the
+pass entirely. Added by the additive `migrate_27_to_28` migration (schema v27→v28); existing projects
+upgrade automatically — see Config Upgrades below.
 
 ## Comment Quality Gate
 

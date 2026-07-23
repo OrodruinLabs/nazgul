@@ -74,6 +74,7 @@ scripts/                             # Shell scripts for hooks
 │   │   └── pre-merge-commit         # Git-level H2 parallel-unit verdict guard
 │   └── lib/                         # Shared libraries
 │       ├── task-utils.sh            # Task status parsing (4 formats) + counting
+│       ├── task-transition-guard.sh # Shared state-machine + evidence lib (task-state-guard + stop-hook reconciliation)
 │       ├── session-tracker.sh       # Concurrent session lock management
 │       ├── bootstrap-scrub-map.sh   # bootstrap-project: scrub rules data
 │       ├── bootstrap-render.sh      # bootstrap-project: prompt rendering + domain helpers
@@ -142,7 +143,9 @@ tests/                               # Plugin validation tests
 
 **Connectors are opt-in and default-off.** `scripts/lib/connector-github.sh` (FEAT-012) is a two-way GitHub connector behind the generalized provider seam (`scripts/lib/inbox-provider.sh`): it pulls opt-in-labeled issues into the inbox so the heartbeat auto-starts them, and pushes task status + PR links back to the mapped issue. It is enabled only when `connectors.github.enabled` is `true` and selected via `automation.heartbeat.inbox.provider: "github"` (the `file` provider is the default). Credentials come from `gh auth` only — no token is ever stored in config or logged — and remote issue content is treated as data. Linear/Slack are follow-on providers behind the same seam. See RULES.md §16.
 
-**State machine is sacred.** Tasks follow: PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> DONE (or CHANGES_REQUESTED -> retry, or BLOCKED). No skipping states.
+**State machine is sacred.** Tasks follow: PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> DONE (or CHANGES_REQUESTED -> retry, or BLOCKED). No skipping states. Every transition is validated against one shared source of truth (`scripts/lib/task-transition-guard.sh`), used by both `task-state-guard.sh`'s live PreToolUse gate and `stop-hook.sh`'s bash-write reconciliation pass below — the IMPLEMENTED gate additionally requires a commit SHA that resolves to a real, reachable commit (`git cat-file -e`), not just a hex-shaped string.
+
+**Bash-mediated bypasses are detected, not just blocked.** A status write through the Write/Edit/MultiEdit tools is gated live; one made outside that path (e.g. `mv`/`cp` over a manifest) is caught after the fact — `stop-hook.sh` diffs every task's live status against the last checkpoint at the top of each iteration and flags any change not traceable to a guarded transition as `BLOCKED` with a named diagnostic, never silently "corrected." Kill-switched by `guards.bash_write_reconciliation` (default `true`, config schema v28).
 
 **Review board is non-negotiable.** ALL reviewers must approve before a task can be DONE. Confidence scores below 80 become non-blocking warnings instead of rejections. A fourth `UNVERIFIED` verdict marks a review that genuinely could not run (reviewer errored/timed out, or self-reported it couldn't assess) — distinct from a rejection and bounded by its own `review_gate.unverified_retries` counter, not the CHANGES_REQUESTED `retry_count`. Its resolution is role-aware: a critical reviewer (`review_gate.critical_reviewers`, default security/architect) still `UNVERIFIED` after retries fails closed to BLOCKED; a non-critical one becomes a non-blocking warning under `review_gate.allow_unverified_nonblocking` (default true). Borderline blocking findings near the confidence threshold get one bounded adversarial cross-check (`review_gate.adversarial_crosscheck`/`adversarial_margin`/`adversarial_max`). These six `review_gate` keys are additive (config schema v24).
 
@@ -219,7 +222,7 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 5. **Never skip the review gate.** ALL reviewers must approve. No exceptions.
 6. **Address ALL blocking feedback.** When CHANGES_REQUESTED, fix every REJECT item.
 7. **One task at a time.** Don't work on multiple tasks simultaneously (unless parallel mode with Agent Teams).
-8. **Update Recovery Pointer on every state change.** This is how you survive compaction. Evidence gates enforce real work: IMPLEMENTED requires a commit SHA in the manifest, IN_REVIEW requires a review directory, source edits require an IN_PROGRESS task.
+8. **Update Recovery Pointer on every state change.** This is how you survive compaction. Evidence gates enforce real work: IMPLEMENTED requires a commit SHA in the manifest that resolves to a real, reachable commit (verified via `git cat-file -e`), IN_REVIEW requires a review directory, source edits require an IN_PROGRESS task. A status change written outside the guarded Write/Edit/MultiEdit path is caught by `stop-hook.sh`'s bash-write reconciliation pass at the next iteration.
 9. **Commit in AFK mode.** Every state transition gets a commit with the dynamic prefix from config (e.g., `feat(FEAT-003):`).
 10. **NAZGUL_COMPLETE means ALL tasks DONE and post-loop finished.** Not before.
 
