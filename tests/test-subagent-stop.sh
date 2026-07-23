@@ -6,10 +6,30 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/assertions.sh"
 source "$SCRIPT_DIR/lib/setup.sh"
+# write_dispatch_manifest: builds a real, production-shaped .dispatch.json
+# fixture (same helper review-gate itself calls) rather than hand-rolling one.
+source "$REPO_ROOT/scripts/lib/review-provenance.sh"
 
 echo "=== $TEST_NAME ==="
 
 HOOK="$REPO_ROOT/scripts/subagent-stop.sh"
+
+_sha256() {
+  { command -v sha256sum >/dev/null 2>&1 && sha256sum || shasum -a 256; } | awk '{print $1}'
+}
+
+# Real subagent-transcript-shaped JSONL: tool-use turn, tool-result turn, final text-only turn.
+_write_fixture_transcript() {
+  local path="$1" final_text="$2"
+  mkdir -p "$(dirname "$path")"
+  {
+    printf '{"type":"assistant","agentId":"fixture-agent","message":{"role":"assistant","content":[{"type":"text","text":"Reading the diff..."}]}}\n'
+    printf '{"type":"assistant","agentId":"fixture-agent","message":{"role":"assistant","content":[{"type":"tool_use","name":"Read","input":{}}]}}\n'
+    printf '{"type":"user","agentId":"fixture-agent","message":{"role":"user","content":[{"type":"tool_result","content":"file contents"}]}}\n'
+    jq -cn --arg t "$final_text" \
+      '{type:"assistant",agentId:"fixture-agent",message:{role:"assistant",content:[{type:"text",text:$t}]}}'
+  } > "$path"
+}
 
 _seed_events() {
   local events_file="$1"; shift
@@ -235,6 +255,113 @@ task001_line=$(grep '"task_id":"TASK-001"' "$TEST_DIR/nazgul/logs/review-coverag
 task002_line=$(grep '"task_id":"TASK-002"' "$TEST_DIR/nazgul/logs/review-coverage.jsonl")
 assert_contains "mixed: TASK-001 uses event's GROUP-5 (ground truth)" "$task001_line" '"review_unit":"GROUP-5"'
 assert_contains "mixed: TASK-002 falls back to resolver's GROUP-2 (manifest field)" "$task002_line" '"review_unit":"GROUP-2"'
+teardown_temp_dir
+
+# --- Test 13: reviewer completion whose agent_type is in the unit's
+# .dispatch.json `selected` roster gets a well-formed receipt appended ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+
+write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-001" "" "FEAT-003" "1" -- code-reviewer security-reviewer >/dev/null
+FINAL_TEXT="VERDICT: APPROVE - all acceptance criteria verified"
+TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture1.jsonl"
+_write_fixture_transcript "$TRANSCRIPT" "$FINAL_TEXT"
+EXPECTED_HASH=$(printf '%s' "$FINAL_TEXT" | _sha256)
+
+HOOK_INPUT=$(jq -cn --arg tp "$TRANSCRIPT" \
+  '{transcript_path:"/some/parent/session.jsonl",agent_transcript_path:$tp,agent_type:"code-reviewer",agent_id:"fixture-agent"}')
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "receipt: exits 0" "$rc" "0"
+assert_file_exists "receipt: review-receipts.jsonl created" "$TEST_DIR/nazgul/logs/review-receipts.jsonl"
+receipt_line=$(tail -1 "$TEST_DIR/nazgul/logs/review-receipts.jsonl")
+assert_contains "receipt: unit is TASK-001" "$receipt_line" '"unit":"TASK-001"'
+assert_contains "receipt: reviewer is code-reviewer" "$receipt_line" '"reviewer":"code-reviewer"'
+assert_contains "receipt: hash matches sha256 of reviewer's final text" "$receipt_line" "\"hash\":\"$EXPECTED_HASH\""
+assert_contains "receipt: has ts field" "$receipt_line" '"ts"'
+teardown_temp_dir
+
+# --- Test 14: non-reviewer completion (agent_type not in any unit's selected
+# roster) appends no receipt and leaves existing telemetry unchanged ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+
+write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-001" "" "FEAT-003" "1" -- code-reviewer >/dev/null
+TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture2.jsonl"
+_write_fixture_transcript "$TRANSCRIPT" "irrelevant implementer output"
+
+HOOK_INPUT=$(jq -cn --arg tp "$TRANSCRIPT" \
+  '{transcript_path:"/some/parent/session.jsonl",agent_transcript_path:$tp,agent_type:"implementer",agent_id:"fixture-agent-2"}')
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "non-reviewer: exits 0" "$rc" "0"
+assert_file_not_exists "non-reviewer: no receipt file written" "$TEST_DIR/nazgul/logs/review-receipts.jsonl"
+assert_file_contains "non-reviewer: subagent_stop telemetry still recorded" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"subagent_stop"'
+teardown_temp_dir
+
+# --- Test 15: reviewer-named agent completes but no review unit has ANY
+# dispatch manifest at all (nazgul/reviews/ empty) -> safe no-op, no crash ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+
+TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture3.jsonl"
+_write_fixture_transcript "$TRANSCRIPT" "VERDICT: APPROVE"
+
+HOOK_INPUT=$(jq -cn --arg tp "$TRANSCRIPT" \
+  '{transcript_path:"/some/parent/session.jsonl",agent_transcript_path:$tp,agent_type:"code-reviewer",agent_id:"fixture-agent-3"}')
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "no dispatch manifest: exits 0" "$rc" "0"
+assert_file_not_exists "no dispatch manifest: no receipt file written" "$TEST_DIR/nazgul/logs/review-receipts.jsonl"
+teardown_temp_dir
+
+# --- Test 16: agent_transcript_path missing/unreadable -> safe no-op, no crash ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+
+write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-001" "" "FEAT-003" "1" -- code-reviewer >/dev/null
+
+HOOK_INPUT='{"transcript_path":"/some/parent/session.jsonl","agent_transcript_path":"/nonexistent/path.jsonl","agent_type":"code-reviewer","agent_id":"fixture-agent-4"}'
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "missing agent_transcript_path: exits 0" "$rc" "0"
+assert_file_not_exists "missing agent_transcript_path: no receipt file written" \
+  "$TEST_DIR/nazgul/logs/review-receipts.jsonl"
+teardown_temp_dir
+
+# --- Test 17: same reviewer name selected across two units' manifests ->
+# receipt is attributed to exactly one unit (the most-recently-created
+# manifest), not duplicated across both ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+
+write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-001" "" "FEAT-003" "1" -- code-reviewer >/dev/null
+sleep 1.1
+write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-002" "" "FEAT-003" "1" -- code-reviewer >/dev/null
+TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture5.jsonl"
+_write_fixture_transcript "$TRANSCRIPT" "VERDICT: APPROVE"
+
+HOOK_INPUT=$(jq -cn --arg tp "$TRANSCRIPT" \
+  '{transcript_path:"/some/parent/session.jsonl",agent_transcript_path:$tp,agent_type:"code-reviewer",agent_id:"fixture-agent-5"}')
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "ambiguous unit: exits 0" "$rc" "0"
+line_count=$(wc -l < "$TEST_DIR/nazgul/logs/review-receipts.jsonl" | tr -d ' ')
+assert_eq "ambiguous unit: exactly one receipt written" "$line_count" "1"
+receipt_line=$(tail -1 "$TEST_DIR/nazgul/logs/review-receipts.jsonl")
+assert_contains "ambiguous unit: attributed to the most-recently-created manifest (TASK-002)" \
+  "$receipt_line" '"unit":"TASK-002"'
 teardown_temp_dir
 
 # --- Test 12: bash -n + shellcheck on subagent-stop.sh ---

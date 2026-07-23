@@ -128,4 +128,75 @@ case "$AGENT" in
     ;;
 esac
 
+# Reviewer-receipt capture (LR-001 / TASK-002): hashes a dispatched REVIEWER
+# subagent's own final returned text. `.transcript_path` in the hook payload
+# is the PARENT/team session's shared transcript, not this subagent's own;
+# `.agent_transcript_path` IS this exact completing subagent's isolated
+# transcript file — empirically confirmed (task manifest Implementation Log).
+_record_reviewer_receipt() {
+  command -v jq >/dev/null 2>&1 || return 0
+  [ -n "$INPUT" ] || return 0
+
+  local agent_transcript
+  agent_transcript=$(printf '%s' "$INPUT" | jq -r '.agent_transcript_path // empty' 2>/dev/null) || return 0
+  [ -n "$agent_transcript" ] && [ -f "$agent_transcript" ] || return 0
+
+  local reviews_dir="$NAZGUL_DIR/reviews"
+  [ -d "$reviews_dir" ] || return 0
+
+  # Find the review unit whose dispatch manifest lists AGENT as a selected
+  # reviewer. Best-effort tie-break if AGENT is selected in more than one
+  # unit's manifest at once (the same reviewer role dispatched concurrently
+  # across units): prefer the most-recently-created manifest — mirrors this
+  # codebase's other "most-recent wins" tie-breaks (e.g. self-audit.sh's
+  # newest-session-dir pick).
+  local unit="" best_created="" manifest
+  for manifest in "$reviews_dir"/*/.dispatch.json; do
+    [ -f "$manifest" ] || continue
+    local is_selected
+    is_selected=$(jq -r --arg a "$AGENT" '(.selected // []) | any(. == $a)' "$manifest" 2>/dev/null)
+    [ "$is_selected" = "true" ] || continue
+    local this_unit this_created
+    this_unit=$(jq -r '.unit // empty' "$manifest" 2>/dev/null)
+    this_created=$(jq -r '.created_at // empty' "$manifest" 2>/dev/null)
+    [ -n "$this_unit" ] || continue
+    if [ -z "$unit" ] || [[ "$this_created" > "$best_created" ]]; then
+      unit="$this_unit"
+      best_created="$this_created"
+    fi
+  done
+  [ -n "$unit" ] || return 0
+
+  # Extract the reviewer's own final assistant-role message text from its
+  # isolated transcript: one JSON record per line, the last record with
+  # type "assistant" is the reviewer's final turn, and its returned text
+  # lives in the "text"-typed blocks of message.content.
+  local final_text
+  final_text=$(jq -rs '
+      [ .[] | select(.type == "assistant") ]
+      | last
+      | (.message.content // [])
+      | map(select(.type == "text") | .text)
+      | join("")
+    ' "$agent_transcript" 2>/dev/null)
+  [ -n "$final_text" ] || return 0
+
+  local hash
+  hash=$(printf '%s' "$final_text" | _rp_sha256) || return 0
+  [ -n "$hash" ] || return 0
+
+  local receipts_file="$NAZGUL_DIR/logs/review-receipts.jsonl"
+  mkdir -p "${receipts_file%/*}" 2>/dev/null || return 0
+  local ts; ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  jq -cn \
+    --arg unit "$unit" \
+    --arg reviewer "$AGENT" \
+    --arg hash "$hash" \
+    --arg ts "$ts" \
+    '{unit: $unit, reviewer: $reviewer, hash: $hash, ts: $ts}' \
+    >> "$receipts_file" 2>/dev/null || true
+}
+
+_record_reviewer_receipt || true
+
 exit 0
