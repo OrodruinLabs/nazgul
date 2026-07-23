@@ -105,7 +105,11 @@ teardown_temp_dir
 
 # --- started (start command fails): claim+archive still happened, but the
 # decision record must say so honestly (started: false), not claim success
-# just because `_hb_start ... || true` swallowed the failure ---
+# just because `_hb_start ... || true` swallowed the failure. MF-044: a
+# failed start must not leave the item silently and permanently sitting in
+# archive/ indistinguishable from a real claim — it's relocated to a
+# visibly distinct nazgul/inbox/failed/, and the log's archived_to reflects
+# that real final location. ---
 setup_temp_dir
 setup_nazgul_dir
 create_config '.automation.heartbeat.enabled = true'
@@ -117,8 +121,12 @@ assert_valid_ndjson "start-failed" "$LOG" 1
 assert_eq "start-failed: decision" "$(line_field "$LOG" 1 '.decision')" "started"
 assert_eq "start-failed: reason" "$(line_field "$LOG" 1 '.reason')" "start_command_failed"
 assert_eq "start-failed: started is false" "$(line_field "$LOG" 1 '.started')" "false"
-assert_eq "start-failed: archived_to still recorded" "$(line_field "$LOG" 1 '.archived_to')" "nazgul/inbox/archive/cand.json"
-assert_file_exists "start-failed: candidate still archived (claim happened)" "$TEST_DIR/nazgul/inbox/archive/cand.json"
+assert_eq "start-failed: archived_to points at the failed/ relocation (MF-044)" \
+  "$(line_field "$LOG" 1 '.archived_to')" "nazgul/inbox/failed/cand.json"
+assert_file_not_exists "start-failed: candidate no longer sitting in archive/ (MF-044)" \
+  "$TEST_DIR/nazgul/inbox/archive/cand.json"
+assert_file_exists "start-failed: candidate relocated to failed/ (MF-044)" \
+  "$TEST_DIR/nazgul/inbox/failed/cand.json"
 teardown_temp_dir
 
 # --- hard_stop: BLOCKED task, no inbox listing performed ---
