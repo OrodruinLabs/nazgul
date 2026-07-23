@@ -17,9 +17,12 @@ CONFIG="$NAZGUL_DIR/config.json"
 TASKS_DIR="$NAZGUL_DIR/tasks"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Scope: only when the parallel dispatch option is on.
+# Scope: only when the parallel dispatch option is on. A present-but-corrupt
+# config can't be trusted to say "parallel is off", so it fails closed instead
+# of silently no-opping (MF-053, ADR-003 Decision 3).
 [ -f "$CONFIG" ] || exit 0
-PARALLEL=$(jq -r '.execution.parallel // false' "$CONFIG" 2>/dev/null || echo "false")
+jq -e . "$CONFIG" >/dev/null 2>&1 || { echo "NAZGUL PARALLEL: Blocked — config.json is unreadable; cannot verify parallel-dispatch safety" >&2; exit 2; }
+PARALLEL=$(jq -r '.execution.parallel // false' "$CONFIG")
 [ "$PARALLEL" = "true" ] || exit 0
 
 # Kill-switch (explicit false disables; absent/true enabled).
