@@ -319,20 +319,33 @@ DISPATCHED reviewer (skip SKIPPED-stub reviewers — they have no verdict to rep
 their `reviewer_skipped` event was already emitted in Step 2). These are
 observational — do not alter verdicts or gate logic.
 
-Every event carries `review_unit` — the SAME `[UNIT-ID]` value the DELEGATE instruction
-gave you for this cycle (e.g. `TASK-003`, `GROUP-1`, `FEATURE-016`). This is prose, not
-bash — you are restating the value you were already told, never re-deriving it (the
-derivation itself is `resolve_review_unit()`, `scripts/lib/review-evidence.sh`, which
-Bundle 1/MF-013 introduced). What changes by granularity is `task_id`:
+Every event carries `review_unit`. **Compute it MECHANICALLY — never restate the DELEGATE
+instruction's prose `[UNIT-ID]` value as-is.** Source `scripts/lib/review-evidence.sh` and
+call `resolve_review_unit "$NAZGUL_DIR" "<task_id>"` for each task_id you emit for; that is
+the SAME deterministic resolver the DONE-gate (`validate_review_evidence`) and
+`subagent-stop.sh`'s coverage-fallback derivation already use (Bundle 1/MF-013, ADR-004
+Decision 1: one resolver, no independent derivations). This closes a real gap: an emit step
+that just echoes back whatever unit id the orchestrator's own prose claims would let a
+misclassifying or prompt-injected review-gate run silence the MF-015 gate by emitting, say,
+`review_unit: "GROUP-1"` for what is actually a task-scoped review — the same agent the gate
+polices would be self-reporting the value the gate trusts. Recomputing from the task
+manifest's actual `Group`/`Wave` field (or config's `feat_id`) via `resolve_review_unit`
+means the emitted value is provably reproducible from disk, not merely asserted. What
+changes by granularity is `task_id`:
 
-- **`task` granularity**: `task_id` and `review_unit` are the SAME value — emit exactly one
-  event per DISPATCHED reviewer, as before.
+- **`task` granularity**: `resolve_review_unit` returns `task_id` unchanged, so `task_id` and
+  `review_unit` come out identical — emit exactly one event per DISPATCHED reviewer, as
+  before, with no different runtime behavior from the pre-MF-015 emit.
 - **`group`/`feature` granularity**: emit ONE event PER (reviewer × covered task) — for each
   DISPATCHED reviewer, loop over every task this unit covers (the task list the DELEGATE
-  instruction gave you, e.g. "covering tasks: TASK-00X TASK-00Y"), and emit one event per
-  covered task with `task_id` = that specific implicated task and `review_unit` = the SAME
-  unit id for all of them. A group review covering 3 tasks therefore emits 3 events per
-  reviewer. This is the producer half of the contract `subagent-stop.sh`'s coverage
+  instruction gave you, e.g. "covering tasks: TASK-00X TASK-00Y" — that task LIST still comes
+  from the DELEGATE instruction, only the `review_unit` LABEL for each task is recomputed),
+  and emit one event per covered task with `task_id` = that specific implicated task and
+  `review_unit` = `resolve_review_unit "$NAZGUL_DIR" "<that task_id>"`'s output. A group
+  review covering 3 tasks therefore emits 3 events per reviewer, and — because each is
+  independently recomputed from that task's own manifest — a task that was wrongly claimed
+  as part of the group would resolve to its OWN group/task id, not silently inherit the
+  claimed one. This is the producer half of the contract `subagent-stop.sh`'s coverage
   detector reads.
 
 CLI arg convention: positional `event_type` first, then alternating `key val` pairs;
@@ -343,6 +356,7 @@ Before the loop, set the emit environment once:
 ```bash
 NAZGUL_DIR="${CLAUDE_PROJECT_DIR}/nazgul"
 CURRENT_ITERATION=$(jq -r '.current_iteration // "null"' "${CLAUDE_PROJECT_DIR}/nazgul/config.json")
+source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/review-evidence.sh"   # for resolve_review_unit — do not re-derive independently
 ```
 
 For each reviewer in `agents.reviewers`:
@@ -355,13 +369,22 @@ For each reviewer in `agents.reviewers`:
    (APPROVE or CHANGES_REQUESTED), `CONFIDENCE` (integer), `BLOCKING` (count of
    blocking findings, integer), `CONCERNS` (count of non-blocking concerns, integer).
 2. Determine `TASK_ID_LIST`: in `task` granularity this is just the one task (`$UNIT_ID`
-   itself); in `group`/`feature` granularity this is every task the unit covers.
-3. Emit via Bash tool (using the `NAZGUL_DIR` and `CURRENT_ITERATION` set above), once per
+   itself); in `group`/`feature` granularity this is every task the unit covers (the task
+   list the DELEGATE instruction gave you). This list membership is the only place the
+   DELEGATE instruction's own claim is used as-is — the `review_unit` LABEL below is not.
+3. For EACH entry in `TASK_ID_LIST`, mechanically recompute its `review_unit` — do not reuse
+   `$UNIT_ID` from the DELEGATE instruction directly:
+
+```bash
+REVIEW_UNIT=$(resolve_review_unit "$NAZGUL_DIR" "$EACH_TASK_ID")
+```
+
+4. Emit via Bash tool (using the `NAZGUL_DIR` and `CURRENT_ITERATION` set above), once per
    entry in `TASK_ID_LIST`:
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/emit-event-cli.sh" reviewer_verdict \
-  task_id "$EACH_TASK_ID" reviewer "$REVIEWER_NAME" review_unit "$UNIT_ID" \
+  task_id "$EACH_TASK_ID" reviewer "$REVIEWER_NAME" review_unit "$REVIEW_UNIT" \
   decision "$DECISION" confidence:n "$CONFIDENCE" \
   blocking_findings:n "$BLOCKING" concerns:n "$CONCERNS"
 ```
