@@ -128,30 +128,11 @@ case "$AGENT" in
     ;;
 esac
 
-# Reviewer-receipt capture (LR-001 / TASK-002): independently records a hash
-# of a dispatched REVIEWER subagent's own final returned text, in a channel
-# review-gate's own Bash-tool steps never touch or write to. Unlike
-# _record_review_coverage above (gated on the review-gate ORCHESTRATOR's own
-# completion), this runs on every subagent stop and decides internally
-# whether THIS completion is one of the individual reviewers dispatched for
-# some review unit, via that unit's `.dispatch.json` `selected` roster.
-#
-# EMPIRICAL FINDING (mandatory first implementation step, see task manifest
-# Implementation Log for the full probe): SubagentStop's `.transcript_path`
-# is the PARENT/team session's own transcript (shared across every agent in
-# the session, NOT isolated to this one completing subagent) — confirmed by
-# instrumenting a throwaway dispatch and inspecting the real hook payload.
-# The SAME payload also carries `.agent_transcript_path`, which IS this exact
-# completing subagent's own isolated transcript file
-# (`<session_dir>/subagents/agent-<agent_id>.jsonl`), keyed by this dispatch's
-# own agent_id — an exact match, not an approximation. Reused directly here
-# instead of `scripts/self-audit.sh`'s newest-session-dir heuristic: that
-# heuristic picks the most-recently-modified session directory and is a
-# reasonable best-effort for its own single-session cost mining, but under
-# this project's own supported `execution.parallel` concurrent-dispatch model
-# — many reviewer subagents completing near-simultaneously across units —
-# it cannot reliably distinguish between concurrent siblings, while
-# `.agent_transcript_path` has no such ambiguity.
+# Reviewer-receipt capture (LR-001 / TASK-002): hashes a dispatched REVIEWER
+# subagent's own final returned text. `.transcript_path` in the hook payload
+# is the PARENT/team session's shared transcript, not this subagent's own;
+# `.agent_transcript_path` IS this exact completing subagent's isolated
+# transcript file — empirically confirmed (task manifest Implementation Log).
 _record_reviewer_receipt() {
   command -v jq >/dev/null 2>&1 || return 0
   [ -n "$INPUT" ] || return 0

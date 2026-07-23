@@ -18,12 +18,7 @@ _sha256() {
   { command -v sha256sum >/dev/null 2>&1 && sha256sum || shasum -a 256; } | awk '{print $1}'
 }
 
-# Writes a real subagent-transcript-shaped JSONL fixture at `path`: an
-# intermediate assistant turn with a tool_use block, a user turn with a
-# tool_result, and a final assistant turn whose only text block is
-# `final_text` — matching the schema an actual reviewer subagent's own
-# isolated transcript file has (confirmed empirically against a real
-# transcript during this task's implementation).
+# Real subagent-transcript-shaped JSONL: tool-use turn, tool-result turn, final text-only turn.
 _write_fixture_transcript() {
   local path="$1" final_text="$2"
   mkdir -p "$(dirname "$path")"
