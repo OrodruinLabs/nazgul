@@ -41,10 +41,8 @@ BACKUP="$CONFIG.v${CURRENT_VERSION}.bak"
 cp "$CONFIG" "$BACKUP"
 log_migration "Backup created: $BACKUP"
 
-# MF-048: prune old backups, keeping the BAK_KEEP most recent (mirrors stop-hook.sh's
-# `iteration-*.json` checkpoint-pruning precedent — keep-N-most-recent by mtime). Uses
-# NUL-delimited find/read (not `ls | xargs`) so a NAZGUL_DIR path containing spaces can't
-# split one backup's path across two xargs arguments and silently fail to prune it.
+# MF-048: keep-N-most-recent .bak pruning (mirrors stop-hook.sh's checkpoint pruning).
+# NUL-delimited find/read, not `ls | xargs` — a space in NAZGUL_DIR would split paths.
 BAK_KEEP=5
 CONFIG_BASENAME="$(basename "$CONFIG")"
 {
@@ -628,22 +626,12 @@ migrate_28_to_29() {
 
 migrate_29_to_30() {
   local tmp; tmp=$(mktemp)
-  # ADR-005 Decision 4 / WS4: additive kill switch for TASK-009's receipt-hash DONE-gate
-  # check (review_gate.receipt_hash_enforcement). NOTE: models.review_orchestrator is
-  # NOT touched here — it has defaulted to "sonnet" since migrate_21_to_22; re-touching
-  # it in this migration would be a misleading no-op (ADR-005 Decision 2 / PRD Non-Goal 2).
-  #
-  # MF-051: remove the confirmed zero-consumer dead keys (top-level task_file/log_dir/
-  # review_dir; safety.block_destructive_commands/require_tests_pass_before_review) using
-  # the additive-with-explicit-preservation pattern — a project that had customized one of
-  # these away from its old default keeps that value under ._deprecated_removed (documented,
-  # not silently dropped); a value still at the old default carries no information and is
-  # dropped cleanly. parallelism.*/context.* are intentionally NOT touched by this migration:
-  # per ADR-005's Risk table they are deprecated (marked, left in place) in
-  # templates/config.json only, since an external shared-mode project may rely on their mere
-  # presence — hard removal is deferred to a later wave if ever needed.
+  # ADR-005 Decision 4: additive review_gate.receipt_hash_enforcement kill switch;
+  # models.review_orchestrator is deliberately untouched (already sonnet since v22).
   jq '
     (if (.safety | type) == "object" then .safety else {} end) as $safety
+    # MF-051: drop confirmed zero-consumer dead keys; a customized non-default value
+    # survives under ._deprecated_removed instead of being silently dropped.
     | (if (._deprecated_removed | type) == "object" then ._deprecated_removed else {} end) as $dep
     | ($dep
         + (if has("task_file") and (.task_file != "nazgul/plan.md") then {"task_file": .task_file} else {} end)

@@ -2,13 +2,7 @@
 set -euo pipefail
 
 # Test: Config migration script handles all scenarios correctly
-#
-# MF-046 label convention: name assertions after the BEHAVIOR under test (e.g. "garbage
-# conductor tree is removed on migration"), not a schema version number — a version-number
-# label goes stale the moment a later migration bumps the terminal schema again, and this
-# file already carries 328+ such labels from before this convention was adopted. A full
-# historical reword is out of scope; new labels (including this wave's own migrate_29_to_30
-# tests) must follow the behavior-described standard going forward.
+# MF-046: label tests by BEHAVIOR under test, not a version number (pre-existing labels are grandfathered; new ones must follow this).
 TEST_NAME="test-migrate-config"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -1943,6 +1937,17 @@ assert_exit_code "v29->v30 garbage safety: migrator exits 0" "$MIG_EC" 0
 assert_eq "v29->v30 garbage safety clamps to object (no dead-key crash)" \
   "$(jq -r '.safety | has("block_destructive_commands")' "$CFG")" "false"
 
+# --- migrate_29_to_30: full idempotency — run twice yields same output ---
+NAZGUL_DIR=$(setup_nazgul_dir "v29-to-30-idempotent")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{ "schema_version": 29, "task_file": "custom/plan.md", "safety": { "block_destructive_commands": false }, "review_gate": { "receipt_hash_enforcement": false } }
+EOF
+CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" >/dev/null 2>/dev/null
+FIRST=$(jq -c '.' "$NAZGUL_DIR/config.json")
+CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" >/dev/null 2>/dev/null
+SECOND=$(jq -c '.' "$NAZGUL_DIR/config.json")
+assert_eq "v29→v30 full idempotency (run twice = run once)" "$FIRST" "$SECOND"
+
 # --- ADR-005 Risk table: parallelism.*/context.* are presence-sensitive and NOT touched by migration ---
 NAZGUL_DIR=$(setup_nazgul_dir "v29-to-30-parallelism-context-retained")
 cat > "$NAZGUL_DIR/config.json" << 'EOF'
@@ -1989,9 +1994,8 @@ NAZGUL_DIR=$(setup_nazgul_dir "bak-pruning-seeded-12")
 cat > "$NAZGUL_DIR/config.json" << 'EOF'
 {"schema_version": 28}
 EOF
-# Seed 12 stale .bak files with distinct, well-separated mtimes (a bare `touch` loop can
-# tie within the same wall-clock second, since stat's mtime resolution is whole seconds —
-# explicit timestamps 1 minute apart make the "N most recent" ordering deterministic).
+# Seed 12 stale .bak files 1 minute apart, not a bare `touch` — mtime resolution is
+# whole seconds, so same-second ties would make "N most recent" nondeterministic.
 for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
   echo "{\"schema_version\": $i}" > "$NAZGUL_DIR/config.json.v${i}.bak"
   touch -t "$(printf '2026010100%02d.00' "$i")" "$NAZGUL_DIR/config.json.v${i}.bak"
@@ -2000,10 +2004,8 @@ BAK_COUNT_BEFORE=$(find "$NAZGUL_DIR" -maxdepth 1 -name '*.bak' | wc -l | tr -d 
 assert_eq "seeded-12-.bak-files backlog exists before migration" "$BAK_COUNT_BEFORE" "12"
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 BAK_COUNT_AFTER=$(find "$NAZGUL_DIR" -maxdepth 1 -name '*.bak' | wc -l | tr -d ' ')
-# The migration's own fresh backup (config.json.v28.bak) is itself a candidate in the
-# "5 most recent" pool and is newest by construction, so it occupies one of the 5 kept
-# slots — total surviving is 5 (the fresh backup + the 4 newest of the 12 seeded files),
-# not 5 seeded survivors plus the fresh one on top.
+# The fresh backup (v28.bak) is itself newest, so it occupies one of the 5 kept slots:
+# surviving = fresh backup + 4 newest seeded files, not 5 seeded + fresh on top.
 assert_eq "migrate-config.sh prunes .bak files to the configured keep-N (5 total, incl. the fresh backup)" \
   "$BAK_COUNT_AFTER" "5"
 assert_file_not_exists "oldest pruned .bak file (v1) no longer exists" "$NAZGUL_DIR/config.json.v1.bak"
