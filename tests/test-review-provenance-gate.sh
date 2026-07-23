@@ -83,10 +83,16 @@ set_task_status_helper() {
 set_task_status_helper "TASK-001" "DONE"
 run_hook
 assert_exit_code "PG-2 second violation: exit 2" "$HOOK_EC" 2
-assert_contains "PG-2 second violation: escalated" "$HOOK_OUTPUT" "escalated to BLOCKED"
+# This out-of-band re-completion is itself a direct manifest write outside
+# task-state-guard.sh's Write/Edit/MultiEdit path — TASK-003's bash-write
+# reconciliation pass (MF-022) now catches it before the provenance loop
+# below even sees the task as DONE, so it's reconciliation's diagnostic that
+# fires here, not the provenance-gate's own escalation message. Both land on
+# the same BLOCKED end state.
+assert_contains "PG-2 second violation: escalated" "$HOOK_OUTPUT" "outside the guarded Write/Edit/MultiEdit path"
 assert_eq "PG-2 second violation: escalated to BLOCKED" "$(task_status TASK-001)" "BLOCKED"
 assert_contains "PG-2 second violation: blocked reason names remedy" \
-  "$(cat "$TEST_DIR/nazgul/tasks/TASK-001.md")" "re-run review-gate"
+  "$(cat "$TEST_DIR/nazgul/tasks/TASK-001.md")" "outside the guarded Write/Edit/MultiEdit path"
 count=$(jq -r '.safety._provenance_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
 assert_eq "PG-2 second violation: count cleared" "$count" "0"
 teardown_temp_dir
