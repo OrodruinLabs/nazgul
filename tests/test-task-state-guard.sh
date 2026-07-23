@@ -1545,7 +1545,8 @@ write_dispatched_review_with_receipt() {
 # body doesn't match its captured receipt — BLOCKED, not silently DONE.
 setup_temp_dir
 setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"'
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"' \
+  '.review_gate.receipt_hash_enforcement = true'
 create_task_file "TASK-001" "IN_REVIEW"
 write_dispatched_review_with_receipt "TASK-001" "code-reviewer" "APPROVE" \
   "Looks good. No blocking issues found." --tamper
@@ -1567,7 +1568,8 @@ teardown_temp_dir
 # every other Nazgul project) the moment this code lands.
 setup_temp_dir
 setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"'
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"' \
+  '.review_gate.receipt_hash_enforcement = true'
 create_task_file "TASK-001" "IN_REVIEW"
 write_dispatched_review_with_receipt "TASK-001" "code-reviewer" "APPROVE" \
   "Looks good. No blocking issues found." --no-receipt
@@ -1583,7 +1585,8 @@ teardown_temp_dir
 # being absent is the targeted-suppression shape and IS blocked.
 setup_temp_dir
 setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer", "qa-reviewer"]' '.review_gate.granularity = "task"'
+create_config '.agents.reviewers = ["code-reviewer", "qa-reviewer"]' '.review_gate.granularity = "task"' \
+  '.review_gate.receipt_hash_enforcement = true'
 create_task_file "TASK-001" "IN_REVIEW"
 write_dispatched_review_with_receipt "TASK-001" "code-reviewer" "APPROVE" \
   "Looks good, ship it."
@@ -1599,7 +1602,8 @@ teardown_temp_dir
 # Proves the gate isn't just failing every APPROVE verdict outright.
 setup_temp_dir
 setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"'
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"' \
+  '.review_gate.receipt_hash_enforcement = true'
 create_task_file "TASK-001" "IN_REVIEW"
 write_dispatched_review_with_receipt "TASK-001" "code-reviewer" "APPROVE" \
   "Looks good. No blocking issues found."
@@ -1685,7 +1689,8 @@ write_resolved_review() {
 # below the note) is allowed to reach DONE.
 setup_temp_dir
 setup_nazgul_dir
-create_config '.agents.reviewers = ["security-reviewer"]' '.review_gate.granularity = "task"'
+create_config '.agents.reviewers = ["security-reviewer"]' '.review_gate.granularity = "task"' \
+  '.review_gate.receipt_hash_enforcement = true'
 create_task_file "TASK-001" "IN_REVIEW"
 write_resolved_review "TASK-001" "security-reviewer" "CHANGES_REQUESTED" "75" "APPROVE" \
   "## Scope of review
@@ -1706,7 +1711,8 @@ teardown_temp_dir
 # the gate. It must not.
 setup_temp_dir
 setup_nazgul_dir
-create_config '.agents.reviewers = ["security-reviewer"]' '.review_gate.granularity = "task"'
+create_config '.agents.reviewers = ["security-reviewer"]' '.review_gate.granularity = "task"' \
+  '.review_gate.receipt_hash_enforcement = true'
 create_task_file "TASK-001" "IN_REVIEW"
 write_resolved_review "TASK-001" "security-reviewer" "CHANGES_REQUESTED" "75" "APPROVE" \
   "## Scope of review
@@ -1720,11 +1726,13 @@ assert_exit_code "note present but body tampered: DONE blocked" "$GUARD_EC" 2
 teardown_temp_dir
 
 # Test 92: an UNDISCLOSED verdict flip (verdict changed, body untouched, but
-# NO resolution note) is blocked — the verdict-brute-force path is gated
-# strictly on note presence, so a bare undisclosed flip can never pass.
+# NO resolution note) is blocked — candidate (ii)'s DETERMINISTIC reversal
+# in _re_receipt_matches requires the exact canonical marker; without a note
+# it is never attempted, so a bare undisclosed flip can never pass.
 setup_temp_dir
 setup_nazgul_dir
-create_config '.agents.reviewers = ["security-reviewer"]' '.review_gate.granularity = "task"'
+create_config '.agents.reviewers = ["security-reviewer"]' '.review_gate.granularity = "task"' \
+  '.review_gate.receipt_hash_enforcement = true'
 create_task_file "TASK-001" "IN_REVIEW"
 write_resolved_review "TASK-001" "security-reviewer" "CHANGES_REQUESTED" "75" "APPROVE" \
   "## Scope of review

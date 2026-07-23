@@ -116,7 +116,7 @@ _re_manifest_authentic() {
   bash "$rs" verify --files "$files" --reviewers "$roster" --claimed-skipped "$claimed"
 }
 
-# _re_reconstruct_pretoken_text <file> [--strip-note] -> prints a
+# _re_reconstruct_pretoken_text <file> [--revert-resolution] -> prints a
 # reconstruction of <file>'s content suitable for hashing against TASK-002's
 # receipt (LR-001 / ADR-005 Decision 4).
 #
@@ -130,63 +130,75 @@ _re_manifest_authentic() {
 # happens to start with `review_token:` is left alone, so injected body
 # content can't hide from the hash it's supposed to be part of.
 #
-# --strip-note: ADDITIONALLY requires and strips a disclosed "review-gate
-# resolution note" — review-gate is documented (nazgul/reviews/TASK-002/
-# {architect,code,security}-reviewer.md, the 2026-07-23 live board; see
-# TASK-009 Implementation Log) to legitimately overwrite ONLY the top-level
-# `verdict:` field's VALUE during Step 3/3.6/3.75 resolution (auto-fix
-# applied, adversarial cross-check refuted, confidence-threshold downgrade),
-# while inserting a disclosure directly below the frontmatter and preserving
-# the reviewer's findings/narrative 100% verbatim below THAT. The note is
-# structurally recognized as: a blank line, then a contiguous block of `>`
-# (blockquote) lines containing the case-insensitive marker phrase
-# "review-gate resolution note", then a blank line — collapsed back to the
-# single blank line that separates frontmatter from narrative in every
-# reviewer's own unedited return (verified byte-for-byte against
-# nazgul/reviews/TASK-002/qa-reviewer.md, which has no note, vs. its
-# note-bearing siblings). Returns 1 (no output) if --strip-note is requested
-# but no such note is found — callers must NEVER brute-force the verdict
-# field without a genuine, disclosed note backing it (an undisclosed verdict
-# flip with an otherwise-untouched body is exactly the FEAT-016/TASK-005
-# fabrication shape and must never be tolerated).
+# --revert-resolution: ADDITIONALLY and DETERMINISTICALLY undoes a disclosed
+# "review-gate resolution note" edit — review-gate is documented
+# (nazgul/reviews/TASK-002/{architect,code,security}-reviewer.md, the
+# 2026-07-23 live board; see TASK-009 Implementation Log) to legitimately
+# overwrite a resolved reviewer's `verdict:` field from CHANGES_REQUESTED to
+# APPROVE during Step 3/3.6/3.75 resolution (auto-fix applied, adversarial
+# cross-check refuted, confidence-threshold downgrade) — the ONLY sanctioned
+# flip direction — while inserting a disclosure directly below the
+# frontmatter and preserving the reviewer's findings/narrative 100%
+# verbatim below THAT. Because the flip direction is fixed, the reversal is
+# DETERMINISTIC, not brute-forced: this mode requires BOTH (a) the
+# persisted `verdict:` is currently exactly `APPROVE`, reverted to
+# `verdict: CHANGES_REQUESTED`; and (b) the canonical, marker-delimited
+# note — a blank line, then a line starting EXACTLY with
+# `> **review-gate resolution note:**` (the literal string every real
+# instance of this note opens with; not just the phrase appearing anywhere
+# in a blockquote), then the rest of that contiguous `>`-line block, then a
+# blank line — collapsed back to the single blank line that separates
+# frontmatter from narrative in every reviewer's own unedited return
+# (verified byte-for-byte against nazgul/reviews/TASK-002/qa-reviewer.md,
+# which has no note, vs. its note-bearing siblings). Returns 1 (no output)
+# if --revert-resolution is requested but either condition is not met —
+# callers must NEVER revert a verdict without BOTH the exact prior value
+# AND a genuine, canonically-delimited note backing it (an undisclosed
+# verdict flip, or a flip lacking the precise marker, is exactly the
+# FEAT-016/TASK-005 fabrication shape and must never be tolerated).
 _re_reconstruct_pretoken_text() {
-  local file="$1" strip_note="false"
-  [ "${2:-}" = "--strip-note" ] && strip_note="true"
+  local file="$1" revert="false"
+  [ "${2:-}" = "--revert-resolution" ] && revert="true"
   [ -f "$file" ] || return 1
-  awk -v strip_note="$strip_note" '
+  awk -v revert="$revert" '
     { lines[NR] = $0 }
     END {
       n = NR
       # Build the full candidate output into out[] first — nothing is
-      # printed until we know whether --strip-note actually found a note.
+      # printed until we know whether --revert-resolution actually applies.
       # (A prior version printed the frontmatter incrementally as it went,
-      # so a --strip-note call that failed to find a note still emitted
-      # partial output before its non-zero exit — violating the documented
-      # "returns 1, no output" contract; caught by a test asserting the
-      # empty-output case, TASK-009 Implementation Log.)
+      # so a call that failed still emitted partial output before its
+      # non-zero exit — violating the documented "returns 1, no output"
+      # contract; caught by a test asserting the empty-output case,
+      # TASK-009 Implementation Log.)
       if (n < 1 || lines[1] !~ /^---[[:space:]]*$/) {
-        if (strip_note == "true") exit 1
+        if (revert == "true") exit 1
         for (j = 1; j <= n; j++) print lines[j]
         exit 0
       }
       m = 0
+      verdict_idx = 0
       out[++m] = lines[1]
       i = 2
       while (i <= n && lines[i] !~ /^---[[:space:]]*$/) {
-        if (lines[i] !~ /^review_token[[:space:]]*:/) out[++m] = lines[i]
+        if (lines[i] !~ /^review_token[[:space:]]*:/) {
+          out[++m] = lines[i]
+          if (lines[i] ~ /^verdict[[:space:]]*:/) verdict_idx = m
+        }
         i++
       }
       if (i <= n) { out[++m] = lines[i]; i++ }   # closing fence
-      if (strip_note == "true") {
-        if (i <= n && lines[i] == "" && (i + 1) <= n && lines[i + 1] ~ /^>/) {
+      if (revert == "true") {
+        # (a) current verdict must be exactly APPROVE — the only sanctioned
+        # flip target — before a reversal is even meaningful.
+        if (verdict_idx == 0 || out[verdict_idx] !~ /^verdict[[:space:]]*:[[:space:]]*APPROVE[[:space:]]*$/) exit 1
+        # (b) canonical marker-delimited note, immediately after the blank
+        # line that follows the frontmatter fence.
+        if (i <= n && lines[i] == "" && (i + 1) <= n && lines[i + 1] ~ /^> \*\*review-gate resolution note:\*\*/) {
           k = i + 1
-          found_marker = 0
-          while (k <= n && lines[k] ~ /^>/) {
-            low = tolower(lines[k])
-            if (index(low, "review-gate resolution note") > 0) found_marker = 1
-            k++
-          }
-          if (found_marker && k <= n && lines[k] == "") {
+          while (k <= n && lines[k] ~ /^>/) k++
+          if (k <= n && lines[k] == "") {
+            out[verdict_idx] = "verdict: CHANGES_REQUESTED"
             out[++m] = ""
             for (j = k + 1; j <= n; j++) out[++m] = lines[j]
             for (j = 1; j <= m; j++) print out[j]
@@ -249,23 +261,32 @@ _re_unit_has_any_receipt() {
 # Two candidate reconstructions are tried, in order:
 #   1. Token-stripped, verdict AS PERSISTED (_re_reconstruct_pretoken_text,
 #      no flag) — the common case: no gate-side editorial resolution at all.
-#   2. ONLY when a disclosed resolution note is structurally present
-#      (_re_reconstruct_pretoken_text --strip-note): the note-stripped body
-#      with the frontmatter's verdict line substituted across the small,
-#      fixed reviewer-authorable verdict enum (APPROVE/APPROVED/
-#      CHANGES_REQUESTED — SKIPPED/UNVERIFIED are always orchestrator-
-#      authored stubs, never a reviewer's own verdict, so never tried here).
-#      This brute-force is cryptographically safe, not a weakening: only a
-#      body that ACTUALLY reproduces the receipt hash for SOME valid verdict
-#      value can pass — an attacker cannot forge a hash collision, so a
-#      rewritten narrative (the real LR-001 threat — confirmed it would
-#      still be caught: candidate 2 only ever varies the verdict LINE, never
-#      the body) is caught unconditionally regardless of which candidate is
-#      tried. Candidate 2 is gated on note-presence specifically so an
-#      UNDISCLOSED verdict flip (no note, body otherwise untouched) is never
-#      tolerated — that is indistinguishable from the FEAT-016/TASK-005
-#      fabrication shape and must always be caught by candidate 1 failing
-#      with no candidate 2 attempted.
+#   2. ONLY when the persisted verdict is currently APPROVE and a
+#      canonically-delimited resolution note is structurally present
+#      (_re_reconstruct_pretoken_text --revert-resolution): the note removed
+#      and the verdict DETERMINISTICALLY reverted CHANGES_REQUESTED (the
+#      only sanctioned flip direction — never a brute-forced enum). Content
+#      tampering is still caught unconditionally regardless of which
+#      candidate is tried: candidate 2 only ever changes the verdict LINE
+#      and removes the note block, never any byte of the narrative — so a
+#      rewritten body still fails both. Candidate 2 is gated on both the
+#      exact prior verdict AND the exact marker specifically so an
+#      UNDISCLOSED verdict flip (no note, or a flip in any other direction)
+#      is never tolerated — that is indistinguishable from the FEAT-016/
+#      TASK-005 fabrication shape and must always be caught by candidate 1
+#      failing with no candidate 2 attempted.
+#
+#   HONEST RESIDUAL LIMITATION (disclosed, not fixed by this mechanism): a
+#   verdict flip with an intact, UNTAMPERED narrative but a FAKE resolution
+#   note (a note that opens with the exact marker but describes a
+#   resolution that never genuinely happened) matches candidate 2 — this is
+#   hash-undetectable BY DESIGN, since content integrity is exactly what the
+#   hash verifies, not the truth of a disclosure. The preserved-verbatim
+#   narrative remains the auditor's signal in that case (a human or a
+#   downstream process can still read the note and the findings it claims
+#   to resolve); whether a given resolution claim was legitimate is a
+#   policy/audit question this content-hash mechanism was never designed to
+#   answer, not a gap introduced here.
 #
 # Both candidates read through a bash command substitution before hashing
 # (`$(...)` strips trailing newlines identically to subagent-stop.sh's
@@ -303,28 +324,18 @@ _re_receipt_matches() {
     return 0
   fi
 
-  # Candidate 1: as-persisted verdict, token stripped.
+  # Candidate (i): as-persisted verdict, token stripped.
   local content recomputed
   content=$(_re_reconstruct_pretoken_text "$file") || return 1
   recomputed=$(printf '%s' "$content" | _rp_sha256) || return 1
   [ "$recomputed" = "$receipt_hash" ] && return 0
 
-  # Candidate 2: only when a disclosed resolution note is present.
-  local note_body candidate cand_text cand_hash
-  note_body=$(_re_reconstruct_pretoken_text "$file" --strip-note) || return 1
-  [ -n "$note_body" ] || return 1
-  for candidate in APPROVE APPROVED CHANGES_REQUESTED; do
-    cand_text=$(printf '%s\n' "$note_body" | awk -v v="$candidate" '
-      NR==1 { print; next }
-      !closed && /^verdict[[:space:]]*:/ { print "verdict: " v; next }
-      !closed && /^---[[:space:]]*$/ { closed=1 }
-      { print }
-    ')
-    cand_hash=$(printf '%s' "$cand_text" | _rp_sha256) || continue
-    [ "$cand_hash" = "$receipt_hash" ] && return 0
-  done
-
-  return 1
+  # Candidate (ii): resolution-reverted — deterministic, single attempt.
+  local reverted rev_hash
+  reverted=$(_re_reconstruct_pretoken_text "$file" --revert-resolution) || return 1
+  [ -n "$reverted" ] || return 1
+  rev_hash=$(printf '%s' "$reverted" | _rp_sha256) || return 1
+  [ "$rev_hash" = "$receipt_hash" ]
 }
 
 # A reviewer counts as authorized-skipped (gate-satisfying despite no APPROVED

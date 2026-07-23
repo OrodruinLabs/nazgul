@@ -193,6 +193,11 @@ setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
 source "$REPO_ROOT/scripts/lib/review-provenance.sh"
+# templates/config.json now defaults receipt_hash_enforcement to false
+# (TASK-009 round-2: opt-in until the parallel-dispatch attribution
+# follow-up lands), so the override below is belt-and-suspenders — kept
+# explicit so this test stays pinned against any future default change,
+# not because CV-9 needs it to pass today.
 create_config \
   '.agents.reviewers = ["code-reviewer"]' \
   '.review_gate.receipt_hash_enforcement = false' \

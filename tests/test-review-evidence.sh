@@ -672,9 +672,15 @@ teardown_temp_dir
 # inserted into the frontmatter the reviewer authored — fences, verdict,
 # confidence, and the entire narrative body are otherwise untouched.
 #
-# templates/config.json ships review_gate.receipt_hash_enforcement: true
-# (TASK-003, schema v30), so create_config/setup_evidence_env already default
-# enforcement ON — no override needed for the "on" cases below.
+# templates/config.json ships review_gate.receipt_hash_enforcement: false
+# (opt-in — TASK-009 round-2 correction: TASK-002's carried-forward
+# parallel-dispatch receipt-attribution weakness can false-trip in
+# execution.parallel mode, this repo's own actual run mode, until an
+# attribution-hardening follow-up lands), so every test below that means to
+# exercise the check explicitly overrides
+# '.review_gate.receipt_hash_enforcement = true' — the implicit-default-on
+# assumption this comment used to state is exactly the kind of unstated
+# fixture dependency that silently stops testing what it claims to.
 # ===========================================================================
 
 # Helper: hash text via the exact pattern both the capture side
@@ -732,7 +738,7 @@ write_dispatched_review() {
 # --- Test 47: matching content — persisted body reconstructs to the exact
 # receipt hash (the orchestrator's review_token insertion is the ONLY diff
 # between the raw captured text and the persisted file) — passes clean ---
-setup_evidence_env "code-reviewer"
+setup_evidence_env "code-reviewer" '.review_gate.receipt_hash_enforcement = true'
 write_dispatched_review "TASK-001" "code-reviewer" "APPROVE" "Looks good. No blocking issues found."
 run_validate "TASK-001"
 assert_exit_code "receipt match: exit 0" "$VAL_EC" 0
@@ -741,7 +747,7 @@ teardown_temp_dir
 
 # --- Test 48 (FEAT-016/TASK-005 reproduction): persisted body hash does NOT
 # match the captured receipt — RECEIPT_MISMATCH, not a silent pass ---
-setup_evidence_env "code-reviewer"
+setup_evidence_env "code-reviewer" '.review_gate.receipt_hash_enforcement = true'
 write_dispatched_review "TASK-001" "code-reviewer" "APPROVE" "Looks good. No blocking issues found." --tamper
 run_validate "TASK-001"
 assert_exit_code "receipt mismatch: exit 1" "$VAL_EC" 1
@@ -764,7 +770,7 @@ teardown_temp_dir
 # this feature shipped. See Test 56 below for the case this DOES still
 # catch (a sibling reviewer's receipt proves capture WAS active for this
 # board, making one reviewer's absence suspicious) ---
-setup_evidence_env "code-reviewer"
+setup_evidence_env "code-reviewer" '.review_gate.receipt_hash_enforcement = true'
 write_dispatched_review "TASK-001" "code-reviewer" "APPROVE" "Looks good. No blocking issues found." --no-receipt
 run_validate "TASK-001"
 assert_exit_code "no receipts at all for unit: exit 0 (capture never active)" "$VAL_EC" 0
@@ -784,7 +790,7 @@ teardown_temp_dir
 # --- Test 51: a CHANGES_REQUESTED verdict is ALSO receipt-checked — tampered
 # content adds RECEIPT_MISMATCH alongside the existing UNAPPROVED problem
 # (additive, per the MISSING/UNAPPROVED pattern) ---
-setup_evidence_env "code-reviewer"
+setup_evidence_env "code-reviewer" '.review_gate.receipt_hash_enforcement = true'
 write_dispatched_review "TASK-001" "code-reviewer" "CHANGES_REQUESTED" "Found a blocking issue in foo.sh." --tamper
 run_validate "TASK-001"
 assert_exit_code "changes_requested tampered: exit 1" "$VAL_EC" 1
@@ -795,7 +801,8 @@ teardown_temp_dir
 # --- Test 52: an authorized SKIPPED stub is NEVER receipt-checked — it is
 # orchestrator-authored (no dispatch, no transcript, no receipt ever exists
 # for it), so requiring one would break every legitimate skip ---
-setup_evidence_env "code-reviewer qa-reviewer" '.review_gate.conditional_dispatch = true'
+setup_evidence_env "code-reviewer qa-reviewer" '.review_gate.conditional_dispatch = true' \
+  '.review_gate.receipt_hash_enforcement = true'
 write_review "TASK-001" "code-reviewer" "APPROVED"
 mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
 printf -- '---\nverdict: SKIPPED\nreview_token: deadbeefcafef00d\n---\nskipped: no tests changed\n' \
@@ -810,7 +817,7 @@ teardown_temp_dir
 
 # --- Test 53: an authorized UNVERIFIED stub is likewise never receipt-
 # checked (same orchestrator-stub reasoning as SKIPPED) ---
-setup_evidence_env "code-reviewer"
+setup_evidence_env "code-reviewer" '.review_gate.receipt_hash_enforcement = true'
 mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
 printf -- '---\nverdict: UNVERIFIED\nreview_token: deadbeefcafef00d\n---\nUnverified: timed out\n' \
   > "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md"
@@ -848,7 +855,7 @@ teardown_temp_dir
 # proves capture WAS active for this board — a specific reviewer's own
 # receipt still being absent is now the targeted-suppression shape and IS
 # flagged RECEIPT_MISMATCH (the case Test 49's correction carves out) ---
-setup_evidence_env "code-reviewer qa-reviewer"
+setup_evidence_env "code-reviewer qa-reviewer" '.review_gate.receipt_hash_enforcement = true'
 write_dispatched_review "TASK-001" "code-reviewer" "APPROVE" "Looks good, ship it."
 write_dispatched_review "TASK-001" "qa-reviewer" "APPROVE" "Test coverage is solid." --no-receipt
 run_validate "TASK-001"
@@ -917,10 +924,10 @@ write_resolved_review() {
     >> "$TEST_DIR/nazgul/logs/review-receipts.jsonl"
 }
 
-# --- Test 57 (real TASK-002-board reproduction): a disclosed, note-backed
-# verdict flip (CHANGES_REQUESTED -> APPROVE, confidence unchanged, findings
-# preserved verbatim below the note) passes clean — no RECEIPT_MISMATCH ---
-setup_evidence_env "security-reviewer"
+# --- Test 57 (structural check): a disclosed, note-backed verdict flip
+# (CHANGES_REQUESTED -> APPROVE, confidence unchanged, findings preserved
+# verbatim below the note) passes clean — no RECEIPT_MISMATCH ---
+setup_evidence_env "security-reviewer" '.review_gate.receipt_hash_enforcement = true'
 write_resolved_review "TASK-001" "security-reviewer" "CHANGES_REQUESTED" "75" "APPROVE" \
   "## Scope of review
 
@@ -930,13 +937,71 @@ assert_exit_code "disclosed verdict-only flip: exit 0" "$VAL_EC" 0
 assert_eq "disclosed verdict-only flip: no output" "$VAL_OUTPUT" ""
 teardown_temp_dir
 
+# --- Test 57b (qa-reviewer round-1 requirement: a fixture copied from the
+# REAL nazgul/reviews/TASK-002/security-reviewer.md file structure, not a
+# structurally-similar synthetic one — this is that file's ACTUAL persisted
+# bytes, frontmatter through the first finding, pasted verbatim at authoring
+# time so the test is self-contained and doesn't depend on that gitignored
+# runtime file still existing on a future run). Confirms candidate (ii)
+# passes against the real multi-paragraph note text, not just a one-line
+# synthetic stand-in. ---
+setup_evidence_env "security-reviewer" '.review_gate.receipt_hash_enforcement = true'
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+cat > "$TEST_DIR/nazgul/reviews/TASK-001/security-reviewer.md" << 'REALFIXTURE'
+---
+verdict: APPROVE
+confidence: 75
+review_token: a32840175b088c96
+---
+
+> **review-gate resolution note:** `_has_approved_verdict` (`scripts/lib/review-evidence.sh`) is
+> VERDICT-ONLY by design — its own header comment states "confidence is handled by the review-gate
+> agent," i.e. review-gate resolves confidence-threshold/Step 3.6 outcomes into the persisted
+> `verdict:` field before the mechanical gate reads it. This reviewer's own self-authored header (as
+> originally returned) was `verdict: CHANGES_REQUESTED, confidence: 75`. Its one blocking finding
+> (unguarded jq under `set -e`, HIGH, confidence 82) was cross-checked per Step 3.6 and REFUTEd at
+> confidence 90 (see the trailing orchestrator note below and
+> `nazgul/reviews/TASK-002/adversarial/security-jq-guard.md`) — downgraded to a non-blocking CONCERN.
+> With zero blocking findings remaining, this review resolves to APPROVED for gating purposes. The
+> `verdict:` field above has been updated from the reviewer's original `CHANGES_REQUESTED` to
+> `APPROVE` to reflect that resolution — **every finding and all narrative content below is preserved
+> 100% verbatim, unedited, exactly as the reviewer returned it.** Full tally:
+> `nazgul/reviews/TASK-002/consolidated-feedback.md`.
+
+## Scope of review
+
+Read `nazgul/reviews/TASK-002/diff.patch`, the task manifest, the full current
+`scripts/subagent-stop.sh`, `scripts/lib/review-provenance.sh`, and the sibling
+`.transcript_path` precedent in `scripts/notify.sh:90`.
+
+### Finding: Unguarded `jq` command substitutions in the manifest-scan loop can silently kill receipt capture
+- **Severity**: HIGH
+- **Confidence**: 82
+- **Verdict**: REJECT (downgraded to CONCERN per the Step 3.6 note above)
+REALFIXTURE
+# The receipt this real file's ORIGINAL raw return would have produced —
+# derived via _re_reconstruct_pretoken_text --revert-resolution itself
+# (already empirically verified byte-for-byte against the un-truncated live
+# file with xxd, TASK-009 Implementation Log; this test proves the CHECK
+# validates it, not that the reconstruction is correct — that's proven
+# separately in Test 60 below).
+REAL_ORIGINAL=$(_re_reconstruct_pretoken_text "$TEST_DIR/nazgul/reviews/TASK-001/security-reviewer.md" --revert-resolution)
+REAL_HASH=$(printf '%s' "$REAL_ORIGINAL" | _rp_sha256)
+mkdir -p "$TEST_DIR/nazgul/logs"
+jq -cn --arg u "TASK-001" --arg r "security-reviewer" --arg h "$REAL_HASH" --arg ts "2026-07-23T00:00:00Z" \
+  '{unit:$u, reviewer:$r, hash:$h, ts:$ts}' >> "$TEST_DIR/nazgul/logs/review-receipts.jsonl"
+run_validate "TASK-001"
+assert_exit_code "real TASK-002-shape fixture: exit 0" "$VAL_EC" 0
+assert_eq "real TASK-002-shape fixture: no output" "$VAL_OUTPUT" ""
+teardown_temp_dir
+
 # --- Test 58 (the decisive FEAT-016/TASK-005 check — "would your design
 # have caught a gate inverting CHANGES_REQUESTED->APPROVE with a rewritten
 # narrative?"): a resolution note is present (disclosed, well-formed), but
 # the body BELOW the note was ALSO altered from what the reviewer actually
 # returned — still RECEIPT_MISMATCH. A disclosed note only excuses the
 # verdict field; it never excuses content tampering ---
-setup_evidence_env "security-reviewer"
+setup_evidence_env "security-reviewer" '.review_gate.receipt_hash_enforcement = true'
 write_resolved_review "TASK-001" "security-reviewer" "CHANGES_REQUESTED" "75" "APPROVE" \
   "## Scope of review
 
@@ -948,11 +1013,11 @@ assert_contains "note present but body tampered: RECEIPT_MISMATCH" "$VAL_OUTPUT"
 teardown_temp_dir
 
 # --- Test 59: an UNDISCLOSED verdict flip (verdict changed, body otherwise
-# untouched, but NO resolution note at all) is RECEIPT_MISMATCH — the
-# verdict-enum brute force in _re_receipt_matches is gated strictly on note
-# presence; without a note it is never attempted, so a bare flip can never
-# silently pass ---
-setup_evidence_env "security-reviewer"
+# untouched, but NO resolution note at all) is RECEIPT_MISMATCH — candidate
+# (ii)'s deterministic reversal in _re_receipt_matches requires BOTH the
+# exact prior verdict AND the exact canonical marker; without a note it is
+# never attempted, so a bare flip can never silently pass ---
+setup_evidence_env "security-reviewer" '.review_gate.receipt_hash_enforcement = true'
 write_resolved_review "TASK-001" "security-reviewer" "CHANGES_REQUESTED" "75" "APPROVE" \
   "## Scope of review
 
@@ -963,34 +1028,65 @@ assert_exit_code "undisclosed flip, no note: exit 1" "$VAL_EC" 1
 assert_contains "undisclosed flip, no note: RECEIPT_MISMATCH" "$VAL_OUTPUT" "RECEIPT_MISMATCH security-reviewer"
 teardown_temp_dir
 
-# --- Test 60: _re_reconstruct_pretoken_text --strip-note unit check — a
-# well-formed, marker-bearing note is stripped and collapsed back to the
-# single blank line that separates frontmatter from narrative in every
-# reviewer's own unedited return (verified against the real
-# nazgul/reviews/TASK-002/qa-reviewer.md convention, TASK-009 Implementation
-# Log) ---
+# --- Test 60: _re_reconstruct_pretoken_text --revert-resolution unit check
+# — a well-formed, exact-marker note on a currently-APPROVE verdict is
+# stripped, the verdict is deterministically reverted to CHANGES_REQUESTED,
+# and the note collapses back to the single blank line that separates
+# frontmatter from narrative in every reviewer's own unedited return
+# (verified against the real nazgul/reviews/TASK-002/qa-reviewer.md
+# convention, TASK-009 Implementation Log) ---
 setup_temp_dir
 mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
 printf -- '---\nverdict: APPROVE\nconfidence: 75\nreview_token: deadbeefcafef00d\n---\n\n> **review-gate resolution note:** flipped per Step 3.6.\n> Second note line.\n\n## Scope\n\nBody text.\n' \
   > "$TEST_DIR/nazgul/reviews/TASK-001/security-reviewer.md"
-RECON_OUT=$(_re_reconstruct_pretoken_text "$TEST_DIR/nazgul/reviews/TASK-001/security-reviewer.md" --strip-note)
+RECON_OUT=$(_re_reconstruct_pretoken_text "$TEST_DIR/nazgul/reviews/TASK-001/security-reviewer.md" --revert-resolution)
 RECON_EC=$?
-assert_exit_code "--strip-note: well-formed note detected (exit 0)" "$RECON_EC" 0
-assert_not_contains "--strip-note: note text removed" "$RECON_OUT" "resolution note"
-assert_contains "--strip-note: body preserved" "$RECON_OUT" "Body text."
+assert_exit_code "--revert-resolution: well-formed note detected (exit 0)" "$RECON_EC" 0
+assert_contains "--revert-resolution: verdict reverted to CHANGES_REQUESTED" "$RECON_OUT" "verdict: CHANGES_REQUESTED"
+assert_not_contains "--revert-resolution: note text removed" "$RECON_OUT" "resolution note"
+assert_contains "--revert-resolution: body preserved" "$RECON_OUT" "Body text."
 teardown_temp_dir
 
-# --- Test 61: _re_reconstruct_pretoken_text --strip-note returns failure
-# (no output) when no note is present — callers must never brute-force the
-# verdict field without a genuine, disclosed note backing it ---
+# --- Test 61: _re_reconstruct_pretoken_text --revert-resolution returns
+# failure (no output) when no note is present — callers must never revert a
+# verdict without a genuine, disclosed note backing it ---
 setup_temp_dir
 mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
 printf -- '---\nverdict: APPROVE\nconfidence: 90\nreview_token: deadbeefcafef00d\n---\n\n## Scope\n\nBody text, no note.\n' \
   > "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md"
-RECON_OUT=$(_re_reconstruct_pretoken_text "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md" --strip-note)
+RECON_OUT=$(_re_reconstruct_pretoken_text "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md" --revert-resolution)
 RECON_EC=$?
-assert_exit_code "--strip-note: no note present (exit 1, no output)" "$RECON_EC" 1
-assert_eq "--strip-note: no note present: empty output" "$RECON_OUT" ""
+assert_exit_code "--revert-resolution: no note present (exit 1, no output)" "$RECON_EC" 1
+assert_eq "--revert-resolution: no note present: empty output" "$RECON_OUT" ""
+teardown_temp_dir
+
+# --- Test 62: _re_reconstruct_pretoken_text --revert-resolution returns
+# failure when the persisted verdict is NOT APPROVE — CHANGES_REQUESTED is
+# the only sanctioned flip target's ORIGIN, never itself a value to revert
+# FROM; a note present on a still-CHANGES_REQUESTED file is not the
+# sanctioned shape and must not be tolerated ---
+setup_temp_dir
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf -- '---\nverdict: CHANGES_REQUESTED\nconfidence: 75\nreview_token: deadbeefcafef00d\n---\n\n> **review-gate resolution note:** not actually resolved.\n\n## Scope\n\nBody text.\n' \
+  > "$TEST_DIR/nazgul/reviews/TASK-001/security-reviewer.md"
+RECON_OUT=$(_re_reconstruct_pretoken_text "$TEST_DIR/nazgul/reviews/TASK-001/security-reviewer.md" --revert-resolution)
+RECON_EC=$?
+assert_exit_code "--revert-resolution: verdict not APPROVE (exit 1, no output)" "$RECON_EC" 1
+assert_eq "--revert-resolution: verdict not APPROVE: empty output" "$RECON_OUT" ""
+teardown_temp_dir
+
+# --- Test 63: _re_reconstruct_pretoken_text --revert-resolution returns
+# failure when a blockquote is present but does NOT open with the EXACT
+# canonical marker — precision check: the phrase appearing later in the
+# block, or a differently-worded blockquote, is not the canonical shape ---
+setup_temp_dir
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf -- '---\nverdict: APPROVE\nconfidence: 90\nreview_token: deadbeefcafef00d\n---\n\n> Some unrelated blockquote that just happens to mention review-gate resolution note later.\n\n## Scope\n\nBody text.\n' \
+  > "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md"
+RECON_OUT=$(_re_reconstruct_pretoken_text "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md" --revert-resolution)
+RECON_EC=$?
+assert_exit_code "--revert-resolution: non-canonical blockquote (exit 1, no output)" "$RECON_EC" 1
+assert_eq "--revert-resolution: non-canonical blockquote: empty output" "$RECON_OUT" ""
 teardown_temp_dir
 
 report_results
