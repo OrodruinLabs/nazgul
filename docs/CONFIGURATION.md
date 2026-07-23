@@ -73,6 +73,8 @@ Both resolve with the exact fallback order **new key → legacy `models.review` 
 
 `task` is the default so existing projects are unchanged. In `group`/`feature` mode, tasks are advanced to IMPLEMENTED and **parked** ("awaiting aggregate review") until the whole unit is built; the loop keeps implementing the rest of the unit instead of reviewing each task. Recovery after a compaction reads the "awaiting aggregate review" marker from `plan.md` / the latest checkpoint, so parked tasks are never re-reviewed or re-implemented.
 
+A single shared resolver, `resolve_review_unit()` (`scripts/lib/review-evidence.sh`), maps a task to the review directory its evidence lives in — `task_id` unchanged in `task` granularity, or the task's `GROUP-<n>`/`FEATURE-<feat_id>` in `group`/`feature` granularity — so `task-state-guard.sh`'s IN_REVIEW/DONE checks and the stop-hook's aggregate-review bookkeeping always agree on which directory to look in. Every `reviewer_verdict` event also carries this value in its own `review_unit` field, computed the same way at emit time rather than self-reported by the dispatching agent; the `SubagentStop` review-coverage detector (`nazgul/logs/review-coverage.jsonl`) reads `review_unit` directly off the event as ground truth, falling back to calling the resolver itself only for older events recorded before the field existed. The emit step additionally cross-checks each covered task's resolved unit against the dispatched unit and skips (logging the mismatch) any task that resolves elsewhere, so a coverage event is only ever emitted for a review directory that actually holds that task's evidence.
+
 The other review settings apply identically in all modes:
 
 - `require_all_approve` — **informational only, not read by any script.** The effective policy is hard-coded in `scripts/lib/review-evidence.sh`: every non-skipped reviewer must APPROVE before the unit passes (with `review_gate.conditional_dispatch`, "non-skipped" excludes reviewers carrying an authorized `verdict: SKIPPED` stub). This key documents that policy for humans; changing it has no effect.
@@ -91,6 +93,10 @@ This is **tamper-evidence and diff-staleness detection, not authentication** —
 ### Conditional Review Dispatch
 
 `review_gate.conditional_dispatch` (default `false`) opts into diff-aware reviewer selection: a deterministic helper (`scripts/lib/reviewer-selection.sh select`, not LLM judgment) skips reviewers whose domain the changed files don't touch — `security-reviewer` always runs; `architect-reviewer` only when the scope touches `skills/`, `agents/`, `scripts/`, `hooks/`, or the config schema; `qa-reviewer` only when `tests/` changed; `code-reviewer` on any non-doc change. Any ambiguity falls back to the full board. Skipped reviewers get a `[reviewer].md` stub with `verdict: SKIPPED` and a reason, which the evidence gate treats as gate-satisfying (a missing or unapproved file still hard-fails). Defaults off, mirroring `review_gate.simplify_before_review`.
+
+### Reviewer Stall Retry Tier Escalation
+
+`review_gate.stall_retry_escalate_tier` (default `true`, config schema v29) controls what happens when a dispatched reviewer stalls or returns an unparseable verdict. Its bounded one-shot retry (`scripts/lib/reviewer-tier.sh` `resolve_retry_model`) normally moves the retry up one model tier (e.g. `haiku` → `sonnet`) instead of re-dispatching on the same tier that just failed. Set this to `false` to keep the retry on the same tier as the original dispatch (the pre-v29 behavior). Reviewer dispatch itself is synchronous by construction — every reviewer's Agent-tool call in review-gate's dispatch message is a single foreground, blocking call the orchestrator waits on, never treated as still running in the background.
 
 ## Execution Engine
 

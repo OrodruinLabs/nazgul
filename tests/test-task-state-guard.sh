@@ -8,6 +8,16 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/assertions.sh"
 source "$SCRIPT_DIR/lib/setup.sh"
 
+# NOTE (MF-013/TASK-001): create_config copies templates/config.json, whose
+# review_gate.granularity has defaulted to "group" since v17 — but this file's
+# create_review_dir/create_task_file helpers write task-id-keyed evidence
+# (reviews/TASK-001/...). Now that resolve_review_unit() makes the DONE/
+# IN_REVIEW evidence gates actually honor granularity (previously they always
+# behaved as "task" regardless of config), any test here that plants evidence
+# at reviews/<task_id> and isn't itself testing group/feature semantics must
+# pin '.review_gate.granularity = "task"' explicitly, or the resolver looks
+# for reviews/GROUP-1 instead and the test fails for the wrong reason.
+
 echo "=== $TEST_NAME ==="
 
 GUARD="$REPO_ROOT/scripts/task-state-guard.sh"
@@ -198,7 +208,7 @@ teardown_temp_dir
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]'
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"'
 create_task_file "TASK-001" "IN_REVIEW"
 create_review_dir "TASK-001"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
@@ -213,7 +223,7 @@ teardown_temp_dir
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer", "security-reviewer"]'
+create_config '.agents.reviewers = ["code-reviewer", "security-reviewer"]' '.review_gate.granularity = "task"'
 create_task_file "TASK-001" "IN_REVIEW"
 create_review_dir "TASK-001"
 # create_review_dir only created code-reviewer.md; security-reviewer.md is absent
@@ -229,7 +239,7 @@ teardown_temp_dir
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]'
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"'
 create_task_file "TASK-001" "IN_REVIEW"
 mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
 cat > "$TEST_DIR/nazgul/reviews/TASK-001/code-reviewer.md" << 'REVIEW_EOF'
@@ -252,7 +262,7 @@ teardown_temp_dir
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]'
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"'
 create_task_file "TASK-001" "IN_REVIEW"
 mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
 cat > "$TEST_DIR/nazgul/reviews/TASK-001/summary.md" << 'REVIEW_EOF'
@@ -509,7 +519,7 @@ teardown_temp_dir
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]'
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"'
 create_task_file "TASK-001" "IN_REVIEW"
 create_review_dir "TASK-001"
 # Add a simplify-report.md — should NOT count as a reviewer file
@@ -643,7 +653,7 @@ teardown_temp_dir
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]'
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"'
 create_task_file "TASK-001" "BLOCKED" "none" "review evidence missing (code-reviewer) — run /nazgul:review --materialize TASK-001"
 create_review_dir "TASK-001"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
@@ -674,7 +684,7 @@ teardown_temp_dir
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]'
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"'
 create_task_file "TASK-001" "BLOCKED" "none" "git conflict — unmerged files detected"
 create_review_dir "TASK-001"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
@@ -955,7 +965,7 @@ teardown_temp_dir
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
-create_config '.afk.yolo = true' '.agents.reviewers = ["code-reviewer"]'
+create_config '.afk.yolo = true' '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"'
 create_task_file "TASK-001" "IN_REVIEW"
 create_review_dir "TASK-001"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
@@ -1350,5 +1360,120 @@ assert_eq "guard recognizes every VALID_STATUSES token as a status" "$ALL_RECOGN
 
 assert_eq "guard does not recognize an off-vocabulary token" \
   "$(recognize_status "FROBNICATED")" "unrecognized"
+
+# ---------------------------------------------------------------------------
+# Tests 78-85: group/feature granularity — resolve_review_unit() end-to-end
+# through task-state-guard.sh (MF-013, TASK-001). Both evidence gates this
+# script owns (the IMPLEMENTED/BLOCKED -> IN_REVIEW dir-check, and the
+# IN_REVIEW -> DONE review-evidence check) must resolve reviews/GROUP-<n> or
+# reviews/FEATURE-<feat_id> instead of reviews/<task_id> once granularity is
+# configured — proving the corrupted-state regression MF-013 names (a
+# legitimately group/feature-reviewed task getting hard-blocked by a
+# task-id-only directory check) no longer happens.
+# ---------------------------------------------------------------------------
+
+# Test 78: group mode — IMPLEMENTED -> IN_REVIEW blocked without reviews/GROUP-1
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "group"'
+create_task_file "TASK-001" "IMPLEMENTED"   # create_task_file sets - **Group**: 1
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
+run_guard "$input"
+assert_exit_code "group mode: IN_REVIEW without reviews/GROUP-1 blocked" "$GUARD_EC" 2
+assert_contains "group mode: IN_REVIEW without reviews/GROUP-1 message" "$GUARD_STDERR" "review directory"
+teardown_temp_dir
+
+# Test 79: group mode — IMPLEMENTED -> IN_REVIEW allowed once reviews/GROUP-1 exists
+# (reviews/TASK-001 deliberately absent — proves the resolver, not the old path, is used)
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "group"'
+create_task_file "TASK-001" "IMPLEMENTED"
+mkdir -p "$TEST_DIR/nazgul/reviews/GROUP-1"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
+run_guard "$input"
+assert_exit_code "group mode: IN_REVIEW with reviews/GROUP-1 allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# Test 80: group mode — IN_REVIEW -> DONE with an APPROVED review under
+# reviews/GROUP-1 (not reviews/TASK-001) — allowed
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "group"' '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "IN_REVIEW"
+create_review_dir "GROUP-1"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "group mode: DONE with reviews/GROUP-1 evidence allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# Test 81 (MF-013 core regression): group mode — IN_REVIEW -> DONE blocked when
+# the ONLY evidence sits at the old reviews/TASK-001 path, proving the fix
+# doesn't silently fall back to task-id-keyed evidence in group mode
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "group"' '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "IN_REVIEW"
+create_review_dir "TASK-001"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "group mode: task-id-keyed evidence not honored: blocked" "$GUARD_EC" 2
+assert_contains "group mode: task-id-keyed evidence not honored: message" "$GUARD_STDERR" "No review directory"
+teardown_temp_dir
+
+# Test 82: group mode — a task in a DIFFERENT group's reviews dir does not
+# satisfy this task's DONE gate (GROUP-2 evidence does not cover a Group:1 task)
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "group"' '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "IN_REVIEW"   # Group: 1
+create_review_dir "GROUP-2"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "group mode: wrong-group evidence not honored: blocked" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Test 83: feature mode — IMPLEMENTED -> IN_REVIEW blocked without reviews/FEATURE-<feat_id>
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "feature"' '.feat_id = "FEAT-016"'
+create_task_file "TASK-001" "IMPLEMENTED"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
+run_guard "$input"
+assert_exit_code "feature mode: IN_REVIEW without reviews/FEATURE-FEAT-016 blocked" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Test 84: feature mode — IMPLEMENTED -> IN_REVIEW allowed once reviews/FEATURE-FEAT-016 exists
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "feature"' '.feat_id = "FEAT-016"'
+create_task_file "TASK-001" "IMPLEMENTED"
+mkdir -p "$TEST_DIR/nazgul/reviews/FEATURE-FEAT-016"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
+run_guard "$input"
+assert_exit_code "feature mode: IN_REVIEW with reviews/FEATURE-FEAT-016 allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# Test 85: feature mode — IN_REVIEW -> DONE with an APPROVED review under
+# reviews/FEATURE-<feat_id> — allowed (end-to-end IMPLEMENTED->IN_REVIEW->DONE
+# for a feature-reviewed task, the exact path MF-013 names as non-functional)
+setup_temp_dir
+setup_nazgul_dir
+create_config '.review_gate.granularity = "feature"' '.feat_id = "FEAT-016"' \
+  '.agents.reviewers = ["code-reviewer"]'
+create_task_file "TASK-001" "IN_REVIEW"
+create_review_dir "FEATURE-FEAT-016"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "feature mode: DONE with reviews/FEATURE-FEAT-016 evidence allowed" "$GUARD_EC" 0
+teardown_temp_dir
 
 report_results

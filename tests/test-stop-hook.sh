@@ -857,7 +857,7 @@ setup_temp_dir; setup_git_repo; setup_nazgul_dir
 create_config '.review_gate.granularity = "group"' '.agents.reviewers = ["code-reviewer"]'
 create_plan
 create_task_file "TASK-001" "DONE";        set_task_group "TASK-001" 1
-create_review_dir "TASK-001"
+create_review_dir "GROUP-1"   # MF-013: TASK-001 Group:1, granularity=group -> evidence lives at reviews/GROUP-1
 create_task_file "TASK-002" "IMPLEMENTED";  set_task_group "TASK-002" 2
 create_task_file "TASK-003" "IMPLEMENTED";  set_task_group "TASK-003" 2
 run_hook
@@ -965,7 +965,7 @@ create_config '.feat_id = "FEAT-INT1"' \
   '.agents.reviewers = ["code-reviewer"]'
 create_plan
 create_task_file "TASK-001" "DONE"
-create_review_dir "TASK-001"
+create_review_dir "GROUP-1"   # MF-013: TASK-001 Group:1 (default), granularity=group -> reviews/GROUP-1
 mkdir -p "$TEST_DIR/nazgul/logs"
 printf '%s\n' '{"sv":1,"ts":"2026-06-24T00:00:00Z","task_id":"TASK-001","review_unit":"TASK-001","granularity_used":"task","iteration":1}' \
   > "$TEST_DIR/nazgul/logs/review-coverage.jsonl"
@@ -987,7 +987,7 @@ create_config '.feat_id = "FEAT-INT2"' \
   '.docs.verify_comments = false' '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
-create_review_dir "TASK-001"
+create_review_dir "GROUP-1"   # MF-013: TASK-001 Group:1 (default), granularity=group -> reviews/GROUP-1
 mkdir -p "$TEST_DIR/nazgul/logs"
 printf '%s\n' '{"sv":1,"ts":"2026-06-24T00:00:00Z","task_id":"TASK-001","review_unit":"GROUP-1","granularity_used":"group","iteration":1}' \
   > "$TEST_DIR/nazgul/logs/review-coverage.jsonl"
@@ -1009,7 +1009,7 @@ create_config '.feat_id = "FEAT-INT3"' \
   '.docs.verify_comments = false' '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
-create_review_dir "TASK-001"
+create_review_dir "GROUP-1"   # MF-013: TASK-001 Group:1 (default), granularity=group -> reviews/GROUP-1
 run_hook
 assert_exit_code "gran gate integration: no coverage degrades: exit 0" "$HOOK_EC" 0
 teardown_temp_dir

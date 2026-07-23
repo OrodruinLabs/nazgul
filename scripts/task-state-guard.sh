@@ -374,7 +374,9 @@ fi
 # IMPLEMENTED/BLOCKED -> IN_REVIEW requires review directory to exist
 # (BLOCKED -> IN_REVIEW is the /nazgul:review --materialize repair path)
 if { [ "$OLD_STATUS" = "IMPLEMENTED" ] || [ "$OLD_STATUS" = "BLOCKED" ]; } && [ "$NEW_STATUS" = "IN_REVIEW" ]; then
-  REVIEW_DIR_CHECK="$NAZGUL_DIR/reviews/$TASK_ID"
+  # resolve_review_unit (MF-013): in group/feature granularity the review
+  # directory is GROUP-<n>/FEATURE-<feat_id>, not reviews/<task_id>.
+  REVIEW_DIR_CHECK="$NAZGUL_DIR/reviews/$(resolve_review_unit "$NAZGUL_DIR" "$TASK_ID")"
   if [ ! -d "$REVIEW_DIR_CHECK" ]; then
     echo "NAZGUL STATE GUARD: BLOCKED — Cannot move to IN_REVIEW without a review directory" >&2
     echo "Expected: ${REVIEW_DIR_CHECK}/" >&2
@@ -412,7 +414,10 @@ elif [ "$YOLO_MODE" != "true" ] && [ "$NEW_STATUS" = "DONE" ]; then
 fi
 
 if [ "$NEEDS_REVIEW_CHECK" = true ]; then
-  REVIEW_DIR="$NAZGUL_DIR/reviews/$TASK_ID"
+  # Diagnostic-only path — the actual gate is ttg_verify_review_evidence below,
+  # which resolves the same reviews/<unit> the resolver computes; kept in sync
+  # here so the NO_REVIEW_DIR message names the directory that was really checked.
+  REVIEW_DIR="$NAZGUL_DIR/reviews/$(resolve_review_unit "$NAZGUL_DIR" "$TASK_ID")"
   EVIDENCE_PROBLEMS=$(ttg_verify_review_evidence "$NAZGUL_DIR" "$TASK_ID") || true
   if [ -n "$EVIDENCE_PROBLEMS" ]; then
     echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2

@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
 # Nazgul shared review-evidence validation — sourced by task-state-guard.sh and stop-hook.sh.
 # Single source of truth for what counts as complete review evidence (Constitution Rule 5).
-# Canonical evidence is per-reviewer files: nazgul/reviews/<TASK-ID>/<reviewer>.md
+# Canonical evidence is per-reviewer files: nazgul/reviews/<UNIT-ID>/<reviewer>.md,
+# where <UNIT-ID> is resolve_review_unit()'s output — the task id in `task`
+# granularity, GROUP-<n>/FEATURE-<feat_id> in group/feature granularity.
 # A consolidated summary.md is NOT evidence — it is a meta-file, excluded below.
 
-# Source structured-state for canonical verdict reading, and review-provenance
-# so every sourcer (stop-hook, task-state-guard) transitively gains
-# validate_review_provenance and the dispatch-manifest reader.
+# Source structured-state for canonical verdict reading, review-provenance so
+# every sourcer (stop-hook, task-state-guard) transitively gains
+# validate_review_provenance and the dispatch-manifest reader, and task-utils
+# for get_task_field (resolve_review_unit's Group/Wave fallback chain) — makes
+# this file self-contained regardless of what order a caller sources its libs.
 _NAZGUL_RE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$_NAZGUL_RE_DIR/structured-state.sh"
 # shellcheck source=/dev/null
 source "$_NAZGUL_RE_DIR/review-provenance.sh"
+# shellcheck source=/dev/null
+source "$_NAZGUL_RE_DIR/task-utils.sh"
 
 # Meta-files in a review dir that are NOT reviewer verdicts.
 # Usage: _is_review_meta_file <basename>
@@ -170,14 +176,80 @@ _re_is_authorized_unverified() {
   return 0
 }
 
+# Resolve which nazgul/reviews/ subdirectory holds a task's review evidence,
+# aware of review_gate.granularity (MF-013, ADR-004 Decision 1). This is the
+# ONE shared derivation every evidence/dispatch-readiness call site must use —
+# do not add a second independent re-derivation anywhere (stop-hook.sh's
+# AGGREGATE_REVIEW_READY block and subagent-stop.sh's coverage recorder both
+# call this instead of computing their own answer).
+#
+# Usage: resolve_review_unit <nazgul_dir> <task_id>
+# Prints one of:
+#   <task_id>            — granularity is "task" (default), or an absent/
+#                           unreadable config, or a missing task manifest —
+#                           the safe, zero-behavior-change fallback.
+#   GROUP-<n>             — granularity "group": the task manifest's Group
+#                           field, falling back to Wave, falling back to "1" —
+#                           the IDENTICAL fallback chain stop-hook.sh's
+#                           AGGREGATE_REVIEW_READY block already uses.
+#   FEATURE-<feat_id>     — granularity "feature": config.json's top-level
+#                           feat_id.
+# Degrades to <task_id> on any ambiguity (missing task file, unreadable/absent
+# config, empty/null feat_id) — never fails open on a genuine evidence check;
+# it just falls back to the one mode where task_id IS the review unit.
+resolve_review_unit() {
+  local nazgul_dir="$1" task_id="$2"
+  local config="$nazgul_dir/config.json"
+  local task_file="$nazgul_dir/tasks/${task_id}.md"
+  local granularity="task"
+
+  if [ -f "$config" ]; then
+    granularity=$(jq -r '.review_gate.granularity // "task"' "$config" 2>/dev/null)
+  fi
+  case "$granularity" in
+    task|group|feature) ;;
+    *) granularity="task" ;;
+  esac
+
+  case "$granularity" in
+    group)
+      if [ ! -f "$task_file" ]; then
+        echo "$task_id"
+        return 0
+      fi
+      local group
+      group=$(get_task_field "$task_file" "Group" "$(get_task_field "$task_file" "Wave" "1")")
+      echo "GROUP-${group}"
+      ;;
+    feature)
+      local feat_id=""
+      if [ -f "$config" ]; then
+        feat_id=$(jq -r '.feat_id // empty' "$config" 2>/dev/null)
+      fi
+      if [ -z "$feat_id" ]; then
+        echo "$task_id"
+        return 0
+      fi
+      echo "FEATURE-${feat_id}"
+      ;;
+    *)
+      echo "$task_id"
+      ;;
+  esac
+}
+
 # Validate review evidence for a task.
 # Usage: validate_review_evidence <nazgul_dir> <task_id>
 # Returns 0 and prints nothing if evidence is complete.
 # Returns 1 and prints one machine-parseable line per problem:
-#   NO_REVIEW_DIR             — reviews/<task_id>/ does not exist
+#   NO_REVIEW_DIR             — reviews/<unit>/ does not exist
 #   NO_REVIEWERS_CONFIGURED   — config.json agents.reviewers is empty
-#   MISSING <reviewer>        — no reviews/<task_id>/<reviewer>.md
+#   MISSING <reviewer>        — no reviews/<unit>/<reviewer>.md
 #   UNAPPROVED <reviewer>     — file exists but lacks an APPROVED verdict
+# <unit> is resolve_review_unit(nazgul_dir, task_id): task_id unchanged in
+# "task" granularity (the common case), or the task's GROUP-<n>/FEATURE-<feat_id>
+# in "group"/"feature" granularity (MF-013) — the single resolution point every
+# caller (task-state-guard.sh, stop-hook.sh) inherits with no call-site change.
 # A reviewer authorized-skipped via the dispatch manifest (see
 # _re_is_authorized_skipped) is exempt from both MISSING and UNAPPROVED. A
 # non-critical reviewer whose file reads verdict: UNVERIFIED with the
@@ -185,7 +257,8 @@ _re_is_authorized_unverified() {
 # likewise exempt from UNAPPROVED; a critical reviewer's UNVERIFIED still blocks.
 validate_review_evidence() {
   local nazgul_dir="$1" task_id="$2"
-  local review_dir="$nazgul_dir/reviews/$task_id"
+  local review_dir
+  review_dir="$nazgul_dir/reviews/$(resolve_review_unit "$nazgul_dir" "$task_id")"
   local config="$nazgul_dir/config.json"
   local problems=0
 
