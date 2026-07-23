@@ -41,6 +41,20 @@ BACKUP="$CONFIG.v${CURRENT_VERSION}.bak"
 cp "$CONFIG" "$BACKUP"
 log_migration "Backup created: $BACKUP"
 
+# MF-048: keep-N-most-recent .bak pruning (mirrors stop-hook.sh's checkpoint pruning).
+# NUL-delimited find/read, not `ls | xargs` — a space in NAZGUL_DIR would split paths.
+BAK_KEEP=5
+CONFIG_BASENAME="$(basename "$CONFIG")"
+{
+  while IFS= read -r -d '' _bak; do
+    _bak_mtime=$(stat -f %m "$_bak" 2>/dev/null || stat -c %Y "$_bak" 2>/dev/null || echo 0)
+    printf '%s\t%s\n' "$_bak_mtime" "$_bak"
+  done < <(find "$NAZGUL_DIR" -maxdepth 1 -type f -name "${CONFIG_BASENAME}.v*.bak" -print0 2>/dev/null)
+} | sort -t "$(printf '\t')" -k1,1rn | tail -n "+$((BAK_KEEP + 1))" | cut -f2- | while IFS= read -r _stale_bak; do
+  rm -f -- "$_stale_bak"
+  log_migration "Pruned stale backup: $_stale_bak"
+done
+
 # --- Migration functions (incremental) ---
 
 migrate_1_to_2() {
@@ -608,6 +622,34 @@ migrate_28_to_29() {
     | .schema_version = 29
   ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
   log_migration "v28→v29: added review_gate.stall_retry_escalate_tier:true (model-tier escalation on a reviewer's bounded stall/malformed-return retry kill switch) (additive; explicit value incl. false preserved)"
+}
+
+migrate_29_to_30() {
+  local tmp; tmp=$(mktemp)
+  # ADR-005 Decision 4: additive review_gate.receipt_hash_enforcement kill switch;
+  # models.review_orchestrator is deliberately untouched (already sonnet since v22).
+  jq '
+    (if (.safety | type) == "object" then .safety else {} end) as $safety
+    # MF-051: drop confirmed zero-consumer dead keys; a customized non-default value
+    # survives under ._deprecated_removed instead of being silently dropped.
+    | (if (._deprecated_removed | type) == "object" then ._deprecated_removed else {} end) as $dep
+    | ($dep
+        + (if has("task_file") and (.task_file != "nazgul/plan.md") then {"task_file": .task_file} else {} end)
+        + (if has("log_dir") and (.log_dir != "nazgul/logs") then {"log_dir": .log_dir} else {} end)
+        + (if has("review_dir") and (.review_dir != "nazgul/reviews") then {"review_dir": .review_dir} else {} end)
+        + (if ($safety | has("block_destructive_commands")) and ($safety.block_destructive_commands != true)
+           then {"safety.block_destructive_commands": $safety.block_destructive_commands} else {} end)
+        + (if ($safety | has("require_tests_pass_before_review")) and ($safety.require_tests_pass_before_review != true)
+           then {"safety.require_tests_pass_before_review": $safety.require_tests_pass_before_review} else {} end)
+      ) as $newdep
+    | (if ($newdep | length) > 0 then ._deprecated_removed = $newdep else . end)
+    | del(.task_file) | del(.log_dir) | del(.review_dir)
+    | .safety = ($safety | del(.block_destructive_commands) | del(.require_tests_pass_before_review))
+    | .review_gate = ((if (.review_gate | type) == "object" then .review_gate else {} end)
+        | .receipt_hash_enforcement = (if has("receipt_hash_enforcement") then .receipt_hash_enforcement else true end))
+    | .schema_version = 30
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v29→v30: added review_gate.receipt_hash_enforcement:true (additive; explicit value incl. false preserved) — TASK-009 DONE-gate receipt-hash kill switch (ADR-005 Decision 4); models.review_orchestrator untouched (already sonnet since migrate_21_to_22). MF-051: removed dead keys task_file/log_dir/review_dir/safety.block_destructive_commands/safety.require_tests_pass_before_review (any customized non-default value preserved under ._deprecated_removed, not silently dropped); parallelism.*/context.* left untouched (deprecated-in-template-only per ADR-005 Risk table)"
 }
 
 # --- Run incremental migrations ---
