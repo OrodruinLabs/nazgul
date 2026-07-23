@@ -582,6 +582,21 @@ migrate_26_to_27() {
   log_migration "v26→v27: added execution.enforce.teammate_report_guard:true (additive; explicit false preserved) — TeammateIdle report-contract guard kill-switch"
 }
 
+migrate_27_to_28() {
+  local tmp; tmp=$(mktemp)
+  # Reliability Wave 2: two additive kill-switch keys for guard-hardening consumers.
+  # Explicit values (incl. false/non-default) preserved; non-object guards/automation sections clamped.
+  jq '
+    .guards = ((if (.guards | type) == "object" then .guards else {} end)
+      | .bash_write_reconciliation = (if has("bash_write_reconciliation") then .bash_write_reconciliation else true end))
+    | .automation = ((if (.automation | type) == "object" then .automation else {} end)
+      | .heartbeat = ((if (.heartbeat | type) == "object" then .heartbeat else {} end)
+          | .lock_stale_seconds = (if has("lock_stale_seconds") then .lock_stale_seconds else 300 end)))
+    | .schema_version = 28
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v27→v28: added guards.bash_write_reconciliation:true (stop-hook recompute-and-compare kill switch) and automation.heartbeat.lock_stale_seconds:300 (heartbeat claim-lock staleness) (additive; explicit values incl. false/non-default preserved)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"
