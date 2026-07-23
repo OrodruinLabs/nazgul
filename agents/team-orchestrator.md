@@ -90,10 +90,9 @@ When asked to run parallel implementations:
    the task BLOCKED if it never lands.
 9. **Merge completed tasks to feature branch:**
    - For each IMPLEMENTED task:
-     a. Checkout feature branch in main worktree
-     b. `git merge --no-ff feat/<display_id>/TASK-NNN -m "<commit_prefix> merge TASK-NNN — [title]"`
-     c. If merge conflict: `git merge --abort`, mark task BLOCKED with conflict details
-     d. If success: remove worktree, delete task branch
+     a. `source scripts/worktree-utils.sh` then call `merge_task_to_feature TASK-NNN "<main_worktree_path>" nazgul/config.json` — `git -C`-safe, so it merges correctly regardless of the invoking worktree's cwd (MF-035), removing the "checkout in main worktree first" convention this step used to depend on.
+     b. If the call returns non-zero (merge conflict, already aborted internally): mark task BLOCKED with conflict details
+     c. If success: remove worktree, delete task branch
 10. Signal completion
 11. Clean up the team AND delete ONLY the `nazgul/dispatch/<session-name>.json`
     manifests for the implementer teammates THIS team spawned (the exact
