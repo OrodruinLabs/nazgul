@@ -1215,6 +1215,22 @@ elif [ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ]; then
 IMPORTANT: Read nazgul/reviews/${ACTIVE_TASK}/consolidated-feedback.md before re-implementing."
 fi
 
+# --- MF-006: mechanical HITL pending-approval gate (DEFAULT SEQUENTIAL path only) --
+# Mirrors execution_should_pause's config-driven gate-check pattern (below, at the
+# opt-in EXEC_PARALLEL=true approve_batch gate) for this default path, which
+# previously had zero mechanical HITL enforcement: "$MODE" never gated dispatch
+# here, so nothing stopped the agent from proceeding after a HITL approval
+# request went unanswered (the exact incident nazgul/improvements.md:24-28
+# reports). A hitl-pending marker file — created by whichever flow requested
+# human approval, removed once the human approves — now hard-blocks the
+# DELEGATE line above while it exists. Deliberately does NOT touch the
+# parallel-batch DISPATCH_INSTR override below (that path already has its own
+# mechanical approve_batch gate at execution_should_pause(...)).
+HITL_PENDING_MARKER="$NAZGUL_DIR/.hitl-pending"
+if [ "$MODE" = "hitl" ] && [ -f "$HITL_PENDING_MARKER" ] && [ -n "$DISPATCH_INSTR" ]; then
+  DISPATCH_INSTR="GATE hitl_pending: a human approval is still pending (nazgul/.hitl-pending exists) — WAIT for explicit human approval before dispatching anything. Do not proceed autonomously."
+fi
+
 # Default Active-task line (sequential mode / no batch). Only overridden below
 # when a parallel batch actually fires, so this text stays byte-identical to
 # the historical inline heredoc expression in the non-batch case.

@@ -112,4 +112,52 @@ run_compact
 assert_contains "stdout shows active task" "$COMPACT_OUTPUT" "Active task: TASK-002"
 teardown_temp_dir
 
+# --- Test 9 (MF-007): an existing richer checkpoint for the current iteration
+# is NOT overwritten by pre-compact's thinner schema — the exact overwrite
+# path MF-007 documents as reproduced in production. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 7'
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/checkpoints"
+cat > "$TEST_DIR/nazgul/checkpoints/iteration-007.json" << 'RICH_EOF'
+{"iteration":7,"task_statuses":{"TASK-001":"READY"},"review_unit":{"granularity":"task"},"context_health":{"compactions_this_session":2},"plan_snapshot":{"est_iteration_usd":0.5}}
+RICH_EOF
+run_compact
+assert_json_field "MF-007: richer schema field survives (task_statuses)" \
+  "$TEST_DIR/nazgul/checkpoints/iteration-007.json" ".task_statuses.\"TASK-001\"" "READY"
+assert_json_field "MF-007: richer schema field survives (review_unit)" \
+  "$TEST_DIR/nazgul/checkpoints/iteration-007.json" ".review_unit.granularity" "task"
+assert_json_field "MF-007: richer schema field survives (context_health)" \
+  "$TEST_DIR/nazgul/checkpoints/iteration-007.json" ".context_health.compactions_this_session" "2"
+assert_contains "MF-007: pre-compact logs the skip" "$COMPACT_OUTPUT" "already exists"
+teardown_temp_dir
+
+# --- Test 10 (MF-007): no pre-existing checkpoint for this iteration — the
+# normal first-write path is unaffected; pre-compact still writes its own. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 9'
+create_task_file "TASK-002" "IN_PROGRESS"
+run_compact
+assert_json_field "MF-007: first-write path unaffected" \
+  "$TEST_DIR/nazgul/checkpoints/iteration-009.json" ".active_task.id" "TASK-002"
+teardown_temp_dir
+
+# --- Test 11 (MF-012): pre-compact.sh resets the compaction-count idempotency
+# lock at the start of each cycle, self-healing a stale lock left by a
+# previous cycle (see post-compact.sh / session-context.sh for the consumers). ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 1'
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/.compaction_count.lock"
+run_compact
+assert_dir_not_exists "MF-012: stale compaction-count lock cleared by pre-compact" \
+  "$TEST_DIR/nazgul/.compaction_count.lock"
+teardown_temp_dir
+
 report_results
