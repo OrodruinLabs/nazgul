@@ -97,7 +97,7 @@ This is **tamper-evidence and diff-staleness detection, not authentication** —
 
 ### Receipt-Hash Enforcement
 
-`review_gate.receipt_hash_enforcement` (default `true`, config schema v30) is a kill switch for a receipt-hash content check in `scripts/lib/review-evidence.sh`'s DONE-gate evidence validation. When enabled, the evidence gate recomputes a SHA-256 over each approving reviewer's persisted verdict file (the body only, after the frontmatter fence) and compares it against the matching entry in `nazgul/logs/review-receipts.jsonl`, failing the check with a `RECEIPT_MISMATCH <reviewer>` problem line — alongside the existing `MISSING`/`UNAPPROVED` checks — on a mismatch. Set to `false` to disable the check and fall back to presence/verdict-only evidence validation.
+`review_gate.receipt_hash_enforcement` (config schema v30) is a kill switch for a receipt-hash content check (`RECEIPT_MISMATCH <reviewer>`, alongside the existing `MISSING`/`UNAPPROVED` problem lines) in `scripts/lib/review-evidence.sh`'s DONE-gate evidence validation, which compares each approving reviewer's persisted verdict file against an independently captured receipt that `scripts/subagent-stop.sh` writes to `nazgul/logs/review-receipts.jsonl` when that reviewer's subagent turn ends — outside review-gate's own dispatch turn, so a rewritten verdict can't retroactively alter the receipt it's checked against. The check is **opt-in, default `false`** — the template (`templates/config.json`), the `migrate_29_to_30` migration, and the gate's own absent-key read in `validate_review_evidence()` all agree on the off default; enforcement activates only on an explicit `true`. When enabled, reconstruction tolerates the two sanctioned review-gate edit shapes before comparing — a top-of-file resolution-note verdict flip and a trailing orchestrator note — so an ordinary Step 3/3.6/3.75 resolution doesn't false-trip a mismatch. As with Review Provenance above, this is **tamper-evidence, not tamper-authentication**: review-gate has ordinary filesystem access to `nazgul/logs/` and nothing here cryptographically prevents it from suppressing or forging a receipt outright; what the check guarantees is that a receipt, once genuinely captured, can't be made to match arbitrary rewritten content.
 
 ## Execution Engine
 
@@ -190,6 +190,15 @@ When an objective finishes, Nazgul distills recurring mistakes (review rejection
 |-----|---------|---------|
 | `learning.enabled` | `true` | Master switch for the learning subsystem. |
 | `learning.auto_distill_post_loop` | `true` | Run (and gate completion on) the learner at objective completion. Set either flag to `false` to opt out — the gate becomes a no-op. |
+
+## Self-Improvement Mode
+
+`self_improvement.{enabled,threshold}` is a distinct, separately-opt-in mechanism from **Self-Audit Gate** below — not a duplicate. This one is the implementer's per-task self-rating gate: after setting a task to IMPLEMENTED, if `self_improvement.enabled` is `true`, the implementer (`agents/implementer.md:149-163`) rates its own experience 0-10 and, if the rating falls below `self_improvement.threshold` (default `7`), files a report via `scripts/file-improvement-report.sh` into `nazgul/improvement-reports/` for `/nazgul:metrics` to aggregate. See `references/self-improvement.md` for the rating rubric and report shape. Self-Audit Gate, by contrast, is a mandatory post-loop pass that mines objective-wide signals (review rejections, retries, blocks, findings) into a durable backlog — the two run at different times, on different triggers, gated by different config keys, and neither substitutes for the other.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `self_improvement.enabled` | `false` | Master switch. When `false` or absent, the implementer skips the self-rating step silently. |
+| `self_improvement.threshold` | `7` | Rating below which a report is filed; ratings at or above the threshold file nothing. |
 
 ## Self-Audit Gate
 
