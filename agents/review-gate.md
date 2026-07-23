@@ -345,7 +345,10 @@ changes by granularity is `task_id`:
   review covering 3 tasks therefore emits 3 events per reviewer, and — because each is
   independently recomputed from that task's own manifest — a task that was wrongly claimed
   as part of the group would resolve to its OWN group/task id, not silently inherit the
-  claimed one. This is the producer half of the contract `subagent-stop.sh`'s coverage
+  claimed one; such a task is then EXCLUDED from this unit's emits (step 3's mismatch rule
+  below), because its verdict files live under `nazgul/reviews/$UNIT_ID/` and an event
+  claiming its differently-resolved unit would record coverage at a path holding no
+  evidence. This is the producer half of the contract `subagent-stop.sh`'s coverage
   detector reads.
 
 CLI arg convention: positional `event_type` first, then alternating `key val` pairs;
@@ -379,8 +382,17 @@ For each reviewer in `agents.reviewers`:
 REVIEW_UNIT=$(resolve_review_unit "$NAZGUL_DIR" "$EACH_TASK_ID")
 ```
 
+   **Mismatch rule:** if `REVIEW_UNIT` differs from `$UNIT_ID` (possible only in
+   `group`/`feature` mode, when the DELEGATE task list wrongly includes a task whose own
+   manifest resolves elsewhere), do NOT emit for that task. Its verdict files were
+   persisted under `nazgul/reviews/$UNIT_ID/`, so an event claiming
+   `review_unit "$REVIEW_UNIT"` would record coverage at a path that holds no evidence.
+   Log the mismatch (task id, resolved unit, dispatched unit) — the mismatch itself is
+   the actionable signal (a mis-scoped delegate list), and the task gets its coverage
+   event when its actual unit is reviewed.
+
 4. Emit via Bash tool (using the `NAZGUL_DIR` and `CURRENT_ITERATION` set above), once per
-   entry in `TASK_ID_LIST`:
+   remaining entry in `TASK_ID_LIST`:
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/emit-event-cli.sh" reviewer_verdict \

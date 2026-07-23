@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Nazgul shared review-evidence validation — sourced by task-state-guard.sh and stop-hook.sh.
 # Single source of truth for what counts as complete review evidence (Constitution Rule 5).
-# Canonical evidence is per-reviewer files: nazgul/reviews/<TASK-ID>/<reviewer>.md
+# Canonical evidence is per-reviewer files: nazgul/reviews/<UNIT-ID>/<reviewer>.md,
+# where <UNIT-ID> is resolve_review_unit()'s output — the task id in `task`
+# granularity, GROUP-<n>/FEATURE-<feat_id> in group/feature granularity.
 # A consolidated summary.md is NOT evidence — it is a meta-file, excluded below.
 
 # Source structured-state for canonical verdict reading, review-provenance so

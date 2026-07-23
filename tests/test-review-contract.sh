@@ -138,6 +138,13 @@ else
   _fail "review-gate.md's emit command uses the recomputed \$REVIEW_UNIT, not \$UNIT_ID directly" "emit line does not reference \$REVIEW_UNIT"
 fi
 
+if grep -q 'if `REVIEW_UNIT` differs from `\$UNIT_ID`' "$REVIEW_GATE" \
+  && grep -q 'do NOT emit for that task' "$REVIEW_GATE"; then
+  _pass "review-gate.md's emit step has the cross-group mismatch rule (skip+log when REVIEW_UNIT != UNIT_ID)"
+else
+  _fail "review-gate.md's emit step has the cross-group mismatch rule (skip+log when REVIEW_UNIT != UNIT_ID)" "mismatch-rule prose not found in review-gate.md emit block"
+fi
+
 if grep -qE 'review_unit "\$UNIT_ID"' "$REVIEW_GATE"; then
   _fail "review-gate.md's emit command does NOT self-report \$UNIT_ID as review_unit" "found the vulnerable self-report pattern"
 else
