@@ -163,30 +163,45 @@ assert_file_not_exists "traversal NAME touches no file inside dispatch dir" \
 EC=0
 jq -n '{from:"sub/dir"}' | bash "$GUARD" >/dev/null 2>&1 || EC=$?
 assert_eq "separator NAME allowed (fail-open)" "$EC" "0"
+assert_contains "separator NAME logs specific message" \
+  "$(cat "$TEST_DIR/nazgul/logs/teammate-idle.jsonl")" "unsafe teammate name"
 assert_file_not_exists "separator NAME touches no file at the nested path" \
   "$TEST_DIR/nazgul/dispatch/sub/dir.json"
 
 # 22. MF-041/MF-054: traversal report_path (relative, contains "..") -> ALLOW
-# (fail-open), specific log message, no file touched at the escaped target.
-make_manifest "rev-trav-rp" "../outside-marker.md" "FEAT-013" 0
+# (fail-open), specific log message. A decoy non-empty file is planted at the
+# EXACT path the guard's own "$PROJECT_DIR/$REPORT_PATH" concatenation would
+# resolve to (computed here the same way, not asserted-and-guessed, so the
+# test can't drift from the real target) — this exercises the actual
+# read-based spoofing risk MF-041 worries about: if a future refactor moved
+# this case check after the delivered-report read, the decoy would get
+# misread as a legitimately delivered report. Today the check fires first,
+# so the log must say "unsafe report_path", never "report delivered".
+TRAV_REPORT_PATH="../outside-marker-$$.md"
+TRAV_DECOY_TARGET="$TEST_DIR/$TRAV_REPORT_PATH"
+echo "decoy: must never be read as a delivered report" > "$TRAV_DECOY_TARGET"
+make_manifest "rev-trav-rp" "$TRAV_REPORT_PATH" "FEAT-013" 0
 EC=0
 jq -n '{from:"rev-trav-rp"}' | bash "$GUARD" >/dev/null 2>&1 || EC=$?
 assert_eq "traversal report_path allowed (fail-open)" "$EC" "0"
-assert_contains "traversal report_path logs specific message" \
-  "$(cat "$TEST_DIR/nazgul/logs/teammate-idle.jsonl")" "unsafe report_path"
-assert_file_not_exists "traversal report_path touches no file at the escaped target" \
-  "$TEST_DIR/outside-marker.md"
+TRAV_LOG_TAIL=$(tail -1 "$TEST_DIR/nazgul/logs/teammate-idle.jsonl")
+assert_contains "traversal report_path logs specific message" "$TRAV_LOG_TAIL" "unsafe report_path"
+assert_not_contains "traversal report_path decoy not misread as delivered" "$TRAV_LOG_TAIL" "report delivered"
+rm -f "$TRAV_DECOY_TARGET"
 
-# 23. MF-041/MF-054: absolute report_path -> same fail-open branch, no file
-# touched at the absolute target.
-make_manifest "rev-abs-rp" "$TEST_DIR/unsafe-abs-target.md" "FEAT-013" 0
+# 23. MF-041/MF-054: absolute report_path -> same fail-open branch. Same
+# decoy-at-the-real-computed-target technique as test 22.
+ABS_REPORT_PATH="/abs-outside-marker.md"
+ABS_DECOY_TARGET="$TEST_DIR/$ABS_REPORT_PATH"
+echo "decoy: must never be read as a delivered report" > "$ABS_DECOY_TARGET"
+make_manifest "rev-abs-rp" "$ABS_REPORT_PATH" "FEAT-013" 0
 EC=0
 jq -n '{from:"rev-abs-rp"}' | bash "$GUARD" >/dev/null 2>&1 || EC=$?
 assert_eq "absolute report_path allowed (fail-open)" "$EC" "0"
-assert_contains "absolute report_path logs specific message" \
-  "$(cat "$TEST_DIR/nazgul/logs/teammate-idle.jsonl")" "unsafe report_path"
-assert_file_not_exists "absolute report_path touches no file at the absolute target" \
-  "$TEST_DIR/unsafe-abs-target.md"
+ABS_LOG_TAIL=$(tail -1 "$TEST_DIR/nazgul/logs/teammate-idle.jsonl")
+assert_contains "absolute report_path logs specific message" "$ABS_LOG_TAIL" "unsafe report_path"
+assert_not_contains "absolute report_path decoy not misread as delivered" "$ABS_LOG_TAIL" "report delivered"
+rm -f "$ABS_DECOY_TARGET"
 
 # 24. MF-056: BOTH `stat -c` (GNU) and `stat -f` (BSD) forms failing must not
 # crash the guard — the documented "treat as delivered" fallback must fire.

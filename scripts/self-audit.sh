@@ -113,22 +113,8 @@ _mine_guard_blocks() {
     "Review recurring block reasons; if one dominates, consider a targeted fix or a learned rule."
 }
 
-# _mine_teammate_spawn_discrepancy — MF-047: Layer 2 of the Teammate Report
-# Contract (RULES.md §17 — a dispatcher writing nazgul/dispatch/<name>.json
-# before spawning a teammate) is advisory-only; nothing mechanically verifies
-# it happened. A missing manifest degrades to silent allow in
-# teammate-idle-guard.sh, indistinguishable from "not a Nazgul-dispatched
-# teammate at all". This is a heuristic cross-check, not a hard verifier: it
-# compares how many teammates were logged as spawned (N) against how many
-# dispatch manifests currently exist (M) for this feat_id, surfacing a finding
-# when M < N so a human can confirm whether the gap is legitimate post-teardown
-# cleanup or a dispatcher that actually skipped Layer 2.
-#
-# Convention (not yet emitted by any dispatcher — this miner activates once a
-# dispatcher starts writing it): one `{"event":"teammate_spawned", ...}` line
-# appended to any nazgul/logs/*.jsonl per spawn, same telemetry style as the
-# "blocked" events _mine_guard_blocks reads above. Until wired, spawned stays
-# 0 and this degrades to a no-op, per this script's "never fails" contract.
+# _mine_teammate_spawn_discrepancy — MF-047 heuristic (RULES.md §17 Layer 2,
+# advisory not proof): flags M < N, fewer dispatch manifests than logged spawns; no-op until an emitter exists (see nazgul/tasks/TASK-005.md for the run-scoping caveat).
 _mine_teammate_spawn_discrepancy() {
   local logs_dir="$NAZGUL_DIR/logs" dispatch_dir="$NAZGUL_DIR/dispatch"
   local f line spawned=0 manifests=0
