@@ -1259,6 +1259,27 @@ elif [ "$GRANULARITY" != "task" ] && [ "$AGGREGATE_REVIEW_READY" = "true" ]; the
   AGGREGATE_MARKER="AGGREGATE REVIEW READY (${GRANULARITY}): review unit [${AGGREGATE_REVIEW_SCOPE}] fully IMPLEMENTED — tasks: ${AGGREGATE_REVIEW_TASKS}."
 fi
 
+# --- MF-006: mechanical HITL pending-approval gate ---------------------------
+# Mirrors execution_should_pause's config-driven gate-check pattern (the
+# opt-in EXEC_PARALLEL=true approve_batch gate above) for the path that
+# previously had zero mechanical HITL enforcement: "$MODE" never gated
+# dispatch, so nothing stopped the agent from proceeding after a HITL
+# approval request went unanswered (the exact incident
+# nazgul/improvements.md:24-28 reports). A hitl-pending marker file —
+# created by whichever flow requested human approval, removed once the
+# human approves — now hard-blocks the DELEGATE line while it exists.
+# Deliberately positioned AFTER both the default sequential DISPATCH_INSTR
+# assignment above AND the parallel-batch override above (round 1 review
+# finding: placing this check before the batch override let a fired batch
+# silently overwrite the GATE message, since approve_batch is a distinct,
+# default-false signal that does not cover the hitl-pending marker) — this
+# single site is authoritative for whichever DISPATCH_INSTR is live by the
+# time CONTINUE_MSG is built, sequential or parallel-batch.
+HITL_PENDING_MARKER="$NAZGUL_DIR/.hitl-pending"
+if [ "$MODE" = "hitl" ] && [ -f "$HITL_PENDING_MARKER" ] && [ -n "$DISPATCH_INSTR" ]; then
+  DISPATCH_INSTR="GATE hitl_pending: a human approval is still pending (nazgul/.hitl-pending exists) — WAIT for explicit human approval before dispatching anything. Do not proceed autonomously."
+fi
+
 cat >&2 << CONTINUE_MSG
 Nazgul loop — iteration ${NEW_ITER}/${MAX_ITER} | Mode: ${MODE} | Review granularity: ${GRANULARITY}
 Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked, ${PLANNED_COUNT} planned

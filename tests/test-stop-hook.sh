@@ -1242,4 +1242,45 @@ assert_eq "recon: hook's own auto-promote not reconciled to BLOCKED" \
   "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "READY"
 teardown_temp_dir
 
+# === MF-006: HITL pending-approval marker gates the DEFAULT sequential path ===
+# nazgul/.hitl-pending, when present in mode=hitl, must suppress the DELEGATE
+# line the default sequential DISPATCH_INSTR would otherwise emit — mirroring
+# execution_should_pause's gate-check pattern (previously only reachable via
+# the opt-in EXEC_PARALLEL=true approve_batch path). Clearing the marker
+# restores normal dispatch.
+
+# --- MF-006a: marker set + mode=hitl → no DELEGATE line, GATE message instead ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.mode = "hitl"'
+create_plan
+create_task_file "TASK-001" "READY"
+touch "$TEST_DIR/nazgul/.hitl-pending"
+run_hook
+assert_exit_code "MF-006a: exit 2 (continue loop)" "$HOOK_EC" 2
+assert_not_contains "MF-006a: no DELEGATE line while pending" "$HOOK_OUTPUT" "DELEGATE: Spawn implementer agent (nazgul:implementer) for TASK-001"
+assert_contains "MF-006a: GATE hitl_pending message shown" "$HOOK_OUTPUT" "GATE hitl_pending"
+assert_contains "MF-006a: GATE message names the marker" "$HOOK_OUTPUT" "nazgul/.hitl-pending"
+teardown_temp_dir
+
+# --- MF-006b: marker cleared → normal DELEGATE dispatch restored ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.mode = "hitl"'
+create_plan
+create_task_file "TASK-001" "READY"
+run_hook
+assert_exit_code "MF-006b: exit 2 (continue loop)" "$HOOK_EC" 2
+assert_contains "MF-006b: DELEGATE line restored once marker cleared" "$HOOK_OUTPUT" "DELEGATE: Spawn implementer agent (nazgul:implementer) for TASK-001"
+assert_not_contains "MF-006b: no GATE hitl_pending message" "$HOOK_OUTPUT" "GATE hitl_pending"
+teardown_temp_dir
+
+# --- MF-006c: marker set but mode != hitl (e.g. afk) → gate does not apply ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.mode = "afk"'
+create_plan
+create_task_file "TASK-001" "READY"
+touch "$TEST_DIR/nazgul/.hitl-pending"
+run_hook
+assert_contains "MF-006c: non-hitl mode dispatches despite marker" "$HOOK_OUTPUT" "DELEGATE: Spawn implementer agent (nazgul:implementer) for TASK-001"
+teardown_temp_dir
+
 report_results

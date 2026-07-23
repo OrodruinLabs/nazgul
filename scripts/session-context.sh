@@ -44,6 +44,12 @@ OBJECTIVE=$(jq -r '.objective // "none"' "$CONFIG")
 ITERATION=$(jq -r '.current_iteration // 0' "$CONFIG")
 MAX_ITER=$(jq -r '.max_iterations // 40' "$CONFIG")
 
+# MF-008: review granularity awareness, mirroring stop-hook.sh's read (its
+# GRANULARITY var, ~line 51) — needed below to defer the single-task review
+# dispatch suggestion to the aggregate review path in group/feature mode.
+GRANULARITY=$(jq -r '.review_gate.granularity // "task"' "$CONFIG" 2>/dev/null || echo "task")
+case "$GRANULARITY" in task|group|feature) ;; *) GRANULARITY="task" ;; esac
+
 # Count tasks and find active task (shared helper; see task-utils.sh:145)
 count_tasks_and_find_active "$NAZGUL_DIR/tasks"
 
@@ -119,16 +125,30 @@ fi
 COMPACTION_FILE="$NAZGUL_DIR/.compaction_count"
 HOOK_EVENT="${CLAUDE_HOOK_EVENT:-}"
 
+# --- MF-012: idempotent compaction counter increment. This SessionStart
+# (matcher=compact) fires AFTER post-compact.sh for the SAME physical
+# compaction event (PreCompact -> compaction -> PostCompact -> SessionStart
+# [compact], confirmed against the Claude Code hooks reference — see
+# pre-compact.sh's reset comment and post-compact.sh's matching guard). A
+# plain read-increment-write here as well as in post-compact.sh double-counts
+# every compaction. The `mkdir` lock post-compact.sh claims first (it always
+# runs first in the lifecycle) means this branch normally just skips its own
+# increment; it still claims the lock itself as a defensive fallback in case
+# PostCompact ever fails to run for a given compaction.
 if [ "$HOOK_EVENT" = "compact" ]; then
+  COMPACTION_LOCK="$NAZGUL_DIR/.compaction_count.lock"
   # Read current state or initialize
   if [ -f "$COMPACTION_FILE" ]; then
     PREV_COUNT=$(jq -r '.count // 0' "$COMPACTION_FILE" 2>/dev/null || echo "0")
   else
     PREV_COUNT=0
   fi
-  NEW_COUNT=$((PREV_COUNT + 1))
-  # Write updated compaction state with current iteration
-  printf '{"count": %d, "last_compaction_iteration": %s}\n' "$NEW_COUNT" "$ITERATION" > "$COMPACTION_FILE"
+  if mkdir "$COMPACTION_LOCK" 2>/dev/null; then
+    NEW_COUNT=$((PREV_COUNT + 1))
+    # Write updated compaction state with current iteration
+    printf '{"count": %d, "last_compaction_iteration": %s}\n' "$NEW_COUNT" "$ITERATION" > "$COMPACTION_FILE"
+  fi
+  # else: post-compact.sh already claimed and incremented for this compaction.
 fi
 
 # Read compaction count for output
@@ -173,8 +193,9 @@ fi
 cat << CONTEXT_EOF2
 $([ -n "$MIGRATION_NOTICE" ] && echo "NOTICE: $MIGRATION_NOTICE" || true)
 Active task: ${ACTIVE_TASK:-none} (${ACTIVE_STATUS:-none})
-$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. Do NOT skip the review gate." || true)
-$([ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}." || true)
+$([ "$GRANULARITY" = "task" ] && [ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. Do NOT skip the review gate." || true)
+$([ "$GRANULARITY" = "task" ] && [ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}." || true)
+$([ "$GRANULARITY" != "task" ] && { [ "$ACTIVE_STATUS" = "IMPLEMENTED" ] || [ "$ACTIVE_STATUS" = "IN_REVIEW" ]; } && echo "NOTE: review granularity is ${GRANULARITY} — do NOT spawn a single-task review-gate for ${ACTIVE_TASK}; it is parked pending the aggregate review unit (MF-008). Read nazgul/plan.md for aggregate-review readiness before dispatching." || true)
 $([ "$ACTIVE_STATUS" = "READY" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}." || true)
 $([ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}." || true)
 $([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first." || true)

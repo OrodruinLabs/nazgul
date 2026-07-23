@@ -19,6 +19,17 @@ fi
 ITERATION=$(jq -r '.current_iteration // 0' "$CONFIG")
 MODE=$(jq -r '.mode // "hitl"' "$CONFIG")
 
+# --- MF-012: reset the compaction-count idempotency lock for the upcoming
+# compaction. PreCompact always fires first in the lifecycle (PreCompact ->
+# compaction -> PostCompact -> SessionStart[matcher=compact] — both of the
+# latter two fire once each, in that order, for the SAME physical compaction
+# event, empirically confirmed against the Claude Code hooks reference). Both
+# post-compact.sh and session-context.sh race a `mkdir` on this same lock dir
+# to claim the ONE increment for this event; whichever loses skips its
+# increment instead of double-counting. Removing any stale lock here (rather
+# than after use) is self-healing even if a prior cycle's consumer never fired.
+rm -rf "$NAZGUL_DIR/.compaction_count.lock"
+
 # Write checkpoint
 mkdir -p "$NAZGUL_DIR/checkpoints"
 CHECKPOINT="$NAZGUL_DIR/checkpoints/iteration-$(printf '%03d' "$ITERATION").json"
@@ -44,76 +55,89 @@ GIT_DIRTY=$(git -C "${CLAUDE_PROJECT_DIR:-$(pwd)}" diff --quiet 2>/dev/null && e
 # Get active reviewers
 ACTIVE_REVIEWERS=$(jq -c '.agents.reviewers // []' "$CONFIG" 2>/dev/null || echo "[]")
 
-# Build active_task_id and active_task_status for jq
-if [ -n "$ACTIVE_TASK" ]; then
-  ACTIVE_TASK_ID="$ACTIVE_TASK"
-  ACTIVE_TASK_STATUS="$ACTIVE_STATUS"
-  NEXT_ACTION="Resume from Recovery Pointer in nazgul/plan.md"
+# --- MF-007: never clobber a richer checkpoint already written this iteration.
+# stop-hook.sh's checkpoint schema is a strict superset of this one (adds
+# task_statuses/branch/review_unit/context_health/budget) — if a PreCompact
+# event lands after stop-hook already wrote iteration-<N>.json for the CURRENT
+# (already-incremented) iteration, overwriting it here would silently regress
+# the schema. Skip the write entirely in that case; the existing file already
+# carries this iteration's recovery state. First-write case (no checkpoint yet
+# for this iteration) is unaffected — this hook's thinner checkpoint is still
+# strictly better than none.
+if [ -f "$CHECKPOINT" ]; then
+  echo "Pre-compact: checkpoint for iteration ${ITERATION} already exists (written by stop-hook.sh) — skipping write to avoid overwriting its richer schema (MF-007)." >&2
 else
-  ACTIVE_TASK_ID=""
-  ACTIVE_TASK_STATUS=""
-  NEXT_ACTION=""
-fi
+  # Build active_task_id and active_task_status for jq
+  if [ -n "$ACTIVE_TASK" ]; then
+    ACTIVE_TASK_ID="$ACTIVE_TASK"
+    ACTIVE_TASK_STATUS="$ACTIVE_STATUS"
+    NEXT_ACTION="Resume from Recovery Pointer in nazgul/plan.md"
+  else
+    ACTIVE_TASK_ID=""
+    ACTIVE_TASK_STATUS=""
+    NEXT_ACTION=""
+  fi
 
-# Write checkpoint JSON via jq (safe escaping for all string values)
-jq -n \
-  --argjson iteration "$ITERATION" \
-  --arg timestamp "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-  --arg mode "$MODE" \
-  --arg active_task_id "$ACTIVE_TASK_ID" \
-  --arg active_task_status "$ACTIVE_TASK_STATUS" \
-  --argjson retry_count "$ACTIVE_RETRY" \
-  --arg next_action "$NEXT_ACTION" \
-  --argjson files_modified "$FILES_MODIFIED_JSON" \
-  --argjson total_tasks "$TOTAL_COUNT" \
-  --argjson done_count "$DONE_COUNT" \
-  --argjson approved "$APPROVED_COUNT" \
-  --argjson ready "$READY_COUNT" \
-  --argjson in_progress "$IN_PROGRESS_COUNT" \
-  --argjson in_review "$IN_REVIEW_COUNT" \
-  --argjson changes_requested "$CHANGES_COUNT" \
-  --argjson blocked "$BLOCKED_COUNT" \
-  --argjson planned "$PLANNED_COUNT" \
-  --arg git_branch "$GIT_BRANCH" \
-  --arg git_sha "$GIT_SHA" \
-  --arg git_msg "$GIT_MSG" \
-  --argjson git_dirty "$GIT_DIRTY" \
-  --argjson reviewers "$ACTIVE_REVIEWERS" \
-  --arg recovery "Post-compaction: Read nazgul/plan.md Recovery Pointer, then nazgul/tasks/${ACTIVE_TASK:-none}.md" \
-  '{
-    iteration: $iteration,
-    timestamp: $timestamp,
-    mode: $mode,
-    active_task: {
-      id: (if $active_task_id == "" then null else $active_task_id end),
-      status: (if $active_task_status == "" then null else $active_task_status end),
-      retry_count: $retry_count,
-      last_action: "Pre-compaction checkpoint",
-      next_action: (if $next_action == "" then null else $next_action end),
-      files_modified_this_iteration: $files_modified
-    },
-    plan_snapshot: {
-      total_tasks: $total_tasks,
-      done: $done_count,
-      approved: $approved,
-      ready: $ready,
-      in_progress: $in_progress,
-      in_review: $in_review,
-      changes_requested: $changes_requested,
-      blocked: $blocked,
-      planned: $planned
-    },
-    git: {
-      branch: $git_branch,
-      last_commit_sha: $git_sha,
-      last_commit_message: $git_msg,
-      uncommitted_changes: $git_dirty
-    },
-    reviewers: {
-      active: $reviewers
-    },
-    recovery_instructions: $recovery
-  }' > "$CHECKPOINT"
+  # Write checkpoint JSON via jq (safe escaping for all string values)
+  jq -n \
+    --argjson iteration "$ITERATION" \
+    --arg timestamp "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+    --arg mode "$MODE" \
+    --arg active_task_id "$ACTIVE_TASK_ID" \
+    --arg active_task_status "$ACTIVE_TASK_STATUS" \
+    --argjson retry_count "$ACTIVE_RETRY" \
+    --arg next_action "$NEXT_ACTION" \
+    --argjson files_modified "$FILES_MODIFIED_JSON" \
+    --argjson total_tasks "$TOTAL_COUNT" \
+    --argjson done_count "$DONE_COUNT" \
+    --argjson approved "$APPROVED_COUNT" \
+    --argjson ready "$READY_COUNT" \
+    --argjson in_progress "$IN_PROGRESS_COUNT" \
+    --argjson in_review "$IN_REVIEW_COUNT" \
+    --argjson changes_requested "$CHANGES_COUNT" \
+    --argjson blocked "$BLOCKED_COUNT" \
+    --argjson planned "$PLANNED_COUNT" \
+    --arg git_branch "$GIT_BRANCH" \
+    --arg git_sha "$GIT_SHA" \
+    --arg git_msg "$GIT_MSG" \
+    --argjson git_dirty "$GIT_DIRTY" \
+    --argjson reviewers "$ACTIVE_REVIEWERS" \
+    --arg recovery "Post-compaction: Read nazgul/plan.md Recovery Pointer, then nazgul/tasks/${ACTIVE_TASK:-none}.md" \
+    '{
+      iteration: $iteration,
+      timestamp: $timestamp,
+      mode: $mode,
+      active_task: {
+        id: (if $active_task_id == "" then null else $active_task_id end),
+        status: (if $active_task_status == "" then null else $active_task_status end),
+        retry_count: $retry_count,
+        last_action: "Pre-compaction checkpoint",
+        next_action: (if $next_action == "" then null else $next_action end),
+        files_modified_this_iteration: $files_modified
+      },
+      plan_snapshot: {
+        total_tasks: $total_tasks,
+        done: $done_count,
+        approved: $approved,
+        ready: $ready,
+        in_progress: $in_progress,
+        in_review: $in_review,
+        changes_requested: $changes_requested,
+        blocked: $blocked,
+        planned: $planned
+      },
+      git: {
+        branch: $git_branch,
+        last_commit_sha: $git_sha,
+        last_commit_message: $git_msg,
+        uncommitted_changes: $git_dirty
+      },
+      reviewers: {
+        active: $reviewers
+      },
+      recovery_instructions: $recovery
+    }' > "$CHECKPOINT"
+fi
 
 # Output Recovery Pointer to stdout (survives compaction)
 echo "=== NAZGUL RECOVERY STATE ==="

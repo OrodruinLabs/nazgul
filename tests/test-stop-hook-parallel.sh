@@ -263,4 +263,43 @@ assert_exit_code "WS3 e2e: CHANGES_REQUESTED task's branch is never merged (H2 g
 assert_contains "WS3 e2e: guard message names the blocked task" "$WS3_MERGE2_STDERR" "TASK-002"
 teardown_temp_dir
 
+# --- MF-006 round-1 rework: HITL pending-approval marker must gate a FIRED
+# parallel batch too, not just the default sequential DISPATCH_INSTR. The
+# gate check was originally placed before the parallel-batch override block
+# (stop-hook.sh), so a fired batch silently clobbered the GATE hitl_pending
+# message with its own DISPATCH_INSTR — approve_batch is a distinct,
+# default-false signal that does not cover the hitl-pending marker. Moved to
+# run once, after both the sequential and parallel-batch DISPATCH_INSTR
+# assignments, immediately before the CONTINUE_MSG heredoc. ---
+
+# --- 6: hitl mode + marker + eligible parallel batch -> GATE hitl_pending,
+#        NO batch DELEGATE (the exact hole round-1 review found) ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.execution.parallel = true' '.execution.max_parallel = 3' '.mode = "hitl"' \
+  '.review_gate.granularity = "task"'
+make_parallel_pair
+touch "$TEST_DIR/nazgul/.hitl-pending"
+run_hook
+assert_exit_code "MF-006+parallel: exit 2 (continue loop)" "$HOOK_EC" 2
+assert_contains "MF-006+parallel: GATE hitl_pending shown" "$HOOK_OUTPUT" "GATE hitl_pending"
+if printf '%s' "$HOOK_OUTPUT" | grep -q "DELEGATE (PARALLEL BATCH"; then
+  _fail "MF-006+parallel: no batch DELEGATE while hitl-pending marker set"
+else
+  _pass "MF-006+parallel: no batch DELEGATE while hitl-pending marker set"
+fi
+teardown_temp_dir
+
+# --- 7: hitl mode WITHOUT marker + eligible parallel batch -> batch DELEGATE
+#        fires normally (regression: the existing non-marker parallel path,
+#        now under hitl mode specifically, must still dispatch) ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.execution.parallel = true' '.execution.max_parallel = 3' '.mode = "hitl"' \
+  '.review_gate.granularity = "task"'
+make_parallel_pair
+run_hook
+assert_exit_code "MF-006+parallel (no marker): exit 2 (continue loop)" "$HOOK_EC" 2
+assert_contains "MF-006+parallel (no marker): batch instruction fires" "$HOOK_OUTPUT" "DELEGATE (PARALLEL BATCH"
+assert_not_contains "MF-006+parallel (no marker): no GATE hitl_pending" "$HOOK_OUTPUT" "GATE hitl_pending"
+teardown_temp_dir
+
 report_results
