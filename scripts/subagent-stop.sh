@@ -128,4 +128,94 @@ case "$AGENT" in
     ;;
 esac
 
+# Reviewer-receipt capture (LR-001 / TASK-002): independently records a hash
+# of a dispatched REVIEWER subagent's own final returned text, in a channel
+# review-gate's own Bash-tool steps never touch or write to. Unlike
+# _record_review_coverage above (gated on the review-gate ORCHESTRATOR's own
+# completion), this runs on every subagent stop and decides internally
+# whether THIS completion is one of the individual reviewers dispatched for
+# some review unit, via that unit's `.dispatch.json` `selected` roster.
+#
+# EMPIRICAL FINDING (mandatory first implementation step, see task manifest
+# Implementation Log for the full probe): SubagentStop's `.transcript_path`
+# is the PARENT/team session's own transcript (shared across every agent in
+# the session, NOT isolated to this one completing subagent) — confirmed by
+# instrumenting a throwaway dispatch and inspecting the real hook payload.
+# The SAME payload also carries `.agent_transcript_path`, which IS this exact
+# completing subagent's own isolated transcript file
+# (`<session_dir>/subagents/agent-<agent_id>.jsonl`), keyed by this dispatch's
+# own agent_id — an exact match, not an approximation. Reused directly here
+# instead of `scripts/self-audit.sh`'s newest-session-dir heuristic: that
+# heuristic picks the most-recently-modified session directory and is a
+# reasonable best-effort for its own single-session cost mining, but under
+# this project's own supported `execution.parallel` concurrent-dispatch model
+# — many reviewer subagents completing near-simultaneously across units —
+# it cannot reliably distinguish between concurrent siblings, while
+# `.agent_transcript_path` has no such ambiguity.
+_record_reviewer_receipt() {
+  command -v jq >/dev/null 2>&1 || return 0
+  [ -n "$INPUT" ] || return 0
+
+  local agent_transcript
+  agent_transcript=$(printf '%s' "$INPUT" | jq -r '.agent_transcript_path // empty' 2>/dev/null) || return 0
+  [ -n "$agent_transcript" ] && [ -f "$agent_transcript" ] || return 0
+
+  local reviews_dir="$NAZGUL_DIR/reviews"
+  [ -d "$reviews_dir" ] || return 0
+
+  # Find the review unit whose dispatch manifest lists AGENT as a selected
+  # reviewer. Best-effort tie-break if AGENT is selected in more than one
+  # unit's manifest at once (the same reviewer role dispatched concurrently
+  # across units): prefer the most-recently-created manifest — mirrors this
+  # codebase's other "most-recent wins" tie-breaks (e.g. self-audit.sh's
+  # newest-session-dir pick).
+  local unit="" best_created="" manifest
+  for manifest in "$reviews_dir"/*/.dispatch.json; do
+    [ -f "$manifest" ] || continue
+    local is_selected
+    is_selected=$(jq -r --arg a "$AGENT" '(.selected // []) | any(. == $a)' "$manifest" 2>/dev/null)
+    [ "$is_selected" = "true" ] || continue
+    local this_unit this_created
+    this_unit=$(jq -r '.unit // empty' "$manifest" 2>/dev/null)
+    this_created=$(jq -r '.created_at // empty' "$manifest" 2>/dev/null)
+    [ -n "$this_unit" ] || continue
+    if [ -z "$unit" ] || [[ "$this_created" > "$best_created" ]]; then
+      unit="$this_unit"
+      best_created="$this_created"
+    fi
+  done
+  [ -n "$unit" ] || return 0
+
+  # Extract the reviewer's own final assistant-role message text from its
+  # isolated transcript: one JSON record per line, the last record with
+  # type "assistant" is the reviewer's final turn, and its returned text
+  # lives in the "text"-typed blocks of message.content.
+  local final_text
+  final_text=$(jq -rs '
+      [ .[] | select(.type == "assistant") ]
+      | last
+      | (.message.content // [])
+      | map(select(.type == "text") | .text)
+      | join("")
+    ' "$agent_transcript" 2>/dev/null)
+  [ -n "$final_text" ] || return 0
+
+  local hash
+  hash=$(printf '%s' "$final_text" | _rp_sha256) || return 0
+  [ -n "$hash" ] || return 0
+
+  local receipts_file="$NAZGUL_DIR/logs/review-receipts.jsonl"
+  mkdir -p "${receipts_file%/*}" 2>/dev/null || return 0
+  local ts; ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  jq -cn \
+    --arg unit "$unit" \
+    --arg reviewer "$AGENT" \
+    --arg hash "$hash" \
+    --arg ts "$ts" \
+    '{unit: $unit, reviewer: $reviewer, hash: $hash, ts: $ts}' \
+    >> "$receipts_file" 2>/dev/null || true
+}
+
+_record_reviewer_receipt || true
+
 exit 0
