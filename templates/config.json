@@ -133,7 +133,7 @@
     "adversarial_margin": 10,
     "adversarial_max": 3,
     "stall_retry_escalate_tier": true,
-    "receipt_hash_enforcement": true
+    "receipt_hash_enforcement": false
   },
   "simplify": {
     "post_loop": true,
