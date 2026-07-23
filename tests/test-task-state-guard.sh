@@ -112,13 +112,16 @@ assert_exit_code "READY->IN_PROGRESS allowed" "$GUARD_EC" 0
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# Test 7: Valid transition IN_PROGRESS -> IMPLEMENTED
+# Test 7: Valid transition IN_PROGRESS -> IMPLEMENTED (MF-026: SHA must be a
+# real, reachable commit)
 # ---------------------------------------------------------------------------
 setup_temp_dir
+setup_git_repo
 setup_nazgul_dir
 create_task_file "TASK-001" "IN_PROGRESS"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
-content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- abc1234def')
+REAL_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- %s' "$REAL_SHA")
 input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
   '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
 run_guard "$input"
@@ -312,14 +315,16 @@ assert_contains "IMPLEMENTED without SHA message" "$GUARD_STDERR" "commit SHA"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# Test 20: IN_PROGRESS -> IMPLEMENTED with commit SHA (Write) — allowed
+# Test 20: IN_PROGRESS -> IMPLEMENTED with a real, verifiable commit SHA
+# (Write) — allowed (MF-026)
 # ---------------------------------------------------------------------------
 setup_temp_dir
+setup_git_repo
 setup_nazgul_dir
 create_task_file "TASK-001" "IN_PROGRESS"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
-# Build input with commit SHA in content
-content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- abc1234def')
+REAL_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- %s' "$REAL_SHA")
 input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
   '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
 run_guard "$input"
@@ -327,16 +332,53 @@ assert_exit_code "IMPLEMENTED with commit SHA allowed" "$GUARD_EC" 0
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# Test 20b: IN_PROGRESS -> IMPLEMENTED via Edit — SHA already in file on disk
+# Test 20b: IN_PROGRESS -> IMPLEMENTED via Edit — real SHA already in file on
+# disk (MF-026)
 # ---------------------------------------------------------------------------
 setup_temp_dir
+setup_git_repo
 setup_nazgul_dir
-create_task_file_with_commits "TASK-001" "IN_PROGRESS" "abc1234def"
+REAL_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+create_task_file_with_commits "TASK-001" "IN_PROGRESS" "$REAL_SHA"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 # Edit only changes the status line — SHA is in the existing file, not in new_string
 input=$(make_edit_input "$TASK_PATH" "IMPLEMENTED" "IN_PROGRESS")
 run_guard "$input"
 assert_exit_code "IMPLEMENTED via Edit with SHA on disk allowed" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 20c: IN_PROGRESS -> IMPLEMENTED with a hex-looking but NONEXISTENT SHA
+# — now BLOCKS (regression: previously passed the bare grep pattern match,
+# MF-026)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_task_file "TASK-001" "IN_PROGRESS"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- deadbeef1234')
+input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
+run_guard "$input"
+assert_exit_code "IMPLEMENTED with nonexistent SHA blocked" "$GUARD_EC" 2
+assert_contains "nonexistent SHA blocked message" "$GUARD_STDERR" "commit SHA"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 20d: IN_PROGRESS -> IMPLEMENTED with a real-looking SHA but NOT in a
+# git repo at all — fails CLOSED, not a silent pass (MF-026 / ADR-003
+# Decision 3)
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IN_PROGRESS"
+TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- deadbeef1234')
+input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
+  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
+run_guard "$input"
+assert_exit_code "IMPLEMENTED with no repo at all blocked (fail closed)" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -660,21 +702,20 @@ teardown_temp_dir
 # ---------------------------------------------------------------------------
 # FILE SCOPE GUARD TESTS (TASK-003)
 # Tests the file-scope extension inside the HAS_ACTIVE=true allow path.
+# MF-024: fed by the real `Files modified` JSON-array field (via
+# get_task_files_modified), NOT the nonexistent "File Scope" field — a real
+# planner-shaped manifest fixture (create_task_file_with_files_modified).
 # ---------------------------------------------------------------------------
 
-# Helper: create a task file with an explicit File Scope field.
+# Helper: create a task file whose real `Files modified` JSON array is a
+# single-path scope (or empty when scope is "").
 create_task_with_file_scope() {
   local id="$1" status="$2" scope="$3"
-  cat > "$TEST_DIR/nazgul/tasks/${id}.md" << TASK_EOF
-# ${id}: Test task
-
-- **Status**: ${status}
-- **Depends on**: none
-- **Group**: 1
-- **Retry count**: 0/3
-- **Assigned to**: implementer
-- **File Scope**: ${scope}
-TASK_EOF
+  if [ -n "$scope" ]; then
+    create_task_file_with_files_modified "$id" "$status" "[\"${scope}\"]"
+  else
+    create_task_file_with_files_modified "$id" "$status" '[]'
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -1020,9 +1061,11 @@ teardown_temp_dir
 # The 4th extractor must also allow valid transitions — no false positives.
 # ---------------------------------------------------------------------------
 setup_temp_dir
+setup_git_repo
 setup_nazgul_dir
 create_task_file "TASK-001" "IN_PROGRESS"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+REAL_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
 content="---
 status: IMPLEMENTED
 ---
@@ -1033,7 +1076,7 @@ status: IMPLEMENTED
 - **Group**: 1
 
 ## Commits
-- abc1234def
+- ${REAL_SHA}
 "
 input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
   '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
@@ -1211,16 +1254,18 @@ teardown_temp_dir
 # test for BSD/macOS awk "newline in string" on -v with embedded newlines)
 # ---------------------------------------------------------------------------
 setup_temp_dir
+setup_git_repo
 setup_nazgul_dir
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
-cat > "$TASK_PATH" << 'EOF'
+REAL_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+cat > "$TASK_PATH" << EOF
 ---
 status: IN_PROGRESS
 ---
 # TASK-001: Test
 
 ## Commits
-- abc1234def
+- ${REAL_SHA}
 EOF
 input=$(jq -n --arg fp "$TASK_PATH" \
   --arg os $'---\nstatus: IN_PROGRESS\n---' \

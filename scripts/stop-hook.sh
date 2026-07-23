@@ -13,6 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/task-utils.sh"
 source "$SCRIPT_DIR/lib/session-tracker.sh"
 source "$SCRIPT_DIR/lib/review-evidence.sh"
+source "$SCRIPT_DIR/lib/task-transition-guard.sh"
 source "$SCRIPT_DIR/lib/git-utils.sh"
 source "$SCRIPT_DIR/lib/emit-event.sh"
 source "$SCRIPT_DIR/lib/parallel-batch.sh"
@@ -151,6 +152,48 @@ if [ "$BUDGET_ENABLED" = "true" ]; then
           spent_usd:n "$BUDGET_SPENT" max_usd:n "$BUDGET_MAX_THRESHOLD" pct:n "50"
         jq '._budget_threshold_50_emitted = true' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
       fi
+    fi
+  fi
+fi
+
+# --- BASH-WRITE RECONCILIATION (MF-022 / ADR-003 Decision 2) ---
+# Runs at the top of every iteration, before counting, so a flip to BLOCKED
+# below is already reflected in this iteration's counts. Diffs each task
+# manifest's live status against the status the LAST checkpoint recorded for
+# it; a change not traceable to a guarded transition (ttg_log_transition,
+# written only by task-state-guard.sh's PreToolUse path) since that
+# checkpoint's timestamp is untrusted — flag BLOCKED with a named diagnostic.
+# Detection/flagging only: never writes a "corrected" status, only BLOCKED.
+# Kill-switch: guards.bash_write_reconciliation (default true; an explicit
+# `false` must be honored, so this is NOT `// true`, which would
+# false-coalesce it back to true).
+RECON_ENABLED=$(jq -r 'if .guards.bash_write_reconciliation == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+if [ "$RECON_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
+  RECON_PREV_CHECKPOINT=$(ls -1t "$NAZGUL_DIR/checkpoints/iteration-"*.json 2>/dev/null | head -1 || true)
+  if [ -n "$RECON_PREV_CHECKPOINT" ] && [ -f "$RECON_PREV_CHECKPOINT" ]; then
+    RECON_PREV_TS=$(jq -r '.timestamp // ""' "$RECON_PREV_CHECKPOINT" 2>/dev/null || echo "")
+    RECON_PREV_STATUSES=$(jq -c '.task_statuses // {}' "$RECON_PREV_CHECKPOINT" 2>/dev/null || echo "{}")
+    if [ -n "$RECON_PREV_TS" ] && [ "$RECON_PREV_STATUSES" != "{}" ]; then
+      for recon_task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
+        [ -f "$recon_task_file" ] || continue
+        RECON_TASK_ID=$(basename "$recon_task_file" .md)
+        RECON_PREV_STATUS=$(printf '%s' "$RECON_PREV_STATUSES" | jq -r --arg t "$RECON_TASK_ID" '.[$t] // ""')
+        [ -n "$RECON_PREV_STATUS" ] || continue
+        RECON_LIVE_STATUS=$(get_task_status "$recon_task_file" "")
+        if [ -n "$RECON_LIVE_STATUS" ] && [ "$RECON_LIVE_STATUS" != "$RECON_PREV_STATUS" ] \
+          && ! ttg_transition_is_guarded "$NAZGUL_DIR" "$RECON_TASK_ID" "$RECON_LIVE_STATUS" "$RECON_PREV_TS"; then
+          echo "NAZGUL BASH-WRITE RECONCILIATION: BLOCKED — ${RECON_TASK_ID} status changed ${RECON_PREV_STATUS} → ${RECON_LIVE_STATUS} written outside the guarded Write/Edit/MultiEdit path" >&2
+          RECON_REASON="status changed ${RECON_PREV_STATUS} → ${RECON_LIVE_STATUS} outside the guarded Write/Edit/MultiEdit path (stop-hook reconciliation, MF-022)"
+          set_task_status "$recon_task_file" "$RECON_LIVE_STATUS" "BLOCKED"
+          if grep -q '^\- \*\*Blocked reason\*\*:' "$recon_task_file" 2>/dev/null; then
+            awk -v reason="- **Blocked reason**: ${RECON_REASON}" \
+              '/^\- \*\*Blocked reason\*\*:/ { print reason; next } { print }' \
+              "$recon_task_file" > "${recon_task_file}.tmp" && mv "${recon_task_file}.tmp" "$recon_task_file"
+          else
+            echo "- **Blocked reason**: ${RECON_REASON}" >> "$recon_task_file"
+          fi
+        fi
+      done
     fi
   fi
 fi
@@ -480,6 +523,21 @@ CHECKPOINT_FILE="$NAZGUL_DIR/checkpoints/iteration-$(printf '%03d' "$NEW_ITER").
 ACTIVE_REVIEWERS=$(jq -c '.agents.reviewers // []' "$CONFIG" 2>/dev/null || echo "[]")
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+# Per-task status snapshot — the baseline the NEXT iteration's bash-write
+# reconciliation pass diffs against (MF-022).
+TASK_STATUSES_JSON="{}"
+if [ -d "$NAZGUL_DIR/tasks" ]; then
+  TASK_STATUSES_JSON=$(
+    for ts_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
+      [ -f "$ts_file" ] || continue
+      ts_id=$(basename "$ts_file" .md)
+      ts_status=$(get_task_status "$ts_file" "")
+      [ -n "$ts_status" ] || continue
+      jq -n --arg k "$ts_id" --arg v "$ts_status" '{($k): $v}'
+    done | jq -s 'add // {}'
+  )
+fi
+
 ACTIVE_TASK_ID="null"
 ACTIVE_TASK_STATUS="null"
 ACTIVE_TASK_NEXT="null"
@@ -531,10 +589,12 @@ jq -n \
   --arg agg_tasks "$AGGREGATE_REVIEW_TASKS" \
   --argjson agg_ready "$AGGREGATE_REVIEW_READY" \
   --argjson agg_awaiting "$AWAITING_AGGREGATE_REVIEW" \
+  --argjson task_statuses "$TASK_STATUSES_JSON" \
   '{
     iteration: $iteration,
     timestamp: $timestamp,
     mode: $mode,
+    task_statuses: $task_statuses,
     active_task: {
       id: (if $active_task_id == "null" then null else $active_task_id end),
       status: (if $active_task_status == "null" then null else $active_task_status end),
