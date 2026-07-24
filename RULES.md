@@ -521,7 +521,7 @@ team's own dispatch manifests on clean completion.
 Completion signal = idle notification + report file on disk. SendMessage is
 coordination-only courtesy, never the report channel.
 
-## §18 Teammate Teardown & Team Sweep
+## 18. Teammate Teardown & Team Sweep
 
 Agent-Teams teammates never terminate on their own; idle is their terminal
 state until dismissed. `TeamCreate`/`TeamDelete` do not exist (removed in
