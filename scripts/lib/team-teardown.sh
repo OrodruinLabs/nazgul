@@ -120,8 +120,14 @@ tt_sweep_orphaned_teams() {
     lead=$(jq -r '.leadSessionId // ""' "$team_cfg" 2>/dev/null || echo "")
     [ -z "$lead" ] && continue
     [ -n "$cur_sid" ] && [ "$lead" = "$cur_sid" ] && continue
+    # Lock liveness: check BOTH sanitized filename forms. session-tracker.sh's
+    # _sanitize_session_id pipes through echo, so the trailing newline is
+    # transliterated to a trailing "_" in real lock filenames (<id>_.lock);
+    # tolerate both that quirk and any future fix that drops it.
     lead_safe=$(printf '%s' "$lead" | tr -c 'A-Za-z0-9_-' '_')
-    [ -f "$nazgul_dir/sessions/${lead_safe}.lock" ] && continue
+    if [ -f "$nazgul_dir/sessions/${lead_safe}.lock" ] || [ -f "$nazgul_dir/sessions/${lead_safe}_.lock" ]; then
+      continue
+    fi
     alive="false"
     for t in "$NAZGUL_PROJECTS_DIR"/*/"$lead".jsonl; do
       [ -f "$t" ] || continue

@@ -12,6 +12,7 @@ source "$SCRIPT_DIR/lib/setup.sh"
 echo "=== $TEST_NAME ==="
 
 source "$REPO_ROOT/scripts/lib/team-teardown.sh"
+source "$REPO_ROOT/scripts/lib/session-tracker.sh"
 
 # Helper: fake team dir with members. Usage: make_team <name> <member>...
 make_team() {
@@ -234,14 +235,23 @@ assert_dir_not_exists "sweep: tasks dir gone" "$TEST_DIR/team-tasks/old-team"
 assert_file_exists "sweep: logged" "$TEST_DIR/nazgul/logs/team-sweep.jsonl"
 teardown_temp_dir
 
-# --- 15: live session lock -> kept ---
+# --- 15: live session lock (real production lock filename) -> kept ---
 setup_temp_dir; setup_nazgul_dir; create_config '.'
 export NAZGUL_TEAMS_DIR="$TEST_DIR/teams" NAZGUL_TEAM_TASKS_DIR="$TEST_DIR/team-tasks" NAZGUL_PROJECTS_DIR="$TEST_DIR/projects"
 make_owned_team "live-team" "live-lead-2222"
-mkdir -p "$TEST_DIR/nazgul/sessions"
-echo '{}' > "$TEST_DIR/nazgul/sessions/live-lead-2222.lock"
+register_session "live-lead-2222" "$TEST_DIR/nazgul/sessions"
 OUT=$(tt_sweep_orphaned_teams "$TEST_DIR/nazgul" "$TEST_DIR" "current-sess" 24)
 assert_dir_exists "lock: team kept" "$TEST_DIR/teams/live-team"
+teardown_temp_dir
+
+# --- 15b: un-suffixed lock filename form also counts as alive ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams" NAZGUL_TEAM_TASKS_DIR="$TEST_DIR/team-tasks" NAZGUL_PROJECTS_DIR="$TEST_DIR/projects"
+make_owned_team "live-team-b" "live-lead-5555"
+mkdir -p "$TEST_DIR/nazgul/sessions"
+echo '{}' > "$TEST_DIR/nazgul/sessions/live-lead-5555.lock"
+OUT=$(tt_sweep_orphaned_teams "$TEST_DIR/nazgul" "$TEST_DIR" "current-sess" 24)
+assert_dir_exists "unsuffixed lock: team kept" "$TEST_DIR/teams/live-team-b"
 teardown_temp_dir
 
 # --- 16: fresh transcript -> kept ---
