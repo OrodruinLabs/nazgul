@@ -271,8 +271,12 @@ if inbox_archive "$INBOX_DIR" "$PICKED"; then
     if [ "$INBOX_PROVIDER" = "file" ]; then
       FAILED_DIR="$INBOX_DIR/failed"
       mkdir -p "$FAILED_DIR" 2>/dev/null || true
-      if mv -f "$INBOX_DIR/archive/$PICKED" "$FAILED_DIR/$PICKED" 2>/dev/null; then
-        ARCHIVED_TO="$INBOX_REL/failed/$PICKED"
+      # Collision-safe: a same-named candidate that failed before must not have
+      # its prior failed payload clobbered — uniquify with a timestamp suffix.
+      FAILED_NAME="$PICKED"
+      [ -e "$FAILED_DIR/$FAILED_NAME" ] && FAILED_NAME="$PICKED.$(date +%s).$$"
+      if mv -f "$INBOX_DIR/archive/$PICKED" "$FAILED_DIR/$FAILED_NAME" 2>/dev/null; then
+        ARCHIVED_TO="$INBOX_REL/failed/$FAILED_NAME"
       fi
     fi
     _hb_emit started start_command_failed "$OBJECTIVE" "$SEEN_COUNT" "$TRIAGED_JSON" "$PICKED" false false "$ARCHIVED_TO"

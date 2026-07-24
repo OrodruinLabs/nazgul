@@ -61,6 +61,17 @@ run_formatter "$PAYLOAD"
 assert_eq "MF-030: .tool_input.file_path outranks .tool_result.file_path" "$FMT_RESOLVED_FILE" "$REAL_FILE"
 teardown_temp_dir
 
+# --- Test 2b: an EMPTY-STRING .tool_input.file_path must not mask a populated
+# legacy alias (jq's // only skips null/false, not "") — PR #69 regression. ---
+setup_temp_dir
+LEGACY_FILE2="$TEST_DIR/empty-preferred-fallback.xyzzy"
+printf 'legacy\n' > "$LEGACY_FILE2"
+PAYLOAD=$(jq -n --arg other "$LEGACY_FILE2" \
+  '{tool_input: {file_path: ""}, tool_result: {file_path: $other}}')
+run_formatter "$PAYLOAD"
+assert_eq "empty preferred path falls through to legacy alias" "$FMT_RESOLVED_FILE" "$LEGACY_FILE2"
+teardown_temp_dir
+
 # --- Test 3: no .tool_input.file_path at all -> legacy alias fallback still
 # works (no regression to the pre-existing alias chain). ---
 setup_temp_dir

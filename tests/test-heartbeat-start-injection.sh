@@ -265,4 +265,34 @@ run_failed_start_scenario() {
 
 run_failed_start_scenario
 
+# --- PR #69 regression: a same-named candidate failing AGAIN must not clobber
+# the prior failed payload — the relocation uniquifies on collision. ---
+run_failed_start_collision_scenario() {
+  setup_temp_dir
+  setup_nazgul_dir
+  create_config '.automation.heartbeat.enabled = true'
+  mkdir -p "$TEST_DIR/nazgul/inbox/failed"
+  printf '{"title":"prior failed payload"}\n' > "$TEST_DIR/nazgul/inbox/failed/cand.json"
+  jq -n '{title:"FEAT-997 failing objective take 2", body:"retry the thing", priority:1}' \
+    > "$TEST_DIR/nazgul/inbox/cand.json"
+  write_fake_failing_claude
+  export PATH="$FAKEBIN:$PATH"
+  unset NAZGUL_HEARTBEAT_START_CMD 2>/dev/null || true
+
+  bash "$REPO_ROOT/scripts/heartbeat.sh"
+
+  assert_contains "[failed-collision] prior failed payload untouched" \
+    "$(cat "$TEST_DIR/nazgul/inbox/failed/cand.json")" "prior failed payload"
+  local extra_count
+  extra_count=$(find "$TEST_DIR/nazgul/inbox/failed" -name 'cand.json.*' | wc -l | tr -d ' ')
+  assert_eq "[failed-collision] new failure landed at a uniquified name" "$extra_count" "1"
+  assert_file_not_exists "[failed-collision] item no longer in archive/" \
+    "$TEST_DIR/nazgul/inbox/archive/cand.json"
+
+  teardown_temp_dir
+  rm -rf "$FAKEBIN"
+}
+
+run_failed_start_collision_scenario
+
 report_results

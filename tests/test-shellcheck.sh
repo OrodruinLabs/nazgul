@@ -62,10 +62,14 @@ _skip() {
 # so the MF-057 self-check below can drive it with a PATH-shadowing test
 # double instead of depending on this machine's real toolchain state.
 _resolve_shellcheck_bin() {
+  # Fallback path is env-injectable (SHELLCHECK_FALLBACK_BIN) so the MF-057
+  # self-check can force it absent deterministically instead of assuming the
+  # default path doesn't exist on this machine.
+  local fallback="${SHELLCHECK_FALLBACK_BIN:-/tmp/shellcheck-v0.10.0/shellcheck}"
   if command -v shellcheck >/dev/null 2>&1; then
     echo "shellcheck"
-  elif [ -x "/tmp/shellcheck-v0.10.0/shellcheck" ]; then
-    echo "/tmp/shellcheck-v0.10.0/shellcheck"
+  elif [ -x "$fallback" ]; then
+    echo "$fallback"
   fi
 }
 
@@ -104,11 +108,11 @@ _report_shellcheck_stage "$SHELLCHECK_BIN" "${SCRIPTS[@]}"
 # never a fake PASS, rather than trusting this machine's real toolchain to
 # stay absent/present the same way in every environment. ---
 
-# 1. PATH-shadowing test double: an empty stub dir on PATH (plus the real
-#    /tmp fallback almost certainly absent here) forces _resolve_shellcheck_bin
-#    to see no shellcheck at all.
+# 1. PATH-shadowing test double: an empty stub dir on PATH, with the fallback
+#    forced to a guaranteed-nonexistent path — fully deterministic regardless
+#    of what exists at the real fallback location on this machine.
 STUB_PATH_DIR=$(mktemp -d)
-RESOLVED_UNDER_STUB=$(PATH="$STUB_PATH_DIR" _resolve_shellcheck_bin)
+RESOLVED_UNDER_STUB=$(PATH="$STUB_PATH_DIR" SHELLCHECK_FALLBACK_BIN="$STUB_PATH_DIR/definitely-absent" _resolve_shellcheck_bin)
 if [ -z "$RESOLVED_UNDER_STUB" ]; then
   _pass "MF-057 self-check: _resolve_shellcheck_bin reports absent under a PATH-shadowing test double"
 else
