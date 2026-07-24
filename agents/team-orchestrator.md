@@ -53,11 +53,18 @@ When asked to run parallel reviews for a task:
    automatically by the TeammateIdle guard (≤3 times); if it still arrives
    file-less (guard escalated), nudge it once via SendMessage, then mark the
    review UNVERIFIED if it never lands.
-9. Clean up the team AND delete ONLY the `nazgul/dispatch/<session-name>.json`
-   manifests for the reviewer teammates THIS team spawned (the exact session
-   names from step 7) — never glob `nazgul/dispatch/*.json`, which would also
+9. Dismiss each teammate THIS team spawned as soon as its report is consumed:
+   send it a SendMessage shutdown_request (teammates never exit on their own;
+   TeamCreate/TeamDelete no longer exist as of Claude Code v2.1.178). After a
+   teammate approves shutdown, delete ONLY its
+   `nazgul/dispatch/<session-name>.json` manifest (the exact session names
+   from step 7) — never glob `nazgul/dispatch/*.json`, which would also
    delete other concurrently active teams' manifests and silently disable
-   their TeammateIdle enforcement.
+   their TeammateIdle enforcement. If a teammate rejects shutdown, it
+   believes it has live work — check its report before re-requesting. The
+   stop-hook's team-teardown gate (guards.team_teardown) independently
+   detects undismissed teammates and blocks new dispatches until they are
+   dismissed.
 
 ## Spawning an Implementation Team
 
@@ -95,11 +102,18 @@ When asked to run parallel implementations:
      b. If the call returns non-zero (merge conflict, already aborted internally): mark task BLOCKED with conflict details
      c. If success: remove worktree, delete task branch
 10. Signal completion
-11. Clean up the team AND delete ONLY the `nazgul/dispatch/<session-name>.json`
-    manifests for the implementer teammates THIS team spawned (the exact
-    session names from step 7) — never glob `nazgul/dispatch/*.json`, which
-    would also delete other concurrently active teams' manifests and
-    silently disable their TeammateIdle enforcement.
+11. Dismiss each teammate THIS team spawned as soon as its report is consumed:
+    send it a SendMessage shutdown_request (teammates never exit on their own;
+    TeamCreate/TeamDelete no longer exist as of Claude Code v2.1.178). After a
+    teammate approves shutdown, delete ONLY its
+    `nazgul/dispatch/<session-name>.json` manifest (the exact session names
+    from step 7) — never glob `nazgul/dispatch/*.json`, which would also
+    delete other concurrently active teams' manifests and silently disable
+    their TeammateIdle enforcement. If a teammate rejects shutdown, it
+    believes it has live work — check its report before re-requesting. The
+    stop-hook's team-teardown gate (guards.team_teardown) independently
+    detects undismissed teammates and blocks new dispatches until they are
+    dismissed.
 
 ## Fallback Behavior
 

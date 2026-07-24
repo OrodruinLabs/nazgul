@@ -520,3 +520,30 @@ team's own dispatch manifests on clean completion.
 
 Completion signal = idle notification + report file on disk. SendMessage is
 coordination-only courtesy, never the report channel.
+
+## §18 Teammate Teardown & Team Sweep
+
+Agent-Teams teammates never terminate on their own; idle is their terminal
+state until dismissed. `TeamCreate`/`TeamDelete` do not exist (removed in
+Claude Code v2.1.178) — per-teammate `SendMessage` shutdown_request is the
+only teardown primitive, and team config state is removed only on normal
+session exit.
+
+1. **Dismissal is part of consuming a report.** Whoever dispatched a teammate
+   MUST send it a shutdown_request after its report is consumed, then delete
+   its `nazgul/dispatch/<session-name>.json` (never glob the directory).
+2. **The stop-hook enforces this** (`guards.team_teardown`, default true): a
+   teammate with a delivered report still present in its team's members list
+   triggers a mandatory TEAM TEARDOWN directive before new work dispatches.
+   After 3 ignored directives it fails open with a raise_finding escalation —
+   the loop never deadlocks on dismissal.
+3. **Manifests self-heal.** A dispatch manifest whose team is gone or whose
+   teammate is no longer a member is deleted automatically by the detector.
+4. **Dead-session team state is swept** (`guards.team_sweep`, default true):
+   at SessionStart, teams attributable to this project (member cwd match)
+   whose lead session is provably dead (no session lock AND no transcript
+   fresher than `guards.team_sweep_min_age_hours`, default 24) are deleted
+   from `~/.claude/teams/` and `~/.claude/tasks/`, logged to
+   `nazgul/logs/team-sweep.jsonl`. Foreign projects' teams are only ever
+   deleted interactively via `/nazgul:clean --teams --all`. Any ambiguity
+   fails open: the team is kept.
