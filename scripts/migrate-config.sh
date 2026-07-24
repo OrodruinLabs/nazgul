@@ -652,6 +652,21 @@ migrate_29_to_30() {
   log_migration "v29→v30: added review_gate.receipt_hash_enforcement:false (additive; explicit value incl. true preserved) — TASK-009 DONE-gate receipt-hash kill switch (ADR-005 Decision 4). DEFAULT OFF (opt-in), a TASK-009 round-2 correction to this same migration: TASK-002's carried-forward parallel-dispatch receipt-attribution weakness (most-recent-.dispatch.json-wins tie-break, no independent correlation) can false-trip mismatches in execution.parallel mode — this repo's own actual run mode — until an attribution-hardening follow-up lands; default-on waits for that. models.review_orchestrator untouched (already sonnet since migrate_21_to_22). MF-051: removed dead keys task_file/log_dir/review_dir/safety.block_destructive_commands/safety.require_tests_pass_before_review (any customized non-default value preserved under ._deprecated_removed, not silently dropped); parallelism.*/context.* left untouched (deprecated-in-template-only per ADR-005 Risk table)"
 }
 
+migrate_30_to_31() {
+  local tmp; tmp=$(mktemp)
+  # Teammate teardown gate + orphaned-team sweep kill-switches
+  # (spec 2026-07-24-team-teardown-design.md). Additive; explicit values
+  # (incl. false) preserved. Same type-guard pattern as migrate_5_to_6.
+  jq '
+    .guards = ((if (.guards | type) == "object" then .guards else {} end)
+      | .team_teardown = (if has("team_teardown") then .team_teardown else true end)
+      | .team_sweep = (if has("team_sweep") then .team_sweep else true end)
+      | .team_sweep_min_age_hours = (if has("team_sweep_min_age_hours") then .team_sweep_min_age_hours else 24 end))
+    | .schema_version = 31
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v30→v31: added guards.team_teardown:true, guards.team_sweep:true, guards.team_sweep_min_age_hours:24 (teammate dismissal gate + dead-session team sweep; additive, explicit values preserved)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"

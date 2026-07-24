@@ -1,5 +1,5 @@
 {
-  "schema_version": 30,
+  "schema_version": 31,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -144,7 +144,10 @@
     "lean_comments": true,
     "max_consecutive_comment_lines": 2,
     "git_hooks": true,
-    "bash_write_reconciliation": true
+    "bash_write_reconciliation": true,
+    "team_teardown": true,
+    "team_sweep": true,
+    "team_sweep_min_age_hours": 24
   },
   "safety": {
     "max_consecutive_failures": 5,
