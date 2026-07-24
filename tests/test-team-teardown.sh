@@ -159,4 +159,56 @@ assert_json_field "v31: explicit team_sweep=false preserved" "$TEST_DIR/nazgul/c
 assert_json_field "v31: min_age default 24" "$TEST_DIR/nazgul/config.json" '.guards.team_sweep_min_age_hours' "24"
 teardown_temp_dir
 
+STOP_HOOK="$REPO_ROOT/scripts/stop-hook.sh"
+run_hook() { HOOK_OUTPUT=$(bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?; }
+
+# Shared fixture for stop-hook gate tests: initialized nazgul + one leaked teammate
+setup_gate_fixture() {  # $1 = extra create_config jq filter (optional)
+  setup_temp_dir; setup_git_repo; setup_nazgul_dir
+  create_config "${1:-.}"
+  create_plan
+  create_task_file TASK-001 READY none
+  export NAZGUL_TEAMS_DIR="$TEST_DIR/teams"
+  make_team "nazgul-review-TASK-001" "rv-code-TASK-001"
+  make_manifest "rv-code-TASK-001" "nazgul/reviews/TASK-001/code.md" "nazgul-review-TASK-001"
+  mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+  echo "verdict: APPROVE" > "$TEST_DIR/nazgul/reviews/TASK-001/code.md"
+}
+
+# --- 10: leaked teammate -> directive in loop prompt, blocks incremented ---
+setup_gate_fixture
+run_hook
+assert_exit_code "gate: loop continues" "$HOOK_EC" 2
+assert_contains "gate: directive injected" "$HOOK_OUTPUT" "TEAM TEARDOWN"
+assert_contains "gate: names teammate" "$HOOK_OUTPUT" "rv-code-TASK-001"
+assert_json_field "gate: blocks incremented" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json" '.teardown_blocks' "1"
+teardown_temp_dir
+
+# --- 11: kill-switch guards.team_teardown=false -> no directive ---
+setup_gate_fixture '.guards.team_teardown = false'
+run_hook
+assert_not_contains "kill-switch: no directive" "$HOOK_OUTPUT" "TEAM TEARDOWN"
+teardown_temp_dir
+
+# --- 12: 3 strikes -> escalation (finding raised once), directive stops ---
+setup_gate_fixture
+tmp=$(mktemp); jq '.teardown_blocks = 3' "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json" > "$tmp" \
+  && mv "$tmp" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json"
+run_hook
+assert_not_contains "escalated: no directive" "$HOOK_OUTPUT" "TEAM TEARDOWN"
+assert_file_exists "escalated: finding raised" "$TEST_DIR/nazgul/logs/findings.jsonl"
+assert_json_field "escalated: flag set" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json" '.teardown_escalated' "true"
+FINDINGS_LINES=$(wc -l < "$TEST_DIR/nazgul/logs/findings.jsonl" | tr -d ' ')
+run_hook   # second run must NOT raise a duplicate finding
+assert_eq "escalated: finding raised once" "$(wc -l < "$TEST_DIR/nazgul/logs/findings.jsonl" | tr -d ' ')" "$FINDINGS_LINES"
+teardown_temp_dir
+
+# --- 13: nothing leaked -> no directive, clean prompt ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir; create_config '.'
+create_plan; create_task_file TASK-001 READY none
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams"
+run_hook
+assert_not_contains "clean: no directive" "$HOOK_OUTPUT" "TEAM TEARDOWN"
+teardown_temp_dir
+
 report_results

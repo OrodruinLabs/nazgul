@@ -198,6 +198,53 @@ if [ "$RECON_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
   fi
 fi
 
+# --- TEAM TEARDOWN GATE (spec 2026-07-24-team-teardown-design.md) ---
+# Teammates whose report is delivered but who are still team members must be
+# dismissed (SendMessage shutdown_request) before new work dispatches. Hooks
+# cannot shut teammates down — this gate detects, directs the lead via the
+# loop prompt, verifies next iteration (detection self-clears on dismissal),
+# and escalates via raise_finding after 3 ignored directives. Fail-open.
+# Kill-switch: guards.team_teardown (explicit false disables).
+TEARDOWN_DIRECTIVE=""
+TT_ENABLED=$(jq -r 'if .guards.team_teardown == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+if [ "$TT_ENABLED" = "true" ]; then
+  source "$SCRIPT_DIR/lib/team-teardown.sh"
+  TT_LEAKED=$(tt_detect_undismissed "$NAZGUL_DIR" "$PROJECT_ROOT" "$SESSION_ID" 2>/dev/null || true)
+  if [ -n "$TT_LEAKED" ]; then
+    TT_LIST=""
+    while IFS=$'\t' read -r tt_name tt_report tt_team_dir tt_blocks; do
+      [ -n "$tt_name" ] || continue
+      tt_manifest="$NAZGUL_DIR/dispatch/${tt_name}.json"
+      if [ "$tt_blocks" -ge 3 ] 2>/dev/null; then
+        if [ "$(jq -r '.teardown_escalated // false' "$tt_manifest" 2>/dev/null)" != "true" ]; then
+          source "$SCRIPT_DIR/lib/raise-finding.sh"
+          raise_finding "medium" "process" \
+            "teammate ${tt_name} not dismissed after 3 directives" \
+            "Report ${tt_report} was delivered but the teammate stayed a member of $(basename "$tt_team_dir") for 3 iterations after dismissal directives. Manual shutdown_request needed." \
+            "Investigate why the lead skips dismissal; send shutdown_request manually." \
+            "$tt_manifest" || true
+          tt_tmp=$(mktemp 2>/dev/null) || tt_tmp=""
+          if [ -n "$tt_tmp" ] && jq '.teardown_escalated = true' "$tt_manifest" > "$tt_tmp" 2>/dev/null; then
+            mv "$tt_tmp" "$tt_manifest" 2>/dev/null || rm -f "$tt_tmp"
+          else rm -f "$tt_tmp"; fi
+          emit_event "team_teardown" action "escalated" teammate "$tt_name"
+        fi
+        continue
+      fi
+      TT_LIST="${TT_LIST}  - ${tt_name} (report delivered: ${tt_report})"$'\n'
+      tt_tmp=$(mktemp 2>/dev/null) || tt_tmp=""
+      if [ -n "$tt_tmp" ] && jq --argjson b "$((tt_blocks + 1))" '.teardown_blocks = $b' "$tt_manifest" > "$tt_tmp" 2>/dev/null; then
+        mv "$tt_tmp" "$tt_manifest" 2>/dev/null || rm -f "$tt_tmp"
+      else rm -f "$tt_tmp"; fi
+    done <<< "$TT_LEAKED"
+    if [ -n "$TT_LIST" ]; then
+      TEARDOWN_DIRECTIVE="TEAM TEARDOWN (mandatory, do this FIRST, before any new dispatch): these teammates delivered their reports and must be dismissed. For EACH: send it a SendMessage shutdown_request; after it approves, delete nazgul/dispatch/<name>.json (NEVER glob dispatch/*.json — other teams' manifests share that directory). If a teammate REJECTS shutdown it believes it has live work — leave its manifest and explain in your summary.
+${TT_LIST%$'\n'}"
+      emit_event "team_teardown" action "directive_injected" count:n "$(printf '%s\n' "$TT_LEAKED" | grep -c .)"
+    fi
+  fi
+fi
+
 # Count tasks by status (shared helper, MF-009 — sets DONE_COUNT, READY_COUNT,
 # IN_PROGRESS_COUNT, IN_REVIEW_COUNT, APPROVED_COUNT, CHANGES_COUNT,
 # BLOCKED_COUNT, PLANNED_COUNT, INVALID_COUNT, TOTAL_COUNT, plus
@@ -1288,6 +1335,7 @@ $([ -n "$FEATURE_BRANCH" ] && echo "Branch: ${FEATURE_BRANCH} → ${BASE_BRANCH}
 
 Read nazgul/plan.md → Recovery Pointer section for current state.
 ${ACTIVE_LINE}
+$([ -n "$TEARDOWN_DIRECTIVE" ] && echo "$TEARDOWN_DIRECTIVE" || true)
 $([ -n "$AGGREGATE_MARKER" ] && echo "$AGGREGATE_MARKER" || true)
 $([ -n "$DISPATCH_INSTR" ] && echo "$DISPATCH_INSTR" || true)
 $([ "$GIT_CONFLICT_DETECTED" = true ] && echo "WARNING: Git conflicts detected. Resolve unmerged files before continuing.")
