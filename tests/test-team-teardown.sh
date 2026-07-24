@@ -27,11 +27,11 @@ make_team() {
     > "$TEST_DIR/teams/$team/config.json"
 }
 
-# Helper: dispatch manifest. Usage: make_manifest <name> <report_path> [team] [spawned_epoch]
+# Helper: dispatch manifest. Usage: make_manifest <name> <report_path> [team] [spawned_epoch] [teardown_blocks]
 make_manifest() {
   mkdir -p "$TEST_DIR/nazgul/dispatch"
-  jq -n --arg t "$1" --arg rp "$2" --arg team "${3:-}" --argjson sae "${4:-0}" \
-    '{teammate:$t, report_path:$rp, feat_id:"default", spawned_at_epoch:$sae, blocks:0}
+  jq -n --arg t "$1" --arg rp "$2" --arg team "${3:-}" --argjson sae "${4:-0}" --argjson tb "${5:-0}" \
+    '{teammate:$t, report_path:$rp, feat_id:"default", spawned_at_epoch:$sae, blocks:0, teardown_blocks:$tb}
      + (if $team != "" then {team:$team} else {} end)' \
     > "$TEST_DIR/nazgul/dispatch/$1.json"
 }
@@ -48,6 +48,31 @@ echo "verdict: APPROVE" > "$TEST_DIR/nazgul/reviews/TASK-001/code.md"
 OUT=$(tt_detect_undismissed "$TEST_DIR/nazgul" "$TEST_DIR" "sess1234-abcd")
 assert_contains "leaked teammate emitted" "$OUT" "rv-code-TASK-001"
 assert_eq "one leaked line" "$(printf '%s' "$OUT" | grep -c .)" "1"
+teardown_temp_dir
+
+# --- 1b: exact output contract line (4 fields, teardown_blocks passthrough) ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams"
+make_team "nazgul-review-TASK-001" "rv-code-TASK-001"
+make_manifest "rv-code-TASK-001" "nazgul/reviews/TASK-001/code.md" "nazgul-review-TASK-001" 0 2
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+echo "x" > "$TEST_DIR/nazgul/reviews/TASK-001/code.md"
+OUT=$(tt_detect_undismissed "$TEST_DIR/nazgul" "$TEST_DIR" "sess1234-abcd")
+EXPECTED=$(printf 'rv-code-TASK-001\tnazgul/reviews/TASK-001/code.md\t%s/nazgul-review-TASK-001\t2' "$TEST_DIR/teams")
+assert_eq "contract: exact TSV line" "$OUT" "$EXPECTED"
+teardown_temp_dir
+
+# --- 2b: corrupt team config -> ambiguous, manifest KEPT (fail open) ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams"
+mkdir -p "$TEST_DIR/teams/broken-team"
+echo '{not json' > "$TEST_DIR/teams/broken-team/config.json"
+make_manifest "rv-code-TASK-001" "nazgul/reviews/TASK-001/code.md" "broken-team"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+echo "x" > "$TEST_DIR/nazgul/reviews/TASK-001/code.md"
+OUT=$(tt_detect_undismissed "$TEST_DIR/nazgul" "$TEST_DIR" "sess1234-abcd")
+assert_eq "corrupt config: nothing emitted" "$OUT" ""
+assert_file_exists "corrupt config: manifest kept (fail open)" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json"
 teardown_temp_dir
 
 # --- 2: delivered + member ABSENT -> manifest self-healed (deleted), nothing emitted ---

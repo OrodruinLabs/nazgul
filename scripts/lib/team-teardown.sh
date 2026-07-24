@@ -33,7 +33,7 @@ tt_team_dir_for_manifest() {
   if [ -z "$team" ] && [ -n "$session_id" ]; then
     team="session-${session_id:0:8}"
   fi
-  case "$team" in ''|*/*|*..*) return 1 ;; esac
+  case "$team" in ''|.|*/*|*..*) return 1 ;; esac
   printf '%s/%s' "$NAZGUL_TEAMS_DIR" "$team"
 }
 
@@ -58,7 +58,7 @@ tt_report_delivered() {
 # jurisdiction, not ours. Always returns 0.
 tt_detect_undismissed() {
   local nazgul_dir="$1" project_dir="$2" session_id="${3:-}"
-  local manifest name feat cur_feat team_dir report spawned blocks
+  local manifest name feat cur_feat team_dir report spawned blocks members_json
   [ -d "$nazgul_dir/dispatch" ] || return 0
   command -v jq >/dev/null 2>&1 || return 0
   cur_feat=$(jq -r '.feat_id // "default"' "$nazgul_dir/config.json" 2>/dev/null || echo "default")
@@ -74,8 +74,11 @@ tt_detect_undismissed() {
       rm -f "$manifest"
       continue
     fi
-    if ! jq -e --arg n "$name" '[.members[]?.name] | index($n)' \
-        "$team_dir/config.json" >/dev/null 2>&1; then
+    members_json=$(jq -c '[.members[]?.name]' "$team_dir/config.json" 2>/dev/null) || members_json=""
+    if [ -z "$members_json" ]; then
+      continue   # config exists but unparseable → ambiguous → fail open, keep manifest
+    fi
+    if ! jq -e --arg n "$name" 'index($n)' <<< "$members_json" >/dev/null 2>&1; then
       rm -f "$manifest"
       continue
     fi
