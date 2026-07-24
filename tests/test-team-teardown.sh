@@ -211,4 +211,75 @@ run_hook
 assert_not_contains "clean: no directive" "$HOOK_OUTPUT" "TEAM TEARDOWN"
 teardown_temp_dir
 
+# Helper: team owned by a given lead session, attributed to TEST_DIR
+make_owned_team() {  # <team> <leadSessionId>
+  mkdir -p "$TEST_DIR/teams/$1" "$TEST_DIR/team-tasks/$1"
+  jq -n --arg name "$1" --arg lead "$2" --arg cwd "$TEST_DIR" \
+    '{name:$name, leadSessionId:$lead, members:[{name:"team-lead", cwd:$cwd}]}' \
+    > "$TEST_DIR/teams/$1/config.json"
+  touch "$TEST_DIR/team-tasks/$1/tasks.json"
+}
+
+export NAZGUL_TEAM_TASKS_DIR=""  # set per test
+export NAZGUL_PROJECTS_DIR=""
+
+# --- 14: dead + attributed -> swept (both dirs), logged ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams" NAZGUL_TEAM_TASKS_DIR="$TEST_DIR/team-tasks" NAZGUL_PROJECTS_DIR="$TEST_DIR/projects"
+make_owned_team "old-team" "dead-lead-1111"
+OUT=$(tt_sweep_orphaned_teams "$TEST_DIR/nazgul" "$TEST_DIR" "current-sess" 24)
+assert_contains "sweep: reported" "$OUT" "old-team"
+assert_dir_not_exists "sweep: team dir gone" "$TEST_DIR/teams/old-team"
+assert_dir_not_exists "sweep: tasks dir gone" "$TEST_DIR/team-tasks/old-team"
+assert_file_exists "sweep: logged" "$TEST_DIR/nazgul/logs/team-sweep.jsonl"
+teardown_temp_dir
+
+# --- 15: live session lock -> kept ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams" NAZGUL_TEAM_TASKS_DIR="$TEST_DIR/team-tasks" NAZGUL_PROJECTS_DIR="$TEST_DIR/projects"
+make_owned_team "live-team" "live-lead-2222"
+mkdir -p "$TEST_DIR/nazgul/sessions"
+echo '{}' > "$TEST_DIR/nazgul/sessions/live-lead-2222.lock"
+OUT=$(tt_sweep_orphaned_teams "$TEST_DIR/nazgul" "$TEST_DIR" "current-sess" 24)
+assert_dir_exists "lock: team kept" "$TEST_DIR/teams/live-team"
+teardown_temp_dir
+
+# --- 16: fresh transcript -> kept ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams" NAZGUL_TEAM_TASKS_DIR="$TEST_DIR/team-tasks" NAZGUL_PROJECTS_DIR="$TEST_DIR/projects"
+make_owned_team "fresh-team" "fresh-lead-3333"
+mkdir -p "$TEST_DIR/projects/proj-a"
+echo '{}' > "$TEST_DIR/projects/proj-a/fresh-lead-3333.jsonl"   # mtime = now
+OUT=$(tt_sweep_orphaned_teams "$TEST_DIR/nazgul" "$TEST_DIR" "current-sess" 24)
+assert_dir_exists "fresh transcript: team kept" "$TEST_DIR/teams/fresh-team"
+teardown_temp_dir
+
+# --- 17: foreign cwd -> never touched ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams" NAZGUL_TEAM_TASKS_DIR="$TEST_DIR/team-tasks" NAZGUL_PROJECTS_DIR="$TEST_DIR/projects"
+mkdir -p "$TEST_DIR/teams/foreign-team"
+jq -n '{name:"foreign-team", leadSessionId:"dead-lead-4444", members:[{name:"team-lead", cwd:"/somewhere/else"}]}' \
+  > "$TEST_DIR/teams/foreign-team/config.json"
+OUT=$(tt_sweep_orphaned_teams "$TEST_DIR/nazgul" "$TEST_DIR" "current-sess" 24)
+assert_dir_exists "foreign: kept" "$TEST_DIR/teams/foreign-team"
+teardown_temp_dir
+
+# --- 18: current session's own team -> never touched ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams" NAZGUL_TEAM_TASKS_DIR="$TEST_DIR/team-tasks" NAZGUL_PROJECTS_DIR="$TEST_DIR/projects"
+make_owned_team "my-team" "current-sess"
+OUT=$(tt_sweep_orphaned_teams "$TEST_DIR/nazgul" "$TEST_DIR" "current-sess" 24)
+assert_dir_exists "own team: kept" "$TEST_DIR/teams/my-team"
+teardown_temp_dir
+
+# --- 19: no leadSessionId (ambiguous) -> kept ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams" NAZGUL_TEAM_TASKS_DIR="$TEST_DIR/team-tasks" NAZGUL_PROJECTS_DIR="$TEST_DIR/projects"
+mkdir -p "$TEST_DIR/teams/odd-team"
+jq -n --arg cwd "$TEST_DIR" '{name:"odd-team", members:[{name:"team-lead", cwd:$cwd}]}' \
+  > "$TEST_DIR/teams/odd-team/config.json"
+OUT=$(tt_sweep_orphaned_teams "$TEST_DIR/nazgul" "$TEST_DIR" "current-sess" 24)
+assert_dir_exists "ambiguous: kept" "$TEST_DIR/teams/odd-team"
+teardown_temp_dir
+
 report_results

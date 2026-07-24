@@ -28,6 +28,17 @@ if warning_msg=$(is_concurrent_session_warning "$SESSIONS_DIR"); then
   CONCURRENT_WARNING="$warning_msg"
 fi
 
+# Orphaned-team sweep (spec 2026-07-24) — dead-session Agent-Teams state
+# attributable to THIS project. Kill-switch: guards.team_sweep.
+TT_SWEEP_NOTICE=""
+TT_SWEEP_ENABLED=$(jq -r 'if .guards.team_sweep == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+if [ "$TT_SWEEP_ENABLED" = "true" ]; then
+  source "$SCRIPT_DIR/lib/team-teardown.sh"
+  TT_MIN_AGE=$(jq -r '.guards.team_sweep_min_age_hours // 24' "$CONFIG" 2>/dev/null || echo 24)
+  TT_SWEPT=$(tt_sweep_orphaned_teams "$NAZGUL_DIR" "${CLAUDE_PROJECT_DIR:-$(pwd)}" "$SESSION_ID" "$TT_MIN_AGE" 2>/dev/null || true)
+  [ -n "$TT_SWEPT" ] && TT_SWEEP_NOTICE="Swept orphaned team state (dead sessions): $(printf '%s' "$TT_SWEPT" | tr '\n' ' ')"
+fi
+
 # Auto-migrate config to latest schema version
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 MIGRATE_SCRIPT="$PLUGIN_ROOT/scripts/migrate-config.sh"
@@ -205,6 +216,7 @@ Git: ${GIT_BRANCH} — ${GIT_LAST}
 Latest checkpoint: ${LATEST_CHECKPOINT}
 $([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "WARNING: Read nazgul/reviews/${ACTIVE_TASK}/consolidated-feedback.md for reviewer feedback." || true)
 $([ -n "$CONCURRENT_WARNING" ] && echo "$CONCURRENT_WARNING" || true)
+$([ -n "$TT_SWEEP_NOTICE" ] && echo "$TT_SWEEP_NOTICE" || true)
 
 Read nazgul/plan.md for full state. Continue the Nazgul pipeline.
 CONTEXT_EOF2
