@@ -40,7 +40,7 @@ write_review_token() {
 # genuinely exits 0 (not the DELEGATE-more-work exit 2 a READY task or the
 # post-loop learning gate would otherwise produce).
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG1"' '.learning.auto_distill_post_loop = false' '.docs.verify_comments = false' '.self_audit.enabled = false'
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.receipt_hash_enforcement = false' '.feat_id = "FEAT-PG1"' '.learning.auto_distill_post_loop = false' '.docs.verify_comments = false' '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 DIFF="$TEST_DIR/nazgul/reviews/TASK-001/diff.patch"
@@ -56,7 +56,7 @@ teardown_temp_dir
 
 # --- PG-2: stamped token but manifest missing, require_provenance=true → reset then BLOCKED ---
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG2"' '.review_gate.require_provenance = true'
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.receipt_hash_enforcement = false' '.feat_id = "FEAT-PG2"' '.review_gate.require_provenance = true'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_task_file "TASK-002" "READY"
@@ -99,7 +99,7 @@ teardown_temp_dir
 
 # --- PG-3: require_provenance=false → invalid provenance ignored, DONE preserved ---
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG3"' \
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.receipt_hash_enforcement = false' '.feat_id = "FEAT-PG3"' \
   '.review_gate.require_provenance = false' '.learning.auto_distill_post_loop = false' \
   '.docs.verify_comments = false' '.self_audit.enabled = false'
 create_plan
@@ -113,7 +113,7 @@ teardown_temp_dir
 
 # --- PG-4: legacy review (no token, no manifest) → degrade-to-allow, DONE preserved ---
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG4"' '.learning.auto_distill_post_loop = false' '.docs.verify_comments = false' '.self_audit.enabled = false'
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.receipt_hash_enforcement = false' '.feat_id = "FEAT-PG4"' '.learning.auto_distill_post_loop = false' '.docs.verify_comments = false' '.self_audit.enabled = false'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
@@ -125,7 +125,7 @@ teardown_temp_dir
 
 # --- PG-5: DIFF_HASH_STALE (diff mutated after the manifest was written) → reset then BLOCKED ---
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG5"'
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.receipt_hash_enforcement = false' '.feat_id = "FEAT-PG5"'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_task_file "TASK-002" "READY"
@@ -155,7 +155,7 @@ teardown_temp_dir
 # check in stop-hook.sh's DONE-gate loop — so this fixture also needs a
 # real APPROVED reviewer file at GROUP-1 to reach the provenance branch at all.
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG6"' '.review_gate.granularity = "group"'
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.receipt_hash_enforcement = false' '.feat_id = "FEAT-PG6"' '.review_gate.granularity = "group"'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_task_file "TASK-002" "READY"
@@ -170,7 +170,7 @@ assert_eq "PG-6 group co-located manifest: stays DONE" "$(task_status TASK-001)"
 teardown_temp_dir
 
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG6B"' '.review_gate.granularity = "group"'
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.receipt_hash_enforcement = false' '.feat_id = "FEAT-PG6B"' '.review_gate.granularity = "group"'
 create_plan
 create_task_file "TASK-001" "DONE"
 create_task_file "TASK-002" "READY"
@@ -184,7 +184,7 @@ teardown_temp_dir
 # _review_reset_counts entry (from an earlier, now-resolved evidence violation)
 # must not survive into the provenance branch and over-escalate a later evidence issue.
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.feat_id = "FEAT-PG7"' \
+create_config '.agents.reviewers = ["code-reviewer"]' '.review_gate.receipt_hash_enforcement = false' '.feat_id = "FEAT-PG7"' \
   '.review_gate.require_provenance = true' '.safety._review_reset_counts = {"TASK-001": 1}'
 create_plan
 create_task_file "TASK-001" "DONE"

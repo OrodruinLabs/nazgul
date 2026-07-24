@@ -60,6 +60,102 @@ str_val=$(echo "$line" | jq -r '.decision' 2>/dev/null)
 assert_eq "plain key value is string" "$str_val" "APPROVE"
 teardown_temp_dir
 
+# --- Test 2b: MF-016 — malformed (non-numeric) :n value still records the
+# event with `null` substituted, instead of the whole event being silently
+# dropped by the caller's `|| true`. ---
+setup_temp_dir
+setup_nazgul_dir
+export NAZGUL_DIR="$TEST_DIR/nazgul"
+export EVENTS_FILE="$TEST_DIR/nazgul/logs/events.jsonl"
+printf '{"telemetry":{"bus_enabled":true}}' > "$TEST_DIR/nazgul/config.json"
+export CURRENT_ITERATION=1
+_source_emit_lib
+emit_event "reviewer_verdict" confidence:n "not-a-number" decision "APPROVE"
+assert_file_exists "MF-016: malformed numeric still writes events.jsonl" "$EVENTS_FILE"
+line=$(tail -1 "$EVENTS_FILE")
+assert_contains "MF-016: event line is valid JSON" "$(echo "$line" | jq . 2>/dev/null)" "reviewer_verdict"
+confidence_val=$(echo "$line" | jq '.confidence' 2>/dev/null)
+assert_eq "MF-016: malformed numeric substitutes JSON null" "$confidence_val" "null"
+str_val2=$(echo "$line" | jq -r '.decision' 2>/dev/null)
+assert_eq "MF-016: sibling non-numeric field unaffected" "$str_val2" "APPROVE"
+teardown_temp_dir
+
+# --- Test 2c: MF-016 regression (board CHANGES_REQUESTED) — a fractional
+# USD value, the exact shape stop-hook.sh's budget_threshold event emits
+# (spent_usd:n/max_usd:n, e.g. "5.40"), must land as a JSON NUMBER, not be
+# nulled by an integer-only regex. Also covers a negative decimal and
+# exponent notation, since the widened regex accepts full JSON-number syntax.
+#
+# Uses numeric/type checks (via `jq -e`) rather than exact string matches on
+# the printed representation — jq's serialization of a passthrough
+# --argjson number is not guaranteed identical across jq versions/builds, so
+# asserting `type == "number"` and the numeric VALUE is the portable check.
+# Also avoids the shared `$line` variable name: assertions.sh's `_fail` runs
+# a non-local `for line in "$@"` loop that clobbers a caller's global `line`
+# var the moment any assertion fails, which would corrupt a later read of
+# a reused `$line` in this same block. ---
+setup_temp_dir
+setup_nazgul_dir
+export NAZGUL_DIR="$TEST_DIR/nazgul"
+export EVENTS_FILE="$TEST_DIR/nazgul/logs/events.jsonl"
+printf '{"telemetry":{"bus_enabled":true}}' > "$TEST_DIR/nazgul/config.json"
+export CURRENT_ITERATION=1
+_source_emit_lib
+emit_event "budget_threshold" spent_usd:n "5.40" max_usd:n "10.00" pct:n "90"
+ev_line=$(tail -1 "$EVENTS_FILE")
+assert_contains "MF-016 regression: decimal event is valid JSON" "$(printf '%s' "$ev_line" | jq . 2>/dev/null)" "budget_threshold"
+
+spent_type=$(printf '%s' "$ev_line" | jq -r '.spent_usd | type' 2>/dev/null)
+assert_eq "MF-016 regression: fractional spent_usd jq type is number" "$spent_type" "number"
+if printf '%s' "$ev_line" | jq -e --argjson want "5.40" '.spent_usd == $want' >/dev/null 2>&1; then
+  _pass "MF-016 regression: fractional spent_usd equals 5.40 (not null)"
+else
+  _fail "MF-016 regression: fractional spent_usd equals 5.40 (not null)" "line: $ev_line"
+fi
+
+max_type=$(printf '%s' "$ev_line" | jq -r '.max_usd | type' 2>/dev/null)
+assert_eq "MF-016 regression: fractional max_usd jq type is number" "$max_type" "number"
+if printf '%s' "$ev_line" | jq -e --argjson want "10.00" '.max_usd == $want' >/dev/null 2>&1; then
+  _pass "MF-016 regression: fractional max_usd equals 10.00 (not null)"
+else
+  _fail "MF-016 regression: fractional max_usd equals 10.00 (not null)" "line: $ev_line"
+fi
+
+pct_type=$(printf '%s' "$ev_line" | jq -r '.pct | type' 2>/dev/null)
+assert_eq "MF-016 regression: sibling integer pct jq type is number" "$pct_type" "number"
+if printf '%s' "$ev_line" | jq -e '.pct == 90' >/dev/null 2>&1; then
+  _pass "MF-016 regression: sibling integer pct equals 90"
+else
+  _fail "MF-016 regression: sibling integer pct equals 90" "line: $ev_line"
+fi
+teardown_temp_dir
+
+setup_temp_dir
+setup_nazgul_dir
+export NAZGUL_DIR="$TEST_DIR/nazgul"
+export EVENTS_FILE="$TEST_DIR/nazgul/logs/events.jsonl"
+printf '{"telemetry":{"bus_enabled":true}}' > "$TEST_DIR/nazgul/config.json"
+export CURRENT_ITERATION=1
+_source_emit_lib
+emit_event "test_event" delta:n "-0.005" scaled:n "1.5e3"
+ev_line2=$(tail -1 "$EVENTS_FILE")
+delta_type=$(printf '%s' "$ev_line2" | jq -r '.delta | type' 2>/dev/null)
+assert_eq "MF-016 regression: negative decimal jq type is number" "$delta_type" "number"
+if printf '%s' "$ev_line2" | jq -e --argjson want "-0.005" '.delta == $want' >/dev/null 2>&1; then
+  _pass "MF-016 regression: negative decimal equals -0.005"
+else
+  _fail "MF-016 regression: negative decimal equals -0.005" "line: $ev_line2"
+fi
+
+scaled_type=$(printf '%s' "$ev_line2" | jq -r '.scaled | type' 2>/dev/null)
+assert_eq "MF-016 regression: exponent-notation jq type is number" "$scaled_type" "number"
+if printf '%s' "$ev_line2" | jq -e '.scaled == 1500' >/dev/null 2>&1; then
+  _pass "MF-016 regression: exponent notation 1.5e3 equals 1500"
+else
+  _fail "MF-016 regression: exponent notation 1.5e3 equals 1500" "line: $ev_line2"
+fi
+teardown_temp_dir
+
 # --- Test 3: ts is ISO-8601 UTC timestamp (library-stamped) ---
 setup_temp_dir
 setup_nazgul_dir

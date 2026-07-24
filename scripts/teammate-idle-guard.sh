@@ -96,8 +96,8 @@ if [ -s "$REPORT_ABS" ]; then
   MTIME=$(stat -c %Y "$REPORT_ABS" 2>/dev/null || stat -f %m "$REPORT_ABS" 2>/dev/null || echo "")
   case "$MTIME" in ''|*[!0-9]*) MTIME="" ;; esac
   if [ -z "$MTIME" ] || [ "$MTIME" -ge "$SPAWNED_EPOCH" ]; then
-    tmp=$(mktemp 2>/dev/null) || tmp=""
-    if [ -n "$tmp" ] && jq '.delivered = true' "$MANIFEST" > "$tmp" 2>/dev/null; then mv "$tmp" "$MANIFEST" 2>/dev/null || rm -f "$tmp"; else rm -f "$tmp"; fi
+    # No `.delivered` manifest write here (MF-045): it was write-only, with zero
+    # production consumers — this log line is the sole durable record of delivery.
     log_event "allow" "report delivered at $REPORT_PATH"
     exit 0
   fi

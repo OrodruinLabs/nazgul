@@ -212,4 +212,44 @@ assert_exit_code "unparseable Status Summary: exit 0 (non-blocking)" "$ec" 0
 assert_contains "unparseable Status Summary is flagged" "$output" "no parseable"
 teardown_temp_dir
 
+# --- Test 14 (MF-008): group granularity defers the single-task review-gate
+# dispatch suggestion to the aggregate review path instead of suggesting a
+# premature single-task dispatch for a parked IMPLEMENTED task. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.review_gate.granularity = "group"'
+create_task_file "TASK-001" "IMPLEMENTED"
+output=$(bash "$SESSION_SCRIPT" 2>&1)
+assert_not_contains "MF-008: no single-task review-gate DELEGATE in group mode" \
+  "$output" "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for TASK-001"
+assert_contains "MF-008: defers to aggregate review path" "$output" "review granularity is group"
+teardown_temp_dir
+
+# --- Test 15 (MF-008): task granularity (default) still dispatches per-task ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.review_gate.granularity = "task"'
+create_task_file "TASK-001" "IMPLEMENTED"
+output=$(bash "$SESSION_SCRIPT" 2>&1)
+assert_contains "MF-008: task granularity still dispatches per-task review-gate" \
+  "$output" "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for TASK-001"
+teardown_temp_dir
+
+# --- Test 16 (MF-012): compaction-count lock already claimed (post-compact.sh
+# ran first for this event) — SessionStart[compact] must NOT double-increment. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+printf '{"count": 3, "last_compaction_iteration": 5}\n' > "$TEST_DIR/nazgul/.compaction_count"
+mkdir -p "$TEST_DIR/nazgul/.compaction_count.lock"
+export CLAUDE_HOOK_EVENT="compact"
+bash "$SESSION_SCRIPT" >/dev/null 2>&1
+val=$(jq -r '.count' "$TEST_DIR/nazgul/.compaction_count")
+assert_eq "MF-012: count NOT incremented when lock already claimed" "$val" "3"
+unset CLAUDE_HOOK_EVENT
+teardown_temp_dir
+
 report_results

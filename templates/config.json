@@ -1,5 +1,5 @@
 {
-  "schema_version": 29,
+  "schema_version": 30,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -11,9 +11,6 @@
   "current_iteration": 0,
   "paused": false,
   "completion_promise": "NAZGUL_COMPLETE",
-  "task_file": "nazgul/plan.md",
-  "log_dir": "nazgul/logs",
-  "review_dir": "nazgul/reviews",
   "project": {
     "language": null,
     "framework": null,
@@ -135,7 +132,8 @@
     "adversarial_crosscheck": true,
     "adversarial_margin": 10,
     "adversarial_max": 3,
-    "stall_retry_escalate_tier": true
+    "stall_retry_escalate_tier": true,
+    "receipt_hash_enforcement": false
   },
   "simplify": {
     "post_loop": true,
@@ -149,8 +147,6 @@
     "bash_write_reconciliation": true
   },
   "safety": {
-    "block_destructive_commands": true,
-    "require_tests_pass_before_review": true,
     "max_consecutive_failures": 5,
     "consecutive_failures": 0
   },
@@ -202,6 +198,10 @@
     "parallel_independent_tasks": true,
     "max_parallel_teammates": 4,
     "wave_execution": true
+  },
+  "_deprecated": {
+    "parallelism": "MF-051 (schema v30): zero-consumer, no code reads any parallelism.* key. Kept in place, not removed — a project running in shared install_mode may rely on the cluster's mere presence (ADR-005 Risk table). Hard-removal deferred to a later wave if ever needed.",
+    "context": "MF-051 (schema v30): zero-consumer, no code reads any context.* key. Kept in place, not removed — same presence-sensitive rationale as parallelism above (ADR-005 Risk table)."
   },
   "models": {
     "planning": "opus",

@@ -48,31 +48,89 @@ for script in "${SCRIPTS[@]}"; do
   fi
 done
 
-# shellcheck (if available)
-SHELLCHECK_BIN=""
-if command -v shellcheck >/dev/null 2>&1; then
-  SHELLCHECK_BIN="shellcheck"
-elif [ -x "/tmp/shellcheck-v0.10.0/shellcheck" ]; then
-  SHELLCHECK_BIN="/tmp/shellcheck-v0.10.0/shellcheck"
-fi
+# MF-057: assertions.sh has no SKIPPED status, only pass/fail — track skips
+# from an absent shellcheck locally in this file so an uninstalled tool is
+# never indistinguishable from a real pass in the suite summary.
+TESTS_SKIPPED=0
+_skip() {
+  TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
+  printf "  SKIP: %s\n" "$1"
+}
 
-if [ -n "$SHELLCHECK_BIN" ]; then
-  for script in "${SCRIPTS[@]}"; do
-    full_path="$REPO_ROOT/$script"
-    name=$(basename "$script")
-    if "$SHELLCHECK_BIN" -S warning "$full_path" 2>/dev/null; then
-      _pass "$name passes shellcheck"
-    else
-      _fail "$name passes shellcheck" "shellcheck warnings found"
-    fi
-  done
+# _resolve_shellcheck_bin -> prints the shellcheck binary to use, or nothing
+# when absent from both PATH and the CI-installed fallback path. Factored out
+# so the MF-057 self-check below can drive it with a PATH-shadowing test
+# double instead of depending on this machine's real toolchain state.
+_resolve_shellcheck_bin() {
+  # Fallback path is env-injectable (SHELLCHECK_FALLBACK_BIN) so the MF-057
+  # self-check can force it absent deterministically instead of assuming the
+  # default path doesn't exist on this machine.
+  local fallback="${SHELLCHECK_FALLBACK_BIN:-/tmp/shellcheck-v0.10.0/shellcheck}"
+  if command -v shellcheck >/dev/null 2>&1; then
+    echo "shellcheck"
+  elif [ -x "$fallback" ]; then
+    echo "$fallback"
+  fi
+}
+
+# _report_shellcheck_stage <bin> <script...> -> shellcheck's the given
+# scripts with <bin>, or reports each as SKIPPED (not PASSED) when <bin> is
+# empty. Factored out of the main stage so the MF-057 self-check can invoke
+# the real reporting logic directly with a forced-absent <bin>, instead of
+# asserting against a hand-duplicated copy of it.
+_report_shellcheck_stage() {
+  local bin="$1"
+  shift
+  local script full_path name
+  if [ -n "$bin" ]; then
+    for script in "$@"; do
+      full_path="$REPO_ROOT/$script"
+      name=$(basename "$script")
+      if "$bin" -S warning "$full_path" 2>/dev/null; then
+        _pass "$name passes shellcheck"
+      else
+        _fail "$name passes shellcheck" "shellcheck warnings found"
+      fi
+    done
+  else
+    echo "  SKIP: shellcheck not found (install with: brew install shellcheck)"
+    for script in "$@"; do
+      name=$(basename "$script")
+      _skip "$name shellcheck (skipped — not installed)"
+    done
+  fi
+}
+
+SHELLCHECK_BIN=$(_resolve_shellcheck_bin)
+_report_shellcheck_stage "$SHELLCHECK_BIN" "${SCRIPTS[@]}"
+
+# --- MF-057 self-check: prove the "not installed" branch reports SKIPPED,
+# never a fake PASS, rather than trusting this machine's real toolchain to
+# stay absent/present the same way in every environment. ---
+
+# 1. PATH-shadowing test double: an empty stub dir on PATH, with the fallback
+#    forced to a guaranteed-nonexistent path — fully deterministic regardless
+#    of what exists at the real fallback location on this machine.
+STUB_PATH_DIR=$(mktemp -d)
+RESOLVED_UNDER_STUB=$(PATH="$STUB_PATH_DIR" SHELLCHECK_FALLBACK_BIN="$STUB_PATH_DIR/definitely-absent" _resolve_shellcheck_bin)
+if [ -z "$RESOLVED_UNDER_STUB" ]; then
+  _pass "MF-057 self-check: _resolve_shellcheck_bin reports absent under a PATH-shadowing test double"
 else
-  echo "  SKIP: shellcheck not found (install with: brew install shellcheck)"
-  # Still count as passes since we can't test without the tool
-  for script in "${SCRIPTS[@]}"; do
-    name=$(basename "$script")
-    _pass "$name shellcheck (skipped — not installed)"
-  done
+  _fail "MF-057 self-check: _resolve_shellcheck_bin reports absent under a PATH-shadowing test double" \
+    "resolved: '$RESOLVED_UNDER_STUB'"
+fi
+rmdir "$STUB_PATH_DIR" 2>/dev/null || true
+
+# 2. Real reporting function, forced-absent bin: must emit SKIP, never a
+#    fake "passes shellcheck" PASS line, for a stand-in script name.
+FAKE_ABSENT_OUTPUT=$(_report_shellcheck_stage "" "scripts/mf-057-selfcheck-fake.sh")
+assert_contains "MF-057 self-check: absent-shellcheck branch reports SKIP" \
+  "$FAKE_ABSENT_OUTPUT" "SKIP: mf-057-selfcheck-fake.sh shellcheck (skipped — not installed)"
+assert_not_contains "MF-057 self-check: absent-shellcheck branch never emits a fake PASS" \
+  "$FAKE_ABSENT_OUTPUT" "passes shellcheck"
+
+if [ "$TESTS_SKIPPED" -gt 0 ]; then
+  echo "  ($TESTS_SKIPPED shellcheck check(s) SKIPPED — shellcheck not installed on this machine/PATH)"
 fi
 
 report_results

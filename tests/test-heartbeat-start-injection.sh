@@ -203,4 +203,111 @@ unset NAZGUL_TEST_CLAUDE_ARGV
 teardown_temp_dir
 rm -rf "$FAKEBIN"
 
+# --- MF-044: a failed start-command must relocate the archived item to a
+# visibly distinct nazgul/inbox/failed/, not leave it silently and
+# permanently archived indistinguishable from a real claim. ---
+write_fake_failing_claude() {
+  FAKEBIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-fakebin-XXXXXX")
+  cat > "$FAKEBIN/claude" << 'EOF'
+#!/usr/bin/env bash
+# Simulates a transient _hb_start failure (network blip, rate-limit, auth
+# expiry): the archive-then-start claim already happened, only the start
+# command itself fails.
+exit 1
+EOF
+  chmod +x "$FAKEBIN/claude"
+}
+
+run_failed_start_scenario() {
+  setup_temp_dir
+  setup_nazgul_dir
+  create_config '.automation.heartbeat.enabled = true'
+  mkdir -p "$TEST_DIR/nazgul/inbox"
+  jq -n '{title:"FEAT-998 failing objective", body:"do the thing", priority:1}' \
+    > "$TEST_DIR/nazgul/inbox/cand.json"
+  write_fake_failing_claude
+  export PATH="$FAKEBIN:$PATH"
+  unset NAZGUL_HEARTBEAT_START_CMD 2>/dev/null || true
+
+  local resolved_claude
+  resolved_claude=$(command -v claude)
+  if [ "$resolved_claude" != "$FAKEBIN/claude" ]; then
+    _fail "[failed-start] PATH resolves to the fake failing claude (safety gate)" \
+      "expected: '$FAKEBIN/claude'" "  actual: '$resolved_claude'"
+    teardown_temp_dir
+    rm -rf "$FAKEBIN"
+    report_results
+    exit 1
+  fi
+  _pass "[failed-start] PATH resolves to the fake failing claude (safety gate)"
+
+  bash "$REPO_ROOT/scripts/heartbeat.sh"
+
+  assert_file_exists "[failed-start] item relocated to nazgul/inbox/failed/" \
+    "$TEST_DIR/nazgul/inbox/failed/cand.json"
+  assert_file_not_exists "[failed-start] item no longer sitting in nazgul/inbox/archive/" \
+    "$TEST_DIR/nazgul/inbox/archive/cand.json"
+
+  local log_file
+  log_file=$(find "$TEST_DIR/nazgul/logs" -name 'heartbeat-*.jsonl' 2>/dev/null | head -1)
+  if [ -n "$log_file" ]; then
+    assert_json_field "[failed-start] decision record reason: start_command_failed" \
+      "$log_file" '.reason' "start_command_failed"
+    assert_json_field "[failed-start] decision record archived_to points at nazgul/inbox/failed/" \
+      "$log_file" '.archived_to' "nazgul/inbox/failed/cand.json"
+  else
+    _fail "[failed-start] heartbeat decision log written" "no nazgul/logs/heartbeat-*.jsonl found"
+  fi
+
+  teardown_temp_dir
+  rm -rf "$FAKEBIN"
+}
+
+run_failed_start_scenario
+
+# --- PR #69 regression: a same-named candidate failing AGAIN must not clobber
+# the prior failed payload — the relocation uniquifies on collision. ---
+run_failed_start_collision_scenario() {
+  setup_temp_dir
+  setup_nazgul_dir
+  create_config '.automation.heartbeat.enabled = true'
+  mkdir -p "$TEST_DIR/nazgul/inbox/failed"
+  printf '{"title":"prior failed payload"}\n' > "$TEST_DIR/nazgul/inbox/failed/cand.json"
+  jq -n '{title:"FEAT-997 failing objective take 2", body:"retry the thing", priority:1}' \
+    > "$TEST_DIR/nazgul/inbox/cand.json"
+  write_fake_failing_claude
+  export PATH="$FAKEBIN:$PATH"
+  unset NAZGUL_HEARTBEAT_START_CMD 2>/dev/null || true
+
+  local resolved_claude
+  resolved_claude=$(command -v claude)
+  if [ "$resolved_claude" != "$FAKEBIN/claude" ]; then
+    _fail "[failed-collision] PATH resolves to the fake failing claude (safety gate)" \
+      "expected: '$FAKEBIN/claude'" "  actual: '$resolved_claude'"
+    teardown_temp_dir
+    rm -rf "$FAKEBIN"
+    report_results
+    exit 1
+  fi
+  _pass "[failed-collision] PATH resolves to the fake failing claude (safety gate)"
+
+  bash "$REPO_ROOT/scripts/heartbeat.sh"
+
+  assert_contains "[failed-collision] prior failed payload untouched" \
+    "$(cat "$TEST_DIR/nazgul/inbox/failed/cand.json")" "prior failed payload"
+  local extra_count uniquified_file
+  extra_count=$(find "$TEST_DIR/nazgul/inbox/failed" -name 'cand.json.*' | wc -l | tr -d ' ')
+  assert_eq "[failed-collision] new failure landed at a uniquified name" "$extra_count" "1"
+  uniquified_file=$(find "$TEST_DIR/nazgul/inbox/failed" -name 'cand.json.*' | head -1)
+  assert_contains "[failed-collision] uniquified file carries the retried payload" \
+    "$(cat "$uniquified_file" 2>/dev/null)" "FEAT-997 failing objective take 2"
+  assert_file_not_exists "[failed-collision] item no longer in archive/" \
+    "$TEST_DIR/nazgul/inbox/archive/cand.json"
+
+  teardown_temp_dir
+  rm -rf "$FAKEBIN"
+}
+
+run_failed_start_collision_scenario
+
 report_results

@@ -2,6 +2,97 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.21.0] - 2026-07-23
+
+FEAT-017, the fourth and final repair wave from the FEAT-013 360 reliability audit — reliability wave 4:
+docs, config & residual findings. Closes the 62-item audit register (30 shipped in Waves 1-3, 26 fixed
+here, 1 confirmed already-fixed, 5 retired as wontfix with recorded rationale). Thirty-three commits
+(`ca80fdb`..`fe73660`).
+
+### Added
+- **Config schema v29 → v30** (`migrate_29_to_30`): additive kill-switched key
+  `review_gate.receipt_hash_enforcement` (default `false`, opt-in), preserving any explicit pre-existing
+  value.
+- **Receipt-hash content gate** (LR-001 mechanical enforcement, opt-in, default off):
+  `scripts/subagent-stop.sh`'s `_record_reviewer_receipt()` captures a sha256 receipt of each dispatched
+  reviewer's actual raw returned text into `nazgul/logs/review-receipts.jsonl`, independent of
+  review-gate's own tool-use surface (reads `.agent_transcript_path`, isolating a reviewer's own
+  transcript from its concurrent siblings). `scripts/lib/review-evidence.sh`'s `validate_review_evidence()`
+  recomputes the hash over up to four sanctioned-edit reconstructions of the persisted verdict file and
+  reports a new `RECEIPT_MISMATCH <reviewer>` problem code when none match — mechanically detecting the
+  FEAT-016/TASK-005 fabricated-board incident shape at the DONE-gate. Honestly scoped as tamper-evidence,
+  not authentication.
+- **Parallel-batch review-then-merge reorder** (closes the FEAT-016 HIGH finding): `stop-hook.sh`'s
+  parallel-batch `DISPATCH_INSTR` now records each task's commit SHA and sets `Status: IMPLEMENTED`
+  immediately after the implementer's own commit, dispatches review-gate against that task's own
+  unmerged branch diff, and merges only a task that reaches `Status: DONE` — restoring the
+  `pre-merge-commit` (H2) guard's precondition, which the prior merge-before-review order left
+  structurally unable to ever match a candidate.
+- **`models.review_orchestrator` tier restatement** (LR-002): `agents/review-gate.md` gets a static
+  `model: sonnet` frontmatter pin (matching `comment-verifier.md`/`doc-verifier.md`/`learner.md`/
+  `self-audit.md`); `stop-hook.sh`'s DELEGATE text and `agents/team-orchestrator.md`'s review-team spawn
+  instructions both restate the tier requirement as defense-in-depth for the Agent-Teams dispatch path.
+
+### Fixed
+26 findings from the FEAT-013 register, each with a landed fix and a regression test:
+- **Recovery/compaction reliability** (MF-006/007/008/012/050): the default sequential dispatch path now
+  mechanically pauses on a `nazgul/.hitl-pending` marker in HITL mode; `pre-compact.sh` skips its
+  checkpoint write when stop-hook's richer one already exists for the current iteration;
+  `post-compact.sh`/`session-context.sh` defer to the aggregate review path in group/feature granularity;
+  `.compaction_count` increments exactly once per compaction cycle via an `mkdir`-based lock (confirmed
+  PostCompact and SessionStart[compact] both fire for the same event); `post-compact.sh` now calls
+  `migrate-config.sh`, mirroring `session-context.sh`'s existing SessionStart call.
+- **Config schema/migration hygiene** (MF-046/048/051): `migrate-config.sh` prunes `.bak` backups to the
+  5 most recent; dead keys `safety.block_destructive_commands`, `safety.require_tests_pass_before_review`,
+  and top-level `task_file`/`log_dir`/`review_dir` are removed (with explicit-value preservation on
+  migration); `parallelism.*`/`context.*` are marked deprecated-in-place rather than removed; new test
+  labels describe behavior, not a version number.
+- **Guard/script cosmetic fixes** (MF-016/021/030/031/032/036): `emit-event.sh` substitutes JSON `null`
+  instead of silently dropping the whole event on a malformed `:n`-suffixed numeric value;
+  `reviewer-selection.sh`'s architecture-surface classifier now recognizes `templates/*`, `references/*`,
+  `.github/workflows/*`, `RULES.md`, `CLAUDE.md`; `formatter.sh` queries `.tool_input.file_path` before
+  falling back to a blind recursive scan; `notify.sh` resolves its `nazgul/...` paths against
+  `CLAUDE_PROJECT_DIR`; `webhook-forward.sh` passes headers through a native bash array instead of an
+  `xargs` pipeline that word-split values containing spaces; `git-hooks.sh` recognizes the four `p4-*`
+  githooks(5) names and flags `core.hooksPath` drift against both the managed dir and the recorded prior
+  value.
+- **Teammate contract hardening** (MF-041/042/045/047/054/056): `teammate-idle-guard.sh`'s
+  traversal-`NAME`/traversal-`report_path` fail-open branches and dual-form-`stat`-failure fallback are
+  now regression-tested; the write-only `.delivered` manifest field is removed; `self-audit.sh` gained a
+  spawn-vs-manifest discrepancy cross-check (`_mine_teammate_spawn_discrepancy`); an empirical dispatch
+  confirmed the guard's logging mechanism works correctly (the previously-empty `teammate-idle.jsonl` log
+  was explained by the known worktree-resolution gap, not a broken guard).
+- **Operational surfacing** (MF-044/057): a failed heartbeat start relocates its inbox item to
+  `nazgul/inbox/failed/` instead of leaving it silently archived; `test-shellcheck.sh` reports a distinct
+  `SKIP` instead of a synthetic `PASS` when shellcheck is absent from `PATH`.
+- **Agent-prompt cleanup** (MF-020/043): `review-gate.md`'s pipeline steps are renumbered sequentially (no
+  more Step 3.6 physically preceding 3.5, no duplicate 1.5); `team-orchestrator.md`'s duplicate "3."
+  review-team step is renumbered.
+- **Docs drift** (MF-029/049): `docs/CONFIGURATION.md`'s Execution Engine section now describes the live
+  `execution.parallel` engine instead of the deleted Conductor architecture, adds `--parallel`/
+  `--conductor` to the flags list, drops the dead "Fast Mode" section, and corrects "Self-Improvement
+  Mode" to the implementer's live opt-in `self_improvement.{enabled,threshold}` gate (distinct from the
+  mandatory `self_audit.*` post-loop gate); `CLAUDE.md`'s `scripts/` directory map adds the five
+  previously-omitted wired hook scripts (`local-mode-tracking-guard.sh`, `lean-comments-guard.sh`,
+  `stop-failure.sh`, `subagent-stop.sh`, `teammate-idle-guard.sh`).
+
+### Retired
+- **MF-018** (already fixed, no code) — `review-gate.md`/`feedback-aggregator.md` already cite
+  `references/fix-first-heuristic.md` by pointer, closing the duplication this finding named.
+- **5 findings retired as wontfix**, with rationale recorded and human sign-off obtained (ADR-005
+  Decision 1): MF-017 (misleading `resolved` field name — the one real risk is independently closed by a
+  FEAT-016/TASK-001 regression test), MF-019 (`review_gate.require_all_approve` is extensively
+  self-documented as intentionally informational in five places), MF-033 (two security-critical
+  tokenizers solve different parsing problems — consolidation risk exceeds the cosmetic payoff), MF-037
+  (`worktree-utils.sh` directory-placement nit on working code; the actual MF-034 dead-code defect is
+  separately confirmed fixed), MF-061 (originally filed as no-fix-needed).
+- Two FEAT-016 backlog items closed: the HIGH `stop-hook.sh` parallel-batch merge-before-review ordering
+  finding (closed by the parallel-batch reorder above) and the TASK-005 fabricated-board incident item
+  (closed by the receipt-hash content gate above).
+
+This closes the FEAT-013 360 Reliability Audit's 62-item register: 30 shipped in Waves 1-3
+(FEAT-014/015/016), 26 fixed + 1 already-fixed + 5 wontfix here — 62/62 dispositioned.
+
 ## [2.20.0] - 2026-07-23
 
 FEAT-016, the third repair wave from the FEAT-013 360 reliability audit — review-pipeline

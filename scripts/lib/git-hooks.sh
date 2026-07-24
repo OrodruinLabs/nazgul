@@ -26,6 +26,7 @@ _GH_OTHER_HOOKS=(
   post-receive post-update push-to-checkout pre-auto-gc post-rewrite
   sendemail-validate fsmonitor-watchman proc-receive post-index-change
   reference-transaction
+  p4-changelist p4-prepare-changelist p4-post-changelist p4-pre-submit
 )
 
 _gh_enabled() {
@@ -188,6 +189,15 @@ uninstall_git_hooks() {
 # otherwise re-asserts the managed `core.hooksPath` only on detected drift.
 # No-ops on an explicit `guards.git_hooks: false`, no active objective, or
 # when already correct — never a blind overwrite.
+#
+# MF-036: drift detection is two-sided. The live `core.hooksPath` is compared
+# against BOTH the managed dir (the expected value) AND the recorded
+# `branch.prior_hooks_path` (the pre-install value an uninstall would restore)
+# before reasserting. A value matching neither is a THIRD value — e.g. a user
+# switching hooks managers (lefthook, husky, ...) mid-cycle — and is flagged
+# with a loud stderr warning so that a deliberate change isn't silently
+# discarded without a trace, even though it is still reasserted back to the
+# managed dir (the guard must keep firing regardless).
 self_heal_git_hooks() {
   local project_root="${1:?self_heal_git_hooks: project_root required}"
   local config="${2:?self_heal_git_hooks: config required}"
@@ -209,6 +219,12 @@ self_heal_git_hooks() {
   local current
   current=$(_gh_current_hooks_path "$project_root")
   [ "$current" != "$_GH_MANAGED_RELDIR" ] || return 0
+
+  local prior
+  prior=$(jq -r '.branch.prior_hooks_path' "$config" 2>/dev/null || echo "")
+  if [ "$current" != "$prior" ]; then
+    echo "[git-hooks] WARNING: core.hooksPath ('$current') matches neither the Nazgul-managed dir ('$_GH_MANAGED_RELDIR') nor the recorded prior value ('$prior') — reasserting the managed dir. If this was an intentional hooks-manager change, review branch.prior_hooks_path in $config." >&2
+  fi
 
   git -C "$project_root" config core.hooksPath "$_GH_MANAGED_RELDIR"
 }

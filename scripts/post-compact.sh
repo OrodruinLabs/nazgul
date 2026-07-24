@@ -18,10 +18,30 @@ if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
+# --- MF-050: mid-session schema migration. session-context.sh already does
+# this on every SessionStart; PostCompact had no equivalent call, so a schema
+# bump between session start and the next full session restart stayed stale
+# for the rest of the session (bounded here to at most one PostCompact cycle).
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+MIGRATE_SCRIPT="$PLUGIN_ROOT/scripts/migrate-config.sh"
+MIGRATION_NOTICE=""
+if [ -f "$MIGRATE_SCRIPT" ]; then
+  MIGRATE_OUTPUT=$("$MIGRATE_SCRIPT" "$NAZGUL_DIR" 2>/dev/null) || true
+  if [ -n "$MIGRATE_OUTPUT" ]; then
+    MIGRATION_NOTICE="$MIGRATE_OUTPUT"
+  fi
+fi
+
 MODE=$(jq -r '.mode // "hitl"' "$CONFIG")
 OBJECTIVE=$(jq -r '.objective // "none"' "$CONFIG")
 ITERATION=$(jq -r '.current_iteration // 0' "$CONFIG")
 MAX_ITER=$(jq -r '.max_iterations // 40' "$CONFIG")
+
+# MF-008: review granularity awareness, mirroring stop-hook.sh's read (its
+# GRANULARITY var, ~line 51) — needed below to defer the single-task review
+# dispatch suggestion to the aggregate review path in group/feature mode.
+GRANULARITY=$(jq -r '.review_gate.granularity // "task"' "$CONFIG" 2>/dev/null || echo "task")
+case "$GRANULARITY" in task|group|feature) ;; *) GRANULARITY="task" ;; esac
 
 # Count tasks + find active task, shared helper (MF-009) — sets DONE_COUNT,
 # READY_COUNT, IN_PROGRESS_COUNT, IN_REVIEW_COUNT, APPROVED_COUNT,
@@ -30,15 +50,29 @@ MAX_ITER=$(jq -r '.max_iterations // 40' "$CONFIG")
 # here, same as before the repoint)
 count_tasks_and_find_active "$NAZGUL_DIR/tasks"
 
-# Update compaction counter
+# --- MF-012: idempotent compaction counter increment. PostCompact and
+# SessionStart[matcher=compact] both fire once each, in that order, for the
+# SAME physical compaction event (confirmed against the Claude Code hooks
+# reference — see pre-compact.sh's reset comment). A plain read-increment-write
+# in both hooks double-counts every compaction. A `mkdir` claim on a lock dir
+# reset by pre-compact.sh at the START of each compaction cycle makes only the
+# FIRST of the two hooks to run actually increment; the second (whichever it
+# is) sees the claim already taken and treats the counter as read-only this
+# cycle — no lost increment, no double count.
 COMPACTION_FILE="$NAZGUL_DIR/.compaction_count"
+COMPACTION_LOCK="$NAZGUL_DIR/.compaction_count.lock"
 if [ -f "$COMPACTION_FILE" ]; then
   PREV_COUNT=$(jq -r '.count // 0' "$COMPACTION_FILE" 2>/dev/null || echo "0")
 else
   PREV_COUNT=0
 fi
-NEW_COUNT=$((PREV_COUNT + 1))
-printf '{"count": %d, "last_compaction_iteration": %s}\n' "$NEW_COUNT" "$ITERATION" > "$COMPACTION_FILE"
+if mkdir "$COMPACTION_LOCK" 2>/dev/null; then
+  NEW_COUNT=$((PREV_COUNT + 1))
+  printf '{"count": %d, "last_compaction_iteration": %s}\n' "$NEW_COUNT" "$ITERATION" > "$COMPACTION_FILE"
+else
+  # SessionStart[matcher=compact] already claimed this compaction's increment.
+  NEW_COUNT="$PREV_COUNT"
+fi
 
 # Emit compaction to the telemetry bus (after counter write; pure observer).
 # shellcheck disable=SC2034
@@ -69,10 +103,11 @@ if [ -f "$PLAN" ]; then
 fi
 
 cat << CONTEXT_EOF2
-
+$([ -n "$MIGRATION_NOTICE" ] && echo "NOTICE: $MIGRATION_NOTICE" || true)
 Active task: ${ACTIVE_TASK:-none} (${ACTIVE_STATUS:-none})
-$([ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. Do NOT skip the review gate." || true)
-$([ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}." || true)
+$([ "$GRANULARITY" = "task" ] && [ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. Do NOT skip the review gate." || true)
+$([ "$GRANULARITY" = "task" ] && [ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}." || true)
+$([ "$GRANULARITY" != "task" ] && { [ "$ACTIVE_STATUS" = "IMPLEMENTED" ] || [ "$ACTIVE_STATUS" = "IN_REVIEW" ]; } && echo "NOTE: review granularity is ${GRANULARITY} — do NOT spawn a single-task review-gate for ${ACTIVE_TASK}; it is parked pending the aggregate review unit (MF-008). Read nazgul/plan.md for aggregate-review readiness before dispatching." || true)
 $([ "$ACTIVE_STATUS" = "READY" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}." || true)
 $([ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}." || true)
 $([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first." || true)

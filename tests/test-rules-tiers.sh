@@ -63,19 +63,17 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test (c): [advisory] count is exactly 17 — the Parallel Execution Collapse
-# deleted the Conductor engine's 4 advisory bullets in the old §11 (opt-in
-# engine selection, two hard stops, wave parallelism, graph-only invariant);
-# their replacements in the new §11/§12 are [enforced]/[hook-driven only]
-# because the checks now run as unconditional stop-hook/script conditionals
-# instead of agent-protocol-invoked steps. 19 - 4 = 15, then +2 from §17
-# Teammate Report Contract (Prompt contract + Dispatch manifest layers) = 17.
+# Test (c): [advisory] count is exactly 19 — was 17 as of FEAT-016 (see prior
+# history: Parallel Execution Collapse deleted 4 Conductor-era bullets, +2 from
+# §17 Teammate Report Contract). FEAT-017/TASK-011 added 2 more: §11's
+# review-then-merge dispatch-order note and §17's MF-047 spawn-vs-manifest
+# companion note. 17 + 2 = 19.
 ADVISORY_COUNT=$(grep -c '\[advisory\]' "$RULES_FILE" || true)
-if [ "$ADVISORY_COUNT" -eq 17 ]; then
-  _pass "[advisory] annotation count is exactly 17 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 19 ]; then
+  _pass "[advisory] annotation count is exactly 19 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 17" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 17"
+  _fail "[advisory] annotation count is exactly 19" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 19"
 fi
 
 # ---------------------------------------------------------------------------

@@ -44,6 +44,32 @@ assert_contains "parallel: worktree isolation" "$HOOK_OUTPUT" "worktree"
 assert_contains "batch dispatch carries report contract" "$HOOK_OUTPUT" "Report Contract"
 teardown_temp_dir
 
+# --- 1b: WS3 reorder — DISPATCH_INSTR text places record-SHA+IMPLEMENTED and
+#         the review-gate dispatch BEFORE any git merge --no-ff text, and the
+#         merge step is explicitly gated on Status: DONE (FEAT-016 HIGH: the
+#         old merge-first order left no manifest entry for the H2 guard to
+#         match at merge time). Also asserts the WS2 (LR-002) DELEGATE-text
+#         restatement of the models.review_orchestrator tier.
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.execution.parallel = true' '.execution.max_parallel = 3' '.mode = "afk"' \
+  '.review_gate.granularity = "task"'
+make_parallel_pair
+run_hook
+OFFSET_IMPLEMENTED=$(grep -abo "set Status: IMPLEMENTED" <<<"$HOOK_OUTPUT" | head -1 | cut -d: -f1)
+OFFSET_REVIEWGATE=$(grep -abo "Dispatch ONE review-gate agent (nazgul:review-gate) PER task" <<<"$HOOK_OUTPUT" | head -1 | cut -d: -f1)
+OFFSET_MERGE=$(grep -abo "git merge --no-ff" <<<"$HOOK_OUTPUT" | head -1 | cut -d: -f1)
+if [ -n "$OFFSET_IMPLEMENTED" ] && [ -n "$OFFSET_REVIEWGATE" ] && [ -n "$OFFSET_MERGE" ] \
+   && [ "$OFFSET_IMPLEMENTED" -lt "$OFFSET_REVIEWGATE" ] && [ "$OFFSET_REVIEWGATE" -lt "$OFFSET_MERGE" ]; then
+  _pass "WS3 reorder: record-SHA+IMPLEMENTED -> review-gate dispatch -> git merge --no-ff"
+else
+  _fail "WS3 reorder: record-SHA+IMPLEMENTED -> review-gate dispatch -> git merge --no-ff" \
+    "offsets: IMPLEMENTED=$OFFSET_IMPLEMENTED review-gate=$OFFSET_REVIEWGATE merge=$OFFSET_MERGE"
+fi
+assert_contains "WS3 reorder: merge explicitly gated on Status: DONE" "$HOOK_OUTPUT" "ONLY a task whose manifest reaches Status: DONE"
+assert_contains "WS3 reorder: CHANGES_REQUESTED/BLOCKED task gets no merge instruction" "$HOOK_OUTPUT" "A task at CHANGES_REQUESTED or BLOCKED is NOT merged"
+assert_contains "WS2 (LR-002): batch review-gate dispatch restates review_orchestrator tier" "$HOOK_OUTPUT" "models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context"
+teardown_temp_dir
+
 # --- 2: parallel off -> sequential instruction byte-identical (regression) ---
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
 create_config '.mode = "afk"'
@@ -154,6 +180,126 @@ else
   _pass "batch+outsider: active task line does not name the non-batch task"
 fi
 assert_contains "batch+outsider: message reflects the batch" "$HOOK_OUTPUT" "Batch tasks: TASK-001, TASK-002"
+teardown_temp_dir
+
+# --- 8: WS3 end-to-end — real git sandbox with the H2 pre-merge-commit guard
+#        installed, driving the CORRECTED sequence by hand (record SHA +
+#        IMPLEMENTED -> review verdict -> merge only if DONE), proving the
+#        reorder actually restores the guard's precondition. Reuses the
+#        sandbox-repo pattern from tests/test-git-hooks-premerge.sh (a
+#        per-repo core.hooksPath install, not the shared repo's own hooks).
+install_premerge_hook() {
+  local repo="$1"
+  mkdir -p "$repo/.githooks"
+  cp "$REPO_ROOT/scripts/git-hooks/pre-merge-commit" "$repo/.githooks/pre-merge-commit"
+  cp "$REPO_ROOT/scripts/git-hooks/_dispatch.sh" "$repo/.githooks/_dispatch.sh"
+  chmod +x "$repo/.githooks/pre-merge-commit" "$repo/.githooks/_dispatch.sh"
+  git -C "$repo" config core.hooksPath "$repo/.githooks"
+}
+
+setup_temp_dir
+WS3_REPO="$TEST_DIR/repo"
+mkdir -p "$WS3_REPO"
+git -C "$WS3_REPO" init -q -b main
+git -C "$WS3_REPO" config user.email "t@t.t"
+git -C "$WS3_REPO" config user.name "t"
+git -C "$WS3_REPO" commit -q --allow-empty -m "init"
+install_premerge_hook "$WS3_REPO"
+mkdir -p "$WS3_REPO/nazgul/tasks"
+printf '{"execution":{"parallel":true},"guards":{"git_hooks":true}}' > "$WS3_REPO/nazgul/config.json"
+
+# Step 1 (unchanged): one implementer per task, its own disjoint-scope branch.
+git -C "$WS3_REPO" checkout -q -b feat/FEAT-999/TASK-001
+echo a > "$WS3_REPO/a.txt"; git -C "$WS3_REPO" add a.txt; git -C "$WS3_REPO" commit -q -m "TASK-001 work"
+WS3_TASK1_SHA=$(git -C "$WS3_REPO" rev-parse HEAD)
+git -C "$WS3_REPO" checkout -q main
+
+git -C "$WS3_REPO" checkout -q -b feat/FEAT-999/TASK-002
+echo b > "$WS3_REPO/b.txt"; git -C "$WS3_REPO" add b.txt; git -C "$WS3_REPO" commit -q -m "TASK-002 work"
+WS3_TASK2_SHA=$(git -C "$WS3_REPO" rev-parse HEAD)
+git -C "$WS3_REPO" checkout -q main
+
+# Step 2 (the reorder): record each branch-tip SHA + IMPLEMENTED BEFORE any
+# merge — the precondition the H2 guard needs is now present at this point,
+# not only after a merge that hasn't happened yet.
+cat > "$WS3_REPO/nazgul/tasks/TASK-001.md" << EOF
+---
+status: IMPLEMENTED
+---
+# TASK-001
+
+## Commits
+- $WS3_TASK1_SHA
+EOF
+cat > "$WS3_REPO/nazgul/tasks/TASK-002.md" << EOF
+---
+status: IMPLEMENTED
+---
+# TASK-002
+
+## Commits
+- $WS3_TASK2_SHA
+EOF
+
+# Step 3 (the reorder): review-gate reviews each task's own unmerged branch
+# diff and returns a verdict — simulated here as the resulting manifest
+# status transition (no git action of its own). TASK-001 -> APPROVED -> DONE.
+# TASK-002 -> CHANGES_REQUESTED.
+sed -i.bak 's/^status: IMPLEMENTED/status: DONE/' "$WS3_REPO/nazgul/tasks/TASK-001.md" && rm -f "$WS3_REPO/nazgul/tasks/TASK-001.md.bak"
+sed -i.bak 's/^status: IMPLEMENTED/status: CHANGES_REQUESTED/' "$WS3_REPO/nazgul/tasks/TASK-002.md" && rm -f "$WS3_REPO/nazgul/tasks/TASK-002.md.bak"
+
+# Step 4 (the reorder): merge ONLY the DONE task. The manifest already lists
+# WS3_TASK1_SHA under Status: DONE, so the H2 guard's lookup finds a match
+# and correctly ALLOWS.
+WS3_MERGE1_STDERR=$(git -C "$WS3_REPO" merge --no-ff -m "merge TASK-001" feat/FEAT-999/TASK-001 2>&1) && WS3_MERGE1_EC=0 || WS3_MERGE1_EC=$?
+assert_exit_code "WS3 e2e: DONE task's branch merges (H2 guard allows)" "$WS3_MERGE1_EC" 0
+
+# The CHANGES_REQUESTED task's branch is never merged by the corrected
+# DISPATCH_INSTR (step 4 only names a DONE task) — and even on a direct
+# attempt, the guard structurally blocks it, so it can never reach main.
+WS3_MERGE2_STDERR=$(git -C "$WS3_REPO" merge --no-ff -m "merge TASK-002" feat/FEAT-999/TASK-002 2>&1) && WS3_MERGE2_EC=0 || WS3_MERGE2_EC=$?
+git -C "$WS3_REPO" merge --abort 2>/dev/null || true
+assert_exit_code "WS3 e2e: CHANGES_REQUESTED task's branch is never merged (H2 guard blocks)" "$WS3_MERGE2_EC" 1
+assert_contains "WS3 e2e: guard message names the blocked task" "$WS3_MERGE2_STDERR" "TASK-002"
+teardown_temp_dir
+
+# --- MF-006 round-1 rework: HITL pending-approval marker must gate a FIRED
+# parallel batch too, not just the default sequential DISPATCH_INSTR. The
+# gate check was originally placed before the parallel-batch override block
+# (stop-hook.sh), so a fired batch silently clobbered the GATE hitl_pending
+# message with its own DISPATCH_INSTR — approve_batch is a distinct,
+# default-false signal that does not cover the hitl-pending marker. Moved to
+# run once, after both the sequential and parallel-batch DISPATCH_INSTR
+# assignments, immediately before the CONTINUE_MSG heredoc. ---
+
+# --- 6: hitl mode + marker + eligible parallel batch -> GATE hitl_pending,
+#        NO batch DELEGATE (the exact hole round-1 review found) ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.execution.parallel = true' '.execution.max_parallel = 3' '.mode = "hitl"' \
+  '.review_gate.granularity = "task"'
+make_parallel_pair
+touch "$TEST_DIR/nazgul/.hitl-pending"
+run_hook
+assert_exit_code "MF-006+parallel: exit 2 (continue loop)" "$HOOK_EC" 2
+assert_contains "MF-006+parallel: GATE hitl_pending shown" "$HOOK_OUTPUT" "GATE hitl_pending"
+if printf '%s' "$HOOK_OUTPUT" | grep -q "DELEGATE (PARALLEL BATCH"; then
+  _fail "MF-006+parallel: no batch DELEGATE while hitl-pending marker set"
+else
+  _pass "MF-006+parallel: no batch DELEGATE while hitl-pending marker set"
+fi
+teardown_temp_dir
+
+# --- 7: hitl mode WITHOUT marker + eligible parallel batch -> batch DELEGATE
+#        fires normally (regression: the existing non-marker parallel path,
+#        now under hitl mode specifically, must still dispatch) ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.execution.parallel = true' '.execution.max_parallel = 3' '.mode = "hitl"' \
+  '.review_gate.granularity = "task"'
+make_parallel_pair
+run_hook
+assert_exit_code "MF-006+parallel (no marker): exit 2 (continue loop)" "$HOOK_EC" 2
+assert_contains "MF-006+parallel (no marker): batch instruction fires" "$HOOK_OUTPUT" "DELEGATE (PARALLEL BATCH"
+assert_not_contains "MF-006+parallel (no marker): no GATE hitl_pending" "$HOOK_OUTPUT" "GATE hitl_pending"
 teardown_temp_dir
 
 report_results
