@@ -11,6 +11,8 @@ metadata:
 ## Examples
 - `/nazgul:clean` — Fully remove Nazgul from this project (with confirmation)
 - `/nazgul:clean --force` — Remove without confirmation prompt
+- `/nazgul:clean --teams` — Sweep dead-session Agent-Teams state for THIS project only (does not uninstall Nazgul)
+- `/nazgul:clean --teams --all` — Also list dead teams from OTHER projects and ask per team before deleting
 
 ## Arguments
 $ARGUMENTS
@@ -38,6 +40,24 @@ If none of the current state indicators show Nazgul presence (no config, no agen
 ### Step 2: Parse Arguments
 
 Check `$ARGUMENTS` for `--force` flag. If present, skip confirmation.
+
+### Step 2b: Teams-Only Mode (`--teams`)
+
+If `$ARGUMENTS` contains `--teams`, do ONLY this step, then stop (no uninstall):
+
+1. Sweep this project's dead teams:
+   ```bash
+   bash -c 'source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/team-teardown.sh"; \
+     tt_sweep_orphaned_teams "$(pwd)/nazgul" "$(pwd)" "${CLAUDE_SESSION_ID:-}" \
+       "$(jq -r ".guards.team_sweep_min_age_hours // 24" nazgul/config.json 2>/dev/null || echo 24)"'
+   ```
+   Report each swept team name; report "no dead teams for this project" when the output is empty.
+2. If `--all` is ALSO present: list every remaining team in `~/.claude/teams/` whose `config.json` `leadSessionId` has no transcript in `~/.claude/projects/*/<id>.jsonl` modified in the last 24 hours. For each such FOREIGN team (any member `cwd` outside this project), show its name, member cwds, and creation date, then use `AskUserQuestion` per team: Delete / Keep. On Delete:
+   ```bash
+   rm -rf ~/.claude/teams/<team> ~/.claude/tasks/<team>
+   ```
+   NEVER delete a foreign team without an explicit per-team answer. Never touch a team whose lead transcript is fresh.
+3. Stop here — `--teams` never proceeds to the uninstall flow.
 
 ### Step 3: Confirm with User
 
