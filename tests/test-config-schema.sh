@@ -14,7 +14,10 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "30"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "31"
+assert_json_field "v31 guards.team_teardown is true" "$CONFIG" ".guards.team_teardown" "true"
+assert_json_field "v31 guards.team_sweep is true" "$CONFIG" ".guards.team_sweep" "true"
+assert_json_field "v31 guards.team_sweep_min_age_hours is 24" "$CONFIG" ".guards.team_sweep_min_age_hours" "24"
 assert_json_field "review_gate.simplify_before_review default false" "$CONFIG" ".review_gate.simplify_before_review" "false"
 assert_json_field "review_gate.enforce_granularity default block" "$CONFIG" ".review_gate.enforce_granularity" "block"
 assert_json_field "has .default_mode" "$CONFIG" ".default_mode" "null"

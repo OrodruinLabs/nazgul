@@ -198,6 +198,56 @@ if [ "$RECON_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
   fi
 fi
 
+# --- TEAM TEARDOWN GATE (spec 2026-07-24-team-teardown-design.md) ---
+# Teammates whose report is delivered but who are still team members must be
+# dismissed (SendMessage shutdown_request) before new work dispatches. Hooks
+# cannot shut teammates down — this gate detects, directs the lead via the
+# loop prompt, verifies next iteration (detection self-clears on dismissal),
+# and escalates via raise_finding after 3 ignored directives. Fail-open.
+# Kill-switch: guards.team_teardown (explicit false disables).
+# Intentionally does NOT run on the earlier exit-0 paths (pause / AFK
+# timeout) — a normal session exit auto-removes team config, so there is
+# nothing left to detect by the time this gate would run.
+TEARDOWN_DIRECTIVE=""
+TT_ENABLED=$(jq -r 'if .guards.team_teardown == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+if [ "$TT_ENABLED" = "true" ]; then
+  source "$SCRIPT_DIR/lib/team-teardown.sh"
+  TT_LEAKED=$(tt_detect_undismissed "$NAZGUL_DIR" "$PROJECT_ROOT" "$SESSION_ID" 2>/dev/null || true)
+  if [ -n "$TT_LEAKED" ]; then
+    TT_LIST=""
+    while IFS=$'\t' read -r tt_name tt_report tt_team_dir tt_blocks; do
+      [ -n "$tt_name" ] || continue
+      tt_manifest="$NAZGUL_DIR/dispatch/${tt_name}.json"
+      if [ "$tt_blocks" -ge 3 ] 2>/dev/null; then
+        if [ "$(jq -r '.teardown_escalated // false' "$tt_manifest" 2>/dev/null)" != "true" ]; then
+          source "$SCRIPT_DIR/lib/raise-finding.sh"
+          raise_finding "medium" "process" \
+            "teammate ${tt_name} not dismissed after 3 directives" \
+            "Report ${tt_report} was delivered but the teammate stayed a member of $(basename "$tt_team_dir") for 3 iterations after dismissal directives. Manual shutdown_request needed." \
+            "Investigate why the lead skips dismissal; send shutdown_request manually." \
+            "$tt_manifest" || true
+          tt_tmp=$(mktemp 2>/dev/null) || tt_tmp=""
+          if [ -n "$tt_tmp" ] && jq '.teardown_escalated = true' "$tt_manifest" > "$tt_tmp" 2>/dev/null; then
+            mv "$tt_tmp" "$tt_manifest" 2>/dev/null || rm -f "$tt_tmp"
+          else [ -n "$tt_tmp" ] && rm -f "$tt_tmp" || true; fi
+          emit_event "team_teardown" action "escalated" teammate "$tt_name"
+        fi
+        continue
+      fi
+      TT_LIST="${TT_LIST}  - ${tt_name} (report delivered: ${tt_report})"$'\n'
+      tt_tmp=$(mktemp 2>/dev/null) || tt_tmp=""
+      if [ -n "$tt_tmp" ] && jq --argjson b "$((tt_blocks + 1))" '.teardown_blocks = $b' "$tt_manifest" > "$tt_tmp" 2>/dev/null; then
+        mv "$tt_tmp" "$tt_manifest" 2>/dev/null || rm -f "$tt_tmp"
+      else [ -n "$tt_tmp" ] && rm -f "$tt_tmp" || true; fi
+    done <<< "$TT_LEAKED"
+    if [ -n "$TT_LIST" ]; then
+      TEARDOWN_DIRECTIVE="TEAM TEARDOWN (mandatory, do this FIRST, before any new dispatch): these teammates delivered their reports and must be dismissed. For EACH: send it a SendMessage shutdown_request; after it approves, delete nazgul/dispatch/<name>.json (NEVER glob dispatch/*.json — other teams' manifests share that directory). If a teammate REJECTS shutdown it believes it has live work — leave its manifest and explain in your summary.
+${TT_LIST%$'\n'}"
+      emit_event "team_teardown" action "directive_injected" count:n "$(printf '%s' "$TT_LIST" | grep -c .)"
+    fi
+  fi
+fi
+
 # Count tasks by status (shared helper, MF-009 — sets DONE_COUNT, READY_COUNT,
 # IN_PROGRESS_COUNT, IN_REVIEW_COUNT, APPROVED_COUNT, CHANGES_COUNT,
 # BLOCKED_COUNT, PLANNED_COUNT, INVALID_COUNT, TOTAL_COUNT, plus
@@ -1237,7 +1287,7 @@ if [ "$EXEC_PARALLEL" = "true" ] && [ "$GRANULARITY" = "task" ] \
     ACTIVE_LINE="Batch tasks: ${BATCH_TASKS}"
     DISPATCH_INSTR="DELEGATE (PARALLEL BATCH of ${BATCH_COUNT}): ${BATCH_TASKS}.
 0. Crash recovery first: if a batch task already has a worktree/branch feat/<display_id>/<id> left by an interrupted batch — a branch WITH commits is resumed (skip re-implementing, continue from step 2 using its existing commit), a dirty/commit-less one is removed (git worktree remove --force, delete the branch) before dispatching. Deterministic rule, no judgment.
-1. Dispatch ONE implementer agent (nazgul:implementer) PER task — ALL Agent calls in a SINGLE message so they run concurrently. Each prompt gets ONLY its task id, its manifest path nazgul/tasks/<id>.md, its file scope, and the line 'NAZGUL_UNIT: <id>'. Each implementer works in its OWN git worktree (branch feat/<display_id>/<id> off the feature branch) and commits there — NEVER in the shared working tree. If dispatching implementers as TEAMMATES (not foreground Agent calls): first write nazgul/dispatch/<session-name>.json per templates/skill-partials/report-contract.md with report_path nazgul/tasks/<id>.md, and END each prompt with the Report Contract block — a teammate's final text is delivered to NO ONE.
+1. Dispatch ONE implementer agent (nazgul:implementer) PER task — ALL Agent calls in a SINGLE message so they run concurrently. Each prompt gets ONLY its task id, its manifest path nazgul/tasks/<id>.md, its file scope, and the line 'NAZGUL_UNIT: <id>'. Each implementer works in its OWN git worktree (branch feat/<display_id>/<id> off the feature branch) and commits there — NEVER in the shared working tree. If dispatching implementers as TEAMMATES (not foreground Agent calls): first write nazgul/dispatch/<session-name>.json per templates/skill-partials/report-contract.md with report_path nazgul/tasks/<id>.md, and END each prompt with the Report Contract block — a teammate's final text is delivered to NO ONE. After consuming each teammate's manifest update, send that teammate a SendMessage shutdown_request and, once approved, delete its nazgul/dispatch/<session-name>.json — teammates are never left idling.
 2. WAIT for every implementer to return. Then, for EACH task (no merge yet), record the implementer's own branch-tip FULL 40-character commit SHA (never abbreviated — the pre-merge guard matches full SHAs only) under its manifest's ## Commits and set Status: IMPLEMENTED — immediately after the implementer's own commit and BEFORE any merge.
 3. Dispatch ONE review-gate agent (nazgul:review-gate) PER task — all in a single message — each prompt carrying 'NAZGUL_UNIT: <id>' and reviewing that task's OWN branch diff (task branch vs. feature branch, unmerged) rather than a post-merge diff — the same diff-scoping already used for group/feature aggregate review of unmerged tasks' commits. Each review-gate dispatch must run at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context.
 4. WAIT for every review-gate to return. Merge (git merge --no-ff) ONLY a task whose manifest reaches Status: DONE — it already lists that branch's SHA under ## Commits, so the pre-merge-commit (H2) guard finds a match and correctly ALLOWS. On conflict: git merge --abort, set that task CHANGES_REQUESTED with a note, keep its branch for inspection — never force-merge. A task at CHANGES_REQUESTED or BLOCKED is NOT merged; its branch/worktree is kept for rework.
@@ -1280,6 +1330,14 @@ if [ "$MODE" = "hitl" ] && [ -f "$HITL_PENDING_MARKER" ] && [ -n "$DISPATCH_INST
   DISPATCH_INSTR="GATE hitl_pending: a human approval is still pending (nazgul/.hitl-pending exists) — WAIT for explicit human approval before dispatching anything. Do not proceed autonomously."
 fi
 
+# Team-teardown gate: while dismissals are outstanding, withhold this
+# iteration's dispatch instruction entirely — the directive is the only
+# actionable instruction. Bounded by the 3-strike escalation (TEARDOWN_DIRECTIVE
+# empties after escalation), so this can never deadlock the loop.
+if [ -n "$TEARDOWN_DIRECTIVE" ]; then
+  DISPATCH_INSTR="DISPATCH WITHHELD this iteration: complete the TEAM TEARDOWN above first."
+fi
+
 cat >&2 << CONTINUE_MSG
 Nazgul loop — iteration ${NEW_ITER}/${MAX_ITER} | Mode: ${MODE} | Review granularity: ${GRANULARITY}
 Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked, ${PLANNED_COUNT} planned
@@ -1288,6 +1346,7 @@ $([ -n "$FEATURE_BRANCH" ] && echo "Branch: ${FEATURE_BRANCH} → ${BASE_BRANCH}
 
 Read nazgul/plan.md → Recovery Pointer section for current state.
 ${ACTIVE_LINE}
+$([ -n "$TEARDOWN_DIRECTIVE" ] && echo "$TEARDOWN_DIRECTIVE" || true)
 $([ -n "$AGGREGATE_MARKER" ] && echo "$AGGREGATE_MARKER" || true)
 $([ -n "$DISPATCH_INSTR" ] && echo "$DISPATCH_INSTR" || true)
 $([ "$GIT_CONFLICT_DETECTED" = true ] && echo "WARNING: Git conflicts detected. Resolve unmerged files before continuing.")
