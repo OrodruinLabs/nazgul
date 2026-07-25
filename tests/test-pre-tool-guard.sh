@@ -109,7 +109,10 @@ done
 for bad_cmd in \
   'psql -c "DROP TABLE accounts"' \
   'mysqldump --host=db -e "DROP DATABASE staging"' \
-  'sqlcmd -Q "TRUNCATE TABLE dbo.orders"'; do
+  'sqlcmd -Q "TRUNCATE TABLE dbo.orders"' \
+  'redis-cli -x "TRUNCATE someset"' \
+  "psql -c 'DROP TABLE \"accounts\"'" \
+  "mysql -e 'DROP TABLE \`users\`'"; do
   ec=$(get_exit_code "$bad_cmd")
   assert_exit_code "blocked MF-029: '$bad_cmd'" "$ec" 2
   output=$(run_guard "$bad_cmd")
@@ -117,8 +120,8 @@ for bad_cmd in \
 done
 
 # --- MF-029: evidence-derived false positives — quoted prose naming the SQL
-# keywords with no DB-CLI invocation token in the same segment must be allowed
-# (LR-005; each case traces to a real hit recorded in nazgul/docs/TRD.md) ---
+# keywords with no DB-CLI invocation token anywhere in the command must be
+# allowed (LR-005; observed live false positives during FEAT-018/019 dogfooding) ---
 
 # FP-1: python3 heredoc prose (the FEAT-018 wiki-ingest case)
 ec=$(get_exit_code "$(printf 'python3 <<EOF\nThis note explains the TRUNCATE prose fix for FEAT-018\nEOF')")
@@ -144,6 +147,29 @@ assert_exit_code "allowed MF-029 FP-5: file path/comment mentioning keyword" "$e
 # per the real PreToolUse hook contract
 ec=$(get_exit_code_json 'git commit -m "fix: anchor DROP TABLE and TRUNCATE guard rules (LR-005)"')
 assert_exit_code "allowed MF-029 FP-6: JSON envelope commit-message prose" "$ec" 0
+
+# --- MF-029: whole-command AND regression — the DB-CLI token and the destructive
+# statement no longer need to share a ;/&&/||/|-delimited segment, so realistic
+# bypasses that split the two across segments or lines must still block ---
+
+# Block S-1: multi-statement SQL inside one quoted -c argument (the `;` inside the
+# quotes used to split the DB-CLI token from the keyword into separate segments)
+ec=$(get_exit_code 'psql -c "SELECT 1; DROP TABLE users;"')
+assert_exit_code "blocked MF-029 S-1: multi-statement quoted -c arg" "$ec" 2
+
+# Block S-2: heredoc invocation — the DB-CLI token and the destructive statement
+# land on separate lines, which the old segment-scoped check treated as isolated
+ec=$(get_exit_code "$(printf 'psql -h host -d mydb <<SQL\nDROP TABLE users;\nSQL')")
+assert_exit_code "blocked MF-029 S-2: heredoc invocation across lines" "$ec" 2
+
+# Block S-3 (deliberate over-block, safe direction): a DB-CLI invocation and an
+# unrelated keyword mention in a LATER, independent segment of the same compound
+# command now also blocks, since the token and the keyword are only required to
+# appear anywhere in $CMD, not in the same segment. This is the documented tradeoff
+# of dropping segment-scoping (see the comment above check_sql_destructive()) —
+# pinned here as a known, accepted limitation (convention: scripts/pre-tool-guard.sh:134-137).
+ec=$(get_exit_code 'psql -c "select 1"; echo "please DROP TABLE users"')
+assert_exit_code "blocked MF-029 S-3: cross-segment token+keyword (accepted over-block)" "$ec" 2
 
 # --- Git force push (should exit 2) ---
 for bad_cmd in \
