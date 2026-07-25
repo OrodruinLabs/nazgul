@@ -167,7 +167,7 @@ assert_exit_code "blocked MF-029 S-2: heredoc invocation across lines" "$ec" 2
 # command now also blocks, since the token and the keyword are only required to
 # appear anywhere in $CMD, not in the same segment. This is the documented tradeoff
 # of dropping segment-scoping (see the comment above check_sql_destructive()) —
-# pinned here as a known, accepted limitation (convention: scripts/pre-tool-guard.sh:134-137).
+# pinned here as a known, accepted limitation (documented at scripts/pre-tool-guard.sh:54-65).
 ec=$(get_exit_code 'psql -c "select 1"; echo "please DROP TABLE users"')
 assert_exit_code "blocked MF-029 S-3: cross-segment token+keyword (accepted over-block)" "$ec" 2
 
