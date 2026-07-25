@@ -63,8 +63,8 @@ When asked to run parallel reviews for a task:
    their TeammateIdle enforcement. If a teammate rejects shutdown, it
    believes it has live work — check its report before re-requesting. The
    stop-hook's team-teardown gate (guards.team_teardown) independently
-   detects undismissed teammates and blocks new dispatches until they are
-   dismissed.
+   detects undismissed teammates and injects a mandatory dismissal directive
+   each iteration until they are dismissed (bounded, fail-open).
 
 ## Spawning an Implementation Team
 
@@ -112,8 +112,8 @@ When asked to run parallel implementations:
     their TeammateIdle enforcement. If a teammate rejects shutdown, it
     believes it has live work — check its report before re-requesting. The
     stop-hook's team-teardown gate (guards.team_teardown) independently
-    detects undismissed teammates and blocks new dispatches until they are
-    dismissed.
+    detects undismissed teammates and injects a mandatory dismissal directive
+    each iteration until they are dismissed (bounded, fail-open).
 
 ## Fallback Behavior
 

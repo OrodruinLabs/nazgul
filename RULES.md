@@ -532,11 +532,14 @@ session exit.
 1. **Dismissal is part of consuming a report.** `[advisory]` Whoever dispatched a teammate
    MUST send it a shutdown_request after its report is consumed, then delete
    its `nazgul/dispatch/<session-name>.json` (never glob the directory).
-2. **The stop-hook enforces this** `[enforced]` (`guards.team_teardown`, default true): a
+2. **The stop-hook detects this** `[hook-driven only]` (`guards.team_teardown`, default true): a
    teammate with a delivered report still present in its team's members list
-   triggers a mandatory TEAM TEARDOWN directive before new work dispatches.
-   After 3 ignored directives it fails open with a raise_finding escalation —
-   the loop never deadlocks on dismissal.
+   causes the stop-hook to inject a mandatory TEAM TEARDOWN directive into the
+   loop prompt, ahead of the dispatch instructions, on every iteration until
+   dismissed. This is a continuation-message instruction, not a mechanical
+   block — a human or orchestrator that dispatches agents directly can route
+   around it. After 3 ignored directives it fails open with a raise_finding
+   escalation — the loop never deadlocks on dismissal.
 3. **Manifests self-heal.** `[enforced]` A dispatch manifest whose team is gone or whose
    teammate is no longer a member is deleted automatically by the detector.
 4. **Dead-session team state is swept** `[enforced]` (`guards.team_sweep`, default true):

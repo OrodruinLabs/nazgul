@@ -52,13 +52,19 @@ tt_report_delivered() {
 # tt_detect_undismissed <nazgul_dir> <project_dir> <session_id>
 # One line per teammate whose report is delivered but who is still a member of
 # its team: name<TAB>report_path<TAB>team_dir<TAB>teardown_blocks
-# Self-heals: a manifest whose team dir is gone (session-exit cleanup) or
-# whose teammate is no longer a member (dismissal completed) is DELETED — it
-# has served its purpose. Undelivered reports are the TeammateIdle guard's
-# jurisdiction, not ours. Always returns 0.
+# Self-heals CONSERVATIVELY: a manifest is deleted only when deletion is
+# unambiguous — (a) team dir gone AND the manifest carries an explicit `team`
+# field (the implicit session-<id8> fallback is too unreliable to justify a
+# destructive action), or (b) teammate no longer a member of its team AND its
+# report was actually delivered (a completed dismissal implies a consumed
+# report on disk). Anything ambiguous — implicit-team fallback with the team
+# dir gone, a non-array `.members`, or an absent member whose report was
+# never delivered — fails open and keeps the manifest; undelivered reports
+# remain the TeammateIdle guard's jurisdiction, not ours. Always returns 0.
 tt_detect_undismissed() {
   local nazgul_dir="$1" project_dir="$2" session_id="${3:-}"
-  local manifest name feat cur_feat team_dir report spawned blocks members_json
+  local manifest name feat cur_feat explicit_team team_dir members_type
+  local report spawned delivered blocks members_json
   [ -d "$nazgul_dir/dispatch" ] || return 0
   command -v jq >/dev/null 2>&1 || return 0
   cur_feat=$(jq -r '.feat_id // "default"' "$nazgul_dir/config.json" 2>/dev/null || echo "default")
@@ -69,24 +75,46 @@ tt_detect_undismissed() {
     case "$name" in */*|*..*) continue ;; esac
     feat=$(jq -r '.feat_id // ""' "$manifest" 2>/dev/null || echo "")
     [ -n "$feat" ] && [ "$feat" != "$cur_feat" ] && continue
+    explicit_team=$(jq -r '.team // ""' "$manifest" 2>/dev/null || echo "")
     team_dir=$(tt_team_dir_for_manifest "$manifest" "$session_id") || continue
     if [ ! -f "$team_dir/config.json" ]; then
-      rm -f "$manifest"
+      # Only delete when the manifest names its team explicitly. The implicit
+      # session-<id8> fallback can resolve to a nonexistent or wrong team dir
+      # (generated fallback session ids, concurrent sessions), and deleting a
+      # LIVE teammate's manifest on that guess would silently disable the
+      # TeammateIdle guard for it. No explicit team on record -> keep.
+      [ -n "$explicit_team" ] && rm -f "$manifest"
       continue
+    fi
+    members_type=$(jq -r '(.members|type)' "$team_dir/config.json" 2>/dev/null) || members_type=""
+    if [ "$members_type" != "array" ]; then
+      continue   # members shape ambiguous (or jq failed) → fail open, keep manifest
     fi
     members_json=$(jq -c '[.members[]?.name]' "$team_dir/config.json" 2>/dev/null) || members_json=""
     if [ -z "$members_json" ]; then
       continue   # config exists but unparseable → ambiguous → fail open, keep manifest
     fi
+    # Report delivered-ness is needed by BOTH branches below: to decide
+    # whether an absent member's manifest is safe to self-heal, and (as
+    # before) to decide whether a still-present member's manifest has leaked.
+    report=$(jq -r '.report_path // ""' "$manifest" 2>/dev/null || echo "")
+    delivered="false"
+    case "$report" in
+      ''|/*|*..*) : ;;  # empty or unsafe path → treated as not delivered
+      *)
+        spawned=$(jq -r '.spawned_at_epoch // 0' "$manifest" 2>/dev/null || echo 0)
+        tt_report_delivered "$project_dir/$report" "$spawned" && delivered="true"
+        ;;
+    esac
     if ! jq -e --arg n "$name" 'index($n)' <<< "$members_json" >/dev/null 2>&1; then
-      rm -f "$manifest"
+      # Member absent = dismissal completed IFF the report was actually
+      # delivered (a completed dismissal implies a consumed report on disk).
+      # Absent + report NOT delivered → the teammate may still be live and
+      # the TeammateIdle guard owns it → keep. Unsafe/missing report → keep.
+      [ "$delivered" = "true" ] && rm -f "$manifest"
       continue
     fi
-    report=$(jq -r '.report_path // ""' "$manifest" 2>/dev/null || echo "")
-    [ -z "$report" ] && continue
-    case "$report" in /*|*..*) continue ;; esac
-    spawned=$(jq -r '.spawned_at_epoch // 0' "$manifest" 2>/dev/null || echo 0)
-    tt_report_delivered "$project_dir/$report" "$spawned" || continue
+    [ "$delivered" = "true" ] || continue
     blocks=$(jq -r '.teardown_blocks // 0' "$manifest" 2>/dev/null || echo 0)
     case "$blocks" in ''|*[!0-9]*) blocks=0 ;; esac
     printf '%s\t%s\t%s\t%s\n' "$name" "$report" "$team_dir" "$blocks"

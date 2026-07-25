@@ -205,6 +205,9 @@ fi
 # loop prompt, verifies next iteration (detection self-clears on dismissal),
 # and escalates via raise_finding after 3 ignored directives. Fail-open.
 # Kill-switch: guards.team_teardown (explicit false disables).
+# Intentionally does NOT run on the earlier exit-0 paths (pause / AFK
+# timeout) — a normal session exit auto-removes team config, so there is
+# nothing left to detect by the time this gate would run.
 TEARDOWN_DIRECTIVE=""
 TT_ENABLED=$(jq -r 'if .guards.team_teardown == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
 if [ "$TT_ENABLED" = "true" ]; then
@@ -240,7 +243,7 @@ if [ "$TT_ENABLED" = "true" ]; then
     if [ -n "$TT_LIST" ]; then
       TEARDOWN_DIRECTIVE="TEAM TEARDOWN (mandatory, do this FIRST, before any new dispatch): these teammates delivered their reports and must be dismissed. For EACH: send it a SendMessage shutdown_request; after it approves, delete nazgul/dispatch/<name>.json (NEVER glob dispatch/*.json — other teams' manifests share that directory). If a teammate REJECTS shutdown it believes it has live work — leave its manifest and explain in your summary.
 ${TT_LIST%$'\n'}"
-      emit_event "team_teardown" action "directive_injected" count:n "$(printf '%s\n' "$TT_LEAKED" | grep -c .)"
+      emit_event "team_teardown" action "directive_injected" count:n "$(printf '%s' "$TT_LIST" | grep -c .)"
     fi
   fi
 fi

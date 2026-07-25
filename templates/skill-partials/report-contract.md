@@ -37,7 +37,9 @@ Dismissal (mandatory): after you consume a teammate's report, send that
 teammate a SendMessage shutdown_request. Once it approves, delete its
 `nazgul/dispatch/<session-name>.json`. Teammates never terminate on their
 own — an undismissed teammate idles forever, and the stop-hook's teardown
-gate will block new dispatches until it is dismissed. `TeamCreate`/
+gate detects undismissed teammates and injects a mandatory dismissal
+directive each iteration until they are dismissed (bounded, fail-open).
+`TeamCreate`/
 `TeamDelete` no longer exist (removed in Claude Code v2.1.178); per-teammate
 shutdown_request is the only teardown primitive, and team state is otherwise
 removed only on normal session exit.

@@ -88,6 +88,31 @@ assert_eq "dismissed: nothing emitted" "$OUT" ""
 assert_file_not_exists "dismissed: manifest self-healed" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json"
 teardown_temp_dir
 
+# --- 2c: member absent, report NOT delivered -> ambiguous (teammate may still
+# be live), manifest KEPT, nothing emitted ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams"
+make_team "nazgul-review-TASK-001"   # no reviewer member
+make_manifest "rv-code-TASK-001" "nazgul/reviews/TASK-001/code.md" "nazgul-review-TASK-001"
+OUT=$(tt_detect_undismissed "$TEST_DIR/nazgul" "$TEST_DIR" "sess1234-abcd")
+assert_eq "member absent + undelivered: nothing emitted" "$OUT" ""
+assert_file_exists "member absent + undelivered: manifest kept" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json"
+teardown_temp_dir
+
+# --- 2d: team config .members is a non-array (valid JSON, wrong shape) ->
+# ambiguous, manifest KEPT, nothing emitted ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams"
+mkdir -p "$TEST_DIR/teams/odd-members-team"
+echo '{"members": "oops"}' > "$TEST_DIR/teams/odd-members-team/config.json"
+make_manifest "rv-code-TASK-001" "nazgul/reviews/TASK-001/code.md" "odd-members-team"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+echo "x" > "$TEST_DIR/nazgul/reviews/TASK-001/code.md"
+OUT=$(tt_detect_undismissed "$TEST_DIR/nazgul" "$TEST_DIR" "sess1234-abcd")
+assert_eq "non-array members: nothing emitted" "$OUT" ""
+assert_file_exists "non-array members: manifest kept" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json"
+teardown_temp_dir
+
 # --- 3: team dir gone (session-exit cleanup) -> manifest self-healed ---
 setup_temp_dir; setup_nazgul_dir; create_config '.'
 export NAZGUL_TEAMS_DIR="$TEST_DIR/teams"
@@ -95,6 +120,19 @@ make_manifest "rv-code-TASK-001" "nazgul/reviews/TASK-001/code.md" "gone-team"
 OUT=$(tt_detect_undismissed "$TEST_DIR/nazgul" "$TEST_DIR" "sess1234-abcd")
 assert_eq "gone team: nothing emitted" "$OUT" ""
 assert_file_not_exists "gone team: manifest deleted" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json"
+teardown_temp_dir
+
+# --- 3b: team dir gone, manifest has NO explicit team field (implicit
+# session-<id8> fallback), report delivered -> too unreliable to delete ->
+# manifest KEPT, nothing emitted ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams"
+make_manifest "impl-TASK-003" "nazgul/tasks/TASK-003.md"   # no team arg -> implicit fallback
+mkdir -p "$TEST_DIR/nazgul/tasks"
+echo "Status: IMPLEMENTED" > "$TEST_DIR/nazgul/tasks/TASK-003.md"
+OUT=$(tt_detect_undismissed "$TEST_DIR/nazgul" "$TEST_DIR" "sess1234-abcd")
+assert_eq "implicit fallback + team gone: nothing emitted" "$OUT" ""
+assert_file_exists "implicit fallback + team gone: manifest kept" "$TEST_DIR/nazgul/dispatch/impl-TASK-003.json"
 teardown_temp_dir
 
 # --- 4: report NOT delivered -> not leaked (idle guard's domain), manifest kept ---

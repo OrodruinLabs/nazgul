@@ -78,6 +78,31 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Test (c2): [enforced]/[hook-driven only] counts. The final whole-branch
+# review's enforcement-tier honesty pass reclassified §18 rule 2 (the
+# stop-hook's undismissed-teammate directive) from [enforced] to
+# [hook-driven only]: the gate only injects a continuation-message directive
+# into the loop prompt — a direct dispatcher can route around it — it never
+# mechanically blocks a tool call the way a PreToolUse guard does. That is a
+# net enforced -1 / hook-driven only +1 relative to the prior count.
+# ---------------------------------------------------------------------------
+ENFORCED_COUNT=$(grep -c '\[enforced\]' "$RULES_FILE" || true)
+if [ "$ENFORCED_COUNT" -eq 49 ]; then
+  _pass "[enforced] annotation count is exactly 49 (found: $ENFORCED_COUNT)"
+else
+  _fail "[enforced] annotation count is exactly 49" \
+    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 49"
+fi
+
+HOOK_DRIVEN_COUNT=$(grep -c '\[hook-driven only\]' "$RULES_FILE" || true)
+if [ "$HOOK_DRIVEN_COUNT" -eq 20 ]; then
+  _pass "[hook-driven only] annotation count is exactly 20 (found: $HOOK_DRIVEN_COUNT)"
+else
+  _fail "[hook-driven only] annotation count is exactly 20" \
+    "found $HOOK_DRIVEN_COUNT occurrences of [hook-driven only] — expected exactly 20"
+fi
+
+# ---------------------------------------------------------------------------
 # Test (e): the Parallel Dispatch section exists with honest tiers. Batch
 # selection and the two hard stops are computed by unconditional stop-hook
 # bash conditionals (no agent judgment gates whether they run), so per the
