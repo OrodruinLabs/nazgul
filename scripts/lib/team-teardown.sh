@@ -33,7 +33,7 @@ tt_team_dir_for_manifest() {
   if [ -z "$team" ] && [ -n "$session_id" ]; then
     team="session-${session_id:0:8}"
   fi
-  case "$team" in ''|.|*/*|*..*) return 1 ;; esac
+  case "$team" in ''|.|*..*|*[!A-Za-z0-9._-]*) return 1 ;; esac
   printf '%s/%s' "$NAZGUL_TEAMS_DIR" "$team"
 }
 
@@ -72,7 +72,7 @@ tt_detect_undismissed() {
     [ -f "$manifest" ] || continue
     name=$(jq -r '.teammate // ""' "$manifest" 2>/dev/null || echo "")
     [ -z "$name" ] && continue
-    case "$name" in */*|*..*) continue ;; esac
+    case "$name" in *..*|*[!A-Za-z0-9._-]*) continue ;; esac
     feat=$(jq -r '.feat_id // ""' "$manifest" 2>/dev/null || echo "")
     [ -n "$feat" ] && [ "$feat" != "$cur_feat" ] && continue
     explicit_team=$(jq -r '.team // ""' "$manifest" 2>/dev/null || echo "")

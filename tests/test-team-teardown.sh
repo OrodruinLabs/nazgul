@@ -188,6 +188,18 @@ OUT=$(tt_detect_undismissed "$TEST_DIR/nazgul" "$TEST_DIR" "sess1234-abcd")
 assert_eq "unsafe name: nothing emitted" "$OUT" ""
 teardown_temp_dir
 
+# --- 8b: teammate name containing a space (outside allowlist) -> skipped,
+# nothing emitted, manifest kept (fail open) ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams"
+mkdir -p "$TEST_DIR/nazgul/dispatch"
+jq -n '{teammate:"rv code TASK-001", report_path:"r.md", feat_id:"default", spawned_at_epoch:0}' \
+  > "$TEST_DIR/nazgul/dispatch/spacey.json"
+OUT=$(tt_detect_undismissed "$TEST_DIR/nazgul" "$TEST_DIR" "sess1234-abcd")
+assert_eq "space in name: nothing emitted" "$OUT" ""
+assert_file_exists "space in name: manifest kept" "$TEST_DIR/nazgul/dispatch/spacey.json"
+teardown_temp_dir
+
 # --- 9: migration v30 -> v31 adds guards keys, preserves explicit values ---
 setup_temp_dir; setup_nazgul_dir
 create_config '.schema_version = 30 | .guards.team_sweep = false'
@@ -221,6 +233,8 @@ assert_exit_code "gate: loop continues" "$HOOK_EC" 2
 assert_contains "gate: directive injected" "$HOOK_OUTPUT" "TEAM TEARDOWN"
 assert_contains "gate: names teammate" "$HOOK_OUTPUT" "rv-code-TASK-001"
 assert_json_field "gate: blocks incremented" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json" '.teardown_blocks' "1"
+assert_not_contains "gate: no new dispatch while pending" "$HOOK_OUTPUT" "DELEGATE:"
+assert_contains "gate: dispatch withheld" "$HOOK_OUTPUT" "DISPATCH WITHHELD"
 teardown_temp_dir
 
 # --- 11: kill-switch guards.team_teardown=false -> no directive ---
@@ -235,6 +249,7 @@ tmp=$(mktemp); jq '.teardown_blocks = 3' "$TEST_DIR/nazgul/dispatch/rv-code-TASK
   && mv "$tmp" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json"
 run_hook
 assert_not_contains "escalated: no directive" "$HOOK_OUTPUT" "TEAM TEARDOWN"
+assert_not_contains "escalated: dispatch resumes" "$HOOK_OUTPUT" "DISPATCH WITHHELD"
 assert_file_exists "escalated: finding raised" "$TEST_DIR/nazgul/logs/findings.jsonl"
 assert_json_field "escalated: flag set" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json" '.teardown_escalated' "true"
 FINDINGS_LINES=$(wc -l < "$TEST_DIR/nazgul/logs/findings.jsonl" | tr -d ' ')

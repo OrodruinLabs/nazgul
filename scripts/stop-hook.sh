@@ -229,7 +229,7 @@ if [ "$TT_ENABLED" = "true" ]; then
           tt_tmp=$(mktemp 2>/dev/null) || tt_tmp=""
           if [ -n "$tt_tmp" ] && jq '.teardown_escalated = true' "$tt_manifest" > "$tt_tmp" 2>/dev/null; then
             mv "$tt_tmp" "$tt_manifest" 2>/dev/null || rm -f "$tt_tmp"
-          else rm -f "$tt_tmp"; fi
+          else [ -n "$tt_tmp" ] && rm -f "$tt_tmp" || true; fi
           emit_event "team_teardown" action "escalated" teammate "$tt_name"
         fi
         continue
@@ -238,7 +238,7 @@ if [ "$TT_ENABLED" = "true" ]; then
       tt_tmp=$(mktemp 2>/dev/null) || tt_tmp=""
       if [ -n "$tt_tmp" ] && jq --argjson b "$((tt_blocks + 1))" '.teardown_blocks = $b' "$tt_manifest" > "$tt_tmp" 2>/dev/null; then
         mv "$tt_tmp" "$tt_manifest" 2>/dev/null || rm -f "$tt_tmp"
-      else rm -f "$tt_tmp"; fi
+      else [ -n "$tt_tmp" ] && rm -f "$tt_tmp" || true; fi
     done <<< "$TT_LEAKED"
     if [ -n "$TT_LIST" ]; then
       TEARDOWN_DIRECTIVE="TEAM TEARDOWN (mandatory, do this FIRST, before any new dispatch): these teammates delivered their reports and must be dismissed. For EACH: send it a SendMessage shutdown_request; after it approves, delete nazgul/dispatch/<name>.json (NEVER glob dispatch/*.json — other teams' manifests share that directory). If a teammate REJECTS shutdown it believes it has live work — leave its manifest and explain in your summary.
@@ -1328,6 +1328,14 @@ fi
 HITL_PENDING_MARKER="$NAZGUL_DIR/.hitl-pending"
 if [ "$MODE" = "hitl" ] && [ -f "$HITL_PENDING_MARKER" ] && [ -n "$DISPATCH_INSTR" ]; then
   DISPATCH_INSTR="GATE hitl_pending: a human approval is still pending (nazgul/.hitl-pending exists) — WAIT for explicit human approval before dispatching anything. Do not proceed autonomously."
+fi
+
+# Team-teardown gate: while dismissals are outstanding, withhold this
+# iteration's dispatch instruction entirely — the directive is the only
+# actionable instruction. Bounded by the 3-strike escalation (TEARDOWN_DIRECTIVE
+# empties after escalation), so this can never deadlock the loop.
+if [ -n "$TEARDOWN_DIRECTIVE" ]; then
+  DISPATCH_INSTR="DISPATCH WITHHELD this iteration: complete the TEAM TEARDOWN above first."
 fi
 
 cat >&2 << CONTINUE_MSG

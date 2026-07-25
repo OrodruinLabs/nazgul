@@ -33,6 +33,8 @@ Fully remove Nazgul from this project. No archiving — permanent deletion.
 
 ### Step 1: Check if Nazgul is Present
 
+If `$ARGUMENTS` contains `--teams`, skip this presence check and go directly to Step 2b (the `--all` foreign-team flow works even without local Nazgul state; the project-local sweep in Step 2b item 1 simply reports nothing when `nazgul/config.json` is absent).
+
 If none of the current state indicators show Nazgul presence (no config, no agents, no MCP entry, no CLAUDE.md section):
 - Output: "Nazgul is not installed in this project. Nothing to clean."
 - Stop here.
@@ -52,7 +54,7 @@ If `$ARGUMENTS` contains `--teams`, do ONLY this step, then stop (no uninstall):
        "$(jq -r ".guards.team_sweep_min_age_hours // 24" nazgul/config.json 2>/dev/null || echo 24)"'
    ```
    Report each swept team name; report "no dead teams for this project" when the output is empty.
-2. If `--all` is ALSO present: list every remaining team in `~/.claude/teams/` whose `config.json` `leadSessionId` has no transcript in `~/.claude/projects/*/<id>.jsonl` modified in the last 24 hours. For each such FOREIGN team (any member `cwd` outside this project), show its name, member cwds, and creation date, then use `AskUserQuestion` per team: Delete / Keep. On Delete:
+2. If `--all` is ALSO present: list every remaining team in `~/.claude/teams/` whose `config.json` `leadSessionId` has no transcript in `~/.claude/projects/*/<id>.jsonl` modified in the last 24 hours, and whose lead has no session lock `<member-cwd>/nazgul/sessions/<leadSessionId sanitized per session-tracker>.lock` (check BOTH filename forms, with and without a trailing underscore) in any member cwd that has a `nazgul/` dir. If any lock exists, treat the lead as alive and do not offer the team. For each such FOREIGN team (any member `cwd` outside this project), show its name, member cwds, and creation date, then use `AskUserQuestion` per team: Delete / Keep. On Delete:
    ```bash
    rm -rf ~/.claude/teams/<team> ~/.claude/tasks/<team>
    ```

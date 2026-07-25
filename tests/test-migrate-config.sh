@@ -1970,7 +1970,7 @@ assert_eq "context.* values pass through migration completely untouched" \
 
 # --- template-shape assertion: templates/config.json reflects all of TASK-003's changes ---
 TEMPLATE_FILE="$REPO_ROOT/templates/config.json"
-assert_json_field "template: schema_version is 30" "$TEMPLATE_FILE" ".schema_version" "31"
+assert_json_field "template: schema_version is 31" "$TEMPLATE_FILE" ".schema_version" "31"
 assert_json_field "template: review_gate.receipt_hash_enforcement is false (opt-in, TASK-009 round-2)" \
   "$TEMPLATE_FILE" ".review_gate.receipt_hash_enforcement" "false"
 assert_json_field "template: models.review_orchestrator is still sonnet (not re-touched)" \
