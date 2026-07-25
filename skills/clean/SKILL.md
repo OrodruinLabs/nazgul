@@ -33,7 +33,7 @@ Fully remove Nazgul from this project. No archiving — permanent deletion.
 
 ### Step 1: Check if Nazgul is Present
 
-If `$ARGUMENTS` contains `--teams`, skip this presence check and go directly to Step 2b (the `--all` foreign-team flow works even without local Nazgul state; the project-local sweep in Step 2b item 1 simply reports nothing when `nazgul/config.json` is absent).
+If `$ARGUMENTS` contains `--teams`, skip this presence check and go directly to Step 2b (the `--all` foreign-team flow works even without local Nazgul state; the project-local sweep in Step 2b item 1 still runs, using the default 24-hour threshold when `nazgul/config.json` is absent).
 
 If none of the current state indicators show Nazgul presence (no config, no agents, no MCP entry, no CLAUDE.md section):
 - Output: "Nazgul is not installed in this project. Nothing to clean."

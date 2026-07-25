@@ -100,7 +100,7 @@ tt_detect_undismissed() {
     report=$(jq -r '.report_path // ""' "$manifest" 2>/dev/null || echo "")
     delivered="false"
     case "$report" in
-      ''|/*|*..*) : ;;  # empty or unsafe path → treated as not delivered
+      ''|/*|*..*|*$'\t'*|*$'\n'*|*$'\r'*) : ;;  # empty or unsafe path → treated as not delivered
       *)
         spawned=$(jq -r '.spawned_at_epoch // 0' "$manifest" 2>/dev/null || echo 0)
         tt_report_delivered "$project_dir/$report" "$spawned" && delivered="true"

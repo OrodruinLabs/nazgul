@@ -1172,7 +1172,7 @@ cp "$REPO_ROOT/templates/config.json" "$NAZGUL_DIR/config.json"
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null); MIG_EC=$?
 assert_exit_code "v26 terminal no-op: migrator exits 0 (not a crash)" "$MIG_EC" 0
 assert_eq "v26 config → no output (terminal no-op)" "$OUTPUT" ""
-assert_json_field "v26 terminal → schema_version still 27" "$NAZGUL_DIR/config.json" ".schema_version" "31"
+assert_json_field "v26 terminal → schema_version still 31" "$NAZGUL_DIR/config.json" ".schema_version" "31"
 
 # --- v25 config → v26 (v25 is no longer terminal) ---
 NAZGUL_DIR=$(setup_nazgul_dir "v25-to-26")
@@ -1182,7 +1182,7 @@ EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null); MIG_EC=$?
 assert_exit_code "v25 → v26: migrator exits 0" "$MIG_EC" 0
 assert_contains "v25 → v26 output" "$OUTPUT" "migrated"
-assert_json_field "v25 → v26 schema_version reaches 27" "$NAZGUL_DIR/config.json" ".schema_version" "31"
+assert_json_field "v25 → v26 schema_version reaches 31 (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "31"
 
 # --- v24 config → v26 (v24 is no longer terminal) ---
 NAZGUL_DIR=$(setup_nazgul_dir "v24-to-26")
@@ -1192,7 +1192,7 @@ EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null); MIG_EC=$?
 assert_exit_code "v24 → v26: migrator exits 0" "$MIG_EC" 0
 assert_contains "v24 → v26 output" "$OUTPUT" "migrated"
-assert_json_field "v24 → v26 schema_version reaches 27" "$NAZGUL_DIR/config.json" ".schema_version" "31"
+assert_json_field "v24 → v26 schema_version reaches 31 (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "31"
 
 # --- chain test: v1 → v25 completes ---
 NAZGUL_DIR=$(setup_nazgul_dir "v1-to-22-chain")
@@ -1509,7 +1509,7 @@ assert_json_field "v23→v24 review_gate.critical_reviewers[1] absent→architec
 assert_json_field "v23→v24 review_gate.adversarial_crosscheck absent→true" "$NAZGUL_DIR/config.json" ".review_gate.adversarial_crosscheck" "true"
 assert_json_field "v23→v24 review_gate.adversarial_margin absent→10" "$NAZGUL_DIR/config.json" ".review_gate.adversarial_margin" "10"
 assert_json_field "v23→v24 review_gate.adversarial_max absent→3" "$NAZGUL_DIR/config.json" ".review_gate.adversarial_max" "3"
-assert_json_field "v23→v27 schema_version is 24" "$NAZGUL_DIR/config.json" ".schema_version" "31"
+assert_json_field "v23→v31 schema_version is 31 (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "31"
 
 # explicit false / custom array preserved (opt-outs and overrides not clobbered)
 NAZGUL_DIR=$(setup_nazgul_dir "v23-to-24-explicit")
@@ -1602,7 +1602,7 @@ assert_json_field "v24→v25 connectors.github.pull.max_body_bytes absent→6553
 assert_json_field "v24→v25 connectors.github.push.enabled absent→true" "$NAZGUL_DIR/config.json" ".connectors.github.push.enabled" "true"
 assert_json_field "v24→v25 connectors.github.pull_failures absent→0" "$NAZGUL_DIR/config.json" ".connectors.github.pull_failures" "0"
 assert_json_field "v24→v25 connectors.github.map absent→empty object" "$NAZGUL_DIR/config.json" ".connectors.github.map | length" "0"
-assert_json_field "v24→v27 schema_version is 25" "$NAZGUL_DIR/config.json" ".schema_version" "31"
+assert_json_field "v24→v31 schema_version is 31 (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "31"
 
 # explicit enabled=true preserved (opt-in not clobbered)
 NAZGUL_DIR=$(setup_nazgul_dir "v24-to-25-enabled")
@@ -1705,7 +1705,7 @@ EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>&1); MIG_EC=$?
 CFG="$NAZGUL_DIR/config.json"
 assert_exit_code "v26 garbage conductor: migrator exits 0" "$MIG_EC" 0
-assert_json_field "v26 garbage conductor: schema_version reaches 27" "$CFG" ".schema_version" "31"
+assert_json_field "v26 garbage conductor: schema_version reaches 31 (full chain)" "$CFG" ".schema_version" "31"
 assert_eq "v26 garbage conductor: parallel defaults false" "$(jq -r '.execution.parallel' "$CFG")" "false"
 assert_eq "v26 garbage conductor: max_parallel defaults 3" "$(jq -r '.execution.max_parallel' "$CFG")" "3"
 assert_eq "v26 garbage conductor: approve_plan defaults false" "$(jq -r '.execution.gates.approve_plan' "$CFG")" "false"
@@ -1719,7 +1719,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 CFG="$NAZGUL_DIR/config.json"
-assert_json_field "v27: schema_version reaches 27" "$CFG" ".schema_version" "31"
+assert_json_field "v27: schema_version reaches 31 (full chain)" "$CFG" ".schema_version" "31"
 assert_eq "v27: teammate_report_guard defaults true" \
   "$(jq -r '.execution.enforce.teammate_report_guard' "$CFG")" "true"
 assert_eq "v27: explicit dispatch_guard false preserved" \

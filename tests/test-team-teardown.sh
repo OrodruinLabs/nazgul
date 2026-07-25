@@ -345,4 +345,16 @@ OUT=$(tt_sweep_orphaned_teams "$TEST_DIR/nazgul" "$TEST_DIR" "current-sess" 24)
 assert_dir_exists "ambiguous: kept" "$TEST_DIR/teams/odd-team"
 teardown_temp_dir
 
+# --- 20: report_path contains a literal tab -> unsafe path, treated as not
+# delivered -> ambiguous, manifest KEPT, nothing emitted (TSV-safety fix) ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams"
+make_team "nazgul-review-TASK-001" "rv-code-TASK-001"
+TAB_REPORT="$(printf 'nazgul/reviews/x\ty.md')"
+make_manifest "rv-code-TASK-001" "$TAB_REPORT" "nazgul-review-TASK-001"
+OUT=$(tt_detect_undismissed "$TEST_DIR/nazgul" "$TEST_DIR" "sess1234-abcd")
+assert_eq "tab in report_path: nothing emitted" "$OUT" ""
+assert_file_exists "tab in report_path: manifest kept" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json"
+teardown_temp_dir
+
 report_results
