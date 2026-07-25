@@ -63,17 +63,18 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test (c): [advisory] count is exactly 19 — was 17 as of FEAT-016 (see prior
+# Test (c): [advisory] count is exactly 20 — was 17 as of FEAT-016 (see prior
 # history: Parallel Execution Collapse deleted 4 Conductor-era bullets, +2 from
 # §17 Teammate Report Contract). FEAT-017/TASK-011 added 2 more: §11's
 # review-then-merge dispatch-order note and §17's MF-047 spawn-vs-manifest
-# companion note. 17 + 2 = 19.
+# companion note (17 + 2 = 19). FEAT-018 added 1 more: §18's "Dismissal is
+# part of consuming a report" rule. 19 + 1 = 20.
 ADVISORY_COUNT=$(grep -c '\[advisory\]' "$RULES_FILE" || true)
-if [ "$ADVISORY_COUNT" -eq 19 ]; then
-  _pass "[advisory] annotation count is exactly 19 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 20 ]; then
+  _pass "[advisory] annotation count is exactly 20 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 19" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 19"
+  _fail "[advisory] annotation count is exactly 20" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 20"
 fi
 
 # ---------------------------------------------------------------------------
