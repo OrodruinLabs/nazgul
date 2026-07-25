@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.22.0] - 2026-07-24
+
+### Added
+- **FEAT-018 Teammate Teardown & Team Sweep** — Agent-Teams teammates are now
+  dismissed instead of left idling forever:
+  - `scripts/lib/team-teardown.sh`: undismissed-teammate detection (delivered
+    report + still a team member) with dispatch-manifest self-heal, and a
+    dead-session orphaned-team sweep for `~/.claude/teams/` + `~/.claude/tasks/`.
+  - Stop-hook TEAM TEARDOWN gate: mandatory dismissal directive before new
+    dispatch, 3-strike fail-open escalation via `raise_finding`
+    (`guards.team_teardown`, default true; config schema v31).
+  - SessionStart sweep (`guards.team_sweep`, default true;
+    `guards.team_sweep_min_age_hours`, default 24) + `/nazgul:clean --teams`
+    (`--all` for interactive foreign-team cleanup).
+  - Report Contract: manifests record their `team`; dismissal
+    (shutdown_request after report consumption) is now part of the contract.
+  - Docs updated for the post-v2.1.178 platform (TeamCreate/TeamDelete
+    removed; per-teammate shutdown_request is the only teardown primitive).
+
 ## [2.21.0] - 2026-07-23
 
 FEAT-017, the fourth and final repair wave from the FEAT-013 360 reliability audit — reliability wave 4:
