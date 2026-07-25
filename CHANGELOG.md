@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.22.1] - 2026-07-25
+
+### Fixed
+- **Guard precision: SQL destructive-statement rules anchored, closing a false-positive class (LR-005).** The
+  three destructive-SQL rules in `scripts/pre-tool-guard.sh` (table drop, database drop, table truncation)
+  were bare case-insensitive substring greps over the whole command string, so any command whose quoted
+  TEXT merely named a keyword tripped them — live evidence included a `python3` heredoc of prose, a `jq`
+  write of unrelated objective text, and `grep` inspection commands during doc generation.
+  `check_sql_destructive()` replaces them with a whole-command AND, modeled on the existing
+  `check_force_push()` pattern: an anchored destructive-statement-shape match plus a DB-CLI invocation
+  token (`psql`/`mysql`/`mysqldump`/`sqlite3`/`sqlcmd`/`redis-cli`) must both be present in the command.
+  Two demonstrated bypass shapes — a quoted multi-statement `-c`/`-e` argument and a multi-line heredoc
+  invocation — are now regression-tested (`tests/test-pre-tool-guard.sh` MF-029 block, cases S-1/S-2/S-3).
+  This closes LR-005 for the SQL rules only; the other unanchored `check_pattern()` rules (fork bomb,
+  recursive chmod, filesystem format, direct disk write, piped execution) remain out of scope for a
+  future objective.
+
 ## [2.22.0] - 2026-07-24
 
 ### Added
