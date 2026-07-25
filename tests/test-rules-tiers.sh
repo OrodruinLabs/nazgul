@@ -69,7 +69,10 @@ fi
 # review-then-merge dispatch-order note and §17's MF-047 spawn-vs-manifest
 # companion note (17 + 2 = 19). FEAT-018 added 1 more: §18's "Dismissal is
 # part of consuming a report" rule. 19 + 1 = 20.
-ADVISORY_COUNT=$(grep -c '\[advisory\]' "$RULES_FILE" || true)
+# NOTE: counts OCCURRENCES, not lines (some lines carry two tags) — see the
+# [enforced] counter below; for [advisory] the line count and occurrence
+# count both happen to be 20 (no line currently carries two [advisory] tags).
+ADVISORY_COUNT=$(awk '{ count += gsub(/\[advisory\]/, "") } END { print count + 0 }' "$RULES_FILE")
 if [ "$ADVISORY_COUNT" -eq 20 ]; then
   _pass "[advisory] annotation count is exactly 20 (found: $ADVISORY_COUNT)"
 else
@@ -86,15 +89,21 @@ fi
 # mechanically blocks a tool call the way a PreToolUse guard does. That is a
 # net enforced -1 / hook-driven only +1 relative to the prior count.
 # ---------------------------------------------------------------------------
-ENFORCED_COUNT=$(grep -c '\[enforced\]' "$RULES_FILE" || true)
-if [ "$ENFORCED_COUNT" -eq 49 ]; then
-  _pass "[enforced] annotation count is exactly 49 (found: $ENFORCED_COUNT)"
+# NOTE: counts OCCURRENCES, not lines — `grep -c` undercounts because two
+# lines in RULES.md (the parallel-batch-selection bullet and the §11
+# hard-stops footnote) each carry two `[enforced]` tags. Line count is 49;
+# true occurrence count is 51 (49 + 2 for the double-tagged lines).
+ENFORCED_COUNT=$(awk '{ count += gsub(/\[enforced\]/, "") } END { print count + 0 }' "$RULES_FILE")
+if [ "$ENFORCED_COUNT" -eq 51 ]; then
+  _pass "[enforced] annotation count is exactly 51 (found: $ENFORCED_COUNT)"
 else
-  _fail "[enforced] annotation count is exactly 49" \
-    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 49"
+  _fail "[enforced] annotation count is exactly 51" \
+    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 51"
 fi
 
-HOOK_DRIVEN_COUNT=$(grep -c '\[hook-driven only\]' "$RULES_FILE" || true)
+# NOTE: counts OCCURRENCES, not lines — no line currently carries two
+# [hook-driven only] tags, so this matches the line count (20).
+HOOK_DRIVEN_COUNT=$(awk '{ count += gsub(/\[hook-driven only\]/, "") } END { print count + 0 }' "$RULES_FILE")
 if [ "$HOOK_DRIVEN_COUNT" -eq 20 ]; then
   _pass "[hook-driven only] annotation count is exactly 20 (found: $HOOK_DRIVEN_COUNT)"
 else
