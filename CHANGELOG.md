@@ -10,9 +10,11 @@ All notable changes to this project will be documented in this file.
   were bare case-insensitive substring greps over the whole command string, so any command whose quoted
   TEXT merely named a keyword tripped them — live evidence included a `python3` heredoc of prose, a `jq`
   write of unrelated objective text, and `grep` inspection commands during doc generation.
-  `check_sql_destructive()` replaces them with a whole-command AND, modeled on the existing
-  `check_force_push()` pattern: an anchored destructive-statement-shape match plus a DB-CLI invocation
-  token (`psql`/`mysql`/`mysqldump`/`sqlite3`/`sqlcmd`/`redis-cli`) must both be present in the command.
+  `check_sql_destructive()` replaces them with a whole-command AND — an anchored destructive-statement-shape
+  match plus a DB-CLI invocation token (`psql`/`mysql`/`mysqldump`/`sqlite3`/`sqlcmd`/`redis-cli`), each
+  checked anywhere in the full command rather than segment-scoped like `check_force_push()`, since a first
+  attempt mirroring `check_force_push()`'s segment-scoped design proved bypassable via quoted multi-statement
+  args and heredocs.
   Two demonstrated bypass shapes — a quoted multi-statement `-c`/`-e` argument and a multi-line heredoc
   invocation — are now regression-tested (`tests/test-pre-tool-guard.sh` MF-029 block, cases S-1/S-2/S-3).
   This closes LR-005 for the SQL rules only; the other unanchored `check_pattern()` rules (fork bomb,
