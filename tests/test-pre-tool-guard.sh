@@ -104,6 +104,47 @@ for bad_cmd in \
   assert_contains "reason for '$bad_cmd'" "$output" "NAZGUL SAFETY"
 done
 
+# --- MF-029: additional DB-CLI invocation shapes (different clients/quoting) must
+# still block, confirming the anchor isn't over-fit to the three literal strings above ---
+for bad_cmd in \
+  'psql -c "DROP TABLE accounts"' \
+  'mysqldump --host=db -e "DROP DATABASE staging"' \
+  'sqlcmd -Q "TRUNCATE TABLE dbo.orders"'; do
+  ec=$(get_exit_code "$bad_cmd")
+  assert_exit_code "blocked MF-029: '$bad_cmd'" "$ec" 2
+  output=$(run_guard "$bad_cmd")
+  assert_contains "reason MF-029 for '$bad_cmd'" "$output" "NAZGUL SAFETY"
+done
+
+# --- MF-029: evidence-derived false positives — quoted prose naming the SQL
+# keywords with no DB-CLI invocation token in the same segment must be allowed
+# (LR-005; each case traces to a real hit recorded in nazgul/docs/TRD.md) ---
+
+# FP-1: python3 heredoc prose (the FEAT-018 wiki-ingest case)
+ec=$(get_exit_code "$(printf 'python3 <<EOF\nThis note explains the TRUNCATE prose fix for FEAT-018\nEOF')")
+assert_exit_code "allowed MF-029 FP-1: python3 heredoc prose (no DB-CLI token)" "$ec" 0
+
+# FP-2: jq string argument naming the keywords (the FEAT-019 objective-store self-block case)
+ec=$(get_exit_code 'jq -n --arg msg "block DROP TABLE and TRUNCATE keywords" "$msg"')
+assert_exit_code "allowed MF-029 FP-2: jq argument naming keywords" "$ec" 0
+
+# FP-3: git commit -m prose message
+ec=$(get_exit_code 'git commit -m "fix: anchor DROP TABLE and TRUNCATE guard rules (LR-005)"')
+assert_exit_code "allowed MF-029 FP-3: git commit -m prose" "$ec" 0
+
+# FP-4: grep search-pattern argument naming a keyword
+ec=$(get_exit_code 'grep -rn "DROP TABLE" scripts/pre-tool-guard.sh')
+assert_exit_code "allowed MF-029 FP-4: grep pattern argument" "$ec" 0
+
+# FP-5: file path / code comment containing a keyword, no DB-CLI invocation
+ec=$(get_exit_code 'echo "// TODO: handle TRUNCATE edge case in parser.py"')
+assert_exit_code "allowed MF-029 FP-5: file path/comment mentioning keyword" "$ec" 0
+
+# FP-6: production JSON-envelope path — same commit-message prose as FP-3, wrapped
+# per the real PreToolUse hook contract
+ec=$(get_exit_code_json 'git commit -m "fix: anchor DROP TABLE and TRUNCATE guard rules (LR-005)"')
+assert_exit_code "allowed MF-029 FP-6: JSON envelope commit-message prose" "$ec" 0
+
 # --- Git force push (should exit 2) ---
 for bad_cmd in \
   "git push --force origin main" \

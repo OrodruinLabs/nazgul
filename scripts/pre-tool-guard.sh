@@ -51,10 +51,35 @@ check_pattern 'rm\s+-rf\s+~/?(\s|$|;|&|\|)' "Recursive delete of home directory"
 check_pattern 'rm\s+-rf\s+\$HOME/?(\s|$|;|&|\|)' "Recursive delete of home directory"
 check_pattern 'rm\s+-rf\s+\.\s*$' "Recursive delete of current directory"
 
-# Database destruction
-check_pattern 'DROP\s+TABLE' "SQL table drop"
-check_pattern 'DROP\s+DATABASE' "SQL database drop"
-check_pattern 'TRUNCATE' "SQL table truncation"
+# Database destruction (MF-029). Bare substring greps here previously fired on any
+# quoted prose naming these keywords (a python3 heredoc, a jq argument, a commit
+# message, a grep pattern — see LR-005). Anchor keyword+identifier shape to a
+# DB-CLI invocation token in the same segment (mirrors check_force_push): a segment
+# naming no psql/mysql/mysqldump/sqlite3/sqlcmd/redis-cli can never match.
+check_sql_destructive() {
+  local segment
+  local dbcli='\b(mysqldump|sqlite3|sqlcmd|mysql|psql|redis-cli)\b'
+  local ident="[A-Za-z_\`'\"][A-Za-z0-9_.\`'\"-]*"
+  while IFS= read -r segment; do
+    echo "$segment" | grep -qiE "$dbcli" || continue
+    if echo "$segment" | grep -qiE "(^|[^A-Za-z0-9_])DROP\s+TABLE\s+$ident"; then
+      echo "NAZGUL SAFETY: Blocked — SQL table drop" >&2
+      echo "Command contained: DROP\s+TABLE" >&2
+      exit 2
+    fi
+    if echo "$segment" | grep -qiE "(^|[^A-Za-z0-9_])DROP\s+DATABASE\s+$ident"; then
+      echo "NAZGUL SAFETY: Blocked — SQL database drop" >&2
+      echo "Command contained: DROP\s+DATABASE" >&2
+      exit 2
+    fi
+    if echo "$segment" | grep -qiE "(^|[^A-Za-z0-9_])TRUNCATE\s+(TABLE\s+)?$ident"; then
+      echo "NAZGUL SAFETY: Blocked — SQL table truncation" >&2
+      echo "Command contained: TRUNCATE" >&2
+      exit 2
+    fi
+  done < <(printf '%s\n' "$CMD" | sed -E 's/(\&\&|\|\||;|\|)/\n/g')
+}
+check_sql_destructive
 
 # Git force push to protected branches (MF-028). The force flag and the branch
 # name can appear in either order (`git push origin main --force` is as idiomatic
