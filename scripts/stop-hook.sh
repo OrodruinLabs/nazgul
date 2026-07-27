@@ -220,10 +220,13 @@ if [ "$TT_ENABLED" = "true" ]; then
   TT_RAW=$(tt_detect_undismissed "$NAZGUL_DIR" "$PROJECT_ROOT" "$SESSION_ID" 2>/dev/null || true)
   if [ -n "$TT_RAW" ]; then
     # tt_detect_undismissed prefixes confirmed-dismissal self-heals with a
-    # HEALED marker line; split those out before they reach the
-    # blocks-increment/TT_LIST consumer below.
-    TT_HEALED=$(printf '%s\n' "$TT_RAW" | grep $'^HEALED\t' || true)
-    TT_LEAKED=$(printf '%s\n' "$TT_RAW" | grep -v $'^HEALED\t' || true)
+    # 2-field HEALED marker line; genuine leaked-teammate lines always have 4
+    # fields (name/report/team_dir/blocks). Disambiguate by field count, not
+    # by $1's literal value, so a teammate literally named "HEALED" can never
+    # collide with the marker (its data line still has 4 fields) — split
+    # those out before they reach the blocks-increment/TT_LIST consumer below.
+    TT_HEALED=$(printf '%s\n' "$TT_RAW" | awk -F'\t' 'NF == 2 && $1 == "HEALED"')
+    TT_LEAKED=$(printf '%s\n' "$TT_RAW" | awk -F'\t' 'NF == 4')
     if [ -n "$TT_HEALED" ]; then
       while IFS=$'\t' read -r _tt_marker tt_healed_name; do
         [ -n "$tt_healed_name" ] || continue

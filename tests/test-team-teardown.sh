@@ -421,6 +421,12 @@ assert_file_contains "verified_clean: fires on confirmed dismissal" "$EVENTS" '"
 VC_COUNT=$(grep -c '"action":"verified_clean"' "$EVENTS" 2>/dev/null || echo 0)
 assert_eq "verified_clean: fires exactly once" "$VC_COUNT" "1"
 assert_file_contains "verified_clean: names the teammate" "$EVENTS" '"teammate":"rv-code-TASK-001"'
+# HEALED must not leak into the blocks-increment/escalation consumer path
+# (the load-bearing regression the filtering in stop-hook.sh exists to prevent).
+assert_file_not_contains "confirmed dismissal: no leaked_detected event" "$EVENTS" '"action":"leaked_detected"'
+assert_file_not_exists "confirmed dismissal: manifest self-healed by stop-hook" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json"
+BLOCKS=$(jq -r '.teardown_blocks // 0' "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json" 2>/dev/null || echo 0)
+assert_eq "confirmed dismissal: teardown_blocks NOT incremented" "$BLOCKS" "0"
 teardown_temp_dir
 
 # --- 24b: team-dir-gone self-heal gets NO verified_clean event (session-exit
@@ -479,6 +485,21 @@ stat() { return 1; }
 OUT=$(tt_sweep_orphaned_teams "$TEST_DIR/nazgul" "$TEST_DIR" "current-sess" 24)
 unset -f stat
 assert_dir_exists "unreadable mtime: team kept (fail open)" "$TEST_DIR/teams/unreadable-mtime-team"
+teardown_temp_dir
+
+# --- 28: a teammate literally named "HEALED" is still treated as a genuine
+# leak, not misparsed as the self-heal marker (leading-empty-field fix) ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir; create_config '.'
+create_plan; create_task_file TASK-001 READY none
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams"
+make_team "nazgul-review-TASK-001" "HEALED"
+make_manifest "HEALED" "nazgul/reviews/TASK-001/code.md" "nazgul-review-TASK-001"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+echo "verdict: APPROVE" > "$TEST_DIR/nazgul/reviews/TASK-001/code.md"
+run_hook
+assert_exit_code "HEALED-named teammate: gate still fires" "$HOOK_EC" 2
+assert_contains "HEALED-named teammate: directive names it" "$HOOK_OUTPUT" "HEALED"
+assert_json_field "HEALED-named teammate: blocks incremented (treated as leak)" "$TEST_DIR/nazgul/dispatch/HEALED.json" '.teardown_blocks' "1"
 teardown_temp_dir
 
 report_results

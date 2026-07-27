@@ -112,6 +112,10 @@ tt_detect_undismissed() {
       # Absent + report NOT delivered → the teammate may still be live and
       # the TeammateIdle guard owns it → keep. Unsafe/missing report → keep.
       if [ "$delivered" = "true" ]; then
+        # 2-field marker vs. the always-4-field genuine data line below —
+        # the consumer disambiguates by field count, not by $name's value,
+        # so this can never collide even if a teammate is literally named
+        # "HEALED" (its data line still has 4 fields).
         printf 'HEALED\t%s\n' "$name"
         rm -f "$manifest"
       fi
