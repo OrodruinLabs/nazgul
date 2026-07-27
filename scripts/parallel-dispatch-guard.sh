@@ -12,10 +12,13 @@ INPUT="${1:-}"
 [ -z "$INPUT" ] && exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
-NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
+
+NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
 TASKS_DIR="$NAZGUL_DIR/tasks"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Scope: only when the parallel dispatch option is on. A present-but-corrupt
 # config can't be trusted to say "parallel is off", so it fails closed instead
@@ -29,6 +32,9 @@ PARALLEL=$(jq -r '.execution.parallel // false' "$CONFIG")
 ENFORCE=$(jq -r 'if .execution.enforce.dispatch_guard == null then "true" else (.execution.enforce.dispatch_guard|tostring) end' "$CONFIG" 2>/dev/null || echo "true")
 [ "$ENFORCE" = "false" ] && exit 0
 
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/emit-event.sh"
+
 TOOL=$(printf '%s' "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
 [ "$TOOL" = "Agent" ] || exit 0
 SUBAGENT=$(printf '%s' "$INPUT" | jq -r '.tool_input.subagent_type // ""' 2>/dev/null || echo "")
@@ -41,12 +47,33 @@ is_work_unit() {
   esac
 }
 
+# Ambiguity fail-open (PRD AC 3). "Cannot confirm" is exactly two structural
+# checks against the resolver's own output — never a content heuristic
+# (LR-005): config.json's feat_id can't even be read (the document root isn't
+# indexable, e.g. not an object), or TASKS_DIR doesn't canonicalize to a real
+# child of NAZGUL_DIR (e.g. tasks/ symlinked outside this objective's tree).
+# A null/absent feat_id is a normal, confirmable state (mirrors
+# teammate-idle-guard.sh's `// "default"` treatment) — only a genuine read
+# failure counts as ambiguous.
+_objective_confirmed() {
+  jq '.feat_id' "$CONFIG" >/dev/null 2>&1 || return 1
+  local nd_real td_real
+  nd_real=$(cd "$NAZGUL_DIR" 2>/dev/null && pwd -P) || return 1
+  td_real=$(cd "$TASKS_DIR" 2>/dev/null && pwd -P) || return 1
+  case "$td_real" in "$nd_real"/*) return 0 ;; *) return 1 ;; esac
+}
+
 # Never re-dispatch a completed unit. Prompt carries `NAZGUL_UNIT: TASK-NNN`
 # (grepped as data — never eval'd). Status source is the task manifest —
 # canonical state, no stored graph. An IMPLEMENTED unit still legitimately
 # needs its review-gate dispatch; only a DONE unit's review is wasted work.
 UNIT=$(printf '%s' "$PROMPT" | grep -oE 'NAZGUL_UNIT: TASK-[0-9]+' | head -1 | sed 's/^NAZGUL_UNIT: //' || true)
 if [ -n "$UNIT" ] && [ -f "$TASKS_DIR/$UNIT.md" ] && is_work_unit "$SUBAGENT"; then
+  if ! _objective_confirmed; then
+    echo "NAZGUL PARALLEL: Allowed — cannot confirm $UNIT belongs to the running objective (ambiguous feat_id/resolution); failing open per PRD AC 3." >&2
+    emit_event "dispatch_guard_ambiguous" unit "$UNIT" subagent "$SUBAGENT"
+    exit 0
+  fi
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/lib/task-utils.sh"
   STATUS=$(get_task_status "$TASKS_DIR/$UNIT.md" "")
