@@ -111,7 +111,10 @@ tt_detect_undismissed() {
       # delivered (a completed dismissal implies a consumed report on disk).
       # Absent + report NOT delivered → the teammate may still be live and
       # the TeammateIdle guard owns it → keep. Unsafe/missing report → keep.
-      [ "$delivered" = "true" ] && rm -f "$manifest"
+      if [ "$delivered" = "true" ]; then
+        printf 'HEALED\t%s\n' "$name"
+        rm -f "$manifest"
+      fi
       continue
     fi
     [ "$delivered" = "true" ] || continue
@@ -133,18 +136,31 @@ tt_detect_undismissed() {
 tt_sweep_orphaned_teams() {
   local nazgul_dir="$1" project_dir="$2" cur_sid="${3:-}" min_age_h="${4:-24}"
   local team_cfg team_dir team lead lead_safe alive t mt now min_age_s m
+  local attributed m_cwd m_cwd_resolved
   command -v jq >/dev/null 2>&1 || return 0
   [ -d "$NAZGUL_TEAMS_DIR" ] || return 0
   case "$min_age_h" in ''|*[!0-9]*) min_age_h=24 ;; esac
+  [ "$min_age_h" -lt 1 ] 2>/dev/null && min_age_h=1
   min_age_s=$((min_age_h * 3600))
   now=$(date +%s)
+  # Physical resolution so macOS /tmp vs /private/tmp still attributes
+  # correctly; fails open to the literal string if the path is inaccessible.
+  project_dir=$(cd "$project_dir" 2>/dev/null && pwd -P || printf '%s' "$project_dir")
   for team_cfg in "$NAZGUL_TEAMS_DIR"/*/config.json; do
     [ -f "$team_cfg" ] || continue
     team_dir=$(dirname "$team_cfg")
     team=$(basename "$team_dir")
     case "$team" in ''|.|..|*/*) continue ;; esac
-    jq -e --arg d "$project_dir" '[.members[]?.cwd == $d] | any' \
-      "$team_cfg" >/dev/null 2>&1 || continue
+    attributed="false"
+    while IFS= read -r m_cwd; do
+      [ -n "$m_cwd" ] || continue
+      m_cwd_resolved=$(cd "$m_cwd" 2>/dev/null && pwd -P || printf '%s' "$m_cwd")
+      if [ "$m_cwd_resolved" = "$project_dir" ]; then
+        attributed="true"
+        break
+      fi
+    done <<< "$(jq -r '.members[]?.cwd // empty' "$team_cfg" 2>/dev/null || echo "")"
+    [ "$attributed" = "true" ] || continue
     lead=$(jq -r '.leadSessionId // ""' "$team_cfg" 2>/dev/null || echo "")
     [ -z "$lead" ] && continue
     [ -n "$cur_sid" ] && [ "$lead" = "$cur_sid" ] && continue

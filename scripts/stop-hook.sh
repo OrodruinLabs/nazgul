@@ -23,12 +23,17 @@ if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
-# Clean up session lock on exit — read persisted ID to match session-context.sh
+# Refresh the session lock every iteration (ADR-007 Option A) — read
+# persisted ID to match session-context.sh. Removed only on a
+# genuinely-ending (exit 0) run via the EXIT trap below, so
+# tt_sweep_orphaned_teams's "provably dead" signal and
+# is_concurrent_session_warning() stay honest for a session's full lifetime.
 SESSION_ID="${CLAUDE_SESSION_ID:-}"
 if [ -z "$SESSION_ID" ] && [ -f "$NAZGUL_DIR/.session_id" ]; then
   SESSION_ID=$(cat "$NAZGUL_DIR/.session_id")
 fi
-[ -n "$SESSION_ID" ] && unregister_session "$SESSION_ID" "$NAZGUL_DIR/sessions"
+[ -n "$SESSION_ID" ] && register_session "$SESSION_ID" "$NAZGUL_DIR/sessions"
+trap '[ "$?" -eq 0 ] && [ -n "$SESSION_ID" ] && unregister_session "$SESSION_ID" "$NAZGUL_DIR/sessions" || true' EXIT
 
 # Read current state (batched into single jq call)
 CONFIG_STATE=$(jq -r '[
@@ -212,38 +217,52 @@ TEARDOWN_DIRECTIVE=""
 TT_ENABLED=$(jq -r 'if .guards.team_teardown == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
 if [ "$TT_ENABLED" = "true" ]; then
   source "$SCRIPT_DIR/lib/team-teardown.sh"
-  TT_LEAKED=$(tt_detect_undismissed "$NAZGUL_DIR" "$PROJECT_ROOT" "$SESSION_ID" 2>/dev/null || true)
-  if [ -n "$TT_LEAKED" ]; then
-    TT_LIST=""
-    while IFS=$'\t' read -r tt_name tt_report tt_team_dir tt_blocks; do
-      [ -n "$tt_name" ] || continue
-      tt_manifest="$NAZGUL_DIR/dispatch/${tt_name}.json"
-      if [ "$tt_blocks" -ge 3 ] 2>/dev/null; then
-        if [ "$(jq -r '.teardown_escalated // false' "$tt_manifest" 2>/dev/null)" != "true" ]; then
-          source "$SCRIPT_DIR/lib/raise-finding.sh"
-          raise_finding "medium" "process" \
-            "teammate ${tt_name} not dismissed after 3 directives" \
-            "Report ${tt_report} was delivered but the teammate stayed a member of $(basename "$tt_team_dir") for 3 iterations after dismissal directives. Manual shutdown_request needed." \
-            "Investigate why the lead skips dismissal; send shutdown_request manually." \
-            "$tt_manifest" || true
-          tt_tmp=$(mktemp 2>/dev/null) || tt_tmp=""
-          if [ -n "$tt_tmp" ] && jq '.teardown_escalated = true' "$tt_manifest" > "$tt_tmp" 2>/dev/null; then
-            mv "$tt_tmp" "$tt_manifest" 2>/dev/null || rm -f "$tt_tmp"
-          else [ -n "$tt_tmp" ] && rm -f "$tt_tmp" || true; fi
-          emit_event "team_teardown" action "escalated" teammate "$tt_name"
+  TT_RAW=$(tt_detect_undismissed "$NAZGUL_DIR" "$PROJECT_ROOT" "$SESSION_ID" 2>/dev/null || true)
+  if [ -n "$TT_RAW" ]; then
+    # tt_detect_undismissed prefixes confirmed-dismissal self-heals with a
+    # HEALED marker line; split those out before they reach the
+    # blocks-increment/TT_LIST consumer below.
+    TT_HEALED=$(printf '%s\n' "$TT_RAW" | grep $'^HEALED\t' || true)
+    TT_LEAKED=$(printf '%s\n' "$TT_RAW" | grep -v $'^HEALED\t' || true)
+    if [ -n "$TT_HEALED" ]; then
+      while IFS=$'\t' read -r _tt_marker tt_healed_name; do
+        [ -n "$tt_healed_name" ] || continue
+        emit_event "team_teardown" action "verified_clean" teammate "$tt_healed_name"
+      done <<< "$TT_HEALED"
+    fi
+    if [ -n "$TT_LEAKED" ]; then
+      emit_event "team_teardown" action "leaked_detected" count:n "$(printf '%s' "$TT_LEAKED" | grep -c .)"
+      TT_LIST=""
+      while IFS=$'\t' read -r tt_name tt_report tt_team_dir tt_blocks; do
+        [ -n "$tt_name" ] || continue
+        tt_manifest="$NAZGUL_DIR/dispatch/${tt_name}.json"
+        if [ "$tt_blocks" -ge 3 ] 2>/dev/null; then
+          if [ "$(jq -r '.teardown_escalated // false' "$tt_manifest" 2>/dev/null)" != "true" ]; then
+            source "$SCRIPT_DIR/lib/raise-finding.sh"
+            raise_finding "medium" "process" \
+              "teammate ${tt_name} not dismissed after 3 directives" \
+              "Report ${tt_report} was delivered but the teammate stayed a member of $(basename "$tt_team_dir") for 3 iterations after dismissal directives. Manual shutdown_request needed." \
+              "Investigate why the lead skips dismissal; send shutdown_request manually." \
+              "$tt_manifest" || true
+            tt_tmp=$(mktemp 2>/dev/null) || tt_tmp=""
+            if [ -n "$tt_tmp" ] && jq '.teardown_escalated = true' "$tt_manifest" > "$tt_tmp" 2>/dev/null; then
+              mv "$tt_tmp" "$tt_manifest" 2>/dev/null || rm -f "$tt_tmp"
+            else [ -n "$tt_tmp" ] && rm -f "$tt_tmp" || true; fi
+            emit_event "team_teardown" action "escalated" teammate "$tt_name"
+          fi
+          continue
         fi
-        continue
-      fi
-      TT_LIST="${TT_LIST}  - ${tt_name} (report delivered: ${tt_report})"$'\n'
-      tt_tmp=$(mktemp 2>/dev/null) || tt_tmp=""
-      if [ -n "$tt_tmp" ] && jq --argjson b "$((tt_blocks + 1))" '.teardown_blocks = $b' "$tt_manifest" > "$tt_tmp" 2>/dev/null; then
-        mv "$tt_tmp" "$tt_manifest" 2>/dev/null || rm -f "$tt_tmp"
-      else [ -n "$tt_tmp" ] && rm -f "$tt_tmp" || true; fi
-    done <<< "$TT_LEAKED"
-    if [ -n "$TT_LIST" ]; then
-      TEARDOWN_DIRECTIVE="TEAM TEARDOWN (mandatory, do this FIRST, before any new dispatch): these teammates delivered their reports and must be dismissed. For EACH: send it a SendMessage shutdown_request; after it approves, delete nazgul/dispatch/<name>.json (NEVER glob dispatch/*.json — other teams' manifests share that directory). If a teammate REJECTS shutdown it believes it has live work — leave its manifest and explain in your summary.
+        TT_LIST="${TT_LIST}  - ${tt_name} (report delivered: ${tt_report})"$'\n'
+        tt_tmp=$(mktemp 2>/dev/null) || tt_tmp=""
+        if [ -n "$tt_tmp" ] && jq --argjson b "$((tt_blocks + 1))" '.teardown_blocks = $b' "$tt_manifest" > "$tt_tmp" 2>/dev/null; then
+          mv "$tt_tmp" "$tt_manifest" 2>/dev/null || rm -f "$tt_tmp"
+        else [ -n "$tt_tmp" ] && rm -f "$tt_tmp" || true; fi
+      done <<< "$TT_LEAKED"
+      if [ -n "$TT_LIST" ]; then
+        TEARDOWN_DIRECTIVE="TEAM TEARDOWN (mandatory, do this FIRST, before any new dispatch): these teammates delivered their reports and must be dismissed. For EACH: send it a SendMessage shutdown_request; after it approves, delete nazgul/dispatch/<name>.json (NEVER glob dispatch/*.json — other teams' manifests share that directory). If a teammate REJECTS shutdown it believes it has live work — leave its manifest and explain in your summary.
 ${TT_LIST%$'\n'}"
-      emit_event "team_teardown" action "directive_injected" count:n "$(printf '%s' "$TT_LIST" | grep -c .)"
+        emit_event "team_teardown" action "directive_injected" count:n "$(printf '%s' "$TT_LIST" | grep -c .)"
+      fi
     fi
   fi
 fi
