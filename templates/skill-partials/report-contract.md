@@ -27,19 +27,15 @@ jq -n --arg t "<teammate-session-name>" --arg rp "<REPORT_PATH>" \
 ```
 
 Completion signal = idle notification + report file on disk. Read the report
-from the file; never wait for a message. At team teardown, delete ONLY the
-`nazgul/dispatch/<session-name>.json` manifests for the teammates THIS team
-spawned — never glob `nazgul/dispatch/*.json`, which would also delete
-manifests belonging to other concurrently active teams and silently disable
-their TeammateIdle enforcement.
-
-Dismissal (mandatory): after you consume a teammate's report, send that
-teammate a SendMessage shutdown_request. Once it approves, delete its
-`nazgul/dispatch/<session-name>.json`. Teammates never terminate on their
-own — an undismissed teammate idles forever, and the stop-hook's teardown
-gate detects undismissed teammates and injects a mandatory dismissal
-directive each iteration until they are dismissed (bounded, fail-open).
-`TeamCreate`/
-`TeamDelete` no longer exist (removed in Claude Code v2.1.178); per-teammate
+from the file; never wait for a message. Dismissal is mandatory once you've
+consumed it: send that teammate a SendMessage shutdown_request, and once it
+approves, delete ONLY its `nazgul/dispatch/<session-name>.json` — never glob
+`nazgul/dispatch/*.json`, which would also delete manifests belonging to
+other concurrently active teams and silently disable their TeammateIdle
+enforcement. Teammates never terminate on their own — `TeamCreate`/
+`TeamDelete` no longer exist (removed in Claude Code v2.1.178), per-teammate
 shutdown_request is the only teardown primitive, and team state is otherwise
-removed only on normal session exit.
+removed only on normal session exit, so an undismissed teammate idles
+forever. As a mechanical backstop, the stop-hook's teardown gate detects
+undismissed teammates and injects a mandatory dismissal directive each
+iteration until they are dismissed (bounded, fail-open).

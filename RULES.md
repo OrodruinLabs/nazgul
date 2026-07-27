@@ -549,4 +549,11 @@ session exit.
    from `~/.claude/teams/` and `~/.claude/tasks/`, logged to
    `nazgul/logs/team-sweep.jsonl`. Foreign projects' teams are only ever
    deleted interactively via `/nazgul:clean --teams --all`. Any ambiguity
-   fails open: the team is kept.
+   fails open: the team is kept. The session lock is refreshed by the
+   stop-hook on every iteration and removed only via a centralized exit-0
+   trap when the loop genuinely ends, or by `cleanup_stale_sessions`'s 2-hour
+   staleness backstop for a crashed session — so "no lock" means the lead
+   session is not looping, for its entire lifetime, not just the window
+   before its first Stop (ADR-007). `guards.team_sweep_min_age_hours` is
+   floored to `>=1` at every read site so a misconfigured `0` cannot
+   silently collapse this AND to lock-only.
