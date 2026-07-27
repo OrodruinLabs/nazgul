@@ -14,7 +14,10 @@ INPUT="${1:-}"
 [ -z "$INPUT" ] && exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
-PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
+
+PROJECT_DIR="$(resolve_project_root)"
 NAZGUL_DIR="$PROJECT_DIR/nazgul"
 CONFIG="$NAZGUL_DIR/config.json"
 DISPATCH_DIR="$NAZGUL_DIR/dispatch"
