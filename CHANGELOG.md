@@ -30,10 +30,11 @@ All notable changes to this project will be documented in this file.
   never touches `.guards`.
 
 ### Added
-- **`team_teardown` telemetry parity with the FEAT-018 design spec §4.4.** `scripts/lib/team-teardown.sh`
-  now also emits `leaked_detected` (any non-empty detection, independent of whether a directive is
-  issued) and `verified_clean` (confirmed-dismissal self-heal only), joining the already-shipped
-  `directive_injected` / `escalated`.
+- **`team_teardown` telemetry parity with the FEAT-018 design spec §4.4.** `scripts/stop-hook.sh` now
+  also emits `leaked_detected` (any non-empty detection, independent of whether a directive is
+  issued) and `verified_clean` (confirmed-dismissal self-heal only) — based on the classifications
+  `scripts/lib/team-teardown.sh` returns — joining the already-shipped `directive_injected` /
+  `escalated`.
 - **Regression coverage**: bare-dot `team` rejection and unreadable-`stat` (`mt=""` keep) tests in
   `tests/test-team-teardown.sh`, plus a pinning test that a `HEALED` self-heal never enters the
   blocks-increment/escalation path.
