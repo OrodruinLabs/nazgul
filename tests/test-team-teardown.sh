@@ -76,7 +76,7 @@ assert_eq "corrupt config: nothing emitted" "$OUT" ""
 assert_file_exists "corrupt config: manifest kept (fail open)" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json"
 teardown_temp_dir
 
-# --- 2: delivered + member ABSENT -> manifest self-healed (deleted), nothing emitted ---
+# --- 2: delivered + member ABSENT -> manifest self-healed (deleted), HEALED line emitted ---
 setup_temp_dir; setup_nazgul_dir; create_config '.'
 export NAZGUL_TEAMS_DIR="$TEST_DIR/teams"
 make_team "nazgul-review-TASK-001"   # no reviewer member
@@ -84,7 +84,7 @@ make_manifest "rv-code-TASK-001" "nazgul/reviews/TASK-001/code.md" "nazgul-revie
 mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
 echo "x" > "$TEST_DIR/nazgul/reviews/TASK-001/code.md"
 OUT=$(tt_detect_undismissed "$TEST_DIR/nazgul" "$TEST_DIR" "sess1234-abcd")
-assert_eq "dismissed: nothing emitted" "$OUT" ""
+assert_eq "dismissed: HEALED line emitted" "$OUT" "$(printf 'HEALED\trv-code-TASK-001')"
 assert_file_not_exists "dismissed: manifest self-healed" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json"
 teardown_temp_dir
 
@@ -355,6 +355,151 @@ make_manifest "rv-code-TASK-001" "$TAB_REPORT" "nazgul-review-TASK-001"
 OUT=$(tt_detect_undismissed "$TEST_DIR/nazgul" "$TEST_DIR" "sess1234-abcd")
 assert_eq "tab in report_path: nothing emitted" "$OUT" ""
 assert_file_exists "tab in report_path: manifest kept" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json"
+teardown_temp_dir
+
+# --- 21: session lock refreshed across continuing runs (ADR-007 Option A) ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir; create_config '.'
+create_plan; create_task_file TASK-001 READY none
+export CLAUDE_SESSION_ID="lock-lifecycle-test-0001"
+LOCK_FILE="$TEST_DIR/nazgul/sessions/$(_sanitize_session_id "$CLAUDE_SESSION_ID").lock"
+run_hook
+assert_exit_code "lock: continuing run exits 2" "$HOOK_EC" 2
+assert_file_exists "lock: present after 1st continuing run" "$LOCK_FILE"
+run_hook
+assert_exit_code "lock: 2nd continuing run exits 2" "$HOOK_EC" 2
+assert_file_exists "lock: still present after refresh (not one-shot)" "$LOCK_FILE"
+unset CLAUDE_SESSION_ID
+teardown_temp_dir
+
+# --- 21b: lock removed only on a genuinely-ending (exit 0) run ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir; create_config '.paused = true'
+create_plan; create_task_file TASK-001 READY none
+export CLAUDE_SESSION_ID="lock-lifecycle-test-0002"
+LOCK_FILE="$TEST_DIR/nazgul/sessions/$(_sanitize_session_id "$CLAUDE_SESSION_ID").lock"
+run_hook
+assert_exit_code "lock: genuinely-ending run exits 0" "$HOOK_EC" 0
+assert_file_not_exists "lock: removed after genuinely-ending run" "$LOCK_FILE"
+unset CLAUDE_SESSION_ID
+teardown_temp_dir
+
+# --- 22: guards.team_sweep_min_age_hours=0 floored to 1 -> a fresh transcript
+# keeps the team; an unfloored 0 disables the freshness AND-term entirely and
+# would sweep it regardless of age ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams" NAZGUL_TEAM_TASKS_DIR="$TEST_DIR/team-tasks" NAZGUL_PROJECTS_DIR="$TEST_DIR/projects"
+make_owned_team "floor-team" "floor-lead-7777"
+mkdir -p "$TEST_DIR/projects/proj-a"
+echo '{}' > "$TEST_DIR/projects/proj-a/floor-lead-7777.jsonl"   # mtime = now
+OUT=$(tt_sweep_orphaned_teams "$TEST_DIR/nazgul" "$TEST_DIR" "current-sess" 0)
+assert_dir_exists "floor: min_age_hours=0 clamped to 1, fresh transcript kept" "$TEST_DIR/teams/floor-team"
+teardown_temp_dir
+
+# --- 23: leaked_detected fires even in the all-at-3-strikes case where
+# directive_injected does NOT fire ---
+setup_gate_fixture
+tmp=$(mktemp); jq '.teardown_blocks = 3' "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json" > "$tmp" \
+  && mv "$tmp" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json"
+run_hook
+EVENTS="$TEST_DIR/nazgul/logs/events.jsonl"
+assert_file_contains "leaked_detected: fires at 3-strikes" "$EVENTS" '"action":"leaked_detected"'
+assert_file_contains "leaked_detected: count is 1" "$EVENTS" '"count":1'
+assert_file_not_contains "leaked_detected: directive_injected does NOT fire at 3-strikes" "$EVENTS" '"action":"directive_injected"'
+teardown_temp_dir
+
+# --- 24: verified_clean fires exactly once on the confirmed-dismissal
+# self-heal (member absent + report delivered) ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir; create_config '.'
+create_plan; create_task_file TASK-001 READY none
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams"
+make_team "nazgul-review-TASK-001"   # no reviewer member -> confirmed dismissal
+make_manifest "rv-code-TASK-001" "nazgul/reviews/TASK-001/code.md" "nazgul-review-TASK-001"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+echo "verdict: APPROVE" > "$TEST_DIR/nazgul/reviews/TASK-001/code.md"
+run_hook
+EVENTS="$TEST_DIR/nazgul/logs/events.jsonl"
+assert_file_contains "verified_clean: fires on confirmed dismissal" "$EVENTS" '"action":"verified_clean"'
+VC_COUNT=$(grep -c '"action":"verified_clean"' "$EVENTS" 2>/dev/null || echo 0)
+assert_eq "verified_clean: fires exactly once" "$VC_COUNT" "1"
+assert_file_contains "verified_clean: names the teammate" "$EVENTS" '"teammate":"rv-code-TASK-001"'
+# HEALED must not leak into the blocks-increment/escalation consumer path
+# (the load-bearing regression the filtering in stop-hook.sh exists to prevent).
+assert_file_not_contains "confirmed dismissal: no leaked_detected event" "$EVENTS" '"action":"leaked_detected"'
+assert_file_not_exists "confirmed dismissal: manifest self-healed by stop-hook" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json"
+BLOCKS=$(jq -r '.teardown_blocks // 0' "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json" 2>/dev/null || echo 0)
+assert_eq "confirmed dismissal: teardown_blocks NOT incremented" "$BLOCKS" "0"
+teardown_temp_dir
+
+# --- 24b: team-dir-gone self-heal gets NO verified_clean event (session-exit
+# cleanup, not a confirmed dismissal) ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir; create_config '.'
+create_plan; create_task_file TASK-001 READY none
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams"
+make_manifest "rv-code-TASK-001" "nazgul/reviews/TASK-001/code.md" "gone-team"
+run_hook
+assert_file_not_contains "team-dir-gone: no verified_clean event" "$TEST_DIR/nazgul/logs/events.jsonl" '"action":"verified_clean"'
+teardown_temp_dir
+
+# --- 25: symlink-equivalent cwd (e.g. macOS /tmp vs /private/tmp) is
+# correctly attributed and swept (existing test 17's genuinely-foreign-cwd
+# control is unaffected — it never resolves through a symlink) ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams" NAZGUL_TEAM_TASKS_DIR="$TEST_DIR/team-tasks" NAZGUL_PROJECTS_DIR="$TEST_DIR/projects"
+REAL_DIR="$TEST_DIR/real-project"
+mkdir -p "$REAL_DIR"
+SYMLINK_DIR="$TEST_DIR/symlinked-project"
+ln -s "$REAL_DIR" "$SYMLINK_DIR"
+mkdir -p "$TEST_DIR/teams/symlink-team" "$TEST_DIR/team-tasks/symlink-team"
+jq -n --arg name "symlink-team" --arg lead "symlink-lead-8888" --arg cwd "$SYMLINK_DIR" \
+  '{name:$name, leadSessionId:$lead, members:[{name:"team-lead", cwd:$cwd}]}' \
+  > "$TEST_DIR/teams/symlink-team/config.json"
+touch "$TEST_DIR/team-tasks/symlink-team/tasks.json"
+OUT=$(tt_sweep_orphaned_teams "$TEST_DIR/nazgul" "$REAL_DIR" "current-sess" 24)
+assert_contains "symlink cwd: attributed and swept" "$OUT" "symlink-team"
+teardown_temp_dir
+
+# --- 26: manifest team field is bare "." -> rejected (fail open), mirrors
+# the existing unsafe-teammate-name assertions (tests 8/8b) on the team field ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams"
+make_manifest "rv-code-TASK-001" "nazgul/reviews/TASK-001/code.md" "."
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+echo "x" > "$TEST_DIR/nazgul/reviews/TASK-001/code.md"
+OUT=$(tt_detect_undismissed "$TEST_DIR/nazgul" "$TEST_DIR" "sess1234-abcd")
+assert_eq "bare-dot team: nothing emitted" "$OUT" ""
+assert_file_exists "bare-dot team: manifest kept" "$TEST_DIR/nazgul/dispatch/rv-code-TASK-001.json"
+teardown_temp_dir
+
+# --- 27: transcript mtime unreadable (both stat forms fail) -> mt="" ->
+# fail open, team kept. `stat` is shadowed with a bash function for this test
+# only (portable across platforms — chmod on the file alone does not make
+# stat() fail on Linux/macOS since it needs no read permission on the target,
+# only directory search permission; the acceptance bar is exercising the
+# mt="" branch, not any one specific construction method) ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams" NAZGUL_TEAM_TASKS_DIR="$TEST_DIR/team-tasks" NAZGUL_PROJECTS_DIR="$TEST_DIR/projects"
+make_owned_team "unreadable-mtime-team" "unreadable-lead-6666"
+mkdir -p "$TEST_DIR/projects/proj-a"
+echo '{}' > "$TEST_DIR/projects/proj-a/unreadable-lead-6666.jsonl"
+# shellcheck disable=SC2329 # called indirectly by tt_sweep_orphaned_teams below
+stat() { return 1; }
+OUT=$(tt_sweep_orphaned_teams "$TEST_DIR/nazgul" "$TEST_DIR" "current-sess" 24)
+unset -f stat
+assert_dir_exists "unreadable mtime: team kept (fail open)" "$TEST_DIR/teams/unreadable-mtime-team"
+teardown_temp_dir
+
+# --- 28: a teammate literally named "HEALED" is still treated as a genuine
+# leak, not misparsed as the self-heal marker (leading-empty-field fix) ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir; create_config '.'
+create_plan; create_task_file TASK-001 READY none
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams"
+make_team "nazgul-review-TASK-001" "HEALED"
+make_manifest "HEALED" "nazgul/reviews/TASK-001/code.md" "nazgul-review-TASK-001"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+echo "verdict: APPROVE" > "$TEST_DIR/nazgul/reviews/TASK-001/code.md"
+run_hook
+assert_exit_code "HEALED-named teammate: gate still fires" "$HOOK_EC" 2
+assert_contains "HEALED-named teammate: directive names it" "$HOOK_OUTPUT" "HEALED"
+assert_json_field "HEALED-named teammate: blocks incremented (treated as leak)" "$TEST_DIR/nazgul/dispatch/HEALED.json" '.teardown_blocks' "1"
 teardown_temp_dir
 
 report_results

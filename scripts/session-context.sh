@@ -34,7 +34,7 @@ TT_SWEEP_NOTICE=""
 TT_SWEEP_ENABLED=$(jq -r 'if .guards.team_sweep == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
 if [ "$TT_SWEEP_ENABLED" = "true" ]; then
   source "$SCRIPT_DIR/lib/team-teardown.sh"
-  TT_MIN_AGE=$(jq -r '.guards.team_sweep_min_age_hours // 24' "$CONFIG" 2>/dev/null || echo 24)
+  TT_MIN_AGE=$(jq -r '[.guards.team_sweep_min_age_hours // 24, 1] | max' "$CONFIG" 2>/dev/null || echo 24)
   TT_SWEPT=$(tt_sweep_orphaned_teams "$NAZGUL_DIR" "${CLAUDE_PROJECT_DIR:-$(pwd)}" "$SESSION_ID" "$TT_MIN_AGE" 2>/dev/null || true)
   [ -n "$TT_SWEPT" ] && TT_SWEEP_NOTICE="Swept orphaned team state (dead sessions): $(printf '%s' "$TT_SWEPT" | tr '\n' ' ')"
 fi

@@ -51,7 +51,7 @@ If `$ARGUMENTS` contains `--teams`, do ONLY this step, then stop (no uninstall):
    ```bash
    bash -c 'source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/team-teardown.sh"; \
      tt_sweep_orphaned_teams "$(pwd)/nazgul" "$(pwd)" "${CLAUDE_SESSION_ID:-}" \
-       "$(jq -r ".guards.team_sweep_min_age_hours // 24" nazgul/config.json 2>/dev/null || echo 24)"'
+       "$(jq -r "[.guards.team_sweep_min_age_hours // 24, 1] | max" nazgul/config.json 2>/dev/null || echo 24)"'
    ```
    Report each swept team name; report "no dead teams for this project" when the output is empty.
 2. If `--all` is ALSO present: list every remaining team in `~/.claude/teams/` whose `config.json` `leadSessionId` has no transcript in `~/.claude/projects/*/<id>.jsonl` modified within the sweep age threshold (`guards.team_sweep_min_age_hours` from `nazgul/config.json` when present, else 24) hours, and whose lead has no session lock `<member-cwd>/nazgul/sessions/<leadSessionId sanitized per session-tracker>.lock` (check BOTH filename forms, with and without a trailing underscore) in any member cwd that has a `nazgul/` dir. If any lock exists, treat the lead as alive and do not offer the team. For each such FOREIGN team (any member `cwd` outside this project), show its name, member cwds, and creation date, then use `AskUserQuestion` per team: Delete / Keep. Before deleting, require the team name to be a safe basename — it must match `[A-Za-z0-9._-]+`, must not be `.` or `..`, and must contain no `/`; skip and report any team whose directory name fails this check. On Delete:
