@@ -2,6 +2,51 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.23.0] - 2026-07-27
+
+### Fixed
+- **Session lock lifecycle repaired — the sweep's "provably dead" signal is honest again (ADR-007).**
+  `scripts/stop-hook.sh` unregistered the session lock unconditionally at the top of every Stop, so
+  the lock vanished after a session's *first* Stop event rather than at the end of its life. This
+  collapsed `tt_sweep_orphaned_teams`'s two-signal "provably dead" AND to transcript-staleness only,
+  and silently broke the pre-existing `is_concurrent_session_warning()` guard beyond iteration 1. The
+  lock now re-registers each iteration and unregisters only on a genuinely-ending path, via one
+  centralized `EXIT` trap (exit 0 only). This makes `cleanup_stale_sessions()`'s 2h threshold
+  load-bearing for the first time. **This is a behavioral change to the loop engine, which is why this
+  release is MINOR rather than PATCH.**
+- **`guards.team_sweep_min_age_hours` floored to `>=1`** at all three read sites
+  (`scripts/session-context.sh`, `skills/clean/SKILL.md`'s `--teams` block, and
+  `tt_sweep_orphaned_teams`'s own numeric guard in `scripts/lib/team-teardown.sh`); a configured `0`
+  previously disabled the transcript-freshness AND-term entirely.
+- **Sweep cwd attribution is now symlink-safe.** Both operands are normalized to physical paths via
+  `pwd -P` before comparison in `scripts/lib/team-teardown.sh`, so a macOS `/tmp` vs `/private/tmp`
+  divergence no longer makes `/nazgul:clean --teams` silently under-report dead teams.
+- **`HEALED` marker vs. a genuine teammate named `HEALED` can no longer collide.** The self-heal
+  marker line in `scripts/lib/team-teardown.sh` moved from a value check (`grep '^HEALED\t'`) to a
+  field-count check (`awk -F'\t' 'NF==2'` for the marker vs. `NF==4` for real teammate rows), which
+  disambiguates regardless of `$name`.
+- **`migrate_30_to_31`'s comment now cites `migrate_27_to_28`** (`scripts/migrate-config.sh`) — the
+  true nearest precedent for the `.guards`-type-guard idiom it reuses, not `migrate_29_to_30`, which
+  never touches `.guards`.
+
+### Added
+- **`team_teardown` telemetry parity with the FEAT-018 design spec §4.4.** `scripts/stop-hook.sh` now
+  also emits `leaked_detected` (any non-empty detection, independent of whether a directive is
+  issued) and `verified_clean` (confirmed-dismissal self-heal only) — based on the classifications
+  `scripts/lib/team-teardown.sh` returns — joining the already-shipped `directive_injected` /
+  `escalated`.
+- **Regression coverage**: bare-dot `team` rejection and unreadable-`stat` (`mt=""` keep) tests in
+  `tests/test-team-teardown.sh`, plus a pinning test that a `HEALED` self-heal never enters the
+  blocks-increment/escalation path.
+
+### Changed
+- **Docs aligned with the shipped mechanics**: `RULES.md` §18.4 describes the per-iteration
+  registration and `EXIT`-trap unregistration; the redundant teardown/dismissal paragraphs in
+  `templates/skill-partials/report-contract.md` were merged into one.
+
+Accepted residual, no action taken: the concurrent-session delivered-manifest self-heal corner
+degrades only to the pre-FEAT-018 status quo and was explicitly accepted rather than fixed here.
+
 ## [2.22.1] - 2026-07-25
 
 ### Fixed
