@@ -112,7 +112,8 @@ for bad_cmd in \
   'sqlcmd -Q "TRUNCATE TABLE dbo.orders"' \
   'redis-cli -x "TRUNCATE someset"' \
   "psql -c 'DROP TABLE \"accounts\"'" \
-  "mysql -e 'DROP TABLE \`users\`'"; do
+  "mysql -e 'DROP TABLE \`users\`'" \
+  'sqlcmd -Q "TRUNCATE TABLE [dbo].[orders]"'; do
   ec=$(get_exit_code "$bad_cmd")
   assert_exit_code "blocked MF-029: '$bad_cmd'" "$ec" 2
   output=$(run_guard "$bad_cmd")
