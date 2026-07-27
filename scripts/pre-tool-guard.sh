@@ -51,10 +51,44 @@ check_pattern 'rm\s+-rf\s+~/?(\s|$|;|&|\|)' "Recursive delete of home directory"
 check_pattern 'rm\s+-rf\s+\$HOME/?(\s|$|;|&|\|)' "Recursive delete of home directory"
 check_pattern 'rm\s+-rf\s+\.\s*$' "Recursive delete of current directory"
 
-# Database destruction
-check_pattern 'DROP\s+TABLE' "SQL table drop"
-check_pattern 'DROP\s+DATABASE' "SQL database drop"
-check_pattern 'TRUNCATE' "SQL table truncation"
+# Database destruction (MF-029). Bare substring greps here previously fired on any
+# quoted prose naming these keywords (a python3 heredoc, a jq argument, a commit
+# message, a grep pattern — see LR-005). A first attempt anchored keyword+identifier
+# shape to a DB-CLI token within the same ;/&&/||/| segment (mirroring
+# check_force_push), but a quoted multi-statement arg (`psql -c "SELECT 1; DROP TABLE
+# x;"`) and a heredoc body both split into separate segments on `;` and on embedded
+# newlines, decoupling the token from the keyword and letting both bypass the guard.
+# Require instead that the DB-CLI token and the anchored keyword+identifier shape each
+# appear ANYWHERE in the whole command: narrower than the old bare grep (still
+# requires a DB-CLI token present) and immune to segment-splitting bypasses. Tradeoff:
+# a DB-CLI invocation elsewhere in a compound command can now co-occur with unrelated
+# prose naming a keyword and block it — pinned as a deliberate over-block test below.
+check_sql_destructive() {
+  local dbcli='(^|[^A-Za-z0-9_-])(mysqldump|sqlite3|sqlcmd|mysql|psql|redis-cli)([^A-Za-z0-9_-]|$)'
+  local ident="[][A-Za-z_\`'\"][][A-Za-z0-9_.\`'\"-]*"
+  local drop_table="(^|[^A-Za-z0-9_])DROP\s+TABLE\s+$ident"
+  local drop_database="(^|[^A-Za-z0-9_])DROP\s+DATABASE\s+$ident"
+  local truncate="(^|[^A-Za-z0-9_])TRUNCATE\s+(TABLE\s+)?$ident"
+
+  echo "$CMD" | grep -qiE "$dbcli" || return 0
+
+  if echo "$CMD" | grep -qiE "$drop_table"; then
+    echo "NAZGUL SAFETY: Blocked — SQL table drop" >&2
+    echo "Command contained: $drop_table" >&2
+    exit 2
+  fi
+  if echo "$CMD" | grep -qiE "$drop_database"; then
+    echo "NAZGUL SAFETY: Blocked — SQL database drop" >&2
+    echo "Command contained: $drop_database" >&2
+    exit 2
+  fi
+  if echo "$CMD" | grep -qiE "$truncate"; then
+    echo "NAZGUL SAFETY: Blocked — SQL table truncation" >&2
+    echo "Command contained: $truncate" >&2
+    exit 2
+  fi
+}
+check_sql_destructive
 
 # Git force push to protected branches (MF-028). The force flag and the branch
 # name can appear in either order (`git push origin main --force` is as idiomatic
