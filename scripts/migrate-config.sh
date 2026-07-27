@@ -656,7 +656,7 @@ migrate_30_to_31() {
   local tmp; tmp=$(mktemp)
   # Teammate teardown gate + orphaned-team sweep kill-switches
   # (spec 2026-07-24-team-teardown-design.md). Additive; explicit values
-  # (incl. false) preserved. Same type-guard pattern as migrate_5_to_6.
+  # (incl. false) preserved. Same type-guard pattern as migrate_29_to_30.
   jq '
     .guards = ((if (.guards | type) == "object" then .guards else {} end)
       | .team_teardown = (if has("team_teardown") then .team_teardown else true end)
