@@ -488,7 +488,8 @@ assert_dir_exists "unreadable mtime: team kept (fail open)" "$TEST_DIR/teams/unr
 teardown_temp_dir
 
 # --- 28: a teammate literally named "HEALED" is still treated as a genuine
-# leak, not misparsed as the self-heal marker (leading-empty-field fix) ---
+# leak, not misparsed as the self-heal marker (field-count disambiguation:
+# marker lines have exactly 2 fields, genuine leak lines exactly 4) ---
 setup_temp_dir; setup_git_repo; setup_nazgul_dir; create_config '.'
 create_plan; create_task_file TASK-001 READY none
 export NAZGUL_TEAMS_DIR="$TEST_DIR/teams"
