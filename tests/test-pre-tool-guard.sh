@@ -119,6 +119,25 @@ for bad_cmd in \
   assert_contains "reason MF-029 for '$bad_cmd'" "$output" "NAZGUL SAFETY"
 done
 
+# --- MF-029 B-1..B-4: DB-CLI token boundary — path-prefixed, subshell, piped, and
+# quoted invocations are still DB-CLI invocations and must block (PR #71 bot findings) ---
+for bad_cmd in \
+  '/usr/bin/psql -c "DROP TABLE users"' \
+  '$(psql -c "DROP TABLE users")' \
+  'cat plan.sql | psql -c "DROP TABLE users"' \
+  '"psql" -c "DROP TABLE users"'; do
+  ec=$(get_exit_code "$bad_cmd")
+  assert_exit_code "blocked MF-029 boundary: '$bad_cmd'" "$ec" 2
+  output=$(run_guard "$bad_cmd")
+  assert_contains "reason MF-029 boundary for '$bad_cmd'" "$output" "NAZGUL SAFETY"
+done
+
+# Hyphen is deliberately NOT a token boundary: a hyphenated compound naming a client
+# (wrapper script, file slug) is not that client, while redis-cli still matches as a
+# listed token. Prose keyword mention alongside such a name must stay allowed.
+ec=$(get_exit_code 'echo "see my-psql-notes.txt for the DROP TABLE cleanup plan"')
+assert_exit_code "allowed MF-029 FP-7: hyphenated compound naming a client is not an invocation" "$ec" 0
+
 # --- MF-029: evidence-derived false positives — quoted prose naming the SQL
 # keywords with no DB-CLI invocation token anywhere in the command must be
 # allowed (LR-005; observed live false positives during FEAT-018/019 dogfooding) ---

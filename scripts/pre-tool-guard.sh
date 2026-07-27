@@ -64,7 +64,7 @@ check_pattern 'rm\s+-rf\s+\.\s*$' "Recursive delete of current directory"
 # a DB-CLI invocation elsewhere in a compound command can now co-occur with unrelated
 # prose naming a keyword and block it — pinned as a deliberate over-block test below.
 check_sql_destructive() {
-  local dbcli='(^|\s)(mysqldump|sqlite3|sqlcmd|mysql|psql|redis-cli)(\s|$)'
+  local dbcli='(^|[^A-Za-z0-9_-])(mysqldump|sqlite3|sqlcmd|mysql|psql|redis-cli)([^A-Za-z0-9_-]|$)'
   local ident="[A-Za-z_\`'\"][A-Za-z0-9_.\`'\"-]*"
   local drop_table="(^|[^A-Za-z0-9_])DROP\s+TABLE\s+$ident"
   local drop_database="(^|[^A-Za-z0-9_])DROP\s+DATABASE\s+$ident"
