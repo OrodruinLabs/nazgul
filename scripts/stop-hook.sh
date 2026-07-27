@@ -5,11 +5,12 @@ set -euo pipefail
 # Exit 0 = allow stop (loop ends)
 # Exit 2 = block stop (loop continues) with stderr message
 
-NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
+PROJECT_ROOT="$(resolve_project_root)"
+NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
 PLAN="$NAZGUL_DIR/plan.md"
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/task-utils.sh"
 source "$SCRIPT_DIR/lib/session-tracker.sh"
 source "$SCRIPT_DIR/lib/review-evidence.sh"
