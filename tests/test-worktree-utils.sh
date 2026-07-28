@@ -152,5 +152,84 @@ CURRENT_BRANCH_AFTER=$(git -C "$TEST_DIR" branch --show-current)
 assert_eq "create_feature_branch: checkout failure leaves the session on the base branch" "$CURRENT_BRANCH_AFTER" "$DEFAULT_BRANCH3"
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# Fix 3b — sourcing worktree-utils.sh under zsh must never silently
+# half-load: either full bash parity (install_git_hooks defined) or a loud,
+# explicit, non-zero FATAL failure — never today's exit 0 with
+# install_git_hooks UNDEFINED (TASK-006 / AC9). Mirrors test-shellcheck.sh's
+# MF-057 local-SKIP convention: assertions.sh has no SKIPPED status, so an
+# unavailable zsh is reported by name, never a silent pass.
+_skip() {
+  printf "  SKIP: %s\n" "$1"
+}
+if command -v zsh >/dev/null 2>&1; then
+  ZSH_OUT="$TEST_DIR-zsh-out.txt"
+  ZSH_ERR="$TEST_DIR-zsh-err.txt"
+  mkdir -p "$(dirname "$ZSH_OUT")" 2>/dev/null || true
+  # `declare -f` (lowercase, prints the body) not `-F` (names-only): zsh's
+  # `declare -F <name>` ignores its argument and always exits 0, so it would
+  # report DEFINED even for a genuinely undefined function and mask exactly
+  # the regression this probe exists to catch. `declare -f` is accurate in
+  # both shells.
+  zsh -c "source '$REPO_ROOT/scripts/worktree-utils.sh'; declare -f install_git_hooks >/dev/null 2>&1 && echo DEFINED || echo UNDEFINED" \
+    >"$ZSH_OUT" 2>"$ZSH_ERR"
+  ZSH_RC=$?
+  ZSH_STDOUT=$(cat "$ZSH_OUT")
+  ZSH_STDERR=$(cat "$ZSH_ERR")
+  if [ "$ZSH_RC" -eq 0 ] && [ "$ZSH_STDOUT" = "DEFINED" ]; then
+    _pass "zsh sourcing: full bash parity (install_git_hooks defined, exit 0)"
+  elif [ "$ZSH_RC" -ne 0 ] && printf '%s' "$ZSH_STDERR" | grep -qF "FATAL: worktree-utils.sh must be sourced from bash"; then
+    _pass "zsh sourcing: loud non-zero FATAL failure, not a silent partial load"
+  else
+    _fail "zsh sourcing: neither full parity nor a loud FATAL failure" \
+      "rc=$ZSH_RC stdout=$ZSH_STDOUT stderr=$ZSH_STDERR"
+  fi
+  rm -f "$ZSH_OUT" "$ZSH_ERR"
+else
+  _skip "zsh sourcing parity/fatal-failure check (zsh not installed)"
+fi
+
+# ---------------------------------------------------------------------------
+# Fix 3b — bash parity regression: sourcing under bash must remain fully
+# unaffected by the new guard (TASK-006 / AC9).
+# ---------------------------------------------------------------------------
+BASH_OUT="$TEST_DIR-bash-out.txt"
+BASH_ERR="$TEST_DIR-bash-err.txt"
+mkdir -p "$(dirname "$BASH_OUT")" 2>/dev/null || true
+bash -c "source '$REPO_ROOT/scripts/worktree-utils.sh'; declare -f install_git_hooks >/dev/null 2>&1 && echo IGH_DEFINED || echo IGH_UNDEFINED; declare -f create_feature_branch >/dev/null 2>&1 && echo CFB_DEFINED || echo CFB_UNDEFINED" \
+  >"$BASH_OUT" 2>"$BASH_ERR"
+BASH_RC=$?
+BASH_STDOUT=$(cat "$BASH_OUT")
+assert_exit_code "bash sourcing: exits 0" "$BASH_RC" 0
+assert_contains "bash sourcing: install_git_hooks defined" "$BASH_STDOUT" "IGH_DEFINED"
+assert_contains "bash sourcing: create_feature_branch defined" "$BASH_STDOUT" "CFB_DEFINED"
+assert_eq "bash sourcing: no new stderr output" "$(cat "$BASH_ERR")" ""
+rm -f "$BASH_OUT" "$BASH_ERR"
+
+# ---------------------------------------------------------------------------
+# Fix 3b — when scripts/lib/git-hooks.sh is genuinely absent (not a zsh
+# artifact) and guards.git_hooks is not explicitly false, create_feature_branch
+# must emit a named warning instead of silently skipping the install
+# (TASK-006 / "make the install verifiable, not best-effort"). Simulated by
+# pointing CLAUDE_PLUGIN_ROOT at a directory with no scripts/lib/git-hooks.sh,
+# so install_git_hooks stays undefined for a reason unrelated to the shell.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+CFG4="$TEST_DIR/nazgul/config.json"
+FAKE_PLUGIN_ROOT="$TEST_DIR-fake-plugin-root"
+mkdir -p "$FAKE_PLUGIN_ROOT/scripts/lib"
+
+WARN_OUT="$TEST_DIR-warn-out.txt"
+WARN_ERR="$TEST_DIR-warn-err.txt"
+bash -c "CLAUDE_PLUGIN_ROOT='$FAKE_PLUGIN_ROOT' source '$REPO_ROOT/scripts/worktree-utils.sh'; create_feature_branch 'Warn objective' '$TEST_DIR' '$CFG4'" \
+  >"$WARN_OUT" 2>"$WARN_ERR"
+assert_contains "create_feature_branch: absent git-hooks.sh emits a named warning (not silence)" \
+  "$(cat "$WARN_ERR")" "WARNING: create_feature_branch: install_git_hooks is undefined"
+rm -rf "$FAKE_PLUGIN_ROOT" "$WARN_OUT" "$WARN_ERR"
+teardown_temp_dir
+
 report_results
 exit $?

@@ -6,6 +6,18 @@ set -euo pipefail
 
 # Requires: NAZGUL_DIR and CONFIG to be set by the caller
 
+# ${BASH_SOURCE[0]} is bash-only. Under zsh (the default interactive shell on
+# macOS) it is an unset-parameter diagnostic that zsh treats as non-fatal:
+# _WU_DIR would silently resolve to the caller's $PWD, _WU_PLUGIN_ROOT and
+# _WU_GIT_HOOKS_LIB (git-hooks.sh, install_git_hooks) and _WU_NAZGUL_ROOT_LIB
+# (nazgul-root.sh, resolve_project_root) would all point at wrong paths, and
+# this file would half-load with no error. Refuse loudly instead.
+if [ -z "${BASH_SOURCE:-}" ]; then
+  echo "FATAL: worktree-utils.sh must be sourced from bash (got: $(basename "${0:-unknown}"))." >&2
+  echo "The managed git-hooks install (create_feature_branch -> install_git_hooks) cannot proceed under this shell." >&2
+  return 1 2>/dev/null || exit 1
+fi
+
 _WU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _WU_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$_WU_DIR/.." && pwd)}"
 _WU_GIT_HOOKS_LIB="$_WU_PLUGIN_ROOT/scripts/lib/git-hooks.sh"
@@ -100,6 +112,18 @@ create_feature_branch() {
 
   if declare -F install_git_hooks >/dev/null 2>&1; then
     install_git_hooks "$project_root" "$config" || true
+  else
+    # The header guard above now makes non-bash sourcing fail loudly before
+    # this function is even defined, so the only way install_git_hooks can
+    # still be undefined here is a deployment that never shipped
+    # scripts/lib/git-hooks.sh. guards.git_hooks=false is NOT this branch —
+    # that skip lives inside install_git_hooks itself. Warn by name instead
+    # of skipping silently, so the install is verifiable, not best-effort.
+    local git_hooks_guard
+    git_hooks_guard=$(jq -r '(.guards.git_hooks // true)' "$config" 2>/dev/null || echo "true")
+    if [ "$git_hooks_guard" != "false" ]; then
+      echo "WARNING: create_feature_branch: install_git_hooks is undefined (scripts/lib/git-hooks.sh was not sourced) — the managed core.hooksPath install did NOT run." >&2
+    fi
   fi
 
   echo "$branch_name"
