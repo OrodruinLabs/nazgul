@@ -95,7 +95,7 @@ Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified o
 9. Run linter after implementation — fix all errors
 9.5. Run the lean-comments check on every changed source file: `"${CLAUDE_PLUGIN_ROOT}/scripts/lean-comments-guard.sh" --check <changed files>`. Fix every reported violation before proceeding — the reviewer will block on it otherwise.
 10. Update task manifest with implementation log
-11. Set status to IMPLEMENTED when all acceptance criteria met, tests pass, lint clean. **The task manifest MUST contain a `## Commits` section with at least one commit SHA — the state guard will block the transition without it.**
+11. Set status to IMPLEMENTED when all acceptance criteria met, tests pass, lint clean. **The task manifest MUST contain a `## Commits` section with at least one commit SHA — the state guard will block the transition without it.** Record the full 40-hex SHA from `git rev-parse HEAD`, bare (no backticks), one per line, and set it before any merge — the branch-tip commit for this task, per the review-then-merge ordering (`RULES.md` §11). This is the authoring convention, not the enforcement boundary: `pre-merge-commit`'s own lookup accepts short and backticked forms too, so the format matters for consistency across manifests, not for the guard to find a match.
 12. Capture the diff for reviewers:
     - Read `branch.feature` and `branch.main_worktree_path` from config
     - `mkdir -p <main_worktree_path>/nazgul/reviews/[TASK-ID]`
