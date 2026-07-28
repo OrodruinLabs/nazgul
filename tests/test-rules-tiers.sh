@@ -90,29 +90,41 @@ fi
 # into the loop prompt — a direct dispatcher can route around it — it never
 # mechanically blocks a tool call the way a PreToolUse guard does. That is a
 # net enforced -1 / hook-driven only +1 relative to the prior count.
+#
+# These two constants are a structural-freshness check on RULES.md's tier
+# taxonomy, not a ceiling: bump them deliberately whenever a genuinely new
+# tier-tagged rule is added. Never weaken or remove an existing tag just to
+# keep a count unchanged — that defeats the point of the check (FEAT-022/
+# TASK-008 review board finding: Attempt 1 folded two new rules into
+# unrelated existing bullets specifically to avoid bumping these numbers).
 # ---------------------------------------------------------------------------
 # NOTE: counts OCCURRENCES, not lines — `grep -c` undercounts because two
 # lines in RULES.md (the parallel-batch-selection bullet and the §11
 # hard-stops footnote) each carry two `[enforced]` tags. Line count was 49;
 # occurrence count was 51 (49 + 2 for the double-tagged lines). FEAT-021/
 # TASK-010 added 1 more: the resolver subsection's `_resolution_integrity_ok()`
-# fail-open sentence (51 + 1 = 52).
+# fail-open sentence (51 + 1 = 52). FEAT-022/TASK-008 added 1 more: §8's new
+# "Project detection (config-present, tasks-absent)" bullet, split out of the
+# Implementer bullet it was originally folded into (52 + 1 = 53).
 ENFORCED_COUNT=$(awk '{ count += gsub(/\[enforced\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ENFORCED_COUNT" -eq 52 ]; then
-  _pass "[enforced] annotation count is exactly 52 (found: $ENFORCED_COUNT)"
+if [ "$ENFORCED_COUNT" -eq 53 ]; then
+  _pass "[enforced] annotation count is exactly 53 (found: $ENFORCED_COUNT)"
 else
-  _fail "[enforced] annotation count is exactly 52" \
-    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 52"
+  _fail "[enforced] annotation count is exactly 53" \
+    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 53"
 fi
 
 # NOTE: counts OCCURRENCES, not lines — no line currently carries two
-# [hook-driven only] tags, so this matches the line count (20).
+# [hook-driven only] tags, so this matches the line count. FEAT-022/TASK-008
+# added 1 more: §15's new "Bash-only sourcing and observed-state branch
+# creation" bullet, split out of the install/uninstall lifecycle bullet it
+# was originally folded into (20 + 1 = 21).
 HOOK_DRIVEN_COUNT=$(awk '{ count += gsub(/\[hook-driven only\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$HOOK_DRIVEN_COUNT" -eq 20 ]; then
-  _pass "[hook-driven only] annotation count is exactly 20 (found: $HOOK_DRIVEN_COUNT)"
+if [ "$HOOK_DRIVEN_COUNT" -eq 21 ]; then
+  _pass "[hook-driven only] annotation count is exactly 21 (found: $HOOK_DRIVEN_COUNT)"
 else
-  _fail "[hook-driven only] annotation count is exactly 20" \
-    "found $HOOK_DRIVEN_COUNT occurrences of [hook-driven only] — expected exactly 20"
+  _fail "[hook-driven only] annotation count is exactly 21" \
+    "found $HOOK_DRIVEN_COUNT occurrences of [hook-driven only] — expected exactly 21"
 fi
 
 # ---------------------------------------------------------------------------
