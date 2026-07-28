@@ -17,7 +17,14 @@ _WU_NAZGUL_ROOT_LIB="$_WU_PLUGIN_ROOT/scripts/lib/nazgul-root.sh"
 
 slugify_objective() {
   local input="$1"
-  echo "$input" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | cut -c1-50
+  local slug
+  slug=$(printf '%s' "$input" \
+    | tr '\n\r\t' '   ' \
+    | tr -s '[:space:]' ' ' \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' \
+    | cut -c1-50)
+  printf '%s' "${slug:-objective}"
 }
 
 create_feature_branch() {
@@ -62,7 +69,21 @@ create_feature_branch() {
   local main_worktree_path
   main_worktree_path=$(cd "$project_root" && pwd)
 
-  git -C "$project_root" checkout -b "$branch_name" 2>/dev/null
+  # Config must record OBSERVED state, not intended state (ADR-009): verify
+  # the ref name, the checkout, and the branch's existence before writing
+  # anything, and fail loudly (non-zero) on any of the three.
+  if ! git -C "$project_root" check-ref-format --branch "$branch_name" >/dev/null 2>&1; then
+    echo "ERROR: create_feature_branch: '$branch_name' is not a valid git branch name" >&2
+    return 1
+  fi
+  if ! git -C "$project_root" checkout -b "$branch_name" 2>/dev/null; then
+    echo "ERROR: create_feature_branch: 'git checkout -b $branch_name' failed (invalid ref name or already exists)" >&2
+    return 1
+  fi
+  if ! git -C "$project_root" rev-parse --verify --quiet "$branch_name" >/dev/null; then
+    echo "ERROR: create_feature_branch: branch '$branch_name' does not exist after checkout" >&2
+    return 1
+  fi
 
   local tmp
   tmp=$(mktemp)
