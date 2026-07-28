@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -uo pipefail
-# Note: NOT using set -e — scripts/worktree-utils.sh is `set -euo pipefail`
-# and gets sourced directly into this script's own shell below (required to
-# observe its export side effect), so this script owns its own error handling.
+# Note: NOT using set -e — this script owns its own error handling so a nonzero
+# status reaches the assertion helpers instead of killing the run.
+# scripts/worktree-utils.sh declares `set -euo pipefail` and is sourced directly
+# into THIS shell below (required to observe its export side effect), which would
+# otherwise switch -e back on for everything after the source. `set +e` is
+# re-asserted immediately after that source to keep the posture above true.
 
 # Test: scripts/worktree-utils.sh's create_task_worktree() (TASK-008, qa 70 —
 # carried forward to this task). No prior test asserted its documented
@@ -29,6 +32,10 @@ jq --arg fb "$DEFAULT_BRANCH" --arg wd "$WORKTREE_DIR" \
 
 # shellcheck source=/dev/null
 source "$REPO_ROOT/scripts/worktree-utils.sh"
+# worktree-utils.sh's own `set -euo pipefail` just leaked into this shell. Undo
+# the -e half so an unexpected nonzero status is reported by the assertion
+# helpers rather than silently aborting the run mid-file.
+set +e
 
 # --- Direct call: CLAUDE_PROJECT_DIR must be exported to the MAIN checkout,
 # not the task worktree path. Capture stdout to a file (not `$(...)`) so the
