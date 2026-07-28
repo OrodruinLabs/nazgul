@@ -11,10 +11,13 @@ INPUT="${1:-}"
 [ -z "$INPUT" ] && exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
-NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
+
+NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
 TASKS_DIR="$NAZGUL_DIR/tasks"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Scope: only when the parallel dispatch option is on. A present-but-corrupt
 # config can't be trusted to say "parallel is off", so it fails closed instead
@@ -38,7 +41,7 @@ FILE_PATH=$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/nu
 # this the prefix-strip below misses and the file is fail-open ALLOWED even
 # though it belongs to a committed unit. No realpath dependency — the file may
 # not exist yet for a Write.
-PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+PROJECT_DIR="$(resolve_project_root)"
 FP="${FILE_PATH#/private}"
 PD="${PROJECT_DIR#/private}"
 ND="${NAZGUL_DIR#/private}"
