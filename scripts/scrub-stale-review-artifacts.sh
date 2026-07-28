@@ -10,6 +10,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/task-utils.sh
 source "$SCRIPT_DIR/lib/task-utils.sh"
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
 
 FOR_FEAT_ID=""
 NAZGUL_DIR=""
@@ -21,7 +22,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-NAZGUL_DIR="${NAZGUL_DIR:-${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul}"
+NAZGUL_DIR="${NAZGUL_DIR:-$(resolve_nazgul_dir)}"
 
 if [ -z "$FOR_FEAT_ID" ]; then
   echo "Usage: $0 --for-new-objective FEAT-ID [nazgul_dir]" >&2

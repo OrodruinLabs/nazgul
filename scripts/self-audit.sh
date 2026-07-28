@@ -15,8 +15,11 @@ set -euo pipefail
 #
 # Usage: self-audit.sh [nazgul_dir]
 
-NAZGUL_DIR="${1:-${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul}"
-PROJECT_ROOT="$(cd "$NAZGUL_DIR/.." 2>/dev/null && pwd)" || PROJECT_ROOT="$(pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
+
+NAZGUL_DIR="${1:-$(resolve_nazgul_dir)}"
+PROJECT_ROOT="$(cd "$NAZGUL_DIR/.." 2>/dev/null && pwd)" || PROJECT_ROOT="$(resolve_project_root)"
 CONFIG="$NAZGUL_DIR/config.json"
 
 FEAT_ID="default"
