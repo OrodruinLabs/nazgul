@@ -125,4 +125,21 @@ assert_contains "test 6: logged the skip" "$T6_OUT" "finding NOT recorded"
 assert_file_not_exists "test 6: no findings file at the blocked path" "$TEST_DIR/blk/nazgul/logs/findings.jsonl"
 teardown_temp_dir
 
+# --- Test 7: NAZGUL_DIR override FALLBACK (qa 65, carried forward to TASK-009) ---
+# Every case above sets NAZGUL_DIR explicitly, so the
+# `${NAZGUL_DIR:-$(resolve_nazgul_dir)}` short-circuit means resolve_nazgul_dir()
+# is never invoked above. setup_temp_dir() exports CLAUDE_PROJECT_DIR, so an
+# omitted NAZGUL_DIR should still land findings in the same, correct place.
+setup_temp_dir
+setup_nazgul_dir
+unset NAZGUL_DIR NAZGUL_AGENT NAZGUL_UNIT
+
+raise_finding "low" "process" "fallback path" "no NAZGUL_DIR override set"
+
+FALLBACK_FINDINGS="$TEST_DIR/nazgul/logs/findings.jsonl"
+assert_file_exists "test 7: omitted NAZGUL_DIR falls back to resolve_nazgul_dir() (via CLAUDE_PROJECT_DIR)" "$FALLBACK_FINDINGS"
+assert_json_field "test 7: fallback-recorded finding has the right title" "$FALLBACK_FINDINGS" '.title' "fallback path"
+
+teardown_temp_dir
+
 report_results

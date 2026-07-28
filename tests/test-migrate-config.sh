@@ -2018,4 +2018,20 @@ assert_file_exists "most-recent-among-seeded .bak file (v12) survives pruning" "
 assert_file_exists "4th-most-recent-among-seeded .bak file (v9) survives pruning" "$NAZGUL_DIR/config.json.v9.bak"
 assert_file_exists "migration's own fresh backup (v28) survives as the newest entry" "$NAZGUL_DIR/config.json.v28.bak"
 
+# --- Resolver FALLBACK path (qa 72, carried forward to TASK-009): every case
+# above passes an explicit nazgul_dir argument, so the `${1:-$(resolve_nazgul_dir)}`
+# short-circuit means resolve_nazgul_dir() is never invoked above. session-context.sh
+# is the real production caller and passes NAZGUL_DIR explicitly too, but a
+# direct invocation (e.g. a manual re-run) has none — this exercises that path.
+FALLBACK_ROOT="$TMPDIR_BASE/fallback-project"
+FALLBACK_ELSEWHERE="$TMPDIR_BASE/fallback-elsewhere"
+mkdir -p "$FALLBACK_ROOT/nazgul" "$FALLBACK_ELSEWHERE"
+cat > "$FALLBACK_ROOT/nazgul/config.json" << 'EOF'
+{ "schema_version": 1, "mode": "hitl" }
+EOF
+FALLBACK_OUTPUT=$(cd "$FALLBACK_ELSEWHERE" && CLAUDE_PROJECT_DIR="$FALLBACK_ROOT" CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" 2>/dev/null) || true
+assert_contains "no-positional-arg: fallback resolves via CLAUDE_PROJECT_DIR and migrates" "$FALLBACK_OUTPUT" "migrated"
+assert_json_field "no-positional-arg: fallback migrated the FIXTURE root's config, not cwd's" "$FALLBACK_ROOT/nazgul/config.json" ".schema_version" "31"
+assert_dir_not_exists "no-positional-arg: fallback did not touch/create a nazgul/ at cwd" "$FALLBACK_ELSEWHERE/nazgul"
+
 report_results
