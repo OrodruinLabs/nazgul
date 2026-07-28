@@ -122,6 +122,23 @@ write_task_long_commits() {
   } > "$repo/nazgul/tasks/$id.md"
 }
 
+# Writes a task manifest with NO ## Commits section at all — the genuine
+# authoring gap Fix 1c targets. Content-matching has nothing to find here;
+# only the ref-derived signal can identify this unit.
+write_task_no_commits() {
+  local repo="$1" id="$2" status="$3"
+  mkdir -p "$repo/nazgul/tasks"
+  cat > "$repo/nazgul/tasks/$id.md" <<EOF
+---
+status: $status
+---
+
+# $id
+
+No Commits section recorded.
+EOF
+}
+
 do_merge() {
   local repo="$1" branch="$2"
   MERGE_STDERR=$(git -C "$repo" merge --no-ff -m "merge $branch" "$branch" 2>&1) && MERGE_EC=0 || MERGE_EC=$?
@@ -361,7 +378,9 @@ teardown_temp_dir
 # FALSE-BLOCK REGRESSION: a /TASK-NNN-suffixed branch WITHOUT the feat/
 # prefix, whose commit was never recorded in any manifest's ## Commits
 # section, must degrade to allow — content-based resolution means branch
-# shape never gates.
+# shape never gates. `docs/TASK-001` does not match the ref-derived signal's
+# `^feat/[^/]+/TASK-[0-9]+$` anchor (nazgul/plan.md -> C1), so this case
+# stays on content-match-only (Fix 1a) behaviour under Fix 1b too.
 # ---------------------------------------------------------------------------
 setup_temp_dir
 init_repo "$TEST_DIR/repo"
@@ -554,6 +573,83 @@ write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
 write_task_frontmatter "$TEST_DIR/repo" "TASK-001" "DONE " "IN_REVIEW" "$UNIT_SHA"
 do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
 assert_exit_code "frontmatter trailing space: 'DONE ' normalizes to DONE -> exit 0" "$MERGE_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# REF-DERIVED IDENTITY (Fix 1b, AC3 case 1): a canonical feat/<feat>/TASK-NNN
+# branch whose manifest has NO ## Commits section at all (a genuine authoring
+# gap, not a formatting mismatch) and is non-DONE. Content-matching finds
+# nothing to check here; only the ref-derived signal identifies the unit.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task_no_commits "$TEST_DIR/repo" "TASK-001" "IN_REVIEW"
+do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+assert_exit_code "ref-derived: no Commits section, non-DONE -> nonzero" "$MERGE_EC" 1
+assert_contains "ref-derived block message names the unit" "$MERGE_STDERR" "TASK-001"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# REF-DERIVED "MATCHED BUT UNVERIFIABLE" (Fix 1c proper): same branch, but
+# the manifest is Status: DONE with still no ## Commits section at all. This
+# proves 1c is a BLOCK, not a skip — a ref-named DONE unit that cannot be
+# verified against the merged content must not be silently admitted. The
+# message must be the unverifiable wording, distinct from the not-DONE one.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task_no_commits "$TEST_DIR/repo" "TASK-001" "DONE"
+do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+assert_exit_code "ref-derived: no Commits section, DONE -> nonzero (unverifiable, not a skip)" "$MERGE_EC" 1
+assert_contains "unverifiable block message names the unit" "$MERGE_STDERR" "TASK-001"
+assert_contains "unverifiable block message uses the unverifiable wording" "$MERGE_STDERR" "unverifiable"
+assert_not_contains "unverifiable block message is NOT the not-DONE wording" "$MERGE_STDERR" "requires status DONE"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# PER-KEY-BOUND SPOOF UNDER THE DUAL-SIGNAL PATH (Fix 1b, test-plan #7): a
+# decoy GITHEAD_<claimed_sha>=feat/FEAT-010-x/TASK-999 (DONE, its own
+# ## Commits recording that same claimed_sha, so the decoy's OWN ref-derived
+# signal verifies cleanly and does not itself block) sits alongside git's
+# genuine GITHEAD_<real-sha> for the actual, unapproved TASK-888 content.
+# Proves the new ref-derived signal cannot be used to launder real content:
+# the genuine key is still independently checked (by both signals) and the
+# merge still blocks, naming TASK-888.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-999"
+APPROVED_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-999")
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-888"
+MALICIOUS_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-888")
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-999" "DONE" "$APPROVED_SHA"
+write_task "$TEST_DIR/repo" "TASK-888" "IN_REVIEW" "$MALICIOUS_SHA"
+do_merge_githead_spoofed "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-888" "$APPROVED_SHA"
+assert_exit_code "per-key-bound spoof: dual-signal decoy does not admit unapproved content -> nonzero" "$MERGE_EC" 1
+assert_contains "per-key-bound spoof: block message names the REAL unit, not the decoy" "$MERGE_STDERR" "TASK-888"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# OFF-CONVENTION REF STILL DOES NOT GATE (test-plan #4, explicit): re-states
+# the FALSE-BLOCK REGRESSION intent as its own assertion so this file has a
+# standalone pin independent of that earlier block's construction.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "docs/TASK-001"
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "0000000"
+do_merge "$TEST_DIR/repo" "docs/TASK-001"
+assert_exit_code "off-convention ref (docs/TASK-001) does not gate -> exit 0" "$MERGE_EC" 0
 teardown_temp_dir
 
 report_results

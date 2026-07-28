@@ -11,12 +11,34 @@ set -euo pipefail
 # merging different, unreviewed content. GITHEAD_<sha> keys are different:
 # git names the variable itself after the actual merged commit's SHA (one
 # per head being merged), so the key can't be relabeled — only extra decoy
-# keys can be added alongside it. We therefore treat ANY GITHEAD_<sha> whose
-# SHA is listed in a task manifest's ## Commits section as a candidate, and
-# BLOCK if that task's Status is not DONE, so a decoy claiming an approved
-# unit cannot mask the genuine, unapproved one. (MERGE_HEAD is not usable
-# here: git only writes it for a stopped/conflicted or --no-commit merge,
-# not for the clean auto-committed merges this guard runs on — confirmed
+# keys can be added alongside it. Each GITHEAD_<sha> entry's VALUE is also
+# the ref git is merging, e.g. `feat/FEAT-009/TASK-165` — a second identity
+# signal bound to that SAME key. For every key we derive two candidates:
+# (1) content-match, via <sha> against a manifest's ## Commits section
+# (Fix 1a), and (2) ref-derived, via a `TASK-NNN` named by that same key's
+# ref, anchored to the canonical `^feat/[^/]+/TASK-[0-9]+$` shape produced by
+# scripts/worktree-utils.sh:125 (create_task_worktree) and
+# merge_task_to_feature — not a bare substring parse, which would also match
+# non-canonical branches like `docs/TASK-001` and false-block them (see
+# tests/test-git-hooks-premerge.sh's FALSE-BLOCK REGRESSION case). An
+# off-convention branch name simply evades the ref signal and falls back to
+# content-matching only — no regression versus pre-1b behaviour. BOTH
+# signals are checked for EVERY key (not just the first match), so a decoy
+# key's ref value resolves harmlessly (same as its decoy content-match
+# always has), while the genuine key — the one git itself set for the
+# actual merged content — is still independently checked by both its own
+# content-match AND its own ref-derived signal. Laundering real content
+# therefore still requires forging the genuine key's own manifest, not
+# merely adding an unrelated decoy elsewhere in the environment.
+#
+# BLOCK if any resolved candidate names a task whose Status is not DONE, or
+# (Fix 1c) names a task — via the ref-derived signal — whose ## Commits
+# section records no commit matching that key's SHA: a DONE unit identified
+# only by branch name that cannot be verified against the merged content is
+# "matched but unverifiable", not "no candidate found", so it BLOCKS rather
+# than silently falling through to allow. (MERGE_HEAD is not usable here:
+# git only writes it for a stopped/conflicted or --no-commit merge, not for
+# the clean auto-committed merges this guard runs on — confirmed
 # empirically, git 2.48, ort strategy.)
 #
 # git pre-merge-commit contract: no argv, no stdin read, exit 0 = allow,
@@ -57,53 +79,92 @@ PARALLEL=$(jq -r '.execution.parallel // false' "$CONFIG" 2>/dev/null || echo "f
 ENFORCE=$(jq -r 'if .execution.enforce.premerge_guard == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
 [ "$ENFORCE" = "true" ] || _dispatch_and_exit
 
-# Candidate merged-head SHAs: one GITHEAD_<sha> per head git is merging,
-# name-keyed by the actual content hash. Any failure in this pipeline (jq
-# choking on a hostile/unexpected env) -> treat as no candidates, same as
-# "no merge in progress" -> degrade to allow.
-CANDIDATE_SHAS_JSON=$(env | sed -nE 's/^GITHEAD_([0-9a-f]{40,64})=.*/\1/p' | jq -R -s 'split("\n") | map(select(length>0))' 2>/dev/null) || CANDIDATE_SHAS_JSON='[]'
-[ "$(printf '%s' "$CANDIDATE_SHAS_JSON" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ] || _dispatch_and_exit
-
-# Map each candidate SHA to a task manifest via its ## Commits section — the
-# per-task replacement for the old graph.json commit lookup. Checked across
-# EVERY candidate (not just the first match) so a decoy GITHEAD_<sha> for a
-# DONE unit can't mask a genuine, unapproved candidate also present in the
-# same merge. Candidates matching no manifest are untracked/unrelated
-# commits (ignored); a matched task whose Status is not DONE blocks.
-#
-# The ## Commits section is bounded to the next ## heading (not a fixed line
-# count) — multi-retry manifests can carry commit lists well past 10 lines.
-#
 # Status is read frontmatter-first, mirroring scripts/lib/task-utils.sh's
 # get_task_status/read_task_status (canonical `status:` inside the leading
 # --- fence wins over the legacy `- **Status**:` list-item line, which can go
 # stale). This hook can't source that lib — it runs standalone in target
-# repos — so the same precedence is replicated inline via awk/grep.
+# repos — so the same precedence is replicated here, shared by both signals.
+task_status() {
+  local tf="$1" st
+  st=$(awk '/^---[[:space:]]*$/{fm++; next} fm==1 && /^status:/{sub(/^status:[[:space:]]*/, ""); sub(/[[:space:]\r]+$/, ""); print; exit}' "$tf" 2>/dev/null)
+  if [ -z "$st" ]; then
+    st=$(grep -E '^\- \*\*Status\*\*:' "$tf" 2>/dev/null | head -1 | sed 's/^.*: *//' | tr -d ' \r')
+  fi
+  printf '%s' "$st"
+}
+
+# True if $tf's ## Commits section (bounded to the next ## heading, not a
+# fixed line count — multi-retry manifests can carry commit lists well past
+# 10 lines) has a token that is a prefix of $sha.
+commits_verify() {
+  local tf="$1" sha="$2" tok
+  for tok in $(awk '/^## Commits/{f=1;next} /^## /{f=0} f' "$tf" 2>/dev/null | grep -oE '[0-9a-f]{7,64}' || true); do
+    case "$sha" in "$tok"*) return 0 ;; esac
+  done
+  return 1
+}
+
+# Candidate (sha, ref) pairs — one GITHEAD_<sha>=<ref> per head git is
+# merging. Any failure in this pipeline (jq choking on a hostile/unexpected
+# env) -> treat as no candidates, same as "no merge in progress" -> degrade
+# to allow.
+CANDIDATE_PAIRS_JSON=$(env | sed -nE 's/^GITHEAD_([0-9a-f]{40,64})=(.*)$/\1\t\2/p' | jq -R -s '
+    split("\n") | map(select(length > 0) | split("\t") | {sha: .[0], ref: (.[1] // "")})
+  ' 2>/dev/null) || CANDIDATE_PAIRS_JSON='[]'
+[ "$(printf '%s' "$CANDIDATE_PAIRS_JSON" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ] || _dispatch_and_exit
+
+REF_TASK_RE='^feat/[^/]+/(TASK-[0-9]+)$'
 UNIT_ID=""
 STATUS=""
-while IFS= read -r CANDIDATE_SHA; do
+KIND=""
+while IFS=$'\t' read -r CANDIDATE_SHA CANDIDATE_REF; do
   [ -n "$CANDIDATE_SHA" ] || continue
+
+  # Signal 1 (Fix 1a): content-match, checked across EVERY manifest (not
+  # just the first) so a decoy key for a DONE unit can't mask a genuine,
+  # unapproved candidate also present in the same merge.
   for tf in "$REPO_ROOT/nazgul/tasks"/TASK-*.md; do
     [ -f "$tf" ] || continue
-    COMMIT_TOKENS=$(awk '/^## Commits/{f=1;next} /^## /{f=0} f' "$tf" 2>/dev/null | grep -oE '[0-9a-f]{7,64}' || true)
-    MATCHED=0
-    for TOKEN in $COMMIT_TOKENS; do
-      case "$CANDIDATE_SHA" in "$TOKEN"*) MATCHED=1; break ;; esac
-    done
-    [ "$MATCHED" = 1 ] || continue
-    tf_status=$(awk '/^---[[:space:]]*$/{fm++; next} fm==1 && /^status:/{sub(/^status:[[:space:]]*/, ""); sub(/[[:space:]\r]+$/, ""); print; exit}' "$tf" 2>/dev/null)
-    if [ -z "$tf_status" ]; then
-      tf_status=$(grep -E '^\- \*\*Status\*\*:' "$tf" 2>/dev/null | head -1 | sed 's/^.*: *//' | tr -d ' \r')
-    fi
+    commits_verify "$tf" "$CANDIDATE_SHA" || continue
+    tf_status=$(task_status "$tf")
     if [ "$tf_status" != "DONE" ]; then
       UNIT_ID=$(basename "$tf" .md)
       STATUS="$tf_status"
+      KIND="notdone"
       break 2
     fi
   done
-done < <(printf '%s' "$CANDIDATE_SHAS_JSON" | jq -r '.[]' 2>/dev/null)
+
+  # Signal 2 (Fix 1b/1c): ref-derived, bound to this SAME key. Only the
+  # canonical task-branch shape gates (nazgul/plan.md -> C1); an
+  # off-convention ref (e.g. docs/TASK-001) evades this signal and falls
+  # back to content-matching only. A ref naming a task with no manifest file
+  # is untracked and ignored.
+  if [[ "$CANDIDATE_REF" =~ $REF_TASK_RE ]]; then
+    tf="$REPO_ROOT/nazgul/tasks/${BASH_REMATCH[1]}.md"
+    if [ -f "$tf" ]; then
+      tf_status=$(task_status "$tf")
+      if [ "$tf_status" != "DONE" ]; then
+        UNIT_ID="${BASH_REMATCH[1]}"
+        STATUS="$tf_status"
+        KIND="notdone"
+        break
+      fi
+      if ! commits_verify "$tf" "$CANDIDATE_SHA"; then
+        UNIT_ID="${BASH_REMATCH[1]}"
+        STATUS="$tf_status"
+        KIND="unverifiable"
+        break
+      fi
+    fi
+  fi
+done < <(printf '%s' "$CANDIDATE_PAIRS_JSON" | jq -r '.[] | "\(.sha)\t\(.ref)"' 2>/dev/null)
 
 [ -n "$UNIT_ID" ] || _dispatch_and_exit
 
-echo "NAZGUL GUARD: Blocked — merge includes $UNIT_ID (status='${STATUS:-none}'), which is not DONE; the review board has not approved it." >&2
+if [ "$KIND" = "unverifiable" ]; then
+  echo "NAZGUL GUARD: Blocked — merge includes $UNIT_ID (status='${STATUS:-none}'), identified by its branch name, but its manifest's ## Commits section records no commit matching the merged content; unverifiable, not admitted." >&2
+else
+  echo "NAZGUL GUARD: Blocked — merge includes $UNIT_ID (status='${STATUS:-none}'); merge requires status DONE." >&2
+fi
 exit 1
