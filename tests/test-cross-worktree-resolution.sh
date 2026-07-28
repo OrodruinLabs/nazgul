@@ -107,6 +107,43 @@ assert_eq "pre-fix idiom demonstrably selects the MAIN checkout's DONE task, not
   "$OLD_STATUS" "DONE"
 
 # =====================================================================
+# Discriminating case (review round 1, architect + code-reviewer): every
+# assertion above pins cwd exactly at a git-toplevel ($TWO_WT_WORKTREE or
+# $TWO_WT_MAIN), where $(pwd) and `git rev-parse --show-toplevel` are
+# IDENTICAL — so the pre-fix idiom and the shipped resolver return the same
+# answer on every input tested so far and none of it regression-tests
+# git-toplevel awareness itself. This section adds the one input where they
+# genuinely diverge: cwd NESTED inside the worktree, CLAUDE_PROJECT_DIR
+# unset. Routed through the real resolve_project_root() and the real guard
+# — not the old_idiom_resolve() shim, which stays reserved for AC 2a above.
+# =====================================================================
+DEEP_SUBDIR="$TWO_WT_WORKTREE/src/deep/nested"
+mkdir -p "$DEEP_SUBDIR"
+_saved_test_dir="$TEST_DIR"
+TEST_DIR="$TWO_WT_WORKTREE"
+create_task_file TASK-101 DONE
+TEST_DIR="$_saved_test_dir"
+
+# macOS resolves /var -> /private/var on `git rev-parse --show-toplevel`
+# (physical) but bash's logical `cd && pwd` does not — so RESOLVED_FROM_SUBDIR
+# (git-backed) is compared against `pwd -P` (physical), while
+# OLD_RESOLVED_FROM_SUBDIR (plain `$(pwd)`, matching old_idiom_resolve's own
+# idiom) is compared against plain `pwd`, matching each side's own idiom.
+TWO_WT_WORKTREE_PHYSICAL=$(cd "$TWO_WT_WORKTREE" && pwd -P)
+DEEP_SUBDIR_LOGICAL=$(cd "$DEEP_SUBDIR" && pwd)
+
+RESOLVED_FROM_SUBDIR=$(cd "$DEEP_SUBDIR" && unset CLAUDE_PROJECT_DIR && source "$REPO_ROOT/scripts/lib/nazgul-root.sh" && resolve_project_root)
+assert_eq "discriminating case: resolve_project_root() from a nested subdir (CLAUDE_PROJECT_DIR unset) follows git-toplevel to the worktree root, not \$(pwd)" \
+  "$RESOLVED_FROM_SUBDIR" "$TWO_WT_WORKTREE_PHYSICAL"
+
+OLD_RESOLVED_FROM_SUBDIR="$(old_idiom_resolve "$DEEP_SUBDIR" "")"
+assert_eq "discriminating case: the pre-fix idiom from the same nested subdir resolves to the nonexistent <subdir>/nazgul instead" \
+  "$OLD_RESOLVED_FROM_SUBDIR" "$DEEP_SUBDIR_LOGICAL/nazgul"
+
+assert_eq "discriminating case, through the real guard: dispatch from a nested subdir still correctly blocks the worktree's own DONE TASK-101" \
+  "$(guard_ec "$DEEP_SUBDIR" "" TASK-101)" "2"
+
+# =====================================================================
 # Carried-forward item 1 (TASK-001 architect review, confidence 85): the
 # REAL create_task_worktree() shape — a SIBLING directory, no own nazgul/.
 # Proves the TASK-001 <-> TASK-008 dependency rather than assuming it.
@@ -149,6 +186,10 @@ TEST_DIR="$(dirname "$TWO_WT_MAIN")"
 SC_OUT=$(cd "$TWO_WT_WORKTREE" && unset CLAUDE_PROJECT_DIR && bash "$SESSION_CONTEXT" 2>&1)
 assert_contains "session-context.sh reads the worktree's own iteration, not the main checkout's" "$SC_OUT" "42/40"
 assert_not_contains "session-context.sh does not surface the main checkout's iteration" "$SC_OUT" "99/40"
+
+SC_OUT_SUBDIR=$(cd "$DEEP_SUBDIR" && unset CLAUDE_PROJECT_DIR && bash "$SESSION_CONTEXT" 2>&1)
+assert_contains "discriminating case: session-context.sh from a nested subdir still reads the worktree's own iteration via git-toplevel" \
+  "$SC_OUT_SUBDIR" "42/40"
 
 (cd "$TWO_WT_WORKTREE" && unset CLAUDE_PROJECT_DIR && bash "$STOP_HOOK" >/dev/null 2>&1) || true
 

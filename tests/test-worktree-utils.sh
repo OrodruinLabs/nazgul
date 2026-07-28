@@ -67,6 +67,7 @@ else
 fi
 
 cleanup_task_worktree TASK-101 "$TEST_DIR" "$CFG"
+rm -rf "$WORKTREE_DIR"
 teardown_temp_dir
 
 report_results
