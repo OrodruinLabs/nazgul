@@ -198,6 +198,7 @@ This guard governs comment QUANTITY at write time. See §7 for the complementary
 ## 8. File Scope Restrictions
 
 - **Implementer**: `[enforced]` Only files listed in the task manifest's `Files modified` JSON array, read via the shared `get_task_files_modified` accessor (`scripts/lib/task-utils.sh`). `task-state-guard.sh` (PreToolUse on Write/Edit) blocks edits outside declared scope — a live restriction again (MF-024): the block previously queried a nonexistent `File Scope` field and never actually restricted anything. Must update the manifest before expanding scope.
+- **Project detection (config-present, tasks-absent).** `[enforced]` The active-task and file-scope gates above only apply once `task-state-guard.sh` decides this IS a Nazgul project — a decision it splits in two: a missing or unreadable `nazgul/config.json` still safely no-ops as "not a Nazgul project" (unchanged); a readable config whose `nazgul/tasks/` is missing or unreadable is a resolved-but-incomplete project, not a non-Nazgul directory, and now BLOCKS (exit 2) with a diagnostic distinct from the ordinary "no active task" message — instead of the prior collapse of both cases into one silent allow, which disarmed both gates above for the rest of the invocation. Same split as §12's MF-053 precedent (config present-but-corrupt fails closed; config genuinely absent no-ops), applied here to a sibling condition on the sibling guard.
 - **Reviewers**: `[enforced]` Read-only — `Read`/`Glob`/`Grep` only, no `Write` and no `Bash` (tool-allowlist enforced). Reviewers do not write any file; they RETURN their review and the review-gate orchestrator persists it to `nazgul/reviews/` (see §3.3).
 - **Parallel tasks**: `[hook-driven only]` Zero file overlap. Team Orchestrator validates before assigning; bypassable by manual task dispatch.
 - **Specialists**: `[hook-driven only]` Only files in the delegation brief's scope. Validated by the Team Orchestrator when stop-hook drives dispatch.
@@ -376,12 +377,29 @@ actually asked to do.
   repo) and its `git -C` false-negative (which routed around a Bash-string check entirely). A git hook
   has no such ambiguity: "current branch" is whatever repo git itself is invoked in.
 - **`pre-merge-commit` — H2 parallel-unit verdict guard.** `[enforced]` `scripts/git-hooks/pre-merge-commit`
-  blocks `git merge --no-ff` of a parallel-dispatched task unit whose manifest under `nazgul/tasks/`
-  records the merged commit in its `## Commits` section but is not yet `Status: DONE`. Only active when
-  `execution.parallel == true` and `execution.enforce.premerge_guard` (default `true`) is not explicitly
-  `false`. Identity is resolved from git's `GITHEAD_<sha>` environment variables (keyed by the actual
-  merged commit's content hash, so a decoy value can't relabel an unapproved unit as an approved one)
-  rather than `GIT_REFLOG_ACTION`, which a caller can pre-set to spoof the same claim.
+  blocks `git merge --no-ff` of a parallel-dispatched task unit whose manifest under `nazgul/tasks/` is
+  not yet `Status: DONE`. Only active when `execution.parallel == true` and
+  `execution.enforce.premerge_guard` (default `true`) is not explicitly `false`. Identity is resolved
+  from git's `GITHEAD_<sha>` environment variables (keyed by the actual merged commit's content hash, so
+  a decoy value can't relabel an unapproved unit as an approved one) rather than `GIT_REFLOG_ACTION`,
+  which a caller can pre-set to spoof the same claim. Each `GITHEAD_<sha>=<ref>` entry yields two
+  candidates, both checked: a **content-match** signal — the manifest's `## Commits` section is
+  tokenized (`grep -oE '[0-9a-f]{7,64}'`) and matched by prefix against `<sha>`, so short, full, and
+  backticked SHA forms all resolve (closing the earlier exact-substring miss on short SHAs) — and a
+  **ref-derived** signal, parsing `TASK-NNN` out of that same key's `<ref>` value, anchored to the
+  canonical `^feat/[^/]+/(TASK-[0-9]+)$` branch shape (an off-convention ref, e.g. `docs/TASK-001`,
+  evades only this second signal and falls back to content-matching alone — which still catches it if
+  the manifest's `## Commits` section records the merged SHA, but a unit on an off-convention branch
+  whose manifest *also* lacks that entry is invisible to BOTH signals: no candidate matches, execution
+  falls through to allow, exit 0, no diagnostic — no regression against the pre-1b content-match-only
+  behavior, which had the identical gap). Both signals are checked for EVERY `GITHEAD_<sha>` key, never
+  just the first match, so a decoy key naming an approved unit cannot mask a genuine, unapproved
+  candidate present under a different key. A task matched only by the ref-derived signal whose `##
+  Commits` section records
+  no commit matching that key's SHA is **matched but unverifiable** and BLOCKS rather than falling
+  through to allow — a DONE unit identified purely by branch name, with nothing on disk to verify it
+  against the merged content, is the "never looked" case this guard exists to close, not "looked and
+  found nothing" (ADR-009, ADR-010).
 - **Generic chain-dispatcher preserves user hooks.** `[enforced]` Pointing `core.hooksPath` at a
   managed directory would otherwise silently disable any hook a user already had installed under every
   *other* standard githooks(5) name. `scripts/git-hooks/_dispatch.sh` forwards argv/stdin/exit code to
@@ -413,6 +431,18 @@ actually asked to do.
   completion, session start), not a PreToolUse guard, so a manually-dispatched agent that never calls
   `create_feature_branch()` (or reaches `SessionStart` with `branch.feature` still unset) gets no guard
   installed at all — the honest gap this tier label exists to state.
+- **Bash-only sourcing and observed-state branch creation.** `[hook-driven only]`
+  `scripts/worktree-utils.sh` refuses to source outside bash (loud `FATAL` + non-zero) instead of
+  silently half-loading: under zsh, `${BASH_SOURCE[0]}` is a non-fatal unset-parameter diagnostic, so the
+  file previously loaded partially — `create_feature_branch` defined, `install_git_hooks` silently
+  undefined — and the install above never ran, with no error anywhere. The `declare -F
+  install_git_hooks` call site inside `create_feature_branch` now also emits a named `WARNING` (instead
+  of a bare `|| true`) when the function is genuinely undefined and `guards.git_hooks` is not explicitly
+  `false`, so a broken install is visible rather than silently skipped. Separately,
+  `create_feature_branch()` validates the branch name (`check-ref-format`), checks `git checkout -b`'s
+  exit status, and verifies the branch exists (`rev-parse --verify`) before writing
+  `config.branch.feature` — config now records observed state, not intended state; a checkout failure
+  returns non-zero with config left unwritten.
 
 **Enforcement tier, stated honestly (ADR-001 Consequences).** Once installed, the two guards above are
 tagged `[enforced]` — but they are stronger than every other `[enforced]` entry in this document: they
