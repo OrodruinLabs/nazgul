@@ -6,7 +6,11 @@ set -euo pipefail
 # Usage: webhook-forward.sh [event_type]
 # Called by hooks (Stop, PostCompact) to notify external systems.
 
-NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
+
+PROJECT_ROOT="$(resolve_project_root)"
+NAZGUL_DIR="$PROJECT_ROOT/nazgul"
 CONFIG="$NAZGUL_DIR/config.json"
 
 # If Nazgul not initialized or no config, exit silently
@@ -40,7 +44,7 @@ MAX_ITER=$(jq -r '.max_iterations // 40' "$CONFIG")
 MODE=$(jq -r '.mode // "hitl"' "$CONFIG")
 OBJECTIVE=$(jq -r '.objective // "none"' "$CONFIG")
 FEAT_ID=$(jq -r '.feat_display_id // ""' "$CONFIG")
-GIT_BRANCH=$(git -C "${CLAUDE_PROJECT_DIR:-$(pwd)}" branch --show-current 2>/dev/null || echo "unknown")
+GIT_BRANCH=$(git -C "$PROJECT_ROOT" branch --show-current 2>/dev/null || echo "unknown")
 
 # Count tasks
 DONE_COUNT=0

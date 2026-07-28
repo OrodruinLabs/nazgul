@@ -17,6 +17,10 @@
 [ -n "${_NAZGUL_RAISE_FINDING_SOURCED:-}" ] && return 0
 _NAZGUL_RAISE_FINDING_SOURCED=1
 
+_RF_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$_RF_LIB_DIR/nazgul-root.sh"
+
 if command -v flock >/dev/null 2>&1; then _RF_HAS_FLOCK=1; else _RF_HAS_FLOCK=0; fi
 
 _rf_neutralize() {
@@ -27,8 +31,10 @@ _rf_neutralize() {
 }
 
 # raise_finding <severity> <category> <title> <detail> [suggested_fix] [evidence]
-# -> append one JSON line to $NAZGUL_DIR/logs/findings.jsonl (falls back to
-# $CLAUDE_PROJECT_DIR/nazgul, then ./nazgul, when NAZGUL_DIR is unset).
+# -> append one JSON line to $NAZGUL_DIR/logs/findings.jsonl. An explicit
+# $NAZGUL_DIR still wins outright (caller override stays in front); otherwise
+# falls back to resolve_nazgul_dir()'s worktree-aware chain (git toplevel ->
+# CLAUDE_PROJECT_DIR -> pwd, marker-validated).
 # ts is UTC now; agent/unit come from $NAZGUL_AGENT/$NAZGUL_UNIT (empty when unset).
 raise_finding() {
   # Argc guard FIRST: this is sourced into caller shells that may run `set -u`,
@@ -41,7 +47,7 @@ raise_finding() {
   fi
   local severity="$1" category="$2" title="$3" detail="$4"
   local suggested_fix="${5:-}" evidence="${6:-}"
-  local nazgul_dir="${NAZGUL_DIR:-${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul}"
+  local nazgul_dir="${NAZGUL_DIR:-$(resolve_nazgul_dir)}"
   local findings_file="$nazgul_dir/logs/findings.jsonl"
   # Best-effort from here on: this is a sourced observability helper (like
   # emit_event), so an ENVIRONMENTAL failure (unwritable dir, missing jq, full

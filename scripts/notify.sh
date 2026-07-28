@@ -41,10 +41,13 @@ set -euo pipefail
 
 COMMAND_TIMEOUT=30
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
+
 # MF-031: resolve nazgul/ paths against the project root like every sibling
 # guard, instead of bare relative paths that only work when cwd happens to
 # already be the project root.
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+PROJECT_ROOT="$(resolve_project_root)"
 
 debug_log() {
     if [[ "${NAZGUL_NOTIFY_DEBUG:-0}" == "1" ]]; then
