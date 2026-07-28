@@ -68,11 +68,15 @@ result="$(_resolve "$repo1" "")"
 assert_eq "plain git repo, env unset: resolves to toplevel" "$result" "$repo1"
 
 # --- Case 1b: same repo, CLAUDE_PROJECT_DIR exported to a DIFFERENT valid root ---
+# TASK-012 regression pin: an explicit, valid CLAUDE_PROJECT_DIR must win over
+# git-toplevel even when the cwd's own repo is also a valid Nazgul root. This
+# assertion FAILS against the pre-TASK-012 resolver (which returned $repo1) —
+# see nazgul/tasks/TASK-012.md Implementation Log for the demonstrated failure.
 repoB="$TMP_ROOT/repoB"
 mkdir -p "$repoB"
 _mk_nazgul_marker "$repoB" "repoB"
 result="$(_resolve "$repo1" "$repoB")"
-assert_eq "git toplevel wins over a stale but valid CLAUDE_PROJECT_DIR" "$result" "$repo1"
+assert_eq "explicit CLAUDE_PROJECT_DIR wins over cwd's own git toplevel" "$result" "$repoB"
 
 # --- Case 2: git worktree add, nested path, own nazgul/config.json ---
 mainrepo="$TMP_ROOT/mainrepo"
@@ -117,6 +121,17 @@ assert_eq "git unavailable: same fallback as non-git host (\$(pwd))" "$result" "
 
 result="$(_resolve_no_git "$nongit" "$cpd_target")"
 assert_eq "git unavailable + CLAUDE_PROJECT_DIR set: falls back to CLAUDE_PROJECT_DIR" "$result" "$cpd_target"
+
+# --- Case 6: path containing a space, resolved via git-toplevel (env unset) ---
+spacerepo="$TMP_ROOT/repo with space"
+_mk_git_repo "$spacerepo"
+_mk_nazgul_marker "$spacerepo" "spacerepo"
+result="$(_resolve "$spacerepo" "")"
+assert_eq "path containing a space resolves verbatim via git toplevel" "$result" "$spacerepo"
+
+# --- Case 6b: path containing a space, resolved via CLAUDE_PROJECT_DIR ---
+result="$(_resolve "$repo1" "$spacerepo")"
+assert_eq "path containing a space resolves verbatim via CLAUDE_PROJECT_DIR" "$result" "$spacerepo"
 
 # --- resolve_nazgul_dir() appends /nazgul to the resolved root ---
 result="$(
