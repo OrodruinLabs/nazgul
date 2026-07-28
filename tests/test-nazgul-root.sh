@@ -78,6 +78,18 @@ _mk_nazgul_marker "$repoB" "repoB"
 result="$(_resolve "$repo1" "$repoB")"
 assert_eq "explicit CLAUDE_PROJECT_DIR wins over cwd's own git toplevel" "$result" "$repoB"
 
+# --- Case 1c: CLAUDE_PROJECT_DIR set to a dir with NO nazgul/, cwd in a
+# DIFFERENT repo that HAS one. TASK-013 regression pin: an explicit
+# CLAUDE_PROJECT_DIR must win unconditionally, even when it fails marker
+# validation and a competing implicit candidate would pass it. This
+# assertion FAILS against the pre-TASK-013 resolver (which fell through to
+# $repo1) — see nazgul/tasks/TASK-013.md Implementation Log for the
+# demonstrated failure.
+cpdNoMarker="$TMP_ROOT/cpd-no-marker"
+mkdir -p "$cpdNoMarker"
+result="$(_resolve "$repo1" "$cpdNoMarker")"
+assert_eq "explicit CLAUDE_PROJECT_DIR wins even without its own marker" "$result" "$cpdNoMarker"
+
 # --- Case 2: git worktree add, nested path, own nazgul/config.json ---
 mainrepo="$TMP_ROOT/mainrepo"
 _mk_git_repo "$mainrepo"

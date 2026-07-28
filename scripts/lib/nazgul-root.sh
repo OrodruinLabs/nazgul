@@ -1,26 +1,24 @@
 #!/usr/bin/env bash
-# Nazgul worktree-aware root resolver (FEAT-021 / ADR-008 Option 1 + Amendment
-# 2026-07-28). Single shared answer to "which nazgul/ does this process
-# belong to?", sourced by every guard/hook that used to compute
+# Nazgul worktree-aware root resolver (FEAT-021 / ADR-008 Option 1 + two
+# amendments, 2026-07-28). Single shared answer to "which nazgul/ does this
+# process belong to?", sourced by every guard/hook that used to compute
 # NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul" directly.
 #
-# Precedence (ordered candidates, marker-validated, first match wins):
-#   1. $CLAUDE_PROJECT_DIR             (explicit signal — wins when valid)
-#   2. git rev-parse --show-toplevel   (this process's actual git worktree)
-#   3. $(pwd)                          (legacy fallback)
-# A candidate "validates" via _nr_has_marker(): <candidate>/nazgul/config.json
-# exists and is readable. That is an EXISTENCE/readability check only, not an
-# identity or content check — a validated candidate is a real Nazgul root,
-# not proof it is the *intended* one for this invocation. Callers must not
-# treat marker-validation as a substitute for their own scoping.
+# Resolution:
+#   1. $CLAUDE_PROJECT_DIR, if set and non-empty — returned UNCONDITIONALLY.
+#      No marker check, no fallthrough: an explicit designation is never
+#      second-guessed. This restores baseline "${CLAUDE_PROJECT_DIR:-...}"
+#      semantics exactly in the explicit-env case (see ADR-008's second
+#      amendment).
+#   2. Otherwise, marker-validated arbitration between the IMPLICIT
+#      candidates (no stated intent to respect, so a marker check is used to
+#      pick the real Nazgul root among them): git-toplevel, then $(pwd).
+#      A candidate "validates" via _nr_has_marker():
+#      <candidate>/nazgul/config.json exists and is readable — an
+#      EXISTENCE/readability check only, not an identity/content check.
 #
-# An explicit CLAUDE_PROJECT_DIR is trusted over git-toplevel once it
-# validates: TASK-012 corrected the original TASK-001 ordering (git-toplevel
-# first), which silently overrode a valid explicit override — a regression,
-# see ADR-008's Amendment for the full incident and rationale.
-#
-# If NO candidate validates (project not yet /nazgul:init'd, or a non-git
-# host), resolve_project_root() falls back to the first non-empty candidate —
+# If no implicit candidate validates (project not yet /nazgul:init'd, or a
+# non-git host), resolve_project_root() falls back to the first candidate —
 # identical to today's "${CLAUDE_PROJECT_DIR:-$(pwd)}" behavior. It never
 # exits, never hard-fails, and never prints anything but the resolved path;
 # $(pwd) is always non-empty so the function always succeeds. Distinguishing
@@ -39,9 +37,13 @@ _nr_has_marker() {
 }
 
 resolve_project_root() {
+  if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+    printf '%s\n' "$CLAUDE_PROJECT_DIR"
+    return 0
+  fi
+
   local git_root
   local -a candidates=()
-  [ -n "${CLAUDE_PROJECT_DIR:-}" ] && candidates+=("$CLAUDE_PROJECT_DIR")
   git_root="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
   [ -n "$git_root" ] && candidates+=("$git_root")
   candidates+=("$(pwd)")
