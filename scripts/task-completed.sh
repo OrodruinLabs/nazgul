@@ -9,7 +9,10 @@ if [ ! -t 0 ]; then
   INPUT=$(cat 2>/dev/null || true)
 fi
 
-NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
+
+NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
 
 # If Nazgul not initialized, exit silently
@@ -17,7 +20,6 @@ if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/emit-event.sh"
 
 # task_id is best-effort — the TaskCompleted payload has no reliable task field.
