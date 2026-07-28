@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
-# Nazgul worktree-aware root resolver (FEAT-021 / ADR-008 Option 1, with the
-# planner's marker-validation amendment — see nazgul/plan.md "Planner
-# correction"). Single shared answer to "which nazgul/ does this process
+# Nazgul worktree-aware root resolver (FEAT-021 / ADR-008 Option 1 + Amendment
+# 2026-07-28). Single shared answer to "which nazgul/ does this process
 # belong to?", sourced by every guard/hook that used to compute
 # NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul" directly.
 #
 # Precedence (ordered candidates, marker-validated, first match wins):
-#   1. git rev-parse --show-toplevel   (this process's actual git worktree)
-#   2. $CLAUDE_PROJECT_DIR             (session-level override)
+#   1. $CLAUDE_PROJECT_DIR             (explicit signal — wins when valid)
+#   2. git rev-parse --show-toplevel   (this process's actual git worktree)
 #   3. $(pwd)                          (legacy fallback)
-# A candidate "validates" when <candidate>/nazgul/config.json exists and is
-# readable. The first validating candidate wins — git-toplevel beats a stale
-# CLAUDE_PROJECT_DIR whenever both are real Nazgul roots, which is the live
-# worktree-vs-main-checkout incident shape this resolver exists to fix.
+# A candidate "validates" via _nr_has_marker(): <candidate>/nazgul/config.json
+# exists and is readable. That is an EXISTENCE/readability check only, not an
+# identity or content check — a validated candidate is a real Nazgul root,
+# not proof it is the *intended* one for this invocation. Callers must not
+# treat marker-validation as a substitute for their own scoping.
+#
+# An explicit CLAUDE_PROJECT_DIR is trusted over git-toplevel once it
+# validates: TASK-012 corrected the original TASK-001 ordering (git-toplevel
+# first), which silently overrode a valid explicit override — a regression,
+# see ADR-008's Amendment for the full incident and rationale.
 #
 # If NO candidate validates (project not yet /nazgul:init'd, or a non-git
 # host), resolve_project_root() falls back to the first non-empty candidate —
@@ -36,9 +41,9 @@ _nr_has_marker() {
 resolve_project_root() {
   local git_root
   local -a candidates=()
+  [ -n "${CLAUDE_PROJECT_DIR:-}" ] && candidates+=("$CLAUDE_PROJECT_DIR")
   git_root="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
   [ -n "$git_root" ] && candidates+=("$git_root")
-  [ -n "${CLAUDE_PROJECT_DIR:-}" ] && candidates+=("$CLAUDE_PROJECT_DIR")
   candidates+=("$(pwd)")
 
   local c
