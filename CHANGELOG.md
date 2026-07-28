@@ -2,6 +2,78 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.24.0] - 2026-07-28
+
+Guard integrity: a guard whose lookup misses must never report success (governing thesis for this
+release — "looked and found nothing" vs. "never looked"). MINOR, not PATCH, because three checks
+that previously exited 0 now BLOCK for input shapes that are legitimate today: short-SHA and
+backticked-short-SHA `## Commits` manifests, refs naming a non-`DONE` task, and (in
+`task-state-guard.sh`) a Nazgul project whose `nazgul/tasks/` directory is missing. MAJOR is wrong —
+nothing is removed, no interface or config key changes shape. **`schema_version` stays at 31**: no
+config key was added, removed, or changed in meaning.
+
+### Fixed
+- **The live merge hole — `pre-merge-commit` admitted unreviewed content on a short SHA.** The guard
+  compared git's always-full-length `GITHEAD_<sha>` key against a task manifest's `## Commits` text
+  with an exact-substring `grep -q`. A manifest that recorded a `git rev-parse --short` SHA (or a
+  backticked one) therefore never matched, `UNIT_ID` stayed empty, and the merge fell through to
+  allow. Reproduced live before the fix: full SHA in `## Commits` -> exit 1 (blocks); short SHA ->
+  exit 0 (merges); backticked short SHA -> exit 0; an empty `## Commits` section -> exit 0. This
+  guard's own repository dogfooded the ambiguity it missed — `scripts/stop-hook.sh` records short
+  SHAs via `git rev-parse --short` in its own commit-recording path, and FEAT-021's own archived task
+  manifests mixed short, backticked-short, and full forms within a single objective. Now matched by
+  token/prefix extraction (`grep -oE '[0-9a-f]{7,64}'` against `## Commits`, then a `case` prefix
+  test against the candidate SHA), so short, full, and backticked forms all resolve.
+  This is a deliberate fail-**CLOSED** design, not FEAT-021's fail-open ADR-008 resolver precedent
+  (ADR-009): a false allow here admits unreviewed code straight into the feature branch's history,
+  indistinguishable from reviewed code the moment the merge lands, while a false deny stalls exactly
+  one unit with a diagnostic that names it — the asymmetry ADR-009 states as its general rule for
+  which guards in this family should fail open vs. closed.
+- **The "never looked" half — ref-name identity, bound per-key, plus block-on-unverifiable.**
+  `GITHEAD_<sha>` values carry the ref name git is actually merging (e.g. `feat/FEAT-009/TASK-165`),
+  set by git itself and not omittable by an implementer — a second identity signal the guard
+  previously ignored, leaving a manifest with no `## Commits` section at all invisible to it. The
+  ref-derived candidate is now resolved per `GITHEAD_<sha>` key (not "first `TASK-NNN` match across
+  the whole environment") and anchored to the canonical `^feat/[^/]+/(TASK-[0-9]+)$` branch shape.
+  ADR-010's naive bare-`TASK-NNN` substring parse was rejected as spoof-unsafe: taking the first
+  `TASK-NNN` match anywhere in the environment, independent of which `GITHEAD_<sha>` key produced it,
+  could resolve identity to a decoy `GITHEAD_<sha>=feat/.../TASK-999` (DONE) instead of the genuine,
+  unapproved head actually being merged — laundering exactly the content the guard exists to catch.
+  The canonical-shape anchor is also what keeps `tests/test-git-hooks-premerge.sh`'s existing
+  FALSE-BLOCK regression case green (`docs/TASK-001`, a non-`feat/`-prefixed branch, must still merge
+  cleanly). A ref-matched unit whose `## Commits` section cannot verify the key's own SHA now BLOCKS
+  as "matched but unverifiable" instead of silently falling through to allow.
+- **`task-state-guard.sh` no longer disables both gates when `nazgul/tasks/` is missing under a real
+  Nazgul project.** A readable `nazgul/config.json` with no (or unreadable) `nazgul/tasks/` is a
+  resolved-but-incomplete project, not a non-Nazgul directory, and now BLOCKS (exit 2) with a
+  diagnostic distinct from the ordinary "no active task" message, instead of collapsing into the
+  same silent no-op as a genuinely non-Nazgul directory (which still safely no-ops on a
+  missing/unreadable `config.json`, unchanged). Same present-but-corrupt-fails-closed /
+  genuinely-absent-no-ops split as §12's MF-053 precedent, applied to this guard.
+- **`slugify_objective` newline corruption, an unchecked `git checkout -b`, and the silent zsh
+  half-load of `worktree-utils.sh`.** A multi-paragraph objective string produced an invalid branch
+  name via `slugify_objective`; `create_feature_branch()`'s `git checkout -b` failure was previously
+  swallowed, leaving config recording a branch that did not exist; and `worktree-utils.sh` sourced
+  under zsh (the default interactive shell on macOS) hit `${BASH_SOURCE[0]}`, a non-fatal
+  unset-parameter diagnostic under zsh, and half-loaded silently — so the managed `core.hooksPath`
+  install (`create_feature_branch -> install_git_hooks`) never ran. All three were hit live during
+  this objective's own setup, and they compound: the merge guard could be both bypassable (the fix
+  above) and not installed at all. `worktree-utils.sh` now refuses to source outside bash, loudly,
+  and `create_feature_branch()` verifies the branch exists after `checkout -b` instead of trusting
+  the exit code alone.
+
+### Added
+- `docs/guard-fail-open-inventory.md` — a classified inventory of the "lookup miss -> pass" pattern
+  across the guard/hook enforcement surface: 125 classified sites across 16 files. Its scope boundary
+  is stated in its own title ("Partial: 16 of ~46 Files"), not implied — the remaining ~322
+  occurrences across 33 files are filed to `nazgul/inbox/` rather than silently left uncounted.
+
+### Changed
+- The `## Commits` manifest format (full 40-hex SHA, bare, one per line) is now specified at both
+  authoring ends — `agents/implementer.md` step 11 and `templates/task-manifest.md` — with an
+  explicit note that this is the authoring convention, not the enforcement boundary:
+  `pre-merge-commit`'s own matching accepts short and backticked forms too.
+
 ## [2.23.1] - 2026-07-28
 
 ### Fixed
