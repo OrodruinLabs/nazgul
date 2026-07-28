@@ -71,13 +71,15 @@ fi
 # part of consuming a report" rule. 19 + 1 = 20.
 # NOTE: counts OCCURRENCES, not lines (some lines carry two tags) — see the
 # [enforced] counter below; for [advisory] the line count and occurrence
-# count both happen to be 20 (no line currently carries two [advisory] tags).
+# count both happen to be 21 (no line currently carries two [advisory] tags).
+# FEAT-021/TASK-010 added 1 more: the "Shared nazgul/ Root Resolver" subsection's
+# resolver-adoption-is-review-only bullet (20 + 1 = 21).
 ADVISORY_COUNT=$(awk '{ count += gsub(/\[advisory\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ADVISORY_COUNT" -eq 20 ]; then
-  _pass "[advisory] annotation count is exactly 20 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 21 ]; then
+  _pass "[advisory] annotation count is exactly 21 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 20" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 20"
+  _fail "[advisory] annotation count is exactly 21" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 21"
 fi
 
 # ---------------------------------------------------------------------------
@@ -91,14 +93,16 @@ fi
 # ---------------------------------------------------------------------------
 # NOTE: counts OCCURRENCES, not lines — `grep -c` undercounts because two
 # lines in RULES.md (the parallel-batch-selection bullet and the §11
-# hard-stops footnote) each carry two `[enforced]` tags. Line count is 49;
-# true occurrence count is 51 (49 + 2 for the double-tagged lines).
+# hard-stops footnote) each carry two `[enforced]` tags. Line count was 49;
+# occurrence count was 51 (49 + 2 for the double-tagged lines). FEAT-021/
+# TASK-010 added 1 more: the resolver subsection's `_resolution_integrity_ok()`
+# fail-open sentence (51 + 1 = 52).
 ENFORCED_COUNT=$(awk '{ count += gsub(/\[enforced\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ENFORCED_COUNT" -eq 51 ]; then
-  _pass "[enforced] annotation count is exactly 51 (found: $ENFORCED_COUNT)"
+if [ "$ENFORCED_COUNT" -eq 52 ]; then
+  _pass "[enforced] annotation count is exactly 52 (found: $ENFORCED_COUNT)"
 else
-  _fail "[enforced] annotation count is exactly 51" \
-    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 51"
+  _fail "[enforced] annotation count is exactly 52" \
+    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 52"
 fi
 
 # NOTE: counts OCCURRENCES, not lines — no line currently carries two
@@ -240,5 +244,47 @@ assert_file_contains \
   "Raising findings append-only sink is tagged [advisory]" \
   "$RULES_FILE" \
   'Append-only sink.*`\[advisory\]`'
+
+# ---------------------------------------------------------------------------
+# Test (i): the Shared nazgul/ Root Resolver subsection (FEAT-021/ADR-008,
+# TASK-010) exists with honest tiers. Library adoption is review-only, no
+# guard blocks a hand-rolled resolution idiom -> [advisory]. The dispatch
+# guard's fail-open branch is a deterministic code path inside a real
+# PreToolUse guard, same class as MF-053's fail-closed branch -> [enforced].
+# ---------------------------------------------------------------------------
+assert_file_contains \
+  "RULES.md has a Shared nazgul/ Root Resolver subsection" \
+  "$RULES_FILE" \
+  "### Shared \`nazgul/\` Root Resolver"
+
+assert_file_contains \
+  "Resolver precedence starts with CLAUDE_PROJECT_DIR winning unconditionally" \
+  "$RULES_FILE" \
+  'Precedence: `\$CLAUDE_PROJECT_DIR`, if set and non-empty,'
+
+assert_file_contains \
+  "Resolver precedence falls through to git-toplevel then pwd" \
+  "$RULES_FILE" \
+  'git-toplevel then `\$(pwd)` whose `nazgul/config.json` exists'
+
+assert_file_contains \
+  "Resolver-library adoption is tagged [advisory]" \
+  "$RULES_FILE" \
+  '`\[advisory\]` `scripts/lib/nazgul-root.sh`'
+
+assert_file_contains \
+  "scripts/git-hooks/ resolver exemption is documented" \
+  "$RULES_FILE" \
+  '`scripts/git-hooks/` is exempt'
+
+assert_file_contains \
+  "_resolution_integrity_ok() fail-open is tagged [enforced]" \
+  "$RULES_FILE" \
+  'top of this resolver\.\*\* `\[enforced\]`'
+
+assert_file_contains \
+  "_resolution_integrity_ok() fail-open does not relax MF-053" \
+  "$RULES_FILE" \
+  "relax, MF-053's fail-CLOSED-on-corrupt-config rule"
 
 report_results

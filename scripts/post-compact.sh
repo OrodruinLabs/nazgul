@@ -5,11 +5,13 @@ set -euo pipefail
 # Fires AFTER compaction completes, BEFORE Claude responds.
 # Stdout is shown to the agent as the first thing in the new context.
 
-NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
+PROJECT_ROOT="$(resolve_project_root)"
+NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
 PLAN="$NAZGUL_DIR/plan.md"
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/task-utils.sh"
 source "$SCRIPT_DIR/lib/emit-event.sh"
 
@@ -86,8 +88,8 @@ LATEST_CHECKPOINT=$(ls -1t "$NAZGUL_DIR/checkpoints/iteration-"*.json 2>/dev/nul
 REVIEWERS=$(jq -r '.agents.reviewers // [] | join(", ")' "$CONFIG" 2>/dev/null || echo "none configured")
 
 # Git state
-GIT_BRANCH=$(git -C "${CLAUDE_PROJECT_DIR:-$(pwd)}" branch --show-current 2>/dev/null || echo "unknown")
-GIT_LAST=$(git -C "${CLAUDE_PROJECT_DIR:-$(pwd)}" log --oneline -1 2>/dev/null || echo "unknown")
+GIT_BRANCH=$(git -C "$PROJECT_ROOT" branch --show-current 2>/dev/null || echo "unknown")
+GIT_LAST=$(git -C "$PROJECT_ROOT" log --oneline -1 2>/dev/null || echo "unknown")
 
 # Output recovery context
 cat << CONTEXT_EOF

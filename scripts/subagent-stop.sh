@@ -13,13 +13,15 @@ if [ ! -t 0 ]; then
   INPUT=$(cat 2>/dev/null || true)
 fi
 
-NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
+
+NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
 
 # If Nazgul is not initialized here, do nothing.
 [ -f "$CONFIG" ] || exit 0
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/emit-event.sh"
 # review-evidence.sh: source of resolve_review_unit(), the single shared
 # fallback resolver for pre-fix events (MF-015; ADR-004 Decision 1).

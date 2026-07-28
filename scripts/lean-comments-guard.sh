@@ -25,6 +25,9 @@ set -euo pipefail
 #
 # No-op when guards.lean_comments is false so projects can opt out.
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
+
 # --- Source-file extension → comment style -----------------------------------
 # Returns "cfamily" (// line, /// or /** doc), "hash" (# line, """ docstring),
 # or "" when the extension is not a recognized source language. NOTE: shell,
@@ -227,7 +230,7 @@ report_for_content() {
 # =============================================================================
 if [ "${1:-}" = "--check" ]; then
   shift
-  CONFIG="${NAZGUL_CONFIG:-${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul/config.json}"
+  CONFIG="${NAZGUL_CONFIG:-$(resolve_nazgul_dir)/config.json}"
   read -r STATE MAXRUN < <(resolve_config check "$CONFIG")
   if [ "$STATE" = "DISABLED" ]; then
     exit 0
@@ -251,7 +254,7 @@ INPUT=$(cat 2>/dev/null || echo "")
 [ -z "$INPUT" ] && exit 0
 
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
-CONFIG="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul/config.json"
+CONFIG="$(resolve_nazgul_dir)/config.json"
 read -r STATE MAXRUN < <(resolve_config hook "$CONFIG")
 if [ "$STATE" = "DISABLED" ]; then
   exit 0

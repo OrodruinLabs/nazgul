@@ -78,6 +78,7 @@ scripts/                             # Shell scripts for hooks
 │   │   ├── pre-commit               # Git-level base-branch guard
 │   │   └── pre-merge-commit         # Git-level H2 parallel-unit verdict guard
 │   └── lib/                         # Shared libraries
+│       ├── nazgul-root.sh           # Shared worktree-aware nazgul/ root resolver (FEAT-021/ADR-008)
 │       ├── task-utils.sh            # Task status parsing (4 formats) + counting
 │       ├── task-transition-guard.sh # Shared state-machine + evidence lib (task-state-guard + stop-hook reconciliation)
 │       ├── session-tracker.sh       # Concurrent session lock management

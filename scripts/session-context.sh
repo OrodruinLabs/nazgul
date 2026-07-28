@@ -4,10 +4,12 @@ set -euo pipefail
 # Nazgul Session Context — injects state on startup and after compaction
 # Stdout is shown to the agent
 
-NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
+PROJECT_ROOT="$(resolve_project_root)"
+NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
 PLAN="$NAZGUL_DIR/plan.md"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/task-utils.sh"
 source "$SCRIPT_DIR/lib/session-tracker.sh"
 
@@ -35,7 +37,7 @@ TT_SWEEP_ENABLED=$(jq -r 'if .guards.team_sweep == false then "false" else "true
 if [ "$TT_SWEEP_ENABLED" = "true" ]; then
   source "$SCRIPT_DIR/lib/team-teardown.sh"
   TT_MIN_AGE=$(jq -r '[.guards.team_sweep_min_age_hours // 24, 1] | max' "$CONFIG" 2>/dev/null || echo 24)
-  TT_SWEPT=$(tt_sweep_orphaned_teams "$NAZGUL_DIR" "${CLAUDE_PROJECT_DIR:-$(pwd)}" "$SESSION_ID" "$TT_MIN_AGE" 2>/dev/null || true)
+  TT_SWEPT=$(tt_sweep_orphaned_teams "$NAZGUL_DIR" "$PROJECT_ROOT" "$SESSION_ID" "$TT_MIN_AGE" 2>/dev/null || true)
   [ -n "$TT_SWEPT" ] && TT_SWEEP_NOTICE="Swept orphaned team state (dead sessions): $(printf '%s' "$TT_SWEPT" | tr '\n' ' ')"
 fi
 
@@ -176,8 +178,8 @@ LATEST_CHECKPOINT=$(ls -1t "$NAZGUL_DIR/checkpoints/iteration-"*.json 2>/dev/nul
 REVIEWERS=$(jq -r '.agents.reviewers // [] | join(", ")' "$CONFIG" 2>/dev/null || echo "none configured")
 
 # Git state
-GIT_BRANCH=$(git -C "${CLAUDE_PROJECT_DIR:-$(pwd)}" branch --show-current 2>/dev/null || echo "unknown")
-GIT_LAST=$(git -C "${CLAUDE_PROJECT_DIR:-$(pwd)}" log --oneline -1 2>/dev/null || echo "unknown")
+GIT_BRANCH=$(git -C "$PROJECT_ROOT" branch --show-current 2>/dev/null || echo "unknown")
+GIT_LAST=$(git -C "$PROJECT_ROOT" log --oneline -1 2>/dev/null || echo "unknown")
 
 # Branch isolation state
 FEATURE_BRANCH=$(jq -r '.branch.feature // ""' "$CONFIG" 2>/dev/null || echo "")

@@ -202,3 +202,46 @@ Test objective
 ## Tasks
 PLAN_EOF
 }
+
+setup_two_worktree_repo() {
+  # Builds the FEAT-021 live-incident shape with real git: a repo at
+  # $TEST_DIR/main with its own nazgul/ (feat_id FEAT-005, TASK-007 DONE —
+  # the main checkout's unrelated objective), plus a real `git worktree add`
+  # checkout nested at .claude/worktrees/feat-x with its OWN nazgul/ (same
+  # feat_id — both trees independently computed objectives_history.length+1
+  # — TASK-007 IN_PROGRESS, this worktree's own active task).
+  #
+  # Reuses setup_git_repo/setup_nazgul_dir/create_config/create_task_file by
+  # temporarily repointing the shared $TEST_DIR global to each tree in turn,
+  # then restores it — sets TWO_WT_MAIN / TWO_WT_WORKTREE for the caller.
+  local outer="$TEST_DIR"
+  TWO_WT_MAIN="$outer/main"
+  TWO_WT_WORKTREE="$TWO_WT_MAIN/.claude/worktrees/feat-x"
+
+  mkdir -p "$TWO_WT_MAIN"
+  TEST_DIR="$TWO_WT_MAIN"
+  setup_git_repo
+  setup_nazgul_dir
+  create_config '.feat_id = "FEAT-005"' '.execution.parallel = true'
+  create_task_file TASK-007 DONE
+
+  git -C "$TWO_WT_MAIN" worktree add -q "$TWO_WT_WORKTREE" -b feat-x
+
+  TEST_DIR="$TWO_WT_WORKTREE"
+  setup_nazgul_dir
+  create_config '.feat_id = "FEAT-005"' '.execution.parallel = true'
+  create_task_file TASK-007 IN_PROGRESS
+
+  TEST_DIR="$outer"
+}
+
+teardown_two_worktree_repo() {
+  # Explicit `git worktree remove` + `prune` BEFORE teardown_temp_dir's
+  # `rm -rf` — required so the fixture repo's own .git/worktrees/ metadata
+  # never dangles, per this task's test requirements.
+  if [ -n "${TWO_WT_MAIN:-}" ] && [ -d "$TWO_WT_MAIN" ]; then
+    git -C "$TWO_WT_MAIN" worktree remove --force "$TWO_WT_WORKTREE" 2>/dev/null || true
+    git -C "$TWO_WT_MAIN" worktree prune 2>/dev/null || true
+  fi
+  unset TWO_WT_MAIN TWO_WT_WORKTREE
+}

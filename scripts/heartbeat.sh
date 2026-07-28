@@ -10,10 +10,12 @@ set -euo pipefail
 # in inbox_list once archived, so a re-run can't repick or double-start it.
 # Appends one decision record per tick to nazgul/logs/heartbeat-<date>.jsonl.
 
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
+
+PROJECT_ROOT="$(resolve_project_root)"
 NAZGUL_DIR="$PROJECT_ROOT/nazgul"
 CONFIG="$NAZGUL_DIR/config.json"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/parallel-batch.sh
 source "$SCRIPT_DIR/lib/parallel-batch.sh"
 # shellcheck source=lib/session-tracker.sh

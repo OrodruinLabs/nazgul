@@ -2,6 +2,54 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.23.1] - 2026-07-28
+
+### Fixed
+- **Cross-worktree state resolution — a session inside a git worktree no longer reads the MAIN
+  checkout's `nazgul/`.** Every guard/hook that hand-rolled `NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}
+  /nazgul"` resolved from the process cwd, so a worktree session structurally valid at `TASK-NNN`
+  (task ids restart per objective) could read a DIFFERENT objective's task state and return a
+  confident WRONG verdict rather than a miss — the live 2026-07-27 incident. New shared resolver,
+  `scripts/lib/nazgul-root.sh` (`resolve_project_root()` / `resolve_nazgul_dir()`), adopted at the
+  **22 verified migration call sites** across `scripts/` and `scripts/lib/` (re-derived this
+  objective — the TRD's "20" was an arithmetic error). Precedence: an explicit, non-empty
+  `CLAUDE_PROJECT_DIR` wins unconditionally, no marker check, no fallthrough; otherwise the first of
+  git-toplevel then `$(pwd)` whose `nazgul/config.json` exists and is readable wins, falling back to
+  git-toplevel (or `$(pwd)` outside a git repo) if neither validates. `scripts/git-hooks/` is exempt —
+  already correct via `git rev-parse --show-toplevel` run inside the hook itself. Landed as three
+  passes on the resolver in this objective (ADR-008 + two amendments + a correction): the initial
+  precedence tried git-toplevel first and could silently override an explicit `CLAUDE_PROJECT_DIR`;
+  a first fix reordered to try the explicit var first but still marker-validated it, so a
+  set-but-invalid value fell through to an unrelated repo; the final fix returns an explicit,
+  non-empty `CLAUDE_PROJECT_DIR` unconditionally.
+- **One new fail-OPEN, narrowly scoped.** `scripts/parallel-dispatch-guard.sh`'s
+  `_resolution_integrity_ok()` allows and warns (`dispatch_guard_resolution_unconfirmed`) when
+  `TASKS_DIR` fails to canonicalize as a child of the resolved `NAZGUL_DIR` — a resolution-INTEGRITY
+  check only (e.g. `nazgul/tasks` symlinked outside the resolved tree), not an objective-identity
+  check. MF-053's fail-CLOSED-on-corrupt-`config.json` rule is unchanged and untouched by this branch.
+- **ADR-008 Option 2 — `CLAUDE_PROJECT_DIR` exported at worktree entry**, as defense-in-depth on top
+  of the resolver fix (`scripts/worktree-utils.sh`), plus its six `project_root` parameter defaults
+  hardened to `resolve_project_root()`.
+- **`RULES.md` §17's `teammate-idle-guard.sh` known limitation is NARROWED, not closed.** The guard now
+  resolves `nazgul/` through the shared resolver instead of a hand-rolled check, so a teammate whose
+  session resolves to a git worktree carrying the shared `nazgul/` runtime is correctly tracked. A bare
+  task-worktree teammate session (`CLAUDE_PROJECT_DIR` unset, no `nazgul/config.json` of its own — it's
+  gitignored and per-worktree) still has no validating candidate. ADR-008 Option 2's export does not
+  close this gap at this layer: `create_task_worktree()` is not in the production call graph, and its
+  `echo`-based return means any caller capturing it via `$(...)` gets the export discarded by the
+  subshell.
+
+### Known / deferred
+- **PRD AC 3 is only partially satisfied.** Detecting a stale or cross-objective `NAZGUL_UNIT` dispatch
+  token requires an objective anchor on the token itself — scope item 4 (collision-resistant `feat_id`
+  generation + `NAZGUL_UNIT: FEAT-NNN/TASK-NNN` namespacing), cut from this objective on cost/benefit
+  (redundant against the resolution fix; changing `feat_id`'s shape is a whole objective, not a task —
+  see `nazgul/docs/PRD.md`). Filed as a standalone follow-up:
+  `nazgul/inbox/feat-id-collision-resistance.md` (priority 3), which also covers `plan.md`'s
+  non-blocking status-table drift.
+- No `schema_version` bump and no config migration in this release — `feat_id` generation, config
+  shape, and `templates/config.json` are all untouched.
+
 ## [2.23.0] - 2026-07-27
 
 ### Fixed

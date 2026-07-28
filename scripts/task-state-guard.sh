@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/task-utils.sh"
 source "$SCRIPT_DIR/lib/review-evidence.sh"
 source "$SCRIPT_DIR/lib/task-transition-guard.sh"
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
 
 # Single source of truth (ADR-002 Decision 1): derive the accepted-status regex
 # alternation from structured-state.sh's VALID_STATUSES (sourced transitively via
@@ -57,8 +58,8 @@ fi
 
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null || echo "")
 
-# Derive project root — prefer CLAUDE_PROJECT_DIR, fall back to pwd
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+# Derive project root via the worktree-aware resolver (FEAT-021 / ADR-008)
+PROJECT_ROOT="$(resolve_project_root)"
 
 # Helper: check if a path is inside the project's nazgul/ control directory
 is_nazgul_path() {

@@ -11,13 +11,15 @@ set -euo pipefail
 # Drain stdin so the producer never blocks on a full pipe.
 cat >/dev/null 2>&1 || true
 
-NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
+
+NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
 
 # If Nazgul is not initialized here, do nothing.
 [ -f "$CONFIG" ] || exit 0
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/emit-event.sh"
 
 TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"

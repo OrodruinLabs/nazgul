@@ -17,7 +17,10 @@ set -euo pipefail
 # command substitution, $'...' ANSI-C quoting) are out of scope by design and degrade
 # to allow — acceptable for normal Nazgul loop usage.
 
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
+
+PROJECT_ROOT="$(resolve_project_root)"
 CONFIG="$PROJECT_ROOT/nazgul/config.json"
 
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
