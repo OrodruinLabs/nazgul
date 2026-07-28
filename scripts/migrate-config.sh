@@ -6,8 +6,9 @@ set -euo pipefail
 # Usage: migrate-config.sh [nazgul_dir]
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-NAZGUL_DIR="${1:-${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul}"
+NAZGUL_DIR="${1:-$(resolve_nazgul_dir)}"
 CONFIG="$NAZGUL_DIR/config.json"
 TEMPLATE="$PLUGIN_ROOT/templates/config.json"
 
