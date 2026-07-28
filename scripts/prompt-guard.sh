@@ -5,7 +5,10 @@ set -euo pipefail
 # Fires on UserPromptSubmit. Blocks accidental state-machine bypasses.
 # Returns exit 2 to block the prompt, exit 0 to allow.
 
-NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
+
+NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
 
 # Read the user's prompt from the UserPromptSubmit stdin JSON envelope
