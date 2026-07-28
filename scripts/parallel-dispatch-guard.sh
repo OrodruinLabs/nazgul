@@ -47,16 +47,16 @@ is_work_unit() {
   esac
 }
 
-# Ambiguity fail-open (PRD AC 3). "Cannot confirm" is exactly two structural
-# checks against the resolver's own output — never a content heuristic
-# (LR-005): config.json's feat_id can't even be read (the document root isn't
-# indexable, e.g. not an object), or TASKS_DIR doesn't canonicalize to a real
-# child of NAZGUL_DIR (e.g. tasks/ symlinked outside this objective's tree).
-# A null/absent feat_id is a normal, confirmable state (mirrors
-# teammate-idle-guard.sh's `// "default"` treatment) — only a genuine read
-# failure counts as ambiguous.
-_objective_confirmed() {
-  jq '.feat_id' "$CONFIG" >/dev/null 2>&1 || return 1
+# Resolution-integrity check — NOT an objective-identity check. It only
+# catches TASKS_DIR failing to canonicalize as a real child of NAZGUL_DIR
+# (e.g. nazgul/tasks symlinked outside the resolved tree). It CANNOT detect
+# a stale or cross-objective NAZGUL_UNIT token that names a real task in a
+# different but internally-valid nazgul/ tree: task manifests carry no
+# feat_id and NAZGUL_UNIT carries no objective anchor to check it against.
+# Closing that gap needs an objective anchor on the dispatch token itself —
+# cut from this objective's scope on cost/benefit grounds (plan.md scope
+# item 4; TRD.md Proposed Changes items 4-5).
+_resolution_integrity_ok() {
   local nd_real td_real
   nd_real=$(cd "$NAZGUL_DIR" 2>/dev/null && pwd -P) || return 1
   td_real=$(cd "$TASKS_DIR" 2>/dev/null && pwd -P) || return 1
@@ -69,11 +69,6 @@ _objective_confirmed() {
 # needs its review-gate dispatch; only a DONE unit's review is wasted work.
 UNIT=$(printf '%s' "$PROMPT" | grep -oE 'NAZGUL_UNIT: TASK-[0-9]+' | head -1 | sed 's/^NAZGUL_UNIT: //' || true)
 if [ -n "$UNIT" ] && [ -f "$TASKS_DIR/$UNIT.md" ] && is_work_unit "$SUBAGENT"; then
-  if ! _objective_confirmed; then
-    echo "NAZGUL PARALLEL: Allowed — cannot confirm $UNIT belongs to the running objective (ambiguous feat_id/resolution); failing open per PRD AC 3." >&2
-    emit_event "dispatch_guard_ambiguous" unit "$UNIT" subagent "$SUBAGENT"
-    exit 0
-  fi
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/lib/task-utils.sh"
   STATUS=$(get_task_status "$TASKS_DIR/$UNIT.md" "")
@@ -83,6 +78,13 @@ if [ -n "$UNIT" ] && [ -f "$TASKS_DIR/$UNIT.md" ] && is_work_unit "$SUBAGENT"; t
     *)             case "$STATUS" in IMPLEMENTED|DONE) BLOCK=1 ;; esac ;;
   esac
   if [ -n "$BLOCK" ]; then
+    # Only checked before trusting a BLOCK verdict, so it never emits
+    # ambiguity telemetry on requests that would have been allowed anyway.
+    if ! _resolution_integrity_ok; then
+      echo "NAZGUL PARALLEL: Allowed — $UNIT failed the tasks-dir resolution-integrity check (not an objective-identity check); failing open per PRD AC 3." >&2
+      emit_event "dispatch_guard_resolution_unconfirmed" unit "$UNIT" subagent "$SUBAGENT"
+      exit 0
+    fi
     echo "NAZGUL PARALLEL: Blocked — $UNIT already $STATUS; re-dispatch is wasted work." >&2
     exit 2
   fi
