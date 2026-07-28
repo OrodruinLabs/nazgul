@@ -46,6 +46,18 @@ status: PLANNED
 <!-- Incremented each time task goes through CHANGES_REQUESTED -> IN_PROGRESS cycle.
      When retry_count >= max_retries_per_task (from config.json), task becomes BLOCKED. -->
 
+## Commits
+<!-- Populated by the implementer when transitioning IN_PROGRESS -> IMPLEMENTED (agents/implementer.md
+     step 11) — required before that transition; the state guard blocks it without at least one entry.
+     One bullet per commit: the full 40-hex SHA from `git rev-parse HEAD`, bare (no backticks), an em
+     dash, then the commit subject. Set it before any merge — the branch-tip commit for this task, per
+     the review-then-merge ordering (RULES.md §11). This is the authoring convention, not the
+     enforcement boundary: `pre-merge-commit`'s lookup also accepts short and backticked forms, so the
+     format is for cross-manifest consistency, not because the guard needs it in this shape.
+
+     Example:
+     - f81e1b25d6b513c5f8c46bb65f25acd970016f8c — feat(FEAT-001): TASK-001 implement user model -->
+
 ## Description
 <!-- Clear, specific description of what this task accomplishes.
      Written by the Planner. Should be understandable without reading other tasks.
@@ -122,7 +134,7 @@ status: PLANNED
      - Created tests/models/user.test.ts with 5 test cases (create, read, update, delete, duplicate email)
      **Test results**: 5/5 passing
      **Lint results**: clean (0 errors, 0 warnings)
-     **Commit**: `feat(FEAT-001): TASK-001 implement user model` (sha: def5678) -->
+     **Commit**: `feat(FEAT-001): TASK-001 implement user model` (sha: f81e1b25d6b513c5f8c46bb65f25acd970016f8c) -->
 
 ## Review Results
 <!-- Populated by the review-gate agent after each review cycle.
