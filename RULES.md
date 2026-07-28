@@ -429,26 +429,28 @@ never reaches either call site stays unguarded indefinitely.
 
 ### Shared `nazgul/` Root Resolver (FEAT-021, ADR-008)
 
-Every script that resolves which `nazgul/` root it belongs to does so through one shared library,
-`scripts/lib/nazgul-root.sh` (`resolve_project_root()` / `resolve_nazgul_dir()`), replacing the
-`NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"` idiom every guard/hook previously hand-rolled.
-Precedence: `$CLAUDE_PROJECT_DIR`, if set and non-empty, wins unconditionally as an explicit caller
-designation — no marker check; otherwise the first of git-toplevel then `$(pwd)` whose
-`nazgul/config.json` exists and is readable wins, falling back to git-toplevel (or `$(pwd)` outside a
-git repo) if neither validates. `scripts/git-hooks/` is exempt — its hooks already resolve correctly
-via `git rev-parse --show-toplevel` run inside the hook itself (above), which this generalizes for
-every non-git-hook caller.
+**Every script that resolves which `nazgul/` root it belongs to does so through one shared library.**
+`[advisory]` `scripts/lib/nazgul-root.sh` (`resolve_project_root()` / `resolve_nazgul_dir()`) replaces
+the `NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"` idiom every guard/hook previously hand-rolled.
+Nothing blocks a new script from hand-rolling that idiom instead of sourcing the library — adoption is
+verified by review, not mechanically enforced. Precedence: `$CLAUDE_PROJECT_DIR`, if set and non-empty,
+wins unconditionally as an explicit caller designation — no marker check; otherwise the first of
+git-toplevel then `$(pwd)` whose `nazgul/config.json` exists and is readable wins, falling back to
+git-toplevel (or `$(pwd)` outside a git repo) if neither validates. `scripts/git-hooks/` is exempt —
+its hooks already resolve correctly via `git rev-parse --show-toplevel` run inside the hook itself
+(above), which this generalizes for every non-git-hook caller.
 
-`scripts/parallel-dispatch-guard.sh`'s `_resolution_integrity_ok()` adds one new fail-OPEN case on top
-of this resolver: if `TASKS_DIR` fails to canonicalize as a child of the resolved `NAZGUL_DIR`, the
-guard allows and warns (`dispatch_guard_resolution_unconfirmed`) instead of blocking. This is a
-resolution-INTEGRITY check only — it catches e.g. `nazgul/tasks` symlinked outside the resolved tree —
-NOT an objective-identity check: it cannot detect a stale or cross-objective `NAZGUL_UNIT` token naming
-a real task in a different-but-internally-valid `nazgul/` tree (PRD AC 3, partially satisfied — closing
-that gap needs an objective anchor on the dispatch token, cut as scope item 4). It is narrower than,
-and does not relax, MF-053's fail-CLOSED-on-corrupt-config rule above: MF-053 covers an unparseable
-`config.json`; this covers only a valid config whose `tasks/` path resolves outside its own `nazgul/`
-tree.
+**`scripts/parallel-dispatch-guard.sh`'s `_resolution_integrity_ok()` adds one new fail-OPEN case on
+top of this resolver.** `[enforced]` If `TASKS_DIR` fails to canonicalize as a child of the resolved
+`NAZGUL_DIR`, the guard allows and warns (`dispatch_guard_resolution_unconfirmed`) instead of
+blocking — a deterministic branch inside the real PreToolUse Dispatch guard (§12), same tier as
+MF-053's fail-CLOSED branch below, not agent discretion. This is a resolution-INTEGRITY check only —
+it catches e.g. `nazgul/tasks` symlinked outside the resolved tree — NOT an objective-identity check:
+it cannot detect a stale or cross-objective `NAZGUL_UNIT` token naming a real task in a
+different-but-internally-valid `nazgul/` tree (PRD AC 3, partially satisfied — closing that gap needs
+an objective anchor on the dispatch token, cut as scope item 4). It is narrower than, and does not
+relax, MF-053's fail-CLOSED-on-corrupt-config rule above: MF-053 covers an unparseable `config.json`;
+this covers only a valid config whose `tasks/` path resolves outside its own `nazgul/` tree.
 
 ## 16. GitHub Connector
 
