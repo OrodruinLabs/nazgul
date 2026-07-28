@@ -106,4 +106,19 @@ set -e
 assert_exit_code "missing flag exits non-zero" "$EXIT_CODE" "1"
 assert_contains "missing flag prints usage" "$(cat "$USAGE_OUT")" "Usage:"
 
+# --- Test 6: Resolver FALLBACK path (qa 72, carried forward to TASK-009) ---
+# Every case above passes an explicit nazgul_dir argument, so the
+# `${NAZGUL_DIR:-$(resolve_nazgul_dir)}` short-circuit means resolve_nazgul_dir()
+# is never invoked above — but this script's real caller (skills/plan/SKILL.md)
+# passes NO positional argument, so the fallback IS the live production path.
+FALLBACK_ROOT="$TMPDIR_BASE/fallback-project/nazgul"
+FALLBACK_ELSEWHERE="$TMPDIR_BASE/fallback-elsewhere"
+mkdir -p "$FALLBACK_ROOT/reviews/TASK-001" "$FALLBACK_ROOT/learning" "$FALLBACK_ROOT/logs" "$FALLBACK_ROOT/tasks" "$FALLBACK_ELSEWHERE"
+echo "verdict: CHANGES_REQUESTED" > "$FALLBACK_ROOT/reviews/TASK-001/consolidated-feedback.md"
+echo "# Proposed Learned Rules" > "$FALLBACK_ROOT/learning/proposed-rules.md"
+FALLBACK_OUTPUT=$(cd "$FALLBACK_ELSEWHERE" && CLAUDE_PROJECT_DIR="$(dirname "$FALLBACK_ROOT")" "$SCRUB" --for-new-objective FEAT-006)
+assert_contains "no-positional-arg: fallback resolves via CLAUDE_PROJECT_DIR and archives" "$FALLBACK_OUTPUT" "archived stale artifacts"
+assert_file_not_exists "no-positional-arg: fallback cleared the FIXTURE root's reviews, not cwd's" "$FALLBACK_ROOT/reviews/TASK-001/consolidated-feedback.md"
+assert_dir_not_exists "no-positional-arg: fallback did not touch/create a nazgul/ at cwd" "$FALLBACK_ELSEWHERE/nazgul"
+
 report_results
