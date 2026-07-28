@@ -11,6 +11,9 @@ _WU_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$_WU_DIR/.." && pwd)}"
 _WU_GIT_HOOKS_LIB="$_WU_PLUGIN_ROOT/scripts/lib/git-hooks.sh"
 # shellcheck source=./lib/git-hooks.sh
 [ -f "$_WU_GIT_HOOKS_LIB" ] && source "$_WU_GIT_HOOKS_LIB"
+_WU_NAZGUL_ROOT_LIB="$_WU_PLUGIN_ROOT/scripts/lib/nazgul-root.sh"
+# shellcheck source=./lib/nazgul-root.sh
+[ -f "$_WU_NAZGUL_ROOT_LIB" ] && source "$_WU_NAZGUL_ROOT_LIB"
 
 slugify_objective() {
   local input="$1"
@@ -19,7 +22,7 @@ slugify_objective() {
 
 create_feature_branch() {
   local objective="$1"
-  local project_root="${2:-$(pwd)}"
+  local project_root="${2:-$(resolve_project_root)}"
   local config="${3:-$CONFIG}"
   local slug
   slug=$(slugify_objective "$objective")
@@ -82,7 +85,7 @@ create_feature_branch() {
 }
 
 setup_worktree_dir() {
-  local project_root="${1:-$(pwd)}"
+  local project_root="${1:-$(resolve_project_root)}"
   local config="${2:-$CONFIG}"
   local project_name
   project_name=$(basename "$project_root")
@@ -100,7 +103,7 @@ setup_worktree_dir() {
 
 create_task_worktree() {
   local task_id="$1"
-  local project_root="${2:-$(pwd)}"
+  local project_root="${2:-$(resolve_project_root)}"
   local config="${3:-$CONFIG}"
 
   local feature_branch
@@ -122,6 +125,23 @@ create_task_worktree() {
   local task_branch="feat/${feat_ref}/${task_id}"
 
   git -C "$project_root" worktree add "$task_dir" -b "$task_branch" "$feature_branch" 2>/dev/null
+
+  # ADR-008 Option 2: export the MAIN checkout, not $task_dir. nazgul/ is
+  # gitignored and per-worktree, so a task worktree never carries its own
+  # nazgul/config.json — pointing CLAUDE_PROJECT_DIR at $task_dir would fail
+  # resolve_project_root()'s marker validation and could clobber an
+  # already-correct value.
+  #
+  # STATUS: no live caller exercises this. create_task_worktree() has no
+  # production caller (real path is the EnterWorktree tool or a raw
+  # `git worktree add` — agents/implementer.md:113); the only return channel
+  # is `echo "$task_dir"`, so every real caller captures via $(...), and that
+  # subshell discards the export before it reaches the caller. Correctly
+  # targeted and ready if a future direct (non-subshell) caller is wired up —
+  # such a caller would then keep this export for the rest of its own
+  # process, including any later unrelated resolve_project_root() calls in
+  # that same shell.
+  export CLAUDE_PROJECT_DIR="$project_root"
 
   # Apply sparse checkout if configured
   local sparse_paths
@@ -145,7 +165,7 @@ create_task_worktree() {
 
 merge_task_to_feature() {
   local task_id="$1"
-  local project_root="${2:-$(pwd)}"
+  local project_root="${2:-$(resolve_project_root)}"
   local config="${3:-$CONFIG}"
 
   local feature_branch
@@ -169,7 +189,7 @@ merge_task_to_feature() {
 
 cleanup_task_worktree() {
   local task_id="$1"
-  local project_root="${2:-$(pwd)}"
+  local project_root="${2:-$(resolve_project_root)}"
   local config="${3:-$CONFIG}"
 
   local worktree_dir
@@ -189,7 +209,7 @@ cleanup_task_worktree() {
 }
 
 cleanup_all_worktrees() {
-  local project_root="${1:-$(pwd)}"
+  local project_root="${1:-$(resolve_project_root)}"
   local config="${2:-$CONFIG}"
 
   local worktree_dir
