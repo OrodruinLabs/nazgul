@@ -85,7 +85,12 @@ while IFS= read -r CANDIDATE_SHA; do
   [ -n "$CANDIDATE_SHA" ] || continue
   for tf in "$REPO_ROOT/nazgul/tasks"/TASK-*.md; do
     [ -f "$tf" ] || continue
-    awk '/^## Commits/{f=1;next} /^## /{f=0} f' "$tf" 2>/dev/null | grep -q "$CANDIDATE_SHA" || continue
+    COMMIT_TOKENS=$(awk '/^## Commits/{f=1;next} /^## /{f=0} f' "$tf" 2>/dev/null | grep -oE '[0-9a-f]{7,64}' || true)
+    MATCHED=0
+    for TOKEN in $COMMIT_TOKENS; do
+      case "$CANDIDATE_SHA" in "$TOKEN"*) MATCHED=1; break ;; esac
+    done
+    [ "$MATCHED" = 1 ] || continue
     tf_status=$(awk '/^---[[:space:]]*$/{fm++; next} fm==1 && /^status:/{sub(/^status:[[:space:]]*/, ""); sub(/[[:space:]\r]+$/, ""); print; exit}' "$tf" 2>/dev/null)
     if [ -z "$tf_status" ]; then
       tf_status=$(grep -E '^\- \*\*Status\*\*:' "$tf" 2>/dev/null | head -1 | sed 's/^.*: *//' | tr -d ' \r')

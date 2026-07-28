@@ -46,6 +46,11 @@ branch_sha() {
   git -C "$repo" rev-parse "$branch"
 }
 
+branch_short_sha() {
+  local repo="$1" branch="$2"
+  git -C "$repo" rev-parse --short "$branch"
+}
+
 write_config() {
   local repo="$1" json="$2"
   mkdir -p "$repo/nazgul"
@@ -214,6 +219,59 @@ write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
 write_task "$TEST_DIR/repo" "TASK-001" "DONE" "$UNIT_SHA"
 do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
 assert_exit_code "allow: content-matched DONE unit -> exit 0" "$MERGE_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# BLOCK (short-SHA keystone): a manifest recording only a SHORT SHA (the
+# form `git rev-parse --short` and implementers actually write) for a
+# non-DONE unit must still be matched by prefix and block. Exact-substring
+# matching (the bug) misses this because a 7-char token is never a
+# substring of the 40-char GITHEAD_<sha> candidate it is a prefix of.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+SHORT_SHA=$(branch_short_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "$SHORT_SHA"
+do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+assert_exit_code "block: short-SHA manifest for non-DONE unit -> nonzero" "$MERGE_EC" 1
+assert_contains "short-SHA block message names the unit" "$MERGE_STDERR" "TASK-001"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# BLOCK (backticked short-SHA): same as above but the manifest entry wraps
+# the short SHA in backticks (a common human-authored form). A backticked
+# FULL SHA already blocks today by accident (substring match tolerates
+# surrounding text); only the backticked SHORT form pins this defect.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+SHORT_SHA=$(branch_short_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "\`$SHORT_SHA\`"
+do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+assert_exit_code "block: backticked short-SHA manifest for non-DONE unit -> nonzero" "$MERGE_EC" 1
+assert_contains "backticked short-SHA block message names the unit" "$MERGE_STDERR" "TASK-001"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# ALLOW (short-SHA over-block regression guard): the same short-SHA manifest
+# at Status: DONE must still allow -> proves the prefix match doesn't
+# over-block a legitimately approved unit.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+SHORT_SHA=$(branch_short_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-001" "DONE" "$SHORT_SHA"
+do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+assert_exit_code "allow: short-SHA manifest for DONE unit -> exit 0" "$MERGE_EC" 0
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
