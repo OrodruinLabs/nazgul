@@ -33,8 +33,9 @@ _rf_neutralize() {
 # raise_finding <severity> <category> <title> <detail> [suggested_fix] [evidence]
 # -> append one JSON line to $NAZGUL_DIR/logs/findings.jsonl. An explicit
 # $NAZGUL_DIR still wins outright (caller override stays in front); otherwise
-# falls back to resolve_nazgul_dir()'s worktree-aware chain (git toplevel ->
-# CLAUDE_PROJECT_DIR -> pwd, marker-validated).
+# falls back to resolve_nazgul_dir(): an explicit non-empty CLAUDE_PROJECT_DIR is
+# returned unconditionally (no marker check), else the first of git-toplevel then
+# pwd carrying a readable nazgul/config.json wins.
 # ts is UTC now; agent/unit come from $NAZGUL_AGENT/$NAZGUL_UNIT (empty when unset).
 raise_finding() {
   # Argc guard FIRST: this is sourced into caller shells that may run `set -u`,
