@@ -427,6 +427,29 @@ guard at all yet — self-heal's first-time-install layer (above) closes the com
 branch-setup call site never ran `create_feature_branch`) at the next `SessionStart`, but a repo that
 never reaches either call site stays unguarded indefinitely.
 
+### Shared `nazgul/` Root Resolver (FEAT-021, ADR-008)
+
+Every script that resolves which `nazgul/` root it belongs to does so through one shared library,
+`scripts/lib/nazgul-root.sh` (`resolve_project_root()` / `resolve_nazgul_dir()`), replacing the
+`NAZGUL_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}/nazgul"` idiom every guard/hook previously hand-rolled.
+Precedence: `$CLAUDE_PROJECT_DIR`, if set and non-empty, wins unconditionally as an explicit caller
+designation — no marker check; otherwise the first of git-toplevel then `$(pwd)` whose
+`nazgul/config.json` exists and is readable wins, falling back to git-toplevel (or `$(pwd)` outside a
+git repo) if neither validates. `scripts/git-hooks/` is exempt — its hooks already resolve correctly
+via `git rev-parse --show-toplevel` run inside the hook itself (above), which this generalizes for
+every non-git-hook caller.
+
+`scripts/parallel-dispatch-guard.sh`'s `_resolution_integrity_ok()` adds one new fail-OPEN case on top
+of this resolver: if `TASKS_DIR` fails to canonicalize as a child of the resolved `NAZGUL_DIR`, the
+guard allows and warns (`dispatch_guard_resolution_unconfirmed`) instead of blocking. This is a
+resolution-INTEGRITY check only — it catches e.g. `nazgul/tasks` symlinked outside the resolved tree —
+NOT an objective-identity check: it cannot detect a stale or cross-objective `NAZGUL_UNIT` token naming
+a real task in a different-but-internally-valid `nazgul/` tree (PRD AC 3, partially satisfied — closing
+that gap needs an objective anchor on the dispatch token, cut as scope item 4). It is narrower than,
+and does not relax, MF-053's fail-CLOSED-on-corrupt-config rule above: MF-053 covers an unparseable
+`config.json`; this covers only a valid config whose `tasks/` path resolves outside its own `nazgul/`
+tree.
+
 ## 16. GitHub Connector
 
 `scripts/lib/connector-github.sh` (FEAT-012, ADR-001) is the first real remote provider behind the
@@ -495,12 +518,23 @@ FILE, enforced in three layers:
    and stale `feat_id` — a deliberate inversion of the PreToolUse guards'
    fail-closed rule, because blocking on garbage strands live teammates.
    Kill-switch: `execution.enforce.teammate_report_guard` (default `true`).
-   Known limitation: the guard resolves `nazgul/` via
-   `CLAUDE_PROJECT_DIR`/cwd, so a teammate whose session resolves to a git
-   worktree without the shared `nazgul/` runtime exits untracked (no
-   enforcement, no telemetry) — worktree-aware resolution
-   (`git rev-parse --git-common-dir` / `branch.main_worktree_path`) is a
-   known follow-up.
+   Resolution (FEAT-021/ADR-008): the guard now resolves `nazgul/` through the
+   shared `resolve_project_root()` (`scripts/lib/nazgul-root.sh`, §15's Shared
+   Root Resolver subsection) instead of a hand-rolled `CLAUDE_PROJECT_DIR`/cwd
+   check, so a teammate whose session resolves to a git worktree carrying the
+   shared `nazgul/` runtime is now correctly tracked. This narrows, but does
+   not close, the original gap: a bare task-worktree teammate session —
+   `CLAUDE_PROJECT_DIR` unset, no `nazgul/config.json` of its own (it's
+   gitignored and per-worktree) — still has no validating candidate and
+   degrades exactly as before, because the resolver's fallback is the first
+   candidate, not a confirmed one. ADR-008 Option 2 (a `CLAUDE_PROJECT_DIR`
+   export at worktree-entry time) was implemented in TASK-008's
+   `create_task_worktree()` as a would-be backstop for that case, but has
+   zero live callers today: the real worktree-entry paths are the
+   `EnterWorktree` tool and a raw `git worktree add`
+   (`agents/implementer.md:113`), neither of which calls it, and its only
+   return channel is `echo`, so any real caller would capture it via
+   `$(...)`, whose subshell discards the export before it reaches the caller.
 
 **MF-047 companion note (Layer 2 cross-check, `[advisory]`).** A missing
 dispatch manifest (Layer 2) is indistinguishable from a non-Nazgul process —
