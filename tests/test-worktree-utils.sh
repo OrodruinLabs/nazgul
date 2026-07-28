@@ -77,5 +77,80 @@ cleanup_task_worktree TASK-101 "$TEST_DIR" "$CFG"
 rm -rf "$WORKTREE_DIR"
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# Fix 3a — slugify_objective() must collapse ALL whitespace (including
+# newlines) before slugifying, so a multi-paragraph objective yields one
+# clean line, not a slug with embedded newlines (TASK-003 / AC7).
+# ---------------------------------------------------------------------------
+MULTI_PARA_OBJECTIVE="$(printf 'Line one here\n\nSecond paragraph goes on for a good while so truncation also gets exercised')"
+SLUG=$(slugify_objective "$MULTI_PARA_OBJECTIVE")
+SLUG_NO_NEWLINES=$(printf '%s' "$SLUG" | tr -d '\n')
+assert_eq "slugify_objective: multi-paragraph input produces a single-line slug" "$SLUG" "$SLUG_NO_NEWLINES"
+if [ "${#SLUG}" -le 50 ]; then
+  _pass "slugify_objective: result is <= 50 chars"
+else
+  _fail "slugify_objective: result is <= 50 chars" "length: ${#SLUG}"
+fi
+git check-ref-format --branch "feat/FEAT-999-${SLUG}" >/dev/null 2>&1
+assert_exit_code "slugify_objective: feat/<id>-<slug> passes git check-ref-format --branch" "$?" 0
+
+EMPTY_SLUG=$(slugify_objective "***---***")
+if [ -n "$EMPTY_SLUG" ]; then
+  _pass "slugify_objective: degenerate all-punctuation input falls back to a non-empty slug"
+else
+  _fail "slugify_objective: degenerate all-punctuation input falls back to a non-empty slug" "got empty string"
+fi
+
+# ---------------------------------------------------------------------------
+# Fix 3a — create_feature_branch() end to end with a multi-paragraph
+# objective: the branch it reports must actually exist, and config must
+# only be written after the branch is verified (TASK-003 / AC7, AC8).
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+CFG2="$TEST_DIR/nazgul/config.json"
+
+OUT_BRANCH="$TEST_DIR/branch-out.txt"
+create_feature_branch "$MULTI_PARA_OBJECTIVE" "$TEST_DIR" "$CFG2" > "$OUT_BRANCH" 2>"$TEST_DIR/branch-err.txt"
+RC=$?
+BRANCH_NAME=$(tail -n1 "$OUT_BRANCH")
+assert_exit_code "create_feature_branch: multi-paragraph objective returns 0" "$RC" 0
+git check-ref-format --branch "$BRANCH_NAME" >/dev/null 2>&1
+assert_exit_code "create_feature_branch: returned branch name is a valid ref" "$?" 0
+git -C "$TEST_DIR" rev-parse --verify --quiet "$BRANCH_NAME" >/dev/null 2>&1
+assert_exit_code "create_feature_branch: returned branch actually exists" "$?" 0
+CONFIG_FEATURE=$(jq -r '.branch.feature' "$CFG2")
+assert_eq "create_feature_branch: .branch.feature equals the returned branch name" "$CONFIG_FEATURE" "$BRANCH_NAME"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Fix 3a — checkout failure must return non-zero AND leave
+# .branch.feature untouched (config records OBSERVED state, not intended
+# state) (TASK-003 / AC8).
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+CFG3="$TEST_DIR/nazgul/config.json"
+DEFAULT_BRANCH3=$(git -C "$TEST_DIR" branch --show-current)
+
+COLLIDE_OBJECTIVE="Collision objective"
+COLLIDE_SLUG=$(slugify_objective "$COLLIDE_OBJECTIVE")
+COLLIDE_BRANCH="feat/FEAT-001-${COLLIDE_SLUG}"
+git -C "$TEST_DIR" branch "$COLLIDE_BRANCH"
+jq --arg fb "sentinel-unchanged" '.branch.feature = $fb' "$CFG3" > "$CFG3.tmp" && mv "$CFG3.tmp" "$CFG3"
+
+create_feature_branch "$COLLIDE_OBJECTIVE" "$TEST_DIR" "$CFG3" > "$TEST_DIR/collide-out.txt" 2>"$TEST_DIR/collide-err.txt"
+RC_COLLIDE=$?
+assert_exit_code "create_feature_branch: checkout failure (branch already exists) returns non-zero" "$RC_COLLIDE" 1
+CONFIG_FEATURE_AFTER=$(jq -r '.branch.feature' "$CFG3")
+assert_eq "create_feature_branch: checkout failure leaves .branch.feature unchanged" "$CONFIG_FEATURE_AFTER" "sentinel-unchanged"
+CURRENT_BRANCH_AFTER=$(git -C "$TEST_DIR" branch --show-current)
+assert_eq "create_feature_branch: checkout failure leaves the session on the base branch" "$CURRENT_BRANCH_AFTER" "$DEFAULT_BRANCH3"
+teardown_temp_dir
+
 report_results
 exit $?
