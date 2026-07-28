@@ -1810,4 +1810,36 @@ run_guard "$input"
 assert_exit_code "real TASK-002-shape board (both notes): DONE allowed" "$GUARD_EC" 0
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# Test 94 (TASK-002/AC6): config present, nazgul/tasks/ missing — BLOCKED,
+# not silently allowed. This is the resolution-failure case ADR-009 rules
+# fails CLOSED, distinct from Test 26's genuinely-not-a-Nazgul-project case.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.guards.requireActiveTask = true'
+rm -rf "$TEST_DIR/nazgul/tasks"
+input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"console.log(1)"}}')
+run_guard "$input"
+assert_exit_code "source edit with config present, tasks dir missing: blocked" "$GUARD_EC" 2
+assert_contains "corrupted-project diagnostic" "$GUARD_STDERR" "nazgul/config.json exists but nazgul/tasks/"
+assert_not_contains "distinct from no-active-task message" "$GUARD_STDERR" "No task is IN_PROGRESS"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 95 (TASK-002/AC6): config present, nazgul/tasks/ unreadable — BLOCKED.
+# Skipped if running as root (chmod 000 is not enforced for root).
+# ---------------------------------------------------------------------------
+if [ "$(id -u)" -ne 0 ]; then
+  setup_temp_dir
+  setup_nazgul_dir
+  create_config '.guards.requireActiveTask = true'
+  chmod 000 "$TEST_DIR/nazgul/tasks"
+  input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"console.log(1)"}}')
+  run_guard "$input"
+  assert_exit_code "source edit with config present, tasks dir unreadable: blocked" "$GUARD_EC" 2
+  chmod 755 "$TEST_DIR/nazgul/tasks"
+  teardown_temp_dir
+fi
+
 report_results
