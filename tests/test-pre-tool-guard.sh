@@ -538,7 +538,22 @@ assert_contains "reason C1-sql" "$output" "NAZGUL SAFETY"
 PRE_FIX_BASE_SHA="5483d70a1c2bd11c4bdaee813369bb7c5afacc5c"
 GUARD_OLD="$(mktemp -t pre-tool-guard-old.XXXXXX)"
 trap 'rm -f "$EXERCISED_LOG" "$GUARD_OLD"' EXIT
-git -C "$REPO_ROOT" show "$PRE_FIX_BASE_SHA":scripts/pre-tool-guard.sh > "$GUARD_OLD"
+
+# actions/checkout@v4 defaults to a shallow depth-1 clone, so the pinned
+# ancestor above may not be present in CI even though it always is on a full
+# local clone. Never let that fall through to a silent skip: try a bounded
+# deepen, and if the SHA is still unreachable, fail loud and name the fix —
+# skipping only the differential replay below, not the rest of this file.
+BASE_SHA_REACHABLE=1
+if ! git -C "$REPO_ROOT" cat-file -e "${PRE_FIX_BASE_SHA}^{commit}" 2>/dev/null; then
+  git -C "$REPO_ROOT" fetch --deepen=50 2>/dev/null || true
+  if ! git -C "$REPO_ROOT" cat-file -e "${PRE_FIX_BASE_SHA}^{commit}" 2>/dev/null; then
+    BASE_SHA_REACHABLE=0
+  fi
+fi
+if [ "$BASE_SHA_REACHABLE" -eq 1 ]; then
+  git -C "$REPO_ROOT" show "$PRE_FIX_BASE_SHA":scripts/pre-tool-guard.sh > "$GUARD_OLD"
+fi
 
 diff_verdict() {
   local mode="$1" cmd="$2"
@@ -575,10 +590,19 @@ fi
 # No dedup (associative arrays are bash 4+ only, and this must also pass under
 # /bin/bash 3.2.57): a command exercised twice by the suite above is simply
 # diffed twice. Redundant, not incorrect.
-while IFS= read -r -d '' _rec; do
-  _mode="${_rec%%$'\x1f'*}"
-  _cmd="${_rec#*$'\x1f'}"
-  diff_verdict "$_mode" "$_cmd"
-done < "$EXERCISED_LOG"
+if [ "$BASE_SHA_REACHABLE" -eq 1 ]; then
+  while IFS= read -r -d '' _rec; do
+    _mode="${_rec%%$'\x1f'*}"
+    _cmd="${_rec#*$'\x1f'}"
+    diff_verdict "$_mode" "$_cmd"
+  done < "$EXERCISED_LOG"
+else
+  _fail "differential harness baseline unreachable" \
+    "pinned pre-fix SHA $PRE_FIX_BASE_SHA is not reachable in this checkout" \
+    "(even after 'git fetch --deepen=50') — likely a shallow CI clone" \
+    "(actions/checkout@v4 defaults to fetch-depth: 1)" \
+    "fix: set fetch-depth: 0 on the checkout step in .github/workflows/test.yml" \
+    "the $EXERCISED_COUNT-command differential replay was SKIPPED; all other assertions in this file still ran"
+fi
 
 report_results
