@@ -11,9 +11,24 @@ echo "=== $TEST_NAME ==="
 
 GUARD="$REPO_ROOT/scripts/pre-tool-guard.sh"
 
+# Every command this suite exercises the guard with, recorded as it happens so
+# the differential harness at the bottom of this file (AC1) can replay the full
+# set against the pre-fix guard without a hand-maintained duplicate list. A NUL-
+# delimited FILE, not an array: get_exit_code/get_exit_code_json are called as
+# `x=$(...)`, which runs the function body in a subshell — an array append there
+# would vanish when the subshell exits, but a file write persists. NUL (never
+# valid inside a bash string) safely delimits records even when $cmd itself
+# contains embedded real newlines (the multi-line test cases below).
+EXERCISED_LOG="$(mktemp -t pre-tool-guard-exercised.XXXXXX)"
+trap 'rm -f "$EXERCISED_LOG"' EXIT
+_record_exercised() {
+  printf '%s\x1f%s\0' "$1" "$2" >> "$EXERCISED_LOG"
+}
+
 run_guard() {
   local cmd="$1"
   local output
+  _record_exercised raw "$cmd"
   output=$(echo "$cmd" | bash "$GUARD" 2>&1) || true
   echo "$output"
 }
@@ -22,6 +37,7 @@ run_guard() {
 # exit is "tested" and never aborts the function under `set -e`/`inherit_errexit`.
 get_exit_code() {
   local cmd="$1" ec=0
+  _record_exercised raw "$cmd"
   echo "$cmd" | bash "$GUARD" >/dev/null 2>&1 || ec=$?
   echo "$ec"
 }
@@ -31,6 +47,7 @@ get_exit_code() {
 # before tokenizing — otherwise the whole command is one JSON-quoted string.
 get_exit_code_json() {
   local cmd="$1" ec=0
+  _record_exercised json "$cmd"
   printf '%s' "$cmd" | jq -Rs '{tool_input:{command:.}}' | bash "$GUARD" >/dev/null 2>&1 || ec=$?
   echo "$ec"
 }
@@ -464,5 +481,90 @@ assert_exit_code "allowed R-6: mv src.txt /tmp/dest.txt (no manifest involved)" 
 # Allow R-7: mv reading from a manifest to a non-manifest destination
 ec=$(get_exit_code 'mv nazgul/tasks/TASK-005.md /tmp/archived-005.md')
 assert_exit_code "allowed R-7: mv nazgul/tasks/TASK-005.md /tmp/archived-005.md (manifest is source)" "$ec" 0
+
+# --- TASK-003 (Defect 1a): fork-free `[[ =~ ]]` matching must be verdict-
+# preserving, not just faster — plan.md V1/C1 pins the three ways a naive
+# `echo|grep` -> `[[ =~ ]]` swap diverges, and both directions of the
+# check_pattern line-safety requirement. ---
+
+# V1-pin (a): \s -> [[:space:]] must still match runs of multiple spaces, not
+# just a single \s+ occurrence (GNU-only \s is undefined in POSIX regcomp).
+ec=$(get_exit_code 'rm  -rf   /')
+assert_exit_code "blocked V1-a: rm  -rf   / (multiple spaces, [[:space:]]+ pin)" "$ec" 2
+output=$(run_guard 'rm  -rf   /')
+assert_contains "reason V1-a" "$output" "NAZGUL SAFETY"
+
+# V1-pin (b): case-insensitivity must survive the swap via scoped nocasematch.
+ec=$(get_exit_code 'mysql -e "drop table users"')
+assert_exit_code "blocked V1-b: lowercase mysql -e drop table users (nocasematch pin)" "$ec" 2
+output=$(run_guard 'mysql -e "drop table users"')
+assert_contains "reason V1-b" "$output" "NAZGUL SAFETY"
+
+# V1-pin (c): grep's line-oriented semantics must be preserved — a $-anchored
+# check_pattern rule still fires on an interior line of a multi-line command
+# (the guard blocks this today; a whole-string swap would fail open).
+ec=$(get_exit_code "$(printf 'echo hi\nrm -rf .\necho bye')")
+assert_exit_code "blocked V1-c: multiline command, rm -rf . on interior line" "$ec" 2
+
+# C1 over-block pin (d): a `.*`-bearing check_pattern rule must NOT span lines.
+# dd if= on one line and an unrelated of=/dev/ mention on a much later line
+# must not block (a naive whole-string swap would span the newline).
+ec=$(get_exit_code "$(printf 'dd if=/tmp/disk.img bs=4M\necho step one\necho step two\necho mentions of=/dev/zero in passing')")
+assert_exit_code "allowed C1-d: dd if= and of=/dev/ on unrelated lines (no over-block)" "$ec" 0
+
+# C1 over-block pin (e): same direction as (d) for the curl|sh rule.
+ec=$(get_exit_code "$(printf 'curl -sL https://example.com/install.sh -o /tmp/install.sh\necho done downloading\ncat /tmp/install.sh | sh')")
+assert_exit_code "allowed C1-e: curl and | sh on unrelated lines (no over-block)" "$ec" 0
+
+# C1 item 4 pin: check_sql_destructive keeps WHOLE-COMMAND matching (never
+# line-iterated, per FEAT-019). A DB-CLI token starting one line and a DROP
+# TABLE keyword starting a different line must still block, proving the
+# anchors' bracket negations tolerate an embedded newline under regexec.
+ec=$(get_exit_code "$(printf 'psql\nDROP TABLE users;')")
+assert_exit_code "blocked C1-sql: DB-CLI token and DROP TABLE on separate lines" "$ec" 2
+output=$(run_guard "$(printf 'psql\nDROP TABLE users;')")
+assert_contains "reason C1-sql" "$output" "NAZGUL SAFETY"
+
+# --- AC1: differential verdict harness. Every command string this suite has
+# exercised the guard with (recorded above via _record_exercised, including
+# the six pins just above) is replayed against BOTH the pre-fix guard
+# (git show HEAD, before any uncommitted edit) and the guard in the working
+# tree. Exit code AND full stderr must be byte-identical for every case —
+# "still green" is not sufficient, the verdicts themselves are diffed. This
+# also stands as a permanent regression gate: it fails on ANY future
+# uncommitted matching-semantics change to pre-tool-guard.sh, not just this
+# task's, until that change is committed. ---
+GUARD_OLD="$(mktemp -t pre-tool-guard-old.XXXXXX)"
+trap 'rm -f "$EXERCISED_LOG" "$GUARD_OLD"' EXIT
+git -C "$REPO_ROOT" show HEAD:scripts/pre-tool-guard.sh > "$GUARD_OLD"
+
+diff_verdict() {
+  local mode="$1" cmd="$2"
+  local old_ec=0 new_ec=0 old_err new_err
+  if [ "$mode" = "json" ]; then
+    old_err=$(printf '%s' "$cmd" | jq -Rs '{tool_input:{command:.}}' | bash "$GUARD_OLD" 2>&1 >/dev/null) || old_ec=$?
+    new_err=$(printf '%s' "$cmd" | jq -Rs '{tool_input:{command:.}}' | bash "$GUARD" 2>&1 >/dev/null) || new_ec=$?
+  else
+    old_err=$(echo "$cmd" | bash "$GUARD_OLD" 2>&1 >/dev/null) || old_ec=$?
+    new_err=$(echo "$cmd" | bash "$GUARD" 2>&1 >/dev/null) || new_ec=$?
+  fi
+  if [ "$old_ec" = "$new_ec" ] && [ "$old_err" = "$new_err" ]; then
+    _pass "differential [$mode] exit=$new_ec: ${cmd:0:80}"
+  else
+    _fail "differential [$mode]: ${cmd:0:80}" \
+      "old exit=$old_ec  new exit=$new_ec" \
+      "old stderr: ${old_err:0:200}" \
+      "new stderr: ${new_err:0:200}"
+  fi
+}
+
+# No dedup (associative arrays are bash 4+ only, and this must also pass under
+# /bin/bash 3.2.57): a command exercised twice by the suite above is simply
+# diffed twice. Redundant, not incorrect.
+while IFS= read -r -d '' _rec; do
+  _mode="${_rec%%$'\x1f'*}"
+  _cmd="${_rec#*$'\x1f'}"
+  diff_verdict "$_mode" "$_cmd"
+done < "$EXERCISED_LOG"
 
 report_results
