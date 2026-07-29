@@ -527,16 +527,18 @@ assert_contains "reason C1-sql" "$output" "NAZGUL SAFETY"
 
 # --- AC1: differential verdict harness. Every command string this suite has
 # exercised the guard with (recorded above via _record_exercised, including
-# the six pins just above) is replayed against BOTH the pre-fix guard
-# (git show HEAD, before any uncommitted edit) and the guard in the working
-# tree. Exit code AND full stderr must be byte-identical for every case —
-# "still green" is not sufficient, the verdicts themselves are diffed. This
-# also stands as a permanent regression gate: it fails on ANY future
-# uncommitted matching-semantics change to pre-tool-guard.sh, not just this
-# task's, until that change is committed. ---
+# the six pins just above) is replayed against BOTH the pre-fix guard, pinned
+# to the Wave-1 Base SHA (the manifest's own documented common ancestor, and
+# since this task is a single commit on top of it, genuinely the pre-fix file
+# forever — `git show HEAD:...` would collapse to a self-comparison the
+# instant the fix is committed, since HEAD then IS the post-fix blob) and the
+# guard in the working tree. Exit code AND full stderr must be byte-identical
+# for every case — "still green" is not sufficient, the verdicts themselves
+# are diffed. ---
+PRE_FIX_BASE_SHA="5483d70a1c2bd11c4bdaee813369bb7c5afacc5c"
 GUARD_OLD="$(mktemp -t pre-tool-guard-old.XXXXXX)"
 trap 'rm -f "$EXERCISED_LOG" "$GUARD_OLD"' EXIT
-git -C "$REPO_ROOT" show HEAD:scripts/pre-tool-guard.sh > "$GUARD_OLD"
+git -C "$REPO_ROOT" show "$PRE_FIX_BASE_SHA":scripts/pre-tool-guard.sh > "$GUARD_OLD"
 
 diff_verdict() {
   local mode="$1" cmd="$2"
@@ -557,6 +559,18 @@ diff_verdict() {
       "new stderr: ${new_err:0:200}"
   fi
 }
+
+# Floor assertion: if _record_exercised ever silently stopped firing (mktemp
+# failure, a refactor changing how run_guard/get_exit_code* are called), this
+# loop would iterate zero times and report_results would still print a clean
+# "0/0 passed" — a silent shrink, not a failure. Assert the recorded count by a
+# known-good floor, not by trusting the loop to run at all.
+EXERCISED_COUNT=$(tr -dc '\0' < "$EXERCISED_LOG" | wc -c | tr -d ' ')
+if [ "$EXERCISED_COUNT" -ge 160 ]; then
+  _pass "differential harness recorded >=160 commands (got $EXERCISED_COUNT)"
+else
+  _fail "differential harness recorded >=160 commands" "got $EXERCISED_COUNT"
+fi
 
 # No dedup (associative arrays are bash 4+ only, and this must also pass under
 # /bin/bash 3.2.57): a command exercised twice by the suite above is simply
