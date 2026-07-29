@@ -156,13 +156,25 @@ assert_flag_value "TASK-007: --max-time 5 unchanged (pre-existing bound)" "$NAZG
 teardown_temp_dir
 
 # D4: fire-and-forget must NOT ship. Static check on the curl invocation
-# block for subshell-backgrounding (`) &`), `disown`, or PID-capture (`$!`)
-# — the mechanical form of "asserted by the absence of those forms in the
-# diff". (Not a bare "&" search: "2>&1" in the same block is legitimate.)
+# block for subshell-backgrounding (`) &`), `disown`, PID-capture (`$!`), or
+# a bare trailing `&` on the statement itself — the mechanical form of
+# "asserted by the absence of those forms in the diff". The trailing-&
+# check is end-of-line anchored, not a substring search, so "2>&1" (which
+# is legitimate in this block) can't trip it.
 CURL_BLOCK=$(awk '/^curl -s -X POST/,/WEBHOOK_URL.*\|\| true/' "$WEBHOOK_SCRIPT")
+if [ -n "$CURL_BLOCK" ]; then
+  _pass "TASK-007/D4: CURL_BLOCK extraction found the curl invocation (anchors matched)"
+else
+  _fail "TASK-007/D4: CURL_BLOCK extraction found the curl invocation (anchors matched)" "awk range matched zero lines — the checks below would trivially pass against an empty string"
+fi
 assert_not_contains "TASK-007/D4: curl invocation not subshell-backgrounded" "$CURL_BLOCK" ") &"
 assert_not_contains "TASK-007/D4: curl invocation does not use disown" "$CURL_BLOCK" "disown"
 assert_not_contains "TASK-007/D4: curl invocation does not capture a background PID" "$CURL_BLOCK" '$!'
+if grep -qE '&[[:space:]]*$' <<<"$CURL_BLOCK"; then
+  _fail "TASK-007/D4: curl invocation not bare-&-backgrounded" "found a bare trailing '&' as the last token of a line in: '${CURL_BLOCK:0:200}'"
+else
+  _pass "TASK-007/D4: curl invocation not bare-&-backgrounded"
+fi
 
 rm -rf "$FAKEBIN"
 
