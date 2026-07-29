@@ -20,6 +20,9 @@ set -euo pipefail
 # that is exactly where a real heredoc can legitimately appear inside `"..."` (a
 # `git commit -m "$(cat <<'EOF' … EOF)"` message) — this guard fails CLOSED
 # (BLOCK) rather than open when that tracking cannot resolve a heredoc extent.
+# `$((...))` arithmetic expansion is excluded from that tracking (its `<<`/`>>`
+# are shift operators, not heredoc starts) and a `"..."` nested inside `$(...)`
+# is its own independent quoted span, not a continuation of the outer quote.
 
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
 INPUT=$(cat 2>/dev/null || echo "")
@@ -78,10 +81,11 @@ fi
 # skipped; the first remaining token is the subcommand.
 HAS_NAZGUL_PATH=$(printf '%s' "$CMD" | awk '
 BEGIN {
-  in_sq = 0; in_dq = 0; tok = ""; found = 0
+  in_sq = 0; in_dq = 0; in_dq2 = 0; in_sq2 = 0; tok = ""; found = 0
   git_seen = 0; subcmd_seen = 0; end_of_opts = 0
   skip_next = 0; not_git = 0; skip_global_val = 0; redir_skip_next = 0
-  in_heredoc = 0; heredoc_delim = ""; heredoc_strip = 0; cs_depth = 0
+  in_heredoc = 0; heredoc_delim = ""; heredoc_strip = 0
+  cs_depth = 0; heredoc_in_cs = 0; arith_top = 0; after_dollar = 0
 }
 
 function reset_segment() {
@@ -195,7 +199,7 @@ function try_heredoc(line, i,    j, n2, delim, ch, lsq, ldq) {
   if (in_heredoc) {
     cmp = $0
     if (heredoc_strip) gsub(/^\t+/, "", cmp)
-    if (cmp == heredoc_delim) in_heredoc = 0
+    if (cmp == heredoc_delim) { in_heredoc = 0; heredoc_in_cs = 0 }
     next
   }
   n = length($0)
@@ -206,20 +210,52 @@ function try_heredoc(line, i,    j, n2, delim, ch, lsq, ldq) {
       # shell word (e.g. -m "foo"nazgul/x is one message value, not a pathspec).
       if (c == "'\''") in_sq = 0
       else tok = tok c
+    } else if (in_dq2) {
+      # A literal " reached while cs_depth > 0 opens an independent nested
+      # double-quoted span — real bash resets quoting inside $(...), so this
+      # must NOT close the outer quote (that was the unconditional-reset bug:
+      # $(echo "hi") desynced in_dq and swallowed the rest of the line).
+      # Opaque span: only its own close and escaping matter here.
+      if (c == "\\" && i < n) { i++; tok = tok substr($0, i, 1) }
+      else if (c == "\"") { in_dq2 = 0 }
+      else tok = tok c
+    } else if (in_sq2) {
+      # Mirror of in_dq2 for a genuine single-quoted span reached while
+      # cs_depth > 0: real single quotes take no escaping at all, so a
+      # literal double-quote inside one must stay inert, not reopen in_dq2.
+      if (c == "'\''") in_sq2 = 0
+      else tok = tok c
     } else if (in_dq) {
       # Inside double quotes a backslash escapes the next char (\" \\ …), so it
       # must not toggle quote state — append the escaped char literally.
       # $(...) resets quoting in real bash, so it is depth-counted (cs_depth) to
       # tell a genuine nested command substitution apart from plain "..." text —
       # a heredoc is recognized only while cs_depth > 0 (AC1: TASK-004).
+      was_after_dollar = after_dollar
+      after_dollar = 0
       if (c == "\\" && i < n) { i++; tok = tok substr($0, i, 1) }
-      else if (c == "\"") { in_dq = 0; cs_depth = 0 }
-      else if (c == "$" && i < n && substr($0, i + 1, 1) == "(") { cs_depth++; tok = tok c substr($0, i + 1, 1); i++ }
-      else if (c == "(" && cs_depth > 0) { cs_depth++; tok = tok c }
-      else if (c == ")" && cs_depth > 0) { cs_depth--; tok = tok c }
-      else if (c == "<" && cs_depth > 0) {
+      else if (c == "\"" && cs_depth > 0) { in_dq2 = 1 }
+      else if (c == "\"") { in_dq = 0; cs_depth = 0; arith_top = 0; in_dq2 = 0; in_sq2 = 0 }
+      else if (c == "'\''" && cs_depth > 0) { in_sq2 = 1 }
+      else if (c == "$" && i < n && substr($0, i + 1, 1) == "(") {
+        cs_depth++; tok = tok c substr($0, i + 1, 1); i++; after_dollar = 1
+      }
+      else if (c == "(" && cs_depth > 0) {
+        # $(( is arithmetic expansion, not a nested $(...): the second "("
+        # arrives immediately after a just-consumed "$(" (was_after_dollar).
+        # Its "<<"/">>" are shift operators, never heredoc starts (B1: TASK-004).
+        cs_depth++
+        if (was_after_dollar) { arith_top++; arith_stack[arith_top] = cs_depth }
+        tok = tok c
+      }
+      else if (c == ")" && cs_depth > 0) {
+        if (arith_top > 0 && cs_depth == arith_stack[arith_top]) arith_top--
+        cs_depth--
+        tok = tok c
+      }
+      else if (c == "<" && cs_depth > 0 && !(arith_top > 0 && cs_depth >= arith_stack[arith_top])) {
         hd_end = try_heredoc($0, i)
-        if (hd_end > 0) i = hd_end
+        if (hd_end > 0) { i = hd_end; heredoc_in_cs = 1 }
         else tok = tok c
       }
       else tok = tok c
@@ -240,6 +276,7 @@ function try_heredoc(line, i,    j, n2, delim, ch, lsq, ldq) {
       if (hd_end > 0) {
         flush_pre_redirect()
         i = hd_end
+        heredoc_in_cs = 0
       } else {
         flush_pre_redirect()
         redir_skip_next = 1
@@ -285,6 +322,15 @@ function try_heredoc(line, i,    j, n2, delim, ch, lsq, ldq) {
   } else {
     if (tok != "") { emit(tok); tok = "" }
     reset_segment()
+  }
+  # A genuine heredoc opener leaves its enclosing $(...) still open at end of
+  # line — the body starts on the NEXT line. If that $(...) has already
+  # closed (cs_depth back to 0) by here, the "<<" that opened in_heredoc was
+  # never really a heredoc start (e.g. $((1<<2)): the arithmetic span closes
+  # on the same line) — every bypass this file has fought shares this shape,
+  # so this is checked structurally rather than per-trigger (TASK-004).
+  if (in_heredoc && heredoc_in_cs && cs_depth == 0) {
+    in_heredoc = 0; heredoc_delim = ""; heredoc_in_cs = 0
   }
 }
 

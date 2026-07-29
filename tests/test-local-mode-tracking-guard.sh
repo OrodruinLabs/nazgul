@@ -783,6 +783,121 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block H-12: <<'MSG'FF quoted-then-unquoted delimiter, real git add after (probe f)" "$GUARD_EC" 2
 teardown_temp_dir
 
+# --- Category H (attempt-4 regression pins): a fifth bypass found by an
+# adversarial re-probe of attempt 3's own fix (security B1, H-13/H-14), plus
+# a sixth the implementer found while hardening the attempt-3 non-blocking
+# note (H-16). Both share the same swallow-real-command shape as H-6..H-12: a
+# bogus span opens and its state never resets, so the real git add is
+# skipped. H-13/H-14/H-16 verified exit=0 on 9ea7c41, exit=2 after this fix;
+# H-15/H-17/H-18 are sanity/no-regression pins (never bypassed, or correctly
+# never blocked).
+
+# Block H-13 (probe g — security B1): $((1<<2)) is arithmetic expansion, not
+# a nested $(...) — its "<<" is a shift operator. cs_depth alone can't tell
+# "$((" apart from "$(" followed by "(", so "<<" was wrongly read as a
+# heredoc start, leaving in_heredoc set after the arithmetic span closed.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_g_cmd=$(cat <<'CMDEOF'
+echo "$((1<<2))"
+git add nazgul/evil
+CMDEOF
+)
+input=$(make_bash_input "$probe_g_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'block H-13: $((1<<2)) arithmetic left-shift, real git add after (probe g)' "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-14 (probe g variant): whitespace around the shift operator must not
+# change the outcome.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_g2_cmd=$(cat <<'CMDEOF'
+echo "$(( 5 << 3 ))"
+git add nazgul/evil
+CMDEOF
+)
+input=$(make_bash_input "$probe_g2_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'block H-14: $(( 5 << 3 )) spaced arithmetic left-shift, real git add after (probe g variant)' "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-15: the right-shift mirror (>>) was never actually routed through
+# try_heredoc() (only "<" triggers it) — this is a sanity/no-regression pin,
+# not a fixed bypass: verified exit=2 on both 9ea7c41 and this fix.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_g3_cmd=$(cat <<'CMDEOF'
+echo "$(( 1>>2 ))"
+git add nazgul/evil
+CMDEOF
+)
+input=$(make_bash_input "$probe_g3_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'block H-15: $(( 1>>2 )) arithmetic right-shift, real git add after (probe g right-shift)' "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-16 (implementer-found, attempt 4): a genuine single-quoted string
+# inside $(...) containing a literal " — real bash never treats it as quote
+# syntax there ('...' takes no escaping), but the unconditional c=="\"" reset
+# at cs_depth>0 (pre-fix) read it as closing the OUTER quote, and nothing
+# tracked real '...' spans nested in $(...) either. That left in_sq stuck
+# open (re-entered at top level with no matching closer left in the line),
+# swallowing "&& git add nazgul/evil" into the never-flushed token. This is
+# the well-formed case: $(echo 'contains " quote') genuinely closes and the
+# real git add genuinely executes in real bash — unlike a same-shape probe
+# with an unmatched " inside $(...), which is itself malformed/unterminated
+# and correctly degrades to ALLOW (H-18).
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'git commit -m "$(echo '"'"'contains " quote'"'"')" && git add nazgul/evil')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'block H-16: single-quoted span inside $(...) with an embedded ", real git add after (implementer probe)' "$GUARD_EC" 2
+teardown_temp_dir
+
+# Allow H-17: a genuinely nested double-quoted string inside $(...) that
+# merely mentions nazgul/ as inert text (not a real pathspec) must not
+# false-block — the H-16 fix must isolate the nested span, not just close it.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'git commit -m "$(echo "nazgul/fake")"')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'allow H-17: nested-dq inert nazgul/ mention inside $(...) does not false-block' "$GUARD_EC" 0
+teardown_temp_dir
+
+# Allow H-18: the malformed mirror of H-16 — an unmatched " inside $(...)
+# with no further " or ) anywhere on the line (unlike H-16's single-quoted
+# case, this never actually closes in real bash either, so "git add" is
+# never really reached) — degrades to ALLOW, matching H-5's contract.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_h18_cmd=$(cat <<'CMDEOF'
+git commit -m "$(echo "hi)" && git add nazgul/evil
+CMDEOF
+)
+input=$(make_bash_input "$probe_h18_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "allow H-18: malformed/unterminated nested-quote span degrades to ALLOW" "$GUARD_EC" 0
+teardown_temp_dir
+
 # ---------------------------------------------------------------------------
 # Performance: resolve_project_root() deferred past the pre-filters (V2/AC2)
 # ---------------------------------------------------------------------------
