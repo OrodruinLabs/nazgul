@@ -49,6 +49,14 @@ assert_eq "Stop has command hooks" "$stop_types" "command"
 matcher=$(jq -r '.hooks.PreToolUse[0].matcher' "$HOOKS")
 assert_eq "PreToolUse has Bash matcher" "$matcher" "Bash"
 
+# PreToolUse Bash-matcher hooks carry the 30s starvation backstop (FEAT-023 Defect 1d)
+bash_timeouts=$(jq -r '.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[].timeout' "$HOOKS" | sort -u | tr '\n' ',')
+assert_eq "PreToolUse Bash matcher hooks all timeout=30" "$bash_timeouts" "30,"
+
+# Every other PreToolUse matcher is untouched at timeout=10
+other_timeouts=$(jq -r '.hooks.PreToolUse[] | select(.matcher != "Bash") | .hooks[].timeout' "$HOOKS" | sort -u | tr '\n' ',')
+assert_eq "PreToolUse non-Bash matchers still timeout=10" "$other_timeouts" "10,"
+
 # SessionStart has both startup and compact matchers
 matchers=$(jq -r '[.hooks.SessionStart[].matcher] | sort | join(",")' "$HOOKS")
 assert_eq "SessionStart has startup and compact matchers" "$matchers" "compact,startup"
