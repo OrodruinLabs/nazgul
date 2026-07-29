@@ -537,19 +537,24 @@ teardown_temp_dir
 # token in the body to check_path — a false BLOCK. Found live by the FEAT-021
 # TASK-010 implementer.
 #
-# Attempt 1 fixed this by also recognizing "<<" as a heredoc start while
+# Attempt 1 fixed this by also recognizing "<<" as a heredoc start whenever
 # in_dq==1, which independently produced three false-ALLOW bypasses (security +
 # code review, TASK-004 attempt 1) because a single in_dq flag can't tell a
 # real dq-nested $(...) heredoc apart from a plain "<<" inside an ordinary
-# "..." string. Attempt 2 drops dq-context heredoc recognition entirely, which
-# closes those bypasses but reopens the original false BLOCK for genuinely
-# dq-nested heredocs specifically (H-1/H-3/H-4 below) — accepted trade-off,
-# a false block costs less than a false allow for this defence-in-depth guard.
+# "..." string. Attempt 2 dropped dq-context heredoc recognition entirely,
+# which closed those bypasses but reopened the original false BLOCK for every
+# dq-nested heredoc (H-1/H-3/H-4) and its own unquoted-delimiter break-class
+# fix introduced three more false ALLOWs (H-6..H-9). Attempt 3 (final) tracks
+# `$(...)` nesting depth (cs_depth) so a heredoc is recognized inside `in_dq`
+# only while genuinely nested in a command substitution — restoring AC1
+# without reopening H-2/H-6..H-9 — and made the delimiter scan itself
+# quote-COMPOSABLE (mirroring the main tokenizer's adjacent-quoted+unquoted
+# rule), closing three further bypasses an adversarial re-probe found in a
+# mixed-quote delimiter like `<<EO'F'` (H-10/H-11/H-12).
 
-# Block H-1 (accepted, documented regression): a dq-nested $(cat <<'MSG' ...)
-# heredoc whose body contains a literal " once again closes the outer quote
-# early and exposes the bare nazgul/ token — the original Defect 1e, now
-# intentionally unfixed for this narrower case. See comment above.
+# Block H-1: a dq-nested $(cat <<'MSG' ...) heredoc whose body contains a
+# literal " must NOT close the outer -m argument's quote early — the original
+# Defect 1e, fixed via $(...)-nesting-depth-gated heredoc recognition.
 setup_temp_dir
 setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
@@ -564,7 +569,7 @@ CMDEOF
 )
 input=$(make_bash_input "$heredoc_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
-assert_exit_code "block H-1: dq-nested heredoc + embedded quote + nazgul/ token (accepted narrower false block)" "$GUARD_EC" 2
+assert_exit_code "allow H-1: dq-nested heredoc + embedded quote + nazgul/ token (AC1)" "$GUARD_EC" 0
 teardown_temp_dir
 
 # Block H-2 (bypass pin): a REAL git add on a nazgul/ path after a heredoc must
@@ -586,8 +591,8 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block H-2: real git add nazgul/ after a heredoc still blocks" "$GUARD_EC" 2
 teardown_temp_dir
 
-# Block H-3 (accepted, documented regression): <<-'MSG' (tab-stripping variant)
-# is also dq-nested, so it behaves like H-1.
+# Allow H-3: <<-'MSG' (tab-stripping variant) is also dq-nested, so it
+# behaves like H-1.
 setup_temp_dir
 setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
@@ -598,11 +603,11 @@ NL=$'\n'
 heredoc_dash_cmd="git commit -m \"\$(cat <<-'MSG'${NL}${TAB}Note: a literal \" character, then mentions nazgul/config.json on this line${NL}${TAB}MSG${NL})\""
 input=$(make_bash_input "$heredoc_dash_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
-assert_exit_code "block H-3: <<-'MSG' tab-stripping heredoc variant (accepted narrower false block)" "$GUARD_EC" 2
+assert_exit_code "allow H-3: <<-'MSG' tab-stripping heredoc variant (AC1)" "$GUARD_EC" 0
 teardown_temp_dir
 
-# Block H-4 (accepted, documented regression): <<"MSG" (double-quoted
-# delimiter) is also dq-nested, so it behaves like H-1.
+# Allow H-4: <<"MSG" (double-quoted delimiter) is also dq-nested, so it
+# behaves like H-1.
 setup_temp_dir
 setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
@@ -617,7 +622,7 @@ CMDEOF
 )
 input=$(make_bash_input "$heredoc_dq_delim_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
-assert_exit_code 'block H-4: <<"MSG" double-quoted delimiter heredoc variant (accepted narrower false block)' "$GUARD_EC" 2
+assert_exit_code 'allow H-4: <<"MSG" double-quoted delimiter heredoc variant (AC1)' "$GUARD_EC" 0
 teardown_temp_dir
 
 # Allow H-5: an unterminated heredoc (delimiter line never appears) degrades to
@@ -708,6 +713,74 @@ EOF
 input=$(make_bash_input 'git add <<<"x" nazgul/config.json')
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block H-9: git add <<<\"x\" nazgul/config.json (same-line here-string)" "$GUARD_EC" 2
+teardown_temp_dir
+
+# --- Category H (attempt-3 regression pins): three more false-ALLOW bypasses
+# an adversarial security re-probe found in the attempt-2 fix itself — the
+# unquoted-delimiter break class that added '"'"'/" also made the delimiter
+# non-composable, so a MIXED quoted+unquoted delimiter word (<<EO'"'"'F'"'"',
+# <<EO"F", <<'"'"'AB'"'"'CD) truncates early: the real terminator line never
+# matches, in_heredoc never resets, and every following line — including the
+# real git add — is skipped. Each verified to FAIL against commit b70315e and
+# PASS after. Mirrors H-2's two-line "real git add after" structure.
+
+# Block H-10 (probe d): <<EO'"'"'F'"'"' — real bash quote-removal on the
+# delimiter word yields "EOF"; an unquoted scan that stops at the first quote
+# char yields the truncated "EO", which the real "EOF" terminator line never
+# matches.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_d_cmd=$(cat <<'CMDEOF'
+cat <<EO'MSGF'
+body
+EOMSGF
+git add nazgul/evil-file
+CMDEOF
+)
+input=$(make_bash_input "$probe_d_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block H-10: <<EO'MSGF' mixed unquoted+quoted delimiter, real git add after (probe d)" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-11 (probe e): <<EO"MSGF" — the double-quoted mirror of H-10.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_e_cmd=$(cat <<'CMDEOF'
+cat <<EO"MSGF"
+body
+EOMSGF
+git add nazgul/evil-file
+CMDEOF
+)
+input=$(make_bash_input "$probe_e_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'block H-11: <<EO"MSGF" mixed unquoted+quoted delimiter, real git add after (probe e)' "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-12 (probe f): <<'MSG'FF — the quoted-then-unquoted mirror, where the
+# quoted-delimiter branch previously returned right after the closing quote
+# and never consumed the trailing unquoted suffix.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_f_cmd=$(cat <<'CMDEOF'
+cat <<'MSG'FF
+body
+MSGFF
+git add nazgul/evil
+CMDEOF
+)
+input=$(make_bash_input "$probe_f_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block H-12: <<'MSG'FF quoted-then-unquoted delimiter, real git add after (probe f)" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------

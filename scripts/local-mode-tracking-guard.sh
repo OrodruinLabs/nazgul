@@ -14,8 +14,12 @@ set -euo pipefail
 # install_mode chokepoint. This guard is a best-effort secondary layer. Leading and
 # fd-numbered redirects (1>, 2>, &>) ARE skipped so they cannot hide a pathspec.
 # Deeply exotic shell forms (process substitution, eval'd strings, nested subshells,
-# command substitution, $'...' ANSI-C quoting) are out of scope by design and degrade
-# to allow — acceptable for normal Nazgul loop usage.
+# $'...' ANSI-C quoting) are out of scope by design and degrade to allow — acceptable
+# for normal Nazgul loop usage. Command substitution is the one exception: a
+# `$(...)` nested inside a double-quoted span IS tracked (depth-counted), because
+# that is exactly where a real heredoc can legitimately appear inside `"..."` (a
+# `git commit -m "$(cat <<'EOF' … EOF)"` message) — this guard fails CLOSED
+# (BLOCK) rather than open when that tracking cannot resolve a heredoc extent.
 
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
 INPUT=$(cat 2>/dev/null || echo "")
@@ -77,7 +81,7 @@ BEGIN {
   in_sq = 0; in_dq = 0; tok = ""; found = 0
   git_seen = 0; subcmd_seen = 0; end_of_opts = 0
   skip_next = 0; not_git = 0; skip_global_val = 0; redir_skip_next = 0
-  in_heredoc = 0; heredoc_delim = ""; heredoc_strip = 0
+  in_heredoc = 0; heredoc_delim = ""; heredoc_strip = 0; cs_depth = 0
 }
 
 function reset_segment() {
@@ -137,19 +141,22 @@ function flush_pre_redirect() {
   else if (tok != "") { emit(tok); tok = "" }
 }
 
-# Heredoc start (<< or <<-), recognized ONLY at the true top level (not inside a
-# double-quoted span). A dq-nested $(...) can legitimately open its own heredoc in
-# real bash, but modelling that with the single in_dq flag previously let a plain
-# "<<" inside an ordinary "..." string (no nested $(...) at all) be misread as a
-# heredoc too, desyncing quote state into a false ALLOW (security/code review,
-# TASK-004 attempt 1). Dropping dq-context recognition trades back the narrower
-# false BLOCK this file was written to fix, for a dq-nested $(cat <<'EOF' ...)
-# heredoc specifically — accepted: a false block costs less than a false allow.
-# NOT recognized inside a real single-quoted span either: nothing is special
-# inside '"'"'...'"'"' in real shell.
+# Heredoc start (<< or <<-), recognized at the true top level and — depth-gated,
+# see the emit()/in_dq loop below — inside a genuine $(...) nested in a
+# double-quoted span. NOT recognized inside a real single-quoted span: nothing is
+# special inside '"'"'...'"'"' in real shell.
 # Returns the index of the last consumed char, or 0 if `line` at `i` is not a
 # genuine "<<"/"<<-" start (also rejects mid-run matches inside "<<<").
-function try_heredoc(line, i,    j, n2, qc, delim, ch) {
+#
+# The delimiter word is quote-COMPOSABLE, mirroring the main tokenizer
+# adjacent-quoted+unquoted-fragments-form-one-word rule (in_sq/in_dq above):
+# real bash applies quote removal across the WHOLE delimiter word, even when
+# only part of it is quoted (an unquoted prefix or suffix glued to a quoted
+# span). Treating any quote character as an unquoted-delimiter BREAK char
+# (rather than composing it) truncates a mixed-quote delimiter early, so the
+# real terminator line never matches and in_heredoc never resets, silently
+# swallowing every line after it (found via adversarial security re-probe).
+function try_heredoc(line, i,    j, n2, delim, ch, lsq, ldq) {
   if (i > 1 && substr(line, i - 1, 1) == "<") return 0
   if (substr(line, i, 2) != "<<") return 0
   j = i + 2
@@ -157,22 +164,27 @@ function try_heredoc(line, i,    j, n2, qc, delim, ch) {
   if (substr(line, j, 1) == "-") { heredoc_strip = 1; j++ }
   n2 = length(line)
   while (j <= n2 && (substr(line, j, 1) == " " || substr(line, j, 1) == "\t")) j++
-  qc = substr(line, j, 1)
-  if (qc == "'\''" || qc == "\"") {
-    j++
-    delim = ""
-    while (j <= n2 && substr(line, j, 1) != qc) { delim = delim substr(line, j, 1); j++ }
-    if (j > n2) return 0
-    j++
-  } else {
-    delim = ""
-    while (j <= n2) {
-      ch = substr(line, j, 1)
-      if (ch ~ /[ \t;|&<>()"'\'']/) break
+  delim = ""; lsq = 0; ldq = 0
+  while (j <= n2) {
+    ch = substr(line, j, 1)
+    if (lsq) {
+      if (ch == "'\''") lsq = 0
+      else delim = delim ch
+    } else if (ldq) {
+      if (ch == "\"") ldq = 0
+      else delim = delim ch
+    } else if (ch == "'\''") {
+      lsq = 1
+    } else if (ch == "\"") {
+      ldq = 1
+    } else if (ch ~ /[ \t;|&<>()]/) {
+      break
+    } else {
       delim = delim ch
-      j++
     }
+    j++
   }
+  if (lsq || ldq) return 0
   if (delim == "") return 0
   heredoc_delim = delim
   in_heredoc = 1
@@ -197,8 +209,19 @@ function try_heredoc(line, i,    j, n2, qc, delim, ch) {
     } else if (in_dq) {
       # Inside double quotes a backslash escapes the next char (\" \\ …), so it
       # must not toggle quote state — append the escaped char literally.
+      # $(...) resets quoting in real bash, so it is depth-counted (cs_depth) to
+      # tell a genuine nested command substitution apart from plain "..." text —
+      # a heredoc is recognized only while cs_depth > 0 (AC1: TASK-004).
       if (c == "\\" && i < n) { i++; tok = tok substr($0, i, 1) }
-      else if (c == "\"") in_dq = 0
+      else if (c == "\"") { in_dq = 0; cs_depth = 0 }
+      else if (c == "$" && i < n && substr($0, i + 1, 1) == "(") { cs_depth++; tok = tok c substr($0, i + 1, 1); i++ }
+      else if (c == "(" && cs_depth > 0) { cs_depth++; tok = tok c }
+      else if (c == ")" && cs_depth > 0) { cs_depth--; tok = tok c }
+      else if (c == "<" && cs_depth > 0) {
+        hd_end = try_heredoc($0, i)
+        if (hd_end > 0) i = hd_end
+        else tok = tok c
+      }
       else tok = tok c
     } else if (c == "\\") {
       # A backslash outside any quote escapes the next char, so it must not be
