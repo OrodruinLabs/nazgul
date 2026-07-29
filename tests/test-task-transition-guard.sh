@@ -92,6 +92,121 @@ fi
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
+# ttg_verify_commit_evidence — scoped to `## Commits` + descendant-of-Base
+# (FEAT-023/TASK-006, Defect 5). Keystone: a manifest carrying only a Base
+# SHA with no `## Commits` section used to pass vacuously (V3(a)); it must
+# fail now.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_git_repo
+BASE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD~1)
+DESC_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+if ttg_verify_commit_evidence "## Metadata
+- **Base SHA**: ${BASE_SHA}
+
+## Description
+work not yet committed under ## Commits" "$TEST_DIR"; then
+  _fail "ttg_verify_commit_evidence: keystone — Base SHA with no ## Commits section rejected" "expected: nonzero" "  actual: 0"
+else
+  _pass "ttg_verify_commit_evidence: keystone — Base SHA with no ## Commits section rejected"
+fi
+
+if ttg_verify_commit_evidence "## Metadata
+- **Base SHA**: ${BASE_SHA}
+
+## Commits
+- ${DESC_SHA}" "$TEST_DIR"; then
+  _pass "ttg_verify_commit_evidence: descendant of Base SHA in ## Commits verifies"
+else
+  _fail "ttg_verify_commit_evidence: descendant of Base SHA in ## Commits verifies" "expected: 0" "  actual: nonzero"
+fi
+
+if ttg_verify_commit_evidence "## Metadata
+- **Base SHA**: ${BASE_SHA}
+
+## Commits
+- ${BASE_SHA}" "$TEST_DIR"; then
+  _fail "ttg_verify_commit_evidence: Base SHA recorded as its own ## Commits entry rejected (no forward progress)" "expected: nonzero" "  actual: 0"
+else
+  _pass "ttg_verify_commit_evidence: Base SHA recorded as its own ## Commits entry rejected (no forward progress)"
+fi
+
+if ttg_verify_commit_evidence "## Metadata
+- **Base SHA**: ${BASE_SHA}
+
+## Commits
+- deadbeef1234" "$TEST_DIR"; then
+  _fail "ttg_verify_commit_evidence: hex-shaped unresolvable ## Commits entry rejected (MF-026, scoped)" "expected: nonzero" "  actual: 0"
+else
+  _pass "ttg_verify_commit_evidence: hex-shaped unresolvable ## Commits entry rejected (MF-026, scoped)"
+fi
+
+STDERR_OUT=$(ttg_verify_commit_evidence "## Commits
+- ${DESC_SHA}" "$TEST_DIR" 2>&1 >/dev/null) && DEGRADE_EC=0 || DEGRADE_EC=$?
+if [ "$DEGRADE_EC" -eq 0 ]; then
+  _pass "ttg_verify_commit_evidence: no Base SHA degrades to existence-only (still passes)"
+else
+  _fail "ttg_verify_commit_evidence: no Base SHA degrades to existence-only (still passes)" "expected: 0" "  actual: nonzero"
+fi
+assert_contains "ttg_verify_commit_evidence: no-Base-SHA degradation is announced on stderr" \
+  "$STDERR_OUT" "forward-progress check skipped"
+teardown_temp_dir
+
+# Archived-manifest sweep (plan.md V3(c)): every FEAT-022 DONE manifest must
+# still verify under the scoped + descendant-of-Base logic. Scoped to the
+# FEAT-022 archive specifically — nazgul/archive/*/tasks/ also holds
+# pre-FEAT-022 snapshots that predate the `## Commits` authoring convention
+# (FEAT-022/TASK-004) and correctly have no evidence to find; sweeping those
+# too would assert a property the objective never claimed for them. Skipped,
+# not failed, when the archive isn't present (untracked runtime state).
+shopt -s nullglob
+ARCHIVE_FILES=("$REPO_ROOT"/nazgul/archive/*-FEAT-022-complete/tasks/TASK-*.md)
+shopt -u nullglob
+if [ "${#ARCHIVE_FILES[@]}" -eq 0 ]; then
+  echo "  SKIP: archived-manifest sweep — no nazgul/archive/*-FEAT-022-complete/tasks/ present"
+else
+  assert_eq "archived-manifest sweep: nine FEAT-022 manifests found (plan.md V3(c))" "${#ARCHIVE_FILES[@]}" "9"
+  for tf in "${ARCHIVE_FILES[@]}"; do
+    manifest_text=$(cat "$tf")
+    if ttg_verify_commit_evidence "$manifest_text" "$REPO_ROOT" 2>/dev/null; then
+      _pass "ttg_verify_commit_evidence: archived $(basename "$(dirname "$(dirname "$tf")")")/$(basename "$tf") passes"
+    else
+      _fail "ttg_verify_commit_evidence: archived $(basename "$(dirname "$(dirname "$tf")")")/$(basename "$tf") passes" "expected: 0" "  actual: nonzero"
+    fi
+  done
+fi
+
+# Cross-check agreement with pre-merge-commit's commits_verify() on the
+# SCOPING question: a Base-SHA-only manifest (no ## Commits) is evidence for
+# neither check. Sources the real function text from the hook file itself
+# (never edited or duplicated here) so this can't silently drift from it.
+PRE_MERGE_HOOK="$REPO_ROOT/scripts/git-hooks/pre-merge-commit"
+COMMITS_VERIFY_SRC=$(sed -n '/^commits_verify() {/,/^}/p' "$PRE_MERGE_HOOK")
+if [ -n "$COMMITS_VERIFY_SRC" ]; then
+  eval "$COMMITS_VERIFY_SRC"
+  setup_temp_dir
+  setup_git_repo
+  CROSS_BASE=$(git -C "$TEST_DIR" rev-parse HEAD)
+  CROSS_MANIFEST="$TEST_DIR/manifest.md"
+  printf '## Metadata\n- **Base SHA**: %s\n' "$CROSS_BASE" > "$CROSS_MANIFEST"
+
+  if ttg_verify_commit_evidence "$(cat "$CROSS_MANIFEST")" "$TEST_DIR"; then
+    _fail "cross-check: ttg_verify_commit_evidence has no evidence for a Base-SHA-only manifest" "expected: nonzero" "  actual: 0"
+  else
+    _pass "cross-check: ttg_verify_commit_evidence has no evidence for a Base-SHA-only manifest"
+  fi
+  if commits_verify "$CROSS_MANIFEST" "$CROSS_BASE"; then
+    _fail "cross-check: commits_verify has no evidence for a Base-SHA-only manifest" "expected: nonzero" "  actual: 0"
+  else
+    _pass "cross-check: commits_verify has no evidence for a Base-SHA-only manifest"
+  fi
+  teardown_temp_dir
+else
+  _fail "cross-check: commits_verify() extracted from pre-merge-commit" "expected: non-empty function source" "  actual: empty"
+fi
+
+# ---------------------------------------------------------------------------
 # ttg_log_transition / ttg_transition_is_guarded — the reconciliation ledger
 # ---------------------------------------------------------------------------
 setup_temp_dir
