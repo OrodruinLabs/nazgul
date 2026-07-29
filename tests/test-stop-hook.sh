@@ -162,23 +162,89 @@ assert_exit_code "consecutive failures: exit 0" "$HOOK_EC" 0
 assert_contains "consecutive failures stderr" "$HOOK_OUTPUT" "consecutive"
 teardown_temp_dir
 
-# --- Test 6: AFK timeout — exit 0 ---
-setup_temp_dir
-setup_git_repo
-setup_nazgul_dir
+# --- Test 6: AFK timeout — exit 0, parameterised over TZ (regression: BSD
+# `date -j -f` parsed the `Z` timestamp in LOCAL time while `date +%s` is
+# absolute — inherited-TZ-only runs (CI=UTC, dev machine=Lisbon) stayed green
+# while TZ=America/New_York deflates elapsed and the gate never fires) ---
+# TZ is exported explicitly per iteration, never inherited from the shell.
 past_ts=$(date -u -v-2H +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "2 hours ago" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
-if [ -n "$past_ts" ]; then
-  create_config ".afk.enabled = true" ".afk.timeout_minutes = 90" ".objective_set_at = \"$past_ts\""
-  create_plan
-  create_task_file "TASK-001" "READY"
-  run_hook
-  assert_exit_code "AFK timeout: exit 0" "$HOOK_EC" 0
-  assert_contains "AFK timeout stderr" "$HOOK_OUTPUT" "AFK timeout"
-else
-  _pass "AFK timeout: exit 0 (skipped — date format unavailable)"
-  _pass "AFK timeout stderr (skipped)"
-fi
-teardown_temp_dir
+for tz in UTC "Europe/Lisbon" "America/New_York"; do
+  setup_temp_dir
+  setup_git_repo
+  setup_nazgul_dir
+  if [ -n "$past_ts" ]; then
+    create_config ".afk.enabled = true" ".afk.timeout_minutes = 90" ".objective_set_at = \"$past_ts\""
+    create_plan
+    create_task_file "TASK-001" "READY"
+    export TZ="$tz"
+    run_hook
+    unset TZ
+    assert_exit_code "TZ=$tz AFK timeout: exit 0" "$HOOK_EC" 0
+    assert_contains "TZ=$tz AFK timeout stderr" "$HOOK_OUTPUT" "AFK timeout"
+    gate_line=$(grep '"event":"stop_gate"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+    assert_contains "TZ=$tz stop_gate event emitted" "$gate_line" '"event":"stop_gate"'
+    assert_contains "TZ=$tz stop_gate reason" "$gate_line" '"reason":"afk_timeout"'
+    assert_eq "TZ=$tz stop_gate limit" "$(jq -r '.limit' <<<"$gate_line")" "90"
+    computed=$(jq -r '.computed' <<<"$gate_line")
+    assert_eq "TZ=$tz stop_gate computed >= limit" "$(( computed >= 90 ))" "1"
+  else
+    _pass "TZ=$tz AFK timeout: exit 0 (skipped — date format unavailable)"
+    _pass "TZ=$tz AFK timeout stderr (skipped)"
+    _pass "TZ=$tz stop_gate event emitted (skipped)"
+    _pass "TZ=$tz stop_gate reason (skipped)"
+    _pass "TZ=$tz stop_gate limit (skipped)"
+    _pass "TZ=$tz stop_gate computed >= limit (skipped)"
+  fi
+  teardown_temp_dir
+done
+
+# --- AC7: parsed epoch for a fixed Z timestamp must be byte-identical across
+# TZ values. Extracts the hook's own dialect-selection branch (the exact
+# lines from the `if date -j ...` probe to its matching `fi`, with or
+# without `-u`) so a regression in that snippet fails this test, not a
+# hand-copied re-implementation of it. TZ is set explicitly per invocation,
+# never inherited.
+_dialect_snippet=$(awk '
+  /^      if date -j/ { flag=1 }
+  flag { print }
+  flag && /^      fi$/ { exit }
+' "$STOP_HOOK")
+assert_contains "AC7: dialect snippet extraction found the branch" "$_dialect_snippet" "START_EPOCH="
+_parse_dialect_epoch() {
+  local ts="$1" tz="$2"
+  SESSION_START="$ts" TZ="$tz" bash -c "$_dialect_snippet; echo \"\$START_EPOCH\""
+}
+fixed_ts="2026-06-15T12:00:00Z"
+epoch_utc=$(_parse_dialect_epoch "$fixed_ts" "UTC")
+epoch_lisbon=$(_parse_dialect_epoch "$fixed_ts" "Europe/Lisbon")
+epoch_ny=$(_parse_dialect_epoch "$fixed_ts" "America/New_York")
+assert_eq "AC7: parsed epoch identical UTC vs Europe/Lisbon" "$epoch_utc" "$epoch_lisbon"
+assert_eq "AC7: parsed epoch identical UTC vs America/New_York" "$epoch_utc" "$epoch_ny"
+
+# --- AC8: no-timeout-below-limit under a non-UTC TZ. elapsed=85m, limit=90m
+# — close enough to the boundary that an unfixed east-of-UTC offset (Lisbon,
+# +1h) crosses it and falsely fires; a west-of-UTC offset (New York) only
+# deflates further and would not demonstrate the bug at this elapsed value. ---
+near_limit_ts=$(date -u -v-85M +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "85 minutes ago" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
+for tz in "Europe/Lisbon" "America/New_York"; do
+  setup_temp_dir
+  setup_git_repo
+  setup_nazgul_dir
+  if [ -n "$near_limit_ts" ]; then
+    create_config ".afk.enabled = true" ".afk.timeout_minutes = 90" ".objective_set_at = \"$near_limit_ts\""
+    create_plan
+    create_task_file "TASK-001" "READY"
+    export TZ="$tz"
+    run_hook
+    unset TZ
+    assert_exit_code "TZ=$tz AC8 below-limit: continues loop" "$HOOK_EC" 2
+    assert_not_contains "TZ=$tz AC8 below-limit stderr" "$HOOK_OUTPUT" "AFK timeout"
+  else
+    _pass "TZ=$tz AC8 below-limit: continues loop (skipped — date format unavailable)"
+    _pass "TZ=$tz AC8 below-limit stderr (skipped)"
+  fi
+  teardown_temp_dir
+done
 
 # === CONTINUE LOOP (exit 2) ===
 
@@ -770,42 +836,51 @@ else
 fi
 teardown_temp_dir
 
-# AFK clock falls back to oldest checkpoint when objective_set_at absent
-setup_temp_dir; setup_git_repo; setup_nazgul_dir
+# AFK clock falls back to oldest checkpoint when objective_set_at absent —
+# parameterised over TZ (see Test 6 above for why).
 old_ts=$(date -u -v-3H +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "3 hours ago" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
-if [ -n "$old_ts" ]; then
-  create_config ".afk.enabled = true" ".afk.timeout_minutes = 90"
-  jq 'del(.objective_set_at)' "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.tmp" && mv "$TEST_DIR/nazgul/config.json.tmp" "$TEST_DIR/nazgul/config.json"
-  create_plan; create_task_file "TASK-001" "READY"
-  printf '{"iteration":1,"timestamp":"%s"}\n' "$old_ts" > "$TEST_DIR/nazgul/checkpoints/iteration-001.json"
-  run_hook
-  assert_exit_code "AFK: falls back to old checkpoint when objective_set_at absent → stop" "$HOOK_EC" 0
-  assert_contains "AFK fallback stderr" "$HOOK_OUTPUT" "AFK timeout"
-else
-  _pass "AFK checkpoint fallback (skipped — date format unavailable)"
-  _pass "AFK fallback stderr (skipped)"
-fi
-teardown_temp_dir
+for tz in UTC "Europe/Lisbon" "America/New_York"; do
+  setup_temp_dir; setup_git_repo; setup_nazgul_dir
+  if [ -n "$old_ts" ]; then
+    create_config ".afk.enabled = true" ".afk.timeout_minutes = 90"
+    jq 'del(.objective_set_at)' "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.tmp" && mv "$TEST_DIR/nazgul/config.json.tmp" "$TEST_DIR/nazgul/config.json"
+    create_plan; create_task_file "TASK-001" "READY"
+    printf '{"iteration":1,"timestamp":"%s"}\n' "$old_ts" > "$TEST_DIR/nazgul/checkpoints/iteration-001.json"
+    export TZ="$tz"
+    run_hook
+    unset TZ
+    assert_exit_code "TZ=$tz AFK: falls back to old checkpoint when objective_set_at absent → stop" "$HOOK_EC" 0
+    assert_contains "TZ=$tz AFK fallback stderr" "$HOOK_OUTPUT" "AFK timeout"
+  else
+    _pass "TZ=$tz AFK checkpoint fallback (skipped — date format unavailable)"
+    _pass "TZ=$tz AFK fallback stderr (skipped)"
+  fi
+  teardown_temp_dir
+done
 
 # AFK clock falls back to durable iterations.jsonl when objective_set_at absent
 # (decoupled from pruning: fires even with no/recent checkpoints — covers migrated
-# configs where migrate_4_to_5 deleted objective_set_at)
-setup_temp_dir; setup_git_repo; setup_nazgul_dir
+# configs where migrate_4_to_5 deleted objective_set_at). Parameterised over TZ.
 old_ts=$(date -u -v-3H +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "3 hours ago" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
-if [ -n "$old_ts" ]; then
-  create_config ".afk.enabled = true" ".afk.timeout_minutes = 90"
-  jq 'del(.objective_set_at)' "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.tmp" && mv "$TEST_DIR/nazgul/config.json.tmp" "$TEST_DIR/nazgul/config.json"
-  create_plan; create_task_file "TASK-001" "READY"
-  mkdir -p "$TEST_DIR/nazgul/logs"
-  printf '{"iteration":1,"timestamp":"%s"}\n' "$old_ts" > "$TEST_DIR/nazgul/logs/iterations.jsonl"
-  run_hook
-  assert_exit_code "AFK: durable iterations.jsonl fallback fires → stop" "$HOOK_EC" 0
-  assert_contains "AFK durable-log fallback stderr" "$HOOK_OUTPUT" "AFK timeout"
-else
-  _pass "AFK durable-log fallback (skipped — date format unavailable)"
-  _pass "AFK durable-log fallback stderr (skipped)"
-fi
-teardown_temp_dir
+for tz in UTC "Europe/Lisbon" "America/New_York"; do
+  setup_temp_dir; setup_git_repo; setup_nazgul_dir
+  if [ -n "$old_ts" ]; then
+    create_config ".afk.enabled = true" ".afk.timeout_minutes = 90"
+    jq 'del(.objective_set_at)' "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.tmp" && mv "$TEST_DIR/nazgul/config.json.tmp" "$TEST_DIR/nazgul/config.json"
+    create_plan; create_task_file "TASK-001" "READY"
+    mkdir -p "$TEST_DIR/nazgul/logs"
+    printf '{"iteration":1,"timestamp":"%s"}\n' "$old_ts" > "$TEST_DIR/nazgul/logs/iterations.jsonl"
+    export TZ="$tz"
+    run_hook
+    unset TZ
+    assert_exit_code "TZ=$tz AFK: durable iterations.jsonl fallback fires → stop" "$HOOK_EC" 0
+    assert_contains "TZ=$tz AFK durable-log fallback stderr" "$HOOK_OUTPUT" "AFK timeout"
+  else
+    _pass "TZ=$tz AFK durable-log fallback (skipped — date format unavailable)"
+    _pass "TZ=$tz AFK durable-log fallback stderr (skipped)"
+  fi
+  teardown_temp_dir
+done
 
 # === REVIEW GRANULARITY (review_gate.granularity) ===
 

@@ -91,9 +91,13 @@ if [ "$AFK_ENABLED" = "true" ] && [ "$AFK_TIMEOUT" != "null" ]; then
   if [ -n "$SESSION_START" ] && [ "$SESSION_START" != "null" ]; then
     # Convert timestamps to epoch seconds for comparison
     if command -v date >/dev/null 2>&1; then
-      # macOS date vs GNU date
-      if date -j -f "%Y-%m-%dT%H:%M:%SZ" "$SESSION_START" "+%s" >/dev/null 2>&1; then
-        START_EPOCH=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$SESSION_START" "+%s" 2>/dev/null || echo "0")
+      # macOS date vs GNU date. `-u` is required on both: BSD `date -j -f`
+      # matches a trailing literal `Z` as an ordinary char and applies the
+      # host's local offset without it. The probe only picks BSD vs GNU
+      # dialect (it succeeds on macOS either way) — correctness is `-u` on
+      # the parse itself, not inferable from probe success.
+      if date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$SESSION_START" "+%s" >/dev/null 2>&1; then
+        START_EPOCH=$(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$SESSION_START" "+%s" 2>/dev/null || echo "0")
       else
         START_EPOCH=$(date -d "$SESSION_START" "+%s" 2>/dev/null || echo "0")
       fi
@@ -102,6 +106,7 @@ if [ "$AFK_ENABLED" = "true" ] && [ "$AFK_TIMEOUT" != "null" ]; then
         ELAPSED_MINUTES=$(( (NOW_EPOCH - START_EPOCH) / 60 ))
         if [ "$ELAPSED_MINUTES" -ge "$AFK_TIMEOUT" ]; then
           echo "Nazgul: AFK timeout reached (${ELAPSED_MINUTES}m >= ${AFK_TIMEOUT}m). Stopping." >&2
+          emit_event "stop_gate" reason "afk_timeout" computed:n "$ELAPSED_MINUTES" limit:n "$AFK_TIMEOUT"
           exit 0
         fi
       fi
