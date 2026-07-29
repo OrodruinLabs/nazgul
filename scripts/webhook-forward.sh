@@ -109,4 +109,5 @@ curl -s -X POST \
   ${HEADER_ARGS[@]+"${HEADER_ARGS[@]}"} \
   -d "$PAYLOAD" \
   --max-time 5 \
+  --connect-timeout 2 \
   "$WEBHOOK_URL" >/dev/null 2>&1 || true
