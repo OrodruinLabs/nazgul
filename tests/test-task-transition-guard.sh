@@ -151,6 +151,34 @@ else
 fi
 assert_contains "ttg_verify_commit_evidence: no-Base-SHA degradation is announced on stderr" \
   "$STDERR_OUT" "forward-progress check skipped"
+DEGRADE_STDERR="$STDERR_OUT"
+teardown_temp_dir
+
+# Base SHA present-but-corrupt vs. absent (security B1, TASK-006 attempt 2):
+# the two states must not collapse into the same degrade path. A garbled or
+# fabricated Base SHA is a stronger trouble signal than a missing field and
+# must fail CLOSED, not fall back to existence-only.
+setup_temp_dir
+setup_git_repo
+UNRELATED_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+CORRUPT_STDERR=$(ttg_verify_commit_evidence "## Metadata
+- **Base SHA**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+
+## Commits
+- ${UNRELATED_SHA}" "$TEST_DIR" 2>&1 >/dev/null) && CORRUPT_EC=0 || CORRUPT_EC=$?
+if [ "$CORRUPT_EC" -ne 0 ]; then
+  _pass "ttg_verify_commit_evidence: present-but-unresolvable Base SHA + unrelated commit rejected"
+else
+  _fail "ttg_verify_commit_evidence: present-but-unresolvable Base SHA + unrelated commit rejected" "expected: nonzero" "  actual: 0"
+fi
+assert_contains "ttg_verify_commit_evidence: corrupt-Base-SHA rejection is announced on stderr" \
+  "$CORRUPT_STDERR" "treated as corrupt"
+if [ "$CORRUPT_STDERR" != "$DEGRADE_STDERR" ]; then
+  _pass "ttg_verify_commit_evidence: corrupt-Base-SHA and absent-Base-SHA emit distinct diagnostics"
+else
+  _fail "ttg_verify_commit_evidence: corrupt-Base-SHA and absent-Base-SHA emit distinct diagnostics" \
+    "expected: different stderr text" "  actual: byte-identical (\"$CORRUPT_STDERR\")"
+fi
 teardown_temp_dir
 
 # Archived-manifest sweep (plan.md V3(c)): every FEAT-022 DONE manifest must

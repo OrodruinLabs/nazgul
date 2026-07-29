@@ -42,32 +42,44 @@ ttg_valid_transition() {
   esac
 }
 
-# Real commit-SHA verification (MF-026, tightened FEAT-023/TASK-006 — Defect 5).
-# Scopes evidence to the manifest's `## Commits` section, using the identical
-# awk boundary expression as scripts/git-hooks/pre-merge-commit's
-# commits_verify() (that hook runs standalone in target repos and cannot
-# source this file, so keep the two textually identical rather than sharing
-# code — ADR-013). A candidate must both resolve to a real commit AND be a
-# strict descendant of the manifest's own `## Metadata` -> Base SHA; the Base
-# SHA itself does not count as forward progress. When no Base SHA resolves,
-# degrades to existence-only and says so on stderr (plan.md C5) rather than
-# silently — the fail-CLOSED-on-ambiguity rule (ADR-003 Decision 3) still
+# Real commit-SHA verification (MF-026, tightened FEAT-023/TASK-006 — Defect 5,
+# hardened TASK-006 attempt 2 — security B1). Scopes evidence to the
+# manifest's `## Commits` section, using the identical awk boundary
+# expression as scripts/git-hooks/pre-merge-commit's commits_verify() (that
+# hook runs standalone in target repos and cannot source this file, so keep
+# the two textually identical rather than sharing code — ADR-013). A
+# candidate must both resolve to a real commit AND be a strict descendant of
+# the manifest's own `## Metadata` -> Base SHA; the Base SHA itself does not
+# count as forward progress.
+#
+# "Base SHA label absent" and "Base SHA label present but unresolvable" are
+# distinct states, not one degrade path (a present-but-corrupt value is a
+# stronger trouble signal than an absent field, per CLAUDE.md's guard-must-
+# know-why rule): absent degrades to existence-only (plan.md C5, genuine
+# pre-convention manifests); present-but-unresolvable is a malformed
+# manifest and fails CLOSED. Each state announces itself on stderr with
+# distinct text. The fail-CLOSED-on-ambiguity rule (ADR-003 Decision 3) still
 # governs everything else: unavailable git, non-repo project_root, and no
 # resolvable candidate in `## Commits` all deny.
 # Usage: ttg_verify_commit_evidence <manifest_text> <project_root>
 ttg_verify_commit_evidence() {
-  local manifest_text="$1" project_root="$2" sha base_sha commits_section
+  local manifest_text="$1" project_root="$2" sha base_sha base_sha_line commits_section
   command -v git >/dev/null 2>&1 || return 1
   git -C "$project_root" rev-parse --git-dir >/dev/null 2>&1 || return 1
 
-  base_sha=$(printf '%s' "$manifest_text" \
+  base_sha_line=$(printf '%s' "$manifest_text" \
     | awk '/^## Metadata/{f=1;next} /^## /{f=0} f' \
-    | grep -iE '^[[:space:]]*-[[:space:]]*\*\*Base SHA\*\*' \
-    | grep -oE '[0-9a-f]{7,64}' | head -1 || true)
+    | grep -iE '^[[:space:]]*-[[:space:]]*\*\*Base SHA\*\*' | head -1 || true)
+  base_sha=$(printf '%s' "$base_sha_line" | grep -oE '[0-9a-f]{7,64}' | head -1 || true)
   if [ -n "$base_sha" ] && ! git -C "$project_root" cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
     base_sha=""
   fi
-  [ -n "$base_sha" ] || echo "ttg_verify_commit_evidence: no resolvable Base SHA in manifest — forward-progress check skipped, degrading to existence-only" >&2
+
+  if [ -n "$base_sha_line" ] && [ -z "$base_sha" ]; then
+    echo "ttg_verify_commit_evidence: Base SHA label present but its value does not resolve to a real commit — manifest treated as corrupt, rejecting" >&2
+    return 1
+  fi
+  [ -n "$base_sha" ] || echo "ttg_verify_commit_evidence: no Base SHA label in manifest — forward-progress check skipped, degrading to existence-only" >&2
 
   commits_section=$(printf '%s' "$manifest_text" | awk '/^## Commits/{f=1;next} /^## /{f=0} f')
   while IFS= read -r sha; do
