@@ -137,15 +137,20 @@ function flush_pre_redirect() {
   else if (tok != "") { emit(tok); tok = "" }
 }
 
-# Heredoc start (<< or <<-), recognized both at top level and inside a double-quoted
-# span (a $(...) command substitution nested in "..." starts its own unquoted parse
-# context, which our single-flag in_dq cannot model — but honouring << there regardless
-# is what stops a heredoc body'"'"'s literal quote from being misread as closing the
-# outer "..."). NOT recognized inside a real single-quoted span: nothing is special
-# inside '"'"'...'"'"' in real shell, so treating it as a heredoc there would be wrong AND
-# could swallow lines that should still be checked (a bypass risk).
-# Returns the index of the last consumed char, or 0 if `line` at `i` is not "<<".
+# Heredoc start (<< or <<-), recognized ONLY at the true top level (not inside a
+# double-quoted span). A dq-nested $(...) can legitimately open its own heredoc in
+# real bash, but modelling that with the single in_dq flag previously let a plain
+# "<<" inside an ordinary "..." string (no nested $(...) at all) be misread as a
+# heredoc too, desyncing quote state into a false ALLOW (security/code review,
+# TASK-004 attempt 1). Dropping dq-context recognition trades back the narrower
+# false BLOCK this file was written to fix, for a dq-nested $(cat <<'EOF' ...)
+# heredoc specifically — accepted: a false block costs less than a false allow.
+# NOT recognized inside a real single-quoted span either: nothing is special
+# inside '"'"'...'"'"' in real shell.
+# Returns the index of the last consumed char, or 0 if `line` at `i` is not a
+# genuine "<<"/"<<-" start (also rejects mid-run matches inside "<<<").
 function try_heredoc(line, i,    j, n2, qc, delim, ch) {
+  if (i > 1 && substr(line, i - 1, 1) == "<") return 0
   if (substr(line, i, 2) != "<<") return 0
   j = i + 2
   heredoc_strip = 0
@@ -163,7 +168,7 @@ function try_heredoc(line, i,    j, n2, qc, delim, ch) {
     delim = ""
     while (j <= n2) {
       ch = substr(line, j, 1)
-      if (ch ~ /[ \t;|&<>()]/) break
+      if (ch ~ /[ \t;|&<>()"'\'']/) break
       delim = delim ch
       j++
     }
@@ -194,11 +199,12 @@ function try_heredoc(line, i,    j, n2, qc, delim, ch) {
       # must not toggle quote state — append the escaped char literally.
       if (c == "\\" && i < n) { i++; tok = tok substr($0, i, 1) }
       else if (c == "\"") in_dq = 0
-      else if (c == "<") {
-        hd_end = try_heredoc($0, i)
-        if (hd_end > 0) i = hd_end
-        else tok = tok c
-      }
+      else tok = tok c
+    } else if (c == "\\") {
+      # A backslash outside any quote escapes the next char, so it must not be
+      # separately interpreted as heredoc/redirect syntax (e.g. \<<EOF is a
+      # literal "<" followed by a plain "< EOF" redirect, never a heredoc).
+      if (i < n) { i++; tok = tok substr($0, i, 1) }
       else tok = tok c
     } else if (c == "'\''") {
       in_sq = 1

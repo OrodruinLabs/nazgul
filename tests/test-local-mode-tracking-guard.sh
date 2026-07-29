@@ -536,9 +536,20 @@ teardown_temp_dir
 # close the outer -m argument's quote tracking early, exposing a bare nazgul/
 # token in the body to check_path — a false BLOCK. Found live by the FEAT-021
 # TASK-010 implementer.
+#
+# Attempt 1 fixed this by also recognizing "<<" as a heredoc start while
+# in_dq==1, which independently produced three false-ALLOW bypasses (security +
+# code review, TASK-004 attempt 1) because a single in_dq flag can't tell a
+# real dq-nested $(...) heredoc apart from a plain "<<" inside an ordinary
+# "..." string. Attempt 2 drops dq-context heredoc recognition entirely, which
+# closes those bypasses but reopens the original false BLOCK for genuinely
+# dq-nested heredocs specifically (H-1/H-3/H-4 below) — accepted trade-off,
+# a false block costs less than a false allow for this defence-in-depth guard.
 
-# Allow H-1: heredoc body with an embedded " and a bare nazgul/ token is not a
-# real pathspec — must not be blocked.
+# Block H-1 (accepted, documented regression): a dq-nested $(cat <<'MSG' ...)
+# heredoc whose body contains a literal " once again closes the outer quote
+# early and exposes the bare nazgul/ token — the original Defect 1e, now
+# intentionally unfixed for this narrower case. See comment above.
 setup_temp_dir
 setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
@@ -553,7 +564,7 @@ CMDEOF
 )
 input=$(make_bash_input "$heredoc_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
-assert_exit_code "allow H-1: heredoc body with embedded quote + nazgul/ token" "$GUARD_EC" 0
+assert_exit_code "block H-1: dq-nested heredoc + embedded quote + nazgul/ token (accepted narrower false block)" "$GUARD_EC" 2
 teardown_temp_dir
 
 # Block H-2 (bypass pin): a REAL git add on a nazgul/ path after a heredoc must
@@ -575,7 +586,8 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block H-2: real git add nazgul/ after a heredoc still blocks" "$GUARD_EC" 2
 teardown_temp_dir
 
-# Allow H-3: <<-'MSG' (tab-stripping variant) behaves like H-1.
+# Block H-3 (accepted, documented regression): <<-'MSG' (tab-stripping variant)
+# is also dq-nested, so it behaves like H-1.
 setup_temp_dir
 setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
@@ -586,10 +598,11 @@ NL=$'\n'
 heredoc_dash_cmd="git commit -m \"\$(cat <<-'MSG'${NL}${TAB}Note: a literal \" character, then mentions nazgul/config.json on this line${NL}${TAB}MSG${NL})\""
 input=$(make_bash_input "$heredoc_dash_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
-assert_exit_code "allow H-3: <<-'MSG' tab-stripping heredoc variant" "$GUARD_EC" 0
+assert_exit_code "block H-3: <<-'MSG' tab-stripping heredoc variant (accepted narrower false block)" "$GUARD_EC" 2
 teardown_temp_dir
 
-# Allow H-4: <<"MSG" (double-quoted delimiter) behaves like H-1.
+# Block H-4 (accepted, documented regression): <<"MSG" (double-quoted
+# delimiter) is also dq-nested, so it behaves like H-1.
 setup_temp_dir
 setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
@@ -604,7 +617,7 @@ CMDEOF
 )
 input=$(make_bash_input "$heredoc_dq_delim_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
-assert_exit_code 'allow H-4: <<"MSG" double-quoted delimiter heredoc variant' "$GUARD_EC" 0
+assert_exit_code 'block H-4: <<"MSG" double-quoted delimiter heredoc variant (accepted narrower false block)' "$GUARD_EC" 2
 teardown_temp_dir
 
 # Allow H-5: an unterminated heredoc (delimiter line never appears) degrades to
@@ -622,6 +635,79 @@ CMDEOF
 input=$(make_bash_input "$heredoc_unterminated_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "allow H-5: unterminated heredoc degrades to ALLOW" "$GUARD_EC" 0
+teardown_temp_dir
+
+# --- Category H (attempt-1 regression pins): three false-ALLOW bypasses the
+# attempt-1 heredoc tokenizer introduced (security 90 + code-reviewer 84,
+# TASK-004 attempt 1), each verified to FAIL against commit 15160c2 and PASS
+# after. Mirrors H-2's two-line "real git add after" structure so a bypass
+# that swallows the second line is caught.
+
+# Block H-6 (probe a — security B1a): "<<" inside a plain double-quoted span
+# (no nested $(...)) must not be misread as a heredoc start — a stray
+# unquoted-delimiter break class that omits '"' absorbs the closing quote and
+# desyncs in_dq, swallowing the real git add on the next line.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_a_cmd=$(cat <<'CMDEOF'
+echo "no heredoc here <<MARK"
+git add nazgul/secret.txt
+CMDEOF
+)
+input=$(make_bash_input "$probe_a_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block H-6: << inside a plain double-quoted span, real git add after (probe a)" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-7 (probe b — security B1b / code-reviewer B1): a <<< here-string
+# must be consumed atomically, not torn into a plain redirect plus a bogus
+# heredoc that swallows the real git add on the next line.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_b_cmd=$(cat <<'CMDEOF'
+ls <<< done
+git add nazgul/secret
+CMDEOF
+)
+input=$(make_bash_input "$probe_b_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block H-7: <<< here-string, real git add after (probe b)" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-8 (probe c — security B1c): a backslash-escaped "<" at top level
+# must not combine with the following "<" into a heredoc start.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_c_cmd=$(cat <<'CMDEOF'
+echo \<<EOF
+git add nazgul/secret
+CMDEOF
+)
+input=$(make_bash_input "$probe_c_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'block H-8: backslash-escaped \<< at top level, real git add after (probe c)' "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-9 (code-reviewer B1 PoC, same-line variant): <<< on the same line
+# as the real nazgul/ pathspec must not leave a stale redir_skip_next that
+# swallows the pathspec at emit().
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input 'git add <<<"x" nazgul/config.json')
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block H-9: git add <<<\"x\" nazgul/config.json (same-line here-string)" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
