@@ -63,10 +63,36 @@ config key was added, removed, or changed in meaning.
   the exit code alone.
 
 ### Added
-- `docs/guard-fail-open-inventory.md` — a classified inventory of the "lookup miss -> pass" pattern
-  across the guard/hook enforcement surface: 125 classified sites across 16 files. Its scope boundary
-  is stated in its own title ("Partial: 16 of ~46 Files"), not implied — the remaining ~322
-  occurrences across 33 files are filed to `nazgul/inbox/` rather than silently left uncounted.
+- `docs/guard-fail-open-inventory.md` — a classified inventory of the "lookup miss -> pass" pattern:
+  125 sites, exhaustively classified across the 16-file **enforcement surface** (every script whose
+  empty-result path is itself an authorization decision). Its own title states the boundary explicitly
+  ("Partial: 16 of ~46 Files") and it must not be cited as a repo-wide inventory: the document itself
+  puts the remainder, depending on which textual forms are counted, at on the order of 190-370
+  occurrences across 25-46 files — none of them an authorization decision, so a fail-open there at
+  worst costs logging, a notification, or an advisory backlog entry, filed by reference rather than
+  silently dropped.
+
+### Known / deferred
+- **The compound case — an off-convention branch whose manifest also has no `## Commits` entry — is
+  not closed by this release.** Fix 1b's ref-derived signal only gates the canonical
+  `feat/<ref>/TASK-NNN` branch shape (`pre-merge-commit:19-26,138-142`); an off-convention branch
+  (e.g. `docs/TASK-001`) evades it by design and falls back to content-matching only — required by
+  `tests/test-git-hooks-premerge.sh`'s FALSE-BLOCK regression case, not a gap in the fix. But if that
+  same unit's manifest also never gained a `## Commits` section naming the merged SHA, content-matching
+  has nothing to find either: both signals report no candidate, `UNIT_ID` stays empty, and the merge
+  falls through to allow — exit 0, no diagnostic, identical to pre-1b behaviour
+  (`nazgul/plan.md` Decision C1). Needs both an authoring gap AND an off-convention branch name at
+  once; not closed by Fix 1a/1b/1c.
+- **`pre-merge-commit`'s config/environment degrade-to-allow path is untouched by this release.** A
+  missing `jq`, a missing `config.json`, `guards.git_hooks: false`, `execution.parallel` not `true`, or
+  `execution.enforce.premerge_guard: false` all degrade to allow before any manifest is even read
+  (`pre-merge-commit:64-80`). `docs/guard-fail-open-inventory.md` ranks the corrupt-but-present-config
+  case at line 77 — `PARALLEL` silently defaults to `"false"` with no `jq -e .` validity check, unlike
+  its PreToolUse sibling guards — as the single highest-severity finding in its inventory: the one
+  guard ADR-009 itself names as having a catastrophic, unbounded false-allow cost. Not fixed here;
+  filed for a future objective.
+- No `schema_version` bump and no config migration in this release — no config key was added, removed,
+  or changed in meaning.
 
 ### Changed
 - The `## Commits` manifest format (full 40-hex SHA, bare, one per line) is now specified at both
