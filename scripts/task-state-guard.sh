@@ -61,6 +61,33 @@ FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null || e
 # Derive project root via the worktree-aware resolver (FEAT-021 / ADR-008)
 PROJECT_ROOT="$(resolve_project_root)"
 
+# Bound FILE_PATH by PROJECT_ROOT (Defect 3): writes outside this project
+# aren't this guard's business — including another project's own manifest.
+_tsg_canon_path() {
+  # No-existence-required realpath (BSD lacks -m): resolve the longest
+  # existing prefix via cd+pwd -P, reattach what doesn't exist literally.
+  local p="$1" suffix="" dir base
+  dir="$(dirname -- "$p")"
+  base="$(basename -- "$p")"
+  while [ "$dir" != "/" ] && [ ! -d "$dir" ]; do
+    suffix="/$(basename -- "$dir")$suffix"
+    dir="$(dirname -- "$dir")"
+  done
+  dir="$(cd "$dir" 2>/dev/null && pwd -P || printf '%s' "$dir")"
+  printf '%s%s/%s' "$dir" "$suffix" "$base"
+}
+
+case "$FILE_PATH" in
+  /*) CANON_FILE_PATH="$FILE_PATH" ;;
+  *)  CANON_FILE_PATH="$PROJECT_ROOT/$FILE_PATH" ;;
+esac
+CANON_FILE_PATH="$(_tsg_canon_path "$CANON_FILE_PATH")"
+CANON_PROJECT_ROOT="$(cd "$PROJECT_ROOT" 2>/dev/null && pwd -P || printf '%s' "$PROJECT_ROOT")"
+case "$CANON_FILE_PATH" in
+  "$CANON_PROJECT_ROOT"|"$CANON_PROJECT_ROOT"/*) ;;
+  *) exit 0 ;;
+esac
+
 # Helper: check if a path is inside the project's nazgul/ control directory
 is_nazgul_path() {
   local p="$1"

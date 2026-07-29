@@ -1862,4 +1862,107 @@ if [ "$(id -u)" -ne 0 ]; then
   teardown_temp_dir
 fi
 
+# ---------------------------------------------------------------------------
+# Test 97 (TASK-002/h-1): out-of-root absolute path is NOT gated by
+# requireActiveTask. Must FAIL before the PROJECT_ROOT bound (Defect 3).
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "PLANNED"
+OUTSIDE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-outside-XXXXXX")
+input=$(jq -n --arg fp "$OUTSIDE_DIR/scratch.md" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"scratch"}}')
+run_guard "$input"
+assert_exit_code "out-of-root absolute path allowed" "$GUARD_EC" 0
+assert_not_contains "out-of-root path has no active-task message" "$GUARD_STDERR" "No task is IN_PROGRESS"
+rm -rf "$OUTSIDE_DIR"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 98 (TASK-002/h-2a): in-project path reached via a symlink is STILL
+# gated. Regression proof — must pass both before and after the bound.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "PLANNED"
+mkdir -p "$TEST_DIR/sub"
+ln -s "$TEST_DIR/sub" "$TEST_DIR/sub-link"
+input=$(jq -n --arg fp "$TEST_DIR/sub-link/a.py" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"x"}}')
+run_guard "$input"
+assert_exit_code "in-project path via symlink still blocked" "$GUARD_EC" 2
+assert_contains "in-project via symlink message" "$GUARD_STDERR" "No task is IN_PROGRESS"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 99 (TASK-002/h-2b): in-project path reached via ".." segments is
+# STILL gated.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "PLANNED"
+mkdir -p "$TEST_DIR/sub"
+input=$(jq -n --arg fp "$TEST_DIR/sub/../sub/a.py" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"x"}}')
+run_guard "$input"
+assert_exit_code "in-project path via .. still blocked" "$GUARD_EC" 2
+assert_contains "in-project via .. message" "$GUARD_STDERR" "No task is IN_PROGRESS"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 100 (TASK-002/h-2c): in-project RELATIVE path resolved from a foreign
+# cwd is STILL gated — the bound must join against PROJECT_ROOT, never $PWD.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "PLANNED"
+mkdir -p "$TEST_DIR/sub"
+input=$(jq -n '{"tool_name":"Write","tool_input":{"file_path":"sub/a.py","content":"x"}}')
+GUARD_STDERR=$(cd /tmp && echo "$input" | bash "$GUARD" 2>&1 >/dev/null) && GUARD_EC=0 || GUARD_EC=$?
+assert_exit_code "relative in-project path from foreign cwd still blocked" "$GUARD_EC" 2
+assert_contains "relative in-project foreign cwd message" "$GUARD_STDERR" "No task is IN_PROGRESS"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 101 (TASK-002): project root itself reached through a symlink — an
+# in-project write via that symlink is still gated. A raw string-prefix
+# comparison gets this wrong in the dangerous direction (falsely "outside").
+# ---------------------------------------------------------------------------
+setup_temp_dir
+REAL_ROOT="$TEST_DIR/real-root"
+LINK_ROOT="$TEST_DIR/link-root"
+mkdir -p "$REAL_ROOT/src"
+ln -s "$REAL_ROOT" "$LINK_ROOT"
+OUTER_TEST_DIR="$TEST_DIR"
+TEST_DIR="$REAL_ROOT"
+setup_nazgul_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "PLANNED"
+TEST_DIR="$OUTER_TEST_DIR"
+export CLAUDE_PROJECT_DIR="$LINK_ROOT"
+input=$(jq -n --arg fp "$LINK_ROOT/src/a.py" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"x"}}')
+run_guard "$input"
+assert_exit_code "in-project write through symlinked project root still blocked" "$GUARD_EC" 2
+assert_contains "symlinked project root message" "$GUARD_STDERR" "No task is IN_PROGRESS"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Test 102 (TASK-002): another project's own nazgul/tasks/TASK-001.md is not
+# evaluated against THIS project's state (V7) — the bound runs before
+# is_task_manifest, so the foreign manifest is simply out of scope (exit 0).
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "PLANNED"
+OTHER_PROJECT=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-other-XXXXXX")
+mkdir -p "$OTHER_PROJECT/nazgul/tasks"
+OTHER_TASK_PATH="$OTHER_PROJECT/nazgul/tasks/TASK-001.md"
+input=$(make_write_input "$OTHER_TASK_PATH" "DONE")
+run_guard "$input"
+assert_exit_code "foreign project's own task manifest not judged by this project's state" "$GUARD_EC" 0
+rm -rf "$OTHER_PROJECT"
+teardown_temp_dir
+
 report_results
