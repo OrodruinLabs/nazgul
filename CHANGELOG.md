@@ -2,6 +2,104 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.24.0] - 2026-07-28
+
+Guard integrity: a guard whose lookup misses must never report success (governing thesis for this
+release — "looked and found nothing" vs. "never looked"). MINOR, not PATCH, because three checks
+that previously exited 0 now BLOCK for input shapes that are legitimate today: short-SHA and
+backticked-short-SHA `## Commits` manifests, refs naming a non-`DONE` task, and (in
+`task-state-guard.sh`) a Nazgul project whose `nazgul/tasks/` directory is missing. MAJOR is wrong —
+nothing is removed, no interface or config key changes shape. **`schema_version` stays at 31**: no
+config key was added, removed, or changed in meaning.
+
+### Fixed
+- **The live merge hole — `pre-merge-commit` admitted unreviewed content on a short SHA.** The guard
+  compared git's always-full-length `GITHEAD_<sha>` key against a task manifest's `## Commits` text
+  with an exact-substring `grep -q`. A manifest that recorded a `git rev-parse --short` SHA (or a
+  backticked one) therefore never matched, `UNIT_ID` stayed empty, and the merge fell through to
+  allow. Reproduced live before the fix: full SHA in `## Commits` -> exit 1 (blocks); short SHA ->
+  exit 0 (merges); backticked short SHA -> exit 0; an empty `## Commits` section -> exit 0. This
+  guard's own repository dogfooded the ambiguity it missed — `scripts/stop-hook.sh` records short
+  SHAs via `git rev-parse --short` in its own commit-recording path, and FEAT-021's own archived task
+  manifests mixed short, backticked-short, and full forms within a single objective. Now matched by
+  token/prefix extraction (`grep -oE '[0-9a-f]{7,64}'` against `## Commits`, then a `case` prefix
+  test against the candidate SHA), so short, full, and backticked forms all resolve.
+  This is a deliberate fail-**CLOSED** design, not FEAT-021's fail-open ADR-008 resolver precedent
+  (ADR-009): a false allow here admits unreviewed code straight into the feature branch's history,
+  indistinguishable from reviewed code the moment the merge lands, while a false deny stalls exactly
+  one unit with a diagnostic that names it — the asymmetry ADR-009 states as its general rule for
+  which guards in this family should fail open vs. closed.
+- **The "never looked" half — ref-name identity, bound per-key, plus block-on-unverifiable.**
+  `GITHEAD_<sha>` values carry the ref name git is actually merging (e.g. `feat/FEAT-009/TASK-165`),
+  set by git itself and not omittable by an implementer — a second identity signal the guard
+  previously ignored, leaving a manifest with no `## Commits` section at all invisible to it. The
+  ref-derived candidate is now resolved per `GITHEAD_<sha>` key (not "first `TASK-NNN` match across
+  the whole environment") and anchored to the canonical `^feat/[^/]+/(TASK-[0-9]+)$` branch shape.
+  ADR-010's naive bare-`TASK-NNN` substring parse was rejected as spoof-unsafe: taking the first
+  `TASK-NNN` match anywhere in the environment, independent of which `GITHEAD_<sha>` key produced it,
+  could resolve identity to a decoy `GITHEAD_<sha>=feat/.../TASK-999` (DONE) instead of the genuine,
+  unapproved head actually being merged — laundering exactly the content the guard exists to catch.
+  The canonical-shape anchor is also what keeps `tests/test-git-hooks-premerge.sh`'s existing
+  FALSE-BLOCK regression case green (`docs/TASK-001`, a non-`feat/`-prefixed branch, must still merge
+  cleanly). A ref-matched unit whose `## Commits` section cannot verify the key's own SHA now BLOCKS
+  as "matched but unverifiable" instead of silently falling through to allow.
+- **`task-state-guard.sh` no longer disables both gates when `nazgul/tasks/` is missing under a real
+  Nazgul project.** A readable `nazgul/config.json` with no (or unreadable) `nazgul/tasks/` is a
+  resolved-but-incomplete project, not a non-Nazgul directory, and now BLOCKS (exit 2) with a
+  diagnostic distinct from the ordinary "no active task" message, instead of collapsing into the
+  same silent no-op as a genuinely non-Nazgul directory (which still safely no-ops on a
+  missing/unreadable `config.json`, unchanged). Same present-but-corrupt-fails-closed /
+  genuinely-absent-no-ops split as §12's MF-053 precedent, applied to this guard.
+- **`slugify_objective` newline corruption, an unchecked `git checkout -b`, and the silent zsh
+  half-load of `worktree-utils.sh`.** A multi-paragraph objective string produced an invalid branch
+  name via `slugify_objective`; `create_feature_branch()`'s `git checkout -b` failure was previously
+  swallowed, leaving config recording a branch that did not exist; and `worktree-utils.sh` sourced
+  under zsh (the default interactive shell on macOS) hit `${BASH_SOURCE[0]}`, a non-fatal
+  unset-parameter diagnostic under zsh, and half-loaded silently — so the managed `core.hooksPath`
+  install (`create_feature_branch -> install_git_hooks`) never ran. All three were hit live during
+  this objective's own setup, and they compound: the merge guard could be both bypassable (the fix
+  above) and not installed at all. `worktree-utils.sh` now refuses to source outside bash, loudly,
+  and `create_feature_branch()` verifies the branch exists after `checkout -b` instead of trusting
+  the exit code alone.
+
+### Added
+- `docs/guard-fail-open-inventory.md` — a classified inventory of the "lookup miss -> pass" pattern:
+  125 sites, exhaustively classified across the 16-file **enforcement surface** (every script whose
+  empty-result path is itself an authorization decision). Its own title states the boundary explicitly
+  ("Partial: 16 of ~46 Files") and it must not be cited as a repo-wide inventory: the document itself
+  puts the remainder, depending on which textual forms are counted, at on the order of 190-370
+  occurrences across 25-46 files — none of them an authorization decision, so a fail-open there at
+  worst costs logging, a notification, or an advisory backlog entry, filed by reference rather than
+  silently dropped.
+
+### Known / deferred
+- **The compound case — an off-convention branch whose manifest also has no `## Commits` entry — is
+  not closed by this release.** Fix 1b's ref-derived signal only gates the canonical
+  `feat/<ref>/TASK-NNN` branch shape (`pre-merge-commit:19-26,138-142`); an off-convention branch
+  (e.g. `docs/TASK-001`) evades it by design and falls back to content-matching only — required by
+  `tests/test-git-hooks-premerge.sh`'s FALSE-BLOCK regression case, not a gap in the fix. But if that
+  same unit's manifest also never gained a `## Commits` section naming the merged SHA, content-matching
+  has nothing to find either: both signals report no candidate, `UNIT_ID` stays empty, and the merge
+  falls through to allow — exit 0, no diagnostic, identical to pre-1b behaviour
+  (`nazgul/plan.md` Decision C1). Needs both an authoring gap AND an off-convention branch name at
+  once; not closed by Fix 1a/1b/1c.
+- **`pre-merge-commit`'s config/environment degrade-to-allow path is untouched by this release.** A
+  missing `jq`, a missing `config.json`, `guards.git_hooks: false`, `execution.parallel` not `true`, or
+  `execution.enforce.premerge_guard: false` all degrade to allow before any manifest is even read
+  (`pre-merge-commit:64-80`). `docs/guard-fail-open-inventory.md` ranks the corrupt-but-present-config
+  case at line 77 — `PARALLEL` silently defaults to `"false"` with no `jq -e .` validity check, unlike
+  its PreToolUse sibling guards — as the single highest-severity finding in its inventory: the one
+  guard ADR-009 itself names as having a catastrophic, unbounded false-allow cost. Not fixed here;
+  filed for a future objective.
+- No `schema_version` bump and no config migration in this release — no config key was added, removed,
+  or changed in meaning.
+
+### Changed
+- The `## Commits` manifest format (full 40-hex SHA, bare, one per line) is now specified at both
+  authoring ends — `agents/implementer.md` step 11 and `templates/task-manifest.md` — with an
+  explicit note that this is the authoring convention, not the enforcement boundary:
+  `pre-merge-commit`'s own matching accepts short and backticked forms too.
+
 ## [2.23.1] - 2026-07-28
 
 ### Fixed
