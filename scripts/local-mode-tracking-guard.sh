@@ -17,12 +17,6 @@ set -euo pipefail
 # command substitution, $'...' ANSI-C quoting) are out of scope by design and degrade
 # to allow — acceptable for normal Nazgul loop usage.
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/lib/nazgul-root.sh"
-
-PROJECT_ROOT="$(resolve_project_root)"
-CONFIG="$PROJECT_ROOT/nazgul/config.json"
-
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
 INPUT=$(cat 2>/dev/null || echo "")
 
@@ -83,6 +77,7 @@ BEGIN {
   in_sq = 0; in_dq = 0; tok = ""; found = 0
   git_seen = 0; subcmd_seen = 0; end_of_opts = 0
   skip_next = 0; not_git = 0; skip_global_val = 0; redir_skip_next = 0
+  in_heredoc = 0; heredoc_delim = ""; heredoc_strip = 0
 }
 
 function reset_segment() {
@@ -137,7 +132,55 @@ function check_path(t) {
   if (t == "nazgul" || index(t, "nazgul/") == 1) found = 1
 }
 
+function flush_pre_redirect() {
+  if (tok ~ /^[0-9]+$/) tok = ""
+  else if (tok != "") { emit(tok); tok = "" }
+}
+
+# Heredoc start (<< or <<-), recognized both at top level and inside a double-quoted
+# span (a $(...) command substitution nested in "..." starts its own unquoted parse
+# context, which our single-flag in_dq cannot model — but honouring << there regardless
+# is what stops a heredoc body'"'"'s literal quote from being misread as closing the
+# outer "..."). NOT recognized inside a real single-quoted span: nothing is special
+# inside '"'"'...'"'"' in real shell, so treating it as a heredoc there would be wrong AND
+# could swallow lines that should still be checked (a bypass risk).
+# Returns the index of the last consumed char, or 0 if `line` at `i` is not "<<".
+function try_heredoc(line, i,    j, n2, qc, delim, ch) {
+  if (substr(line, i, 2) != "<<") return 0
+  j = i + 2
+  heredoc_strip = 0
+  if (substr(line, j, 1) == "-") { heredoc_strip = 1; j++ }
+  n2 = length(line)
+  while (j <= n2 && (substr(line, j, 1) == " " || substr(line, j, 1) == "\t")) j++
+  qc = substr(line, j, 1)
+  if (qc == "'\''" || qc == "\"") {
+    j++
+    delim = ""
+    while (j <= n2 && substr(line, j, 1) != qc) { delim = delim substr(line, j, 1); j++ }
+    if (j > n2) return 0
+    j++
+  } else {
+    delim = ""
+    while (j <= n2) {
+      ch = substr(line, j, 1)
+      if (ch ~ /[ \t;|&<>()]/) break
+      delim = delim ch
+      j++
+    }
+  }
+  if (delim == "") return 0
+  heredoc_delim = delim
+  in_heredoc = 1
+  return j - 1
+}
+
 {
+  if (in_heredoc) {
+    cmp = $0
+    if (heredoc_strip) gsub(/^\t+/, "", cmp)
+    if (cmp == heredoc_delim) in_heredoc = 0
+    next
+  }
   n = length($0)
   for (i = 1; i <= n; i++) {
     c = substr($0, i, 1)
@@ -151,25 +194,38 @@ function check_path(t) {
       # must not toggle quote state — append the escaped char literally.
       if (c == "\\" && i < n) { i++; tok = tok substr($0, i, 1) }
       else if (c == "\"") in_dq = 0
+      else if (c == "<") {
+        hd_end = try_heredoc($0, i)
+        if (hd_end > 0) i = hd_end
+        else tok = tok c
+      }
       else tok = tok c
     } else if (c == "'\''") {
       in_sq = 1
     } else if (c == "\"") {
       in_dq = 1
-    } else if (c == ">" || c == "<") {
+    } else if (c == "<") {
+      # Redirect or heredoc. try_heredoc() wins when "<<" starts here; otherwise
+      # this is a plain input redirect and the target token is skipped like ">".
+      hd_end = try_heredoc($0, i)
+      if (hd_end > 0) {
+        flush_pre_redirect()
+        i = hd_end
+      } else {
+        flush_pre_redirect()
+        redir_skip_next = 1
+      }
+    } else if (c == ">") {
       # Redirect operator. An all-digit token glued before it is an fd descriptor
       # (1>, 2<) — discard it; otherwise flush the preceding word normally. Consume
       # multi-char forms (>>, >|, >>|) and skip the following redirect target so a
       # leading redirect cannot hide the real git pathspec, and a target file is
       # never mistaken for a pathspec.
-      if (tok ~ /^[0-9]+$/) tok = ""
-      else if (tok != "") { emit(tok); tok = "" }
-      if (c == ">") {
-        rn1 = (i < n) ? substr($0, i+1, 1) : ""
-        rn2 = (i+1 < n) ? substr($0, i+2, 1) : ""
-        if (rn1 == ">") { i++; if (rn2 == "|") i++ }
-        else if (rn1 == "|") i++
-      }
+      flush_pre_redirect()
+      rn1 = (i < n) ? substr($0, i+1, 1) : ""
+      rn2 = (i+1 < n) ? substr($0, i+2, 1) : ""
+      if (rn1 == ">") { i++; if (rn2 == "|") i++ }
+      else if (rn1 == "|") i++
       redir_skip_next = 1
     } else if (c == " " || c == "\t") {
       if (tok != "") { emit(tok); tok = "" }
@@ -209,6 +265,15 @@ END { print found }
 if [ "$HAS_NAZGUL_PATH" != "1" ]; then
   exit 0
 fi
+
+# Resolution deferred to here (past the pre-filters and the tokenizer) so the
+# overwhelming majority of Bash calls — which never carry a nazgul/ pathspec —
+# never pay for it.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
+
+PROJECT_ROOT="$(resolve_project_root)"
+CONFIG="$PROJECT_ROOT/nazgul/config.json"
 
 # Degrade gracefully: config absent → allow
 if [ ! -f "$CONFIG" ]; then

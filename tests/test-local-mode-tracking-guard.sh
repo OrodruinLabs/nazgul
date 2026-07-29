@@ -531,4 +531,141 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block W-2: git add nazgul/ (portable boundary still matches real cmd)" "$GUARD_EC" 2
 teardown_temp_dir
 
+# --- Category H: heredoc-aware tokenizer (Defect 1e) ---
+# A `-m "$(cat <<'MSG' ... MSG)"` heredoc body containing a literal `"` used to
+# close the outer -m argument's quote tracking early, exposing a bare nazgul/
+# token in the body to check_path — a false BLOCK. Found live by the FEAT-021
+# TASK-010 implementer.
+
+# Allow H-1: heredoc body with an embedded " and a bare nazgul/ token is not a
+# real pathspec — must not be blocked.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+heredoc_cmd=$(cat <<'CMDEOF'
+git commit -m "$(cat <<'MSG'
+Note: a literal " character, then mentions nazgul/config.json on this line
+MSG
+)"
+CMDEOF
+)
+input=$(make_bash_input "$heredoc_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "allow H-1: heredoc body with embedded quote + nazgul/ token" "$GUARD_EC" 0
+teardown_temp_dir
+
+# Block H-2 (bypass pin): a REAL git add on a nazgul/ path after a heredoc must
+# still block — this is what stops H-1's fix from turning the tokenizer off.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+heredoc_bypass_cmd=$(cat <<'CMDEOF'
+cat <<'MSG'
+decoy nazgul/text inside the heredoc body
+MSG
+git add nazgul/real-file
+CMDEOF
+)
+input=$(make_bash_input "$heredoc_bypass_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block H-2: real git add nazgul/ after a heredoc still blocks" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Allow H-3: <<-'MSG' (tab-stripping variant) behaves like H-1.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+TAB=$'\t'
+NL=$'\n'
+heredoc_dash_cmd="git commit -m \"\$(cat <<-'MSG'${NL}${TAB}Note: a literal \" character, then mentions nazgul/config.json on this line${NL}${TAB}MSG${NL})\""
+input=$(make_bash_input "$heredoc_dash_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "allow H-3: <<-'MSG' tab-stripping heredoc variant" "$GUARD_EC" 0
+teardown_temp_dir
+
+# Allow H-4: <<"MSG" (double-quoted delimiter) behaves like H-1.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+heredoc_dq_delim_cmd=$(cat <<'CMDEOF'
+git commit -m "$(cat <<"MSG"
+Note: a literal " character, then mentions nazgul/config.json on this line
+MSG
+)"
+CMDEOF
+)
+input=$(make_bash_input "$heredoc_dq_delim_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'allow H-4: <<"MSG" double-quoted delimiter heredoc variant' "$GUARD_EC" 0
+teardown_temp_dir
+
+# Allow H-5: an unterminated heredoc (delimiter line never appears) degrades to
+# ALLOW per the file's documented degradation contract, asserted explicitly.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+heredoc_unterminated_cmd=$(cat <<'CMDEOF'
+git commit -m "$(cat <<'MSG'
+Also touches nazgul/config.json but the heredoc never closes
+CMDEOF
+)
+input=$(make_bash_input "$heredoc_unterminated_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "allow H-5: unterminated heredoc degrades to ALLOW" "$GUARD_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# Performance: resolve_project_root() deferred past the pre-filters (V2/AC2)
+# ---------------------------------------------------------------------------
+
+# Deterministic proof (load-independent): for a command failing either
+# pre-filter, `nazgul-root.sh` must never even be sourced — xtrace of the run
+# must not mention it, regardless of how busy the host machine is.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+input=$(make_bash_input "echo hello world")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "perf: pre-filter-failing command is allowed" "$GUARD_EC" 0
+trace_output=$(echo "$input" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash -x "$GUARD" 2>&1 >/dev/null)
+assert_not_contains "perf: nazgul-root.sh never sourced for pre-filter-failing command" "$trace_output" "nazgul-root.sh"
+
+# Wall-clock corroboration: compare the pre-filter-exit (fast) path against a
+# real blocking command (slow path) that does reach resolve_project_root(),
+# sampled back-to-back so both inherit identical ambient host load — this
+# stays meaningful even on a contended CI/dev box where an absolute ms budget
+# would not. Median over N=20 interleaved samples each.
+slow_input=$(make_bash_input "git add nazgul/config.json")
+PERF_N=20
+fast_samples=()
+slow_samples=()
+for ((_i = 0; _i < PERF_N; _i++)); do
+  _start=$EPOCHREALTIME
+  echo "$input" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$GUARD" >/dev/null 2>&1
+  _end=$EPOCHREALTIME
+  fast_samples+=("$(awk -v s="$_start" -v e="$_end" 'BEGIN{printf "%.3f", (e-s)*1000}')")
+  _start=$EPOCHREALTIME
+  echo "$slow_input" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$GUARD" >/dev/null 2>&1
+  _end=$EPOCHREALTIME
+  slow_samples+=("$(awk -v s="$_start" -v e="$_end" 'BEGIN{printf "%.3f", (e-s)*1000}')")
+done
+fast_median_ms=$(printf '%s\n' "${fast_samples[@]}" | sort -n | awk -v n="$PERF_N" 'NR==int((n+1)/2){print; exit}')
+slow_median_ms=$(printf '%s\n' "${slow_samples[@]}" | sort -n | awk -v n="$PERF_N" 'NR==int((n+1)/2){print; exit}')
+echo "  (perf: pre-filter-exit median ${fast_median_ms} ms vs resolve_project_root-path median ${slow_median_ms} ms, N=${PERF_N} each; pre-fix empty-stdin baseline was ~36.9 ms)"
+faster=$(awk -v f="$fast_median_ms" -v s="$slow_median_ms" 'BEGIN{print (f<s)?"yes":"no"}')
+assert_eq "perf: pre-filter-exit path is faster than the resolve_project_root path" "$faster" "yes"
+teardown_temp_dir
+
 report_results
