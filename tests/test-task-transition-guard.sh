@@ -257,10 +257,23 @@ assert_file_not_contains "templates/task-manifest.md no longer calls the SHA for
 assert_file_not_contains "agents/implementer.md no longer calls the SHA format 'not the enforcement boundary'" \
   "$IMPLEMENTER_DOC" "not the enforcement boundary"
 
-assert_file_contains "templates/task-manifest.md still specifies full 40-hex bare SHA before any merge" \
+# Test Requirement #4 names three separate clauses of FEAT-022/TASK-004's format spec, so assert each
+# one rather than only "40-hex SHA". Both the qa and code reviewers independently flagged that a single
+# substring check would pass while a future edit clipped "bare (no backticks)" or "before any merge" —
+# an assertion whose name promises more than its pattern verifies is the same shape of silent
+# under-coverage this objective exists to close.
+assert_file_contains "templates/task-manifest.md still specifies the full 40-hex SHA form" \
   "$MANIFEST_TEMPLATE" "40-hex SHA"
-assert_file_contains "agents/implementer.md still specifies full 40-hex bare SHA before any merge" \
+assert_file_contains "agents/implementer.md still specifies the full 40-hex SHA form" \
   "$IMPLEMENTER_DOC" "40-hex SHA"
+assert_file_contains "templates/task-manifest.md still requires the bare (no backticks) form" \
+  "$MANIFEST_TEMPLATE" "bare (no backticks)"
+assert_file_contains "agents/implementer.md still requires the bare (no backticks) form" \
+  "$IMPLEMENTER_DOC" "bare (no backticks)"
+assert_file_contains "templates/task-manifest.md still requires recording before any merge" \
+  "$MANIFEST_TEMPLATE" "before any merge"
+assert_file_contains "agents/implementer.md still requires recording before any merge" \
+  "$IMPLEMENTER_DOC" "before any merge"
 
 # The template, instantiated the way a real implementer would: a real Base
 # SHA in ## Metadata satisfies TASK-006's gate only once ## Commits carries a
