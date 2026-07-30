@@ -45,15 +45,23 @@ status: PLANNED
 - **Retry count**: 0/3
 <!-- Incremented each time task goes through CHANGES_REQUESTED -> IN_PROGRESS cycle.
      When retry_count >= max_retries_per_task (from config.json), task becomes BLOCKED. -->
+- **Base SHA**: <!-- 40-hex SHA of the commit this task branched from. Written by the Planner at
+     manifest creation or by the implementer at claim time (agents/implementer.md Task Selection
+     step 3). Read by `ttg_verify_commit_evidence` (scripts/lib/task-transition-guard.sh) to prove the
+     SHA recorded under `## Commits` is a strict descendant of this one — i.e. real forward progress,
+     not just a pre-existing reachable commit. If absent, the gate degrades to existence-only and
+     announces it on stderr; it does not fail closed. -->
 
 ## Commits
 <!-- Populated by the implementer when transitioning IN_PROGRESS -> IMPLEMENTED (agents/implementer.md
      step 11) — required before that transition; the state guard blocks it without at least one entry.
      One bullet per commit: the full 40-hex SHA from `git rev-parse HEAD`, bare (no backticks), an em
      dash, then the commit subject. Set it before any merge — the branch-tip commit for this task, per
-     the review-then-merge ordering (RULES.md §11). This is the authoring convention, not the
-     enforcement boundary: `pre-merge-commit`'s lookup also accepts short and backticked forms, so the
-     format is for cross-manifest consistency, not because the guard needs it in this shape.
+     the review-then-merge ordering (RULES.md §11). The `## Commits` heading IS the enforcement
+     boundary for the IMPLEMENTED gate — `ttg_verify_commit_evidence` reads only what falls under it,
+     and the recorded SHA must resolve AND be a strict descendant of `Base SHA` above. Short and
+     backticked forms still resolve, so the full-40-hex-bare form remains a cross-manifest consistency
+     rule, not a matching requirement.
 
      Example:
      - f81e1b25d6b513c5f8c46bb65f25acd970016f8c — feat(FEAT-001): TASK-001 implement user model -->

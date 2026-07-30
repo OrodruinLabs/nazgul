@@ -235,6 +235,62 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# TASK-008 — authoring ends: templates/task-manifest.md and
+# agents/implementer.md must actually declare what TASK-006's gate enforces.
+# ---------------------------------------------------------------------------
+MANIFEST_TEMPLATE="$REPO_ROOT/templates/task-manifest.md"
+IMPLEMENTER_DOC="$REPO_ROOT/agents/implementer.md"
+
+assert_file_contains "templates/task-manifest.md declares a Base SHA field" \
+  "$MANIFEST_TEMPLATE" '\*\*Base SHA\*\*'
+
+METADATA_BLOCK=$(awk '/^## Metadata/{f=1;next} /^## /{f=0} f' "$MANIFEST_TEMPLATE")
+if printf '%s\n' "$METADATA_BLOCK" | grep -q '\*\*Base SHA\*\*'; then
+  _pass "templates/task-manifest.md: Base SHA field sits inside ## Metadata"
+else
+  _fail "templates/task-manifest.md: Base SHA field sits inside ## Metadata" \
+    "expected: '**Base SHA**' inside the ## Metadata block" "  actual: not found"
+fi
+
+assert_file_not_contains "templates/task-manifest.md no longer calls the SHA format 'not the enforcement boundary'" \
+  "$MANIFEST_TEMPLATE" "not the enforcement boundary"
+assert_file_not_contains "agents/implementer.md no longer calls the SHA format 'not the enforcement boundary'" \
+  "$IMPLEMENTER_DOC" "not the enforcement boundary"
+
+assert_file_contains "templates/task-manifest.md still specifies full 40-hex bare SHA before any merge" \
+  "$MANIFEST_TEMPLATE" "40-hex SHA"
+assert_file_contains "agents/implementer.md still specifies full 40-hex bare SHA before any merge" \
+  "$IMPLEMENTER_DOC" "40-hex SHA"
+
+# The template, instantiated the way a real implementer would: a real Base
+# SHA in ## Metadata satisfies TASK-006's gate only once ## Commits carries a
+# real descendant commit — left at its placeholder/example content, it fails.
+setup_temp_dir
+setup_git_repo
+TPL_BASE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD~1)
+TPL_DESC_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+TEMPLATE_UNFILLED=$(sed "s/^- \*\*Base SHA\*\*:.*/- **Base SHA**: ${TPL_BASE_SHA}/" "$MANIFEST_TEMPLATE")
+
+if ttg_verify_commit_evidence "$TEMPLATE_UNFILLED" "$TEST_DIR"; then
+  _fail "templates/task-manifest.md: unfilled ## Commits (placeholder/example only) fails the gate" \
+    "expected: nonzero" "  actual: 0"
+else
+  _pass "templates/task-manifest.md: unfilled ## Commits (placeholder/example only) fails the gate"
+fi
+
+TEMPLATE_FILLED=$(printf '%s\n' "$TEMPLATE_UNFILLED" | sed "/^## Commits\$/a\\
+- ${TPL_DESC_SHA} — feat(FIXTURE): descendant commit")
+
+if ttg_verify_commit_evidence "$TEMPLATE_FILLED" "$TEST_DIR"; then
+  _pass "templates/task-manifest.md: real Base SHA + real descendant ## Commits entry passes the gate"
+else
+  _fail "templates/task-manifest.md: real Base SHA + real descendant ## Commits entry passes the gate" \
+    "expected: 0" "  actual: nonzero"
+fi
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
 # ttg_log_transition / ttg_transition_is_guarded — the reconciliation ledger
 # ---------------------------------------------------------------------------
 setup_temp_dir
