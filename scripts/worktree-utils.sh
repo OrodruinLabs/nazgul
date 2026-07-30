@@ -116,8 +116,28 @@ create_feature_branch() {
   #
   # Idiom copied from scripts/lib/git-hooks.sh:116, which already guards the
   # same `jq … && mv` shape for the same reason.
+  #
+  # The temp file is COLOCATED with $config, not left to `mktemp`'s default
+  # (PR #74 review). A bare `mktemp` uses $TMPDIR, which is not guaranteed to
+  # share a filesystem with $config — on Linux CI /tmp is frequently tmpfs and
+  # in containers a separate mount. Across filesystems `mv` is not an atomic
+  # rename(2); it degrades to copy-then-unlink, so a failure partway through
+  # can leave $config PARTIALLY WRITTEN. That would break the rollback
+  # contract below (which promises $config is untouched on failure) and, worse,
+  # a corrupt config now fails the pre-merge guard closed — blocking every
+  # merge in the repo. Colocating makes the mv a same-directory rename, which
+  # POSIX guarantees atomic. Note this also moves the failure point: on an
+  # unwritable config dir `mktemp` now fails instead of `mv`, so its result is
+  # checked and routed through the same rollback.
   local tmp
-  tmp=$(mktemp)
+  tmp=$(mktemp "$(dirname "$config")/.nazgul-config.XXXXXX" 2>/dev/null) || {
+    echo "ERROR: create_feature_branch: cannot create a temp file beside '$config' after branch '$branch_name' was created — rolling back to '$base_branch'" >&2
+    git -C "$project_root" checkout "$base_branch" >/dev/null 2>&1 \
+      || echo "ERROR: create_feature_branch: rollback checkout to '$base_branch' also failed — branch '$branch_name' left on disk, config unchanged" >&2
+    git -C "$project_root" branch -D "$branch_name" >/dev/null 2>&1 \
+      || echo "ERROR: create_feature_branch: rollback delete of '$branch_name' failed — remove it manually before retrying" >&2
+    return 1
+  }
   if jq \
       --arg feat "$branch_name" \
       --arg base "$base_branch" \
@@ -168,8 +188,14 @@ setup_worktree_dir() {
 
   mkdir -p "$worktree_dir"
 
+  # Colocated temp so `mv` is a same-filesystem atomic rename, not a
+  # cross-FS copy-then-unlink that could leave $config partially written
+  # (PR #74 review). Same reasoning as create_feature_branch above.
   local tmp
-  tmp=$(mktemp)
+  tmp=$(mktemp "$(dirname "$config")/.nazgul-config.XXXXXX" 2>/dev/null) || {
+    echo "ERROR: setup_worktree_dir: cannot create a temp file beside '$config'; worktree dir '$worktree_dir' exists on disk but was NOT recorded in config" >&2
+    return 1
+  }
   jq --arg wd "$worktree_dir" '.branch.worktree_dir = $wd' "$config" > "$tmp" && mv "$tmp" "$config"
 
   echo "$worktree_dir"
@@ -230,8 +256,12 @@ create_task_worktree() {
     fi
   fi
 
+  # Colocated temp — same atomicity reasoning as above (PR #74 review).
   local tmp
-  tmp=$(mktemp)
+  tmp=$(mktemp "$(dirname "$config")/.nazgul-config.XXXXXX" 2>/dev/null) || {
+    echo "ERROR: create_task_worktree: cannot create a temp file beside '$config'; task branch '$task_branch' NOT recorded" >&2
+    return 1
+  }
   jq --arg lb "$task_branch" '.branch.last_task_branch = $lb' "$config" > "$tmp" && mv "$tmp" "$config"
 
   echo "$task_dir"
