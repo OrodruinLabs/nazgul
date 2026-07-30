@@ -41,6 +41,29 @@ set -euo pipefail
 # the clean auto-committed merges this guard runs on — confirmed
 # empirically, git 2.48, ort strategy.)
 #
+# KNOWN, PERMANENT LIMIT — the compound miss. If a merge's ref is
+# off-convention (does not match ^feat/[^/]+/TASK-[0-9]+$) AND no manifest's
+# ## Commits section records the merged SHA, BOTH identity signals miss and
+# the merge is ALLOWED. This is not closable at this site, and is documented
+# here as a limit of the identity model rather than as a deferred fix:
+#   * A "does this merge touch nazgul/tasks/?" signal is structurally
+#     vacuous — nazgul/ is gitignored (.gitignore:2,15) and per-worktree, so
+#     manifest edits are never part of ANY commit tree; `git log -- nazgul/
+#     tasks/` is empty by construction. git cannot see the state the guard
+#     would need.
+#   * Failing closed instead would block ordinary human merges whose only
+#     "offense" is a TASK-NNN-shaped branch name — pinned against by the
+#     FALSE-BLOCK REGRESSION case (tests/test-git-hooks-premerge.sh:378-393),
+#     which exists because a previously-shipped guard over-blocked. This hook
+#     installs repo-wide via core.hooksPath and fires on EVERY
+#     `git merge --no-ff`, including merges unrelated to Nazgul.
+#   * With neither signal the guard's honest state is "no evidence this is a
+#     task merge at all" — absence of evidence, not weak evidence.
+# Closing it properly needs an independent, mechanically-populated SHA<->task
+# record (e.g. a post-commit hook writing a worktree-local marker) — a real
+# feature, still --no-verify-bypassable, out of scope here. The path is not
+# silent: it emits a stderr advisory before allowing (see below).
+#
 # git pre-merge-commit contract: no argv, no stdin read, exit 0 = allow,
 # nonzero = block (message on stderr).
 
@@ -73,6 +96,26 @@ command -v jq >/dev/null 2>&1 || _dispatch_and_exit
 GIT_HOOKS_ENABLED=$(jq -r 'if .guards.git_hooks == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
 [ "$GIT_HOOKS_ENABLED" = "true" ] || _dispatch_and_exit
 
+# MF-053 / ADR-003 Decision 3: config present-but-corrupt fails CLOSED.
+# The kill-switch read above already defaults to "true" (enabled) on a parse
+# failure — the safe direction — but PARALLEL below defaults to "false",
+# which for THIS guard means "skip the entire merge-verdict check". ADR-009
+# names this guard's false-allow catastrophic (unreviewed code permanently
+# enters the trunk of record), so an unparseable config must not silently
+# disarm it. A genuinely ABSENT config still no-ops at the `[ -f ]` test
+# above; only present-but-corrupt blocks. Placed after the kill-switch reads
+# (a VALID `guards.git_hooks: false` still disables the guard exactly as
+# before) and immediately before the one read whose default is unsafe —
+# mirroring scripts/parallel-dispatch-guard.sh:26 and
+# scripts/parallel-rework-guard.sh:25, which already ship this check.
+# exit 1, not 2: this is a git hook (0 allow / nonzero block), not a
+# PreToolUse hook. Block paths in this file exit directly and do not
+# chain-dispatch; forwarding applies on the allow path only.
+jq -e . "$CONFIG" >/dev/null 2>&1 || {
+  echo "NAZGUL GUARD: Blocked — nazgul/config.json is present but unparseable; cannot verify parallel-dispatch merge safety. Fix or remove the file." >&2
+  exit 1
+}
+
 PARALLEL=$(jq -r '.execution.parallel // false' "$CONFIG" 2>/dev/null || echo "false")
 [ "$PARALLEL" = "true" ] || _dispatch_and_exit
 
@@ -95,10 +138,31 @@ task_status() {
 
 # True if $tf's ## Commits section (bounded to the next ## heading, not a
 # fixed line count — multi-retry manifests can carry commit lists well past
-# 10 lines) has a token that is a prefix of $sha.
+# 10 lines) records $sha as a DELIVERED commit: the leading hex token of a
+# `- ` bullet's opening line, optionally backticked. Prefix-tolerant, so
+# short-SHA authoring still matches git's always-full GITHEAD_<sha> (Fix 1a).
+#
+# ANCHORED deliberately (PR #74 review). The prior whole-section token scan
+# also matched hex mentioned anywhere in narrative prose, and the two call
+# sites have OPPOSITE polarity:
+#   * Signal 1 (:126-136) blocks when a token matches a non-DONE manifest —
+#     a spurious match there is a false BLOCK: safe direction.
+#   * Signal 2 (:153-158) blocks when this function FAILS — so a spurious
+#     match there SUPPRESSES the unverifiable-block and ADMITS the merge:
+#     fail-OPEN, on the one gate standing between "manifest is DONE but the
+#     merged content is not what it claims" and trunk.
+# Anchoring is therefore a net tightening. Verified against all 22 live +
+# archived manifests: 20 unchanged; the only tokens dropped are narrative
+# cross-references (a Base SHA, a short duplicate of an anchored commit, a
+# superseded pre-rebase SHA, two non-commit hex strings). No manifest records
+# a delivered commit only in prose, and the authoring contract mandates the
+# bullet form (FEAT-023/TASK-008: templates/task-manifest.md,
+# agents/implementer.md).
 commits_verify() {
   local tf="$1" sha="$2" tok
-  for tok in $(awk '/^## Commits/{f=1;next} /^## /{f=0} f' "$tf" 2>/dev/null | grep -oE '[0-9a-f]{7,64}' || true); do
+  for tok in $(awk '/^## Commits/{f=1;next} /^## /{f=0} f' "$tf" 2>/dev/null \
+      | grep -oE '^-[[:space:]]*`?[0-9a-f]{7,64}' \
+      | grep -oE '[0-9a-f]{7,64}' || true); do
     case "$sha" in "$tok"*) return 0 ;; esac
   done
   return 1
@@ -159,6 +223,15 @@ while IFS=$'\t' read -r CANDIDATE_SHA CANDIDATE_REF; do
     fi
   fi
 done < <(printf '%s' "$CANDIDATE_PAIRS_JSON" | jq -r '.[] | "\(.sha)\t\(.ref)"' 2>/dev/null)
+
+# Both identity signals missed. This merge is ALLOWED, and that is deliberate
+# — see the "compound-miss" note in the header block. It is also the one path
+# where this guard admits a merge it cannot reason about, so it must not be
+# silent: a gate that declines to act should say so (FEAT-023's thesis). The
+# advisory is stderr-only and does NOT change the exit code.
+if [ -z "$UNIT_ID" ]; then
+  echo "NAZGUL GUARD: advisory — merge allowed with no task identity resolved (no candidate ref matched ${REF_TASK_RE}, and no manifest's ## Commits section records a merged SHA). Not blocked: with neither signal, the guard has no evidence this is a tracked task merge at all." >&2
+fi
 
 [ -n "$UNIT_ID" ] || _dispatch_and_exit
 

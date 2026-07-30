@@ -652,4 +652,117 @@ do_merge "$TEST_DIR/repo" "docs/TASK-001"
 assert_exit_code "off-convention ref (docs/TASK-001) does not gate -> exit 0" "$MERGE_EC" 0
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# PR #74 review — ANCHORED commits_verify (Decision 1).
+# A DONE unit on a canonical task branch whose ## Commits section mentions the
+# merged SHA ONLY in narrative prose (not as a bullet's leading token) must
+# now BLOCK as unverifiable. Before anchoring the whole-section token scan
+# matched the prose mention, commits_verify SUCCEEDED, Signal 2's
+# unverifiable-block was suppressed, and the merge was ADMITTED — Signal 2
+# blocks when commits_verify FAILS, so a spurious match there is fail-OPEN.
+# Mirrors the real shape in nazgul/tasks/TASK-007.md, whose ## Commits prose
+# names a superseded pre-rebase SHA.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-001/TASK-001"
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+PROSE_SHA=$(git -C "$TEST_DIR/repo" rev-parse "feat/FEAT-001/TASK-001")
+mkdir -p "$TEST_DIR/repo/nazgul/tasks"
+cat > "$TEST_DIR/repo/nazgul/tasks/TASK-001.md" <<EOF
+---
+status: DONE
+---
+# TASK-001
+
+## Commits
+
+- 0000000000000000000000000000000000000000 the actually-delivered commit
+  (supersedes the pre-rebase SHA \`$PROSE_SHA\`)
+EOF
+do_merge "$TEST_DIR/repo" "feat/FEAT-001/TASK-001"
+assert_exit_code "anchored: SHA only in ## Commits prose -> unverifiable, blocks" "$MERGE_EC" 1
+assert_contains "anchored: unverifiable diagnostic names the unit" "$MERGE_STDERR" "TASK-001"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# PR #74 review — anchoring must NOT break the legitimate bullet forms.
+# A DONE unit whose ## Commits records the merged SHA as the leading token of
+# a bullet — backticked, and in SHORT form (prefix-tolerance, Fix 1a) — must
+# still verify and merge clean.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-001/TASK-001"
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+FULL_SHA=$(git -C "$TEST_DIR/repo" rev-parse "feat/FEAT-001/TASK-001")
+SHORT_SHA=$(printf '%s' "$FULL_SHA" | cut -c1-8)
+mkdir -p "$TEST_DIR/repo/nazgul/tasks"
+cat > "$TEST_DIR/repo/nazgul/tasks/TASK-001.md" <<EOF
+---
+status: DONE
+---
+# TASK-001
+
+## Commits
+
+- \`$SHORT_SHA\` backticked short SHA as the bullet's leading token
+EOF
+do_merge "$TEST_DIR/repo" "feat/FEAT-001/TASK-001"
+assert_exit_code "anchored: backticked SHORT leading token still verifies -> exit 0" "$MERGE_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# PR #74 review — MF-053 config present-but-corrupt fails CLOSED (Decision 2).
+# Matches scripts/parallel-dispatch-guard.sh:26 / parallel-rework-guard.sh:25,
+# which already ship this check. Previously the unparseable config made the
+# PARALLEL read default to "false" and the entire merge-verdict check was
+# skipped — the highest-severity finding in docs/guard-fail-open-inventory.md.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-001/TASK-001"
+install_hooks "$TEST_DIR/repo"
+mkdir -p "$TEST_DIR/repo/nazgul"
+printf '{ this is not valid json' > "$TEST_DIR/repo/nazgul/config.json"
+write_task "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "0000000"
+do_merge "$TEST_DIR/repo" "feat/FEAT-001/TASK-001"
+assert_exit_code "corrupt config.json -> fails closed, blocks" "$MERGE_EC" 1
+assert_contains "corrupt config diagnostic" "$MERGE_STDERR" "unparseable"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# PR #74 review — a genuinely ABSENT config still no-ops (the other half of
+# MF-053: present-but-corrupt blocks, absent allows). Guards against the
+# fail-closed change over-reaching into repos that never used Nazgul.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-001/TASK-001"
+install_hooks "$TEST_DIR/repo"
+do_merge "$TEST_DIR/repo" "feat/FEAT-001/TASK-001"
+assert_exit_code "absent config.json still no-ops -> exit 0" "$MERGE_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# PR #74 review — the compound-miss path stays ALLOWED but is no longer
+# SILENT (Decision 3). Off-convention ref + no manifest match: exit code
+# unchanged at 0, but a stderr advisory now records that the guard admitted a
+# merge it could not identify. The gap is permanent (nazgul/ is gitignored, so
+# no git-visible third identity source exists) — making it observable is the
+# available fix.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "docs/TASK-001"
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "0000000"
+do_merge "$TEST_DIR/repo" "docs/TASK-001"
+assert_exit_code "compound miss still allows -> exit 0" "$MERGE_EC" 0
+assert_contains "compound miss emits an advisory, not silence" "$MERGE_STDERR" "no task identity resolved"
+teardown_temp_dir
+
 report_results
