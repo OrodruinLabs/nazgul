@@ -535,7 +535,16 @@ assert_contains "reason C1-sql" "$output" "NAZGUL SAFETY"
 # guard in the working tree. Exit code AND full stderr must be byte-identical
 # for every case — "still green" is not sufficient, the verdicts themselves
 # are diffed. ---
-PRE_FIX_BASE_SHA="5483d70a1c2bd11c4bdaee813369bb7c5afacc5c"
+# Re-pinned when PR #74 (FEAT-022) was SQUASH-merged to main. The prior pin,
+# 5483d70a1c2bd11c4bdaee813369bb7c5afacc5c, was a commit on the FEAT-022
+# BRANCH; a squash merge replaces that history with one commit, so the old SHA
+# is no longer an ancestor of main and a fresh CI clone cannot resolve it —
+# the reachability pre-check below would have failed loudly on every run.
+# 6f0be16 is main's squash commit for FEAT-022 and carries a byte-identical
+# scripts/pre-tool-guard.sh (verified: both blobs hash to
+# e982558df84076e6863ddb75dbaec4fbeedb53a4), so the differential baseline is
+# unchanged in content — only its address is.
+PRE_FIX_BASE_SHA="6f0be16e20151693ce9de9bf6326bbf10dc12bb9"
 GUARD_OLD="$(mktemp -t pre-tool-guard-old.XXXXXX)"
 trap 'rm -f "$EXERCISED_LOG" "$GUARD_OLD"' EXIT
 
