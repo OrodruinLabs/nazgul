@@ -118,13 +118,17 @@ fi
 # [hook-driven only] tags, so this matches the line count. FEAT-022/TASK-008
 # added 1 more: §15's new "Bash-only sourcing and observed-state branch
 # creation" bullet, split out of the install/uninstall lifecycle bullet it
-# was originally folded into (20 + 1 = 21).
+# was originally folded into (20 + 1 = 21). FEAT-023/TASK-009 added 1 more:
+# §5's new "A gate-triggered stop announces itself" `stop_gate` bullet —
+# tagged [hook-driven only], not [enforced], because it is stop-hook.sh
+# behavior on the AFK gate path only (ADR-014), not a PreToolUse block
+# (21 + 1 = 22).
 HOOK_DRIVEN_COUNT=$(awk '{ count += gsub(/\[hook-driven only\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$HOOK_DRIVEN_COUNT" -eq 21 ]; then
-  _pass "[hook-driven only] annotation count is exactly 21 (found: $HOOK_DRIVEN_COUNT)"
+if [ "$HOOK_DRIVEN_COUNT" -eq 22 ]; then
+  _pass "[hook-driven only] annotation count is exactly 22 (found: $HOOK_DRIVEN_COUNT)"
 else
-  _fail "[hook-driven only] annotation count is exactly 21" \
-    "found $HOOK_DRIVEN_COUNT occurrences of [hook-driven only] — expected exactly 21"
+  _fail "[hook-driven only] annotation count is exactly 22" \
+    "found $HOOK_DRIVEN_COUNT occurrences of [hook-driven only] — expected exactly 22"
 fi
 
 # ---------------------------------------------------------------------------
