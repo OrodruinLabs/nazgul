@@ -70,9 +70,10 @@ grep -nE \
   scripts/lib/review-provenance.sh scripts/lib/task-utils.sh scripts/lib/parallel-batch.sh
 ```
 
-This is a superset of TRD's four base textual forms (`|| continue`, `|| exit 0`,
-`|| _dispatch_and_exit`, `|| true`, plus `[ -z "$X" ] &&`): it also catches `[ -n "$X" ] ||`,
-`|| return 0`, `[ -f "$X" ] &&` (a guarded-presence chain whose absence silently skips a check), and
+The grep has ten alternations: TRD's **five** forms — its four base textual forms (`|| continue`,
+`|| exit 0`, `|| _dispatch_and_exit`, `|| true`) plus `[ -z "$X" ] &&` — and **five** extensions added
+here. The five extensions are `[ -n "$X" ] ||`, `|| return 0`,
+`[ -f "$X" ] &&` (a guarded-presence chain whose absence silently skips a check), and
 the `if [ -z "$X" ]; then` / `if [ ! -f "$X" ]; then` multi-line block-opener forms, since these are
 textually different spellings of the identical "empty/missing → proceed" shape and were found by
 inspection to account for roughly a third of the real sites in these 16 files. `|| return 1` was
@@ -358,7 +359,8 @@ reproducible. They are real findings and are ranked among the most serious below
   `[ -z "$X" ] &&` shape are filed, with re-derived per-file counts and the reproducing grep, to
   `nazgul/inbox/guard-fail-open-sweep-remainder.md`.
 - **Pattern-class boundary:** only the textual/semantic shapes enumerated in the Methodology section
-  (TRD's four base forms plus the six extensions the reproducing grep documents) were searched for.
+  (TRD's five forms plus the five extensions the reproducing grep documents — ten alternations in
+  total) were searched for.
   Other shapes of "ambiguity resolved toward permission" almost certainly exist in these same 16 files
   (e.g. a `case` statement's default arm, or a value silently coerced by a `// default` jq expression
   three call-frames away from where it's checked) that neither this grep nor a plausible one-line

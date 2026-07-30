@@ -1842,4 +1842,24 @@ if [ "$(id -u)" -ne 0 ]; then
   teardown_temp_dir
 fi
 
+# ---------------------------------------------------------------------------
+# Test 96 (PR #74 review): config present, nazgul/tasks/ readable but NOT
+# searchable (mode 0444) — BLOCKED. A directory without its search bit cannot
+# be traversed, so the TASK-*.md glob resolves to nothing and every task reads
+# as absent; `-r` alone would misclassify that as a readable tasks dir.
+# Skipped if running as root (mode bits are not enforced for root).
+# ---------------------------------------------------------------------------
+if [ "$(id -u)" -ne 0 ]; then
+  setup_temp_dir
+  setup_nazgul_dir
+  create_config '.guards.requireActiveTask = true'
+  chmod 444 "$TEST_DIR/nazgul/tasks"
+  input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"console.log(1)"}}')
+  run_guard "$input"
+  assert_exit_code "source edit with config present, tasks dir non-searchable: blocked" "$GUARD_EC" 2
+  assert_contains "corrupted-project diagnostic (non-searchable)" "$GUARD_STDERR" "nazgul/config.json exists but nazgul/tasks/"
+  chmod 755 "$TEST_DIR/nazgul/tasks"
+  teardown_temp_dir
+fi
+
 report_results

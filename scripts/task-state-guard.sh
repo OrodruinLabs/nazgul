@@ -171,7 +171,12 @@ if ! is_task_manifest "$FILE_PATH"; then
   # corrupted/partially-initialized Nazgul project, not a non-Nazgul
   # directory. Fail CLOSED (ADR-009): a silent allow here disarms both the
   # active-task and file-scope gates for the rest of the invocation.
-  if [ ! -d "$PROJECT_ROOT/nazgul/tasks" ] || [ ! -r "$PROJECT_ROOT/nazgul/tasks" ]; then
+  # `-r` alone is not enough for a DIRECTORY: without the search (`-x`) bit the
+  # glob below cannot stat TASK-*.md, so every task reads as absent — exactly
+  # the "never actually looked" state this branch exists to reject.
+  if [ ! -d "$PROJECT_ROOT/nazgul/tasks" ] \
+    || [ ! -r "$PROJECT_ROOT/nazgul/tasks" ] \
+    || [ ! -x "$PROJECT_ROOT/nazgul/tasks" ]; then
     echo "NAZGUL STATE GUARD: BLOCKED — nazgul/config.json exists but nazgul/tasks/ is missing or unreadable" >&2
     echo "This looks like a corrupted or partially-initialized Nazgul project, not a non-Nazgul directory." >&2
     echo "The active-task and file-scope gates cannot be evaluated without it." >&2
