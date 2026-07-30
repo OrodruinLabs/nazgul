@@ -560,13 +560,21 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-heredoc_cmd=$(cat <<'CMDEOF'
-git commit -m "$(cat <<'MSG'
-Note: a literal " character, then mentions nazgul/config.json on this line
-MSG
-)"
-CMDEOF
-)
+# Built with printf, NOT a nested heredoc. The obvious fixture —
+# `$(cat <<'CMDEOF' … git commit -m "$(cat <<'MSG' … " … )` — is a heredoc
+# inside a command substitution inside a heredoc, whose body carries an
+# unbalanced `"`. bash 5 parses that; /bin/bash 3.2 (macOS, this repo's stated
+# minimum) does NOT — it fails the whole FILE with `unexpected EOF while
+# looking for matching '"'`, so the suite silently stopped running there.
+# Fittingly, the fixture for a heredoc-tokenizer bug was itself breaking an
+# older shell's heredoc tokenizer. Verified byte-identical to the construct it
+# replaces (both hash to 7cfc22b6…).
+SQ="'"
+heredoc_cmd=$(printf '%s\n' \
+  "git commit -m \"\$(cat <<${SQ}MSG${SQ}" \
+  'Note: a literal " character, then mentions nazgul/config.json on this line' \
+  'MSG' \
+  ')"')
 input=$(make_bash_input "$heredoc_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "allow H-1: dq-nested heredoc + embedded quote + nazgul/ token (AC1)" "$GUARD_EC" 0
@@ -579,13 +587,11 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-heredoc_bypass_cmd=$(cat <<'CMDEOF'
-cat <<'MSG'
-decoy nazgul/text inside the heredoc body
-MSG
-git add nazgul/real-file
-CMDEOF
-)
+heredoc_bypass_cmd=$(printf '%s\n' \
+  'cat <<'"'"'MSG'"'"'' \
+  'decoy nazgul/text inside the heredoc body' \
+  'MSG' \
+  'git add nazgul/real-file')
 input=$(make_bash_input "$heredoc_bypass_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block H-2: real git add nazgul/ after a heredoc still blocks" "$GUARD_EC" 2
@@ -613,13 +619,11 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-heredoc_dq_delim_cmd=$(cat <<'CMDEOF'
-git commit -m "$(cat <<"MSG"
-Note: a literal " character, then mentions nazgul/config.json on this line
-MSG
-)"
-CMDEOF
-)
+heredoc_dq_delim_cmd=$(printf '%s\n' \
+  'git commit -m "$(cat <<"MSG"' \
+  'Note: a literal " character, then mentions nazgul/config.json on this line' \
+  'MSG' \
+  ')"')
 input=$(make_bash_input "$heredoc_dq_delim_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code 'allow H-4: <<"MSG" double-quoted delimiter heredoc variant (AC1)' "$GUARD_EC" 0
@@ -632,11 +636,9 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-heredoc_unterminated_cmd=$(cat <<'CMDEOF'
-git commit -m "$(cat <<'MSG'
-Also touches nazgul/config.json but the heredoc never closes
-CMDEOF
-)
+heredoc_unterminated_cmd=$(printf '%s\n' \
+  'git commit -m "$(cat <<'"'"'MSG'"'"'' \
+  'Also touches nazgul/config.json but the heredoc never closes')
 input=$(make_bash_input "$heredoc_unterminated_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "allow H-5: unterminated heredoc degrades to ALLOW" "$GUARD_EC" 0
@@ -657,11 +659,9 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_a_cmd=$(cat <<'CMDEOF'
-echo "no heredoc here <<MARK"
-git add nazgul/secret.txt
-CMDEOF
-)
+probe_a_cmd=$(printf '%s\n' \
+  'echo "no heredoc here <<MARK"' \
+  'git add nazgul/secret.txt')
 input=$(make_bash_input "$probe_a_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block H-6: << inside a plain double-quoted span, real git add after (probe a)" "$GUARD_EC" 2
@@ -675,11 +675,9 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_b_cmd=$(cat <<'CMDEOF'
-ls <<< done
-git add nazgul/secret
-CMDEOF
-)
+probe_b_cmd=$(printf '%s\n' \
+  'ls <<< done' \
+  'git add nazgul/secret')
 input=$(make_bash_input "$probe_b_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block H-7: <<< here-string, real git add after (probe b)" "$GUARD_EC" 2
@@ -692,11 +690,9 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_c_cmd=$(cat <<'CMDEOF'
-echo \<<EOF
-git add nazgul/secret
-CMDEOF
-)
+probe_c_cmd=$(printf '%s\n' \
+  'echo \<<EOF' \
+  'git add nazgul/secret')
 input=$(make_bash_input "$probe_c_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code 'block H-8: backslash-escaped \<< at top level, real git add after (probe c)' "$GUARD_EC" 2
@@ -733,13 +729,11 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_d_cmd=$(cat <<'CMDEOF'
-cat <<EO'MSGF'
-body
-EOMSGF
-git add nazgul/evil-file
-CMDEOF
-)
+probe_d_cmd=$(printf '%s\n' \
+  'cat <<EO'"'"'MSGF'"'"'' \
+  'body' \
+  'EOMSGF' \
+  'git add nazgul/evil-file')
 input=$(make_bash_input "$probe_d_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block H-10: <<EO'MSGF' mixed unquoted+quoted delimiter, real git add after (probe d)" "$GUARD_EC" 2
@@ -751,13 +745,11 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_e_cmd=$(cat <<'CMDEOF'
-cat <<EO"MSGF"
-body
-EOMSGF
-git add nazgul/evil-file
-CMDEOF
-)
+probe_e_cmd=$(printf '%s\n' \
+  'cat <<EO"MSGF"' \
+  'body' \
+  'EOMSGF' \
+  'git add nazgul/evil-file')
 input=$(make_bash_input "$probe_e_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code 'block H-11: <<EO"MSGF" mixed unquoted+quoted delimiter, real git add after (probe e)' "$GUARD_EC" 2
@@ -771,13 +763,11 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_f_cmd=$(cat <<'CMDEOF'
-cat <<'MSG'FF
-body
-MSGFF
-git add nazgul/evil
-CMDEOF
-)
+probe_f_cmd=$(printf '%s\n' \
+  'cat <<'"'"'MSG'"'"'FF' \
+  'body' \
+  'MSGFF' \
+  'git add nazgul/evil')
 input=$(make_bash_input "$probe_f_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block H-12: <<'MSG'FF quoted-then-unquoted delimiter, real git add after (probe f)" "$GUARD_EC" 2
@@ -801,11 +791,9 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_g_cmd=$(cat <<'CMDEOF'
-echo "$((1<<2))"
-git add nazgul/evil
-CMDEOF
-)
+probe_g_cmd=$(printf '%s\n' \
+  'echo "$((1<<2))"' \
+  'git add nazgul/evil')
 input=$(make_bash_input "$probe_g_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code 'block H-13: $((1<<2)) arithmetic left-shift, real git add after (probe g)' "$GUARD_EC" 2
@@ -818,11 +806,9 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_g2_cmd=$(cat <<'CMDEOF'
-echo "$(( 5 << 3 ))"
-git add nazgul/evil
-CMDEOF
-)
+probe_g2_cmd=$(printf '%s\n' \
+  'echo "$(( 5 << 3 ))"' \
+  'git add nazgul/evil')
 input=$(make_bash_input "$probe_g2_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code 'block H-14: $(( 5 << 3 )) spaced arithmetic left-shift, real git add after (probe g variant)' "$GUARD_EC" 2
@@ -836,11 +822,9 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_g3_cmd=$(cat <<'CMDEOF'
-echo "$(( 1>>2 ))"
-git add nazgul/evil
-CMDEOF
-)
+probe_g3_cmd=$(printf '%s\n' \
+  'echo "$(( 1>>2 ))"' \
+  'git add nazgul/evil')
 input=$(make_bash_input "$probe_g3_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code 'block H-15: $(( 1>>2 )) arithmetic right-shift, real git add after (probe g right-shift)' "$GUARD_EC" 2
@@ -905,10 +889,8 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_h18_cmd=$(cat <<'CMDEOF'
-git commit -m "$(echo "hi)" && git add nazgul/evil
-CMDEOF
-)
+probe_h18_cmd=$(printf '%s\n' \
+  'git commit -m "$(echo "hi)" && git add nazgul/evil')
 input=$(make_bash_input "$probe_h18_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block H-18: malformed/never-executing nested-quote span now blocks (opaque paren-depth miscount, reclassified attempt 5)" "$GUARD_EC" 2
@@ -927,11 +909,9 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_h_cmd=$(cat <<'CMDEOF'
-echo $((1<<2))
-git add nazgul/config.json
-CMDEOF
-)
+probe_h_cmd=$(printf '%s\n' \
+  'echo $((1<<2))' \
+  'git add nazgul/config.json')
 input=$(make_bash_input "$probe_h_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code 'block H-19: echo $((1<<2)) top-level (unquoted), real git add after (probe h)' "$GUARD_EC" 2
@@ -943,11 +923,9 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_h2_cmd=$(cat <<'CMDEOF'
-x=$((1<<2))
-git add nazgul/config.json
-CMDEOF
-)
+probe_h2_cmd=$(printf '%s\n' \
+  'x=$((1<<2))' \
+  'git add nazgul/config.json')
 input=$(make_bash_input "$probe_h2_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code 'block H-20: x=$((1<<2)) top-level assignment, real git add after (probe h variant)' "$GUARD_EC" 2
@@ -959,11 +937,9 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_h3_cmd=$(cat <<'CMDEOF'
-echo $(( 5 << 3 ))
-git add nazgul/config.json
-CMDEOF
-)
+probe_h3_cmd=$(printf '%s\n' \
+  'echo $(( 5 << 3 ))' \
+  'git add nazgul/config.json')
 input=$(make_bash_input "$probe_h3_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code 'block H-21: echo $(( 5 << 3 )) top-level spaced arithmetic, real git add after (probe h variant)' "$GUARD_EC" 2
@@ -976,11 +952,9 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_h4_cmd=$(cat <<'CMDEOF'
-: $((1<<2))
-git add nazgul/config.json
-CMDEOF
-)
+probe_h4_cmd=$(printf '%s\n' \
+  ': $((1<<2))' \
+  'git add nazgul/config.json')
 input=$(make_bash_input "$probe_h4_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code 'block H-22: : $((1<<2)) top-level no-op command, real git add after (probe h variant)' "$GUARD_EC" 2
@@ -998,13 +972,11 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_h5_cmd=$(cat <<'CMDEOF'
-cat <<EOF
-decoy nazgul/text inside the heredoc body
-EOF
-git add nazgul/config.json
-CMDEOF
-)
+probe_h5_cmd=$(printf '%s\n' \
+  'cat <<EOF' \
+  'decoy nazgul/text inside the heredoc body' \
+  'EOF' \
+  'git add nazgul/config.json')
 input=$(make_bash_input "$probe_h5_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block H-23: cat <<EOF (unquoted delimiter) top-level heredoc, real git add after" "$GUARD_EC" 2
@@ -1017,13 +989,11 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_h6_cmd=$(cat <<'CMDEOF'
-tee <<EOF
-decoy nazgul/text inside the heredoc body
-EOF
-git add nazgul/config.json
-CMDEOF
-)
+probe_h6_cmd=$(printf '%s\n' \
+  'tee <<EOF' \
+  'decoy nazgul/text inside the heredoc body' \
+  'EOF' \
+  'git add nazgul/config.json')
 input=$(make_bash_input "$probe_h6_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block H-24: tee <<EOF top-level heredoc, real git add after" "$GUARD_EC" 2
@@ -1060,11 +1030,9 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_h26_cmd=$(cat <<'CMDEOF'
-echo $((cat<<2))
-git add nazgul/config.json
-CMDEOF
-)
+probe_h26_cmd=$(printf '%s\n' \
+  'echo $((cat<<2))' \
+  'git add nazgul/config.json')
 input=$(make_bash_input "$probe_h26_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code 'block H-26: echo $((cat<<2)) bareword arithmetic operand, real git add after' "$GUARD_EC" 2
@@ -1076,11 +1044,9 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_h27_cmd=$(cat <<'CMDEOF'
-x=$((cat<<2))
-git add nazgul/config.json
-CMDEOF
-)
+probe_h27_cmd=$(printf '%s\n' \
+  'x=$((cat<<2))' \
+  'git add nazgul/config.json')
 input=$(make_bash_input "$probe_h27_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code 'block H-27: x=$((cat<<2)) top-level assignment, bareword operand, real git add after' "$GUARD_EC" 2
@@ -1093,11 +1059,9 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_h28_cmd=$(cat <<'CMDEOF'
-: $((tee<<1))
-git add nazgul/config.json
-CMDEOF
-)
+probe_h28_cmd=$(printf '%s\n' \
+  ': $((tee<<1))' \
+  'git add nazgul/config.json')
 input=$(make_bash_input "$probe_h28_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code 'block H-28: : $((tee<<1)) no-op command, bareword operand, real git add after' "$GUARD_EC" 2
@@ -1110,11 +1074,9 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_h29_cmd=$(cat <<'CMDEOF'
-x=$(( cat << 2 ))
-git add nazgul/config.json
-CMDEOF
-)
+probe_h29_cmd=$(printf '%s\n' \
+  'x=$(( cat << 2 ))' \
+  'git add nazgul/config.json')
 input=$(make_bash_input "$probe_h29_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code 'block H-29: x=$(( cat << 2 )) spaced arithmetic, bareword operand, real git add after' "$GUARD_EC" 2
@@ -1127,11 +1089,9 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_h30_cmd=$(cat <<'CMDEOF'
-x=$((_cat<<2))
-git add nazgul/config.json
-CMDEOF
-)
+probe_h30_cmd=$(printf '%s\n' \
+  'x=$((_cat<<2))' \
+  'git add nazgul/config.json')
 input=$(make_bash_input "$probe_h30_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code 'block H-30: x=$((_cat<<2)) underscore-prefixed identifier suffix, real git add after' "$GUARD_EC" 2
@@ -1144,11 +1104,9 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_h31_cmd=$(cat <<'CMDEOF'
-x=$((2tee<<3))
-git add nazgul/config.json
-CMDEOF
-)
+probe_h31_cmd=$(printf '%s\n' \
+  'x=$((2tee<<3))' \
+  'git add nazgul/config.json')
 input=$(make_bash_input "$probe_h31_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code 'block H-31: x=$((2tee<<3)) digit-prefixed identifier suffix, real git add after' "$GUARD_EC" 2
@@ -1165,11 +1123,9 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_h32_cmd=$(cat <<'CMDEOF'
-x=$((mycat<<2))
-git add nazgul/config.json
-CMDEOF
-)
+probe_h32_cmd=$(printf '%s\n' \
+  'x=$((mycat<<2))' \
+  'git add nazgul/config.json')
 input=$(make_bash_input "$probe_h32_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code 'block H-32: x=$((mycat<<2)) whole-word non-cat/tee identifier, real git add after' "$GUARD_EC" 2
@@ -1182,13 +1138,11 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_h33_cmd=$(cat <<'CMDEOF'
-bobcat <<EOF
-decoy nazgul/text inside the heredoc body
-EOF
-git add nazgul/config.json
-CMDEOF
-)
+probe_h33_cmd=$(printf '%s\n' \
+  'bobcat <<EOF' \
+  'decoy nazgul/text inside the heredoc body' \
+  'EOF' \
+  'git add nazgul/config.json')
 input=$(make_bash_input "$probe_h33_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block H-33: bobcat <<EOF whole-word non-cat command, real git add after" "$GUARD_EC" 2
@@ -1199,13 +1153,11 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_h33b_cmd=$(cat <<'CMDEOF'
-concat <<EOF
-decoy nazgul/text inside the heredoc body
-EOF
-git add nazgul/config.json
-CMDEOF
-)
+probe_h33b_cmd=$(printf '%s\n' \
+  'concat <<EOF' \
+  'decoy nazgul/text inside the heredoc body' \
+  'EOF' \
+  'git add nazgul/config.json')
 input=$(make_bash_input "$probe_h33b_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block H-33b: concat <<EOF whole-word non-cat command, real git add after" "$GUARD_EC" 2
@@ -1219,14 +1171,12 @@ setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
 {"install_mode":"local","afk":{"enabled":true}}
 EOF
-probe_h34_cmd=$(cat <<'CMDEOF'
-(cat <<EOF
-decoy nazgul/text inside the heredoc body
-EOF
-)
-git add nazgul/config.json
-CMDEOF
-)
+probe_h34_cmd=$(printf '%s\n' \
+  '(cat <<EOF' \
+  'decoy nazgul/text inside the heredoc body' \
+  'EOF' \
+  ')' \
+  'git add nazgul/config.json')
 input=$(make_bash_input "$probe_h34_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block H-34: (cat <<EOF ... EOF) genuine subshell heredoc still arms, real git add after" "$GUARD_EC" 2
@@ -1256,6 +1206,17 @@ assert_not_contains "perf: nazgul-root.sh never sourced for pre-filter-failing c
 # stays meaningful even on a contended CI/dev box where an absolute ms budget
 # would not. Median over N=20 interleaved samples each.
 slow_input=$(make_bash_input "git add nazgul/config.json")
+
+# EPOCHREALTIME is bash >= 5. Under `set -u` on /bin/bash 3.2 (macOS, this
+# repo's stated minimum) referencing it aborts the whole file, so the section
+# is gated rather than assumed (PR #75 review). Skipping is safe: this block
+# is CORROBORATION only — the deterministic xtrace assertion above already
+# proves resolve_project_root() is not reached on the pre-filter path, and it
+# runs on every shell. The skip is announced, not silent, so nobody reads a
+# green run as "the perf claim was checked" when it was not.
+if [ -z "${EPOCHREALTIME+x}" ]; then
+  echo "  (perf: SKIPPED — \$EPOCHREALTIME requires bash >= 5; running $(bash --version 2>/dev/null | head -1 | sed 's/GNU bash, version //;s/ .*//'). The xtrace assertion above already pins the behaviour.)"
+else
 PERF_N=20
 fast_samples=()
 slow_samples=()
@@ -1274,6 +1235,7 @@ slow_median_ms=$(printf '%s\n' "${slow_samples[@]}" | sort -n | awk -v n="$PERF_
 echo "  (perf: pre-filter-exit median ${fast_median_ms} ms vs resolve_project_root-path median ${slow_median_ms} ms, N=${PERF_N} each; pre-fix empty-stdin baseline was ~36.9 ms)"
 faster=$(awk -v f="$fast_median_ms" -v s="$slow_median_ms" 'BEGIN{print (f<s)?"yes":"no"}')
 assert_eq "perf: pre-filter-exit path is faster than the resolve_project_root path" "$faster" "yes"
+fi
 teardown_temp_dir
 
 report_results
