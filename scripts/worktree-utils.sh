@@ -6,6 +6,18 @@ set -euo pipefail
 
 # Requires: NAZGUL_DIR and CONFIG to be set by the caller
 
+# ${BASH_SOURCE[0]} is bash-only. Under zsh (the default interactive shell on
+# macOS) it is an unset-parameter diagnostic that zsh treats as non-fatal:
+# _WU_DIR would silently resolve to the caller's $PWD, _WU_PLUGIN_ROOT and
+# _WU_GIT_HOOKS_LIB (git-hooks.sh, install_git_hooks) and _WU_NAZGUL_ROOT_LIB
+# (nazgul-root.sh, resolve_project_root) would all point at wrong paths, and
+# this file would half-load with no error. Refuse loudly instead.
+if [ -z "${BASH_SOURCE:-}" ]; then
+  echo "FATAL: worktree-utils.sh must be sourced from bash (got: $(basename "${0:-unknown}"))." >&2
+  echo "The managed git-hooks install (create_feature_branch -> install_git_hooks) cannot proceed under this shell." >&2
+  return 1 2>/dev/null || exit 1
+fi
+
 _WU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _WU_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$_WU_DIR/.." && pwd)}"
 _WU_GIT_HOOKS_LIB="$_WU_PLUGIN_ROOT/scripts/lib/git-hooks.sh"
@@ -17,7 +29,14 @@ _WU_NAZGUL_ROOT_LIB="$_WU_PLUGIN_ROOT/scripts/lib/nazgul-root.sh"
 
 slugify_objective() {
   local input="$1"
-  echo "$input" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | cut -c1-50
+  local slug
+  slug=$(printf '%s' "$input" \
+    | tr '\n\r\t' '   ' \
+    | tr -s '[:space:]' ' ' \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' \
+    | cut -c1-50)
+  printf '%s' "${slug:-objective}"
 }
 
 create_feature_branch() {
@@ -62,23 +81,98 @@ create_feature_branch() {
   local main_worktree_path
   main_worktree_path=$(cd "$project_root" && pwd)
 
-  git -C "$project_root" checkout -b "$branch_name" 2>/dev/null
+  # Config must record OBSERVED state, not intended state (ADR-009): verify
+  # the ref name, the checkout, and the branch's existence before writing
+  # anything, and fail loudly (non-zero) on any of the three.
+  if ! git -C "$project_root" check-ref-format --branch "$branch_name" >/dev/null 2>&1; then
+    echo "ERROR: create_feature_branch: '$branch_name' is not a valid git branch name" >&2
+    return 1
+  fi
+  if ! git -C "$project_root" checkout -b "$branch_name" 2>/dev/null; then
+    echo "ERROR: create_feature_branch: 'git checkout -b $branch_name' failed (invalid ref name or already exists)" >&2
+    return 1
+  fi
+  if ! git -C "$project_root" rev-parse --verify --quiet "$branch_name" >/dev/null; then
+    echo "ERROR: create_feature_branch: branch '$branch_name' does not exist after checkout" >&2
+    return 1
+  fi
 
+  # The config write is the FOURTH verification step, and it fails loudly like
+  # the three above it. Previously unchecked (PR #74 review): a failed
+  # `jq … && mv` left the branch created and checked out on disk while
+  # config.json recorded nothing, and the function still returned success —
+  # config inconsistent with observed state, with nothing emitted. Worse, the
+  # state was unrecoverable: every retry then died at `checkout -b` with
+  # "invalid ref name or already exists", so a transient write failure bricked
+  # branch setup for the objective until a human deleted the branch.
+  #
+  # On failure we roll back to the pre-call state. That is safe here and only
+  # here: the branch passed check-ref-format, was created by THIS call's
+  # `checkout -b` (which only succeeds on an unclaimed name), and was verified
+  # to exist — so it is provably fresh, carries no commits beyond
+  # "$base_branch", and nothing has run between its creation and this write.
+  # Rollback commands are best-effort; if one fails we say so rather than
+  # failing harder inside an already-failing path.
+  #
+  # Idiom copied from scripts/lib/git-hooks.sh:116, which already guards the
+  # same `jq … && mv` shape for the same reason.
+  #
+  # The temp file is COLOCATED with $config, not left to `mktemp`'s default
+  # (PR #74 review). A bare `mktemp` uses $TMPDIR, which is not guaranteed to
+  # share a filesystem with $config — on Linux CI /tmp is frequently tmpfs and
+  # in containers a separate mount. Across filesystems `mv` is not an atomic
+  # rename(2); it degrades to copy-then-unlink, so a failure partway through
+  # can leave $config PARTIALLY WRITTEN. That would break the rollback
+  # contract below (which promises $config is untouched on failure) and, worse,
+  # a corrupt config now fails the pre-merge guard closed — blocking every
+  # merge in the repo. Colocating makes the mv a same-directory rename, which
+  # POSIX guarantees atomic. Note this also moves the failure point: on an
+  # unwritable config dir `mktemp` now fails instead of `mv`, so its result is
+  # checked and routed through the same rollback.
   local tmp
-  tmp=$(mktemp)
-  jq \
-    --arg feat "$branch_name" \
-    --arg base "$base_branch" \
-    --arg mwp "$main_worktree_path" \
-    --arg ts "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-    --arg fid "$feat_id" \
-    --arg did "$display_id" \
-    --arg prefix "$commit_prefix" \
-    '.branch.feature = $feat | .branch.base = $base | .branch.main_worktree_path = $mwp | .branch.created_at = $ts | .feat_id = $fid | .feat_display_id = $did | .afk.commit_prefix = $prefix' \
-    "$config" > "$tmp" && mv "$tmp" "$config"
+  tmp=$(mktemp "$(dirname "$config")/.nazgul-config.XXXXXX" 2>/dev/null) || {
+    echo "ERROR: create_feature_branch: cannot create a temp file beside '$config' after branch '$branch_name' was created — rolling back to '$base_branch'" >&2
+    git -C "$project_root" checkout "$base_branch" >/dev/null 2>&1 \
+      || echo "ERROR: create_feature_branch: rollback checkout to '$base_branch' also failed — branch '$branch_name' left on disk, config unchanged" >&2
+    git -C "$project_root" branch -D "$branch_name" >/dev/null 2>&1 \
+      || echo "ERROR: create_feature_branch: rollback delete of '$branch_name' failed — remove it manually before retrying" >&2
+    return 1
+  }
+  if jq \
+      --arg feat "$branch_name" \
+      --arg base "$base_branch" \
+      --arg mwp "$main_worktree_path" \
+      --arg ts "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+      --arg fid "$feat_id" \
+      --arg did "$display_id" \
+      --arg prefix "$commit_prefix" \
+      '.branch.feature = $feat | .branch.base = $base | .branch.main_worktree_path = $mwp | .branch.created_at = $ts | .feat_id = $fid | .feat_display_id = $did | .afk.commit_prefix = $prefix' \
+      "$config" > "$tmp" && mv "$tmp" "$config"; then
+    :
+  else
+    rm -f "$tmp"
+    echo "ERROR: create_feature_branch: config write failed after branch '$branch_name' was created — rolling back to '$base_branch' so the retry is not blocked by a branch nothing recorded" >&2
+    git -C "$project_root" checkout "$base_branch" >/dev/null 2>&1 \
+      || echo "ERROR: create_feature_branch: rollback checkout to '$base_branch' also failed — branch '$branch_name' left on disk, config unchanged" >&2
+    git -C "$project_root" branch -D "$branch_name" >/dev/null 2>&1 \
+      || echo "ERROR: create_feature_branch: rollback delete of '$branch_name' failed — remove it manually before retrying" >&2
+    return 1
+  fi
 
   if declare -F install_git_hooks >/dev/null 2>&1; then
     install_git_hooks "$project_root" "$config" || true
+  else
+    # The header guard above now makes non-bash sourcing fail loudly before
+    # this function is even defined, so the only way install_git_hooks can
+    # still be undefined here is a deployment that never shipped
+    # scripts/lib/git-hooks.sh. guards.git_hooks=false is NOT this branch —
+    # that skip lives inside install_git_hooks itself. Warn by name instead
+    # of skipping silently, so the install is verifiable, not best-effort.
+    local git_hooks_guard
+    git_hooks_guard=$(jq -r '(.guards.git_hooks // true)' "$config" 2>/dev/null || echo "true")
+    if [ "$git_hooks_guard" != "false" ]; then
+      echo "WARNING: create_feature_branch: install_git_hooks is undefined (scripts/lib/git-hooks.sh was not sourced) — the managed core.hooksPath install did NOT run." >&2
+    fi
   fi
 
   echo "$branch_name"
@@ -94,8 +188,14 @@ setup_worktree_dir() {
 
   mkdir -p "$worktree_dir"
 
+  # Colocated temp so `mv` is a same-filesystem atomic rename, not a
+  # cross-FS copy-then-unlink that could leave $config partially written
+  # (PR #74 review). Same reasoning as create_feature_branch above.
   local tmp
-  tmp=$(mktemp)
+  tmp=$(mktemp "$(dirname "$config")/.nazgul-config.XXXXXX" 2>/dev/null) || {
+    echo "ERROR: setup_worktree_dir: cannot create a temp file beside '$config'; worktree dir '$worktree_dir' exists on disk but was NOT recorded in config" >&2
+    return 1
+  }
   jq --arg wd "$worktree_dir" '.branch.worktree_dir = $wd' "$config" > "$tmp" && mv "$tmp" "$config"
 
   echo "$worktree_dir"
@@ -156,8 +256,12 @@ create_task_worktree() {
     fi
   fi
 
+  # Colocated temp — same atomicity reasoning as above (PR #74 review).
   local tmp
-  tmp=$(mktemp)
+  tmp=$(mktemp "$(dirname "$config")/.nazgul-config.XXXXXX" 2>/dev/null) || {
+    echo "ERROR: create_task_worktree: cannot create a temp file beside '$config'; task branch '$task_branch' NOT recorded" >&2
+    return 1
+  }
   jq --arg lb "$task_branch" '.branch.last_task_branch = $lb' "$config" > "$tmp" && mv "$tmp" "$config"
 
   echo "$task_dir"

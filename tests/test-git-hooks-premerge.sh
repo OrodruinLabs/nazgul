@@ -46,6 +46,11 @@ branch_sha() {
   git -C "$repo" rev-parse "$branch"
 }
 
+branch_short_sha() {
+  local repo="$1" branch="$2"
+  git -C "$repo" rev-parse --short "$branch"
+}
+
 write_config() {
   local repo="$1" json="$2"
   mkdir -p "$repo/nazgul"
@@ -115,6 +120,23 @@ write_task_long_commits() {
     echo
     echo "nothing relevant here"
   } > "$repo/nazgul/tasks/$id.md"
+}
+
+# Writes a task manifest with NO ## Commits section at all — the genuine
+# authoring gap Fix 1c targets. Content-matching has nothing to find here;
+# only the ref-derived signal can identify this unit.
+write_task_no_commits() {
+  local repo="$1" id="$2" status="$3"
+  mkdir -p "$repo/nazgul/tasks"
+  cat > "$repo/nazgul/tasks/$id.md" <<EOF
+---
+status: $status
+---
+
+# $id
+
+No Commits section recorded.
+EOF
 }
 
 do_merge() {
@@ -217,6 +239,59 @@ assert_exit_code "allow: content-matched DONE unit -> exit 0" "$MERGE_EC" 0
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
+# BLOCK (short-SHA keystone): a manifest recording only a SHORT SHA (the
+# form `git rev-parse --short` and implementers actually write) for a
+# non-DONE unit must still be matched by prefix and block. Exact-substring
+# matching (the bug) misses this because a 7-char token is never a
+# substring of the 40-char GITHEAD_<sha> candidate it is a prefix of.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+SHORT_SHA=$(branch_short_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "$SHORT_SHA"
+do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+assert_exit_code "block: short-SHA manifest for non-DONE unit -> nonzero" "$MERGE_EC" 1
+assert_contains "short-SHA block message names the unit" "$MERGE_STDERR" "TASK-001"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# BLOCK (backticked short-SHA): same as above but the manifest entry wraps
+# the short SHA in backticks (a common human-authored form). A backticked
+# FULL SHA already blocks today by accident (substring match tolerates
+# surrounding text); only the backticked SHORT form pins this defect.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+SHORT_SHA=$(branch_short_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "\`$SHORT_SHA\`"
+do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+assert_exit_code "block: backticked short-SHA manifest for non-DONE unit -> nonzero" "$MERGE_EC" 1
+assert_contains "backticked short-SHA block message names the unit" "$MERGE_STDERR" "TASK-001"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# ALLOW (short-SHA over-block regression guard): the same short-SHA manifest
+# at Status: DONE must still allow -> proves the prefix match doesn't
+# over-block a legitimately approved unit.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+SHORT_SHA=$(branch_short_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001")
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-001" "DONE" "$SHORT_SHA"
+do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+assert_exit_code "allow: short-SHA manifest for DONE unit -> exit 0" "$MERGE_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
 # SPOOF (primary): a decoy GITHEAD_<sha>=<label> falsely claims a DONE unit
 # (TASK-999) while the actual merged content is a DIFFERENT, unapproved unit
 # (TASK-888) — git itself still sets the genuine GITHEAD_<real-sha> for
@@ -303,7 +378,9 @@ teardown_temp_dir
 # FALSE-BLOCK REGRESSION: a /TASK-NNN-suffixed branch WITHOUT the feat/
 # prefix, whose commit was never recorded in any manifest's ## Commits
 # section, must degrade to allow — content-based resolution means branch
-# shape never gates.
+# shape never gates. `docs/TASK-001` does not match the ref-derived signal's
+# `^feat/[^/]+/TASK-[0-9]+$` anchor (nazgul/plan.md -> C1), so this case
+# stays on content-match-only (Fix 1a) behaviour under Fix 1b too.
 # ---------------------------------------------------------------------------
 setup_temp_dir
 init_repo "$TEST_DIR/repo"
@@ -496,6 +573,196 @@ write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
 write_task_frontmatter "$TEST_DIR/repo" "TASK-001" "DONE " "IN_REVIEW" "$UNIT_SHA"
 do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
 assert_exit_code "frontmatter trailing space: 'DONE ' normalizes to DONE -> exit 0" "$MERGE_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# REF-DERIVED IDENTITY (Fix 1b, AC3 case 1): a canonical feat/<feat>/TASK-NNN
+# branch whose manifest has NO ## Commits section at all (a genuine authoring
+# gap, not a formatting mismatch) and is non-DONE. Content-matching finds
+# nothing to check here; only the ref-derived signal identifies the unit.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task_no_commits "$TEST_DIR/repo" "TASK-001" "IN_REVIEW"
+do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+assert_exit_code "ref-derived: no Commits section, non-DONE -> nonzero" "$MERGE_EC" 1
+assert_contains "ref-derived block message names the unit" "$MERGE_STDERR" "TASK-001"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# REF-DERIVED "MATCHED BUT UNVERIFIABLE" (Fix 1c proper): same branch, but
+# the manifest is Status: DONE with still no ## Commits section at all. This
+# proves 1c is a BLOCK, not a skip — a ref-named DONE unit that cannot be
+# verified against the merged content must not be silently admitted. The
+# message must be the unverifiable wording, distinct from the not-DONE one.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task_no_commits "$TEST_DIR/repo" "TASK-001" "DONE"
+do_merge "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-001"
+assert_exit_code "ref-derived: no Commits section, DONE -> nonzero (unverifiable, not a skip)" "$MERGE_EC" 1
+assert_contains "unverifiable block message names the unit" "$MERGE_STDERR" "TASK-001"
+assert_contains "unverifiable block message uses the unverifiable wording" "$MERGE_STDERR" "unverifiable"
+assert_not_contains "unverifiable block message is NOT the not-DONE wording" "$MERGE_STDERR" "requires status DONE"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# PER-KEY-BOUND SPOOF UNDER THE DUAL-SIGNAL PATH (Fix 1b, test-plan #7): a
+# decoy GITHEAD_<claimed_sha>=feat/FEAT-010-x/TASK-999 (DONE, its own
+# ## Commits recording that same claimed_sha, so the decoy's OWN ref-derived
+# signal verifies cleanly and does not itself block) sits alongside git's
+# genuine GITHEAD_<real-sha> for the actual, unapproved TASK-888 content.
+# Proves the new ref-derived signal cannot be used to launder real content:
+# the genuine key is still independently checked (by both signals) and the
+# merge still blocks, naming TASK-888.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-999"
+APPROVED_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-999")
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-888"
+MALICIOUS_SHA=$(branch_sha "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-888")
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-999" "DONE" "$APPROVED_SHA"
+write_task "$TEST_DIR/repo" "TASK-888" "IN_REVIEW" "$MALICIOUS_SHA"
+do_merge_githead_spoofed "$TEST_DIR/repo" "feat/FEAT-010-x/TASK-888" "$APPROVED_SHA"
+assert_exit_code "per-key-bound spoof: dual-signal decoy does not admit unapproved content -> nonzero" "$MERGE_EC" 1
+assert_contains "per-key-bound spoof: block message names the REAL unit, not the decoy" "$MERGE_STDERR" "TASK-888"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# OFF-CONVENTION REF STILL DOES NOT GATE (test-plan #4, explicit): re-states
+# the FALSE-BLOCK REGRESSION intent as its own assertion so this file has a
+# standalone pin independent of that earlier block's construction.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "docs/TASK-001"
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "0000000"
+do_merge "$TEST_DIR/repo" "docs/TASK-001"
+assert_exit_code "off-convention ref (docs/TASK-001) does not gate -> exit 0" "$MERGE_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# PR #74 review — ANCHORED commits_verify (Decision 1).
+# A DONE unit on a canonical task branch whose ## Commits section mentions the
+# merged SHA ONLY in narrative prose (not as a bullet's leading token) must
+# now BLOCK as unverifiable. Before anchoring the whole-section token scan
+# matched the prose mention, commits_verify SUCCEEDED, Signal 2's
+# unverifiable-block was suppressed, and the merge was ADMITTED — Signal 2
+# blocks when commits_verify FAILS, so a spurious match there is fail-OPEN.
+# Mirrors the real shape in nazgul/tasks/TASK-007.md, whose ## Commits prose
+# names a superseded pre-rebase SHA.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-001/TASK-001"
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+PROSE_SHA=$(git -C "$TEST_DIR/repo" rev-parse "feat/FEAT-001/TASK-001")
+mkdir -p "$TEST_DIR/repo/nazgul/tasks"
+cat > "$TEST_DIR/repo/nazgul/tasks/TASK-001.md" <<EOF
+---
+status: DONE
+---
+# TASK-001
+
+## Commits
+
+- 0000000000000000000000000000000000000000 the actually-delivered commit
+  (supersedes the pre-rebase SHA \`$PROSE_SHA\`)
+EOF
+do_merge "$TEST_DIR/repo" "feat/FEAT-001/TASK-001"
+assert_exit_code "anchored: SHA only in ## Commits prose -> unverifiable, blocks" "$MERGE_EC" 1
+assert_contains "anchored: unverifiable diagnostic names the unit" "$MERGE_STDERR" "TASK-001"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# PR #74 review — anchoring must NOT break the legitimate bullet forms.
+# A DONE unit whose ## Commits records the merged SHA as the leading token of
+# a bullet — backticked, and in SHORT form (prefix-tolerance, Fix 1a) — must
+# still verify and merge clean.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-001/TASK-001"
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+FULL_SHA=$(git -C "$TEST_DIR/repo" rev-parse "feat/FEAT-001/TASK-001")
+SHORT_SHA=$(printf '%s' "$FULL_SHA" | cut -c1-8)
+mkdir -p "$TEST_DIR/repo/nazgul/tasks"
+cat > "$TEST_DIR/repo/nazgul/tasks/TASK-001.md" <<EOF
+---
+status: DONE
+---
+# TASK-001
+
+## Commits
+
+- \`$SHORT_SHA\` backticked short SHA as the bullet's leading token
+EOF
+do_merge "$TEST_DIR/repo" "feat/FEAT-001/TASK-001"
+assert_exit_code "anchored: backticked SHORT leading token still verifies -> exit 0" "$MERGE_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# PR #74 review — MF-053 config present-but-corrupt fails CLOSED (Decision 2).
+# Matches scripts/parallel-dispatch-guard.sh:26 / parallel-rework-guard.sh:25,
+# which already ship this check. Previously the unparseable config made the
+# PARALLEL read default to "false" and the entire merge-verdict check was
+# skipped — the highest-severity finding in docs/guard-fail-open-inventory.md.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-001/TASK-001"
+install_hooks "$TEST_DIR/repo"
+mkdir -p "$TEST_DIR/repo/nazgul"
+printf '{ this is not valid json' > "$TEST_DIR/repo/nazgul/config.json"
+write_task "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "0000000"
+do_merge "$TEST_DIR/repo" "feat/FEAT-001/TASK-001"
+assert_exit_code "corrupt config.json -> fails closed, blocks" "$MERGE_EC" 1
+assert_contains "corrupt config diagnostic" "$MERGE_STDERR" "unparseable"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# PR #74 review — a genuinely ABSENT config still no-ops (the other half of
+# MF-053: present-but-corrupt blocks, absent allows). Guards against the
+# fail-closed change over-reaching into repos that never used Nazgul.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "feat/FEAT-001/TASK-001"
+install_hooks "$TEST_DIR/repo"
+do_merge "$TEST_DIR/repo" "feat/FEAT-001/TASK-001"
+assert_exit_code "absent config.json still no-ops -> exit 0" "$MERGE_EC" 0
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# PR #74 review — the compound-miss path stays ALLOWED but is no longer
+# SILENT (Decision 3). Off-convention ref + no manifest match: exit code
+# unchanged at 0, but a stderr advisory now records that the guard admitted a
+# merge it could not identify. The gap is permanent (nazgul/ is gitignored, so
+# no git-visible third identity source exists) — making it observable is the
+# available fix.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+init_repo "$TEST_DIR/repo"
+make_unit_branch "$TEST_DIR/repo" "docs/TASK-001"
+install_hooks "$TEST_DIR/repo"
+write_config "$TEST_DIR/repo" "$PARALLEL_CONFIG"
+write_task "$TEST_DIR/repo" "TASK-001" "IN_REVIEW" "0000000"
+do_merge "$TEST_DIR/repo" "docs/TASK-001"
+assert_exit_code "compound miss still allows -> exit 0" "$MERGE_EC" 0
+assert_contains "compound miss emits an advisory, not silence" "$MERGE_STDERR" "no task identity resolved"
 teardown_temp_dir
 
 report_results

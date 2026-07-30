@@ -158,17 +158,31 @@ if ! is_task_manifest "$FILE_PATH"; then
     docs/*|plans/*|doc/*|.claude/*) exit 0 ;;
   esac
 
-  # Check if active task guard is enabled
-  NAZGUL_TASKS_DIR=""
-  if [ -d "$PROJECT_ROOT/nazgul/tasks" ]; then
-    NAZGUL_TASKS_DIR="$PROJECT_ROOT/nazgul/tasks"
-    NAZGUL_CONFIG="$PROJECT_ROOT/nazgul/config.json"
-  fi
-
-  # No nazgul/tasks dir = not a Nazgul project, allow everything
-  if [ -z "$NAZGUL_TASKS_DIR" ]; then
+  # Split "not a Nazgul project" from "IS a Nazgul project whose task state is
+  # missing" (ADR-009 Option 3): reuse nazgul-root.sh's own marker for the
+  # former — nazgul/config.json exists and is readable — instead of inventing
+  # a second definition (TASK-002 / PRD AC6).
+  NAZGUL_CONFIG="$PROJECT_ROOT/nazgul/config.json"
+  if [ ! -f "$NAZGUL_CONFIG" ] || [ ! -r "$NAZGUL_CONFIG" ]; then
     exit 0
   fi
+
+  # config.json exists but nazgul/tasks/ is missing or unreadable: this is a
+  # corrupted/partially-initialized Nazgul project, not a non-Nazgul
+  # directory. Fail CLOSED (ADR-009): a silent allow here disarms both the
+  # active-task and file-scope gates for the rest of the invocation.
+  # `-r` alone is not enough for a DIRECTORY: without the search (`-x`) bit the
+  # glob below cannot stat TASK-*.md, so every task reads as absent — exactly
+  # the "never actually looked" state this branch exists to reject.
+  if [ ! -d "$PROJECT_ROOT/nazgul/tasks" ] \
+    || [ ! -r "$PROJECT_ROOT/nazgul/tasks" ] \
+    || [ ! -x "$PROJECT_ROOT/nazgul/tasks" ]; then
+    echo "NAZGUL STATE GUARD: BLOCKED — nazgul/config.json exists but nazgul/tasks/ is missing or unreadable" >&2
+    echo "This looks like a corrupted or partially-initialized Nazgul project, not a non-Nazgul directory." >&2
+    echo "The active-task and file-scope gates cannot be evaluated without it." >&2
+    exit 2
+  fi
+  NAZGUL_TASKS_DIR="$PROJECT_ROOT/nazgul/tasks"
 
   # Check config flag — default to true if not set
   REQUIRE_ACTIVE="true"
