@@ -97,18 +97,47 @@ create_feature_branch() {
     return 1
   fi
 
+  # The config write is the FOURTH verification step, and it fails loudly like
+  # the three above it. Previously unchecked (PR #74 review): a failed
+  # `jq … && mv` left the branch created and checked out on disk while
+  # config.json recorded nothing, and the function still returned success —
+  # config inconsistent with observed state, with nothing emitted. Worse, the
+  # state was unrecoverable: every retry then died at `checkout -b` with
+  # "invalid ref name or already exists", so a transient write failure bricked
+  # branch setup for the objective until a human deleted the branch.
+  #
+  # On failure we roll back to the pre-call state. That is safe here and only
+  # here: the branch passed check-ref-format, was created by THIS call's
+  # `checkout -b` (which only succeeds on an unclaimed name), and was verified
+  # to exist — so it is provably fresh, carries no commits beyond
+  # "$base_branch", and nothing has run between its creation and this write.
+  # Rollback commands are best-effort; if one fails we say so rather than
+  # failing harder inside an already-failing path.
+  #
+  # Idiom copied from scripts/lib/git-hooks.sh:116, which already guards the
+  # same `jq … && mv` shape for the same reason.
   local tmp
   tmp=$(mktemp)
-  jq \
-    --arg feat "$branch_name" \
-    --arg base "$base_branch" \
-    --arg mwp "$main_worktree_path" \
-    --arg ts "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-    --arg fid "$feat_id" \
-    --arg did "$display_id" \
-    --arg prefix "$commit_prefix" \
-    '.branch.feature = $feat | .branch.base = $base | .branch.main_worktree_path = $mwp | .branch.created_at = $ts | .feat_id = $fid | .feat_display_id = $did | .afk.commit_prefix = $prefix' \
-    "$config" > "$tmp" && mv "$tmp" "$config"
+  if jq \
+      --arg feat "$branch_name" \
+      --arg base "$base_branch" \
+      --arg mwp "$main_worktree_path" \
+      --arg ts "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+      --arg fid "$feat_id" \
+      --arg did "$display_id" \
+      --arg prefix "$commit_prefix" \
+      '.branch.feature = $feat | .branch.base = $base | .branch.main_worktree_path = $mwp | .branch.created_at = $ts | .feat_id = $fid | .feat_display_id = $did | .afk.commit_prefix = $prefix' \
+      "$config" > "$tmp" && mv "$tmp" "$config"; then
+    :
+  else
+    rm -f "$tmp"
+    echo "ERROR: create_feature_branch: config write failed after branch '$branch_name' was created — rolling back to '$base_branch' so the retry is not blocked by a branch nothing recorded" >&2
+    git -C "$project_root" checkout "$base_branch" >/dev/null 2>&1 \
+      || echo "ERROR: create_feature_branch: rollback checkout to '$base_branch' also failed — branch '$branch_name' left on disk, config unchanged" >&2
+    git -C "$project_root" branch -D "$branch_name" >/dev/null 2>&1 \
+      || echo "ERROR: create_feature_branch: rollback delete of '$branch_name' failed — remove it manually before retrying" >&2
+    return 1
+  fi
 
   if declare -F install_git_hooks >/dev/null 2>&1; then
     install_git_hooks "$project_root" "$config" || true

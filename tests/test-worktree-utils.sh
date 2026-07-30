@@ -231,5 +231,53 @@ assert_contains "create_feature_branch: absent git-hooks.sh emits a named warnin
 rm -rf "$FAKE_PLUGIN_ROOT" "$WARN_OUT" "$WARN_ERR"
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# PR #74 review (Copilot): the config write was UNCHECKED. A failed
+# `jq … && mv` left the branch created and checked out on disk while
+# config.json recorded nothing, and the function still returned SUCCESS —
+# config inconsistent with observed state (ADR-009), with nothing emitted.
+# The state was also unrecoverable: every retry then died at `checkout -b`
+# with "invalid ref name or already exists", so one transient write failure
+# bricked branch setup for the objective until a human deleted the branch.
+#
+# Repro: a VALID config (so every read succeeds and the branch IS created)
+# inside a read-only parent dir, so only the `mv` fails. Root-skipped — mode
+# bits are not enforced for root.
+#
+# Asserts BOTH halves: the return code pins the check; no-orphan-branch and
+# back-on-base pin the ROLLBACK, which is what separates this fix from a bare
+# fail-and-leave-the-branch.
+# ---------------------------------------------------------------------------
+if [ "$(id -u)" -ne 0 ]; then
+  setup_temp_dir
+  setup_git_repo
+  setup_nazgul_dir
+  create_config
+  CFG_W="$TEST_DIR/nazgul/config.json"
+  BASE_BRANCH_W=$(git -C "$TEST_DIR" branch --show-current)
+  WRITE_OBJECTIVE="Write failure objective"
+  WRITE_SLUG=$(slugify_objective "$WRITE_OBJECTIVE")
+  WRITE_BRANCH="feat/FEAT-001-${WRITE_SLUG}"
+  CFG_BEFORE_W=$(cat "$CFG_W")
+
+  chmod 555 "$TEST_DIR/nazgul"
+  create_feature_branch "$WRITE_OBJECTIVE" "$TEST_DIR" "$CFG_W" \
+    > "$TEST_DIR/wfail-out.txt" 2>"$TEST_DIR/wfail-err.txt"
+  RC_WRITE=$?
+  chmod 755 "$TEST_DIR/nazgul"
+
+  assert_exit_code "create_feature_branch: failed config write returns non-zero" "$RC_WRITE" 1
+  assert_contains "create_feature_branch: failed write names the rollback in its diagnostic" \
+    "$(cat "$TEST_DIR/wfail-err.txt")" "rolling back"
+  assert_eq "create_feature_branch: failed write leaves NO orphan branch (rollback)" \
+    "$(git -C "$TEST_DIR" branch --list "$WRITE_BRANCH" | tr -d ' *')" ""
+  assert_eq "create_feature_branch: failed write returns the session to the base branch" \
+    "$(git -C "$TEST_DIR" branch --show-current)" "$BASE_BRANCH_W"
+  assert_eq "create_feature_branch: failed write leaves config.json byte-identical" \
+    "$(cat "$CFG_W")" "$CFG_BEFORE_W"
+
+  teardown_temp_dir
+fi
+
 report_results
 exit $?
