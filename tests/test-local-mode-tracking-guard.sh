@@ -1044,6 +1044,194 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block H-25: cat <<-'EOF' tab-stripping top-level heredoc, real git add after" "$GUARD_EC" 2
 teardown_temp_dir
 
+# --- Category H (attempt-7 regression pins): heredoc_command_before()'s
+# backward letter-scan armed on a bareword arithmetic OPERAND spelled
+# cat/tee (a ninth false ALLOW, found independently by security and QA on
+# attempt 6, confirmed by execution) because it had no grammar anchoring
+# for $((...)) and no true word-boundary check. H-26..H-31 verified exit=0
+# on 308c9190 (attempt 6), exit=2 after this fix — both directions checked.
+# H-32..H-34 are sanity/no-regression pins (already correct on attempt 6,
+# previously unpinned).
+
+# Block H-26 (orchestrator/security/qa B1): echo $((cat<<2)) — cat is a
+# bareword arithmetic operand ($cat, unset -> 0), not the cat(1) command.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_h26_cmd=$(cat <<'CMDEOF'
+echo $((cat<<2))
+git add nazgul/config.json
+CMDEOF
+)
+input=$(make_bash_input "$probe_h26_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'block H-26: echo $((cat<<2)) bareword arithmetic operand, real git add after' "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-27 (B1 variant): x=$((cat<<2)) assignment form.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_h27_cmd=$(cat <<'CMDEOF'
+x=$((cat<<2))
+git add nazgul/config.json
+CMDEOF
+)
+input=$(make_bash_input "$probe_h27_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'block H-27: x=$((cat<<2)) top-level assignment, bareword operand, real git add after' "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-28 (B1 variant): : $((tee<<1)) — the other enumerated word, no-op
+# command prefix.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_h28_cmd=$(cat <<'CMDEOF'
+: $((tee<<1))
+git add nazgul/config.json
+CMDEOF
+)
+input=$(make_bash_input "$probe_h28_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'block H-28: : $((tee<<1)) no-op command, bareword operand, real git add after' "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-29 (B1 variant, spaced): x=$(( cat << 2 )) — whitespace between the
+# arithmetic open and the operand must not defeat the "((" boundary check.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_h29_cmd=$(cat <<'CMDEOF'
+x=$(( cat << 2 ))
+git add nazgul/config.json
+CMDEOF
+)
+input=$(make_bash_input "$probe_h29_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'block H-29: x=$(( cat << 2 )) spaced arithmetic, bareword operand, real git add after' "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-30 (N1): x=$((_cat<<2)) — the letter-scan stops at "_", capturing
+# only the "cat" suffix of the real identifier "_cat"; must still refuse.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_h30_cmd=$(cat <<'CMDEOF'
+x=$((_cat<<2))
+git add nazgul/config.json
+CMDEOF
+)
+input=$(make_bash_input "$probe_h30_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'block H-30: x=$((_cat<<2)) underscore-prefixed identifier suffix, real git add after' "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-31 (N1): x=$((2tee<<3)) — the letter-scan stops at a digit,
+# capturing only the "tee" suffix of the real identifier "2tee".
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_h31_cmd=$(cat <<'CMDEOF'
+x=$((2tee<<3))
+git add nazgul/config.json
+CMDEOF
+)
+input=$(make_bash_input "$probe_h31_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'block H-31: x=$((2tee<<3)) digit-prefixed identifier suffix, real git add after' "$GUARD_EC" 2
+teardown_temp_dir
+
+# --- Category H (attempt-7 sanity pins, code-reviewer N1): the boundary
+# fix must not disturb whole-word non-cat/tee identifiers or the genuine
+# subshell heredoc case — already correct on attempt 6, previously unpinned.
+
+# Block H-32: x=$((mycat<<2)) — "mycat" is one contiguous letter-run and
+# never equals "cat"/"tee"; must keep refusing to arm.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_h32_cmd=$(cat <<'CMDEOF'
+x=$((mycat<<2))
+git add nazgul/config.json
+CMDEOF
+)
+input=$(make_bash_input "$probe_h32_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'block H-32: x=$((mycat<<2)) whole-word non-cat/tee identifier, real git add after' "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-33: bobcat <<EOF / concat <<EOF at top level — whole-word
+# non-cat/tee command names must not arm as a recognized heredoc.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_h33_cmd=$(cat <<'CMDEOF'
+bobcat <<EOF
+decoy nazgul/text inside the heredoc body
+EOF
+git add nazgul/config.json
+CMDEOF
+)
+input=$(make_bash_input "$probe_h33_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block H-33: bobcat <<EOF whole-word non-cat command, real git add after" "$GUARD_EC" 2
+teardown_temp_dir
+
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_h33b_cmd=$(cat <<'CMDEOF'
+concat <<EOF
+decoy nazgul/text inside the heredoc body
+EOF
+git add nazgul/config.json
+CMDEOF
+)
+input=$(make_bash_input "$probe_h33b_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block H-33b: concat <<EOF whole-word non-cat command, real git add after" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-34 (security N2): (cat <<EOF ... EOF) — a genuine subshell heredoc
+# must keep arming. Only "((" (arithmetic open) excludes; a single "("
+# (subshell/command-substitution open) must not.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_h34_cmd=$(cat <<'CMDEOF'
+(cat <<EOF
+decoy nazgul/text inside the heredoc body
+EOF
+)
+git add nazgul/config.json
+CMDEOF
+)
+input=$(make_bash_input "$probe_h34_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block H-34: (cat <<EOF ... EOF) genuine subshell heredoc still arms, real git add after" "$GUARD_EC" 2
+teardown_temp_dir
+
 # ---------------------------------------------------------------------------
 # Performance: resolve_project_root() deferred past the pre-filters (V2/AC2)
 # ---------------------------------------------------------------------------

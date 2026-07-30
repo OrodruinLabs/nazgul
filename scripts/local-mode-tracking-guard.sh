@@ -200,6 +200,14 @@ function nested_heredoc_ok(line, pos,    j, n2, word, ch2) {
 # same enumerated list, applied at the true top level (TASK-004 attempt 6:
 # a bare "$((1<<2))" was previously arming a bogus heredoc there because only
 # the $(...)-nested case was gated).
+#
+# Two grammar checks past the letter-run itself (TASK-004 attempt 7): a digit
+# or "_" right at the boundary means the run was only a suffix of a longer
+# identifier ("_cat", "2tee"), not the whole word — refuse. And a boundary of
+# "((" (skipping back over any whitespace first, so "$(( cat << " still
+# counts) means the word is a bareword arithmetic operand inside $((...)),
+# where "<<" is unconditionally the shift operator — refuse. A single "("
+# (real command substitution/subshell open) is left alone.
 function heredoc_command_before(line, pos,    j, word, ch3) {
   j = pos - 1
   while (j >= 1 && (substr(line, j, 1) == " " || substr(line, j, 1) == "\t")) j--
@@ -210,7 +218,11 @@ function heredoc_command_before(line, pos,    j, word, ch3) {
     word = ch3 word
     j--
   }
-  return is_heredoc_command(word)
+  if (!is_heredoc_command(word)) return 0
+  if (j >= 1 && substr(line, j, 1) ~ /[0-9_]/) return 0
+  while (j >= 1 && (substr(line, j, 1) == " " || substr(line, j, 1) == "\t")) j--
+  if (j > 1 && substr(line, j, 1) == "(" && substr(line, j - 1, 1) == "(") return 0
+  return 1
 }
 
 # Heredoc start (<< or <<-), recognized at the true top level ONLY when
