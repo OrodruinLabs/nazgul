@@ -880,10 +880,26 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code 'allow H-17: nested-dq inert nazgul/ mention inside $(...) does not false-block' "$GUARD_EC" 0
 teardown_temp_dir
 
-# Allow H-18: the malformed mirror of H-16 — an unmatched " inside $(...)
-# with no further " or ) anywhere on the line (unlike H-16's single-quoted
-# case, this never actually closes in real bash either, so "git add" is
-# never really reached) — degrades to ALLOW, matching H-5's contract.
+# Block H-18 (RECLASSIFIED, TASK-004 attempt 5 — was "allow" under attempts
+# 3/4's in_dq2/in_sq2 nested-quote isolation, deleted this attempt). The
+# command's $(...) never actually closes in real bash: "echo "hi)"" is a
+# complete, properly double-quoted "hi)" argument INSIDE the substitution —
+# real bash reads the embedded ")" as inert literal text, not a closer — so
+# no ")" remains anywhere on the line to end the $(...), and "&& git add
+# nazgul/evil" is never really reached in real bash either way.
+#
+# Attempt 5's narrow rule intentionally does not track real nested quoting
+# inside an unrecognized $(...) (that machinery — in_dq2/in_sq2 — is exactly
+# what this attempt retired). It tracks opaque paren depth only, so the ")"
+# inside the properly-quoted "hi)" is miscounted as the substitution's own
+# close, and the tokenizer follows the (illusory) "&&" as if it were a real
+# separator, and does correctly identify a real git add after it. Given the
+# input never executes in real bash regardless, and a false BLOCK costs less
+# than a false ALLOW per this guard's own contract, blocking a malformed,
+# never-executing construct is the accepted, documented direction — not a
+# reopened bypass. Contrast H-16 (well-formed, genuinely executes in real
+# bash, no embedded ")" inside its quoted content to miscount) which still
+# blocks correctly under the same mechanism.
 setup_temp_dir
 setup_nazgul_dir
 cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
@@ -895,7 +911,7 @@ CMDEOF
 )
 input=$(make_bash_input "$probe_h18_cmd")
 CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
-assert_exit_code "allow H-18: malformed/unterminated nested-quote span degrades to ALLOW" "$GUARD_EC" 0
+assert_exit_code "block H-18: malformed/never-executing nested-quote span now blocks (opaque paren-depth miscount, reclassified attempt 5)" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
