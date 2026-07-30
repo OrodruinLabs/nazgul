@@ -39,6 +39,10 @@ set -euo pipefail
 # defence-in-depth guard, and because avoiding that imprecision would require
 # reintroducing the general-purpose nested-quote/arithmetic state machine this
 # attempt replaces.
+#
+# The same cat/tee gate applies at the true top level too (TASK-004 attempt
+# 6): a top-level `<<` only arms a heredoc when the word immediately before it
+# is `cat`/`tee`, so `echo $((1<<2))` is a shift operator, not a heredoc open.
 
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
 INPUT=$(cat 2>/dev/null || echo "")
@@ -189,10 +193,31 @@ function nested_heredoc_ok(line, pos,    j, n2, word, ch2) {
   return (substr(line, j, 2) == "<<")
 }
 
-# Heredoc start (<< or <<-), recognized at the true top level and — only when
-# heredoc_armed (see the in_dq loop below) — inside a $(...) nested in a
-# double-quoted span. NOT recognized inside a real single-quoted span: nothing is
-# special inside '"'"'...'"'"' in real shell.
+# True iff, scanning backward in `line` from just before position `pos` (the
+# start of a candidate "<<"/"<<-"), the immediately preceding word is a known
+# heredoc-consuming command. This is the top-level mirror of
+# the nested_heredoc_ok forward lookahead — same is_heredoc_command() predicate,
+# same enumerated list, applied at the true top level (TASK-004 attempt 6:
+# a bare "$((1<<2))" was previously arming a bogus heredoc there because only
+# the $(...)-nested case was gated).
+function heredoc_command_before(line, pos,    j, word, ch3) {
+  j = pos - 1
+  while (j >= 1 && (substr(line, j, 1) == " " || substr(line, j, 1) == "\t")) j--
+  word = ""
+  while (j >= 1) {
+    ch3 = substr(line, j, 1)
+    if (ch3 !~ /[A-Za-z]/) break
+    word = ch3 word
+    j--
+  }
+  return is_heredoc_command(word)
+}
+
+# Heredoc start (<< or <<-), recognized at the true top level ONLY when
+# heredoc_command_before() holds, and — only when heredoc_armed (see the
+# in_dq loop below) — inside a $(...) nested in a double-quoted span. NOT
+# recognized inside a real single-quoted span: nothing is special inside
+# '"'"'...'"'"' in real shell.
 # Returns the index of the last consumed char, or 0 if `line` at `i` is not a
 # genuine "<<"/"<<-" start (also rejects mid-run matches inside "<<<").
 #
@@ -295,9 +320,13 @@ function try_heredoc(line, i,    j, n2, delim, ch, lsq, ldq) {
     } else if (c == "\"") {
       in_dq = 1
     } else if (c == "<") {
-      # Redirect or heredoc. try_heredoc() wins when "<<" starts here; otherwise
-      # this is a plain input redirect and the target token is skipped like ">".
-      hd_end = try_heredoc($0, i)
+      # Redirect or heredoc. try_heredoc() wins when "<<" starts here AND the
+      # preceding word is a known heredoc-consuming command
+      # (heredoc_command_before) — the same narrow gate as the $(...)-nested
+      # case, applied uniformly (TASK-004 attempt 6). Otherwise this is a
+      # plain input redirect (or an arithmetic/other "<<" that never arms a
+      # heredoc) and the target token is skipped like ">".
+      hd_end = heredoc_command_before($0, i) ? try_heredoc($0, i) : 0
       if (hd_end > 0) {
         flush_pre_redirect()
         i = hd_end

@@ -914,6 +914,136 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
 assert_exit_code "block H-18: malformed/never-executing nested-quote span now blocks (opaque paren-depth miscount, reclassified attempt 5)" "$GUARD_EC" 2
 teardown_temp_dir
 
+# --- Category H (attempt-6 regression pins): a top-level, UNQUOTED $((...))
+# was arming a bogus heredoc because the top-level "<<" scanner never applied
+# the cat/tee gate the $(...)-nested case already had. Verified to FAIL (exit
+# 0) against commit d8a0293 and PASS (exit 2) after this fix — both
+# directions checked, not assumed.
+
+# Block H-19 (probe h — orchestrator B1): echo $((1<<2)) at top level, no
+# surrounding quotes, real git add after.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_h_cmd=$(cat <<'CMDEOF'
+echo $((1<<2))
+git add nazgul/config.json
+CMDEOF
+)
+input=$(make_bash_input "$probe_h_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'block H-19: echo $((1<<2)) top-level (unquoted), real git add after (probe h)' "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-20 (probe h variant): x=$((1<<2)) assignment form.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_h2_cmd=$(cat <<'CMDEOF'
+x=$((1<<2))
+git add nazgul/config.json
+CMDEOF
+)
+input=$(make_bash_input "$probe_h2_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'block H-20: x=$((1<<2)) top-level assignment, real git add after (probe h variant)' "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-21 (probe h variant): whitespace around the shift operator.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_h3_cmd=$(cat <<'CMDEOF'
+echo $(( 5 << 3 ))
+git add nazgul/config.json
+CMDEOF
+)
+input=$(make_bash_input "$probe_h3_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'block H-21: echo $(( 5 << 3 )) top-level spaced arithmetic, real git add after (probe h variant)' "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-22 (probe h variant): a no-op command word (":") preceding the
+# arithmetic expansion.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_h4_cmd=$(cat <<'CMDEOF'
+: $((1<<2))
+git add nazgul/config.json
+CMDEOF
+)
+input=$(make_bash_input "$probe_h4_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code 'block H-22: : $((1<<2)) top-level no-op command, real git add after (probe h variant)' "$GUARD_EC" 2
+teardown_temp_dir
+
+# --- Category H (attempt-6 sanity pins): the uniform cat/tee gate must not
+# regress a REAL top-level heredoc using an unquoted delimiter or "tee", or
+# the tab-stripping "<<-" variant — only bogus arming is removed, not genuine
+# heredoc recognition.
+
+# Allow-body/Block-after H-23: cat <<EOF (bare, unquoted delimiter) at top
+# level — body is inert, real git add after the terminator still blocks.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_h5_cmd=$(cat <<'CMDEOF'
+cat <<EOF
+decoy nazgul/text inside the heredoc body
+EOF
+git add nazgul/config.json
+CMDEOF
+)
+input=$(make_bash_input "$probe_h5_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block H-23: cat <<EOF (unquoted delimiter) top-level heredoc, real git add after" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-24: tee <<EOF at top level — the other enumerated heredoc-consuming
+# command, real git add after the terminator still blocks.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+probe_h6_cmd=$(cat <<'CMDEOF'
+tee <<EOF
+decoy nazgul/text inside the heredoc body
+EOF
+git add nazgul/config.json
+CMDEOF
+)
+input=$(make_bash_input "$probe_h6_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block H-24: tee <<EOF top-level heredoc, real git add after" "$GUARD_EC" 2
+teardown_temp_dir
+
+# Block H-25: cat <<-'EOF' (tab-stripping variant) at top level, real git add
+# after the tab-indented terminator still blocks.
+setup_temp_dir
+setup_nazgul_dir
+cat > "$TEST_DIR/nazgul/config.json" <<'EOF'
+{"install_mode":"local","afk":{"enabled":true}}
+EOF
+TAB=$'\t'
+NL=$'\n'
+probe_h7_cmd="cat <<-'EOF'${NL}${TAB}decoy nazgul/text inside the heredoc body${NL}${TAB}EOF${NL}git add nazgul/config.json"
+input=$(make_bash_input "$probe_h7_cmd")
+CLAUDE_PROJECT_DIR="$TEST_DIR" run_guard_json "$input"
+assert_exit_code "block H-25: cat <<-'EOF' tab-stripping top-level heredoc, real git add after" "$GUARD_EC" 2
+teardown_temp_dir
+
 # ---------------------------------------------------------------------------
 # Performance: resolve_project_root() deferred past the pre-filters (V2/AC2)
 # ---------------------------------------------------------------------------
