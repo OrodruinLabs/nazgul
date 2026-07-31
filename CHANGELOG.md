@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [2.26.0] - 2026-07-31
 
 Subagent non-delivery: a subagent whose model finished reasoning must not stall silently at its turn
-ceiling and read to the orchestrator as work still in progress (governing thesis for this release).
+ceiling and be read by the orchestrator as work still in progress (governing thesis for this release).
 MINOR, not PATCH, on three independent grounds, any one sufficient by this repo's own precedent: (1)
 agent runtime behaviour changes in both directions — every generated reviewer's `maxTurns` goes
 12 → 30; (2) a new telemetry event type ships, `subagent_empty_return`; (3) a new bounded gate and a
