@@ -668,6 +668,20 @@ migrate_30_to_31() {
   log_migration "v30→v31: added guards.team_teardown:true, guards.team_sweep:true, guards.team_sweep_min_age_hours:24 (teammate dismissal gate + dead-session team sweep; additive, explicit values preserved)"
 }
 
+migrate_31_to_32() {
+  local tmp; tmp=$(mktemp)
+  # Bounded auto-resume backstop kill-switch (ADR-015 Part 1). Named for the
+  # BEHAVIOUR (bounded subagent resume), not the mechanism, so it applies
+  # whichever branch the SubagentStop exit-2 probe selects. Additive; explicit
+  # values (incl. false) preserved. Same type-guard pattern as migrate_30_to_31.
+  jq '
+    .guards = ((if (.guards | type) == "object" then .guards else {} end)
+      | .subagent_resume = (if has("subagent_resume") then .subagent_resume else true end))
+    | .schema_version = 32
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v31→v32: added guards.subagent_resume:true (bounded auto-resume backstop kill-switch; additive, explicit values preserved)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"
