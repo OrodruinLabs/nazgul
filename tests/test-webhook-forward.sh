@@ -122,9 +122,63 @@ CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$WEBHOOK_SCRIPT" "Stop" >/dev/null 2>&1
 assert_file_not_exists "event not configured: curl never invoked" "$NAZGUL_TEST_CURL_ARGV"
 teardown_temp_dir
 
+# --- Test 5 (TASK-007/D4): curl carries --connect-timeout 2 alongside the
+# pre-existing --max-time 5 (attributed to 53cc7cb, FEAT-017); this does NOT
+# fix the reported 16-24s stalls (those are Defect 1's CPU starvation), it
+# only bounds the connect phase distinct from the overall wall-clock bound. ---
+assert_flag_value() {
+  local name="$1" file="$2" flag="$3" value="$4"
+  mapfile -t lines < "$file"
+  local found=0
+  for i in "${!lines[@]}"; do
+    if [ "${lines[$i]}" = "$flag" ] && [ "$((i + 1))" -lt "${#lines[@]}" ] && [ "${lines[$((i + 1))]}" = "$value" ]; then
+      found=1
+      break
+    fi
+  done
+  if [ "$found" -eq 1 ]; then
+    _pass "$name"
+  else
+    _fail "$name" "expected '$flag' immediately followed by '$value' in: $file"
+  fi
+}
+
+setup_temp_dir
+setup_nazgul_dir
+create_config \
+  '.webhooks.enabled = true' \
+  '.webhooks.url = "https://example.invalid/hook"' \
+  '.webhooks.events = ["Stop"]'
+run_webhook "Stop"
+assert_file_exists "TASK-007: fake curl captured argv" "$NAZGUL_TEST_CURL_ARGV"
+assert_flag_value "TASK-007: --connect-timeout 2 present" "$NAZGUL_TEST_CURL_ARGV" "--connect-timeout" "2"
+assert_flag_value "TASK-007: --max-time 5 unchanged (pre-existing bound)" "$NAZGUL_TEST_CURL_ARGV" "--max-time" "5"
+teardown_temp_dir
+
+# D4: fire-and-forget must NOT ship. Static check on the curl invocation
+# block for subshell-backgrounding (`) &`), `disown`, PID-capture (`$!`), or
+# a bare trailing `&` on the statement itself — the mechanical form of
+# "asserted by the absence of those forms in the diff". The trailing-&
+# check is end-of-line anchored, not a substring search, so "2>&1" (which
+# is legitimate in this block) can't trip it.
+CURL_BLOCK=$(awk '/^curl -s -X POST/,/WEBHOOK_URL.*\|\| true/' "$WEBHOOK_SCRIPT")
+if [ -n "$CURL_BLOCK" ]; then
+  _pass "TASK-007/D4: CURL_BLOCK extraction found the curl invocation (anchors matched)"
+else
+  _fail "TASK-007/D4: CURL_BLOCK extraction found the curl invocation (anchors matched)" "awk range matched zero lines — the checks below would trivially pass against an empty string"
+fi
+assert_not_contains "TASK-007/D4: curl invocation not subshell-backgrounded" "$CURL_BLOCK" ") &"
+assert_not_contains "TASK-007/D4: curl invocation does not use disown" "$CURL_BLOCK" "disown"
+assert_not_contains "TASK-007/D4: curl invocation does not capture a background PID" "$CURL_BLOCK" '$!'
+if grep -qE '&[[:space:]]*$' <<<"$CURL_BLOCK"; then
+  _fail "TASK-007/D4: curl invocation not bare-&-backgrounded" "found a bare trailing '&' as the last token of a line in: '${CURL_BLOCK:0:200}'"
+else
+  _pass "TASK-007/D4: curl invocation not bare-&-backgrounded"
+fi
+
 rm -rf "$FAKEBIN"
 
-# --- Test 5: bash -n / shellcheck sanity (project convention) ---
+# --- Test 6: bash -n / shellcheck sanity (project convention) ---
 bash -n "$WEBHOOK_SCRIPT" 2>/dev/null && _pass "bash -n clean: webhook-forward.sh" || _fail "bash -n clean: webhook-forward.sh" "syntax error in $WEBHOOK_SCRIPT"
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck -S warning "$WEBHOOK_SCRIPT" 2>/dev/null && _pass "shellcheck clean: webhook-forward.sh" || _fail "shellcheck clean: webhook-forward.sh" "shellcheck found issues in $WEBHOOK_SCRIPT"

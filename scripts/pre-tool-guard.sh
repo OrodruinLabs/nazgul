@@ -26,17 +26,39 @@ if [ -z "$CMD" ]; then
   CMD="$INPUT"
 fi
 
+# Case-insensitive, fork-free `[[ =~ ]]` match. `\s` is a GNU/BSD grep extension
+# undefined in POSIX ERE (the regcomp(3) engine behind `=~` does not implement it,
+# see scripts/local-mode-tracking-guard.sh:50-53 for the same lesson learned once
+# already) — translate it to `[[:space:]]` for matching only; callers still print
+# the original `\s`-bearing pattern text so blocked-command messages are unchanged.
+# nocasematch is scoped to this one match, never left ambient.
+_ci_match() {
+  local str="$1" pattern="$2"
+  local mpattern="${pattern//\\s/[[:space:]]}"
+  local rc
+  shopt -s nocasematch
+  if [[ "$str" =~ $mpattern ]]; then rc=0; else rc=1; fi
+  shopt -u nocasematch
+  return $rc
+}
+
 # Destructive patterns to block. Scan the extracted command ($CMD), not the raw
 # stdin — in production stdin is the JSON envelope, whose escaping/encoding could
-# hide or distort a pattern match.
+# hide or distort a pattern match. Matched per LINE (a here-string read loop, zero
+# forks) to preserve grep's line-oriented semantics: a `$`-anchored pattern must
+# still fire on an interior line of a multi-line command, and a `.*`-bearing
+# pattern must not span lines and over-match across them.
 check_pattern() {
   local pattern="$1"
   local reason="$2"
-  if echo "$CMD" | grep -qiE "$pattern"; then
-    echo "NAZGUL SAFETY: Blocked — $reason" >&2
-    echo "Command contained: $pattern" >&2
-    exit 2
-  fi
+  local line
+  while IFS= read -r line; do
+    if _ci_match "$line" "$pattern"; then
+      echo "NAZGUL SAFETY: Blocked — $reason" >&2
+      echo "Command contained: $pattern" >&2
+      exit 2
+    fi
+  done <<< "$CMD"
 }
 
 # Filesystem destruction. Anchored on a boundary (whitespace/end/;/&/|) after the
@@ -70,19 +92,21 @@ check_sql_destructive() {
   local drop_database="(^|[^A-Za-z0-9_])DROP\s+DATABASE\s+$ident"
   local truncate="(^|[^A-Za-z0-9_])TRUNCATE\s+(TABLE\s+)?$ident"
 
-  echo "$CMD" | grep -qiE "$dbcli" || return 0
+  # Whole-command matching, deliberately NOT line-iterated (see comment above):
+  # segment/line-splitting is exactly the bypass FEAT-019 closed.
+  _ci_match "$CMD" "$dbcli" || return 0
 
-  if echo "$CMD" | grep -qiE "$drop_table"; then
+  if _ci_match "$CMD" "$drop_table"; then
     echo "NAZGUL SAFETY: Blocked — SQL table drop" >&2
     echo "Command contained: $drop_table" >&2
     exit 2
   fi
-  if echo "$CMD" | grep -qiE "$drop_database"; then
+  if _ci_match "$CMD" "$drop_database"; then
     echo "NAZGUL SAFETY: Blocked — SQL database drop" >&2
     echo "Command contained: $drop_database" >&2
     exit 2
   fi
-  if echo "$CMD" | grep -qiE "$truncate"; then
+  if _ci_match "$CMD" "$truncate"; then
     echo "NAZGUL SAFETY: Blocked — SQL table truncation" >&2
     echo "Command contained: $truncate" >&2
     exit 2
@@ -97,9 +121,9 @@ check_sql_destructive
 check_force_push() {
   local segment
   while IFS= read -r segment; do
-    if echo "$segment" | grep -qiE 'git\s+push' \
-      && echo "$segment" | grep -qiE '(^|\s)(--force|-f)(\s|$)' \
-      && echo "$segment" | grep -qiE '(^|\s)(main|master)(\s|$)'; then
+    if _ci_match "$segment" 'git\s+push' \
+      && _ci_match "$segment" '(^|\s)(--force|-f)(\s|$)' \
+      && _ci_match "$segment" '(^|\s)(main|master)(\s|$)'; then
       echo "NAZGUL SAFETY: Blocked — Force push to main/master branch" >&2
       echo "Command contained: git push with --force/-f targeting main/master" >&2
       exit 2

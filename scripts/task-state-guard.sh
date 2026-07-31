@@ -61,6 +61,68 @@ FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null || e
 # Derive project root via the worktree-aware resolver (FEAT-021 / ADR-008)
 PROJECT_ROOT="$(resolve_project_root)"
 
+# Bound FILE_PATH by PROJECT_ROOT (Defect 3): writes outside this project
+# aren't this guard's business — including another project's own manifest.
+_tsg_canon_path() {
+  # No-existence-required realpath (BSD lacks -m): resolve the longest
+  # existing prefix via cd+pwd -P, reattach what doesn't exist literally.
+  #
+  # A TERMINAL symlink must be resolved too (PR #75 review). Resolving only
+  # dirname left the leaf literal, which is a real BYPASS in the fail-open
+  # direction, not just cosmetic: a path OUTSIDE the project symlinked to an
+  # in-project source file canonicalized as outside, so the boundary check
+  # below exited 0 and the state gate never ran — while the write landed
+  # inside the project. Reproduced: direct write to proj/src/main.ts with no
+  # task IN_PROGRESS exits 2, but the same write via outside/link.ts exited 0.
+  local p="$1" suffix="" dir base
+  dir="$(dirname -- "$p")"
+  base="$(basename -- "$p")"
+  while [ "$dir" != "/" ] && [ ! -d "$dir" ]; do
+    suffix="/$(basename -- "$dir")$suffix"
+    dir="$(dirname -- "$dir")"
+  done
+  dir="$(cd "$dir" 2>/dev/null && pwd -P || printf '%s' "$dir")"
+  # Bounded symlink walk on the leaf, only when it exists and the prefix was
+  # fully resolved (no literal suffix). Bounded to 16 hops so a symlink loop
+  # cannot hang a PreToolUse hook; on exhaustion we keep the last path, which
+  # degrades to the previous behaviour rather than failing the guard.
+  if [ -z "$suffix" ]; then
+    local hops=0 target
+    while [ -L "$dir/$base" ] && [ "$hops" -lt 16 ]; do
+      target="$(readlink -- "$dir/$base")" || break
+      case "$target" in
+        /*) dir="$(dirname -- "$target")"; base="$(basename -- "$target")" ;;
+        *)  dir="$(cd "$dir" 2>/dev/null && cd "$(dirname -- "$target")" 2>/dev/null && pwd -P || printf '%s' "$dir")"
+            base="$(basename -- "$target")" ;;
+      esac
+      dir="$(cd "$dir" 2>/dev/null && pwd -P || printf '%s' "$dir")"
+      hops=$((hops + 1))
+    done
+  fi
+  printf '%s%s/%s' "$dir" "$suffix" "$base"
+}
+
+case "$FILE_PATH" in
+  /*) CANON_FILE_PATH="$FILE_PATH" ;;
+  *)  CANON_FILE_PATH="$PROJECT_ROOT/$FILE_PATH" ;;
+esac
+CANON_FILE_PATH="$(_tsg_canon_path "$CANON_FILE_PATH")"
+CANON_PROJECT_ROOT="$(cd "$PROJECT_ROOT" 2>/dev/null && pwd -P || printf '%s' "$PROJECT_ROOT")"
+# When the project root canonicalizes to "/", "$CANON_PROJECT_ROOT"/* expands
+# to "//*", which matches nothing with a single leading slash — so EVERY
+# descendant fell through to `exit 0` and the guard silently disarmed itself
+# for the whole filesystem (PR #75 review; verified: with root=/, both
+# /tmp/file and /a/b took the allow branch). A root-mounted project is
+# unlikely, but a guard that no-ops on an unlikely input is still a guard that
+# no-ops. With root "/" every absolute path IS a descendant, so skip the
+# boundary test rather than let the pattern decide it.
+if [ "$CANON_PROJECT_ROOT" != "/" ]; then
+  case "$CANON_FILE_PATH" in
+    "$CANON_PROJECT_ROOT"|"$CANON_PROJECT_ROOT"/*) ;;
+    *) exit 0 ;;
+  esac
+fi
+
 # Helper: check if a path is inside the project's nazgul/ control directory
 is_nazgul_path() {
   local p="$1"

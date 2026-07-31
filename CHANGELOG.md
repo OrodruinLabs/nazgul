@@ -2,6 +2,128 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.25.0] - 2026-07-30
+
+Loop reliability: a mechanism that FAILS must not look like a mechanism that had nothing to do
+(governing thesis for this release — the sibling of 2.24.0's "looked and found nothing" vs. "never
+looked"). MINOR, not PATCH, because two gates change behaviour in BOTH directions and one guard
+widens its allow: the AFK timeout gate now computes elapsed time correctly in every timezone — east
+of UTC a run that previously stopped early now runs to its configured limit, and west of UTC a run
+that previously NEVER timed out now will; the IMPLEMENTED evidence gate tightens — transitions that
+pass today on a manifest's own Base SHA now BLOCK; and `task-state-guard.sh` widens — writes outside
+the project root that BLOCK today (with `guards.requireActiveTask` on) are now allowed. Additive on
+top of those: a new `stop_gate` telemetry event type, and the `PreToolUse` Bash-matcher hook
+timeouts raised 10 s → 30 s. MAJOR is wrong — nothing is removed and no interface changes shape.
+**`schema_version` stays at 31**: no config key was added, removed, or changed in meaning.
+
+### Fixed
+- **The AFK timeout gate parsed Z-suffixed UTC timestamps as LOCAL time on macOS (Defect 4).**
+  BSD `date -j -f` treats a trailing literal `Z` as an ordinary character, so `stop-hook.sh`'s gate
+  compared a locally-parsed start time against an absolute `date +%s` epoch: east of UTC the
+  computed elapsed was inflated by the UTC offset and the gate fired EARLY (observed live: true
+  elapsed 81 minutes computed as 141 against a 90-minute limit — a `--yolo` run with 9 planned
+  tasks never dispatched one); west of UTC it under-enforced by hours. UTC CI could never catch it.
+  Both the probe and the parse now run `date -j -u`, correct in every timezone — and the probe now
+  establishes that the timestamp PARSED correctly, not merely that the command exited 0. The second
+  half of the fix is observability: a gate-triggered stop no longer ends an autonomous run with a
+  bare `exit 0` indistinguishable from "nothing to do" — it emits a `stop_gate` telemetry event
+  carrying `reason`, `computed` and `limit`.
+- **`task-state-guard.sh` gated writes OUTSIDE this project (Defect 3).** `PROJECT_ROOT` was
+  resolved but never used as a bound, so with `guards.requireActiveTask` on and no task
+  IN_PROGRESS, a Write to an absolute path in another repository — or to Claude Code's own session
+  scratchpad — was blocked with "No task is IN_PROGRESS". The guard is now bounded by
+  `PROJECT_ROOT`: both sides are canonicalized before comparison, paths outside the project root
+  are never gated, and in-project paths reached non-canonically (symlink, `..`, a foreign cwd) are
+  STILL gated. This is the objective's only allow-widening change, and it composes with — does not
+  replace — 2.24.0's config-present/tasks-absent fail-closed behaviour.
+- **`pre-tool-guard.sh` fork elimination (Defect 1a).** The reported failure mode: on a loaded
+  machine (203 Bash calls, 59 concurrent subagents, `tsc`/`vitest` on the same cores) trivial
+  commands hit the 10 s hook timeout, with killed `durationMs` exceeding `timeoutMs` by 1.4-2.4x —
+  CPU starvation from fork volume, not slow logic. The guard's 19 per-call `echo | grep` pipelines
+  (15 `check_pattern` sites, `check_sql_destructive`'s `$dbcli` gate, `check_force_push`'s three
+  per-segment matches; the SQL function's three further matches only run when that gate passes, so
+  a command touching a DB CLI costs 22) are now bash-native `[[ =~ ]]` via one `_ci_match()` helper: external
+  invocations 20 → 3 per call, measured mean wall clock ~100-108 ms → ~30-34 ms (~68-70%
+  reduction). FEAT-019's precision suite is not just preserved but PROVEN preserved: a differential
+  harness replays every command the 160-assertion suite exercises against the pre-fix guard and
+  asserts exit code AND stderr byte-identical — zero diffs — plus six new pinned regression cases
+  for the semantic corners (`\s` vs `[[:space:]]`, scoped `nocasematch`, per-line vs whole-string
+  anchoring).
+- **`local-mode-tracking-guard.sh` heredoc FALSE BLOCK (Defect 1e).** A legitimate
+  `git commit -m "$(cat <<'EOF' … EOF)"` whose heredoc body contained a literal `"` broke the
+  scanner's quote tracking, exposing body text to the runtime-state pathspec check and falsely
+  blocking the commit. After the general-tokenizer approach was retired (see Known / deferred), the
+  shipped fix is a narrow rule recognizing the `cat`/`tee` heredoc command shape, with an opaque
+  paren-depth fallback for every other `$(...)` — scanner state reduced from 11 variables to 7,
+  87/87 guard suite green. Fixed, but NOT hardened: two accepted false-ALLOW residuals remain,
+  named below. The guard also no longer pays ~27 ms resolving `PROJECT_ROOT` before its cheap
+  pre-filters run — that resolution is now lazy, after the pre-filters that `exit 0` for the
+  overwhelming majority of Bash calls.
+- **`PreToolUse` Bash-matcher hook timeouts 10 s → 30 s (Defect 1d) — a backstop, not a fix.**
+  Exactly the two `Bash`-matcher entries in `hooks/hooks.json`; every other timeout is
+  byte-unchanged. The fixes are the fork eliminations above; the bump only stops a loaded machine
+  from turning a guard into a stall. Whether a timed-out `PreToolUse` hook fails open or closed
+  remains unverified — see Known / deferred.
+- **The IMPLEMENTED evidence gate was satisfied before any work was done (Defect 5).**
+  `ttg_verify_commit_evidence` extracted every hex token from the ENTIRE manifest and accepted if
+  any one resolved — and every manifest carries its planner-written `Base SHA` in `## Metadata`
+  from creation, which is by definition a real, reachable commit. Reproduced deterministically: a
+  manifest with only a Base SHA and NO `## Commits` section passed (exit 0); deleting that one line
+  made it correctly fail. The gate now scopes extraction to the `## Commits` section (agreeing with
+  `pre-merge-commit`'s heading-scoped matching — one definition of evidence, so a task can no
+  longer pass IMPLEMENTED and then block at merge as unverifiable) and requires the recorded commit
+  to be a STRICT descendant of the manifest's own Base SHA (`git merge-base --is-ancestor`, with
+  equality explicitly rejected — a commit is its own ancestor), proving forward progress rather
+  than mere existence. A manifest with no Base SHA degrades to existence-only LOUDLY, with a stderr
+  diagnostic naming the degradation. The authoring contract is now stated at both ends
+  (`templates/task-manifest.md`, `agents/implementer.md`), and `RULES.md` Rules 2/8 plus
+  `CLAUDE.md` describe the shipped gate rather than the planned one, with ADR-011/012/013 amended
+  to match shipped code.
+- **`webhook-forward.sh` gains `--connect-timeout 2` (Defect 2 — downgraded, see below).** One flag
+  beside the PRE-EXISTING `--max-time 5`: it bounds the DNS/connect phase specifically, distinct
+  from the overall wall clock. This is NOT a fix for an unbounded call — the unbounded-curl claim
+  was verified false before any work started.
+
+### Known / deferred
+- **Defect 2 was DOWNGRADED from p1 to p3 before any work started.** The report's claim that
+  `webhook-forward.sh` runs an unbounded `curl` was verified FALSE on disk: `--max-time 5` has been
+  present since commit `08c5da84` (2026-03-16), long before this objective. Only
+  `--connect-timeout 2` is new here. The reported 16,585 ms and 24,102 ms Stop-hook durations are
+  NOT explained by that call — a call bounded at 5 s cannot produce a 24 s duration — and the
+  better-supported explanation is the same CPU starvation as Defect 1.
+- **Fix 1b (merging the two `PreToolUse` Bash guards) is DEFERRED**, with the measurement: ~13 ms
+  of a ~147 ms combined per-call cost (~9%), versus ~101 ms recovered by the two single-file fixes
+  that did ship. ADR-011's cheaper "shared parse helper" fallback was found to save nothing — two
+  independently-registered hook processes each receive their own stdin and cannot share one `jq`
+  call.
+- **Fix 1c (replacing `jq` for envelope parsing) DOES NOT SHIP** — measured at 4.8 ms, ~3% of the
+  combined per-call cost, against a byte-equivalence verification burden and a real corruption
+  risk.
+- **`webhook-forward.sh` fire-and-forget DOES NOT SHIP** — detaching the POST would trade an
+  observed bounded wait for an unobservable delivery, which is the exact failure shape this release
+  exists to eliminate.
+- **The disposition of a timed-out `PreToolUse` hook (fail-open vs fail-closed) is UNVERIFIED.**
+  The 10 s → 30 s bump ships anyway because a timeout is bad under either reading, but this release
+  does not claim the question was answered. Filed to the work inbox as an open item.
+- **`START_EPOCH=0` still skips the AFK gate silently** when the session-start timestamp cannot be
+  parsed on either `date` dialect. Same thesis family — a failed mechanism indistinguishable from
+  an idle one — but out of ADR-014's scope; filed.
+- **The corrected ADRs never reach a clone.** ADR-011/012/013 were amended to `ACCEPTED (amended)`
+  because their original text contradicted shipped code — ADR-011's would have a reader implement
+  the fail-open variant that silently disarms `pre-tool-guard.sh` — but the project-local docs
+  directory those ADRs live in is gitignored in local install mode, so the corrections exist for
+  this repository's own record and its doc-verifier gate only, not for downstream users. Whether
+  ADRs belong somewhere git-tracked is a standing open question FEAT-022 also raised and left
+  unresolved; recorded here, not resolved here.
+- **The heredoc guard shipped with two accepted residual bypasses**, by architect resolution ruling
+  after retry exhaustion (3/3) — ten false-ALLOW bypasses were found across seven attempts at the
+  general tokenizer. Stated honestly: Defect 1e (the heredoc false BLOCK) is FIXED, bypasses #8/#9
+  and the pre-existing baseline bypass H-16 are CLOSED, but deprecated `$[...]` bracket arithmetic
+  and space-separated `$(( (cmd<<n) ))` remain false-ALLOWs — filed in prose, accepted as LOW
+  severity behind `.gitignore` and the session-staging chokepoint. A git-level `pre-commit`
+  staged-tree guard is chartered as the durable fix — the third proof in this repository that
+  command-string parsing does not converge.
+
 ## [2.24.0] - 2026-07-28
 
 Guard integrity: a guard whose lookup misses must never report success (governing thesis for this
