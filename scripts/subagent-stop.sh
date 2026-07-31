@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Nazgul SubagentStop — fires when any subagent finishes. Always appends a
-# telemetry event to the event bus so /nazgul:metrics can report how many
-# subagents ran per loop. Also inspects the completing subagent's own
+# Nazgul SubagentStop — fires when any subagent finishes. Appends a
+# telemetry event to the event bus (whenever jq, hook input, and the bus are
+# available — unavailable preconditions skip with a stderr notice) so
+# /nazgul:metrics can report how many subagents ran per loop. Also inspects the completing subagent's own
 # transcript for an empty or verdict-less final return (subagent_empty_return
 # event) and, on detection, can now BLOCK the subagent turn to force one
 # bounded resume attempt — this hook is no longer "never blocks."
