@@ -73,13 +73,14 @@ fi
 # [enforced] counter below; for [advisory] the line count and occurrence
 # count both happen to be 21 (no line currently carries two [advisory] tags).
 # FEAT-021/TASK-010 added 1 more: the "Shared nazgul/ Root Resolver" subsection's
-# resolver-adoption-is-review-only bullet (20 + 1 = 21).
+# resolver-adoption-is-review-only bullet (20 + 1 = 21). FEAT-024/TASK-009 added
+# 1 more: §19's resume-recovery-pattern bullet (21 + 1 = 22).
 ADVISORY_COUNT=$(awk '{ count += gsub(/\[advisory\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ADVISORY_COUNT" -eq 21 ]; then
-  _pass "[advisory] annotation count is exactly 21 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 22 ]; then
+  _pass "[advisory] annotation count is exactly 22 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 21" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 21"
+  _fail "[advisory] annotation count is exactly 22" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 22"
 fi
 
 # ---------------------------------------------------------------------------
@@ -105,13 +106,15 @@ fi
 # TASK-010 added 1 more: the resolver subsection's `_resolution_integrity_ok()`
 # fail-open sentence (51 + 1 = 52). FEAT-022/TASK-008 added 1 more: §8's new
 # "Project detection (config-present, tasks-absent)" bullet, split out of the
-# Implementer bullet it was originally folded into (52 + 1 = 53).
+# Implementer bullet it was originally folded into (52 + 1 = 53). FEAT-024/
+# TASK-009 added 3 more: §19's universal-detection, bounded-resume, and
+# kill-switch bullets (53 + 3 = 56).
 ENFORCED_COUNT=$(awk '{ count += gsub(/\[enforced\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ENFORCED_COUNT" -eq 53 ]; then
-  _pass "[enforced] annotation count is exactly 53 (found: $ENFORCED_COUNT)"
+if [ "$ENFORCED_COUNT" -eq 56 ]; then
+  _pass "[enforced] annotation count is exactly 56 (found: $ENFORCED_COUNT)"
 else
-  _fail "[enforced] annotation count is exactly 53" \
-    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 53"
+  _fail "[enforced] annotation count is exactly 56" \
+    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 56"
 fi
 
 # NOTE: counts OCCURRENCES, not lines — no line currently carries two
