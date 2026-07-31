@@ -173,6 +173,30 @@ _resolve_agent_max_turns() {
   grep -m1 -E '^maxTurns:[[:space:]]*[0-9]+' "$spec" 2>/dev/null | grep -oE '[0-9]+' || true
 }
 
+# Reviewer identification (TASK-005): a positive test only — a non-reviewer
+# must never be checked for a verdict line, since only reviewers carry the
+# verdict grammar contract (agents/templates/reviewer-base.md:71-98). Every
+# generated reviewer name ends in "-reviewer" (agents/templates/reviewer-domains.json
+# keys, plus architect-reviewer) — mirrors the *review-gate* name-keyed case
+# above. $unit != "unknown" is a second, independent positive signal: AGENT
+# was found in some dispatch.json's `selected` roster, which review-gate
+# populates with reviewer names only.
+_agent_is_reviewer() {
+  local unit_arg="$1"
+  case "$AGENT" in
+    *-reviewer) return 0 ;;
+  esac
+  [ "$unit_arg" != "unknown" ]
+}
+
+# Matches the fenced YAML verdict line reviewer-base.md:71-98 specifies
+# (`verdict: APPROVE|CHANGES_REQUESTED|UNVERIFIED`) — no looser than the
+# contract's three literal values, no stricter than the plain "key: value"
+# form reviewers actually emit.
+_final_text_has_verdict_line() {
+  printf '%s\n' "$1" | grep -qE '^[[:space:]]*verdict:[[:space:]]*(APPROVE|CHANGES_REQUESTED|UNVERIFIED)[[:space:]]*$'
+}
+
 # Appends one review-receipt line (LR-001 / TASK-002): hashes a dispatched
 # REVIEWER's own final returned text so a later re-check can bind a verdict
 # to the exact text the reviewer returned. Scope is unchanged by TASK-004 —
@@ -247,13 +271,25 @@ _inspect_subagent_completion() {
     return 0
   fi
 
+  # TASK-005: a reviewer whose final_text is non-empty but carries no verdict
+  # line has also delivered nothing usable — same event, distinguished by
+  # `reason` so a consumer can separate "never spoke" from "spoke without
+  # delivering" (TRD Scope Item 2 step 5, second detection clause).
+  local emit_reason=""
   if [ -z "$final_text" ]; then
+    emit_reason="empty_final_text"
+  elif _agent_is_reviewer "$unit" && ! _final_text_has_verdict_line "$final_text"; then
+    emit_reason="no_verdict_line"
+  fi
+
+  if [ -n "$emit_reason" ]; then
     local turns_used max_turns
     turns_used=$(jq -rs '[ .[] | select(.type == "assistant") ] | length' "$agent_transcript" 2>/dev/null) || true
     max_turns=$(_resolve_agent_max_turns) || true
     emit_event "subagent_empty_return" \
       agent "$AGENT" \
       unit "$unit" \
+      reason "$emit_reason" \
       turns_used:n "$turns_used" \
       max_turns:n "$max_turns"
   fi
