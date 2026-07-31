@@ -651,7 +651,7 @@ every completion.
    continues the SAME subagent with the reason injected as a new turn. On detecting either reason above,
    `_maybe_resume_subagent()` blocks with a "reply now with your final deliverable" directive, capped at
    `_RESUME_CAP` (2) attempts per dispatch — keyed by the hook's own `agent_id` (falling back to
-   `session_id:$AGENT`, then bare `$AGENT`, each fallback announced on stderr) so the cap tracks one
+   `session_id:$AGENT`, then bare `$AGENT` — the final, coarsest fallback announced on stderr) so the cap tracks one
    dispatch's resumed turns rather than the agent type globally. Never blocks a second time on the
    harness's own `stop_hook_active` re-entry signal, and any unexpected failure (unwritable attempts
    directory, missing config) degrades to `action: detected_only` with a stderr notice — fail-open,
