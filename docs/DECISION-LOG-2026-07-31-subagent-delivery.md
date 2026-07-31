@@ -72,3 +72,59 @@ use `maxTurns: 30` for reviewers — matching it avoids introducing a second rev
 
 Neither drift was touched by this task; no other agent spec was accidentally modified (full audit table
 above covers every file the grep matched).
+
+## TASK-003 — SubagentStop exit-2 probe
+
+**Result in one sentence: exit 2 + `{"decision":"block","reason":...}` from a `type: "command"`
+`SubagentStop` hook IS honored — the harness continued the SAME subagent with the reason injected as a
+new turn — so TASK-006 implements Branch A (in-hook bounded resume).**
+
+### Method actually used (differs from the manifest's step 2, deliberately)
+
+The manifest proposed temporarily pointing the `SubagentStop` entry in `hooks/hooks.json` at the probe.
+That was NOT done, for two reasons discovered at execution time: (a) this session loads the plugin from
+the version cache (`~/.claude/plugins/cache/orodruin-labs/nazgul/2.23.1/`), not from this repo checkout,
+so editing the repo's `hooks/hooks.json` would be a no-op for the live session; and (b) hook CONFIG may be
+snapshotted at session start, which would make a config swap silently untestable — indistinguishable from
+"exit 2 has no effect," exactly the ambiguity this framework exists to forbid. Instead the probe swapped
+the SCRIPT BODY at the path the already-registered hook command resolves on every event
+(`<cache>/scripts/subagent-stop.sh`), which is read fresh at each invocation. The repo's
+`hooks/hooks.json` was therefore never modified at all (`git diff --exit-code hooks/hooks.json` clean
+throughout), and the cache script was restored byte-identical (verified with `cmp`) immediately after
+observation. The probe script lived in the session scratchpad and was deleted after restore.
+
+### Probe payload (exact)
+
+First invocation only (marker-counted, so a working block could not loop forever):
+
+```json
+{"decision":"block","reason":"PROBE-CONTINUATION: you were blocked from stopping by a SubagentStop exit-2 probe. Reply with exactly the word PONG and stop."}
+```
+
+emitted on stdout, followed by `exit 2`. Subsequent invocations: `exit 0`.
+
+### Dispatch mode observed
+
+Direct Agent-tool dispatch (`subagent_type: general-purpose`, model haiku, one-shot prompt "Reply with
+exactly the word PING and nothing else"). **Agent-Teams teammate mode was NOT observed** — this result is
+claimed for direct dispatch only, the mode the review board actually uses.
+
+### Observed behaviour
+
+- The subagent's final deliverable was `PONG`, not `PING` — it composed PING, was blocked at stop,
+  received the probe's reason as a continuation turn, complied, and stopped again.
+- The probe recorded exactly 2 invocations: invocation 1 (blocked, exit 2), invocation 2 (the re-stop,
+  allowed with exit 0). Marker files captured the harness's hook input both times.
+- Total added latency ~4s on a trivial dispatch; no error surfaced to the orchestrator.
+
+### Hook input fields observed (useful to TASK-006 Branch A)
+
+The `SubagentStop` stdin JSON carried, among others: `agent_id`, `agent_type`, `agent_transcript_path`,
+`last_assistant_message`, `stop_hook_active`, `session_id`, `cwd`. Notable: `last_assistant_message`
+gives the hook the final text directly (no transcript parse needed for the empty-return check), and
+`stop_hook_active` is the harness's own re-entry signal — both directly serve the Branch A resume design.
+
+### Selected branch
+
+**Branch A** (in-hook bounded resume in `scripts/subagent-stop.sh`). TASK-007's Branch B stop-hook gate
+is therefore expected to close NOT-APPLICABLE per its manifest.
