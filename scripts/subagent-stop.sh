@@ -130,28 +130,16 @@ case "$AGENT" in
     ;;
 esac
 
-# Reviewer-receipt capture (LR-001 / TASK-002): hashes a dispatched REVIEWER
-# subagent's own final returned text. `.transcript_path` in the hook payload
-# is the PARENT/team session's shared transcript, not this subagent's own;
-# `.agent_transcript_path` IS this exact completing subagent's isolated
-# transcript file — empirically confirmed (task manifest Implementation Log).
-_record_reviewer_receipt() {
-  command -v jq >/dev/null 2>&1 || return 0
-  [ -n "$INPUT" ] || return 0
-
-  local agent_transcript
-  agent_transcript=$(printf '%s' "$INPUT" | jq -r '.agent_transcript_path // empty' 2>/dev/null) || return 0
-  [ -n "$agent_transcript" ] && [ -f "$agent_transcript" ] || return 0
-
+# Best-effort review-unit resolution for AGENT (TASK-002 / LR-001): finds the
+# dispatch manifest whose `selected` roster lists AGENT and returns its unit.
+# Pure enrichment — callers must treat "" as "unresolved", never as failure.
+# Tie-break on more than one match: prefer the most-recently-created manifest
+# (mirrors this codebase's other "most-recent wins" tie-breaks, e.g.
+# self-audit.sh's newest-session-dir pick).
+_resolve_review_unit_for_agent() {
   local reviews_dir="$NAZGUL_DIR/reviews"
   [ -d "$reviews_dir" ] || return 0
 
-  # Find the review unit whose dispatch manifest lists AGENT as a selected
-  # reviewer. Best-effort tie-break if AGENT is selected in more than one
-  # unit's manifest at once (the same reviewer role dispatched concurrently
-  # across units): prefer the most-recently-created manifest — mirrors this
-  # codebase's other "most-recent wins" tie-breaks (e.g. self-audit.sh's
-  # newest-session-dir pick).
   local unit="" best_created="" manifest
   for manifest in "$reviews_dir"/*/.dispatch.json; do
     [ -f "$manifest" ] || continue
@@ -167,21 +155,31 @@ _record_reviewer_receipt() {
       best_created="$this_created"
     fi
   done
-  [ -n "$unit" ] || return 0
+  printf '%s' "$unit"
+}
 
-  # Extract the reviewer's own final assistant-role message text from its
-  # isolated transcript: one JSON record per line, the last record with
-  # type "assistant" is the reviewer's final turn, and its returned text
-  # lives in the "text"-typed blocks of message.content.
-  local final_text
-  final_text=$(jq -rs '
-      [ .[] | select(.type == "assistant") ]
-      | last
-      | (.message.content // [])
-      | map(select(.type == "text") | .text)
-      | join("")
-    ' "$agent_transcript" 2>/dev/null)
-  [ -n "$final_text" ] || return 0
+# Resolves AGENT's configured maxTurns ceiling from its own spec file: the
+# generated copy first (what actually ran), falling back to the committed
+# template for agents dispatched standalone (e.g. `architect`) with no
+# generated copy. Prints nothing (not even a trailing newline) when neither
+# file exists or carries a `maxTurns:` line — the caller's numeric-suffix
+# convention already turns an empty string into an explicit JSON null.
+_resolve_agent_max_turns() {
+  local project_root="${NAZGUL_DIR%/nazgul}"
+  local spec="$project_root/.claude/agents/generated/${AGENT}.md"
+  [ -f "$spec" ] || spec="$project_root/agents/${AGENT}.md"
+  [ -f "$spec" ] || return 0
+
+  grep -m1 -E '^maxTurns:[[:space:]]*[0-9]+' "$spec" 2>/dev/null | grep -oE '[0-9]+' || true
+}
+
+# Appends one review-receipt line (LR-001 / TASK-002): hashes a dispatched
+# REVIEWER's own final returned text so a later re-check can bind a verdict
+# to the exact text the reviewer returned. Scope is unchanged by TASK-004 —
+# still reviewer-dispatch-scoped, still gated on both a resolved unit and
+# non-empty final_text; only empty-return detection became universal.
+_append_review_receipt() {
+  local unit="$1" final_text="$2"
 
   local hash
   hash=$(printf '%s' "$final_text" | _rp_sha256) || return 0
@@ -199,6 +197,74 @@ _record_reviewer_receipt() {
     >> "$receipts_file" 2>/dev/null || true
 }
 
-_record_reviewer_receipt || true
+# Universal empty-return detection (TASK-004 / TRD Scope Item 2): every
+# completing subagent with a readable transcript gets this check, regardless
+# of whether it maps to a review-gate dispatch — the two standalone stalls
+# in the objective's own evidence (`commits_verify`, `create_feature_branch`)
+# are NOT board dispatches and must still be caught. Unit resolution below is
+# best-effort enrichment; it can never gate whether detection runs.
+# `.transcript_path` in the hook payload is the PARENT/team session's shared
+# transcript, not this subagent's own; `.agent_transcript_path` IS this exact
+# completing subagent's isolated transcript file — empirically confirmed
+# (TASK-002 manifest Implementation Log).
+_inspect_subagent_completion() {
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "subagent-stop: skipping empty-return detection (jq unavailable)" >&2
+    return 0
+  fi
+  if [ -z "$INPUT" ]; then
+    echo "subagent-stop: skipping empty-return detection (no hook input)" >&2
+    return 0
+  fi
+
+  local agent_transcript
+  agent_transcript=$(printf '%s' "$INPUT" | jq -r '.agent_transcript_path // empty' 2>/dev/null) || true
+  if [ -z "$agent_transcript" ] || [ ! -f "$agent_transcript" ]; then
+    echo "subagent-stop: skipping empty-return detection (no readable agent_transcript_path)" >&2
+    return 0
+  fi
+
+  # "unknown" is an explicit sentinel: "looked and found no unit" must stay
+  # distinguishable from "never looked" (RULES.md §15 / LR-006, applied here
+  # to this hook's own control flow rather than to a guard's pass/fail).
+  local unit
+  unit=$(_resolve_review_unit_for_agent)
+  [ -n "$unit" ] || unit="unknown"
+
+  # Extract the subagent's own final assistant-role message text: one JSON
+  # record per line, the last record with type "assistant" is its final
+  # turn, and its returned text lives in the "text"-typed blocks of
+  # message.content.
+  local final_text
+  if ! final_text=$(jq -rs '
+      [ .[] | select(.type == "assistant") ]
+      | last
+      | (.message.content // [])
+      | map(select(.type == "text") | .text)
+      | join("")
+    ' "$agent_transcript" 2>/dev/null); then
+    echo "subagent-stop: skipping empty-return detection (transcript parse failed: $agent_transcript)" >&2
+    return 0
+  fi
+
+  if [ -z "$final_text" ]; then
+    local turns_used max_turns
+    turns_used=$(jq -rs '[ .[] | select(.type == "assistant") ] | length' "$agent_transcript" 2>/dev/null) || true
+    max_turns=$(_resolve_agent_max_turns) || true
+    emit_event "subagent_empty_return" \
+      agent "$AGENT" \
+      unit "$unit" \
+      turns_used:n "$turns_used" \
+      max_turns:n "$max_turns"
+  fi
+
+  # Receipt-hashing stays reviewer-dispatch-scoped: only when a review unit
+  # resolved (not the "unknown" sentinel) AND final_text is non-empty.
+  if [ "$unit" != "unknown" ] && [ -n "$final_text" ]; then
+    _append_review_receipt "$unit" "$final_text"
+  fi
+}
+
+_inspect_subagent_completion || true
 
 exit 0
