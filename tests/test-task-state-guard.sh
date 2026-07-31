@@ -1965,4 +1965,55 @@ assert_exit_code "foreign project's own task manifest not judged by this project
 rm -rf "$OTHER_PROJECT"
 teardown_temp_dir
 
+# ---------------------------------------------------------------------------
+# PR #75 review (CodeRabbit): a TERMINAL symlink was not resolved — only
+# dirname was. That is a real BYPASS in the fail-open direction: a path
+# OUTSIDE the project symlinked to an in-project SOURCE file canonicalized as
+# outside, so the PROJECT_ROOT boundary exited 0 and the state gate never ran,
+# while the write landed inside the project.
+# Control (direct write) must block, genuinely-outside must allow, and the
+# symlink must now block.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "PLANNED"
+mkdir -p "$TEST_DIR/src"
+echo "console.log(1)" > "$TEST_DIR/src/main.ts"
+SYM_OUTSIDE=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-symout-XXXXXX")
+ln -s "$TEST_DIR/src/main.ts" "$SYM_OUTSIDE/link.ts"
+echo "x" > "$SYM_OUTSIDE/real.ts"
+
+input=$(jq -n --arg fp "$TEST_DIR/src/main.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"x"}}')
+run_guard "$input"
+assert_exit_code "control: direct in-project source write is gated" "$GUARD_EC" 2
+
+input=$(jq -n --arg fp "$SYM_OUTSIDE/real.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"x"}}')
+run_guard "$input"
+assert_exit_code "genuinely-outside path still NOT gated (Defect 3 preserved)" "$GUARD_EC" 0
+
+input=$(jq -n --arg fp "$SYM_OUTSIDE/link.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"x"}}')
+run_guard "$input"
+assert_exit_code "outside symlink -> in-project source IS gated (bypass closed)" "$GUARD_EC" 2
+
+rm -rf "$SYM_OUTSIDE"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# PR #75 review (CodeRabbit): a symlink LOOP must not hang the hook. The leaf
+# walk is bounded to 16 hops; on exhaustion it keeps the last path rather than
+# failing, so the guard still returns a verdict promptly.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_nazgul_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "PLANNED"
+mkdir -p "$TEST_DIR/src"
+ln -s "$TEST_DIR/src/loop_b.ts" "$TEST_DIR/src/loop_a.ts"
+ln -s "$TEST_DIR/src/loop_a.ts" "$TEST_DIR/src/loop_b.ts"
+input=$(jq -n --arg fp "$TEST_DIR/src/loop_a.ts" '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"x"}}')
+run_guard "$input"
+assert_exit_code "symlink loop terminates and still returns a verdict" "$GUARD_EC" 2
+teardown_temp_dir
+
 report_results

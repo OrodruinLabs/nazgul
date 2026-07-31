@@ -40,8 +40,9 @@ timeouts raised 10 s → 30 s. MAJOR is wrong — nothing is removed and no inte
   machine (203 Bash calls, 59 concurrent subagents, `tsc`/`vitest` on the same cores) trivial
   commands hit the 10 s hook timeout, with killed `durationMs` exceeding `timeoutMs` by 1.4-2.4x —
   CPU starvation from fork volume, not slow logic. The guard's 19 per-call `echo | grep` pipelines
-  (15 `check_pattern` sites, `check_sql_destructive`'s three matches, `check_force_push`'s three
-  per-segment matches) are now bash-native `[[ =~ ]]` via one `_ci_match()` helper: external
+  (15 `check_pattern` sites, `check_sql_destructive`'s `$dbcli` gate, `check_force_push`'s three
+  per-segment matches; the SQL function's three further matches only run when that gate passes, so
+  a command touching a DB CLI costs 22) are now bash-native `[[ =~ ]]` via one `_ci_match()` helper: external
   invocations 20 → 3 per call, measured mean wall clock ~100-108 ms → ~30-34 ms (~68-70%
   reduction). FEAT-019's precision suite is not just preserved but PROVEN preserved: a differential
   harness replays every command the 160-assertion suite exercises against the pre-fix guard and
