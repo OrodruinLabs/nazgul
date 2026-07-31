@@ -16,6 +16,7 @@ echo "=== $TEST_NAME ==="
 TEMPLATE="$REPO_ROOT/agents/templates/reviewer-base.md"
 
 # Template invariants
+assert_file_contains "template: maxTurns raised off the stale 12-turn ceiling" "$TEMPLATE" "maxTurns: 30"
 assert_file_not_contains "template: no Bash in tool allowlist" "$TEMPLATE" "  - Bash"
 assert_file_not_contains "template: no Write in tool allowlist" "$TEMPLATE" "  - Write"
 assert_file_not_contains "template: no SubagentStop file-write hook" "$TEMPLATE" "SubagentStop"
