@@ -166,6 +166,16 @@ Full XML/JSDoc/docstring on PUBLIC interface members is expected (`<inheritdoc/>
 | `guards.lean_comments` | `true` | Master switch. Set to `false` to opt out entirely (the guard becomes a no-op). |
 | `guards.max_consecutive_comment_lines` | `2` | Longest run of line comments allowed before it's flagged as bloat. |
 
+## Bounded Subagent Resume
+
+`guards.subagent_resume` (default `true`, config schema v32) is the kill switch for a bounded in-hook auto-resume in `scripts/subagent-stop.sh`: on every `SubagentStop` event, the hook reads the completing subagent's own transcript and detects two empty-return shapes — no final assistant text at all (`empty_final_text`), or, for a reviewer agent, final text with no fenced `verdict: APPROVE|CHANGES_REQUESTED|UNVERIFIED` line (`no_verdict_line`). Reviewer `maxTurns` was raised 12→30 (`agents/templates/reviewer-base.md`) alongside this gate, since a starved turn budget was one contributing cause of the empty returns it detects.
+
+When enabled and a cap is not yet exhausted, the hook responds with a decision-block JSON payload (`{"decision":"block","reason":...}`, `exit 2`) that has the harness re-run the SAME subagent with a directive to reply immediately with its final deliverable — no marker file, no orchestrator re-dispatch. The resume is bounded on two independent axes: a hard cap of 2 attempts per dispatch (tracked in a small counter file under `nazgul/logs/.resume-attempts/`, keyed by the dispatch's `agent_id` or, failing that, `session_id:agent`), and the harness's own `stop_hook_active` re-entry flag, which the hook treats as "never block again on this turn" regardless of remaining cap headroom.
+
+Every detected empty-return emits exactly one `subagent_empty_return` event (see Event Types above) whose `action` field records the outcome — `resumed`, `exhausted` (cap reached), or `detected_only` (kill-switch off, or the resume path itself degraded on error, e.g. an unwritable attempts directory). The mechanism is fail-open by construction: any failure in the resume path falls back to detection-only rather than either silently passing or blocking indefinitely.
+
+Added by the additive `migrate_31_to_32` migration (schema v31→v32); existing projects upgrade automatically with `guards.subagent_resume` default `true` — see Config Upgrades below.
+
 ## Bash-Write Reconciliation
 
 `guards.bash_write_reconciliation` (default `true`) gates a second, detection-only layer behind
@@ -230,6 +240,7 @@ The stream captures:
 - **blocked** — when a task or the loop is blocked (git conflict, security reject, max retries)
 - **compaction** — context compression checkpoints
 - **subagent_stop** — when specialized agents (implementer, discovery, etc.) complete
+- **subagent_empty_return** — a completing subagent's transcript carried no usable final text, or (for reviewers) no fenced verdict line; fields `agent`/`unit`/`turns_used`/`max_turns`/`reason` (`empty_final_text`|`no_verdict_line`)/`action` (`resumed`|`exhausted`|`detected_only`) — see Bounded Subagent Resume below
 - **stop_failure** — when the loop stop hook itself fails
 - **budget_threshold** — proactive warning when spending reaches 50% or 90% of the configured limit
 - **objective_complete** — when all tasks finish and the post-loop phase begins

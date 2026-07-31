@@ -1,12 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Nazgul SubagentStop — fires when any subagent finishes. Lightweight
-# observability: appends one event to the telemetry bus so /nazgul:metrics
-# can report how many subagents ran per loop. Never blocks the subagent.
+# Nazgul SubagentStop — fires when any subagent finishes. Always appends a
+# telemetry event to the event bus so /nazgul:metrics can report how many
+# subagents ran per loop. Also inspects the completing subagent's own
+# transcript for an empty or verdict-less final return (subagent_empty_return
+# event) and, on detection, can now BLOCK the subagent turn to force one
+# bounded resume attempt — this hook is no longer "never blocks."
+# Exit 0 = allow the subagent to finish (telemetry-only, or resume not taken)
+# Exit 2 = block-to-continue: harness re-runs the SAME subagent with the
+#          returned "reason" injected as its next turn (decision:block JSON)
 #
-# Input: hook JSON on stdin (may include subagent name / type — recorded if
-# present, but never required).
+# The resume path is capped at 2 attempts per dispatch (`_RESUME_CAP`), keyed
+# under nazgul/logs/.resume-attempts/, kill-switched by guards.subagent_resume
+# (default true), and skipped on the harness's own stop_hook_active re-entry
+# signal. It fails open to detection-only (exit 0) on any error, disabled
+# kill-switch, or cap exhaustion — never a silent pass, never an unbounded
+# block.
+#
+# Input: hook JSON on stdin (may include subagent name / type, and this
+# subagent's own transcript path — recorded/inspected if present, but
+# nothing here is required for the telemetry-only path to still run).
 
 INPUT=""
 if [ ! -t 0 ]; then

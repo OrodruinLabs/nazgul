@@ -40,6 +40,7 @@ The event stream captures the complete lifecycle:
 - **Retries and blocks** — re-attempts after CHANGES_REQUESTED, and blocking states that require intervention
 - **Compaction milestones** — checkpoints during context compression
 - **Subagent lifecycle** — when specialized agents (implementer, discovery, etc.) complete
+- **Subagent empty/verdict-less returns** — `subagent_empty_return` (reasons `empty_final_text`|`no_verdict_line`, actions `resumed`|`exhausted`|`detected_only`) fires for any completing subagent whose transcript shows no usable final text, or (for reviewers) no fenced verdict line
 - **Budget/cost warnings** — proactive alerts before spending limits
 
 See `docs/superpowers/specs/2026-06-24-telemetry-bus-design.md` for the full event taxonomy and schema.
@@ -47,6 +48,10 @@ See `docs/superpowers/specs/2026-06-24-telemetry-bus-design.md` for the full eve
 ### Emit Library
 
 `scripts/lib/emit-event.sh` is the canonical append mechanism — writes one JSON event line per call. When `flock` is available (typically Linux) it serialises concurrent writers with an exclusive lock; when absent (stock macOS) it falls back to a best-effort direct append relying on `O_APPEND` atomicity for the short JSONL lines. Callers pass event type + key-value pairs; the library handles schema versioning, timestamps (ISO 8601 UTC), and iteration context. Emits are best-effort: a write failure never aborts the calling hook.
+
+### SubagentStop: telemetry plus a bounded resume path
+
+`scripts/subagent-stop.sh` is no longer a pure observer. In addition to its `subagent_stop` telemetry append, it inspects every completing subagent's own transcript for an empty or verdict-less final return and, when `guards.subagent_resume` is `true` (default, config schema v32), can respond with a decision-block JSON payload (`exit 2`) that has the harness re-run the SAME subagent with the empty-return called out as its next turn — a bounded, in-hook fix rather than an orchestrator-level re-dispatch. The resume is capped at 2 attempts per dispatch (tracked under `nazgul/logs/.resume-attempts/`, keyed by `agent_id`/`session_id`), skips itself on the harness's own `stop_hook_active` re-entry signal, and degrades to detection-only (`exit 0`, no block) on any error, a disabled kill-switch, or cap exhaustion — every outcome is recorded in the `subagent_empty_return` event's `action` field. See RULES.md §19.
 
 Used by:
 - **5 hook scripts** (`stop-hook.sh`, `task-completed.sh`, `subagent-stop.sh`, `stop-failure.sh`, `post-compact.sh`) — write producer events
