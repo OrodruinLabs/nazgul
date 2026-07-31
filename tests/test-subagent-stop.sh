@@ -266,7 +266,7 @@ printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 
 write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-001" "" "FEAT-003" "1" -- code-reviewer security-reviewer >/dev/null
-FINAL_TEXT="VERDICT: APPROVE - all acceptance criteria verified"
+FINAL_TEXT=$'---\nverdict: APPROVE\nconfidence: 95\n---\n\nAll acceptance criteria verified.'
 TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture1.jsonl"
 _write_fixture_transcript "$TRANSCRIPT" "$FINAL_TEXT"
 EXPECTED_HASH=$(printf '%s' "$FINAL_TEXT" | _sha256)
@@ -313,7 +313,7 @@ printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 
 TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture3.jsonl"
-_write_fixture_transcript "$TRANSCRIPT" "VERDICT: APPROVE"
+_write_fixture_transcript "$TRANSCRIPT" $'---\nverdict: APPROVE\nconfidence: 90\n---'
 
 HOOK_INPUT=$(jq -cn --arg tp "$TRANSCRIPT" \
   '{transcript_path:"/some/parent/session.jsonl",agent_transcript_path:$tp,agent_type:"code-reviewer",agent_id:"fixture-agent-3"}')
@@ -351,7 +351,7 @@ write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-001" "" "FEAT-003" "1" -- code-
 sleep 1.1
 write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-002" "" "FEAT-003" "1" -- code-reviewer >/dev/null
 TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture5.jsonl"
-_write_fixture_transcript "$TRANSCRIPT" "VERDICT: APPROVE"
+_write_fixture_transcript "$TRANSCRIPT" $'---\nverdict: APPROVE\nconfidence: 90\n---'
 
 HOOK_INPUT=$(jq -cn --arg tp "$TRANSCRIPT" \
   '{transcript_path:"/some/parent/session.jsonl",agent_transcript_path:$tp,agent_type:"code-reviewer",agent_id:"fixture-agent-5"}')
@@ -362,6 +362,296 @@ assert_eq "ambiguous unit: exactly one receipt written" "$line_count" "1"
 receipt_line=$(tail -1 "$TEST_DIR/nazgul/logs/review-receipts.jsonl")
 assert_contains "ambiguous unit: attributed to the most-recently-created manifest (TASK-002)" \
   "$receipt_line" '"unit":"TASK-002"'
+teardown_temp_dir
+
+# --- Test 18 (test-plan #3, keystone): empty final_text with NO resolvable
+# review-dispatch unit (simulating a standalone architect-ruling stall, not a
+# board dispatch) still emits subagent_empty_return, with unit explicitly
+# "unknown" rather than the event being silently skipped ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+
+TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture6.jsonl"
+_write_fixture_transcript "$TRANSCRIPT" ""
+
+HOOK_INPUT=$(jq -cn --arg tp "$TRANSCRIPT" \
+  '{transcript_path:"/some/parent/session.jsonl",agent_transcript_path:$tp,agent_type:"architect",agent_id:"fixture-agent-6"}')
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "keystone empty-return: exits 0" "$rc" "0"
+assert_file_contains "keystone: subagent_empty_return event emitted" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"subagent_empty_return"'
+empty_return_line=$(grep '"event":"subagent_empty_return"' "$TEST_DIR/nazgul/logs/events.jsonl")
+assert_contains "keystone: agent is architect" "$empty_return_line" '"agent":"architect"'
+assert_contains "keystone: unit is explicit unknown sentinel" "$empty_return_line" '"unit":"unknown"'
+assert_file_not_exists "keystone: no receipt written (unit unresolved)" \
+  "$TEST_DIR/nazgul/logs/review-receipts.jsonl"
+teardown_temp_dir
+
+# --- Test 19 (test-plan #4): empty final_text WITH a resolvable
+# review-dispatch unit emits the event with the correct unit populated ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+
+write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-001" "" "FEAT-003" "1" -- code-reviewer >/dev/null
+TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture7.jsonl"
+_write_fixture_transcript "$TRANSCRIPT" ""
+
+HOOK_INPUT=$(jq -cn --arg tp "$TRANSCRIPT" \
+  '{transcript_path:"/some/parent/session.jsonl",agent_transcript_path:$tp,agent_type:"code-reviewer",agent_id:"fixture-agent-7"}')
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "resolvable-unit empty-return: exits 0" "$rc" "0"
+empty_return_line=$(grep '"event":"subagent_empty_return"' "$TEST_DIR/nazgul/logs/events.jsonl")
+assert_contains "resolvable-unit: unit is TASK-001" "$empty_return_line" '"unit":"TASK-001"'
+assert_file_not_exists "resolvable-unit: no receipt written (final_text empty)" \
+  "$TEST_DIR/nazgul/logs/review-receipts.jsonl"
+teardown_temp_dir
+
+# --- Test 20 (test-plan #6, regression floor): non-empty final_text with a
+# resolvable unit emits NO subagent_empty_return event, and the pre-existing
+# review-receipts.jsonl hashing behavior (LR-001/FEAT-017) is unchanged ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+
+write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-001" "" "FEAT-003" "1" -- code-reviewer >/dev/null
+FINAL_TEXT=$'---\nverdict: APPROVE\nconfidence: 95\n---\n\nAll acceptance criteria verified.'
+TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture8.jsonl"
+_write_fixture_transcript "$TRANSCRIPT" "$FINAL_TEXT"
+EXPECTED_HASH=$(printf '%s' "$FINAL_TEXT" | _sha256)
+
+HOOK_INPUT=$(jq -cn --arg tp "$TRANSCRIPT" \
+  '{transcript_path:"/some/parent/session.jsonl",agent_transcript_path:$tp,agent_type:"code-reviewer",agent_id:"fixture-agent-8"}')
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "regression floor: exits 0" "$rc" "0"
+assert_not_contains "regression floor: no subagent_empty_return event" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl")" '"event":"subagent_empty_return"'
+receipt_line=$(tail -1 "$TEST_DIR/nazgul/logs/review-receipts.jsonl")
+assert_contains "regression floor: receipt hash unchanged" "$receipt_line" "\"hash\":\"$EXPECTED_HASH\""
+assert_contains "regression floor: receipt unit unchanged" "$receipt_line" '"unit":"TASK-001"'
+teardown_temp_dir
+
+# --- Test 21 (test-plan #7): turns_used on the emitted event matches the
+# fixture transcript's actual count of type == "assistant" records ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+
+TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture9.jsonl"
+_write_fixture_transcript "$TRANSCRIPT" ""
+EXPECTED_TURNS=$(jq -rs '[ .[] | select(.type == "assistant") ] | length' "$TRANSCRIPT")
+
+HOOK_INPUT=$(jq -cn --arg tp "$TRANSCRIPT" \
+  '{transcript_path:"/some/parent/session.jsonl",agent_transcript_path:$tp,agent_type:"architect",agent_id:"fixture-agent-9"}')
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "turns_used: exits 0" "$rc" "0"
+empty_return_line=$(grep '"event":"subagent_empty_return"' "$TEST_DIR/nazgul/logs/events.jsonl")
+assert_contains "turns_used: matches fixture assistant-record count ($EXPECTED_TURNS)" \
+  "$empty_return_line" "\"turns_used\":$EXPECTED_TURNS"
+teardown_temp_dir
+
+# --- Test 22 (test-plan #8a): max_turns resolves from
+# .claude/agents/generated/<agent>.md when a generated copy exists ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+mkdir -p "$TEST_DIR/.claude/agents/generated"
+printf -- '---\nname: code-reviewer\nmaxTurns: 30\n---\n' \
+  > "$TEST_DIR/.claude/agents/generated/code-reviewer.md"
+
+TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture10.jsonl"
+_write_fixture_transcript "$TRANSCRIPT" ""
+
+HOOK_INPUT=$(jq -cn --arg tp "$TRANSCRIPT" \
+  '{transcript_path:"/some/parent/session.jsonl",agent_transcript_path:$tp,agent_type:"code-reviewer",agent_id:"fixture-agent-10"}')
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "max_turns generated-copy: exits 0" "$rc" "0"
+empty_return_line=$(grep '"event":"subagent_empty_return"' "$TEST_DIR/nazgul/logs/events.jsonl")
+assert_contains "max_turns generated-copy: resolves to 30" "$empty_return_line" '"max_turns":30'
+teardown_temp_dir
+
+# --- Test 23 (test-plan #8b): max_turns falls back to agents/<agent>.md when
+# no generated copy exists (e.g. a standalone architect ruling agent) ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+mkdir -p "$TEST_DIR/agents"
+printf -- '---\nname: architect\nmaxTurns: 40\n---\n' \
+  > "$TEST_DIR/agents/architect.md"
+
+TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture11.jsonl"
+_write_fixture_transcript "$TRANSCRIPT" ""
+
+HOOK_INPUT=$(jq -cn --arg tp "$TRANSCRIPT" \
+  '{transcript_path:"/some/parent/session.jsonl",agent_transcript_path:$tp,agent_type:"architect",agent_id:"fixture-agent-11"}')
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "max_turns template-fallback: exits 0" "$rc" "0"
+empty_return_line=$(grep '"event":"subagent_empty_return"' "$TEST_DIR/nazgul/logs/events.jsonl")
+assert_contains "max_turns template-fallback: resolves to 40" "$empty_return_line" '"max_turns":40'
+teardown_temp_dir
+
+# --- Test 24 (test-plan #8c): max_turns is explicitly null (never omitted)
+# when neither a generated nor a committed spec file can be found ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+
+TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture12.jsonl"
+_write_fixture_transcript "$TRANSCRIPT" ""
+
+HOOK_INPUT=$(jq -cn --arg tp "$TRANSCRIPT" \
+  '{transcript_path:"/some/parent/session.jsonl",agent_transcript_path:$tp,agent_type:"ghost-agent",agent_id:"fixture-agent-12"}')
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "max_turns unresolved: exits 0" "$rc" "0"
+empty_return_line=$(grep '"event":"subagent_empty_return"' "$TEST_DIR/nazgul/logs/events.jsonl")
+assert_contains "max_turns unresolved: field is explicit null, not omitted" \
+  "$empty_return_line" '"max_turns":null'
+teardown_temp_dir
+
+# --- Test 25: agent_transcript_path missing/unreadable is an announced
+# degradation — exits 0, no crash, but skip is stated on stderr, not silent ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+
+HOOK_INPUT='{"transcript_path":"/some/parent/session.jsonl","agent_transcript_path":"/nonexistent/path.jsonl","agent_type":"architect","agent_id":"fixture-agent-13"}'
+output=$(printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1); rc=$?
+assert_exit_code "unreadable transcript: exits 0" "$rc" "0"
+assert_contains "unreadable transcript: skip announced on stderr" "$output" \
+  "skipping empty-return detection"
+assert_file_not_exists "unreadable transcript: no empty-return event" \
+  "$TEST_DIR/nazgul/logs/review-receipts.jsonl"
+teardown_temp_dir
+
+# --- Test 26: a transcript file that is unparseable JSON is a detection
+# error — announced on stderr, hook still exits 0, no crash ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture14.jsonl"
+mkdir -p "$(dirname "$TRANSCRIPT")"
+printf 'not valid json at all\n' > "$TRANSCRIPT"
+
+HOOK_INPUT=$(jq -cn --arg tp "$TRANSCRIPT" \
+  '{transcript_path:"/some/parent/session.jsonl",agent_transcript_path:$tp,agent_type:"architect",agent_id:"fixture-agent-14"}')
+output=$(printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1); rc=$?
+assert_exit_code "unparseable transcript: exits 0" "$rc" "0"
+assert_contains "unparseable transcript: skip announced on stderr" "$output" \
+  "skipping empty-return detection"
+assert_not_contains "unparseable transcript: no subagent_empty_return event" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl")" '"event":"subagent_empty_return"'
+teardown_temp_dir
+
+# --- Test 27 (test-plan #5): reviewer with non-empty final_text and a
+# resolvable review-dispatch unit, but no line matching the verdict: contract
+# (real observed shape: mid-analysis trailing text, not a verdict block) ->
+# emits subagent_empty_return with reason no_verdict_line and unit populated ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+
+write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-001" "" "FEAT-003" "1" -- architect-reviewer >/dev/null
+NO_VERDICT_TEXT="I'm satisfied. Let me do a final check..."
+TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture15.jsonl"
+_write_fixture_transcript "$TRANSCRIPT" "$NO_VERDICT_TEXT"
+EXPECTED_HASH=$(printf '%s' "$NO_VERDICT_TEXT" | _sha256)
+
+HOOK_INPUT=$(jq -cn --arg tp "$TRANSCRIPT" \
+  '{transcript_path:"/some/parent/session.jsonl",agent_transcript_path:$tp,agent_type:"architect-reviewer",agent_id:"fixture-agent-15"}')
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "no-verdict-line reviewer: exits 0" "$rc" "0"
+no_verdict_line=$(grep '"event":"subagent_empty_return"' "$TEST_DIR/nazgul/logs/events.jsonl")
+assert_contains "no-verdict-line reviewer: event emitted" "$no_verdict_line" '"agent":"architect-reviewer"'
+assert_contains "no-verdict-line reviewer: reason is no_verdict_line" "$no_verdict_line" '"reason":"no_verdict_line"'
+assert_contains "no-verdict-line reviewer: unit resolved to TASK-001" "$no_verdict_line" '"unit":"TASK-001"'
+receipt_line=$(tail -1 "$TEST_DIR/nazgul/logs/review-receipts.jsonl")
+assert_contains "no-verdict-line reviewer: receipt-hashing scope is untouched (still runs)" \
+  "$receipt_line" "\"hash\":\"$EXPECTED_HASH\""
+teardown_temp_dir
+
+# --- Test 28 (test-plan #5, name-only signal): reviewer-named agent with NO
+# dispatch manifest at all (unit stays "unknown") and non-empty final_text
+# with no verdict line still emits the event -- reviewer identification by
+# name alone does not depend on a resolvable dispatch manifest ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+
+TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture16.jsonl"
+_write_fixture_transcript "$TRANSCRIPT" "Reviewing the diff now, one moment..."
+
+HOOK_INPUT=$(jq -cn --arg tp "$TRANSCRIPT" \
+  '{transcript_path:"/some/parent/session.jsonl",agent_transcript_path:$tp,agent_type:"code-reviewer",agent_id:"fixture-agent-16"}')
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "name-only reviewer signal: exits 0" "$rc" "0"
+no_verdict_line=$(grep '"event":"subagent_empty_return"' "$TEST_DIR/nazgul/logs/events.jsonl")
+assert_contains "name-only reviewer signal: reason is no_verdict_line" "$no_verdict_line" '"reason":"no_verdict_line"'
+assert_contains "name-only reviewer signal: unit is unresolved sentinel" "$no_verdict_line" '"unit":"unknown"'
+teardown_temp_dir
+
+# --- Test 29 (non-reviewer negative case): a NON-reviewer agent with
+# non-empty final_text and no verdict-like text emits NO subagent_empty_return
+# event at all -- non-reviewers have no verdict grammar to violate ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+
+TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture17.jsonl"
+_write_fixture_transcript "$TRANSCRIPT" "Implemented the feature and ran the tests."
+
+HOOK_INPUT=$(jq -cn --arg tp "$TRANSCRIPT" \
+  '{transcript_path:"/some/parent/session.jsonl",agent_transcript_path:$tp,agent_type:"implementer",agent_id:"fixture-agent-17"}')
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "non-reviewer no-verdict text: exits 0" "$rc" "0"
+assert_not_contains "non-reviewer no-verdict text: no subagent_empty_return event" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl")" '"event":"subagent_empty_return"'
+teardown_temp_dir
+
+# --- Test 30 (no double-count): a reviewer with EMPTY final_text emits only
+# the TASK-004 empty_final_text event -- the verdict-line clause never also
+# fires for the same completion (if/elif, not two independent checks) ---
+setup_temp_dir
+setup_nazgul_dir
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+  > "$TEST_DIR/nazgul/config.json"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+
+TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture18.jsonl"
+_write_fixture_transcript "$TRANSCRIPT" ""
+
+HOOK_INPUT=$(jq -cn --arg tp "$TRANSCRIPT" \
+  '{transcript_path:"/some/parent/session.jsonl",agent_transcript_path:$tp,agent_type:"code-reviewer",agent_id:"fixture-agent-18"}')
+printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1; rc=$?
+assert_exit_code "empty-text reviewer: exits 0" "$rc" "0"
+event_count=$(grep -c '"event":"subagent_empty_return"' "$TEST_DIR/nazgul/logs/events.jsonl")
+assert_eq "empty-text reviewer: exactly one event (not double-counted)" "$event_count" "1"
+empty_return_line=$(grep '"event":"subagent_empty_return"' "$TEST_DIR/nazgul/logs/events.jsonl")
+assert_contains "empty-text reviewer: reason is empty_final_text" "$empty_return_line" '"reason":"empty_final_text"'
 teardown_temp_dir
 
 # --- Test 12: bash -n + shellcheck on subagent-stop.sh ---
