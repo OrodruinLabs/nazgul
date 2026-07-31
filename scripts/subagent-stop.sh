@@ -249,7 +249,10 @@ _resume_dispatch_key() {
     session_id=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null) || true
     [ -n "$session_id" ] && key="${session_id}:${AGENT}"
   fi
-  [ -n "$key" ] || key="$AGENT"
+  if [ -z "$key" ]; then
+    echo "subagent-stop: resume key fallback to bare agent name (no agent_id/session_id in hook input) for $AGENT" >&2
+    key="$AGENT"
+  fi
   printf '%s' "$key"
 }
 
@@ -257,11 +260,18 @@ _resume_dispatch_key() {
 # key may contain path-unsafe characters). Directory lives under
 # nazgul/logs/, mirroring stop-hook.sh's own marker/attempts-file
 # convention, generalized here to one file per concurrent dispatch instead
-# of a single shared file per objective.
+# of a single shared file per objective. Uses the shared `_rp_sha256` helper
+# (review-provenance.sh, transitively sourced via review-evidence.sh) rather
+# than reimplementing the sha256sum/shasum fallback: a top-level pipeline
+# with neither tool installed would abort the whole hook under `set -e`.
 _resume_attempts_file() {
   local key="$1" hash
-  hash=$(printf '%s' "$key" | { command -v sha256sum >/dev/null 2>&1 && sha256sum || shasum -a 256; } 2>/dev/null | awk '{print $1}' | cut -c1-16)
-  [ -n "$hash" ] || hash="fallback"
+  hash=$(printf '%s' "$key" | _rp_sha256) || hash=""
+  hash="${hash:0:16}"
+  if [ -z "$hash" ]; then
+    echo "subagent-stop: resume attempts-file hash fallback (sha256 unavailable) for $AGENT" >&2
+    hash="fallback"
+  fi
   printf '%s/.resume-attempts/%s' "$NAZGUL_DIR/logs" "$hash"
 }
 

@@ -6,6 +6,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/assertions.sh"
 source "$SCRIPT_DIR/lib/setup.sh"
+# write_dispatch_manifest: builds a real, production-shaped .dispatch.json
+# fixture so a reviewer's unit resolves, same helper review-gate itself calls.
+source "$REPO_ROOT/scripts/lib/review-provenance.sh"
 
 echo "=== $TEST_NAME ==="
 
@@ -185,7 +188,53 @@ event_line=$(grep '"event":"subagent_empty_return"' "$TEST_DIR/nazgul/logs/event
 assert_contains "stop_hook_active re-entry: action is detected_only" "$event_line" '"action":"detected_only"'
 teardown_temp_dir
 
-# --- Test 8: bash -n + shellcheck on subagent-stop.sh (belt-and-suspenders;
+# --- Test 8 (code-reviewer board concern, confidence 35): a reviewer with
+# non-empty final_text lacking a verdict line, unit resolved, resume enabled
+# -> blocks (exit 2) BEFORE the receipt-hashing tail ever runs, so NO receipt
+# is appended -- a real behavior change from the resume-disabled case (where
+# the same fixture's receipt IS appended, per test-subagent-stop.sh's
+# no-verdict-line test) that was previously unasserted ---
+setup_temp_dir
+setup_nazgul_dir
+_config_with_resume "true"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+
+write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-001" "" "FEAT-024" "1" -- code-reviewer >/dev/null
+NO_VERDICT_TEXT="I'm satisfied. Let me do a final check..."
+TRANSCRIPT="$TEST_DIR/transcripts/agent-8.jsonl"
+_write_fixture_transcript "$TRANSCRIPT" "$NO_VERDICT_TEXT"
+HOOK_INPUT=$(_hook_input "$TRANSCRIPT" "code-reviewer" "dispatch-8")
+
+OUT8=$(printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1); rc8=$?
+assert_exit_code "no-verdict-line + resume enabled: exit 2" "$rc8" "2"
+assert_contains "no-verdict-line + resume enabled: stdout is a block decision" "$OUT8" '"decision":"block"'
+event_line=$(grep '"event":"subagent_empty_return"' "$TEST_DIR/nazgul/logs/events.jsonl")
+assert_contains "no-verdict-line + resume enabled: reason is no_verdict_line" "$event_line" '"reason":"no_verdict_line"'
+assert_contains "no-verdict-line + resume enabled: action is resumed" "$event_line" '"action":"resumed"'
+assert_file_not_exists "no-verdict-line + resume enabled: no receipt appended" \
+  "$TEST_DIR/nazgul/logs/review-receipts.jsonl"
+teardown_temp_dir
+
+# --- Test 9 (architect concern 40 / security concern 60): no agent_id and no
+# session_id in hook input -> the dispatch-key fallback to bare $AGENT is
+# announced on stderr, not silent, and the resume still proceeds normally ---
+setup_temp_dir
+setup_nazgul_dir
+_config_with_resume "true"
+export CLAUDE_PROJECT_DIR="$TEST_DIR"
+
+TRANSCRIPT="$TEST_DIR/transcripts/agent-9.jsonl"
+_write_fixture_transcript "$TRANSCRIPT" ""
+HOOK_INPUT=$(_hook_input "$TRANSCRIPT" "code-reviewer" "")
+
+OUT9=$(printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>"$TEST_DIR/stderr-9.log"); rc9=$?
+assert_exit_code "bare-agent fallback: exit 2 (resume still works)" "$rc9" "2"
+assert_contains "bare-agent fallback: stdout is a block decision" "$OUT9" '"decision":"block"'
+assert_file_contains "bare-agent fallback: announced on stderr" \
+  "$TEST_DIR/stderr-9.log" "resume key fallback to bare agent name"
+teardown_temp_dir
+
+# --- Test 10: bash -n + shellcheck on subagent-stop.sh (belt-and-suspenders;
 # also asserted by test-subagent-stop.sh) ---
 bash -n "$HOOK" 2>/dev/null \
   && _pass "bash -n clean: subagent-stop.sh" \
