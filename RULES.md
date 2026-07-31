@@ -625,3 +625,47 @@ session exit.
    before its first Stop (ADR-007). `guards.team_sweep_min_age_hours` is
    floored to `>=1` at every read site so a misconfigured `0` cannot
    silently collapse this AND to lock-only.
+
+## 19. Subagent Non-Delivery & Bounded Resume
+
+A dispatch that ends without a deliverable must not look like a dispatch that had nothing to say.
+FEAT-024 confirmed the concrete cause: all four generated reviewers ran at a stale `maxTurns: 12`
+(`agents/templates/reviewer-base.md`, raised to 30 — a repo-wide audit confirmed every other agent
+spec's ceiling was already appropriate; see `docs/DECISION-LOG-2026-07-31-subagent-delivery.md`
+TASK-001), ending the dispatch mid-tool-loop before the model ever reached a turn in which to compose
+its output — while `SubagentStop` already computed the empty-handed signal and silently discarded it on
+every completion.
+
+1. **Universal empty-return detection.** `[enforced]` — independent of loop driver, since this fires on
+   `SubagentStop` itself rather than on `stop-hook.sh`'s loop machinery. `scripts/subagent-stop.sh`'s
+   `_inspect_subagent_completion` runs on every completing subagent with a readable
+   `.agent_transcript_path` (the completing subagent's own isolated transcript, distinct from
+   `.transcript_path`, the parent/team's shared file) regardless of whether it maps to a review-gate
+   dispatch, and emits `subagent_empty_return` (`agent`, `unit`, `turns_used`, `max_turns`, `reason`,
+   `action`) when the final assistant text is empty (`reason: empty_final_text`) or, for a reviewer
+   identified by a `-reviewer` name suffix or a resolved review unit, non-empty text with no fenced
+   `verdict: APPROVE|CHANGES_REQUESTED|UNVERIFIED` line (`reason: no_verdict_line`).
+2. **Bounded in-hook resume — Branch A.** `[enforced]` — same independence from loop driver as above. A
+   disposable exit-2 probe (TASK-003; direct Agent-tool dispatch, not Agent-Teams) proved `SubagentStop`
+   honors `{"decision":"block","reason":...}` + `exit 2` exactly like the main `Stop` event: the harness
+   continues the SAME subagent with the reason injected as a new turn. On detecting either reason above,
+   `_maybe_resume_subagent()` blocks with a "reply now with your final deliverable" directive, capped at
+   `_RESUME_CAP` (2) attempts per dispatch — keyed by the hook's own `agent_id` (falling back to
+   `session_id:$AGENT`, then bare `$AGENT` — the final, coarsest fallback announced on stderr) so the cap tracks one
+   dispatch's resumed turns rather than the agent type globally. Never blocks a second time on the
+   harness's own `stop_hook_active` re-entry signal, and any unexpected failure (unwritable attempts
+   directory, missing config) degrades to `action: detected_only` with a stderr notice — fail-open,
+   never a silent pass, never an unbounded block.
+3. **Kill-switch: `guards.subagent_resume`.** `[enforced]` (default `true`, config schema v32, TASK-002).
+   `false` disables ONLY the resume/block path in item 2 — detection and the `subagent_empty_return`
+   event in item 1 still fire whenever detection itself can run (readable transcript, `jq` present,
+   telemetry bus enabled — the same preconditions as item 1, each announced on stderr when unmet), so
+   turning this off can never blind the telemetry this mechanism exists to produce.
+4. **Resume-recovery pattern.** `[advisory]` — every resumed dispatch this objective measured (2
+   first-round reviewer stalls across GROUP-1/GROUP-2, reproduced again by replaying the real
+   transcripts through the shipped hook) delivered with near-zero further tool calls after the resume
+   directive. The model's judgment was already complete at stall time; the resume grants the turn it
+   was never given to state it, rather than asking it to redo work. This is why the fix is a resume of
+   the same subagent, not a fresh re-dispatch (rejected alternatives: more prompt hardening, giving
+   reviewers `Write`, splitting analysis/verdict into two dispatches — none survive the same evidence;
+   see `nazgul/inbox/subagent-nondelivery-maxturns-ceiling.md`).

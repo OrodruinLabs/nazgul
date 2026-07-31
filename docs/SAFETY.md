@@ -25,6 +25,7 @@
 - **Fix-first auto-remediation**: Mechanical review findings (dead code, style) are applied automatically; only risky changes (security, architecture) require human judgment
 - **Concurrent session detection**: Filesystem locks warn when multiple Nazgul sessions run on the same project, preventing state corruption
 - **Automation heartbeat hard stops**: `scripts/heartbeat.sh` (opt-in, default off) halts unconditionally on a BLOCKED task or a security-reviewer rejection — the same two hard stops as the Conductor engine — checked before it even reads `automation.heartbeat.enabled`; the auto-start objective text is hardened against quote/newline breakout into `/nazgul:start`'s flag parsing (RULES.md §13)
+- **Bounded subagent resume**: `scripts/subagent-stop.sh` detects a completing subagent whose transcript carries no usable final text (or, for reviewers, no fenced verdict line) and can force one bounded re-turn by blocking the subagent's own stop (`exit 2` + decision-block JSON) rather than letting a stalled dispatch silently complete empty. Hard-capped at 2 attempts per dispatch, kill-switched by `guards.subagent_resume` (default `true`), skipped on the harness's own `stop_hook_active` re-entry signal, and fail-open to detection-only on any error — every outcome (`resumed`/`exhausted`/`detected_only`) is recorded in the `subagent_empty_return` telemetry event (RULES.md §19)
 
 ## Troubleshooting
 

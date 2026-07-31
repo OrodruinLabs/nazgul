@@ -2,6 +2,86 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.26.0] - 2026-07-31
+
+Subagent non-delivery: a subagent whose model finished reasoning must not stall silently at its turn
+ceiling and be read by the orchestrator as work still in progress (governing thesis for this release).
+MINOR, not PATCH, on three independent grounds, any one sufficient by this repo's own precedent: (1)
+agent runtime behaviour changes in both directions — every generated reviewer's `maxTurns` goes
+12 → 30; (2) a new telemetry event type ships, `subagent_empty_return`; (3) a new bounded gate and a
+new config key ship, `guards.subagent_resume`. MAJOR is wrong — nothing is removed and no interface
+changes shape. **`schema_version` moves 31 → 32**: `guards.subagent_resume` (default `true`) is new —
+a behaviour-named (not mechanism-named) kill-switch for the auto-resume backstop, consistent with
+every other autonomous mechanism this repo ships with one.
+
+### Added
+- **Reviewer `maxTurns` ceiling raised 12 → 30**, across a repo-wide audit of every generated reviewer
+  template and specialist agent that dispatches under the review board, not just the four core
+  reviewers. More headroom before the ceiling is reached is the first of two mitigations this release
+  ships; the second is the resume backstop below.
+- **Universal `subagent_empty_return` telemetry event.** Emitted by `scripts/subagent-stop.sh` for
+  ANY dispatched subagent — reviewer, implementer, specialist — whose SubagentStop input carries no
+  usable final deliverable. Two `reason`s: `empty_final_text` (the transcript's last assistant record
+  carries no text block at all — a bare tool call or nothing) and `no_verdict_line` (text is present
+  but the required `verdict:`/`reviewer:` contract line is missing). Three `action`s: `resumed` (the
+  bounded backstop below fired), `exhausted` (the resume cap was already spent), `detected_only` (the
+  backstop is disabled by config; detection still fires).
+- **Branch A: bounded in-hook auto-resume, `guards.subagent_resume`.** `scripts/subagent-stop.sh`
+  itself returns `exit 2` with a `{"decision":"block","reason":...}` continuation directive when it
+  detects an empty return, capped at 2 resume attempts per dispatch, kill-switched by
+  `guards.subagent_resume` (default `true`); on any unexpected error the mechanism fails open to
+  `detected_only` with a stderr diagnostic naming the degradation, rather than silently doing
+  nothing. Branch A was selected empirically, not by design preference: a `SubagentStop` exit-2 probe
+  proved live, under **direct Agent-tool dispatch** (the mode the review board actually uses — Agent
+  Teams teammate mode was not tested), that an `exit 2` decision-block IS honored and continues the
+  SAME subagent with the reason injected as a new turn. The alternative — a sixth `stop-hook.sh` gate
+  injecting a resume directive at the orchestrator level (Branch B) — was therefore never built; it
+  closes **NOT-APPLICABLE**, not abandoned or deferred.
+- `RULES.md` §19, "Subagent Non-Delivery & Bounded Resume," and the matching `CLAUDE.md` Key Concepts
+  paragraph, documenting universal detection, the Branch A resume mechanism, the kill-switch, and the
+  resume-recovery pattern (a resumed agent needs ~zero further tool calls — it had already finished
+  reasoning and simply failed to emit the terminal deliverable).
+
+### Measured
+- **Observed first-round reviewer non-delivery this objective: 2/12 ≈ 17%**, against this repo's own
+  historical baseline of **~50% (24/47 across FEAT-022/FEAT-023, `maxTurns: 12`)** — a material drop,
+  stated plainly. This tally is notification-derived (the orchestrator's own dispatch/resume record),
+  **not** sourced from `events.jsonl`, because this session's live `SubagentStop` hook was the
+  plugin's pre-instrumentation `2.23.1` version-cache copy and recorded zero `subagent_empty_return`
+  events all day — a vacuous zero (the hook that could emit the event never ran live), not a
+  measurement of a low rate.
+- **Replay of the real transcripts through the shipped, unmodified instrument matched ground truth
+  7/7**: both known real stalls reproduce `subagent_empty_return`/`empty_final_text` when replayed at
+  the pre-resume boundary, and all five known clean/resumed-and-delivered cases reproduce no event —
+  the strongest evidence available this session that the detector is correctly calibrated against
+  real transcript shapes, not synthetic fixtures.
+- **Causal attribution to the `maxTurns` bump specifically is explicitly UNPROVEN.** The one datum
+  that would settle it — `turns_used` sitting at the ceiling, sourced from a live `events.jsonl`
+  under the instrumented hook — was never available this session: the live hook predates this
+  instrumentation (the vacuous zero above), and the replay-derived `turns_used` proxy is
+  independently miscalibrated (the real transcript format writes one content-block per line, not one
+  turn per line, so `turns_used: 74` was observed against `max_turns: 30` on one stalled dispatch —
+  only possible because the metric counts content-block records, not turns). A live instrumented
+  capture under this release or later, against a real multi-board run, is the only way to answer the
+  ceiling-vs-cause question.
+
+### Known / deferred
+Five defects were found and filed to the work inbox this objective, none fixed here — findings filed,
+not silently patched:
+- `discovery.md`'s stale embedded reviewer-template fragment (carries `maxTurns: 30` plus
+  pre-FEAT-006 tools/hooks fields) and `.claude/agents/generated/documentation.md`'s
+  generated-vs-template drift (30 vs the template's 40) — both confirmed unchanged by the
+  repo-wide audit and filed, not fixed.
+- The DONE-gate's live blocking path never calls `validate_review_provenance` — only
+  `stop-hook.sh`'s hook-driven reconciliation does, leaving a window where a direct board bypass is
+  not caught until the next iteration.
+- No test pins the `review_token:` contract field name.
+- `turns_used` overcounts content-block records as turns (27/74 observed vs. `max_turns: 30` on real
+  transcripts), the miscalibration cited above under Measured.
+- `resolve_nazgul_dir()` ignores a `NAZGUL_DIR` environment override — only `CLAUDE_PROJECT_DIR` is
+  read — discovered when a replay attempt silently ran against live project state instead of the
+  intended isolated temp directory.
+
 ## [2.25.0] - 2026-07-30
 
 Loop reliability: a mechanism that FAILS must not look like a mechanism that had nothing to do

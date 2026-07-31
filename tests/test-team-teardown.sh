@@ -204,7 +204,7 @@ teardown_temp_dir
 setup_temp_dir; setup_nazgul_dir
 create_config '.schema_version = 30 | .guards.team_sweep = false'
 CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO_ROOT/scripts/migrate-config.sh" >/dev/null 2>&1
-assert_json_field "v31: schema bumped" "$TEST_DIR/nazgul/config.json" '.schema_version' "31"
+assert_json_field "v30 chain: schema_version reaches terminal 32" "$TEST_DIR/nazgul/config.json" '.schema_version' "32"
 assert_json_field "v31: team_teardown default true" "$TEST_DIR/nazgul/config.json" '.guards.team_teardown' "true"
 assert_json_field "v31: explicit team_sweep=false preserved" "$TEST_DIR/nazgul/config.json" '.guards.team_sweep' "false"
 assert_json_field "v31: min_age default 24" "$TEST_DIR/nazgul/config.json" '.guards.team_sweep_min_age_hours' "24"
