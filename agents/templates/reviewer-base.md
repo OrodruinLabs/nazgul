@@ -11,7 +11,7 @@ tools:
 # nazgul/reviews/. Removing Bash also means a reviewer cannot re-run the test
 # suite (the pre-checks already ran it once) — eliminating the biggest source of
 # wasted review time — and makes "reviewers are read-only" actually tool-enforced.
-maxTurns: 12
+maxTurns: 30
 ---
 
 <!--
