@@ -53,7 +53,7 @@ _seed_event_with_unit() {
 # --- Test 1: review-gate subagent with one reviewer_verdict writes coverage record ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 _seed_events "$TEST_DIR/nazgul/logs/events.jsonl" "TASK-001"
@@ -76,7 +76,7 @@ teardown_temp_dir
 # --- Test 2: review-gate with multiple tasks and group granularity ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"group"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"group"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 _seed_events "$TEST_DIR/nazgul/logs/events.jsonl" "TASK-001" "TASK-002"
@@ -101,7 +101,7 @@ teardown_temp_dir
 # --- Test 3: non-review-gate subagent writes no coverage record ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 _seed_events "$TEST_DIR/nazgul/logs/events.jsonl" "TASK-001"
@@ -116,7 +116,7 @@ teardown_temp_dir
 # --- Test 4: missing events.jsonl is a silent no-op ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 
@@ -130,7 +130,7 @@ teardown_temp_dir
 # --- Test 5: events.jsonl with no reviewer_verdict events is a silent no-op ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 mkdir -p "$TEST_DIR/nazgul/logs"
@@ -158,7 +158,7 @@ teardown_temp_dir
 # --- Test 7: subagent_stop event always emitted (even for non-review-gate) ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 
@@ -174,7 +174,7 @@ teardown_temp_dir
 # --- Test 8: feature granularity writes FEATURE-<feat_id> review_unit ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"feature"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"feature"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 _seed_events "$TEST_DIR/nazgul/logs/events.jsonl" "TASK-001" "TASK-002"
@@ -194,7 +194,7 @@ teardown_temp_dir
 # granularity_used is sourced from the event rather than inferred ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 _seed_event_with_unit "$TEST_DIR/nazgul/logs/events.jsonl" "TASK-001" "GROUP-1"
@@ -216,7 +216,7 @@ teardown_temp_dir
 # inference ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 _seed_event_with_unit "$TEST_DIR/nazgul/logs/events.jsonl" "TASK-002" "FEATURE-FEAT-999"
@@ -237,7 +237,7 @@ teardown_temp_dir
 # field) — both resolve correctly in the same review-gate invocation ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"group"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"group"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 _seed_event_with_unit "$TEST_DIR/nazgul/logs/events.jsonl" "TASK-001" "GROUP-5"
@@ -261,7 +261,7 @@ teardown_temp_dir
 # .dispatch.json `selected` roster gets a well-formed receipt appended ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 
@@ -287,7 +287,7 @@ teardown_temp_dir
 # roster) appends no receipt and leaves existing telemetry unchanged ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 
@@ -308,7 +308,7 @@ teardown_temp_dir
 # dispatch manifest at all (nazgul/reviews/ empty) -> safe no-op, no crash ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 
@@ -325,7 +325,7 @@ teardown_temp_dir
 # --- Test 16: agent_transcript_path missing/unreadable -> safe no-op, no crash ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 
@@ -343,7 +343,7 @@ teardown_temp_dir
 # manifest), not duplicated across both ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 
@@ -370,7 +370,7 @@ teardown_temp_dir
 # "unknown" rather than the event being silently skipped ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 
@@ -386,6 +386,7 @@ assert_file_contains "keystone: subagent_empty_return event emitted" \
 empty_return_line=$(grep '"event":"subagent_empty_return"' "$TEST_DIR/nazgul/logs/events.jsonl")
 assert_contains "keystone: agent is architect" "$empty_return_line" '"agent":"architect"'
 assert_contains "keystone: unit is explicit unknown sentinel" "$empty_return_line" '"unit":"unknown"'
+assert_contains "keystone: action is detected_only (resume disabled)" "$empty_return_line" '"action":"detected_only"'
 assert_file_not_exists "keystone: no receipt written (unit unresolved)" \
   "$TEST_DIR/nazgul/logs/review-receipts.jsonl"
 teardown_temp_dir
@@ -394,7 +395,7 @@ teardown_temp_dir
 # review-dispatch unit emits the event with the correct unit populated ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 
@@ -417,7 +418,7 @@ teardown_temp_dir
 # review-receipts.jsonl hashing behavior (LR-001/FEAT-017) is unchanged ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 
@@ -442,7 +443,7 @@ teardown_temp_dir
 # fixture transcript's actual count of type == "assistant" records ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 
@@ -463,7 +464,7 @@ teardown_temp_dir
 # .claude/agents/generated/<agent>.md when a generated copy exists ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 mkdir -p "$TEST_DIR/.claude/agents/generated"
@@ -485,7 +486,7 @@ teardown_temp_dir
 # no generated copy exists (e.g. a standalone architect ruling agent) ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 mkdir -p "$TEST_DIR/agents"
@@ -507,7 +508,7 @@ teardown_temp_dir
 # when neither a generated nor a committed spec file can be found ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 
@@ -527,7 +528,7 @@ teardown_temp_dir
 # degradation — exits 0, no crash, but skip is stated on stderr, not silent ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 
@@ -544,7 +545,7 @@ teardown_temp_dir
 # error — announced on stderr, hook still exits 0, no crash ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 TRANSCRIPT="$TEST_DIR/transcripts/agent-fixture14.jsonl"
@@ -567,7 +568,7 @@ teardown_temp_dir
 # emits subagent_empty_return with reason no_verdict_line and unit populated ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 
@@ -585,6 +586,7 @@ no_verdict_line=$(grep '"event":"subagent_empty_return"' "$TEST_DIR/nazgul/logs/
 assert_contains "no-verdict-line reviewer: event emitted" "$no_verdict_line" '"agent":"architect-reviewer"'
 assert_contains "no-verdict-line reviewer: reason is no_verdict_line" "$no_verdict_line" '"reason":"no_verdict_line"'
 assert_contains "no-verdict-line reviewer: unit resolved to TASK-001" "$no_verdict_line" '"unit":"TASK-001"'
+assert_contains "no-verdict-line reviewer: action is detected_only (resume disabled)" "$no_verdict_line" '"action":"detected_only"'
 receipt_line=$(tail -1 "$TEST_DIR/nazgul/logs/review-receipts.jsonl")
 assert_contains "no-verdict-line reviewer: receipt-hashing scope is untouched (still runs)" \
   "$receipt_line" "\"hash\":\"$EXPECTED_HASH\""
@@ -596,7 +598,7 @@ teardown_temp_dir
 # name alone does not depend on a resolvable dispatch manifest ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 
@@ -617,7 +619,7 @@ teardown_temp_dir
 # event at all -- non-reviewers have no verdict grammar to violate ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 
@@ -637,7 +639,7 @@ teardown_temp_dir
 # fires for the same completion (if/elif, not two independent checks) ---
 setup_temp_dir
 setup_nazgul_dir
-printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003"}' \
+printf '{"review_gate":{"granularity":"task"},"telemetry":{"bus_enabled":true},"feat_id":"FEAT-003","guards":{"subagent_resume":false}}' \
   > "$TEST_DIR/nazgul/config.json"
 export CLAUDE_PROJECT_DIR="$TEST_DIR"
 

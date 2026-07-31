@@ -164,7 +164,11 @@ _resolve_review_unit_for_agent() {
 # generated copy. Prints nothing (not even a trailing newline) when neither
 # file exists or carries a `maxTurns:` line — the caller's numeric-suffix
 # convention already turns an empty string into an explicit JSON null.
+# $AGENT is untrusted hook input, used directly in a path — reject anything
+# but a bare identifier before it ever reaches a filesystem path.
 _resolve_agent_max_turns() {
+  [[ "$AGENT" =~ ^[A-Za-z0-9_-]+$ ]] || return 0
+
   local project_root="${NAZGUL_DIR%/nazgul}"
   local spec="$project_root/.claude/agents/generated/${AGENT}.md"
   [ -f "$spec" ] || spec="$project_root/agents/${AGENT}.md"
@@ -221,6 +225,123 @@ _append_review_receipt() {
     >> "$receipts_file" 2>/dev/null || true
 }
 
+# Bounded auto-resume (TASK-006 / ADR-015 Part 2 Branch A): the SubagentStop
+# exit-2 probe (TASK-003) confirmed the harness continues the SAME subagent
+# with the block reason injected as a new turn, so a stalled dispatch is
+# fixed in-hook — no marker file, no orchestrator involvement. Gated on
+# guards.subagent_resume (default true) and hard-capped independently of the
+# kill-switch so a pathological repeat cannot loop.
+_RESUME_CAP=2
+
+_subagent_resume_enabled() {
+  jq -r 'if .guards.subagent_resume == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true"
+}
+
+# Stable per-dispatch identifier for the attempt counter: agent_id is the
+# harness's own identity for this exact subagent instance (present in the
+# TASK-003 probe's stdin), constant across the SAME dispatch's resumed turns
+# but distinct across separate dispatches of the same agent type.
+_resume_dispatch_key() {
+  local key
+  key=$(printf '%s' "$INPUT" | jq -r '.agent_id // empty' 2>/dev/null) || true
+  if [ -z "$key" ]; then
+    local session_id
+    session_id=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null) || true
+    [ -n "$session_id" ] && key="${session_id}:${AGENT}"
+  fi
+  if [ -z "$key" ]; then
+    echo "subagent-stop: resume key fallback to bare agent name (no agent_id/session_id in hook input) for $AGENT" >&2
+    key="$AGENT"
+  fi
+  printf '%s' "$key"
+}
+
+# One attempts file per dispatch, named by a short hash of its key (the raw
+# key may contain path-unsafe characters). Directory lives under
+# nazgul/logs/, mirroring stop-hook.sh's own marker/attempts-file
+# convention, generalized here to one file per concurrent dispatch instead
+# of a single shared file per objective. Uses the shared `_rp_sha256` helper
+# (review-provenance.sh, transitively sourced via review-evidence.sh) rather
+# than reimplementing the sha256sum/shasum fallback: a top-level pipeline
+# with neither tool installed would abort the whole hook under `set -e`.
+_resume_attempts_file() {
+  local key="$1" hash
+  hash=$(printf '%s' "$key" | _rp_sha256) || hash=""
+  hash="${hash:0:16}"
+  if [ -z "$hash" ]; then
+    echo "subagent-stop: resume attempts-file hash fallback (sha256 unavailable) for $AGENT" >&2
+    hash="fallback"
+  fi
+  printf '%s/.resume-attempts/%s' "$NAZGUL_DIR/logs" "$hash"
+}
+
+# Decides and executes the resume outcome for one detected empty-return.
+# Always emits exactly one subagent_empty_return event, whose `action` field
+# records the outcome: resumed | exhausted | detected_only. Fail-open: any
+# unexpected error here degrades to detected_only (exit 0) with a stderr
+# notice — never a silent pass, never an unbounded block.
+_maybe_resume_subagent() {
+  local emit_reason="$1" unit="$2" turns_used="$3" max_turns="$4"
+  local action="detected_only" should_block=1 directive=""
+
+  if [ "$(_subagent_resume_enabled)" = "true" ]; then
+    local stop_hook_active
+    stop_hook_active=$(printf '%s' "$INPUT" | jq -r '.stop_hook_active // false' 2>/dev/null) || stop_hook_active="false"
+    [ -n "$stop_hook_active" ] || stop_hook_active="false"
+
+    if [ "$stop_hook_active" = "true" ]; then
+      # Belt-and-suspenders: the harness's own re-entry signal — never block
+      # again on it, even with cap headroom left.
+      echo "subagent-stop: stop_hook_active re-entry for agent $AGENT — not blocking again" >&2
+    else
+      local key attempts_dir attempts_file attempts=0
+      key=$(_resume_dispatch_key)
+      attempts_dir="$NAZGUL_DIR/logs/.resume-attempts"
+      attempts_file=$(_resume_attempts_file "$key")
+
+      if ! mkdir -p "$attempts_dir" 2>/dev/null; then
+        echo "subagent-stop: resume path failed (attempts dir unwritable) — degrading to detection-only for $AGENT" >&2
+      else
+        if [ -f "$attempts_file" ]; then
+          local raw
+          raw=$(cat "$attempts_file" 2>/dev/null || echo "")
+          case "$raw" in ''|*[!0-9]*) attempts=0 ;; *) attempts="$raw" ;; esac
+        fi
+
+        if [ "$attempts" -lt "$_RESUME_CAP" ]; then
+          if printf '%s\n' "$((attempts + 1))" > "$attempts_file" 2>/dev/null; then
+            action="resumed"
+            should_block=0
+            if _agent_is_reviewer "$unit"; then
+              directive="Your previous turn ended without delivering a usable result. Make no further tool calls. Reply now with your final deliverable, beginning with the fenced verdict: block (verdict: APPROVE|CHANGES_REQUESTED|UNVERIFIED)."
+            else
+              directive="Your previous turn ended without delivering a usable result. Make no further tool calls. Reply now with your final deliverable."
+            fi
+          else
+            echo "subagent-stop: resume path failed (attempt write) — degrading to detection-only for $AGENT" >&2
+          fi
+        else
+          action="exhausted"
+          echo "subagent-stop: resume_exhausted — attempt cap (${_RESUME_CAP}) reached for agent $AGENT, completing without further resume" >&2
+        fi
+      fi
+    fi
+  fi
+
+  emit_event "subagent_empty_return" \
+    agent "$AGENT" \
+    unit "$unit" \
+    reason "$emit_reason" \
+    turns_used:n "$turns_used" \
+    max_turns:n "$max_turns" \
+    action "$action"
+
+  if [ "$should_block" -eq 0 ]; then
+    jq -cn --arg r "$directive" '{"decision":"block","reason":$r}' || true
+    exit 2
+  fi
+}
+
 # Universal empty-return detection (TASK-004 / TRD Scope Item 2): every
 # completing subagent with a readable transcript gets this check, regardless
 # of whether it maps to a review-gate dispatch — the two standalone stalls
@@ -249,7 +370,7 @@ _inspect_subagent_completion() {
   fi
 
   # "unknown" is an explicit sentinel: "looked and found no unit" must stay
-  # distinguishable from "never looked" (RULES.md §15 / LR-006, applied here
+  # distinguishable from "never looked" (RULES.md §15 / ADR-009, applied here
   # to this hook's own control flow rather than to a guard's pass/fail).
   local unit
   unit=$(_resolve_review_unit_for_agent)
@@ -286,12 +407,7 @@ _inspect_subagent_completion() {
     local turns_used max_turns
     turns_used=$(jq -rs '[ .[] | select(.type == "assistant") ] | length' "$agent_transcript" 2>/dev/null) || true
     max_turns=$(_resolve_agent_max_turns) || true
-    emit_event "subagent_empty_return" \
-      agent "$AGENT" \
-      unit "$unit" \
-      reason "$emit_reason" \
-      turns_used:n "$turns_used" \
-      max_turns:n "$max_turns"
+    _maybe_resume_subagent "$emit_reason" "$unit" "$turns_used" "$max_turns"
   fi
 
   # Receipt-hashing stays reviewer-dispatch-scoped: only when a review unit
