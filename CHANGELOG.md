@@ -68,8 +68,10 @@ every other autonomous mechanism this repo ships with one.
 ### Known / deferred
 Five defects were found and filed to the work inbox this objective, none fixed here — findings filed,
 not silently patched:
-- `discovery.md`'s embedded reviewer template and `documentation.md`'s generated-vs-template drift
-  both carry the pre-bump `maxTurns: 12`, missed by the repo-wide audit's own scope.
+- `discovery.md`'s stale embedded reviewer-template fragment (carries `maxTurns: 30` plus
+  pre-FEAT-006 tools/hooks fields) and `.claude/agents/generated/documentation.md`'s
+  generated-vs-template drift (30 vs the template's 40) — both confirmed unchanged by the
+  repo-wide audit and filed, not fixed.
 - The DONE-gate's live blocking path never calls `validate_review_provenance` — only
   `stop-hook.sh`'s hook-driven reconciliation does, leaving a window where a direct board bypass is
   not caught until the next iteration.

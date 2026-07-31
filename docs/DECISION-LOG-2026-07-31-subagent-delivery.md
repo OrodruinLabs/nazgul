@@ -136,7 +136,7 @@ is therefore expected to close NOT-APPLICABLE per its manifest.
 `nazgul/logs/events.jsonl` records **zero** `subagent_empty_return` events for this entire objective —
 lifetime, not just today. Checked directly:
 
-```
+```console
 $ jq -c 'select(.event=="subagent_stop")' nazgul/logs/events.jsonl | wc -l
 2021
 $ jq -c 'select(.event=="subagent_empty_return")' nazgul/logs/events.jsonl | wc -l

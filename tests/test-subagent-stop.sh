@@ -537,8 +537,14 @@ output=$(printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1); rc=$?
 assert_exit_code "unreadable transcript: exits 0" "$rc" "0"
 assert_contains "unreadable transcript: skip announced on stderr" "$output" \
   "skipping empty-return detection"
-assert_file_not_exists "unreadable transcript: no empty-return event" \
+assert_file_not_exists "unreadable transcript: no receipt appended" \
   "$TEST_DIR/nazgul/logs/review-receipts.jsonl"
+if [ -f "$TEST_DIR/nazgul/logs/events.jsonl" ]; then
+  assert_file_not_contains "unreadable transcript: no empty-return event in events.jsonl" \
+    "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"subagent_empty_return"'
+else
+  _pass "unreadable transcript: no empty-return event in events.jsonl (file absent)"
+fi
 teardown_temp_dir
 
 # --- Test 26: a transcript file that is unparseable JSON is a detection

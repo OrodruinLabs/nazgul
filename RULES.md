@@ -658,8 +658,9 @@ every completion.
    never a silent pass, never an unbounded block.
 3. **Kill-switch: `guards.subagent_resume`.** `[enforced]` (default `true`, config schema v32, TASK-002).
    `false` disables ONLY the resume/block path in item 2 — detection and the `subagent_empty_return`
-   event in item 1 still fire unconditionally, so turning this off can never blind the telemetry this
-   mechanism exists to produce.
+   event in item 1 still fire whenever detection itself can run (readable transcript, `jq` present,
+   telemetry bus enabled — the same preconditions as item 1, each announced on stderr when unmet), so
+   turning this off can never blind the telemetry this mechanism exists to produce.
 4. **Resume-recovery pattern.** `[advisory]` — every resumed dispatch this objective measured (2
    first-round reviewer stalls across GROUP-1/GROUP-2, reproduced again by replaying the real
    transcripts through the shipped hook) delivered with near-zero further tool calls after the resume

@@ -71,7 +71,7 @@ fi
 # part of consuming a report" rule. 19 + 1 = 20.
 # NOTE: counts OCCURRENCES, not lines (some lines carry two tags) — see the
 # [enforced] counter below; for [advisory] the line count and occurrence
-# count both happen to be 21 (no line currently carries two [advisory] tags).
+# count both happen to be 22 (no line currently carries two [advisory] tags).
 # FEAT-021/TASK-010 added 1 more: the "Shared nazgul/ Root Resolver" subsection's
 # resolver-adoption-is-review-only bullet (20 + 1 = 21). FEAT-024/TASK-009 added
 # 1 more: §19's resume-recovery-pattern bullet (21 + 1 = 22).

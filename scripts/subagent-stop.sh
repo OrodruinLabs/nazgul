@@ -327,7 +327,7 @@ _maybe_resume_subagent() {
             action="resumed"
             should_block=0
             if _agent_is_reviewer "$unit"; then
-              directive="Your previous turn ended without delivering a usable result. Make no further tool calls. Reply now with your final deliverable, beginning with the fenced verdict: block (verdict: APPROVE|CHANGES_REQUESTED|UNVERIFIED)."
+              directive="Your previous turn ended without delivering a usable result. Make no further tool calls. Reply now with your final deliverable, beginning with the YAML frontmatter verdict block: a line containing ---, then a line 'verdict: APPROVE' (or CHANGES_REQUESTED or UNVERIFIED), your remaining frontmatter fields, and a closing --- line."
             else
               directive="Your previous turn ended without delivering a usable result. Make no further tool calls. Reply now with your final deliverable."
             fi
@@ -351,6 +351,13 @@ _maybe_resume_subagent() {
     action "$action"
 
   if [ "$should_block" -eq 0 ]; then
+    # Dual-channel delivery. The TASK-003 probe proved empirically that the
+    # stdout decision JSON + exit 2 reaches the subagent on this harness (the
+    # probe's injected instruction was obeyed). The documented contract,
+    # however, says exit 2 feeds STDERR to the subagent and stdout JSON is
+    # only read on exit 0 — so emit the directive on stderr as well, making
+    # delivery robust under either interpretation and across harness versions.
+    printf '%s\n' "$directive" >&2
     jq -cn --arg r "$directive" '{"decision":"block","reason":$r}' || true
     exit 2
   fi

@@ -55,6 +55,8 @@ OUT=$(printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>"$TEST_DIR/stderr-1.log"); rc=$
 assert_exit_code "first detection: exit 2" "$rc" "2"
 assert_contains "first detection: stdout is a block decision" "$OUT" '"decision":"block"'
 assert_contains "first detection: directive tells reviewer to lead with verdict:" "$OUT" "verdict:"
+assert_file_contains "first detection: directive also delivered on stderr" \
+  "$TEST_DIR/stderr-1.log" "verdict:"
 DECISION_REASON=$(printf '%s' "$OUT" | jq -r '.reason')
 assert_eq "first detection: decision JSON parses (reason non-empty)" "$([ -n "$DECISION_REASON" ] && echo yes || echo no)" "yes"
 assert_file_contains "first detection: subagent_empty_return emitted" \
@@ -81,6 +83,8 @@ OUT2=$(printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>"$TEST_DIR/stderr-2.log"); rc2
 assert_exit_code "first call (setup): exit 2" "$rc1" "2"
 assert_exit_code "second detection same agent: exit 2 (cap 2)" "$rc2" "2"
 assert_contains "second detection: stdout is a block decision" "$OUT2" '"decision":"block"'
+assert_file_contains "second detection: directive also delivered on stderr" \
+  "$TEST_DIR/stderr-2.log" "final deliverable"
 last_event=$(grep '"event":"subagent_empty_return"' "$TEST_DIR/nazgul/logs/events.jsonl" | tail -1)
 assert_contains "second detection: action is resumed" "$last_event" '"action":"resumed"'
 teardown_temp_dir
@@ -141,6 +145,7 @@ HOOK_INPUT=$(_hook_input "$TRANSCRIPT" "architect" "dispatch-5")
 OUT5=$(printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1); rc5=$?
 assert_exit_code "non-reviewer empty-text: exit 2" "$rc5" "2"
 assert_contains "non-reviewer empty-text: stdout is a block decision" "$OUT5" '"decision":"block"'
+assert_contains "non-reviewer empty-text: directive delivered (merged stdout+stderr)" "$OUT5" "final deliverable"
 event_line=$(grep '"event":"subagent_empty_return"' "$TEST_DIR/nazgul/logs/events.jsonl")
 assert_contains "non-reviewer empty-text: action is resumed" "$event_line" '"action":"resumed"'
 teardown_temp_dir
@@ -208,6 +213,7 @@ HOOK_INPUT=$(_hook_input "$TRANSCRIPT" "code-reviewer" "dispatch-8")
 OUT8=$(printf '%s' "$HOOK_INPUT" | bash "$HOOK" 2>&1); rc8=$?
 assert_exit_code "no-verdict-line + resume enabled: exit 2" "$rc8" "2"
 assert_contains "no-verdict-line + resume enabled: stdout is a block decision" "$OUT8" '"decision":"block"'
+assert_contains "no-verdict-line + resume enabled: directive delivered (merged stdout+stderr)" "$OUT8" "verdict:"
 event_line=$(grep '"event":"subagent_empty_return"' "$TEST_DIR/nazgul/logs/events.jsonl")
 assert_contains "no-verdict-line + resume enabled: reason is no_verdict_line" "$event_line" '"reason":"no_verdict_line"'
 assert_contains "no-verdict-line + resume enabled: action is resumed" "$event_line" '"action":"resumed"'

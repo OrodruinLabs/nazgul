@@ -1753,7 +1753,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 CFG="$NAZGUL_DIR/config.json"
-assert_json_field "v28: schema_version reaches 28" "$CFG" ".schema_version" "32"
+assert_json_field "v28 chain: schema_version reaches terminal 32" "$CFG" ".schema_version" "32"
 assert_eq "v28: guards.bash_write_reconciliation defaults true" \
   "$(jq -r '.guards.bash_write_reconciliation' "$CFG")" "true"
 assert_eq "v28: automation.heartbeat.lock_stale_seconds defaults 300" \
@@ -1795,7 +1795,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 CFG="$NAZGUL_DIR/config.json"
-assert_json_field "v29: schema_version reaches 29" "$CFG" ".schema_version" "32"
+assert_json_field "v29 chain: schema_version reaches terminal 32" "$CFG" ".schema_version" "32"
 assert_eq "v29: review_gate.stall_retry_escalate_tier defaults true" \
   "$(jq -r '.review_gate.stall_retry_escalate_tier' "$CFG")" "true"
 assert_eq "v29: preserves existing review_gate.granularity" \
@@ -1833,7 +1833,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 CFG="$NAZGUL_DIR/config.json"
-assert_json_field "v29->v30: schema_version reaches 30" "$CFG" ".schema_version" "32"
+assert_json_field "v29->v30 chain: schema_version reaches terminal 32" "$CFG" ".schema_version" "32"
 assert_eq "receipt_hash_enforcement defaults false and preserves explicit values (default case)" \
   "$(jq -r '.review_gate.receipt_hash_enforcement' "$CFG")" "false"
 assert_eq "receipt_hash_enforcement migration preserves sibling review_gate.granularity" \
