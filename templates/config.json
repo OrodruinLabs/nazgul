@@ -1,5 +1,5 @@
 {
-  "schema_version": 31,
+  "schema_version": 32,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -147,7 +147,8 @@
     "bash_write_reconciliation": true,
     "team_teardown": true,
     "team_sweep": true,
-    "team_sweep_min_age_hours": 24
+    "team_sweep_min_age_hours": 24,
+    "subagent_resume": true
   },
   "safety": {
     "max_consecutive_failures": 5,
