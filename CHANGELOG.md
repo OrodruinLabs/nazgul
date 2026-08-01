@@ -11,7 +11,7 @@ bash-vs-zsh hazard, the `NAZGUL_DIR` footgun, config-schema staleness, and the n
 stdout; that read-only boundary is the release's headline property, not a footnote. MINOR, not PATCH,
 because a new user-facing capability ships (the `/nazgul:doctor` skill and `scripts/doctor.sh`),
 matching this repo's own precedent for exactly this shape: FEAT-008 shipped `/nazgul:heartbeat` as
-MINOR `2.9.0` → `2.10.0`. PATCH is wrong — this repo reserves PATCH for narrow, no-new-capability
+MINOR `2.10.1` → `2.11.0`. PATCH is wrong — this repo reserves PATCH for narrow, no-new-capability
 precision fixes (FEAT-019 `2.22.1`, FEAT-021 `2.23.1`). MAJOR is wrong — nothing is removed and no
 interface changes shape. **`schema_version` stays at 32** — no new config key ships; doctor is
 invoked on demand only, has no hook binding, and gates nothing, so there is no autonomous behavior to
