@@ -40,6 +40,8 @@ $ARGUMENTS
 
 Format all output per `references/ui-brand.md` — use stage banners, status symbols, spawning indicators, and display patterns defined there.
 
+Print, unconditionally, before proceeding: "Run /nazgul:doctor to verify your environment before starting the loop." This is a printed suggestion only — do not run doctor, do not read or branch on its result, and do not gate any part of this skill on it.
+
 ### Parse Arguments
 - `$ARGUMENTS` may contain:
   - An objective string (optional — override for new work)

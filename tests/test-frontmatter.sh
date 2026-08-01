@@ -69,4 +69,25 @@ for skill_file in "$REPO_ROOT"/skills/*/SKILL.md; do
   check_frontmatter "$skill_file" "skill"
 done
 
+# Doctor's allowed-tools grant is the mechanical enforcement of ADR-016
+# Decision 1 (read-only reporter) — it must never gain Write/Edit/Task.
+doctor_file="$REPO_ROOT/skills/doctor/SKILL.md"
+if [ -f "$doctor_file" ]; then
+  doctor_frontmatter="$(sed -n '2,/^---$/p' "$doctor_file" | sed '$d')"
+  doctor_tools="$(echo "$doctor_frontmatter" | grep '^allowed-tools:' || true)"
+  assert_not_contains "skills/doctor/SKILL.md allowed-tools excludes Write" "$doctor_tools" "Write"
+  assert_not_contains "skills/doctor/SKILL.md allowed-tools excludes Edit" "$doctor_tools" "Edit"
+  assert_not_contains "skills/doctor/SKILL.md allowed-tools excludes Task" "$doctor_tools" "Task"
+else
+  _fail "skills/doctor/SKILL.md exists"
+fi
+
+init_content="$(cat "$REPO_ROOT/skills/init/SKILL.md" 2>/dev/null || echo "")"
+assert_contains "skills/init/SKILL.md prints the /nazgul:doctor advisory" "$init_content" \
+  "Run /nazgul:doctor to verify your environment before starting the loop."
+
+start_content="$(cat "$REPO_ROOT/skills/start/SKILL.md" 2>/dev/null || echo "")"
+assert_contains "skills/start/SKILL.md prints the /nazgul:doctor advisory" "$start_content" \
+  "Run /nazgul:doctor to verify your environment before starting the loop."
+
 report_results
