@@ -10,14 +10,19 @@ set -euo pipefail
 # fail. Doctor never writes to nazgul/, git config, or anywhere under
 # PROJECT_ROOT — its only fix path is the remediation text in each message.
 #
-# TASK-001 shipped the engine plus checks (b), (f), (g). This task
-# (TASK-002) adds checks (a), (c), (d); TASK-003 adds check (e).
+# TASK-001 shipped the engine plus checks (b), (f), (g). TASK-002 added
+# checks (a), (c), (d). This task (TASK-003) adds check (e).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/nazgul-root.sh
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 # shellcheck source=lib/git-hooks.sh
 source "$SCRIPT_DIR/lib/git-hooks.sh"
+
+# Captured before this script's own NAZGUL_DIR assignment below shadows it —
+# check (e) needs to know what the OPERATOR's environment held, not what
+# doctor.sh's own local variable of the same conventional name becomes.
+_DOC_OPERATOR_NAZGUL_DIR="${NAZGUL_DIR:-}"
 
 PROJECT_ROOT="$(resolve_project_root)"
 NAZGUL_DIR="$PROJECT_ROOT/nazgul"
@@ -248,6 +253,19 @@ check_config_schema() {
   fi
 }
 
+# (e) NAZGUL_DIR footgun (ADR-016 Decision 3, option (b) — documentation
+# only, no override is honored): scripts/lib/nazgul-root.sh never reads
+# NAZGUL_DIR; only CLAUDE_PROJECT_DIR redirects resolution. Warns when
+# NAZGUL_DIR is set in the live environment — a strong signal the operator
+# is about to repeat the FEAT-024/TASK-008 leak.
+check_nazgul_dir_env() {
+  if [ -n "$_DOC_OPERATOR_NAZGUL_DIR" ]; then
+    _doc_report warn nazgul-dir-env "NAZGUL_DIR is set ('$_DOC_OPERATOR_NAZGUL_DIR') but scripts/lib/nazgul-root.sh never reads it — it has NO effect on resolution. CLAUDE_PROJECT_DIR is the one seam that actually isolates nazgul/ resolution: use 'CLAUDE_PROJECT_DIR=$_DOC_OPERATOR_NAZGUL_DIR ...' instead of 'NAZGUL_DIR=$_DOC_OPERATOR_NAZGUL_DIR ...'."
+  else
+    _doc_report pass nazgul-dir-env "NAZGUL_DIR is not set. CLAUDE_PROJECT_DIR is the one environment variable that redirects nazgul/ resolution."
+  fi
+}
+
 # (g) Never-EOF stdin hazard: an unconditional advisory note, not a scored
 # check — routed through _doc_report with verdict "note" so it shares the
 # same output shape without touching the aggregate exit code.
@@ -261,6 +279,7 @@ main() {
   check_dependencies
   check_git_hooks
   check_invoking_shell
+  check_nazgul_dir_env
   check_config_schema
   check_stdin_hazard
   exit "$_DOC_WORST"

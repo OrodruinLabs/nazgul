@@ -6,8 +6,8 @@ set -uo pipefail
 
 # Test: scripts/doctor.sh — the read-only preflight check engine (TASK-001,
 # checks (b)/(f)/(g)) plus checks (a) cache-vs-repo version, (c) git-hooks
-# drift, (d) bash-vs-zsh hazard (TASK-002). Check (e) is added to this same
-# file by TASK-003 and is out of scope here.
+# drift, (d) bash-vs-zsh hazard (TASK-002), and (e) NAZGUL_DIR footgun
+# (TASK-003).
 TEST_NAME="test-doctor"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -70,13 +70,14 @@ setup_nazgul_dir
 create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
   '.board.enabled = false' '.guards.git_hooks = false'
 
-OUT=$(env -u CLAUDE_PLUGIN_ROOT "$DOCTOR" 2>&1); EXIT=$?
+OUT=$(env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "healthy fixture: aggregate exit 0 (all pass)" "$EXIT" 0
 assert_contains "healthy fixture: config-present pass" "$OUT" "$(printf 'pass\tconfig-present')"
 assert_contains "healthy fixture: plugin-version pass (not applicable)" "$OUT" "$(printf 'pass\tplugin-version')"
 assert_contains "healthy fixture: dependencies pass" "$OUT" "$(printf 'pass\tdependencies')"
 assert_contains "healthy fixture: git-hooks pass (not applicable)" "$OUT" "$(printf 'pass\tgit-hooks')"
 assert_contains "healthy fixture: invoking-shell pass" "$OUT" "$(printf 'pass\tinvoking-shell')"
+assert_contains "healthy fixture: nazgul-dir-env pass" "$OUT" "$(printf 'pass\tnazgul-dir-env')"
 assert_contains "healthy fixture: config-schema pass" "$OUT" "$(printf 'pass\tconfig-schema')"
 assert_contains "healthy fixture: stdin-hazard note always printed" "$OUT" "$(printf 'note\tstdin-hazard')"
 assert_not_contains "healthy fixture: no fail lines" "$OUT" "$(printf 'fail\t')"
@@ -391,6 +392,31 @@ assert_exit_code "invoking-shell non-bash fixture: aggregate exit 1 (warn)" "$EX
 assert_contains "invoking-shell non-bash fixture: warns" "$OUT" "$(printf 'warn\tinvoking-shell')"
 assert_contains "invoking-shell non-bash fixture: names the detected shell" "$OUT" "'zsh'"
 assert_contains "invoking-shell non-bash fixture: remediation shows the bash -c pattern" "$OUT" "bash -c"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# (e) nazgul-dir-env: pass (unset) and warn (set) branches
+# ---------------------------------------------------------------------------
+
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false'
+OUT=$(env -u NAZGUL_DIR "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "nazgul-dir-env unset fixture: aggregate exit 0" "$EXIT" 0
+assert_contains "nazgul-dir-env unset fixture: passes" "$OUT" "$(printf 'pass\tnazgul-dir-env')"
+assert_contains "nazgul-dir-env unset fixture: names CLAUDE_PROJECT_DIR as the seam" "$OUT" "CLAUDE_PROJECT_DIR"
+teardown_temp_dir
+
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false'
+OUT=$(NAZGUL_DIR="$TEST_DIR/nazgul" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "nazgul-dir-env set fixture: aggregate exit 1 (warn)" "$EXIT" 1
+assert_contains "nazgul-dir-env set fixture: warns" "$OUT" "$(printf 'warn\tnazgul-dir-env')"
+assert_contains "nazgul-dir-env set fixture: states it has no effect" "$OUT" "has NO effect"
+assert_contains "nazgul-dir-env set fixture: shows the corrected CLAUDE_PROJECT_DIR invocation" "$OUT" "CLAUDE_PROJECT_DIR=$TEST_DIR/nazgul"
 teardown_temp_dir
 
 report_results

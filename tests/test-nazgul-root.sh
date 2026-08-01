@@ -189,6 +189,25 @@ strict_exit=0
 ) || strict_exit=$?
 assert_eq "safe to source and call under set -euo pipefail" "$strict_exit" "0"
 
+# --- Header states CLAUDE_PROJECT_DIR is the one override and NAZGUL_DIR is
+# never read (ADR-016 Decision 3, option (b); folded-in p3) ---
+result="$(grep -c 'CLAUDE_PROJECT_DIR is the ONLY environment variable that redirects' "$LIB")"
+assert_eq "header states CLAUDE_PROJECT_DIR is the only redirecting env var" "$result" "1"
+result="$(grep -c 'NAZGUL_DIR is never read by this file' "$LIB")"
+assert_eq "header states NAZGUL_DIR is never read" "$result" "1"
+
+# --- Regression: NAZGUL_DIR set in the environment has NO effect on
+# resolve_project_root() — CLAUDE_PROJECT_DIR is the only seam ---
+result="$(
+  cd "$repo1" || exit 1
+  unset CLAUDE_PROJECT_DIR
+  export NAZGUL_DIR="$TMP_ROOT/some-other-dir"
+  # shellcheck source=/dev/null
+  source "$LIB"
+  resolve_project_root
+)"
+assert_eq "NAZGUL_DIR set in the environment does not change the resolved root" "$result" "$repo1"
+
 # --- Calling the resolver does not leak a cd in the caller's shell ---
 before="$(cd "$TMP_ROOT" && pwd -P)"
 after="$(
