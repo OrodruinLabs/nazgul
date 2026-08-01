@@ -48,3 +48,5 @@
 **Concurrent session warning** (e.g., "WARNING: N concurrent Nazgul sessions detected. State corruption risk.") — Ensure only one Nazgul session per project at a time. Stale locks are cleaned after 2 hours, or delete `nazgul/sessions/*.lock` manually.
 
 **Heartbeat tick did nothing** — Check `automation.heartbeat.enabled` in `nazgul/config.json` (defaults to `false`) and the latest `decision` in `nazgul/logs/heartbeat-*.jsonl` via `/nazgul:log`: `disabled` means the feature is off, `hard_stop` means a BLOCKED task or security rejection halted it, `skipped` with `reason: active_session` means another Nazgul session was already running.
+
+**Plugin edits not taking effect, or unsure the environment is set up right** — Run `/nazgul:doctor` for a read-only preflight: cache-vs-repo plugin-version drift, `jq`/`gh` presence and auth, git-hooks drift, the bash-vs-zsh hazard, the `NAZGUL_DIR` footgun, and config-schema staleness. It never writes state; the only fix path is text on stdout.

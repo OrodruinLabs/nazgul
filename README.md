@@ -83,6 +83,7 @@ Nazgul auto-detects project state: active work resumes, existing docs trigger pl
 | Command | Description |
 |---------|-------------|
 | `/nazgul:init` | First-time setup: discovery, reviewer generation, runtime dirs |
+| `/nazgul:doctor` | Read-only environment preflight — plugin version, deps, git-hooks, shell, config schema |
 | `/nazgul:plan` | Brainstorm a new idea into a Nazgul spec + task plan, then run it |
 | `/nazgul:start` | Smart start/resume — auto-detects state, derives objective |
 | `/nazgul:status` | Check loop progress, task counts, reviewer board |
