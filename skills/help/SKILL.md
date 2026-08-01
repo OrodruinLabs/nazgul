@@ -34,6 +34,7 @@ metadata:
 | `/nazgul:status` | Loop progress, task counts, review board |
 | `/nazgul:log` | Iteration history, commits, reviews |
 | `/nazgul:task list` | List all tasks with status |
+| `/nazgul:doctor` | Read-only environment preflight (plugin version, deps, git-hooks, shell, config schema) |
 
 ## Task Management
 

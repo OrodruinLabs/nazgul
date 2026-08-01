@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.27.0] - 2026-08-01
+
+`/nazgul:doctor`: a new operator cannot know the seven environment traps that silently produce
+confusing failures — cache-vs-repo plugin version, `jq`/`gh` presence and auth, git-hooks drift, the
+bash-vs-zsh hazard, the `NAZGUL_DIR` footgun, config-schema staleness, and the never-EOF-stdin hazard
+(governing thesis for this release). Doctor **never writes state** — its only fix path is text on
+stdout; that read-only boundary is the release's headline property, not a footnote. MINOR, not PATCH,
+because a new user-facing capability ships (the `/nazgul:doctor` skill and `scripts/doctor.sh`),
+matching this repo's own precedent for exactly this shape: FEAT-008 shipped `/nazgul:heartbeat` as
+MINOR `2.10.1` → `2.11.0`. PATCH is wrong — this repo reserves PATCH for narrow, no-new-capability
+precision fixes (FEAT-019 `2.22.1`, FEAT-021 `2.23.1`). MAJOR is wrong — nothing is removed and no
+interface changes shape. **`schema_version` stays at 32** — no new config key ships; doctor is
+invoked on demand only, has no hook binding, and gates nothing, so there is no autonomous behavior to
+kill-switch.
+
+### Added
+- **`scripts/doctor.sh` + `skills/doctor/SKILL.md`**, a read-only preflight diagnostic covering
+  eight checks — a config-present engine check (an uninitialized project is reported, never
+  silently skipped) plus the seven environment checks below — each reported `pass`/`warn`/`fail`
+  with a one-line remediation:
+  (a) cache-vs-repo plugin version — an explicitly **documented workaround**, not a platform API,
+  since Claude Code exposes no mechanism to compare the active plugin cache against the repo
+  checkout; (b) `jq`/`gh` presence on `PATH`, with `gh auth status` checked only when connectors or
+  the board integration are enabled; (c) managed git-hooks drift — reports `core.hooksPath` and guard
+  presence mismatches, never fixes them; (d) the bash-vs-zsh invoking-shell hazard, warning with the
+  `bash -c` remediation; (e) the `NAZGUL_DIR` footgun, naming `CLAUDE_PROJECT_DIR` as the one honored
+  isolation seam; (f) config-schema staleness against the highest available `migrate_N_to_N+1`
+  target; (g) an unconditional never-EOF-stdin advisory note.
+- **Advisory, non-blocking `/nazgul:doctor` mentions** in `/nazgul:init` and `/nazgul:start` — one
+  unconditional suggestion line each, with no exit-code branching and no state read or write to
+  decide it.
+- **`scripts/lib/nazgul-root.sh` header documentation fix**, closing the folded-in p3
+  (`resolve-nazgul-dir-ignores-nazgul-dir-env.md`): the header now states plainly that
+  `CLAUDE_PROJECT_DIR` is the only environment variable that redirects resolution and that
+  `NAZGUL_DIR` is never read. This is **documentation only** — `resolve_project_root()` and
+  `resolve_nazgul_dir()` are byte-identical; no behavior changes.
+
 ## [2.26.0] - 2026-07-31
 
 Subagent non-delivery: a subagent whose model finished reasoning must not stall silently at its turn

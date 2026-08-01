@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.26.0-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-2.27.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-Plugin-7c3aed?style=flat-square" alt="Claude Code Plugin">
   <img src="https://img.shields.io/badge/agents-22-orange?style=flat-square" alt="Agents">
@@ -83,6 +83,7 @@ Nazgul auto-detects project state: active work resumes, existing docs trigger pl
 | Command | Description |
 |---------|-------------|
 | `/nazgul:init` | First-time setup: discovery, reviewer generation, runtime dirs |
+| `/nazgul:doctor` | Read-only environment preflight — plugin version, deps, git-hooks, shell, config schema |
 | `/nazgul:plan` | Brainstorm a new idea into a Nazgul spec + task plan, then run it |
 | `/nazgul:start` | Smart start/resume — auto-detects state, derives objective |
 | `/nazgul:status` | Check loop progress, task counts, reviewer board |

@@ -26,8 +26,17 @@
 # it is today: check for the resolved nazgul/config.json yourself and no-op
 # if absent.
 #
-# Never sources or clobbers NAZGUL_DIR — callers with their own override
-# precedence (e.g. scripts/lib/raise-finding.sh) keep it in front of this.
+# CLAUDE_PROJECT_DIR is the ONLY environment variable that redirects
+# resolution (branch 1 above). NAZGUL_DIR is never read by this file — it is
+# just the local variable name callers use for the resolved nazgul/ dir
+# (one level BELOW project root), and setting it in the environment has NO
+# effect on resolution. To isolate a script for test/replay, use
+# `CLAUDE_PROJECT_DIR=<root> bash scripts/<x>.sh`, never
+# `NAZGUL_DIR=<root>/nazgul ...` — a real isolation attempt leaked live
+# project state this way before this note existed (see the [2.27.0]
+# CHANGELOG entry). One caller-side exception: raise_finding()
+# (scripts/lib/raise-finding.sh) intentionally honors an explicit
+# NAZGUL_DIR for its own output path only; resolution here is unaffected.
 
 [ -n "${_NAZGUL_ROOT_SOURCED:-}" ] && return 0
 _NAZGUL_ROOT_SOURCED=1
