@@ -123,10 +123,12 @@ The decision record (`config.json`, `plan.md`, `tasks/`, `reviews/`, `docs/`, `c
 4. If this is a reinitialization (`--force`) of a project that already committed the ephemeral paths, tell the user they can stop tracking them with the one-shot in Step 4's summary.
 
 ### Step 3: Run Discovery
-Delegate to the Discovery agent to scan the codebase:
-1. Generate project context files in `nazgul/context/`
-2. Generate tailored reviewer agents in `.claude/agents/generated/`
-3. Update `nazgul/config.json` with discovered project settings
+Dispatch via the `Agent` tool with `subagent_type: "nazgul:discovery"` — **do not pass a `name`/`-n` parameter.** Naming an `Agent`-tool dispatch folds it into team/roster infrastructure even without an explicit team spawn (ADR-017); discovery is one-shot work (scan, write, return), so it stays on the unnamed one-shot subagent primitive. The dispatch:
+1. Generates project context files in `nazgul/context/`
+2. Generates tailored reviewer agents in `.claude/agents/generated/`
+3. Updates `nazgul/config.json` with discovered project settings
+
+The dispatch is a single exchange — its return value is the summary Step 4 displays below. No `nazgul/dispatch/<name>.json` manifest is written for this call (it is not a teammate, so the Report Contract's Layer 2 does not apply); instead it inherits `SubagentStop`'s empty-return detection + bounded resume (RULES.md §19) automatically, with no extra instrumentation needed here.
 
 ### Step 4: Display Summary
 Show the user:
