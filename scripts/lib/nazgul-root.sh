@@ -32,8 +32,11 @@
 # (one level BELOW project root), and setting it in the environment has NO
 # effect on resolution. To isolate a script for test/replay, use
 # `CLAUDE_PROJECT_DIR=<root> bash scripts/<x>.sh`, never
-# `NAZGUL_DIR=<root>/nazgul ...` (see
-# nazgul/inbox/resolve-nazgul-dir-ignores-nazgul-dir-env.md).
+# `NAZGUL_DIR=<root>/nazgul ...` — a real isolation attempt leaked live
+# project state this way before this note existed (see the [2.27.0]
+# CHANGELOG entry). One caller-side exception: raise_finding()
+# (scripts/lib/raise-finding.sh) intentionally honors an explicit
+# NAZGUL_DIR for its own output path only; resolution here is unaffected.
 
 [ -n "${_NAZGUL_ROOT_SOURCED:-}" ] && return 0
 _NAZGUL_ROOT_SOURCED=1

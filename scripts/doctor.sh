@@ -260,7 +260,15 @@ check_config_schema() {
 # is about to repeat the FEAT-024/TASK-008 leak.
 check_nazgul_dir_env() {
   if [ -n "$_DOC_OPERATOR_NAZGUL_DIR" ]; then
-    _doc_report warn nazgul-dir-env "NAZGUL_DIR is set ('$_DOC_OPERATOR_NAZGUL_DIR') but scripts/lib/nazgul-root.sh never reads it — it has NO effect on resolution. CLAUDE_PROJECT_DIR is the one seam that actually isolates nazgul/ resolution: use 'CLAUDE_PROJECT_DIR=$_DOC_OPERATOR_NAZGUL_DIR ...' instead of 'NAZGUL_DIR=$_DOC_OPERATOR_NAZGUL_DIR ...'."
+    # CLAUDE_PROJECT_DIR must be the PROJECT ROOT — one level above nazgul/.
+    # NAZGUL_DIR conventionally names the nazgul/ dir itself, so suggesting
+    # the same value verbatim would resolve to <root>/nazgul/nazgul.
+    local suggested_root="${_DOC_OPERATOR_NAZGUL_DIR%/}"
+    case "$suggested_root" in
+      */nazgul) suggested_root="${suggested_root%/nazgul}" ;;
+    esac
+    [ -n "$suggested_root" ] || suggested_root="<project-root>"
+    _doc_report warn nazgul-dir-env "NAZGUL_DIR is set ('$_DOC_OPERATOR_NAZGUL_DIR') but scripts/lib/nazgul-root.sh never reads it — it has NO effect on resolution. CLAUDE_PROJECT_DIR is the one seam that actually isolates nazgul/ resolution, and it must be the PROJECT ROOT (one level above nazgul/): use 'CLAUDE_PROJECT_DIR=$suggested_root ...' instead of 'NAZGUL_DIR=$_DOC_OPERATOR_NAZGUL_DIR ...'."
   else
     _doc_report pass nazgul-dir-env "NAZGUL_DIR is not set. CLAUDE_PROJECT_DIR is the one environment variable that redirects nazgul/ resolution."
   fi
@@ -270,7 +278,7 @@ check_nazgul_dir_env() {
 # check — routed through _doc_report with verdict "note" so it shares the
 # same output shape without touching the aggregate exit code.
 check_stdin_hazard() {
-  _doc_report note stdin-hazard "Hook scripts that read stdin via 'cat' without a bounded, non-tty-aware guard can block forever under a non-tty, never-EOF stdin (see nazgul/inbox/test-harness-stdin-hang-and-serial-runtime.md). Informational only; does not affect this run's exit code."
+  _doc_report note stdin-hazard "Hook scripts that read stdin via 'cat' without a bounded, non-tty-aware guard can block forever under a non-tty, never-EOF stdin. When running such scripts (or the test harness) outside a real hook context, redirect stdin: 'script < /dev/null'. Informational only; does not affect this run's exit code."
 }
 
 main() {

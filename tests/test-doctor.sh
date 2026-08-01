@@ -416,7 +416,9 @@ OUT=$(NAZGUL_DIR="$TEST_DIR/nazgul" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "nazgul-dir-env set fixture: aggregate exit 1 (warn)" "$EXIT" 1
 assert_contains "nazgul-dir-env set fixture: warns" "$OUT" "$(printf 'warn\tnazgul-dir-env')"
 assert_contains "nazgul-dir-env set fixture: states it has no effect" "$OUT" "has NO effect"
-assert_contains "nazgul-dir-env set fixture: shows the corrected CLAUDE_PROJECT_DIR invocation" "$OUT" "CLAUDE_PROJECT_DIR=$TEST_DIR/nazgul"
+assert_contains "nazgul-dir-env set fixture: shows the corrected CLAUDE_PROJECT_DIR invocation with the PROJECT ROOT (trailing /nazgul stripped)" "$OUT" "CLAUDE_PROJECT_DIR=$TEST_DIR ..."
+assert_not_contains "nazgul-dir-env set fixture: never suggests the doubled <root>/nazgul path as CLAUDE_PROJECT_DIR" "$OUT" "CLAUDE_PROJECT_DIR=$TEST_DIR/nazgul"
+assert_contains "nazgul-dir-env set fixture: states CLAUDE_PROJECT_DIR must be one level above nazgul/" "$OUT" "one level above nazgul/"
 teardown_temp_dir
 
 report_results
