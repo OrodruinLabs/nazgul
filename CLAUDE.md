@@ -24,7 +24,7 @@ skills/                              # User-facing commands (/nazgul:*)
 │   ├── verify/SKILL.md
 │   ├── metrics/SKILL.md
 │   ├── heartbeat/SKILL.md           # Opt-in automation-heartbeat tick (inbox triage + auto-start)
-│   ├── doctor/SKILL.md              # Read-only environment preflight diagnostic (seven checks)
+│   ├── doctor/SKILL.md              # Read-only environment preflight diagnostic (eight checks)
 │   └── bootstrap-project/SKILL.md   # Emit portable Nazgul-free bundle (one-shot)
 agents/                              # Subagent definitions
 │   ├── discovery.md                 # Pipeline: scans codebase, classifies project
@@ -74,7 +74,7 @@ scripts/                             # Shell scripts for hooks
 │   ├── gen-skill-docs.sh            # Skill template: resolve {{PARTIAL:name}}
 │   ├── bootstrap-transform.sh       # bootstrap-project: Nazgul-token scrub pass
 │   ├── heartbeat.sh                 # Opt-in automation-heartbeat tick engine (separate entry path)
-│   ├── doctor.sh                    # Read-only preflight diagnostic (seven checks, never writes state)
+│   ├── doctor.sh                    # Read-only preflight diagnostic (eight checks, never writes state)
 │   ├── git-hooks/                   # Templates installed into the managed core.hooksPath dir
 │   │   ├── _dispatch.sh             # Chain-dispatcher: forwards to any pre-existing user hook
 │   │   ├── pre-commit               # Git-level base-branch guard

@@ -9,7 +9,7 @@ metadata:
 # Nazgul Doctor
 
 ## Examples
-- `/nazgul:doctor` — Run all seven environment checks and report pass/warn/fail with remediation
+- `/nazgul:doctor` — Run all eight checks (a config-present engine check plus the seven environment checks (a)-(g)) and report pass/warn/fail with remediation
 
 ## Instructions
 
@@ -22,7 +22,7 @@ Format all output per `references/ui-brand.md` — stage banner, status symbols,
 ```
 
 Capture both stdout and the exit code. This is the entire implementation — `scripts/doctor.sh` runs
-all seven checks read-only. It never writes to `nazgul/`, git config, or anywhere else; this skill only
+all eight checks read-only. It never writes to `nazgul/`, git config, or anywhere else; this skill only
 formats what it reports. Every stdout line has the shape `<verdict>\t<check-id>\t<message>`, verdict one
 of `pass`/`warn`/`fail`/`note`. The exit code is the aggregate: 0 = all pass, 1 = worst is warn, 2 = worst
 is fail.

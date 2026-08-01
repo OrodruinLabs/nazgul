@@ -18,8 +18,10 @@ invoked on demand only, has no hook binding, and gates nothing, so there is no a
 kill-switch.
 
 ### Added
-- **`scripts/doctor.sh` + `skills/doctor/SKILL.md`**, a read-only preflight diagnostic covering all
-  seven checks, each reported `pass`/`warn`/`fail` with a one-line remediation:
+- **`scripts/doctor.sh` + `skills/doctor/SKILL.md`**, a read-only preflight diagnostic covering
+  eight checks — a config-present engine check (an uninitialized project is reported, never
+  silently skipped) plus the seven environment checks below — each reported `pass`/`warn`/`fail`
+  with a one-line remediation:
   (a) cache-vs-repo plugin version — an explicitly **documented workaround**, not a platform API,
   since Claude Code exposes no mechanism to compare the active plugin cache against the repo
   checkout; (b) `jq`/`gh` presence on `PATH`, with `gh auth status` checked only when connectors or
