@@ -18,10 +18,34 @@ if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
+# Session identity resolution (TASK-006/FEAT-026). CLAUDE_SESSION_ID is not
+# set in the SessionStart hook env, so the fallback chain reads the real id
+# out of the hook's own JSON payload on stdin first: payload .session_id ->
+# CLAUDE_SESSION_ID -> persisted nazgul/.session_id -> synthetic epoch-pid
+# (last resort, matched by the digits-hyphen-digits shape below). Read
+# guarded by a TTY check + tolerant cat, mirroring
+# teammate-idle-guard.sh/subagent-stop.sh so this never hangs the hook.
+STDIN_PAYLOAD=""
+if [ ! -t 0 ]; then
+  STDIN_PAYLOAD=$(cat 2>/dev/null || echo "")
+fi
+PAYLOAD_SESSION_ID=""
+if [ -n "$STDIN_PAYLOAD" ]; then
+  PAYLOAD_SESSION_ID=$(printf '%s' "$STDIN_PAYLOAD" | jq -r '.session_id // empty' 2>/dev/null || echo "")
+fi
+if [ -n "$PAYLOAD_SESSION_ID" ]; then
+  SESSION_ID="$PAYLOAD_SESSION_ID"
+elif [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+  SESSION_ID="$CLAUDE_SESSION_ID"
+elif [ -s "$NAZGUL_DIR/.session_id" ]; then
+  SESSION_ID=$(cat "$NAZGUL_DIR/.session_id")
+else
+  SESSION_ID="$(date +%s)-$$"
+fi
+
 # Session tracking — register this session and warn on concurrent
-SESSION_ID="${CLAUDE_SESSION_ID:-$(date +%s)-$$}"
 SESSIONS_DIR="$NAZGUL_DIR/sessions"
-# Persist generated session ID so stop-hook can unregister it
+# Persist resolved session ID so stop-hook can unregister it
 printf '%s' "$SESSION_ID" > "$NAZGUL_DIR/.session_id"
 register_session "$SESSION_ID" "$SESSIONS_DIR"
 cleanup_stale_sessions "$SESSIONS_DIR"
@@ -31,14 +55,26 @@ if warning_msg=$(is_concurrent_session_warning "$SESSIONS_DIR"); then
 fi
 
 # Orphaned-team sweep (spec 2026-07-24) — dead-session Agent-Teams state
-# attributable to THIS project. Kill-switch: guards.team_sweep.
+# attributable to THIS project. Kill-switch: guards.team_sweep. A sweep that
+# cannot identify the current session must not sweep (RULES.md §15/ADR-009):
+# if resolution above fell all the way through to the synthetic epoch-pid
+# fallback, that id can never match a team's leadSessionId, so skip instead
+# of sweeping under a wrong identity and log why.
 TT_SWEEP_NOTICE=""
 TT_SWEEP_ENABLED=$(jq -r 'if .guards.team_sweep == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
 if [ "$TT_SWEEP_ENABLED" = "true" ]; then
-  source "$SCRIPT_DIR/lib/team-teardown.sh"
-  TT_MIN_AGE=$(jq -r '[.guards.team_sweep_min_age_hours // 24, 1] | max' "$CONFIG" 2>/dev/null || echo 24)
-  TT_SWEPT=$(tt_sweep_orphaned_teams "$NAZGUL_DIR" "$PROJECT_ROOT" "$SESSION_ID" "$TT_MIN_AGE" 2>/dev/null || true)
-  [ -n "$TT_SWEPT" ] && TT_SWEEP_NOTICE="Swept orphaned team state (dead sessions): $(printf '%s' "$TT_SWEPT" | tr '\n' ' ')"
+  if [[ "$SESSION_ID" =~ ^[0-9]+-[0-9]+$ ]]; then
+    TT_SWEEP_NOTICE="Skipped orphaned-team sweep: current session id could not be resolved (unresolved_session_id) — see nazgul/logs/team-sweep.jsonl."
+    mkdir -p "$NAZGUL_DIR/logs" 2>/dev/null || true
+    jq -cn --arg ts "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+      '{ts:$ts, action:"skipped", reason:"unresolved_session_id"}' \
+      >> "$NAZGUL_DIR/logs/team-sweep.jsonl" 2>/dev/null || true
+  else
+    source "$SCRIPT_DIR/lib/team-teardown.sh"
+    TT_MIN_AGE=$(jq -r '[.guards.team_sweep_min_age_hours // 24, 1] | max' "$CONFIG" 2>/dev/null || echo 24)
+    TT_SWEPT=$(tt_sweep_orphaned_teams "$NAZGUL_DIR" "$PROJECT_ROOT" "$SESSION_ID" "$TT_MIN_AGE" 2>/dev/null || true)
+    [ -n "$TT_SWEPT" ] && TT_SWEEP_NOTICE="Swept orphaned team state (dead sessions): $(printf '%s' "$TT_SWEPT" | tr '\n' ' ')"
+  fi
 fi
 
 # Auto-migrate config to latest schema version

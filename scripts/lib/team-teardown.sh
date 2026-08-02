@@ -32,13 +32,19 @@ NAZGUL_PROJECTS_DIR="${NAZGUL_PROJECTS_DIR:-$HOME/.claude/projects}"
 tt_sweep_orphaned_teams() {
   local nazgul_dir="$1" project_dir="$2" cur_sid="${3:-}" min_age_h="${4:-24}"
   local team_cfg team_dir team lead lead_safe alive t mt now min_age_s m
-  local attributed m_cwd m_cwd_resolved
+  local attributed m_cwd m_cwd_resolved cur_sid_team
   command -v jq >/dev/null 2>&1 || return 0
   [ -d "$NAZGUL_TEAMS_DIR" ] || return 0
   case "$min_age_h" in ''|*[!0-9]*) min_age_h=24 ;; esac
   [ "$min_age_h" -lt 1 ] 2>/dev/null && min_age_h=1
   min_age_s=$((min_age_h * 3600))
   now=$(date +%s)
+  # Belt-and-braces: the current session's implicit team dir name
+  # (session-<first 8 chars of the lead session id>, same derivation the
+  # retired tt_team_dir_for_manifest() used) is excluded even if leadSessionId
+  # in that team's config.json doesn't match cur_sid for any reason.
+  cur_sid_team=""
+  [ -n "$cur_sid" ] && cur_sid_team="session-${cur_sid:0:8}"
   # Physical resolution so macOS /tmp vs /private/tmp still attributes
   # correctly; fails open to the literal string if the path is inaccessible.
   project_dir=$(cd "$project_dir" 2>/dev/null && pwd -P || printf '%s' "$project_dir")
@@ -57,6 +63,7 @@ tt_sweep_orphaned_teams() {
       fi
     done <<< "$(jq -r '.members[]?.cwd // empty' "$team_cfg" 2>/dev/null || echo "")"
     [ "$attributed" = "true" ] || continue
+    [ -n "$cur_sid_team" ] && [ "$team" = "$cur_sid_team" ] && continue
     lead=$(jq -r '.leadSessionId // ""' "$team_cfg" 2>/dev/null || echo "")
     [ -z "$lead" ] && continue
     [ -n "$cur_sid" ] && [ "$lead" = "$cur_sid" ] && continue
@@ -85,7 +92,7 @@ tt_sweep_orphaned_teams() {
     rm -rf "${NAZGUL_TEAM_TASKS_DIR:?}/${team}"
     mkdir -p "$nazgul_dir/logs" 2>/dev/null || true
     jq -cn --arg ts "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" --arg team "$team" --arg lead "$lead" \
-      '{ts:$ts, team:$team, lead:$lead, action:"swept"}' \
+      '{ts:$ts, team:$team, lead:$lead, action:"swept", reason:"no_lock_no_fresh_transcript"}' \
       >> "$nazgul_dir/logs/team-sweep.jsonl" 2>/dev/null || true
     printf '%s\n' "$team"
   done

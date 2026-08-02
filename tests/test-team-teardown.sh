@@ -96,7 +96,8 @@ make_owned_team() {  # <team> <leadSessionId>
 export NAZGUL_TEAM_TASKS_DIR=""  # set per test
 export NAZGUL_PROJECTS_DIR=""
 
-# --- 14: dead + attributed -> swept (both dirs), logged ---
+# --- 14: dead + attributed -> swept (both dirs), logged with a reason
+# (TASK-006 AC: a future false sweep must be diagnosable from telemetry) ---
 setup_temp_dir; setup_nazgul_dir; create_config '.'
 export NAZGUL_TEAMS_DIR="$TEST_DIR/teams" NAZGUL_TEAM_TASKS_DIR="$TEST_DIR/team-tasks" NAZGUL_PROJECTS_DIR="$TEST_DIR/projects"
 make_owned_team "old-team" "dead-lead-1111"
@@ -105,6 +106,8 @@ assert_contains "sweep: reported" "$OUT" "old-team"
 assert_dir_not_exists "sweep: team dir gone" "$TEST_DIR/teams/old-team"
 assert_dir_not_exists "sweep: tasks dir gone" "$TEST_DIR/team-tasks/old-team"
 assert_file_exists "sweep: logged" "$TEST_DIR/nazgul/logs/team-sweep.jsonl"
+assert_eq "sweep: reason recorded on the swept record" \
+  "$(jq -r '.reason' "$TEST_DIR/nazgul/logs/team-sweep.jsonl")" "no_lock_no_fresh_transcript"
 teardown_temp_dir
 
 # --- 15: live session lock (real production lock filename) -> kept ---
@@ -235,6 +238,22 @@ stat() { return 1; }
 OUT=$(tt_sweep_orphaned_teams "$TEST_DIR/nazgul" "$TEST_DIR" "current-sess" 24)
 unset -f stat
 assert_dir_exists "unreadable mtime: team kept (fail open)" "$TEST_DIR/teams/unreadable-mtime-team"
+teardown_temp_dir
+
+# --- 28 (TASK-006): current session's own team, identified ONLY by NAME FORM
+# (session-<first 8 chars of cur_sid>) with an unrelated leadSessionId, no
+# lock, no transcript — the exact production shape from
+# nazgul/inbox/team-sweep-kills-live-session-team-file.md. Kept, and the
+# sweep still returns 0 (fail-open contract preserved) ---
+setup_temp_dir; setup_nazgul_dir; create_config '.'
+export NAZGUL_TEAMS_DIR="$TEST_DIR/teams" NAZGUL_TEAM_TASKS_DIR="$TEST_DIR/team-tasks" NAZGUL_PROJECTS_DIR="$TEST_DIR/projects"
+CUR_SID="29ebbe09-4aff-4dfc-b566-e9c9cd41f359"
+make_owned_team "session-29ebbe09" "unrelated-dead-lead"
+OUT=$(tt_sweep_orphaned_teams "$TEST_DIR/nazgul" "$TEST_DIR" "$CUR_SID" 24)
+RC=$?
+assert_eq "name-form exclusion: sweep still returns 0" "$RC" "0"
+assert_dir_exists "name-form exclusion: own team kept (no lock, no transcript)" "$TEST_DIR/teams/session-29ebbe09"
+assert_not_contains "name-form exclusion: not reported as swept" "$OUT" "session-29ebbe09"
 teardown_temp_dir
 
 report_results
