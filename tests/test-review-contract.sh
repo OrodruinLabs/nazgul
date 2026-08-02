@@ -36,15 +36,18 @@ for f in "$REVIEW_GATE" "$REVIEWER_BASE" "$TEAM_ORCHESTRATOR" "$REVIEW_EVIDENCE"
   fi
 done
 
-# --- MF-058: four-consumer <UNIT-ID>/<reviewer-name>.md filename consistency ---
+# --- MF-058: <UNIT-ID>/<reviewer-name>.md filename consistency across the
+# live report-contract consumers ---
 #
 # Each file spells the review-unit and reviewer placeholders with its own
-# convention ([UNIT-ID], [TASK-ID], {{reviewer_name}}, <TASK-ID>, ${reviewer}),
-# per the TRD's own verification that team-orchestrator.md's [TASK-ID] variant
-# is an accepted part of the same agreed contract (its dispatch path is
-# task-scoped, never group/feature). The invariant every consumer must share
-# is the SHAPE: reviews/<placeholder>/<placeholder>.md — a bracketed,
-# braced, or angle-bracketed token, never a divergent literal path segment.
+# convention ([UNIT-ID], {{reviewer_name}}, ${reviewer}). The invariant every
+# consumer must share is the SHAPE: reviews/<placeholder>/<placeholder>.md —
+# a bracketed, braced, or angle-bracketed token, never a divergent literal
+# path segment. team-orchestrator.md is no longer one of these consumers:
+# FEAT-026/ADR-017 retired its named-teammate report-dispatch path (the sole
+# place it restated this pattern), so it is intentionally excluded from this
+# check rather than checked against a pattern it no longer has any reason to
+# contain.
 PLACEHOLDER='(\[[A-Za-z_-]+\]|\{\{[A-Za-z_]+\}\}|<[A-Za-z_-]+>)'
 UNIT_REVIEWER_PATTERN="reviews/${PLACEHOLDER}/${PLACEHOLDER}\.md"
 
@@ -58,12 +61,6 @@ if grep -qE "$UNIT_REVIEWER_PATTERN" "$REVIEWER_BASE"; then
   _pass "reviewer-base.md references the <UNIT-ID>/<reviewer-name>.md pattern"
 else
   _fail "reviewer-base.md references the <UNIT-ID>/<reviewer-name>.md pattern" "no match for: $UNIT_REVIEWER_PATTERN"
-fi
-
-if grep -qE "$UNIT_REVIEWER_PATTERN" "$TEAM_ORCHESTRATOR"; then
-  _pass "team-orchestrator.md references the <UNIT-ID>/<reviewer-name>.md pattern"
-else
-  _fail "team-orchestrator.md references the <UNIT-ID>/<reviewer-name>.md pattern" "no match for: $UNIT_REVIEWER_PATTERN"
 fi
 
 # review-evidence.sh documents the same shape in its header comment (the

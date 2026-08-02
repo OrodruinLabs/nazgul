@@ -25,95 +25,28 @@ Format ALL user-facing output per `references/ui-brand.md`:
 - Progress bars: `████████░░░░ 80%`
 - Never use emoji — only the defined symbols
 
-## Spawning a Review Team
+## Retired: Named-Teammate Spawn Paths
 
-When asked to run parallel reviews for a task:
+FEAT-026/ADR-017 retired this agent's two named-teammate spawn sections ("Spawning a Review Team" and
+"Spawning an Implementation Team"): the dispatch-site audit (TRD §2 sites 5-6) found no live caller of
+either, and both duplicated work the one-shot subagent primitive already does correctly:
 
-1. Verify Agent Teams is available: read `nazgul/config.json → parallelism.require_settings` and confirm the setting is enabled
-2. Read the reviewer list from `nazgul/config.json → agents.reviewers`
-3. Read `nazgul/config.json → models.review` for the model to assign each reviewer teammate (default: `"sonnet"`). Pass this as the `model` parameter when spawning each teammate via the Task tool.
-4. Read the changed files for the task from the task manifest. Verify `nazgul/reviews/[TASK-ID]/diff.patch` exists.
-5. For each reviewer teammate, BEFORE spawning: write its dispatch manifest per
-   the Report Contract (`templates/skill-partials/report-contract.md`) with
-   `report_path: nazgul/reviews/[TASK-ID]/[reviewer-name].md`. Note: the §3.3
-   read-only guarantee applies to subagent-dispatched reviewers persisted by
-   the review-gate orchestrator — reviewer teammates spawned here must be
-   given Write access scoped to their single report file so they can persist
-   it themselves; if scoped Write is unavailable for this teammate, point
-   `report_path` at output the lead persists itself instead.
-6. This spawn flow is where the Agent-Teams path performs `nazgul:review-gate`'s orchestrating role directly (rather than dispatching a separate `nazgul:review-gate` agent instance). Dispatch review-gate at `models.review_orchestrator` (default `sonnet`) — never inherit a lower tier from the calling context. This is defense-in-depth alongside `review-gate.md`'s own `model: sonnet` frontmatter pin, for this Agent-Teams path where a static frontmatter pin may not apply the same way.
-7. Spawn a team with one teammate per reviewer:
-   - Team name: `nazgul-review-[TASK-ID]`
-   - Session naming: name each teammate session as `nazgul-[reviewer-name]-[TASK-ID]` using the `-n` flag — the dispatch manifest filename MUST match this session name exactly
-   - Each teammate gets: their agent definition, the diff file path (`nazgul/reviews/[TASK-ID]/diff.patch`), the file list, relevant context paths
-   - Instruct each teammate: "Read diff.patch FIRST to understand what changed, then read full files only for additional context"
-   - END each teammate prompt with the Report Contract block, `<REPORT_PATH>` = `nazgul/reviews/[TASK-ID]/[reviewer-name].md`
-8. Completion signal = idle notification + report file on disk. When a teammate
-   idles, read its report file. A teammate idling without its file is blocked
-   automatically by the TeammateIdle guard (≤3 times); if it still arrives
-   file-less (guard escalated), nudge it once via SendMessage, then mark the
-   review UNVERIFIED if it never lands.
-9. Dismiss each teammate THIS team spawned as soon as its report is consumed:
-   send it a SendMessage shutdown_request (teammates never exit on their own;
-   TeamCreate/TeamDelete no longer exist as of Claude Code v2.1.178). After a
-   teammate approves shutdown, delete ONLY its
-   `nazgul/dispatch/<session-name>.json` manifest (the exact session names
-   from step 7) — never glob `nazgul/dispatch/*.json`, which would also
-   delete other concurrently active teams' manifests and silently disable
-   their TeammateIdle enforcement. If a teammate rejects shutdown, it
-   believes it has live work — check its report before re-requesting. The
-   stop-hook's team-teardown gate (guards.team_teardown) independently
-   detects undismissed teammates and injects a mandatory dismissal directive
-   each iteration until they are dismissed (bounded, fail-open).
+- **Review dispatch** lives at the stop-hook's unnamed `Agent` dispatch to `subagent_type:
+  "nazgul:review-gate"`, which itself fans reviewers out as unnamed one-shot subagents — one `Agent` call
+  per reviewer, all in a single message (`agents/review-gate.md`, Parallel Review Mode).
+- **Implementation dispatch** lives at the stop-hook's parallel-batch per-unit fan-out
+  (`compute_dispatch_batch`, `scripts/lib/parallel-batch.sh`, FEAT-009/ADR-004) — one unnamed `Agent`
+  dispatch per task, all in one message.
 
-## Spawning an Implementation Team
-
-When asked to run parallel implementations:
-
-1. Verify Agent Teams is available: read `nazgul/config.json → parallelism.require_settings` and confirm the setting is enabled
-2. Read the parallel group from `nazgul/plan.md`
-3. Read `nazgul/config.json → models.implementation` for the model to assign each implementer teammate (default: `"sonnet"`). Pass this as the `model` parameter when spawning each teammate via the Task tool.
-4. Verify NO file overlaps between tasks (abort if overlap detected)
-5. **Create worktrees for each task:**
-   - Read `branch.feature` and `branch.worktree_dir` from config
-   - Prefer `EnterWorktree` tool for native isolation; fallback to `git worktree add <worktree_dir>/TASK-NNN -b feat/<display_id>/TASK-NNN <feature-branch>`
-   - Pass the worktree path to each implementer teammate
-6. For each implementer teammate, BEFORE spawning: write its dispatch manifest
-   per the Report Contract (`templates/skill-partials/report-contract.md`)
-   with `report_path: nazgul/tasks/[TASK-ID].md` — the task manifest itself is
-   the implementer's deliverable (its Status/Commits update), not a separate
-   report file.
-7. Spawn a team with one implementer per task:
-   - Team name: `nazgul-impl-group-[N]`
-   - Session naming: name each teammate session as `nazgul-impl-[TASK-ID]` using the `-n` flag — the dispatch manifest filename MUST match this session name exactly
-   - Each teammate gets: their task details, their file scope, implementer rules, AND their worktree path
-   - Each teammate works in its own worktree and references nazgul runtime via `branch.main_worktree_path`
-   - Each teammate commits in its own worktree
-   - END each teammate prompt with the Report Contract block, `<REPORT_PATH>` = `nazgul/tasks/[TASK-ID].md`
-8. Completion signal = idle notification + task manifest on disk showing
-   Status: IMPLEMENTED or BLOCKED with a commit SHA recorded under ## Commits.
-   A teammate idling without that manifest update is blocked automatically by
-   the TeammateIdle guard (≤3 times); if it still arrives without a landed
-   Status update (guard escalated), nudge it once via SendMessage, then mark
-   the task BLOCKED if it never lands.
-9. **Merge completed tasks to feature branch:**
-   - For each IMPLEMENTED task:
-     a. `source scripts/worktree-utils.sh` then call `merge_task_to_feature TASK-NNN "<main_worktree_path>" nazgul/config.json` — `git -C`-safe, so it merges correctly regardless of the invoking worktree's cwd (MF-035), removing the "checkout in main worktree first" convention this step used to depend on.
-     b. If the call returns non-zero (merge conflict, already aborted internally): mark task BLOCKED with conflict details
-     c. If success: remove worktree, delete task branch
-10. Signal completion
-11. Dismiss each teammate THIS team spawned as soon as its report is consumed:
-    send it a SendMessage shutdown_request (teammates never exit on their own;
-    TeamCreate/TeamDelete no longer exist as of Claude Code v2.1.178). After a
-    teammate approves shutdown, delete ONLY its
-    `nazgul/dispatch/<session-name>.json` manifest (the exact session names
-    from step 7) — never glob `nazgul/dispatch/*.json`, which would also
-    delete other concurrently active teams' manifests and silently disable
-    their TeammateIdle enforcement. If a teammate rejects shutdown, it
-    believes it has live work — check its report before re-requesting. The
-    stop-hook's team-teardown gate (guards.team_teardown) independently
-    detects undismissed teammates and injects a mandatory dismissal directive
-    each iteration until they are dismissed (bounded, fail-open).
+The rule going forward: a persistent Agent-Teams teammate only when the work genuinely needs more than one
+exchange with the lead; an unnamed one-shot `Agent` dispatch for everything else, including review and
+implementation, both of which are single-exchange work (dispatch, produce, return). This file remains as
+documentation/introspection surface — `templates/config.json → agents.pipeline`,
+`scripts/parallel-dispatch-guard.sh`'s name-matching allowlist, and `skills/enhance/SKILL.md`'s tools-block
+probe all still reference it by name — and its tools stay available for the one case ADR-017's Option B
+reserves (a genuine multi-turn need, which this objective's own audit found none of). It is deliberately not
+re-documented "just in case": keeping a spawn procedure for a primitive nothing should use is the drift this
+objective exists to close.
 
 ## Fallback Behavior
 
