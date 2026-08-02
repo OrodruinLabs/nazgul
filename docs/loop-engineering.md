@@ -9,8 +9,8 @@ one gap that was missing.
 
 | # | Component | Nazgul artifact |
 |---|-----------|------------------|
-| 1 | Automations / heartbeat | The `Stop` hook (`hooks/hooks.json` → `scripts/stop-hook.sh`) re-fires after every turn, reads `nazgul/plan.md`, and either continues the loop (exit 2) or lets it end (exit 0). This is the loop's heartbeat — it never needs a human to press "continue." |
-| 2 | Worktrees | The `EnterWorktree`/`ExitWorktree` tools give each task (or Conductor unit) an isolated git worktree and branch, so parallel work never collides on the working tree. See `agents/team-orchestrator.md` for the pattern; `agents/implementer.md` and `agents/conductor.md` both use it. |
+| 1 | Automations / heartbeat | The `Stop` hook (`hooks/hooks.json` → `scripts/stop-hook.sh`) re-fires after every turn, reads `nazgul/plan.md`, and either continues the loop (exit 2), lets it end (exit 0), or takes an ALLOWED, uncounted hold (exit 0, iteration NOT incremented) while a just-dispatched `Agent` is still running (`guards.in_flight_hold`, FEAT-026 scope addition — the marker that triggers the hold is itself written and cleared by hooks, `scripts/in-flight-marker.sh` and `scripts/subagent-stop.sh`, per ADR-015). This is the loop's heartbeat — it never needs a human to press "continue." |
+| 2 | Worktrees | The `EnterWorktree`/`ExitWorktree` tools give each task an isolated git worktree and branch, so parallel work never collides on the working tree. See `agents/implementer.md`'s Branch and Worktree Protocol for the pattern (per-unit unnamed subagent fan-out, ADR-004/FEAT-009); `agents/team-orchestrator.md` keeps the same tools but no longer documents a teammate-spawn workflow (FEAT-026/ADR-017). |
 | 3 | Skills | `skills/*/SKILL.md` are the user-facing entry points (`/nazgul:init`, `/nazgul:start`, `/nazgul:status`, etc.) — the operator's interface to the loop, independent of which execution engine is driving underneath. |
 | 4 | Connectors | FEAT-008 shipped the pull side over a local file inbox; FEAT-012 (2.15.0) added the first real remote provider: `scripts/lib/connector-github.sh` is a two-way GitHub connector that pulls labeled issues into the inbox (so the heartbeat auto-starts them) and pushes task status + PR links back to the mapped issue, routed through the generalized `file`/`github` provider seam (`scripts/lib/inbox-provider.sh`). Opt-in and default-off (`connectors.github.enabled`), gh-auth-only (no tokens stored). Linear/Slack are the remaining follow-on providers behind the same seam; `scripts/board-sync-github.sh` remains a separate one-way GitHub Projects status mirror. |
 | 5 | Maker/checker sub-agents | `agents/implementer.md` (maker) builds one task; `agents/review-gate.md` (checker) orchestrates the review board and `agents/feedback-aggregator.md` consolidates findings before any retry. No task reaches DONE without the checker's approval — this split is structural, not optional. |
@@ -49,17 +49,20 @@ never re-dispatched or re-implemented.
 
 1. `scripts/conductor-dispatch-guard.sh` (PreToolUse on the `Agent` tool) denies background dispatch of a
    work-unit subagent and denies re-dispatching a unit whose status makes that dispatch wasted work —
-   `implementer`/`team-orchestrator` at `IMPLEMENTED`/`DONE`, but `review-gate` only at `DONE` (an
-   `IMPLEMENTED` unit still legitimately needs its review dispatched, not re-implemented). Dispatch is
-   synchronous and one-shot per unit per subagent kind.
+   `implementer` at `IMPLEMENTED`/`DONE`, but `review-gate` only at `DONE` (an `IMPLEMENTED` unit still
+   legitimately needs its review dispatched, not re-implemented; `team-orchestrator` was a dispatch target
+   here only for its now-retired named-teammate spawn paths — FEAT-026/ADR-017 replaced them with per-unit
+   unnamed subagent fan-out, ADR-004/FEAT-009). Dispatch is synchronous and one-shot per unit per subagent
+   kind.
 2. `scripts/conductor-rework-guard.sh` (PreToolUse on `Write|Edit|MultiEdit`) denies writing to a file
    inside a committed unit's `file_scope`.
 3. `scripts/subagent-stop.sh` detects an orphaned wave (units dispatched but not yet terminal) on every
    `SubagentStop` event and records a `nazgul/conductor/.resume-needed` marker plus a
    `conductor_orphan_detected` event.
-4. `scripts/lib/conductor-router.sh` routes a Planner-marked, zero-overlap parallel wave to
-   `team-orchestrator` instead of one bespoke worktree per unit, reusing the sequential engine's proven
-   Agent-Teams path and its zero-file-overlap validation.
+4. `scripts/lib/conductor-router.sh` routed a Planner-marked, zero-overlap parallel wave to
+   `team-orchestrator`'s Agent-Teams path and its zero-file-overlap validation instead of one bespoke
+   worktree per unit; FEAT-026/ADR-017 retired that named-teammate spawn target, and the shipped equivalent
+   today is `scripts/lib/parallel-batch.sh`'s per-unit unnamed subagent fan-out (ADR-004/FEAT-009).
 5. `scripts/lib/conductor-graph.sh`'s `graph_wave_digest` gives the Conductor a cheap per-turn orientation
    snapshot (`{current_wave, next_unit, units}`) instead of a full wave recomputation.
 

@@ -85,7 +85,10 @@ If the `models` section is missing from config.json, use `"sonnet"` as the fallb
 
 When launching Nazgul, use session naming for identification:
 - Launch with: `claude -n "nazgul-<feat_display_id>"` (e.g., `claude -n "nazgul-FEAT-003"`)
-- Agent Teams sessions are auto-named by the team-orchestrator: `nazgul-impl-TASK-NNN`, `nazgul-review-TASK-NNN`
+- Nazgul's own agent dispatches (discovery, review, implementation, post-loop verifiers) are unnamed
+  one-shot `Agent` dispatches — naming a dispatch (a `name`/`-n` parameter) folds it into Agent-Teams
+  roster infrastructure, which is wrong for single-exchange work (ADR-017). This naming convention is
+  scoped to the human's own launch session above and does not extend to what Nazgul dispatches internally.
 
 ### Apply Flags (MANDATORY — runs on every path, before state detection)
 Persist the CLI flags to config via the tested helper, so every mode-gated branch below reads a correct `config.mode`:

@@ -117,5 +117,5 @@ fi
 tmp=$(mktemp 2>/dev/null) || tmp=""
 if [ -n "$tmp" ] && jq --argjson b "$((BLOCKS + 1))" '.blocks = $b' "$MANIFEST" > "$tmp" 2>/dev/null; then mv "$tmp" "$MANIFEST" 2>/dev/null || rm -f "$tmp"; else rm -f "$tmp"; fi
 log_event "block" "report missing at $REPORT_PATH (block $((BLOCKS + 1))/3)"
-echo "NAZGUL TEAMMATE REPORT CONTRACT: Your report at ${REPORT_PATH} was not written — your final plain text is invisible to the parent. Write your full report to ${REPORT_PATH} now, then idle." >&2
+echo "NAZGUL TEAMMATE REPORT CONTRACT: Your report at ${REPORT_PATH} was not written — your final plain text is invisible to the parent. Write your full report to ${REPORT_PATH} now." >&2
 exit 2

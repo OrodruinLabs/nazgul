@@ -252,4 +252,41 @@ assert_eq "MF-012: count NOT incremented when lock already claimed" "$val" "3"
 unset CLAUDE_HOOK_EVENT
 teardown_temp_dir
 
+# --- Test 17 (TASK-006): SessionStart hook JSON payload on stdin resolves the
+# real session id — no CLAUDE_SESSION_ID and no prior persisted id, so the
+# payload is the only source. Asserted via the persisted .session_id file and
+# the session lock filename (both must reflect the payload's real id, not a
+# synthetic epoch-pid fallback). ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+PAYLOAD_SID="29ebbe09-4aff-4dfc-b566-e9c9cd41f359"
+output=$(printf '{"session_id":"%s","hook_event_name":"SessionStart"}' "$PAYLOAD_SID" | bash "$SESSION_SCRIPT" 2>&1)
+assert_eq "stdin payload: persisted .session_id is the payload's real id" \
+  "$(cat "$TEST_DIR/nazgul/.session_id")" "$PAYLOAD_SID"
+assert_file_exists "stdin payload: session lock filed under the real id" \
+  "$TEST_DIR/nazgul/sessions/${PAYLOAD_SID}_.lock"
+teardown_temp_dir
+
+# --- Test 18 (TASK-006): no payload, no CLAUDE_SESSION_ID, no persisted id —
+# the sweep cannot identify the current session, so it is SKIPPED with a
+# loud diagnostic and a `skipped`/`unresolved_session_id` JSONL record; the
+# hook still exits 0 (never blocks session start on this). ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+unset CLAUDE_SESSION_ID 2>/dev/null || true
+ec=0
+output=$(bash "$SESSION_SCRIPT" < /dev/null 2>&1) || ec=$?
+assert_exit_code "unresolved session id: hook still exits 0" "$ec" 0
+assert_contains "unresolved session id: sweep-skipped diagnostic shown" \
+  "$output" "Skipped orphaned-team sweep"
+assert_eq "unresolved session id: JSONL action is skipped" \
+  "$(jq -r '.action' "$TEST_DIR/nazgul/logs/team-sweep.jsonl")" "skipped"
+assert_eq "unresolved session id: JSONL reason is unresolved_session_id" \
+  "$(jq -r '.reason' "$TEST_DIR/nazgul/logs/team-sweep.jsonl")" "unresolved_session_id"
+teardown_temp_dir
+
 report_results

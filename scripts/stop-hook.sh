@@ -114,6 +114,59 @@ if [ "$AFK_ENABLED" = "true" ] && [ "$AFK_TIMEOUT" != "null" ]; then
   fi
 fi
 
+# --- In-flight hold (ADR-015, TASK-008) ---
+# A fresh dispatch marker means dispatched work is still running; the
+# orchestrator's only honest move is "nothing to do this tick," and blocking
+# that stop would burn an iteration on a no-op
+# (nazgul/inbox/stop-hook-blind-in-flight-iteration-burn.md). Runs AFTER the
+# AFK gate and BEFORE the iteration increment on purpose: a hold must never
+# increment current_iteration/consecutive_failures, and must never fire when
+# the AFK timeout should end the run instead.
+# Kill-switch: guards.in_flight_hold (explicit `false` disables the hold; the
+# marker write/clear in in-flight-marker.sh/subagent-stop.sh keep running
+# harmlessly either way).
+IN_FLIGHT_HOLD_ENABLED=$(jq -r 'if .guards.in_flight_hold == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; then
+  IN_FLIGHT_STALE_MIN=$(jq -r '[.guards.in_flight_stale_minutes // 30, 1] | max' "$CONFIG" 2>/dev/null || echo 30)
+  # A JSON string or fractional value passes jq's max unchanged (string ranks
+  # above number); guard before arithmetic so a bad config never crashes the
+  # whole stop-hook (same pattern as scripts/lib/team-teardown.sh:38-39).
+  case "$IN_FLIGHT_STALE_MIN" in ''|*[!0-9]*) IN_FLIGHT_STALE_MIN=30 ;; esac
+  IN_FLIGHT_NOW=$(date +%s)
+  IN_FLIGHT_CUTOFF=$(( IN_FLIGHT_NOW - IN_FLIGHT_STALE_MIN * 60 ))
+  # CURRENT_ITERATION is normally only set by the iteration increment further
+  # down (NEW_ITER=$((ITERATION + 1)) ... CURRENT_ITERATION="$NEW_ITER", after
+  # this gate); set it here from the un-incremented ITERATION so an event
+  # emitted by this gate carries the real current iteration, not null.
+  # shellcheck disable=SC2034
+  CURRENT_ITERATION="$ITERATION"
+  FRESH_UNITS="" FRESH_COUNT=0
+  for marker in "$NAZGUL_DIR/in-flight"/*.json; do
+    [ -f "$marker" ] || continue
+    m_epoch=$(jq -r '.dispatched_at_epoch // 0' "$marker" 2>/dev/null || echo 0)
+    m_unit=$(jq -r '.unit // "unknown"' "$marker" 2>/dev/null || echo "unknown")
+    m_agent=$(jq -r '.agent // "unknown"' "$marker" 2>/dev/null || echo "unknown")
+    case "$m_epoch" in ''|*[!0-9]*) m_epoch=0 ;; esac
+    if [ "$m_epoch" -gt 0 ] && [ "$m_epoch" -ge "$IN_FLIGHT_CUTOFF" ]; then
+      FRESH_COUNT=$((FRESH_COUNT + 1))
+      FRESH_UNITS="${FRESH_UNITS}${FRESH_UNITS:+ }${m_unit}"
+    else
+      # Stale markers are NEVER silently deleted here — a crashed subagent's
+      # marker is diagnostic evidence for the next tick, and only
+      # SubagentStop's own clear (matched by agent) or manual cleanup removes
+      # a marker file. The hold is simply not taken for it.
+      m_age_min=$(( (IN_FLIGHT_NOW - m_epoch) / 60 ))
+      echo "Nazgul: STALE in-flight marker for ${m_unit} (${m_agent}), age ${m_age_min}m >= ${IN_FLIGHT_STALE_MIN}m — hold NOT taken; investigate a possibly crashed subagent ($(basename "$marker"))." >&2
+      emit_event "stop_gate" reason "in_flight_stale" unit "$m_unit" agent "$m_agent" age_minutes:n "$m_age_min" limit:n "$IN_FLIGHT_STALE_MIN"
+    fi
+  done
+  if [ "$FRESH_COUNT" -gt 0 ]; then
+    echo "Nazgul: in-flight hold — waiting on ${FRESH_COUNT} dispatched unit(s): ${FRESH_UNITS}. Allowing stop; the harness resumes this loop when the background agent finishes." >&2
+    emit_event "stop_gate" reason "in_flight_hold" units "$FRESH_UNITS" count:n "$FRESH_COUNT"
+    exit 0
+  fi
+fi
+
 # Increment iteration
 NEW_ITER=$((ITERATION + 1))
 jq --argjson iter "$NEW_ITER" '.current_iteration = $iter' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
@@ -205,73 +258,6 @@ if [ "$RECON_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
           fi
         fi
       done
-    fi
-  fi
-fi
-
-# --- TEAM TEARDOWN GATE (spec 2026-07-24-team-teardown-design.md) ---
-# Teammates whose report is delivered but who are still team members must be
-# dismissed (SendMessage shutdown_request) before new work dispatches. Hooks
-# cannot shut teammates down — this gate detects, directs the lead via the
-# loop prompt, verifies next iteration (detection self-clears on dismissal),
-# and escalates via raise_finding after 3 ignored directives. Fail-open.
-# Kill-switch: guards.team_teardown (explicit false disables).
-# Intentionally does NOT run on the earlier exit-0 paths (pause / AFK
-# timeout) — a normal session exit auto-removes team config, so there is
-# nothing left to detect by the time this gate would run.
-TEARDOWN_DIRECTIVE=""
-TT_ENABLED=$(jq -r 'if .guards.team_teardown == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
-if [ "$TT_ENABLED" = "true" ]; then
-  source "$SCRIPT_DIR/lib/team-teardown.sh"
-  TT_RAW=$(tt_detect_undismissed "$NAZGUL_DIR" "$PROJECT_ROOT" "$SESSION_ID" 2>/dev/null || true)
-  if [ -n "$TT_RAW" ]; then
-    # tt_detect_undismissed prefixes confirmed-dismissal self-heals with a
-    # 2-field HEALED marker line; genuine leaked-teammate lines always have 4
-    # fields (name/report/team_dir/blocks). Disambiguate by field count, not
-    # by $1's literal value, so a teammate literally named "HEALED" can never
-    # collide with the marker (its data line still has 4 fields) — split
-    # those out before they reach the blocks-increment/TT_LIST consumer below.
-    TT_HEALED=$(printf '%s\n' "$TT_RAW" | awk -F'\t' 'NF == 2 && $1 == "HEALED"')
-    TT_LEAKED=$(printf '%s\n' "$TT_RAW" | awk -F'\t' 'NF == 4')
-    if [ -n "$TT_HEALED" ]; then
-      while IFS=$'\t' read -r _tt_marker tt_healed_name; do
-        [ -n "$tt_healed_name" ] || continue
-        emit_event "team_teardown" action "verified_clean" teammate "$tt_healed_name"
-      done <<< "$TT_HEALED"
-    fi
-    if [ -n "$TT_LEAKED" ]; then
-      emit_event "team_teardown" action "leaked_detected" count:n "$(printf '%s' "$TT_LEAKED" | grep -c .)"
-      TT_LIST=""
-      while IFS=$'\t' read -r tt_name tt_report tt_team_dir tt_blocks; do
-        [ -n "$tt_name" ] || continue
-        tt_manifest="$NAZGUL_DIR/dispatch/${tt_name}.json"
-        if [ "$tt_blocks" -ge 3 ] 2>/dev/null; then
-          if [ "$(jq -r '.teardown_escalated // false' "$tt_manifest" 2>/dev/null)" != "true" ]; then
-            source "$SCRIPT_DIR/lib/raise-finding.sh"
-            raise_finding "medium" "process" \
-              "teammate ${tt_name} not dismissed after 3 directives" \
-              "Report ${tt_report} was delivered but the teammate stayed a member of $(basename "$tt_team_dir") for 3 iterations after dismissal directives. Manual shutdown_request needed." \
-              "Investigate why the lead skips dismissal; send shutdown_request manually." \
-              "$tt_manifest" || true
-            tt_tmp=$(mktemp 2>/dev/null) || tt_tmp=""
-            if [ -n "$tt_tmp" ] && jq '.teardown_escalated = true' "$tt_manifest" > "$tt_tmp" 2>/dev/null; then
-              mv "$tt_tmp" "$tt_manifest" 2>/dev/null || rm -f "$tt_tmp"
-            else [ -n "$tt_tmp" ] && rm -f "$tt_tmp" || true; fi
-            emit_event "team_teardown" action "escalated" teammate "$tt_name"
-          fi
-          continue
-        fi
-        TT_LIST="${TT_LIST}  - ${tt_name} (report delivered: ${tt_report})"$'\n'
-        tt_tmp=$(mktemp 2>/dev/null) || tt_tmp=""
-        if [ -n "$tt_tmp" ] && jq --argjson b "$((tt_blocks + 1))" '.teardown_blocks = $b' "$tt_manifest" > "$tt_tmp" 2>/dev/null; then
-          mv "$tt_tmp" "$tt_manifest" 2>/dev/null || rm -f "$tt_tmp"
-        else [ -n "$tt_tmp" ] && rm -f "$tt_tmp" || true; fi
-      done <<< "$TT_LEAKED"
-      if [ -n "$TT_LIST" ]; then
-        TEARDOWN_DIRECTIVE="TEAM TEARDOWN (mandatory, do this FIRST, before any new dispatch): these teammates delivered their reports and must be dismissed. For EACH: send it a SendMessage shutdown_request; after it approves, delete nazgul/dispatch/<name>.json (NEVER glob dispatch/*.json — other teams' manifests share that directory). If a teammate REJECTS shutdown it believes it has live work — leave its manifest and explain in your summary.
-${TT_LIST%$'\n'}"
-        emit_event "team_teardown" action "directive_injected" count:n "$(printf '%s' "$TT_LIST" | grep -c .)"
-      fi
     fi
   fi
 fi
@@ -1358,14 +1344,6 @@ if [ "$MODE" = "hitl" ] && [ -f "$HITL_PENDING_MARKER" ] && [ -n "$DISPATCH_INST
   DISPATCH_INSTR="GATE hitl_pending: a human approval is still pending (nazgul/.hitl-pending exists) — WAIT for explicit human approval before dispatching anything. Do not proceed autonomously."
 fi
 
-# Team-teardown gate: while dismissals are outstanding, withhold this
-# iteration's dispatch instruction entirely — the directive is the only
-# actionable instruction. Bounded by the 3-strike escalation (TEARDOWN_DIRECTIVE
-# empties after escalation), so this can never deadlock the loop.
-if [ -n "$TEARDOWN_DIRECTIVE" ]; then
-  DISPATCH_INSTR="DISPATCH WITHHELD this iteration: complete the TEAM TEARDOWN above first."
-fi
-
 cat >&2 << CONTINUE_MSG
 Nazgul loop — iteration ${NEW_ITER}/${MAX_ITER} | Mode: ${MODE} | Review granularity: ${GRANULARITY}
 Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked, ${PLANNED_COUNT} planned
@@ -1374,7 +1352,6 @@ $([ -n "$FEATURE_BRANCH" ] && echo "Branch: ${FEATURE_BRANCH} → ${BASE_BRANCH}
 
 Read nazgul/plan.md → Recovery Pointer section for current state.
 ${ACTIVE_LINE}
-$([ -n "$TEARDOWN_DIRECTIVE" ] && echo "$TEARDOWN_DIRECTIVE" || true)
 $([ -n "$AGGREGATE_MARKER" ] && echo "$AGGREGATE_MARKER" || true)
 $([ -n "$DISPATCH_INSTR" ] && echo "$DISPATCH_INSTR" || true)
 $([ "$GIT_CONFLICT_DETECTED" = true ] && echo "WARNING: Git conflicts detected. Resolve unmerged files before continuing.")
