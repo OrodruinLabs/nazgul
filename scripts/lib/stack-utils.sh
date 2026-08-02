@@ -21,8 +21,6 @@
 _NAZGUL_STACK_UTILS_SOURCED=1
 
 _SU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./nazgul-root.sh
-source "$_SU_DIR/nazgul-root.sh"
 # shellcheck source=./emit-event.sh
 source "$_SU_DIR/emit-event.sh"
 
@@ -134,7 +132,7 @@ _su_push_branch() {
   local project_root="$1" branch="$2" out rc
   out=$(git -C "$project_root" push -u origin "$branch" 2>&1)
   rc=$?
-  if [ $rc -ne 0 ]; then
+  if [ "$rc" -ne 0 ]; then
     printf 'stack-utils: push of %s to origin failed: %s\n' "$branch" "$out" >&2
     return 1
   fi
@@ -148,7 +146,7 @@ _su_plain_pr() {
   local base="$1" branch="$2" title="$3" body="$4" out rc
   out=$(gh pr create --base "$base" --head "$branch" --title "$title" --body "$body" 2>&1)
   rc=$?
-  if [ $rc -ne 0 ]; then
+  if [ "$rc" -ne 0 ]; then
     printf 'stack-utils: gh pr create failed for %s -> %s: %s\n' "$branch" "$base" "$out" >&2
     return 1
   fi
@@ -162,7 +160,7 @@ _su_stacked_pr() {
   local branch="$1" out rc pr_url
   out=$(gh stack submit --auto --open 2>&1)
   rc=$?
-  if [ $rc -ne 0 ]; then
+  if [ "$rc" -ne 0 ]; then
     printf 'stack-utils: gh stack submit failed for %s (exit %s): %s\n' "$branch" "$rc" "$out" >&2
     return 1
   fi
@@ -192,9 +190,9 @@ stack_submit() {
   local config="$1" project_root="$2" title="$3" body="$4"
   [ -f "$config" ] || return 1
   local branch base feat_id avail pr_url
-  branch=$(jq -r '.branch.feature // empty' "$config" 2>/dev/null)
-  base=$(jq -r '.branch.base // "main"' "$config" 2>/dev/null)
-  feat_id=$(jq -r '.feat_id // empty' "$config" 2>/dev/null)
+  branch=$(jq -r '.branch.feature // empty' "$config" 2>/dev/null) || branch=""
+  base=$(jq -r '.branch.base // "main"' "$config" 2>/dev/null) || base="main"
+  feat_id=$(jq -r '.feat_id // empty' "$config" 2>/dev/null) || feat_id=""
   if [ -z "$branch" ]; then
     printf 'stack-utils: stack_submit: no branch.feature in config\n' >&2
     return 1
@@ -202,7 +200,7 @@ stack_submit() {
 
   _su_push_branch "$project_root" "$branch" || return 1
 
-  avail=$(stack_available "$config")
+  avail=$(stack_available "$config") || true
   case "$avail" in
     ready)
       local layer_base
@@ -220,6 +218,6 @@ stack_submit() {
       ;;
   esac
 
-  _su_write_history "$config" "$feat_id" "$pr_url"
+  _su_write_history "$config" "$feat_id" "$pr_url" || printf 'stack-utils: stack_submit: history write failed for %s (PR %s created OK)\n' "$feat_id" "$pr_url" >&2
   printf '%s\n' "$pr_url"
 }
