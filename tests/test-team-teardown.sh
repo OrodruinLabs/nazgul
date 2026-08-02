@@ -45,14 +45,16 @@ make_manifest() {
 
 export NAZGUL_TEAMS_DIR=""  # set per test after TEST_DIR exists
 
-# --- 9: migration v30 -> v31 adds guards keys, preserves explicit values ---
+# --- 9: migration v30 -> v33 adds guards.team_sweep* at v31, then removes
+# guards.team_teardown at v33 (dead key, TASK-001 deleted its only consumer) ---
 setup_temp_dir; setup_nazgul_dir
 create_config '.schema_version = 30 | .guards.team_sweep = false'
 CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO_ROOT/scripts/migrate-config.sh" >/dev/null 2>&1
-assert_json_field "v30 chain: schema_version reaches terminal 32" "$TEST_DIR/nazgul/config.json" '.schema_version' "32"
-assert_json_field "v31: team_teardown default true" "$TEST_DIR/nazgul/config.json" '.guards.team_teardown' "true"
-assert_json_field "v31: explicit team_sweep=false preserved" "$TEST_DIR/nazgul/config.json" '.guards.team_sweep' "false"
-assert_json_field "v31: min_age default 24" "$TEST_DIR/nazgul/config.json" '.guards.team_sweep_min_age_hours' "24"
+assert_json_field "v30 chain: schema_version reaches terminal 33" "$TEST_DIR/nazgul/config.json" '.schema_version' "33"
+assert_eq "v33: guards.team_teardown removed (was at default true)" \
+  "$(jq -r '.guards | has("team_teardown")' "$TEST_DIR/nazgul/config.json")" "false"
+assert_json_field "v31: explicit team_sweep=false preserved through v33" "$TEST_DIR/nazgul/config.json" '.guards.team_sweep' "false"
+assert_json_field "v31: min_age default 24 preserved through v33" "$TEST_DIR/nazgul/config.json" '.guards.team_sweep_min_age_hours' "24"
 teardown_temp_dir
 
 STOP_HOOK="$REPO_ROOT/scripts/stop-hook.sh"
