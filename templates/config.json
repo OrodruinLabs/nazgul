@@ -1,5 +1,5 @@
 {
-  "schema_version": 33,
+  "schema_version": 34,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -147,7 +147,9 @@
     "bash_write_reconciliation": true,
     "team_sweep": true,
     "team_sweep_min_age_hours": 24,
-    "subagent_resume": true
+    "subagent_resume": true,
+    "in_flight_hold": true,
+    "in_flight_stale_minutes": 30
   },
   "safety": {
     "max_consecutive_failures": 5,
