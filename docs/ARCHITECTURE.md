@@ -41,6 +41,7 @@ The event stream captures the complete lifecycle:
 - **Compaction milestones** — checkpoints during context compression
 - **Subagent lifecycle** — when specialized agents (implementer, discovery, etc.) complete
 - **Subagent empty/verdict-less returns** — `subagent_empty_return` (reasons `empty_final_text`|`no_verdict_line`, actions `resumed`|`exhausted`|`detected_only`) fires for any completing subagent whose transcript shows no usable final text, or (for reviewers) no fenced verdict line
+- **Gate-triggered stops** — `stop_gate` (reasons `afk_timeout`, `in_flight_hold`, `in_flight_stale`) fires whenever a stop-hook gate ends or holds a turn, so the telemetry always shows a mechanism acted rather than a bare `exit 0`
 - **Budget/cost warnings** — proactive alerts before spending limits
 
 See `docs/superpowers/specs/2026-06-24-telemetry-bus-design.md` for the full event taxonomy and schema.
@@ -57,6 +58,21 @@ Used by:
 - **5 hook scripts** (`stop-hook.sh`, `task-completed.sh`, `subagent-stop.sh`, `stop-failure.sh`, `post-compact.sh`) — write producer events
 - **Review-gate agent** (`agents/review-gate.md`) — emits reviewer verdicts, retry dispatch, and blocks
 - **Agents via CLI wrapper** (`scripts/emit-event-cli.sh`) — agent-friendly invoke pattern
+
+### In-Flight Dispatch Hold
+
+`scripts/in-flight-marker.sh` (`PreToolUse` on the `Agent` tool) writes a small marker file under
+`nazgul/in-flight/` for every subagent dispatch — never blocking, a failed write is a silent no-op.
+`scripts/subagent-stop.sh` clears the oldest marker matching the completing subagent right after its
+existing `subagent_stop` telemetry append. `scripts/stop-hook.sh` checks for a fresh marker immediately
+before its iteration increment: with one present, it ALLOWS the stop (`exit 0`) without touching
+`current_iteration` or `safety.consecutive_failures`, relying on the harness's own task-notification to wake
+the loop when the dispatched agent finishes rather than polling. A marker older than
+`guards.in_flight_stale_minutes` (default 30) does not hold the stop — the loop proceeds normally — but is
+reported loudly (stderr + a distinguishable `stop_gate` event) rather than silently ignored. Kill-switched by
+`guards.in_flight_hold` (default `true`, config schema v34). Both ends of the mechanism are hooks, per
+ADR-015 — the trigger is never orchestrator memory. See RULES.md §1, `docs/CONFIGURATION.md`, ADR-017
+(FEAT-026).
 
 ### Migration: Single-Write + Dual-Read
 
@@ -79,6 +95,7 @@ Nazgul survives compaction, crashes, and session restarts:
 7. **TaskCompleted hook** fires immediately when spawned agents finish for faster transitions
 8. **Prompt guard hook** validates user prompts on submission
 9. **Task-state guard hook** prevents edits outside claimed task scope
+10. **In-flight dispatch hold** — the stop-hook holds an ALLOWED, uncounted stop while a just-dispatched `Agent` is still running (`guards.in_flight_hold`), so the loop doesn't burn iterations re-invoking itself every ~15 seconds against work that hasn't finished. See In-Flight Dispatch Hold below.
 
 After any interruption:
 ```bash

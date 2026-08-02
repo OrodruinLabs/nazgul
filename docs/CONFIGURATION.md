@@ -176,6 +176,55 @@ Every detected empty-return emits exactly one `subagent_empty_return` event (see
 
 Added by the additive `migrate_31_to_32` migration (schema v31→v32); existing projects upgrade automatically with `guards.subagent_resume` default `true` — see Config Upgrades below.
 
+## In-Flight Dispatch Hold
+
+`guards.in_flight_hold` (default `true`, config schema v34) lets the stop-hook take an ALLOWED, uncounted
+stop instead of burning an iteration when the work it just dispatched is still running. `PreToolUse(Agent)`
+writes a marker (`scripts/in-flight-marker.sh`, one file per dispatch under `nazgul/in-flight/`, never
+blocking — a failed write is a silent no-op); `SubagentStop` clears the oldest marker matching the
+completing subagent (`scripts/subagent-stop.sh`); and `stop-hook.sh` checks for a fresh marker right before
+the iteration increment. A fresh marker allows the stop (`exit 0`), leaves `current_iteration` and
+`safety.consecutive_failures` untouched, and emits one `stop_gate` event with `reason: "in_flight_hold"`
+naming the held units and their count — the wake-up comes from the harness's own task-notification when the
+dispatched agent finishes, not a poll. Without this gate, a session could otherwise burn an iteration on
+every ~15-second re-invocation while dispatched work was still running, until a soft limit (or the harness's
+own `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`) force-ended the turn from outside the loop's own control.
+
+A marker older than `guards.in_flight_stale_minutes` (default `30`, floored to `>=1`) is NOT held on — the
+stop proceeds normally (iteration increments) — but the staleness is surfaced loudly: a stderr line plus a
+`stop_gate` event with `reason: "in_flight_stale"` naming the unit and its age, so a crashed subagent shows
+up in telemetry instead of silently vanishing. Stale markers are left on disk rather than deleted, so the
+retention itself doesn't hide the incident from the next tick's diagnostics.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `guards.in_flight_hold` | `true` | Master switch. Set to `false` to disable the hold entirely — the marker writer and clearer keep running harmlessly, but the stop-hook never allows a stop on their account. |
+| `guards.in_flight_stale_minutes` | `30` | Age past which a marker is ignored (hold not taken) and reported as stale rather than fresh. |
+
+Added by the additive `migrate_33_to_34` migration (schema v33→v34, chained after `migrate_32_to_33` below);
+existing projects upgrade automatically — see Config Upgrades below. See RULES.md §1 (the no-bare-`exit 0`
+rule) and ADR-015.
+
+## One-Shot Dispatch Primacy (`guards.team_teardown` removed)
+
+FEAT-026/ADR-017 converted every one-shot Nazgul dispatch (discovery, review, implementation, post-loop
+verifiers) to an unnamed one-shot `Agent` dispatch and deleted the teardown subsystem that used to remediate
+a resulting idle Agent-Teams teammate — a dispatch that never becomes a teammate has nothing to dismiss. The
+now-unused `guards.team_teardown` key was removed by the additive `migrate_32_to_33` migration (schema
+v32→v33): an explicit non-default value survives under `._deprecated_removed["guards.team_teardown"]`, and
+`guards.team_sweep`/`guards.team_sweep_min_age_hours` (below) are untouched.
+
+`guards.team_sweep` (default `true`) is unchanged in mechanism — SessionStart still sweeps dead-session team
+state under `~/.claude/teams/`/`~/.claude/tasks/` as a crash-only backstop, logged to
+`nazgul/logs/team-sweep.jsonl` — but its current-session exclusion now actually fires: `session-context.sh`
+resolves the real session id from the SessionStart payload (falling back to `CLAUDE_SESSION_ID`, then the
+persisted `nazgul/.session_id`, then a synthetic `epoch-pid` form) and excludes a team whose `leadSessionId`
+matches that id OR whose directory name matches the session's implicit team-name form. When resolution
+bottoms out at the synthetic form — no real harness session id was obtainable — the sweep is SKIPPED
+entirely rather than run against an unverifiable identity, recording a `skipped`/`unresolved_session_id`
+line instead of silently proceeding. `/nazgul:clean --teams`'s direct invocation is unaffected. See RULES.md
+§18 and ADR-017.
+
 ## Bash-Write Reconciliation
 
 `guards.bash_write_reconciliation` (default `true`) gates a second, detection-only layer behind
