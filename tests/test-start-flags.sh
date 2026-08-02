@@ -119,6 +119,31 @@ assert_eq "--parallel inside objective ignored" "$(jq -r '.execution.parallel //
 mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--parallel --conductor" >/dev/null
 assert_eq "--parallel and deprecated --conductor together idempotent" "$(jq -r .execution.parallel "$TMP/c.json")" "true"
 
+# --stack/--no-stack: three-state, mirrors --parallel but with an explicit false state
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--stack" >/dev/null
+assert_eq "--stack sets execution.stacking.enabled" "$(jq -r .execution.stacking.enabled "$TMP/c.json")" "true"
+
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--no-stack" >/dev/null
+assert_eq "--no-stack sets execution.stacking.enabled false" "$(jq -r .execution.stacking.enabled "$TMP/c.json")" "false"
+
+stackon='{"mode":"hitl","afk":{"enabled":false,"yolo":false,"task_pr":false},"max_iterations":40,"execution":{"stacking":{"enabled":true}}}'
+mkcfg "$stackon"; bash "$APPLY" "$TMP/c.json" "--afk" >/dev/null
+assert_eq "no --stack flag leaves execution.stacking.enabled=true untouched" "$(jq -r .execution.stacking.enabled "$TMP/c.json")" "true"
+
+stackoff='{"mode":"hitl","afk":{"enabled":false,"yolo":false,"task_pr":false},"max_iterations":40,"execution":{"stacking":{"enabled":false}}}'
+mkcfg "$stackoff"; bash "$APPLY" "$TMP/c.json" "--afk" >/dev/null
+assert_eq "no --stack flag leaves explicit execution.stacking.enabled=false untouched" "$(jq -r .execution.stacking.enabled "$TMP/c.json")" "false"
+
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--stack --no-stack" >/dev/null
+assert_eq "--stack --no-stack: last one wins (false)" "$(jq -r .execution.stacking.enabled "$TMP/c.json")" "false"
+
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" "--no-stack --stack" >/dev/null
+assert_eq "--no-stack --stack: last one wins (true)" "$(jq -r .execution.stacking.enabled "$TMP/c.json")" "true"
+
+# A --stack token INSIDE the quoted objective must NOT be parsed as a flag
+mkcfg "$base"; bash "$APPLY" "$TMP/c.json" '"try the --stack feature"' >/dev/null
+assert_eq "--stack inside objective ignored" "$(jq -r '.execution.stacking.enabled // "unset"' "$TMP/c.json")" "unset"
+
 # Switching modes CLEARS stale autonomous sub-flags (the runtime gates on them).
 prioryolo='{"mode":"afk","afk":{"enabled":true,"yolo":true,"task_pr":true},"max_iterations":40}'
 mkcfg "$prioryolo"; bash "$APPLY" "$TMP/c.json" "--afk" >/dev/null
