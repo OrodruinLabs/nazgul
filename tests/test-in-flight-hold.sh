@@ -152,6 +152,39 @@ run_hook
 assert_exit_code "stale bound floored to >=1 min: 90s-old marker is stale (exit 2)" "$HOOK_EC" 2
 teardown_temp_dir
 
+# Malformed (non-numeric string) guards.in_flight_stale_minutes must never
+# crash the stop-hook; falls back to the 30-min default (fresh marker holds).
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.in_flight_stale_minutes = "garbage"'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/marker-1.json" "nazgul:implementer" "TASK-001" "$(date +%s)"
+run_hook
+CRASH_SAFE=$([ "$HOOK_EC" = "0" ] || [ "$HOOK_EC" = "2" ] && echo yes || echo no)
+assert_eq "malformed stale_minutes (string): never a bash fatal (exit 0 or 2)" "$CRASH_SAFE" "yes"
+assert_exit_code "malformed stale_minutes (string): falls back to 30-min default (fresh marker holds, exit 0)" "$HOOK_EC" 0
+teardown_temp_dir
+
+# Fractional guards.in_flight_stale_minutes must never crash the stop-hook
+# (bash integer arithmetic on a float would abort under set -e); falls back
+# to the 30-min default.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.in_flight_stale_minutes = 30.5'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/marker-1.json" "nazgul:implementer" "TASK-001" "$(date +%s)"
+run_hook
+CRASH_SAFE=$([ "$HOOK_EC" = "0" ] || [ "$HOOK_EC" = "2" ] && echo yes || echo no)
+assert_eq "malformed stale_minutes (fractional): never a bash fatal (exit 0 or 2)" "$CRASH_SAFE" "yes"
+assert_exit_code "malformed stale_minutes (fractional): falls back to 30-min default (fresh marker holds, exit 0)" "$HOOK_EC" 0
+teardown_temp_dir
+
 # === Clear: scripts/subagent-stop.sh ===
 
 setup_temp_dir

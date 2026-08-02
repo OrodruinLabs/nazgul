@@ -128,6 +128,10 @@ fi
 IN_FLIGHT_HOLD_ENABLED=$(jq -r 'if .guards.in_flight_hold == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
 if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; then
   IN_FLIGHT_STALE_MIN=$(jq -r '[.guards.in_flight_stale_minutes // 30, 1] | max' "$CONFIG" 2>/dev/null || echo 30)
+  # A JSON string or fractional value passes jq's max unchanged (string ranks
+  # above number); guard before arithmetic so a bad config never crashes the
+  # whole stop-hook (same pattern as scripts/lib/team-teardown.sh:38-39).
+  case "$IN_FLIGHT_STALE_MIN" in ''|*[!0-9]*) IN_FLIGHT_STALE_MIN=30 ;; esac
   IN_FLIGHT_NOW=$(date +%s)
   IN_FLIGHT_CUTOFF=$(( IN_FLIGHT_NOW - IN_FLIGHT_STALE_MIN * 60 ))
   # CURRENT_ITERATION is normally only set by the increment below (:120-122,
