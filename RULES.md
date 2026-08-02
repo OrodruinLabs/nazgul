@@ -537,7 +537,9 @@ FILE, enforced in three layers:
    naming an explicit `report_path`.
 2. **Dispatch manifest** `[advisory]` — before spawning, the dispatcher writes
    `nazgul/dispatch/<session-name>.json` (`teammate`, `report_path`, `feat_id`,
-   `spawned_at`, `spawned_at_epoch`, `blocks`). Deleted at team teardown.
+   `spawned_at`, `spawned_at_epoch`, `blocks`). Deleted manually by the
+   dispatcher once the teammate is dismissed (§18 item 2) — there is no
+   automated teardown that does this.
    Note: the §3.3 read-only guarantee applies to subagent-dispatched
    reviewers persisted by the review-gate orchestrator; reviewer teammates in
    Agent Teams mode must be spawned with Write access scoped to their single
@@ -583,48 +585,67 @@ backlog entry, not a blocking gate) and currently degrades to a documented
 no-op — no dispatcher in this codebase emits `teammate_spawned` yet, so `N`
 stays `0` until an emitter is wired; once wired, the comparison must stay
 scoped to a single run/window rather than `nazgul/logs/*.jsonl`'s full
-history, since `team-orchestrator.md`'s documented teardown step deletes a
-team's own dispatch manifests on clean completion.
+history, since manifest deletion is manual only (§18 item 2) — nothing sweeps
+`nazgul/dispatch/*.json` automatically, so a forgotten dismissal leaves a
+stale manifest on disk with no window to bound it against.
 
 Completion signal = idle notification + report file on disk. SendMessage is
 coordination-only courtesy, never the report channel.
 
-## 18. Teammate Teardown & Team Sweep
+## 18. One-Shot Dispatch Primacy & Dead-Session Team Sweep
 
-Agent-Teams teammates never terminate on their own; idle is their terminal
-state until dismissed. `TeamCreate`/`TeamDelete` do not exist (removed in
-Claude Code v2.1.178) — per-teammate `SendMessage` shutdown_request is the
-only teardown primitive, and team config state is removed only on normal
-session exit.
+FEAT-026/ADR-017 deleted the teammate-teardown remediation subsystem this section used to document
+(`tt_detect_undismissed()`, the stop-hook's `TEAM TEARDOWN` gate and its 3-strike escalation,
+`teammate-idle-guard.sh`'s `"...then idle"` instruction, and `team-orchestrator.md`'s two named-teammate
+spawn sections) because it was remediating a choice, not a bug: one-shot work — discovery, one review
+verdict, one task's implementation — was landing on a *persistent-peer* primitive, Agent-Teams teammate,
+which idles forever unless the lead sends a `shutdown_request` and which naming an otherwise-plain `Agent`
+dispatch is enough to opt into, even without an explicit team spawn. A dispatch that never becomes a
+teammate has nothing to idle and nothing to dismiss.
 
-1. **Dismissal is part of consuming a report.** `[advisory]` Whoever dispatched a teammate
-   MUST send it a shutdown_request after its report is consumed, then delete
-   its `nazgul/dispatch/<session-name>.json` (never glob the directory).
-2. **The stop-hook detects this** `[hook-driven only]` (`guards.team_teardown`, default true): a
-   teammate with a delivered report still present in its team's members list
-   causes the stop-hook to inject a mandatory TEAM TEARDOWN directive into the
-   loop prompt, ahead of the dispatch instructions, on every iteration until
-   dismissed. This is a continuation-message instruction, not a mechanical
-   block — a human or orchestrator that dispatches agents directly can route
-   around it. After 3 ignored directives it fails open with a raise_finding
-   escalation — the loop never deadlocks on dismissal.
-3. **Manifests self-heal.** `[enforced]` A dispatch manifest whose team is gone or whose
-   teammate is no longer a member is deleted automatically by the detector.
-4. **Dead-session team state is swept** `[enforced]` (`guards.team_sweep`, default true):
-   at SessionStart, teams attributable to this project (member cwd match)
-   whose lead session is provably dead (no session lock AND no transcript
-   fresher than `guards.team_sweep_min_age_hours`, default 24) are deleted
-   from `~/.claude/teams/` and `~/.claude/tasks/`, logged to
-   `nazgul/logs/team-sweep.jsonl`. Foreign projects' teams are only ever
-   deleted interactively via `/nazgul:clean --teams --all`. Any ambiguity
-   fails open: the team is kept. The session lock is refreshed by the
-   stop-hook on every iteration and removed only via a centralized exit-0
-   trap when the loop genuinely ends, or by `cleanup_stale_sessions`'s 2-hour
-   staleness backstop for a crashed session — so "no lock" means the lead
-   session is not looping, for its entire lifetime, not just the window
-   before its first Stop (ADR-007). `guards.team_sweep_min_age_hours` is
-   floored to `>=1` at every read site so a misconfigured `0` cannot
-   silently collapse this AND to lock-only.
+1. **The rule, stated positively.** `[advisory]` Use a persistent Agent-Teams teammate ONLY when the work
+   genuinely requires more than one exchange with the lead. Use an unnamed one-shot `Agent` dispatch for
+   everything else — including a dispatch that would otherwise be named for traceability, since naming
+   alone folds it into team infrastructure. Nazgul's own dispatch sites (discovery, review, implementation)
+   are all one-shot by definition and run this way today; none uses the teammate primitive. See ADR-017
+   for the platform facts and the dispatch-site audit behind this rule.
+2. **Dismissal, if a teammate ever exists.** `[advisory]` Nothing in Nazgul dispatches a teammate today, so
+   this is dormant, not active. If a genuinely multi-turn need ever justifies one, dismissal is part of
+   consuming its report: send it a shutdown_request once its report is consumed, then delete its
+   `nazgul/dispatch/<session-name>.json` (never glob the directory) — see §17 item 2. There is no
+   stop-hook gate backing this; nothing remediates an undismissed teammate but the dispatcher's own
+   discipline.
+3. **Dead-session team state is swept** `[enforced]` (`guards.team_sweep`, default true), as a crash-only
+   backstop rather than routine remediation: at SessionStart, teams attributable to this project (member
+   cwd match) whose lead session is provably dead (no session lock AND no transcript fresher than
+   `guards.team_sweep_min_age_hours`, default 24) are deleted from `~/.claude/teams/` and
+   `~/.claude/tasks/`, logged to `nazgul/logs/team-sweep.jsonl`. Foreign projects' teams are only ever
+   deleted interactively via `/nazgul:clean --teams --all`. Any ambiguity fails open: the team is kept. The
+   session lock is refreshed by the stop-hook on every iteration and removed only via a centralized exit-0
+   trap when the loop genuinely ends, or by `cleanup_stale_sessions`'s 2-hour staleness backstop for a
+   crashed session — so "no lock" means the lead session is not looping, for its entire lifetime, not just
+   the window before its first Stop (ADR-007). `guards.team_sweep_min_age_hours` is floored to `>=1` at
+   every read site so a misconfigured `0` cannot silently collapse this AND to lock-only.
+4. **The sweep excludes the current session, and admits when it can't tell.** `[enforced]` A team is
+   excluded from the sweep if either its `leadSessionId` matches the current session's resolved id OR its
+   directory name equals that session's implicit team-name form (`session-<first 8 chars>`) — the second
+   check catches the exact production shape a `leadSessionId`-only match missed. `session-context.sh`
+   resolves the real session id from the SessionStart hook's JSON payload (fallback: `CLAUDE_SESSION_ID` ->
+   the persisted `nazgul/.session_id` -> a synthetic `epoch-pid` form) and, when resolution bottoms out at
+   the synthetic form — meaning no real harness session id was obtainable — SKIPS the sweep entirely rather
+   than run it against an unverifiable identity, recording a `skipped`/`unresolved_session_id` line to
+   `nazgul/logs/team-sweep.jsonl` and printing the reason in the injected context. A gate that declines to
+   run must not look like a gate that found nothing to do (§1 rule 8). `/nazgul:clean --teams`'s direct
+   invocation is unaffected — that decision lives at the SessionStart call site only, and an operator asking
+   explicitly for the sweep still gets it. Every swept team's JSONL record carries the deciding `reason`.
+
+§17 (Teammate Report Contract) documents the Layer 1-3 report-delivery contract for a teammate that does get
+dispatched; its guard is unaffected by this section's deletions — only its two claims that depended on the
+now-deleted mechanisms (the dispatch manifest's deletion note, and the MF-047 companion note's
+`team-orchestrator.md` teardown-step reference) were amended above to reflect that manifest deletion is
+manual only. §19 (Subagent Non-Delivery & Bounded Resume) is the coverage a dispatch converted to the
+one-shot primitive inherits — `SubagentStop`'s empty-return detection and bounded resume, which the
+teammate path never had.
 
 ## 19. Subagent Non-Delivery & Bounded Resume
 

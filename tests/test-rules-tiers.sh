@@ -74,13 +74,16 @@ fi
 # count both happen to be 22 (no line currently carries two [advisory] tags).
 # FEAT-021/TASK-010 added 1 more: the "Shared nazgul/ Root Resolver" subsection's
 # resolver-adoption-is-review-only bullet (20 + 1 = 21). FEAT-024/TASK-009 added
-# 1 more: §19's resume-recovery-pattern bullet (21 + 1 = 22).
+# 1 more: §19's resume-recovery-pattern bullet (21 + 1 = 22). FEAT-026/TASK-007's
+# §18 rewrite (teardown subsystem deleted, ADR-017) replaced the old single
+# dismissal bullet with two: the primitive-choice rule and a dormant-dismissal
+# note (22 + 1 = 23).
 ADVISORY_COUNT=$(awk '{ count += gsub(/\[advisory\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ADVISORY_COUNT" -eq 22 ]; then
-  _pass "[advisory] annotation count is exactly 22 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 23 ]; then
+  _pass "[advisory] annotation count is exactly 23 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 22" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 22"
+  _fail "[advisory] annotation count is exactly 23" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 23"
 fi
 
 # ---------------------------------------------------------------------------
@@ -125,13 +128,15 @@ fi
 # §5's new "A gate-triggered stop announces itself" `stop_gate` bullet —
 # tagged [hook-driven only], not [enforced], because it is stop-hook.sh
 # behavior on the AFK gate path only (ADR-014), not a PreToolUse block
-# (21 + 1 = 22).
+# (21 + 1 = 22). FEAT-026/TASK-007 removed 1: §18's old "stop-hook detects
+# this" bullet, the deleted teardown gate's directive, has no replacement —
+# nothing hook-driven remains in the rewritten section (22 - 1 = 21).
 HOOK_DRIVEN_COUNT=$(awk '{ count += gsub(/\[hook-driven only\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$HOOK_DRIVEN_COUNT" -eq 22 ]; then
-  _pass "[hook-driven only] annotation count is exactly 22 (found: $HOOK_DRIVEN_COUNT)"
+if [ "$HOOK_DRIVEN_COUNT" -eq 21 ]; then
+  _pass "[hook-driven only] annotation count is exactly 21 (found: $HOOK_DRIVEN_COUNT)"
 else
-  _fail "[hook-driven only] annotation count is exactly 22" \
-    "found $HOOK_DRIVEN_COUNT occurrences of [hook-driven only] — expected exactly 22"
+  _fail "[hook-driven only] annotation count is exactly 21" \
+    "found $HOOK_DRIVEN_COUNT occurrences of [hook-driven only] — expected exactly 21"
 fi
 
 # ---------------------------------------------------------------------------

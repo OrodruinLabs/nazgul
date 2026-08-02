@@ -33,7 +33,7 @@ agents/                              # Subagent definitions
 │   ├── implementer.md               # Pipeline: builds tasks, delegates to specialists
 │   ├── review-gate.md               # Pipeline: orchestrates review board
 │   ├── feedback-aggregator.md       # Pipeline: consolidates review feedback
-│   ├── team-orchestrator.md         # Pipeline: manages Agent Teams
+│   ├── team-orchestrator.md         # Pipeline: reserved for a genuine multi-turn teammate need (named-teammate spawn paths retired, FEAT-026/ADR-017)
 │   ├── designer.md                  # Specialist: design system, visual direction
 │   ├── frontend-dev.md              # Specialist: UI component implementation
 │   ├── mobile-dev.md                # Specialist: mobile platform implementation
@@ -84,7 +84,7 @@ scripts/                             # Shell scripts for hooks
 │       ├── task-utils.sh            # Task status parsing (4 formats) + counting
 │       ├── task-transition-guard.sh # Shared state-machine + evidence lib (task-state-guard + stop-hook reconciliation)
 │       ├── session-tracker.sh       # Concurrent session lock management
-│       ├── team-teardown.sh         # Teammate dismissal detection + dead-session team sweep
+│       ├── team-teardown.sh         # Dead-session team sweep (crash-only backstop)
 │       ├── bootstrap-scrub-map.sh   # bootstrap-project: scrub rules data
 │       ├── bootstrap-render.sh      # bootstrap-project: prompt rendering + domain helpers
 │       ├── bootstrap-preflight.sh   # bootstrap-project: pre-flight gate checks
@@ -150,7 +150,7 @@ tests/                               # Plugin validation tests
 
 **One engine, optional parallel dispatch.** The stop-hook loop is the only driver — there is no separate engine to opt into. `execution.parallel` (opt-in via `/nazgul:start --parallel`, default `false`) layers concurrent batch dispatch on top of the same sequential loop: when `review_gate.granularity` is `"task"` (the template default `"group"` stays sequential with aggregate reviews) and a wave in `nazgul/plan.md`'s `## Wave Groups` section has `>=2` READY tasks whose dependencies are all DONE and whose file scopes are disjoint, the stop-hook's `compute_dispatch_batch` (`scripts/lib/parallel-batch.sh`) dispatches them together instead of one at a time, reusing the same Review Board per task. Sequential and parallel dispatch share the same Planner output, task state machine, and review gate — the option only changes how many tasks start at once, not what "done" means.
 
-**Teammates are dismissed, never abandoned.** Agent-Teams teammates idle forever unless the lead sends a `shutdown_request` — so consuming a teammate's report and dismissing it are one motion. The stop-hook's teardown gate (`guards.team_teardown`) detects undismissed teammates (delivered report + still a team member) and injects a mandatory dismissal directive each iteration until they are dismissed (bounded, fail-open); SessionStart sweeps team state left by dead sessions (`guards.team_sweep`). See RULES.md §18 (Teammate Teardown & Team Sweep).
+**One-shot subagents for one-shot work.** Agent-Teams teammates idle forever unless the lead sends a `shutdown_request` — and naming an otherwise-plain `Agent` dispatch is enough to fold it into team infrastructure, even without an explicit team spawn. Nazgul's actual work (discovery, one review verdict, one task's implementation) is one-shot by definition, so FEAT-026/ADR-017 converted every such dispatch site to an unnamed one-shot `Agent` dispatch and deleted the teardown subsystem that used to remediate the resulting idling (`tt_detect_undismissed()`, the stop-hook's `TEAM TEARDOWN` gate, `teammate-idle-guard.sh`'s `"...then idle"` instruction) — a dispatch that never becomes a teammate has nothing to dismiss. SessionStart still sweeps team state left by a dead session as a crash-only backstop (`guards.team_sweep`), now with a current-session exclusion that actually fires (both by session id and by the session's implicit team-name form). See RULES.md §18 (One-Shot Dispatch Primacy & Dead-Session Team Sweep).
 
 **Connectors are opt-in and default-off.** `scripts/lib/connector-github.sh` (FEAT-012) is a two-way GitHub connector behind the generalized provider seam (`scripts/lib/inbox-provider.sh`): it pulls opt-in-labeled issues into the inbox so the heartbeat auto-starts them, and pushes task status + PR links back to the mapped issue. It is enabled only when `connectors.github.enabled` is `true` and selected via `automation.heartbeat.inbox.provider: "github"` (the `file` provider is the default). Credentials come from `gh auth` only — no token is ever stored in config or logged — and remote issue content is treated as data. Linear/Slack are follow-on providers behind the same seam. See RULES.md §16.
 
