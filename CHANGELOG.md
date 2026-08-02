@@ -2,6 +2,58 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.28.0] - 2026-08-02
+
+FEAT-026, ADR-017 — one-shot subagents for one-shot work (governing thesis for this release). Nazgul was
+dispatching work that needs exactly one exchange (discovery, a review verdict, a task's implementation) onto
+a primitive whose entire design premise is that it outlives one exchange — an Agent-Teams teammate, reached
+either by an explicit team spawn or merely by NAMING an `Agent`-tool dispatch — and then remediating the
+resulting idling with a per-iteration dismissal directive. This release fixes the choice, not the symptom:
+`/nazgul:init`'s discovery dispatch converts to an unnamed one-shot `Agent` dispatch, and the teardown
+subsystem the conversion makes dead is deleted outright, net negative on lines. MINOR, not PATCH, on the same
+two grounds this repo has used before: user-visible behavior changes (the init dispatch primitive, the
+stop-hook's directive surface, `team-orchestrator.md`'s documented capabilities) and a config schema key is
+removed with a migration (`guards.team_teardown`, precedent: FEAT-016 `2.19.0`, FEAT-024 `2.26.0`). MAJOR is
+wrong — nothing an operator invokes is removed or renamed; the deletions are internal remediation machinery
+with no live caller. **`schema_version` moves 32 → 33 → 34**: v33 (`migrate_32_to_33`) removes
+`guards.team_teardown`, preserving any customized non-default value under `._deprecated_removed`; v34
+(`migrate_33_to_34`, a user-approved scope addition mid-objective) adds `guards.in_flight_hold` (default
+`true`) and `guards.in_flight_stale_minutes` (default `30`) for the new in-flight hold below. Two incremental
+migrations in one release do not change the verdict — the second reinforces the schema-bump ground rather
+than altering it.
+
+### Removed
+- **The teardown subsystem**, made dead by the conversion below: the stop-hook `TEAM TEARDOWN` gate and
+  `tt_detect_undismissed()` (`scripts/stop-hook.sh`, `scripts/lib/team-teardown.sh`), and
+  `teammate-idle-guard.sh`'s `"then idle"` instruction. `team-teardown.sh` retains only the dead-session
+  sweep, demoted below to a crash-only backstop.
+- **`team-orchestrator.md`'s two named-teammate spawn sections** ("Spawning a Review Team" and its
+  counterpart) and the naming convention that biased dispatches toward them. The `"team-orchestrator"` entry
+  itself stays in `agents.pipeline` — two live consumers (`parallel-dispatch-guard.sh`'s allowlist,
+  `skills/enhance/SKILL.md`'s `tools:`-block probe) still match on its name.
+
+### Changed
+- **`/nazgul:init` Step 3** dispatches discovery via the `Agent` tool with `subagent_type: "nazgul:discovery"`
+  and **no `name`/`-n` parameter** — one-shot work stays on the one-shot primitive (ADR-017).
+- **The dead-session sweep's current-session exclusion now actually fires.** It previously compared against
+  a session id that was almost never populated; the sweep now reads the real id out of the SessionStart
+  hook's own JSON payload (`.session_id` → `CLAUDE_SESSION_ID` → persisted `nazgul/.session_id` → synthetic
+  epoch-pid fallback, in that order), refuses to sweep when the id is still unidentifiable (logged as
+  `unresolved_session_id` rather than silently sweeping), and excludes by both the team config's
+  `leadSessionId` and the `session-<first-8-chars>` name form. This closes the recurring "team file not
+  found" error — `nazgul/logs/team-sweep.jsonl` had recorded five self-sweeps of the live session's own team
+  across four days before this fix.
+
+### Added
+- **Stop-hook in-flight awareness (ADR-015 Part 2).** A `PreToolUse(Agent)` marker
+  (`scripts/in-flight-marker.sh`) records a dispatch as running; `SubagentStop` clears it on completion
+  (`scripts/subagent-stop.sh`); while a fresh marker exists, the stop-hook takes an allowed, uncounted hold
+  instead of burning an iteration, emitting a `stop_gate` event (`in_flight_hold` while fresh,
+  `in_flight_stale` past `guards.in_flight_stale_minutes`) either way so the hold is never silent. This stops
+  the no-op iteration burn the loop suffered while dispatched work was still running underneath it.
+- **`guards.in_flight_hold`** (default `true`) and **`guards.in_flight_stale_minutes`** (default `30`, schema
+  v34) — the kill-switch and staleness bound for the hold above.
+
 ## [2.27.0] - 2026-08-01
 
 `/nazgul:doctor`: a new operator cannot know the seven environment traps that silently produce
