@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.28.1] - 2026-08-02
+
+### Fixed
+- **Three stale test-description labels in `tests/test-migrate-config.sh`** left by the 2.28.0
+  PR-review sweep: chain-span labels still naming an old terminal version ("v1→v29 chain",
+  "v17→v27 walk", "v24→v32") on assertions that check terminal `schema_version` 34 — now
+  version-agnostic ("→terminal"), so future schema bumps only change the asserted value
+  (PR #78 post-merge CodeRabbit follow-up). Test-only; no behavior change.
+
 ## [2.28.0] - 2026-08-02
 
 FEAT-026, ADR-017 — one-shot subagents for one-shot work (governing thesis for this release). Nazgul was

@@ -1201,7 +1201,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v1→v29 chain migrated" "$OUTPUT" "migrated"
-assert_json_field "v1→v29 chain reaches terminal schema_version 34" "$NAZGUL_DIR/config.json" ".schema_version" "34"
+assert_json_field "v1→terminal chain reaches schema_version 34" "$NAZGUL_DIR/config.json" ".schema_version" "34"
 assert_json_field "v1→v29 chain granularity is group" "$NAZGUL_DIR/config.json" ".review_gate.granularity" "group"
 assert_json_field "v1→v29 chain post_loop is sonnet" "$NAZGUL_DIR/config.json" ".models.post_loop" "sonnet"
 assert_json_field "v1→v29 chain wave_execution is true" "$NAZGUL_DIR/config.json" ".parallelism.wave_execution" "true"
@@ -1566,7 +1566,7 @@ cat > "$NAZGUL_DIR/config.json" << 'EOF'
 EOF
 OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
 assert_contains "v17→v23 walk migrated" "$OUTPUT" "migrated"
-assert_json_field "v17→v27 walk reaches terminal schema_version 34" "$NAZGUL_DIR/config.json" ".schema_version" "34"
+assert_json_field "v17→terminal walk reaches schema_version 34" "$NAZGUL_DIR/config.json" ".schema_version" "34"
 assert_json_field "v17→v23 walk hand-set marker preserved (no key lost)" "$NAZGUL_DIR/config.json" ".marker" "keep-me"
 assert_json_field "v17→v23 walk v18 step review_gate.require_provenance present" "$NAZGUL_DIR/config.json" ".review_gate.require_provenance" "true"
 assert_json_field "v17→v23→v26 walk v19 step execution.engine sequential → execution.parallel=false" "$NAZGUL_DIR/config.json" ".execution.parallel" "false"
@@ -1602,7 +1602,7 @@ assert_json_field "v24→v25 connectors.github.pull.max_body_bytes absent→6553
 assert_json_field "v24→v25 connectors.github.push.enabled absent→true" "$NAZGUL_DIR/config.json" ".connectors.github.push.enabled" "true"
 assert_json_field "v24→v25 connectors.github.pull_failures absent→0" "$NAZGUL_DIR/config.json" ".connectors.github.pull_failures" "0"
 assert_json_field "v24→v25 connectors.github.map absent→empty object" "$NAZGUL_DIR/config.json" ".connectors.github.map | length" "0"
-assert_json_field "v24→v32 schema_version is 34 (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "34"
+assert_json_field "v24→terminal schema_version is 34 (full chain)" "$NAZGUL_DIR/config.json" ".schema_version" "34"
 
 # explicit enabled=true preserved (opt-in not clobbered)
 NAZGUL_DIR=$(setup_nazgul_dir "v24-to-25-enabled")
