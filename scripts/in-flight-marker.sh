@@ -38,7 +38,8 @@ UNIT=$(printf '%s' "$PROMPT" | grep -oE 'NAZGUL_UNIT: TASK-[0-9]+' | head -1 | s
 [ -n "$UNIT" ] || UNIT="nounit"
 
 # Sanitize filename components to a safe basename: [A-Za-z0-9._-], no `/`, no
-# `..` — same convention as scrub-stale-review-artifacts.sh:33.
+# `..` — same character allowlist as scrub-stale-review-artifacts.sh:33
+# (that script rejects on a bad char; this one transforms to safe instead).
 _sanitize() {
   local s; s=$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_')
   s="${s//../_}"
