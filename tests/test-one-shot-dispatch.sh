@@ -65,4 +65,15 @@ assert_eq "sweep prints nothing (nothing was ever a team member)" "$SWEPT" ""
 assert_eq "sweep returns 0 (fail-open contract)" "$EC" "0"
 
 teardown_temp_dir
+
+# --- 4. team-orchestrator.md's named-teammate spawn paths are retired
+# (TRD §2 sites 5-6, ADR-017): no new live dispatch caller, both spawn
+# section headings gone. ---
+TEAM_ORCH_CALLERS=$(grep -rln "nazgul:team-orchestrator" "$REPO_ROOT/scripts" "$REPO_ROOT/skills" 2>/dev/null | wc -l | tr -d ' ') || true
+assert_eq "no nazgul:team-orchestrator dispatch caller in scripts/ or skills/" "$TEAM_ORCH_CALLERS" "0"
+
+TEAM_ORCH_FILE="$REPO_ROOT/agents/team-orchestrator.md"
+assert_file_not_contains "no 'Spawning a Review Team' heading" "$TEAM_ORCH_FILE" "^## Spawning a Review Team"
+assert_file_not_contains "no 'Spawning an Implementation Team' heading" "$TEAM_ORCH_FILE" "^## Spawning an Implementation Team"
+
 report_results
