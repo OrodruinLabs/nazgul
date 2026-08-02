@@ -240,6 +240,40 @@ assert_exit_code "clear: no matching marker still exits cleanly" "$EC" 0
 assert_file_exists "clear: non-matching agent marker untouched" "$TEST_DIR/nazgul/in-flight/other.json"
 teardown_temp_dir
 
+# Unit-aware pairing (PR #78 review): when the completing subagent's transcript
+# names its NAZGUL_UNIT, the clear targets THAT unit's marker even when a
+# same-agent marker is older — out-of-order completions never clear the wrong
+# unit's marker.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/older.json" "nazgul:implementer" "TASK-001" "1000"
+_write_marker "$TEST_DIR/nazgul/in-flight/newer.json" "nazgul:implementer" "TASK-002" "2000"
+TRANSCRIPT="$TEST_DIR/transcript.jsonl"
+{ jq -cn '{type:"user", message:{content:"NAZGUL_UNIT: TASK-002\\n\\nImplement TASK-002 of the objective."}}'; jq -cn '{type:"assistant", message:{content:[{type:"text", text:"TASK-002 implemented; report delivered."}]}}'; } > "$TRANSCRIPT"
+PAYLOAD=$(jq -cn --arg t "$TRANSCRIPT" '{subagent_type:"nazgul:implementer", agent_transcript_path:$t}')
+printf '%s' "$PAYLOAD" | bash "$CLEARER" >/dev/null 2>&1; EC=$?
+assert_exit_code "unit-aware clear: exits cleanly" "$EC" 0
+assert_file_not_exists "unit-aware clear: the COMPLETED unit's marker removed (not the oldest)" "$TEST_DIR/nazgul/in-flight/newer.json"
+assert_file_exists "unit-aware clear: the other unit's marker survives" "$TEST_DIR/nazgul/in-flight/older.json"
+teardown_temp_dir
+
+# Unit-aware pairing fallback: transcript names a unit with NO matching marker
+# -> agent-only oldest-match (one completion still clears one dispatch).
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/older.json" "nazgul:implementer" "TASK-001" "1000"
+TRANSCRIPT="$TEST_DIR/transcript.jsonl"
+{ jq -cn '{type:"user", message:{content:"NAZGUL_UNIT: TASK-099\\n\\nImplement TASK-099."}}'; jq -cn '{type:"assistant", message:{content:[{type:"text", text:"TASK-099 implemented; report delivered."}]}}'; } > "$TRANSCRIPT"
+PAYLOAD=$(jq -cn --arg t "$TRANSCRIPT" '{subagent_type:"nazgul:implementer", agent_transcript_path:$t}')
+printf '%s' "$PAYLOAD" | bash "$CLEARER" >/dev/null 2>&1; EC=$?
+assert_exit_code "unit-fallback clear: exits cleanly" "$EC" 0
+assert_file_not_exists "unit-fallback clear: agent-only oldest still cleared" "$TEST_DIR/nazgul/in-flight/older.json"
+teardown_temp_dir
+
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck -S warning "$WRITER" 2>/dev/null \
     && _pass "shellcheck clean: in-flight-marker.sh" \

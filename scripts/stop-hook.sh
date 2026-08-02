@@ -134,9 +134,10 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
   case "$IN_FLIGHT_STALE_MIN" in ''|*[!0-9]*) IN_FLIGHT_STALE_MIN=30 ;; esac
   IN_FLIGHT_NOW=$(date +%s)
   IN_FLIGHT_CUTOFF=$(( IN_FLIGHT_NOW - IN_FLIGHT_STALE_MIN * 60 ))
-  # CURRENT_ITERATION is normally only set by the increment below (:120-122,
-  # after this gate); set it here from the un-incremented ITERATION so an
-  # event emitted by this gate carries the real current iteration, not null.
+  # CURRENT_ITERATION is normally only set by the iteration increment further
+  # down (NEW_ITER=$((ITERATION + 1)) ... CURRENT_ITERATION="$NEW_ITER", after
+  # this gate); set it here from the un-incremented ITERATION so an event
+  # emitted by this gate carries the real current iteration, not null.
   # shellcheck disable=SC2034
   CURRENT_ITERATION="$ITERATION"
   FRESH_UNITS="" FRESH_COUNT=0

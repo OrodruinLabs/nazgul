@@ -53,25 +53,44 @@ fi
 # CURRENT_ITERATION intentionally omitted — emit_event treats unset as null.
 emit_event "subagent_stop" agent "$AGENT"
 
-# In-flight marker clear (ADR-015 Part 2, TASK-008): one completion clears the
-# OLDEST marker whose `agent` field matches AGENT, which pairs correctly
-# under fan-out (N dispatches, N completions). No match is a silent no-op.
+# In-flight marker clear (ADR-015 Part 2, TASK-008): one completion clears one
+# dispatch. Prefer the OLDEST marker matching both `agent` AND this subagent's
+# unit (grep-as-data from its transcript head, same NAZGUL_UNIT pattern the
+# writer records) so concurrent same-agent dispatches pair correctly even when
+# completions arrive out of order; fall back to agent-only oldest-match when no
+# unit is derivable (PR #78 review). No match is a silent no-op.
 _clear_in_flight_marker() {
   command -v jq >/dev/null 2>&1 || return 0
   local marker_dir="$NAZGUL_DIR/in-flight"
   [ -d "$marker_dir" ] || return 0
 
-  local oldest="" oldest_epoch="" f epoch a
+  local unit="" tpath=""
+  tpath=$(printf '%s' "$INPUT" | jq -r '.agent_transcript_path // .transcript_path // ""' 2>/dev/null || echo "")
+  if [ -n "$tpath" ] && [ -f "$tpath" ]; then
+    unit=$(head -c 262144 "$tpath" 2>/dev/null | grep -oE 'NAZGUL_UNIT: TASK-[0-9]+' | head -1 | sed 's/^NAZGUL_UNIT: //' || true)
+  fi
+
+  local oldest="" oldest_epoch="" fallback="" fallback_epoch="" f epoch a u
   for f in "$marker_dir"/*.json; do
     [ -f "$f" ] || continue
     a=$(jq -r '.agent // ""' "$f" 2>/dev/null) || continue
     [ "$a" = "$AGENT" ] || continue
     epoch=$(jq -r '.dispatched_at_epoch // 0' "$f" 2>/dev/null) || epoch=0
-    if [ -z "$oldest" ] || [ "$epoch" -lt "$oldest_epoch" ] 2>/dev/null; then
-      oldest="$f"
-      oldest_epoch="$epoch"
+    if [ -n "$unit" ]; then
+      u=$(jq -r '.unit // ""' "$f" 2>/dev/null) || u=""
+      if [ "$u" = "$unit" ]; then
+        if [ -z "$oldest" ] || [ "$epoch" -lt "$oldest_epoch" ] 2>/dev/null; then
+          oldest="$f"
+          oldest_epoch="$epoch"
+        fi
+      fi
+    fi
+    if [ -z "$fallback" ] || [ "$epoch" -lt "$fallback_epoch" ] 2>/dev/null; then
+      fallback="$f"
+      fallback_epoch="$epoch"
     fi
   done
+  [ -z "$oldest" ] && oldest="$fallback"
   [ -n "$oldest" ] && rm -f "$oldest" 2>/dev/null
   return 0
 }

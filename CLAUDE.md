@@ -132,7 +132,7 @@ tests/                               # Plugin validation tests
 
 ## Code Style
 
-- Shell scripts: Use `set -euo pipefail`. Quote all variables. Use `jq` for JSON, not sed/grep.
+- Shell scripts: Use `set -euo pipefail`. Quote all variables. Use `jq` for JSON, not sed/grep. Two documented exceptions omit `-e`: sourced libs (`scripts/lib/*` — must not alter the caller's shell options) and fail-open observe-only hooks (e.g. `scripts/in-flight-marker.sh` — every path must fall through to an unconditional `exit 0` rather than abort); test harness files under `tests/` use `set -uo pipefail` so they can assert on nonzero exit codes from code under test.
 - Markdown: Use ATX headers (`#`). Fenced code blocks with language tags.
 - YAML frontmatter: Consistent indentation (2 spaces). Quote string values with special characters.
 - File naming: kebab-case for all files. UPPERCASE for docs (CLAUDE.md, README.md).

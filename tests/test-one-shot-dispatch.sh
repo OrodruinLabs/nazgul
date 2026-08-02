@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Note: NOT using set -e — the harness runs code-under-test and asserts on
+# nonzero exit codes explicitly (suite convention, e.g. test-review-contract.sh).
+set -uo pipefail
 # Test: the filing's acceptance test — a completed one-shot dispatch leaves
 # zero live team members without any lead action (ADR-017, TRD §7).
 # Strongest available form: prove nothing ever becomes a team member, rather
