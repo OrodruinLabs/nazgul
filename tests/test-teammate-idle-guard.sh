@@ -44,13 +44,17 @@ assert_eq "manifest has no .delivered field (MF-045: dead field removed, not wir
 assert_contains "delivery recorded via log line instead" \
   "$(cat "$TEST_DIR/nazgul/logs/teammate-idle.jsonl")" "report delivered"
 
-# 2. report missing -> BLOCK (exit 2), blocks incremented, reason names path
+# 2. report missing -> BLOCK (exit 2), blocks incremented, reason names path,
+# block message instructs writing the report but no longer instructs idling.
 make_manifest "rev-b" "nazgul/reviews/TASK-001/rev-b.md" "FEAT-013" 0
-assert_eq "report missing blocked" "$(guard_ec rev-b)" "2"
+BLOCK_EC=0
+BLOCK_ERR=$(jq -n '{from:"rev-b"}' | bash "$GUARD" 2>&1 >/dev/null) || BLOCK_EC=$?
+assert_eq "report missing blocked" "$BLOCK_EC" "2"
 assert_eq "blocks incremented" \
   "$(jq -r '.blocks' "$TEST_DIR/nazgul/dispatch/rev-b.json")" "1"
-ERR=$(jq -n '{from:"rev-b"}' | bash "$GUARD" 2>&1 >/dev/null || true)
-assert_contains "reason names report path" "$ERR" "nazgul/reviews/TASK-001/rev-b.md"
+assert_contains "reason names report path" "$BLOCK_ERR" "nazgul/reviews/TASK-001/rev-b.md"
+assert_not_contains "block message does not instruct idling" "$BLOCK_ERR" "then idle"
+assert_contains "block message still instructs writing the report" "$BLOCK_ERR" "Write your full report to"
 
 # 3. empty report file counts as missing -> BLOCK
 make_manifest "rev-empty" "nazgul/reviews/TASK-001/rev-empty.md" "FEAT-013" 0
