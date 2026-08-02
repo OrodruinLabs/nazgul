@@ -36,6 +36,9 @@ enforcement. Teammates never terminate on their own — `TeamCreate`/
 `TeamDelete` no longer exist (removed in Claude Code v2.1.178), per-teammate
 shutdown_request is the only teardown primitive, and team state is otherwise
 removed only on normal session exit, so an undismissed teammate idles
-forever. As a mechanical backstop, the stop-hook's teardown gate detects
-undismissed teammates and injects a mandatory dismissal directive each
-iteration until they are dismissed (bounded, fail-open).
+forever unless the dispatcher dismisses it — there is no mechanical backstop
+(RULES.md §18, FEAT-026/ADR-017).
+
+This contract applies only to a genuine Agent-Teams teammate. Nazgul's own
+dispatches (discovery, review, implementation) are unnamed one-shot `Agent`
+dispatches, not teammates, and none of the above applies to them.
