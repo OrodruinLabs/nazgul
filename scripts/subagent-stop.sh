@@ -53,6 +53,30 @@ fi
 # CURRENT_ITERATION intentionally omitted — emit_event treats unset as null.
 emit_event "subagent_stop" agent "$AGENT"
 
+# In-flight marker clear (ADR-015 Part 2, TASK-008): one completion clears the
+# OLDEST marker whose `agent` field matches AGENT, which pairs correctly
+# under fan-out (N dispatches, N completions). No match is a silent no-op.
+_clear_in_flight_marker() {
+  command -v jq >/dev/null 2>&1 || return 0
+  local marker_dir="$NAZGUL_DIR/in-flight"
+  [ -d "$marker_dir" ] || return 0
+
+  local oldest="" oldest_epoch="" f epoch a
+  for f in "$marker_dir"/*.json; do
+    [ -f "$f" ] || continue
+    a=$(jq -r '.agent // ""' "$f" 2>/dev/null) || continue
+    [ "$a" = "$AGENT" ] || continue
+    epoch=$(jq -r '.dispatched_at_epoch // 0' "$f" 2>/dev/null) || epoch=0
+    if [ -z "$oldest" ] || [ "$epoch" -lt "$oldest_epoch" ] 2>/dev/null; then
+      oldest="$f"
+      oldest_epoch="$epoch"
+    fi
+  done
+  [ -n "$oldest" ] && rm -f "$oldest" 2>/dev/null
+  return 0
+}
+_clear_in_flight_marker || true
+
 # Review-coverage detector: derive which task(s) a review-gate covered and record
 # in review-coverage.jsonl (derived index of reviewer_verdict events — not a
 # parallel state store). Runs only for review-gate subagents; non-fatal.

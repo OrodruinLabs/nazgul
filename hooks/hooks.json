@@ -92,6 +92,11 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/parallel-dispatch-guard.sh\"",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/in-flight-marker.sh\"",
+            "timeout": 10
           }
         ]
       }

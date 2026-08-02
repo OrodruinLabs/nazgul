@@ -701,6 +701,20 @@ migrate_32_to_33() {
   log_migration "v32→v33: removed guards.team_teardown (dead key — TASK-001 deleted its only consumer, the stop-hook teardown gate + tt_detect_undismissed()); a customized non-default value survives under ._deprecated_removed[\"guards.team_teardown\"] (MF-051). guards.team_sweep / guards.team_sweep_min_age_hours untouched (ADR-017 Option C)."
 }
 
+migrate_33_to_34() {
+  local tmp; tmp=$(mktemp)
+  # Stop-hook in-flight hold kill-switch pair (ADR-015 / TASK-008). Additive;
+  # explicit values (incl. false) preserved. Same type-guard pattern as
+  # migrate_30_to_31/migrate_31_to_32.
+  jq '
+    .guards = ((if (.guards | type) == "object" then .guards else {} end)
+      | .in_flight_hold = (if has("in_flight_hold") then .in_flight_hold else true end)
+      | .in_flight_stale_minutes = (if has("in_flight_stale_minutes") then .in_flight_stale_minutes else 30 end))
+    | .schema_version = 34
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v33→v34: added guards.in_flight_hold:true, guards.in_flight_stale_minutes:30 (stop-hook in-flight awareness — allowed uncounted hold while dispatched work is still running, plus its kill-switch; additive, explicit values preserved)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"
