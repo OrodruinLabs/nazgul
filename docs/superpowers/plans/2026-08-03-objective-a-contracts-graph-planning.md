@@ -26,7 +26,7 @@
 ### Task 1: Empirical probe — code-graph CLI + `compute_waves` reuse (ADR before integration code)
 
 **Files:**
-- Create: `nazgul/docs/ADR-<next>-code-graph-cli-probe.md` (ADR number = highest existing + 1)
+- Create: `docs/adr/ADR-<next>-code-graph-cli-probe.md` (TRACKED path — `nazgul/docs/` is gitignored, and this ADR is a durable design record the commit step below must actually capture; number sequentially after the highest ADR across both `docs/adr/` and any runtime `nazgul/docs/` ADRs)
 - Create (scratch, not committed): probe sandbox under the session scratchpad
 
 **Interfaces:**
@@ -36,7 +36,7 @@
 - [ ] **Step 2: Measure edge queries.** Run the CLI's edge-relevant subcommands (`refs`, `callgraph`, `impact`) between file pairs. Record: does it report the a→b edge? Does it correctly report NO edge for c? Latency per query? Behavior when the index is stale (edit a file, query without reindex)?
 - [ ] **Step 3: Failure-mode probe.** Run with: tool absent from PATH, corrupted index file, and a 1-second `timeout(1)` wrapper. Record exit codes and stderr for each — Task 5's fail-open branch keys off these.
 - [ ] **Step 4: `compute_waves` reuse check.** In this repo, write 4 throwaway task manifests (one diamond: B,C depend on A; D depends on B,C; plus one cycle pair) into a temp dir; source `scripts/lib/parallel-batch.sh` and call `compute_waves` against them. Confirm: diamond → 3 waves with B,C co-waved; cycle → `CYCLE:` error naming members. Record any format friction.
-- [ ] **Step 5: Write the ADR.** Sections: Context, Probe Results (tables from steps 1-4), Verdict (GO/NO-GO for `code-graph-mcp`; alternate tool or veto-gate descoping if NO-GO), Binding Design Adjustments (exact invocation, timeout value confirmation, exit-code table), and an Appendix recording every probe command verbatim so the probe is re-runnable (PR #80 review: the probe's verification is its recorded, reproducible results). Follow `nazgul/docs/ADR-018-*` structure.
+- [ ] **Step 5: Write the ADR.** Sections: Context, Probe Results (tables from steps 1-4), Verdict (GO/NO-GO for `code-graph-mcp`; alternate tool or veto-gate descoping if NO-GO), Binding Design Adjustments (exact invocation, timeout value confirmation, exit-code table), and an Appendix recording every probe command verbatim so the probe is re-runnable (PR #80 review: the probe's verification is its recorded, reproducible results). Follow the FEAT-027 probe-ADR structure (ADR-018, a runtime artifact — mirror its section shape: Context / Probe Results / Verdict / Binding Design Adjustments; the tracked destination is this task's `docs/adr/` path).
 - [ ] **Step 6: Commit** the ADR: `docs: ADR — code-graph CLI probe results and binding invocation shape`
 
 ### Task 2: Config schema — `execution.graph` (additive migration)

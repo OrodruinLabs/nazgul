@@ -30,7 +30,7 @@ The browser frontend (fleet page, drill-down, xterm.js terminal panel, notificat
 
 **Files:**
 - Create: `scripts/lib/registry.sh` (sourced lib)
-- Modify: `skills/init/SKILL.md` (append-on-init step), `scripts/worktree-utils.sh` (`create_feature_worktree` calls it — soft dependency shipped in Objective B; guard with `command -v registry_append`)
+- Modify: `skills/init/SKILL.md` (append-on-init step), `scripts/worktree-utils.sh` (`create_feature_worktree` calls it — soft dependency shipped in Objective B; conditionally source the lib the way worktree-utils already sources its other libs — `[ -f "$_WU_REGISTRY_LIB" ] && source "$_WU_REGISTRY_LIB"` — then guard the call with `command -v registry_append`, which only works once sourcing is in place)
 - Test: `tests/test-registry.sh` (new)
 
 **Interfaces:**
