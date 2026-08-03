@@ -24,7 +24,7 @@ skills/                              # User-facing commands (/nazgul:*)
 │   ├── verify/SKILL.md
 │   ├── metrics/SKILL.md
 │   ├── heartbeat/SKILL.md           # Opt-in automation-heartbeat tick (inbox triage + auto-start)
-│   ├── doctor/SKILL.md              # Read-only environment preflight diagnostic (eight checks)
+│   ├── doctor/SKILL.md              # Read-only environment preflight diagnostic (ten checks)
 │   └── bootstrap-project/SKILL.md   # Emit portable Nazgul-free bundle (one-shot)
 agents/                              # Subagent definitions
 │   ├── discovery.md                 # Pipeline: scans codebase, classifies project
@@ -74,7 +74,7 @@ scripts/                             # Shell scripts for hooks
 │   ├── gen-skill-docs.sh            # Skill template: resolve {{PARTIAL:name}}
 │   ├── bootstrap-transform.sh       # bootstrap-project: Nazgul-token scrub pass
 │   ├── heartbeat.sh                 # Opt-in automation-heartbeat tick engine (separate entry path)
-│   ├── doctor.sh                    # Read-only preflight diagnostic (eight checks, never writes state)
+│   ├── doctor.sh                    # Read-only preflight diagnostic (ten checks, never writes state)
 │   ├── git-hooks/                   # Templates installed into the managed core.hooksPath dir
 │   │   ├── _dispatch.sh             # Chain-dispatcher: forwards to any pre-existing user hook
 │   │   ├── pre-commit               # Git-level base-branch guard
@@ -95,6 +95,7 @@ scripts/                             # Shell scripts for hooks
 │       ├── inbox-provider.sh        # Heartbeat: work-inbox provider seam (list/get/archive), dispatches file vs github
 │       ├── heartbeat-triage.sh      # Heartbeat: source-agnostic candidate selection policy
 │       ├── connector-github.sh      # Connectors: two-way GitHub provider (pull issues in / push status + PR back)
+│       ├── stack-utils.sh           # execution.stacking: sole writer of stack.layers[], only home of `gh stack`
 │       └── git-hooks.sh             # Git hooks: install/uninstall/self-heal core.hooksPath lifecycle
 templates/                           # Objective + document templates
 │   ├── CLAUDE.md.template           # Injected into target projects by /nazgul:init
@@ -109,7 +110,7 @@ references/                          # Shared reference docs for agents
 │   ├── fix-first-heuristic.md       # AUTO-FIX vs ASK classification rules
 │   └── self-improvement.md          # Agent self-rating protocol
 tests/                               # Plugin validation tests
-│   ├── run-tests.sh                 # Test runner (65 unit/integration files)
+│   ├── run-tests.sh                 # Test runner (85 unit/integration files)
 │   ├── test-*.sh                    # Unit/integration tests
 │   ├── fixtures/                    # Test fixtures (bootstrap-transform scrub cases)
 │   ├── lib/                         # Test assertions + setup helpers
@@ -117,6 +118,7 @@ tests/                               # Plugin validation tests
 .github/workflows/                   # CI pipelines
 │   ├── test.yml                     # Unit/integration tests on push/PR
 │   ├── e2e-tests.yml                # E2E skill tests (manual trigger)
+│   ├── e2e-stack.yml                # Two-layer gh-stack E2E against a live scratch repo (manual trigger)
 │   └── skill-docs.yml               # Skill template freshness check on PR
 ```
 
@@ -154,6 +156,8 @@ tests/                               # Plugin validation tests
 
 **Connectors are opt-in and default-off.** `scripts/lib/connector-github.sh` (FEAT-012) is a two-way GitHub connector behind the generalized provider seam (`scripts/lib/inbox-provider.sh`): it pulls opt-in-labeled issues into the inbox so the heartbeat auto-starts them, and pushes task status + PR links back to the mapped issue. It is enabled only when `connectors.github.enabled` is `true` and selected via `automation.heartbeat.inbox.provider: "github"` (the `file` provider is the default). Credentials come from `gh auth` only — no token is ever stored in config or logged — and remote issue content is treated as data. Linear/Slack are follow-on providers behind the same seam. See RULES.md §16.
 
+**Stacking changes when work starts, never what "done" means.** An objective's end used to idle the loop: a PR opened to `main`, nothing to merge it, and no honest way to start the next objective. `execution.stacking` (FEAT-027/ADR-018, opt-in via `/nazgul:start --stack`, default `false`, schema v35) makes objective N+1 branch off objective N's unmerged tip and stack its PR on top. One objective is still one PR — the task state machine, review board, and per-objective release flow are untouched. GitHub owns every retarget/rebase/merge mechanic via the official `gh-stack` CLI extension (no hand-rolled `rebase --onto`, ever — two prior attempts in this repo failed to converge); Nazgul owns only the script-written `stack.layers[]` registry (`scripts/lib/stack-utils.sh` is its sole writer and the only home of `gh stack`) and the policy gates: a cap on unmerged layers (`max_unmerged`, default 3) that skips auto-start loudly with `stack_cap_reached`, and a `CHANGES_REQUESTED` review auto-filed as a p1 `stack-rework` inbox item (`rework_priority`, default 1) the heartbeat picks first. Every degradation is fail-closed and loud: unusable tooling still opens the ordinary PR but emits `stop_gate reason:stacking_unavailable`; a sync conflict halts stacking, files a p1 item, and emits `stack_sync_conflict` — never auto-resolved. Because gh-stack aborts a real divergence with exit **0**, the wrapper classifies its stderr rather than trusting exit codes. New event types: `stack_layer_merged`, `stack_rework_filed`, `stack_sync_conflict`, `stack_api_failure`, `stack_remote_layer_imported`, `stack_remote_layer_import_failed`. **One piece ships for ALL users regardless of the opt-in**: `create_feature_branch` now asserts the checked-out branch equals `branch.base` and refuses loudly otherwise, closing the accidental-stacking hazard (it used to take whatever was checked out as the base). See RULES.md §20.
+
 **State machine is sacred.** Tasks follow: PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> DONE (or CHANGES_REQUESTED -> retry, or BLOCKED). No skipping states. Every transition is validated against one shared source of truth (`scripts/lib/task-transition-guard.sh`), used by both `task-state-guard.sh`'s live PreToolUse gate and `stop-hook.sh`'s bash-write reconciliation pass below — the IMPLEMENTED gate additionally requires a commit SHA recorded inside the manifest's `## Commits` section (a hex token anywhere else — notably the `## Metadata` Base SHA every manifest carries at creation — is invisible to the gate) that resolves to a real, reachable commit (`git cat-file -e`) AND is a strict descendant of the manifest's own Base SHA (`git merge-base --is-ancestor`, equality rejected): forward progress, not mere existence. With no Base SHA in the manifest the gate degrades to existence-only and announces the skipped forward-progress check on stderr; a Base SHA present but unresolvable rejects the manifest as corrupt.
 
 **Bash-mediated bypasses are detected, not just blocked.** A status write through the Write/Edit/MultiEdit tools is gated live; one made outside that path (e.g. `mv`/`cp` over a manifest) is caught after the fact — `stop-hook.sh` diffs every task's live status against the last checkpoint at the top of each iteration and flags any change not traceable to a guarded transition as `BLOCKED` with a named diagnostic, never silently "corrected." Kill-switched by `guards.bash_write_reconciliation` (default `true`, config schema v28).
@@ -179,12 +183,13 @@ tests/                               # Plugin validation tests
 ## Testing
 
 ```bash
-tests/run-tests.sh                    # Run all unit/integration tests (65 files)
+tests/run-tests.sh                    # Run all unit/integration tests (85 files)
 tests/run-tests.sh --filter=stop-hook # Run specific test file
 tests/e2e/run-e2e.sh                  # Run E2E skill tests (requires claude CLI, costs money)
+tests/e2e/run-stack-e2e.sh            # Two-layer gh-stack E2E (real repo/PRs; CI-only via e2e-stack.yml)
 ```
 
-CI runs automatically on push (`test.yml`) and checks skill template freshness on PRs (`skill-docs.yml`). E2E tests are manual trigger only (`e2e-tests.yml`).
+CI runs automatically on push (`test.yml`) and checks skill template freshness on PRs (`skill-docs.yml`). E2E tests are manual trigger only (`e2e-tests.yml`, `e2e-stack.yml` — the latter needs a `STACK_E2E_GH_TOKEN` secret and creates real GitHub repos/PRs).
 
 ---
 
@@ -208,12 +213,15 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 - `nazgul/inbox/` (+ `nazgul/inbox/archive/`) — Automation-heartbeat work inbox: candidate `.md`/`.json` files picked up by `scripts/heartbeat.sh` and archived on claim; only populated/consumed when `automation.heartbeat.enabled: true`
 - `config.json → connectors.github` — GitHub two-way connector config (opt-in, `enabled: false` by default): `pull.{label, claimed_label, max_body_bytes}`, `push.enabled`, `pull_failures` counter, and the remote-issue ↔ local-id `map`. No credential is stored here — auth is `gh` only. Consumed by `scripts/lib/connector-github.sh` via the `scripts/lib/inbox-provider.sh` seam (`automation.heartbeat.inbox.provider: "github"`)
 - `nazgul/.githooks/` — Per-project managed git hooks dir (generated by `scripts/lib/git-hooks.sh`), pointed to by `core.hooksPath` when `guards.git_hooks: true`; holds the `pre-commit`/`pre-merge-commit` guards, the chain-dispatcher, and pass-through shims for every other githooks(5) name
+- `config.json → execution.stacking` — Stacked-PR continuation policy (opt-in, `enabled: false` by default, schema v35): `max_unmerged` (default 3, the auto-start cap) and `rework_priority` (default 1). Three further keys are written at runtime by `scripts/lib/stack-utils.sh` and absent from a fresh config: `halted`/`halt_reason` (fail-closed flag, cleared only by a human) and `api_failures` (consecutive-failure counter, halts at 3)
+- `config.json → stack.layers[]` — Script-owned layer registry, one entry per layer (`{feat_id, branch, pr, base, state: "open"|"merged", opened_at, merged_at}`). `scripts/lib/stack-utils.sh` is its SOLE writer — operators read it (via `/nazgul:status`, SessionStart, or `jq`) and never hand-edit it
 - `nazgul/logs/heartbeat-*.jsonl` — One decision record per heartbeat tick (one file per UTC day)
 
 ## Commands
 - `/nazgul:init` — First-time setup: run Discovery, generate reviewers, create runtime dirs
 - `/nazgul:start` — Auto-detects project state and continues or starts work (derives objective from context)
-- `/nazgul:start "objective"` — Override: start a specific new objective (flags: --afk, --yolo, --hitl, --max N, --parallel; --conductor is a deprecated alias for --parallel)
+- `/nazgul:start "objective"` — Override: start a specific new objective (flags: --afk, --yolo, --hitl, --max N, --parallel, --stack/--no-stack; --conductor is a deprecated alias for --parallel)
+- `/nazgul:start --stack` / `--no-stack` — Opt into (or explicitly out of) stacked-PR continuation; persists `execution.stacking.enabled`. Three-state: omitting both leaves the persisted value untouched, so a prior objective's choice survives a resume. Orthogonal to mode and to `--parallel`
 - `/nazgul:status` — Check loop progress, task counts, reviewer board
 - `/nazgul:task` — Task lifecycle: skip, unblock, add, prioritize, info, list
 - `/nazgul:pause` — Gracefully pause the loop at next iteration boundary
@@ -228,7 +236,7 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 - `/nazgul:patch` — Lightweight task mode for bug fixes, config changes, and small features
 - `/nazgul:verify` — Human acceptance testing for completed tasks
 - `/nazgul:heartbeat` — Run one automation-heartbeat tick by hand: triages `nazgul/inbox/` and auto-starts the next objective if idle and clear. Opt-in and default-off (`automation.heartbeat.enabled: false`); a separate entry path from the main loop with no changes to the sequential or parallel execution path
-- `/nazgul:doctor` — Read-only environment preflight: reports plugin-version drift, `jq`/`gh` deps, git-hooks drift, the bash-vs-zsh hazard, the `NAZGUL_DIR` footgun, and config-schema staleness. Never writes state; its only fix path is text on stdout
+- `/nazgul:doctor` — Read-only environment preflight: reports plugin-version drift, `jq`/`gh` deps, git-hooks drift, the bash-vs-zsh hazard, the `NAZGUL_DIR` footgun, config-schema staleness, and — when `execution.stacking` is enabled — gh-stack tooling readiness plus registry-vs-GitHub drift. Never writes state; its only fix path is text on stdout
 - `/nazgul:help` — Quick reference for all commands and modes
 
 ## The 10 Rules for the Nazgul Loop
