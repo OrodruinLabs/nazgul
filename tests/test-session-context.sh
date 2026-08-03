@@ -289,4 +289,94 @@ assert_eq "unresolved session id: JSONL reason is unresolved_session_id" \
   "$(jq -r '.reason' "$TEST_DIR/nazgul/logs/team-sweep.jsonl")" "unresolved_session_id"
 teardown_temp_dir
 
+# --- Test 19 (TASK-010): stacking disabled + no layers — no stack line ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+output=$(bash "$SESSION_SCRIPT" 2>&1)
+assert_not_contains "stacking disabled: no Stack line" "$output" "Stack:"
+teardown_temp_dir
+
+# --- Test 20 (TASK-010): old-schema config with no `stack` key at all —
+# regression: must still render with no error and no Stack line. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+jq 'del(.stack) | del(.execution.stacking)' "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.tmp" \
+  && mv "$TEST_DIR/nazgul/config.json.tmp" "$TEST_DIR/nazgul/config.json"
+ec=0
+output=$(bash "$SESSION_SCRIPT" 2>&1) || ec=$?
+assert_exit_code "old-schema stack key: exit 0" "$ec" 0
+assert_not_contains "old-schema stack key: no Stack line" "$output" "Stack:"
+teardown_temp_dir
+
+# --- Test 21 (TASK-010): stacking enabled, populated registry — Stack line
+# present with open count / cap / tip branch / PR number. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config \
+  '.execution.stacking.enabled = true' \
+  '.execution.stacking.max_unmerged = 3' \
+  '.stack.layers = [
+     {"feat_id":"FEAT-026","branch":"feat/FEAT-026","pr":"https://github.com/o/r/pull/79","base":"main","state":"merged","opened_at":"2026-08-01T00:00:00Z","merged_at":"2026-08-02T00:00:00Z"},
+     {"feat_id":"FEAT-027","branch":"feat/FEAT-027-stacked-pr","pr":"https://github.com/o/r/pull/80","base":"feat/FEAT-026","state":"open","opened_at":"2026-08-02T00:00:00Z","merged_at":null}
+   ]'
+output=$(bash "$SESSION_SCRIPT" 2>&1)
+assert_contains "populated registry: Stack line present" "$output" "Stack: 1 open / cap 3"
+assert_contains "populated registry: tip branch shown" "$output" "tip: feat/FEAT-027-stacked-pr"
+assert_contains "populated registry: tip PR number shown" "$output" "PR #80 open"
+teardown_temp_dir
+
+# --- Test 22 (TASK-010): layers present but stacking disabled — line still
+# renders (per manifest: enabled OR layers non-empty). ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config \
+  '.execution.stacking.enabled = false' \
+  '.stack.layers = [{"feat_id":"FEAT-026","branch":"feat/FEAT-026","pr":null,"base":"main","state":"open","opened_at":"2026-08-01T00:00:00Z","merged_at":null}]'
+output=$(bash "$SESSION_SCRIPT" 2>&1)
+assert_contains "layers without enabled: Stack line still present" "$output" "Stack: 1 open"
+assert_contains "layer with no PR yet: rendered honestly" "$output" "no PR yet"
+teardown_temp_dir
+
+# --- Test 23 (TASK-010): stacking enabled, empty layers — line present
+# with zero open count, no tip segment. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.execution.stacking.enabled = true'
+output=$(bash "$SESSION_SCRIPT" 2>&1)
+assert_contains "enabled, no layers: Stack line present" "$output" "Stack: 0 open / cap 3"
+assert_not_contains "enabled, no layers: no tip segment" "$output" "tip:"
+teardown_temp_dir
+
+# --- Test 24 (TASK-010): malformed `.stack` (non-object, e.g. a string) —
+# no crash, no Stack line (jq's runtime type error falls through to the
+# same fallback path old-schema configs already use). ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.execution.stacking.enabled = true' '.stack = "corrupt"'
+ec=0
+output=$(bash "$SESSION_SCRIPT" 2>&1) || ec=$?
+assert_exit_code "malformed stack: exit 0" "$ec" 0
+assert_contains "malformed stack: line present via enabled flag, count falls back to 0" "$output" "Stack: 0 open / cap 3"
+teardown_temp_dir
+
+# --- Test 25 (TASK-010): halted flag set — surfaced on the Stack line. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config \
+  '.execution.stacking.enabled = true' \
+  '.execution.stacking.halted = true' \
+  '.execution.stacking.halt_reason = "conflict"'
+output=$(bash "$SESSION_SCRIPT" 2>&1)
+assert_contains "halted: flag surfaced on Stack line" "$output" "HALTED: conflict"
+teardown_temp_dir
+
 report_results

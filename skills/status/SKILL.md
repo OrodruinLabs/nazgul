@@ -36,6 +36,7 @@ metadata:
 - Board last sync: !`jq -r '.board.last_sync // "never"' nazgul/config.json 2>/dev/null || echo "never"`
 - Board failures: !`jq -r '.board.sync_failures // 0' nazgul/config.json 2>/dev/null || echo "0"`
 - Board tasks mapped: !`jq -r '.board.task_map | length' nazgul/config.json 2>/dev/null || echo "0"`
+- Stack registry: !`{ source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/stack-utils.sh" 2>/dev/null && UNMERGED=$(stack_unmerged_count nazgul/config.json 2>/dev/null || echo 0) && jq --argjson unmerged "$UNMERGED" '{enabled: (.execution.stacking.enabled // false), max_unmerged: (.execution.stacking.max_unmerged // 3), halted: (.execution.stacking.halted // false), halt_reason: (.execution.stacking.halt_reason // ""), unmerged: $unmerged, layers: (.stack.layers // []), readable: true}' nazgul/config.json; } 2>/dev/null || echo '{"enabled":false,"max_unmerged":3,"halted":false,"halt_reason":"","unmerged":0,"layers":[],"readable":false}'`
 
 ## Instructions
 
@@ -50,6 +51,11 @@ not `task`, batch dispatch never fires even with `--parallel` set — say so exp
 but granularity is 'group': loop stays sequential with aggregate reviews") rather than showing an empty batch
 as if it were meaningful. If Parallel execution is `disabled`, always use the sequential Status Report Format
 below unchanged.
+
+**Stack section**: parse the Stack registry JSON. If `readable` is `false`, render the Stack section anyway
+and say the registry could not be read (config missing/corrupt) — never render it as healthy when the read
+failed. If `readable` is `true` and `enabled` is `false` with an empty `layers` array, omit the Stack section
+entirely (nothing to show). Otherwise render it after Board Sync per the format below.
 
 ### Status Report Format (default — parallel execution disabled)
 
@@ -101,6 +107,23 @@ Provider:     [github/none]
 Last sync:    [timestamp]
 Tasks mapped: [N]
 Failures:     [N]
+
+Stack
+─────────────────────────────────────
+Enabled:      [yes/no]
+Unmerged:     [N] / cap [M]
+  [feat_id]  [branch] → PR [#N or "none yet"] ([state])
+  ...
+⚠ At/over cap — new objectives will not auto-start until a layer merges. [only if unmerged >= max_unmerged]
+⚠ HALTED: [halt_reason] — resolve manually before continuing. [only if halted]
+```
+
+Registry unreadable variant (config missing/corrupt — say so, never render as healthy):
+
+```text
+Stack
+─────────────────────────────────────
+✗ Stack registry unreadable — nazgul/config.json is missing or malformed.
 ```
 
 ### Parallel Batch Progress Format (execution.parallel enabled)
@@ -130,4 +153,6 @@ Wave  Units
 5. When Parallel execution is `enabled`, parse the Dispatch batch and Wave layout JSON for the Parallel Batch
    Progress block instead of recomputing batch/wave state — never reimplement `compute_dispatch_batch` or
    `compute_waves`
-6. Output the formatted status summary
+6. Parse the Stack registry JSON for the Stack section (readable/enabled/layers/unmerged/halted — see
+   "Stack section" above)
+7. Output the formatted status summary
