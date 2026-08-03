@@ -173,9 +173,21 @@ chmod +x "$FAKEBIN/gh"
 
 # Save the pre-FAKEBIN PATH (still carrying jq/git) for the one test that
 # needs `gh` genuinely absent (stack_available's `command -v gh` branch).
+# Symlink farm minus gh: on ubuntu runners gh lives in /usr/bin, so listing
+# real bin dirs kept gh resolvable and this case passed for the wrong reason
+# (real gh answering "no extension"). Farm construction mirrors test-stack-seam.
 JQ_DIR=$(dirname "$(command -v jq)")
 GIT_DIR=$(dirname "$(command -v git)")
-NO_GH_PATH="$JQ_DIR:$GIT_DIR:/usr/bin:/bin"
+NOGH_DIR=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-nogh-XXXXXX")
+for _d in "$JQ_DIR" "$GIT_DIR" /usr/bin /bin; do
+  [ -d "$_d" ] || continue
+  for _f in "$_d"/*; do
+    _b=$(basename "$_f")
+    [ "$_b" = "gh" ] && continue
+    [ -e "$NOGH_DIR/$_b" ] || ln -s "$_f" "$NOGH_DIR/$_b" 2>/dev/null || true
+  done
+done
+NO_GH_PATH="$NOGH_DIR"
 
 export PATH="$FAKEBIN:$PATH"
 
@@ -1205,5 +1217,5 @@ assert_exit_code "_su_write_history: zero matches is a failure, not a silent suc
 assert_contains "_su_write_history: zero matches names the feat_id and the PR" "$hist_err" "FEAT-870"
 
 teardown_temp_dir
-rm -rf "$FAKEBIN"
+rm -rf "$FAKEBIN" "$NOGH_DIR"
 report_results

@@ -106,10 +106,22 @@ EOF
 chmod +x "$FAKEBIN/gh"
 
 # Saved before FAKEBIN is prepended: the one row of the availability table that
-# needs `gh` genuinely absent (not merely shadowed) runs on this PATH.
+# needs `gh` genuinely absent (not merely shadowed) runs on this PATH. Listing
+# real bin dirs is NOT enough — on ubuntu runners gh lives in /usr/bin, so a
+# "$JQ_DIR:/usr/bin:/bin" path still resolves gh (caught by this suite's own
+# safety gate on CI). Build a symlink farm of those dirs minus gh instead.
 JQ_DIR=$(dirname "$(command -v jq)")
 GIT_DIR=$(dirname "$(command -v git)")
-NO_GH_PATH="$JQ_DIR:$GIT_DIR:/usr/bin:/bin"
+NOGH_DIR=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-nogh-XXXXXX")
+for _d in "$JQ_DIR" "$GIT_DIR" /usr/bin /bin; do
+  [ -d "$_d" ] || continue
+  for _f in "$_d"/*; do
+    _b=$(basename "$_f")
+    [ "$_b" = "gh" ] && continue
+    [ -e "$NOGH_DIR/$_b" ] || ln -s "$_f" "$NOGH_DIR/$_b" 2>/dev/null || true
+  done
+done
+NO_GH_PATH="$NOGH_DIR"
 
 export PATH="$FAKEBIN:$PATH"
 SEAM_PATH="$PATH"
@@ -308,5 +320,5 @@ RESTORED_SC=$(bash "$SESSION_CONTEXT" </dev/null 2>&1)
 assert_contains "canary: restoring the producer's field names restores the agreement" "$RESTORED_SC" "tip: $LIB_TIP"
 
 teardown_temp_dir
-rm -rf "$FAKEBIN"
+rm -rf "$FAKEBIN" "$NOGH_DIR"
 report_results
