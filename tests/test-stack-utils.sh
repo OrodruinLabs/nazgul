@@ -801,7 +801,7 @@ unset NAZGUL_TEST_GH_PR_VIEW_JSON NAZGUL_TEST_GH_STACK_SYNC_EXIT NAZGUL_TEST_GH_
 REMOTE_CONFIG=$(_sync_doctrine_fixture "FEAT-504")
 REMOTE_PR_VIEW_MAP="$TEST_DIR/pr-view-map-remote.tsv"
 printf 'https://github.com/o/r/pull/FEAT-504\t{"number":504,"state":"MERGED","mergedAt":"2026-08-02T06:00:00Z"}\n' > "$REMOTE_PR_VIEW_MAP"
-printf '12\t{"headRefName":"feat/FEAT-777-imported","baseRefName":"feat/FEAT-504-x"}\n' >> "$REMOTE_PR_VIEW_MAP"
+printf '12\t{"headRefName":"feat/FEAT-777-imported","baseRefName":"feat/FEAT-504-x","url":"https://github.com/o/r/pull/12"}\n' >> "$REMOTE_PR_VIEW_MAP"
 export NAZGUL_TEST_GH_PR_VIEW_JSON_MAP="$REMOTE_PR_VIEW_MAP"
 export NAZGUL_TEST_GH_STACK_SYNC_EXIT=0
 export NAZGUL_TEST_GH_STACK_SYNC_STDERR="⚠ A stack on GitHub already contains #12, which is not in your local stack. Run 'gh stack checkout <pr>' to import the full stack"
@@ -818,6 +818,8 @@ assert_eq "stack_reconcile: remote-ahead — imported layer's base from gh pr vi
   "$(jq -r '.stack.layers[] | select(.feat_id=="remote-pr-12") | .base' "$REMOTE_CONFIG")" "feat/FEAT-504-x"
 assert_eq "stack_reconcile: remote-ahead — imported layer starts open" \
   "$(jq -r '.stack.layers[] | select(.feat_id=="remote-pr-12") | .state' "$REMOTE_CONFIG")" "open"
+assert_eq "stack_reconcile: remote-ahead — registry pr field is the URL, same format stack_submit writes" \
+  "$(jq -r '.stack.layers[] | select(.feat_id=="remote-pr-12") | .pr' "$REMOTE_CONFIG")" "https://github.com/o/r/pull/12"
 assert_eq "stack_reconcile: remote-ahead — emits stack_remote_layer_imported" \
   "$(_event_count stack_remote_layer_imported)" "1"
 assert_eq "stack_reconcile: remote-ahead — NOT halted (benign, not a conflict)" \

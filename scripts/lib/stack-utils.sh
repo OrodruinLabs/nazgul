@@ -688,14 +688,14 @@ _su_extract_remote_ahead_pr() {
 # reconcile tick will retry. Prints 'api_failure' on stdout when the failure was
 # a gh API one, so the caller can fold it into its own per-tick counter update.
 _su_import_remote_layer() {
-  local config="$1" pr="$2" out rc pr_json branch base
+  local config="$1" pr="$2" out rc pr_json branch base pr_ref
   out=$(gh stack checkout "$pr" 2>&1); rc=$?
   if [ "$rc" -ne 0 ]; then
     printf 'stack-utils: gh stack checkout %s failed (exit %s): %s\n' "$pr" "$rc" "$out" >&2
     _su_emit "stack_remote_layer_import_failed" pr "$pr" exit_code:n "$rc" detail "$(_su_oneline "$out")"
     return 1
   fi
-  pr_json=$(gh pr view "$pr" --json headRefName,baseRefName 2>&1); rc=$?
+  pr_json=$(gh pr view "$pr" --json headRefName,baseRefName,url 2>&1); rc=$?
   if [ "$rc" -ne 0 ]; then
     printf 'stack-utils: gh pr view %s failed while importing a remote-ahead layer (exit %s): %s\n' "$pr" "$rc" "$(_su_oneline "$pr_json")" >&2
     _su_emit "stack_api_failure" stage "remote_import_pr_view" pr "$pr" auth_status "$(_su_auth_status_tag)"
@@ -704,6 +704,11 @@ _su_import_remote_layer() {
   fi
   branch=$(printf '%s' "$pr_json" | jq -r '.headRefName // empty' 2>/dev/null) || branch=""
   base=$(printf '%s' "$pr_json" | jq -r '.baseRefName // empty' 2>/dev/null) || base=""
+  # The registry's `pr` field holds a URL everywhere else (stack_submit writes
+  # gh's own `.url`); registering the bare number here would mix formats in one
+  # field. Fall back to the number only when the URL is unreadable.
+  pr_ref=$(printf '%s' "$pr_json" | jq -r '.url // empty' 2>/dev/null) || pr_ref=""
+  [ -n "$pr_ref" ] || pr_ref="$pr"
   if [ -z "$branch" ]; then
     printf 'stack-utils: remote-ahead PR %s reports no headRefName — cannot register the imported layer (registry left unchanged)\n' "$pr" >&2
     _su_emit "stack_remote_layer_import_failed" pr "$pr" reason "no_head_ref"
@@ -713,7 +718,7 @@ _su_import_remote_layer() {
     base=$(jq -r '.branch.base // "main"' "$config" 2>/dev/null) || base="main"
     printf 'stack-utils: remote-ahead PR %s reports no baseRefName — recording base as "%s"\n' "$pr" "$base" >&2
   fi
-  if ! stack_register_layer "$config" "remote-pr-${pr}" "$branch" "$base" "$pr"; then
+  if ! stack_register_layer "$config" "remote-pr-${pr}" "$branch" "$base" "$pr_ref"; then
     printf 'stack-utils: remote-ahead PR %s was checked out but registering layer remote-pr-%s failed — it is NOT in the registry and reconcile will not see it\n' "$pr" "$pr" >&2
     _su_emit "stack_remote_layer_import_failed" pr "$pr" reason "register_failed" branch "$branch"
     return 1
