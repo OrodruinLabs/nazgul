@@ -26,6 +26,8 @@ source "$SCRIPT_DIR/lib/inbox-provider.sh"
 source "$SCRIPT_DIR/lib/heartbeat-triage.sh"
 # shellcheck source=lib/connector-github.sh
 source "$SCRIPT_DIR/lib/connector-github.sh"
+# shellcheck source=lib/stack-utils.sh
+source "$SCRIPT_DIR/lib/stack-utils.sh"
 
 # Degrade to a safe no-op when Nazgul is uninitialized, matching stop-hook.sh.
 [ -f "$CONFIG" ] || exit 0
@@ -208,6 +210,25 @@ esac
 INBOX_REL=$(jq -r '.automation.heartbeat.inbox.dir // "nazgul/inbox"' "$CONFIG" 2>/dev/null || echo "nazgul/inbox")
 INBOX_DIR="$PROJECT_ROOT/$INBOX_REL"
 
+# FEAT-027 stack continuation, pre-triage: reconcile any newly-merged layer
+# and file rework items for CHANGES_REQUESTED PRs so THIS tick's triage below
+# can pick them. Own count_active_sessions check — the concurrency guard
+# below sits AFTER triage and can't protect this: a rebase must never run
+# under a live session (serialization doctrine). STACK_CAP_REACHED is only
+# computed here; the actual skip decision waits until the picked item's type
+# is known (a rework fix on an existing layer is never blocked by the cap).
+STACK_CAP_REACHED=false
+if [ "$(stack_available "$CONFIG" 2>/dev/null || true)" = "ready" ] \
+  && [ "$(count_active_sessions "$NAZGUL_DIR/sessions")" -eq 0 ]; then
+  stack_reconcile "$CONFIG" || true
+  stack_detect_changes_requested "$CONFIG" || true
+  STACK_MAX_UNMERGED=$(jq -r '.execution.stacking.max_unmerged // 3' "$CONFIG" 2>/dev/null) || STACK_MAX_UNMERGED=3
+  case "$STACK_MAX_UNMERGED" in ''|*[!0-9]*) STACK_MAX_UNMERGED=3 ;; esac
+  STACK_UNMERGED=$(stack_unmerged_count "$CONFIG" 2>/dev/null) || STACK_UNMERGED=0
+  case "$STACK_UNMERGED" in ''|*[!0-9]*) STACK_UNMERGED=0 ;; esac
+  [ "$STACK_UNMERGED" -ge "$STACK_MAX_UNMERGED" ] && STACK_CAP_REACHED=true
+fi
+
 SEEN_LIST=$(inbox_list "$INBOX_DIR" 2>/dev/null || true)
 if [ -n "$SEEN_LIST" ]; then
   # grep -c exits 1 on zero matches (e.g. a provider ever yielding a blank
@@ -237,6 +258,17 @@ if [ "$SESSION_COUNT" -gt 0 ]; then
   OBJECTIVE=$(_hb_objective "$INBOX_DIR" "$PICKED")
   _hb_emit skipped active_session "$OBJECTIVE" "$SEEN_COUNT" "$TRIAGED_JSON" "$PICKED" true
   exit 0
+fi
+
+# Cap gate: the cap bounds NEW layers, not fixes to open ones — a picked
+# stack-rework item is never blocked here even when the cap is reached.
+if [ "$STACK_CAP_REACHED" = "true" ]; then
+  PICKED_TYPE=$(inbox_get "$INBOX_DIR" "$PICKED" 2>/dev/null | jq -r '.type // empty') || PICKED_TYPE=""
+  if [ "$PICKED_TYPE" != "stack-rework" ]; then
+    OBJECTIVE=$(_hb_objective "$INBOX_DIR" "$PICKED")
+    _hb_emit skipped stack_cap_reached "$OBJECTIVE" "$SEEN_COUNT" "$TRIAGED_JSON" "$PICKED" false
+    exit 0
+  fi
 fi
 
 OBJECTIVE=$(_hb_objective "$INBOX_DIR" "$PICKED")
