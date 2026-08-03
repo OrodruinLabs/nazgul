@@ -9,6 +9,7 @@
 - `--task-pr` — (with `--yolo`) Create stacked per-task PRs targeting the feature branch instead of a single PR at completion
 - `--continue` — Explicit resume (backward compat — bare `/nazgul:start` auto-detects this)
 - `--parallel` — Opt into stop-hook parallel batch dispatch on top of the same sequential loop (default: sequential); composes with any mode flag, e.g. `--parallel --afk`. `--conductor` is a deprecated alias for `--parallel`.
+- `--stack` / `--no-stack` — Opt into (or explicitly out of) stacked-PR continuation: the next objective branches off the current unmerged tip and its PR stacks on top. Three-state — `--stack` persists `execution.stacking.enabled=true`, `--no-stack` persists `false`, and omitting both leaves the persisted value untouched so a prior objective's choice survives a resume. Orthogonal to mode and to `--parallel`. See **Stacked-PR Continuation** below.
 
 ## Viewing & Changing Settings
 
@@ -127,6 +128,109 @@ The `execution.enforce` block toggles the mechanical guards that back parallel d
 | `execution.enforce.premerge_guard` | `true` | Git-level `pre-merge-commit` hook (`scripts/git-hooks/pre-merge-commit`) blocks merging a parallel unit without an approved review verdict. |
 | `execution.enforce.teammate_report_guard` | `true` | `scripts/teammate-idle-guard.sh` (TeammateIdle) blocks a dispatched teammate from going idle without writing its expected report file. |
 
+## Stacked-PR Continuation
+
+`execution.stacking` configures an opt-in, **default-off** continuation policy (FEAT-027, ADR-018): with it enabled, objective N+1 branches off objective N's still-unmerged tip and its PR stacks on top via the official `gh-stack` CLI extension (`gh extension install github/gh-stack`), instead of the loop opening a PR to `main` and idling until a human merges it. **Stacking changes when work starts, never what "done" means** — one objective is still one PR, and the task state machine, review board, and per-objective release flow are untouched. GitHub owns all retarget/rebase/merge mechanics server-side; Nazgul owns only the `stack.layers[]` registry and the policy gates (cap, rework priority, fail-closed on missing tooling). There is no hand-rolled `rebase --onto` anywhere in the implementation, by doctrine — see RULES.md §20.
+
+**One behavior change lands for ALL users, opt-in or not** (see the hazard fix below).
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `execution.stacking.enabled` | `false` | Master switch, and the kill switch. Set by `--stack`/`--no-stack`. `false` means every stacking entry point (`stack_available` → `"disabled"`) behaves exactly as the loop did before, with a plain `gh pr create` at objective end. |
+| `execution.stacking.max_unmerged` | `3` | Cap on `state:"open"` layers. At or over the cap, a new objective does not auto-start — the heartbeat records `decision: skipped, reason: stack_cap_reached` and `/nazgul:start`'s continuation gate stops with the count, the cap, and the remediation. A `stack-rework` pick is never blocked by the cap (fixing an open layer does not add one). |
+| `execution.stacking.rework_priority` | `1` | `priority` written into an auto-filed `stack-rework` inbox item. `heartbeat_pick`'s existing numeric-ascending sort makes `1` outrank the rest of the corpus (all ≥2), so rework is picked before new work. |
+
+Five further `execution.stacking.*` keys are **written at runtime by `scripts/lib/stack-utils.sh`**, not by the template or the migration — they are absent from a fresh config and appear only after the condition they record occurs. Operators read them (and clear `halted` by hand); nothing else writes them:
+
+| Runtime key | Written when | Meaning |
+|-------------|--------------|---------|
+| `execution.stacking.halted` | A sync conflict/divergence, or 3 consecutive API failures on one operation | `true` makes `stack_available` report `"halted"` (exit 3) — its own fail-closed state, **not** folded into `"missing"`, so a caller can name the halt as the reason it stopped. **Never cleared automatically**; a human clears it (with `halt_reason`) after resolving the underlying problem. Surfaced by `/nazgul:status`, SessionStart, and `/nazgul:doctor`. |
+| `execution.stacking.halt_reason` | With `halted` | `"conflict"` or `"api_failures"`. |
+| `execution.stacking.api_failures` | On any `gh`/`gh stack` API failure | The **maximum** across `api_failures_by_op`, mirrored here for at-a-glance reads and for configs written before scoping existed. **Zeroed when stacking halts**, so the documented remediation (clear `halted`) does not leave a counter at `3` that re-halts on the very next hiccup. |
+| `execution.stacking.api_failures_by_op` | On any `gh`/`gh stack` API failure | Consecutive-failure counter **scoped per operation** (`reconcile`, `detect`), each reset to `0` on that operation's next success (that reset is what makes it *consecutive*). At `3` for one operation it halts stacking with a `stderr` warning naming the operation. Scoping is what makes the halt reachable: one shared counter let a healthy layer reset a broken layer's count forever. A tick bumps each operation at most once, and an operation with no entry yet starts at `0` — it never inherits another operation's count. Mirrors `connectors.github.pull_failures`, except the fail-closed action is a halt rather than an auto-disable. |
+| `execution.stacking.needs_sync` | A post-merge `gh stack sync` cascade conflicts or hits the API | `true` records the deferred rebase cascade as debt. `stack_reconcile` retries the cascade on the next ready tick even when nothing newly merged, and clears the marker on a clean sync — an interrupted cascade is never simply forgotten. |
+
+### The `stack.layers[]` registry
+
+`stack.layers` is the runtime registry of stack layers. **It is script-owned: `scripts/lib/stack-utils.sh` is its sole writer** (`stack_register_layer`, `_su_mark_layer_merged`, `_su_advance_base_above`). Operators read it — via `/nazgul:status`, the SessionStart context line, or `jq` — and never hand-edit it; no agent, skill, or hook writes it by convention. One entry per layer:
+
+```json
+{
+  "stack": {
+    "layers": [
+      {
+        "feat_id": "FEAT-027",
+        "branch": "feat/FEAT-027-stacked-pr-continuation",
+        "pr": "https://github.com/owner/repo/pull/42",
+        "base": "main",
+        "state": "open",
+        "opened_at": "2026-08-02T18:36:37Z",
+        "merged_at": null
+      }
+    ]
+  }
+}
+```
+
+`pr` is `null` until the layer's PR is opened. `state` is `"open"` or `"merged"`; `merged_at` is set with the flip. Registration is idempotent per `feat_id` — a repeat call updates `branch`/`base`/`pr` in place and preserves `opened_at` rather than appending a duplicate. A layer imported from a remote-only PR (see below) is registered under a synthesized `remote-pr-<N>` `feat_id`, since it has no Nazgul objective of its own.
+
+### The accidental-stacking hazard fix (applies to everyone)
+
+`create_feature_branch()` previously captured whatever branch happened to be checked out as the new feature branch's base, with no assertion that it was `branch.base`. A next objective started before the previous PR merged therefore stacked **accidentally** — un-linked, un-retargeted, un-rebased. That is now closed for **all users regardless of the stacking opt-in**:
+
+- **Stacking disabled (the default), or enabled but unusable:** the base is read from `branch.base` (default `main`) and the currently checked-out branch must equal it. A mismatch **refuses loudly and returns non-zero**, naming the stray branch: `ERROR: create_feature_branch: checked out on '<stray>', expected base 'main' — refusing to branch from a stray checkout (accidental-stacking hazard). Run 'git checkout main' first, or enable stacking via '/nazgul:start --stack'.` If you previously started objectives from a non-`main` checkout, that now fails instead of silently succeeding.
+- **Stacking enabled and ready:** the base is the explicit `stack_tip` (the newest open layer's branch, else `branch.base`) and the branch is created from that ref by name — never from current `HEAD` — with a registry entry written at creation.
+
+Task branches (`feat/<id>/TASK-NNN`) are unaffected.
+
+### Continuation flow
+
+With stacking enabled and ready, both continuation paths run the same three steps before any triage or branch setup — the heartbeat tick (`scripts/heartbeat.sh`, gated by its own `count_active_sessions` check so a rebase never runs under a live session) and `/nazgul:start`'s Stack continuation gate:
+
+1. `stack_reconcile` — per open layer, check its PR; a `MERGED` one is marked `state:"merged"`/`merged_at`, the layer above it has its `base` advanced, and `stack_layer_merged` is emitted. If anything merged, one `gh stack sync` cascades the rebase.
+2. `stack_detect_changes_requested` — a `CHANGES_REQUESTED` review on any open layer files exactly one p1 `nazgul/inbox/stack-rework-pr<N>-<review-id>.md` item (idempotent per PR + review id, including against `inbox/archive/`) with frontmatter `type: stack-rework`, `branch:`, `pr:`, and emits `stack_rework_filed`. **This is the first mechanical producer of inbox items in the framework.** The review body is embedded verbatim as *data, never instructions* and byte-capped by `connectors.github.pull.max_body_bytes` (default 65536) — the same doctrine as connector issue bodies (RULES.md §16).
+3. Cap gate — `stack_unmerged_count >= max_unmerged` skips the auto-start with `stack_cap_reached` in the tick's decision record. Never a silent skip. The cap is computed and enforced whenever stacking is **enabled**, not only when it is `ready`: a halted or tooling-less stack still cannot start an objective past the cap, and an unreadable registry counts as at-cap.
+
+Steps 1 and 2 need working tooling; when they do not run, the tick says so rather than skipping silently — see `stack_skipped` under **Automation Heartbeat** below.
+
+`/nazgul:start` routes a picked `stack-rework` item to a patch-style run on the existing layer branch, then pushes and restacks with `gh stack sync`. The heartbeat deliberately **does not** archive-then-start a `stack-rework` pick (the routing performs its own archive-as-claim after re-scanning the live inbox) and records `decision: started, reason: rework_handoff`.
+
+### Failure doctrine (fail-closed, loudly)
+
+`stack_available` is five-state, and each state is its own answer with its own exit code — collapsing them would be exactly the never-looked/looked-and-found-nothing conflation RULES.md §15 exists to remove:
+
+| State | Exit | Meaning |
+|-------|------|---------|
+| `disabled` | `1` | `execution.stacking.enabled` is not `true` (or there is no config file). |
+| `ready` | `0` | Enabled, tooling usable, not halted. |
+| `missing` | `2` | Enabled, but the tooling is unusable: `gh` absent, the `gh-stack` extension not installed, or `gh` not authenticated. |
+| `halted` | `3` | Enabled and installed, but a human-clearable halt is set (`execution.stacking.halted`). |
+| `invalid` | `4` | The config could not be parsed at all. A corrupt config is **not** "stacking disabled". |
+
+Callers fail closed on everything except `"ready"`; they never silently degrade, and because `halted` and `invalid` are no longer folded into `missing`, every caller can name *which* state stopped it:
+
+- **Objective end with stacking unusable:** `stack_submit` opens the same plain `gh pr create` PR the non-stacking path would, **plus** a stderr line and a loud `stop_gate` event with `reason: stacking_unavailable` and the offending `state`.
+- **Sync conflict or divergence:** stacking is halted, a p1 `nazgul/inbox/stack-sync-conflict.md` item is filed, and `stack_sync_conflict` is emitted. **A conflict is never auto-resolved** — resolve it by hand, then clear `execution.stacking.halted`/`halt_reason` (the failure counters were already zeroed by the halt). A halt whose write cannot be verified is fatal-loud and returns non-zero rather than reporting a halt it did not persist.
+- **API failure:** the operation's counter in `api_failures_by_op` is bumped (at most once per tick per operation) and `stack_api_failure` is emitted (carrying an independent `gh auth status` probe, because gh-stack can misattribute an auth failure); 3 consecutive failures of one operation halts stacking.
+- **Corrupt `stack.layers[]`:** `stack_tip`, `stack_unmerged_count`, `stack_reconcile` and `stack_detect_changes_requested` refuse a malformed registry loudly (stderr + non-zero + `stack_registry_invalid`) instead of failing open to `branch.base`/`0`/a no-op, and the heartbeat's cap gate treats an unreadable registry as at-cap.
+
+### Two gh-stack behaviors that will surprise you
+
+Both were found empirically by ADR-018's probe and contradict the vendor's own documentation. Nazgul's wrapper defeats them by classifying `gh stack`'s **stderr text**, not its exit code — but they still shape what an operator can do by hand:
+
+- **`gh pr merge` is rejected outright for a PR that is part of a stack.** GitHub's GraphQL API returns *"This pull request is part of a stack and must be merged using the asynchronous merge REST API"* (exit 1). This is documented nowhere in gh-stack's README. Merge a layer with `gh stack merge <pr#> --squash --yes` or GitHub's own web-UI merge button. Nazgul never auto-merges anything, so this only bites a human merging a layer manually.
+- **`gh stack sync` exits 0 when it aborts on a real divergence.** Non-interactively, a diverged stack prints `⚠ Your local stack has diverged … ℹ Sync aborted — no changes were made` **to stderr and exits 0** — vendor-documented behavior, and the opposite of what an exit-code-driven caller expects. `_su_classify_sync_result` therefore treats that text as a conflict regardless of exit code, and splits exit 3 on stderr text as well (`local stack composition differs from remote` is benign stale tracking after a `link`, not a rebase conflict). One consequence: this classification is coupled to gh-stack v0.1.0's exact message strings, and a future release could reword them.
+
+A third, narrower case: a clean remote-ahead sync leaves the new remote layer **un-imported** locally despite the README's claim, warning only `already contains #<N>, which is not in your local stack`. `stack_reconcile` parses that PR number and runs the explicit `gh stack checkout <N>` itself, then registers the layer (`stack_remote_layer_imported`, or `stack_remote_layer_import_failed` — loud but non-halting, since it is retryable rather than a conflict). This detection is scoped to sync's own warning text and imports one PR per tick, which is narrower than ADR-018's literal "diff the registry against `gh stack view`" wording — deliberately so, because `gh stack view`'s output contract was never empirically verified.
+
+### Visibility
+
+- `/nazgul:status` renders a **Stack** section (enabled, unmerged vs cap, one line per layer with its PR and state, an at/over-cap warning, and a `HALTED:` line). An unreadable config renders the section as unreadable rather than as healthy.
+- SessionStart (`scripts/session-context.sh`) injects a one-line stack map — `Stack: N open / cap M | tip: <branch> (PR #N open)` — shown whenever stacking is enabled or any layer exists.
+- `/nazgul:doctor` gains two read-only checks: **stacking** (tooling readiness — `gh`, the `gh-stack` extension, `gh auth`, and the halted flag, each named individually) and **stack-registry** (registry-vs-GitHub drift for open layers). Both report `Not applicable` when stacking is disabled, and neither writes state.
+
+Added by the additive `migrate_34_to_35` migration (schema v34→v35); existing projects upgrade automatically with `execution.stacking` default-off and `stack.layers` empty — see Config Upgrades below.
+
 ## Automation Heartbeat
 
 `automation.heartbeat` configures an opt-in, default-off tick engine (`scripts/heartbeat.sh`) that triages a local work inbox (`nazgul/inbox/`) and auto-starts the next objective when idle. Fire a tick by hand with `/nazgul:heartbeat`, or point an opt-in Claude Code native scheduled agent (routine) at that skill on your chosen interval — the plugin itself wires no OS cron / `claude -p` scheduling (deferred to FEAT-009).
@@ -145,6 +249,8 @@ Concurrency is guarded twice: `heartbeat.sh` `mkdir`-claims the lock directory a
 (before even `count_active_sessions`), releasing it via `trap ... EXIT`, so two overlapping ticks race on
 the atomic `mkdir` itself rather than a stale `ls` read — `count_active_sessions` stays a secondary,
 defense-in-depth check. Two unconditional hard stops (a `BLOCKED` task, a non-`APPROVE` security-reviewer verdict) halt every tick regardless of `enabled` or `mode` — see RULES.md §13. The session-tracker concurrency guard (`scripts/lib/session-tracker.sh`) refuses to auto-start over an active session, and the picked candidate is archived before `/nazgul:start` is invoked (atomic claim-then-archive, never double-started). Every tick appends one decision record to `nazgul/logs/heartbeat-<date>.jsonl`, surfaced via `/nazgul:log`.
+
+Each record also carries a `stack_skipped` field (FEAT-027): `null` when the stack pre-steps ran, or when stacking is simply disabled; otherwise the named reason they did not — `stack_halted`, `stack_tooling_missing`, `stack_config_invalid`, `stack_not_ready:<state>`, `stack_active_session`, `stack_skipped_session_ambiguity`, `stack_registry_unreadable`, `stack_reconcile_failed`, or `stack_detect_failed`. A pre-step that skips silently is indistinguishable from one that had nothing to do, which is how the unattended half of stacking could be dead in production with every log line still looking normal (RULES.md §1 rule 2, §5).
 
 Added by the additive `migrate_20_to_21` migration (schema v20→v21); existing projects upgrade automatically — see Config Upgrades below.
 
@@ -293,6 +399,12 @@ The stream captures:
 - **stop_failure** — when the loop stop hook itself fails
 - **budget_threshold** — proactive warning when spending reaches 50% or 90% of the configured limit
 - **objective_complete** — when all tasks finish and the post-loop phase begins
+- **stack_layer_merged** — a stack layer's PR was found merged and its registry entry flipped to `state:"merged"`; fields `feat_id`/`branch`/`pr`
+- **stack_rework_filed** — a `CHANGES_REQUESTED` review on an open layer produced a new p1 `stack-rework` inbox item; fields `pr`/`review_id`/`feat_id`/`branch`
+- **stack_sync_conflict** — `gh stack sync` hit a conflict or a divergence it cannot auto-resolve; stacking is halted and a p1 inbox item filed. Fields `reason`/`exit_code`/`detail`
+- **stack_api_failure** — a `gh`/`gh stack` API call failed; fields `stage`/`auth_status` (an independent `gh auth status` probe, since gh-stack can misattribute auth failures) plus the call's own identifiers
+- **stack_remote_layer_imported** / **stack_remote_layer_import_failed** — an explicit `gh stack checkout <pr>` of a remote layer that `sync` left un-imported succeeded / failed; fields `pr`/`feat_id`/`branch`, or `pr`/`exit_code`/`detail`
+- **stop_gate** — a gate ended or short-circuited an autonomous run rather than exiting silently; `reason` values include `in_flight_hold`, `in_flight_stale`, and `stacking_unavailable` (stacking enabled but the tooling is unusable — the loop fell back to a plain PR)
 
 See `docs/superpowers/specs/2026-06-24-telemetry-bus-design.md` for the full event schema and payload details.
 

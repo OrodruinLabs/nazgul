@@ -129,6 +129,51 @@ assert_file_exists "start-failed: candidate relocated to failed/ (MF-044)" \
   "$TEST_DIR/nazgul/inbox/failed/cand.json"
 teardown_temp_dir
 
+# --- skipped/stack_cap_reached (TASK-008): open layers at cap, a non-rework
+# candidate picked -> record extends the `skipped` decision with the new
+# reason value; every other field shape matches the existing skip paths ---
+FAKEBIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-fakebin-XXXXXX")
+cat > "$FAKEBIN/gh" << 'EOF'
+#!/usr/bin/env bash
+sub="${1:-}"; shift || true
+case "$sub" in
+  extension)
+    [ "${1:-}" = "list" ] && { printf 'gh stack\tgithub/gh-stack\tv0.1.0\n'; exit 0; }
+    exit 1 ;;
+  auth)
+    [ "${1:-}" = "status" ] && exit 0
+    exit 1 ;;
+  pr)
+    [ "${1:-}" = "view" ] && { printf '{"number":1,"state":"OPEN","mergedAt":null,"reviewDecision":null,"reviews":[]}\n'; exit 0; }
+    exit 1 ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$FAKEBIN/gh"
+
+setup_temp_dir
+setup_nazgul_dir
+create_config '.automation.heartbeat.enabled = true'
+jq '.execution.stacking.enabled = true
+  | .execution.stacking.max_unmerged = 1
+  | .stack.layers = [{feat_id:"FEAT-800", branch:"feat/FEAT-800-x", pr:"https://github.com/o/r/pull/800", base:"main", state:"open", opened_at:"2026-08-02T00:00:00Z", merged_at:null}]
+' "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.tmp" \
+  && mv "$TEST_DIR/nazgul/config.json.tmp" "$TEST_DIR/nazgul/config.json"
+mkdir -p "$TEST_DIR/nazgul/inbox"
+jq -n '{title:"FEAT-999 test objective", body:"do the thing", priority:5, type:"feature"}' > "$TEST_DIR/nazgul/inbox/cand.json"
+PATH="$FAKEBIN:$PATH" NAZGUL_HEARTBEAT_START_CMD="true" bash "$REPO_ROOT/scripts/heartbeat.sh"
+LOG=$(latest_log)
+assert_valid_ndjson "stack_cap_reached" "$LOG" 1
+assert_eq "stack_cap_reached: decision" "$(line_field "$LOG" 1 '.decision')" "skipped"
+assert_eq "stack_cap_reached: reason" "$(line_field "$LOG" 1 '.reason')" "stack_cap_reached"
+assert_eq "stack_cap_reached: picked" "$(line_field "$LOG" 1 '.picked')" "cand.json"
+assert_eq "stack_cap_reached: seen is 1" "$(line_field "$LOG" 1 '.seen')" "1"
+assert_eq "stack_cap_reached: session_active false" "$(line_field "$LOG" 1 '.session_active')" "false"
+assert_eq "stack_cap_reached: started is false" "$(line_field "$LOG" 1 '.started')" "false"
+assert_eq "stack_cap_reached: archived_to is null" "$(line_field "$LOG" 1 '.archived_to')" "null"
+teardown_temp_dir
+rm -rf "$FAKEBIN"
+
 # --- hard_stop: BLOCKED task, no inbox listing performed ---
 setup_temp_dir
 setup_nazgul_dir

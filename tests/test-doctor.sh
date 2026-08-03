@@ -79,6 +79,8 @@ assert_contains "healthy fixture: git-hooks pass (not applicable)" "$OUT" "$(pri
 assert_contains "healthy fixture: invoking-shell pass" "$OUT" "$(printf 'pass\tinvoking-shell')"
 assert_contains "healthy fixture: nazgul-dir-env pass" "$OUT" "$(printf 'pass\tnazgul-dir-env')"
 assert_contains "healthy fixture: config-schema pass" "$OUT" "$(printf 'pass\tconfig-schema')"
+assert_contains "healthy fixture: stacking pass (not applicable)" "$OUT" "$(printf 'pass\tstacking')"
+assert_contains "healthy fixture: stack-registry pass (not applicable)" "$OUT" "$(printf 'pass\tstack-registry')"
 assert_contains "healthy fixture: stdin-hazard note always printed" "$OUT" "$(printf 'note\tstdin-hazard')"
 assert_not_contains "healthy fixture: no fail lines" "$OUT" "$(printf 'fail\t')"
 assert_not_contains "healthy fixture: no warn lines" "$OUT" "$(printf 'warn\t')"
@@ -419,6 +421,330 @@ assert_contains "nazgul-dir-env set fixture: states it has no effect" "$OUT" "ha
 assert_contains "nazgul-dir-env set fixture: shows the corrected CLAUDE_PROJECT_DIR invocation with the PROJECT ROOT (trailing /nazgul stripped)" "$OUT" "CLAUDE_PROJECT_DIR=$TEST_DIR ..."
 assert_not_contains "nazgul-dir-env set fixture: never suggests the doubled <root>/nazgul path as CLAUDE_PROJECT_DIR" "$OUT" "CLAUDE_PROJECT_DIR=$TEST_DIR/nazgul"
 assert_contains "nazgul-dir-env set fixture: states CLAUDE_PROJECT_DIR must be one level above nazgul/" "$OUT" "one level above nazgul/"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# (h)/(i) stacking + stack-registry: FAKEBIN gh stub covering extension list
+# and pr view, on top of the minimal auth-status variant above.
+# ---------------------------------------------------------------------------
+
+FAKEBIN_STACK=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-doctor-stack-fakebin-XXXXXX")
+cat > "$FAKEBIN_STACK/gh" << 'FAKE_GH_STACK_EOF'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "auth status") [ "${NAZGUL_TEST_GH_AUTH:-ok}" = "ok" ] && exit 0 || exit 1 ;;
+  "extension list")
+    [ "${NAZGUL_TEST_GH_STACK_EXT:-yes}" = "yes" ] && printf 'gh stack\tgithub/gh-stack\t%s\n' "${NAZGUL_TEST_GH_STACK_VER-v0.1.0}"
+    exit 0 ;;
+  "pr view")
+    [ "${NAZGUL_TEST_GH_PR_STATE:-OPEN}" = "FAIL" ] && exit 1
+    printf '%s\n' "${NAZGUL_TEST_GH_PR_STATE:-OPEN}"
+    exit 0 ;;
+esac
+exit 0
+FAKE_GH_STACK_EOF
+chmod +x "$FAKEBIN_STACK/gh"
+
+STACK_LAYER_OPEN='.stack.layers = [{"feat_id":"FEAT-100","branch":"feat/x","pr":"https://github.com/o/r/pull/1","base":"main","state":"open","opened_at":"2026-01-01T00:00:00Z","merged_at":null}]'
+
+# --- stacking disabled: both checks not-applicable, no gh call needed ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false'
+OUT=$(PATH="$(_dr_shim_path dirname git grep sed sort tail cat bash jq)" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "stacking-disabled fixture: aggregate exit 0" "$EXIT" 0
+assert_contains "stacking-disabled fixture: stacking not applicable" "$OUT" "Not applicable — execution.stacking.enabled is false."
+assert_contains "stacking-disabled fixture: stack-registry not applicable" "$OUT" "Not applicable — execution.stacking.enabled is false."
+teardown_temp_dir
+
+# --- stacking enabled, gh entirely absent from PATH ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+OUT=$(PATH="$(_dr_shim_path dirname git grep sed sort tail cat bash jq)" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "stacking gh-missing fixture: aggregate exit 1 (warn)" "$EXIT" 1
+assert_contains "stacking gh-missing fixture: stacking warns" "$OUT" "$(printf 'warn\tstacking')"
+assert_contains "stacking gh-missing fixture: remediation names gh" "$OUT" "gh is not on PATH"
+teardown_temp_dir
+
+# --- stacking enabled, gh present but the gh-stack extension is not installed ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+OUT=$(NAZGUL_TEST_GH_STACK_EXT=no PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "stacking extension-missing fixture: aggregate exit 1 (warn)" "$EXIT" 1
+assert_contains "stacking extension-missing fixture: stacking warns" "$OUT" "$(printf 'warn\tstacking')"
+assert_contains "stacking extension-missing fixture: remediation names gh-stack install" "$OUT" "gh extension install github/gh-stack"
+teardown_temp_dir
+
+# --- stacking enabled, extension present but gh is not authenticated ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+OUT=$(NAZGUL_TEST_GH_AUTH=fail PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "stacking not-authed fixture: aggregate exit 1 (warn)" "$EXIT" 1
+assert_contains "stacking not-authed fixture: stacking warns" "$OUT" "$(printf 'warn\tstacking')"
+assert_contains "stacking not-authed fixture: remediation names gh auth login" "$OUT" "gh auth login"
+teardown_temp_dir
+
+# --- stacking enabled and halted: warns naming the halt reason, before any gh call ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' \
+  '.execution.stacking.halted = true' '.execution.stacking.halt_reason = "sync conflict on FEAT-100"'
+OUT=$(PATH="$(_dr_shim_path dirname git grep sed sort tail cat bash jq)" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "stacking halted fixture: aggregate exit 1 (warn)" "$EXIT" 1
+assert_contains "stacking halted fixture: stacking warns" "$OUT" "$(printf 'warn\tstacking')"
+assert_contains "stacking halted fixture: names the halt reason" "$OUT" "sync conflict on FEAT-100"
+teardown_temp_dir
+
+# --- stacking enabled and fully ready (gh, extension, auth) -> pass ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "stacking ready fixture: aggregate exit 0" "$EXIT" 0
+assert_contains "stacking ready fixture: stacking passes" "$OUT" "$(printf 'pass\tstacking')"
+teardown_temp_dir
+
+# --- stack-registry: open layer, PR still OPEN on GitHub -> pass, no drift ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' "$STACK_LAYER_OPEN"
+OUT=$(NAZGUL_TEST_GH_PR_STATE=OPEN PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "stack-registry no-drift fixture: aggregate exit 0" "$EXIT" 0
+assert_contains "stack-registry no-drift fixture: passes" "$OUT" "$(printf 'pass\tstack-registry')"
+teardown_temp_dir
+
+# --- stack-registry: open layer, PR MERGED on GitHub -> drift warn naming the layer ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' "$STACK_LAYER_OPEN"
+OUT=$(NAZGUL_TEST_GH_PR_STATE=MERGED PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "stack-registry drift fixture: aggregate exit 1 (warn)" "$EXIT" 1
+assert_contains "stack-registry drift fixture: warns" "$OUT" "$(printf 'warn\tstack-registry')"
+assert_contains "stack-registry drift fixture: names the drifted layer" "$OUT" "FEAT-100(MERGED)"
+assert_contains "stack-registry drift fixture: remediation points at reconcile" "$OUT" "reconcile the stack registry"
+teardown_temp_dir
+
+# --- stack-registry: open layer, PR CLOSED (unmerged) on GitHub -> drift warn too ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' "$STACK_LAYER_OPEN"
+OUT=$(NAZGUL_TEST_GH_PR_STATE=CLOSED PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "stack-registry closed-drift fixture: aggregate exit 1 (warn)" "$EXIT" 1
+assert_contains "stack-registry closed-drift fixture: warns" "$OUT" "$(printf 'warn\tstack-registry')"
+assert_contains "stack-registry closed-drift fixture: names the drifted layer" "$OUT" "FEAT-100(CLOSED)"
+teardown_temp_dir
+
+# --- stack-registry: open layer with no recorded pr -> the ABANDONED-LAYER
+# condition, named as a warn (TASK-013). It is not "drift we couldn't assess":
+# nothing can ever mark a PR-less layer merged, so it counts against
+# max_unmerged forever and stack_tip keeps handing it out as the next base. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' \
+  '.stack.layers = [{"feat_id":"FEAT-101","branch":"feat/y","pr":null,"base":"main","state":"open","opened_at":"2026-01-01T00:00:00Z","merged_at":null}]'
+OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "stack-registry no-pr fixture: aggregate exit 1 (warn)" "$EXIT" 1
+assert_contains "stack-registry no-pr fixture: warns, naming the abandoned-layer condition" "$OUT" "Abandoned layer(s)"
+assert_contains "stack-registry no-pr fixture: names the layer" "$OUT" "FEAT-101"
+assert_not_contains "stack-registry no-pr fixture: never reports pass" "$OUT" "$(printf 'pass\tstack-registry')"
+assert_not_contains "stack-registry no-pr fixture: no longer downgraded to a non-blocking note" "$OUT" "$(printf 'note\tstack-registry')"
+teardown_temp_dir
+
+# --- stack-registry: gh unavailable to consult -> note, never a false pass ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' "$STACK_LAYER_OPEN"
+OUT=$(PATH="$(_dr_shim_path dirname git grep sed sort tail cat bash jq)" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "stack-registry gh-unavailable fixture: aggregate exit 1 (stacking check warns too)" "$EXIT" 1
+assert_contains "stack-registry gh-unavailable fixture: notes, never falsely passes" "$OUT" "$(printf 'note\tstack-registry')"
+assert_not_contains "stack-registry gh-unavailable fixture: never reports pass" "$OUT" "$(printf 'pass\tstack-registry')"
+teardown_temp_dir
+
+# --- stack-registry: PR unreadable from GitHub (API failure) -> note, never a false pass ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' "$STACK_LAYER_OPEN"
+OUT=$(NAZGUL_TEST_GH_PR_STATE=FAIL PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "stack-registry unreadable-api fixture: aggregate exit 0 (note is non-blocking)" "$EXIT" 0
+assert_contains "stack-registry unreadable-api fixture: notes, never falsely passes" "$OUT" "$(printf 'note\tstack-registry')"
+assert_not_contains "stack-registry unreadable-api fixture: never reports pass" "$OUT" "$(printf 'pass\tstack-registry')"
+teardown_temp_dir
+
+# --- stack-registry: stacking enabled but registry has no open layers -> not applicable ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "stack-registry empty-registry fixture: aggregate exit 0" "$EXIT" 0
+assert_contains "stack-registry empty-registry fixture: passes not applicable" "$OUT" "$(printf 'pass\tstack-registry')"
+assert_contains "stack-registry empty-registry fixture: states the reason" "$OUT" "no open entries"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# TASK-013 — RULES §15 verdicts for the two stacking checks. Each assertion
+# below was written against the PRE-FIX tree and observed to FAIL there.
+# ---------------------------------------------------------------------------
+
+# --- config exists but does not parse -> FAIL on both checks. Pre-fix _doc_cfg
+# swallowed the parse error and returned the caller's default, so an unreadable
+# config reported a confident "Not applicable — stacking.enabled is false" on
+# BOTH: never-looked presented as looked-and-found-nothing. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false'
+printf '{ "execution": { "stacking": ' > "$TEST_DIR/nazgul/config.json"
+OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "unparseable-config fixture: aggregate exit 2 (fail)" "$EXIT" 2
+assert_contains "unparseable-config fixture: stacking FAILS, never 'not applicable'" "$OUT" "$(printf 'fail\tstacking')"
+assert_contains "unparseable-config fixture: stack-registry FAILS too" "$OUT" "$(printf 'fail\tstack-registry')"
+assert_not_contains "unparseable-config fixture: never a false pass on stacking" "$OUT" "$(printf 'pass\tstacking')"
+assert_not_contains "unparseable-config fixture: never a false pass on stack-registry" "$OUT" "$(printf 'pass\tstack-registry')"
+teardown_temp_dir
+
+# --- stack.layers[] is the wrong JSON type -> WARN naming the corruption.
+# Pre-fix `[.stack.layers[]? | ...] | length` yielded 0 and the check reported
+# "no open entries" — corruption read as an empty stack. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' '.stack.layers = "corrupt"'
+OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "malformed-registry fixture: aggregate exit 1 (warn)" "$EXIT" 1
+assert_contains "malformed-registry fixture: stack-registry warns" "$OUT" "$(printf 'warn\tstack-registry')"
+assert_contains "malformed-registry fixture: names the corruption" "$OUT" "CORRUPT"
+assert_not_contains "malformed-registry fixture: never reports 'no open entries'" "$OUT" "no open entries"
+teardown_temp_dir
+
+# --- stacking disabled but open layers remain -> warn, not "not applicable".
+# Abandoned layers are invisible to every other surface while stacking is off,
+# and re-enabling counts them against max_unmerged immediately. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' "$STACK_LAYER_OPEN"
+OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "disabled-with-layers fixture: aggregate exit 1 (warn)" "$EXIT" 1
+assert_contains "disabled-with-layers fixture: stack-registry warns" "$OUT" "$(printf 'warn\tstack-registry')"
+assert_contains "disabled-with-layers fixture: names the leftover open entries" "$OUT" "still holds 1 open entry"
+assert_not_contains "disabled-with-layers fixture: no longer a bare 'not applicable' pass" "$OUT" "$(printf 'pass\tstack-registry')"
+teardown_temp_dir
+
+# --- api_failures at 1-2 (below the three-strikes halt) -> warn. Pre-fix the
+# counter was never mentioned at any level until it had already halted. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' \
+  '.execution.stacking.api_failures = 2'
+OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "api-failures fixture: aggregate exit 1 (warn)" "$EXIT" 1
+assert_contains "api-failures fixture: stacking warns before the halt, not after" "$OUT" "$(printf 'warn\tstacking')"
+assert_contains "api-failures fixture: names the counter and the threshold" "$OUT" "api_failures is 2"
+teardown_temp_dir
+
+# --- halted: the remediation must name the counter too, or clearing `halted`
+# alone re-halts on the next single API hiccup. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' \
+  '.execution.stacking.halted = true' '.execution.stacking.halt_reason = "conflict"'
+OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_contains "halted fixture: remediation names api_failures, not just the halted flag" "$OUT" "api_failures"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# TASK-014 — vendor-drift canary. stack-utils.sh classifies `gh stack sync`'s
+# outcome by matching gh-stack v0.1.0's exact stderr strings, and a reword in a
+# v0.1.x release turns a real divergence into a clean sync AND resets the
+# three-strikes counter — with the test suite still green, because the fixtures
+# are the code's own strings (audit-failpaths.md, top risk #1). Doctor already
+# reads the version in `gh extension list`'s row; it just never compared it.
+# ---------------------------------------------------------------------------
+
+# --- installed version matches the ADR pin -> pass, and SAYS which version ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "version canary (pinned v0.1.0): aggregate exit 0" "$EXIT" 0
+assert_contains "version canary (pinned v0.1.0): stacking still passes" "$OUT" "$(printf 'pass\tstacking')"
+assert_contains "version canary (pinned v0.1.0): the pass names the version it checked" "$OUT" "gh-stack v0.1.0"
+teardown_temp_dir
+
+# --- a different installed version -> warn naming both versions, the coupled
+# strings, and where they are matched ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+OUT=$(NAZGUL_TEST_GH_STACK_VER=v0.2.0 PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "version canary (drifted v0.2.0): aggregate exit 1 (warn)" "$EXIT" 1
+assert_contains "version canary (drifted v0.2.0): stacking warns" "$OUT" "$(printf 'warn\tstacking')"
+assert_contains "version canary (drifted v0.2.0): names the installed version" "$OUT" "gh-stack v0.2.0 is installed"
+assert_contains "version canary (drifted v0.2.0): names the pinned version" "$OUT" "ADR-018 pinned v0.1.0"
+assert_contains "version canary (drifted v0.2.0): names the string-coupling risk" "$OUT" "diverged from the stack on GitHub"
+assert_contains "version canary (drifted v0.2.0): points at the classifier that does the matching" "$OUT" "_su_classify_sync_result"
+assert_contains "version canary (drifted v0.2.0): points at ADR-018 §4" "$OUT" "ADR-018 §4"
+assert_not_contains "version canary (drifted v0.2.0): never a pass on a version nobody probed" "$OUT" "$(printf 'pass\tstacking')"
+teardown_temp_dir
+
+# --- the row carries no version at all: the canary could not run. That is not
+# "matches the pin" — it is reported as its own answer (RULES §15). ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+OUT=$(NAZGUL_TEST_GH_STACK_VER= PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "version canary (no version in the row): aggregate exit 0 (note is non-blocking)" "$EXIT" 0
+assert_contains "version canary (no version in the row): notes" "$OUT" "$(printf 'note\tstacking')"
+assert_contains "version canary (no version in the row): says the canary could not run" "$OUT" "canary could NOT run"
+assert_not_contains "version canary (no version in the row): never a pass claiming the version was checked" "$OUT" "$(printf 'pass\tstacking')"
+teardown_temp_dir
+
+rm -rf "$FAKEBIN_STACK"
+
+# --- Zero-write guarantee extended: doctor never writes when the new checks
+# actually fire (stacking enabled, ready, an open layer to consult) ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' "$STACK_LAYER_OPEN"
+BEFORE_STACK_ZW=$(_dr_snapshot "$TEST_DIR/nazgul")
+FAKEBIN_STACK2=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-doctor-stack-fakebin2-XXXXXX")
+cat > "$FAKEBIN_STACK2/gh" << 'FAKE_GH_STACK_EOF2'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "auth status") exit 0 ;;
+  "extension list") printf 'gh stack\tgithub/gh-stack\tv0.1.0\n'; exit 0 ;;
+  "pr view") printf 'OPEN\n'; exit 0 ;;
+esac
+exit 0
+FAKE_GH_STACK_EOF2
+chmod +x "$FAKEBIN_STACK2/gh"
+PATH="$FAKEBIN_STACK2:$PATH" "$DOCTOR" >/dev/null 2>&1
+AFTER_STACK_ZW=$(_dr_snapshot "$TEST_DIR/nazgul")
+assert_eq "stacking zero-write guarantee: nazgul/ snapshot identical before/after a run with stacking checks firing" \
+  "$AFTER_STACK_ZW" "$BEFORE_STACK_ZW"
+rm -rf "$FAKEBIN_STACK2"
 teardown_temp_dir
 
 report_results

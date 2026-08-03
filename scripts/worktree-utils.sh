@@ -26,6 +26,12 @@ _WU_GIT_HOOKS_LIB="$_WU_PLUGIN_ROOT/scripts/lib/git-hooks.sh"
 _WU_NAZGUL_ROOT_LIB="$_WU_PLUGIN_ROOT/scripts/lib/nazgul-root.sh"
 # shellcheck source=./lib/nazgul-root.sh
 [ -f "$_WU_NAZGUL_ROOT_LIB" ] && source "$_WU_NAZGUL_ROOT_LIB"
+# Optional: stacking (FEAT-027). Tolerate absence — non-stacking flows (the
+# default) never require it, so a deployment missing this lib still works;
+# create_feature_branch treats an undefined stack_available as "disabled".
+_WU_STACK_UTILS_LIB="$_WU_PLUGIN_ROOT/scripts/lib/stack-utils.sh"
+# shellcheck source=./lib/stack-utils.sh
+[ -f "$_WU_STACK_UTILS_LIB" ] && source "$_WU_STACK_UTILS_LIB"
 
 slugify_objective() {
   local input="$1"
@@ -76,10 +82,59 @@ create_feature_branch() {
   fi
 
   local branch_name="feat/${branch_component}-${slug}"
-  local base_branch
-  base_branch=$(git -C "$project_root" branch --show-current 2>/dev/null || echo "main")
   local main_worktree_path
   main_worktree_path=$(cd "$project_root" && pwd)
+
+  # Stack-aware base selection (FEAT-027 TASK-006, ADR-018). Prior behavior
+  # captured whatever branch happened to be checked out with no assertion it
+  # was the intended base — the accidental-stacking hazard the spec's
+  # Purpose section calls out. stack_available is undefined when
+  # stack-utils.sh wasn't sourced (missing lib) — treated the same as
+  # "disabled".
+  local stack_state="disabled"
+  if declare -F stack_available >/dev/null 2>&1; then
+    stack_state=$(stack_available "$config") || true
+  fi
+
+  local base_branch
+  if [ "$stack_state" = "ready" ]; then
+    # Stacking on and ready: base is the explicit stack tip, never whatever
+    # is checked out — create from this ref below, not current HEAD. A tip the
+    # registry cannot answer for is a refusal, not a fallback.
+    if ! base_branch=$(stack_tip "$config"); then
+      echo "ERROR: create_feature_branch: stack_tip refused to answer (see the stack-utils diagnostic above) — refusing to branch from a guessed base." >&2
+      return 1
+    fi
+  else
+    # Disabled, or enabled but unusable (tooling missing, halted, or an
+    # unparseable config): fail closed to today's non-stacking contract. Assert
+    # reality matches intent instead of trusting whatever is checked out — this
+    # is the hazard fix, and it ships for ALL users regardless of the stacking
+    # opt-in.
+    #
+    # The degradation is announced on stderr FIRST and unconditionally. It used
+    # to be an emit_event alone, which no-ops whenever NAZGUL_DIR is unset (the
+    # normal case at this function's skill call site) — and when the checkout
+    # already matched the base, the branch was created against `main` with the
+    # registry still recording open layers and nothing said at all.
+    case "$stack_state" in
+      missing|halted|invalid)
+        echo "WARNING: create_feature_branch: execution.stacking is enabled but unusable (stack_available: $stack_state) — this objective's branch is being created against '$(jq -r '.branch.base // "main"' "$config" 2>/dev/null)' as an ORDINARY (unstacked) branch. Run /nazgul:doctor to see which precondition failed." >&2
+        if declare -F _su_emit >/dev/null 2>&1; then
+          _su_emit "stop_gate" reason "stacking_unavailable" state "$stack_state" phase "create_feature_branch" feat_id "$feat_id"
+        elif declare -F emit_event >/dev/null 2>&1; then
+          emit_event "stop_gate" reason "stacking_unavailable" state "$stack_state" phase "create_feature_branch" feat_id "$feat_id"
+        fi
+        ;;
+    esac
+    base_branch=$(jq -r '.branch.base // "main"' "$config" 2>/dev/null) || base_branch="main"
+    local current_branch
+    current_branch=$(git -C "$project_root" branch --show-current 2>/dev/null || echo "")
+    if [ "$current_branch" != "$base_branch" ]; then
+      echo "ERROR: create_feature_branch: checked out on '$current_branch', expected base '$base_branch' — refusing to branch from a stray checkout (accidental-stacking hazard). Run 'git checkout $base_branch' first, or enable stacking via '/nazgul:start --stack'." >&2
+      return 1
+    fi
+  fi
 
   # Config must record OBSERVED state, not intended state (ADR-009): verify
   # the ref name, the checkout, and the branch's existence before writing
@@ -88,8 +143,8 @@ create_feature_branch() {
     echo "ERROR: create_feature_branch: '$branch_name' is not a valid git branch name" >&2
     return 1
   fi
-  if ! git -C "$project_root" checkout -b "$branch_name" 2>/dev/null; then
-    echo "ERROR: create_feature_branch: 'git checkout -b $branch_name' failed (invalid ref name or already exists)" >&2
+  if ! git -C "$project_root" checkout -b "$branch_name" "$base_branch" 2>/dev/null; then
+    echo "ERROR: create_feature_branch: 'git checkout -b $branch_name $base_branch' failed (invalid ref name, already exists, or base ref missing)" >&2
     return 1
   fi
   if ! git -C "$project_root" rev-parse --verify --quiet "$branch_name" >/dev/null; then
@@ -129,9 +184,38 @@ create_feature_branch() {
   # POSIX guarantees atomic. Note this also moves the failure point: on an
   # unwritable config dir `mktemp` now fails instead of `mv`, so its result is
   # checked and routed through the same rollback.
+  #
+  # Stacking-ready only: a byte-identical backup taken BEFORE this write, so
+  # that if the LATER stack_register_layer call (below) fails after this
+  # write has already committed, we can restore config to its pre-call state
+  # rather than leave a branch/base recorded with no matching registry entry.
+  # Registry is written only AFTER this write commits (not before) — see the
+  # note at the registry-write call site for why that ordering was chosen.
+  #
+  # BOTH the mktemp and the cp are checked. An unchecked cp (PR #81 audit) could
+  # leave an EMPTY backup file that the registry-failure path below would then
+  # `mv` over config.json and report as a successful restore — a corrupt config
+  # that fails the pre-merge guard closed and blocks every merge in the repo,
+  # which is the exact hazard the colocation note above exists to prevent. No
+  # usable backup means no safe unwind, so we refuse before the branch has any
+  # config state to unwind.
+  local config_backup=""
+  if [ "$stack_state" = "ready" ]; then
+    config_backup=$(mktemp "$(dirname "$config")/.nazgul-config-backup.XXXXXX" 2>/dev/null) || config_backup=""
+    if [ -z "$config_backup" ] || ! cp "$config" "$config_backup" 2>/dev/null; then
+      echo "ERROR: create_feature_branch: could not take a byte-identical backup of '$config' after branch '$branch_name' was created — without it a later registry failure could not be unwound safely, so rolling back to '$base_branch' now" >&2
+      [ -n "$config_backup" ] && rm -f "$config_backup"
+      git -C "$project_root" checkout "$base_branch" >/dev/null 2>&1 \
+        || echo "ERROR: create_feature_branch: rollback checkout to '$base_branch' also failed — branch '$branch_name' left on disk, config unchanged" >&2
+      git -C "$project_root" branch -D "$branch_name" >/dev/null 2>&1 \
+        || echo "ERROR: create_feature_branch: rollback delete of '$branch_name' failed — remove it manually before retrying" >&2
+      return 1
+    fi
+  fi
   local tmp
   tmp=$(mktemp "$(dirname "$config")/.nazgul-config.XXXXXX" 2>/dev/null) || {
     echo "ERROR: create_feature_branch: cannot create a temp file beside '$config' after branch '$branch_name' was created — rolling back to '$base_branch'" >&2
+    rm -f "$config_backup"
     git -C "$project_root" checkout "$base_branch" >/dev/null 2>&1 \
       || echo "ERROR: create_feature_branch: rollback checkout to '$base_branch' also failed — branch '$branch_name' left on disk, config unchanged" >&2
     git -C "$project_root" branch -D "$branch_name" >/dev/null 2>&1 \
@@ -150,13 +234,39 @@ create_feature_branch() {
       "$config" > "$tmp" && mv "$tmp" "$config"; then
     :
   else
-    rm -f "$tmp"
+    rm -f "$tmp" "$config_backup"
     echo "ERROR: create_feature_branch: config write failed after branch '$branch_name' was created — rolling back to '$base_branch' so the retry is not blocked by a branch nothing recorded" >&2
     git -C "$project_root" checkout "$base_branch" >/dev/null 2>&1 \
       || echo "ERROR: create_feature_branch: rollback checkout to '$base_branch' also failed — branch '$branch_name' left on disk, config unchanged" >&2
     git -C "$project_root" branch -D "$branch_name" >/dev/null 2>&1 \
       || echo "ERROR: create_feature_branch: rollback delete of '$branch_name' failed — remove it manually before retrying" >&2
     return 1
+  fi
+
+  # Stacking-ready only, and only AFTER the write above commits: registering
+  # the layer before the branch/base config write would risk an entry that
+  # outlives a subsequent rollback (config restored, registry left stale) —
+  # stack-utils.sh is the SOLE writer of stack.layers[], so this file cannot
+  # reach in and unwind an entry itself, only redo the write it owns
+  # (config.json as a whole). Writing registry last means the ONLY failure
+  # left to handle is its own: roll back both the branch and this config
+  # write via the pre-write backup captured above.
+  if [ "$stack_state" = "ready" ]; then
+    if ! declare -F stack_register_layer >/dev/null 2>&1 || ! stack_register_layer "$config" "$feat_id" "$branch_name" "$base_branch"; then
+      echo "ERROR: create_feature_branch: stack_register_layer failed after config committed for '$branch_name' — rolling back branch and config to '$base_branch' so config never claims a layer the registry doesn't have" >&2
+      if [ -n "$config_backup" ] && [ -f "$config_backup" ]; then
+        mv "$config_backup" "$config" 2>/dev/null \
+          || echo "ERROR: create_feature_branch: restoring config from backup also failed — '$config' may still reference '$branch_name', which is about to be deleted; inspect '$config' manually" >&2
+      else
+        echo "ERROR: create_feature_branch: no config backup available to restore — '$config' may still reference '$branch_name', which is about to be deleted; inspect '$config' manually" >&2
+      fi
+      git -C "$project_root" checkout "$base_branch" >/dev/null 2>&1 \
+        || echo "ERROR: create_feature_branch: rollback checkout to '$base_branch' also failed — branch '$branch_name' left on disk" >&2
+      git -C "$project_root" branch -D "$branch_name" >/dev/null 2>&1 \
+        || echo "ERROR: create_feature_branch: rollback delete of '$branch_name' failed — remove it manually before retrying" >&2
+      return 1
+    fi
+    rm -f "$config_backup"
   fi
 
   if declare -F install_git_hooks >/dev/null 2>&1; then

@@ -2,6 +2,123 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.29.0] - 2026-08-03
+
+FEAT-027, ADR-018 — an objective's end must not idle the loop (governing thesis for this release).
+Today the loop opens a PR to `main` and stops; nothing merges it, and the next objective cannot
+honestly start. Worse, the framework already stacked **accidentally, with zero management**:
+`create_feature_branch()` captured whatever branch happened to be checked out as the base with no
+assertion it was `main`, so a next objective started before merge silently branched off the
+unmerged feature branch — un-linked, un-retargeted, un-rebased. This release ships a managed
+alternative (`execution.stacking`, opt-in, default-off: objective N+1 branches off objective N's
+unmerged tip and its PR stacks on top via the official `gh-stack` CLI extension) **and** closes the
+accidental variant for everyone. The boundary that makes this safe: **stacking changes when work
+starts, never what "done" means** — one objective is still one PR, and the task state machine,
+review board, and per-objective release flow are byte-identical either way. GitHub owns every
+retarget/rebase/merge mechanic server-side; Nazgul owns only the `stack.layers[]` registry and the
+policy gates. There is **no hand-rolled `rebase --onto` anywhere** — a locked decision, on the
+evidence of two prior non-convergent attempts at hand-rolled rebase machinery in this repo. MINOR,
+not PATCH, on this repo's own precedent for exactly this shape: a new opt-in capability plus an
+additive schema migration (FEAT-008's opt-in heartbeat → `2.11.0`; FEAT-012's opt-in connector →
+`2.15.0`). MAJOR is wrong — nothing an operator invokes is removed or renamed, and every existing
+non-stacking workflow that was already correct behaves identically. **`schema_version` moves 34 →
+35** (`migrate_34_to_35`, additive; explicit values including `false` preserved).
+
+### Changed
+- **`create_feature_branch()` now asserts its base branch and refuses a stray checkout — this is the
+  one behavior change users who never opt into stacking will see.** With stacking off (or enabled but
+  unusable) the base is read from `branch.base` (default `main`) and the currently checked-out branch
+  must equal it; a mismatch **returns non-zero and refuses loudly**, naming the stray branch and the
+  remediation (`git checkout main`, or `/nazgul:start --stack`). Starting an objective from a
+  non-`branch.base` checkout previously succeeded silently and produced an unmanaged accidental
+  stack; it now fails. With stacking enabled and ready, the branch is created from `stack_tip` by
+  explicit ref name rather than from `HEAD`, with a registry entry written at creation and a config
+  rollback if that registry write fails. Task branches (`feat/<id>/TASK-NNN`) are unaffected.
+- **The objective-end PR is mechanized, and `objectives_history[].pr` is now actually written.** The
+  duplicated `gh pr create` prose in `skills/start/SKILL.md` (OBJECTIVE_COMPLETE) and
+  `agents/review-gate.md` (Step 5.1) is replaced by one `stack_submit` call that owns the push, the
+  PR, the registry update, and the history write **in both modes**. `objectives_history[].pr` was
+  previously written by nobody at PR time — that mechanical write now happens for all users, stacking
+  or not.
+- **`/nazgul:doctor` now runs ten checks** (was eight): the two new stacking checks below.
+
+### Added
+- **`execution.stacking` (schema v35, opt-in, default-off)** — `enabled` (`false`), `max_unmerged`
+  (`3`, the cap on open layers) and `rework_priority` (`1`). Three further keys are written at
+  runtime by the lib and absent from a fresh config: `halted`/`halt_reason` (fail-closed flag,
+  cleared only by a human) and `api_failures` (consecutive-failure counter; 3 halts stacking,
+  mirroring `connectors.github.pull_failures` but halting rather than auto-disabling).
+- **`stack.layers[]` — a script-owned registry.** One entry per layer (`{feat_id, branch, pr, base,
+  state, opened_at, merged_at}`), idempotent per `feat_id`. `scripts/lib/stack-utils.sh` is its
+  **sole writer**; operators read it and never hand-edit it.
+- **`scripts/lib/stack-utils.sh`** — the only home of `gh stack` invocation: `stack_available`
+  (three-state `disabled`/`ready`/`missing`, with extension presence checked via `gh extension list`
+  text, never by invoking `gh stack` and reading its failure), `stack_tip`, `stack_unmerged_count`,
+  `stack_register_layer`, `stack_submit`, `stack_reconcile`, `stack_detect_changes_requested`.
+- **`--stack` / `--no-stack` start flags** (three-state, mirroring `--parallel`, in the single
+  source of truth `scripts/apply-start-flags.sh`): `--stack` persists `enabled=true`, `--no-stack`
+  persists `false`, omitting both leaves the persisted value untouched so a prior objective's choice
+  survives a resume.
+- **Continuation, on both entry paths.** `scripts/heartbeat.sh` runs three pre-triage steps under its
+  own `count_active_sessions` check (a rebase must never run under a live session) — reconcile,
+  rework detection, cap gate — and `/nazgul:start` runs the same three inline before branch setup. At
+  or over the cap, the tick records `decision: skipped, reason: stack_cap_reached` and `/nazgul:start`
+  stops with the count, the cap, and the remediation; never a silent skip. A `stack-rework` pick is
+  exempt from the cap and is handed to `/nazgul:start`'s new **Stack Rework Routing** with **no**
+  archive-then-start (the routing performs its own archive-as-claim after re-scanning the live
+  inbox), recorded as `decision: started, reason: rework_handoff`.
+- **Auto-filed rework items — the first mechanical producer of inbox items in the framework.** A
+  `CHANGES_REQUESTED` review on an open layer files exactly one p1 item per PR + review id
+  (idempotent, including against `inbox/archive/`) with frontmatter `type: stack-rework`, `branch:`,
+  `pr:`. The review body is embedded verbatim as **data, never instructions**, byte-capped by
+  `connectors.github.pull.max_body_bytes` — same doctrine as connector issue bodies (RULES.md §16).
+- **Two read-only `/nazgul:doctor` checks** — `stacking` (tooling readiness: `gh`, the `gh-stack`
+  extension, `gh auth`, and the halted flag, each named individually) and `stack-registry`
+  (registry-vs-GitHub drift for open layers). Both report `Not applicable` when stacking is disabled;
+  neither writes state.
+- **Stack visibility** — a **Stack** section in `/nazgul:status` (layers, PR states, unmerged vs cap,
+  at/over-cap warning, `HALTED:` line, and an explicit "registry unreadable" variant that never
+  renders a failed read as healthy) and a one-line stack map in the SessionStart context.
+- **New event types** — `stack_layer_merged`, `stack_rework_filed`, `stack_sync_conflict`,
+  `stack_api_failure`, `stack_remote_layer_imported`, `stack_remote_layer_import_failed`, plus a new
+  `stop_gate` reason `stacking_unavailable` (stacking enabled but tooling unusable: the loop still
+  opens the ordinary plain PR, but the fallback is never silent).
+- **`.github/workflows/e2e-stack.yml` + `tests/e2e/run-stack-e2e.sh`** — a manual-trigger
+  (`workflow_dispatch`) two-layer stack E2E against a live disposable scratch repo, requiring a
+  `STACK_E2E_GH_TOKEN` secret (`repo` + `delete_repo`; the default workflow token cannot create or
+  delete arbitrary repos). **This workflow has never been executed** — it is authored, syntax-checked,
+  and deliberately never wired to push/pull_request/schedule because it creates real repos and PRs
+  and costs API calls and Actions minutes. Its claims are unverified until someone runs it.
+- **`nazgul/docs/ADR-018`** — the empirical `gh-stack` v0.1.0 probe (run in a disposable GitHub repo
+  before any integration code existed, FEAT-024's probe-first precedent) and the binding design
+  adjustments every downstream task implemented against.
+- **Test coverage** — `tests/test-stack-utils.sh` (139 assertions) and `tests/test-heartbeat-stack.sh`
+  (28), plus extensions to the migration, config-schema, doctor, session-context, start-flags,
+  worktree-utils, and heartbeat-triage/log suites.
+
+### Known constraints (honest notes)
+- **`gh pr merge` is rejected outright for a PR that is part of a stack** — GitHub's API demands the
+  asynchronous merge REST endpoint. This is documented **nowhere** in gh-stack's README; ADR-018
+  found it empirically. Nazgul never auto-merges, so this only affects a human merging a layer by
+  hand: use `gh stack merge <pr#> --squash --yes` or the web-UI merge button.
+- **`gh stack sync` exits 0 when it aborts on a real divergence**, printing its warning to stderr —
+  vendor-documented, and the opposite of the exit-code-driven conflict doctrine the spec originally
+  assumed. The wrapper therefore classifies gh-stack's **stderr text**, not its exit code (and splits
+  exit 3 between a genuine rebase conflict and the benign `local stack composition differs from
+  remote` stale-tracking case). The cost is stated plainly in ADR-018's Consequences: this matching
+  is coupled to gh-stack v0.1.0's exact message strings, and a future reword would break the
+  disambiguation with no signal beyond the stubbed-`gh` fixtures.
+- **Remote-ahead import is narrower than ADR-018's literal wording.** A clean remote-ahead `sync`
+  leaves the new layer un-imported despite the README's claim; `stack_reconcile` parses the PR number
+  out of gh-stack's own warning and runs the explicit `gh stack checkout <N>` itself. ADR-018 asked
+  for a full diff of the registry against `gh stack view`; the shipped detection is scoped to sync's
+  warning text and imports one PR per tick, because `gh stack view`'s output contract was never
+  empirically verified and implementing against an unverified CLI surface was judged worse than a
+  documented, narrower mechanism. Reviewed and accepted as such (GROUP-3 Attempt 3).
+- **Explicitly out of scope**, unchanged from the spec: task-level stacked PRs (the dormant
+  `afk.task_pr` path), auto-merging any PR, merge-queue integration, and Linear/Slack parity for
+  rework filing.
+
 ## [2.28.1] - 2026-08-02
 
 ### Fixed

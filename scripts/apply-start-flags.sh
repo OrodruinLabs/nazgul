@@ -7,7 +7,7 @@ CONFIG="${1:?usage: apply-start-flags.sh <config.json> <args>}"
 ARGS="${2:-}"
 [ -f "$CONFIG" ] || { echo "hitl"; exit 0; }
 
-yolo=false; afk=false; hitl=false; task_pr=false; parallel=false
+yolo=false; afk=false; hitl=false; task_pr=false; parallel=false; stack=""
 # Strip quoted spans first so a flag token INSIDE the objective string is not
 # misread as a flag (e.g. /nazgul:start "fix the --yolo bug" must NOT enable yolo).
 SCAN=$(printf '%s' "$ARGS" | sed -E 's/"[^"]*"//g; s/'"'"'[^'"'"']*'"'"'//g')
@@ -22,6 +22,8 @@ for tok in $SCAN; do
     --task-pr) task_pr=true ;;
     --parallel) parallel=true ;;
     --conductor) parallel=true; echo "Nazgul: --conductor is deprecated; treating as --parallel." >&2 ;;
+    --stack) stack=true ;;
+    --no-stack) stack=false ;;
   esac
 done
 maxn=$(printf '%s\n' "$SCAN" | grep -oE -- '--max[[:space:]]+[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
@@ -54,6 +56,9 @@ fi
 [ -n "$maxn" ] && jqp="$jqp | .max_iterations=($maxn)"
 # --parallel is orthogonal to mode (an operator can pair it with --afk/--hitl/--yolo)
 [ "$parallel" = true ] && jqp="$jqp | .execution.parallel=true"
+# --stack/--no-stack: three-state — absent leaves execution.stacking.enabled untouched
+# (the persisted choice survives resume). Last one wins if both are given (case-loop order).
+[ -n "$stack" ] && jqp="$jqp | .execution.stacking.enabled=$stack"
 
 tmp=$(mktemp)
 if jq "$jqp" "$CONFIG" > "$tmp" 2>/dev/null; then mv "$tmp" "$CONFIG"; else rm -f "$tmp"; fi

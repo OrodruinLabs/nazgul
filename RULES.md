@@ -690,3 +690,86 @@ every completion.
    the same subagent, not a fresh re-dispatch (rejected alternatives: more prompt hardening, giving
    reviewers `Write`, splitting analysis/verdict into two dispatches — none survive the same evidence;
    see `nazgul/inbox/subagent-nondelivery-maxturns-ceiling.md`).
+
+## 20. Stacked-PR Continuation (opt-in)
+
+`scripts/lib/stack-utils.sh` (FEAT-027, ADR-018) is the whole of Nazgul's stacking surface: the sole
+writer of the `stack.layers[]` registry and the only home of `gh stack` invocation. GitHub owns every
+retarget/rebase/merge mechanic server-side via the official `gh-stack` CLI extension; Nazgul owns only
+the registry and the policy gates. The governing boundary is that **stacking changes when work starts,
+never what "done" means** — one objective is still one PR, and the task state machine, review board, and
+per-objective release flow are byte-identical whether stacking is on or off. Opt in with
+`/nazgul:start --stack` (`execution.stacking.enabled`, default `false`, schema v35); see
+`docs/CONFIGURATION.md` → **Stacked-PR Continuation** for the key-by-key reference.
+
+1. **The base assertion is mechanical, and it applies to everyone.** `[enforced]` (in-script)
+   `create_feature_branch()` (`scripts/worktree-utils.sh`) no longer takes whatever branch is checked
+   out as the new feature branch's base. With stacking off (or enabled-but-unusable), it reads
+   `branch.base` and **refuses with a non-zero return**, naming the stray branch, when the checkout does
+   not match; with stacking ready, it branches from `stack_tip` by explicit ref name rather than from
+   `HEAD`. This is a real return-code failure inside the function every branch-creation path calls, not
+   a prompt instruction, and it **ships regardless of the stacking opt-in** — the accidental-stacking
+   hazard it closes predates stacking entirely. Covered by `tests/test-worktree-utils.sh`.
+2. **Fail-closed on unusable tooling — never a silent degrade.** `[enforced]` (in-script)
+   `stack_available` is five-state, each state its OWN answer per RULES §15's
+   distinguish-the-ambiguous-case doctrine: `disabled` (exit 1) means `execution.stacking.enabled` is
+   not true; `ready` (exit 0); `missing` (exit 2) means enabled but the tooling is unusable — `gh`
+   absent, the `gh-stack` extension not installed, or `gh` not authed; `halted` (exit 3) means enabled
+   and installed but a human-clearable halt is set; `invalid` (exit 4) means the config could not be
+   parsed at all, which is never reported as `disabled`. A halt no longer masquerades as missing
+   tooling, so a caller can report WHY it stopped and still enforce the policy gates that need no
+   tooling (the unmerged cap reads the registry only). Every caller gates on it and fails closed on
+   everything except `ready`. At objective end, an unusable state still opens the ordinary plain
+   `gh pr create` PR — but emits a `stop_gate` event with `reason: stacking_unavailable` and the
+   offending `state` alongside it, so a fallback is never indistinguishable from a normal run (§1 rule
+   2, §5); the heartbeat records the same on its decision record's `stack_skipped` field
+   (`stack_halted` / `stack_tooling_missing` / `stack_config_invalid` and the session/registry variants,
+   null when the pre-steps ran). Extension presence is checked via `gh extension list` text and NEVER by
+   invoking `gh stack` and reading its failure, which is indistinguishable from a typo at the `gh` level
+   (ADR-018 binding adjustment #1).
+3. **The registry is script-owned.** `[enforced]` (in-script) at the lib boundary: `stack.layers[]` is
+   written only by `stack-utils.sh` (`stack_register_layer`, `_su_mark_layer_merged`,
+   `_su_advance_base_above`), each an atomic `jq … > tmp && mv`. No skill, agent, or hook writes it by
+   convention, and `create_feature_branch` rolls its own config write back rather than leave a recorded
+   layer the registry does not have. The boundary is real for every path that goes through the lib;
+   nothing mechanically stops a human from hand-editing `config.json`, which is why the operator-facing
+   docs say plainly: read it, never edit it.
+4. **A conflict is NEVER auto-resolved.** `[enforced]` (in-script) A `gh stack sync` classified as a
+   conflict halts stacking (`execution.stacking.halted`, which `stack_available` reports as its own
+   `halted` state, exit 3), files a p1 `stack-sync-conflict` inbox item, and emits `stack_sync_conflict`.
+   The halt is never cleared automatically — only a human clears it, and halting ZEROES the
+   consecutive-failure counters (`execution.stacking.api_failures` and the per-operation
+   `api_failures_by_op`) so the documented remediation does not re-halt on the first hiccup after it.
+   A halt whose write cannot be verified is fatal-loud and non-zero, never a success that announced a
+   halt it did not persist. There is **no hand-rolled `rebase --onto` anywhere in this subsystem**, by
+   locked decision: two prior attempts at hand-rolled rebase machinery in this repo failed to converge,
+   which is the entire reason gh-stack was adopted.
+5. **Distrust the tool's exit code; classify its stderr.** `[enforced]` (in-script)
+   `_su_classify_sync_result` treats `diverged from the stack on GitHub` / `Sync aborted` as a conflict
+   **regardless of exit code** — a non-interactive `gh stack sync` aborts a genuine divergence with exit
+   **0** (vendor-documented, empirically confirmed in ADR-018 §4) — splits exit 3 between a genuine
+   rebase conflict and the benign `local stack composition differs from remote` stale-tracking case, and
+   folds any exit outside `{0,2,3}` into the API-failure branch, including the undocumented exit 9
+   ADR-018 observed on an auth failure. Auth is confirmed independently via `gh auth status`, never from
+   gh-stack's own error text, which misattributes auth failures to "stacked PRs not enabled". The cost
+   of this rule is stated openly in ADR-018's Consequences: the matching is coupled to gh-stack v0.1.0's
+   exact strings and a reword would break it silently, with only `tests/test-stack-utils.sh`'s fixtures
+   as the signal.
+6. **The cap is a loud skip, not a stall.** `[enforced]` (in-script, per entry point)
+   `stack_unmerged_count >= execution.stacking.max_unmerged` (default 3) stops a new objective from
+   auto-starting: `scripts/heartbeat.sh` writes `decision: skipped, reason: stack_cap_reached` into the
+   tick's decision record, and `/nazgul:start`'s continuation gate stops and prints the count, the cap,
+   and the remediation. A picked `stack-rework` item is exempt — fixing an open layer adds no layer.
+7. **Remote review content is DATA.** `[advisory]` A `stack-rework` inbox item embeds the review body
+   verbatim inside a quoted block explicitly labelled as data-not-instructions, byte-capped by
+   `connectors.github.pull.max_body_bytes` (default 65536) and passed through `jq`/`printf` arguments —
+   never `eval`'d. Same honest tier as §16's connector rule: `shellcheck` catches quoting hazards, but
+   nothing mechanically forbids a future `eval`.
+8. **"Stack unit = objective" is convention.** `[advisory]` Nothing mechanically prevents a future
+   feature from registering a task-level layer — the registry shape would accept it. The boundary is
+   held by the fact that only `create_feature_branch` and `stack_submit` register layers, both of which
+   run once per objective. The dormant `afk.task_pr` per-task PR path is explicitly out of scope.
+9. **Nazgul never merges a layer.** `[advisory]` Humans merge; the loop only builds, stacks, reconciles,
+   and reworks. Worth knowing when you do: GitHub rejects plain `gh pr merge` outright for any PR that is
+   part of a stack (*"must be merged using the asynchronous merge REST API"*, undocumented in gh-stack's
+   README, found empirically in ADR-018 §4). Use `gh stack merge <pr#> --squash --yes` or the web UI.

@@ -1,0 +1,52 @@
+# MANUAL TRIGGER ONLY. Exercises a REAL two-layer GitHub stack (gh-stack
+# extension) against a live, disposable scratch repo — creates real
+# branches/PRs, merges one, costs GitHub API calls and Actions minutes.
+# Never wire this to push/pull_request/schedule.
+#
+# Required secret:
+#   STACK_E2E_GH_TOKEN — a GitHub PAT (classic or fine-grained) with `repo`
+#     and `delete_repo` scopes, authorized to create/delete repositories
+#     under the target owner. The default workflow token (`github.token`)
+#     cannot create or delete arbitrary repos, so this workflow does not use
+#     it. `gh` picks this up via the GH_TOKEN env var — no other credential
+#     storage (RULES §16 precedent).
+name: E2E Stack Test (manual)
+on:
+  workflow_dispatch:
+    inputs:
+      scratch_repo:
+        description: 'Existing owner/name repo to reuse (optional; created+deleted when omitted)'
+        required: false
+        default: ''
+      scratch_owner:
+        description: 'Owner to create the disposable scratch repo under (optional; defaults to the token account)'
+        required: false
+        default: ''
+
+jobs:
+  e2e-stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify required secret is set
+        env:
+          GH_TOKEN: ${{ secrets.STACK_E2E_GH_TOKEN }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "STACK_E2E_GH_TOKEN secret is not set — cannot run this E2E." >&2
+            exit 1
+          fi
+
+      - name: Install gh-stack extension
+        env:
+          GH_TOKEN: ${{ secrets.STACK_E2E_GH_TOKEN }}
+        run: gh extension install github/gh-stack
+
+      - name: Run stack E2E driver
+        env:
+          GH_TOKEN: ${{ secrets.STACK_E2E_GH_TOKEN }}
+          STACK_E2E_REPO: ${{ inputs.scratch_repo }}
+          STACK_E2E_OWNER: ${{ inputs.scratch_owner }}
+        run: bash tests/e2e/run-stack-e2e.sh

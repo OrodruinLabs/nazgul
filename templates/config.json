@@ -1,5 +1,5 @@
 {
-  "schema_version": 34,
+  "schema_version": 35,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -82,7 +82,15 @@
       "rework_guard": true,
       "premerge_guard": true,
       "teammate_report_guard": true
+    },
+    "stacking": {
+      "enabled": false,
+      "max_unmerged": 3,
+      "rework_priority": 1
     }
+  },
+  "stack": {
+    "layers": []
   },
   "automation": {
     "heartbeat": {

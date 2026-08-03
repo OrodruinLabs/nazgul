@@ -715,6 +715,24 @@ migrate_33_to_34() {
   log_migration "v33→v34: added guards.in_flight_hold:true, guards.in_flight_stale_minutes:30 (stop-hook in-flight awareness — allowed uncounted hold while dispatched work is still running, plus its kill-switch; additive, explicit values preserved)"
 }
 
+migrate_34_to_35() {
+  local tmp; tmp=$(mktemp)
+  # Stacked-PR continuation opt-in policy (FEAT-027 TASK-002). Additive;
+  # explicit values (incl. false) preserved. Same type-guard pattern as
+  # migrate_32_to_33/migrate_33_to_34.
+  jq '
+    .execution = ((if (.execution | type) == "object" then .execution else {} end)
+      | .stacking = ((if (.stacking | type) == "object" then .stacking else {} end)
+          | .enabled = (if has("enabled") then .enabled else false end)
+          | .max_unmerged = (if has("max_unmerged") then .max_unmerged else 3 end)
+          | .rework_priority = (if has("rework_priority") then .rework_priority else 1 end)))
+    | .stack = ((if (.stack | type) == "object" then .stack else {} end)
+        | .layers = (if has("layers") then .layers else [] end))
+    | .schema_version = 35
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v34→v35: added execution.stacking.enabled:false, execution.stacking.max_unmerged:3, execution.stacking.rework_priority:1, stack.layers:[] (opt-in stacked-PR continuation registry + policy; additive, explicit values preserved)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"

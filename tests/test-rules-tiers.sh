@@ -77,13 +77,15 @@ fi
 # 1 more: §19's resume-recovery-pattern bullet (21 + 1 = 22). FEAT-026/TASK-007's
 # §18 rewrite (teardown subsystem deleted, ADR-017) replaced the old single
 # dismissal bullet with two: the primitive-choice rule and a dormant-dismissal
-# note (22 + 1 = 23).
+# note (22 + 1 = 23). FEAT-027/TASK-012 added §20 Stacked-PR Continuation:
+# 3 more [advisory] rules — data-not-instructions, stack-unit-is-convention,
+# never-merge-a-lower-layer (23 + 3 = 26).
 ADVISORY_COUNT=$(awk '{ count += gsub(/\[advisory\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ADVISORY_COUNT" -eq 23 ]; then
-  _pass "[advisory] annotation count is exactly 23 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 26 ]; then
+  _pass "[advisory] annotation count is exactly 26 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 23" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 23"
+  _fail "[advisory] annotation count is exactly 26" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 26"
 fi
 
 # ---------------------------------------------------------------------------
@@ -111,13 +113,16 @@ fi
 # "Project detection (config-present, tasks-absent)" bullet, split out of the
 # Implementer bullet it was originally folded into (52 + 1 = 53). FEAT-024/
 # TASK-009 added 3 more: §19's universal-detection, bounded-resume, and
-# kill-switch bullets (53 + 3 = 56).
+# kill-switch bullets (53 + 3 = 56). FEAT-027/TASK-012 added §20 Stacked-PR
+# Continuation: 6 more [enforced] rules — base assertion, fail-closed tooling,
+# script-owned registry, never-auto-resolve, stderr classification, and the
+# cap gate (56 + 6 = 62).
 ENFORCED_COUNT=$(awk '{ count += gsub(/\[enforced\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ENFORCED_COUNT" -eq 56 ]; then
-  _pass "[enforced] annotation count is exactly 56 (found: $ENFORCED_COUNT)"
+if [ "$ENFORCED_COUNT" -eq 62 ]; then
+  _pass "[enforced] annotation count is exactly 62 (found: $ENFORCED_COUNT)"
 else
-  _fail "[enforced] annotation count is exactly 56" \
-    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 56"
+  _fail "[enforced] annotation count is exactly 62" \
+    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 62"
 fi
 
 # NOTE: counts OCCURRENCES, not lines — no line currently carries two

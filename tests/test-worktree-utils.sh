@@ -18,8 +18,21 @@ source "$SCRIPT_DIR/lib/setup.sh"
 
 echo "=== $TEST_NAME ==="
 
+# create_feature_branch's stacking-off hazard assertion (TASK-006) expects
+# the checked-out branch to equal config's branch.base, which defaults to
+# "main" when unset (matching this repo's own convention — CLAUDE.md: "the
+# default branch is always main, never master"). setup_git_repo()'s plain
+# `git init` inherits whatever init.defaultBranch this HOST happens to have
+# configured (often "master") — normalize every fixture repo to "main" right
+# after init so the regression tests below exercise ordinary success, not
+# the host's local git config.
+_norm_main() {
+  git -C "$TEST_DIR" branch -M main 2>/dev/null || true
+}
+
 setup_temp_dir
 setup_git_repo
+_norm_main
 setup_nazgul_dir
 create_config
 
@@ -108,6 +121,7 @@ fi
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_git_repo
+_norm_main
 setup_nazgul_dir
 create_config
 CFG2="$TEST_DIR/nazgul/config.json"
@@ -132,6 +146,7 @@ teardown_temp_dir
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_git_repo
+_norm_main
 setup_nazgul_dir
 create_config
 CFG3="$TEST_DIR/nazgul/config.json"
@@ -216,6 +231,7 @@ rm -f "$BASH_OUT" "$BASH_ERR"
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_git_repo
+_norm_main
 setup_nazgul_dir
 create_config
 CFG4="$TEST_DIR/nazgul/config.json"
@@ -248,9 +264,22 @@ teardown_temp_dir
 # back-on-base pin the ROLLBACK, which is what separates this fix from a bare
 # fail-and-leave-the-branch.
 # ---------------------------------------------------------------------------
+
+# assertions.sh has no SKIPPED status, only pass/fail — so a root run used to
+# drop the five assertions below with no trace at all, leaving "everything
+# passed" indistinguishable from "the only test of the config-write check never
+# ran" (audit-tests.md, coverage honesty). Same local-counter idiom as
+# tests/test-shellcheck.sh:54-58.
+TESTS_SKIPPED=0
+_skip() {
+  TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
+  printf "  SKIP: %s\n" "$1"
+}
+
 if [ "$(id -u)" -ne 0 ]; then
   setup_temp_dir
   setup_git_repo
+  _norm_main
   setup_nazgul_dir
   create_config
   CFG_W="$TEST_DIR/nazgul/config.json"
@@ -277,6 +306,331 @@ if [ "$(id -u)" -ne 0 ]; then
     "$(cat "$CFG_W")" "$CFG_BEFORE_W"
 
   teardown_temp_dir
+else
+  _skip "create_feature_branch: failed config write returns non-zero (root: mode bits not enforced)"
+  _skip "create_feature_branch: failed write names the rollback in its diagnostic (root)"
+  _skip "create_feature_branch: failed write leaves NO orphan branch (rollback) (root)"
+  _skip "create_feature_branch: failed write returns the session to the base branch (root)"
+  _skip "create_feature_branch: failed write leaves config.json byte-identical (root)"
+fi
+
+# ---------------------------------------------------------------------------
+# TASK-006 (FEAT-027, ADR-018) — accidental-stacking hazard fix, stacking
+# OFF: the checked-out branch must equal config's branch.base (default
+# "main"). On mismatch, refuse loudly naming the stray branch and the
+# expected base; nonzero; NO branch created; config untouched.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_git_repo
+_norm_main
+setup_nazgul_dir
+create_config
+CFG_STRAY="$TEST_DIR/nazgul/config.json"
+CFG_STRAY_BEFORE=$(cat "$CFG_STRAY")
+
+STRAY_BRANCH="some-other-feature"
+git -C "$TEST_DIR" checkout -q -b "$STRAY_BRANCH"
+
+STRAY_OBJECTIVE="Stray checkout objective"
+STRAY_SLUG=$(slugify_objective "$STRAY_OBJECTIVE")
+STRAY_TARGET_BRANCH="feat/FEAT-001-${STRAY_SLUG}"
+
+create_feature_branch "$STRAY_OBJECTIVE" "$TEST_DIR" "$CFG_STRAY" \
+  > "$TEST_DIR/stray-out.txt" 2>"$TEST_DIR/stray-err.txt"
+RC_STRAY=$?
+STRAY_ERR=$(cat "$TEST_DIR/stray-err.txt")
+
+assert_exit_code "create_feature_branch: stacking off + stray checkout returns non-zero" "$RC_STRAY" 1
+assert_contains "create_feature_branch: stray-checkout refusal names the stray branch" "$STRAY_ERR" "$STRAY_BRANCH"
+assert_contains "create_feature_branch: stray-checkout refusal names the expected base" "$STRAY_ERR" "main"
+assert_eq "create_feature_branch: stray-checkout refusal leaves no target branch created" \
+  "$(git -C "$TEST_DIR" branch --list "$STRAY_TARGET_BRANCH" | tr -d ' *')" ""
+assert_eq "create_feature_branch: stray-checkout refusal leaves config untouched" \
+  "$(cat "$CFG_STRAY")" "$CFG_STRAY_BEFORE"
+assert_eq "create_feature_branch: stray-checkout refusal leaves the session where it was (nothing moved)" \
+  "$(git -C "$TEST_DIR" branch --show-current)" "$STRAY_BRANCH"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# TASK-006 — stacking-aware tests share one minimal `gh` PATH-shim mock
+# (extension list + auth status only — create_feature_branch never calls
+# `gh stack`/`gh pr` itself, only stack_available/stack_tip/
+# stack_register_layer). No network. Mirrors tests/test-stack-utils.sh.
+# ---------------------------------------------------------------------------
+WU_BASE_PATH="$PATH"
+FAKEBIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-wu-fakebin-XXXXXX")
+cat > "$FAKEBIN/gh" << 'GH_EOF'
+#!/usr/bin/env bash
+sub="${1:-}"; shift || true
+case "$sub" in
+  extension)
+    action="${1:-}"; shift || true
+    case "$action" in
+      list)
+        if [ "${NAZGUL_TEST_GH_STACK_EXT:-1}" != "0" ]; then
+          printf 'gh stack\tgithub/gh-stack\tv0.1.0\n'
+        fi
+        exit 0 ;;
+      *) exit 1 ;;
+    esac ;;
+  auth)
+    action="${1:-}"; shift || true
+    case "$action" in
+      status) [ "${NAZGUL_TEST_GH_AUTH:-ok}" = "ok" ] && exit 0 || exit 1 ;;
+      *) exit 1 ;;
+    esac ;;
+  *) exit 1 ;;
+esac
+GH_EOF
+chmod +x "$FAKEBIN/gh"
+export PATH="$FAKEBIN:$PATH"
+resolved_gh=$(command -v gh)
+if [ "$resolved_gh" != "$FAKEBIN/gh" ]; then
+  _fail "PATH resolves to the fake gh (safety gate)" "expected: '$FAKEBIN/gh'" "  actual: '$resolved_gh'"
+  export PATH="$WU_BASE_PATH"; rm -rf "$FAKEBIN"; report_results; exit 1
+fi
+_pass "PATH resolves to the fake gh (safety gate)"
+
+# ---------------------------------------------------------------------------
+# TASK-006 — stacking ON and ready: base := stack_tip (explicit ref, never
+# whatever is checked out), stack_register_layer entry appended at creation.
+# The tip carries a commit main doesn't have and we deliberately check out
+# main (not the tip) before calling create_feature_branch, so "created from
+# the tip" is provable rather than incidental.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_git_repo
+_norm_main
+setup_nazgul_dir
+create_config
+CFG_READY="$TEST_DIR/nazgul/config.json"
+jq '.execution.stacking.enabled = true' "$CFG_READY" > "$CFG_READY.tmp" && mv "$CFG_READY.tmp" "$CFG_READY"
+
+TIP_BRANCH="feat/FEAT-100-tip-layer"
+git -C "$TEST_DIR" checkout -q -b "$TIP_BRANCH"
+echo "tip work" > "$TEST_DIR/tip.txt"
+git -C "$TEST_DIR" add tip.txt
+git -C "$TEST_DIR" commit -q -m "tip commit"
+TIP_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+git -C "$TEST_DIR" checkout -q main
+
+jq --arg br "$TIP_BRANCH" \
+  '.stack.layers = [{feat_id:"FEAT-100", branch:$br, pr:null, base:"main", state:"open", opened_at:"2026-08-01T00:00:00Z", merged_at:null}]' \
+  "$CFG_READY" > "$CFG_READY.tmp" && mv "$CFG_READY.tmp" "$CFG_READY"
+
+create_feature_branch "Second layer objective" "$TEST_DIR" "$CFG_READY" \
+  > "$TEST_DIR/ready-out.txt" 2>"$TEST_DIR/ready-err.txt"
+RC_READY=$?
+READY_BRANCH=$(tail -n1 "$TEST_DIR/ready-out.txt")
+
+assert_exit_code "create_feature_branch: stacking on + ready returns 0" "$RC_READY" 0
+assert_eq "create_feature_branch: new branch HEAD equals the tip's HEAD (created from the explicit tip ref)" \
+  "$(git -C "$TEST_DIR" rev-parse "$READY_BRANCH" 2>/dev/null)" "$TIP_SHA"
+assert_eq "create_feature_branch: config .branch.base records the tip" \
+  "$(jq -r '.branch.base' "$CFG_READY")" "$TIP_BRANCH"
+assert_eq "create_feature_branch: registry now has 2 layers (tip + new)" \
+  "$(jq '.stack.layers | length' "$CFG_READY")" "2"
+NEW_FEAT_ID=$(jq -r '.feat_id' "$CFG_READY")
+assert_eq "create_feature_branch: new registry entry's branch is the returned branch" \
+  "$(jq -r --arg f "$NEW_FEAT_ID" '.stack.layers[] | select(.feat_id == $f) | .branch' "$CFG_READY")" "$READY_BRANCH"
+assert_eq "create_feature_branch: new registry entry's base is the tip branch" \
+  "$(jq -r --arg f "$NEW_FEAT_ID" '.stack.layers[] | select(.feat_id == $f) | .base' "$CFG_READY")" "$TIP_BRANCH"
+assert_eq "create_feature_branch: new registry entry's state is open" \
+  "$(jq -r --arg f "$NEW_FEAT_ID" '.stack.layers[] | select(.feat_id == $f) | .state' "$CFG_READY")" "open"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# TASK-006 — stacking ON but tooling missing: stack_available reports
+# "missing" and create_feature_branch falls back to the SAME non-stacking
+# assertion as stacking-off (ADR-018 locked decision 4: fail closed to
+# today's single-branch contract), plus a loud stop_gate degradation event —
+# never a silent downgrade. Realistic trigger: mid-continuation, the current
+# checkout is the PRIOR (unmerged) layer, not branch.base, so the fallback
+# assertion legitimately refuses.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_git_repo
+_norm_main
+setup_nazgul_dir
+create_config
+CFG_MISSING="$TEST_DIR/nazgul/config.json"
+jq '.execution.stacking.enabled = true' "$CFG_MISSING" > "$CFG_MISSING.tmp" && mv "$CFG_MISSING.tmp" "$CFG_MISSING"
+
+MISSING_STRAY_BRANCH="leftover-layer-branch"
+git -C "$TEST_DIR" checkout -q -b "$MISSING_STRAY_BRANCH"
+
+# worktree-utils.sh (and the emit-event.sh it transitively sources) was
+# already sourced once at the top of this file, before any NAZGUL_DIR
+# existed — emit_event's EVENTS_FILE default is a module-level var computed
+# only at that first source, so it stays frozen. Point it at THIS fixture's
+# events log directly rather than relying on NAZGUL_DIR being re-read.
+NAZGUL_DIR="$TEST_DIR/nazgul"
+EVENTS_FILE="$NAZGUL_DIR/logs/events.jsonl"
+
+export NAZGUL_TEST_GH_STACK_EXT=0
+create_feature_branch "Missing tooling objective" "$TEST_DIR" "$CFG_MISSING" \
+  > "$TEST_DIR/missing-out.txt" 2>"$TEST_DIR/missing-err.txt"
+RC_MISSING=$?
+unset NAZGUL_TEST_GH_STACK_EXT
+
+assert_exit_code "create_feature_branch: stacking on + tooling missing returns non-zero" "$RC_MISSING" 1
+assert_contains "create_feature_branch: missing-tooling refusal names the stray branch" \
+  "$(cat "$TEST_DIR/missing-err.txt")" "$MISSING_STRAY_BRANCH"
+if [ -f "$EVENTS_FILE" ]; then
+  assert_contains "create_feature_branch: missing tooling emits a loud stacking_unavailable degradation event" \
+    "$(cat "$EVENTS_FILE")" "stacking_unavailable"
+else
+  _fail "create_feature_branch: missing tooling emits a loud stacking_unavailable degradation event" "events.jsonl was never created"
+fi
+unset NAZGUL_DIR EVENTS_FILE
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# TASK-006 — rollback-unwind contract: if stack_register_layer fails AFTER
+# the branch/base config write already committed, create_feature_branch
+# must roll back BOTH the branch and the config write, not leave config
+# pointing at a branch (and a base/registry) that no longer agree. Forces
+# the failure with a test-double `stack_register_layer` that shadows the
+# real one, defined in a throwaway subshell so the override never leaks
+# into the rest of this file.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_git_repo
+_norm_main
+setup_nazgul_dir
+create_config
+CFG_ROLLBACK="$TEST_DIR/nazgul/config.json"
+jq '.execution.stacking.enabled = true' "$CFG_ROLLBACK" > "$CFG_ROLLBACK.tmp" && mv "$CFG_ROLLBACK.tmp" "$CFG_ROLLBACK"
+
+RB_TIP_BRANCH="feat/FEAT-200-rb-tip"
+git -C "$TEST_DIR" checkout -q -b "$RB_TIP_BRANCH"
+
+jq --arg br "$RB_TIP_BRANCH" \
+  '.stack.layers = [{feat_id:"FEAT-200", branch:$br, pr:null, base:"main", state:"open", opened_at:"2026-08-01T00:00:00Z", merged_at:null}]' \
+  "$CFG_ROLLBACK" > "$CFG_ROLLBACK.tmp" && mv "$CFG_ROLLBACK.tmp" "$CFG_ROLLBACK"
+CFG_ROLLBACK_BEFORE=$(cat "$CFG_ROLLBACK")
+
+ROLLBACK_OBJECTIVE="Rollback unwind objective"
+ROLLBACK_SLUG=$(slugify_objective "$ROLLBACK_OBJECTIVE")
+ROLLBACK_TARGET_BRANCH="feat/FEAT-001-${ROLLBACK_SLUG}"
+
+bash -c "
+  source '$REPO_ROOT/scripts/worktree-utils.sh'
+  stack_register_layer() { echo 'FAKE stack_register_layer: forced failure for rollback test' >&2; return 1; }
+  create_feature_branch '$ROLLBACK_OBJECTIVE' '$TEST_DIR' '$CFG_ROLLBACK'
+" > "$TEST_DIR/rollback-out.txt" 2>"$TEST_DIR/rollback-err.txt"
+RC_ROLLBACK=$?
+
+assert_exit_code "create_feature_branch: stack_register_layer failure after config commit returns non-zero" "$RC_ROLLBACK" 1
+assert_contains "create_feature_branch: rollback-unwind diagnostic names the rollback" \
+  "$(cat "$TEST_DIR/rollback-err.txt")" "rolling back"
+assert_eq "create_feature_branch: rollback-unwind leaves NO orphan branch" \
+  "$(git -C "$TEST_DIR" branch --list "$ROLLBACK_TARGET_BRANCH" | tr -d ' *')" ""
+assert_eq "create_feature_branch: rollback-unwind returns the session to the tip base" \
+  "$(git -C "$TEST_DIR" branch --show-current)" "$RB_TIP_BRANCH"
+assert_eq "create_feature_branch: rollback-unwind restores config byte-identical (branch/base fields AND registry both reverted)" \
+  "$(cat "$CFG_ROLLBACK")" "$CFG_ROLLBACK_BEFORE"
+
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# TASK-013 — the SILENT missing-tooling case: stacking enabled, tooling gone,
+# and the checkout ALREADY equals branch.base, so the loud base assertion never
+# fires. Pre-fix the only signal was an emit_event that no-ops without
+# NAZGUL_DIR — the branch was created against main, the registry still claimed
+# open layers, and the run reported plain success. The stderr warning is the
+# signal; the event is corroboration.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_git_repo
+_norm_main
+setup_nazgul_dir
+create_config
+CFG_QUIET="$TEST_DIR/nazgul/config.json"
+jq '.execution.stacking.enabled = true' "$CFG_QUIET" > "$CFG_QUIET.tmp" && mv "$CFG_QUIET.tmp" "$CFG_QUIET"
+
+export NAZGUL_TEST_GH_STACK_EXT=0
+create_feature_branch "Quiet degradation objective" "$TEST_DIR" "$CFG_QUIET" \
+  > "$TEST_DIR/quiet-out.txt" 2>"$TEST_DIR/quiet-err.txt"
+RC_QUIET=$?
+unset NAZGUL_TEST_GH_STACK_EXT
+QUIET_ERR=$(cat "$TEST_DIR/quiet-err.txt")
+
+assert_exit_code "create_feature_branch: on-base + missing tooling still succeeds (fail-closed to a plain branch)" "$RC_QUIET" 0
+assert_contains "create_feature_branch: on-base + missing tooling WARNS on stderr instead of degrading silently" \
+  "$QUIET_ERR" "execution.stacking is enabled but unusable"
+assert_contains "create_feature_branch: the warning names the state that failed" "$QUIET_ERR" "missing"
+assert_eq "create_feature_branch: registry untouched by the degraded path" \
+  "$(jq '.stack.layers | length' "$CFG_QUIET")" "0"
+teardown_temp_dir
+
+# A halted stack degrades the same way, and says "halted" rather than "missing"
+# — stack_available no longer collapses the two.
+setup_temp_dir
+setup_git_repo
+_norm_main
+setup_nazgul_dir
+create_config
+CFG_HALT="$TEST_DIR/nazgul/config.json"
+jq '.execution.stacking.enabled = true | .execution.stacking.halted = true | .execution.stacking.halt_reason = "conflict"' \
+  "$CFG_HALT" > "$CFG_HALT.tmp" && mv "$CFG_HALT.tmp" "$CFG_HALT"
+create_feature_branch "Halted degradation objective" "$TEST_DIR" "$CFG_HALT" \
+  > "$TEST_DIR/halt-out.txt" 2>"$TEST_DIR/halt-err.txt"
+RC_HALT=$?
+assert_exit_code "create_feature_branch: on-base + halted stack still succeeds" "$RC_HALT" 0
+assert_contains "create_feature_branch: halted is reported as halted, not as missing tooling" \
+  "$(cat "$TEST_DIR/halt-err.txt")" "stack_available: halted"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# TASK-013 — the pre-write backup's `cp` result is checked. An unchecked cp
+# could leave an EMPTY backup that the registry-failure unwind would then move
+# over config.json and report as a successful restore: a corrupt config that
+# fails the pre-merge guard closed and blocks every merge in the repo. With no
+# usable backup there is no safe unwind, so the call refuses up front.
+# `mktemp` is shadowed to hand back a path in a directory that does not exist,
+# so the mktemp SUCCEEDS and the cp is the thing that fails.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_git_repo
+_norm_main
+setup_nazgul_dir
+create_config
+CFG_BACKUP="$TEST_DIR/nazgul/config.json"
+jq '.execution.stacking.enabled = true' "$CFG_BACKUP" > "$CFG_BACKUP.tmp" && mv "$CFG_BACKUP.tmp" "$CFG_BACKUP"
+BK_TIP_BRANCH="feat/FEAT-300-bk-tip"
+git -C "$TEST_DIR" checkout -q -b "$BK_TIP_BRANCH"
+git -C "$TEST_DIR" checkout -q main
+jq --arg br "$BK_TIP_BRANCH" \
+  '.stack.layers = [{feat_id:"FEAT-300", branch:$br, pr:null, base:"main", state:"open", opened_at:"2026-08-01T00:00:00Z", merged_at:null}]' \
+  "$CFG_BACKUP" > "$CFG_BACKUP.tmp" && mv "$CFG_BACKUP.tmp" "$CFG_BACKUP"
+CFG_BACKUP_BEFORE=$(cat "$CFG_BACKUP")
+
+BACKUP_OBJECTIVE="Backup failure objective"
+BACKUP_SLUG=$(slugify_objective "$BACKUP_OBJECTIVE")
+BACKUP_TARGET_BRANCH="feat/FEAT-001-${BACKUP_SLUG}"
+
+bash -c "
+  source '$REPO_ROOT/scripts/worktree-utils.sh'
+  mktemp() { printf '%s\n' '/nazgul-t13-no-such-dir/backup.tmp'; }
+  create_feature_branch '$BACKUP_OBJECTIVE' '$TEST_DIR' '$CFG_BACKUP'
+" > "$TEST_DIR/backup-out.txt" 2>"$TEST_DIR/backup-err.txt"
+RC_BACKUP=$?
+
+assert_exit_code "create_feature_branch: an unusable config backup is a refusal, not a silent continue" "$RC_BACKUP" 1
+assert_contains "create_feature_branch: the backup failure is named on stderr" \
+  "$(cat "$TEST_DIR/backup-err.txt")" "could not take a byte-identical backup"
+assert_eq "create_feature_branch: backup failure leaves NO orphan branch" \
+  "$(git -C "$TEST_DIR" branch --list "$BACKUP_TARGET_BRANCH" | tr -d ' *')" ""
+assert_eq "create_feature_branch: backup failure leaves config byte-identical" \
+  "$(cat "$CFG_BACKUP")" "$CFG_BACKUP_BEFORE"
+teardown_temp_dir
+
+export PATH="$WU_BASE_PATH"
+rm -rf "$FAKEBIN"
+
+if [ "$TESTS_SKIPPED" -gt 0 ]; then
+  echo "  ($TESTS_SKIPPED assertion(s) SKIPPED — running as root, where read-only mode bits are not enforced)"
 fi
 
 report_results

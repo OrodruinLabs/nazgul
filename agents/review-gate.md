@@ -727,9 +727,21 @@ After all tasks are DONE, run a cross-task simplification pass across ALL modifi
 1. Run post-loop agents (documentation, release-manager, observability) if configured — use `models.post_loop` from `nazgul/config.json` as the `model` parameter (default: `"haiku"`)
 2. After post-loop agents complete:
    a. Read `branch.feature` and `branch.base` from config
-   b. Push feature branch: `git push -u origin <feature-branch>`
-   c. Create PR: `gh pr create --base <base-branch> --head <feature-branch> --title "<objective> (<feat_display_id>)" --body "<task summary>"`
-   d. Clean up all remaining worktrees and worktree parent dir
+   b. Submit the objective's PR with one call — run this in bash, not zsh (the lib resolves
+      its own path via `BASH_SOURCE`, which zsh leaves unset and silently mis-resolves; the
+      same hazard `scripts/worktree-utils.sh` guards against):
+      ```bash
+      source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/stack-utils.sh"
+      stack_submit nazgul/config.json "$(pwd)" "<objective> (<feat_display_id>)" "<task summary>"
+      ```
+      `stack_submit` owns the push, the PR itself (a stacked `gh stack submit` PR when
+      stacking is enabled and ready, otherwise a plain `gh pr create` against `branch.base`),
+      the `stack.layers[]` registry update, and the `objectives_history[].pr` write — in BOTH
+      modes. Do not run a separate `git push` or `gh pr create` here; that would duplicate
+      what `stack_submit` already does. Tooling missing while stacking is enabled degrades to
+      the same plain PR plus a loud `stop_gate reason:stacking_unavailable` event — never a
+      silent fallback and never a second prose recipe.
+   c. Clean up all remaining worktrees and worktree parent dir
 3. Output NAZGUL_COMPLETE
 
 ## Important: Reviews Are Read-Only
