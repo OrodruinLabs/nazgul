@@ -238,14 +238,22 @@ orchestration arrive with Objective C.
 
 ## 5. Objective C — Mission Control (fleet dashboard + platform layer)
 
-**Verdict from research: integrate the outer layer, build the inner layer.** Anthropic's
-Agent View (`claude agents`, research preview since 2026-05-11, v2.1.139+) owns
-session-fleet chrome: `--json` state (also on disk: `~/.claude/daemon/roster.json`,
-`~/.claude/jobs/<id>/state.json`), and control verbs `attach`/`logs`/`stop`/`kill`/
-`respawn`. Every dead OSS competitor (Vibe Kanban, Crystal, Omnara, claude-code-webui)
-died competing with first-party features; the live ones are AGPL (license risk) or have
-no event seam. Nothing renders Nazgul's inner state (tasks/waves/verdicts/blockers) —
-Agent View deliberately collapses subagents into the parent row. That layer is ours.
+**Verdict from research: integrate the outer layer, build the inner layer.** The
+first-party chrome has TWO surfaces (2026-08-03 platform research): Anthropic's
+Agent View (research preview since 2026-05-11, v2.1.139+) owns
+**background-session lifecycle**: `claude agents --json` state (also on disk:
+`~/.claude/daemon/roster.json`, `~/.claude/jobs/<id>/state.json`), and control verbs
+`attach`/`logs`/`stop`/`kill`/`respawn`; **Remote Control** (`claude remote-control`,
+research preview, verified 2026-08-03) owns **remote access to interactive sessions** —
+browser + mobile window into the LOCAL session (hooks/git/stacking intact), steering,
+mobile push on "Claude decides"/"actions required", and multi-session spawn
+(`--spawn worktree`, `--capacity`). Every dead OSS competitor (Vibe Kanban, Crystal,
+Omnara, claude-code-webui) died competing with first-party features; the live ones are
+AGPL (license risk) or have no event seam. Nothing first-party renders Nazgul's inner
+state (tasks/waves/verdicts/blockers) — Agent View deliberately collapses subagents
+into the parent row. That layer is ours. Registry + files are primary for row existence
+and loop state; Agent View is progressive enhancement, and absence from it is never a
+death signal (it legitimately cannot see foreground, remote, or other-machine loops).
 
 ### C1. Registry
 
@@ -273,22 +281,28 @@ must be HTTPS, and `prompt_head` fields are redacted before forwarding.
 ### C3. Web frontend (the product surface; Aspire-style single pane)
 
 - **Fleet page**: attention-ordered queue (needs-input / BLOCKED / ready-for-review
-  first, completed last), one row per loop joined from `claude agents --json` (liveness,
-  PID, session) × registry × latest snapshot (project, domain, feature, wave, buckets,
-  one-line summary, cost meter, PR badge).
+  first, completed last), one row per **registry entry** joined registry × latest
+  snapshot (project, domain, feature, wave, buckets, one-line summary, cost meter,
+  PR badge), enhanced with `claude agents --json` liveness/PID where a session matches
+  on `cwd`; an unmatched row renders in full with `session: -` (normal, not an error).
 - **Loop drill-down**: Recovery Pointer, task board, review verdicts, event timeline,
   attention badges for the mechanism signals only Nazgul records (`stop_gate`,
   reconciliation flags, unverified-critical-reviewer, `subagent_empty_return`).
-- **Terminal panel**: embedded xterm.js over a WebSocket→server-side-PTY bridge running
-  `claude logs -f <id>` (read-only peek, default) or `claude attach <id>` (interactive,
-  one click deeper). Session lifecycle stays Agent View's supervisor's problem. Validated
-  pattern (marcnuri.com dashboard: browser terminal over WS relay incl. mobile) — used
-  as existence proof, not copied.
+- **First-party boundary** (amended 2026-08-03 after platform research): remote
+  view/steer/notify **defaults to Remote Control** — verified: remote window into the
+  local session, steering, mobile push on decisions/actions-required — and local
+  terminal access to background sessions is Agent View's (`attach`/`logs`). The
+  drill-down renders Nazgul's inner state only. The previously-recorded **xterm.js
+  terminal panel** (WS→server-side-PTY running `claude logs -f`/`claude attach`;
+  marcnuri.com pattern as existence proof) and **service-worker push notifications**
+  (needs-input / completion / requires-gate unblock) remain recorded here as
+  **fallbacks**, to be built only if the frontend spec cycle finds Remote Control
+  unavailable or insufficient (preview withdrawn, ZDR org, Bedrock/Vertex/Foundry,
+  non-OAuth auth, or a capability gap). Decided at that cycle — never pre-built in
+  parallel with the first-party feature.
 - **Actions**: pause/resume = toggling `paused` in the loop's config.json (stop-hook
   already obeys at the next iteration boundary); stop/respawn = delegated to `claude`
   CLI; start-next-feature = drop an inbox item.
-- **Notifications**: service-worker push on needs-input / completion / requires-gate
-  unblock.
 - **Auth**: token-less mode binds loopback ONLY (non-loopback listeners refuse to start
   without `COLLECTOR_TOKEN` — PR #80 review catch); pre-shared key for remote
   deployment (OIDC = later hardening).
@@ -337,8 +351,9 @@ must be HTTPS, and `prompt_head` fields are redacted before forwarding.
 Graph runtimes (LangGraph et al.); GraphRAG/knowledge-graph memory; replacing agentic
 exploration with graph retrieval; full Co-Coder partitioning; impact-aware reviewer
 selection; a stub-grep transition gate; cross-domain stacking; full-DB state migration;
-building a session supervisor (Agent View owns it); org-graph/work-graph taxonomy;
-mechanizing `requires:` against objectives_history.
+building a session supervisor (Agent View owns it); a remote-access surface
+(first-party Remote Control is the default answer — §5 C3); org-graph/work-graph
+taxonomy; mechanizing `requires:` against objectives_history.
 
 ## 8. Cross-references
 
