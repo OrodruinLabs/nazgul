@@ -59,7 +59,13 @@ Half-day timebox, before Task 2 freezes the worktree directory convention (2026-
 platform research). Question: can a `claude remote-control --spawn worktree` server-mode
 session adopt — or be pointed at — a pre-created named worktree + branch off a chosen
 base, with its own `nazgul/` brain and hooks firing? Deliverable: ADR appendix with the
-commands recorded verbatim (Objective A probe precedent, spec §6).
+commands recorded verbatim (Objective A probe precedent, spec §6) AND an explicit
+pass/fail result per check (CodeRabbit PR #82):
+(1) session CWD equals the pre-created worktree path; (2) branch and base preserved
+(`git branch --show-current`, `git merge-base`); (3) `resolve_project_root()` from inside
+the session resolves to the worktree; (4) worktree-scoped git hooks fire (Task 1's
+guards); (5) state writes land under that worktree's `nazgul/` tree. Any check without a
+recorded result → the probe is INCONCLUSIVE, same as the timebox case below.
 
 **Non-blocking:** Task 2 ships regardless of the outcome — branch naming and base-branch
 choice are Nazgul stacking policy, and no first-party spawner supplies them. The probe

@@ -240,8 +240,8 @@ orchestration arrive with Objective C.
 
 **Verdict from research: integrate the outer layer, build the inner layer.** The
 first-party chrome has TWO surfaces (2026-08-03 platform research): Anthropic's
-Agent View (`claude agents`, research preview since 2026-05-11, v2.1.139+) owns
-**background-session lifecycle**: `--json` state (also on disk:
+Agent View (research preview since 2026-05-11, v2.1.139+) owns
+**background-session lifecycle**: `claude agents --json` state (also on disk:
 `~/.claude/daemon/roster.json`, `~/.claude/jobs/<id>/state.json`), and control verbs
 `attach`/`logs`/`stop`/`kill`/`respawn`; **Remote Control** (`claude remote-control`,
 research preview, verified 2026-08-03) owns **remote access to interactive sessions** —
