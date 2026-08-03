@@ -476,14 +476,25 @@ assert_eq "stack_submit: no registry write when gh stack submit fails" \
   "$(jq '.stack.layers | length' "$SUB_STACKFAIL")" "0"
 
 # =====================================================================
-# stack_available — respects the halt marker (TASK-005)
+# stack_available — halt marker (TASK-005) is its OWN state, not "missing"
+# (TASK-013): folding it into "missing" made every caller unable to say WHY it
+# stopped, and made the halted branch of the heartbeat cap gate untestable.
 # =====================================================================
 
 HALTED_CONFIG="$TEST_DIR/nazgul/config-halted.json"
 jq '.execution.stacking.enabled = true | .execution.stacking.halted = true | .execution.stacking.halt_reason = "conflict"' "$CONFIG" > "$HALTED_CONFIG"
-assert_eq "stack_available: halted -> missing (fail-closed, cleared only by a human)" \
-  "$(stack_available "$HALTED_CONFIG")" "missing"
-stack_available "$HALTED_CONFIG" >/dev/null; assert_exit_code "stack_available: halted returns 2" "$?" 2
+assert_eq "stack_available: halted is its own state, distinct from missing tooling" \
+  "$(stack_available "$HALTED_CONFIG")" "halted"
+stack_available "$HALTED_CONFIG" >/dev/null; assert_exit_code "stack_available: halted returns 3" "$?" 3
+
+# Unparseable config: NOT "disabled" (a corrupt config is not an opt-out).
+INVALID_CONFIG="$TEST_DIR/nazgul/config-invalid.json"
+printf '{ this is not json' > "$INVALID_CONFIG"
+assert_eq "stack_available: unparseable config -> invalid, never 'disabled'" \
+  "$(stack_available "$INVALID_CONFIG" 2>/dev/null)" "invalid"
+stack_available "$INVALID_CONFIG" >/dev/null 2>&1; assert_exit_code "stack_available: invalid returns 4" "$?" 4
+assert_contains "stack_available: unparseable config is loud on stderr" \
+  "$(stack_available "$INVALID_CONFIG" 2>&1 >/dev/null)" "not parseable JSON"
 
 # =====================================================================
 # stack_reconcile / stack_detect_changes_requested — no-op when not "ready"
@@ -581,7 +592,10 @@ for expect in 1 2; do
 done
 stack_reconcile "$API_CONFIG"; apirc3=$?
 assert_exit_code "stack_reconcile: 3rd consecutive API failure still returns 0" "$apirc3" 0
-assert_eq "stack_reconcile: api_failures reached 3" "$(jq -r '.execution.stacking.api_failures' "$API_CONFIG")" "3"
+assert_eq "stack_reconcile: halting ZEROES api_failures (the documented un-halt remediation must not re-break on the first failure after it)" \
+  "$(jq -r '.execution.stacking.api_failures' "$API_CONFIG")" "0"
+assert_eq "stack_reconcile: halting also clears the per-operation counters" \
+  "$(jq -r '.execution.stacking.api_failures_by_op | length' "$API_CONFIG")" "0"
 assert_eq "stack_reconcile: HALTED at 3 consecutive failures" \
   "$(jq -r '.execution.stacking.halted' "$API_CONFIG")" "true"
 assert_eq "stack_reconcile: halt_reason names the API-failure path" \
@@ -589,11 +603,11 @@ assert_eq "stack_reconcile: halt_reason names the API-failure path" \
 assert_eq "stack_reconcile: 3 stack_api_failure events emitted (loud, never silent)" \
   "$(_event_count stack_api_failure)" "3"
 
-# A 4th call after halting is a no-op (stack_available now reports "missing").
+# A 4th call after halting is a no-op (stack_available now reports "halted").
 stack_reconcile "$API_CONFIG"; apirc4=$?
 assert_exit_code "stack_reconcile: post-halt call still returns 0" "$apirc4" 0
-assert_eq "stack_reconcile: post-halt call does not bump the counter further" \
-  "$(jq -r '.execution.stacking.api_failures' "$API_CONFIG")" "3"
+assert_eq "stack_reconcile: post-halt call does not bump the counter" \
+  "$(jq -r '.execution.stacking.api_failures' "$API_CONFIG")" "0"
 unset NAZGUL_TEST_GH_PR_VIEW_JSON_FAIL
 
 # reset-on-success: 2 failures then one success clears the counter to 0.
@@ -850,6 +864,244 @@ assert_eq "body cap: review body clamped to max_body_bytes (50 'A's, not 200)" \
   "$(printf '%s' "$CAP_BODY_TEXT" | grep -o 'A' | wc -l | tr -d ' ')" "50"
 
 unset NAZGUL_TEST_GH_PR_VIEW_JSON
+
+# =====================================================================
+# TASK-013 — audit remediation. Every assertion below was written against the
+# PRE-FIX tree first and observed to FAIL there (red-run evidence in
+# nazgul/tasks/TASK-013.md).
+# =====================================================================
+
+# --- Extension detection must not depend on pipeline timing. `gh extension
+# list | grep -q` lets grep exit at the first match, so gh takes SIGPIPE on its
+# remaining output and, under a caller's `set -o pipefail` (scripts/heartbeat.sh
+# and scripts/doctor.sh both set it), the pipeline reports 141 — an INSTALLED
+# extension read as "missing", silently un-stacking the run. This mock makes the
+# race deterministic by delaying the line after the match. ---
+SLOWBIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-slowgh-XXXXXX")
+cat > "$SLOWBIN/gh" << 'SLOWEOF'
+#!/usr/bin/env bash
+sub="${1:-}"; shift || true
+case "$sub" in
+  extension)
+    [ "${1:-}" = "list" ] || exit 1
+    printf 'gh stack\tgithub/gh-stack\tv0.1.0\n'
+    sleep 0.3
+    printf 'gh other-ext\tsome/other\tv1.0.0\n'
+    exit 0 ;;
+  auth) [ "${1:-}" = "status" ] && exit 0; exit 1 ;;
+esac
+exit 1
+SLOWEOF
+chmod +x "$SLOWBIN/gh"
+SIGPIPE_CONFIG="$TEST_DIR/nazgul/config-sigpipe.json"
+jq '.execution.stacking.enabled = true' "$CONFIG" > "$SIGPIPE_CONFIG"
+sigpipe_result=$(set -o pipefail; PATH="$SLOWBIN:$PATH" stack_available "$SIGPIPE_CONFIG" 2>/dev/null)
+assert_eq "stack_available: an installed extension stays 'ready' under pipefail even when gh is slow to finish writing" \
+  "$sigpipe_result" "ready"
+rm -rf "$SLOWBIN"
+
+# --- Registry honesty: a malformed stack.layers[] is refused by every reader,
+# never reported as an empty stack (RULES §15). ---
+MALFORMED_REG="$TEST_DIR/nazgul/config-malformed-reg.json"
+jq '.branch.base = "main" | .execution.stacking.enabled = true | .stack.layers = "not-an-array"' "$CONFIG" > "$MALFORMED_REG"
+
+tip_out=$(stack_tip "$MALFORMED_REG" 2>/dev/null); tip_rc=$?
+assert_exit_code "stack_tip: malformed registry returns non-zero" "$tip_rc" 2
+assert_eq "stack_tip: malformed registry prints NO branch (never a silent fallback to branch.base)" "$tip_out" ""
+assert_contains "stack_tip: malformed registry is loud on stderr" \
+  "$(stack_tip "$MALFORMED_REG" 2>&1 >/dev/null)" "malformed"
+
+count_out=$(stack_unmerged_count "$MALFORMED_REG" 2>/dev/null); count_rc=$?
+assert_exit_code "stack_unmerged_count: malformed registry returns non-zero" "$count_rc" 2
+assert_eq "stack_unmerged_count: malformed registry prints NO count (a vacuous cap is worse than none)" "$count_out" ""
+
+stack_reconcile "$MALFORMED_REG" >/dev/null 2>&1; mal_rec_rc=$?
+assert_exit_code "stack_reconcile: malformed registry returns non-zero, never a silent no-op" "$mal_rec_rc" 1
+stack_detect_changes_requested "$MALFORMED_REG" >/dev/null 2>&1; mal_det_rc=$?
+assert_exit_code "stack_detect_changes_requested: malformed registry returns non-zero" "$mal_det_rc" 1
+
+# Non-object layer entries are malformed too (not just a non-array .stack.layers).
+MALFORMED_ENTRY_REG="$TEST_DIR/nazgul/config-malformed-entry.json"
+jq '.branch.base = "main" | .stack.layers = ["FEAT-001"]' "$CONFIG" > "$MALFORMED_ENTRY_REG"
+stack_tip "$MALFORMED_ENTRY_REG" >/dev/null 2>&1
+assert_exit_code "stack_tip: a non-object layer entry is malformed too" "$?" 2
+
+# --- Duplicate feat_id: first match only, and named on stderr. ---
+DUP_CONFIG="$TEST_DIR/nazgul/config-dup-featid.json"
+jq '
+  .execution.stacking.enabled = true
+  | .stack.layers = [
+      {feat_id:"FEAT-800", branch:"feat/FEAT-800-a", pr:"https://github.com/o/r/pull/800", base:"main", state:"open", opened_at:"2026-08-02T00:00:00Z", merged_at:null},
+      {feat_id:"FEAT-800", branch:"feat/FEAT-800-b", pr:"https://github.com/o/r/pull/800", base:"main", state:"open", opened_at:"2026-08-02T01:00:00Z", merged_at:null}
+    ]
+' "$CONFIG" > "$DUP_CONFIG"
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":800,"state":"MERGED","mergedAt":"2026-08-02T09:00:00Z"}'
+dup_err=$(stack_reconcile "$DUP_CONFIG" 2>&1 >/dev/null)
+assert_contains "duplicate feat_id: reconcile names the duplication on stderr" "$dup_err" "registry entries share feat_id"
+assert_eq "duplicate feat_id: exactly ONE entry marked merged (first match), not a blanket rewrite" \
+  "$(jq '[.stack.layers[] | select(.state == "merged")] | length' "$DUP_CONFIG")" "1"
+assert_eq "duplicate feat_id: the FIRST entry is the one marked" \
+  "$(jq -r '.stack.layers[0].state' "$DUP_CONFIG")" "merged"
+unset NAZGUL_TEST_GH_PR_VIEW_JSON
+
+# --- _su_halt_stacking: a halt it could not persist is a LOUD failure, never
+# a silent success after announcing the halt. ---
+halt_err=$(_su_halt_stacking "$TEST_DIR/nazgul/definitely-not-here.json" "conflict" 2>&1); halt_rc=$?
+assert_exit_code "_su_halt_stacking: unwritable target returns non-zero" "$halt_rc" 1
+assert_contains "_su_halt_stacking: unwritable target says the halt did NOT persist" "$halt_err" "NOT persisted"
+
+# --- Per-operation counter scoping: one broken PR alongside a healthy one used
+# to reset-then-bump forever, so the three-strikes halt was UNREACHABLE. ---
+SCOPE_CONFIG="$TEST_DIR/nazgul/config-counter-scope.json"
+jq '
+  .execution.stacking.enabled = true
+  | .stack.layers = [
+      {feat_id:"FEAT-810", branch:"feat/FEAT-810-ok", pr:"https://github.com/o/r/pull/810", base:"main", state:"open", opened_at:"2026-08-02T00:00:00Z", merged_at:null},
+      {feat_id:"FEAT-811", branch:"feat/FEAT-811-broken", pr:"https://github.com/o/r/pull/811", base:"main", state:"open", opened_at:"2026-08-02T01:00:00Z", merged_at:null}
+    ]
+' "$CONFIG" > "$SCOPE_CONFIG"
+SCOPE_MAP="$TEST_DIR/pr-view-map-scope.tsv"
+printf 'https://github.com/o/r/pull/810\t{"number":810,"state":"OPEN","mergedAt":null,"reviewDecision":null,"reviews":[]}\n' > "$SCOPE_MAP"
+export NAZGUL_TEST_GH_PR_VIEW_JSON_MAP="$SCOPE_MAP"
+export NAZGUL_TEST_GH_PR_VIEW_JSON_FAIL=1
+for _i in 1 2 3; do stack_detect_changes_requested "$SCOPE_CONFIG" >/dev/null 2>&1; done
+unset NAZGUL_TEST_GH_PR_VIEW_JSON_FAIL NAZGUL_TEST_GH_PR_VIEW_JSON_MAP
+assert_eq "counter scoping: a healthy layer no longer resets the broken layer's count away — 3 ticks HALT" \
+  "$(jq -r '.execution.stacking.halted // false' "$SCOPE_CONFIG")" "true"
+
+# One tick bumps at most ONCE per operation, even with several failing layers.
+ONEBUMP_CONFIG="$TEST_DIR/nazgul/config-one-bump.json"
+jq '
+  .execution.stacking.enabled = true
+  | .stack.layers = [
+      {feat_id:"FEAT-820", branch:"feat/FEAT-820-a", pr:"https://github.com/o/r/pull/820", base:"main", state:"open", opened_at:"2026-08-02T00:00:00Z", merged_at:null},
+      {feat_id:"FEAT-821", branch:"feat/FEAT-821-b", pr:"https://github.com/o/r/pull/821", base:"main", state:"open", opened_at:"2026-08-02T01:00:00Z", merged_at:null}
+    ]
+' "$CONFIG" > "$ONEBUMP_CONFIG"
+export NAZGUL_TEST_GH_PR_VIEW_JSON_FAIL=1
+stack_detect_changes_requested "$ONEBUMP_CONFIG" >/dev/null 2>&1
+unset NAZGUL_TEST_GH_PR_VIEW_JSON_FAIL
+assert_eq "counter scoping: two failing layers in ONE tick bump the detect counter exactly once" \
+  "$(jq -r '.execution.stacking.api_failures_by_op.detect' "$ONEBUMP_CONFIG")" "1"
+
+# --- needs_sync: a cascade interrupted by a conflict is retried on the next
+# ready tick instead of being forgotten. ---
+NEEDSYNC_CONFIG=$(_sync_doctrine_fixture "FEAT-830")
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":830,"state":"MERGED","mergedAt":"2026-08-02T06:00:00Z"}'
+export NAZGUL_TEST_GH_STACK_SYNC_EXIT=3
+export NAZGUL_TEST_GH_STACK_SYNC_STDERR="Conflict detected rebasing onto main"
+NEEDSYNC_LOG="$TEST_DIR/sync-calls-needsync.log"
+: > "$NEEDSYNC_LOG"
+export NAZGUL_TEST_GH_STACK_SYNC_LOG="$NEEDSYNC_LOG"
+stack_reconcile "$NEEDSYNC_CONFIG" >/dev/null 2>&1
+assert_eq "needs_sync: a conflicted cascade records the debt" \
+  "$(jq -r '.execution.stacking.needs_sync' "$NEEDSYNC_CONFIG")" "true"
+# Human clears the halt; nothing new merged this tick, but the cascade still owes work.
+jq '.execution.stacking.halted = false' "$NEEDSYNC_CONFIG" > "$NEEDSYNC_CONFIG.tmp" && mv "$NEEDSYNC_CONFIG.tmp" "$NEEDSYNC_CONFIG"
+unset NAZGUL_TEST_GH_STACK_SYNC_EXIT NAZGUL_TEST_GH_STACK_SYNC_STDERR
+stack_reconcile "$NEEDSYNC_CONFIG" >/dev/null 2>&1
+assert_eq "needs_sync: the next ready tick retries the deferred gh stack sync" \
+  "$(wc -l < "$NEEDSYNC_LOG" | tr -d ' ')" "2"
+assert_eq "needs_sync: a clean cascade clears the marker" \
+  "$(jq -r '.execution.stacking.needs_sync' "$NEEDSYNC_CONFIG")" "false"
+unset NAZGUL_TEST_GH_STACK_SYNC_LOG NAZGUL_TEST_GH_PR_VIEW_JSON
+
+# --- Conflict inbox: an ARCHIVED first conflict must not suppress the NEXT one. ---
+rm -f "$INBOX_DIR/stack-sync-conflict.md"
+mkdir -p "$INBOX_DIR/archive"
+: > "$INBOX_DIR/archive/stack-sync-conflict.md"
+CONFLICT2_CONFIG=$(_sync_doctrine_fixture "FEAT-840")
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":840,"state":"MERGED","mergedAt":"2026-08-02T06:00:00Z"}'
+export NAZGUL_TEST_GH_STACK_SYNC_EXIT=3
+export NAZGUL_TEST_GH_STACK_SYNC_STDERR="Conflict detected rebasing onto main"
+stack_reconcile "$CONFLICT2_CONFIG" >/dev/null 2>&1
+assert_file_exists "conflict inbox: a SECOND conflict is filed even though the first is archived" \
+  "$INBOX_DIR/stack-sync-conflict.md"
+assert_contains "conflict inbox: body names the api_failures counter the remediation must also clear" \
+  "$(cat "$INBOX_DIR/stack-sync-conflict.md")" "api_failures"
+unset NAZGUL_TEST_GH_PR_VIEW_JSON NAZGUL_TEST_GH_STACK_SYNC_EXIT NAZGUL_TEST_GH_STACK_SYNC_STDERR
+rm -f "$INBOX_DIR/archive/stack-sync-conflict.md" "$INBOX_DIR/stack-sync-conflict.md"
+
+# --- Rework filing that FAILS to write is loud (a dropped p1 was silent). ---
+if [ "$(id -u)" -ne 0 ]; then
+  RO_INBOX_CONFIG="$TEST_DIR/nazgul-roinbox/config.json"
+  mkdir -p "$TEST_DIR/nazgul-roinbox/inbox"
+  jq '
+    .execution.stacking.enabled = true
+    | .stack.layers = [{feat_id:"FEAT-850", branch:"feat/FEAT-850-x", pr:"https://github.com/o/r/pull/850", base:"main", state:"open", opened_at:"2026-08-02T00:00:00Z", merged_at:null}]
+  ' "$CONFIG" > "$RO_INBOX_CONFIG"
+  export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":850,"reviewDecision":"CHANGES_REQUESTED","reviews":[{"id":"REVIEW_9","state":"CHANGES_REQUESTED","body":"fix it"}]}'
+  chmod 500 "$TEST_DIR/nazgul-roinbox/inbox"
+  : > "$EVENTS_FILE_PATH"
+  ro_err=$(stack_detect_changes_requested "$RO_INBOX_CONFIG" 2>&1 >/dev/null)
+  chmod 700 "$TEST_DIR/nazgul-roinbox/inbox"
+  assert_contains "dropped p1: an unwritable inbox is named on stderr, never silently dropped" "$ro_err" "DROPPED"
+  assert_eq "dropped p1: emits stack_rework_file_failed" "$(_event_count stack_rework_file_failed)" "1"
+  unset NAZGUL_TEST_GH_PR_VIEW_JSON
+else
+  _pass "dropped p1 inbox-write failure (skipped: running as root, chmod 500 does not deny)"
+fi
+
+# --- The fail-closed contract at the REAL call site: NAZGUL_DIR unset. The
+# stacking_unavailable signal used to be an emit_event alone, which no-ops
+# without NAZGUL_DIR — the exact environment skills/start/SKILL.md and
+# agents/review-gate.md invoke stack_submit in. ---
+BR_NODIR="feat/FEAT-860-nodir"
+git -C "$TEST_DIR" checkout -q "$DEFAULT_BRANCH"
+git -C "$TEST_DIR" checkout -q -b "$BR_NODIR"
+echo "nodir change" >> "$TEST_DIR/README.md"
+git -C "$TEST_DIR" commit -qam "nodir change"
+SUB_NODIR="$TEST_DIR/nazgul/config-submit-nodir.json"
+jq --arg feat "$BR_NODIR" --arg base "$DEFAULT_BRANCH" '
+  .execution.stacking.enabled = true
+  | .branch.feature = $feat | .branch.base = $base | .feat_id = "FEAT-860"
+  | .objectives_history = [{feat_id:"FEAT-860", objective:"nazgul-dir-unset test", started_at:"2026-08-02T00:00:00Z"}]
+  | .stack.layers = []
+' "$CONFIG" > "$SUB_NODIR"
+: > "$EVENTS_FILE_PATH"
+NODIR_ERR=$(
+  unset NAZGUL_DIR EVENTS_FILE
+  export CLAUDE_PROJECT_DIR="$TEST_DIR"
+  export NAZGUL_TEST_GH_STACK_EXT=0
+  # Re-source in the subshell so emit-event.sh's module-level EVENTS_FILE is
+  # recomputed from an UNSET NAZGUL_DIR — exactly as it resolves in production.
+  unset _NAZGUL_STACK_UTILS_SOURCED
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/scripts/lib/stack-utils.sh"
+  stack_submit "$SUB_NODIR" "$TEST_DIR" "No-NAZGUL_DIR PR" "body" 2>&1 >/dev/null
+)
+assert_contains "NAZGUL_DIR unset: the degradation is announced on stderr, not only on the event bus" \
+  "$NODIR_ERR" "fail-closed fallback"
+assert_contains "NAZGUL_DIR unset: stack_submit still records the stop_gate event (root resolved on demand)" \
+  "$(cat "$EVENTS_FILE_PATH" 2>/dev/null)" '"reason":"stacking_unavailable"'
+
+# --- PR created, registry write failed: name the PR and the exact recovery. ---
+BR_REGFAIL="feat/FEAT-861-regfail"
+git -C "$TEST_DIR" checkout -q "$DEFAULT_BRANCH"
+git -C "$TEST_DIR" checkout -q -b "$BR_REGFAIL"
+echo "regfail change" >> "$TEST_DIR/README.md"
+git -C "$TEST_DIR" commit -qam "regfail change"
+SUB_REGFAIL="$TEST_DIR/nazgul/config-submit-regfail.json"
+jq --arg feat "$BR_REGFAIL" --arg base "$DEFAULT_BRANCH" '
+  .execution.stacking.enabled = true
+  | .branch.feature = $feat | .branch.base = $base | .feat_id = "FEAT-861"
+  | .objectives_history = [{feat_id:"FEAT-861", objective:"register-after-pr test", started_at:"2026-08-02T00:00:00Z"}]
+  | .stack.layers = []
+' "$CONFIG" > "$SUB_REGFAIL"
+REGFAIL_ERR=$(
+  stack_register_layer() { return 1; }
+  stack_submit "$SUB_REGFAIL" "$TEST_DIR" "Register fail PR" "body" 2>&1 >/dev/null
+)
+assert_contains "PR-then-register failure: names the PR that DOES exist" "$REGFAIL_ERR" "WAS CREATED"
+assert_contains "PR-then-register failure: prints the exact recovery command" "$REGFAIL_ERR" "stack_register_layer"
+
+# --- _su_write_history with no matching entry: a map over zero matches used to
+# return success, so the caller's warning could never fire. ---
+NOHIST_CONFIG="$TEST_DIR/nazgul/config-nohistory.json"
+jq '.objectives_history = [{feat_id:"FEAT-OTHER", objective:"unrelated", started_at:"2026-08-02T00:00:00Z"}]' "$CONFIG" > "$NOHIST_CONFIG"
+hist_err=$(_su_write_history "$NOHIST_CONFIG" "FEAT-870" "https://github.com/o/r/pull/870" 2>&1); hist_rc=$?
+assert_exit_code "_su_write_history: zero matches is a failure, not a silent success" "$hist_rc" 1
+assert_contains "_su_write_history: zero matches names the feat_id and the PR" "$hist_err" "FEAT-870"
 
 teardown_temp_dir
 rm -rf "$FAKEBIN"

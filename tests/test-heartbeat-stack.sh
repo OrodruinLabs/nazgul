@@ -183,30 +183,147 @@ assert_eq "rework at cap: picked the rework item" "$(jq -r '.picked' "$LOG")" "s
 unset NAZGUL_TEST_GH_PR_VIEW_JSON
 teardown_temp_dir
 
-# --- Test 6: active session -> stack steps skipped (no rework filed, registry
-# untouched), normal flow proceeds to the existing post-triage session guard ---
+# --- Test 6 (TASK-013, rewritten): the tick's OWN session lock must not gate
+# the stack pre-steps. Every session — including `claude -p /nazgul:heartbeat`,
+# the documented firing path — fires SessionStart, which registers a lock BEFORE
+# the tick runs. The pre-fix guard counted that lock, so on the sanctioned path
+# the pre-steps NEVER ran: no reconcile, no rework filing, and STACK_CAP_REACHED
+# left false, making the cap gate vacuous. The old Test 6 pinned that dead shape
+# as correct by testing only a foreign lock. Here the lock IS this tick's own
+# (nazgul/.session_id names it, exactly as scripts/session-context.sh:49 writes
+# it before register_session) and the block must RUN. ---
 setup_temp_dir
 setup_nazgul_dir
 create_config '.automation.heartbeat.enabled = true'
 open_layer_config "https://github.com/o/r/pull/705"
+mkdir -p "$TEST_DIR/nazgul/sessions"
+printf 'own-session-abc' > "$TEST_DIR/nazgul/.session_id"
+echo '{"pid":"1","session":"own-session-abc","started":"now"}' > "$TEST_DIR/nazgul/sessions/own-session-abc.lock"
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":705,"state":"OPEN","mergedAt":null,"reviewDecision":"CHANGES_REQUESTED","reviews":[{"id":"REVIEW_D","state":"CHANGES_REQUESTED","body":"needs a fix"}]}'
+NAZGUL_HEARTBEAT_START_CMD="true" bash "$REPO_ROOT/scripts/heartbeat.sh"
+LOG=$(latest_log)
+assert_eq "own session: the stack pre-steps RUN — the rework item is filed" "$(event_count stack_rework_filed)" "1"
+assert_eq "own session: no stack skip reason recorded (the block ran)" "$(jq -r '.stack_skipped' "$LOG")" "null"
+assert_eq "own session: the freshly-filed rework item is picked this same tick" \
+  "$(jq -r '.picked' "$LOG")" "stack-rework-pr705-REVIEW_D.md"
+unset NAZGUL_TEST_GH_PR_VIEW_JSON
+teardown_temp_dir
+
+# --- Test 6b: a lock belonging to ANOTHER session still gates the pre-steps
+# (serialization doctrine intact) — and now says so in the decision record. ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.automation.heartbeat.enabled = true'
+open_layer_config "https://github.com/o/r/pull/706"
+mkdir -p "$TEST_DIR/nazgul/inbox" "$TEST_DIR/nazgul/sessions"
+jq -n '{title:"FEAT-999 test objective", body:"do the thing", priority:5, type:"feature"}' \
+  > "$TEST_DIR/nazgul/inbox/cand.json"
+printf 'own-session-abc' > "$TEST_DIR/nazgul/.session_id"
+echo '{"pid":"1","session":"own-session-abc","started":"now"}' > "$TEST_DIR/nazgul/sessions/own-session-abc.lock"
+echo '{"pid":"2","session":"other-session","started":"now"}' > "$TEST_DIR/nazgul/sessions/other-session.lock"
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":706,"state":"OPEN","mergedAt":null,"reviewDecision":"CHANGES_REQUESTED","reviews":[{"id":"REVIEW_E","state":"CHANGES_REQUESTED","body":"needs a fix"}]}'
+bash "$REPO_ROOT/scripts/heartbeat.sh"
+LOG=$(latest_log)
+assert_eq "other session: stack pre-steps skipped (no rework filed)" "$(event_count stack_rework_filed)" "0"
+assert_eq "other session: the skip is RECORDED, not silent" \
+  "$(jq -r '.stack_skipped' "$LOG")" "stack_active_session"
+assert_eq "other session: normal flow still reaches the post-triage session guard" \
+  "$(jq -r '.reason' "$LOG")" "active_session"
+unset NAZGUL_TEST_GH_PR_VIEW_JSON
+teardown_temp_dir
+
+# --- Test 6c: locks exist but NONE can be attributed to this tick. That is
+# ambiguity, not idleness: skip, and say which it was. ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.automation.heartbeat.enabled = true'
+open_layer_config "https://github.com/o/r/pull/707"
+mkdir -p "$TEST_DIR/nazgul/sessions"
+echo '{"pid":"1","session":"unknown-owner","started":"now"}' > "$TEST_DIR/nazgul/sessions/unknown-owner.lock"
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":707,"state":"OPEN","mergedAt":null,"reviewDecision":"CHANGES_REQUESTED","reviews":[{"id":"REVIEW_F","state":"CHANGES_REQUESTED","body":"needs a fix"}]}'
+bash "$REPO_ROOT/scripts/heartbeat.sh" 2>/dev/null
+LOG=$(latest_log)
+assert_eq "session ambiguity: no rework filed" "$(event_count stack_rework_filed)" "0"
+assert_eq "session ambiguity: named reason, never a silent skip" \
+  "$(jq -r '.stack_skipped' "$LOG")" "stack_skipped_session_ambiguity"
+unset NAZGUL_TEST_GH_PR_VIEW_JSON
+teardown_temp_dir
+
+# --- Test 6d: NAZGUL_SESSION_ID (what skills/heartbeat/SKILL.md passes)
+# resolves the own lock even with no nazgul/.session_id on disk. ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.automation.heartbeat.enabled = true'
+open_layer_config "https://github.com/o/r/pull/708"
+mkdir -p "$TEST_DIR/nazgul/sessions"
+echo '{"pid":"1","session":"env-session","started":"now"}' > "$TEST_DIR/nazgul/sessions/env-session.lock"
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":708,"state":"OPEN","mergedAt":null,"reviewDecision":"CHANGES_REQUESTED","reviews":[{"id":"REVIEW_G","state":"CHANGES_REQUESTED","body":"needs a fix"}]}'
+NAZGUL_SESSION_ID="env-session" NAZGUL_HEARTBEAT_START_CMD="true" bash "$REPO_ROOT/scripts/heartbeat.sh"
+LOG=$(latest_log)
+assert_eq "NAZGUL_SESSION_ID: the passed id excludes this tick's own lock — pre-steps run" \
+  "$(event_count stack_rework_filed)" "1"
+assert_eq "NAZGUL_SESSION_ID: no skip reason recorded" "$(jq -r '.stack_skipped' "$LOG")" "null"
+unset NAZGUL_TEST_GH_PR_VIEW_JSON
+teardown_temp_dir
+
+# --- Test 6e (audit-tests (c), the wholly uncovered branch): stacking HALTED,
+# at cap, non-rework candidate. Pre-fix, stack_available folded halted into
+# "missing", the whole block was skipped, STACK_CAP_REACHED stayed false and the
+# tick auto-started a NEW objective on top of a stack it was supposed to be
+# capping. The cap reads the registry only, so it must hold under a halt. ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.automation.heartbeat.enabled = true'
+open_layer_config "https://github.com/o/r/pull/709" 1
+jq '.execution.stacking.halted = true | .execution.stacking.halt_reason = "conflict"' \
+  "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.tmp" \
+  && mv "$TEST_DIR/nazgul/config.json.tmp" "$TEST_DIR/nazgul/config.json"
 mkdir -p "$TEST_DIR/nazgul/inbox"
 jq -n '{title:"FEAT-999 test objective", body:"do the thing", priority:5, type:"feature"}' \
   > "$TEST_DIR/nazgul/inbox/cand.json"
-mkdir -p "$TEST_DIR/nazgul/sessions"
-echo '{"pid":"1","session":"s1","started":"now"}' > "$TEST_DIR/nazgul/sessions/s1.lock"
-export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":705,"state":"OPEN","mergedAt":null,"reviewDecision":"CHANGES_REQUESTED","reviews":[{"id":"REVIEW_D","state":"CHANGES_REQUESTED","body":"needs a fix"}]}'
-bash "$REPO_ROOT/scripts/heartbeat.sh"
+NAZGUL_HEARTBEAT_START_CMD="true" bash "$REPO_ROOT/scripts/heartbeat.sh" 2>/dev/null
 LOG=$(latest_log)
-assert_eq "active session: no rework item filed (stack steps skipped)" "$(event_count stack_rework_filed)" "0"
-assert_eq "active session: registry layer state unchanged" \
-  "$(jq -r '.stack.layers[0].state' "$TEST_DIR/nazgul/config.json")" "open"
-assert_eq "active session: normal flow proceeds to skipped/active_session" \
+assert_eq "halted at cap: the cap is STILL enforced — no new objective started" \
   "$(jq -r '.decision' "$LOG")" "skipped"
-assert_eq "active session: reason is active_session, not stack_cap_reached" \
-  "$(jq -r '.reason' "$LOG")" "active_session"
-assert_eq "active session: picked the pre-existing (non-stack) candidate" \
-  "$(jq -r '.picked' "$LOG")" "cand.json"
-unset NAZGUL_TEST_GH_PR_VIEW_JSON
+assert_eq "halted at cap: reason is stack_cap_reached" "$(jq -r '.reason' "$LOG")" "stack_cap_reached"
+assert_eq "halted at cap: the halt itself is recorded, not inferred from silence" \
+  "$(jq -r '.stack_skipped' "$LOG")" "stack_halted"
+assert_file_exists "halted at cap: candidate stays in the inbox" "$TEST_DIR/nazgul/inbox/cand.json"
+teardown_temp_dir
+
+# --- Test 6f: missing tooling is its own recorded reason, and the cap still
+# applies (a lost gh extension must not lift the limit on new layers). ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.automation.heartbeat.enabled = true'
+open_layer_config "https://github.com/o/r/pull/710" 1
+mkdir -p "$TEST_DIR/nazgul/inbox"
+jq -n '{title:"FEAT-999 test objective", body:"do the thing", priority:5, type:"feature"}' \
+  > "$TEST_DIR/nazgul/inbox/cand.json"
+NAZGUL_TEST_GH_AUTH=fail NAZGUL_HEARTBEAT_START_CMD="true" bash "$REPO_ROOT/scripts/heartbeat.sh" 2>/dev/null
+LOG=$(latest_log)
+assert_eq "missing tooling: named reason on the decision record" \
+  "$(jq -r '.stack_skipped' "$LOG")" "stack_tooling_missing"
+assert_eq "missing tooling: cap still enforced" "$(jq -r '.reason' "$LOG")" "stack_cap_reached"
+teardown_temp_dir
+
+# --- Test 6g: an unreadable registry fails CLOSED at the cap. Counting a
+# corrupt registry as 0 open layers would lift the cap exactly when the registry
+# is least trustworthy. ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.automation.heartbeat.enabled = true'
+jq '.execution.stacking.enabled = true | .stack.layers = "corrupt"' \
+  "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.tmp" \
+  && mv "$TEST_DIR/nazgul/config.json.tmp" "$TEST_DIR/nazgul/config.json"
+mkdir -p "$TEST_DIR/nazgul/inbox"
+jq -n '{title:"FEAT-999 test objective", body:"do the thing", priority:5, type:"feature"}' \
+  > "$TEST_DIR/nazgul/inbox/cand.json"
+NAZGUL_HEARTBEAT_START_CMD="true" bash "$REPO_ROOT/scripts/heartbeat.sh" 2>/dev/null
+LOG=$(latest_log)
+assert_eq "corrupt registry: cap fails CLOSED, no new objective started" \
+  "$(jq -r '.reason' "$LOG")" "stack_cap_reached"
+assert_file_exists "corrupt registry: candidate stays in the inbox" "$TEST_DIR/nazgul/inbox/cand.json"
 teardown_temp_dir
 
 # --- Test 7: rework handoff seam — a picked stack-rework item must stay LIVE

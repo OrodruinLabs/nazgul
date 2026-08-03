@@ -75,6 +75,13 @@ LOG_FILE="$LOG_DIR/heartbeat-${TS%%T*}.jsonl"
 ENABLED=$(jq -r '.automation.heartbeat.enabled // false' "$CONFIG" 2>/dev/null || echo false)
 [ "$ENABLED" = "true" ] && ENABLED_BOOL=true || ENABLED_BOOL=false
 
+# Why the FEAT-027 stack pre-steps did or did not run this tick — carried on
+# every decision record as `stack_skipped` (null when they ran, or when stacking
+# is simply disabled). A pre-step that skips silently is indistinguishable from
+# one that had nothing to do, which is how the whole unattended half of stacking
+# could be dead in production with every log line looking normal.
+STACK_SKIP_REASON=""
+
 # _hb_emit <decision> <reason> <objective> <seen> <triaged_json> <picked>
 #          <session_active> [started] [archived_to]
 # Appends one decision record. `started`/`archived_to` default to false/null
@@ -96,6 +103,7 @@ _hb_emit() {
     --argjson session_active "$session_active" \
     --argjson started "$started" \
     --arg archived_to "$archived_to" \
+    --arg stack_skipped "$STACK_SKIP_REASON" \
     '{
       ts: $ts,
       tick: $tick,
@@ -108,7 +116,8 @@ _hb_emit() {
       objective: (if $objective == "" then null else $objective end),
       session_active: $session_active,
       started: $started,
-      archived_to: (if $archived_to == "" then null else $archived_to end)
+      archived_to: (if $archived_to == "" then null else $archived_to end),
+      stack_skipped: (if $stack_skipped == "" then null else $stack_skipped end)
     }' >> "$LOG_FILE"
 }
 
@@ -225,23 +234,101 @@ esac
 INBOX_REL=$(jq -r '.automation.heartbeat.inbox.dir // "nazgul/inbox"' "$CONFIG" 2>/dev/null || echo "nazgul/inbox")
 INBOX_DIR="$PROJECT_ROOT/$INBOX_REL"
 
+# _hb_own_session_id -> the session id whose nazgul/sessions/<id>.lock belongs to
+# THIS tick, or "" when none can be resolved.
+#
+# Empirically (TASK-013, probed on Claude Code 2.x/macOS): CLAUDE_SESSION_ID —
+# the name session-context.sh:38 and stop-hook.sh:32 fall back to — is NOT set in
+# a skill's bash environment at all. CLAUDE_CODE_SESSION_ID IS set, but inside a
+# subagent it holds the CHILD's id, not the id SessionStart registered, so it is
+# only trustworthy when it names a lock that actually exists. The one identifier
+# guaranteed to match the lock is the one SessionStart itself persisted:
+# session-context.sh:49 writes the resolved id to nazgul/.session_id immediately
+# before register_session uses it for the lock filename. So: honor an explicit
+# NAZGUL_SESSION_ID (what skills/heartbeat/SKILL.md passes), then the two env
+# names, then the persisted file — and use the first candidate that names a real
+# lock. A candidate that names no lock means this tick holds no lock, which is
+# equally answerable: exclude nothing.
+_hb_own_session_id() {
+  local cand sanitized
+  for cand in "${NAZGUL_SESSION_ID:-}" "${CLAUDE_SESSION_ID:-}" "${CLAUDE_CODE_SESSION_ID:-}" \
+              "$( [ -s "$NAZGUL_DIR/.session_id" ] && cat "$NAZGUL_DIR/.session_id" 2>/dev/null )"; do
+    [ -n "$cand" ] || continue
+    sanitized=$(printf '%s' "$cand" | tr -c 'A-Za-z0-9_-' '_')
+    if [ -f "$NAZGUL_DIR/sessions/${sanitized}.lock" ]; then
+      printf '%s' "$sanitized"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# _hb_other_session_count -> active session locks NOT belonging to this tick.
+# Prints the count; returns 1 (with the raw count still printed) when locks
+# exist but none of them could be attributed to this tick — the caller must
+# treat that as ambiguity to report, never as "no other sessions".
+_hb_other_session_count() {
+  local total
+  total=$(count_active_sessions "$NAZGUL_DIR/sessions")
+  case "$total" in ''|*[!0-9]*) total=0 ;; esac
+  [ "$total" -eq 0 ] && { printf '0'; return 0; }
+  if _hb_own_session_id >/dev/null; then
+    printf '%s' "$((total - 1))"
+    return 0
+  fi
+  printf '%s' "$total"
+  return 1
+}
+
 # FEAT-027 stack continuation, pre-triage: reconcile any newly-merged layer
 # and file rework items for CHANGES_REQUESTED PRs so THIS tick's triage below
-# can pick them. Own count_active_sessions check — the concurrency guard
-# below sits AFTER triage and can't protect this: a rebase must never run
-# under a live session (serialization doctrine). STACK_CAP_REACHED is only
-# computed here; the actual skip decision waits until the picked item's type
-# is known (a rework fix on an existing layer is never blocked by the cap).
+# can pick them. Own session check — the concurrency guard below sits AFTER
+# triage and can't protect this: a rebase must never run under a live session
+# (serialization doctrine). That guard counted the tick's OWN SessionStart lock,
+# so on the documented `claude -p /nazgul:heartbeat` firing path it was never
+# once satisfied and this entire block was dead; the exclusion above is what
+# makes the sanctioned path the tested path.
+#
+# The CAP is computed whether or not the reconcile/detect half could run: it
+# reads only the registry, so a halted stack or missing tooling must not silently
+# un-cap new-objective auto-starts. The actual skip decision waits until the
+# picked item's type is known (a rework fix on an existing layer is never
+# blocked by the cap).
 STACK_CAP_REACHED=false
-if [ "$(stack_available "$CONFIG" 2>/dev/null || true)" = "ready" ] \
-  && [ "$(count_active_sessions "$NAZGUL_DIR/sessions")" -eq 0 ]; then
-  stack_reconcile "$CONFIG" || true
-  stack_detect_changes_requested "$CONFIG" || true
+STACK_STATE=$(stack_available "$CONFIG" 2>/dev/null || true)
+if [ "$STACK_STATE" != "disabled" ]; then
+  STACK_OTHER_SESSIONS=$(_hb_other_session_count) && STACK_SESSIONS_KNOWN=true || STACK_SESSIONS_KNOWN=false
+
+  if [ "$STACK_STATE" = "ready" ] && [ "$STACK_SESSIONS_KNOWN" != "true" ]; then
+    STACK_SKIP_REASON="stack_skipped_session_ambiguity"
+    echo "heartbeat: $STACK_OTHER_SESSIONS session lock(s) exist and none could be attributed to this tick — skipping the stack pre-steps rather than rebasing under a possibly-live session." >&2
+  elif [ "$STACK_STATE" = "ready" ] && [ "$STACK_OTHER_SESSIONS" -gt 0 ]; then
+    STACK_SKIP_REASON="stack_active_session"
+  elif [ "$STACK_STATE" = "ready" ]; then
+    stack_reconcile "$CONFIG" || STACK_SKIP_REASON="stack_reconcile_failed"
+    stack_detect_changes_requested "$CONFIG" || STACK_SKIP_REASON="stack_detect_failed"
+  else
+    case "$STACK_STATE" in
+      halted)  STACK_SKIP_REASON="stack_halted" ;;
+      missing) STACK_SKIP_REASON="stack_tooling_missing" ;;
+      invalid) STACK_SKIP_REASON="stack_config_invalid" ;;
+      *)       STACK_SKIP_REASON="stack_not_ready:$STACK_STATE" ;;
+    esac
+    echo "heartbeat: stacking is enabled but $STACK_STATE — reconcile/rework detection skipped this tick ($STACK_SKIP_REASON); the unmerged cap is still enforced below." >&2
+  fi
+
   STACK_MAX_UNMERGED=$(jq -r '.execution.stacking.max_unmerged // 3' "$CONFIG" 2>/dev/null) || STACK_MAX_UNMERGED=3
   case "$STACK_MAX_UNMERGED" in ''|*[!0-9]*) STACK_MAX_UNMERGED=3 ;; esac
-  STACK_UNMERGED=$(stack_unmerged_count "$CONFIG" 2>/dev/null) || STACK_UNMERGED=0
-  case "$STACK_UNMERGED" in ''|*[!0-9]*) STACK_UNMERGED=0 ;; esac
-  [ "$STACK_UNMERGED" -ge "$STACK_MAX_UNMERGED" ] && STACK_CAP_REACHED=true
+  if STACK_UNMERGED=$(stack_unmerged_count "$CONFIG" 2>/dev/null); then
+    case "$STACK_UNMERGED" in ''|*[!0-9]*) STACK_UNMERGED=0 ;; esac
+    [ "$STACK_UNMERGED" -ge "$STACK_MAX_UNMERGED" ] && STACK_CAP_REACHED=true
+  else
+    # Unreadable registry: fail CLOSED. Counting it as 0 would lift the cap
+    # exactly when the registry is least trustworthy.
+    STACK_CAP_REACHED=true
+    [ -n "$STACK_SKIP_REASON" ] || STACK_SKIP_REASON="stack_registry_unreadable"
+    echo "heartbeat: stack registry could not be read — treating the unmerged cap as REACHED (fail-closed)." >&2
+  fi
 fi
 
 SEEN_LIST=$(inbox_list "$INBOX_DIR" 2>/dev/null || true)

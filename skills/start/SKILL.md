@@ -176,14 +176,19 @@ item with frontmatter `type: stack-rework`, `branch:`, `pr:`. Route it before an
    source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/inbox-provider.sh"
    source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/heartbeat-triage.sh"
    REWORK_ID=""
-   if [ "$(stack_available nazgul/config.json)" = "ready" ]; then
+   REWORK_AVAIL=$(stack_available nazgul/config.json) || true
+   if [ "$REWORK_AVAIL" = "ready" ]; then
      TOP_ID=$(heartbeat_pick nazgul/inbox 2>/dev/null) || TOP_ID=""
      if [ -n "$TOP_ID" ]; then
        TOP_TYPE=$(inbox_get nazgul/inbox "$TOP_ID" 2>/dev/null | jq -r '.type // empty')
        [ "$TOP_TYPE" = "stack-rework" ] && REWORK_ID="$TOP_ID"
      fi
+   elif [ "$REWORK_AVAIL" != "disabled" ] && ls nazgul/inbox/stack-rework-*.md >/dev/null 2>&1; then
+     echo "stack_rework_unroutable: stacking is enabled but '$REWORK_AVAIL' — pending stack-rework item(s) in nazgul/inbox cannot be routed this invocation"
    fi
    ```
+   Report a `stack_rework_unroutable` line to the user before continuing: a rework item that
+   nothing can claim while the stack is halted must not sit in the inbox unmentioned.
    `inbox_list`/`inbox_get` are provider-agnostic (`scripts/lib/inbox-provider.sh`); the file
    provider is the only one that ever writes `stack-rework` items today. `branch:`/`pr:` ride
    along in the raw frontmatter unparsed by `inbox_get` (it only reads `title`/`body`/
@@ -193,17 +198,34 @@ item with frontmatter `type: stack-rework`, `branch:`, `pr:`. Route it before an
 2. If `REWORK_ID` is empty: nothing to route — continue to **Objective Identity** and
    **Smart State Detection** below as normal.
 3. If `REWORK_ID` is set:
-   a. Archive it immediately: `inbox_archive nazgul/inbox "$REWORK_ID"` — this is the ONLY
-      claim a `stack-rework` item ever gets. `scripts/heartbeat.sh` special-cases this type to
-      skip its own archive-then-start block and invoke `/nazgul:start` with no objective
-      override, leaving the item live specifically so this scan finds it — so a crash mid-rework
-      can't re-pick and double-process the same item, and the two entry paths never race over
-      the same claim.
-   b. Record the current branch, then checkout the recorded layer branch — run in bash, not zsh:
+   a. Archive it immediately, and CHECK that the archive succeeded — run in bash, not zsh:
+      ```bash
+      if ! inbox_archive nazgul/inbox "$REWORK_ID"; then
+        echo "rework_claim_failed: could not archive nazgul/inbox/$REWORK_ID — refusing to process an item this session cannot claim" >&2
+        exit 1
+      fi
+      ```
+      The archive IS the claim, and it is the ONLY claim a `stack-rework` item ever gets.
+      `scripts/heartbeat.sh` special-cases this type to skip its own archive-then-start block
+      and invoke `/nazgul:start` with no objective override, leaving the item live specifically
+      so this scan finds it — so a crash mid-rework can't re-pick and double-process the same
+      item, and the two entry paths never race over the same claim. If the archive fails, STOP
+      and tell the user: an unclaimed item processed anyway can be picked again by the next tick.
+   b. Record the current branch, then checkout the recorded layer branch. A failed checkout must
+      RESTORE THE CLAIM before stopping — otherwise the patch in step c lands on whatever branch
+      happens to be checked out (the objective's own feature branch, or `main`) while the item is
+      already archived, so nothing will ever re-file it. Run in bash, not zsh:
       ```bash
       REWORK_PRE_BRANCH=$(git branch --show-current)
-      git checkout "$REWORK_BRANCH"
+      if ! git checkout "$REWORK_BRANCH"; then
+        mv "nazgul/inbox/archive/$REWORK_ID" "nazgul/inbox/$REWORK_ID" 2>/dev/null \
+          && echo "rework_checkout_failed: could not checkout $REWORK_BRANCH — claim restored, item is live again in nazgul/inbox/$REWORK_ID" >&2 \
+          || echo "rework_checkout_failed: could not checkout $REWORK_BRANCH AND could not restore the claim — nazgul/inbox/archive/$REWORK_ID must be moved back by hand" >&2
+        exit 1
+      fi
       ```
+      Then STOP and report it — do not fall through to the patch. Likely causes are a dirty
+      working tree or the branch being checked out in another worktree; both need a human.
       The base-branch assertion (TASK-006's accidental-stacking hazard fix in
       `create_feature_branch`) does NOT apply here — this is a checkout of an already-registered
       layer branch named by the rework item itself, not a new-branch creation.
@@ -216,14 +238,27 @@ item with frontmatter `type: stack-rework`, `branch:`, `pr:`. Route it before an
       exactly as `skills/patch/SKILL.md` Step 6 item 2 would (`- [x] PATCH-NNN: [description]
       (sha: [commit])` under `## Patches`) — recovery state must stay complete even though this
       routing stops at step e below instead of running Step 6's own completion banner.
-   d. On patch DONE, push the fix and restack — run in bash, not zsh:
+   d. On patch DONE, push the fix and restack. A push or restack that fails leaves the layer's
+      remote and the rest of the stack out of date with a fix that only exists locally, and this
+      routing is about to stop — so each failure both echoes AND files a p2 inbox item, the only
+      durable channel a later tick can pick up. Run in bash, not zsh:
       ```bash
-      git push origin "$REWORK_BRANCH"
       source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/stack-utils.sh"
-      if [ "$(stack_available nazgul/config.json)" = "ready" ]; then
-        gh stack sync
+      REWORK_FAIL=""
+      if ! git push origin "$REWORK_BRANCH"; then
+        REWORK_FAIL="git push origin $REWORK_BRANCH failed — the rework commit exists only locally"
+      elif [ "$(stack_available nazgul/config.json)" = "ready" ]; then
+        gh stack sync || REWORK_FAIL="gh stack sync failed after pushing $REWORK_BRANCH — layers above it are not rebased onto the fix"
       else
-        echo "stacking_unavailable: pushed $REWORK_BRANCH but skipped the gh stack sync restack"
+        REWORK_FAIL="stacking_unavailable: pushed $REWORK_BRANCH but skipped the gh stack sync restack"
+      fi
+      if [ -n "$REWORK_FAIL" ]; then
+        echo "$REWORK_FAIL" >&2
+        _su_write_inbox_item nazgul/inbox "stack-rework-followup-$(printf '%s' "$REWORK_BRANCH" | tr -c 'A-Za-z0-9_-' '-').md" \
+          "Stack rework follow-up needed: $REWORK_BRANCH" "2" "stack-rework-followup" \
+          "branch: $REWORK_BRANCH" "$REWORK_FAIL
+
+Re-run the push/restack by hand, then delete this item."
       fi
       ```
       There is no stack-utils wrapper for a bare post-push resync — `stack_reconcile`'s
@@ -256,12 +291,19 @@ Every "Branch Setup" step referenced from a state below follows this same sequen
    if [ "$STACK_AVAIL" = "ready" ]; then
      stack_reconcile nazgul/config.json
      stack_detect_changes_requested nazgul/config.json
-     STACK_UNMERGED=$(stack_unmerged_count nazgul/config.json) || STACK_UNMERGED=0
-     case "$STACK_UNMERGED" in ''|*[!0-9]*) STACK_UNMERGED=0 ;; esac
+   elif [ "$STACK_AVAIL" != "disabled" ]; then
+     echo "stacking_unavailable: execution.stacking is enabled but stack_available reports '$STACK_AVAIL' — reconcile and rework detection did NOT run this invocation; the unmerged cap below is still enforced"
+   fi
+   if [ "$STACK_AVAIL" != "disabled" ]; then
      STACK_MAX=$(jq -r '.execution.stacking.max_unmerged // 3' nazgul/config.json) || STACK_MAX=3
      case "$STACK_MAX" in ''|*[!0-9]*) STACK_MAX=3 ;; esac
-     if [ "$STACK_UNMERGED" -ge "$STACK_MAX" ]; then
-       echo "stack_cap_reached: $STACK_UNMERGED unmerged layer(s) >= max_unmerged ($STACK_MAX)"
+     if STACK_UNMERGED=$(stack_unmerged_count nazgul/config.json); then
+       case "$STACK_UNMERGED" in ''|*[!0-9]*) STACK_UNMERGED=0 ;; esac
+       if [ "$STACK_UNMERGED" -ge "$STACK_MAX" ]; then
+         echo "stack_cap_reached: $STACK_UNMERGED unmerged layer(s) >= max_unmerged ($STACK_MAX)"
+       fi
+     else
+       echo "stack_cap_reached: stack.layers[] could not be read — failing closed rather than starting a new layer against an unreadable registry"
      fi
    fi
    ```
@@ -272,8 +314,12 @@ Every "Branch Setup" step referenced from a state below follows this same sequen
    the cap, and the remediation: "Stack cap reached: `$STACK_UNMERGED` unmerged layer(s) >=
    max_unmerged (`$STACK_MAX`). Merge a layer, or raise `execution.stacking.max_unmerged` in
    `nazgul/config.json`, then re-run `/nazgul:start`." Never proceed past the cap silently.
-   Disabled/missing/halted stacking (`STACK_AVAIL` != `ready`) skips this whole gate and falls
-   straight through to step 1, same as today.
+   If it printed `stacking_unavailable`, say so to the user as well — naming the state
+   (`missing` = gh/extension/auth, `halted` = a human-clearable halt, `invalid` = unparseable
+   config) and pointing at `/nazgul:doctor` — before continuing to step 1. The cap is enforced in
+   EVERY enabled state, not only `ready`: it reads the registry alone, so a halted stack or a
+   missing extension must never quietly lift the limit on new layers. Only `disabled` skips this
+   gate entirely.
 1. `source scripts/worktree-utils.sh` then call `create_feature_branch "$OBJECTIVE" "$(pwd)" nazgul/config.json`. This performs the full branch-setup (captures `branch.base`, stores `branch.main_worktree_path`, slugifies, `git checkout -b`, sets `feat_id`/`feat_display_id`/`afk.commit_prefix`) and calls `install_git_hooks` internally — the managed `core.hooksPath` and `branch.prior_hooks_path` are now set as a direct consequence of this one call. The helper is identity-reuse-safe per the **Objective Identity** rule above: an already-set `config.feat_id` (and its display id/commit prefix) is reused verbatim for the branch name and config fields; a fresh `FEAT-NNN` is derived from `objectives_history.length + 1` only when `feat_id` is null.
 2. History append, per **Objective Identity (use existing or assign)** above:
    - Reuse case (`feat_id` was already set): do NOT append to `objectives_history` — already done at original assignment time.
@@ -366,9 +412,11 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
           `branch.base`), the `stack.layers[]` registry update, and the
           `objectives_history[].pr` write — in BOTH modes. Do not run a separate `git push`
           or `gh pr create` here; that would duplicate what `stack_submit` already does.
-          Tooling missing while stacking is enabled degrades to the same plain PR plus a
-          loud `stop_gate reason:stacking_unavailable` event — never a silent fallback and
-          never a second prose recipe.
+          Tooling missing (or a halt) while stacking is enabled degrades to the same plain PR
+          plus BOTH a `stop_gate reason:stacking_unavailable` event and a stderr line naming
+          the state — never a silent fallback and never a second prose recipe. Surface that
+          stderr line to the user verbatim if it appears; the event alone is not a report (it
+          no-ops whenever `NAZGUL_DIR` is unset, which is the normal case here).
         - Clean up all worktrees: `source scripts/worktree-utils.sh` then `cleanup_all_worktrees "$(pwd)" nazgul/config.json` — removes every task worktree plus the worktree parent dir, and uninstalls the managed git hooks (restoring the recorded prior `core.hooksPath`) when this objective actually installed them.
      c. Output NAZGUL_COMPLETE
 4. If post-loop already run:

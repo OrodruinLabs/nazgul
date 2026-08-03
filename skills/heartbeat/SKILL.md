@@ -35,8 +35,17 @@ If `nazgul/config.json` does not exist:
 Invoke the tick engine directly — it is the entire implementation; this skill only wraps it:
 
 ```bash
-bash scripts/heartbeat.sh
+NAZGUL_SESSION_ID="$(cat nazgul/.session_id 2>/dev/null)" bash scripts/heartbeat.sh
 ```
+
+`NAZGUL_SESSION_ID` tells the tick which `nazgul/sessions/*.lock` is its OWN, so the stacking
+pre-steps' serialization guard counts only OTHER sessions. `nazgul/.session_id` is the right source
+and the env vars are not: `CLAUDE_SESSION_ID` is unset in a skill's bash environment, and
+`CLAUDE_CODE_SESSION_ID` holds a subagent's own id rather than the registered one — whereas
+`scripts/session-context.sh` persists the exact id it then registers the lock under. The variable is
+optional (the engine falls back to the same file, then to a loud
+`stack_skipped_session_ambiguity` decision record); it is passed here so the sanctioned path is
+explicit rather than inferred.
 
 `scripts/heartbeat.sh` is self-contained and trigger-agnostic: it gates on
 `automation.heartbeat.enabled`, enforces the two unconditional hard stops (BLOCKED task, security
