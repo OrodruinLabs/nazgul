@@ -4,8 +4,10 @@ set -uo pipefail
 
 # Test: scripts/lib/stack-utils.sh — FEAT-027 TASK-004 core (availability,
 # tip/count against fixture registries, register idempotency, submit in both
-# stacking modes + the stacking_unavailable fallback). `gh` is a PATH-shim
-# mock; NO network. `git push` is real, against a local bare "origin".
+# stacking modes + the stacking_unavailable fallback) PLUS TASK-005's
+# continuation half (stack_reconcile, stack_detect_changes_requested, the
+# ADR-018 exit-3/4/9 conflict/API doctrine, and rework-item filing). `gh` is a
+# PATH-shim mock; NO network. `git push` is real, against a local bare "origin".
 TEST_NAME="test-stack-utils"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -82,12 +84,42 @@ case "$sub" in
         printf 'https://github.com/o/r/pull/%s\n' "$(printf '%s' "$head" | tr '/' '-')"
         exit 0 ;;
       view)
-        branch="${1:-}"
+        ident="${1:-}"; shift || true
+        json_fields=""; has_query=0
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --json) json_fields="$2"; shift 2 ;;
+            -q|--jq) has_query=1; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        # `--json <fields> -q <query>` (used by _su_stacked_pr) extracts a
+        # scalar server-side — keep returning the plain-URL legacy behavior.
+        # Bare `--json <fields>` (stack_reconcile/stack_detect_changes_requested)
+        # returns the raw JSON object.
+        if [ -n "$json_fields" ] && [ "$has_query" -eq 0 ]; then
+          if [ "${NAZGUL_TEST_GH_PR_VIEW_JSON_FAIL:-0}" = "1" ]; then
+            echo "gh pr view --json: simulated API failure" >&2
+            exit "${NAZGUL_TEST_GH_PR_VIEW_JSON_FAIL_EXIT:-1}"
+          fi
+          payload=""
+          if [ -n "${NAZGUL_TEST_GH_PR_VIEW_JSON_MAP:-}" ] && [ -f "${NAZGUL_TEST_GH_PR_VIEW_JSON_MAP}" ]; then
+            payload=$(awk -F'\t' -v k="$ident" '$1==k{print $2; exit}' "${NAZGUL_TEST_GH_PR_VIEW_JSON_MAP}")
+          fi
+          if [ -z "$payload" ]; then
+            payload="${NAZGUL_TEST_GH_PR_VIEW_JSON:-}"
+          fi
+          if [ -z "$payload" ]; then
+            payload='{"number":1,"state":"OPEN","mergedAt":null,"reviewDecision":null,"reviews":[]}'
+          fi
+          printf '%s\n' "$payload"
+          exit 0
+        fi
         if [ "${NAZGUL_TEST_GH_PR_VIEW_FAIL:-0}" = "1" ]; then
           echo "gh pr view: simulated failure" >&2
           exit 1
         fi
-        printf 'https://github.com/o/r/pull/%s\n' "$(printf '%s' "$branch" | tr '/' '-')"
+        printf 'https://github.com/o/r/pull/%s\n' "$(printf '%s' "$ident" | tr '/' '-')"
         exit 0 ;;
       *) exit 1 ;;
     esac
@@ -105,6 +137,31 @@ case "$sub" in
           exit "$exit_code"
         fi
         echo "Submitted stack."
+        exit 0 ;;
+      sync)
+        if [ -n "${NAZGUL_TEST_GH_STACK_SYNC_LOG:-}" ]; then
+          printf 'sync called\n' >> "$NAZGUL_TEST_GH_STACK_SYNC_LOG"
+        fi
+        if [ -n "${NAZGUL_TEST_GH_STACK_SYNC_STDERR:-}" ]; then
+          echo "${NAZGUL_TEST_GH_STACK_SYNC_STDERR}" >&2
+        fi
+        exit_code="${NAZGUL_TEST_GH_STACK_SYNC_EXIT:-0}"
+        if [ "$exit_code" != "0" ]; then
+          exit "$exit_code"
+        fi
+        echo "Stack synced."
+        exit 0 ;;
+      checkout)
+        pr="${1:-}"; shift || true
+        if [ -n "${NAZGUL_TEST_GH_STACK_CHECKOUT_LOG:-}" ]; then
+          printf 'checkout called: %s\n' "$pr" >> "$NAZGUL_TEST_GH_STACK_CHECKOUT_LOG"
+        fi
+        exit_code="${NAZGUL_TEST_GH_STACK_CHECKOUT_EXIT:-0}"
+        if [ "$exit_code" != "0" ]; then
+          echo "${NAZGUL_TEST_GH_STACK_CHECKOUT_STDERR:-gh stack checkout: simulated failure}" >&2
+          exit "$exit_code"
+        fi
+        echo "Checked out stack."
         exit 0 ;;
       *) exit 1 ;;
     esac
@@ -131,6 +188,8 @@ _pass "PATH resolves to the fake gh (safety gate)"
 
 # shellcheck source=/dev/null
 source "$REPO_ROOT/scripts/lib/stack-utils.sh"
+# shellcheck source=/dev/null
+source "$REPO_ROOT/scripts/lib/heartbeat-triage.sh"
 
 # =====================================================================
 # stack_available — three distinct states, each pinned
@@ -415,6 +474,382 @@ unset NAZGUL_TEST_GH_STACK_SUBMIT_EXIT
 assert_exit_code "stack_submit: returns non-zero when gh stack submit fails (ready mode)" "$stackfail_rc" 1
 assert_eq "stack_submit: no registry write when gh stack submit fails" \
   "$(jq '.stack.layers | length' "$SUB_STACKFAIL")" "0"
+
+# =====================================================================
+# stack_available — respects the halt marker (TASK-005)
+# =====================================================================
+
+HALTED_CONFIG="$TEST_DIR/nazgul/config-halted.json"
+jq '.execution.stacking.enabled = true | .execution.stacking.halted = true | .execution.stacking.halt_reason = "conflict"' "$CONFIG" > "$HALTED_CONFIG"
+assert_eq "stack_available: halted -> missing (fail-closed, cleared only by a human)" \
+  "$(stack_available "$HALTED_CONFIG")" "missing"
+stack_available "$HALTED_CONFIG" >/dev/null; assert_exit_code "stack_available: halted returns 2" "$?" 2
+
+# =====================================================================
+# stack_reconcile / stack_detect_changes_requested — no-op when not "ready"
+# =====================================================================
+
+_event_count() {
+  local type="$1"
+  [ -f "$EVENTS_FILE_PATH" ] || { echo 0; return; }
+  jq -s --arg t "$type" '[.[] | select(.event==$t)] | length' "$EVENTS_FILE_PATH" 2>/dev/null || echo 0
+}
+
+NOTREADY_CONFIG="$TEST_DIR/nazgul/config-notready.json"
+jq --arg br "feat/FEAT-900-x" '
+  .execution.stacking.enabled = false
+  | .stack.layers = [{feat_id:"FEAT-900", branch:$br, pr:"https://github.com/o/r/pull/900", base:"main", state:"open", opened_at:"2026-08-02T00:00:00Z", merged_at:null}]
+' "$CONFIG" > "$NOTREADY_CONFIG"
+: > "$EVENTS_FILE_PATH"
+stack_reconcile "$NOTREADY_CONFIG"; notready_reconcile_rc=$?
+stack_detect_changes_requested "$NOTREADY_CONFIG"; notready_detect_rc=$?
+assert_exit_code "stack_reconcile: disabled config -> no-op, returns 0" "$notready_reconcile_rc" 0
+assert_exit_code "stack_detect_changes_requested: disabled config -> no-op, returns 0" "$notready_detect_rc" 0
+assert_eq "stack_reconcile/detect: disabled -> layer untouched (still open)" \
+  "$(jq -r '.stack.layers[0].state' "$NOTREADY_CONFIG")" "open"
+assert_eq "stack_reconcile/detect: disabled -> no events emitted" \
+  "$(_event_count stack_layer_merged)" "0"
+
+# =====================================================================
+# stack_reconcile — happy path: merged bottom layer, base advance, event
+# =====================================================================
+
+REC_CONFIG="$TEST_DIR/nazgul/config-reconcile.json"
+jq '
+  .execution.stacking.enabled = true
+  | .stack.layers = [
+      {feat_id:"FEAT-300", branch:"feat/FEAT-300-x", pr:"https://github.com/o/r/pull/300", base:"main", state:"open", opened_at:"2026-08-02T00:00:00Z", merged_at:null},
+      {feat_id:"FEAT-301", branch:"feat/FEAT-301-y", pr:"https://github.com/o/r/pull/301", base:"feat/FEAT-300-x", state:"open", opened_at:"2026-08-02T01:00:00Z", merged_at:null}
+    ]
+' "$CONFIG" > "$REC_CONFIG"
+
+PR_VIEW_MAP="$TEST_DIR/pr-view-map.tsv"
+printf 'https://github.com/o/r/pull/300\t{"number":300,"state":"MERGED","mergedAt":"2026-08-02T05:00:00Z"}\n' > "$PR_VIEW_MAP"
+printf 'https://github.com/o/r/pull/301\t{"number":301,"state":"OPEN","mergedAt":null}\n' >> "$PR_VIEW_MAP"
+export NAZGUL_TEST_GH_PR_VIEW_JSON_MAP="$PR_VIEW_MAP"
+
+: > "$EVENTS_FILE_PATH"
+SYNC_LOG="$TEST_DIR/sync-calls.log"
+export NAZGUL_TEST_GH_STACK_SYNC_LOG="$SYNC_LOG"
+stack_reconcile "$REC_CONFIG"; reconcile_rc=$?
+assert_exit_code "stack_reconcile (happy path): returns 0" "$reconcile_rc" 0
+assert_eq "stack_reconcile: merged layer marked state=merged" \
+  "$(jq -r '.stack.layers[] | select(.feat_id=="FEAT-300") | .state' "$REC_CONFIG")" "merged"
+assert_eq "stack_reconcile: merged layer merged_at from gh pr view" \
+  "$(jq -r '.stack.layers[] | select(.feat_id=="FEAT-300") | .merged_at' "$REC_CONFIG")" "2026-08-02T05:00:00Z"
+assert_eq "stack_reconcile: layer above advances base to the merged layer's OWN base" \
+  "$(jq -r '.stack.layers[] | select(.feat_id=="FEAT-301") | .base' "$REC_CONFIG")" "main"
+assert_eq "stack_reconcile: layer above stays open" \
+  "$(jq -r '.stack.layers[] | select(.feat_id=="FEAT-301") | .state' "$REC_CONFIG")" "open"
+assert_eq "stack_reconcile: gh stack sync invoked exactly once" \
+  "$(wc -l < "$SYNC_LOG" | tr -d ' ')" "1"
+assert_eq "stack_reconcile: emits stack_layer_merged exactly once" "$(_event_count stack_layer_merged)" "1"
+assert_contains "stack_reconcile: stack_layer_merged event names the feat_id" \
+  "$(cat "$EVENTS_FILE_PATH")" '"feat_id":"FEAT-300"'
+assert_eq "stack_reconcile: no conflict/api-failure events on the happy path" \
+  "$(_event_count stack_sync_conflict)$(_event_count stack_api_failure)" "00"
+
+# Idempotency: second call sees only one still-open, unmerged layer -> no sync, no new events.
+stack_reconcile "$REC_CONFIG"; reconcile_rc2=$?
+assert_exit_code "stack_reconcile: idempotent second call returns 0" "$reconcile_rc2" 0
+assert_eq "stack_reconcile: idempotent — gh stack sync NOT called again" \
+  "$(wc -l < "$SYNC_LOG" | tr -d ' ')" "1"
+assert_eq "stack_reconcile: idempotent — no additional stack_layer_merged event" \
+  "$(_event_count stack_layer_merged)" "1"
+unset NAZGUL_TEST_GH_STACK_SYNC_LOG NAZGUL_TEST_GH_PR_VIEW_JSON_MAP
+
+# =====================================================================
+# stack_reconcile — exit 4 / undocumented failure doctrine: bump, 3
+# consecutive -> halt loudly, reset-on-success
+# =====================================================================
+
+API_CONFIG="$TEST_DIR/nazgul/config-api-fail.json"
+jq '
+  .execution.stacking.enabled = true
+  | .stack.layers = [{feat_id:"FEAT-400", branch:"feat/FEAT-400-x", pr:"https://github.com/o/r/pull/400", base:"main", state:"open", opened_at:"2026-08-02T00:00:00Z", merged_at:null}]
+' "$CONFIG" > "$API_CONFIG"
+
+export NAZGUL_TEST_GH_PR_VIEW_JSON_FAIL=1
+: > "$EVENTS_FILE_PATH"
+for expect in 1 2; do
+  stack_reconcile "$API_CONFIG"; apirc=$?
+  assert_exit_code "stack_reconcile: API-failure tick #$expect still returns 0 (loop unblocked)" "$apirc" 0
+  assert_eq "stack_reconcile: api_failures bumped to $expect" \
+    "$(jq -r '.execution.stacking.api_failures' "$API_CONFIG")" "$expect"
+  assert_eq "stack_reconcile: not halted before 3 consecutive (#$expect)" \
+    "$(jq -r '.execution.stacking.halted // false' "$API_CONFIG")" "false"
+done
+stack_reconcile "$API_CONFIG"; apirc3=$?
+assert_exit_code "stack_reconcile: 3rd consecutive API failure still returns 0" "$apirc3" 0
+assert_eq "stack_reconcile: api_failures reached 3" "$(jq -r '.execution.stacking.api_failures' "$API_CONFIG")" "3"
+assert_eq "stack_reconcile: HALTED at 3 consecutive failures" \
+  "$(jq -r '.execution.stacking.halted' "$API_CONFIG")" "true"
+assert_eq "stack_reconcile: halt_reason names the API-failure path" \
+  "$(jq -r '.execution.stacking.halt_reason' "$API_CONFIG")" "api_failures"
+assert_eq "stack_reconcile: 3 stack_api_failure events emitted (loud, never silent)" \
+  "$(_event_count stack_api_failure)" "3"
+
+# A 4th call after halting is a no-op (stack_available now reports "missing").
+stack_reconcile "$API_CONFIG"; apirc4=$?
+assert_exit_code "stack_reconcile: post-halt call still returns 0" "$apirc4" 0
+assert_eq "stack_reconcile: post-halt call does not bump the counter further" \
+  "$(jq -r '.execution.stacking.api_failures' "$API_CONFIG")" "3"
+unset NAZGUL_TEST_GH_PR_VIEW_JSON_FAIL
+
+# reset-on-success: 2 failures then one success clears the counter to 0.
+RESET_CONFIG="$TEST_DIR/nazgul/config-api-reset.json"
+jq '
+  .execution.stacking.enabled = true
+  | .stack.layers = [{feat_id:"FEAT-401", branch:"feat/FEAT-401-x", pr:"https://github.com/o/r/pull/401", base:"main", state:"open", opened_at:"2026-08-02T00:00:00Z", merged_at:null}]
+' "$CONFIG" > "$RESET_CONFIG"
+export NAZGUL_TEST_GH_PR_VIEW_JSON_FAIL=1
+stack_reconcile "$RESET_CONFIG" >/dev/null
+stack_reconcile "$RESET_CONFIG" >/dev/null
+assert_eq "stack_reconcile (reset test): api_failures at 2 before the reset" \
+  "$(jq -r '.execution.stacking.api_failures' "$RESET_CONFIG")" "2"
+unset NAZGUL_TEST_GH_PR_VIEW_JSON_FAIL
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":401,"state":"OPEN","mergedAt":null}'
+stack_reconcile "$RESET_CONFIG" >/dev/null
+assert_eq "stack_reconcile: a subsequent success resets api_failures to 0" \
+  "$(jq -r '.execution.stacking.api_failures' "$RESET_CONFIG")" "0"
+assert_eq "stack_reconcile: reset — still not halted" \
+  "$(jq -r '.execution.stacking.halted // false' "$RESET_CONFIG")" "false"
+unset NAZGUL_TEST_GH_PR_VIEW_JSON
+
+# =====================================================================
+# stack_reconcile — overloaded exit 3 disambiguation + divergence-via-exit-0
+# + undocumented exit 9 (ADR-018 binding adjustments)
+# =====================================================================
+
+_sync_doctrine_fixture() {
+  local feat="$1" out="$TEST_DIR/nazgul/$1-config.json"
+  jq --arg f "$feat" --arg pr "https://github.com/o/r/pull/$feat" --arg br "feat/$feat-x" '
+    .execution.stacking.enabled = true
+    | .stack.layers = [{feat_id: $f, branch: $br, pr: $pr, base: "main", state: "open", opened_at: "2026-08-02T00:00:00Z", merged_at: null}]
+  ' "$CONFIG" > "$out" 2>/dev/null
+  printf '%s\n' "$out"
+}
+
+# --- stale local tracking after `link` (exit 3, benign — NOT a conflict) ---
+STALE_CONFIG=$(_sync_doctrine_fixture "FEAT-500")
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":500,"state":"MERGED","mergedAt":"2026-08-02T06:00:00Z"}'
+export NAZGUL_TEST_GH_STACK_SYNC_EXIT=3
+export NAZGUL_TEST_GH_STACK_SYNC_STDERR="✗ local stack composition differs from remote"
+: > "$EVENTS_FILE_PATH"
+stack_reconcile "$STALE_CONFIG" >/dev/null
+assert_eq "stack_reconcile: overloaded exit 3 (stale tracking) — NOT halted" \
+  "$(jq -r '.execution.stacking.halted // false' "$STALE_CONFIG")" "false"
+assert_eq "stack_reconcile: stale tracking — no stack_sync_conflict event" \
+  "$(_event_count stack_sync_conflict)" "0"
+assert_file_not_exists "stack_reconcile: stale tracking — no conflict inbox item filed" \
+  "$TEST_DIR/nazgul/inbox/stack-sync-conflict.md"
+
+# --- genuine rebase conflict (exit 3, distinct message) ---
+CONFLICT_CONFIG=$(_sync_doctrine_fixture "FEAT-501")
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":501,"state":"MERGED","mergedAt":"2026-08-02T06:00:00Z"}'
+export NAZGUL_TEST_GH_STACK_SYNC_EXIT=3
+export NAZGUL_TEST_GH_STACK_SYNC_STDERR="Conflict detected rebasing onto main"
+: > "$EVENTS_FILE_PATH"
+stack_reconcile "$CONFLICT_CONFIG" >/dev/null
+assert_eq "stack_reconcile: genuine conflict (exit 3) — HALTED, never auto-resolved" \
+  "$(jq -r '.execution.stacking.halted' "$CONFLICT_CONFIG")" "true"
+assert_eq "stack_reconcile: genuine conflict — halt_reason" \
+  "$(jq -r '.execution.stacking.halt_reason' "$CONFLICT_CONFIG")" "conflict"
+assert_eq "stack_reconcile: genuine conflict — emits stack_sync_conflict" \
+  "$(_event_count stack_sync_conflict)" "1"
+assert_file_exists "stack_reconcile: genuine conflict — p1 inbox item filed" \
+  "$TEST_DIR/nazgul/inbox/stack-sync-conflict.md"
+assert_eq "stack_reconcile: conflict inbox item — priority 1" \
+  "$(sed -n 's/^priority:[[:space:]]*//p' "$TEST_DIR/nazgul/inbox/stack-sync-conflict.md" | head -1)" "1"
+assert_eq "stack_reconcile: conflict inbox item — type stack-conflict" \
+  "$(sed -n 's/^type:[[:space:]]*//p' "$TEST_DIR/nazgul/inbox/stack-sync-conflict.md" | head -1)" "stack-conflict"
+
+# --- silent-success divergence: exit 0, but stderr says it diverged/aborted ---
+DIVERGE_CONFIG=$(_sync_doctrine_fixture "FEAT-502")
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":502,"state":"MERGED","mergedAt":"2026-08-02T06:00:00Z"}'
+export NAZGUL_TEST_GH_STACK_SYNC_EXIT=0
+export NAZGUL_TEST_GH_STACK_SYNC_STDERR="Your local stack has diverged from the stack on GitHub. Sync aborted - no changes were made"
+: > "$EVENTS_FILE_PATH"
+stack_reconcile "$DIVERGE_CONFIG" >/dev/null
+assert_eq "stack_reconcile: divergence-via-exit-0 — HALTED despite exit 0 (never trust exit code alone)" \
+  "$(jq -r '.execution.stacking.halted' "$DIVERGE_CONFIG")" "true"
+assert_eq "stack_reconcile: divergence-via-exit-0 — emits stack_sync_conflict" \
+  "$(_event_count stack_sync_conflict)" "1"
+
+# --- undocumented exit 9 (observed on an auth failure) folds into API-failure ---
+EXIT9_CONFIG=$(_sync_doctrine_fixture "FEAT-503")
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":503,"state":"MERGED","mergedAt":"2026-08-02T06:00:00Z"}'
+export NAZGUL_TEST_GH_STACK_SYNC_EXIT=9
+export NAZGUL_TEST_GH_STACK_SYNC_STDERR="Stacked PRs are not enabled for this repository"
+: > "$EVENTS_FILE_PATH"
+stack_reconcile "$EXIT9_CONFIG" >/dev/null
+assert_eq "stack_reconcile: undocumented exit 9 — NOT treated as a conflict" \
+  "$(jq -r '.execution.stacking.halted // false' "$EXIT9_CONFIG")" "false"
+assert_eq "stack_reconcile: undocumented exit 9 — folds into api_failure (bumped to 1)" \
+  "$(jq -r '.execution.stacking.api_failures' "$EXIT9_CONFIG")" "1"
+assert_eq "stack_reconcile: undocumented exit 9 — emits stack_api_failure" \
+  "$(_event_count stack_api_failure)" "1"
+assert_contains "stack_reconcile: exit 9 event carries the raw exit code" \
+  "$(cat "$EVENTS_FILE_PATH")" '"exit_code":9'
+
+unset NAZGUL_TEST_GH_PR_VIEW_JSON NAZGUL_TEST_GH_STACK_SYNC_EXIT NAZGUL_TEST_GH_STACK_SYNC_STDERR
+
+# =====================================================================
+# stack_reconcile — remote-ahead layer import (ADR-018 binding adjustment #2:
+# a clean sync must not be trusted to auto-import a remote-only layer;
+# `_su_import_remote_layer` explicitly `gh stack checkout`s the PR the
+# vendor's own "already contains #<N>" warning names)
+# =====================================================================
+
+# --- remote-ahead layer named in a clean sync's warning -> checked out + registered ---
+REMOTE_CONFIG=$(_sync_doctrine_fixture "FEAT-504")
+REMOTE_PR_VIEW_MAP="$TEST_DIR/pr-view-map-remote.tsv"
+printf 'https://github.com/o/r/pull/FEAT-504\t{"number":504,"state":"MERGED","mergedAt":"2026-08-02T06:00:00Z"}\n' > "$REMOTE_PR_VIEW_MAP"
+printf '12\t{"headRefName":"feat/FEAT-777-imported","baseRefName":"feat/FEAT-504-x"}\n' >> "$REMOTE_PR_VIEW_MAP"
+export NAZGUL_TEST_GH_PR_VIEW_JSON_MAP="$REMOTE_PR_VIEW_MAP"
+export NAZGUL_TEST_GH_STACK_SYNC_EXIT=0
+export NAZGUL_TEST_GH_STACK_SYNC_STDERR="⚠ A stack on GitHub already contains #12, which is not in your local stack. Run 'gh stack checkout <pr>' to import the full stack"
+CHECKOUT_LOG="$TEST_DIR/checkout-calls.log"
+: > "$CHECKOUT_LOG"
+export NAZGUL_TEST_GH_STACK_CHECKOUT_LOG="$CHECKOUT_LOG"
+: > "$EVENTS_FILE_PATH"
+stack_reconcile "$REMOTE_CONFIG" >/dev/null
+assert_eq "stack_reconcile: remote-ahead — gh stack checkout invoked for #12" \
+  "$(cat "$CHECKOUT_LOG")" "checkout called: 12"
+assert_eq "stack_reconcile: remote-ahead — registry gains the imported layer's branch" \
+  "$(jq -r '.stack.layers[] | select(.feat_id=="remote-pr-12") | .branch' "$REMOTE_CONFIG")" "feat/FEAT-777-imported"
+assert_eq "stack_reconcile: remote-ahead — imported layer's base from gh pr view" \
+  "$(jq -r '.stack.layers[] | select(.feat_id=="remote-pr-12") | .base' "$REMOTE_CONFIG")" "feat/FEAT-504-x"
+assert_eq "stack_reconcile: remote-ahead — imported layer starts open" \
+  "$(jq -r '.stack.layers[] | select(.feat_id=="remote-pr-12") | .state' "$REMOTE_CONFIG")" "open"
+assert_eq "stack_reconcile: remote-ahead — emits stack_remote_layer_imported" \
+  "$(_event_count stack_remote_layer_imported)" "1"
+assert_eq "stack_reconcile: remote-ahead — NOT halted (benign, not a conflict)" \
+  "$(jq -r '.execution.stacking.halted // false' "$REMOTE_CONFIG")" "false"
+unset NAZGUL_TEST_GH_STACK_CHECKOUT_LOG NAZGUL_TEST_GH_PR_VIEW_JSON_MAP NAZGUL_TEST_GH_STACK_SYNC_STDERR
+
+# --- checkout failure (exit 3, composition-differs flavor) -> loud, non-halting, retryable ---
+CHECKOUT_FAIL_CONFIG=$(_sync_doctrine_fixture "FEAT-505")
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":505,"state":"MERGED","mergedAt":"2026-08-02T06:00:00Z"}'
+export NAZGUL_TEST_GH_STACK_SYNC_EXIT=0
+export NAZGUL_TEST_GH_STACK_SYNC_STDERR="⚠ A stack on GitHub already contains #13, which is not in your local stack. Run 'gh stack checkout <pr>' to import the full stack"
+export NAZGUL_TEST_GH_STACK_CHECKOUT_EXIT=3
+export NAZGUL_TEST_GH_STACK_CHECKOUT_STDERR="✗ local stack composition differs from remote"
+: > "$EVENTS_FILE_PATH"
+stack_reconcile "$CHECKOUT_FAIL_CONFIG" >/dev/null
+assert_eq "stack_reconcile: remote-ahead checkout failure — NOT halted (benign/retryable, not a conflict)" \
+  "$(jq -r '.execution.stacking.halted // false' "$CHECKOUT_FAIL_CONFIG")" "false"
+assert_eq "stack_reconcile: remote-ahead checkout failure — registry NOT updated for #13" \
+  "$(jq -r '[.stack.layers[] | select(.feat_id=="remote-pr-13")] | length' "$CHECKOUT_FAIL_CONFIG")" "0"
+assert_eq "stack_reconcile: remote-ahead checkout failure — emits stack_remote_layer_import_failed" \
+  "$(_event_count stack_remote_layer_import_failed)" "1"
+assert_contains "stack_reconcile: remote-ahead checkout failure — event carries the exit code" \
+  "$(cat "$EVENTS_FILE_PATH")" '"exit_code":3'
+unset NAZGUL_TEST_GH_PR_VIEW_JSON NAZGUL_TEST_GH_STACK_CHECKOUT_EXIT NAZGUL_TEST_GH_STACK_CHECKOUT_STDERR NAZGUL_TEST_GH_STACK_SYNC_STDERR
+
+# --- no-drift: clean sync with no remote-ahead warning -> no checkout, no import event ---
+NODRIFT_CONFIG=$(_sync_doctrine_fixture "FEAT-506")
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":506,"state":"MERGED","mergedAt":"2026-08-02T06:00:00Z"}'
+export NAZGUL_TEST_GH_STACK_SYNC_EXIT=0
+NODRIFT_CHECKOUT_LOG="$TEST_DIR/checkout-calls-nodrift.log"
+: > "$NODRIFT_CHECKOUT_LOG"
+export NAZGUL_TEST_GH_STACK_CHECKOUT_LOG="$NODRIFT_CHECKOUT_LOG"
+: > "$EVENTS_FILE_PATH"
+stack_reconcile "$NODRIFT_CONFIG" >/dev/null
+assert_eq "stack_reconcile: no-drift sync — gh stack checkout never invoked" \
+  "$(cat "$NODRIFT_CHECKOUT_LOG")" ""
+assert_eq "stack_reconcile: no-drift sync — no remote-layer-imported event" \
+  "$(_event_count stack_remote_layer_imported)" "0"
+unset NAZGUL_TEST_GH_STACK_CHECKOUT_LOG NAZGUL_TEST_GH_PR_VIEW_JSON NAZGUL_TEST_GH_STACK_SYNC_EXIT
+
+# =====================================================================
+# stack_detect_changes_requested — rework filing: idempotency, priority,
+# archive-aware dedup, body size cap
+# =====================================================================
+
+REWORK_CONFIG="$TEST_DIR/nazgul/config-rework.json"
+jq '
+  .execution.stacking.enabled = true
+  | .execution.stacking.rework_priority = 1
+  | .stack.layers = [{feat_id:"FEAT-600", branch:"feat/FEAT-600-x", pr:"https://github.com/o/r/pull/600", base:"main", state:"open", opened_at:"2026-08-02T00:00:00Z", merged_at:null}]
+' "$CONFIG" > "$REWORK_CONFIG"
+INBOX_DIR="$TEST_DIR/nazgul/inbox"
+
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":600,"reviewDecision":"CHANGES_REQUESTED","reviews":[{"id":"REVIEW_1","state":"CHANGES_REQUESTED","body":"please fix the null check"}]}'
+: > "$EVENTS_FILE_PATH"
+stack_detect_changes_requested "$REWORK_CONFIG"; detect_rc=$?
+assert_exit_code "stack_detect_changes_requested: returns 0" "$detect_rc" 0
+REWORK_FILE="$INBOX_DIR/stack-rework-pr600-REVIEW_1.md"
+assert_file_exists "stack_detect_changes_requested: files exactly the expected candidate" "$REWORK_FILE"
+assert_eq "rework item: priority (rework_priority)" \
+  "$(sed -n 's/^priority:[[:space:]]*//p' "$REWORK_FILE" | head -1)" "1"
+assert_eq "rework item: type stack-rework" \
+  "$(sed -n 's/^type:[[:space:]]*//p' "$REWORK_FILE" | head -1)" "stack-rework"
+assert_eq "rework item: branch: frontmatter" \
+  "$(sed -n 's/^branch:[[:space:]]*//p' "$REWORK_FILE" | head -1)" "feat/FEAT-600-x"
+assert_eq "rework item: pr: frontmatter" \
+  "$(sed -n 's/^pr:[[:space:]]*//p' "$REWORK_FILE" | head -1)" "https://github.com/o/r/pull/600"
+assert_contains "rework item: body carries the review content (data, not instructions)" \
+  "$(cat "$REWORK_FILE")" "please fix the null check"
+assert_eq "stack_detect_changes_requested: emits stack_rework_filed exactly once" \
+  "$(_event_count stack_rework_filed)" "1"
+assert_contains "stack_rework_filed event: names the review id" \
+  "$(cat "$EVENTS_FILE_PATH")" '"review_id":"REVIEW_1"'
+
+# Idempotency: same PR + review id, second call files nothing new.
+stack_detect_changes_requested "$REWORK_CONFIG"; detect_rc2=$?
+assert_exit_code "stack_detect_changes_requested: idempotent second call returns 0" "$detect_rc2" 0
+assert_eq "stack_detect_changes_requested: idempotent — no second stack_rework_filed event" \
+  "$(_event_count stack_rework_filed)" "1"
+
+# Archive-aware dedup: once claimed (archived), re-detecting the SAME PR+review never re-files it.
+mkdir -p "$INBOX_DIR/archive"
+mv "$REWORK_FILE" "$INBOX_DIR/archive/stack-rework-pr600-REVIEW_1.md"
+: > "$EVENTS_FILE_PATH"
+stack_detect_changes_requested "$REWORK_CONFIG" >/dev/null
+assert_file_not_exists "stack_detect_changes_requested: archived item is NOT re-filed to the inbox" "$REWORK_FILE"
+assert_eq "stack_detect_changes_requested: archive-aware dedup — no event on a re-detect" \
+  "$(_event_count stack_rework_filed)" "0"
+
+# heartbeat_pick honors rework_priority (1) over a pre-existing priority-2 fixture.
+# Clean slate: earlier scenarios in this file left their own p1 candidates
+# (e.g. stack-sync-conflict.md) in this same inbox dir.
+rm -f "$INBOX_DIR"/*.md
+cat > "$INBOX_DIR/other-lower-priority-item.md" << 'MDEOF'
+---
+title: Some other lower-priority item
+priority: 2
+type: generic
+---
+Unrelated body text.
+MDEOF
+PICK2_CONFIG="$TEST_DIR/nazgul/config-pick2.json"
+jq '
+  .execution.stacking.enabled = true
+  | .stack.layers = [{feat_id:"FEAT-601", branch:"feat/FEAT-601-x", pr:"https://github.com/o/r/pull/601", base:"main", state:"open", opened_at:"2026-08-02T00:00:00Z", merged_at:null}]
+' "$CONFIG" > "$PICK2_CONFIG"
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":601,"reviewDecision":"CHANGES_REQUESTED","reviews":[{"id":"REVIEW_2","state":"CHANGES_REQUESTED","body":"another fix needed"}]}'
+stack_detect_changes_requested "$PICK2_CONFIG" >/dev/null
+assert_eq "heartbeat_pick: priority-1 rework item outranks the priority-2 fixture" \
+  "$(heartbeat_pick "$INBOX_DIR")" "stack-rework-pr601-REVIEW_2.md"
+
+# Body size cap: a long review body is clamped to connectors.github.pull.max_body_bytes.
+CAP_CONFIG="$TEST_DIR/nazgul/config-cap.json"
+jq '
+  .execution.stacking.enabled = true
+  | .connectors.github.pull.max_body_bytes = 50
+  | .stack.layers = [{feat_id:"FEAT-602", branch:"feat/FEAT-602-x", pr:"https://github.com/o/r/pull/602", base:"main", state:"open", opened_at:"2026-08-02T00:00:00Z", merged_at:null}]
+' "$CONFIG" > "$CAP_CONFIG"
+LONG_BODY=$(printf 'A%.0s' $(seq 1 200))
+export NAZGUL_TEST_GH_PR_VIEW_JSON="{\"number\":602,\"reviewDecision\":\"CHANGES_REQUESTED\",\"reviews\":[{\"id\":\"REVIEW_3\",\"state\":\"CHANGES_REQUESTED\",\"body\":\"$LONG_BODY\"}]}"
+stack_detect_changes_requested "$CAP_CONFIG" >/dev/null
+CAP_FILE="$INBOX_DIR/stack-rework-pr602-REVIEW_3.md"
+assert_file_exists "body cap: rework item filed" "$CAP_FILE"
+CAP_BODY_TEXT=$(awk 'BEGIN{fence=0} /^---$/{fence++; next} fence>=2{print}' "$CAP_FILE")
+assert_eq "body cap: review body clamped to max_body_bytes (50 'A's, not 200)" \
+  "$(printf '%s' "$CAP_BODY_TEXT" | grep -o 'A' | wc -l | tr -d ' ')" "50"
+
+unset NAZGUL_TEST_GH_PR_VIEW_JSON
 
 teardown_temp_dir
 rm -rf "$FAKEBIN"
