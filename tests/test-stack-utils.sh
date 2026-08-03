@@ -151,6 +151,18 @@ case "$sub" in
         fi
         echo "Stack synced."
         exit 0 ;;
+      checkout)
+        pr="${1:-}"; shift || true
+        if [ -n "${NAZGUL_TEST_GH_STACK_CHECKOUT_LOG:-}" ]; then
+          printf 'checkout called: %s\n' "$pr" >> "$NAZGUL_TEST_GH_STACK_CHECKOUT_LOG"
+        fi
+        exit_code="${NAZGUL_TEST_GH_STACK_CHECKOUT_EXIT:-0}"
+        if [ "$exit_code" != "0" ]; then
+          echo "${NAZGUL_TEST_GH_STACK_CHECKOUT_STDERR:-gh stack checkout: simulated failure}" >&2
+          exit "$exit_code"
+        fi
+        echo "Checked out stack."
+        exit 0 ;;
       *) exit 1 ;;
     esac
     ;;
@@ -681,6 +693,74 @@ assert_contains "stack_reconcile: exit 9 event carries the raw exit code" \
   "$(cat "$EVENTS_FILE_PATH")" '"exit_code":9'
 
 unset NAZGUL_TEST_GH_PR_VIEW_JSON NAZGUL_TEST_GH_STACK_SYNC_EXIT NAZGUL_TEST_GH_STACK_SYNC_STDERR
+
+# =====================================================================
+# stack_reconcile — remote-ahead layer import (ADR-018 binding adjustment #2:
+# a clean sync must not be trusted to auto-import a remote-only layer;
+# `_su_import_remote_layer` explicitly `gh stack checkout`s the PR the
+# vendor's own "already contains #<N>" warning names)
+# =====================================================================
+
+# --- remote-ahead layer named in a clean sync's warning -> checked out + registered ---
+REMOTE_CONFIG=$(_sync_doctrine_fixture "FEAT-504")
+REMOTE_PR_VIEW_MAP="$TEST_DIR/pr-view-map-remote.tsv"
+printf 'https://github.com/o/r/pull/FEAT-504\t{"number":504,"state":"MERGED","mergedAt":"2026-08-02T06:00:00Z"}\n' > "$REMOTE_PR_VIEW_MAP"
+printf '12\t{"headRefName":"feat/FEAT-777-imported","baseRefName":"feat/FEAT-504-x"}\n' >> "$REMOTE_PR_VIEW_MAP"
+export NAZGUL_TEST_GH_PR_VIEW_JSON_MAP="$REMOTE_PR_VIEW_MAP"
+export NAZGUL_TEST_GH_STACK_SYNC_EXIT=0
+export NAZGUL_TEST_GH_STACK_SYNC_STDERR="⚠ A stack on GitHub already contains #12, which is not in your local stack. Run 'gh stack checkout <pr>' to import the full stack"
+CHECKOUT_LOG="$TEST_DIR/checkout-calls.log"
+: > "$CHECKOUT_LOG"
+export NAZGUL_TEST_GH_STACK_CHECKOUT_LOG="$CHECKOUT_LOG"
+: > "$EVENTS_FILE_PATH"
+stack_reconcile "$REMOTE_CONFIG" >/dev/null
+assert_eq "stack_reconcile: remote-ahead — gh stack checkout invoked for #12" \
+  "$(cat "$CHECKOUT_LOG")" "checkout called: 12"
+assert_eq "stack_reconcile: remote-ahead — registry gains the imported layer's branch" \
+  "$(jq -r '.stack.layers[] | select(.feat_id=="remote-pr-12") | .branch' "$REMOTE_CONFIG")" "feat/FEAT-777-imported"
+assert_eq "stack_reconcile: remote-ahead — imported layer's base from gh pr view" \
+  "$(jq -r '.stack.layers[] | select(.feat_id=="remote-pr-12") | .base' "$REMOTE_CONFIG")" "feat/FEAT-504-x"
+assert_eq "stack_reconcile: remote-ahead — imported layer starts open" \
+  "$(jq -r '.stack.layers[] | select(.feat_id=="remote-pr-12") | .state' "$REMOTE_CONFIG")" "open"
+assert_eq "stack_reconcile: remote-ahead — emits stack_remote_layer_imported" \
+  "$(_event_count stack_remote_layer_imported)" "1"
+assert_eq "stack_reconcile: remote-ahead — NOT halted (benign, not a conflict)" \
+  "$(jq -r '.execution.stacking.halted // false' "$REMOTE_CONFIG")" "false"
+unset NAZGUL_TEST_GH_STACK_CHECKOUT_LOG NAZGUL_TEST_GH_PR_VIEW_JSON_MAP NAZGUL_TEST_GH_STACK_SYNC_STDERR
+
+# --- checkout failure (exit 3, composition-differs flavor) -> loud, non-halting, retryable ---
+CHECKOUT_FAIL_CONFIG=$(_sync_doctrine_fixture "FEAT-505")
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":505,"state":"MERGED","mergedAt":"2026-08-02T06:00:00Z"}'
+export NAZGUL_TEST_GH_STACK_SYNC_EXIT=0
+export NAZGUL_TEST_GH_STACK_SYNC_STDERR="⚠ A stack on GitHub already contains #13, which is not in your local stack. Run 'gh stack checkout <pr>' to import the full stack"
+export NAZGUL_TEST_GH_STACK_CHECKOUT_EXIT=3
+export NAZGUL_TEST_GH_STACK_CHECKOUT_STDERR="✗ local stack composition differs from remote"
+: > "$EVENTS_FILE_PATH"
+stack_reconcile "$CHECKOUT_FAIL_CONFIG" >/dev/null
+assert_eq "stack_reconcile: remote-ahead checkout failure — NOT halted (benign/retryable, not a conflict)" \
+  "$(jq -r '.execution.stacking.halted // false' "$CHECKOUT_FAIL_CONFIG")" "false"
+assert_eq "stack_reconcile: remote-ahead checkout failure — registry NOT updated for #13" \
+  "$(jq -r '[.stack.layers[] | select(.feat_id=="remote-pr-13")] | length' "$CHECKOUT_FAIL_CONFIG")" "0"
+assert_eq "stack_reconcile: remote-ahead checkout failure — emits stack_remote_layer_import_failed" \
+  "$(_event_count stack_remote_layer_import_failed)" "1"
+assert_contains "stack_reconcile: remote-ahead checkout failure — event carries the exit code" \
+  "$(cat "$EVENTS_FILE_PATH")" '"exit_code":3'
+unset NAZGUL_TEST_GH_PR_VIEW_JSON NAZGUL_TEST_GH_STACK_CHECKOUT_EXIT NAZGUL_TEST_GH_STACK_CHECKOUT_STDERR NAZGUL_TEST_GH_STACK_SYNC_STDERR
+
+# --- no-drift: clean sync with no remote-ahead warning -> no checkout, no import event ---
+NODRIFT_CONFIG=$(_sync_doctrine_fixture "FEAT-506")
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":506,"state":"MERGED","mergedAt":"2026-08-02T06:00:00Z"}'
+export NAZGUL_TEST_GH_STACK_SYNC_EXIT=0
+NODRIFT_CHECKOUT_LOG="$TEST_DIR/checkout-calls-nodrift.log"
+: > "$NODRIFT_CHECKOUT_LOG"
+export NAZGUL_TEST_GH_STACK_CHECKOUT_LOG="$NODRIFT_CHECKOUT_LOG"
+: > "$EVENTS_FILE_PATH"
+stack_reconcile "$NODRIFT_CONFIG" >/dev/null
+assert_eq "stack_reconcile: no-drift sync — gh stack checkout never invoked" \
+  "$(cat "$NODRIFT_CHECKOUT_LOG")" ""
+assert_eq "stack_reconcile: no-drift sync — no remote-layer-imported event" \
+  "$(_event_count stack_remote_layer_imported)" "0"
+unset NAZGUL_TEST_GH_STACK_CHECKOUT_LOG NAZGUL_TEST_GH_PR_VIEW_JSON NAZGUL_TEST_GH_STACK_SYNC_EXIT
 
 # =====================================================================
 # stack_detect_changes_requested — rework filing: idempotency, priority,

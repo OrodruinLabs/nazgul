@@ -16,13 +16,15 @@
 #
 # `stack_reconcile`'s `_su_classify_sync_result` implements the ADR-018 §2
 # doctrine: a `diverged from the stack on GitHub` / `Sync aborted` stderr match
-# means conflict REGARDLESS of exit code (incl. exit 0); exit 3 is disambiguated
-# by stderr text (`local stack composition differs from remote` = benign stale
-# tracking, anything else = genuine conflict); any exit outside {0,2,3} folds
-# into the API-failure/three-strikes branch. Known gap: a clean remote-ahead
-# sync may leave a new layer un-imported locally (README overclaims); safe
-# recovery needs `gh stack view`'s output contract, which ADR-018 did not
-# empirically verify — deferred to a task that re-probes it first.
+# means conflict REGARDLESS of exit code (incl. exit 0); a clean sync whose
+# stderr contains "already contains #<N>, which is not in your local stack"
+# means the remote gained a layer this sync did NOT import despite the
+# README's claim (v0.1.0, confirmed empirically) — `_su_import_remote_layer`
+# extracts <N> and runs `gh stack checkout <N>` explicitly, per ADR-018 §2's
+# binding requirement; exit 3 is disambiguated by stderr text (`local stack
+# composition differs from remote` = benign stale tracking, anything else =
+# genuine conflict); any exit outside {0,2,3} folds into the API-failure/
+# three-strikes branch.
 #
 # Idempotent source guard; NOT `set -euo pipefail` (sourced into caller shells
 # that own their own shell options).
@@ -379,10 +381,12 @@ _su_advance_base_above() {
 }
 
 # _su_classify_sync_result <exit_code> <combined_output> -> one of
-# ok / conflict / stale_tracking / not_in_stack / api_failure. Implements
-# ADR-018's binding disambiguation: divergence text wins regardless of exit
-# code (a non-interactive `sync` can abort with exit 0 on real divergence);
-# exit 3 splits on stderr text (stale local tracking after `link` is benign,
+# ok / conflict / remote_ahead / stale_tracking / not_in_stack / api_failure.
+# Implements ADR-018's binding disambiguation: divergence text wins regardless
+# of exit code (a non-interactive `sync` can abort with exit 0 on real
+# divergence); a clean sync's "already contains #<N>" text (also exit 0) means
+# a remote-only layer was left unimported (see `_su_import_remote_layer`); exit
+# 3 splits on stderr text (stale local tracking after `link` is benign,
 # anything else is a genuine conflict); anything outside {0,2,3} is an API
 # failure, never assumed to be a conflict.
 _su_classify_sync_result() {
@@ -390,6 +394,10 @@ _su_classify_sync_result() {
   case "$text" in
     *"diverged from the stack on GitHub"*|*"Sync aborted"*)
       printf 'conflict\n'; return 0 ;;
+  esac
+  case "$text" in
+    *"already contains #"*"which is not in your local stack"*)
+      printf 'remote_ahead\n'; return 0 ;;
   esac
   case "$rc" in
     0) printf 'ok\n' ;;
@@ -424,12 +432,57 @@ nazgul/config.json to resume. See nazgul/docs/ADR-018-gh-stack-primitive.md."
   _su_write_inbox_item "$inbox_dir" "stack-sync-conflict.md" "$title" "1" "stack-conflict" "" "$body"
 }
 
+# _su_extract_remote_ahead_pr <sync_stderr> -> the PR number named in
+# gh-stack's "already contains #<N>, which is not in your local stack"
+# warning, or empty if unparseable.
+_su_extract_remote_ahead_pr() {
+  printf '%s' "$1" | sed -n 's/.*already contains #\([0-9][0-9]*\).*/\1/p' | head -1
+}
+
+# _su_import_remote_layer <config> <pr> -> ADR-018 binding adjustment #2's
+# last bullet: a clean remote-ahead `sync` leaves the new layer un-imported
+# locally despite the README's claim (v0.1.0, confirmed empirically). Runs
+# the explicit `gh stack checkout <pr>` the vendor's own warning names, then
+# registers the layer under a synthesized feat_id — it was link'd or created
+# outside Nazgul's own objective flow, so it has no feat_id of its own.
+# Checkout failure (e.g. the exit-3 "composition differs" flavor ADR-018 area
+# 3 documents) is logged loudly but does NOT halt stacking — same
+# benign/retryable posture as stale_tracking, not a rebase conflict; the next
+# reconcile tick will retry.
+_su_import_remote_layer() {
+  local config="$1" pr="$2" out rc pr_json branch base
+  out=$(gh stack checkout "$pr" 2>&1); rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'stack-utils: gh stack checkout %s failed (exit %s): %s\n' "$pr" "$rc" "$out" >&2
+    emit_event "stack_remote_layer_import_failed" pr "$pr" exit_code:n "$rc" detail "$(_su_oneline "$out")"
+    return 1
+  fi
+  pr_json=$(gh pr view "$pr" --json headRefName,baseRefName 2>&1); rc=$?
+  if [ "$rc" -ne 0 ]; then
+    _su_bump_api_failures "$config"
+    emit_event "stack_api_failure" stage "remote_import_pr_view" pr "$pr" auth_status "$(_su_auth_status_tag)"
+    return 1
+  fi
+  branch=$(printf '%s' "$pr_json" | jq -r '.headRefName // empty' 2>/dev/null) || branch=""
+  base=$(printf '%s' "$pr_json" | jq -r '.baseRefName // empty' 2>/dev/null) || base=""
+  [ -n "$branch" ] || return 1
+  if [ -z "$base" ]; then
+    base=$(jq -r '.branch.base // "main"' "$config" 2>/dev/null) || base="main"
+  fi
+  stack_register_layer "$config" "remote-pr-${pr}" "$branch" "$base" "$pr" || return 1
+  emit_event "stack_remote_layer_imported" pr "$pr" feat_id "remote-pr-${pr}" branch "$branch"
+}
+
 # stack_reconcile <config> -> per open layer (bottom of the stack first):
 # merged? -> mark registry state:"merged"/merged_at, emit `stack_layer_merged`.
 # If anything merged this call, run ONE `gh stack sync` to cascade the rebase,
 # classify its result (see `_su_classify_sync_result`), and act on ADR-018's
 # doctrine: conflict -> p1 inbox item + halt stacking + `stack_sync_conflict`,
-# NEVER auto-resolved; stale_tracking/not_in_stack -> benign, logged only;
+# NEVER auto-resolved; remote_ahead -> `_su_import_remote_layer` explicitly
+# `gh stack checkout`s the unreflected PR and registers it (loud
+# `stack_remote_layer_imported`; a checkout failure is logged loudly via
+# `stack_remote_layer_import_failed` but does NOT halt — benign/retryable,
+# not a rebase conflict); stale_tracking/not_in_stack -> benign, logged only;
 # api_failure (incl. undocumented exit 9) -> `_su_bump_api_failures` +
 # `stack_api_failure` (3 consecutive -> halted, see `_su_halt_stacking`). A
 # `gh pr view` failure mid-loop stops further PR checks (but still syncs any
@@ -484,6 +537,16 @@ stack_reconcile() {
       ok|stale_tracking|not_in_stack)
         _su_reset_api_failures "$config"
         [ "$class" = "ok" ] || printf 'stack-utils: gh stack sync: %s (benign, not a conflict): %s\n' "$class" "$sync_out" >&2
+        ;;
+      remote_ahead)
+        _su_reset_api_failures "$config"
+        local remote_pr
+        remote_pr=$(_su_extract_remote_ahead_pr "$sync_out")
+        if [ -n "$remote_pr" ]; then
+          _su_import_remote_layer "$config" "$remote_pr"
+        else
+          printf 'stack-utils: gh stack sync: remote-ahead warning detected but PR number unparseable: %s\n' "$sync_out" >&2
+        fi
         ;;
       conflict)
         _su_reset_api_failures "$config"
