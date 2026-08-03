@@ -434,7 +434,7 @@ cat > "$FAKEBIN_STACK/gh" << 'FAKE_GH_STACK_EOF'
 case "$1 $2" in
   "auth status") [ "${NAZGUL_TEST_GH_AUTH:-ok}" = "ok" ] && exit 0 || exit 1 ;;
   "extension list")
-    [ "${NAZGUL_TEST_GH_STACK_EXT:-yes}" = "yes" ] && printf 'gh stack\tgithub/gh-stack\tv0.1.0\n'
+    [ "${NAZGUL_TEST_GH_STACK_EXT:-yes}" = "yes" ] && printf 'gh stack\tgithub/gh-stack\t%s\n' "${NAZGUL_TEST_GH_STACK_VER-v0.1.0}"
     exit 0 ;;
   "pr view")
     [ "${NAZGUL_TEST_GH_PR_STATE:-OPEN}" = "FAIL" ] && exit 1
@@ -668,6 +668,56 @@ create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' \
   '.execution.stacking.halted = true' '.execution.stacking.halt_reason = "conflict"'
 OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_contains "halted fixture: remediation names api_failures, not just the halted flag" "$OUT" "api_failures"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# TASK-014 — vendor-drift canary. stack-utils.sh classifies `gh stack sync`'s
+# outcome by matching gh-stack v0.1.0's exact stderr strings, and a reword in a
+# v0.1.x release turns a real divergence into a clean sync AND resets the
+# three-strikes counter — with the test suite still green, because the fixtures
+# are the code's own strings (audit-failpaths.md, top risk #1). Doctor already
+# reads the version in `gh extension list`'s row; it just never compared it.
+# ---------------------------------------------------------------------------
+
+# --- installed version matches the ADR pin -> pass, and SAYS which version ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "version canary (pinned v0.1.0): aggregate exit 0" "$EXIT" 0
+assert_contains "version canary (pinned v0.1.0): stacking still passes" "$OUT" "$(printf 'pass\tstacking')"
+assert_contains "version canary (pinned v0.1.0): the pass names the version it checked" "$OUT" "gh-stack v0.1.0"
+teardown_temp_dir
+
+# --- a different installed version -> warn naming both versions, the coupled
+# strings, and where they are matched ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+OUT=$(NAZGUL_TEST_GH_STACK_VER=v0.2.0 PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "version canary (drifted v0.2.0): aggregate exit 1 (warn)" "$EXIT" 1
+assert_contains "version canary (drifted v0.2.0): stacking warns" "$OUT" "$(printf 'warn\tstacking')"
+assert_contains "version canary (drifted v0.2.0): names the installed version" "$OUT" "gh-stack v0.2.0 is installed"
+assert_contains "version canary (drifted v0.2.0): names the pinned version" "$OUT" "ADR-018 pinned v0.1.0"
+assert_contains "version canary (drifted v0.2.0): names the string-coupling risk" "$OUT" "diverged from the stack on GitHub"
+assert_contains "version canary (drifted v0.2.0): points at the classifier that does the matching" "$OUT" "_su_classify_sync_result"
+assert_contains "version canary (drifted v0.2.0): points at ADR-018 §4" "$OUT" "ADR-018 §4"
+assert_not_contains "version canary (drifted v0.2.0): never a pass on a version nobody probed" "$OUT" "$(printf 'pass\tstacking')"
+teardown_temp_dir
+
+# --- the row carries no version at all: the canary could not run. That is not
+# "matches the pin" — it is reported as its own answer (RULES §15). ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+OUT=$(NAZGUL_TEST_GH_STACK_VER= PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "version canary (no version in the row): aggregate exit 0 (note is non-blocking)" "$EXIT" 0
+assert_contains "version canary (no version in the row): notes" "$OUT" "$(printf 'note\tstacking')"
+assert_contains "version canary (no version in the row): says the canary could not run" "$OUT" "canary could NOT run"
+assert_not_contains "version canary (no version in the row): never a pass claiming the version was checked" "$OUT" "$(printf 'pass\tstacking')"
 teardown_temp_dir
 
 rm -rf "$FAKEBIN_STACK"

@@ -264,6 +264,18 @@ teardown_temp_dir
 # back-on-base pin the ROLLBACK, which is what separates this fix from a bare
 # fail-and-leave-the-branch.
 # ---------------------------------------------------------------------------
+
+# assertions.sh has no SKIPPED status, only pass/fail — so a root run used to
+# drop the five assertions below with no trace at all, leaving "everything
+# passed" indistinguishable from "the only test of the config-write check never
+# ran" (audit-tests.md, coverage honesty). Same local-counter idiom as
+# tests/test-shellcheck.sh:54-58.
+TESTS_SKIPPED=0
+_skip() {
+  TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
+  printf "  SKIP: %s\n" "$1"
+}
+
 if [ "$(id -u)" -ne 0 ]; then
   setup_temp_dir
   setup_git_repo
@@ -294,6 +306,12 @@ if [ "$(id -u)" -ne 0 ]; then
     "$(cat "$CFG_W")" "$CFG_BEFORE_W"
 
   teardown_temp_dir
+else
+  _skip "create_feature_branch: failed config write returns non-zero (root: mode bits not enforced)"
+  _skip "create_feature_branch: failed write names the rollback in its diagnostic (root)"
+  _skip "create_feature_branch: failed write leaves NO orphan branch (rollback) (root)"
+  _skip "create_feature_branch: failed write returns the session to the base branch (root)"
+  _skip "create_feature_branch: failed write leaves config.json byte-identical (root)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -610,6 +628,10 @@ teardown_temp_dir
 
 export PATH="$WU_BASE_PATH"
 rm -rf "$FAKEBIN"
+
+if [ "$TESTS_SKIPPED" -gt 0 ]; then
+  echo "  ($TESTS_SKIPPED assertion(s) SKIPPED — running as root, where read-only mode bits are not enforced)"
+fi
 
 report_results
 exit $?
