@@ -11,7 +11,8 @@ set -euo pipefail
 # PROJECT_ROOT — its only fix path is the remediation text in each message.
 #
 # TASK-001 shipped the engine plus checks (b), (f), (g). TASK-002 added
-# checks (a), (c), (d). This task (TASK-003) adds check (e).
+# checks (a), (c), (d). TASK-003 added check (e). FEAT-027/TASK-009 adds
+# checks (h), (i).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/nazgul-root.sh
@@ -281,6 +282,100 @@ check_stdin_hazard() {
   _doc_report note stdin-hazard "Hook scripts that read stdin via 'cat' without a bounded, non-tty-aware guard can block forever under a non-tty, never-EOF stdin. When running such scripts (or the test harness) outside a real hook context, redirect stdin: 'script < /dev/null'. Informational only; does not affect this run's exit code."
 }
 
+# (h) Stacking tooling: only when execution.stacking.enabled is true. Checks
+# the SAME preconditions stack_available() (scripts/lib/stack-utils.sh) gates
+# on, in the same order, so doctor and production code never disagree on what
+# "available" means — duplicated read-only per ADR-018 rather than sourced,
+# so this check can name exactly which precondition failed (stack_available
+# only returns a collapsed "missing"). Extension presence is detected via
+# `gh extension list` text (ADR-018 binding adjustment #1) — `gh stack` is
+# never invoked to probe, since an absent extension produces indistinguishable
+# generic gh CLI routing noise.
+check_stacking() {
+  if [ "$(_doc_cfg '.execution.stacking.enabled // false' 'false')" != "true" ]; then
+    _doc_report pass stacking "Not applicable — execution.stacking.enabled is false."
+    return 0
+  fi
+
+  if [ "$(_doc_cfg '.execution.stacking.halted // false' 'false')" = "true" ]; then
+    local halt_reason
+    halt_reason="$(_doc_cfg '.execution.stacking.halt_reason // "unknown"' 'unknown')"
+    _doc_report warn stacking "execution.stacking.enabled is true but stacking is halted (reason: $halt_reason) — resolve the underlying sync conflict, then clear execution.stacking.halted in nazgul/config.json to resume."
+    return 0
+  fi
+
+  if ! command -v gh >/dev/null 2>&1; then
+    _doc_report warn stacking "execution.stacking.enabled is true but gh is not on PATH — install the GitHub CLI ('brew install gh') and run 'gh auth login'."
+    return 0
+  fi
+
+  if ! gh extension list 2>/dev/null | grep -q "github/gh-stack"; then
+    _doc_report warn stacking "execution.stacking.enabled is true but the gh-stack extension is not installed — run 'gh extension install github/gh-stack'."
+    return 0
+  fi
+
+  if ! gh auth status >/dev/null 2>&1; then
+    _doc_report warn stacking "execution.stacking.enabled is true but gh is not authenticated — run 'gh auth login'."
+    return 0
+  fi
+
+  _doc_report pass stacking "execution.stacking.enabled is true; gh, the gh-stack extension, and gh auth are all ready."
+}
+
+# (i) Registry-vs-GitHub drift: only when stacking is enabled and
+# `stack.layers[]` has open entries. A layer's registry state is "open" but
+# GitHub's PR is MERGED/CLOSED -> warn (drift). No recorded PR, or the PR
+# state can't be read from GitHub -> note, never a false pass (RULES §15:
+# looked-and-found-none vs never-looked).
+check_stack_registry() {
+  if [ "$(_doc_cfg '.execution.stacking.enabled // false' 'false')" != "true" ]; then
+    _doc_report pass stack-registry "Not applicable — execution.stacking.enabled is false."
+    return 0
+  fi
+
+  local open_count
+  open_count="$(_doc_cfg '[.stack.layers[]? | select(.state == "open")] | length' '0')"
+  case "$open_count" in ''|*[!0-9]*) open_count=0 ;; esac
+  if [ "$open_count" -eq 0 ]; then
+    _doc_report pass stack-registry "Not applicable — stack.layers[] has no open entries."
+    return 0
+  fi
+
+  if ! command -v gh >/dev/null 2>&1; then
+    _doc_report note stack-registry "gh is not on PATH — cannot verify $open_count open stack.layers[] entries against GitHub. Install gh (and run 'gh auth login') then re-run /nazgul:doctor."
+    return 0
+  fi
+
+  local feat_id pr state drifted="" unreadable=0
+  while IFS=$'\t' read -r feat_id pr; do
+    [ -n "$feat_id" ] || continue
+    if [ -z "$pr" ] || [ "$pr" = "null" ]; then
+      unreadable=$((unreadable + 1))
+      continue
+    fi
+    state="$(gh pr view "$pr" --json state -q '.state' 2>/dev/null)" || state=""
+    if [ -z "$state" ]; then
+      unreadable=$((unreadable + 1))
+      continue
+    fi
+    case "$state" in
+      MERGED|CLOSED) drifted="$drifted $feat_id($state)" ;;
+    esac
+  done < <(jq -r '.stack.layers[]? | select(.state == "open") | [.feat_id, (.pr // "")] | @tsv' "$CONFIG" 2>/dev/null)
+
+  if [ -n "$drifted" ]; then
+    _doc_report warn stack-registry "Registry says open but GitHub disagrees for:$drifted — run a heartbeat tick (or /nazgul:start) to reconcile the stack registry."
+    return 0
+  fi
+
+  if [ "$unreadable" -gt 0 ]; then
+    _doc_report note stack-registry "$unreadable of $open_count open stack.layers[] entries have no recorded PR, or their PR state could not be read from GitHub — registry drift cannot be assessed for them."
+    return 0
+  fi
+
+  _doc_report pass stack-registry "All $open_count open stack.layers[] entries match GitHub's PR state."
+}
+
 main() {
   check_config_present
   check_plugin_version
@@ -289,6 +384,8 @@ main() {
   check_invoking_shell
   check_nazgul_dir_env
   check_config_schema
+  check_stacking
+  check_stack_registry
   check_stdin_hazard
   exit "$_DOC_WORST"
 }
