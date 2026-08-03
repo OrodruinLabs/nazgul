@@ -209,5 +209,35 @@ assert_eq "active session: picked the pre-existing (non-stack) candidate" \
 unset NAZGUL_TEST_GH_PR_VIEW_JSON
 teardown_temp_dir
 
+# --- Test 7: rework handoff seam — a picked stack-rework item must stay LIVE
+# in the inbox (not archived by this generic block) and the start command
+# must receive NO objective override, so Stack Rework Routing's own live-inbox
+# scan (skills/start/SKILL.md) can find and claim it itself. Uses a RECORDING
+# NAZGUL_HEARTBEAT_START_CMD stub (captures argv) instead of "true" — Tests
+# 1/5 mock away this exact seam and would not have caught the archive-before-
+# routing-scan race (GROUP-4 Blocking Issue 1, adversarially confirmed 95). ---
+setup_temp_dir
+setup_nazgul_dir
+create_config '.automation.heartbeat.enabled = true'
+open_layer_config "https://github.com/o/r/pull/706" 3
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":706,"state":"OPEN","mergedAt":null,"reviewDecision":"CHANGES_REQUESTED","reviews":[{"id":"REVIEW_E","state":"CHANGES_REQUESTED","body":"needs a fix"}]}'
+REWORK_ID="stack-rework-pr706-REVIEW_E.md"
+CAPTURE_FILE="$TEST_DIR/start-cmd-capture.txt"
+cat > "$FAKEBIN/record-start-cmd" << CAPEOF
+#!/usr/bin/env bash
+{ printf 'argc=%s\n' "\$#"; for a in "\$@"; do printf 'arg=%s\n' "\$a"; done; } > "$CAPTURE_FILE"
+CAPEOF
+chmod +x "$FAKEBIN/record-start-cmd"
+NAZGUL_HEARTBEAT_START_CMD="$FAKEBIN/record-start-cmd" bash "$REPO_ROOT/scripts/heartbeat.sh"
+LOG=$(latest_log)
+assert_file_exists "rework handoff: picked item stays LIVE in the inbox (not archived)" "$TEST_DIR/nazgul/inbox/$REWORK_ID"
+assert_eq "rework handoff: start command received NO objective argument" "$(head -1 "$CAPTURE_FILE" 2>/dev/null)" "argc=0"
+assert_eq "rework handoff: decision is started" "$(jq -r '.decision' "$LOG")" "started"
+assert_eq "rework handoff: reason reflects rework handoff" "$(jq -r '.reason' "$LOG")" "rework_handoff"
+assert_eq "rework handoff: archived_to is null (heartbeat did not claim it)" "$(jq -r '.archived_to' "$LOG")" "null"
+rm -f "$FAKEBIN/record-start-cmd"
+unset NAZGUL_TEST_GH_PR_VIEW_JSON
+teardown_temp_dir
+
 rm -rf "$FAKEBIN"
 report_results
