@@ -53,6 +53,22 @@ test_second_worktree_install_does_not_disarm_first() {
 - [ ] **Step 4: Run** filter — PASS. Confirm existing single-worktree git-hooks tests still pass unchanged.
 - [ ] **Step 5: Commit**: `fix: worktree-scoped core.hooksPath — second feature worktree no longer disarms the first's guards`
 
+### Task 1.5: Probe — Remote Control server-mode composability (timeboxed, non-blocking)
+
+Half-day timebox, before Task 2 freezes the worktree directory convention (2026-08-03
+platform research). Question: can a `claude remote-control --spawn worktree` server-mode
+session adopt — or be pointed at — a pre-created named worktree + branch off a chosen
+base, with its own `nazgul/` brain and hooks firing? Deliverable: ADR appendix with the
+commands recorded verbatim (Objective A probe precedent, spec §6).
+
+**Non-blocking:** Task 2 ships regardless of the outcome — branch naming and base-branch
+choice are Nazgul stacking policy, and no first-party spawner supplies them. The probe
+decides only: (a) whether Task 5's operator docs gain a "server-mode session hosting"
+paragraph (`claude remote-control --spawn worktree` as the session multiplexer above
+Nazgul-created worktrees); (b) whether the `<repo>-worktrees/<feat_id>` directory
+convention needs aligning with what server mode can serve. Inconclusive at timebox →
+record that and proceed unchanged.
+
 ### Task 2: `create_feature_worktree()` (self-contained feature sandbox)
 
 **Files:**
