@@ -226,6 +226,36 @@ if [ -n "$WORKTREE_DIR" ] && [ -d "$WORKTREE_DIR" ]; then
   WORKTREE_COUNT=$(find "$WORKTREE_DIR" -maxdepth 1 -name 'TASK-*' -type d 2>/dev/null | wc -l | tr -d ' ')
 fi
 
+# Stack map (FEAT-027, schema v35+): empty unless stacking is enabled or a
+# layer exists; a malformed `.stack` (non-object) falls through the same
+# jq-error-then-fallback path old-schema configs already use, never a crash.
+STACK_LINE=""
+STACK_ENABLED=$(jq -r 'if (.execution.stacking.enabled == true) then "true" else "false" end' "$CONFIG" 2>/dev/null || echo "false")
+STACK_LAYER_COUNT=$(jq -r '[.stack.layers[]?] | length' "$CONFIG" 2>/dev/null || echo "0")
+if [ "$STACK_ENABLED" = "true" ] || [ "$STACK_LAYER_COUNT" -gt 0 ]; then
+  STACK_MAX=$(jq -r '.execution.stacking.max_unmerged // 3' "$CONFIG" 2>/dev/null || echo "3")
+  STACK_OPEN=$(jq -r '[.stack.layers[]? | select(.state == "open")] | length' "$CONFIG" 2>/dev/null || echo "0")
+  STACK_TIP_BRANCH=$(jq -r '([.stack.layers[]? | select(.state == "open")] | sort_by(.opened_at) | last // {}) | (.branch // "")' "$CONFIG" 2>/dev/null || echo "")
+  STACK_TIP_PR=$(jq -r '([.stack.layers[]? | select(.state == "open")] | sort_by(.opened_at) | last // {}) | (.pr // "")' "$CONFIG" 2>/dev/null || echo "")
+  STACK_HALTED=$(jq -r 'if (.execution.stacking.halted == true) then "true" else "false" end' "$CONFIG" 2>/dev/null || echo "false")
+  STACK_HALT_REASON=$(jq -r '.execution.stacking.halt_reason // ""' "$CONFIG" 2>/dev/null || echo "")
+  STACK_LINE="Stack: ${STACK_OPEN} open / cap ${STACK_MAX}"
+  if [ -n "$STACK_TIP_BRANCH" ]; then
+    STACK_TIP_PR_NUM=""
+    if [[ "$STACK_TIP_PR" =~ ([0-9]+)$ ]]; then
+      STACK_TIP_PR_NUM="${BASH_REMATCH[1]}"
+    fi
+    if [ -n "$STACK_TIP_PR_NUM" ]; then
+      STACK_LINE="${STACK_LINE} | tip: ${STACK_TIP_BRANCH} (PR #${STACK_TIP_PR_NUM} open)"
+    else
+      STACK_LINE="${STACK_LINE} | tip: ${STACK_TIP_BRANCH} (no PR yet)"
+    fi
+  fi
+  if [ "$STACK_HALTED" = "true" ]; then
+    STACK_LINE="${STACK_LINE} | HALTED${STACK_HALT_REASON:+: $STACK_HALT_REASON}"
+  fi
+fi
+
 # Output context
 cat << CONTEXT_EOF
 Nazgul loop state — iteration ${ITERATION}/${MAX_ITER} | Mode: ${MODE} | Objective: ${OBJECTIVE}
@@ -250,6 +280,7 @@ $([ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agen
 $([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first." || true)
 Reviewers: ${REVIEWERS}
 $([ -n "$FEATURE_BRANCH" ] && echo "Branch: ${FEATURE_BRANCH} → ${BASE_BRANCH} | Worktrees: ${WORKTREE_COUNT}" || true)
+$([ -n "$STACK_LINE" ] && echo "$STACK_LINE" || true)
 Git: ${GIT_BRANCH} — ${GIT_LAST}
 Latest checkpoint: ${LATEST_CHECKPOINT}
 $([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "WARNING: Read nazgul/reviews/${ACTIVE_TASK}/consolidated-feedback.md for reviewer feedback." || true)
