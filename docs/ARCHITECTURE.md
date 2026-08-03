@@ -41,7 +41,8 @@ The event stream captures the complete lifecycle:
 - **Compaction milestones** — checkpoints during context compression
 - **Subagent lifecycle** — when specialized agents (implementer, discovery, etc.) complete
 - **Subagent empty/verdict-less returns** — `subagent_empty_return` (reasons `empty_final_text`|`no_verdict_line`, actions `resumed`|`exhausted`|`detected_only`) fires for any completing subagent whose transcript shows no usable final text, or (for reviewers) no fenced verdict line
-- **Gate-triggered stops** — `stop_gate` (reasons `afk_timeout`, `in_flight_hold`, `in_flight_stale`) fires whenever a stop-hook gate ends or holds a turn, so the telemetry always shows a mechanism acted rather than a bare `exit 0`
+- **Gate-triggered stops** — `stop_gate` (reasons `afk_timeout`, `in_flight_hold`, `in_flight_stale`, `stacking_unavailable`) fires whenever a stop-hook gate ends or holds a turn, so the telemetry always shows a mechanism acted rather than a bare `exit 0`
+- **Stacked-PR continuation lifecycle** — `stack_layer_merged`, `stack_rework_filed`, `stack_sync_conflict`, `stack_api_failure`, `stack_remote_layer_imported`/`stack_remote_layer_import_failed` (opt-in, `execution.stacking`) — see `docs/CONFIGURATION.md` → **Stacked-PR Continuation**
 - **Budget/cost warnings** — proactive alerts before spending limits
 
 See `docs/superpowers/specs/2026-06-24-telemetry-bus-design.md` for the full event taxonomy and schema.
@@ -123,6 +124,7 @@ The review gate's Step 3.75 applies auto-fixes, re-runs tests, and only surfaces
 - `test.yml` — runs unit/integration tests on push and PR
 - `e2e-tests.yml` — E2E skill tests via `claude -p` (manual trigger)
 - `skill-docs.yml` — checks SKILL.md freshness on PRs touching skills/partials
+- `e2e-stack.yml` — two-layer `gh-stack` E2E against a live scratch repo (manual trigger, needs a `STACK_E2E_GH_TOKEN` secret)
 
 ## Self-Improvement Mode
 Agents optionally self-rate their experience (0-10) and file structured JSON reports via `scripts/file-improvement-report.sh`. Enabled per-project in config. `/nazgul:metrics` aggregates reports.
