@@ -48,11 +48,16 @@ gh extension list 2>/dev/null | grep -q "github/gh-stack" || fail "gh-stack exte
 WORKDIR=""
 REPO_SLUG=""
 CREATED_REPO=0
+PR1_URL=""
 PR2_URL=""
 
 cleanup() {
   local rc=$?
   step "Cleanup"
+  if [ -n "$PR1_URL" ]; then
+    gh pr close "$PR1_URL" --delete-branch >/dev/null 2>&1 \
+      || echo "WARNING: could not close PR $PR1_URL — close it manually if it is still open." >&2
+  fi
   if [ -n "$PR2_URL" ]; then
     gh pr close "$PR2_URL" --delete-branch >/dev/null 2>&1 \
       || echo "WARNING: could not close PR $PR2_URL — close it manually if it is still open." >&2
@@ -115,7 +120,8 @@ git -C "$REPO_DIR" checkout -b "$BRANCH1" "$TRUNK" >/dev/null 2>&1 || fail "coul
 echo "layer 1" > "$REPO_DIR/layer1.txt"
 git -C "$REPO_DIR" add layer1.txt
 git -C "$REPO_DIR" commit -q -m "layer1: add layer1.txt" || fail "commit for layer1 failed"
-jq --arg br "$BRANCH1" --arg f "$FEAT1" '.branch.feature = $br | .feat_id = $f' "$CONFIG" > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
+jq --arg br "$BRANCH1" --arg f "$FEAT1" '.branch.feature = $br | .feat_id = $f' "$CONFIG" > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG" \
+  || fail "could not update scratch config.json for layer 1"
 
 PR1_URL=$(stack_submit "$CONFIG" "$REPO_DIR" "E2E layer 1" "E2E stack test layer 1") || fail "stack_submit failed for layer 1"
 [ -n "$PR1_URL" ] || fail "stack_submit for layer 1 returned no PR URL"
@@ -131,7 +137,8 @@ echo "layer 2" > "$REPO_DIR/layer2.txt"
 git -C "$REPO_DIR" add layer2.txt
 git -C "$REPO_DIR" commit -q -m "layer2: add layer2.txt" || fail "commit for layer2 failed"
 stack_register_layer "$CONFIG" "$FEAT2" "$BRANCH2" "$BASE2" || fail "stack_register_layer failed for layer 2"
-jq --arg br "$BRANCH2" --arg f "$FEAT2" '.branch.feature = $br | .feat_id = $f' "$CONFIG" > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
+jq --arg br "$BRANCH2" --arg f "$FEAT2" '.branch.feature = $br | .feat_id = $f' "$CONFIG" > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG" \
+  || fail "could not update scratch config.json for layer 2"
 
 PR2_URL=$(stack_submit "$CONFIG" "$REPO_DIR" "E2E layer 2" "E2E stack test layer 2") || fail "stack_submit failed for layer 2"
 [ -n "$PR2_URL" ] || fail "stack_submit for layer 2 returned no PR URL"
