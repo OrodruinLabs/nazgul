@@ -139,6 +139,26 @@ assert_exit_code "traversal: all-malicious inbox is nothing actionable" "$PICK_E
 assert_eq "traversal: all-malicious inbox has no output" "$PICK_OUT" ""
 teardown_temp_dir
 
+# --- Test 10 (FEAT-027 TASK-008): a p1 stack-rework item outranks a corpus
+# of >=2-priority items — heartbeat_pick needs no code change for this ---
+setup_temp_dir
+INBOX="$TEST_DIR/nazgul/inbox"; mkdir -p "$INBOX"
+mkcand "$INBOX" a.json 3 "third"
+mkcand "$INBOX" b.json 2 "second"
+cat > "$INBOX/stack-rework-pr700-REVIEW_X.md" << 'MDEOF'
+---
+title: Stack rework: PR #700 changes requested
+priority: 1
+type: stack-rework
+---
+fix it
+MDEOF
+run_pick "$INBOX"
+assert_exit_code "rework priority: exit 0 with a winner" "$PICK_EC" 0
+assert_eq "rework priority: p1 stack-rework outranks the >=2-priority corpus" \
+  "$PICK_OUT" "stack-rework-pr700-REVIEW_X.md"
+teardown_temp_dir
+
 # --- Provider gate (TASK-008): github degrades safe, unknown fails closed (full tick) ---
 hb_last_decision() {
   local f

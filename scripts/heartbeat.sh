@@ -26,6 +26,8 @@ source "$SCRIPT_DIR/lib/inbox-provider.sh"
 source "$SCRIPT_DIR/lib/heartbeat-triage.sh"
 # shellcheck source=lib/connector-github.sh
 source "$SCRIPT_DIR/lib/connector-github.sh"
+# shellcheck source=lib/stack-utils.sh
+source "$SCRIPT_DIR/lib/stack-utils.sh"
 
 # Degrade to a safe no-op when Nazgul is uninitialized, matching stop-hook.sh.
 [ -f "$CONFIG" ] || exit 0
@@ -122,14 +124,24 @@ _hb_objective() {
 }
 
 # _hb_start <objective> -> invoke the auto-start command with the objective
-# passed as a single argv argument (data, never eval'd/shell-interpolated).
-# Injectable via NAZGUL_HEARTBEAT_START_CMD (called as `$CMD "$objective"`) for
-# testing; defaults to the real `/nazgul:start` invocation, mode/parallel flags
-# taken from automation.heartbeat.auto_start.{mode,parallel} (default yolo/true).
+# passed as a single argv argument (data, never eval'd/shell-interpolated). An
+# EMPTY objective means "no override" — the real path then omits the quoted
+# objective span entirely (bare `/nazgul:start $mode_flag $par_flag`), and the
+# injectable path calls NAZGUL_HEARTBEAT_START_CMD with NO argv at all, so a
+# recording stub can assert "received no objective" the same way in both.
+# Used for a stack-rework pick (see the rework-handoff branch below): Stack
+# Rework Routing (skills/start/SKILL.md) re-scans the live inbox itself and
+# must see the still-live item, not a synthesized new-objective string.
+# Defaults to the real `/nazgul:start` invocation, mode/parallel flags taken
+# from automation.heartbeat.auto_start.{mode,parallel} (default yolo/true).
 _hb_start() {
   local objective="$1"
   if [ -n "${NAZGUL_HEARTBEAT_START_CMD:-}" ]; then
-    "$NAZGUL_HEARTBEAT_START_CMD" "$objective"
+    if [ -z "$objective" ]; then
+      "$NAZGUL_HEARTBEAT_START_CMD"
+    else
+      "$NAZGUL_HEARTBEAT_START_CMD" "$objective"
+    fi
   else
     local mode par mode_flag=""
     mode=$(jq -r '.automation.heartbeat.auto_start.mode // "yolo"' "$CONFIG" 2>/dev/null || echo "yolo")
@@ -143,6 +155,11 @@ _hb_start() {
     esac
     local par_flag=""
     [ "$par" = "true" ] && par_flag="--parallel"
+
+    if [ -z "$objective" ]; then
+      (cd "$PROJECT_ROOT" && claude -p "/nazgul:start $mode_flag $par_flag")
+      return
+    fi
 
     # apply-start-flags.sh later strips this span with a literal-quote-paired
     # sed scan that is inherently line-bounded, so a raw `"` or an embedded
@@ -208,6 +225,25 @@ esac
 INBOX_REL=$(jq -r '.automation.heartbeat.inbox.dir // "nazgul/inbox"' "$CONFIG" 2>/dev/null || echo "nazgul/inbox")
 INBOX_DIR="$PROJECT_ROOT/$INBOX_REL"
 
+# FEAT-027 stack continuation, pre-triage: reconcile any newly-merged layer
+# and file rework items for CHANGES_REQUESTED PRs so THIS tick's triage below
+# can pick them. Own count_active_sessions check — the concurrency guard
+# below sits AFTER triage and can't protect this: a rebase must never run
+# under a live session (serialization doctrine). STACK_CAP_REACHED is only
+# computed here; the actual skip decision waits until the picked item's type
+# is known (a rework fix on an existing layer is never blocked by the cap).
+STACK_CAP_REACHED=false
+if [ "$(stack_available "$CONFIG" 2>/dev/null || true)" = "ready" ] \
+  && [ "$(count_active_sessions "$NAZGUL_DIR/sessions")" -eq 0 ]; then
+  stack_reconcile "$CONFIG" || true
+  stack_detect_changes_requested "$CONFIG" || true
+  STACK_MAX_UNMERGED=$(jq -r '.execution.stacking.max_unmerged // 3' "$CONFIG" 2>/dev/null) || STACK_MAX_UNMERGED=3
+  case "$STACK_MAX_UNMERGED" in ''|*[!0-9]*) STACK_MAX_UNMERGED=3 ;; esac
+  STACK_UNMERGED=$(stack_unmerged_count "$CONFIG" 2>/dev/null) || STACK_UNMERGED=0
+  case "$STACK_UNMERGED" in ''|*[!0-9]*) STACK_UNMERGED=0 ;; esac
+  [ "$STACK_UNMERGED" -ge "$STACK_MAX_UNMERGED" ] && STACK_CAP_REACHED=true
+fi
+
 SEEN_LIST=$(inbox_list "$INBOX_DIR" 2>/dev/null || true)
 if [ -n "$SEEN_LIST" ]; then
   # grep -c exits 1 on zero matches (e.g. a provider ever yielding a blank
@@ -239,7 +275,40 @@ if [ "$SESSION_COUNT" -gt 0 ]; then
   exit 0
 fi
 
+# Type is needed by both the cap gate below and the rework-handoff
+# special-case further down, so it's resolved once here.
+PICKED_TYPE=$(inbox_get "$INBOX_DIR" "$PICKED" 2>/dev/null | jq -r '.type // empty') || PICKED_TYPE=""
+
+# Cap gate: the cap bounds NEW layers, not fixes to open ones — a picked
+# stack-rework item is never blocked here even when the cap is reached.
+if [ "$STACK_CAP_REACHED" = "true" ] && [ "$PICKED_TYPE" != "stack-rework" ]; then
+  OBJECTIVE=$(_hb_objective "$INBOX_DIR" "$PICKED")
+  _hb_emit skipped stack_cap_reached "$OBJECTIVE" "$SEEN_COUNT" "$TRIAGED_JSON" "$PICKED" false
+  exit 0
+fi
+
 OBJECTIVE=$(_hb_objective "$INBOX_DIR" "$PICKED")
+
+# Rework handoff: Stack Rework Routing (skills/start/SKILL.md) is the ONLY
+# claimant of a stack-rework item — it re-scans the LIVE inbox itself and
+# performs its own archive-as-claim + checkout + patch flow. inbox_list
+# structurally excludes archive/, so if this generic block archived the item
+# first (as it does for every other type below), the routing's scan would
+# find nothing, REWORK_ID would stay empty, and the tick would fall through
+# to a bogus New Objective Override built from the rework's title text
+# (GROUP-4 Blocking Issue 1, adversarially confirmed). Skip the archive here
+# and invoke /nazgul:start with NO objective override so the routing finds
+# the item exactly as it expects.
+if [ "$PICKED_TYPE" = "stack-rework" ]; then
+  START_OK=true
+  _hb_start "" || START_OK=false
+  if [ "$START_OK" = "true" ]; then
+    _hb_emit started rework_handoff "$OBJECTIVE" "$SEEN_COUNT" "$TRIAGED_JSON" "$PICKED" false true
+  else
+    _hb_emit started start_command_failed "$OBJECTIVE" "$SEEN_COUNT" "$TRIAGED_JSON" "$PICKED" false false
+  fi
+  exit 0
+fi
 
 # Archive-then-start: the archive move is the atomic claim. A crash here
 # before start leaves the item archived (not lost, not re-pickable) — a
