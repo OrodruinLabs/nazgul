@@ -234,7 +234,7 @@ esac
 INBOX_REL=$(jq -r '.automation.heartbeat.inbox.dir // "nazgul/inbox"' "$CONFIG" 2>/dev/null || echo "nazgul/inbox")
 INBOX_DIR="$PROJECT_ROOT/$INBOX_REL"
 
-# _hb_own_session_id -> the session id whose nazgul/sessions/<id>.lock belongs to
+# _hb_own_session_id -> the session id whose nazgul/sessions/ lock belongs to
 # THIS tick, or "" when none can be resolved.
 #
 # Empirically (TASK-013, probed on Claude Code 2.x/macOS): CLAUDE_SESSION_ID —
@@ -255,7 +255,10 @@ _hb_own_session_id() {
               "$( [ -s "$NAZGUL_DIR/.session_id" ] && cat "$NAZGUL_DIR/.session_id" 2>/dev/null )"; do
     [ -n "$cand" ] || continue
     sanitized=$(printf '%s' "$cand" | tr -c 'A-Za-z0-9_-' '_')
-    if [ -f "$NAZGUL_DIR/sessions/${sanitized}.lock" ]; then
+    # Check BOTH filename forms, as team-teardown.sh:70-77 does: session-tracker.sh's
+    # _sanitize_session_id pipes through echo, so real locks are <id>_.lock.
+    if [ -f "$NAZGUL_DIR/sessions/${sanitized}.lock" ] || \
+       [ -f "$NAZGUL_DIR/sessions/${sanitized}_.lock" ]; then
       printf '%s' "$sanitized"
       return 0
     fi

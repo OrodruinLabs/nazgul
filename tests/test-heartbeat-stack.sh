@@ -11,6 +11,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/assertions.sh"
 source "$SCRIPT_DIR/lib/setup.sh"
+# Session locks below are written by the REAL producer, never hand-authored: its
+# sanitizer's trailing-"_" quirk is exactly what the own-session gate must match.
+source "$REPO_ROOT/scripts/lib/session-tracker.sh"
 
 echo "=== $TEST_NAME ==="
 
@@ -196,9 +199,8 @@ setup_temp_dir
 setup_nazgul_dir
 create_config '.automation.heartbeat.enabled = true'
 open_layer_config "https://github.com/o/r/pull/705"
-mkdir -p "$TEST_DIR/nazgul/sessions"
 printf 'own-session-abc' > "$TEST_DIR/nazgul/.session_id"
-echo '{"pid":"1","session":"own-session-abc","started":"now"}' > "$TEST_DIR/nazgul/sessions/own-session-abc.lock"
+register_session "own-session-abc" "$TEST_DIR/nazgul/sessions"
 export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":705,"state":"OPEN","mergedAt":null,"reviewDecision":"CHANGES_REQUESTED","reviews":[{"id":"REVIEW_D","state":"CHANGES_REQUESTED","body":"needs a fix"}]}'
 NAZGUL_HEARTBEAT_START_CMD="true" bash "$REPO_ROOT/scripts/heartbeat.sh"
 LOG=$(latest_log)
@@ -215,12 +217,12 @@ setup_temp_dir
 setup_nazgul_dir
 create_config '.automation.heartbeat.enabled = true'
 open_layer_config "https://github.com/o/r/pull/706"
-mkdir -p "$TEST_DIR/nazgul/inbox" "$TEST_DIR/nazgul/sessions"
+mkdir -p "$TEST_DIR/nazgul/inbox"
 jq -n '{title:"FEAT-999 test objective", body:"do the thing", priority:5, type:"feature"}' \
   > "$TEST_DIR/nazgul/inbox/cand.json"
 printf 'own-session-abc' > "$TEST_DIR/nazgul/.session_id"
-echo '{"pid":"1","session":"own-session-abc","started":"now"}' > "$TEST_DIR/nazgul/sessions/own-session-abc.lock"
-echo '{"pid":"2","session":"other-session","started":"now"}' > "$TEST_DIR/nazgul/sessions/other-session.lock"
+register_session "own-session-abc" "$TEST_DIR/nazgul/sessions"
+register_session "other-session" "$TEST_DIR/nazgul/sessions"
 export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":706,"state":"OPEN","mergedAt":null,"reviewDecision":"CHANGES_REQUESTED","reviews":[{"id":"REVIEW_E","state":"CHANGES_REQUESTED","body":"needs a fix"}]}'
 bash "$REPO_ROOT/scripts/heartbeat.sh"
 LOG=$(latest_log)
@@ -238,8 +240,7 @@ setup_temp_dir
 setup_nazgul_dir
 create_config '.automation.heartbeat.enabled = true'
 open_layer_config "https://github.com/o/r/pull/707"
-mkdir -p "$TEST_DIR/nazgul/sessions"
-echo '{"pid":"1","session":"unknown-owner","started":"now"}' > "$TEST_DIR/nazgul/sessions/unknown-owner.lock"
+register_session "unknown-owner" "$TEST_DIR/nazgul/sessions"
 export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":707,"state":"OPEN","mergedAt":null,"reviewDecision":"CHANGES_REQUESTED","reviews":[{"id":"REVIEW_F","state":"CHANGES_REQUESTED","body":"needs a fix"}]}'
 bash "$REPO_ROOT/scripts/heartbeat.sh" 2>/dev/null
 LOG=$(latest_log)
@@ -255,8 +256,7 @@ setup_temp_dir
 setup_nazgul_dir
 create_config '.automation.heartbeat.enabled = true'
 open_layer_config "https://github.com/o/r/pull/708"
-mkdir -p "$TEST_DIR/nazgul/sessions"
-echo '{"pid":"1","session":"env-session","started":"now"}' > "$TEST_DIR/nazgul/sessions/env-session.lock"
+register_session "env-session" "$TEST_DIR/nazgul/sessions"
 export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":708,"state":"OPEN","mergedAt":null,"reviewDecision":"CHANGES_REQUESTED","reviews":[{"id":"REVIEW_G","state":"CHANGES_REQUESTED","body":"needs a fix"}]}'
 NAZGUL_SESSION_ID="env-session" NAZGUL_HEARTBEAT_START_CMD="true" bash "$REPO_ROOT/scripts/heartbeat.sh"
 LOG=$(latest_log)
