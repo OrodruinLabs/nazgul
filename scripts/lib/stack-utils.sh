@@ -353,6 +353,7 @@ _su_write_inbox_item() {
 # `state:"merged"` + `merged_at`, atomic tmp+mv.
 _su_mark_layer_merged() {
   local config="$1" feat_id="$2" merged_at="$3" tmp
+  [ -f "$config" ] || { printf 'stack-utils: stack registry %s not found; cannot mark layer merged\n' "$config" >&2; return 1; }
   tmp="${config}.tmp.$$"
   jq --arg f "$feat_id" --arg m "$merged_at" '
     .stack.layers = (.stack.layers | map(
@@ -451,9 +452,9 @@ stack_reconcile() {
     local layer feat_id branch pr pr_json rc pr_state merged_at
     layer=$(printf '%s' "$layers" | jq -c ".[$i]" 2>/dev/null) || layer='{}'
     i=$((i + 1))
-    feat_id=$(printf '%s' "$layer" | jq -r '.feat_id // empty')
-    branch=$(printf '%s' "$layer" | jq -r '.branch // empty')
-    pr=$(printf '%s' "$layer" | jq -r '.pr // empty')
+    feat_id=$(printf '%s' "$layer" | jq -r '.feat_id // empty' 2>/dev/null) || feat_id=""
+    branch=$(printf '%s' "$layer" | jq -r '.branch // empty' 2>/dev/null) || branch=""
+    pr=$(printf '%s' "$layer" | jq -r '.pr // empty' 2>/dev/null) || pr=""
     [ -n "$feat_id" ] && [ -n "$pr" ] && [ "$pr" != "null" ] || continue
 
     pr_json=$(gh pr view "$pr" --json state,mergedAt 2>&1); rc=$?
@@ -540,9 +541,9 @@ stack_detect_changes_requested() {
     local layer feat_id branch pr pr_json rc decision pr_number review_ids
     layer=$(printf '%s' "$layers" | jq -c ".[$i]" 2>/dev/null) || layer='{}'
     i=$((i + 1))
-    feat_id=$(printf '%s' "$layer" | jq -r '.feat_id // empty')
-    branch=$(printf '%s' "$layer" | jq -r '.branch // empty')
-    pr=$(printf '%s' "$layer" | jq -r '.pr // empty')
+    feat_id=$(printf '%s' "$layer" | jq -r '.feat_id // empty' 2>/dev/null) || feat_id=""
+    branch=$(printf '%s' "$layer" | jq -r '.branch // empty' 2>/dev/null) || branch=""
+    pr=$(printf '%s' "$layer" | jq -r '.pr // empty' 2>/dev/null) || pr=""
     [ -n "$pr" ] && [ "$pr" != "null" ] || continue
 
     pr_json=$(gh pr view "$pr" --json number,reviewDecision,reviews 2>&1); rc=$?
