@@ -120,12 +120,17 @@ path earns trust).
 
 ### A4. Contract / domain conventions (documentation + planner guidance, zero new machinery)
 
-- **Contract = ordinary sequentially-numbered ADR** in `nazgul/docs/ADR-NNN-<contract>.md`,
-  written before consumer specs. Binding via the exact ADR-018 ↔ FEAT-027-spec citation
-  pattern (spec lists the ADR as binding input; ADR declares downstream features inherit
-  it). Doc-generator's existing ADR-ingestion step picks it up automatically. Contracts
-  are typed by boundary: API (endpoints/schemas), design system (tokens/components),
-  infra (container/ports/env), data (schema/migration policy).
+- **Contract = ordinary sequentially-numbered ADR at a TRACKED path** —
+  `docs/contracts/ADR-NNN-<contract>.md` in the target repo (configurable), written
+  before consumer specs. NOT `nazgul/docs/` — that directory is gitignored and
+  per-worktree (PR #80 review catch): a contract written there would be invisible to
+  sibling feature worktrees and lost on archive, which is exactly wrong for a
+  cross-feature binding artifact. Committed contracts travel with branches and are
+  readable from every worktree once merged. Binding via the ADR-018 ↔ FEAT-027-spec
+  citation pattern (spec lists the ADR as binding input; ADR declares downstream
+  features inherit it); doc-generator's ADR-ingestion step must include the tracked
+  contracts path. Contracts are typed by boundary: API (endpoints/schemas), design
+  system (tokens/components), infra (container/ports/env), data (schema/migration policy).
 - **Consumer features own their stubs** inside their own `Creates`/`Modifies` scope and
   never list contract-owned files there. (Grounded free: the scope model tracks writes
   only — there is no Reads field; reading other tasks' files was never gated.)
@@ -208,6 +213,8 @@ is a per-domain budget.
 - Resolution: branch-name-convention scan (`feat/<id>-*`) + `git merge-base
   --is-ancestor <tip> <branch.base>`. Works across sibling worktrees for free (shared
   refs namespace). Never PR state, never objectives_history, never cross-worktree config.
+  Multiple refs matching one id = a distinct loud `ambiguous` state (treated like
+  unresolvable: skip + escalate), never newest-wins (PR #80 review catch).
 - Enforcement: filter inside `heartbeat_pick` (`heartbeat-triage.sh:31-62`) before the
   final sort — the next eligible candidate wins the same tick — paired with a new
   additive `requires_skipped` field on the tick's decision record (a skip is visible,
@@ -255,9 +262,13 @@ FULL event bus — `nazgul/logs/events.jsonl` records (20+ event types incl. `st
 `subagent_empty_return`, reviewer/stacking families) — plus per-iteration checkpoint
 snapshots (`checkpoints/iteration-NNN.json` is already a complete dashboard payload:
 task buckets, active task + next action, git state, reviewers/verdicts, budget, context
-health); (b) `nazgul/in-flight/*.json` for currently-dispatched agents. Tables: events,
-snapshots, sessions, loops, heartbeat decisions. Opt-in, kill-switched, non-blocking —
-the `connectors.github` idiom.
+health); (b) `nazgul/in-flight/*.json` for currently-dispatched agents. Tables v1:
+events, snapshots (sessions/loops/heartbeat-decision tables deferred to the frontend
+sub-project phase — PR #80 consistency catch). Ingest is idempotent: batches carry
+`(registry_key, byte_offset)` keys under a unique constraint so a
+committed-then-timed-out batch resends harmlessly. Opt-in, kill-switched,
+non-blocking — the `connectors.github` idiom; remote (non-loopback) collector URLs
+must be HTTPS, and `prompt_head` fields are redacted before forwarding.
 
 ### C3. Web frontend (the product surface; Aspire-style single pane)
 
@@ -278,7 +289,9 @@ the `connectors.github` idiom.
   CLI; start-next-feature = drop an inbox item.
 - **Notifications**: service-worker push on needs-input / completion / requires-gate
   unblock.
-- **Auth**: none locally; pre-shared key for remote deployment (OIDC = later hardening).
+- **Auth**: token-less mode binds loopback ONLY (non-loopback listeners refuse to start
+  without `COLLECTOR_TOKEN` — PR #80 review catch); pre-shared key for remote
+  deployment (OIDC = later hardening).
 
 ### C4. Near-free additions
 
@@ -306,7 +319,9 @@ the `connectors.github` idiom.
 - **A**: unit tests in the existing harness — veto gate (edge → solo; tool absent/hung →
   today's behavior + `graph_tool_degraded`; intra-batch scoping ignores DONE-task edges);
   validator (cycle → BLOCKED with named members; unreachable; clean plan passes);
-  migration idempotence. Probe task produces the ADR, not tests.
+  migration idempotence. The probe task's deliverable is the ADR; its commands are
+  recorded verbatim in an ADR appendix so the probe is re-runnable (Rule-4 tests apply
+  from the first integration task onward).
 - **B**: hooksPath fix (two worktrees, both guards still fire — regression test for the
   clobber); requires-gate (merged/unmerged/unresolvable × heartbeat/manual paths;
   `requires_skipped` visible in the decision record); `create_feature_worktree`

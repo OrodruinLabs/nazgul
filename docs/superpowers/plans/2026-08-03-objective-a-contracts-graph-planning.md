@@ -1,6 +1,6 @@
 # Objective A — Contract-Bound Domains + Graph-Aware Planning: Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. When executed as a Nazgul objective instead, the Nazgul planner derives task manifests from this plan; task boundaries below are the intended manifest boundaries.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. (These are external Superpowers-plugin skills, not part of this repo; human contributors can treat them as optional process guides.) Steps use checkbox (`- [ ]`) syntax for tracking. When executed as a Nazgul objective instead, the Nazgul planner derives task manifests from this plan; task boundaries below are the intended manifest boundaries.
 
 **Goal:** Ship the contract-as-ADR convention, planner guidance for domain/contract/wiring decomposition, a plan validator that catches broken task DAGs at plan time, and a fail-open dependency-edge veto gate for parallel batch dispatch.
 
@@ -36,7 +36,7 @@
 - [ ] **Step 2: Measure edge queries.** Run the CLI's edge-relevant subcommands (`refs`, `callgraph`, `impact`) between file pairs. Record: does it report the a→b edge? Does it correctly report NO edge for c? Latency per query? Behavior when the index is stale (edit a file, query without reindex)?
 - [ ] **Step 3: Failure-mode probe.** Run with: tool absent from PATH, corrupted index file, and a 1-second `timeout(1)` wrapper. Record exit codes and stderr for each — Task 5's fail-open branch keys off these.
 - [ ] **Step 4: `compute_waves` reuse check.** In this repo, write 4 throwaway task manifests (one diamond: B,C depend on A; D depends on B,C; plus one cycle pair) into a temp dir; source `scripts/lib/parallel-batch.sh` and call `compute_waves` against them. Confirm: diamond → 3 waves with B,C co-waved; cycle → `CYCLE:` error naming members. Record any format friction.
-- [ ] **Step 5: Write the ADR.** Sections: Context, Probe Results (tables from steps 1-4), Verdict (GO/NO-GO for `code-graph-mcp`; alternate tool or veto-gate descoping if NO-GO), Binding Design Adjustments (exact invocation, timeout value confirmation, exit-code table). Follow `nazgul/docs/ADR-018-*` structure.
+- [ ] **Step 5: Write the ADR.** Sections: Context, Probe Results (tables from steps 1-4), Verdict (GO/NO-GO for `code-graph-mcp`; alternate tool or veto-gate descoping if NO-GO), Binding Design Adjustments (exact invocation, timeout value confirmation, exit-code table), and an Appendix recording every probe command verbatim so the probe is re-runnable (PR #80 review: the probe's verification is its recorded, reproducible results). Follow `nazgul/docs/ADR-018-*` structure.
 - [ ] **Step 6: Commit** the ADR: `docs: ADR — code-graph CLI probe results and binding invocation shape`
 
 ### Task 2: Config schema — `execution.graph` (additive migration)
@@ -157,6 +157,14 @@ test_veto_fail_open_tool_absent() {
   assert_eq "$(jq -r '.parallel' <<<"$result")" "true"   # today's behavior
   assert_event_emitted "graph_tool_degraded" "reason" "not found"
 }
+test_veto_disabled_is_not_degraded() {                   # PR #80: disabled != failed
+  set_config '.execution.graph.enabled = false'
+  install_fake_graph_tool "edge"                          # even with edges present
+  result=$(compute_dispatch_batch ...)
+  assert_eq "$(jq -r '.parallel' <<<"$result")" "true"   # veto skipped entirely
+  assert_no_event_emitted "graph_tool_degraded"           # and NO degradation event
+  assert_fake_tool_never_invoked                          # helper not even called
+}
 test_veto_fail_open_timeout() {
   install_fake_graph_tool "hang"                # sleeps past timeout_seconds
   result=$(compute_dispatch_batch ...)
@@ -166,7 +174,7 @@ test_veto_fail_open_timeout() {
 ```
 
 - [ ] **Step 2: Run** filter — FAIL.
-- [ ] **Step 3: Implement.** `_pb_cross_scope_edges`: respect `.execution.graph.enabled` (false → exit 2 without event — disabled is not degraded), locate tool from `.execution.graph.tool`, wrap invocation in `timeout "$(jq -r '.execution.graph.timeout_seconds // 10' "$CONFIG")"`, parse edges, filter to ONLY pairs where both endpoints are inside the two candidate scopes (the intra-batch rule). In `compute_dispatch_batch`: for each surviving candidate pair after file-overlap, call it; edges found → `_pb_single_result "cross-scope dependency edge: $first_edge"`; exit 2 → `emit_event "graph_tool_degraded" reason "<why>" tool "$tool" fallback "file_disjointness"` once for the iteration, continue with today's behavior.
+- [ ] **Step 3: Implement.** The CALLER (`compute_dispatch_batch`) checks `.execution.graph.enabled` FIRST: false → skip the veto pass entirely, no helper call, no event (disabled is intentional, not degraded — PR #80 review). `_pb_cross_scope_edges` itself: locate tool from `.execution.graph.tool`, wrap invocation in `timeout "$(jq -r '.execution.graph.timeout_seconds // 10' "$CONFIG")"`, parse edges, filter to ONLY pairs where both endpoints are inside the two candidate scopes (the intra-batch rule); exit 2 strictly means tool unavailable/failed/timeout. In `compute_dispatch_batch`: for each surviving candidate pair after file-overlap, call it; edges found → `_pb_single_result "cross-scope dependency edge: $first_edge"`; exit 2 → `emit_event "graph_tool_degraded" reason "<why>" tool "$tool" fallback "file_disjointness"` once for the iteration, continue with today's behavior.
 - [ ] **Step 4: Run** filter — PASS; `shellcheck` clean.
 - [ ] **Step 5: Commit**: `feat: dependency-edge veto gate — intra-batch scoped, fail-open with graph_tool_degraded`
 

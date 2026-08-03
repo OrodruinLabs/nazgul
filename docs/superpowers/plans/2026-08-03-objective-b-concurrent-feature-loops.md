@@ -1,6 +1,6 @@
 # Objective B — Concurrent Feature Loops (Worktree-per-Feature): Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. When executed as a Nazgul objective instead, the Nazgul planner derives task manifests from this plan; task boundaries below are the intended manifest boundaries.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. (These are external Superpowers-plugin skills, not part of this repo; human contributors can treat them as optional process guides.) Steps use checkbox (`- [ ]`) syntax for tracking. When executed as a Nazgul objective instead, the Nazgul planner derives task manifests from this plan; task boundaries below are the intended manifest boundaries.
 
 **Goal:** Make two or more Nazgul feature loops runnable simultaneously in sibling git worktrees — each with its own private `nazgul/` state — with per-domain PR stacks, a git-truth `requires:` gate for the integration domain, and doctor checks for the two footguns.
 
@@ -96,8 +96,8 @@ test_create_feature_worktree_branches_off_main_not_current() {
 **Interfaces:**
 - Produces:
   - `rg_parse_requires <candidate_file>` → newline list of FEAT ids (empty if key absent)
-  - `rg_check_requirement <feat_id> <base_branch> <repo_root>` → exit 0 `satisfied`; exit 3 `unmerged` (branch found, not ancestor); exit 4 `unresolvable` (no branch matching `feat/<feat_id>-*` locally or on origin)
-  - `rg_gate <candidate_file> <base_branch> <repo_root>` → stdout one word: `satisfied` | `unmerged:<id>` | `unresolvable:<id>` (first blocker wins), exit 0/3/4 to match
+  - `rg_check_requirement <feat_id> <base_branch> <repo_root>` → exit 0 `satisfied`; exit 3 `unmerged` (branch found, not ancestor); exit 4 `unresolvable` (no branch matching `feat/<feat_id>-*` locally or on origin); exit 5 `ambiguous` (MULTIPLE refs match one id — never newest-wins, PR #80 review catch; treated like unresolvable downstream: skip loudly + escalate)
+  - `rg_gate <candidate_file> <base_branch> <repo_root>` → stdout one word: `satisfied` | `unmerged:<id>` | `unresolvable:<id>` | `ambiguous:<id>` (first blocker wins), exit 0/3/4/5 to match
 
 - [ ] **Step 1: Write failing tests** (fixture repo with real branches/merges):
 
@@ -130,7 +130,7 @@ test_stacked_layer_pr_merged_but_content_not_in_main_is_unmerged() {
 ```
 
 - [ ] **Step 2: Run** `tests/run-tests.sh --filter=requires-gate` — FAIL.
-- [ ] **Step 3: Implement**: parse via `sed -n 's/^requires:[[:space:]]*//p' | tr ',' '\n'` trimmed; resolve via `git -C "$repo" for-each-ref 'refs/heads/feat/<id>-*' 'refs/remotes/origin/feat/<id>-*'` taking the newest tip if multiple; verdict via `git merge-base --is-ancestor "$tip" "refs/heads/$base"` (fall back to `origin/$base` when local base absent).
+- [ ] **Step 3: Implement**: parse via `sed -n 's/^requires:[[:space:]]*//p' | tr ',' '\n'` trimmed; resolve via `git -C "$repo" for-each-ref 'refs/heads/feat/<id>-*' 'refs/remotes/origin/feat/<id>-*'`, deduping local/remote pairs of the SAME branch name; >1 distinct branch name for one id → `ambiguous` (exit 5); exactly one → verdict via `git merge-base --is-ancestor "$tip" "refs/heads/$base"` (fall back to `origin/$base` when local base absent). Add a test: two distinct `feat/FEAT-B-*` branches → `ambiguous:FEAT-B`, exit 5.
 - [ ] **Step 4: Run** filter — PASS; `shellcheck` clean.
 - [ ] **Step 5: Commit**: `feat: requires-gate lib — feature-level dependency verdict from branch ancestry`
 
@@ -147,7 +147,7 @@ test_stacked_layer_pr_merged_but_content_not_in_main_is_unmerged() {
 
 - [ ] **Step 1: Write failing tests**: (a) tick with wiring candidate `requires: FEAT-B` unmerged + a second eligible candidate → second one picked AND decision record lists the skip; (b) all candidates skipped → tick ends idle with `requires_skipped` populated (not silent); (c) unresolvable candidate ticked 3x → p1 item exists, filed exactly once on further ticks.
 - [ ] **Step 2: Run** filters — FAIL.
-- [ ] **Step 3: Implement**: in `heartbeat_pick`, for each candidate run `rg_gate`; drop non-satisfied from the pick set, collecting `{id, reason}` pairs the caller emits into the decision record. In `heartbeat.sh`: merge collected skips into `_hb_emit`'s record (additive field); on `unresolvable`, bump the frontmatter counter via a temp-file rewrite, file the p1 item at 3 mirroring `_su_file_conflict_inbox`'s shape.
+- [ ] **Step 3: Implement**: in `heartbeat_pick`, for each candidate run `rg_gate`; drop non-satisfied from the pick set, collecting `{id, reason}` pairs the caller emits into the decision record. In `heartbeat.sh`: merge collected skips into `_hb_emit`'s record (additive field); on `unresolvable` OR `ambiguous`, bump the frontmatter counter via a temp-file rewrite, file the p1 item at 3 mirroring `_su_file_conflict_inbox`'s shape (the p1 item names which of the two states it was).
 - [ ] **Step 4: Run** filters — PASS.
 - [ ] **Step 5: Commit**: `feat: heartbeat requires-gate — skip visibly, escalate unresolvable to p1`
 
@@ -158,7 +158,7 @@ test_stacked_layer_pr_merged_but_content_not_in_main_is_unmerged() {
 - Modify: `RULES.md` (integration-domain requires convention), `CLAUDE.md` (concurrent workflow paragraph: one session per feature worktree; stacking per-domain only; `max_unmerged` is per-domain)
 - Test: manual verification checklist in the skill change (skills are prose; the mechanical check itself is Task 3's lib, already tested)
 
-- [ ] **Step 1: Add the start-path step**: when the chosen objective's spec/inbox item carries `requires:`, run `rg_gate`; `unmerged` → refuse with the listed blockers and stop; `unresolvable` → refuse naming the id (never proceed silently past either) — same wording discipline as the stack-cap step.
+- [ ] **Step 1: Add the start-path step**: when the chosen objective's spec/inbox item carries `requires:`, run `rg_gate`; `unmerged` → refuse with the listed blockers and stop; `unresolvable`/`ambiguous` → refuse naming the id and the state (never proceed silently past any of the three) — same wording discipline as the stack-cap step.
 - [ ] **Step 2: Run** `scripts/gen-skill-docs.sh` freshness check if templated; full suite `tests/run-tests.sh` — PASS.
 - [ ] **Step 3: Commit**: `docs+skill: requires-gate on manual start; concurrent-loops operator workflow`
 
@@ -179,4 +179,4 @@ test_stacked_layer_pr_merged_but_content_not_in_main_is_unmerged() {
 
 ## Self-review notes (done at plan time)
 
-Spec coverage: §4 B1→Task 2, B2→Task 1 (ordered first — it ships for all users and Task 2 depends on it), B3→docs in Task 5 (no mechanism: stacking-off is the existing default path; the rule is convention + doctor visibility), B4→Tasks 3-4-5, B5→Tasks 5-6. E2E two-loop manual workflow lives in Task 5's CLAUDE.md paragraph; automated two-loop E2E deliberately not planned (needs two live sessions — out of harness reach; the isolation invariants are covered by Tasks 1-2 unit tests). Type consistency: `rg_gate` exit codes 0/3/4 and reason words `unmerged`/`unresolvable` used identically in Tasks 3, 4, 5.
+Spec coverage: §4 B1→Task 2, B2→Task 1 (ordered first — it ships for all users and Task 2 depends on it), B3→docs in Task 5 (no mechanism: stacking-off is the existing default path; the rule is convention + doctor visibility), B4→Tasks 3-4-5, B5→Tasks 5-6. E2E two-loop manual workflow lives in Task 5's CLAUDE.md paragraph; automated two-loop E2E deliberately not planned (needs two live sessions — out of harness reach; the isolation invariants are covered by Tasks 1-2 unit tests). Type consistency: `rg_gate` exit codes 0/3/4/5 and reason words `unmerged`/`unresolvable`/`ambiguous` used identically in Tasks 3, 4, 5.
