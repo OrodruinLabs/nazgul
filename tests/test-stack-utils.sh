@@ -984,6 +984,23 @@ unset NAZGUL_TEST_GH_PR_VIEW_JSON_FAIL
 assert_eq "counter scoping: two failing layers in ONE tick bump the detect counter exactly once" \
   "$(jq -r '.execution.stacking.api_failures_by_op.detect' "$ONEBUMP_CONFIG")" "1"
 
+# The legacy scalar is a migration seed, NOT a per-key fallback: reconcile has
+# already failed twice (mirrored into api_failures), and detect's FIRST failure
+# must start at 1 rather than inheriting reconcile's 2 and halting on strike 3.
+LEAK_CONFIG="$TEST_DIR/nazgul/config-counter-leak.json"
+jq '
+  .execution.stacking.enabled = true
+  | .execution.stacking.api_failures_by_op = {reconcile: 2}
+  | .execution.stacking.api_failures = 2
+' "$CONFIG" > "$LEAK_CONFIG"
+_su_bump_api_failures "$LEAK_CONFIG" "detect" >/dev/null 2>&1
+assert_eq "counter scoping: an operation's first failure does not inherit another operation's count" \
+  "$(jq -r '.execution.stacking.api_failures_by_op.detect' "$LEAK_CONFIG")" "1"
+assert_eq "counter scoping: reconcile's own count is untouched by detect's bump" \
+  "$(jq -r '.execution.stacking.api_failures_by_op.reconcile' "$LEAK_CONFIG")" "2"
+assert_eq "counter scoping: detect's first failure does not trip the three-strikes halt" \
+  "$(jq -r '.execution.stacking.halted // false' "$LEAK_CONFIG")" "false"
+
 # --- needs_sync: a cascade interrupted by a conflict is retried on the next
 # ready tick instead of being forgotten. ---
 NEEDSYNC_CONFIG=$(_sync_doctrine_fixture "FEAT-830")

@@ -384,7 +384,7 @@ check_stack_registry() {
   fi
 
   if [ "$(_doc_registry_shape)" = "malformed" ]; then
-    _doc_report warn stack-registry "stack.layers[] is CORRUPT — it is not an array of objects. Every reader (stack_tip, stack_unmerged_count, /nazgul:status, SessionStart) now refuses it rather than reporting an empty stack, so branch creation and the unmerged cap are blocked until it is repaired by hand in nazgul/config.json."
+    _doc_report warn stack-registry "stack.layers[] is CORRUPT — it is not an array of objects. The stack-utils readers (stack_tip, stack_unmerged_count, stack_reconcile, stack_detect_changes_requested) now refuse it rather than reporting an empty stack, so branch creation and the unmerged cap are blocked until it is repaired by hand in nazgul/config.json."
     return 0
   fi
 

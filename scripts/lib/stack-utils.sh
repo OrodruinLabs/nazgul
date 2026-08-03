@@ -412,10 +412,21 @@ stack_submit() {
 # stack with one broken and one healthy layer reset-then-bumped forever. Callers
 # additionally apply exactly ONE update per call (bump if anything failed, else
 # reset), so a single tick can no longer bump twice either.
+#
+# The legacy scalar is read ONLY as a one-time migration seed, when
+# `api_failures_by_op` is absent or empty (a config written before scoping
+# existed). Once the map exists, a missing per-op key reads 0 — a per-key `//`
+# fallback to the scalar would hand an operation's FIRST failure the max across
+# every other operation, re-merging the very counters this scoping separates.
+_SU_READ_OP_FAILURES='
+  (.execution.stacking.api_failures_by_op // {}) as $m
+  | if ($m | length) == 0 then (.execution.stacking.api_failures // 0) else ($m[$op] // 0) end
+'
+
 _su_bump_api_failures() {
   local config="$1" op="${2:-reconcile}" current new
   [ -f "$config" ] || return 0
-  current=$(jq -r --arg op "$op" '.execution.stacking.api_failures_by_op[$op] // .execution.stacking.api_failures // 0' "$config" 2>/dev/null) || current=0
+  current=$(jq -r --arg op "$op" "$_SU_READ_OP_FAILURES" "$config" 2>/dev/null) || current=0
   case "$current" in ''|*[!0-9]*) current=0 ;; esac
   new=$((current + 1))
   if ! _su_jq_write "$config" "_su_bump_api_failures" --arg op "$op" --argjson n "$new" '
@@ -435,7 +446,7 @@ _su_bump_api_failures() {
 _su_reset_api_failures() {
   local config="$1" op="${2:-reconcile}" current
   [ -f "$config" ] || return 0
-  current=$(jq -r --arg op "$op" '.execution.stacking.api_failures_by_op[$op] // .execution.stacking.api_failures // 0' "$config" 2>/dev/null) || current=0
+  current=$(jq -r --arg op "$op" "$_SU_READ_OP_FAILURES" "$config" 2>/dev/null) || current=0
   case "$current" in ''|*[!0-9]*) current=0 ;; esac
   [ "$current" -eq 0 ] && return 0
   _su_jq_write "$config" "_su_reset_api_failures" --arg op "$op" '
