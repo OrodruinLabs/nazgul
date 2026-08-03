@@ -500,11 +500,22 @@ assert_contains "stack_available: unparseable config is loud on stderr" \
 # stack_reconcile / stack_detect_changes_requested — no-op when not "ready"
 # =====================================================================
 
+# _event_count <type> -> how many <type> events are on the bus. A MISSING
+# events.jsonl prints "no-events-file", NEVER 0: "the bus recorded none of
+# these" and "nothing ever wrote to the bus" are different answers, and every
+# `... -> no events emitted` assertion below passes identically under both if
+# they are collapsed — the whole suite's emit path could be broken and the
+# zero-assertions would still be green (audit-tests.md, coverage honesty).
+# Every such assertion truncates the file first, so the file exists by then.
 _event_count() {
   local type="$1"
-  [ -f "$EVENTS_FILE_PATH" ] || { echo 0; return; }
-  jq -s --arg t "$type" '[.[] | select(.event==$t)] | length' "$EVENTS_FILE_PATH" 2>/dev/null || echo 0
+  [ -f "$EVENTS_FILE_PATH" ] || { echo "no-events-file"; return; }
+  jq -s --arg t "$type" '[.[] | select(.event==$t)] | length' "$EVENTS_FILE_PATH" 2>/dev/null || echo "count-failed"
 }
+
+assert_eq "_event_count self-check: a MISSING events.jsonl is named, never reported as 0" \
+  "$( EVENTS_FILE_PATH="$TEST_DIR/nazgul/logs/no-such-bus.jsonl"; _event_count stack_layer_merged )" \
+  "no-events-file"
 
 NOTREADY_CONFIG="$TEST_DIR/nazgul/config-notready.json"
 jq --arg br "feat/FEAT-900-x" '
@@ -678,17 +689,88 @@ assert_eq "stack_reconcile: conflict inbox item — priority 1" \
 assert_eq "stack_reconcile: conflict inbox item — type stack-conflict" \
   "$(sed -n 's/^type:[[:space:]]*//p' "$TEST_DIR/nazgul/inbox/stack-sync-conflict.md" | head -1)" "stack-conflict"
 
-# --- silent-success divergence: exit 0, but stderr says it diverged/aborted ---
+# --- silent-success divergence: exit 0, but stderr says it diverged/aborted.
+# The fixture is now pasted VERBATIM from ADR-018:98-99 (glyphs, ellipsis and
+# em-dash included). It used to be a from-memory reconstruction — glyphs
+# dropped, em-dash flattened to a hyphen, ellipsis collapsed — of the probe's
+# single most significant finding, which is exactly the string this doctrine
+# stands on (audit-tests.md, fixture provenance). ---
+ADR_DIVERGED_CLAUSE="⚠ Your local stack has diverged from the stack on GitHub ..."
+ADR_ABORTED_CLAUSE="ℹ Sync aborted — no changes were made"
+ADR_COMPOSITION_DIFFERS="✗ local stack composition differs from remote"
+
 DIVERGE_CONFIG=$(_sync_doctrine_fixture "FEAT-502")
 export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":502,"state":"MERGED","mergedAt":"2026-08-02T06:00:00Z"}'
 export NAZGUL_TEST_GH_STACK_SYNC_EXIT=0
-export NAZGUL_TEST_GH_STACK_SYNC_STDERR="Your local stack has diverged from the stack on GitHub. Sync aborted - no changes were made"
+export NAZGUL_TEST_GH_STACK_SYNC_STDERR="$ADR_DIVERGED_CLAUSE $ADR_ABORTED_CLAUSE"
 : > "$EVENTS_FILE_PATH"
 stack_reconcile "$DIVERGE_CONFIG" >/dev/null
 assert_eq "stack_reconcile: divergence-via-exit-0 — HALTED despite exit 0 (never trust exit code alone)" \
   "$(jq -r '.execution.stacking.halted' "$DIVERGE_CONFIG")" "true"
 assert_eq "stack_reconcile: divergence-via-exit-0 — emits stack_sync_conflict" \
   "$(_event_count stack_sync_conflict)" "1"
+
+# --- Independent-trigger divergence cases (audit-tests.md missing test #2).
+# The fixture above carries BOTH alternation branches of
+# _su_classify_sync_result's first case, so deleting either one from the code
+# left the suite green — the weakest of the five load-bearing behaviors. Each
+# case below carries exactly ONE trigger, and each asserts the p1 inbox item
+# (not just `halted`), because the filed item is what a human ever sees. The
+# conflict item dedupes LIVE-only, so each case clears it first and a re-file
+# is genuine, not a leftover. ---
+
+_diverge_case() {
+  # _diverge_case <feat_id> <sync_exit> <sync_stderr>
+  rm -f "$TEST_DIR/nazgul/inbox/stack-sync-conflict.md"
+  : > "$EVENTS_FILE_PATH"
+  local cfg
+  cfg=$(_sync_doctrine_fixture "$1")
+  export NAZGUL_TEST_GH_PR_VIEW_JSON="{\"number\":${1#FEAT-},\"state\":\"MERGED\",\"mergedAt\":\"2026-08-02T06:00:00Z\"}"
+  export NAZGUL_TEST_GH_STACK_SYNC_EXIT="$2"
+  export NAZGUL_TEST_GH_STACK_SYNC_STDERR="$3"
+  stack_reconcile "$cfg" >/dev/null 2>&1
+  printf '%s\n' "$cfg"
+}
+
+_assert_conflict_filed() {
+  # _assert_conflict_filed <label> <config> <body_fragment>
+  local label="$1" cfg="$2" fragment="$3" item="$TEST_DIR/nazgul/inbox/stack-sync-conflict.md"
+  assert_eq "$label: HALTED" "$(jq -r '.execution.stacking.halted // false' "$cfg")" "true"
+  assert_eq "$label: halt_reason is conflict" "$(jq -r '.execution.stacking.halt_reason' "$cfg")" "conflict"
+  assert_eq "$label: emits stack_sync_conflict" "$(_event_count stack_sync_conflict)" "1"
+  assert_file_exists "$label: p1 inbox item filed" "$item"
+  assert_eq "$label: inbox item priority 1" \
+    "$(sed -n 's/^priority:[[:space:]]*//p' "$item" 2>/dev/null | head -1)" "1"
+  assert_eq "$label: inbox item type stack-conflict" \
+    "$(sed -n 's/^type:[[:space:]]*//p' "$item" 2>/dev/null | head -1)" "stack-conflict"
+  assert_contains "$label: inbox item quotes the vendor text that triggered it" \
+    "$(cat "$item" 2>/dev/null)" "$fragment"
+}
+
+ONLY_DIVERGED_CONFIG=$(_diverge_case "FEAT-505" 0 "$ADR_DIVERGED_CLAUSE")
+_assert_conflict_filed "divergence trigger A (exit 0, ONLY the diverged clause)" \
+  "$ONLY_DIVERGED_CONFIG" "diverged from the stack on GitHub"
+
+ONLY_ABORTED_CONFIG=$(_diverge_case "FEAT-506" 0 "$ADR_ABORTED_CLAUSE")
+_assert_conflict_filed "divergence trigger B (exit 0, ONLY the Sync-aborted clause)" \
+  "$ONLY_ABORTED_CONFIG" "Sync aborted"
+
+# Exit 3 whose text carries BOTH the benign stale-tracking marker and the
+# divergence one: divergence wins, per ADR-018's "regardless of exit code".
+BOTH_TEXTS_CONFIG=$(_diverge_case "FEAT-507" 3 "$ADR_COMPOSITION_DIFFERS $ADR_DIVERGED_CLAUSE")
+_assert_conflict_filed "divergence beats stale-tracking (exit 3, both texts present)" \
+  "$BOTH_TEXTS_CONFIG" "diverged from the stack on GitHub"
+
+# Exit 3 with NO stderr at all: the inner case's default arm. An unrecognized
+# (or silent) failure on the documented conflict exit code must fail CLOSED —
+# a mute tool is not a clean sync.
+EMPTY_STDERR_CONFIG=$(_diverge_case "FEAT-508" 3 "")
+assert_eq "exit 3 with EMPTY stderr: fails CLOSED as a conflict, never 'ok'" \
+  "$(jq -r '.execution.stacking.halted // false' "$EMPTY_STDERR_CONFIG")" "true"
+assert_file_exists "exit 3 with EMPTY stderr: p1 inbox item still filed" \
+  "$TEST_DIR/nazgul/inbox/stack-sync-conflict.md"
+rm -f "$TEST_DIR/nazgul/inbox/stack-sync-conflict.md"
+: > "$EVENTS_FILE_PATH"
 
 # --- undocumented exit 9 (observed on an auth failure) folds into API-failure ---
 EXIT9_CONFIG=$(_sync_doctrine_fixture "FEAT-503")

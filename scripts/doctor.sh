@@ -311,6 +311,25 @@ check_stdin_hazard() {
   _doc_report note stdin-hazard "Hook scripts that read stdin via 'cat' without a bounded, non-tty-aware guard can block forever under a non-tty, never-EOF stdin. When running such scripts (or the test harness) outside a real hook context, redirect stdin: 'script < /dev/null'. Informational only; does not affect this run's exit code."
 }
 
+# The gh-stack release ADR-018's probe characterized, and whose exact message
+# strings scripts/lib/stack-utils.sh matches on. The pin lives in source, not in
+# nazgul/config.json, because doctor never writes state (ADR-016): the canary is
+# a comparison and a message, not a recorded baseline.
+_DOC_GH_STACK_PINNED="0.1.0"
+
+# _doc_gh_stack_version <extension-list-text> -> the version on the
+# github/gh-stack row, leading "v" stripped, or "" when that row carries no
+# version-shaped token. `gh extension list` has no --json flag (ADR-018 §1), and
+# the version already rides the same plain-text table check (h) greps for
+# presence, so the canary costs no extra process and no extra failure mode. The
+# scan is right-to-left over the row's fields rather than a fixed column: gh
+# appends its own trailing columns (e.g. an upgrade notice) on some versions.
+_doc_gh_stack_version() {
+  local ver
+  ver=$(awk '/github\/gh-stack/ { for (i = NF; i >= 1; i--) if ($i ~ /^v?[0-9]+\.[0-9]+/) { print $i; exit } exit }' <<<"$1")
+  printf '%s' "${ver#v}"
+}
+
 # (h) Stacking tooling: only when execution.stacking.enabled is true. Checks
 # the SAME preconditions stack_available() (scripts/lib/stack-utils.sh) gates
 # on, in the same order, so doctor and production code never disagree on what
@@ -369,7 +388,18 @@ check_stacking() {
     return 0
   fi
 
-  _doc_report pass stacking "execution.stacking.enabled is true; gh, the gh-stack extension, and gh auth are all ready."
+  local gh_stack_ver
+  gh_stack_ver="$(_doc_gh_stack_version "$ext_list")"
+  if [ -z "$gh_stack_ver" ]; then
+    _doc_report note stacking "execution.stacking.enabled is true; gh, the gh-stack extension, and gh auth are all present — but 'gh extension list' reported no version for github/gh-stack, so the vendor-drift canary could NOT run. Nazgul's sync classifier (_su_classify_sync_result, scripts/lib/stack-utils.sh) matches gh-stack v$_DOC_GH_STACK_PINNED's exact message strings; check 'gh stack --version' by hand (ADR-018 §4)."
+    return 0
+  fi
+  if [ "$gh_stack_ver" != "$_DOC_GH_STACK_PINNED" ]; then
+    _doc_report warn stacking "gh-stack v$gh_stack_ver is installed but ADR-018 pinned v$_DOC_GH_STACK_PINNED — the conflict doctrine is coupled to that release's exact message strings ('diverged from the stack on GitHub' / 'Sync aborted' / 'local stack composition differs from remote'), matched as text in _su_classify_sync_result (scripts/lib/stack-utils.sh). A reword reclassifies a real divergence as a clean sync and RESETS the three-strikes counter, with no other signal anywhere. Re-probe the new release against ADR-018 §4 and update the fixtures in tests/test-stack-utils.sh before trusting unattended stacking."
+    return 0
+  fi
+
+  _doc_report pass stacking "execution.stacking.enabled is true; gh, the gh-stack extension, and gh auth are all ready (gh-stack v$gh_stack_ver, the release ADR-018 pins)."
 }
 
 # (i) Registry-vs-GitHub drift: only when stacking is enabled and

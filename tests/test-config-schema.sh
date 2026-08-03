@@ -222,4 +222,20 @@ assert_json_field "v28 automation.heartbeat.lock_stale_seconds is 300" "$CONFIG"
 # reviewer's bounded stall/malformed-return retry)
 assert_json_field "v29 review_gate.stall_retry_escalate_tier is true" "$CONFIG" ".review_gate.stall_retry_escalate_tier" "true"
 
+# v35 new defaults (FEAT-027: stacked-PR continuation, opt-in and default-off).
+# Migrated configs were already covered by test-migrate-config; a FRESH config
+# was not, so the template could have shipped stacking ON — or with no registry
+# at all, which every reader treats as "no layers" — with the suite green.
+assert_json_field "v35 execution.stacking.enabled defaults false (opt-in)" "$CONFIG" ".execution.stacking.enabled" "false"
+assert_json_field "v35 execution.stacking.max_unmerged is 3" "$CONFIG" ".execution.stacking.max_unmerged" "3"
+assert_json_field "v35 execution.stacking.rework_priority is 1" "$CONFIG" ".execution.stacking.rework_priority" "1"
+assert_json_field "v35 stack.layers is an empty array on a fresh config" "$CONFIG" ".stack.layers | length" "0"
+assert_json_field "v35 stack.layers really is an array, not an object" "$CONFIG" ".stack.layers | type" "array"
+# The runtime-written keys must be ABSENT from a fresh config: `halted` present
+# and false is indistinguishable from a halt that was cleared, and an
+# api_failures of 0 shipped in the template would hide a migration that failed
+# to carry a live counter forward.
+assert_json_field "v35 execution.stacking.halted is absent until something halts" "$CONFIG" '.execution.stacking | has("halted")' "false"
+assert_json_field "v35 execution.stacking.api_failures is absent until something fails" "$CONFIG" '.execution.stacking | has("api_failures")' "false"
+
 report_results

@@ -81,11 +81,23 @@ latest_log() {
 
 events_file() { printf '%s' "$TEST_DIR/nazgul/logs/events.jsonl"; }
 
+# event_count <type> -> how many <type> events are on the bus; a MISSING
+# events.jsonl prints "no-events-file", never 0. Every "no rework filed"
+# assertion here used to pass BECAUSE the file was absent — the emit path
+# could have been broken repo-wide and they would have looked identical
+# (audit-tests.md, coverage honesty). reset_event_bus creates the file, so a
+# zero now means the bus was read and held none.
 event_count() {
-  local type="$1" f
+  local type="$1" f n
   f=$(events_file)
-  [ -f "$f" ] || { echo 0; return; }
-  grep -c "\"event\":\"$type\"" "$f" 2>/dev/null || echo 0
+  [ -f "$f" ] || { printf 'no-events-file\n'; return; }
+  n=$(grep -c "\"event\":\"$type\"" "$f" 2>/dev/null) || n=0
+  printf '%s\n' "$n"
+}
+
+reset_event_bus() {
+  mkdir -p "$TEST_DIR/nazgul/logs"
+  : > "$(events_file)"
 }
 
 open_layer_config() {
@@ -103,6 +115,7 @@ open_layer_config() {
 # the rework item filed this tick is picked and started ---
 setup_temp_dir
 setup_nazgul_dir
+reset_event_bus
 create_config '.automation.heartbeat.enabled = true'
 open_layer_config "https://github.com/o/r/pull/700"
 export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":700,"state":"OPEN","mergedAt":null,"reviewDecision":"CHANGES_REQUESTED","reviews":[{"id":"REVIEW_A","state":"CHANGES_REQUESTED","body":"needs a fix"}]}'
@@ -111,6 +124,10 @@ LOG=$(latest_log)
 assert_eq "invoked: detect filed the rework item" "$(event_count stack_rework_filed)" "1"
 assert_eq "invoked: decision is started" "$(jq -r '.decision' "$LOG")" "started"
 assert_eq "invoked: picked the freshly-filed rework item" "$(jq -r '.picked' "$LOG")" "stack-rework-pr700-REVIEW_A.md"
+mv "$(events_file)" "$(events_file).selfcheck"
+assert_eq "event_count self-check: a MISSING events.jsonl is named, never reported as 0" \
+  "$(event_count stack_rework_filed)" "no-events-file"
+mv "$(events_file).selfcheck" "$(events_file)"
 unset NAZGUL_TEST_GH_PR_VIEW_JSON
 teardown_temp_dir
 
@@ -118,6 +135,7 @@ teardown_temp_dir
 # ran (no rework filed, registry untouched, normal nothing_actionable) ---
 setup_temp_dir
 setup_nazgul_dir
+reset_event_bus
 create_config '.automation.heartbeat.enabled = true'
 jq '.execution.stacking.enabled = false
   | .stack.layers = [{feat_id:"FEAT-701", branch:"feat/FEAT-701-x", pr:"https://github.com/o/r/pull/701", base:"main", state:"open", opened_at:"2026-08-02T00:00:00Z", merged_at:null}]
@@ -139,6 +157,7 @@ teardown_temp_dir
 # -> skipped/stack_cap_reached, no auto-start, candidate stays in the inbox ---
 setup_temp_dir
 setup_nazgul_dir
+reset_event_bus
 create_config '.automation.heartbeat.enabled = true'
 open_layer_config "https://github.com/o/r/pull/702" 1
 mkdir -p "$TEST_DIR/nazgul/inbox"
@@ -159,6 +178,7 @@ teardown_temp_dir
 # --- Test 4: below cap -> proceeds to normal auto-start ---
 setup_temp_dir
 setup_nazgul_dir
+reset_event_bus
 create_config '.automation.heartbeat.enabled = true'
 open_layer_config "https://github.com/o/r/pull/703" 3
 mkdir -p "$TEST_DIR/nazgul/inbox"
@@ -176,6 +196,7 @@ teardown_temp_dir
 # fixes to existing ones ---
 setup_temp_dir
 setup_nazgul_dir
+reset_event_bus
 create_config '.automation.heartbeat.enabled = true'
 open_layer_config "https://github.com/o/r/pull/704" 1
 export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":704,"state":"OPEN","mergedAt":null,"reviewDecision":"CHANGES_REQUESTED","reviews":[{"id":"REVIEW_C","state":"CHANGES_REQUESTED","body":"needs a fix"}]}'
@@ -197,6 +218,7 @@ teardown_temp_dir
 # it before register_session) and the block must RUN. ---
 setup_temp_dir
 setup_nazgul_dir
+reset_event_bus
 create_config '.automation.heartbeat.enabled = true'
 open_layer_config "https://github.com/o/r/pull/705"
 printf 'own-session-abc' > "$TEST_DIR/nazgul/.session_id"
@@ -215,6 +237,7 @@ teardown_temp_dir
 # (serialization doctrine intact) — and now says so in the decision record. ---
 setup_temp_dir
 setup_nazgul_dir
+reset_event_bus
 create_config '.automation.heartbeat.enabled = true'
 open_layer_config "https://github.com/o/r/pull/706"
 mkdir -p "$TEST_DIR/nazgul/inbox"
@@ -238,6 +261,7 @@ teardown_temp_dir
 # ambiguity, not idleness: skip, and say which it was. ---
 setup_temp_dir
 setup_nazgul_dir
+reset_event_bus
 create_config '.automation.heartbeat.enabled = true'
 open_layer_config "https://github.com/o/r/pull/707"
 register_session "unknown-owner" "$TEST_DIR/nazgul/sessions"
@@ -254,6 +278,7 @@ teardown_temp_dir
 # resolves the own lock even with no nazgul/.session_id on disk. ---
 setup_temp_dir
 setup_nazgul_dir
+reset_event_bus
 create_config '.automation.heartbeat.enabled = true'
 open_layer_config "https://github.com/o/r/pull/708"
 register_session "env-session" "$TEST_DIR/nazgul/sessions"
@@ -273,6 +298,7 @@ teardown_temp_dir
 # capping. The cap reads the registry only, so it must hold under a halt. ---
 setup_temp_dir
 setup_nazgul_dir
+reset_event_bus
 create_config '.automation.heartbeat.enabled = true'
 open_layer_config "https://github.com/o/r/pull/709" 1
 jq '.execution.stacking.halted = true | .execution.stacking.halt_reason = "conflict"' \
@@ -295,6 +321,7 @@ teardown_temp_dir
 # applies (a lost gh extension must not lift the limit on new layers). ---
 setup_temp_dir
 setup_nazgul_dir
+reset_event_bus
 create_config '.automation.heartbeat.enabled = true'
 open_layer_config "https://github.com/o/r/pull/710" 1
 mkdir -p "$TEST_DIR/nazgul/inbox"
@@ -312,6 +339,7 @@ teardown_temp_dir
 # is least trustworthy. ---
 setup_temp_dir
 setup_nazgul_dir
+reset_event_bus
 create_config '.automation.heartbeat.enabled = true'
 jq '.execution.stacking.enabled = true | .stack.layers = "corrupt"' \
   "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.tmp" \
@@ -326,6 +354,35 @@ assert_eq "corrupt registry: cap fails CLOSED, no new objective started" \
 assert_file_exists "corrupt registry: candidate stays in the inbox" "$TEST_DIR/nazgul/inbox/cand.json"
 teardown_temp_dir
 
+# --- Test 6h (TASK-014): halted BELOW the cap. 6e pins that a halt cannot lift
+# the cap; this pins the other half — that the halt is RECORDED on a tick the
+# cap does not stop. Without it, `stack_skipped` could be written only on the
+# skip path and every started tick would look, in the record, exactly like one
+# where the pre-steps ran: reconcile silently not running while objectives keep
+# starting is precisely the failure this field exists to make visible. ---
+setup_temp_dir
+setup_nazgul_dir
+reset_event_bus
+create_config '.automation.heartbeat.enabled = true'
+open_layer_config "https://github.com/o/r/pull/711" 3
+jq '.execution.stacking.halted = true | .execution.stacking.halt_reason = "conflict"' \
+  "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.tmp" \
+  && mv "$TEST_DIR/nazgul/config.json.tmp" "$TEST_DIR/nazgul/config.json"
+mkdir -p "$TEST_DIR/nazgul/inbox"
+jq -n '{title:"FEAT-999 test objective", body:"do the thing", priority:5, type:"feature"}' \
+  > "$TEST_DIR/nazgul/inbox/cand.json"
+NAZGUL_HEARTBEAT_START_CMD="true" bash "$REPO_ROOT/scripts/heartbeat.sh" 2>"$TEST_DIR/hb-halted-err.txt"
+LOG=$(latest_log)
+assert_eq "halted below cap: the tick still starts (a halt bounds rebasing, not new work under the cap)" \
+  "$(jq -r '.decision' "$LOG")" "started"
+assert_eq "halted below cap: the halt is recorded on the STARTED record too, not only on skips" \
+  "$(jq -r '.stack_skipped' "$LOG")" "stack_halted"
+assert_eq "halted below cap: reconcile/detect really did not run" \
+  "$(event_count stack_rework_filed)" "0"
+assert_contains "halted below cap: the skipped pre-steps are announced on stderr, not only on the record" \
+  "$(cat "$TEST_DIR/hb-halted-err.txt")" "reconcile/rework detection skipped this tick"
+teardown_temp_dir
+
 # --- Test 7: rework handoff seam — a picked stack-rework item must stay LIVE
 # in the inbox (not archived by this generic block) and the start command
 # must receive NO objective override, so Stack Rework Routing's own live-inbox
@@ -335,6 +392,7 @@ teardown_temp_dir
 # routing-scan race (GROUP-4 Blocking Issue 1, adversarially confirmed 95). ---
 setup_temp_dir
 setup_nazgul_dir
+reset_event_bus
 create_config '.automation.heartbeat.enabled = true'
 open_layer_config "https://github.com/o/r/pull/706" 3
 export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":706,"state":"OPEN","mergedAt":null,"reviewDecision":"CHANGES_REQUESTED","reviews":[{"id":"REVIEW_E","state":"CHANGES_REQUESTED","body":"needs a fix"}]}'
