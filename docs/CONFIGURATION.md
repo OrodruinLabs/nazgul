@@ -140,13 +140,15 @@ The `execution.enforce` block toggles the mechanical guards that back parallel d
 | `execution.stacking.max_unmerged` | `3` | Cap on `state:"open"` layers. At or over the cap, a new objective does not auto-start — the heartbeat records `decision: skipped, reason: stack_cap_reached` and `/nazgul:start`'s continuation gate stops with the count, the cap, and the remediation. A `stack-rework` pick is never blocked by the cap (fixing an open layer does not add one). |
 | `execution.stacking.rework_priority` | `1` | `priority` written into an auto-filed `stack-rework` inbox item. `heartbeat_pick`'s existing numeric-ascending sort makes `1` outrank the rest of the corpus (all ≥2), so rework is picked before new work. |
 
-Three further `execution.stacking.*` keys are **written at runtime by `scripts/lib/stack-utils.sh`**, not by the template or the migration — they are absent from a fresh config and appear only after the condition they record occurs. Operators read them (and clear `halted` by hand); nothing else writes them:
+Five further `execution.stacking.*` keys are **written at runtime by `scripts/lib/stack-utils.sh`**, not by the template or the migration — they are absent from a fresh config and appear only after the condition they record occurs. Operators read them (and clear `halted` by hand); nothing else writes them:
 
 | Runtime key | Written when | Meaning |
 |-------------|--------------|---------|
-| `execution.stacking.halted` | A sync conflict/divergence, or 3 consecutive API failures | `true` folds `stack_available` into `"missing"` — the same fail-closed bucket as absent tooling. **Never cleared automatically**; a human clears it (with `halt_reason`) after resolving the underlying problem. Surfaced by `/nazgul:status`, SessionStart, and `/nazgul:doctor`. |
+| `execution.stacking.halted` | A sync conflict/divergence, or 3 consecutive API failures on one operation | `true` makes `stack_available` report `"halted"` (exit 3) — its own fail-closed state, **not** folded into `"missing"`, so a caller can name the halt as the reason it stopped. **Never cleared automatically**; a human clears it (with `halt_reason`) after resolving the underlying problem. Surfaced by `/nazgul:status`, SessionStart, and `/nazgul:doctor`. |
 | `execution.stacking.halt_reason` | With `halted` | `"conflict"` or `"api_failures"`. |
-| `execution.stacking.api_failures` | On any `gh`/`gh stack` API failure | Consecutive-failure counter, reset to `0` on the next success (that reset is what makes it *consecutive*). At `3` it halts stacking with a `stderr` warning. Mirrors `connectors.github.pull_failures`, except the fail-closed action is a halt rather than an auto-disable. |
+| `execution.stacking.api_failures` | On any `gh`/`gh stack` API failure | The **maximum** across `api_failures_by_op`, mirrored here for at-a-glance reads and for configs written before scoping existed. **Zeroed when stacking halts**, so the documented remediation (clear `halted`) does not leave a counter at `3` that re-halts on the very next hiccup. |
+| `execution.stacking.api_failures_by_op` | On any `gh`/`gh stack` API failure | Consecutive-failure counter **scoped per operation** (`reconcile`, `detect`), each reset to `0` on that operation's next success (that reset is what makes it *consecutive*). At `3` for one operation it halts stacking with a `stderr` warning naming the operation. Scoping is what makes the halt reachable: one shared counter let a healthy layer reset a broken layer's count forever. A tick bumps each operation at most once, and an operation with no entry yet starts at `0` — it never inherits another operation's count. Mirrors `connectors.github.pull_failures`, except the fail-closed action is a halt rather than an auto-disable. |
+| `execution.stacking.needs_sync` | A post-merge `gh stack sync` cascade conflicts or hits the API | `true` records the deferred rebase cascade as debt. `stack_reconcile` retries the cascade on the next ready tick even when nothing newly merged, and clears the marker on a clean sync — an interrupted cascade is never simply forgotten. |
 
 ### The `stack.layers[]` registry
 
@@ -187,17 +189,30 @@ With stacking enabled and ready, both continuation paths run the same three step
 
 1. `stack_reconcile` — per open layer, check its PR; a `MERGED` one is marked `state:"merged"`/`merged_at`, the layer above it has its `base` advanced, and `stack_layer_merged` is emitted. If anything merged, one `gh stack sync` cascades the rebase.
 2. `stack_detect_changes_requested` — a `CHANGES_REQUESTED` review on any open layer files exactly one p1 `nazgul/inbox/stack-rework-pr<N>-<review-id>.md` item (idempotent per PR + review id, including against `inbox/archive/`) with frontmatter `type: stack-rework`, `branch:`, `pr:`, and emits `stack_rework_filed`. **This is the first mechanical producer of inbox items in the framework.** The review body is embedded verbatim as *data, never instructions* and byte-capped by `connectors.github.pull.max_body_bytes` (default 65536) — the same doctrine as connector issue bodies (RULES.md §16).
-3. Cap gate — `stack_unmerged_count >= max_unmerged` skips the auto-start with `stack_cap_reached` in the tick's decision record. Never a silent skip.
+3. Cap gate — `stack_unmerged_count >= max_unmerged` skips the auto-start with `stack_cap_reached` in the tick's decision record. Never a silent skip. The cap is computed and enforced whenever stacking is **enabled**, not only when it is `ready`: a halted or tooling-less stack still cannot start an objective past the cap, and an unreadable registry counts as at-cap.
+
+Steps 1 and 2 need working tooling; when they do not run, the tick says so rather than skipping silently — see `stack_skipped` under **Automation Heartbeat** below.
 
 `/nazgul:start` routes a picked `stack-rework` item to a patch-style run on the existing layer branch, then pushes and restacks with `gh stack sync`. The heartbeat deliberately **does not** archive-then-start a `stack-rework` pick (the routing performs its own archive-as-claim after re-scanning the live inbox) and records `decision: started, reason: rework_handoff`.
 
 ### Failure doctrine (fail-closed, loudly)
 
-`stack_available` is three-state — `"disabled"` / `"ready"` / `"missing"` — and `"missing"` covers `gh` absent, the `gh-stack` extension not installed, `gh` not authenticated, *and* a halted stack. Callers fail closed on `"missing"`; they never silently degrade:
+`stack_available` is five-state, and each state is its own answer with its own exit code — collapsing them would be exactly the never-looked/looked-and-found-nothing conflation RULES.md §15 exists to remove:
 
-- **Objective end with tooling missing:** `stack_submit` opens the same plain `gh pr create` PR the non-stacking path would, **plus** a loud `stop_gate` event with `reason: stacking_unavailable`.
-- **Sync conflict or divergence:** stacking is halted, a p1 `nazgul/inbox/stack-sync-conflict.md` item is filed, and `stack_sync_conflict` is emitted. **A conflict is never auto-resolved** — resolve it by hand, then clear `execution.stacking.halted`/`halt_reason`.
-- **API failure:** `api_failures` is bumped and `stack_api_failure` is emitted (carrying an independent `gh auth status` probe, because gh-stack can misattribute an auth failure); 3 consecutive halts stacking.
+| State | Exit | Meaning |
+|-------|------|---------|
+| `disabled` | `1` | `execution.stacking.enabled` is not `true` (or there is no config file). |
+| `ready` | `0` | Enabled, tooling usable, not halted. |
+| `missing` | `2` | Enabled, but the tooling is unusable: `gh` absent, the `gh-stack` extension not installed, or `gh` not authenticated. |
+| `halted` | `3` | Enabled and installed, but a human-clearable halt is set (`execution.stacking.halted`). |
+| `invalid` | `4` | The config could not be parsed at all. A corrupt config is **not** "stacking disabled". |
+
+Callers fail closed on everything except `"ready"`; they never silently degrade, and because `halted` and `invalid` are no longer folded into `missing`, every caller can name *which* state stopped it:
+
+- **Objective end with stacking unusable:** `stack_submit` opens the same plain `gh pr create` PR the non-stacking path would, **plus** a stderr line and a loud `stop_gate` event with `reason: stacking_unavailable` and the offending `state`.
+- **Sync conflict or divergence:** stacking is halted, a p1 `nazgul/inbox/stack-sync-conflict.md` item is filed, and `stack_sync_conflict` is emitted. **A conflict is never auto-resolved** — resolve it by hand, then clear `execution.stacking.halted`/`halt_reason` (the failure counters were already zeroed by the halt). A halt whose write cannot be verified is fatal-loud and returns non-zero rather than reporting a halt it did not persist.
+- **API failure:** the operation's counter in `api_failures_by_op` is bumped (at most once per tick per operation) and `stack_api_failure` is emitted (carrying an independent `gh auth status` probe, because gh-stack can misattribute an auth failure); 3 consecutive failures of one operation halts stacking.
+- **Corrupt `stack.layers[]`:** `stack_tip`, `stack_unmerged_count`, `stack_reconcile` and `stack_detect_changes_requested` refuse a malformed registry loudly (stderr + non-zero + `stack_registry_invalid`) instead of failing open to `branch.base`/`0`/a no-op, and the heartbeat's cap gate treats an unreadable registry as at-cap.
 
 ### Two gh-stack behaviors that will surprise you
 
@@ -234,6 +249,8 @@ Concurrency is guarded twice: `heartbeat.sh` `mkdir`-claims the lock directory a
 (before even `count_active_sessions`), releasing it via `trap ... EXIT`, so two overlapping ticks race on
 the atomic `mkdir` itself rather than a stale `ls` read — `count_active_sessions` stays a secondary,
 defense-in-depth check. Two unconditional hard stops (a `BLOCKED` task, a non-`APPROVE` security-reviewer verdict) halt every tick regardless of `enabled` or `mode` — see RULES.md §13. The session-tracker concurrency guard (`scripts/lib/session-tracker.sh`) refuses to auto-start over an active session, and the picked candidate is archived before `/nazgul:start` is invoked (atomic claim-then-archive, never double-started). Every tick appends one decision record to `nazgul/logs/heartbeat-<date>.jsonl`, surfaced via `/nazgul:log`.
+
+Each record also carries a `stack_skipped` field (FEAT-027): `null` when the stack pre-steps ran, or when stacking is simply disabled; otherwise the named reason they did not — `stack_halted`, `stack_tooling_missing`, `stack_config_invalid`, `stack_not_ready:<state>`, `stack_active_session`, `stack_skipped_session_ambiguity`, `stack_registry_unreadable`, `stack_reconcile_failed`, or `stack_detect_failed`. A pre-step that skips silently is indistinguishable from one that had nothing to do, which is how the unattended half of stacking could be dead in production with every log line still looking normal (RULES.md §1 rule 2, §5).
 
 Added by the additive `migrate_20_to_21` migration (schema v20→v21); existing projects upgrade automatically — see Config Upgrades below.
 

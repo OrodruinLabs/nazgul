@@ -514,6 +514,100 @@ assert_eq "create_feature_branch: rollback-unwind restores config byte-identical
   "$(cat "$CFG_ROLLBACK")" "$CFG_ROLLBACK_BEFORE"
 
 teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# TASK-013 — the SILENT missing-tooling case: stacking enabled, tooling gone,
+# and the checkout ALREADY equals branch.base, so the loud base assertion never
+# fires. Pre-fix the only signal was an emit_event that no-ops without
+# NAZGUL_DIR — the branch was created against main, the registry still claimed
+# open layers, and the run reported plain success. The stderr warning is the
+# signal; the event is corroboration.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_git_repo
+_norm_main
+setup_nazgul_dir
+create_config
+CFG_QUIET="$TEST_DIR/nazgul/config.json"
+jq '.execution.stacking.enabled = true' "$CFG_QUIET" > "$CFG_QUIET.tmp" && mv "$CFG_QUIET.tmp" "$CFG_QUIET"
+
+export NAZGUL_TEST_GH_STACK_EXT=0
+create_feature_branch "Quiet degradation objective" "$TEST_DIR" "$CFG_QUIET" \
+  > "$TEST_DIR/quiet-out.txt" 2>"$TEST_DIR/quiet-err.txt"
+RC_QUIET=$?
+unset NAZGUL_TEST_GH_STACK_EXT
+QUIET_ERR=$(cat "$TEST_DIR/quiet-err.txt")
+
+assert_exit_code "create_feature_branch: on-base + missing tooling still succeeds (fail-closed to a plain branch)" "$RC_QUIET" 0
+assert_contains "create_feature_branch: on-base + missing tooling WARNS on stderr instead of degrading silently" \
+  "$QUIET_ERR" "execution.stacking is enabled but unusable"
+assert_contains "create_feature_branch: the warning names the state that failed" "$QUIET_ERR" "missing"
+assert_eq "create_feature_branch: registry untouched by the degraded path" \
+  "$(jq '.stack.layers | length' "$CFG_QUIET")" "0"
+teardown_temp_dir
+
+# A halted stack degrades the same way, and says "halted" rather than "missing"
+# — stack_available no longer collapses the two.
+setup_temp_dir
+setup_git_repo
+_norm_main
+setup_nazgul_dir
+create_config
+CFG_HALT="$TEST_DIR/nazgul/config.json"
+jq '.execution.stacking.enabled = true | .execution.stacking.halted = true | .execution.stacking.halt_reason = "conflict"' \
+  "$CFG_HALT" > "$CFG_HALT.tmp" && mv "$CFG_HALT.tmp" "$CFG_HALT"
+create_feature_branch "Halted degradation objective" "$TEST_DIR" "$CFG_HALT" \
+  > "$TEST_DIR/halt-out.txt" 2>"$TEST_DIR/halt-err.txt"
+RC_HALT=$?
+assert_exit_code "create_feature_branch: on-base + halted stack still succeeds" "$RC_HALT" 0
+assert_contains "create_feature_branch: halted is reported as halted, not as missing tooling" \
+  "$(cat "$TEST_DIR/halt-err.txt")" "stack_available: halted"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# TASK-013 — the pre-write backup's `cp` result is checked. An unchecked cp
+# could leave an EMPTY backup that the registry-failure unwind would then move
+# over config.json and report as a successful restore: a corrupt config that
+# fails the pre-merge guard closed and blocks every merge in the repo. With no
+# usable backup there is no safe unwind, so the call refuses up front.
+# `mktemp` is shadowed to hand back a path in a directory that does not exist,
+# so the mktemp SUCCEEDS and the cp is the thing that fails.
+# ---------------------------------------------------------------------------
+setup_temp_dir
+setup_git_repo
+_norm_main
+setup_nazgul_dir
+create_config
+CFG_BACKUP="$TEST_DIR/nazgul/config.json"
+jq '.execution.stacking.enabled = true' "$CFG_BACKUP" > "$CFG_BACKUP.tmp" && mv "$CFG_BACKUP.tmp" "$CFG_BACKUP"
+BK_TIP_BRANCH="feat/FEAT-300-bk-tip"
+git -C "$TEST_DIR" checkout -q -b "$BK_TIP_BRANCH"
+git -C "$TEST_DIR" checkout -q main
+jq --arg br "$BK_TIP_BRANCH" \
+  '.stack.layers = [{feat_id:"FEAT-300", branch:$br, pr:null, base:"main", state:"open", opened_at:"2026-08-01T00:00:00Z", merged_at:null}]' \
+  "$CFG_BACKUP" > "$CFG_BACKUP.tmp" && mv "$CFG_BACKUP.tmp" "$CFG_BACKUP"
+CFG_BACKUP_BEFORE=$(cat "$CFG_BACKUP")
+
+BACKUP_OBJECTIVE="Backup failure objective"
+BACKUP_SLUG=$(slugify_objective "$BACKUP_OBJECTIVE")
+BACKUP_TARGET_BRANCH="feat/FEAT-001-${BACKUP_SLUG}"
+
+bash -c "
+  source '$REPO_ROOT/scripts/worktree-utils.sh'
+  mktemp() { printf '%s\n' '/nazgul-t13-no-such-dir/backup.tmp'; }
+  create_feature_branch '$BACKUP_OBJECTIVE' '$TEST_DIR' '$CFG_BACKUP'
+" > "$TEST_DIR/backup-out.txt" 2>"$TEST_DIR/backup-err.txt"
+RC_BACKUP=$?
+
+assert_exit_code "create_feature_branch: an unusable config backup is a refusal, not a silent continue" "$RC_BACKUP" 1
+assert_contains "create_feature_branch: the backup failure is named on stderr" \
+  "$(cat "$TEST_DIR/backup-err.txt")" "could not take a byte-identical backup"
+assert_eq "create_feature_branch: backup failure leaves NO orphan branch" \
+  "$(git -C "$TEST_DIR" branch --list "$BACKUP_TARGET_BRANCH" | tr -d ' *')" ""
+assert_eq "create_feature_branch: backup failure leaves config byte-identical" \
+  "$(cat "$CFG_BACKUP")" "$CFG_BACKUP_BEFORE"
+teardown_temp_dir
+
 export PATH="$WU_BASE_PATH"
 rm -rf "$FAKEBIN"
 

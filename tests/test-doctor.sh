@@ -546,16 +546,21 @@ assert_contains "stack-registry closed-drift fixture: warns" "$OUT" "$(printf 'w
 assert_contains "stack-registry closed-drift fixture: names the drifted layer" "$OUT" "FEAT-100(CLOSED)"
 teardown_temp_dir
 
-# --- stack-registry: open layer with no recorded pr -> note, never a false pass ---
+# --- stack-registry: open layer with no recorded pr -> the ABANDONED-LAYER
+# condition, named as a warn (TASK-013). It is not "drift we couldn't assess":
+# nothing can ever mark a PR-less layer merged, so it counts against
+# max_unmerged forever and stack_tip keeps handing it out as the next base. ---
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
 create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' \
   '.stack.layers = [{"feat_id":"FEAT-101","branch":"feat/y","pr":null,"base":"main","state":"open","opened_at":"2026-01-01T00:00:00Z","merged_at":null}]'
 OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
-assert_exit_code "stack-registry no-pr fixture: aggregate exit 0 (note is non-blocking)" "$EXIT" 0
-assert_contains "stack-registry no-pr fixture: notes, never falsely passes" "$OUT" "$(printf 'note\tstack-registry')"
+assert_exit_code "stack-registry no-pr fixture: aggregate exit 1 (warn)" "$EXIT" 1
+assert_contains "stack-registry no-pr fixture: warns, naming the abandoned-layer condition" "$OUT" "Abandoned layer(s)"
+assert_contains "stack-registry no-pr fixture: names the layer" "$OUT" "FEAT-101"
 assert_not_contains "stack-registry no-pr fixture: never reports pass" "$OUT" "$(printf 'pass\tstack-registry')"
+assert_not_contains "stack-registry no-pr fixture: no longer downgraded to a non-blocking note" "$OUT" "$(printf 'note\tstack-registry')"
 teardown_temp_dir
 
 # --- stack-registry: gh unavailable to consult -> note, never a false pass ---
@@ -589,6 +594,80 @@ OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "stack-registry empty-registry fixture: aggregate exit 0" "$EXIT" 0
 assert_contains "stack-registry empty-registry fixture: passes not applicable" "$OUT" "$(printf 'pass\tstack-registry')"
 assert_contains "stack-registry empty-registry fixture: states the reason" "$OUT" "no open entries"
+teardown_temp_dir
+
+# ---------------------------------------------------------------------------
+# TASK-013 — RULES §15 verdicts for the two stacking checks. Each assertion
+# below was written against the PRE-FIX tree and observed to FAIL there.
+# ---------------------------------------------------------------------------
+
+# --- config exists but does not parse -> FAIL on both checks. Pre-fix _doc_cfg
+# swallowed the parse error and returned the caller's default, so an unreadable
+# config reported a confident "Not applicable — stacking.enabled is false" on
+# BOTH: never-looked presented as looked-and-found-nothing. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false'
+printf '{ "execution": { "stacking": ' > "$TEST_DIR/nazgul/config.json"
+OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "unparseable-config fixture: aggregate exit 2 (fail)" "$EXIT" 2
+assert_contains "unparseable-config fixture: stacking FAILS, never 'not applicable'" "$OUT" "$(printf 'fail\tstacking')"
+assert_contains "unparseable-config fixture: stack-registry FAILS too" "$OUT" "$(printf 'fail\tstack-registry')"
+assert_not_contains "unparseable-config fixture: never a false pass on stacking" "$OUT" "$(printf 'pass\tstacking')"
+assert_not_contains "unparseable-config fixture: never a false pass on stack-registry" "$OUT" "$(printf 'pass\tstack-registry')"
+teardown_temp_dir
+
+# --- stack.layers[] is the wrong JSON type -> WARN naming the corruption.
+# Pre-fix `[.stack.layers[]? | ...] | length` yielded 0 and the check reported
+# "no open entries" — corruption read as an empty stack. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' '.stack.layers = "corrupt"'
+OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "malformed-registry fixture: aggregate exit 1 (warn)" "$EXIT" 1
+assert_contains "malformed-registry fixture: stack-registry warns" "$OUT" "$(printf 'warn\tstack-registry')"
+assert_contains "malformed-registry fixture: names the corruption" "$OUT" "CORRUPT"
+assert_not_contains "malformed-registry fixture: never reports 'no open entries'" "$OUT" "no open entries"
+teardown_temp_dir
+
+# --- stacking disabled but open layers remain -> warn, not "not applicable".
+# Abandoned layers are invisible to every other surface while stacking is off,
+# and re-enabling counts them against max_unmerged immediately. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' "$STACK_LAYER_OPEN"
+OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "disabled-with-layers fixture: aggregate exit 1 (warn)" "$EXIT" 1
+assert_contains "disabled-with-layers fixture: stack-registry warns" "$OUT" "$(printf 'warn\tstack-registry')"
+assert_contains "disabled-with-layers fixture: names the leftover open entries" "$OUT" "still holds 1 open entry"
+assert_not_contains "disabled-with-layers fixture: no longer a bare 'not applicable' pass" "$OUT" "$(printf 'pass\tstack-registry')"
+teardown_temp_dir
+
+# --- api_failures at 1-2 (below the three-strikes halt) -> warn. Pre-fix the
+# counter was never mentioned at any level until it had already halted. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' \
+  '.execution.stacking.api_failures = 2'
+OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_exit_code "api-failures fixture: aggregate exit 1 (warn)" "$EXIT" 1
+assert_contains "api-failures fixture: stacking warns before the halt, not after" "$OUT" "$(printf 'warn\tstacking')"
+assert_contains "api-failures fixture: names the counter and the threshold" "$OUT" "api_failures is 2"
+teardown_temp_dir
+
+# --- halted: the remediation must name the counter too, or clearing `halted`
+# alone re-halts on the next single API hiccup. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' \
+  '.execution.stacking.halted = true' '.execution.stacking.halt_reason = "conflict"'
+OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
+assert_contains "halted fixture: remediation names api_failures, not just the halted flag" "$OUT" "api_failures"
 teardown_temp_dir
 
 rm -rf "$FAKEBIN_STACK"

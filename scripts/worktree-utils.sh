@@ -99,17 +99,34 @@ create_feature_branch() {
   local base_branch
   if [ "$stack_state" = "ready" ]; then
     # Stacking on and ready: base is the explicit stack tip, never whatever
-    # is checked out — create from this ref below, not current HEAD.
-    base_branch=$(stack_tip "$config")
-  else
-    # Disabled, or enabled but tooling missing/halted (stack_available folds
-    # "halted" into "missing" — TASK-005): fail closed to today's
-    # non-stacking contract. Assert reality matches intent instead of
-    # trusting whatever is checked out — this is the hazard fix, and it
-    # ships for ALL users regardless of the stacking opt-in.
-    if [ "$stack_state" = "missing" ] && declare -F emit_event >/dev/null 2>&1; then
-      emit_event "stop_gate" reason "stacking_unavailable" phase "create_feature_branch" feat_id "$feat_id"
+    # is checked out — create from this ref below, not current HEAD. A tip the
+    # registry cannot answer for is a refusal, not a fallback.
+    if ! base_branch=$(stack_tip "$config"); then
+      echo "ERROR: create_feature_branch: stack_tip refused to answer (see the stack-utils diagnostic above) — refusing to branch from a guessed base." >&2
+      return 1
     fi
+  else
+    # Disabled, or enabled but unusable (tooling missing, halted, or an
+    # unparseable config): fail closed to today's non-stacking contract. Assert
+    # reality matches intent instead of trusting whatever is checked out — this
+    # is the hazard fix, and it ships for ALL users regardless of the stacking
+    # opt-in.
+    #
+    # The degradation is announced on stderr FIRST and unconditionally. It used
+    # to be an emit_event alone, which no-ops whenever NAZGUL_DIR is unset (the
+    # normal case at this function's skill call site) — and when the checkout
+    # already matched the base, the branch was created against `main` with the
+    # registry still recording open layers and nothing said at all.
+    case "$stack_state" in
+      missing|halted|invalid)
+        echo "WARNING: create_feature_branch: execution.stacking is enabled but unusable (stack_available: $stack_state) — this objective's branch is being created against '$(jq -r '.branch.base // "main"' "$config" 2>/dev/null)' as an ORDINARY (unstacked) branch. Run /nazgul:doctor to see which precondition failed." >&2
+        if declare -F _su_emit >/dev/null 2>&1; then
+          _su_emit "stop_gate" reason "stacking_unavailable" state "$stack_state" phase "create_feature_branch" feat_id "$feat_id"
+        elif declare -F emit_event >/dev/null 2>&1; then
+          emit_event "stop_gate" reason "stacking_unavailable" state "$stack_state" phase "create_feature_branch" feat_id "$feat_id"
+        fi
+        ;;
+    esac
     base_branch=$(jq -r '.branch.base // "main"' "$config" 2>/dev/null) || base_branch="main"
     local current_branch
     current_branch=$(git -C "$project_root" branch --show-current 2>/dev/null || echo "")
@@ -174,10 +191,26 @@ create_feature_branch() {
   # rather than leave a branch/base recorded with no matching registry entry.
   # Registry is written only AFTER this write commits (not before) — see the
   # note at the registry-write call site for why that ordering was chosen.
+  #
+  # BOTH the mktemp and the cp are checked. An unchecked cp (PR #81 audit) could
+  # leave an EMPTY backup file that the registry-failure path below would then
+  # `mv` over config.json and report as a successful restore — a corrupt config
+  # that fails the pre-merge guard closed and blocks every merge in the repo,
+  # which is the exact hazard the colocation note above exists to prevent. No
+  # usable backup means no safe unwind, so we refuse before the branch has any
+  # config state to unwind.
   local config_backup=""
   if [ "$stack_state" = "ready" ]; then
     config_backup=$(mktemp "$(dirname "$config")/.nazgul-config-backup.XXXXXX" 2>/dev/null) || config_backup=""
-    [ -n "$config_backup" ] && cp "$config" "$config_backup" 2>/dev/null
+    if [ -z "$config_backup" ] || ! cp "$config" "$config_backup" 2>/dev/null; then
+      echo "ERROR: create_feature_branch: could not take a byte-identical backup of '$config' after branch '$branch_name' was created — without it a later registry failure could not be unwound safely, so rolling back to '$base_branch' now" >&2
+      [ -n "$config_backup" ] && rm -f "$config_backup"
+      git -C "$project_root" checkout "$base_branch" >/dev/null 2>&1 \
+        || echo "ERROR: create_feature_branch: rollback checkout to '$base_branch' also failed — branch '$branch_name' left on disk, config unchanged" >&2
+      git -C "$project_root" branch -D "$branch_name" >/dev/null 2>&1 \
+        || echo "ERROR: create_feature_branch: rollback delete of '$branch_name' failed — remove it manually before retrying" >&2
+      return 1
+    fi
   fi
   local tmp
   tmp=$(mktemp "$(dirname "$config")/.nazgul-config.XXXXXX" 2>/dev/null) || {

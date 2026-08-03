@@ -56,6 +56,35 @@ _doc_cfg() {
   fi
 }
 
+# _doc_config_parses — 0 when nazgul/config.json is absent (nothing to
+# contradict) or parses as JSON, 1 when it exists but does not. _doc_cfg cannot
+# answer this: it swallows the parse error and returns the caller's default, so
+# an unparseable config read as `.execution.stacking.enabled // false` came back
+# "false" and both stacking checks reported a confident "Not applicable" for a
+# config nobody could read (RULES §15 — never-looked reported as looked-and-
+# found-nothing).
+_doc_config_parses() {
+  [ -f "$CONFIG" ] || return 0
+  jq -e . "$CONFIG" >/dev/null 2>&1
+}
+
+# _doc_registry_shape — "ok" / "malformed", mirroring _su_registry_state()
+# (scripts/lib/stack-utils.sh). Duplicated read-only for the same reason the
+# stacking precondition ladder is (ADR-018): doctor must be able to name the
+# condition, and must not depend on sourcing runtime libs.
+_doc_registry_shape() {
+  local shape
+  shape="$(jq -r '
+    if (.stack | type) == "null" then "ok"
+    elif (.stack | type) != "object" then "malformed"
+    elif (.stack.layers | type) == "null" then "ok"
+    elif (.stack.layers | type) != "array" then "malformed"
+    elif ([.stack.layers[] | select(type != "object")] | length) > 0 then "malformed"
+    else "ok" end' "$CONFIG" 2>/dev/null)" || shape="ok"
+  [ -n "$shape" ] || shape="ok"
+  printf '%s' "$shape"
+}
+
 # _doc_json_field <file> <jq-filter> — reads an arbitrary JSON file, printing
 # "" when the file is absent, unreadable, or the filter errors or resolves
 # to null. Same graceful-degradation contract as _doc_cfg, for files other
@@ -292,15 +321,29 @@ check_stdin_hazard() {
 # never invoked to probe, since an absent extension produces indistinguishable
 # generic gh CLI routing noise.
 check_stacking() {
+  if ! _doc_config_parses; then
+    _doc_report fail stacking "nazgul/config.json exists but is not parseable JSON — stacking state cannot be read at all. This is NOT the same as 'stacking is off': stack_available() reports 'invalid' and every stacking caller fails closed. Repair the JSON (jq . nazgul/config.json shows the parse error), then re-run /nazgul:doctor."
+    return 0
+  fi
+
   if [ "$(_doc_cfg '.execution.stacking.enabled // false' 'false')" != "true" ]; then
     _doc_report pass stacking "Not applicable — execution.stacking.enabled is false."
     return 0
   fi
 
   if [ "$(_doc_cfg '.execution.stacking.halted // false' 'false')" = "true" ]; then
-    local halt_reason
+    local halt_reason halt_failures
     halt_reason="$(_doc_cfg '.execution.stacking.halt_reason // "unknown"' 'unknown')"
-    _doc_report warn stacking "execution.stacking.enabled is true but stacking is halted (reason: $halt_reason) — resolve the underlying sync conflict, then clear execution.stacking.halted in nazgul/config.json to resume."
+    halt_failures="$(_doc_cfg '.execution.stacking.api_failures // 0' '0')"
+    _doc_report warn stacking "execution.stacking.enabled is true but stacking is halted (reason: $halt_reason) — resolve the underlying sync conflict, then clear execution.stacking.halted in nazgul/config.json to resume. Also confirm execution.stacking.api_failures is 0 (currently $halt_failures) and execution.stacking.api_failures_by_op is empty before resuming: a non-zero counter re-halts on the very next API hiccup."
+    return 0
+  fi
+
+  local api_failures
+  api_failures="$(_doc_cfg '.execution.stacking.api_failures // 0' '0')"
+  case "$api_failures" in ''|*[!0-9]*) api_failures=0 ;; esac
+  if [ "$api_failures" -ge 1 ]; then
+    _doc_report warn stacking "execution.stacking.api_failures is $api_failures (of 3 consecutive before stacking halts) — GitHub API calls are failing. Check 'gh auth status' and the PRs named in nazgul/config.json stack.layers[]; a successful reconcile tick resets the counter."
     return 0
   fi
 
@@ -309,10 +352,17 @@ check_stacking() {
     return 0
   fi
 
-  if ! gh extension list 2>/dev/null | grep -q "github/gh-stack"; then
-    _doc_report warn stacking "execution.stacking.enabled is true but the gh-stack extension is not installed — run 'gh extension install github/gh-stack'."
-    return 0
-  fi
+  # Captured, not piped into `grep -q` — same SIGPIPE-under-pipefail hazard
+  # fixed in stack_available() (doctor.sh runs under `set -euo pipefail`), which
+  # would report an installed extension as missing on a fraction of runs.
+  local ext_list
+  ext_list=$(gh extension list 2>/dev/null) || ext_list=""
+  case "$ext_list" in
+    *"github/gh-stack"*) : ;;
+    *)
+      _doc_report warn stacking "execution.stacking.enabled is true but the gh-stack extension is not installed — run 'gh extension install github/gh-stack'."
+      return 0 ;;
+  esac
 
   if ! gh auth status >/dev/null 2>&1; then
     _doc_report warn stacking "execution.stacking.enabled is true but gh is not authenticated — run 'gh auth login'."
@@ -328,14 +378,30 @@ check_stacking() {
 # state can't be read from GitHub -> note, never a false pass (RULES §15:
 # looked-and-found-none vs never-looked).
 check_stack_registry() {
-  if [ "$(_doc_cfg '.execution.stacking.enabled // false' 'false')" != "true" ]; then
-    _doc_report pass stack-registry "Not applicable — execution.stacking.enabled is false."
+  if ! _doc_config_parses; then
+    _doc_report fail stack-registry "nazgul/config.json exists but is not parseable JSON — the stack.layers[] registry cannot be read, so drift cannot be assessed (and 'no drift found' would be a lie). Repair the JSON, then re-run /nazgul:doctor."
     return 0
   fi
 
-  local open_count
+  if [ "$(_doc_registry_shape)" = "malformed" ]; then
+    _doc_report warn stack-registry "stack.layers[] is CORRUPT — it is not an array of objects. The stack-utils readers (stack_tip, stack_unmerged_count, stack_reconcile, stack_detect_changes_requested) now refuse it rather than reporting an empty stack, so branch creation and the unmerged cap are blocked until it is repaired by hand in nazgul/config.json."
+    return 0
+  fi
+
+  local open_count enabled
+  enabled="$(_doc_cfg '.execution.stacking.enabled // false' 'false')"
   open_count="$(_doc_cfg '[.stack.layers[]? | select(.state == "open")] | length' '0')"
   case "$open_count" in ''|*[!0-9]*) open_count=0 ;; esac
+
+  if [ "$enabled" != "true" ]; then
+    if [ "$open_count" -gt 0 ]; then
+      _doc_report warn stack-registry "execution.stacking.enabled is false but stack.layers[] still holds $open_count open entry/entries — nothing reconciles them while stacking is off, and re-enabling stacking counts them against max_unmerged immediately. Merge or close their PRs, or clear the entries, before re-enabling."
+      return 0
+    fi
+    _doc_report pass stack-registry "Not applicable — execution.stacking.enabled is false and stack.layers[] has no open entries."
+    return 0
+  fi
+
   if [ "$open_count" -eq 0 ]; then
     _doc_report pass stack-registry "Not applicable — stack.layers[] has no open entries."
     return 0
@@ -346,11 +412,11 @@ check_stack_registry() {
     return 0
   fi
 
-  local feat_id pr state drifted="" unreadable=0
+  local feat_id pr state drifted="" abandoned="" unreadable=0
   while IFS=$'\t' read -r feat_id pr; do
     [ -n "$feat_id" ] || continue
     if [ -z "$pr" ] || [ "$pr" = "null" ]; then
-      unreadable=$((unreadable + 1))
+      abandoned="$abandoned $feat_id"
       continue
     fi
     state="$(gh pr view "$pr" --json state -q '.state' 2>/dev/null)" || state=""
@@ -368,8 +434,20 @@ check_stack_registry() {
     return 0
   fi
 
+  # A PR-less open layer is not "drift we could not assess" — it is the
+  # ABANDONED-LAYER condition, and it is terminal without a human:
+  # create_feature_branch registers a layer with pr unset, stack_reconcile skips
+  # PR-less layers, so an objective that never reached stack_submit leaves an
+  # entry no code path can ever close. Each one counts against max_unmerged
+  # forever and stack_tip keeps handing it out as the base for the next
+  # objective. Named warn, never a note.
+  if [ -n "$abandoned" ]; then
+    _doc_report warn stack-registry "Abandoned layer(s) — open in stack.layers[] with no recorded PR:$abandoned. These were registered at branch creation and never submitted, so nothing can ever mark them merged: they count against execution.stacking.max_unmerged permanently and stack_tip returns them as the base for the next objective. Submit their PRs (/nazgul:start on that objective) or remove the entries from nazgul/config.json by hand."
+    return 0
+  fi
+
   if [ "$unreadable" -gt 0 ]; then
-    _doc_report note stack-registry "$unreadable of $open_count open stack.layers[] entries have no recorded PR, or their PR state could not be read from GitHub — registry drift cannot be assessed for them."
+    _doc_report note stack-registry "$unreadable of $open_count open stack.layers[] entries record a PR whose state could not be read from GitHub — registry drift cannot be assessed for them."
     return 0
   fi
 

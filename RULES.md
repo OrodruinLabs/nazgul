@@ -711,12 +711,20 @@ per-objective release flow are byte-identical whether stacking is on or off. Opt
    a prompt instruction, and it **ships regardless of the stacking opt-in** — the accidental-stacking
    hazard it closes predates stacking entirely. Covered by `tests/test-worktree-utils.sh`.
 2. **Fail-closed on unusable tooling — never a silent degrade.** `[enforced]` (in-script)
-   `stack_available` is three-state (`disabled` / `ready` / `missing`, RULES §15's
-   distinguish-the-ambiguous-case doctrine) and folds absent `gh`, an uninstalled `gh-stack` extension,
-   an unauthenticated `gh`, and a halted stack all into `missing`. Every caller gates on it. At
-   objective end, `missing` still opens the ordinary plain `gh pr create` PR — but emits a `stop_gate`
-   event with `reason: stacking_unavailable` alongside it, so a fallback is never indistinguishable from
-   a normal run (§1 rule 2, §5). Extension presence is checked via `gh extension list` text and NEVER by
+   `stack_available` is five-state, each state its OWN answer per RULES §15's
+   distinguish-the-ambiguous-case doctrine: `disabled` (exit 1) means `execution.stacking.enabled` is
+   not true; `ready` (exit 0); `missing` (exit 2) means enabled but the tooling is unusable — `gh`
+   absent, the `gh-stack` extension not installed, or `gh` not authed; `halted` (exit 3) means enabled
+   and installed but a human-clearable halt is set; `invalid` (exit 4) means the config could not be
+   parsed at all, which is never reported as `disabled`. A halt no longer masquerades as missing
+   tooling, so a caller can report WHY it stopped and still enforce the policy gates that need no
+   tooling (the unmerged cap reads the registry only). Every caller gates on it and fails closed on
+   everything except `ready`. At objective end, an unusable state still opens the ordinary plain
+   `gh pr create` PR — but emits a `stop_gate` event with `reason: stacking_unavailable` and the
+   offending `state` alongside it, so a fallback is never indistinguishable from a normal run (§1 rule
+   2, §5); the heartbeat records the same on its decision record's `stack_skipped` field
+   (`stack_halted` / `stack_tooling_missing` / `stack_config_invalid` and the session/registry variants,
+   null when the pre-steps ran). Extension presence is checked via `gh extension list` text and NEVER by
    invoking `gh stack` and reading its failure, which is indistinguishable from a typo at the `gh` level
    (ADR-018 binding adjustment #1).
 3. **The registry is script-owned.** `[enforced]` (in-script) at the lib boundary: `stack.layers[]` is
@@ -727,11 +735,15 @@ per-objective release flow are byte-identical whether stacking is on or off. Opt
    nothing mechanically stops a human from hand-editing `config.json`, which is why the operator-facing
    docs say plainly: read it, never edit it.
 4. **A conflict is NEVER auto-resolved.** `[enforced]` (in-script) A `gh stack sync` classified as a
-   conflict halts stacking (`execution.stacking.halted`, which `stack_available` reads back as
-   `missing`), files a p1 `stack-sync-conflict` inbox item, and emits `stack_sync_conflict`. The halt is
-   never cleared automatically — only a human clears it. There is **no hand-rolled `rebase --onto`
-   anywhere in this subsystem**, by locked decision: two prior attempts at hand-rolled rebase machinery
-   in this repo failed to converge, which is the entire reason gh-stack was adopted.
+   conflict halts stacking (`execution.stacking.halted`, which `stack_available` reports as its own
+   `halted` state, exit 3), files a p1 `stack-sync-conflict` inbox item, and emits `stack_sync_conflict`.
+   The halt is never cleared automatically — only a human clears it, and halting ZEROES the
+   consecutive-failure counters (`execution.stacking.api_failures` and the per-operation
+   `api_failures_by_op`) so the documented remediation does not re-halt on the first hiccup after it.
+   A halt whose write cannot be verified is fatal-loud and non-zero, never a success that announced a
+   halt it did not persist. There is **no hand-rolled `rebase --onto` anywhere in this subsystem**, by
+   locked decision: two prior attempts at hand-rolled rebase machinery in this repo failed to converge,
+   which is the entire reason gh-stack was adopted.
 5. **Distrust the tool's exit code; classify its stderr.** `[enforced]` (in-script)
    `_su_classify_sync_result` treats `diverged from the stack on GitHub` / `Sync aborted` as a conflict
    **regardless of exit code** — a non-interactive `gh stack sync` aborts a genuine divergence with exit
