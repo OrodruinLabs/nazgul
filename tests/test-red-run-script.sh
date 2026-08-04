@@ -204,6 +204,35 @@ assert_exit_code "derived filter: falls back to ## Test Obligation" "$RR_EC" 0
 assert_file_contains "derived filter: ran the filter the manifest named" "$MANIFEST6" 'run-tests.sh --filter=gamma'
 assert_file_contains "derived filter: entry names gamma" "$MANIFEST6" 'red-run: tests/test-gamma.sh'
 
+# --- the harness is never copied into the pre-change tree -------------------
+# Found by this script's own first real use: TASK-001 changed tests/run-tests.sh,
+# the derived copy set carried it into the pre-change worktree, and the red run
+# went green because the change under test had been copied in with the tests.
+teardown_temp_dir
+setup_project
+printf '\n# touched by this task\n' >> "$TEST_DIR/tests/run-tests.sh"
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "this task also changes the harness"
+HEAD_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+write_manifest TASK-011 "$BASE_SHA"
+MANIFEST11="$TEST_DIR/nazgul/tasks/TASK-011.md"
+run_capture TASK-011 --filter=alpha
+assert_exit_code "harness exclusion: the run is still red" "$RR_EC" 0
+assert_contains "harness exclusion: says what it refused to copy, and why" "$RR_OUT" \
+  "NOT copying tests/run-tests.sh into the pre-change tree"
+assert_file_contains "harness exclusion: the evidence block records the exclusion" \
+  "$MANIFEST11" 'NOT copied (harness, not test input): tests/run-tests.sh'
+
+run_capture TASK-011 --filter=alpha --copy=tests/test-alpha.sh
+assert_exit_code "--copy: a pinned copy set still red-runs" "$RR_EC" 0
+assert_contains "--copy: announces that derivation was suppressed" "$RR_OUT" "copy set pinned by --copy"
+assert_file_contains "--copy: the pinning is recorded in the evidence block" "$MANIFEST11" 'copy set pinned by --copy'
+assert_file_contains "--copy: exactly the one pinned file was copied" "$MANIFEST11" '1 changed test file(s) copied in'
+
+run_capture TASK-011 --filter=alpha --copy=tests/does-not-exist.sh
+assert_exit_code "--copy: a path that does not exist is an error, not a silent skip" "$RR_EC" 1
+assert_contains "--copy: names the missing path" "$RR_OUT" "tests/does-not-exist.sh does not exist"
+
 # --- environment errors: nothing written, distinct messages -----------------
 run_capture TASK-999 --filter=alpha
 assert_exit_code "missing manifest: exits 1" "$RR_EC" 1

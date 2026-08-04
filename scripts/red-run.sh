@@ -10,10 +10,17 @@ set -euo pipefail
 # script's core job — not a warning.
 #
 # Usage: scripts/red-run.sh <TASK-ID> [--filter=<name>] [--project-root=<path>]
+#                           [--copy=<path> ...]
 #
 # The filter defaults to the first `--filter=<name>` named in the manifest's
 # `## Test Obligation` section. There is no full-suite mode: the ~300s per-task
 # bar is a stated boundary, and a red run that blows it gets routed around.
+#
+# The copy set defaults to the task's changed files under `tests/` MINUS the
+# harness itself: copying a changed `tests/run-tests.sh` into the pre-change tree
+# would run the new tests under the changed runner, which is the change being
+# present — the exact vacuity this script exists to detect. `--copy=` (repeatable)
+# pins the set explicitly and suppresses derivation entirely.
 #
 # Exit codes:
 #   0  RED confirmed — the evidence block was written
@@ -39,16 +46,23 @@ die_code() {
 }
 
 usage() {
-  echo "Usage: scripts/red-run.sh <TASK-ID> [--filter=<name>] [--project-root=<path>]"
+  echo "Usage: scripts/red-run.sh <TASK-ID> [--filter=<name>] [--project-root=<path>] [--copy=<path> ...]"
 }
+
+# Files under tests/ that are implementation, not test input: never copied into
+# the pre-change tree by the derived set.
+RR_NEVER_COPY="tests/run-tests.sh"
 
 TASK_ID=""
 FILTER=""
 PROJECT_ROOT=""
+EXPLICIT_COPY=""
 for arg in "$@"; do
   case "$arg" in
     --filter=*) FILTER="${arg#--filter=}" ;;
     --project-root=*) PROJECT_ROOT="${arg#--project-root=}" ;;
+    --copy=*) EXPLICIT_COPY="${EXPLICIT_COPY}${arg#--copy=}
+" ;;
     -h|--help) usage; exit 0 ;;
     -*) usage >&2; die "unknown argument: $arg" ;;
     *)
@@ -103,16 +117,38 @@ fi
   "no scoped filter given and none found in $TASK_ID's ## Test Obligation section." \
   "Pass --filter=<name>; a full-suite red run is out of the per-task time budget."
 
-TEST_FILES=$( {
-    git -C "$PROJECT_ROOT" diff --name-only "${BASE_SHA}..HEAD" -- tests/ 2>/dev/null || true
-    git -C "$PROJECT_ROOT" diff --name-only HEAD -- tests/ 2>/dev/null || true
-    git -C "$PROJECT_ROOT" ls-files --others --exclude-standard -- tests/ 2>/dev/null || true
-  } | sort -u | grep -v '^$' || true)
+if [ -n "$EXPLICIT_COPY" ]; then
+  TEST_FILES="$EXPLICIT_COPY"
+  echo "red-run: copy set pinned by --copy; no derivation, no exclusions" >&2
+else
+  TEST_FILES=$( {
+      git -C "$PROJECT_ROOT" diff --name-only "${BASE_SHA}..HEAD" -- tests/ 2>/dev/null || true
+      git -C "$PROJECT_ROOT" diff --name-only HEAD -- tests/ 2>/dev/null || true
+      git -C "$PROJECT_ROOT" ls-files --others --exclude-standard -- tests/ 2>/dev/null || true
+    } | sort -u | grep -v '^$' || true)
+fi
 
 COPY_LIST=""
+EXCLUDED=""
 while IFS= read -r rel; do
   [ -n "$rel" ] || continue
-  [ -f "$PROJECT_ROOT/$rel" ] || continue
+  if [ -z "$EXPLICIT_COPY" ]; then
+    case "
+$RR_NEVER_COPY
+" in
+      *"
+$rel
+"*)
+        echo "red-run: NOT copying $rel into the pre-change tree — it is the harness, not test input; copying it would run the new tests under the changed runner" >&2
+        EXCLUDED="${EXCLUDED}${rel} "
+        continue
+        ;;
+    esac
+  fi
+  if [ ! -f "$PROJECT_ROOT/$rel" ]; then
+    [ -n "$EXPLICIT_COPY" ] && die "--copy=$rel does not exist under $PROJECT_ROOT"
+    continue
+  fi
   COPY_LIST="${COPY_LIST}${rel}
 "
 done <<EOF
@@ -120,8 +156,9 @@ $TEST_FILES
 EOF
 
 [ -n "$COPY_LIST" ] || die \
-  "$TASK_ID changes no file under tests/ (looked at ${BASE_SHA}..HEAD, the working tree, and untracked files)." \
-  "There is nothing to red-run. If that is correct, record an enumerated N/A token instead."
+  "$TASK_ID changes no copyable file under tests/ (looked at ${BASE_SHA}..HEAD, the working tree, and untracked files)." \
+  "There is nothing to red-run. If that is correct, record an enumerated N/A token instead." \
+  "If the only changed test-tree file is the harness itself, pin the copy set with --copy=<path>."
 
 SCRATCH_PARENT=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-red-run-XXXXXX")
 SCRATCH="$SCRATCH_PARENT/pre-change"
@@ -234,8 +271,12 @@ done <<EOF
 $FAILED_NAMES
 EOF
 
+CAPTURE_NOTE=""
+[ -n "$EXCLUDED" ] && CAPTURE_NOTE="; NOT copied (harness, not test input): ${EXCLUDED% }"
+[ -n "$EXPLICIT_COPY" ] && CAPTURE_NOTE="; copy set pinned by --copy"
+
 BLOCK="${BEGIN_MARK}
-- capture: \`tests/run-tests.sh --filter=${FILTER}\` in a detached worktree at \`${BASE_SHA}\`; ${COPIED} changed test file(s) copied in; runner exit ${RUN_EC} in ${ELAPSED}s
+- capture: \`tests/run-tests.sh --filter=${FILTER}\` in a detached worktree at \`${BASE_SHA}\`; ${COPIED} changed test file(s) copied in${CAPTURE_NOTE}; runner exit ${RUN_EC} in ${ELAPSED}s
 ${ENTRIES}${END_MARK}"
 
 # In-place file write, never `mv`/`cp` over a manifest: the bash-write
