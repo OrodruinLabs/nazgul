@@ -1,5 +1,5 @@
 {
-  "schema_version": 35,
+  "schema_version": 36,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -157,7 +157,8 @@
     "team_sweep_min_age_hours": 24,
     "subagent_resume": true,
     "in_flight_hold": true,
-    "in_flight_stale_minutes": 30
+    "in_flight_stale_minutes": 30,
+    "red_run_evidence": true
   },
   "safety": {
     "max_consecutive_failures": 5,

@@ -311,6 +311,43 @@ Added by the additive `migrate_33_to_34` migration (schema v33→v34, chained af
 existing projects upgrade automatically — see Config Upgrades below. See RULES.md §1 (the no-bare-`exit 0`
 rule) and ADR-015.
 
+## Red-Run Evidence Gate
+
+`guards.red_run_evidence` (default `true`, config schema v36) is the kill switch for the red-run
+evidence check that `scripts/lib/task-transition-guard.sh` adds to the IMPLEMENTED gate. A task whose
+file scope touches `scripts/**` or `tests/**` must carry a `## Red-Run Evidence` section in its manifest
+recording that its tests were actually run against the pre-change tree and **failed** there — a test that
+passes without the change under test is evidence of nothing. Capture it mechanically with
+`scripts/red-run.sh <TASK-ID> --filter=<scoped>`, never by hand: the script builds a detached worktree at
+the manifest's Base SHA, copies the task's changed `tests/` files in, runs the scoped filter, and writes
+the block itself.
+
+The check's dispositions mirror the `## Commits` gate's shape — the section heading is the enforcement
+boundary, and "looked and found none" is kept distinct from "never looked":
+
+| Manifest state | Outcome |
+|---|---|
+| Section absent, scope touches `scripts/**` or `tests/**` | **BLOCK** (`absent`) |
+| Section absent, scope touches neither | ALLOW, and the skipped check is announced on stderr (`not_applicable`) |
+| Section present with no parseable `red-run:` entry | **BLOCK** as corrupt (`corrupt`) — present-but-unreadable is a stronger trouble signal than absent |
+| Entry present but its test path or `pre-change-ref` is unresolvable, not an ancestor, or records exit 0 | **BLOCK** (`ref_unresolvable` / `not_ancestor` / `exit_zero`) — the evidence claims something git can refute |
+| `red-run: N/A — <token>` with `<token>` in the closed list `docs-only`, `comment-only`, `revert`, `fixture-capture-only` | ALLOW, recorded (`enumerated_na`) |
+| `red-run: N/A — <free text>` | **BLOCK** (`bad_na_token`) — an open-ended excuse field is an allow-everything field |
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `guards.red_run_evidence` | `true` | Set to `false` to suppress the **block only**. Detection still runs: the stderr diagnostic still names the reason, the `red_run_missing` event is still emitted, and a second stderr line records that the block was suppressed. There is no setting that makes the gate stop looking. |
+
+It ships default-on deliberately. This is an enforcement mechanism, and a default-off enforcement
+mechanism reproduces the problem it exists to fix — the objective's whole premise is that a test suite
+whose redness was never observed is a count, not evidence (RULES.md §1 rule 4). Existing projects with a
+task that predates the gate see one block, resolved by capturing the evidence (or recording an
+enumerated `N/A` token) rather than by flipping the switch.
+
+Added by the additive `migrate_35_to_36` migration (schema v35→v36); existing projects upgrade
+automatically with `guards.red_run_evidence` default `true`, and an explicit `false` is preserved — see
+Config Upgrades below. See RULES.md §1 rule 4 and ADR-019 D1.
+
 ## One-Shot Dispatch Primacy (`guards.team_teardown` removed)
 
 FEAT-026/ADR-017 converted every one-shot Nazgul dispatch (discovery, review, implementation, post-loop
@@ -404,6 +441,7 @@ The stream captures:
 - **stack_sync_conflict** — `gh stack sync` hit a conflict or a divergence it cannot auto-resolve; stacking is halted and a p1 inbox item filed. Fields `reason`/`exit_code`/`detail`
 - **stack_api_failure** — a `gh`/`gh stack` API call failed; fields `stage`/`auth_status` (an independent `gh auth status` probe, since gh-stack can misattribute auth failures) plus the call's own identifiers
 - **stack_remote_layer_imported** / **stack_remote_layer_import_failed** — an explicit `gh stack checkout <pr>` of a remote layer that `sync` left un-imported succeeded / failed; fields `pr`/`feat_id`/`branch`, or `pr`/`exit_code`/`detail`
+- **red_run_missing** — the IMPLEMENTED red-run evidence check found no usable evidence; fields `task_id` and `reason` (`absent`, `corrupt`, `ref_unresolvable`, `not_ancestor`, `exit_zero`, `bad_na_token`). Emitted whether or not `guards.red_run_evidence` suppressed the block — see Red-Run Evidence Gate above
 - **stop_gate** — a gate ended or short-circuited an autonomous run rather than exiting silently; `reason` values include `in_flight_hold`, `in_flight_stale`, and `stacking_unavailable` (stacking enabled but the tooling is unusable — the loop fell back to a plain PR)
 
 See `docs/superpowers/specs/2026-06-24-telemetry-bus-design.md` for the full event schema and payload details.
