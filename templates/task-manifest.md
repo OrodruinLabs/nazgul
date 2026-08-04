@@ -66,6 +66,32 @@ status: PLANNED
      Example:
      - f81e1b25d6b513c5f8c46bb65f25acd970016f8c — feat(FEAT-001): TASK-001 implement user model -->
 
+## Red-Run Evidence
+<!-- Populated by scripts/red-run.sh before IN_PROGRESS -> IMPLEMENTED: proof that this task's
+     new/changed tests FAILED against the pre-change tree. A test written to confirm its author's
+     implementation is not a test (FEAT-028 charter, deliverable 1).
+
+     The `## Red-Run Evidence` heading IS the enforcement boundary for the IMPLEMENTED gate —
+     `ttg_verify_red_run_evidence` (scripts/lib/task-transition-guard.sh) reads only what falls under
+     it, exactly as `ttg_verify_commit_evidence` reads only what falls under `## Commits`. A
+     `red-run:` token anywhere else in this manifest is invisible to the gate.
+
+     One `- red-run:` bullet per entry. The gate verifies referential integrity, never semantics: the
+     named test path exists in the worktree, `pre-change-ref` resolves to a real commit and is an
+     ancestor of a SHA recorded under `## Commits`, and `result:` records a NON-ZERO exit. Whether the
+     failure was meaningful is the qa-reviewer's blocking question.
+
+     A task whose scope touches neither `scripts/**` nor `tests/**` may instead record one enumerated
+     exemption. The list is CLOSED — docs-only, comment-only, revert, fixture-capture-only — and free
+     text is rejected, because an open-ended excuse field is an allow-everything field.
+
+     Example:
+     - red-run: tests/test-foo.sh :: case "guard blocks a 6-line run in a .sh file"
+       - pre-change-ref: 8f2c1ad3c0be1f5e2a9d47bb0c1e6d3a51f7b902
+       - result: FAILED (exit 1) — "FAIL: guard blocks a 6-line run in a .sh file"
+       - captured-by: scripts/red-run.sh at 2026-08-04T11:02:31Z
+     - red-run: N/A — docs-only -->
+
 ## Description
 <!-- Clear, specific description of what this task accomplishes.
      Written by the Planner. Should be understandable without reading other tasks.

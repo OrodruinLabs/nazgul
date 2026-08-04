@@ -446,6 +446,14 @@ if [ "$OLD_STATUS" = "IN_PROGRESS" ] && [ "$NEW_STATUS" = "IMPLEMENTED" ]; then
     echo "If you implemented the work, you should have committed it. If git is unavailable, this blocks by design (fail closed)." >&2
     exit 2
   fi
+  # Red-run evidence (FEAT-028/TASK-002). Runs AFTER the commit check because
+  # the ancestry leg reads the SHAs the commit gate just proved real.
+  if ! ttg_verify_red_run_evidence "$MANIFEST_TEXT" "$PROJECT_ROOT" "$TASK_ID"; then
+    echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark IMPLEMENTED without verified red-run evidence" >&2
+    echo "Add a ## Red-Run Evidence section recording that the new/changed tests FAILED against the pre-change tree." >&2
+    echo "Capture it with scripts/red-run.sh, or declare an enumerated exemption: red-run: N/A — docs-only|comment-only|revert|fixture-capture-only" >&2
+    exit 2
+  fi
 fi
 
 # IMPLEMENTED/BLOCKED -> IN_REVIEW requires review directory to exist
