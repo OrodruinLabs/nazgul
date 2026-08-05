@@ -240,10 +240,47 @@ run_capture TASK-011 --filter=alpha --copy=tests/does-not-exist.sh
 assert_exit_code "--copy: a path that does not exist is an error, not a silent skip" "$RR_EC" 1
 assert_contains "--copy: names the missing path" "$RR_OUT" "tests/does-not-exist.sh does not exist"
 
+run_capture TASK-011 --filter=alpha --copy=tests/lib
+assert_exit_code "--copy: a directory is rejected as a non-regular file" "$RR_EC" 1
+assert_contains "--copy: a directory diagnostic names the existing path" "$RR_OUT" \
+  "copy=tests/lib exists under"
+assert_contains "--copy: a directory is reported accurately" "$RR_OUT" \
+  "but is not a regular file"
+assert_not_contains "--copy: an existing directory is never reported missing" "$RR_OUT" \
+  "tests/lib does not exist"
+
 run_capture TASK-011 --filter=alpha --copy=tests/../scripts/feature.sh
 assert_exit_code "--copy: traversal out of tests/ is rejected before any worktree write" "$RR_EC" 1
 assert_contains "--copy: traversal rejection names the unsafe path" "$RR_OUT" \
   "copy path must not contain '.' or '..' segments: tests/../scripts/feature.sh"
+
+# A legacy/pre-change harness may exit nonzero without printing a "Failed test
+# files" section. The fallback must treat a dash-leading filter as literal data.
+cat > "$TEST_DIR/tests/run-tests.sh" <<'LEGACY_RUNNER'
+#!/usr/bin/env bash
+echo "=== test--dash ==="
+echo "  FAIL: legacy harness reports no failed-file summary"
+exit 1
+LEGACY_RUNNER
+git -C "$TEST_DIR" add tests/run-tests.sh
+git -C "$TEST_DIR" commit -q -m "legacy runner without failed-file summary"
+FALLBACK_BASE=$(git -C "$TEST_DIR" rev-parse HEAD)
+cat > "$TEST_DIR/tests/test--dash.sh" <<'DASH_TEST'
+#!/usr/bin/env bash
+echo "  FAIL: dash-filter regression"
+exit 1
+DASH_TEST
+git -C "$TEST_DIR" add tests/test--dash.sh
+git -C "$TEST_DIR" commit -q -m "add dash-filter regression test"
+HEAD_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+write_manifest TASK-012 "$FALLBACK_BASE"
+MANIFEST12="$TEST_DIR/nazgul/tasks/TASK-012.md"
+run_capture TASK-012 --filter=-dash
+assert_exit_code "fallback: dash-leading filter still identifies the copied failing file" "$RR_EC" 0
+assert_contains "fallback: announces failed-file discovery fallback" "$RR_OUT" \
+  "falling back to the copied files matching '-dash'"
+assert_file_contains "fallback: records the literal dash-filter match" "$MANIFEST12" \
+  'red-run: tests/test--dash.sh'
 
 # --- environment errors: nothing written, distinct messages -----------------
 run_capture TASK-999 --filter=alpha

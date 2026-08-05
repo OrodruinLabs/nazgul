@@ -166,8 +166,12 @@ $rel
         ;;
     esac
   fi
-  if [ ! -f "$PROJECT_ROOT/$rel" ]; then
+  if [ ! -e "$PROJECT_ROOT/$rel" ] && [ ! -L "$PROJECT_ROOT/$rel" ]; then
     [ -n "$EXPLICIT_COPY" ] && die "--copy=$rel does not exist under $PROJECT_ROOT"
+    continue
+  fi
+  if [ ! -f "$PROJECT_ROOT/$rel" ]; then
+    [ -n "$EXPLICIT_COPY" ] && die "--copy=$rel exists under $PROJECT_ROOT but is not a regular file"
     continue
   fi
   COPY_LIST="${COPY_LIST}${rel}
@@ -268,7 +272,7 @@ FAILED_NAMES=$(awk '/^Failed test files:/{f=1;next} f && /^[[:space:]]*$/{f=0} f
 
 if [ -z "$FAILED_NAMES" ]; then
   echo "red-run: the pre-change run exited $RUN_EC but named no failed test file — falling back to the copied files matching '$FILTER'" >&2
-  FAILED_NAMES=$(printf '%s' "$COPY_LIST" | sed -E 's%^.*/%%' | grep "$FILTER" || true)
+  FAILED_NAMES=$(printf '%s' "$COPY_LIST" | sed -E 's%^.*/%%' | grep -F -e "$FILTER" || true)
 fi
 [ -n "$FAILED_NAMES" ] || die \
   "the pre-change run exited $RUN_EC but no failing test file could be identified — refusing to write an entry naming nothing"
