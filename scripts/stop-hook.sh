@@ -248,6 +248,15 @@ if [ "$RECON_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
           && ! ttg_transition_is_guarded "$NAZGUL_DIR" "$RECON_TASK_ID" "$RECON_LIVE_STATUS" "$RECON_PREV_TS"; then
           echo "NAZGUL BASH-WRITE RECONCILIATION: BLOCKED — ${RECON_TASK_ID} status changed ${RECON_PREV_STATUS} → ${RECON_LIVE_STATUS} written outside the guarded Write/Edit/MultiEdit path" >&2
           RECON_REASON="status changed ${RECON_PREV_STATUS} → ${RECON_LIVE_STATUS} outside the guarded Write/Edit/MultiEdit path (stop-hook reconciliation, MF-022)"
+          # An untraceable landing on IMPLEMENTED never passed the PreToolUse
+          # red-run gate, so re-verify it here (FEAT-028/TASK-002, plan
+          # Structural Note 1) and name red-run evidence distinctly when it is
+          # what is actually missing.
+          if [ "$RECON_LIVE_STATUS" = "IMPLEMENTED" ] \
+            && ! ttg_verify_red_run_evidence "$(cat "$recon_task_file")" "$PROJECT_ROOT" "$RECON_TASK_ID"; then
+            echo "NAZGUL BASH-WRITE RECONCILIATION: BLOCKED — ${RECON_TASK_ID} carries no verified red-run evidence (${TTG_RED_RUN_REASON}) for its IMPLEMENTED status" >&2
+            RECON_REASON="unverified red-run evidence (${TTG_RED_RUN_REASON}) on a status changed ${RECON_PREV_STATUS} → IMPLEMENTED outside the guarded Write/Edit/MultiEdit path (stop-hook reconciliation, FEAT-028)"
+          fi
           set_task_status "$recon_task_file" "$RECON_LIVE_STATUS" "BLOCKED"
           if grep -q '^\- \*\*Blocked reason\*\*:' "$recon_task_file" 2>/dev/null; then
             awk -v reason="- **Blocked reason**: ${RECON_REASON}" \

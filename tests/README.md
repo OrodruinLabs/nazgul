@@ -12,6 +12,30 @@ tests/run-tests.sh --filter=stop-hook
 tests/run-tests.sh --filter=json
 ```
 
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Every checked file passed |
+| `1` | At least one checked file failed |
+| `2` | **NOTHING CHECKED** — the filter matched no file, or no test file was discovered |
+| `3` | Internal coverage-accounting defect (`scanned != skipped + checked`) |
+
+Exit `2` exists so a mistyped `--filter` is distinguishable from a real test failure. A zero-match run
+never prints "All tests passed."; it prints `run-tests: NOTHING CHECKED — ...` on stderr instead.
+
+## Coverage Line
+
+Every run ends with one fixed-grammar, greppable line on stdout (the coverage-honesty contract — a run
+must report what it did NOT look at, not only what it found):
+
+```text
+run-tests: <N> scanned, <M> skipped (filtered-out=<count>, unreadable=<count>), <K> checked, <F> findings
+```
+
+Skip reasons are a closed list — `filtered-out`, `unreadable`. The runner asserts `N == M + K` itself and
+exits `3` on a mismatch, because a summary that does not add up is a defect in the emitter.
+
 ## Test Files
 
 | File | Description | Cases |

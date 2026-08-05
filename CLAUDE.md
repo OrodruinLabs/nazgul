@@ -110,7 +110,7 @@ references/                          # Shared reference docs for agents
 │   ├── fix-first-heuristic.md       # AUTO-FIX vs ASK classification rules
 │   └── self-improvement.md          # Agent self-rating protocol
 tests/                               # Plugin validation tests
-│   ├── run-tests.sh                 # Test runner (85 unit/integration files)
+│   ├── run-tests.sh                 # Test runner (87 unit/integration files); exit 2 = nothing checked
 │   ├── test-*.sh                    # Unit/integration tests
 │   ├── fixtures/                    # Test fixtures (bootstrap-transform scrub cases)
 │   ├── lib/                         # Test assertions + setup helpers
@@ -183,11 +183,17 @@ tests/                               # Plugin validation tests
 ## Testing
 
 ```bash
-tests/run-tests.sh                    # Run all unit/integration tests (85 files)
+tests/run-tests.sh                    # Run all unit/integration tests (87 files)
 tests/run-tests.sh --filter=stop-hook # Run specific test file
 tests/e2e/run-e2e.sh                  # Run E2E skill tests (requires claude CLI, costs money)
 tests/e2e/run-stack-e2e.sh            # Two-layer gh-stack E2E (real repo/PRs; CI-only via e2e-stack.yml)
 ```
+
+**Harness exit codes:** `0` all checked files passed, `1` a checked file failed, `2` NOTHING CHECKED (the
+`--filter` matched nothing, or no test file was discovered), `3` internal coverage-accounting defect. A
+zero-match filter is a failure, not a silent pass — every run ends with the fixed-grammar coverage line
+`run-tests: N scanned, M skipped (filtered-out=…, unreadable=…), K checked, F findings` (`N == M + K`,
+asserted by the emitter). See `tests/README.md`.
 
 CI runs automatically on push (`test.yml`) and checks skill template freshness on PRs (`skill-docs.yml`). E2E tests are manual trigger only (`e2e-tests.yml`, `e2e-stack.yml` — the latter needs a `STACK_E2E_GH_TOKEN` secret and creates real GitHub repos/PRs).
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
 # Test: Config template has all required fields
 TEST_NAME="test-config-schema"
@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "35"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "36"
 assert_eq "v33 guards.team_teardown is absent (dead consumer removed)" \
   "$(jq -r '.guards | has("team_teardown")' "$CONFIG")" "false"
 assert_json_field "v31 guards.team_sweep is true" "$CONFIG" ".guards.team_sweep" "true"
@@ -237,5 +237,11 @@ assert_json_field "v35 stack.layers really is an array, not an object" "$CONFIG"
 # to carry a live counter forward.
 assert_json_field "v35 execution.stacking.halted is absent until something halts" "$CONFIG" '.execution.stacking | has("halted")' "false"
 assert_json_field "v35 execution.stacking.api_failures is absent until something fails" "$CONFIG" '.execution.stacking | has("api_failures")' "false"
+
+# v36 (FEAT-028): the red-run evidence gate's kill switch ships default-ON. A
+# fresh config that omitted the key, or shipped it false, would leave the gate
+# this objective exists to install silently inert on every new project.
+assert_json_field "v36 guards.red_run_evidence is present on a fresh config" "$CONFIG" '.guards | has("red_run_evidence")' "true"
+assert_json_field "v36 guards.red_run_evidence defaults true (enforcement, not opt-in)" "$CONFIG" ".guards.red_run_evidence" "true"
 
 report_results

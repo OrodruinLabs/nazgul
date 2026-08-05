@@ -733,6 +733,19 @@ migrate_34_to_35() {
   log_migration "v34→v35: added execution.stacking.enabled:false, execution.stacking.max_unmerged:3, execution.stacking.rework_priority:1, stack.layers:[] (opt-in stacked-PR continuation registry + policy; additive, explicit values preserved)"
 }
 
+migrate_35_to_36() {
+  local tmp; tmp=$(mktemp)
+  # Red-run evidence gate kill switch (FEAT-028 TASK-004 / ADR-019 D1). Additive;
+  # explicit values (incl. false) preserved. Same type-guard pattern as
+  # migrate_33_to_34/migrate_34_to_35.
+  jq '
+    .guards = ((if (.guards | type) == "object" then .guards else {} end)
+      | .red_run_evidence = (if has("red_run_evidence") then .red_run_evidence else true end))
+    | .schema_version = 36
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v35→v36: added guards.red_run_evidence:true (kill switch for the IMPLEMENTED red-run evidence gate — false suppresses the block only, the diagnostic and the red_run_missing event still fire; additive, explicit values preserved)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"
