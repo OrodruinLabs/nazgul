@@ -126,6 +126,12 @@ rr_call "$COMMENT_ONLY_OUT" "$TEST_DIR"
 assert_exit_code "comment-only + out of scope: allows" "$RR_EC" 0
 assert_eq "comment-only + out of scope: reason is not_applicable" "$RR_REASON" "not_applicable"
 
+TEMPLATE_SCOPE_OUT=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n- **Base SHA**: %s\n\n## File Scope\n<!--\n**Creates:**\n- `tests/models/user.test.ts`\n-->\n\n## Commits\n- %s — docs: work\n\n## Red-Run Evidence\n<!-- not filled in yet -->\n\n## Description\nx\n' \
+  "$HEAD_SHA" "$HEAD_SHA")
+rr_call "$TEMPLATE_SCOPE_OUT" "$TEST_DIR"
+assert_exit_code "template scope comments: example test paths do not put a docs task in scope" "$RR_EC" 0
+assert_eq "template scope comments: reason is not_applicable" "$RR_REASON" "not_applicable"
+
 rr_call "$(rr_manifest '["scripts/foo.sh"]' '<!-- not filled in yet -->')" "$TEST_DIR"
 assert_exit_code "comment-only + in scope: blocks as absent evidence" "$RR_EC" 1
 assert_eq "comment-only + in scope: reason is absent" "$RR_REASON" "absent"

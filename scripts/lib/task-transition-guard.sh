@@ -135,6 +135,28 @@ _ttg_red_run_deny() {
   return 1
 }
 
+_ttg_strip_html_comments() {
+  awk '
+    {
+      line=$0; out=""
+      while (length(line) > 0) {
+        if (comment) {
+          end=index(line, "-->")
+          if (!end) { line=""; break }
+          line=substr(line, end + 3); comment=0; continue
+        }
+        start=index(line, "<!--")
+        if (!start) { out=out line; line=""; break }
+        out=out substr(line, 1, start - 1)
+        line=substr(line, start + 4)
+        end=index(line, "-->")
+        if (end) { line=substr(line, end + 3); continue }
+        comment=1; line=""
+      }
+      if (out ~ /[^[:space:]]/) print out
+    }'
+}
+
 # UNION scope predicate (plan Decision D-3): the manifest's declared scope OR
 # the Base SHA..HEAD diff putting a `scripts/**`/`tests/**` path in scope puts
 # the task in scope. The manifest field alone cannot decide it — understating
@@ -149,6 +171,7 @@ _ttg_red_run_in_scope() {
     | grep -iE '^[[:space:]]*-[[:space:]]*\*\*Files modified\*\*' || true)
   declared="${declared}
 $(printf '%s' "$manifest_text" | awk '/^## File Scope/{f=1;next} /^## /{f=0} f')"
+  declared=$(printf '%s\n' "$declared" | _ttg_strip_html_comments)
   if printf '%s\n' "$declared" | grep -qE '(^|[^[:alnum:]_./-])(scripts|tests)/'; then
     return 0
   fi
@@ -367,25 +390,7 @@ ttg_verify_red_run_evidence() {
   fi
 
   raw_section=$(printf '%s' "$manifest_text" | awk '/^## Red-Run Evidence/{f=1;next} /^## /{f=0} f')
-  section=$(printf '%s\n' "$raw_section" | awk '
-    {
-      line=$0; out=""
-      while (length(line) > 0) {
-        if (comment) {
-          end=index(line, "-->")
-          if (!end) { line=""; break }
-          line=substr(line, end + 3); comment=0; continue
-        }
-        start=index(line, "<!--")
-        if (!start) { out=out line; line=""; break }
-        out=out substr(line, 1, start - 1)
-        line=substr(line, start + 4)
-        end=index(line, "-->")
-        if (end) { line=substr(line, end + 3); continue }
-        comment=1; line=""
-      }
-      if (out ~ /[^[:space:]]/) print out
-    }')
+  section=$(printf '%s\n' "$raw_section" | _ttg_strip_html_comments)
   if ! printf '%s\n' "$section" | grep -qE '^[[:space:]]*-[[:space:]]*(\*\*)?red-run(\*\*)?:'; then
     if ! printf '%s' "$section" | grep -q '[^[:space:]]'; then
       if _ttg_red_run_in_scope "$manifest_text" "$project_root"; then

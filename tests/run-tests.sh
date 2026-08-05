@@ -107,8 +107,10 @@ fi
 if [ "$CHECKED" -eq 0 ]; then
   if [ "$SCANNED" -eq 0 ]; then
     echo "run-tests: NOTHING CHECKED — no test files discovered in $SCRIPT_DIR" >&2
-  elif [ -n "$FILTER" ]; then
+  elif [ -n "$FILTER" ] && [ "$SKIP_FILTERED" -eq "$SCANNED" ]; then
     echo "run-tests: NOTHING CHECKED — all $SCANNED candidates skipped; no test files matched filter '$FILTER'" >&2
+  elif [ -n "$FILTER" ]; then
+    echo "run-tests: NOTHING CHECKED — matching candidates for filter '$FILTER' were unreadable or non-regular" >&2
   else
     echo "run-tests: NOTHING CHECKED — all $SCANNED candidates skipped" >&2
   fi

@@ -81,9 +81,10 @@ status: PLANNED
      ancestor of a SHA recorded under `## Commits`, and `result:` records a NON-ZERO exit. Whether the
      failure was meaningful is the qa-reviewer's blocking question.
 
-     A task whose scope touches neither `scripts/**` nor `tests/**` may instead record one enumerated
+     When no meaningful pre-change red run exists, record one specifically applicable enumerated
      exemption. The list is CLOSED — docs-only, comment-only, revert, fixture-capture-only — and free
-     text is rejected, because an open-ended excuse field is an allow-everything field.
+     text is rejected. The gate validates exact list membership; the qa-reviewer judges whether the
+     selected exemption is truthful.
 
      Example:
      - red-run: tests/test-foo.sh :: case "guard blocks a 6-line run in a .sh file"

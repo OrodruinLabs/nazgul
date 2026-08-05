@@ -128,6 +128,8 @@ BASE_SHA=$(awk '/^## Metadata/{f=1;next} /^## /{f=0} f' "$MANIFEST" \
   "There is no pre-change tree to run against — record it before capturing a red run."
 git -C "$PROJECT_ROOT" cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null \
   || die "Base SHA $BASE_SHA does not resolve to a commit in $PROJECT_ROOT"
+git -C "$PROJECT_ROOT" merge-base --is-ancestor "$BASE_SHA" HEAD 2>/dev/null \
+  || die "Base SHA $BASE_SHA is not an ancestor of HEAD"
 
 if [ -z "$FILTER" ]; then
   FILTER=$(awk '/^## Test Obligation/{f=1;next} /^## /{f=0} f' "$MANIFEST" \
@@ -270,7 +272,23 @@ GLOBAL_FIRST_FAIL=$(grep -m1 -E '^[[:space:]]*FAIL:' "$OUT_FILE" || true)
 FAILED_NAMES=$(awk '/^Failed test files:/{f=1;next} f && /^[[:space:]]*$/{f=0} f' "$OUT_FILE" \
   | sed -E 's/^[[:space:]]*-[[:space:]]*//' | grep -v '^$' || true)
 
-if [ -z "$FAILED_NAMES" ]; then
+if [ -n "$FAILED_NAMES" ]; then
+  COPIED_FAILED_NAMES=""
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    if grep -qFx -e "tests/$name" <<<"$COPY_LIST"; then
+      COPIED_FAILED_NAMES="${COPIED_FAILED_NAMES}${name}
+"
+    else
+      echo "red-run: ignoring reported failure outside the copied test set: tests/$name" >&2
+    fi
+  done <<EOF
+$FAILED_NAMES
+EOF
+  [ -n "$COPIED_FAILED_NAMES" ] || die \
+    "the pre-change run exited $RUN_EC, but none of its reported failing test files belongs to the copied test set — refusing unrelated evidence"
+  FAILED_NAMES="$COPIED_FAILED_NAMES"
+else
   echo "red-run: the pre-change run exited $RUN_EC but named no failed test file — falling back to the copied files matching '$FILTER'" >&2
   FAILED_NAMES=$(printf '%s' "$COPY_LIST" | sed -E 's%^.*/%%' | grep -F -e "$FILTER" || true)
 fi

@@ -118,18 +118,24 @@ assert_eq "no-candidates: coverage line is all zeros" "$LAST" \
 
 # --- Unreadable candidate is skipped under its own reason, never silently dropped ---
 SB_UNREAD="$(_mk_sandbox unreadable test-alpha.sh:0 test-beta.sh:0 test-gamma.sh:0)"
-chmod 000 "$SB_UNREAD/tests/test-beta.sh"
-if [ -r "$SB_UNREAD/tests/test-beta.sh" ]; then
-  echo "  NOTE: unreadable case not exercised — chmod 000 left the file readable (running as root?)"
-else
-  _run "$SB_UNREAD"
-  assert_eq "unreadable: still exits 0 (nothing checked failed)" "$RC" "0"
-  assert_eq "unreadable: coverage line books it under the unreadable reason" "$LAST" \
-    "run-tests: 3 scanned, 1 skipped (filtered-out=0, unreadable=1), 2 checked, 0 findings"
-  assert_contains "unreadable: names the skipped file" "$OUT" "test-beta.sh"
-  _assert_grammar "unreadable" "$LAST"
-fi
-chmod 644 "$SB_UNREAD/tests/test-beta.sh" 2>/dev/null
+rm -f "$SB_UNREAD/tests/test-beta.sh"
+ln -s missing-test-target "$SB_UNREAD/tests/test-beta.sh"
+_run "$SB_UNREAD"
+assert_eq "unreadable: still exits 0 (nothing checked failed)" "$RC" "0"
+assert_eq "unreadable: coverage line books it under the unreadable reason" "$LAST" \
+  "run-tests: 3 scanned, 1 skipped (filtered-out=0, unreadable=1), 2 checked, 0 findings"
+assert_contains "unreadable: names the skipped file" "$OUT" "test-beta.sh"
+_assert_grammar "unreadable" "$LAST"
+
+_run "$SB_UNREAD" --filter=beta
+assert_eq "filtered unreadable: exits 2 because no matching candidate was checked" "$RC" "2"
+assert_contains "filtered unreadable: diagnoses the matching non-regular candidate" "$ERR" \
+  "matching candidates for filter 'beta' were unreadable or non-regular"
+assert_not_contains "filtered unreadable: does not claim the filter matched nothing" "$ERR" \
+  "no test files matched filter"
+assert_eq "filtered unreadable: coverage line distinguishes filtering from unreadability" "$LAST" \
+  "run-tests: 3 scanned, 3 skipped (filtered-out=2, unreadable=1), 0 checked, 0 findings"
+_assert_grammar "filtered unreadable" "$LAST"
 
 # --- The N == M + K self-assertion actually fires (mutated runner) ---
 SB_MUT="$(_mk_sandbox mutant test-alpha.sh:0 test-beta.sh:0 test-gamma.sh:0)"

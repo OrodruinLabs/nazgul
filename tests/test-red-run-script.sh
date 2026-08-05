@@ -22,11 +22,17 @@ RED_RUN="$REPO_ROOT/scripts/red-run.sh"
 # multi-entry entry-per-failed-file assertion).
 setup_project() {
   setup_temp_dir
-  git -C "$TEST_DIR" init -q
+  git -C "$TEST_DIR" init -q -b main
   git -C "$TEST_DIR" config user.email "test@nazgul.dev"
   git -C "$TEST_DIR" config user.name "Nazgul Test"
   mkdir -p "$TEST_DIR/tests" "$TEST_DIR/scripts" "$TEST_DIR/nazgul/tasks"
   cp "$REPO_ROOT/tests/run-tests.sh" "$TEST_DIR/tests/run-tests.sh"
+  cat > "$TEST_DIR/tests/test-mask-unrelated.sh" <<'UNRELATED'
+#!/usr/bin/env bash
+echo "=== test-mask-unrelated ==="
+echo "  FAIL: pre-existing failure outside the copied test set"
+exit 1
+UNRELATED
   git -C "$TEST_DIR" add -A
   git -C "$TEST_DIR" commit -q -m "base"
   BASE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
@@ -61,6 +67,12 @@ fi
 echo "  FAIL: feature.sh is readable"
 exit 1
 GAMMA
+  cat > "$TEST_DIR/tests/test-mask-vacuous.sh" <<'VACUOUS_MASK'
+#!/usr/bin/env bash
+echo "=== test-mask-vacuous ==="
+echo "  PASS: copied test is vacuous"
+exit 0
+VACUOUS_MASK
   git -C "$TEST_DIR" add -A
   git -C "$TEST_DIR" commit -q -m "the task's work"
   HEAD_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
@@ -195,6 +207,17 @@ assert_file_contains "multi: alpha is recorded" "$MANIFEST5" 'red-run: tests/tes
 assert_file_contains "multi: gamma is recorded" "$MANIFEST5" 'red-run: tests/test-gamma.sh'
 assert_file_not_contains "multi: the file that PASSED red is not claimed as evidence" \
   "$MANIFEST5" 'red-run: tests/test-beta.sh'
+assert_file_not_contains "multi: a pre-existing failure outside the copy set is not claimed" \
+  "$MANIFEST5" 'red-run: tests/test-mask-unrelated.sh'
+
+write_manifest TASK-013 "$BASE_SHA"
+MANIFEST13="$TEST_DIR/nazgul/tasks/TASK-013.md"
+run_capture TASK-013 --filter=mask
+assert_exit_code "unrelated failure: refuses evidence when no copied test failed" "$RR_EC" 1
+assert_contains "unrelated failure: explains why the runner's failure is insufficient" "$RR_OUT" \
+  "none of its reported failing test files belongs to the copied test set"
+assert_file_not_contains "unrelated failure: writes NO evidence block" "$MANIFEST13" \
+  '## Red-Run Evidence'
 
 # --- filter derived from the manifest's Test Obligation ---------------------
 write_manifest TASK-006 "$BASE_SHA"
@@ -300,6 +323,16 @@ write_manifest TASK-008 "0000000000000000000000000000000000000000"
 run_capture TASK-008 --filter=alpha
 assert_exit_code "unresolvable Base SHA: exits 1" "$RR_EC" 1
 assert_contains "unresolvable Base SHA: says so" "$RR_OUT" "does not resolve to a commit"
+
+UNRELATED_SHA=$(git -C "$TEST_DIR" commit-tree "$(git -C "$TEST_DIR" mktree </dev/null)" \
+  -m "unrelated base" </dev/null)
+write_manifest TASK-014 "$UNRELATED_SHA"
+run_capture TASK-014 --filter=alpha
+assert_exit_code "unrelated Base SHA: exits 1 before creating a worktree" "$RR_EC" 1
+assert_contains "unrelated Base SHA: says it is not an ancestor of HEAD" "$RR_OUT" \
+  "is not an ancestor of HEAD"
+assert_file_not_contains "unrelated Base SHA: writes NO evidence block" \
+  "$TEST_DIR/nazgul/tasks/TASK-014.md" '## Red-Run Evidence'
 
 write_manifest TASK-009 "$BASE_SHA"
 sed -i.bak '/Scoped filter/d' "$TEST_DIR/nazgul/tasks/TASK-009.md" && rm -f "$TEST_DIR/nazgul/tasks/TASK-009.md.bak"

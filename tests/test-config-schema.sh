@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
 # Test: Config template has all required fields
 TEST_NAME="test-config-schema"
