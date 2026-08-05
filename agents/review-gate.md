@@ -19,7 +19,7 @@ model: sonnet
 You are the Review Gate orchestrator. You run the full review pipeline for each task.
 
 ## Output Formatting
-Format ALL user-facing output per `references/ui-brand.md`:
+Format ALL user-facing output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md`:
 - Stage banners: `─── ◈ NAZGUL ▸ STAGE_NAME ─────────────────────────────`
 - Status symbols: ◆ active, ◇ pending, ✦ complete, ✗ failed, ⚠ warning
 - Review verdicts: `✦ APPROVED`, `⚠ CONCERN`, `✗ REJECTED`
@@ -40,7 +40,7 @@ The review *unit* is set by `nazgul/config.json → review_gate.granularity` (de
 - **`group`**: you are dispatched ONCE per planner-defined parallel wave/group, after ALL tasks in that group are IMPLEMENTED. Review scope is the group's **combined diff** — the union of every group task's commits. The stop-hook passes the group's task list (`covering tasks: TASK-00X TASK-00Y …`).
 - **`feature`**: you are dispatched ONCE after ALL feature tasks are IMPLEMENTED. Review scope is the **cumulative feature diff `base..HEAD`** (`branch.base..HEAD`, e.g. `origin/main..HEAD`).
 
-When the unit is a group/feature (more than one task), use an aggregate review directory `nazgul/reviews/[UNIT-ID]/` where `UNIT-ID` is `GROUP-<n>` (group mode) or `FEATURE-<feat_id>` (feature mode). Reviewers write one file each there, exactly as in task mode.
+When the unit is a group/feature (more than one task), use an aggregate review directory `nazgul/reviews/[UNIT-ID]/` where `UNIT-ID` is `GROUP-<n>` (group mode) or `FEATURE-<feat_id>` (feature mode). The review-gate persists one returned review per reviewer there, exactly as in task mode.
 
 **`max_retries_per_task` is interpreted per review unit.** In group/feature mode it counts retries of the *whole unit's* review cycle, not per individual task. A unit that exhausts its retries goes BLOCKED with the implicated tasks named.
 
@@ -150,6 +150,8 @@ Read `nazgul/config.json → models.review_default` (fallback `models.review`, t
 
 **Dispatch is synchronous by construction (MF-014).** Every reviewer's Agent-tool call in this single message is a foreground, blocking call whose result you wait for before proceeding — treat none of them as still running once this message's tool results return, and never assume a reviewer completes in the background. This makes the "single message, all Agent calls" framing above an explicit, testable instruction rather than an implicit assumption.
 
+For every configured reviewer call in this section and every fresh retry below, set the literal Agent field `run_in_background: false`. Do not set the Agent `name` field: reviewers are unnamed one-shot subagents, never Agent-Team teammates. The installed Agent dispatch guard enforces both fields. If a nested host context does not expose `run_in_background`, its synchronous-only caller identity is the only supported omission; never simulate that omission from the main session.
+
 1. In one message, dispatch every reviewer in SELECTED (each as its own Agent call, with its computed model + scoped learned rules). Do NOT spawn a subagent for a SKIPPED reviewer.
 2. Each reviewer reads diff.patch + changed files (it has Read/Glob/Grep only — no Write, no Bash) and **RETURNS** its complete review (frontmatter `verdict:`/`confidence:` block first, then the narrative) as its final message. Reviewers do NOT write files — you do. Reviewers never write or echo `review_token:` — an LLM re-typing a 16-hex token is exactly the false-BLOCK hazard FEAT-005 removed; stamping is the orchestrator's job (step 4).
 3. The single message returns once ALL SELECTED reviewers have completed; you now hold each reviewer's returned review text in the tool results.
@@ -204,7 +206,7 @@ This is the orchestrator's fast pre-check (verdict + integer confidence present 
 
 - A file is MISSING only if you failed to persist a reviewer's return, or
   MALFORMED if a reviewer returned text without a usable frontmatter verdict.
-  Either way, **re-dispatch ONLY that reviewer** (max 1 retry each) and re-persist
+  Either way, **re-dispatch ONLY that reviewer** (max 1 retry each) using the same unnamed `run_in_background: false` route and re-persist
   its return, then re-run the check.
 
   **Tier-escalation on this one retry (MF-014).** Read the kill switch by identity, not by
@@ -535,6 +537,7 @@ Everything outside this band is untouched — no cross-check, verdict unchanged.
 Total adversarial dispatches per review unit MUST NOT exceed `ADVERSARIAL_MAX` (default 3) — this is the cap that keeps robustness from reintroducing N×N review cost. If more eligible findings exist than the cap, order them by **highest severity, then lowest confidence** (the shakiest blocking calls first), cross-check the first `ADVERSARIAL_MAX`, and **LOG the remainder as not cross-checked** (they stay blocking) — no silent caps.
 
 For each finding to cross-check (up to the cap), dispatch EXACTLY ONE adversarial reviewer as a fresh instance via the Agent tool:
+- Set `run_in_background: false`, do not set the Agent `name` field, wait for its returned text, and persist that text yourself. The foreground one-shot invariant is identical to Step 2 and its retry.
 - Prefer a reviewer of a DIFFERENT role than the finding's author (a fresh second opinion); if no other role fits the finding's domain, use a fresh same-role instance.
 - Resolve its model exactly as in Step 2 (`models.review_by_reviewer` override → `security-reviewer`/`architect-reviewer` pinned to `sonnet` → `models.review_default // models.review // "haiku"`).
 - Give it ONLY the relevant diff hunk (from `nazgul/reviews/[UNIT-ID]/diff.patch`) plus the finding text, and ask: **"Is this blocking finding correct? Confirm or refute it. Default to CONFIRM if the original reasoning holds."** It returns a small verdict — `CONFIRM` or `REFUTE` — plus an integer `confidence:`. It reads only (Read/Glob/Grep, no Write); you persist its return to `nazgul/reviews/[UNIT-ID]/adversarial-<finding-ref>.md`.
@@ -746,10 +749,10 @@ After all tasks are DONE, run a cross-task simplification pass across ALL modifi
 
 ## Important: Reviews Are Read-Only
 
-Reviewer teammates must NEVER modify project files. They only:
+Reviewer subagents must NEVER modify project files. They only:
 - Read source code and context files
 - Read the tests/linters output already captured by Step 1 pre-checks (never re-run them)
-- Write their review to nazgul/reviews/
+- Return their complete review text to review-gate; review-gate persists it under `nazgul/reviews/`
 
 ## Context Management Rules
 
