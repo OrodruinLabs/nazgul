@@ -110,17 +110,25 @@ STDERR_NOT_APPLICABLE="$RR_STDERR"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# STATE 3 — section present, no parseable entry: BLOCK as corrupt.
-# Present-but-unreadable is a stronger trouble signal than absent, so this
-# blocks regardless of scope (TRD §1 table has no scope qualifier on this row).
+# STATE 3 — non-comment section content with no parseable entry: BLOCK as corrupt.
 # ---------------------------------------------------------------------------
 setup_rr_repo
-rr_call "$(rr_manifest '["docs/PRD.md"]' '<!-- not filled in yet -->')" "$TEST_DIR"
+rr_call "$(rr_manifest '["docs/PRD.md"]' 'not a red-run entry')" "$TEST_DIR"
 assert_exit_code "present + no entry: blocks even out of scope" "$RR_EC" 1
 assert_eq "present + no entry: reason is 'corrupt'" "$RR_REASON" "corrupt"
 assert_contains "present + no entry: distinct diagnostic" \
   "$RR_STDERR" "present but carries no parseable 'red-run:' entry"
 STDERR_CORRUPT="$RR_STDERR"
+
+COMMENT_ONLY_OUT=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n- **Base SHA**: %s\n\n## Commits\n- %s — docs: work\n\n## Red-Run Evidence\n<!-- not filled in yet -->\n\n## Description\nx\n' \
+  "$HEAD_SHA" "$HEAD_SHA")
+rr_call "$COMMENT_ONLY_OUT" "$TEST_DIR"
+assert_exit_code "comment-only + out of scope: allows" "$RR_EC" 0
+assert_eq "comment-only + out of scope: reason is not_applicable" "$RR_REASON" "not_applicable"
+
+rr_call "$(rr_manifest '["scripts/foo.sh"]' '<!-- not filled in yet -->')" "$TEST_DIR"
+assert_exit_code "comment-only + in scope: blocks as absent evidence" "$RR_EC" 1
+assert_eq "comment-only + in scope: reason is absent" "$RR_REASON" "absent"
 
 # ---------------------------------------------------------------------------
 # STATE 4 — a real, referentially intact entry: ALLOW
@@ -164,6 +172,25 @@ rr_call "$(rr_manifest '["scripts/foo.sh"]' "- red-run: tests/test-never-written
 assert_exit_code "nonexistent test path: blocks" "$RR_EC" 1
 assert_eq "nonexistent test path: reason is 'corrupt'" "$RR_REASON" "corrupt"
 assert_contains "nonexistent test path: names the path" "$RR_STDERR" "tests/test-never-written.sh"
+
+rr_call "$(rr_manifest '["scripts/foo.sh"]' "- red-run: ${TEST_DIR}/tests/test-foo.sh :: case \"x\"
+  - pre-change-ref: ${BASE_SHA}
+  - result: FAILED (exit 1)")" "$TEST_DIR"
+assert_eq "absolute test path: reason is corrupt" "$RR_REASON" "corrupt"
+assert_contains "absolute test path: repository-relative tests path required" "$RR_STDERR" "repository-relative and under tests/"
+
+rr_call "$(rr_manifest '["scripts/foo.sh"]' "- red-run: tests/../scripts/foo.sh :: case \"x\"
+  - pre-change-ref: ${BASE_SHA}
+  - result: FAILED (exit 1)")" "$TEST_DIR"
+assert_eq "traversal test path: reason is corrupt" "$RR_REASON" "corrupt"
+assert_contains "traversal test path: dot segments rejected" "$RR_STDERR" "must not contain '.' or '..' segments"
+
+ln -s "$TEST_DIR/scripts/foo.sh" "$TEST_DIR/tests/test-linked.sh"
+rr_call "$(rr_manifest '["scripts/foo.sh"]' "- red-run: tests/test-linked.sh :: case \"x\"
+  - pre-change-ref: ${BASE_SHA}
+  - result: FAILED (exit 1)")" "$TEST_DIR"
+assert_eq "symlink test path: reason is corrupt" "$RR_REASON" "corrupt"
+assert_contains "symlink test path: regular non-symlink file required" "$RR_STDERR" "regular non-symlink file"
 
 # --- entry with no result: line at all ---
 rr_call "$(rr_manifest '["scripts/foo.sh"]' "- red-run: tests/test-foo.sh :: case \"x\"
@@ -218,7 +245,7 @@ assert_eq "decoy entry does not satisfy the gate" "$RR_REASON" "absent"
 AFTER_BOUNDARY=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["scripts/foo.sh"]\n- **Base SHA**: %s\n\n## Commits\n- %s\n\n## Red-Run Evidence\n<!-- empty -->\n\n## Description\n- red-run: N/A — docs-only\n' \
   "$BASE_SHA" "$HEAD_SHA")
 rr_call "$AFTER_BOUNDARY" "$TEST_DIR"
-assert_eq "entry after the next ## heading does not count as an entry" "$RR_REASON" "corrupt"
+assert_eq "entry after the next ## heading does not count as an entry" "$RR_REASON" "absent"
 
 # ---------------------------------------------------------------------------
 # KILL SWITCH — guards.red_run_evidence: false suppresses the BLOCK ONLY.
@@ -427,8 +454,8 @@ assert_eq "## Red-Run Evidence sits immediately after ## Commits" \
   "$TEMPLATE_HEADINGS" "## Commits|## Red-Run Evidence|## Description|"
 
 # The template as the planner ships it: a real Base SHA and a real descendant
-# commit satisfy the COMMIT gate, but the untouched Red-Run section does not
-# satisfy this one — present-but-unfilled is corrupt, not a pass.
+# commit satisfy the COMMIT gate, but the untouched Red-Run section remains
+# logically absent after its HTML commentary is stripped.
 setup_rr_repo
 TEMPLATE_FILLED=$(sed "s|^- \*\*Base SHA\*\*:.*|- **Base SHA**: ${BASE_SHA}|" "$MANIFEST_TEMPLATE" \
   | sed "/^## Commits$/a\\
@@ -440,11 +467,7 @@ else
 fi
 rr_call "$TEMPLATE_FILLED" "$TEST_DIR"
 assert_exit_code "template's untouched Red-Run section fails this gate" "$RR_EC" 1
-# The template's example entry carries a placeholder pre-change-ref, so git
-# refutes it by name — the same way the commit gate refutes the template's
-# example SHA. An unfilled section is never a vacuous pass, whichever check
-# names it.
-assert_eq "template's untouched Red-Run section is refuted by git, not passed" "$RR_REASON" "ref_unresolvable"
+assert_eq "template's untouched Red-Run section is treated as absent evidence" "$RR_REASON" "absent"
 teardown_temp_dir
 
 report_results

@@ -51,7 +51,9 @@ usage() {
 
 # Files under tests/ that are implementation, not test input: never copied into
 # the pre-change tree by the derived set.
-RR_NEVER_COPY="tests/run-tests.sh"
+RR_NEVER_COPY="tests/run-tests.sh
+tests/lib/assertions.sh
+tests/lib/setup.sh"
 
 TASK_ID=""
 FILTER=""
@@ -73,10 +75,8 @@ for arg in "$@"; do
 done
 
 [ -n "$TASK_ID" ] || { usage >&2; die "no task id given"; }
-case "$TASK_ID" in
-  TASK-*|PATCH-*) ;;
-  *) die "'$TASK_ID' is not a TASK-NNN / PATCH-NNN id" ;;
-esac
+[[ "$TASK_ID" =~ ^(TASK|PATCH)-[0-9]+$ ]] \
+  || die "'$TASK_ID' is not a TASK-NNN / PATCH-NNN id"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -z "$PROJECT_ROOT" ]; then
@@ -90,7 +90,27 @@ if [ -z "$PROJECT_ROOT" ]; then
   fi
 fi
 [ -d "$PROJECT_ROOT" ] || die "project root does not exist: $PROJECT_ROOT"
-PROJECT_ROOT="$(cd "$PROJECT_ROOT" && pwd)"
+PROJECT_ROOT="$(cd "$PROJECT_ROOT" && pwd -P)"
+
+validate_copy_path() {
+  local rel="$1" source parent
+  case "$rel" in
+    tests/*) ;;
+    *) die "copy path must be repository-relative and under tests/: $rel" ;;
+  esac
+  case "/$rel/" in
+    */../*|*/./*) die "copy path must not contain '.' or '..' segments: $rel" ;;
+  esac
+
+  source="$PROJECT_ROOT/$rel"
+  [ -f "$source" ] || return 0
+  [ ! -L "$source" ] || die "copy path must not be a symlink: $rel"
+  parent=$(cd "$(dirname "$source")" && pwd -P) || die "cannot resolve copy path parent: $rel"
+  case "$parent/" in
+    "$PROJECT_ROOT/tests/"*) ;;
+    *) die "copy path resolves outside the repository tests/ tree: $rel" ;;
+  esac
+}
 
 MANIFEST="$PROJECT_ROOT/nazgul/tasks/$TASK_ID.md"
 [ -f "$MANIFEST" ] || die "no manifest at $MANIFEST"
@@ -132,6 +152,7 @@ COPY_LIST=""
 EXCLUDED=""
 while IFS= read -r rel; do
   [ -n "$rel" ] || continue
+  validate_copy_path "$rel"
   if [ -z "$EXPLICIT_COPY" ]; then
     case "
 $RR_NEVER_COPY
@@ -139,7 +160,7 @@ $RR_NEVER_COPY
       *"
 $rel
 "*)
-        echo "red-run: NOT copying $rel into the pre-change tree — it is the harness, not test input; copying it would run the new tests under the changed runner" >&2
+        echo "red-run: NOT copying $rel into the pre-change tree — it is test-harness infrastructure, not test input; copying it would run the new tests under changed support code" >&2
         EXCLUDED="${EXCLUDED}${rel} "
         continue
         ;;
@@ -177,11 +198,18 @@ trap rr_cleanup EXIT INT TERM
 
 git -C "$PROJECT_ROOT" worktree add --detach --quiet "$SCRATCH" "$BASE_SHA" >/dev/null 2>&1 \
   || die "could not create a detached worktree at $BASE_SHA"
+SCRATCH="$(cd "$SCRATCH" && pwd -P)"
 
 COPIED=0
 while IFS= read -r rel; do
   [ -n "$rel" ] || continue
-  mkdir -p "$SCRATCH/$(dirname "$rel")"
+  dest_dir="$SCRATCH/$(dirname "$rel")"
+  mkdir -p "$dest_dir"
+  dest_parent=$(cd "$dest_dir" && pwd -P) || die "cannot resolve scratch destination for $rel"
+  case "$dest_parent/" in
+    "$SCRATCH/tests/"*) ;;
+    *) die "scratch destination resolves outside the detached tests/ tree: $rel" ;;
+  esac
   cp "$PROJECT_ROOT/$rel" "$SCRATCH/$rel"
   COPIED=$((COPIED + 1))
 done <<EOF

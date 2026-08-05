@@ -211,6 +211,9 @@ assert_file_contains "derived filter: entry names gamma" "$MANIFEST6" 'red-run: 
 teardown_temp_dir
 setup_project
 printf '\n# touched by this task\n' >> "$TEST_DIR/tests/run-tests.sh"
+mkdir -p "$TEST_DIR/tests/lib"
+printf '# changed assertion helper\n' > "$TEST_DIR/tests/lib/assertions.sh"
+printf '# changed setup helper\n' > "$TEST_DIR/tests/lib/setup.sh"
 git -C "$TEST_DIR" add -A
 git -C "$TEST_DIR" commit -q -m "this task also changes the harness"
 HEAD_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
@@ -220,8 +223,12 @@ run_capture TASK-011 --filter=alpha
 assert_exit_code "harness exclusion: the run is still red" "$RR_EC" 0
 assert_contains "harness exclusion: says what it refused to copy, and why" "$RR_OUT" \
   "NOT copying tests/run-tests.sh into the pre-change tree"
+assert_contains "harness exclusion: assertions helper is never derived into the old tree" "$RR_OUT" \
+  "NOT copying tests/lib/assertions.sh into the pre-change tree"
+assert_contains "harness exclusion: setup helper is never derived into the old tree" "$RR_OUT" \
+  "NOT copying tests/lib/setup.sh into the pre-change tree"
 assert_file_contains "harness exclusion: the evidence block records the exclusion" \
-  "$MANIFEST11" 'NOT copied (harness, not test input): tests/run-tests.sh'
+  "$MANIFEST11" 'NOT copied (harness, not test input):.*tests/run-tests.sh'
 
 run_capture TASK-011 --filter=alpha --copy=tests/test-alpha.sh
 assert_exit_code "--copy: a pinned copy set still red-runs" "$RR_EC" 0
@@ -232,6 +239,11 @@ assert_file_contains "--copy: exactly the one pinned file was copied" "$MANIFEST
 run_capture TASK-011 --filter=alpha --copy=tests/does-not-exist.sh
 assert_exit_code "--copy: a path that does not exist is an error, not a silent skip" "$RR_EC" 1
 assert_contains "--copy: names the missing path" "$RR_OUT" "tests/does-not-exist.sh does not exist"
+
+run_capture TASK-011 --filter=alpha --copy=tests/../scripts/feature.sh
+assert_exit_code "--copy: traversal out of tests/ is rejected before any worktree write" "$RR_EC" 1
+assert_contains "--copy: traversal rejection names the unsafe path" "$RR_OUT" \
+  "copy path must not contain '.' or '..' segments: tests/../scripts/feature.sh"
 
 # --- environment errors: nothing written, distinct messages -----------------
 run_capture TASK-999 --filter=alpha
@@ -262,6 +274,10 @@ assert_contains "no filter anywhere: says a full-suite red run is out of budget"
 run_capture NOT-A-TASK --filter=alpha
 assert_exit_code "bad task id: exits 1" "$RR_EC" 1
 assert_contains "bad task id: says what shape it wanted" "$RR_OUT" "is not a TASK-NNN"
+
+run_capture TASK-foo --filter=alpha
+assert_exit_code "non-numeric task id: exits 1" "$RR_EC" 1
+assert_contains "non-numeric task id: says what shape it wanted" "$RR_OUT" "is not a TASK-NNN"
 
 # --- no test files changed: refuses rather than capturing nothing ------------
 teardown_temp_dir

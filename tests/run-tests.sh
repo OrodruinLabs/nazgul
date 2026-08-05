@@ -44,7 +44,7 @@ for test_file in "$SCRIPT_DIR"/test-*.sh; do
   name=$(basename "$test_file")
   SCANNED=$((SCANNED + 1))
 
-  if [ -n "$FILTER" ] && ! grep -q "$FILTER" <<<"$name"; then
+  if [ -n "$FILTER" ] && ! grep -qF -e "$FILTER" <<<"$name"; then
     SKIP_FILTERED=$((SKIP_FILTERED + 1))
     continue
   fi

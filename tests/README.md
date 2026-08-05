@@ -29,7 +29,7 @@ never prints "All tests passed."; it prints `run-tests: NOTHING CHECKED — ...`
 Every run ends with one fixed-grammar, greppable line on stdout (the coverage-honesty contract — a run
 must report what it did NOT look at, not only what it found):
 
-```
+```text
 run-tests: <N> scanned, <M> skipped (filtered-out=<count>, unreadable=<count>), <K> checked, <F> findings
 ```
 

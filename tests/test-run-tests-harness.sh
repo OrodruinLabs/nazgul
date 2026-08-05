@@ -99,6 +99,14 @@ assert_eq "partial-filter: coverage line splits scanned into skipped + checked" 
   "run-tests: 3 scanned, 2 skipped (filtered-out=2, unreadable=0), 1 checked, 0 findings"
 _assert_grammar "partial-filter" "$LAST"
 
+# --- A leading dash is data, never a grep option ---
+SB_DASH="$(_mk_sandbox dash-filter test-alpha.sh:0 test--n-case.sh:0)"
+_run "$SB_DASH" --filter=-n
+assert_eq "dash-filter: exits 0 rather than aborting grep" "$RC" "0"
+assert_eq "dash-filter: treats the filter literally" "$LAST" \
+  "run-tests: 2 scanned, 1 skipped (filtered-out=1, unreadable=0), 1 checked, 0 findings"
+_assert_grammar "dash-filter" "$LAST"
+
 # --- No test files discovered at all: a broken enumerator, not a clean repo ---
 SB_EMPTY="$(_mk_sandbox empty)"
 _run "$SB_EMPTY"

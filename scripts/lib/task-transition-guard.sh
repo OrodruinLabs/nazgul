@@ -185,7 +185,7 @@ $(printf '%s' "$manifest_text" | awk '/^## File Scope/{f=1;next} /^## /{f=0} f')
 # good.
 _ttg_red_run_check_entry() {
   local entry="$1" project_root="$2" nazgul_dir="$3" task_id="$4" commits="$5"
-  local payload test_path abs_path ref result_line exit_code na_token tok found
+  local payload test_path abs_path tests_root resolved_parent ref result_line exit_code na_token tok found
 
   payload=$(printf '%s\n' "$entry" | head -1 \
     | sed -E 's/^[[:space:]]*-[[:space:]]*(\*\*)?red-run(\*\*)?:[[:space:]]*//')
@@ -214,16 +214,51 @@ _ttg_red_run_check_entry() {
 
   test_path=$(printf '%s' "$payload" | awk '{print $1}' | tr -d '`')
   case "$test_path" in
-    /*) abs_path="$test_path" ;;
-    *)  abs_path="$project_root/$test_path" ;;
+    tests/*) ;;
+    *)
+      if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "corrupt" \
+        "red-run entry test path '${test_path}' must be repository-relative and under tests/"; then
+        return 1
+      fi
+      return 0
+      ;;
   esac
-  if [ -z "$test_path" ] || [ ! -f "$abs_path" ]; then
+  case "/$test_path/" in
+    */../*|*/./*)
+      if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "corrupt" \
+        "red-run entry test path '${test_path}' must not contain '.' or '..' segments"; then
+        return 1
+      fi
+      return 0
+      ;;
+  esac
+  abs_path="$project_root/$test_path"
+  if [ ! -f "$abs_path" ] || [ -L "$abs_path" ]; then
     if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "corrupt" \
-      "red-run entry names test path '${test_path}', which does not exist in the worktree"; then
+      "red-run entry names test path '${test_path}', which is not an existing regular non-symlink file"; then
       return 1
     fi
     return 0
   fi
+  tests_root=$(cd "$project_root/tests" 2>/dev/null && pwd -P) || tests_root=""
+  resolved_parent=$(cd "$(dirname "$abs_path")" 2>/dev/null && pwd -P) || resolved_parent=""
+  if [ -z "$tests_root" ] || [ -z "$resolved_parent" ]; then
+    if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "corrupt" \
+      "red-run entry test path '${test_path}' could not be resolved under the repository tests/ tree"; then
+      return 1
+    fi
+    return 0
+  fi
+  case "$resolved_parent/" in
+    "$tests_root/"*) ;;
+    *)
+      if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "corrupt" \
+        "red-run entry test path '${test_path}' resolves outside the repository tests/ tree"; then
+        return 1
+      fi
+      return 0
+      ;;
+  esac
 
   ref=$(printf '%s\n' "$entry" \
     | grep -iE '^[[:space:]]*-?[[:space:]]*(\*\*)?pre-change-ref(\*\*)?:' | head -1 \
@@ -298,8 +333,8 @@ _ttg_red_run_check_entry() {
 # per guard, not inherited by proximity): section absent + in scope BLOCKs
 # (a false deny costs one manifest edit; a false allow makes the whole charter
 # decorative); section absent + out of scope ALLOWs and announces the skipped
-# check; section present with no parseable entry BLOCKs as corrupt regardless
-# of scope (present-but-unreadable is a stronger trouble signal than absent);
+# check; a comment-only template section is treated as logically absent; a
+# non-comment section with no parseable entry BLOCKs as corrupt;
 # an entry whose ref, ancestry, or recorded exit code git can refute BLOCKs
 # naming which check failed; an enumerated `N/A` token ALLOWs; a free-text
 # `N/A` BLOCKs.
@@ -307,7 +342,7 @@ _ttg_red_run_check_entry() {
 ttg_verify_red_run_evidence() {
   local manifest_text="$1" project_root="$2" task_id="${3:-}"
   local nazgul_dir="${NAZGUL_DIR:-$project_root/nazgul}"
-  local section commits entry="" line rc=0
+  local raw_section section commits entry="" line rc=0
 
   TTG_RED_RUN_REASON=""
   if [ -z "$task_id" ]; then
@@ -331,8 +366,40 @@ ttg_verify_red_run_evidence() {
     return 0
   fi
 
-  section=$(printf '%s' "$manifest_text" | awk '/^## Red-Run Evidence/{f=1;next} /^## /{f=0} f')
+  raw_section=$(printf '%s' "$manifest_text" | awk '/^## Red-Run Evidence/{f=1;next} /^## /{f=0} f')
+  section=$(printf '%s\n' "$raw_section" | awk '
+    {
+      line=$0; out=""
+      while (length(line) > 0) {
+        if (comment) {
+          end=index(line, "-->")
+          if (!end) { line=""; break }
+          line=substr(line, end + 3); comment=0; continue
+        }
+        start=index(line, "<!--")
+        if (!start) { out=out line; line=""; break }
+        out=out substr(line, 1, start - 1)
+        line=substr(line, start + 4)
+        end=index(line, "-->")
+        if (end) { line=substr(line, end + 3); continue }
+        comment=1; line=""
+      }
+      if (out ~ /[^[:space:]]/) print out
+    }')
   if ! printf '%s\n' "$section" | grep -qE '^[[:space:]]*-[[:space:]]*(\*\*)?red-run(\*\*)?:'; then
+    if ! printf '%s' "$section" | grep -q '[^[:space:]]'; then
+      if _ttg_red_run_in_scope "$manifest_text" "$project_root"; then
+        if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "absent" \
+          "## Red-Run Evidence contains only template commentary, but this task's scope touches scripts/** or tests/**"; then
+          return 1
+        fi
+        return 0
+      fi
+      # shellcheck disable=SC2034  # read by scripts/stop-hook.sh, not within this file
+      TTG_RED_RUN_REASON="not_applicable"
+      echo "ttg_verify_red_run_evidence: ## Red-Run Evidence contains only template commentary and no scripts/** or tests/** path is in scope — red-run check not applicable, skipped" >&2
+      return 0
+    fi
     if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "corrupt" \
       "## Red-Run Evidence section is present but carries no parseable 'red-run:' entry"; then
       return 1
