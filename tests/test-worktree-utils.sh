@@ -172,11 +172,8 @@ teardown_temp_dir
 # half-load: either full bash parity (install_git_hooks defined) or a loud,
 # explicit, non-zero FATAL failure — never today's exit 0 with
 # install_git_hooks UNDEFINED (TASK-006 / AC9). Mirrors test-shellcheck.sh's
-# MF-057 local-SKIP convention: assertions.sh has no SKIPPED status, so an
-# unavailable zsh is reported by name, never a silent pass.
-_skip() {
-  printf "  SKIP: %s\n" "$1"
-}
+# MF-057: an unavailable zsh is reported by name and counted by the shared
+# assertion library, never treated as a pass or dropped from the summary.
 if command -v zsh >/dev/null 2>&1; then
   ZSH_OUT="$TEST_DIR-zsh-out.txt"
   ZSH_ERR="$TEST_DIR-zsh-err.txt"
@@ -265,16 +262,8 @@ teardown_temp_dir
 # fail-and-leave-the-branch.
 # ---------------------------------------------------------------------------
 
-# assertions.sh has no SKIPPED status, only pass/fail — so a root run used to
-# drop the five assertions below with no trace at all, leaving "everything
-# passed" indistinguishable from "the only test of the config-write check never
-# ran" (audit-tests.md, coverage honesty). Same local-counter idiom as
-# tests/test-shellcheck.sh:54-58.
-TESTS_SKIPPED=0
-_skip() {
-  TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
-  printf "  SKIP: %s\n" "$1"
-}
+# The shared assertion library counts the root-only skip separately from real
+# passes, so a privileged run cannot hide that this branch was not exercised.
 
 if [ "$(id -u)" -ne 0 ]; then
   setup_temp_dir
@@ -628,10 +617,6 @@ teardown_temp_dir
 
 export PATH="$WU_BASE_PATH"
 rm -rf "$FAKEBIN"
-
-if [ "$TESTS_SKIPPED" -gt 0 ]; then
-  echo "  ($TESTS_SKIPPED assertion(s) SKIPPED — running as root, where read-only mode bits are not enforced)"
-fi
 
 report_results
 exit $?

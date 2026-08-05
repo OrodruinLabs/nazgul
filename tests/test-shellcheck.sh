@@ -19,17 +19,27 @@ echo "=== $TEST_NAME ==="
 # bash scripts without a .sh suffix, by githooks(5) naming convention; a bare
 # `-name '*.sh'` glob would silently drop them, so they're picked up via their
 # shebang instead of a second hardcoded name list.
-mapfile -t SCRIPTS < <(cd "$REPO_ROOT" && {
+# Env-injectable for the same reason SHELLCHECK_FALLBACK_BIN is: the zero-candidate
+# and all-skipped branches are unreachable against a healthy repo.
+SCAN_ROOT="${NAZGUL_SHELLCHECK_SCAN_ROOT:-$REPO_ROOT}"
+
+mapfile -t SCRIPTS < <(cd "$SCAN_ROOT" && {
   find scripts -name '*.sh'
   find scripts -type f ! -name '*.sh' -exec grep -lE '^#!.*/(env )?(bash|sh)([[:space:]]|$)' {} \;
-} | sort -u)
+} 2>/dev/null | sort -u)
+
+SC_SCANNED=${#SCRIPTS[@]}
+SC_CHECKED=0
+SC_SKIP_NOT_A_FILE=0
+SC_SKIP_UNREADABLE=0
+SC_FINDINGS=0
 
 # Sanity check: validate coverage by PATH, not by total count. A count-only check
 # (discovered >= live .sh count) can pass while a real .sh file is dropped, because
 # the discovered set also includes extensionless hooks that can mask the shortfall.
 # Instead, assert every scripts/**/*.sh path is present in the discovered set.
 MISSING_SH=$(comm -23 \
-  <(cd "$REPO_ROOT" && find scripts -type f -name '*.sh' | sort -u) \
+  <(cd "$SCAN_ROOT" && find scripts -type f -name '*.sh' 2>/dev/null | sort -u) \
   <(printf '%s\n' "${SCRIPTS[@]}" | sort -u))
 if [ -z "$MISSING_SH" ]; then
   _pass "every scripts/**/*.sh file is in the shellcheck set"
@@ -37,25 +47,34 @@ else
   _fail "every scripts/**/*.sh file is in the shellcheck set" "missing: $(echo "$MISSING_SH" | tr '\n' ' ')"
 fi
 
-# bash -n syntax checks
+# bash -n syntax checks. A candidate the enumerator produced but this stage
+# cannot open is counted and named, never folded into the passing set.
+CHECKED_SCRIPTS=()
 for script in "${SCRIPTS[@]}"; do
-  full_path="$REPO_ROOT/$script"
+  full_path="$SCAN_ROOT/$script"
   name=$(basename "$script")
+  if [ ! -f "$full_path" ]; then
+    SC_SKIP_NOT_A_FILE=$((SC_SKIP_NOT_A_FILE + 1))
+    echo "  SKIP: $name (not a regular file — not checked)"
+    continue
+  fi
+  if [ ! -r "$full_path" ]; then
+    SC_SKIP_UNREADABLE=$((SC_SKIP_UNREADABLE + 1))
+    echo "  SKIP: $name (unreadable — not checked)"
+    continue
+  fi
+  SC_CHECKED=$((SC_CHECKED + 1))
+  CHECKED_SCRIPTS+=("$script")
   if bash -n "$full_path" 2>/dev/null; then
     _pass "$name passes bash -n"
   else
+    SC_FINDINGS=$((SC_FINDINGS + 1))
     _fail "$name passes bash -n" "syntax error detected"
   fi
 done
 
-# MF-057: assertions.sh has no SKIPPED status, only pass/fail — track skips
-# from an absent shellcheck locally in this file so an uninstalled tool is
-# never indistinguishable from a real pass in the suite summary.
-TESTS_SKIPPED=0
-_skip() {
-  TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
-  printf "  SKIP: %s\n" "$1"
-}
+# MF-057's local _skip/TESTS_SKIPPED moved into tests/lib/assertions.sh by
+# FEAT-028 TASK-017, so every file in the suite counts skips the same way.
 
 # _resolve_shellcheck_bin -> prints the shellcheck binary to use, or nothing
 # when absent from both PATH and the CI-installed fallback path. Factored out
@@ -84,11 +103,12 @@ _report_shellcheck_stage() {
   local script full_path name
   if [ -n "$bin" ]; then
     for script in "$@"; do
-      full_path="$REPO_ROOT/$script"
+      full_path="$SCAN_ROOT/$script"
       name=$(basename "$script")
       if "$bin" -S warning "$full_path" 2>/dev/null; then
         _pass "$name passes shellcheck"
       else
+        SC_FINDINGS=$((SC_FINDINGS + 1))
         _fail "$name passes shellcheck" "shellcheck warnings found"
       fi
     done
@@ -102,7 +122,7 @@ _report_shellcheck_stage() {
 }
 
 SHELLCHECK_BIN=$(_resolve_shellcheck_bin)
-_report_shellcheck_stage "$SHELLCHECK_BIN" "${SCRIPTS[@]}"
+_report_shellcheck_stage "$SHELLCHECK_BIN" ${CHECKED_SCRIPTS[@]+"${CHECKED_SCRIPTS[@]}"}
 
 # --- MF-057 self-check: prove the "not installed" branch reports SKIPPED,
 # never a fake PASS, rather than trusting this machine's real toolchain to
@@ -133,4 +153,28 @@ if [ "$TESTS_SKIPPED" -gt 0 ]; then
   echo "  ($TESTS_SKIPPED shellcheck check(s) SKIPPED — shellcheck not installed on this machine/PATH)"
 fi
 
-report_results
+# Blocking disposition (TRD §6): zero candidates is a broken enumerator, not a clean
+# repo. No bus write — a test file never touches runtime state (TASK-006 precedent).
+SC_SKIPPED=$((SC_SKIP_NOT_A_FILE + SC_SKIP_UNREADABLE))
+if [ "$SC_SCANNED" -ne $((SC_SKIPPED + SC_CHECKED)) ]; then
+  echo "$TEST_NAME: INTERNAL — coverage accounting mismatch: $SC_SCANNED scanned != $SC_SKIPPED skipped + $SC_CHECKED checked" >&2
+  _fail "coverage accounting adds up (N == M + K)" "$SC_SCANNED != $SC_SKIPPED + $SC_CHECKED"
+fi
+if [ "$SC_CHECKED" -eq 0 ]; then
+  if [ "$SC_SCANNED" -eq 0 ]; then
+    echo "$TEST_NAME: NOTHING CHECKED — no shell scripts discovered under $SCAN_ROOT/scripts" >&2
+    _fail "the enumerator found at least one shell script to check" \
+      "zero candidates under $SCAN_ROOT/scripts — a broken enumerator, not a clean repo"
+  else
+    echo "$TEST_NAME: NOTHING CHECKED — all $SC_SCANNED candidates skipped" >&2
+    _fail "at least one discovered shell script was actually checked" \
+      "all $SC_SCANNED candidates skipped"
+  fi
+fi
+
+RC=0
+report_results || RC=1
+printf '%s: %d scanned, %d skipped (not-a-file=%d, unreadable=%d), %d checked, %d findings\n' \
+  "$TEST_NAME" "$SC_SCANNED" "$SC_SKIPPED" "$SC_SKIP_NOT_A_FILE" "$SC_SKIP_UNREADABLE" \
+  "$SC_CHECKED" "$SC_FINDINGS"
+exit "$RC"

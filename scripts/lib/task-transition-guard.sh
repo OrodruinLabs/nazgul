@@ -98,17 +98,11 @@ ttg_verify_commit_evidence() {
 # pattern guess — an open-ended excuse field is an allow-everything field).
 _TTG_RED_RUN_NA_TOKENS="docs-only comment-only revert fixture-capture-only"
 
-# Disposition of the last ttg_verify_red_run_evidence call. One of the six
-# block reasons (absent, corrupt, ref_unresolvable, not_ancestor, exit_zero,
-# bad_na_token) or an allow reason (verified, enumerated_na, not_applicable).
-# Read by stop-hook.sh's reconciliation pass to name the blocker.
+# Last red-run verdict: six block reasons or verified/enumerated_na/not_applicable.
 # shellcheck disable=SC2034  # read by scripts/stop-hook.sh, not within this file
 TTG_RED_RUN_REASON=""
 
-# Resolve NAZGUL_DIR/EVENTS_FILE per call inside a subshell (stack-utils.sh's
-# _su_emit precedent): task-state-guard.sh sources this library long before it
-# derives NAZGUL_DIR, so a source-time binding would freeze EVENTS_FILE empty
-# and silently drop every event.
+# Resolve event paths per call because task-state-guard sources this before deriving NAZGUL_DIR.
 _ttg_emit_event() {
   local nazgul_dir="$1"; shift
   declare -F emit_event >/dev/null 2>&1 || return 0
@@ -117,10 +111,7 @@ _ttg_emit_event() {
   ( NAZGUL_DIR="$nazgul_dir"; EVENTS_FILE="$nazgul_dir/logs/events.jsonl"; emit_event "$@" ) || true
 }
 
-# Record a red-run block: distinct stderr diagnostic + red_run_missing event,
-# then honor the kill switch. guards.red_run_evidence: false suppresses the
-# BLOCK ONLY — detection and telemetry still fire (guards.subagent_resume
-# precedent). Returns 1 to block, 0 when suppressed.
+# Emit a distinct red-run diagnostic/event; the kill switch suppresses only the block.
 _ttg_red_run_deny() {
   local nazgul_dir="$1" task_id="$2" reason="$3" detail="$4" enabled
   TTG_RED_RUN_REASON="$reason"
@@ -157,12 +148,7 @@ _ttg_strip_html_comments() {
     }'
 }
 
-# UNION scope predicate (plan Decision D-3): the manifest's declared scope OR
-# the Base SHA..HEAD diff putting a `scripts/**`/`tests/**` path in scope puts
-# the task in scope. The manifest field alone cannot decide it — understating
-# it is exactly how a task would evade this gate. When the diff cannot be
-# computed at all that is "could not look", not "looked and found nothing":
-# announce the degrade on stderr and fall back to the manifest field.
+# Scope is the union of declared paths and Base SHA..HEAD; diff failure degrades loudly to manifest-only.
 _ttg_red_run_in_scope() {
   local manifest_text="$1" project_root="$2"
   local declared diff_out base_sha degrade=""
@@ -202,10 +188,7 @@ $(printf '%s' "$manifest_text" | awk '/^## File Scope/{f=1;next} /^## /{f=0} f')
   return 1
 }
 
-# Referential integrity of ONE `red-run:` entry — never semantics. Whether the
-# failure was meaningful is the qa-reviewer's blocking question, exactly as the
-# commit gate proves a SHA resolves and advances but never that its content is
-# good.
+# Check one entry's referential integrity; QA owns whether the recorded failure is meaningful.
 _ttg_red_run_check_entry() {
   local entry="$1" project_root="$2" nazgul_dir="$3" task_id="$4" commits="$5"
   local payload test_path abs_path tests_root resolved_parent ref result_line exit_code na_token tok found

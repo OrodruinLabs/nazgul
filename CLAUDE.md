@@ -49,6 +49,7 @@ agents/                              # Subagent definitions
 hooks/hooks.json                     # Hook configuration
 scripts/                             # Shell scripts for hooks
 │   ├── stop-hook.sh                 # Stop: loop engine, state machine, checkpoints
+│   ├── red-run.sh                   # Mechanized pre-change red-run capture + manifest evidence
 │   ├── pre-compact.sh               # PreCompact: checkpoint before compaction
 │   ├── post-compact.sh              # PostCompact: re-inject state after compaction
 │   ├── pre-tool-guard.sh            # PreToolUse: block destructive commands
@@ -68,7 +69,7 @@ scripts/                             # Shell scripts for hooks
 │   ├── webhook-forward.sh           # Stop/Compact: forward events to HTTP endpoints
 │   ├── task-completed.sh            # TaskCompleted: update board, record metrics
 │   ├── board-sync-github.sh         # GitHub Projects board sync
-│   ├── migrate-config.sh            # Config schema migration (v1→v7)
+│   ├── migrate-config.sh            # Config schema migration (v1→v36)
 │   ├── worktree-utils.sh            # Git worktree helper functions
 │   ├── file-improvement-report.sh   # Self-improvement: write JSON reports
 │   ├── gen-skill-docs.sh            # Skill template: resolve {{PARTIAL:name}}
@@ -110,15 +111,17 @@ references/                          # Shared reference docs for agents
 │   ├── fix-first-heuristic.md       # AUTO-FIX vs ASK classification rules
 │   └── self-improvement.md          # Agent self-rating protocol
 tests/                               # Plugin validation tests
-│   ├── run-tests.sh                 # Test runner (87 unit/integration files); exit 2 = nothing checked
+│   ├── run-tests.sh                 # Test runner (93 unit/integration files); exit 2 = nothing checked
 │   ├── test-*.sh                    # Unit/integration tests
-│   ├── fixtures/                    # Test fixtures (bootstrap-transform scrub cases)
+│   ├── fixtures/                    # Small product-input goldens; no Nazgul runtime state
 │   ├── lib/                         # Test assertions + setup helpers
-│   └── e2e/                         # E2E skill tests via claude -p
+│   ├── e2e/                         # E2E skill tests via claude -p
+│   └── smoke/                       # Paid true-entry headless smoke in scratch projects
 .github/workflows/                   # CI pipelines
 │   ├── test.yml                     # Unit/integration tests on push/PR
 │   ├── e2e-tests.yml                # E2E skill tests (manual trigger)
 │   ├── e2e-stack.yml                # Two-layer gh-stack E2E against a live scratch repo (manual trigger)
+│   ├── smoke.yml                    # Headless smoke (manual + nightly; ANTHROPIC_API_KEY)
 │   └── skill-docs.yml               # Skill template freshness check on PR
 ```
 
@@ -166,6 +169,8 @@ tests/                               # Plugin validation tests
 
 **A mechanism that fails must not look like a mechanism that had nothing to do.** The sibling thesis to the paragraph above, for the machinery that RUNS the loop rather than guards it: when a gate ends or short-circuits an autonomous run, or a check silently weakens, the record must show that a mechanism acted — a bare `exit 0` and a vacuously-satisfied gate are indistinguishable from "nothing happened." Three shipped instances (FEAT-023): a `date -j -f` probe that tested whether the command *succeeded* rather than whether it *parsed correctly*, so the AFK timeout gate skewed with the host timezone in both directions; that same safety gate ending an autonomous run with a bare `exit 0` — a gate-triggered stop now emits a `stop_gate` event (`reason`/`computed`/`limit`) before exiting; and an evidence gate satisfiable by the `## Metadata` Base SHA every manifest carries at creation — now scoped to `## Commits` and required to prove forward progress, with its one degradation path (no Base SHA) announced on stderr rather than taken silently (RULES.md §1 rules 2/8 and §5, ADR-013, ADR-014).
 
+**A green test is evidence only after it proved it can turn red.** FEAT-028/ADR-019 makes that thesis mechanical: `scripts/red-run.sh` runs a task's changed tests against its pre-change Base SHA, and the same shared transition library that verifies commit evidence blocks IMPLEMENTED when required red-run evidence is missing or corrupt. Fixtures at load-bearing seams are captured from real producers, carry machine-checked provenance and mutation pins, guards are dogfooded on this shell-heavy repository's own language and real hook envelopes, and every checking entry point reports `scanned / skipped / checked / findings` so “looked and found none” cannot collapse into “never looked.” `guards.red_run_evidence` (schema v36, default `true`) suppresses the block only; the diagnostic and `red_run_missing` event remain.
+
 **A dispatch that ends without a deliverable must not look like one that had nothing to say.** FEAT-024's instance: all four generated reviewers ran at a stale `maxTurns: 12` (`agents/templates/reviewer-base.md`, raised to 30) and stalled mid-tool-loop, before ever reaching a turn in which to compose a verdict — while `scripts/subagent-stop.sh` already computed the empty-handed signal (`[ -n "$final_text" ] || return 0`) and silently discarded it on every dispatch. It now emits `subagent_empty_return` for EVERY completing subagent, not just review-gate dispatches, on either an empty final turn (`empty_final_text`) or, for reviewers specifically, prose with no fenced `verdict:` line (`no_verdict_line`) — carrying `agent`/`unit`/`turns_used`/`max_turns` plus an `action` of `resumed`/`exhausted`/`detected_only`. A disposable `SubagentStop` exit-2 probe (direct dispatch, not Agent-Teams) proved the harness honors `{"decision":"block","reason":...}` on this hook exactly as it does on the main `Stop` event, so the fix ships as a bounded in-hook resume rather than a `stop-hook.sh` gate: up to 2 automatic re-prompts per dispatch, gated by `guards.subagent_resume` (disables the resume only — detection and the event still fire), never blocking twice on the harness's own `stop_hook_active` re-entry signal. Every resumed dispatch measured this objective delivered with near-zero further tool calls — judgment was already complete at stall time; the resume only grants the turn it was never given to state it. See RULES.md §19 (Subagent Non-Delivery & Bounded Resume).
 
 **Review board is non-negotiable.** ALL reviewers must approve before a task can be DONE. Confidence scores below 80 become non-blocking warnings instead of rejections. A fourth `UNVERIFIED` verdict marks a review that genuinely could not run (reviewer errored/timed out, or self-reported it couldn't assess) — distinct from a rejection and bounded by its own `review_gate.unverified_retries` counter, not the CHANGES_REQUESTED `retry_count`. Its resolution is role-aware: a critical reviewer (`review_gate.critical_reviewers`, default security/architect) still `UNVERIFIED` after retries fails closed to BLOCKED; a non-critical one becomes a non-blocking warning under `review_gate.allow_unverified_nonblocking` (default true). Borderline blocking findings near the confidence threshold get one bounded adversarial cross-check (`review_gate.adversarial_crosscheck`/`adversarial_margin`/`adversarial_max`). These six `review_gate` keys are additive (config schema v24). In `group`/`feature` granularity, one shared resolver, `resolve_review_unit()` (`scripts/lib/review-evidence.sh`), maps a task to its review directory (`GROUP-<n>`/`FEATURE-<feat_id>`) so the IN_REVIEW/DONE evidence gates and the `reviewer_verdict` event's `review_unit` field (read by the `SubagentStop` coverage detector as ground truth) always agree on which unit a task was reviewed under (RULES.md §3.9, schema v29).
@@ -183,10 +188,11 @@ tests/                               # Plugin validation tests
 ## Testing
 
 ```bash
-tests/run-tests.sh                    # Run all unit/integration tests (87 files)
+tests/run-tests.sh                    # Run all unit/integration tests (93 files)
 tests/run-tests.sh --filter=stop-hook # Run specific test file
 tests/e2e/run-e2e.sh                  # Run E2E skill tests (requires claude CLI, costs money)
 tests/e2e/run-stack-e2e.sh            # Two-layer gh-stack E2E (real repo/PRs; CI-only via e2e-stack.yml)
+tests/smoke/run-smoke.sh               # True-entry headless smoke (authenticated, paid, scratch only)
 ```
 
 **Harness exit codes:** `0` all checked files passed, `1` a checked file failed, `2` NOTHING CHECKED (the
@@ -195,7 +201,7 @@ zero-match filter is a failure, not a silent pass — every run ends with the fi
 `run-tests: N scanned, M skipped (filtered-out=…, unreadable=…), K checked, F findings` (`N == M + K`,
 asserted by the emitter). See `tests/README.md`.
 
-CI runs automatically on push (`test.yml`) and checks skill template freshness on PRs (`skill-docs.yml`). E2E tests are manual trigger only (`e2e-tests.yml`, `e2e-stack.yml` — the latter needs a `STACK_E2E_GH_TOKEN` secret and creates real GitHub repos/PRs).
+CI runs automatically on push (`test.yml`) and checks skill template freshness on PRs (`skill-docs.yml`). Skill E2E and stack E2E are manual trigger only (`e2e-tests.yml`, `e2e-stack.yml` — the latter needs a `STACK_E2E_GH_TOKEN` secret and creates real GitHub repos/PRs). Headless smoke is manual + nightly (`smoke.yml`) and needs `ANTHROPIC_API_KEY`; it is never a push/PR gate.
 
 ---
 
@@ -217,6 +223,7 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 - `nazgul/context/` — Project context from Discovery
 - `nazgul/docs/` — Generated project documents (PRD, TRD, ADRs)
 - `nazgul/inbox/` (+ `nazgul/inbox/archive/`) — Automation-heartbeat work inbox: candidate `.md`/`.json` files picked up by `scripts/heartbeat.sh` and archived on claim; only populated/consumed when `automation.heartbeat.enabled: true`
+- `config.json → guards.red_run_evidence` — Default-on schema-v36 kill switch for the IMPLEMENTED red-run evidence block. `false` suppresses the block only; detection, stderr, and `red_run_missing` telemetry still run
 - `config.json → connectors.github` — GitHub two-way connector config (opt-in, `enabled: false` by default): `pull.{label, claimed_label, max_body_bytes}`, `push.enabled`, `pull_failures` counter, and the remote-issue ↔ local-id `map`. No credential is stored here — auth is `gh` only. Consumed by `scripts/lib/connector-github.sh` via the `scripts/lib/inbox-provider.sh` seam (`automation.heartbeat.inbox.provider: "github"`)
 - `nazgul/.githooks/` — Per-project managed git hooks dir (generated by `scripts/lib/git-hooks.sh`), pointed to by `core.hooksPath` when `guards.git_hooks: true`; holds the `pre-commit`/`pre-merge-commit` guards, the chain-dispatcher, and pass-through shims for every other githooks(5) name
 - `config.json → execution.stacking` — Stacked-PR continuation policy (opt-in, `enabled: false` by default, schema v35): `max_unmerged` (default 3, the auto-start cap) and `rework_priority` (default 1). Three further keys are written at runtime by `scripts/lib/stack-utils.sh` and absent from a fresh config: `halted`/`halt_reason` (fail-closed flag, cleared only by a human) and `api_failures` (consecutive-failure counter, halts at 3)
@@ -254,7 +261,7 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 5. **Never skip the review gate.** ALL reviewers must approve. No exceptions.
 6. **Address ALL blocking feedback.** When CHANGES_REQUESTED, fix every REJECT item.
 7. **One task at a time.** Don't work on multiple tasks simultaneously (unless parallel mode with Agent Teams).
-8. **Update Recovery Pointer on every state change.** This is how you survive compaction. Evidence gates enforce real work: IMPLEMENTED requires a commit SHA recorded under the manifest's `## Commits` section that resolves to a real, reachable commit (`git cat-file -e`) and is a strict descendant of the manifest's Base SHA (existence-only, announced on stderr, when no Base SHA is present), IN_REVIEW requires a review directory, source edits require an IN_PROGRESS task — and only for paths inside this project's root (`task-state-guard.sh` is PROJECT_ROOT-bounded; in-project paths reached via symlink or `..` are still gated). A status change written outside the guarded Write/Edit/MultiEdit path is caught by `stop-hook.sh`'s bash-write reconciliation pass at the next iteration.
+8. **Update Recovery Pointer on every state change.** This is how you survive compaction. Evidence gates enforce real work: IMPLEMENTED requires a commit SHA recorded under the manifest's `## Commits` section that resolves to a real, reachable commit (`git cat-file -e`) and is a strict descendant of the manifest's Base SHA (existence-only, announced on stderr, when no Base SHA is present); a `scripts/**`/`tests/**` task also requires usable `## Red-Run Evidence` or a scope-valid enumerated N/A token. Missing/corrupt evidence emits `red_run_missing` and blocks unless `guards.red_run_evidence: false` suppresses that block. IN_REVIEW requires a review directory, source edits require an IN_PROGRESS task — and only for paths inside this project's root (`task-state-guard.sh` is PROJECT_ROOT-bounded; in-project paths reached via symlink or `..` are still gated). A status change written outside the guarded Write/Edit/MultiEdit path is caught by `stop-hook.sh`'s bash-write reconciliation pass at the next iteration.
 9. **Commit in AFK mode.** Every state transition gets a commit with the dynamic prefix from config (e.g., `feat(FEAT-003):`).
 10. **NAZGUL_COMPLETE means ALL tasks DONE and post-loop finished.** Not before.
 

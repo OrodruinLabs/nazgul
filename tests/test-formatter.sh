@@ -24,10 +24,8 @@ FORMATTER="$REPO_ROOT/scripts/formatter.sh"
 # formatter" status message itself only names the extension, not the path).
 run_formatter() {
   local payload="$1"
-  FMT_OUTPUT=$(printf '%s' "$payload" | NAZGUL_FORMATTER_ENABLED=1 NAZGUL_FORMATTER_DEBUG=1 bash "$FORMATTER" 2>&1) \
-    && FMT_EC=0 || FMT_EC=$?
+  FMT_OUTPUT=$(printf '%s' "$payload" | NAZGUL_FORMATTER_ENABLED=1 NAZGUL_FORMATTER_DEBUG=1 bash "$FORMATTER" 2>&1) || true
   FMT_STATUS=$(printf '%s' "$FMT_OUTPUT" | tail -1 | jq -r '.hookSpecificOutput.status // empty' 2>/dev/null || true)
-  FMT_MESSAGE=$(printf '%s' "$FMT_OUTPUT" | tail -1 | jq -r '.hookSpecificOutput.message // empty' 2>/dev/null || true)
   FMT_RESOLVED_FILE=$(printf '%s' "$FMT_OUTPUT" | grep -oE 'File: [^,]+' | head -1 | sed 's/^File: //')
 }
 
@@ -97,7 +95,7 @@ bash -n "$FORMATTER" 2>/dev/null && _pass "bash -n clean: formatter.sh" || _fail
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck -S warning "$FORMATTER" 2>/dev/null && _pass "shellcheck clean: formatter.sh" || _fail "shellcheck clean: formatter.sh" "shellcheck found issues in $FORMATTER"
 else
-  _pass "shellcheck clean: formatter.sh (shellcheck not installed, skipped)"
+  _skip "shellcheck clean: formatter.sh (shellcheck not installed, skipped)"
 fi
 
 report_results

@@ -9,6 +9,8 @@ set -euo pipefail
 # aggregate exit code. Aggregate exit: 0 all pass, 1 worst is warn, 2 worst is
 # fail. Doctor never writes to nazgul/, git config, or anywhere under
 # PROJECT_ROOT — its only fix path is the remediation text in each message.
+# The last stdout line is the TRD §6 coverage line; a check with nothing to
+# inspect is reported through _doc_skip, not folded into the checked count.
 #
 # TASK-001 shipped the engine plus checks (b), (f), (g). TASK-002 added
 # checks (a), (c), (d). TASK-003 added check (e). FEAT-027/TASK-009 adds
@@ -31,13 +33,46 @@ CONFIG="$NAZGUL_DIR/config.json"
 
 _DOC_WORST=0
 
-_doc_report() {
+_DOC_SCANNED=0
+_DOC_CHECKED=0
+_DOC_FINDINGS=0
+_DOC_SKIP_NA_CONFIG=0
+_DOC_SKIP_NA_ENV=0
+_DOC_SKIP_NO_CANDIDATES=0
+_DOC_SKIP_UNREADABLE=0
+
+_doc_emit() {
   local verdict="$1" check_id="$2" message="$3"
   printf '%s\t%s\t%s\n' "$verdict" "$check_id" "$message"
+  _DOC_SCANNED=$((_DOC_SCANNED + 1))
   case "$verdict" in
-    warn) if [ "$_DOC_WORST" -lt 1 ]; then _DOC_WORST=1; fi ;;
-    fail) _DOC_WORST=2 ;;
+    warn) _DOC_FINDINGS=$((_DOC_FINDINGS + 1)); if [ "$_DOC_WORST" -lt 1 ]; then _DOC_WORST=1; fi ;;
+    fail) _DOC_FINDINGS=$((_DOC_FINDINGS + 1)); _DOC_WORST=2 ;;
   esac
+}
+
+_doc_report() {
+  _DOC_CHECKED=$((_DOC_CHECKED + 1))
+  _doc_emit "$@"
+}
+
+# _doc_skip <verdict> <check-id> <reason> <message> — a check with nothing to
+# inspect. An unenumerated reason is announced and counted as CHECKED (TRD §6).
+_doc_skip() {
+  local verdict="$1" check_id="$2" reason="$3" message="$4"
+  case "$reason" in
+    not-applicable-config) _DOC_SKIP_NA_CONFIG=$((_DOC_SKIP_NA_CONFIG + 1)) ;;
+    not-applicable-env)    _DOC_SKIP_NA_ENV=$((_DOC_SKIP_NA_ENV + 1)) ;;
+    no-candidates)         _DOC_SKIP_NO_CANDIDATES=$((_DOC_SKIP_NO_CANDIDATES + 1)) ;;
+    unreadable)            _DOC_SKIP_UNREADABLE=$((_DOC_SKIP_UNREADABLE + 1)) ;;
+    *)
+      printf 'doctor: INTERNAL — unenumerated skip reason "%s" on check %s; counted as checked\n' \
+        "$reason" "$check_id" >&2
+      _doc_report "$verdict" "$check_id" "$message"
+      return 0
+      ;;
+  esac
+  _doc_emit "$verdict" "$check_id" "$message"
 }
 
 # _doc_cfg <jq-filter> <default> — reads nazgul/config.json, falling back to
@@ -161,12 +196,12 @@ check_plugin_version() {
   fi
 
   if [ "$install_mode" != "local" ] && [ "$plugin_repo_here" != "true" ]; then
-    _doc_report pass plugin-version "Not applicable — install_mode is not 'local' and $PROJECT_ROOT is not a plugin repo (no .claude-plugin/plugin.json)."
+    _doc_skip pass plugin-version not-applicable-config "Not applicable — install_mode is not 'local' and $PROJECT_ROOT is not a plugin repo (no .claude-plugin/plugin.json)."
     return 0
   fi
 
   if [ -z "${CLAUDE_PLUGIN_ROOT:-}" ]; then
-    _doc_report pass plugin-version "Not applicable — CLAUDE_PLUGIN_ROOT is unset, so there is no active plugin instance to compare against (e.g. running under a test harness)."
+    _doc_skip pass plugin-version not-applicable-env "Not applicable — CLAUDE_PLUGIN_ROOT is unset, so there is no active plugin instance to compare against (e.g. running under a test harness)."
     return 0
   fi
 
@@ -177,7 +212,7 @@ check_plugin_version() {
   repo_version="$(_doc_json_field "$repo_json" '.version // ""')"
 
   if [ -z "$active_version" ] || [ -z "$repo_version" ]; then
-    _doc_report pass plugin-version "Not applicable — could not read a .version field from $active_json or $repo_json."
+    _doc_skip pass plugin-version unreadable "Not applicable — could not read a .version field from $active_json or $repo_json."
     return 0
   fi
 
@@ -195,7 +230,7 @@ check_plugin_version() {
 # disagree on what "managed" means.
 check_git_hooks() {
   if [ "$(_doc_cfg '.guards.git_hooks // false' 'false')" != "true" ]; then
-    _doc_report pass git-hooks "Not applicable — guards.git_hooks is false."
+    _doc_skip pass git-hooks not-applicable-config "Not applicable — guards.git_hooks is false."
     return 0
   fi
 
@@ -264,7 +299,7 @@ check_invoking_shell() {
 # target defined in migrate-config.sh, read as text (never sourced).
 check_config_schema() {
   if [ ! -f "$CONFIG" ]; then
-    _doc_report pass config-schema "No nazgul/config.json to check yet — run /nazgul:init first."
+    _doc_skip pass config-schema not-applicable-config "No nazgul/config.json to check yet — run /nazgul:init first."
     return 0
   fi
 
@@ -346,7 +381,7 @@ check_stacking() {
   fi
 
   if [ "$(_doc_cfg '.execution.stacking.enabled // false' 'false')" != "true" ]; then
-    _doc_report pass stacking "Not applicable — execution.stacking.enabled is false."
+    _doc_skip pass stacking not-applicable-config "Not applicable — execution.stacking.enabled is false."
     return 0
   fi
 
@@ -428,17 +463,17 @@ check_stack_registry() {
       _doc_report warn stack-registry "execution.stacking.enabled is false but stack.layers[] still holds $open_count open entry/entries — nothing reconciles them while stacking is off, and re-enabling stacking counts them against max_unmerged immediately. Merge or close their PRs, or clear the entries, before re-enabling."
       return 0
     fi
-    _doc_report pass stack-registry "Not applicable — execution.stacking.enabled is false and stack.layers[] has no open entries."
+    _doc_skip pass stack-registry not-applicable-config "Not applicable — execution.stacking.enabled is false and stack.layers[] has no open entries."
     return 0
   fi
 
   if [ "$open_count" -eq 0 ]; then
-    _doc_report pass stack-registry "Not applicable — stack.layers[] has no open entries."
+    _doc_skip pass stack-registry no-candidates "Not applicable — stack.layers[] has no open entries."
     return 0
   fi
 
   if ! command -v gh >/dev/null 2>&1; then
-    _doc_report note stack-registry "gh is not on PATH — cannot verify $open_count open stack.layers[] entries against GitHub. Install gh (and run 'gh auth login') then re-run /nazgul:doctor."
+    _doc_skip note stack-registry unreadable "gh is not on PATH — cannot verify $open_count open stack.layers[] entries against GitHub. Install gh (and run 'gh auth login') then re-run /nazgul:doctor."
     return 0
   fi
 
@@ -484,17 +519,83 @@ check_stack_registry() {
   _doc_report pass stack-registry "All $open_count open stack.layers[] entries match GitHub's PR state."
 }
 
+_DOC_CHECK_IDS="config-present plugin-version dependencies git-hooks invoking-shell nazgul-dir-env config-schema stacking stack-registry stdin-hazard"
+_DOC_ONLY=""
+
+# _doc_run <check-id> <function> — runs the check unless --only excluded it.
+_doc_run() {
+  if [ -n "$_DOC_ONLY" ]; then
+    case ",$_DOC_ONLY," in
+      *",$1,"*) : ;;
+      *) return 0 ;;
+    esac
+  fi
+  "$2"
+}
+
+# Coverage line, always the last line of stdout (TRD §6). Doctor has NO bus path:
+# events.jsonl is under nazgul/, and zero-write outranks the event.
+_doc_emit_coverage_line() {
+  local skipped=$((_DOC_SKIP_NA_CONFIG + _DOC_SKIP_NA_ENV + _DOC_SKIP_NO_CANDIDATES + _DOC_SKIP_UNREADABLE))
+  if [ "$_DOC_SCANNED" -ne $((skipped + _DOC_CHECKED)) ]; then
+    printf 'doctor: INTERNAL — coverage accounting mismatch: %d scanned != %d skipped + %d checked\n' \
+      "$_DOC_SCANNED" "$skipped" "$_DOC_CHECKED" >&2
+  fi
+  if [ "$_DOC_CHECKED" -eq 0 ] && [ "$_DOC_SCANNED" -gt 0 ]; then
+    printf 'doctor: NOTHING CHECKED — all %d candidates skipped\n' "$_DOC_SCANNED" >&2
+  fi
+  printf 'doctor: %d scanned, %d skipped (not-applicable-config=%d, not-applicable-env=%d, no-candidates=%d, unreadable=%d), %d checked, %d findings\n' \
+    "$_DOC_SCANNED" "$skipped" "$_DOC_SKIP_NA_CONFIG" "$_DOC_SKIP_NA_ENV" \
+    "$_DOC_SKIP_NO_CANDIDATES" "$_DOC_SKIP_UNREADABLE" "$_DOC_CHECKED" "$_DOC_FINDINGS"
+}
+
+# --only exists so the all-skipped path is reachable at all: with every check
+# selected at least one always inspects something.
+_doc_parse_args() {
+  local arg id found
+  for arg in "$@"; do
+    case "$arg" in
+      --only=*) _DOC_ONLY="${arg#--only=}" ;;
+      -h|--help)
+        echo "Usage: doctor.sh [--only=<check-id>[,<check-id>...]]"
+        echo "Checks: $_DOC_CHECK_IDS"
+        exit 0
+        ;;
+      *)
+        echo "doctor: unknown argument: $arg" >&2
+        echo "Usage: doctor.sh [--only=<check-id>[,<check-id>...]]" >&2
+        exit 1
+        ;;
+    esac
+  done
+  [ -n "$_DOC_ONLY" ] || return 0
+  # A typo in --only would otherwise select nothing and report a confident
+  # zero-finding run: the vacuous green this whole contract exists to abolish.
+  for id in ${_DOC_ONLY//,/ }; do
+    found="false"
+    for arg in $_DOC_CHECK_IDS; do
+      [ "$id" = "$arg" ] && found="true"
+    done
+    if [ "$found" != "true" ]; then
+      echo "doctor: --only names unknown check '$id'. Known checks: $_DOC_CHECK_IDS" >&2
+      exit 1
+    fi
+  done
+}
+
 main() {
-  check_config_present
-  check_plugin_version
-  check_dependencies
-  check_git_hooks
-  check_invoking_shell
-  check_nazgul_dir_env
-  check_config_schema
-  check_stacking
-  check_stack_registry
-  check_stdin_hazard
+  _doc_parse_args "$@"
+  _doc_run config-present check_config_present
+  _doc_run plugin-version check_plugin_version
+  _doc_run dependencies check_dependencies
+  _doc_run git-hooks check_git_hooks
+  _doc_run invoking-shell check_invoking_shell
+  _doc_run nazgul-dir-env check_nazgul_dir_env
+  _doc_run config-schema check_config_schema
+  _doc_run stacking check_stacking
+  _doc_run stack-registry check_stack_registry
+  _doc_run stdin-hazard check_stdin_hazard
+  _doc_emit_coverage_line
   exit "$_DOC_WORST"
 }
 

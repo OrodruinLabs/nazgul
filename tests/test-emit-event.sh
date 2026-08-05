@@ -303,14 +303,14 @@ bash -n "$EMIT_CLI" 2>/dev/null && _pass "bash -n clean: emit-event-cli.sh" || _
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck -S warning "$EMIT_LIB" 2>/dev/null && _pass "shellcheck clean: emit-event.sh" || _fail "shellcheck clean: emit-event.sh" "shellcheck found issues in $EMIT_LIB"
 else
-  _pass "shellcheck skipped (not installed): emit-event.sh"
+  _skip "shellcheck skipped (not installed): emit-event.sh"
 fi
 
 # --- Test 13: shellcheck on emit-event-cli.sh (warning-level, matching project convention) ---
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck -S warning "$EMIT_CLI" 2>/dev/null && _pass "shellcheck clean: emit-event-cli.sh" || _fail "shellcheck clean: emit-event-cli.sh" "shellcheck found issues in $EMIT_CLI"
 else
-  _pass "shellcheck skipped (not installed): emit-event-cli.sh"
+  _skip "shellcheck skipped (not installed): emit-event-cli.sh"
 fi
 
 report_results

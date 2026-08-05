@@ -171,4 +171,92 @@ assert_not_contains "mechanical resolve: mismatched task does not silently inher
 
 teardown_temp_dir
 
+# --- FEAT-028 AC9: the qa-reviewer charter must survive the render ---
+#
+# The tracked deliverable is reviewer-domains.json, but what a reviewer
+# actually obeys is the RENDERED prompt. This renders the real base template
+# with the real renderer (the bootstrap-project pipeline) and asserts the
+# charter's four ALWAYS-BLOCKING questions arrive intact. Expected strings are
+# spelled out here rather than read back from the JSON under test — a render
+# check that derives its expectations from its own subject cannot fail.
+source "$REPO_ROOT/scripts/lib/bootstrap-render.sh"
+DOMAINS_JSON="$REPO_ROOT/agents/templates/reviewer-domains.json"
+[ -f "$DOMAINS_JSON" ] || _fail "required file exists: $DOMAINS_JSON" "file not found"
+
+QA_RENDER=$(render_template "$REVIEWER_BASE" | substitute_domain_vars "qa-reviewer" "$DOMAINS_JSON")
+assert_eq "qa-reviewer renders through the real bootstrap pipeline" "$?" "0"
+
+QA_SEAMS='Which seams does this diff touch — as producer or consumer? Does each contract test invoke the producer or build state through a supported scratch entry path? (ALWAYS-BLOCKING)'
+QA_REDRUN='Where is the red-run evidence for every new/changed test — and does it carry `captured-by: scripts/red-run.sh`? (ALWAYS-BLOCKING)'
+QA_FIXTURE='Does any test commit copied project-runtime state instead of generating minimal scratch state during the run? (ALWAYS-BLOCKING)'
+QA_DOGFOOD='If a guard changed: does its suite exercise THIS repo'"'"'s own language and shape? (ALWAYS-BLOCKING)'
+
+assert_contains "rendered qa-reviewer asks which seams the diff touches (blocking)" "$QA_RENDER" "$QA_SEAMS"
+assert_contains "rendered qa-reviewer asks where the red-run evidence is (blocking)" "$QA_RENDER" "$QA_REDRUN"
+assert_contains "rendered qa-reviewer rejects committed runtime snapshots (blocking)" "$QA_RENDER" "$QA_FIXTURE"
+assert_contains "rendered qa-reviewer asks whether a changed guard is dogfooded (blocking)" "$QA_RENDER" "$QA_DOGFOOD"
+assert_contains "rendered qa-reviewer asks for the coverage-honesty signal" "$QA_RENDER" 'the `N scanned, M skipped` line and the nothing-checked signal'
+assert_contains "rendered qa-reviewer asks whether each assertion could actually fail" "$QA_RENDER" "Could each new assertion actually fail"
+
+QA_CHECKLIST=$(grep '^- \[ \] ' <<<"$QA_RENDER")
+assert_eq "exactly four ALWAYS-BLOCKING checklist items" "$(grep -c 'ALWAYS-BLOCKING' <<<"$QA_CHECKLIST")" "4"
+assert_eq "the ALWAYS-BLOCKING items are the FIRST four" "$(head -4 <<<"$QA_CHECKLIST" | grep -c 'ALWAYS-BLOCKING')" "4"
+
+assert_contains "rendered APPROVE criterion is the charter's" "$QA_RENDER" \
+  'Every touched seam is exercised through a real producer or supported scratch entry path, red-run evidence is present and mechanically captured, and remaining concerns are minor'
+assert_contains "rendered CHANGES_REQUESTED criterion is the charter's" "$QA_RENDER" \
+  'A touched seam is unpinned, red-run evidence is missing, project-runtime state is committed as fixture data, a changed guard is not dogfooded, or an assertion cannot fail (confidence >= 80)'
+assert_contains "rendered review steps read the manifest's Red-Run Evidence section" "$QA_RENDER" '`## Red-Run Evidence` section'
+assert_contains "rendered review steps reject committed runtime snapshots" "$QA_RENDER" 'Nazgul manifests, reviews, checkpoints, locks, and inbox records must be generated in a temporary project'
+assert_contains "rendered review steps forbid re-running the suite" "$QA_RENDER" 'Do NOT re-run the suite'
+assert_contains "rendered qa-reviewer keeps its read-only tools list" "$QA_RENDER" '  - Read'
+assert_not_contains "rendered qa-reviewer still has no Bash tool" "$QA_RENDER" '  - Bash'
+assert_contains "rendered qa-reviewer carries the ALWAYS-BLOCKING mechanism that gives the questions teeth" "$QA_RENDER" \
+  'Never downgrade an always-blocking finding'
+
+# The bundle path (skills/bootstrap-project) renders with BUNDLE_MODE=true; the
+# charter has to survive that branch too, not just the loop's.
+QA_BUNDLE=$(BUNDLE_MODE=true render_template "$REVIEWER_BASE" | substitute_domain_vars "qa-reviewer" "$DOMAINS_JSON")
+assert_contains "bundle-mode render keeps the seams question" "$QA_BUNDLE" "$QA_SEAMS"
+assert_contains "bundle-mode render keeps the red-run question" "$QA_BUNDLE" "$QA_REDRUN"
+
+# Control: the same pipeline over the pre-charter qa-reviewer shape. Without it
+# these assertions could be passing on base-template text rather than on the
+# domain config this task rewrote.
+CONTROL_JSON=$(mktemp "${TMPDIR:-/tmp}/qa-control.XXXXXX")
+cat > "$CONTROL_JSON" <<'CONTROL'
+{
+  "qa-reviewer": {
+    "description": "Reviews test coverage, edge cases, test quality, and assertion completeness for this project",
+    "title": "QA",
+    "context_items": "test framework, test locations, coverage tool, test commands, fixture patterns",
+    "checklist": [
+      "New code has corresponding tests",
+      "Tests cover happy path AND error/edge cases"
+    ],
+    "review_steps": ["Find corresponding test files"],
+    "category": "Testing",
+    "approved_criteria": "Tests are adequate, concerns are minor",
+    "rejected_criteria": "Missing tests or critical test quality issues (confidence >= 80)"
+  }
+}
+CONTROL
+CONTROL_RENDER=$(render_template "$REVIEWER_BASE" | substitute_domain_vars "qa-reviewer" "$CONTROL_JSON")
+CONTROL_CHECKLIST=$(grep '^- \[ \] ' <<<"$CONTROL_RENDER")
+rm -f "$CONTROL_JSON"
+
+assert_not_contains "control render: pre-charter config produces no seams question" "$CONTROL_RENDER" "$QA_SEAMS"
+assert_not_contains "control render: pre-charter config produces no red-run question" "$CONTROL_RENDER" "$QA_REDRUN"
+assert_not_contains "control render: pre-charter config has no ALWAYS-BLOCKING checklist item" "$CONTROL_CHECKLIST" "ALWAYS-BLOCKING"
+assert_not_contains "control render: pre-charter config keeps the old APPROVE criterion, not the charter's" "$CONTROL_RENDER" \
+  'Every touched seam is pinned by a contract test'
+
+DISCOVERY=$(cat "$REPO_ROOT/agents/discovery.md")
+assert_contains "discovery names the live reviewer base as its source of truth" \
+  "$DISCOVERY" '`agents/templates/reviewer-base.md` + `agents/templates/reviewer-domains.json` are the SINGLE source of'
+assert_contains "discovery binds its reviewer contract to this test" \
+  "$DISCOVERY" 'reviewer-contract:begin — checked against agents/templates/reviewer-base.md by tests/test-review-contract.sh'
+assert_not_contains "discovery no longer embeds the obsolete Bash-capable reviewer copy" \
+  "$DISCOVERY" 'allowed-tools: Read, Glob, Grep, Bash(npm test *)'
+
 report_results

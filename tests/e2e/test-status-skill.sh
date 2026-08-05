@@ -44,7 +44,11 @@ OUTPUT=$(run_skill_session "/nazgul:status" 60)
 PASSED=0
 FAILED=0
 
-assert_output_contains "$OUTPUT" "NAZGUL" "Shows Nazgul branding" && ((PASSED++)) || ((FAILED++))
+if assert_output_contains "$OUTPUT" "NAZGUL" "Shows Nazgul branding"; then
+  PASSED=$((PASSED + 1))
+else
+  FAILED=$((FAILED + 1))
+fi
 
 echo ""
 echo "E2E /nazgul:status: $PASSED passed, $FAILED failed"

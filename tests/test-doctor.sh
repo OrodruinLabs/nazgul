@@ -747,4 +747,52 @@ assert_eq "stacking zero-write guarantee: nazgul/ snapshot identical before/afte
 rm -rf "$FAKEBIN_STACK2"
 teardown_temp_dir
 
+# Coverage honesty (FEAT-028 TASK-015, TRD §6): a check with nothing to inspect is
+# skipped with an enumerated reason, and the vacuous case writes nothing.
+
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false'
+OUT=$("$DOCTOR" 2>/dev/null); EXIT=$?
+COVERAGE=$(printf '%s' "$OUT" | tail -1)
+DR_GRAMMAR="^doctor: ([0-9]+) scanned, ([0-9]+) skipped \(not-applicable-config=([0-9]+), not-applicable-env=([0-9]+), no-candidates=([0-9]+), unreadable=([0-9]+)\), ([0-9]+) checked, ([0-9]+) findings$"
+if printf '%s' "$COVERAGE" | grep -qE "$DR_GRAMMAR"; then
+  _pass "coverage line is the last stdout line and conforms to the TRD §6 grammar"
+else
+  _fail "coverage line is the last stdout line and conforms to the TRD §6 grammar" "got: '$COVERAGE'"
+fi
+read -r D_SCANNED D_SKIPPED D_CHECKED <<<"$(printf '%s' "$COVERAGE" | sed -E "s/$DR_GRAMMAR/\1 \2 \7/")"
+assert_eq "coverage line adds up (N == M + K)" "$D_SCANNED" "$((D_SKIPPED + D_CHECKED))"
+assert_eq "every check reports exactly once, so N is the full check roster" "$D_SCANNED" "10"
+if [ "$D_SKIPPED" -ge 1 ]; then
+  _pass "the disabled-guard check is counted as skipped, not as a check that passed on nothing"
+else
+  _fail "the disabled-guard check is counted as skipped, not as a check that passed on nothing" \
+    "skipped: $D_SKIPPED"
+fi
+assert_exit_code "the coverage line does not change the aggregate exit code" "$EXIT" 0
+
+# Forced all-skip: --only two checks that both have nothing to inspect here.
+BEFORE_CH=$(_dr_snapshot "$TEST_DIR/nazgul")
+OUT=$("$DOCTOR" --only=git-hooks,stacking 2>"$TEST_DIR/only.err"); EXIT=$?
+assert_contains "forced all-skip emits the nothing-checked signal on stderr" \
+  "$(cat "$TEST_DIR/only.err")" "doctor: NOTHING CHECKED — all 2 candidates skipped"
+assert_contains "forced all-skip still emits the coverage line" \
+  "$(printf '%s' "$OUT" | tail -1)" "doctor: 2 scanned, 2 skipped"
+assert_contains "a skipped check still reports pass with the Not applicable convention" \
+  "$OUT" "$(printf 'pass\tgit-hooks\tNot applicable')"
+assert_exit_code "an all-skipped run still exits on the worst verdict, not on the coverage" "$EXIT" 0
+assert_eq "zero-write guarantee holds on the nothing-checked path (no event, no log dir)" \
+  "$(_dr_snapshot "$TEST_DIR/nazgul")" "$BEFORE_CH"
+assert_file_not_exists "the vacuous path writes no events.jsonl — zero-write outranks the bus" \
+  "$TEST_DIR/nazgul/logs/events.jsonl"
+
+# A --only typo must not select nothing and report a confident zero-finding run.
+OUT=$("$DOCTOR" --only=git-hooks,no-such-check 2>&1); EXIT=$?
+assert_exit_code "an unknown --only check id is a usage error, not an empty run" "$EXIT" 1
+assert_contains "the unknown --only id is named" "$OUT" "unknown check 'no-such-check'"
+assert_not_contains "a rejected --only run emits no coverage line at all" "$OUT" "0 checked, 0 findings"
+teardown_temp_dir
+
 report_results

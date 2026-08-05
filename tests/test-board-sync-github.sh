@@ -37,7 +37,7 @@ if command -v shellcheck >/dev/null 2>&1; then
     _fail "passes shellcheck (no errors)" "$SC_ERRORS"
   fi
 else
-  _pass "shellcheck not installed — skipped"
+  _skip "shellcheck not installed — skipped"
 fi
 
 # Test: shows usage on no args
@@ -60,5 +60,15 @@ assert_contains "usage mentions status" "$OUTPUT" "status"
 
 # Test: script uses set -euo pipefail
 assert_file_contains "uses strict mode" "$SCRIPT" "set -euo pipefail"
+
+# Manifest parsing uses the shared consumer at both call sites. These assertions
+# pin that the two defective expressions are gone from the source.
+assert_file_contains "reads task status through the shared consumer" "$SCRIPT" "source .*lib/task-utils.sh"
+assert_file_not_contains "no legacy body-line status grep survives" "$SCRIPT" '## Status:'
+assert_eq "get_task_status is used at both parse sites (create-issue, sync-task)" \
+  "$(grep -c 'get_task_status "\$task_file"' "$SCRIPT")" "2"
+assert_file_contains "the title comes from the first H1, not line 1" "$SCRIPT" "grep -m1 '\^# '"
+assert_file_not_contains "no head -1 title extraction survives" "$SCRIPT" 'head -1 "\$task_file"'
+assert_file_contains "sync-all reports how many of how many actually synced" "$SCRIPT" 'of \$count tasks synced'
 
 report_results

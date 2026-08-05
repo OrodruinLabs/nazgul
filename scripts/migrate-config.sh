@@ -735,9 +735,7 @@ migrate_34_to_35() {
 
 migrate_35_to_36() {
   local tmp; tmp=$(mktemp)
-  # Red-run evidence gate kill switch (FEAT-028 TASK-004 / ADR-019 D1). Additive;
-  # explicit values (incl. false) preserved. Same type-guard pattern as
-  # migrate_33_to_34/migrate_34_to_35.
+  # Additive red-run kill switch; preserve explicit values, including false (ADR-019 D1).
   jq '
     .guards = ((if (.guards | type) == "object" then .guards else {} end)
       | .red_run_evidence = (if has("red_run_evidence") then .red_run_evidence else true end))

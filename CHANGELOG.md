@@ -2,6 +2,87 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.30.0] - 2026-08-05
+
+FEAT-028, ADR-019 — a green test is evidence only after it proved it can turn red. The suite had
+strong regression breadth but no mechanical proof that a new test failed without its change, several
+entry points could report success after checking nothing, and the guard intended to police this
+shell-first repository exempted shell entirely. This release turns test reality into an enforced
+artifact: pre-change red runs are captured into task manifests, guards exercise real entry paths with
+minimal state generated in disposable projects, and every checking entry point accounts for what it
+skipped. Project-local Nazgul runtime state is never committed as test fixture data. MINOR, not PATCH:
+this is new enforcement capability, an additive schema step, and a
+default-on behavior change — a `scripts/**`/`tests/**` task with missing or corrupt red-run evidence is
+now blocked at IMPLEMENTED. Nothing user-invoked is removed or renamed. **`schema_version` moves 35 →
+36** (`migrate_35_to_36`, additive): `guards.red_run_evidence: true`, preserving explicit `false`.
+
+### Added — the six deliverables
+
+1. **Mechanized red-run evidence.** `scripts/red-run.sh` creates a detached worktree at a task's Base
+   SHA, copies only the changed test inputs (never the changed harness), runs the scoped filter, rejects
+   exit-zero vacuity and zero-match runs distinctly, and writes the parseable `## Red-Run Evidence`
+   block itself. The shared task-transition library validates ref resolution, ancestry, exit status,
+   scope-valid N/A tokens, and commit ordering on both guarded writes and bash-write reconciliation.
+2. **Guard dogfooding on real inputs.** The suite drives generated shell bodies, hook payloads, Git
+   repositories, short-SHA manifests, checkpoints, and file swaps through production entry points.
+   Each test creates the smallest supported state it needs under a temporary directory instead of
+   copying a working project's `nazgul/` directory into the repository.
+3. **Coverage honesty across checking entry points.** Unit, E2E, smoke, JSON, guard, doctor,
+   heartbeat, and reviewer-verifier surfaces report fixed-grammar
+   `N scanned, M skipped (...), K checked, F findings` records with `N == M + K`; blocking runners use
+   nonzero NOTHING CHECKED results, while advisory surfaces retain their exit policy and emit
+   `coverage_vacuous`.
+4. **True-entry headless smoke.** `tests/smoke/run-smoke.sh` exercises `/nazgul:heartbeat` and a bounded
+   `/nazgul:start` loop only in disposable scratch projects, with timeout/accounting, p1 failure filing,
+   and hard refusal to touch this repository's live `nazgul/` state. `.github/workflows/smoke.yml` is
+   manual + nightly only and uses the `ANTHROPIC_API_KEY` secret; cheap shape checks remain in normal CI.
+5. **Adversarial QA charter.** The generated `qa-reviewer` now treats unproved-green tests as presumed
+   vacuous, checks red-run evidence, scratch-state construction, guard realism, and coverage accounting,
+   and blocks committed Nazgul manifests, reviews, checkpoints, locks, or inbox records.
+6. **Retroactive reality audit.** `docs/test-audit-2026-08.md` records exactly one verdict for all 118
+   scoped files (93 root tests, 2 helpers, 12 E2E files, 11 pre-existing fixtures): 84 clean, 15
+   `vacuous-fixed`, 19 `vacuous-filed`, and 0 not-audited. TASK-017 began with 34 affected files; 15
+   were repaired and 19 remain explicitly filed. All nine findings have a fix or prioritized filing.
+
+### Changed
+
+- **Default-on IMPLEMENTED evidence gate.** A task whose declared scope touches `scripts/**` or
+  `tests/**` must carry usable red-run evidence or one of the three scope-checked enumerated exemptions
+  (`docs-only`, `config-only`, `deletion-only`). Missing/corrupt evidence emits `red_run_missing` and
+  blocks. `guards.red_run_evidence: false` suppresses only the block — detection, stderr, and telemetry
+  remain, so the kill switch cannot turn absence into a pass.
+- **Suite growth and accounting.** The objective began with 86 root tests; seven adversarial/smoke
+  files bring the discovered suite to 93. Shared assertions now distinguish grep errors from a real
+  no-match, fail negative-file assertions when the file is absent, reject zero-assertion summaries,
+  and count unavailable checks as skips rather than fabricated passes.
+
+### Fixed — pulled-in defects, deliberately fenced
+
+- **Lean-comments shell coverage (filing items 1–3).** `.sh`, `.bash`, and shebang-classified shell are
+  now checked with one explicit header-block allowance; a real six-line shell body run is blocked, and
+  `--check` reports its skipped coverage plus `coverage_vacuous`. **Remaining filed scope:** item 4,
+  the measured sweep/waiver of pre-existing bloat (128 of 167 tracked shell files, 1,748 findings), was
+  not silently rewritten in this objective.
+- **Board-sync manifest parsing (sub-defects A/B).** Both status sites use the shared frontmatter-aware
+  task parser; titles come from the real H1; bodies tolerate current planner/patch sections; missing ID
+  fields no longer abort; and `sync-all` reports synced-of-total rather than claiming every attempt
+  succeeded. **Remaining filed scope:** C (feature/plan/roadmap tier) and D (objective-rotation
+  `task_map` reuse) remain open and the inbox item stays active.
+- **Retroactive harness repairs.** JSON validation discovers all tracked plugin JSON instead of five
+  hand-listed paths; E2E absent-CLI and zero-match paths return NOTHING CHECKED; session helper grep
+  errors and `set -e` counter aborts are repaired. Semantic `/nazgul:init` and `/nazgul:status` E2E
+  assertions remain filed until authenticated outputs can be captured rather than guessed.
+
+### Known constraints (honest notes)
+
+- The paid headless smoke scenarios were authored, linted, and shape-tested but were not run during
+  implementation; they require an authenticated `claude -p` environment and intentionally run only by
+  manual/nightly workflow. Local interactive Claude may use stored account/OAuth login without an API
+  key; the GitHub headless workflows explicitly require `ANTHROPIC_API_KEY`.
+- Four unit tests still replay consumer-authored `gh` response shapes (V2), and the bootstrap-transform
+  golden corpus cannot establish its original authorship (V1). Both are prioritized audit filings, not
+  silently labeled clean.
+
 ## [2.29.0] - 2026-08-03
 
 FEAT-027, ADR-018 — an objective's end must not idle the loop (governing thesis for this release).
