@@ -672,7 +672,7 @@ if command -v shellcheck >/dev/null 2>&1; then
     && _pass "shellcheck clean: subagent-stop.sh" \
     || _fail "shellcheck clean: subagent-stop.sh" "shellcheck warnings found"
 else
-  _pass "shellcheck skipped (not installed): subagent-stop.sh"
+  _skip "shellcheck skipped (not installed): subagent-stop.sh"
 fi
 
 report_results

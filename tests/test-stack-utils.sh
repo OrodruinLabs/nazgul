@@ -1152,7 +1152,7 @@ if [ "$(id -u)" -ne 0 ]; then
   assert_eq "dropped p1: emits stack_rework_file_failed" "$(_event_count stack_rework_file_failed)" "1"
   unset NAZGUL_TEST_GH_PR_VIEW_JSON
 else
-  _pass "dropped p1 inbox-write failure (skipped: running as root, chmod 500 does not deny)"
+  _skip "dropped p1 inbox-write failure (skipped: running as root, chmod 500 does not deny)"
 fi
 
 # --- The fail-closed contract at the REAL call site: NAZGUL_DIR unset. The

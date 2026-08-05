@@ -134,9 +134,17 @@ substitute_domain_vars() {
   tpl=$(mktemp "${TMPDIR:-/tmp}/bootstrap-domain.XXXXXX") || { echo "error: substitute_domain_vars: mktemp failed" >&2; return 1; }
   cat > "$tpl"  || { rc=$?; rm -f "$tpl"; echo "error: substitute_domain_vars: failed reading template from stdin" >&2; return "$rc"; }
 
-  awk -v name="$name" -v title="$title" -v desc="$desc" -v cat="$cat" \
-      -v checklist="$checklist" -v review_steps="$review_steps" \
-      -v approved="$approved" -v rejected="$rejected" -v ctx="$ctx" '
+  # Multiline checklist values use the environment because BSD awk rejects them through `-v`.
+  RD_name="$name" RD_title="$title" RD_desc="$desc" RD_cat="$cat" \
+  RD_checklist="$checklist" RD_review_steps="$review_steps" \
+  RD_approved="$approved" RD_rejected="$rejected" RD_ctx="$ctx" \
+  awk '
+    BEGIN {
+      name=ENVIRON["RD_name"]; title=ENVIRON["RD_title"]; desc=ENVIRON["RD_desc"]
+      cat=ENVIRON["RD_cat"]; checklist=ENVIRON["RD_checklist"]
+      review_steps=ENVIRON["RD_review_steps"]; approved=ENVIRON["RD_approved"]
+      rejected=ENVIRON["RD_rejected"]; ctx=ENVIRON["RD_ctx"]
+    }
     {
       gsub(/\{\{reviewer_name\}\}/, name)
       gsub(/\{\{title\}\}/, title)

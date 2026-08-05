@@ -38,17 +38,32 @@ exits `3` on a mismatch, because a summary that does not add up is a defect in t
 
 ## Test Files
 
-| File | Description | Cases |
-|------|-------------|-------|
-| `test-json-validation.sh` | All JSON files parse with `jq empty` | 5 |
-| `test-frontmatter.sh` | Agent/skill markdown YAML frontmatter validation | ~38 files |
-| `test-config-schema.sh` | Config template required fields | 15 |
-| `test-hooks-schema.sh` | Hook wiring, matchers, script references | 8 |
-| `test-shellcheck.sh` | `bash -n` + `shellcheck -S warning` on all scripts | 8 |
-| `test-pre-tool-guard.sh` | Dangerous command blocking | 18 |
-| `test-session-context.sh` | Context output, compaction counter | 10 |
-| `test-pre-compact.sh` | Checkpoint creation, recovery stdout | 8 |
-| `test-stop-hook.sh` | Full state machine: exits, loops, mutations | 22 |
+The runner discovers **93** root `test-*.sh` files. The FEAT-028 retroactive audit covers 118 files
+when shared helpers, E2E files, and fixtures are included; see `docs/test-audit-2026-08.md` for the
+one-verdict-per-file ledger.
+
+| Area | Coverage |
+|------|----------|
+| Harness + assertion reality | Zero-match/no-file runs, skip accounting, grep-error handling, red-run evidence gate/tool |
+| Scratch-state dogfooding | Guards receive generated shell, hook, Git, and session state in temporary projects; Nazgul runtime snapshots are not committed |
+| State/review loop | Task transitions, review evidence/provenance, dispatch granularity, stop-hook state machine |
+| Config + docs | Terminal schema v36, migration chain, frontmatter, JSON, template freshness, RULES consistency |
+| Paid validation | Manual skill E2E, GitHub stack E2E, and manual/nightly true-entry smoke in scratch projects |
+
+## Red-Run Evidence
+
+For a task that changes `scripts/**` or `tests/**`, capture the scoped pre-change failure after the
+implementation commit and before marking the task IMPLEMENTED:
+
+```bash
+scripts/red-run.sh TASK-017 --filter=assertion-vacuity --copy=tests/test-assertion-vacuity.sh
+```
+
+The tool creates a detached worktree at the task's recorded Base SHA, copies only the named changed
+test input, runs the normal harness, and writes the parseable evidence block into the task manifest.
+Exit `2` means the test passed without the change and is therefore vacuous; exit `3` means the filter
+checked nothing. `guards.red_run_evidence: false` suppresses the IMPLEMENTED block only, not detection
+or the `red_run_missing` event.
 
 ## Prerequisites
 
@@ -63,7 +78,10 @@ exits `3` on a mismatch, because a summary that does not add up is a defect in t
 
 ## Manual Test Procedures
 
-These features require runtime Claude Code and cannot be tested with shell scripts alone.
+These features require an authenticated Claude Code CLI and cannot be tested with shell scripts alone.
+An interactive CLI may use the user's stored Claude subscription/OAuth login, so a local session does
+not require `ANTHROPIC_API_KEY`. The headless GitHub workflows are separate: `e2e-tests.yml` and
+`smoke.yml` explicitly require the repository secret `ANTHROPIC_API_KEY` and spend API money.
 
 ### 1. Bootstrap Test (`/nazgul:init`)
 

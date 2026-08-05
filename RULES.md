@@ -21,7 +21,7 @@ Enforceable operating rules for the Nazgul Framework. Each rule carries a tier l
 5. **Never skip the review gate.** `[enforced]` ALL reviewers must approve. No exceptions. `review-evidence.sh` blocks DONE until a review directory with `verdict: APPROVE` exists for every reviewer.
 6. **Address ALL blocking feedback.** `[advisory]` When CHANGES_REQUESTED, fix every REJECT item.
 7. **One task at a time.** `[hook-driven only]` Don't work on multiple tasks simultaneously (unless `execution.parallel` batch dispatch is enabled — the stop-hook dispatches a bounded, file-scope-disjoint batch of READY tasks together). Sequencing is enforced by stop-hook dispatch; bypassable by direct orchestrator dispatch.
-8. **Update Recovery Pointer on every state change.** `[enforced]` This is how you survive compaction. Evidence gates enforce real work: IMPLEMENTED requires a commit SHA recorded under the manifest's `## Commits` section that resolves to a real commit and is a strict descendant of the manifest's `Base SHA` (existence-only, with an announced stderr diagnostic, when no `Base SHA` is present — see Rule 2 for the full gate), IN_REVIEW requires a review directory, source edits require an IN_PROGRESS task.
+8. **Update Recovery Pointer on every state change.** `[enforced]` This is how you survive compaction. Evidence gates enforce real work: IMPLEMENTED requires a commit SHA recorded under the manifest's `## Commits` section that resolves to a real commit and is a strict descendant of the manifest's `Base SHA` (existence-only, with an announced stderr diagnostic, when no `Base SHA` is present — see Rule 2 for the full gate). When a task's declared scope touches `scripts/**` or `tests/**`, IMPLEMENTED also requires a parseable `## Red-Run Evidence` entry produced by `scripts/red-run.sh`: the pre-change ref must resolve, precede the recorded commit, and have exited nonzero. The gate preserves three honest states rather than collapsing them: usable red evidence; an exemption from the closed list (`N/A — docs-only`, `N/A — comment-only`, `N/A — revert`, or `N/A — fixture-capture-only`); or missing/corrupt evidence, which emits `red_run_missing` and blocks. `guards.red_run_evidence: false` is a kill switch for the block only — detection, stderr, and the event still fire. IN_REVIEW requires a review directory; source edits require an IN_PROGRESS task.
 9. **Commit in AFK mode.** `[hook-driven only]` Every state transition gets a commit with the dynamic prefix from config. Enforced in AFK/YOLO via stop-hook; not enforced in HITL or manual dispatch.
 10. **NAZGUL_COMPLETE means ALL tasks DONE and post-loop finished.** `[enforced]` Not before. Verified by re-reading task manifests from disk immediately beforehand — never by recalling prior transitions (guards can silently block status writes).
 
@@ -159,6 +159,7 @@ This guard governs comment QUANTITY at write time. See §7 for the complementary
 | Confidence threshold | 80 | `review_gate.confidence_threshold` |
 
 - **A gate-triggered stop announces itself.** `[hook-driven only]` When the AFK timeout gate ends a run, `scripts/stop-hook.sh` emits a `stop_gate` event to `nazgul/logs/events.jsonl` — fields `reason` (`"afk_timeout"`), `computed` (elapsed minutes), and `limit` (the configured timeout) — before exiting, so a run stopped by a safety gate is distinguishable in telemetry from a run that simply ended (FEAT-023/TASK-001, ADR-014: a mechanism that fails must not look like a mechanism that had nothing to do). FEAT-026/TASK-008 extended the same `stop_gate` event to the in-flight dispatch hold (`reason: "in_flight_hold"`, naming the units and count an ALLOWED, uncounted stop is waiting on) and to a stale marker declined for that hold (`reason: "in_flight_stale"`, naming the unit and its age) — see Config Upgrades / In-Flight Dispatch Hold in `docs/CONFIGURATION.md`. Other soft-limit stops in the table above still do not emit it, and this rule must not be read as claiming they do.
+- **Evidence degradation announces itself.** `[enforced]` A required red run that is absent, corrupt, non-ancestral, exit-zero, or covered by an invalid N/A token emits `red_run_missing` even when `guards.red_run_evidence: false` suppresses the block. A checking entry point that had candidates but checked none emits `coverage_vacuous` when an event bus is available. These signals are the loud-degradation list for test evidence; neither may be replaced by a green summary.
 
 ---
 
@@ -483,6 +484,17 @@ different-but-internally-valid `nazgul/` tree (PRD AC 3, partially satisfied —
 an objective anchor on the dispatch token, cut as scope item 4). It is narrower than, and does not
 relax, MF-053's fail-CLOSED-on-corrupt-config rule above: MF-053 covers an unparseable `config.json`;
 this covers only a valid config whose `tasks/` path resolves outside its own `nazgul/` tree.
+
+### Tests-facing application: coverage honesty (FEAT-028, ADR-019)
+
+`[enforced]` Every checking entry point reports the work it did not perform as well as the findings it
+did produce. Its terminal record has the fixed grammar
+`<entry>: N scanned, M skipped (<closed reason>=<count>...), K checked, F findings`, and the emitter
+asserts `N == M + K`. If candidates existed but `K == 0`, the run says `NOTHING CHECKED` rather than
+claiming success; blocking runners exit nonzero, while advisory guards preserve their documented exit
+policy but emit `coverage_vacuous`. A filter that matches no file is also NOTHING CHECKED, not a green
+run. A new skip reason must be named and counted — it cannot disappear into `passed` or a free-form
+note. This is §15's looked-vs-never-looked distinction applied to tests, guards, smoke, and audits.
 
 ## 16. GitHub Connector
 

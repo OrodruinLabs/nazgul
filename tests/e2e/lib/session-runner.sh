@@ -55,29 +55,39 @@ assert_output_contains() {
   local output="$1"
   local expected="$2"
   local description="${3:-contains '$expected'}"
+  local rc=0
 
-  if echo "$output" | grep -qF "$expected"; then
-    echo "  PASS: $description"
-    return 0
-  else
-    echo "  FAIL: $description"
-    echo "  Expected to find: $expected"
-    echo "  In output (first 500 chars): ${output:0:500}"
-    return 1
-  fi
+  grep -qF -e "$expected" <<<"$output" || rc=$?
+  case "$rc" in
+    0) echo "  PASS: $description"; return 0 ;;
+    1)
+      echo "  FAIL: $description"
+      echo "  Expected to find: $expected"
+      echo "  In output (first 500 chars): ${output:0:500}"
+      return 1 ;;
+    *)
+      echo "  FAIL: $description"
+      echo "  grep could not evaluate the needle (exit $rc) — test defect, not a negative result"
+      return 1 ;;
+  esac
 }
 
 assert_output_not_contains() {
   local output="$1"
   local unexpected="$2"
   local description="${3:-does not contain '$unexpected'}"
+  local rc=0
 
-  if echo "$output" | grep -qF "$unexpected"; then
-    echo "  FAIL: $description"
-    echo "  Did not expect: $unexpected"
-    return 1
-  else
-    echo "  PASS: $description"
-    return 0
-  fi
+  grep -qF -e "$unexpected" <<<"$output" || rc=$?
+  case "$rc" in
+    0)
+      echo "  FAIL: $description"
+      echo "  Did not expect: $unexpected"
+      return 1 ;;
+    1) echo "  PASS: $description"; return 0 ;;
+    *)
+      echo "  FAIL: $description"
+      echo "  grep could not evaluate the needle (exit $rc) — test defect, not a negative result"
+      return 1 ;;
+  esac
 }

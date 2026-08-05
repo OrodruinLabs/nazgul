@@ -85,7 +85,7 @@ bash -n "$NOTIFY" 2>/dev/null && _pass "bash -n clean: notify.sh" || _fail "bash
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck -S warning "$NOTIFY" 2>/dev/null && _pass "shellcheck clean: notify.sh" || _fail "shellcheck clean: notify.sh" "shellcheck found issues in $NOTIFY"
 else
-  _pass "shellcheck clean: notify.sh (shellcheck not installed, skipped)"
+  _skip "shellcheck clean: notify.sh (shellcheck not installed, skipped)"
 fi
 
 report_results

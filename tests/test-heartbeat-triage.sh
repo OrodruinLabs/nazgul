@@ -119,6 +119,17 @@ mkcand "$INBOX" bad-pri.json '"abc"' "non-numeric priority"
 run_pick "$INBOX"
 assert_exit_code "non-numeric priority: exit 0 with a winner" "$PICK_EC" 0
 assert_eq "non-numeric priority: numeric priority wins over non-numeric" "$PICK_OUT" "numeric-pri.json"
+mkdir -p "$TEST_DIR/nazgul/logs"
+cp "$REPO_ROOT/templates/config.json" "$TEST_DIR/nazgul/config.json"
+NAZGUL_DIR="$TEST_DIR/nazgul" bash -c \
+  "source '$REPO_ROOT/scripts/lib/heartbeat-triage.sh'; heartbeat_pick '$INBOX'" \
+  >"$TEST_DIR/pick.out" 2>"$TEST_DIR/pick.err"
+assert_contains "non-numeric priority: the demotion is visible" \
+  "$(cat "$TEST_DIR/pick.err")" 'states priority "abc", which this parser cannot read'
+assert_contains "non-numeric priority: the finding is counted" \
+  "$(tail -1 "$TEST_DIR/pick.err")" '2 checked, 1 findings'
+assert_contains "non-numeric priority: the finding reaches the event bus" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" '"event":"heartbeat_triage_unparseable"'
 teardown_temp_dir
 
 # --- Test 9: path-traversal id guard rejects ids containing a path separator ---

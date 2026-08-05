@@ -116,13 +116,15 @@ fi
 # kill-switch bullets (53 + 3 = 56). FEAT-027/TASK-012 added §20 Stacked-PR
 # Continuation: 6 more [enforced] rules — base assertion, fail-closed tooling,
 # script-owned registry, never-auto-resolve, stderr classification, and the
-# cap gate (56 + 6 = 62).
+# cap gate (56 + 6 = 62). FEAT-028/TASK-018 adds 2 more: §5's loud evidence-
+# degradation rule and §15's tests-facing coverage-honesty application
+# (62 + 2 = 64).
 ENFORCED_COUNT=$(awk '{ count += gsub(/\[enforced\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ENFORCED_COUNT" -eq 62 ]; then
-  _pass "[enforced] annotation count is exactly 62 (found: $ENFORCED_COUNT)"
+if [ "$ENFORCED_COUNT" -eq 64 ]; then
+  _pass "[enforced] annotation count is exactly 64 (found: $ENFORCED_COUNT)"
 else
-  _fail "[enforced] annotation count is exactly 62" \
-    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 62"
+  _fail "[enforced] annotation count is exactly 64" \
+    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 64"
 fi
 
 # NOTE: counts OCCURRENCES, not lines — no line currently carries two

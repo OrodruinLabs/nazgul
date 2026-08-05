@@ -1,0 +1,64 @@
+# MANUAL + NIGHTLY ONLY. Runs `claude -p` sessions over the true Nazgul entry
+# paths (heartbeat tick, bounded loop dry-run) against throwaway scratch
+# projects — it costs money and minutes. Never wire this to push/pull_request:
+# the CI-cheap half lives in tests/test-smoke-shape.sh, which the normal suite
+# (test.yml) already runs on every push.
+name: Headless Smoke (manual/nightly)
+permissions:
+  contents: read
+on:
+  workflow_dispatch:
+    inputs:
+      scenario_filter:
+        description: 'Scenario filter (heartbeat | loop; empty runs both)'
+        required: false
+        default: ''
+  schedule:
+    - cron: '0 7 * * *'
+
+concurrency:
+  group: headless-smoke-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    if: github.event_name == 'workflow_dispatch' || github.repository == 'OrodruinLabs/nazgul'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require Anthropic API key
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "ANTHROPIC_API_KEY is required for the paid headless smoke" >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code@2.1.222
+
+      - name: Run headless smoke
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Via env, never interpolated into the script body: a dispatch input is
+          # operator-supplied text and belongs in the environment, not in argv-by-substitution.
+          SCENARIO_FILTER: ${{ inputs.scenario_filter }}
+        run: |
+          bash tests/smoke/run-smoke.sh \
+            --filter="$SCENARIO_FILTER" \
+            --inbox-dir="$GITHUB_WORKSPACE/nazgul/inbox" \
+            --timeout=600
+
+      - name: Upload the p1 inbox item filed by a smoke failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-failure-inbox-items
+          path: nazgul/inbox/smoke-failure-*.md
+          if-no-files-found: warn

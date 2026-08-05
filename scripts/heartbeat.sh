@@ -357,8 +357,9 @@ if [ -z "$PICKED" ]; then
   exit 0
 fi
 
-# Concurrency guard — never a second loop.
-SESSION_COUNT=$(count_active_sessions "$NAZGUL_DIR/sessions")
+# Exclude this tick's SessionStart lock so the sanctioned `claude -p` path stays reachable.
+# Unattributable locks still count in full and gate concurrent starts.
+SESSION_COUNT=$(_hb_other_session_count) || true
 if [ "$SESSION_COUNT" -gt 0 ]; then
   OBJECTIVE=$(_hb_objective "$INBOX_DIR" "$PICKED")
   _hb_emit skipped active_session "$OBJECTIVE" "$SEEN_COUNT" "$TRIAGED_JSON" "$PICKED" true

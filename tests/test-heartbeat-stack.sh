@@ -230,6 +230,8 @@ assert_eq "own session: the stack pre-steps RUN — the rework item is filed" "$
 assert_eq "own session: no stack skip reason recorded (the block ran)" "$(jq -r '.stack_skipped' "$LOG")" "null"
 assert_eq "own session: the freshly-filed rework item is picked this same tick" \
   "$(jq -r '.picked' "$LOG")" "stack-rework-pr705-REVIEW_D.md"
+assert_eq "own session: the normal start path is not blocked by its own lock" \
+  "$(jq -r '.decision' "$LOG")" "started"
 unset NAZGUL_TEST_GH_PR_VIEW_JSON
 teardown_temp_dir
 

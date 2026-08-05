@@ -3,14 +3,17 @@ set -euo pipefail
 
 TEST_NAME="e2e-bootstrap-project"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/../lib/assertions.sh"
 
 echo "=== $TEST_NAME ==="
 
+# An absent CLI means nothing was checked; exiting 0 here would let a CI whose
+# install broke report a green e2e that verified nothing (run-smoke.sh precedent).
 command -v claude >/dev/null 2>&1 || {
-  echo "SKIP: claude CLI not available"
-  exit 0
+  _skip "both fixtures (claude CLI not on PATH — not checked)"
+  echo "$TEST_NAME: NOTHING CHECKED — claude CLI not on PATH" >&2
+  report_results || true
+  exit "$NOTHING_CHECKED_EXIT"
 }
 
 run_fixture() {

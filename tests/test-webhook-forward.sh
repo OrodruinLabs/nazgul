@@ -183,7 +183,7 @@ bash -n "$WEBHOOK_SCRIPT" 2>/dev/null && _pass "bash -n clean: webhook-forward.s
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck -S warning "$WEBHOOK_SCRIPT" 2>/dev/null && _pass "shellcheck clean: webhook-forward.sh" || _fail "shellcheck clean: webhook-forward.sh" "shellcheck found issues in $WEBHOOK_SCRIPT"
 else
-  _pass "shellcheck clean: webhook-forward.sh (shellcheck not installed, skipped)"
+  _skip "shellcheck clean: webhook-forward.sh (shellcheck not installed, skipped)"
 fi
 
 report_results

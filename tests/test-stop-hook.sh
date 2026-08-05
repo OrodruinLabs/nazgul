@@ -188,12 +188,12 @@ for tz in UTC "Europe/Lisbon" "America/New_York"; do
     computed=$(jq -r '.computed' <<<"$gate_line")
     assert_eq "TZ=$tz stop_gate computed >= limit" "$(( computed >= 90 ))" "1"
   else
-    _pass "TZ=$tz AFK timeout: exit 0 (skipped — date format unavailable)"
-    _pass "TZ=$tz AFK timeout stderr (skipped)"
-    _pass "TZ=$tz stop_gate event emitted (skipped)"
-    _pass "TZ=$tz stop_gate reason (skipped)"
-    _pass "TZ=$tz stop_gate limit (skipped)"
-    _pass "TZ=$tz stop_gate computed >= limit (skipped)"
+    _skip "TZ=$tz AFK timeout: exit 0 (skipped — date format unavailable)"
+    _skip "TZ=$tz AFK timeout stderr (skipped)"
+    _skip "TZ=$tz stop_gate event emitted (skipped)"
+    _skip "TZ=$tz stop_gate reason (skipped)"
+    _skip "TZ=$tz stop_gate limit (skipped)"
+    _skip "TZ=$tz stop_gate computed >= limit (skipped)"
   fi
   teardown_temp_dir
 done
@@ -240,8 +240,8 @@ for tz in "Europe/Lisbon" "America/New_York"; do
     assert_exit_code "TZ=$tz AC8 below-limit: continues loop" "$HOOK_EC" 2
     assert_not_contains "TZ=$tz AC8 below-limit stderr" "$HOOK_OUTPUT" "AFK timeout"
   else
-    _pass "TZ=$tz AC8 below-limit: continues loop (skipped — date format unavailable)"
-    _pass "TZ=$tz AC8 below-limit stderr (skipped)"
+    _skip "TZ=$tz AC8 below-limit: continues loop (skipped — date format unavailable)"
+    _skip "TZ=$tz AC8 below-limit stderr (skipped)"
   fi
   teardown_temp_dir
 done
@@ -573,9 +573,9 @@ if echo "$porcelain" | grep -qE '^(U.|.U|AA|DD) '; then
   assert_file_contains "blocked event names task" \
     "$TEST_DIR/nazgul/logs/events.jsonl" '"task_id":"TASK-001"'
 else
-  _pass "git conflict blocks task (skipped — no conflict produced)"
-  _pass "blocked event emitted on git conflict (skipped — no conflict produced)"
-  _pass "blocked event names task (skipped — no conflict produced)"
+  _skip "git conflict blocks task (skipped — no conflict produced)"
+  _skip "blocked event emitted on git conflict (skipped — no conflict produced)"
+  _skip "blocked event names task (skipped — no conflict produced)"
 fi
 teardown_temp_dir
 
@@ -832,7 +832,7 @@ if [ -n "$old_ts" ]; then
   run_hook
   assert_exit_code "AFK: recent objective_set_at overrides old checkpoint → continue" "$HOOK_EC" 2
 else
-  _pass "AFK objective_set_at precedence (skipped — date format unavailable)"
+  _skip "AFK objective_set_at precedence (skipped — date format unavailable)"
 fi
 teardown_temp_dir
 
@@ -852,8 +852,8 @@ for tz in UTC "Europe/Lisbon" "America/New_York"; do
     assert_exit_code "TZ=$tz AFK: falls back to old checkpoint when objective_set_at absent → stop" "$HOOK_EC" 0
     assert_contains "TZ=$tz AFK fallback stderr" "$HOOK_OUTPUT" "AFK timeout"
   else
-    _pass "TZ=$tz AFK checkpoint fallback (skipped — date format unavailable)"
-    _pass "TZ=$tz AFK fallback stderr (skipped)"
+    _skip "TZ=$tz AFK checkpoint fallback (skipped — date format unavailable)"
+    _skip "TZ=$tz AFK fallback stderr (skipped)"
   fi
   teardown_temp_dir
 done
@@ -876,8 +876,8 @@ for tz in UTC "Europe/Lisbon" "America/New_York"; do
     assert_exit_code "TZ=$tz AFK: durable iterations.jsonl fallback fires → stop" "$HOOK_EC" 0
     assert_contains "TZ=$tz AFK durable-log fallback stderr" "$HOOK_OUTPUT" "AFK timeout"
   else
-    _pass "TZ=$tz AFK durable-log fallback (skipped — date format unavailable)"
-    _pass "TZ=$tz AFK durable-log fallback stderr (skipped)"
+    _skip "TZ=$tz AFK durable-log fallback (skipped — date format unavailable)"
+    _skip "TZ=$tz AFK durable-log fallback stderr (skipped)"
   fi
   teardown_temp_dir
 done

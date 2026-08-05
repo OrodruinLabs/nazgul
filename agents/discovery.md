@@ -463,75 +463,59 @@ Tailor to the SPECIFIC security surface found:
 
 ### Reviewer Agent Template
 
-Every generated reviewer agent MUST use this template:
+`agents/templates/reviewer-base.md` + `agents/templates/reviewer-domains.json` are the SINGLE source of
+truth for a generated reviewer's shape — Step 5.7 renders them, and a second full copy of the template
+here would drift out of date and teach the wrong reviewer. What follows is only the CONTRACT the render
+must satisfy; `tests/test-review-contract.sh` checks the generated reviewer against the live template
+mechanically, so a divergence is a test failure rather than stale prose.
+
+<!-- reviewer-contract:begin — checked against agents/templates/reviewer-base.md by tests/test-review-contract.sh -->
+
+Frontmatter shape:
 
 ```markdown
 ---
 name: [reviewer-name]
+model: [read from nazgul/config.json → models.review]
 description: [one-line description tailored to this project]
 tools:
   - Read
   - Glob
   - Grep
-  - Bash
-allowed-tools: Read, Glob, Grep, Bash(npm test *), Bash(npx *), Bash(pytest *), Bash(cargo test *), Bash(go test *), Bash(bash -n *), Bash(shellcheck *)
 maxTurns: 30
-hooks:
-  SubagentStop:
-    - hooks:
-        - type: prompt
-          prompt: "A reviewer subagent is trying to stop. Check if it has written its review file to nazgul/reviews/[TASK-ID]/[reviewer-name].md (inside a per-task subdirectory, NOT flat in nazgul/reviews/). The file must contain a Final Verdict (APPROVED or CHANGES_REQUESTED). If no review file was written in the correct location, block and instruct the reviewer to create the nazgul/reviews/[TASK-ID]/ directory and write its review there. $ARGUMENTS"
 ---
-
-# [Reviewer Name] — [Project Name]
-
-## Project Context
-[Specific details about THIS project that are relevant to this reviewer's domain.
-Include file paths, patterns, libraries, and conventions detected by Discovery.]
-
-## What You Review
-[Specific checklist of things to verify, tailored to this project.
-NOT generic best practices — things grounded in what this codebase actually does.]
-
-## How to Review
-1. Read `nazgul/reviews/[TASK-ID]/diff.patch` FIRST — this shows exactly what changed, line by line
-2. For each changed hunk, read the surrounding context in the full file if needed
-3. Compare changes against the project's established patterns in nazgul/context/
-4. Check each item in your review checklist against the CHANGED code
-5. Run relevant commands to verify (tests, linter, type checker, etc.)
-
-## Output Format
-
-For each finding, use confidence-scored format:
-
-### Finding: [Short description]
-- **Severity**: HIGH | MEDIUM | LOW
-- **Confidence**: [0-100]
-- **File**: [file:line-range]
-- **Category**: [Architecture | Code Quality | Security | Performance | Style | Testing]
-- **Verdict**: ❌ REJECT (blocking — confidence >= 80) | ⚠️ CONCERN (non-blocking — confidence < 80) | ✅ PASS
-- **Issue**: [specific problem description]
-- **Fix**: [specific fix instruction]
-- **Pattern reference**: [file:line showing the correct pattern in this codebase]
-
-### Summary
-- ✅ PASS: [item] — [brief reason]
-- ⚠️ CONCERN: [item] — [specific issue and suggestion] (confidence: N/100, non-blocking)
-- ❌ REJECT: [item] — [specific issue, what's wrong, how to fix it] (confidence: N/100, blocking)
-
-## Final Verdict
-- `APPROVED` — All checks pass, concerns are minor (all findings below confidence threshold or PASS)
-- `CHANGES_REQUESTED` — Blocking issues found (any finding with confidence >= 80 and severity HIGH/MEDIUM)
-  - List each blocking issue with specific fix instructions
-
-IMPORTANT: You are reviewing for THIS specific project. Reference actual files, actual patterns,
-actual conventions. Do not give generic advice. If you cite a standard, show where it's already
-followed in this codebase as the reference implementation.
-
-Write your review to `nazgul/reviews/[TASK-ID]/[your-reviewer-name].md`.
-Create the directory `nazgul/reviews/[TASK-ID]/` first if it doesn't exist (`mkdir -p`).
-[TASK-ID] is the task you are reviewing (e.g., TASK-001).
 ```
+
+- **Read-only, tool-enforced.** `tools:` is Read/Glob/Grep and nothing else — no `Bash`, no `Write`, no
+  `allowed-tools:` line. A reviewer cannot re-run the suite (the pre-checks already did) and cannot write
+  any file, including its own review.
+- **No `hooks:` block.** Review persistence is the review-gate orchestrator's mechanical job
+  (`agents/review-gate.md` Step 4), not a prompt-type `SubagentStop` hook's. The reviewer RETURNS its
+  review as its final message and the review-gate orchestrator persists it to
+  `nazgul/reviews/[UNIT-ID]/[reviewer-name].md`. Never instruct a reviewer to create a review directory
+  or write its own review file.
+- **`[UNIT-ID]`, never `[TASK-ID]`.** The review unit equals the task id only under `task` granularity;
+  it is `GROUP-<n>` / `FEATURE-<feat_id>` otherwise (`resolve_review_unit`).
+- **`maxTurns: 30`** — must equal the live template's value. A reviewer that exhausts its turns stalls
+  before it ever reaches a turn in which to compose a verdict (FEAT-024).
+- **Verdict grammar.** The final message opens with a YAML frontmatter block whose `verdict:` is exactly
+  one of `verdict: APPROVE`, `verdict: CHANGES_REQUESTED`, `verdict: UNVERIFIED`, plus an integer
+  `confidence:` (optional for `UNVERIFIED`):
+
+```yaml
+---
+verdict: APPROVE
+confidence: 92
+---
+```
+
+  Nothing else is a verdict. The retired bare `APPROVED` token is not the structured form
+  `_has_approved_verdict` reads, and a `verdict:` value off that enum fails LOUDLY.
+- **Project-specific, always.** Every checklist item, review step and pattern reference must name actual
+  files and conventions found in THIS codebase — that is what the `{{checklist}}`, `{{review_steps}}` and
+  `{{context_items}}` substitutions in Step 5.7 carry.
+
+<!-- reviewer-contract:end -->
 
 ---
 
@@ -773,7 +757,7 @@ For each selected reviewer:
 7. Write the generated reviewer to `.claude/agents/generated/[name].md`
 8. Read `nazgul/config.json → models.review` (default: `"sonnet"`). Add `model: [value]` to the generated reviewer's YAML frontmatter, after the `name:` field.
 
-Follow the Reviewer Agent Template in Step 6 above for the final output format, tailoring to THIS project's specific patterns.
+The rendered `agents/templates/reviewer-base.md` IS the final output format — Step 6's "Reviewer Agent Template" states the contract that render must satisfy, not a second template to copy from. Tailor only through the `{{placeholder}}` substitutions above.
 
 ### Specialist Agent Generation
 

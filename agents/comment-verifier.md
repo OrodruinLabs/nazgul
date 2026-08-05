@@ -31,7 +31,9 @@ guard has already run.
    `git diff HEAD~1..HEAD --name-only`.
 4. Restrict the list to source files — skip anything under `nazgul/docs/`, `docs/`,
    config files (`*.json`), lockfiles, and non-code assets. If NO source files remain,
-   write the marker and exit (degrade-to-allow — nothing to check).
+   write the marker and exit (degrade-to-allow — nothing to check), after emitting the
+   coverage line and the nothing-checked signal below: this is exactly the vacuous pass
+   that must not read as a clean one.
 
 ## Scope: what to verify
 
@@ -88,6 +90,45 @@ FILE:LINE — <class>: <reason>
 Where `<class>` is one of `templated`, `restatement`, `contradiction`. Collect all
 findings before deciding the outcome.
 
+## Coverage honesty (TRD §6)
+
+Count as you go, and report what you actually opened. `scanned` is every changed file the
+diff produced; `skipped` is the ones step 4 excluded or could not read; `checked` is the
+ones whose doc-comment blocks you actually read. A file you never opened is never folded
+into a clean result.
+
+Emit this as the LAST line of stdout on every run that reaches changed-file
+determination — clean, findings, or degrade-to-allow. The explicit
+`docs.verify_comments: false` opt-out is the sole exception: it exits before
+enumeration and writes only the marker described above.
+
+```text
+comment-verifier: <N> scanned, <M> skipped (non-source=<a>, unreadable=<b>), <K> checked, <F> findings
+```
+
+`N` must equal `M + K`; if it does not, say so on stderr (`comment-verifier: INTERNAL — coverage
+accounting mismatch: ...`) rather than adjusting a number. The skip reasons are exactly
+`non-source` and `unreadable` — no free text, because uncountable reasons cannot be aggregated.
+
+When `K == 0` and `N > 0` — every changed file was skipped — additionally write to stderr:
+
+```text
+comment-verifier: NOTHING CHECKED — all <N> candidates skipped
+```
+
+and emit the event:
+
+```bash
+NAZGUL_DIR="$(pwd)/nazgul" "${CLAUDE_PLUGIN_ROOT}/scripts/emit-event-cli.sh" coverage_vacuous \
+  entry_point "comment-verifier" scanned:n "$N" skipped:n "$M"
+```
+
+This surface is **advisory**: the WARN and the event are the whole product. The exit code and
+the marker protocol below are UNCHANGED by coverage honesty — a hard fail on an advisory gate
+gets routed around, which buys nothing. (The separate defect where the marker is written
+despite findings is filed as `nazgul/inbox/comment-verifier-marker-written-despite-findings.md`
+and is NOT fixed here; do not change the marker rules while addressing coverage.)
+
 ## Completion protocol
 
 **On clean pass** (zero unresolved findings):
@@ -106,8 +147,9 @@ gate to block and re-delegate until the comments are fixed and the verifier is r
 with a clean pass. This gate is bounded (≤3 backstop) and degrades to allow past the
 limit, matching the doc-verifier gate's behavior.
 
-**Degrade-to-allow** (opt-out set, or no source files changed): write the marker exactly
-as in the clean-pass case, then exit 0. Nothing to check → nothing to block.
+**Degrade-to-allow** (no source files changed): write the marker exactly as in the
+clean-pass case, emit the zero-count coverage line, then exit 0. Nothing to check →
+nothing to block. The config opt-out follows the earlier immediate-exit contract.
 
 ## Hard rules
 

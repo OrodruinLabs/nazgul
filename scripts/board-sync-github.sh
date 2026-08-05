@@ -15,6 +15,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
+# shellcheck source=./lib/task-utils.sh
+source "$SCRIPT_DIR/lib/task-utils.sh"
 
 NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
@@ -80,6 +82,81 @@ increment_sync_failures() {
 
 reset_sync_failures() {
   jq '.board.sync_failures = 0 | .board.last_sync = (now | strftime("%Y-%m-%dT%H:%M:%SZ"))' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+}
+
+# --- Manifest parsing (seam S2: planner -> board-sync, TRD §3) ---
+
+# Lines under `## <section>`, up to the next `## ` heading.
+extract_section() {
+  awk -v want="## $2" '$0==want{f=1;next} /^## /{f=0} f' "$1"
+}
+
+# The first of the named sections that is non-blank; rc 1 when none is.
+first_section() {
+  local file="$1"; shift
+  local name body
+  for name in "$@"; do
+    body=$(extract_section "$file" "$name")
+    if [ -n "$(printf '%s' "$body" | tr -d '[:space:]')" ]; then
+      printf '%s\n' "$body"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Prose lines that are neither frontmatter nor bookkeeping — the last resort for
+# a manifest whose section headings this script does not know.
+manifest_body_fallback() {
+  awk '
+    NR==1 && /^---[[:space:]]*$/ {fm=1; next}
+    fm && /^---[[:space:]]*$/ {fm=0; next}
+    fm {next}
+    /^# /{next}
+    /^## (Metadata|Commits|Red-Run Evidence|Review Results|Implementation Log)[[:space:]]*$/{skip=1; next}
+    /^## /{skip=0}
+    skip{next}
+    /^<!--/{next}
+    /^- \*\*[^*]+\*\*:/{next}
+    NF
+  ' "$1"
+}
+
+manifest_meta_lines() {
+  local key
+  for key in "Depends on" "Traces to" "Files modified"; do
+    grep -m1 -E "^- \*\*${key}\*\*:" "$1" || true
+  done
+}
+
+# The `- **ID**:` field, else the H1's leading id token, else the filename stem.
+manifest_task_id() {
+  local id
+  id=$(grep -m1 -E '^- \*\*ID\*\*:' "$1" | sed -E 's/^- \*\*ID\*\*:[[:space:]]*//') || id=""
+  if [ -z "$id" ]; then
+    id=$(grep -m1 -oE '^# (TASK|PATCH)-[0-9]+' "$1" | sed 's/^# //') || id=""
+  fi
+  [ -n "$id" ] || id=$(basename "$1" .md)
+  printf '%s\n' "$id"
+}
+
+# H1 title + the manifest's prose, rendered for a human reading the issue.
+manifest_issue_body() {
+  local task_file="$1"
+  local body criteria meta issue_body
+  body=$(first_section "$task_file" "Description" "Objective" "Summary" "Context" | sed -n '1,40p') || body=""
+  if [ -z "$body" ]; then
+    body=$(manifest_body_fallback "$task_file" | sed -n '1,30p') || body=""
+  fi
+  criteria=$(first_section "$task_file" "Acceptance Criteria" "Acceptance criteria" "Success Criteria" "Subtasks" | sed -n '1,20p') || criteria=""
+  meta=$(manifest_meta_lines "$task_file") || meta=""
+
+  issue_body="${body:-_this manifest carries no prose section this script could read_}"
+  issue_body="${issue_body}"$'\n\n'"## Acceptance Criteria"$'\n'"${criteria:-_none recorded in the manifest_}"
+  if [ -n "$meta" ]; then
+    issue_body="${issue_body}"$'\n\n'"$meta"
+  fi
+  printf '%s\n\n---\n*Managed by Nazgul*\n' "$issue_body"
 }
 
 # --- Commands ---
@@ -232,23 +309,21 @@ cmd_create_issue() {
   local owner repo task_id title status group
   owner=$(jq -r '.board.provider_config.owner' "$CONFIG")
   repo=$(jq -r '.board.provider_config.repo' "$CONFIG")
-  task_id=$(grep -m1 '^\- \*\*ID\*\*:' "$task_file" | sed 's/.*: //')
+  task_id=$(manifest_task_id "$task_file")
   local raw_title
-  raw_title=$(head -1 "$task_file" | sed 's/^# //')
+  raw_title=$(grep -m1 '^# ' "$task_file" | sed 's/^# //') || raw_title=""
+  [ -n "$raw_title" ] || raw_title=$(basename "$task_file" .md)
   # Ensure title follows spec format: TASK-001: [Title]
   if echo "$raw_title" | grep -q "^${task_id}"; then
     title="$raw_title"
   else
     title="${task_id}: ${raw_title}"
   fi
-  status=$(grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$task_file" | sed 's/.*:[[:space:]]*//')
+  status=$(get_task_status "$task_file" "PLANNED")
   group=$(grep -m1 -E '(^\- \*\*Group\*\*:|^## Group:)' "$task_file" | sed 's/.*:[[:space:]]*//' || echo "0")
 
-  # Extract description and acceptance criteria for issue body
-  local body criteria issue_body
-  body=$(awk '/^## Description$/,/^## /' "$task_file" | sed '1d;$d' | head -20)
-  criteria=$(awk '/^## Acceptance Criteria$/,/^## /' "$task_file" | sed '1d;$d' | head -10)
-  issue_body=$(printf "%s\n\n## Acceptance Criteria\n%s\n\n---\n*Managed by Nazgul*" "$body" "$criteria")
+  local issue_body
+  issue_body=$(manifest_issue_body "$task_file")
 
   # Check if issue already exists in task_map
   local existing
@@ -348,8 +423,8 @@ cmd_sync_task() {
   fi
 
   local task_id status
-  task_id=$(grep -m1 '^\- \*\*ID\*\*:' "$task_file" | sed 's/.*: //')
-  status=$(grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$task_file" | sed 's/.*:[[:space:]]*//')
+  task_id=$(manifest_task_id "$task_file")
+  status=$(get_task_status "$task_file" "PLANNED")
 
   # Check if we have a mapping for this task
   local issue_number item_id
@@ -427,17 +502,27 @@ cmd_sync_all() {
   fi
 
   log_info "Full sync starting..."
-  local count=0
+  local count=0 synced=0 failed=0
 
   if [ -d "$NAZGUL_DIR/tasks" ]; then
     for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
       [ -f "$task_file" ] || continue
-      cmd_sync_task "$task_file" || true
       count=$((count + 1))
+      if cmd_sync_task "$task_file"; then
+        synced=$((synced + 1))
+      else
+        failed=$((failed + 1))
+      fi
     done
   fi
 
-  log_info "Full sync complete: $count tasks synced"
+  if [ "$count" -eq 0 ]; then
+    log_warn "Full sync found NO task manifests under $NAZGUL_DIR/tasks — nothing was synced"
+  elif [ "$synced" -eq 0 ]; then
+    log_warn "Full sync FAILED: 0 of $count tasks synced ($failed failed)"
+  else
+    log_info "Full sync complete: $synced of $count tasks synced ($failed failed)"
+  fi
 }
 
 cmd_archive_all() {

@@ -1,26 +1,25 @@
 {
   "qa-reviewer": {
-    "description": "Reviews test coverage, edge cases, test quality, and assertion completeness for this project",
+    "description": "Reviews which seams a diff touches, whether tests exercise real producers or supported scratch-state entry paths, and whether every new/changed test carries mechanically captured red-run evidence",
     "title": "QA",
-    "context_items": "test framework, test locations, coverage tool, test commands, fixture patterns",
+    "context_items": "test framework, test locations, seam inventory (producer→consumer pairs), scratch-state setup patterns, red-run capturer path, coverage-honesty reporting conventions",
     "checklist": [
-      "New code has corresponding tests",
-      "Tests cover happy path AND error/edge cases",
-      "Assertions are specific (not just \"doesn't throw\")",
-      "Test descriptions clearly state expected behavior",
-      "No flaky patterns (timing-dependent, order-dependent, external-service-dependent)",
-      "Mocks/stubs are appropriate (not over-mocking)",
-      "Integration points have integration tests",
-      "Test data is realistic and covers boundary values"
+      "Which seams does this diff touch — as producer or consumer? Does each contract test invoke the producer or build state through a supported scratch entry path? (ALWAYS-BLOCKING)",
+      "Where is the red-run evidence for every new/changed test — and does it carry `captured-by: scripts/red-run.sh`? (ALWAYS-BLOCKING)",
+      "Does any test commit copied project-runtime state instead of generating minimal scratch state during the run? (ALWAYS-BLOCKING)",
+      "If a guard changed: does its suite exercise THIS repo's own language and shape? (ALWAYS-BLOCKING)",
+      "Does every new check/entry point emit the `N scanned, M skipped` line and the nothing-checked signal?",
+      "Could each new assertion actually fail — or is it asserting a value derived from the code under test?"
     ],
     "review_steps": [
-      "Find corresponding test files",
-      "Judge coverage and assertions from the diff and test files — do not re-run the suite (Step 1 pre-checks already ran it)",
-      "Evaluate test quality against checklist"
+      "Identify the seams this diff touches, as producer or consumer, by matching the changed files against the project's documented entry paths",
+      "Read the task manifest's `## Red-Run Evidence` section: every new/changed test needs a parseable entry carrying `captured-by: scripts/red-run.sh`, or one of the enumerated `N/A` tokens",
+      "Inspect test setup for committed runtime snapshots: Nazgul manifests, reviews, checkpoints, locks, and inbox records must be generated in a temporary project unless they are the product under test",
+      "Judge failing-capability from the test source: could each assertion have failed against the pre-change tree? Do NOT re-run the suite — the reviewer has no Bash by design and the Step 1 pre-checks already ran it"
     ],
     "category": "Testing",
-    "approved_criteria": "Tests are adequate, concerns are minor",
-    "rejected_criteria": "Missing tests or critical test quality issues (confidence >= 80)"
+    "approved_criteria": "Every touched seam is exercised through a real producer or supported scratch entry path, red-run evidence is present and mechanically captured, and remaining concerns are minor",
+    "rejected_criteria": "A touched seam is unpinned, red-run evidence is missing, project-runtime state is committed as fixture data, a changed guard is not dogfooded, or an assertion cannot fail (confidence >= 80)"
   },
   "api-reviewer": {
     "description": "Reviews API design for REST conventions, versioning, error responses, pagination, rate limiting, and backward compatibility",
