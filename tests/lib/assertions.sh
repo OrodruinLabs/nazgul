@@ -6,6 +6,7 @@ TESTS_RUN=0
 TESTS_FAILED=0
 TESTS_PASSED=0
 TESTS_SKIPPED=0
+NOTHING_CHECKED_EXIT=2
 
 _pass() {
   TESTS_RUN=$((TESTS_RUN + 1))
@@ -48,6 +49,7 @@ assert_eq() {
 
 assert_contains() {
   local name="$1" haystack="$2" needle="$3" rc=0
+  # String assertions are literal: callers do not need to escape BRE syntax.
   # Here-string, not `echo | grep`: grep -q's early exit SIGPIPEs the writer, which
   # pipefail reports as failure once the haystack exceeds the pipe buffer (~64KB).
   grep -qF -e "$needle" <<<"$haystack" || rc=$?
@@ -60,6 +62,7 @@ assert_contains() {
 
 assert_not_contains() {
   local name="$1" haystack="$2" needle="$3" rc=0
+  # String assertions are literal: callers do not need to escape BRE syntax.
   grep -qF -e "$needle" <<<"$haystack" || rc=$?
   case "$rc" in
     0) _fail "$name" "expected NOT to contain: '$needle'" "  in: '${haystack:0:200}'" ;;
@@ -130,6 +133,7 @@ assert_json_field() {
 
 assert_file_contains() {
   local name="$1" file="$2" pattern="$3" rc=0
+  # File assertions intentionally accept a basic regular expression (BRE).
   if [ ! -f "$file" ]; then
     _fail "$name" "file not found: $file"
     return
@@ -144,6 +148,7 @@ assert_file_contains() {
 
 assert_file_not_contains() {
   local name="$1" file="$2" pattern="$3" rc=0
+  # File assertions intentionally accept a basic regular expression (BRE).
   # An absent file is "never looked", not "looked and found none" (RULES §15).
   if [ ! -f "$file" ]; then
     _fail "$name" "file not found: $file — absence cannot stand in for a negative result"
@@ -173,7 +178,7 @@ report_results() {
   if [ "$TESTS_RUN" -eq 0 ]; then
     printf '%s: NOTHING CHECKED — 0 assertions ran (%d skipped)\n' \
       "${TEST_NAME:-tests}" "$TESTS_SKIPPED" >&2
-    return 1
+    return "$NOTHING_CHECKED_EXIT"
   fi
   return 0
 }

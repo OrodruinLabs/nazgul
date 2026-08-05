@@ -183,8 +183,9 @@ source "$REPO_ROOT/scripts/lib/bootstrap-render.sh"
 DOMAINS_JSON="$REPO_ROOT/agents/templates/reviewer-domains.json"
 [ -f "$DOMAINS_JSON" ] || _fail "required file exists: $DOMAINS_JSON" "file not found"
 
-QA_RENDER=$(render_template "$REVIEWER_BASE" | substitute_domain_vars "qa-reviewer" "$DOMAINS_JSON")
-assert_eq "qa-reviewer renders through the real bootstrap pipeline" "$?" "0"
+QA_RENDER_RC=0
+QA_RENDER=$(render_template "$REVIEWER_BASE" | substitute_domain_vars "qa-reviewer" "$DOMAINS_JSON") || QA_RENDER_RC=$?
+assert_exit_code "qa-reviewer renders through the real bootstrap pipeline" "$QA_RENDER_RC" 0
 
 QA_SEAMS='Which seams does this diff touch — as producer or consumer? Does each contract test invoke the producer or build state through a supported scratch entry path? (ALWAYS-BLOCKING)'
 QA_REDRUN='Where is the red-run evidence for every new/changed test — and does it carry `captured-by: scripts/red-run.sh`? (ALWAYS-BLOCKING)'
@@ -209,14 +210,21 @@ assert_contains "rendered CHANGES_REQUESTED criterion is the charter's" "$QA_REN
 assert_contains "rendered review steps read the manifest's Red-Run Evidence section" "$QA_RENDER" '`## Red-Run Evidence` section'
 assert_contains "rendered review steps reject committed runtime snapshots" "$QA_RENDER" 'Nazgul manifests, reviews, checkpoints, locks, and inbox records must be generated in a temporary project'
 assert_contains "rendered review steps forbid re-running the suite" "$QA_RENDER" 'Do NOT re-run the suite'
-assert_contains "rendered qa-reviewer keeps its read-only tools list" "$QA_RENDER" '  - Read'
-assert_not_contains "rendered qa-reviewer still has no Bash tool" "$QA_RENDER" '  - Bash'
+QA_TOOLS=$(printf '%s\n' "$QA_RENDER" | awk '
+  /^tools:/ { in_tools=1; next }
+  in_tools && /^[^[:space:]]/ { exit }
+  in_tools { print }
+')
+assert_eq "rendered qa-reviewer tools are exactly the read-only allowlist" \
+  "$QA_TOOLS" $'  - Read\n  - Glob\n  - Grep'
 assert_contains "rendered qa-reviewer carries the ALWAYS-BLOCKING mechanism that gives the questions teeth" "$QA_RENDER" \
   'Never downgrade an always-blocking finding'
 
 # The bundle path (skills/bootstrap-project) renders with BUNDLE_MODE=true; the
 # charter has to survive that branch too, not just the loop's.
-QA_BUNDLE=$(BUNDLE_MODE=true render_template "$REVIEWER_BASE" | substitute_domain_vars "qa-reviewer" "$DOMAINS_JSON")
+QA_BUNDLE_RC=0
+QA_BUNDLE=$(BUNDLE_MODE=true render_template "$REVIEWER_BASE" | substitute_domain_vars "qa-reviewer" "$DOMAINS_JSON") || QA_BUNDLE_RC=$?
+assert_exit_code "bundle-mode qa-reviewer renders successfully" "$QA_BUNDLE_RC" 0
 assert_contains "bundle-mode render keeps the seams question" "$QA_BUNDLE" "$QA_SEAMS"
 assert_contains "bundle-mode render keeps the red-run question" "$QA_BUNDLE" "$QA_REDRUN"
 
@@ -241,7 +249,9 @@ cat > "$CONTROL_JSON" <<'CONTROL'
   }
 }
 CONTROL
-CONTROL_RENDER=$(render_template "$REVIEWER_BASE" | substitute_domain_vars "qa-reviewer" "$CONTROL_JSON")
+CONTROL_RENDER_RC=0
+CONTROL_RENDER=$(render_template "$REVIEWER_BASE" | substitute_domain_vars "qa-reviewer" "$CONTROL_JSON") || CONTROL_RENDER_RC=$?
+assert_exit_code "control config renders successfully" "$CONTROL_RENDER_RC" 0
 CONTROL_CHECKLIST=$(grep '^- \[ \] ' <<<"$CONTROL_RENDER")
 rm -f "$CONTROL_JSON"
 

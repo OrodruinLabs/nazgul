@@ -69,6 +69,8 @@ assert_eq "get_task_status is used at both parse sites (create-issue, sync-task)
   "$(grep -c 'get_task_status "\$task_file"' "$SCRIPT")" "2"
 assert_file_contains "the title comes from the first H1, not line 1" "$SCRIPT" "grep -m1 '\^# '"
 assert_file_not_contains "no head -1 title extraction survives" "$SCRIPT" 'head -1 "\$task_file"'
+assert_file_not_contains "section truncation never early-closes a pipe under pipefail" "$SCRIPT" '| head -'
+assert_file_contains "section truncation consumes the producer safely" "$SCRIPT" "sed -n '1,40p'"
 assert_file_contains "sync-all reports how many of how many actually synced" "$SCRIPT" 'of \$count tasks synced'
 
 report_results

@@ -51,11 +51,24 @@ _smoke_timeout_cmd() {
 # a config DERIVED from templates/config.json + plugin symlinks. <dest> inside this repo is refused.
 smoke_scratch_project() {
   local dest="$1"; shift
-  local resolved d override
+  local resolved parent candidate d override
+  parent=$(dirname "$dest")
+  if [ -d "$parent" ]; then
+    candidate="$(cd "$parent" && pwd)/$(basename "$dest")"
+    case "$candidate/" in
+      "$REPO_ROOT"/*)
+        printf 'run-smoke: refusing to build a scratch project inside %s\n' "$REPO_ROOT" >&2
+        return 1
+        ;;
+    esac
+  fi
   mkdir -p "$dest"
   resolved="$(cd "$dest" && pwd)"
   case "$resolved/" in
-    "$REPO_ROOT"/*) printf 'run-smoke: refusing to build a scratch project inside %s\n' "$REPO_ROOT" >&2; return 1 ;;
+    "$REPO_ROOT"/*)
+      printf 'run-smoke: refusing to build a scratch project inside %s\n' "$REPO_ROOT" >&2
+      return 1
+      ;;
   esac
 
   git -C "$resolved" init -q
@@ -148,7 +161,7 @@ _smoke_claude() {
 
 # Scenario A — heartbeat tick on the true entry path.
 scenario_heartbeat() {
-  local proj="$1" timeout_s="$2" out records rec decision reason session_active archived live starts
+  local proj="$1" timeout_s="$2" out heartbeat_rc records rec decision reason session_active archived live starts
   smoke_scratch_project "$proj" \
     '.mode = "afk"' \
     '.automation.heartbeat.enabled = true' \
@@ -163,8 +176,9 @@ STUB
   chmod +x "$proj/.smoke/start-stub.sh"
 
   out="$proj/.smoke/heartbeat-session.log"
-  export NAZGUL_HEARTBEAT_START_CMD="$proj/.smoke/start-stub.sh"
-  _smoke_claude "$proj" "/nazgul:heartbeat" 8 "$timeout_s" "$out" >/dev/null
+  heartbeat_rc=$(NAZGUL_HEARTBEAT_START_CMD="$proj/.smoke/start-stub.sh" \
+    _smoke_claude "$proj" "/nazgul:heartbeat" 8 "$timeout_s" "$out")
+  assert_exit_code "A: claude heartbeat session exits successfully" "$heartbeat_rc" 0
 
   records=$(cat "$proj"/nazgul/logs/heartbeat-*.jsonl 2>/dev/null | grep -c '[^[:space:]]' || true)
   assert_eq "A: exactly one decision record appended" "${records:-0}" "1"
@@ -197,7 +211,7 @@ STUB
 
 # Scenario B — bounded loop dry-run over the real hook chain.
 scenario_loop() {
-  local proj="$1" timeout_s="$2" out objective checkpoints first_cp session_mtime cp_mtime
+  local proj="$1" timeout_s="$2" out loop_rc objective checkpoints first_cp session_mtime cp_mtime
   local first_stop_hook events gate_rc gate_events_before gate_events_after
   objective="Add a LICENSE file naming the MIT license"
   smoke_scratch_project "$proj" \
@@ -209,7 +223,8 @@ scenario_loop() {
     && mv "$proj/nazgul/config.json.tmp" "$proj/nazgul/config.json"
 
   out="$proj/.smoke/loop-session.log"
-  _smoke_claude "$proj" "/nazgul:start \"$objective\" --afk --max 2" 25 "$timeout_s" "$out" >/dev/null
+  loop_rc=$(_smoke_claude "$proj" "/nazgul:start \"$objective\" --afk --max 2" 25 "$timeout_s" "$out")
+  assert_exit_code "B: claude bounded-loop session exits successfully" "$loop_rc" 0
 
   assert_file_exists "B: SessionStart injection persisted the session id" "$proj/nazgul/.session_id"
   if [ -n "$(find "$proj/nazgul/sessions" -maxdepth 1 -name '*.lock' 2>/dev/null)" ]; then
@@ -235,7 +250,8 @@ scenario_loop() {
   # Ordering is judged against hooks/hooks.json itself, not a copy of it here.
   first_stop_hook=$(jq -r '[.hooks.Stop[].hooks[].command] | first' "$REPO_ROOT/hooks/hooks.json" 2>/dev/null || echo "")
   assert_contains "B: hooks.json declares stop-hook.sh first in the Stop chain" "$first_stop_hook" "stop-hook.sh"
-  first_cp=$(ls -1tr "$proj"/nazgul/checkpoints/iteration-*.json 2>/dev/null | head -1)
+  first_cp=$(find "$proj/nazgul/checkpoints" -maxdepth 1 -type f -name 'iteration-*.json' \
+    -print 2>/dev/null | sort | sed -n '1p' || true)
   if [ -f "$proj/nazgul/.session_id" ] && [ -n "$first_cp" ]; then
     session_mtime=$(_smoke_mtime "$proj/nazgul/.session_id")
     cp_mtime=$(_smoke_mtime "$first_cp")
@@ -305,7 +321,7 @@ trap cleanup EXIT
 
 for scenario in $SMOKE_SCENARIOS; do
   SCANNED=$((SCANNED + 1))
-  if [ -n "$FILTER" ] && ! grep -q "$FILTER" <<<"$scenario"; then
+  if [ -n "$FILTER" ] && ! grep -qF -e "$FILTER" <<<"$scenario"; then
     SKIP_FILTERED=$((SKIP_FILTERED + 1))
     continue
   fi

@@ -97,7 +97,10 @@ diff produced; `skipped` is the ones step 4 excluded or could not read; `checked
 ones whose doc-comment blocks you actually read. A file you never opened is never folded
 into a clean result.
 
-Emit this as the LAST line of stdout, on every run — clean, findings, or degrade-to-allow:
+Emit this as the LAST line of stdout on every run that reaches changed-file
+determination — clean, findings, or degrade-to-allow. The explicit
+`docs.verify_comments: false` opt-out is the sole exception: it exits before
+enumeration and writes only the marker described above.
 
 ```text
 comment-verifier: <N> scanned, <M> skipped (non-source=<a>, unreadable=<b>), <K> checked, <F> findings
@@ -144,8 +147,9 @@ gate to block and re-delegate until the comments are fixed and the verifier is r
 with a clean pass. This gate is bounded (≤3 backstop) and degrades to allow past the
 limit, matching the doc-verifier gate's behavior.
 
-**Degrade-to-allow** (opt-out set, or no source files changed): write the marker exactly
-as in the clean-pass case, then exit 0. Nothing to check → nothing to block.
+**Degrade-to-allow** (no source files changed): write the marker exactly as in the
+clean-pass case, emit the zero-count coverage line, then exit 0. Nothing to check →
+nothing to block. The config opt-out follows the earlier immediate-exit contract.
 
 ## Hard rules
 

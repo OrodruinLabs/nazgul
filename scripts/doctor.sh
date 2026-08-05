@@ -552,10 +552,10 @@ _doc_emit_coverage_line() {
 # --only exists so the all-skipped path is reachable at all: with every check
 # selected at least one always inspects something.
 _doc_parse_args() {
-  local arg id found
+  local arg id found only_seen="false"
   for arg in "$@"; do
     case "$arg" in
-      --only=*) _DOC_ONLY="${arg#--only=}" ;;
+      --only=*) _DOC_ONLY="${arg#--only=}"; only_seen="true" ;;
       -h|--help)
         echo "Usage: doctor.sh [--only=<check-id>[,<check-id>...]]"
         echo "Checks: $_DOC_CHECK_IDS"
@@ -568,7 +568,13 @@ _doc_parse_args() {
         ;;
     esac
   done
-  [ -n "$_DOC_ONLY" ] || return 0
+  [ "$only_seen" = "true" ] || return 0
+  case ",$_DOC_ONLY," in
+    *,,*)
+      echo "doctor: --only requires one or more non-empty check ids. Known checks: $_DOC_CHECK_IDS" >&2
+      exit 1
+      ;;
+  esac
   # A typo in --only would otherwise select nothing and report a confident
   # zero-finding run: the vacuous green this whole contract exists to abolish.
   for id in ${_DOC_ONLY//,/ }; do

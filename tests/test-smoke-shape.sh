@@ -33,7 +33,38 @@ if [ ! -f "$WORKFLOW" ] || [ ! -f "$RUNNER" ]; then
   report_results || true
   printf '%s: %d scanned, %d skipped (pyyaml-absent=0, shellcheck-absent=0, no-smoke-artifacts=%d), 0 checked, %d findings\n' \
     "$TEST_NAME" "$SS_SCANNED" "$SS_SCANNED" "$SS_SCANNED" "$TESTS_FAILED"
-  exit 1
+  exit "$NOTHING_CHECKED_EXIT"
+fi
+
+workflow_has_push_pr_trigger() {
+  awk '
+    /^[^[:space:]#]/ { in_on=0 }
+    /^on:[[:space:]]*/ {
+      rest=$0
+      sub(/^on:[[:space:]]*/, "", rest)
+      if (rest == "") in_on=1
+      else if (rest ~ /(^|[^[:alnum:]_])(push|pull_request)([^[:alnum:]_]|$)/) found=1
+      next
+    }
+    in_on && /^[[:space:]]+(push|pull_request)[[:space:]]*:/ { found=1 }
+    END { exit found ? 0 : 1 }
+  ' "$1"
+}
+
+INLINE_TRIGGER="$SCRATCH/inline-trigger.yaml"
+printf 'on: [workflow_dispatch, push]\n' > "$INLINE_TRIGGER"
+if workflow_has_push_pr_trigger "$INLINE_TRIGGER"; then
+  _pass "workflow trigger scanner detects inline push triggers in .yaml files"
+else
+  _fail "workflow trigger scanner detects inline push triggers in .yaml files"
+fi
+
+SAFE_TRIGGER="$SCRATCH/manual-trigger.yaml"
+printf 'on: [workflow_dispatch]\n' > "$SAFE_TRIGGER"
+if workflow_has_push_pr_trigger "$SAFE_TRIGGER"; then
+  _fail "workflow trigger scanner does not flag a safe inline manual trigger"
+else
+  _pass "workflow trigger scanner does not flag a safe inline manual trigger"
 fi
 
 # --- Stage: workflow-yaml-parse (needs PyYAML; skipped by name when absent) ---
@@ -61,14 +92,18 @@ assert_contains "smoke.yml declares workflow_dispatch" "$WF" "workflow_dispatch:
 assert_contains "smoke.yml declares a nightly schedule" "$WF" "cron:"
 # The whole posture: a push/pull_request trigger would put a paid claude -p run
 # on every commit. Match the trigger form (`  push:`), not the word.
-if grep -qE '^[[:space:]]{1,4}(push|pull_request):' "$WORKFLOW"; then
+if workflow_has_push_pr_trigger "$WORKFLOW"; then
   _fail "smoke.yml never triggers on push or pull_request" "found a push/pull_request trigger key"
 else
   _pass "smoke.yml never triggers on push or pull_request"
 fi
 assert_contains "smoke.yml is timeout-bounded" "$WF" "timeout-minutes:"
+assert_contains "smoke.yml prevents overlapping paid runs" "$WF" "concurrency:"
+assert_contains "smoke.yml keeps the active run instead of cancelling it" "$WF" "cancel-in-progress: false"
+assert_contains "scheduled smoke is gated to the official repository" "$WF" "github.repository == 'OrodruinLabs/nazgul'"
 assert_contains "smoke.yml uses the ANTHROPIC_API_KEY secret" "$WF" "secrets.ANTHROPIC_API_KEY"
-assert_contains "smoke.yml installs the Claude Code CLI" "$WF" "npm install -g @anthropic-ai/claude-code"
+assert_contains "smoke.yml checks the API key before paid setup" "$WF" 'if [ -z "$ANTHROPIC_API_KEY" ]'
+assert_contains "smoke.yml installs a pinned Claude Code CLI" "$WF" "npm install -g @anthropic-ai/claude-code@2.1.222"
 assert_contains "smoke.yml runs the smoke runner" "$WF" "tests/smoke/run-smoke.sh"
 # `-e`, because assert_contains's grep reads a leading `--` needle as options.
 if grep -qF -e '--inbox-dir=' "$WORKFLOW"; then
@@ -81,11 +116,11 @@ fi
 SS_CHECKED=$((SS_CHECKED + 1))
 LEAKED=""
 WF_SCANNED=0
-for wf in "$REPO_ROOT"/.github/workflows/*.yml; do
+for wf in "$REPO_ROOT"/.github/workflows/*.yml "$REPO_ROOT"/.github/workflows/*.yaml; do
   [ -f "$wf" ] || continue
   [ "$wf" = "$WORKFLOW" ] && continue
   WF_SCANNED=$((WF_SCANNED + 1))
-  if grep -qE '^[[:space:]]{1,4}(push|pull_request):' "$wf" && grep -q 'tests/smoke' "$wf"; then
+  if workflow_has_push_pr_trigger "$wf" && grep -q 'tests/smoke' "$wf"; then
     LEAKED="$LEAKED $(basename "$wf")"
   fi
 done
@@ -159,7 +194,7 @@ assert_eq "the scratch config carries the shipped schema_version" \
 assert_eq "per-scenario jq overrides are applied" "$(jq -r '.automation.heartbeat.enabled' "$CFG")" "true"
 assert_eq "the scratch project is a real git repo" "$(git -C "$PROJ" rev-parse --is-inside-work-tree 2>/dev/null)" "true"
 
-INBOX_ITEM=$(find "$PROJ/nazgul/inbox" -maxdepth 1 -type f -name '*.md' | head -1)
+INBOX_ITEM=$(find "$PROJ/nazgul/inbox" -maxdepth 1 -type f -name '*.md' | sed -n '1p')
 assert_eq "the scratch project has exactly one live inbox candidate" \
   "$(find "$PROJ/nazgul/inbox" -maxdepth 1 -type f \( -name '*.md' -o -name '*.json' \) | wc -l | tr -d ' ')" "1"
 # Parsed by the real consumer, not by a grep written to match the fixture.
@@ -183,8 +218,7 @@ assert_contains "the scratch inbox seed identifies the runner as its source" \
 BOUNDARY_RC=0
 smoke_scratch_project "$REPO_ROOT/.smoke-boundary-probe" >/dev/null 2>&1 || BOUNDARY_RC=$?
 assert_exit_code "smoke_scratch_project refuses a destination inside this repository" "$BOUNDARY_RC" 1
-rmdir "$REPO_ROOT/.smoke-boundary-probe" 2>/dev/null || true
-assert_file_not_exists "the refused probe left nothing behind" "$REPO_ROOT/.smoke-boundary-probe/nazgul/config.json"
+assert_dir_not_exists "the refused probe leaves no destination directory behind" "$REPO_ROOT/.smoke-boundary-probe"
 
 FILED=$(smoke_file_failure_item "$SCRATCH/inbox" "heartbeat" "smoke shape self-check")
 assert_contains "a smoke failure files a priority-1 inbox item" "$(cat "$FILED")" "priority: 1"

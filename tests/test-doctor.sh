@@ -793,6 +793,15 @@ OUT=$("$DOCTOR" --only=git-hooks,no-such-check 2>&1); EXIT=$?
 assert_exit_code "an unknown --only check id is a usage error, not an empty run" "$EXIT" 1
 assert_contains "the unknown --only id is named" "$OUT" "unknown check 'no-such-check'"
 assert_not_contains "a rejected --only run emits no coverage line at all" "$OUT" "0 checked, 0 findings"
+
+OUT=$("$DOCTOR" --only=, 2>&1); EXIT=$?
+assert_exit_code "an empty comma-only --only list is a usage error" "$EXIT" 1
+assert_contains "the empty --only list explains that check ids must be non-empty" \
+  "$OUT" "requires one or more non-empty check ids"
+assert_not_contains "an empty --only list cannot report a vacuous coverage pass" "$OUT" "0 checked, 0 findings"
+
+OUT=$("$DOCTOR" --only= 2>&1); EXIT=$?
+assert_exit_code "an empty --only value is a usage error" "$EXIT" 1
 teardown_temp_dir
 
 report_results

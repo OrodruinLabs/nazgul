@@ -298,13 +298,16 @@ emit_coverage_vacuous_event() {
     nd="$(resolve_nazgul_dir)"
   fi
   [ -d "$nd" ] || return 0
-  export NAZGUL_DIR="$nd"
-  # shellcheck source=./lib/emit-event.sh
-  source "$SCRIPT_DIR/lib/emit-event.sh"
-  emit_event "coverage_vacuous" \
-    entry_point "lean-comments" \
-    scanned:n "$SCANNED" \
-    skipped:n "$((SKIP_EXT + SKIP_UNREADABLE))"
+  (
+    export NAZGUL_DIR="$nd"
+    export EVENTS_FILE="$nd/logs/events.jsonl"
+    # shellcheck source=./lib/emit-event.sh
+    source "$SCRIPT_DIR/lib/emit-event.sh"
+    emit_event "coverage_vacuous" \
+      entry_point "lean-comments" \
+      scanned:n "$SCANNED" \
+      skipped:n "$((SKIP_EXT + SKIP_UNREADABLE))"
+  )
 }
 
 # Mode 1: --check FILE [FILE...]

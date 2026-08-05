@@ -12,7 +12,8 @@ echo "=== $TEST_NAME ==="
 command -v claude >/dev/null 2>&1 || {
   _skip "both fixtures (claude CLI not on PATH — not checked)"
   echo "$TEST_NAME: NOTHING CHECKED — claude CLI not on PATH" >&2
-  exit 2
+  report_results || true
+  exit "$NOTHING_CHECKED_EXIT"
 }
 
 run_fixture() {

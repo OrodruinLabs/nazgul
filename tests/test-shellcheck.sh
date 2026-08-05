@@ -64,8 +64,8 @@ for script in "${SCRIPTS[@]}"; do
     continue
   fi
   SC_CHECKED=$((SC_CHECKED + 1))
-  CHECKED_SCRIPTS+=("$script")
   if bash -n "$full_path" 2>/dev/null; then
+    CHECKED_SCRIPTS+=("$script")
     _pass "$name passes bash -n"
   else
     SC_FINDINGS=$((SC_FINDINGS + 1))

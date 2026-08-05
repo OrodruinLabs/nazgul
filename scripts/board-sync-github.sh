@@ -144,11 +144,11 @@ manifest_task_id() {
 manifest_issue_body() {
   local task_file="$1"
   local body criteria meta issue_body
-  body=$(first_section "$task_file" "Description" "Objective" "Summary" "Context" | head -40) || body=""
+  body=$(first_section "$task_file" "Description" "Objective" "Summary" "Context" | sed -n '1,40p') || body=""
   if [ -z "$body" ]; then
-    body=$(manifest_body_fallback "$task_file" | head -30) || body=""
+    body=$(manifest_body_fallback "$task_file" | sed -n '1,30p') || body=""
   fi
-  criteria=$(first_section "$task_file" "Acceptance Criteria" "Acceptance criteria" "Success Criteria" "Subtasks" | head -20) || criteria=""
+  criteria=$(first_section "$task_file" "Acceptance Criteria" "Acceptance criteria" "Success Criteria" "Subtasks" | sed -n '1,20p') || criteria=""
   meta=$(manifest_meta_lines "$task_file") || meta=""
 
   issue_body="${body:-_this manifest carries no prose section this script could read_}"

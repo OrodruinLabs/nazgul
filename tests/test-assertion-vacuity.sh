@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
 # Test: the assertion library itself cannot report a check it never made.
 # FEAT-028 TASK-017 (retroactive audit, docs/test-audit-2026-08.md). Three vacuity
@@ -79,14 +79,14 @@ assert_contains "V4: the absent-file failure says absence cannot stand in for a 
 
 R=$(run_child 'report_results')
 assert_contains "V5: zero assertions reports NOTHING CHECKED" "$R" "NOTHING CHECKED"
-assert_contains "V5: zero assertions exits nonzero" "$R" "__EC__1"
+assert_contains "V5: zero assertions uses the shared nothing-checked exit" "$R" "__EC__2"
 
 R=$(run_child '_skip "tool absent"
 report_results')
 assert_contains "V5: a skip is printed as SKIP, never as PASS" "$R" "SKIP: tool absent"
 assert_not_contains "V5: a skip never emits a PASS line" "$R" "PASS: tool absent"
 assert_contains "V5: skips alone still report 0/0" "$R" "child: 0/0 passed"
-assert_contains "V5: skips alone still exit nonzero" "$R" "__EC__1"
+assert_contains "V5: skips alone use the shared nothing-checked exit" "$R" "__EC__2"
 
 R=$(run_child 'assert_eq "real check" a a
 _skip "tool absent"

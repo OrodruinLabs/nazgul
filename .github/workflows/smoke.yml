@@ -16,18 +16,32 @@ on:
   schedule:
     - cron: '0 7 * * *'
 
+concurrency:
+  group: headless-smoke-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   smoke:
+    if: github.event_name == 'workflow_dispatch' || github.repository == 'OrodruinLabs/nazgul'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Require Anthropic API key
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "ANTHROPIC_API_KEY is required for the paid headless smoke" >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq
 
       - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+        run: npm install -g @anthropic-ai/claude-code@2.1.222
 
       - name: Run headless smoke
         env:

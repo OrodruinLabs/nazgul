@@ -26,8 +26,13 @@ done
 assert_not_contains "the stub PATH dir has no claude in it" "$(ls "$STUB")" "claude"
 
 run_e2e() {
-  local out ec=0
-  out=$(PATH="$STUB" bash "$RUNNER" "$@" </dev/null 2>&1) || ec=$?
+  run_e2e_in "" "$@"
+}
+
+run_e2e_in() {
+  local test_dir="$1" out ec=0
+  shift
+  out=$(PATH="$STUB" NAZGUL_E2E_TEST_DIR="$test_dir" bash "$RUNNER" "$@" </dev/null 2>&1) || ec=$?
   printf '%s\n__EC__%s\n' "$out" "$ec"
 }
 
@@ -43,20 +48,45 @@ R=$(run_e2e "--filter=no-such-e2e-test-anywhere")
 assert_contains "zero-match filter: exit 2, not 0" "$R" "__EC__2"
 assert_contains "zero-match filter: says NOTHING CHECKED" "$R" "NOTHING CHECKED"
 
+R=$(run_e2e "--filter=-no-such-e2e-test-anywhere")
+assert_contains "dash-leading filter: is treated as literal text" "$R" "__EC__2"
+assert_not_contains "dash-leading filter: is never parsed as a grep option" "$R" "grep:"
+
 # --- Fixed-grammar coverage line on every path, accounting that adds up ---
-COV=$(printf '%s' "$R" | grep -e '^run-e2e: ' | tail -1)
+COV=$(printf '%s' "$R" | grep -e '^run-e2e: ' | tail -1 || true)
+SCANNED=0
+SKIPPED=0
+CHECKED=0
+if [ -z "$COV" ]; then
+  _fail "coverage line: runner emits the fixed-grammar line" "no run-e2e coverage line found"
+else
+  _pass "coverage line: runner emits the fixed-grammar line"
+  SCANNED=$(printf '%s' "$COV" | sed -E 's/^run-e2e: ([0-9]+) scanned.*/\1/')
+  SKIPPED=$(printf '%s' "$COV" | sed -E 's/.*scanned, ([0-9]+) skipped.*/\1/')
+  CHECKED=$(printf '%s' "$COV" | sed -E 's/.*\), ([0-9]+) checked.*/\1/')
+fi
 assert_contains "coverage line: fixed grammar" "$COV" "scanned,"
-assert_contains "coverage line: names both skip reasons" "$COV" "filtered-out="
+assert_contains "coverage line: names the filter skip reason" "$COV" "filtered-out="
 assert_contains "coverage line: no-claude-cli is a named reason" "$COV" "no-claude-cli="
-SCANNED=$(printf '%s' "$COV" | sed -E 's/^run-e2e: ([0-9]+) scanned.*/\1/')
-SKIPPED=$(printf '%s' "$COV" | sed -E 's/.*scanned, ([0-9]+) skipped.*/\1/')
-CHECKED=$(printf '%s' "$COV" | sed -E 's/.*\), ([0-9]+) checked.*/\1/')
+assert_contains "coverage line: not-a-file is a named reason" "$COV" "not-a-file="
+assert_contains "coverage line: unreadable is a named reason" "$COV" "unreadable="
 assert_eq "coverage accounting adds up (N == M + K)" "$SCANNED" "$((SKIPPED + CHECKED))"
 if [ "$SCANNED" -gt 0 ]; then
   _pass "the runner discovered at least one e2e candidate to account for"
 else
   _fail "the runner discovered at least one e2e candidate to account for" "scanned=$SCANNED"
 fi
+
+# --- Non-files and unreadable candidates are skipped, never counted checked ---
+CANDIDATES="$STUB-candidates"
+mkdir -p "$CANDIDATES/test-directory.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$CANDIDATES/test-unreadable.sh"
+chmod 000 "$CANDIDATES/test-unreadable.sh"
+R=$(run_e2e_in "$CANDIDATES")
+assert_contains "candidate classification: non-file is a named skip" "$R" "not-a-file=1"
+assert_contains "candidate classification: unreadable file is a named skip" "$R" "unreadable=1"
+assert_contains "candidate classification: neither candidate is counted checked" "$R" "), 0 checked,"
+assert_contains "candidate classification: nothing checked exits 2" "$R" "__EC__2"
 
 # --- The per-file skip-green: an e2e test file itself must not exit 0 CLI-less ---
 BOOTSTRAP="$REPO_ROOT/tests/e2e/test-bootstrap-project.sh"

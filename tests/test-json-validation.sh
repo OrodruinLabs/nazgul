@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
 # Test: every tracked JSON file in the plugin parses.
 # Discovered by glob, not by a hand-maintained array: the previous list named 5
