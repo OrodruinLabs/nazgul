@@ -44,6 +44,38 @@ ttg_valid_transition() {
   esac
 }
 
+# Last dependency requirement in words, for the caller's diagnostic.
+# shellcheck disable=SC2034  # read by callers, not within this file
+TTG_DEP_EXPECTED=""
+
+# Is one PLANNED -> READY dependency satisfied? Granularity-aware: `group`/`feature`
+# park EVERY task at IMPLEMENTED until one aggregate board, so DONE is unsatisfiable there.
+ttg_dependency_satisfied() {
+  local nazgul_dir="$1" dep_status="$2" granularity yolo
+  granularity=$(jq -r '.review_gate.granularity // "task"' \
+    "$nazgul_dir/config.json" 2>/dev/null || echo "task")
+  yolo=$(jq -r 'if .afk.yolo == true then "true" else "false" end' \
+    "$nazgul_dir/config.json" 2>/dev/null || echo "false")
+  case "$granularity" in
+    group|feature)
+      TTG_DEP_EXPECTED="IMPLEMENTED or later (review_gate.granularity=${granularity})"
+      case "$dep_status" in
+        IMPLEMENTED|IN_REVIEW|APPROVED|DONE) return 0 ;;
+      esac
+      ;;
+    *)
+      if [ "$yolo" = "true" ]; then
+        TTG_DEP_EXPECTED="APPROVED/DONE"
+        case "$dep_status" in DONE|APPROVED) return 0 ;; esac
+      else
+        TTG_DEP_EXPECTED="DONE"
+        if [ "$dep_status" = "DONE" ]; then return 0; fi
+      fi
+      ;;
+  esac
+  return 1
+}
+
 # Real commit-SHA verification (MF-026, tightened FEAT-023/TASK-006 — Defect 5,
 # hardened TASK-006 attempt 2 — security B1). Scopes evidence to the
 # manifest's `## Commits` section, using the identical awk boundary
@@ -485,14 +517,8 @@ ttg_validate_transition() {
         return 1
       }
       dep_status=$(get_task_status "$dep_file" "")
-      if [ "$yolo_mode" = "true" ]; then
-        case "$dep_status" in DONE|APPROVED) ;; *)
-          echo "ttg_validate_transition: READY dependency ${dep} is ${dep_status:-missing}, not APPROVED/DONE" >&2
-          return 1
-          ;;
-        esac
-      elif [ "$dep_status" != "DONE" ]; then
-        echo "ttg_validate_transition: READY dependency ${dep} is ${dep_status:-missing}, not DONE" >&2
+      if ! ttg_dependency_satisfied "$nazgul_dir" "$dep_status"; then
+        echo "ttg_validate_transition: READY dependency ${dep} is ${dep_status:-missing}, not ${TTG_DEP_EXPECTED}" >&2
         return 1
       fi
     done
@@ -517,9 +543,13 @@ ttg_validate_transition() {
     fi
   fi
 
+  # Two named repair classes may leave BLOCKED for IN_REVIEW: review-evidence
+  # materialization and the ADR-020 typed reconciliation quarantine.
   if [ "$from" = "BLOCKED" ] && [ "$to" = "IN_REVIEW" ]; then
-    if ! printf '%s\n' "$manifest_text" | grep -qi '^\- \*\*Blocked reason\*\*:.*review evidence'; then
-      echo "ttg_validate_transition: BLOCKED -> IN_REVIEW is reserved for review-evidence repair" >&2
+    # Anchored, so an already-repaired `reconciliation (repaired …)` cannot re-qualify.
+    if ! printf '%s\n' "$manifest_text" | grep -qi '^\- \*\*Blocked reason\*\*:.*review evidence' \
+      && ! printf '%s\n' "$manifest_text" | grep -qiE '^\- \*\*Blocked kind\*\*:[[:space:]]*reconciliation[[:space:]]*$'; then
+      echo "ttg_validate_transition: BLOCKED -> IN_REVIEW is reserved for review-evidence repair and typed reconciliation repair" >&2
       return 1
     fi
   fi

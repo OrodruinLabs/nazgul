@@ -28,6 +28,23 @@ $ARGUMENTS
 
 Parse `$ARGUMENTS` for a subcommand and its parameters. If no subcommand is provided, default to `list`.
 
+### Changing a task's status
+
+**Every** status change goes through one command. A direct Write/Edit of a manifest's status field is
+denied by `task-state-guard.sh`, and a status reached by `sed`, `cp`, `mv`, or a shell redirect is
+quarantined as BLOCKED by the stop-hook's reconciliation pass (ADR-020) — validating a write is not the
+same as completing one, so only a disk-verified write records authority.
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition TASK-NNN FROM TO
+# BLOCKED only: append --reason "one line"
+```
+
+Name the exact live status as FROM — a stale FROM is rejected and nothing is written. Everything else in
+a manifest (`- **Depends on**:`, `- **Blocked reason**:`, `- **Retry count**:`) is ordinary content you
+edit directly, and must be written BEFORE the transition that depends on it. A non-zero exit means
+nothing changed: read the stderr, fix the cause, re-run. Never `sed` a task manifest.
+
 ### Subcommands
 
 ---
@@ -60,14 +77,30 @@ Total: 5 | Done: 1 | Active: 2 | Blocked: 1 | Planned: 1
 
 #### `skip TASK-NNN`
 
-Set the specified task's status to SKIPPED.
+Take a task out of the run without implementing or reviewing it.
+
+`SKIPPED` is deliberately NOT written: it is absent from `VALID_STATUSES`
+(`scripts/lib/structured-state.sh`), so a manifest carrying it resolves to `INVALID`, counts into no
+tracked bucket, and is reported as an off-vocabulary status on every iteration. A skipped task is
+recorded as `BLOCKED` with an explicit operator reason instead.
 
 1. Validate the task file exists: `nazgul/tasks/TASK-NNN.md`
 2. If not found, error: "Task TASK-NNN not found."
-3. Use sed to update the `Status:` field to `SKIPPED` in the task manifest
-4. Scan all other task manifests for dependencies that reference TASK-NNN
-5. For any task whose ONLY remaining non-DONE/non-SKIPPED dependency was TASK-NNN, promote its status from `PLANNED` to `READY`
-6. Output: "TASK-NNN set to SKIPPED. [N] downstream task(s) promoted to READY."
+3. Read the task's current status. If it is already `DONE` or `BLOCKED`, report that and stop.
+4. Record the skip:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition TASK-NNN <CURRENT_STATUS> BLOCKED \
+  --reason "skipped by operator via /nazgul:task skip"
+```
+
+5. Scan every other task manifest for a `- **Depends on**:` line naming TASK-NNN and edit that line to
+   drop it (`none` when it was the only dependency). This is non-status content, so it is an ordinary
+   edit — and it is the ONLY way downstream tasks can proceed, because the dependency gate requires
+   every dependency to be `DONE` (or `APPROVED` in YOLO) and a skipped task is neither.
+6. Do not promote anything by hand: the stop-hook auto-promotes each now-unblocked `PLANNED` task to
+   `READY` on its next iteration.
+7. Output: "TASK-NNN skipped (recorded as BLOCKED). [N] downstream task(s) had the dependency removed."
 
 ---
 
@@ -78,9 +111,24 @@ Reset a BLOCKED task back to READY so it can be picked up by the loop.
 1. Validate the task file exists: `nazgul/tasks/TASK-NNN.md`
 2. If not found, error: "Task TASK-NNN not found."
 3. If the task is not BLOCKED, warn: "TASK-NNN is not blocked (current status: [status])."
-4. Update `Status:` to `READY`
-5. Clear the `blocked_reason:` field (set to empty or remove the line)
-6. Reset `retry:` count to `0/3`
+4. **Route by blocker class.** Read `- **Blocked kind**:` from the manifest BEFORE doing anything else.
+   - `reconciliation` — do NOT unblock. This is the stop-hook's integrity quarantine: the code and its
+     review may be entirely intact, only the state provenance was lost, so sending it to `READY` would
+     throw away reviewed work and re-run the implementer. Run
+     `"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" repair TASK-NNN`, which revalidates the task's
+     commits, red-run evidence, review verdicts, and review provenance and then records
+     `BLOCKED -> IN_REVIEW -> DONE`. It never uses `READY` and never dispatches an implementer. If
+     repair refuses, report its diagnostic verbatim and stop — do NOT fall back to unblock.
+   - any other value (`review-evidence`, `review-provenance`, `git-conflict`), or no `Blocked kind`
+     line at all — an ordinary blocker; continue with the steps below. `repair` will refuse these.
+5. Clear the `- **Blocked reason**:` line and reset `- **Retry count**:` to `0/3`. Both are non-status
+   content, so edit them directly, and do it BEFORE the transition.
+6. Return it to the queue:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition TASK-NNN BLOCKED READY
+```
+
 7. Output: "TASK-NNN unblocked and set to READY. It will be picked up in the next iteration."
 
 ---
@@ -112,7 +160,10 @@ Create a new task manifest and append it to the plan.
 _To be filled by implementer._
 ```
 
-3. If there are no dependencies (check if any were specified in the description), set status to `READY` instead of `PLANNED`
+3. If there are no dependencies (check if any were specified in the description), write `READY` instead
+   of `PLANNED` in that same initial Write. A brand-new manifest's FIRST status is not a transition —
+   `task-state-guard.sh` permits an initial `PLANNED` or `READY` — so do not call the transition command
+   here; there is no FROM status for it to compare against.
 4. Append the task to `nazgul/plan.md` in the task list section
 5. Output: "Created TASK-NNN: [description]. Status: [PLANNED|READY]."
 
