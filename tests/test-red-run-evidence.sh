@@ -229,9 +229,19 @@ assert_eq "N/A list is exact-match, not substring" "$RR_REASON" "bad_na_token"
 # SIX DISTINCT DIAGNOSTICS — a reason the operator cannot tell apart from
 # another reason is one collapsed state wearing six names.
 # ---------------------------------------------------------------------------
-DISTINCT_COUNT=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
+# Compared as whole diagnostics, not as lines: every blocking reason shares one
+# trailing remediation line, so a line-wise sort -u would count that shared line
+# as a seventh "diagnostic" and stop measuring distinguishability at all.
+distinct_diagnostics() {
+  local blob
+  for blob in "$@"; do
+    printf '%s' "$blob" | tr '\n' '\037'
+    printf '\n'
+  done | sort -u | wc -l | tr -d ' '
+}
+DISTINCT_COUNT=$(distinct_diagnostics \
   "$STDERR_ABSENT" "$STDERR_CORRUPT" "$STDERR_REF" "$STDERR_ANCESTOR" \
-  "$STDERR_EXIT_ZERO" "$STDERR_BAD_NA" | sort -u | wc -l | tr -d ' ')
+  "$STDERR_EXIT_ZERO" "$STDERR_BAD_NA")
 assert_eq "six block reasons emit six distinct stderr diagnostics" "$DISTINCT_COUNT" "6"
 assert_not_contains "the allow-with-announce diagnostic is distinct from the absent block" \
   "$STDERR_NOT_APPLICABLE" "no ## Red-Run Evidence section, but this task's scope touches"
@@ -356,30 +366,45 @@ setup_nazgul_dir
 create_config
 printf -- '---\nstatus: IN_PROGRESS\n---\n# TASK-001: Test\n\n- **Group**: 1\n' > "$TEST_DIR/nazgul/tasks/TASK-001.md"
 
+# Under ADR-020 no direct status write is ever allowed, so exit 2 alone proves
+# nothing about this gate. What distinguishes the states is WHICH refusal the
+# operator gets: a refusal FOR the evidence, or a routing to the transactional
+# command that would then have applied the edge.
+ROUTED="Direct task-status edits cannot record completed-write authority"
+REFUSED="failed the shared transition/evidence validation"
+
 run_guard "$(guard_write_input "$(guard_manifest '')")"
 assert_exit_code "call site 1: IN_PROGRESS->IMPLEMENTED with a real SHA but no red-run evidence is BLOCKED" "$GUARD_EC" 2
-assert_contains "call site 1: block names red-run evidence" "$GUARD_STDERR" "without verified red-run evidence"
+assert_contains "call site 1: block is the evidence refusal" "$GUARD_STDERR" "$REFUSED"
+assert_contains "call site 1: block names red-run evidence" "$GUARD_STDERR" "IMPLEMENTED requires verified red-run evidence"
 assert_contains "call site 1: block names the enumerated exemption escape" "$GUARD_STDERR" "red-run: N/A — docs-only"
 assert_contains "call site 1: the shared library's own diagnostic reaches the operator" \
   "$GUARD_STDERR" "[reason: absent]"
+assert_not_contains "call site 1: refused evidence is not routed to the command" "$GUARD_STDERR" "$ROUTED"
 
 run_guard "$(guard_write_input "$(guard_manifest "
 ## Red-Run Evidence
 $(valid_entry)
 ")")"
-assert_exit_code "call site 1: same transition WITH valid red-run evidence is allowed" "$GUARD_EC" 0
+assert_exit_code "call site 1: same transition WITH valid red-run evidence is still denied as a direct write" "$GUARD_EC" 2
+assert_contains "call site 1: valid evidence is routed, not refused" "$GUARD_STDERR" "$ROUTED"
+assert_contains "call site 1: routing names the exact edge for the command" \
+  "$GUARD_STDERR" "scripts/task-transition.sh transition TASK-001 IN_PROGRESS IMPLEMENTED"
+assert_not_contains "call site 1: valid evidence is not blamed" "$GUARD_STDERR" "$REFUSED"
 
 run_guard "$(guard_write_input "$(guard_manifest '
 ## Red-Run Evidence
 - red-run: N/A — docs-only
 ')")"
-assert_exit_code "call site 1: enumerated N/A exemption is allowed" "$GUARD_EC" 0
+assert_exit_code "call site 1: enumerated N/A exemption reaches the routing, not the refusal" "$GUARD_EC" 2
+assert_contains "call site 1: enumerated N/A is routed to the command" "$GUARD_STDERR" "$ROUTED"
 
 run_guard "$(guard_write_input "$(guard_manifest '
 ## Red-Run Evidence
 - red-run: N/A — I ran them locally
 ')")"
 assert_exit_code "call site 1: free-text N/A is BLOCKED" "$GUARD_EC" 2
+assert_contains "call site 1: free-text N/A is refused for evidence" "$GUARD_STDERR" "$REFUSED"
 
 # The commit gate still runs FIRST — a manifest with red-run evidence but no
 # commit SHA must still be refused for the commit, not silently reordered.
@@ -389,9 +414,31 @@ assert_contains "call site 1: commit gate's own message, not the red-run one" "$
 
 create_config '.guards.red_run_evidence = false'
 run_guard "$(guard_write_input "$(guard_manifest '')")"
-assert_exit_code "call site 1: kill switch off — the same write is allowed" "$GUARD_EC" 0
+assert_exit_code "call site 1: kill switch off — evidence no longer refuses the edge" "$GUARD_EC" 2
+assert_contains "call site 1: kill switch off — the write is routed to the command" "$GUARD_STDERR" "$ROUTED"
+assert_not_contains "call site 1: kill switch off — nothing is refused for evidence" "$GUARD_STDERR" "$REFUSED"
 assert_contains "call site 1: kill switch off — diagnostic still reaches the operator" \
   "$GUARD_STDERR" "[reason: absent]"
+
+# The gate the guard now only diagnoses is the one the transactional command
+# enforces. Prove both verdicts survive in ttg_validate_transition itself, so
+# "everything is denied" cannot hide a gate that stopped deciding.
+create_config
+if ttg_validate_transition "$TEST_DIR/nazgul" "$TEST_DIR" TASK-001 IN_PROGRESS IMPLEMENTED \
+  "$(guard_manifest "
+## Red-Run Evidence
+$(valid_entry)
+")" 2>/dev/null; then
+  _pass "shared validator still admits the edge when red-run evidence verifies"
+else
+  _fail "shared validator still admits the edge when red-run evidence verifies" "expected: 0" "  actual: nonzero"
+fi
+if ttg_validate_transition "$TEST_DIR/nazgul" "$TEST_DIR" TASK-001 IN_PROGRESS IMPLEMENTED \
+  "$(guard_manifest '')" 2>/dev/null; then
+  _fail "shared validator still refuses the edge when red-run evidence is absent" "expected: nonzero" "  actual: 0"
+else
+  _pass "shared validator still refuses the edge when red-run evidence is absent"
+fi
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------

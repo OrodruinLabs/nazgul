@@ -70,8 +70,28 @@ Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified o
 
 1. Read `nazgul/plan.md` — find the first READY task whose dependencies are all DONE
 2. If a task is CHANGES_REQUESTED, pick it up (it has priority)
-3. Claim the task: update status to IN_PROGRESS, set claimed_at timestamp.
-   Record current HEAD SHA as base reference: add `- **Base SHA**: [sha]` to the task manifest.
+3. Claim the task: set claimed_at, and record the current HEAD SHA as base reference by adding
+   `- **Base SHA**: [sha]` to the task manifest. Then move it to IN_PROGRESS with the transition
+   command (see **How to change a task's status** below) — a direct edit of the status field is denied.
+
+## How to change a task's status
+
+**Every** status change goes through one command. Write/Edit/MultiEdit of a manifest's status field is
+denied by `task-state-guard.sh` (ADR-020): validating a request is not the same as applying it, so only
+a completed, disk-verified write records authority. A status that appears without that record is
+quarantined as BLOCKED by the stop-hook's reconciliation pass, even when the edit itself was legal.
+
+```
+"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition [TASK-ID] FROM TO
+# BLOCKED only: append --reason "one line"
+```
+
+Run it from the project root (or with `CLAUDE_PROJECT_DIR` set), naming the exact live status as FROM —
+a stale FROM is rejected and nothing is written. The command validates the edge and its evidence,
+compare-and-swap writes the manifest, verifies the new status on disk, and only then records the edge.
+Non-status manifest content (implementation log, `## Commits`, `## Red-Run Evidence`) is still edited
+normally, and must be written BEFORE the transition that depends on it, since the command reads the
+live file. A non-zero exit means nothing changed — read its stderr, fix the cause, and re-run it.
 
 ## Implementation Protocol
 
@@ -99,7 +119,7 @@ Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified o
     - Exit 2 is **VACUOUS TEST**: your test passed against a tree that does not contain your change, so it is evidence of nothing. Rewrite the test so it fails for the reason the change fixes; do not hand-write a block.
     - Exit 3 is **NOTHING CHECKED**: the scoped filter matched no test file in the pre-change tree. Fix the filter — this is a different failure from a vacuous test, and neither writes evidence.
     - Never hand-author the block. Hand-written evidence lacks `captured-by: scripts/red-run.sh` and the qa-reviewer treats its absence as unverified provenance — a finding, not a silent pass. When no meaningful pre-change red run exists, record only the specifically applicable enumerated `N/A` token (`docs-only`, `comment-only`, `revert`, `fixture-capture-only` — the list is CLOSED). The gate validates exact list membership; the qa-reviewer judges whether the selected exemption is truthful.
-11. Set status to IMPLEMENTED when all acceptance criteria met, tests pass, lint clean, and the red-run block is captured. **The task manifest MUST contain a `## Commits` section with at least one commit SHA — the state guard will block the transition without it.** Record the full 40-hex SHA from `git rev-parse HEAD`, bare (no backticks), one per line, and set it before any merge — the branch-tip commit for this task, per the review-then-merge ordering (`RULES.md` §11). The `## Commits` heading IS the enforcement boundary for the IMPLEMENTED gate: `ttg_verify_commit_evidence` reads only what falls under it, and the recorded SHA must resolve AND be a strict descendant of the manifest's `Base SHA`, not just any reachable commit. Short and backticked forms still resolve, so the full-40-hex-bare form remains a cross-manifest consistency rule, not a matching requirement.
+11. Move to IMPLEMENTED with `scripts/task-transition.sh transition [TASK-ID] IN_PROGRESS IMPLEMENTED` when all acceptance criteria met, tests pass, lint clean, and the red-run block is captured — the evidence below must already be on disk, because the command reads the live manifest. **The task manifest MUST contain a `## Commits` section with at least one commit SHA — the state guard will block the transition without it.** Record the full 40-hex SHA from `git rev-parse HEAD`, bare (no backticks), one per line, and set it before any merge — the branch-tip commit for this task, per the review-then-merge ordering (`RULES.md` §11). The `## Commits` heading IS the enforcement boundary for the IMPLEMENTED gate: `ttg_verify_commit_evidence` reads only what falls under it, and the recorded SHA must resolve AND be a strict descendant of the manifest's `Base SHA`, not just any reachable commit. Short and backticked forms still resolve, so the full-40-hex-bare form remains a cross-manifest consistency rule, not a matching requirement.
 12. Capture the diff for reviewers:
     - Read `branch.feature` and `branch.main_worktree_path` from config
     - `mkdir -p <main_worktree_path>/nazgul/reviews/[TASK-ID]`
@@ -112,7 +132,7 @@ Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified o
 
 Every task runs in an isolated worktree. This applies to ALL modes (HITL, AFK, YOLO).
 
-### On task claim (READY → IN_PROGRESS):
+### On task claim (READY → IN_PROGRESS — through the transition command):
 1. Read `nazgul/config.json → branch.feature`, `branch.worktree_dir`, `branch.main_worktree_path`
 2. Create task worktree: prefer `EnterWorktree` tool for native isolation; fallback to `git worktree add <worktree_dir>/TASK-NNN -b feat/<display_id>/TASK-NNN <feature-branch>` if EnterWorktree is unavailable
 3. `cd` into the worktree for ALL implementation work

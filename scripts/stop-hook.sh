@@ -223,11 +223,11 @@ fi
 # --- BASH-WRITE RECONCILIATION (MF-022 / ADR-003 Decision 2) ---
 # Runs at the top of every iteration, before counting, so a flip to BLOCKED
 # below is already reflected in this iteration's counts. Diffs each task
-# manifest's live status against the status the LAST checkpoint recorded for
-# it; a change not traceable to a guarded transition (ttg_log_transition,
-# written only by task-state-guard.sh's PreToolUse path) since that
-# checkpoint's timestamp is untrusted — flag BLOCKED with a named diagnostic.
-# Detection/flagging only: never writes a "corrected" status, only BLOCKED.
+# manifest's live status against the LAST checkpoint's. Authority is the
+# completed-write ledger (ADR-020): only edges scripts/task-transition.sh
+# applied and verified on disk are recorded, so a live status the ledger
+# cannot chain to since that checkpoint is untrusted — flag BLOCKED, never
+# a "corrected" status.
 # Kill-switch: guards.bash_write_reconciliation (default true; an explicit
 # `false` must be honored, so this is NOT `// true`, which would
 # false-coalesce it back to true).
@@ -245,9 +245,10 @@ if [ "$RECON_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
         [ -n "$RECON_PREV_STATUS" ] || continue
         RECON_LIVE_STATUS=$(get_task_status "$recon_task_file" "")
         if [ -n "$RECON_LIVE_STATUS" ] && [ "$RECON_LIVE_STATUS" != "$RECON_PREV_STATUS" ] \
-          && ! ttg_transition_is_guarded "$NAZGUL_DIR" "$RECON_TASK_ID" "$RECON_LIVE_STATUS" "$RECON_PREV_TS"; then
-          echo "NAZGUL BASH-WRITE RECONCILIATION: BLOCKED — ${RECON_TASK_ID} status changed ${RECON_PREV_STATUS} → ${RECON_LIVE_STATUS} written outside the guarded Write/Edit/MultiEdit path" >&2
-          RECON_REASON="status changed ${RECON_PREV_STATUS} → ${RECON_LIVE_STATUS} outside the guarded Write/Edit/MultiEdit path (stop-hook reconciliation, MF-022)"
+          && ! ttg_transition_chain_is_guarded "$NAZGUL_DIR" "$RECON_TASK_ID" \
+            "$RECON_PREV_STATUS" "$RECON_LIVE_STATUS" "$RECON_PREV_TS"; then
+          echo "NAZGUL BASH-WRITE RECONCILIATION: BLOCKED — ${RECON_TASK_ID} status changed ${RECON_PREV_STATUS} → ${RECON_LIVE_STATUS} outside the guarded Write/Edit/MultiEdit path, with no completed transition recorded by scripts/task-transition.sh" >&2
+          RECON_REASON="status changed ${RECON_PREV_STATUS} → ${RECON_LIVE_STATUS} outside the guarded Write/Edit/MultiEdit path, with no completed transition recorded by scripts/task-transition.sh (stop-hook reconciliation, MF-022)"
           # Recheck red evidence when an untraceable IMPLEMENTED landing bypassed PreToolUse.
           if [ "$RECON_LIVE_STATUS" = "IMPLEMENTED" ] \
             && ! ttg_verify_red_run_evidence "$(cat "$recon_task_file")" "$PROJECT_ROOT" "$RECON_TASK_ID"; then
