@@ -9,8 +9,8 @@ set -euo pipefail
 #
 # `repair` is the ONLY exit from a typed reconciliation quarantine. It is closed
 # to every other blocker class and revalidates canonical evidence from local
-# files and Git history before taking BLOCKED -> IN_REVIEW -> DONE. It never
-# uses READY and never dispatches an implementer.
+# files and Git history before walking the mode-derived REPAIR_EDGES list. It
+# never uses READY and never dispatches an implementer.
 
 usage() {
   echo "Usage: scripts/task-transition.sh transition TASK-NNN FROM TO [--reason TEXT|--reason=TEXT]" >&2
@@ -229,4 +229,9 @@ _ttg_emit_event "$NAZGUL_DIR" "reconciliation_repair" \
   checkpoint_status "$QUARANTINE_FROM" observed_status "$QUARANTINE_OBSERVED" \
   checks:n "$REPAIR_CHECKS"
 
-echo "task-transition: repair ${TASK_ID} — ${REPAIR_CHECKS} evidence checks run, 0 findings; BLOCKED -> IN_REVIEW -> DONE recorded"
+REPAIR_WALK=""
+for _re in ${REPAIR_EDGES[@]+"${REPAIR_EDGES[@]}"}; do
+  [ -n "$REPAIR_WALK" ] || REPAIR_WALK="${_re%%:*}"
+  REPAIR_WALK="${REPAIR_WALK} -> ${_re#*:}"
+done
+echo "task-transition: repair ${TASK_ID} — ${REPAIR_CHECKS} evidence checks run, 0 findings; ${REPAIR_WALK} recorded"

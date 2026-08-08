@@ -127,6 +127,12 @@ assert_eq "R1: repair lands on DONE" \
   "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "DONE"
 assert_contains "R1: repair reports what it checked, not just that it passed" \
   "$CMD_OUT" "5 evidence checks run, 0 findings"
+assert_contains "R1: the reported walk names the edges actually traversed" \
+  "$CMD_OUT" "BLOCKED -> IN_REVIEW -> DONE"
+assert_not_contains "R1: the reported walk does not start from the pre-quarantine status" \
+  "$CMD_OUT" "IMPLEMENTED -> IN_REVIEW"
+assert_not_contains "R1: the two-edge walk does not advertise the task-PR APPROVED hop" \
+  "$CMD_OUT" "APPROVED"
 LEDGER="$TEST_DIR/nazgul/logs/guarded-transitions.jsonl"
 assert_eq "R1: BLOCKED -> IN_REVIEW is recorded as a completed edge" \
   "$(jq -sr '[.[] | select(.task_id == "TASK-001" and .from == "BLOCKED" and .to == "IN_REVIEW")] | length' "$LEDGER")" "1"
