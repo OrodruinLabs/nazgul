@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# Test: shared-resource references in shipped prompts (FEAT-029 TASK-007, PRD AC8).
+# Test: shared-resource references in shipped prompts (FEAT-029 TASK-007/008, PRD AC8).
 # The historical defect: a prompt cited `references/ui-brand.md` relative to nothing in
 # particular, which resolves in a checkout of this repo and nowhere in an installed
 # plugin. Both halves are therefore checked: every shared resource is cited from
@@ -9,7 +9,7 @@ set -uo pipefail
 # INSIDE the packaged tree — the package is staged from what git would ship, so a
 # working-tree-only or ignored file cannot pass for a packaged one.
 #
-# Extending this test (TASK-008/009/010): add the file globs of the newly qualified
+# Extending this test (TASK-009/010): add the file globs of the newly qualified
 # prompts to SCAN_GLOBS and their expected citations to REQUIRED_CITATIONS. The scanner
 # itself is data-driven and needs no change; a second scanner is a defect, not a task.
 TEST_NAME="test-reference-paths"
@@ -25,7 +25,11 @@ trap 'rm -rf "$WORK"' EXIT
 # The prompt file sets scanned by this test. One entry per shell glob, relative to the
 # repository root; a glob that matches nothing is a finding, not an empty pass.
 SCAN_GLOBS="agents/*.md
-agents/templates/*.md"
+agents/templates/*.md
+skills/context/SKILL.md
+skills/discover/SKILL.md
+skills/docs/SKILL.md
+skills/doctor/SKILL.md"
 
 # Citations each listed file must carry, as "<file> <path-under-plugin-root>". This is
 # the positive half: a reference silently deleted is not a compliant reference.
@@ -33,12 +37,16 @@ REQUIRED_CITATIONS="agents/debugger.md references/ui-brand.md
 agents/discovery.md references/ui-brand.md
 agents/feedback-aggregator.md references/ui-brand.md
 agents/feedback-aggregator.md references/fix-first-heuristic.md
-agents/planner.md references/ui-brand.md"
+agents/planner.md references/ui-brand.md
+skills/context/SKILL.md references/ui-brand.md
+skills/discover/SKILL.md references/ui-brand.md
+skills/docs/SKILL.md references/ui-brand.md
+skills/doctor/SKILL.md references/ui-brand.md"
 
 PLUGIN_ROOT_TOKEN='${CLAUDE_PLUGIN_ROOT}/'
 
-MIN_SCANNED_FILES=20
-MIN_SCANNED_REFS=10
+MIN_SCANNED_FILES=25
+MIN_SCANNED_REFS=52
 
 # Stage the packaged plugin tree: every file git would ship (tracked, plus untracked
 # files that are not ignored), copied out of the working tree into a clean root.
