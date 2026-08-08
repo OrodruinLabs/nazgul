@@ -8,8 +8,6 @@ tools:
   - Grep
   - Bash
   - Agent
-  - EnterWorktree
-  - ExitWorktree
 maxTurns: 40
 model: sonnet
 ---
@@ -44,7 +42,8 @@ quarantined as BLOCKED by the stop-hook's reconciliation pass, even when the edi
 # BLOCKED only: append --reason "one line"
 ```
 
-Run it from the project root (or with `CLAUDE_PROJECT_DIR` set), naming the exact live status as FROM —
+Name the project root explicitly rather than assuming your cwd is it —
+`CLAUDE_PROJECT_DIR="<main_worktree_path>" "${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" ...` — and give the exact live status as FROM;
 a stale FROM is rejected and nothing is written. Everything else in a manifest (test-failure counters,
 failure details, `- **PR**:`, review notes) is ordinary content you still write with Edit, and it must be
 written BEFORE the transition that depends on it, since the command reads the live file.
@@ -83,7 +82,7 @@ Read `review_gate.simplify_before_review` from `nazgul/config.json` (default **f
 
 When `review_gate.simplify_before_review` is `true`:
 
-1. Read the task worktree path from config: `<worktree_dir>/TASK-NNN`
+1. Read the task worktree path from config: `<worktree_dir>/TASK-NNN`. It must already exist — you pass an existing absolute path to the simplifier, which never creates, enters, or removes a worktree of its own
 2. Read `simplify.focus` from `nazgul/config.json` (if set, pass as focus argument)
 3. **Dispatch the Simplifier agent** using the Agent tool with `subagent_type: "nazgul:simplifier"`:
    - Task ID
@@ -604,7 +603,7 @@ Where `$RESULT` is `confirm` or `refute` and `$DOWNGRADED` is `true` or `false`.
 
 ### Step 3.75: Fix-First Auto-Remediation
 
-When verdict is CHANGES_REQUESTED and feedback-aggregator has classified findings using `references/fix-first-heuristic.md`:
+When verdict is CHANGES_REQUESTED and feedback-aggregator has classified findings using `${CLAUDE_PLUGIN_ROOT}/references/fix-first-heuristic.md`:
 
 1. Read `nazgul/reviews/[UNIT-ID]/consolidated-feedback.md`
 2. Count AUTO-FIX vs ASK items
@@ -636,7 +635,7 @@ Skip this step entirely if mode is `"afk"` or if any reviewer returned CHANGES_R
 #### Process
 
 1. Read the task manifest for acceptance criteria and implementation log
-2. Run automated pre-checks from `references/verification-patterns.md`:
+2. Run automated pre-checks from `${CLAUDE_PLUGIN_ROOT}/references/verification-patterns.md`:
    - **Level 1 (Exists):** Check all files in task's File Scope exist
    - **Level 2 (Substantive):** Run stub detection on created/modified files
    - **Level 3 (Wired):** Verify new files are imported/referenced
