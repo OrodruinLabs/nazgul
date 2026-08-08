@@ -63,7 +63,7 @@ Task-PR:     PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> APPR
 
 ### Bash-Write Reconciliation (MF-022, second layer)
 
-`[hook-driven only]` The table above is enforced at the tool level by `task-state-guard.sh` — but only for a status write that goes through Write/Edit/MultiEdit. A write that reaches a manifest by another path (`mv`/`cp` over the file, a raw shell redirect that evades the PreToolUse matcher) bypasses that tool-level gate entirely. `scripts/stop-hook.sh` closes this as a second, detection-only layer: at the top of every iteration it diffs each task manifest's live status against the status recorded in the previous checkpoint's `task_statuses` snapshot, and any change since then that is not traceable to a guarded transition — logged only by `task-state-guard.sh`'s PreToolUse path via `ttg_log_transition` (`scripts/lib/task-transition-guard.sh`) — is untrusted and flagged `BLOCKED` with a named diagnostic (task id, old→new status, "written outside the guarded Write/Edit/MultiEdit path"). It never rewrites a "corrected" status, only blocks. Both call sites share one library (`scripts/lib/task-transition-guard.sh`: `ttg_valid_transition`, `ttg_verify_commit_evidence`, `ttg_verify_review_evidence`, `ttg_log_transition`), so the transition rules can't drift out of sync between the two enforcement points. Runs only when `stop-hook.sh` drives the loop — a human or orchestrator that never invokes it is not caught by this layer, only by the tool-level block (when the write happens to go through a guarded tool). Kill-switch: `guards.bash_write_reconciliation` (default `true`, config schema v28).
+`[hook-driven only]` The table above is enforced at the tool level by `task-state-guard.sh` — but only for a status write that goes through Write/Edit/MultiEdit. A write that reaches a manifest by another path (`mv`/`cp` over the file, a raw shell redirect that evades the PreToolUse matcher) bypasses that tool-level gate entirely. `scripts/stop-hook.sh` closes this as a second, detection-only layer: at the top of every iteration it diffs each task manifest's live status against the status recorded in the previous checkpoint's `task_statuses` snapshot, and any change since then that is not traceable to a guarded transition — logged only by `task-state-guard.sh`'s PreToolUse path via `ttg_log_transition` (`scripts/lib/task-transition-guard.sh`) — is untrusted and flagged `BLOCKED` with a named diagnostic (task id, old→new status, "written outside the guarded Write/Edit/MultiEdit path"). It never rewrites a "corrected" status, only blocks. Both call sites share one library (`scripts/lib/task-transition-guard.sh`: `ttg_valid_transition`, `ttg_verify_commit_evidence`, `ttg_verify_review_evidence`, `ttg_log_transition`), so the transition rules can't drift out of sync between the two enforcement points. Runs only when `stop-hook.sh` drives the loop — a human or orchestrator that never invokes it is not caught by this layer, only by the tool-level block (when the write happens to go through a guarded tool). Kill-switch: `guards.bash_write_reconciliation` (default `true`, config schema v28). The Bash routes themselves are denied up front by the Task Manifest Write Policy in §5 — a best-effort denylist, explicitly not exhaustive, which is why this detection layer exists rather than being replaced by it.
 
 ---
 
@@ -124,6 +124,25 @@ The Recovery Pointer is read first by every agent on every start. `[enforced]` E
 - Fork bombs, `curl | sh` -- unsafe execution
 - `chmod -R 777` -- permission degradation
 - Comment bloat in source writes -- blocked by `lean-comments-guard.sh` (PreToolUse on Write/Edit/MultiEdit), opt-out via `guards.lean_comments`
+- Direct Bash writes to a task manifest -- see Task Manifest Write Policy below
+
+### Task Manifest Write Policy (ADR-020, FEAT-029)
+
+This policy is one of the Hard Blocks above and carries that section's tier — it is not a separately tiered rule. `scripts/task-transition.sh` is the SINGLE sanctioned writer of a task's status. `task-state-guard.sh` denies a status transition attempted through Write/Edit/MultiEdit and names that command; `pre-tool-guard.sh` denies the Bash routes around it. A shell word counts as a task manifest only when it matches `nazgul/tasks/TASK-<digits>.md` — bare, `./`-prefixed, quoted, split across adjacent quoted fragments, glob-spelled, or absolute — the same strict matcher `task-state-guard.sh` uses. `nazgul/tasks/patches/PATCH-*.md`, per-task artifacts under `nazgul/tasks/TASK-NNN/`, and `TASK-NNN-delegation.md` are deliberately outside the blast radius.
+
+Denied, evaluated per compound-command segment:
+
+- any real redirect (`>`, `>>`, `>|`, `&>`, fd-numbered forms) whose target is a manifest, whatever the command — including a leading redirect with no command word at all;
+- `mv`, `cp`, `install`, `ln` with a manifest as the final non-flag argument (the forge-into-place shape);
+- `tee` with a manifest argument;
+- `sed`, `perl`, `ruby`, `awk`/`gawk` carrying an in-place flag (`-i`, `-i.bak`, `-pi`, `--in-place`) with a manifest in the segment;
+- `sed`, `awk`/`gawk`/`mawk`/`nawk`, `perl`, `python`/`python3`, `ruby`, `node`, `php`, `ed`, `ex` carrying a manifest path INSIDE a larger word — the shape every reported one-liner writer takes (`Path(...).write_text`, `File.write`, `print > "..."`);
+- `bash`/`sh`/`zsh`/`ksh`/`dash` invoked with `-c` and a manifest path (one hop only);
+- a heredoc-fed interpreter when a manifest path appears anywhere in the command.
+
+Allowed on purpose: read-only inspection (`grep`, `cat`, `head`, `diff`, `ls`, and plain `sed -n`/`awk` with the path as its own bare argument), `cp`/`mv` READING from a manifest, and every spelling of the transition command itself.
+
+**This is a denylist over a Turing-complete shell. It is not exhaustive and must not be read as one.** It matches command shape, not effect. It does not catch `eval`, command or process substitution, a script file that writes a manifest (`python3 writer.py`), a path assembled from an unexpanded variable (`"$NAZGUL_DIR/tasks/TASK-001.md"`), shell nesting deeper than one `-c` hop, an interpreter invoked under an unlisted name, or any writer added to the system after this list was written. Those routes degrade to allow by design. What makes an unsanctioned write ineffective is not this layer but the two behind it: the transactional writer's compare-and-swap plus the completed-write ledger, and `stop-hook.sh`'s bash-write reconciliation (§2), which quarantines any status change with no completed transition recorded — including one this denylist never saw. Two over-blocks are accepted deliberately: an interpreter one-liner that only READS a manifest, and `bash -c` wrapping a read-only command. Intent is not decidable from the command string, and both reads have an unblocked plain spelling.
 
 ### Lean Comments (enforced)
 
