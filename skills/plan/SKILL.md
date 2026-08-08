@@ -25,7 +25,7 @@ $ARGUMENTS
 
 ## Instructions
 
-Format all output per `references/ui-brand.md`.
+Format all output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md`.
 
 **Pre-load:** run `ToolSearch` with query `select:AskUserQuestion` (deferred tool) before any step that prompts.
 

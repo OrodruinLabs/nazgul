@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# Test: shared-resource references in shipped prompts (FEAT-029 TASK-007/008/009, PRD AC8).
+# Test: shared-resource references in shipped prompts (FEAT-029 TASK-007..010, PRD AC8).
 # The historical defect: a prompt cited `references/ui-brand.md` relative to nothing in
 # particular, which resolves in a checkout of this repo and nowhere in an installed
 # plugin. Both halves are therefore checked: every shared resource is cited from
@@ -9,9 +9,8 @@ set -uo pipefail
 # INSIDE the packaged tree — the package is staged from what git would ship, so a
 # working-tree-only or ignored file cannot pass for a packaged one.
 #
-# Extending this test (TASK-010): add the file globs of the newly qualified
-# prompts to SCAN_GLOBS and their expected citations to REQUIRED_CITATIONS. The scanner
-# itself is data-driven and needs no change; a second scanner is a defect, not a task.
+# Extending this test: add globs to SCAN_GLOBS and expected citations to
+# REQUIRED_CITATIONS. A second scanner is a defect, not a task.
 TEST_NAME="test-reference-paths"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -26,14 +25,7 @@ trap 'rm -rf "$WORK"' EXIT
 # repository root; a glob that matches nothing is a finding, not an empty pass.
 SCAN_GLOBS="agents/*.md
 agents/templates/*.md
-skills/context/SKILL.md
-skills/discover/SKILL.md
-skills/docs/SKILL.md
-skills/doctor/SKILL.md
-skills/enhance/SKILL.md
-skills/learn/SKILL.md
-skills/metrics/SKILL.md
-skills/verify/SKILL.md"
+skills/*/SKILL.md"
 
 # Citations each listed file must carry, as "<file> <path-under-plugin-root>". This is
 # the positive half: a reference silently deleted is not a compliant reference.
@@ -49,13 +41,21 @@ skills/doctor/SKILL.md references/ui-brand.md
 skills/enhance/SKILL.md references/ui-brand.md
 skills/learn/SKILL.md references/ui-brand.md
 skills/metrics/SKILL.md references/ui-brand.md
+skills/plan/SKILL.md references/ui-brand.md
+skills/review/SKILL.md references/ui-brand.md
+skills/start/SKILL.md references/ui-brand.md
+skills/start/SKILL.md skills/start/references/greenfield-scaffolding.md
+skills/start/SKILL.md skills/start/references/tool-preflight.md
+skills/status/SKILL.md references/ui-brand.md
 skills/verify/SKILL.md references/ui-brand.md
 skills/verify/SKILL.md references/verification-patterns.md"
 
 PLUGIN_ROOT_TOKEN='${CLAUDE_PLUGIN_ROOT}/'
 
-MIN_SCANNED_FILES=29
-MIN_SCANNED_REFS=60
+# Floors sit between what a silent loss of the skills glob would produce (23 files,
+# 50 references — agents only) and the 49/104 the full glob set matches today.
+MIN_SCANNED_FILES=45
+MIN_SCANNED_REFS=95
 
 # Stage the packaged plugin tree: every file git would ship (tracked, plus untracked
 # files that are not ignored), copied out of the working tree into a clean root.

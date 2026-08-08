@@ -25,7 +25,7 @@ $ARGUMENTS
 
 ## Instructions
 
-Format all output per `references/ui-brand.md` — use stage banners, review verdicts, spawning indicators, and display patterns defined there.
+Format all output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md` — use stage banners, review verdicts, spawning indicators, and display patterns defined there.
 
 ### If a task ID is provided in arguments:
 1. Read the task manifest at `nazgul/tasks/[TASK-ID].md`
