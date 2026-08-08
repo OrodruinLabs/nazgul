@@ -2,9 +2,8 @@
 set -uo pipefail
 # Note: NOT using set -e — we assert on exit codes explicitly throughout.
 
-# Test: scripts/self-audit.sh mines in-repo signals + findings.jsonl + best-effort
-# transcript cost, appends one well-formed append-only entry per finding, and
-# degrades cleanly (never errors) when any source is absent.
+# Test: scripts/self-audit.sh mines in-repo signals + findings.jsonl + transcript
+# cost, appends one entry per finding, reports coverage, and never errors.
 TEST_NAME="test-self-audit"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -148,20 +147,23 @@ assert_exit_code "T8: exits 0" "$SA_EC" 0
 assert_contains "T8: logs cost data unavailable" "$SA_OUTPUT" "cost data unavailable"
 assert_file_not_contains "T8: no model-tier drift entry" "$ROOT/nazgul/improvements.md" "Model-tier drift"
 
-# --- Test 9: transcript present -> flags tier drift, no false positive on a match ---
+# --- Test 9: opaque `agent-<hex>.jsonl` transcripts resolve their role from
+# attributionAgent (prefix normalized) -> drift flagged, no false positive ---
 ROOT=$(mk_project "t9")
 TRANSCRIPTS="$TMPDIR_BASE/t9-transcripts/session1/subagents"
 mkdir -p "$TRANSCRIPTS"
-printf '{"message":{"model":"opus","usage":{"input_tokens":100,"output_tokens":50}}}\n' \
-  > "$TRANSCRIPTS/code-reviewer.jsonl"
-printf '{"message":{"model":"sonnet","usage":{"input_tokens":200,"output_tokens":80}}}\n' \
-  > "$TRANSCRIPTS/implementer.jsonl"
+printf '{"attributionAgent":"nazgul:code-reviewer","message":{"model":"opus","usage":{"input_tokens":100,"output_tokens":50}}}\n' \
+  > "$TRANSCRIPTS/agent-a015e06fa8fb1060b.jsonl"
+printf '{"attributionAgent":"nazgul:nazgul:implementer","message":{"model":"sonnet","usage":{"input_tokens":200,"output_tokens":80}}}\n' \
+  > "$TRANSCRIPTS/agent-a0254f11fcb9191cf.jsonl"
 run_self_audit_with_transcripts "$ROOT/nazgul" "$TMPDIR_BASE/t9-transcripts"
 assert_exit_code "T9: exits 0" "$SA_EC" 0
 BACKLOG9=$(cat "$ROOT/nazgul/improvements.md")
 assert_contains "T9: drift flagged for code-reviewer (opus vs haiku)" "$BACKLOG9" \
   "Model-tier drift: code-reviewer ran on opus (expected haiku)"
 assert_not_contains "T9: no drift for implementer (sonnet matches)" "$BACKLOG9" "Model-tier drift: implementer"
+assert_contains "T9: both opaque files classified from attribution, none skipped" "$SA_OUTPUT" \
+  "self-audit/token-cost: 2 scanned, 0 skipped (unreadable=0, unclassifiable=0, not-applicable=0), 2 checked, 1 findings"
 
 # --- Test 10: bare nazgul dir (no reviews/logs/tasks/git) -> exits 0, header-only backlog ---
 BARE="$TMPDIR_BASE/t10"
@@ -172,11 +174,8 @@ assert_exit_code "T10: bare dir exits 0" "$SA_EC" 0
 assert_file_exists "T10: backlog created" "$BARE/nazgul/improvements.md"
 assert_contains "T10: backlog has header" "$(cat "$BARE/nazgul/improvements.md")" "Improvements Backlog"
 
-# --- Test 11: unwritable backlog dir -> degrades cleanly (exit 0), never aborts the run ---
-# The script runs under `set -euo pipefail` and promises "never fails the run".
-# Force the backlog's parent-dir creation to fail deterministically for ANY user
-# (incl. root in CI) by pointing self_audit.backlog_path at a path whose parent is
-# a regular FILE — `mkdir -p` then cannot create the directory.
+# --- Test 11: unwritable backlog dir -> degrades cleanly (exit 0), never aborts.
+# Fails for ANY user (incl. root in CI): the configured backlog's parent is a FILE ---
 T11=$(mk_project "t11")
 # Seed a real finding so the script would WANT to append (proves it's the write,
 # not "nothing to do", that we're exercising).
@@ -192,13 +191,12 @@ assert_exit_code "T11: unwritable backlog exits 0 (never fails the run)" "$SA_EC
 assert_contains "T11: logs a skip message" "$SA_OUTPUT" "run not failed"
 assert_file_not_exists "T11: no backlog created at the blocked path" "$T11/blk/improvements.md"
 
-# --- Test 12: feedback-aggregator on haiku is NOT flagged as tier drift ---
-# review-gate dispatches feedback-aggregator on the review_default chain (haiku),
-# so _expected_model_for must resolve it to haiku, not fall through to sonnet.
+# --- Test 12: feedback-aggregator on haiku is NOT tier drift — review-gate
+# dispatches it on the review_default chain, not models.default ---
 T12ROOT=$(mk_project "t12")
 T12T="$TMPDIR_BASE/t12-transcripts/session1/subagents"
 mkdir -p "$T12T"
-printf '{"message":{"model":"haiku"}}\n' > "$T12T/feedback-aggregator.jsonl"
+printf '{"attributionAgent":"feedback-aggregator","message":{"model":"haiku"}}\n' > "$T12T/agent-a03d0dafb0145a2d7.jsonl"
 run_self_audit_with_transcripts "$T12ROOT/nazgul" "$TMPDIR_BASE/t12-transcripts"
 assert_exit_code "T12: exits 0" "$SA_EC" 0
 assert_not_contains "T12: feedback-aggregator on haiku not flagged as drift (review_default)" \
@@ -209,8 +207,10 @@ assert_not_contains "T12: feedback-aggregator on haiku not flagged as drift (rev
 T13ROOT=$(mk_project "t13")
 T13T="$TMPDIR_BASE/t13-transcripts"
 mkdir -p "$T13T/session-old/subagents" "$T13T/session-new/subagents"
-printf '{"message":{"model":"opus"}}\n'   > "$T13T/session-old/subagents/code-reviewer.jsonl"  # would drift (opus vs haiku)
-printf '{"message":{"model":"sonnet"}}\n' > "$T13T/session-new/subagents/implementer.jsonl"     # matches, no drift
+printf '{"attributionAgent":"code-reviewer","message":{"model":"opus"}}\n' \
+  > "$T13T/session-old/subagents/agent-a015e06fa8fb1060b.jsonl"   # would drift (opus vs haiku)
+printf '{"attributionAgent":"implementer","message":{"model":"sonnet"}}\n' \
+  > "$T13T/session-new/subagents/agent-a0254f11fcb9191cf.jsonl"   # matches, no drift
 # Force mtime ordering AFTER writing contents (writes bump the dir mtime).
 touch -t 202601010000 "$T13T/session-old"
 touch -t 202601020000 "$T13T/session-new"
@@ -259,10 +259,8 @@ T16RESULT=$(unset CLAUDE_CONFIG_DIR; HOME="$T16FAKEHOME" call_transcripts_dir "$
 assert_eq "T16: falls back to basename glob match" "$T16RESULT" \
   "$T16FAKEHOME/.claude/projects/-some-other-prefix-t16-drift-project"
 
-# --- Test 17: an AMBIGUOUS basename glob (two projects share the leaf slug)
-# must NOT arbitrarily pick one — it degrades to the computed (missing) expected
-# path so mining reports cost-unavailable rather than mining an unrelated
-# project's transcripts (PR #55 review) ---
+# --- Test 17: an AMBIGUOUS basename glob must NOT arbitrarily pick one — it
+# degrades to the computed (missing) path so cost reads unavailable (PR #55) ---
 T17ROOT="$TMPDIR_BASE/t17 drift project"
 mkdir -p "$T17ROOT/nazgul"
 cp "$REPO_ROOT/templates/config.json" "$T17ROOT/nazgul/config.json"
@@ -312,5 +310,247 @@ run_self_audit "$ROOT/nazgul"
 assert_exit_code "T20: exits 0" "$SA_EC" 0
 assert_file_not_contains "T20: no discrepancy finding with zero logged spawns" \
   "$ROOT/nazgul/improvements.md" "Teammate spawn/manifest discrepancy"
+
+APPROVE_BOARD="$REPO_ROOT/tests/fixtures/self-audit/approve-board"
+
+# sa_line <output> <miner> -> that miner's last coverage line ("" when absent).
+sa_line() {
+  printf '%s\n' "$1" | grep -E "^self-audit/$2: " | tail -1
+}
+
+# sa_num <line> <sed-capture> -> the integer that capture selects.
+sa_num() {
+  printf '%s' "$1" | sed -E "s/$2/\1/"
+}
+
+# assert_coverage <label> <line> <prefix> — fixed grammar, closed reason list,
+# N == M + K, and the reasons summing to M.
+assert_coverage() {
+  local label="$1" line="$2" prefix="$3" n m k u c a
+  local re="^${prefix}: [0-9]+ scanned, [0-9]+ skipped \(unreadable=[0-9]+, unclassifiable=[0-9]+, not-applicable=[0-9]+\), [0-9]+ checked, [0-9]+ findings$"
+  if printf '%s' "$line" | grep -qE "$re"; then
+    _pass "$label: coverage line conforms to the grammar"
+  else
+    _fail "$label: coverage line conforms to the grammar" "got: '$line'"
+    return 1
+  fi
+  n=$(sa_num "$line" '^[^:]*: ([0-9]+) scanned.*')
+  m=$(sa_num "$line" '^.*, ([0-9]+) skipped \(.*')
+  u=$(sa_num "$line" '^.*unreadable=([0-9]+).*')
+  c=$(sa_num "$line" '^.*unclassifiable=([0-9]+).*')
+  a=$(sa_num "$line" '^.*not-applicable=([0-9]+).*')
+  k=$(sa_num "$line" '^.*\), ([0-9]+) checked.*')
+  assert_eq "$label: N == M + K" "$n" "$((m + k))"
+  assert_eq "$label: enumerated reasons account for all M" "$m" "$((u + c + a))"
+}
+
+# --- Test 21 (AC5): every miner reports its own coverage, and the run total is
+# the sum of them — "looked and found none" never collapses into "never looked" ---
+T21=$(mk_project "t21")
+mkdir -p "$T21/nazgul/logs" "$T21/nazgul/tasks" "$T21/nazgul/reviews/TASK-001"
+printf -- '---\nverdict: APPROVE\n---\nfine.\n' > "$T21/nazgul/reviews/TASK-001/code-reviewer.md"
+printf '{"event":"blocked","task_id":"TASK-001","reason":"lint"}\n' > "$T21/nazgul/logs/events.jsonl"
+printf '{"ts":"t","agent":"a","severity":"low","title":"x","detail":"d"}\n' \
+  > "$T21/nazgul/logs/findings.jsonl"
+cat > "$T21/nazgul/tasks/TASK-001.md" << 'EOF'
+# TASK-001
+- **Retry count**: 0/3
+EOF
+T21T="$TMPDIR_BASE/t21-transcripts/session1/subagents"
+mkdir -p "$T21T"
+printf '{"attributionAgent":"implementer","message":{"model":"sonnet"}}\n' > "$T21T/agent-aaa.jsonl"
+run_self_audit_with_transcripts "$T21/nazgul" "$TMPDIR_BASE/t21-transcripts"
+assert_exit_code "T21: exits 0" "$SA_EC" 0
+T21_SUM_S=0; T21_SUM_M=0; T21_SUM_K=0; T21_SUM_F=0
+for miner in review-rejections guard-blocks teammate-spawns todo-delta task-retries token-cost findings-jsonl; do
+  LINE=$(sa_line "$SA_OUTPUT" "$miner")
+  assert_coverage "T21/$miner" "$LINE" "self-audit/$miner" || continue
+  T21_SUM_S=$((T21_SUM_S + $(sa_num "$LINE" '^[^:]*: ([0-9]+) scanned.*')))
+  T21_SUM_M=$((T21_SUM_M + $(sa_num "$LINE" '^.*, ([0-9]+) skipped \(.*')))
+  T21_SUM_K=$((T21_SUM_K + $(sa_num "$LINE" '^.*\), ([0-9]+) checked.*')))
+  T21_SUM_F=$((T21_SUM_F + $(sa_num "$LINE" '^.*, ([0-9]+) findings$')))
+done
+T21_TOTAL=$(printf '%s\n' "$SA_OUTPUT" | grep -E '^self-audit: [0-9]+ scanned' | tail -1)
+assert_coverage "T21/run-total" "$T21_TOTAL" "self-audit"
+assert_eq "T21: run total scanned == sum of miners" \
+  "$(sa_num "$T21_TOTAL" '^[^:]*: ([0-9]+) scanned.*')" "$T21_SUM_S"
+assert_eq "T21: run total skipped == sum of miners" \
+  "$(sa_num "$T21_TOTAL" '^.*, ([0-9]+) skipped \(.*')" "$T21_SUM_M"
+assert_eq "T21: run total checked == sum of miners" \
+  "$(sa_num "$T21_TOTAL" '^.*\), ([0-9]+) checked.*')" "$T21_SUM_K"
+assert_eq "T21: run total findings == sum of miners" \
+  "$(sa_num "$T21_TOTAL" '^.*, ([0-9]+) findings$')" "$T21_SUM_F"
+assert_not_contains "T21: no internal accounting mismatch reported" "$SA_OUTPUT" \
+  "coverage accounting mismatch"
+
+# --- Test 22 (AC4): the captured-real 11/11 APPROVE board, six of whose files
+# carry `REJECT: none` boilerplate, produces ZERO rejection findings ---
+T22=$(mk_project "t22")
+mkdir -p "$T22/nazgul/reviews/FEATURE-FEAT-010"
+cp "$APPROVE_BOARD"/*.md "$T22/nazgul/reviews/FEATURE-FEAT-010/"
+BOILERPLATE=$(grep -lE '^-[[:space:]]*\*{0,2}REJECT' "$T22/nazgul/reviews/FEATURE-FEAT-010"/*.md | wc -l | tr -d ' ')
+assert_eq "T22: fixture really carries the boilerplate (6 files)" "$BOILERPLATE" "6"
+run_self_audit "$T22/nazgul"
+assert_exit_code "T22: exits 0" "$SA_EC" 0
+assert_file_not_contains "T22: unanimous APPROVE board emits no rejection finding" \
+  "$T22/nazgul/improvements.md" "Review rejection:"
+assert_contains "T22: all 11 verdicts were classified, none skipped" "$SA_OUTPUT" \
+  "self-audit/review-rejections: 11 scanned, 0 skipped (unreadable=0, unclassifiable=0, not-applicable=0), 11 checked, 0 findings"
+
+# --- Test 23 (AC4): the same board turns red when ONE verdict really rejects —
+# a fixture that can only pass is evidence of nothing ---
+T23=$(mk_project "t23")
+mkdir -p "$T23/nazgul/reviews/FEATURE-FEAT-010"
+cp "$APPROVE_BOARD"/*.md "$T23/nazgul/reviews/FEATURE-FEAT-010/"
+sed 's/^verdict: APPROVE$/verdict: CHANGES_REQUESTED/' "$APPROVE_BOARD/qa-reviewer.md" \
+  > "$T23/nazgul/reviews/FEATURE-FEAT-010/qa-reviewer.md"
+run_self_audit "$T23/nazgul"
+assert_exit_code "T23: exits 0" "$SA_EC" 0
+assert_file_contains "T23: the one real rejection is found" \
+  "$T23/nazgul/improvements.md" "Review rejection: FEATURE-FEAT-010/qa-reviewer"
+T23_COUNT=$(grep -c "Review rejection:" "$T23/nazgul/improvements.md")
+assert_eq "T23: exactly one rejection finding, not one per REJECT mention" "$T23_COUNT" "1"
+
+# --- Test 24 (AC4): a NUL byte flips BSD grep into binary mode and made the same
+# board mine differently; `grep -a` keeps the verdict readable ---
+T24=$(mk_project "t24")
+mkdir -p "$T24/nazgul/reviews/GROUP-1"
+{ printf 'binary noise: \000\n'; sed 's/^verdict: APPROVE$/verdict: CHANGES_REQUESTED/' "$APPROVE_BOARD/qa-reviewer.md"; } \
+  > "$T24/nazgul/reviews/GROUP-1/qa-reviewer.md"
+NULCOUNT=$(LC_ALL=C tr -dc '\000' < "$T24/nazgul/reviews/GROUP-1/qa-reviewer.md" | wc -c | tr -d ' ')
+assert_eq "T24: the fixture really carries an embedded NUL" "$NULCOUNT" "1"
+run_self_audit "$T24/nazgul"
+assert_exit_code "T24: exits 0" "$SA_EC" 0
+assert_file_contains "T24: NUL-bearing rejection still detected" \
+  "$T24/nazgul/improvements.md" "Review rejection: GROUP-1/qa-reviewer"
+assert_contains "T24: NUL file counted as checked, not silently skipped" "$SA_OUTPUT" \
+  "self-audit/review-rejections: 1 scanned, 0 skipped (unreadable=0, unclassifiable=0, not-applicable=0), 1 checked, 1 findings"
+
+# --- Test 25 (AC1): a generic harness agent type names no Nazgul role, so it is
+# reported unclassifiable instead of compared against models.default ---
+T25=$(mk_project "t25")
+T25T="$TMPDIR_BASE/t25-transcripts/session1/subagents"
+mkdir -p "$T25T"
+printf '{"attributionAgent":"general-purpose","message":{"model":"haiku"}}\n' > "$T25T/agent-b1.jsonl"
+printf '{"attributionAgent":"Explore","message":{"model":"haiku"}}\n' > "$T25T/agent-b2.jsonl"
+run_self_audit_with_transcripts "$T25/nazgul" "$TMPDIR_BASE/t25-transcripts"
+assert_exit_code "T25: exits 0" "$SA_EC" 0
+assert_file_not_contains "T25: generic agent types emit no drift finding" \
+  "$T25/nazgul/improvements.md" "Model-tier drift"
+assert_contains "T25: both reported unclassifiable, and the miner says so" "$SA_OUTPUT" \
+  "self-audit/token-cost: 2 scanned, 2 skipped (unreadable=0, unclassifiable=2, not-applicable=0), 0 checked, 0 findings"
+
+# --- Test 26 (AC1): a transcript with NO attribution at all is unclassifiable.
+# Resolving the role from the opaque filename compared it to models.default ---
+T26=$(mk_project "t26")
+T26T="$TMPDIR_BASE/t26-transcripts/session1/subagents"
+mkdir -p "$T26T"
+printf '{"message":{"model":"haiku"}}\n' > "$T26T/agent-c1a2b3c4d5e6f7081.jsonl"
+run_self_audit_with_transcripts "$T26/nazgul" "$TMPDIR_BASE/t26-transcripts"
+assert_exit_code "T26: exits 0" "$SA_EC" 0
+assert_file_not_contains "T26: unattributed transcript emits no drift finding" \
+  "$T26/nazgul/improvements.md" "Model-tier drift"
+assert_contains "T26: skip is reported, not silent" "$SA_OUTPUT" \
+  "self-audit/token-cost: 1 scanned, 1 skipped (unreadable=0, unclassifiable=1, not-applicable=0), 0 checked, 0 findings"
+
+# --- Test 27 (AC2): a configured bare alias is a FAMILY pin — same-family
+# resolved ids match, cross-family drift still emits exactly one finding ---
+T27=$(mk_project "t27")
+T27T="$TMPDIR_BASE/t27-transcripts/session1/subagents"
+mkdir -p "$T27T"
+printf '{"attributionAgent":"nazgul:implementer","message":{"model":"claude-sonnet-5"}}\n' > "$T27T/agent-d1.jsonl"
+printf '{"attributionAgent":"code-reviewer","message":{"model":"claude-3-5-haiku-20241022"}}\n' > "$T27T/agent-d2.jsonl"
+printf '{"attributionAgent":"nazgul:planner","message":{"model":"claude-3-5-haiku-20241022"}}\n' > "$T27T/agent-d3.jsonl"
+run_self_audit_with_transcripts "$T27/nazgul" "$TMPDIR_BASE/t27-transcripts"
+assert_exit_code "T27: exits 0" "$SA_EC" 0
+BACKLOG27=$(cat "$T27/nazgul/improvements.md")
+assert_not_contains "T27: sonnet alias matches claude-sonnet-5" "$BACKLOG27" "Model-tier drift: implementer"
+assert_not_contains "T27: haiku alias matches claude-3-5-haiku-20241022" "$BACKLOG27" "Model-tier drift: code-reviewer"
+assert_contains "T27: genuine cross-family drift (opus configured, haiku ran) still reported" \
+  "$BACKLOG27" "Model-tier drift: planner ran on claude-3-5-haiku-20241022 (expected opus)"
+T27_COUNT=$(grep -c "Model-tier drift" "$T27/nazgul/improvements.md")
+assert_eq "T27: exactly one drift finding from three transcripts" "$T27_COUNT" "1"
+
+# --- Test 28 (AC3): an explicit configured full model id stays an EXACT pin, so
+# a same-family version mismatch still reports and the exact id does not ---
+T28=$(mk_project "t28")
+jq '.models.implementation = "claude-sonnet-4-5-20250929"' \
+  "$T28/nazgul/config.json" > "$T28/nazgul/config.json.tmp" \
+  && mv "$T28/nazgul/config.json.tmp" "$T28/nazgul/config.json"
+T28T="$TMPDIR_BASE/t28-transcripts/session1/subagents"
+mkdir -p "$T28T"
+printf '{"attributionAgent":"implementer","message":{"model":"claude-sonnet-5"}}\n' > "$T28T/agent-e1.jsonl"
+run_self_audit_with_transcripts "$T28/nazgul" "$TMPDIR_BASE/t28-transcripts"
+assert_exit_code "T28: exits 0" "$SA_EC" 0
+assert_file_contains "T28: full-id pin rejects a same-family version mismatch" \
+  "$T28/nazgul/improvements.md" \
+  "Model-tier drift: implementer ran on claude-sonnet-5 (expected claude-sonnet-4-5-20250929)"
+T28B=$(mk_project "t28b")
+jq '.models.implementation = "claude-sonnet-4-5-20250929"' \
+  "$T28B/nazgul/config.json" > "$T28B/nazgul/config.json.tmp" \
+  && mv "$T28B/nazgul/config.json.tmp" "$T28B/nazgul/config.json"
+T28BT="$TMPDIR_BASE/t28b-transcripts/session1/subagents"
+mkdir -p "$T28BT"
+printf '{"attributionAgent":"implementer","message":{"model":"claude-sonnet-4-5-20250929"}}\n' > "$T28BT/agent-e2.jsonl"
+run_self_audit_with_transcripts "$T28B/nazgul" "$TMPDIR_BASE/t28b-transcripts"
+assert_file_not_contains "T28b: the exact pinned id is not drift" \
+  "$T28B/nazgul/improvements.md" "Model-tier drift"
+
+# --- Test 29 (AC6): the mined log window advances — a second run over the same
+# events re-reports them as out-of-window instead of re-mining them ---
+T29=$(mk_project "t29")
+mkdir -p "$T29/nazgul/logs"
+printf '{"event":"blocked","task_id":"TASK-001","reason":"lint"}\n{"event":"other"}\n' \
+  > "$T29/nazgul/logs/events.jsonl"
+run_self_audit "$T29/nazgul"
+assert_exit_code "T29a: first run exits 0" "$SA_EC" 0
+assert_contains "T29a: first run mines both lines" "$SA_OUTPUT" \
+  "self-audit/guard-blocks: 2 scanned, 0 skipped (unreadable=0, unclassifiable=0, not-applicable=0), 2 checked, 1 findings"
+assert_file_exists "T29a: high-water mark persisted" "$T29/nazgul/self-audit-window.json"
+assert_eq "T29a: mark records the consumed line count" \
+  "$(jq -r '.guard_blocks["events.jsonl"]' "$T29/nazgul/self-audit-window.json")" "2"
+run_self_audit "$T29/nazgul"
+assert_exit_code "T29b: second run exits 0" "$SA_EC" 0
+assert_contains "T29b: already-mined lines are out of window, not re-checked" "$SA_OUTPUT" \
+  "self-audit/guard-blocks: 2 scanned, 2 skipped (unreadable=0, unclassifiable=0, not-applicable=2), 0 checked, 0 findings"
+T29_COUNT=$(grep -c "loop-blocked event" "$T29/nazgul/improvements.md")
+assert_eq "T29b: the 2026-08-03-style re-mine does not happen (one entry, not two)" "$T29_COUNT" "1"
+
+# --- Test 30 (AC6): a newly appended event IS mined on the next run ---
+printf '{"event":"blocked","task_id":"TASK-002","reason":"conflict"}\n' >> "$T29/nazgul/logs/events.jsonl"
+run_self_audit "$T29/nazgul"
+assert_exit_code "T30: exits 0" "$SA_EC" 0
+assert_contains "T30: only the new line is checked" "$SA_OUTPUT" \
+  "self-audit/guard-blocks: 3 scanned, 2 skipped (unreadable=0, unclassifiable=0, not-applicable=2), 1 checked, 1 findings"
+assert_file_contains "T30: the new event reaches the backlog" \
+  "$T29/nazgul/improvements.md" "TASK-002:conflict"
+
+# --- Test 31 (AC6): a rotated/truncated log is re-mined from the start, loudly —
+# a mark ahead of the file is a state change, not a reason to look at nothing ---
+printf '{"event":"blocked","task_id":"TASK-009","reason":"rotated"}\n' \
+  > "$T29/nazgul/logs/events.jsonl"
+run_self_audit "$T29/nazgul"
+assert_exit_code "T31: exits 0" "$SA_EC" 0
+assert_contains "T31: announces the shrink instead of silently skipping" "$SA_OUTPUT" \
+  "is shorter than the recorded mark"
+assert_contains "T31: re-mines the whole file" "$SA_OUTPUT" \
+  "self-audit/guard-blocks: 1 scanned, 0 skipped (unreadable=0, unclassifiable=0, not-applicable=0), 1 checked, 1 findings"
+
+# --- Test 32 (AC6): snapshot miners are deduped on (title, evidence), so a
+# second run over unchanged state appends nothing and says how much it held back ---
+T32=$(mk_project "t32")
+mkdir -p "$T32/nazgul/tasks"
+cat > "$T32/nazgul/tasks/TASK-003.md" << 'EOF'
+# TASK-003
+- **Retry count**: 2/3
+EOF
+run_self_audit "$T32/nazgul"
+assert_exit_code "T32a: first run exits 0" "$SA_EC" 0
+run_self_audit "$T32/nazgul"
+assert_exit_code "T32b: second run exits 0" "$SA_EC" 0
+T32_COUNT=$(grep -c "TASK-003 required 2 retry attempt(s)" "$T32/nazgul/improvements.md")
+assert_eq "T32b: the retry finding appears exactly once across two runs" "$T32_COUNT" "1"
+assert_contains "T32b: suppression is reported, not silent" "$SA_OUTPUT" \
+  "suppressed as already present in the backlog"
 
 report_results
