@@ -91,6 +91,7 @@ All documents go to `nazgul/docs/`. This directory is the project's living docum
       - Ensure no contradictions with existing docs; if found, note and justify resolution
    c. Write to `nazgul/docs/[document-type].md`
    d. Log to `nazgul/docs/manifest.md`
+   e. Before writing any statement that names an exact generated path, package layout, or build-output location, run it through the Artifact Claim Evidence Ledger below and record its row.
 4. If HITL mode: pause for human review of docs before proceeding
 5. If AFK mode: generate all docs and continue
 
@@ -106,6 +107,45 @@ All documents go to `nazgul/docs/`. This directory is the project's living docum
 - Generated docs must not contradict existing docs without explicit justification.
 - For BROWNFIELD with existing API specs: TRD "API Design" must extend the existing spec, citing base spec path.
 - For projects with existing ADRs: number new ADRs sequentially after the highest existing ADR number.
+- An exact generated path, package layout, or build-output location is a claim, not a fact. Every one carries a row in the Artifact Claim Evidence Ledger — verified by a command you actually ran, or explicitly marked unverified. Never state one with certainty on the strength of source intent alone.
+
+## Artifact Claim Evidence Ledger
+
+An **artifact claim** is any statement naming an exact generated path, package layout, output filename, or build-output location — something that exists only after a build, pack, publish, or code-generation step has run.
+
+Source **intent** and verified **output** are different facts. A template, a project manifest, a config key, or a directory in the repository tells you what the project is *meant* to produce. Only the inspected result of a command that actually ran tells you what it *does* produce. Toolchains rewrite layouts between the two: packagers relocate content roots, bundlers insert content hashes, compilers add configuration and target segments. Stating an exact generated path with certainty on the strength of intent alone is prohibited — that is the error class this ledger exists to prevent.
+
+### Verifying a claim
+
+Verification is project-native and read from configuration. Never assume a command and never assume a layout:
+
+1. Read `nazgul/config.json` → `project.build_command`, `project.test_command`, `project.lint_command`, `project.smoke_command`. Use the command this project configured for its own toolchain.
+2. If no configured command covers the claim, a read-only inspection of an artifact already present on disk (listing a produced output directory or an already-built package) is acceptable evidence.
+3. Run nothing else. Do NOT derive a command from a language, framework, or file-extension guess, and do not carry another project's output layout into this one.
+
+Decline to run anything that is not configured, needs credentials or a network publish, writes outside the project, or has no bounded runtime. Unsafe and unavailable end the same way: the claim is UNVERIFIED. An unverified claim is a normal and acceptable outcome; a fabricated command or a fabricated output excerpt is not.
+
+### Recording a claim
+
+Every artifact claim gets exactly one row in an `## Artifact Claim Evidence` table in the document that makes the claim:
+
+| Claim | Class | Status | Command | Observed | Disposition |
+|---|---|---|---|---|---|
+| `build/app-4f2c1a.min.js` | build output | VERIFIED | `<project.build_command>` | output listing contains `build/app-4f2c1a.min.js` | stated as an exact path |
+| `content/<name>/config.json` | package layout | UNVERIFIED | n/a | n/a | test-plan obligation: assert the packed layout |
+
+- **VERIFIED** requires a `Command` you actually ran and an `Observed` excerpt you actually read, and the observed text must literally contain the claimed path. A VERIFIED row whose `Observed` does not contain its `Claim` is invented evidence: downgrade it to UNVERIFIED and record what was really observed.
+- **UNVERIFIED** requires `n/a` in both evidence columns, the claim written in prose with a visible `UNVERIFIED` marker and intent wording ("intended to produce", "per `<source>`") in place of certainty, and a matching obligation added to the test plan's `## Acceptance Criteria Verification` table so the gap is scheduled rather than forgotten.
+
+<!-- artifact-claim-ledger:begin — checked against this contract by tests/test-doc-generator-contract.sh -->
+columns: claim | class | status | command | observed | disposition
+status_tokens: VERIFIED UNVERIFIED
+verified_row: command != n/a; observed != n/a; observed contains claim
+unverified_row: command == n/a; observed == n/a; disposition names a test-plan obligation
+document_requires: visible UNVERIFIED marker in prose; obligation row in the test plan
+command_source: nazgul/config.json project.build_command project.test_command project.lint_command project.smoke_command
+forbidden: assumed_command; assumed_layout; invented_observed
+<!-- artifact-claim-ledger:end -->
 
 ## Output: manifest.md
 

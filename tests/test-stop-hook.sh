@@ -1277,26 +1277,44 @@ assert_eq "recon: kill switch off — forged status left untouched" \
   "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "IMPLEMENTED"
 teardown_temp_dir
 
-# --- RECON-3: a legitimate Write-mediated transition (through
-# task-state-guard.sh, so it lands in the guarded-transition ledger) is NOT
-# flagged BLOCKED by the next iteration's reconciliation pass ---
+# --- RECON-3: authority is the completed-write ledger (ADR-020). An edge
+# applied by scripts/task-transition.sh is NOT reconciled to BLOCKED; a status
+# reached by any other route in the same window still is. Both directions are
+# asserted from one fixture so neither can pass vacuously. ---
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
 create_config '.agents.reviewers = ["code-reviewer"]'
 create_plan
-create_task_file "TASK-001" "IN_PROGRESS"
+RECON_BASE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD~1)
+RECON_HEAD_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+# Scope is deliberately outside scripts/** and tests/**, so this fixture
+# exercises the commit gate without needing captured red-run evidence.
+recon_cycle_manifest() { # <task-id> <status>
+  printf -- '---\nstatus: %s\n---\n# %s: Test task\n\n## Metadata\n- **Depends on**: none\n- **Group**: 1\n- **Retry count**: 0/3\n- **Files modified**: ["docs/foo.md"]\n- **Base SHA**: %s\n\n## Commits\n- %s — feat: work\n' \
+    "$2" "$1" "$RECON_BASE_SHA" "$RECON_HEAD_SHA"
+}
+run_transition_cmd() { # <task-id> <from> <to>
+  TRANSITION_EC=0
+  CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO_ROOT/scripts/task-transition.sh" \
+    transition "$1" "$2" "$3" >/dev/null 2>"$TEST_DIR/transition.err" || TRANSITION_EC=$?
+}
+
+recon_cycle_manifest TASK-001 IN_PROGRESS > "$TEST_DIR/nazgul/tasks/TASK-001.md"
+recon_cycle_manifest TASK-002 READY > "$TEST_DIR/nazgul/tasks/TASK-002.md"
 run_hook
-REAL_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
-RECON_TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
-recon_content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- %s' "$REAL_SHA")
-recon_input=$(jq -n --arg fp "$RECON_TASK_PATH" --arg content "$recon_content" \
-  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
-echo "$recon_input" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO_ROOT/scripts/task-state-guard.sh" >/dev/null 2>&1
-printf '%s' "$recon_content" > "$RECON_TASK_PATH"
+run_transition_cmd TASK-001 IN_PROGRESS IMPLEMENTED
+assert_exit_code "recon: sanctioned command applies the implementer's own edge" "$TRANSITION_EC" 0
+sed -i.bak 's/^status: READY/status: IN_PROGRESS/' "$TEST_DIR/nazgul/tasks/TASK-002.md" \
+  && rm -f "$TEST_DIR/nazgul/tasks/TASK-002.md.bak"
 run_hook
-assert_eq "recon: legitimate guarded transition not reconciled to BLOCKED" \
-  "$(get_task_status "$RECON_TASK_PATH")" "IMPLEMENTED"
+assert_eq "recon: command-applied transition not reconciled to BLOCKED" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "IMPLEMENTED"
+assert_eq "recon: same-window write by another route is still reconciled to BLOCKED" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-002.md")" "BLOCKED"
+assert_contains "recon: diagnostic names the completed-write authority" \
+  "$HOOK_OUTPUT" "no completed transition recorded by scripts/task-transition.sh"
 teardown_temp_dir
 
 # --- RECON-4: the stop-hook's OWN auto-promote (PLANNED -> READY) runs after
@@ -1315,6 +1333,36 @@ assert_eq "recon: auto-promote flipped PLANNED to READY" \
 run_hook
 assert_eq "recon: hook's own auto-promote not reconciled to BLOCKED" \
   "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "READY"
+teardown_temp_dir
+
+# --- RECON-5: the loop must not wedge on its own change. Every routine edge —
+# the implementer's claim and IMPLEMENTED, the review gate's IN_REVIEW and DONE
+# — must still complete once direct status writes are denied, and several of
+# them land inside ONE checkpoint window, so reconciliation has to resolve a
+# chain of completed edges rather than a single entry. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]' \
+  '.learning.auto_distill_post_loop = false' '.docs.verify_comments = false' \
+  '.self_audit.enabled = false'
+create_plan
+create_review_dir "TASK-001"
+RECON_BASE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD~1)
+RECON_HEAD_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+recon_cycle_manifest TASK-001 READY > "$TEST_DIR/nazgul/tasks/TASK-001.md"
+run_hook
+CYCLE_STEPS="READY:IN_PROGRESS IN_PROGRESS:IMPLEMENTED IMPLEMENTED:IN_REVIEW IN_REVIEW:DONE"
+for cycle_step in $CYCLE_STEPS; do
+  run_transition_cmd TASK-001 "${cycle_step%%:*}" "${cycle_step##*:}"
+  assert_exit_code "cycle: ${cycle_step%%:*} -> ${cycle_step##*:} completes through the command" \
+    "$TRANSITION_EC" 0
+done
+assert_eq "cycle: task reaches DONE entirely through the command" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "DONE"
+run_hook
+assert_eq "cycle: a multi-edge window is chained by the ledger, not quarantined" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "DONE"
 teardown_temp_dir
 
 # === MF-006: HITL pending-approval marker gates the DEFAULT sequential path ===

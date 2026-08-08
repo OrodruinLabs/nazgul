@@ -36,7 +36,7 @@ $ARGUMENTS
 4. Ensure `nazgul/learning/` exists (`mkdir -p`).
 
 ### Display Banner
-Output per references/ui-brand.md:
+Output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md`:
 ```
 ─── ◈ NAZGUL ▸ LEARNING ────────────────────────────────
 ```

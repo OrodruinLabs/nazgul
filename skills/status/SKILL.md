@@ -40,7 +40,7 @@ metadata:
 
 ## Instructions
 
-Format all output per `references/ui-brand.md` — use stage banners, status symbols, progress bars, and task status display patterns defined there.
+Format all output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md` — use stage banners, status symbols, progress bars, and task status display patterns defined there.
 
 Using the live data above, produce a formatted status report.
 

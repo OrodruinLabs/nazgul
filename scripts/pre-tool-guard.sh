@@ -143,44 +143,55 @@ check_pattern 'curl\s+.*\|\s*(ba)?sh' "Piped internet execution (curl | sh)"
 check_pattern 'wget\s+.*\|\s*(ba)?sh' "Piped internet execution (wget | sh)"
 check_pattern 'curl\s+.*\|\s*sudo' "Piped internet execution with sudo"
 
-# Task manifest status protection — prevent bypassing Write/Edit hooks
-check_pattern 'sed.*nazgul/tasks/TASK-.*Status' "Direct sed on task manifest status (use Write/Edit tools)"
-check_pattern 'cat.*>.*nazgul/tasks/TASK-' "Direct cat redirect to task manifest (use Write/Edit tools)"
-check_pattern 'tee.*nazgul/tasks/TASK-' "Direct tee to task manifest (use Write/Edit tools)"
+# Task manifest status protection lives entirely in the structural funnel below
+# (the old text-substring sed/cat/tee rules both over- and under-matched).
 
-# Task manifest write protection: a segment is blocked when it EITHER (a) invokes
-# echo/printf AND has a REAL redirect operator (>, >>, >|, >>| outside quotes) whose
-# target resolves to a nazgul/tasks/TASK-*.md path — in either order, so a leading
-# redirect (`> nazgul/tasks/TASK-001.md echo ok`) is caught too — OR (b) invokes
-# mv/cp with a manifest path as its final non-flag argument (MF-022 funnel; the
-# common `mv/cp SRC nazgul/tasks/TASK-NNN.md` forgery shape). The awk tokenizer
-# tracks single/double-quote state (a > inside quotes is data, not a redirect) and
-# reconstructs the full shell word from adjacent quoted+unquoted fragments, so a
-# split target like `> "nazgul/tasks/"TASK-001.md` rejoins to one path before
-# validation. Compound commands (;, &&, ||, |, newline outside quotes) reset
-# per-segment state so each segment is checked independently. Scoped to
-# echo/printf/mv/cp; sed/cat/tee rules above handle those separately.
-#
-# Defense-in-depth note: primary protection is the Write/Edit tool hooks and
-# task-state guard. This is a best-effort secondary layer — the structural fix for
-# MF-022 is the stop-hook-time recompute-and-compare reconciliation (ADR-003
-# Decision 2), not this funnel. fd-numbered and combined redirects (1>, 2>, &>,
-# 2>&1) ARE handled. Deeply exotic shell forms (process substitution, eval'd
-# strings, nested subshells, command substitution) are out of scope by design and
-# degrade to allow.
+# Task manifest write funnel (ADR-020): scripts/task-transition.sh is the single
+# sanctioned status writer; RULES.md §5 states the rules and their known limits.
 _check_manifest_write_funnel() {
   printf '%s' "$CMD" | awk '
 BEGIN {
   in_sq = 0; in_dq = 0; tok = ""; found_cmd = 0
   redirect_pending = 0; found = 0; fd_target_pending = 0
-  seg_has_cmd = 0; seg_writes_manifest = 0
-  seg_is_mv_cp = 0; mv_cp_target = ""
+  cmd_word = ""; seg_writes_manifest = 0; last_arg = ""
+  has_inplace = 0; has_dash_c = 0; seg_heredoc = 0
+  manifest_arg = 0; manifest_embedded = 0
+  any_manifest = 0; heredoc_interp = 0
 }
 
+# Quotes are stripped during accumulation, so the reconstructed shell word is
+# matched whole — bare, ./-prefixed and absolute spellings all resolve here.
 function is_manifest_path(t) {
-  # tok already has quotes stripped during accumulation — check the whole word.
-  while (substr(t,1,2) == "./") t = substr(t, 3)
-  return (t ~ /^nazgul\/tasks\/TASK-[^[:space:]]*\.md$/)
+  return (t ~ /(^|\/)nazgul\/tasks\/TASK-[0-9*?]+\.md$/)
+}
+
+# The same path INSIDE a larger word (interpreter script text, an option value),
+# which is the shape every one-liner writer takes.
+function has_manifest_path(t) {
+  return (t ~ /(^|[^A-Za-z0-9_.-])nazgul\/tasks\/TASK-[0-9*?]+\.md/)
+}
+
+function base_cmd(t) {
+  sub(/^.*\//, "", t)
+  return t
+}
+
+function writes_by_last_arg(c) {
+  return (c == "mv" || c == "cp" || c == "install" || c == "ln")
+}
+
+function edits_in_place(c) {
+  return (c == "sed" || c == "gsed" || c == "perl" || c == "ruby" || c == "awk" || c == "gawk")
+}
+
+function interpreter(c) {
+  return (c == "sed" || c == "gsed" || c == "awk" || c == "gawk" || c == "mawk" || c == "nawk" ||
+          c == "perl" || c == "python" || c == "python2" || c == "python3" || c == "ruby" ||
+          c == "node" || c == "php" || c == "ed" || c == "ex")
+}
+
+function shell_dash_c(c) {
+  return (c == "bash" || c == "sh" || c == "zsh" || c == "ksh" || c == "dash")
 }
 
 # Flush the accumulated word. A word may be built from adjacent quoted and
@@ -191,6 +202,7 @@ function is_manifest_path(t) {
 function flush_tok(    t) {
   t = tok; tok = ""
   if (t == "") return
+  if (has_manifest_path(t)) any_manifest = 1
   if (fd_target_pending) {
     # fd-duplication target (the 1 in 2>&1, the - in >&-) — never a command word
     fd_target_pending = 0
@@ -201,33 +213,47 @@ function flush_tok(    t) {
     redirect_pending = 0
     return
   }
-  # mv/cp arguments: track the last non-flag word as the candidate destination
-  # (the common `mv/cp SRC DEST` shape — DEST is whatever word came last).
-  if (seg_is_mv_cp && t !~ /^-/) mv_cp_target = t
   if (!found_cmd) {
     # Leading VAR=value env assignments precede the command word in bash — skip
-    # them so a later echo/printf/mv/cp is still recognised as the command.
+    # them so the real command word is still recognised.
     if (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/) return
     found_cmd = 1
-    if (t == "echo" || t == "printf") seg_has_cmd = 1
-    if (t == "mv" || t == "cp") seg_is_mv_cp = 1
+    cmd_word = base_cmd(t)
+    return
   }
+  if (t ~ /^-/) {
+    if (t == "-c") has_dash_c = 1
+    if (t ~ /^--in-place/ || t ~ /^-[A-Za-z0-9]*i(\.[A-Za-z0-9]*)?$/) has_inplace = 1
+  } else {
+    last_arg = t
+  }
+  if (t ~ /^<</) seg_heredoc = 1
+  if (is_manifest_path(t)) manifest_arg = 1
+  else if (has_manifest_path(t)) manifest_embedded = 1
 }
 
-# A segment blocks when it either (a) invokes echo/printf AND redirects into a
-# manifest, in either order (handles leading redirects), or (b) invokes mv/cp with
-# a manifest path as the final argument.
 function end_segment() {
   flush_tok()
-  if (seg_has_cmd && seg_writes_manifest) found = 1
-  if (seg_is_mv_cp && is_manifest_path(mv_cp_target)) found = 1
+  # Any real redirect into a manifest, whatever the command (or none at all).
+  if (seg_writes_manifest) found = 1
+  if (writes_by_last_arg(cmd_word) && is_manifest_path(last_arg)) found = 1
+  if (cmd_word == "tee" && (manifest_arg || manifest_embedded)) found = 1
+  if (edits_in_place(cmd_word) && has_inplace && (manifest_arg || manifest_embedded)) found = 1
+  # An interpreter carrying the path inside its program text is a writer shape;
+  # read-only inspection passes the path as its own bare argument instead.
+  if (interpreter(cmd_word) && manifest_embedded) found = 1
+  if (shell_dash_c(cmd_word) && has_dash_c && (manifest_arg || manifest_embedded)) found = 1
+  # A heredoc-fed interpreter: the body arrives on later lines, so pair it with a
+  # manifest path seen anywhere in the command rather than guess at the body.
+  if (interpreter(cmd_word) && seg_heredoc) heredoc_interp = 1
 }
 
 function reset_segment() {
   end_segment()
   found_cmd = 0; redirect_pending = 0; fd_target_pending = 0
-  seg_has_cmd = 0; seg_writes_manifest = 0
-  seg_is_mv_cp = 0; mv_cp_target = ""
+  cmd_word = ""; seg_writes_manifest = 0; last_arg = ""
+  has_inplace = 0; has_dash_c = 0; seg_heredoc = 0
+  manifest_arg = 0; manifest_embedded = 0
 }
 
 {
@@ -303,7 +329,10 @@ function reset_segment() {
   }
 }
 
-END { exit (found ? 2 : 0) }
+END {
+  if (heredoc_interp && any_manifest) found = 1
+  exit (found ? 2 : 0)
+}
 '
 }
 

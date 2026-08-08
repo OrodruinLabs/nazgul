@@ -39,7 +39,7 @@ $ARGUMENTS
 
 ## Instructions
 
-Format all output per `references/ui-brand.md` — use stage banners, status symbols, spawning indicators, and display patterns defined there.
+Format all output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md` — use stage banners, status symbols, spawning indicators, and display patterns defined there.
 
 Print, unconditionally, before proceeding: "Run /nazgul:doctor to verify your environment before starting the loop." This is a printed suggestion only — do not run doctor, do not read or branch on its result, and do not gate any part of this skill on it.
 
@@ -535,9 +535,9 @@ Do NOT append to `objectives_history` here — the single per-objective append i
 
 ### Greenfield Stack Scaffolding
 
-For greenfield projects, Nazgul first checks for a project spec (see Step 0 in `references/greenfield-scaffolding.md`), then runs an interactive stack selection, tool pre-flight check, and configuration workflow. Consult `references/greenfield-scaffolding.md` for the full process including project spec detection, stack selection menus, AFK defaults, tool configuration steps, infrastructure scaffolding, and config storage.
+For greenfield projects, Nazgul first checks for a project spec (see Step 0 in `${CLAUDE_PLUGIN_ROOT}/skills/start/references/greenfield-scaffolding.md`), then runs an interactive stack selection, tool pre-flight check, and configuration workflow. Consult `${CLAUDE_PLUGIN_ROOT}/skills/start/references/greenfield-scaffolding.md` for the full process including project spec detection, stack selection menus, AFK defaults, tool configuration steps, infrastructure scaffolding, and config storage.
 
-For the tool detection commands table (check commands and install commands per platform), see `references/tool-preflight.md`.
+For the tool detection commands table (check commands and install commands per platform), see `${CLAUDE_PLUGIN_ROOT}/skills/start/references/tool-preflight.md`.
 
 ---
 

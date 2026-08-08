@@ -22,7 +22,7 @@ $ARGUMENTS
 
 ## Instructions
 
-Format all output per `references/ui-brand.md` — use checkpoint boxes, status symbols, and display patterns defined there.
+Format all output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md` — use checkpoint boxes, status symbols, and display patterns defined there.
 
 ### Pre-flight
 1. Check if `nazgul/config.json` exists. If not: "Nazgul not initialized. Run `/nazgul:init` first." and STOP.
@@ -46,7 +46,7 @@ For each task being verified:
 
 ### Step 2: Automated Pre-Checks (Levels 1-3)
 
-Run automated verification using patterns from `references/verification-patterns.md`:
+Run automated verification using patterns from `${CLAUDE_PLUGIN_ROOT}/references/verification-patterns.md`:
 
 **Level 1 — Exists:**
 - Check all files listed in the task's `File Scope → Creates` actually exist

@@ -36,11 +36,13 @@ Task-PR:     PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> APPR
 
 ### Permitted Transitions
 
-`[enforced]` All permitted and forbidden transitions are mechanically enforced by `task-state-guard.sh` (PreToolUse on Write/Edit). Any status write that is not an adjacent permitted transition — including a non-adjacent jump like `IN_PROGRESS → DONE` or `PLANNED → DONE`, and including a full-manifest Write whose `status:` lives in YAML frontmatter (caught by the guard's status-extraction fallback) — is rejected (exit 2) with a message naming the current status and the allowed next state(s). Illegal status writes are blocked at the tool call level regardless of who drives the loop.
+`[enforced]` `scripts/task-transition.sh` is the SOLE sanctioned writer of a task's status (ADR-020, FEAT-029). Under a per-task lock it validates the live manifest, rechecks the source status immediately before an atomic rename, verifies the target status on disk afterwards, and only then records the exact edge it completed. `task-state-guard.sh` (PreToolUse on Write/Edit/MultiEdit) remains a preflight safety layer and now rejects (exit 2) EVERY direct status write, not merely an illegal one — a legal adjacent transition typed by hand is refused with `Direct task-status edits cannot record completed-write authority` and the exact transition command to run instead. An illegal write is refused earlier and separately, by the shared `ttg_validate_transition`, so the two failures stay distinguishable: a non-adjacent jump like `IN_PROGRESS → DONE`, a missing-evidence transition, and a full-manifest Write whose `status:` lives in YAML frontmatter (caught by the guard's status-extraction fallback) each name their own cause. A manifest with a visible transition lock is also refused, which narrows — without pretending to eliminate — the check-to-rename window a PreToolUse hook cannot hold a lock across.
+
+**Preflight is not authority.** `[enforced]` The guard observes an *intended* write and can never observe whether the tool call succeeded, so a cancelled or failed edit used to leave a ledger entry that reconciliation later accepted as authorization for a different raw write. Authority now comes only from a verified completed write: the ledger records the exact `FROM -> TO` edge that was observed on disk, not an endpoint that was once permitted. The honest boundary: the Write/Edit route is blocked mechanically, while the Bash routes around it are a best-effort denylist explicitly documented as non-exhaustive (§5) — what makes an unsanctioned write ineffective is the compare-and-swap plus the reconciliation pass below, not the denylist.
 
 | From | To | Condition |
 |------|----|-----------|
-| PLANNED | READY | All dependencies DONE (or APPROVED in YOLO) |
+| PLANNED | READY | All dependencies DONE (or APPROVED in YOLO); `IMPLEMENTED` or later under `group`/`feature` granularity — see the dependency-gate rule below |
 | READY | IN_PROGRESS | Agent claims the task |
 | IN_PROGRESS | IMPLEMENTED | Code complete + tests pass + lint clean |
 | IMPLEMENTED | IN_REVIEW | Review gate picks up the task |
@@ -61,9 +63,19 @@ Task-PR:     PLANNED -> READY -> IN_PROGRESS -> IMPLEMENTED -> IN_REVIEW -> APPR
 - IN_REVIEW -> IN_PROGRESS (must go through CHANGES_REQUESTED)
 - DONE -> any state (terminal)
 
+### Dependency Gate
+
+- **The `PLANNED -> READY` dependency condition is granularity-aware.** `[enforced]` ONE authority, `ttg_dependency_satisfied` (`scripts/lib/task-transition-guard.sh`), is called by both `ttg_validate_transition` and `stop-hook.sh`'s auto-promote arm, so the two enforcement points cannot drift. Under `review_gate.granularity: task` a dependency must be `DONE` (or `APPROVED` in YOLO). Under `group`/`feature` every task parks at IMPLEMENTED until ONE aggregate board, so `DONE` is unsatisfiable there and `IMPLEMENTED`, `IN_REVIEW`, `APPROVED`, and `DONE` all satisfy the gate — the aggregate board gates the whole unit, not each task. A `PLANNED` dependency still refuses in every granularity. Requiring `DONE` unconditionally was a shipping deadlock: once the direct manifest-write routes closed (§5), a `group`/`feature` project could claim no task at all.
+
 ### Bash-Write Reconciliation (MF-022, second layer)
 
-`[hook-driven only]` The table above is enforced at the tool level by `task-state-guard.sh` — but only for a status write that goes through Write/Edit/MultiEdit. A write that reaches a manifest by another path (`mv`/`cp` over the file, a raw shell redirect that evades the PreToolUse matcher) bypasses that tool-level gate entirely. `scripts/stop-hook.sh` closes this as a second, detection-only layer: at the top of every iteration it diffs each task manifest's live status against the status recorded in the previous checkpoint's `task_statuses` snapshot, and any change since then that is not traceable to a guarded transition — logged only by `task-state-guard.sh`'s PreToolUse path via `ttg_log_transition` (`scripts/lib/task-transition-guard.sh`) — is untrusted and flagged `BLOCKED` with a named diagnostic (task id, old→new status, "written outside the guarded Write/Edit/MultiEdit path"). It never rewrites a "corrected" status, only blocks. Both call sites share one library (`scripts/lib/task-transition-guard.sh`: `ttg_valid_transition`, `ttg_verify_commit_evidence`, `ttg_verify_review_evidence`, `ttg_log_transition`), so the transition rules can't drift out of sync between the two enforcement points. Runs only when `stop-hook.sh` drives the loop — a human or orchestrator that never invokes it is not caught by this layer, only by the tool-level block (when the write happens to go through a guarded tool). Kill-switch: `guards.bash_write_reconciliation` (default `true`, config schema v28).
+`[hook-driven only]` The table above is enforced at the tool level by `task-state-guard.sh` — but only for a status write that goes through Write/Edit/MultiEdit. A write that reaches a manifest by another path (`mv`/`cp` over the file, a raw shell redirect that evades the PreToolUse matcher) bypasses that tool-level gate entirely. `scripts/stop-hook.sh` closes this as a second, detection-only layer: at the top of every iteration it diffs each task manifest's live status against the status recorded in the previous checkpoint's `task_statuses` snapshot, and any change since then that is not traceable to a chain of COMPLETED transitions — appended by `ttg_log_transition` (`scripts/lib/task-transition-guard.sh`) only after `ttg_apply_transition` verified the new status on disk, i.e. by `scripts/task-transition.sh` and by the stop-hook's own auto-promote/auto-block arms, never by a PreToolUse preauthorization — is untrusted and quarantined with a named diagnostic (task id, old→new status, "outside the guarded Write/Edit/MultiEdit path, with no completed transition recorded"). The chain matters: matching only the endpoints let a stale record ratify an unrelated write. It never rewrites a "corrected" status, only quarantines. An untraceable landing on IMPLEMENTED additionally re-verifies red-run evidence, so the quarantine reason names which fact was missing. Both call sites share one library (`scripts/lib/task-transition-guard.sh`: `ttg_valid_transition`, `ttg_verify_commit_evidence`, `ttg_verify_review_evidence`, `ttg_log_transition`), so the transition rules can't drift out of sync between the two enforcement points. Runs only when `stop-hook.sh` drives the loop — a human or orchestrator that never invokes it is not caught by this layer, only by the tool-level block (when the write happens to go through a guarded tool). Kill-switch: `guards.bash_write_reconciliation` (default `true`, config schema v28). The Bash routes themselves are denied up front by the Task Manifest Write Policy in §5 — a best-effort denylist, explicitly not exhaustive, which is why this detection layer exists rather than being replaced by it.
+
+### Reconciliation Quarantine and Evidence-Gated Repair (ADR-020)
+
+- **A quarantine is a typed integrity annotation, not an ordinary graph edge.** `[hook-driven only]` When reconciliation rejects a status change, `stop-hook.sh` writes machine-readable endpoints into the manifest — `Blocked kind: reconciliation`, `Blocked from: <checkpoint status>`, `Blocked observed: <untrusted live status>`, plus a prose `Blocked reason` — emits a `reconciliation_quarantine` event, and names the recovery command on stderr. `DONE -> BLOCKED` is deliberately NOT claimed as a permitted product-flow edge; it is an integrity state outside the ordinary graph, and recording both endpoints is what lets the untrusted target be revalidated later instead of silently "corrected" away. The other blocker classes are typed the same way (`review-evidence`, `review-provenance`, `git-conflict`), which is what makes the repair routing below mechanical rather than inferred from the absence of a field. Runs only when `stop-hook.sh` drives the loop.
+- **`repair` is the only exit from a reconciliation quarantine, and it revalidates before it writes.** `[enforced]` `scripts/task-transition.sh repair TASK-NNN` runs five independent checks against local files and Git history — commit evidence, red-run evidence, review-directory path safety, review verdicts, and review provenance — and refuses if any reports a finding. Only then does it take `BLOCKED -> IN_REVIEW -> DONE` through the same transactional primitive as every other edge, one edge at a time; a halt at either edge preserves the quarantine. It never uses `READY` and never redispatches an implementer: the work was already reviewed, so re-implementing it would destroy the evidence the repair exists to revalidate. Review receipts are evidence transport, never standalone authority.
+- **Every repair refusal is distinguishable, on stderr and in telemetry.** `[enforced]` Six named reasons — `not_blocked`, `untyped_blocker`, `wrong_blocker_kind`, `corrupt_quarantine_metadata`, `unreviewed_observed_status`, `incomplete_evidence` — each emit a `reconciliation_repair` event with `action: denied`, and a refused edge emits `action: halted` with `reason: edge_refused`. `repair` is closed to every other blocker class: an untyped blocker or one typed `review-evidence`/`review-provenance`/`git-conflict` routes to `/nazgul:task unblock`, never here. A repair that declined must not look like a repair that had nothing to do (§5).
 
 ---
 
@@ -124,6 +136,25 @@ The Recovery Pointer is read first by every agent on every start. `[enforced]` E
 - Fork bombs, `curl | sh` -- unsafe execution
 - `chmod -R 777` -- permission degradation
 - Comment bloat in source writes -- blocked by `lean-comments-guard.sh` (PreToolUse on Write/Edit/MultiEdit), opt-out via `guards.lean_comments`
+- Direct Bash writes to a task manifest -- see Task Manifest Write Policy below
+
+### Task Manifest Write Policy (ADR-020, FEAT-029)
+
+This policy is one of the Hard Blocks above and carries that section's tier — it is not a separately tiered rule. `scripts/task-transition.sh` is the SINGLE sanctioned writer of a task's status. `task-state-guard.sh` denies a status transition attempted through Write/Edit/MultiEdit and names that command; `pre-tool-guard.sh` denies the Bash routes around it. A shell word counts as a task manifest only when it matches `nazgul/tasks/TASK-<digits>.md` — bare, `./`-prefixed, quoted, split across adjacent quoted fragments, glob-spelled, or absolute — the same strict matcher `task-state-guard.sh` uses. `nazgul/tasks/patches/PATCH-*.md`, per-task artifacts under `nazgul/tasks/TASK-NNN/`, and `TASK-NNN-delegation.md` are deliberately outside the blast radius.
+
+Denied, evaluated per compound-command segment:
+
+- any real redirect (`>`, `>>`, `>|`, `&>`, fd-numbered forms) whose target is a manifest, whatever the command — including a leading redirect with no command word at all;
+- `mv`, `cp`, `install`, `ln` with a manifest as the final non-flag argument (the forge-into-place shape);
+- `tee` with a manifest argument;
+- `sed`, `perl`, `ruby`, `awk`/`gawk` carrying an in-place flag (`-i`, `-i.bak`, `-pi`, `--in-place`) with a manifest in the segment;
+- `sed`, `awk`/`gawk`/`mawk`/`nawk`, `perl`, `python`/`python3`, `ruby`, `node`, `php`, `ed`, `ex` carrying a manifest path INSIDE a larger word — the shape every reported one-liner writer takes (`Path(...).write_text`, `File.write`, `print > "..."`);
+- `bash`/`sh`/`zsh`/`ksh`/`dash` invoked with `-c` and a manifest path (one hop only);
+- a heredoc-fed interpreter when a manifest path appears anywhere in the command.
+
+Allowed on purpose: read-only inspection (`grep`, `cat`, `head`, `diff`, `ls`, and plain `sed -n`/`awk` with the path as its own bare argument), `cp`/`mv` READING from a manifest, and every spelling of the transition command itself.
+
+**This is a denylist over a Turing-complete shell. It is not exhaustive and must not be read as one.** It matches command shape, not effect. It does not catch `eval`, command or process substitution, a script file that writes a manifest (`python3 writer.py`), a path assembled from an unexpanded variable (`"$NAZGUL_DIR/tasks/TASK-001.md"`), shell nesting deeper than one `-c` hop, an interpreter invoked under an unlisted name, or any writer added to the system after this list was written. Those routes degrade to allow by design. What makes an unsanctioned write ineffective is not this layer but the two behind it: the transactional writer's compare-and-swap plus the completed-write ledger, and `stop-hook.sh`'s bash-write reconciliation (§2), which quarantines any status change with no completed transition recorded — including one this denylist never saw. Two over-blocks are accepted deliberately: an interpreter one-liner that only READS a manifest, and `bash -c` wrapping a read-only command. Intent is not decidable from the command string, and both reads have an unblocked plain spelling.
 
 ### Lean Comments (enforced)
 
@@ -193,6 +224,8 @@ This guard governs comment QUANTITY at write time. See §7 for the complementary
 **Inline doc-comment quality is enforced at the post-loop completion gate.** `[enforced]` `agents/comment-verifier.md` — a language-generic agent — grades inline source doc-comments (XML `<summary>`, JSDoc, docstrings) changed by the objective for templated, restatement, and contradiction defects; this is distinct from the Lean Comments quantity guard in §5 (write-time bloat vs. post-loop quality — see the cross-reference there). It records completion by writing `nazgul/logs/.comments-verified` containing the current `feat_id`. The stop-hook blocks `NAZGUL_COMPLETE` until this marker is present and matches the active `feat_id`, with its own bounded backstop (≤3 attempts) after which it warns and allows completion. When `docs.verify_comments` is `false` in `nazgul/config.json` (default `true`), or no non-doc/config source file changed on the feature branch, the gate degrades to allow without requiring the marker.
 
 **Self-audit runs at the post-loop completion gate.** `[enforced]` (FEAT-009, ADR-001) After the doc/comment verifiers, `agents/self-audit.md` mines this objective's own signals — review rejections, retries, blocks, best-effort transcript token cost, and any first-party findings in `nazgul/logs/findings.jsonl` (§14) — and appends one structured entry per finding to the durable, append-only backlog at `nazgul/improvements.md` (path from `self_audit.backlog_path`). Its testable core `scripts/self-audit.sh` never fails the run: every source degrades to a no-op when absent. The agent records completion by writing `nazgul/logs/.self-audited` containing the current `feat_id`; the stop-hook blocks `NAZGUL_COMPLETE` until that marker matches, with a bounded ≤3-attempt backstop so it can never deadlock an unattended loop. When `self_audit.enabled` is `false` in `nazgul/config.json` (default `true`), the gate is a complete no-op.
+
+**An exact generated-artifact claim needs verified output, never source intent.** `[advisory]` (FEAT-029/TASK-005, ADR-020's sibling honesty rule) `agents/doc-generator.md`'s Artifact Claim Evidence Ledger keeps two facts apart that generated docs routinely conflate: source *intent* (what a template, manifest, config key, or directory listing says should be produced) and verified *output* (the inspected result of a command that actually ran). Asserting an exact path, filename, or version from intent alone is prohibited, and a `VERIFIED` row whose `Observed` does not literally contain its `Claim` is invented evidence that must be downgraded. Where verification is unsafe or unavailable the two reach the SAME outcome — `UNVERIFIED` in prose plus an obligation in the test plan's `## Acceptance Criteria Verification` table — never a fabricated command or excerpt. The contract stays framework-neutral by naming no build command, only `nazgul/config.json → project.build_command|test_command|lint_command|smoke_command`. The tier is honest: `tests/test-doc-generator-contract.sh` pins the CONTRACT as rendered by the real producer, which is not the same as blocking a doc-generator run that claims a path it never observed. Nothing mechanically stops that claim; a reviewer must catch it.
 
 **Model tiers are config-read, not hook-enforced.** `[advisory]` (FEAT-009) The single review tier is now two keys: `models.review_orchestrator` (the review-gate orchestrator) and `models.review_default` (default per-reviewer tier for the mechanical code/qa reviewers). Both resolve with the exact fallback chain **new key → legacy `models.review` → hardcoded** (`sonnet` for the orchestrator, `haiku` for the default reviewer), so a config still carrying only `models.review` is honored unchanged; `models.review_by_reviewer` pins `security-reviewer`/`architect-reviewer` to `sonnet` on top of this (§3 Rule 11). These are agent/skill config reads, not hook checks — advisory, like the rest of the model routing.
 
@@ -496,6 +529,17 @@ policy but emit `coverage_vacuous`. A filter that matches no file is also NOTHIN
 run. A new skip reason must be named and counted — it cannot disappear into `passed` or a free-form
 note. This is §15's looked-vs-never-looked distinction applied to tests, guards, smoke, and audits.
 
+- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Seven entry
+  points are bound by the contract above: `tests/run-tests.sh`, `scripts/lean-comments-guard.sh --check`,
+  `tests/test-shellcheck.sh`, `scripts/doctor.sh`, `agents/comment-verifier.md`,
+  `scripts/lib/heartbeat-triage.sh`, and `scripts/self-audit.sh` (enrolled FEAT-029/TASK-012, which also
+  moved the registry here). `tests/test-coverage-honesty.sh` drives every one of them under a forced
+  all-skip input and FAILS if any enumerated entry point was never driven — membership is asserted, not
+  assumed, so an entry point that conforms today cannot silently stop conforming tomorrow. Add a new
+  checking entry point to this list and to that test in the same change. The registry previously cited a
+  TRD section, which was archived out from under the citation when that objective completed: the authority
+  for a durable contract must live in a durable file.
+
 ## 16. GitHub Connector
 
 `scripts/lib/connector-github.sh` (FEAT-012, ADR-001) is the first real remote provider behind the
@@ -577,12 +621,20 @@ FILE, enforced in three layers:
    degrades exactly as before, because the resolver's fallback is the first
    candidate, not a confirmed one. ADR-008 Option 2 (a `CLAUDE_PROJECT_DIR`
    export at worktree-entry time) was implemented in TASK-008's
-   `create_task_worktree()` as a would-be backstop for that case, but has
-   zero live callers today: the real worktree-entry paths are the
-   `EnterWorktree` tool and a raw `git worktree add`
-   (`agents/implementer.md:113`), neither of which calls it, and its only
+   `create_task_worktree()` as a would-be backstop for that case, but still
+   has zero live callers. FEAT-029/TASK-006 changed what the alternatives
+   are: the `EnterWorktree`/`ExitWorktree` tool grants and the prose that
+   used them were removed from every agent spec, so no agent creates or
+   enters a worktree at all — the implementer is HANDED an existing
+   `<task_worktree>`, verifies it with `git -C ... rev-parse`, and STOPs
+   rather than creating one (`agents/implementer.md`, Branch and Worktree
+   Protocol). Whatever creates that worktree does so outside this repo's
+   scripts; nothing in-tree calls `create_task_worktree()`, and its only
    return channel is `echo`, so any real caller would capture it via
    `$(...)`, whose subshell discards the export before it reaches the caller.
+   `scripts/worktree-utils.sh:346` still repeats the retired `EnterWorktree`
+   claim in a comment; it is outside TASK-012's file scope and is reported
+   rather than edited here.
 
 **MF-047 companion note (Layer 2 cross-check, `[advisory]`).** A missing
 dispatch manifest (Layer 2) is indistinguishable from a non-Nazgul process —

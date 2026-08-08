@@ -10,19 +10,13 @@ echo "=== $TEST_NAME ==="
 
 RULES_FILE="$REPO_ROOT/RULES.md"
 
-# ---------------------------------------------------------------------------
-# Test (a): RULES.md does NOT contain the old overclaiming line
-# ---------------------------------------------------------------------------
 assert_file_not_contains \
   "RULES.md does not claim 'Every rule here is checked by a hook, agent, or script'" \
   "$RULES_FILE" \
   "Every rule here is checked by a hook, agent, or script"
 
-# ---------------------------------------------------------------------------
-# Test (b): every numbered rule line carries exactly one tier string
-# A "numbered rule line" is a line matching: ^[0-9]+\. \*\* (bold lead-in)
-# The Recovery Read Order items use plain text, not bold — excluded by the pattern.
-# ---------------------------------------------------------------------------
+# A "numbered rule line" is `^[0-9]+\. \*\*`; the Recovery Read Order items are
+# plain text, so the bold lead-in excludes them.
 TIER_PATTERN='\[enforced\]\|\[hook-driven only\]\|\[advisory\]'
 
 missing_tier=0
@@ -40,12 +34,8 @@ else
     "one or more numbered rule lines above are missing a tier label"
 fi
 
-# ---------------------------------------------------------------------------
-# Test (d): every "- **rule**" bullet carries a tier annotation
-# (Section 10 Branch Isolation uses bullet format, not numbered format)
-# Excludes lines inside fenced code blocks (Recovery Pointer template, etc.)
-# and mode-name bullets that are plain descriptors, not enforcement rules.
-# ---------------------------------------------------------------------------
+# Bullet-format rules (§10 Branch Isolation and friends), excluding fenced
+# blocks and the HITL/AFK/YOLO mode descriptors, which are not rules.
 missing_bullet_tier=0
 while IFS= read -r line; do
   if ! echo "$line" | grep -qE '\[(enforced|hook-driven only|advisory)\]'; then
@@ -62,99 +52,38 @@ else
     "one or more bullet-format rule lines above are missing a tier label"
 fi
 
-# ---------------------------------------------------------------------------
-# Test (c): [advisory] count is exactly 20 — was 17 as of FEAT-016 (see prior
-# history: Parallel Execution Collapse deleted 4 Conductor-era bullets, +2 from
-# §17 Teammate Report Contract). FEAT-017/TASK-011 added 2 more: §11's
-# review-then-merge dispatch-order note and §17's MF-047 spawn-vs-manifest
-# companion note (17 + 2 = 19). FEAT-018 added 1 more: §18's "Dismissal is
-# part of consuming a report" rule. 19 + 1 = 20.
-# NOTE: counts OCCURRENCES, not lines (some lines carry two tags) — see the
-# [enforced] counter below; for [advisory] the line count and occurrence
-# count both happen to be 22 (no line currently carries two [advisory] tags).
-# FEAT-021/TASK-010 added 1 more: the "Shared nazgul/ Root Resolver" subsection's
-# resolver-adoption-is-review-only bullet (20 + 1 = 21). FEAT-024/TASK-009 added
-# 1 more: §19's resume-recovery-pattern bullet (21 + 1 = 22). FEAT-026/TASK-007's
-# §18 rewrite (teardown subsystem deleted, ADR-017) replaced the old single
-# dismissal bullet with two: the primitive-choice rule and a dormant-dismissal
-# note (22 + 1 = 23). FEAT-027/TASK-012 added §20 Stacked-PR Continuation:
-# 3 more [advisory] rules — data-not-instructions, stack-unit-is-convention,
-# never-merge-a-lower-layer (23 + 3 = 26).
-ADVISORY_COUNT=$(awk '{ count += gsub(/\[advisory\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ADVISORY_COUNT" -eq 26 ]; then
-  _pass "[advisory] annotation count is exactly 26 (found: $ADVISORY_COUNT)"
+# The three counts are structural-freshness checks, NOT ceilings: bump one for a
+# genuinely new rule; never weaken a tag to keep a count unchanged (FEAT-022).
+ADVISORY_COUNT=$(awk '{ count += gsub(/\[advisory\]/, "") } END { print count + 0 }' "$RULES_FILE")  # occurrences, not lines
+if [ "$ADVISORY_COUNT" -eq 27 ]; then
+  _pass "[advisory] annotation count is exactly 27 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 26" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 26"
+  _fail "[advisory] annotation count is exactly 27" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 27"
 fi
 
-# ---------------------------------------------------------------------------
-# Test (c2): [enforced]/[hook-driven only] counts. The final whole-branch
-# review's enforcement-tier honesty pass reclassified §18 rule 2 (the
-# stop-hook's undismissed-teammate directive) from [enforced] to
-# [hook-driven only]: the gate only injects a continuation-message directive
-# into the loop prompt — a direct dispatcher can route around it — it never
-# mechanically blocks a tool call the way a PreToolUse guard does. That is a
-# net enforced -1 / hook-driven only +1 relative to the prior count.
-#
-# These two constants are a structural-freshness check on RULES.md's tier
-# taxonomy, not a ceiling: bump them deliberately whenever a genuinely new
-# tier-tagged rule is added. Never weaken or remove an existing tag just to
-# keep a count unchanged — that defeats the point of the check (FEAT-022/
-# TASK-008 review board finding: Attempt 1 folded two new rules into
-# unrelated existing bullets specifically to avoid bumping these numbers).
-# ---------------------------------------------------------------------------
-# NOTE: counts OCCURRENCES, not lines — `grep -c` undercounts because two
-# lines in RULES.md (the parallel-batch-selection bullet and the §11
-# hard-stops footnote) each carry two `[enforced]` tags. Line count was 49;
-# occurrence count was 51 (49 + 2 for the double-tagged lines). FEAT-021/
-# TASK-010 added 1 more: the resolver subsection's `_resolution_integrity_ok()`
-# fail-open sentence (51 + 1 = 52). FEAT-022/TASK-008 added 1 more: §8's new
-# "Project detection (config-present, tasks-absent)" bullet, split out of the
-# Implementer bullet it was originally folded into (52 + 1 = 53). FEAT-024/
-# TASK-009 added 3 more: §19's universal-detection, bounded-resume, and
-# kill-switch bullets (53 + 3 = 56). FEAT-027/TASK-012 added §20 Stacked-PR
-# Continuation: 6 more [enforced] rules — base assertion, fail-closed tooling,
-# script-owned registry, never-auto-resolve, stderr classification, and the
-# cap gate (56 + 6 = 62). FEAT-028/TASK-018 adds 2 more: §5's loud evidence-
-# degradation rule and §15's tests-facing coverage-honesty application
-# (62 + 2 = 64).
+# 64 -> 69: FEAT-029 added §2's preflight-is-not-authority rule, §2's
+# granularity-aware dependency gate, §2's two repair rules, and §15's registry.
 ENFORCED_COUNT=$(awk '{ count += gsub(/\[enforced\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ENFORCED_COUNT" -eq 64 ]; then
-  _pass "[enforced] annotation count is exactly 64 (found: $ENFORCED_COUNT)"
+if [ "$ENFORCED_COUNT" -eq 69 ]; then
+  _pass "[enforced] annotation count is exactly 69 (found: $ENFORCED_COUNT)"
 else
-  _fail "[enforced] annotation count is exactly 64" \
-    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 64"
+  _fail "[enforced] annotation count is exactly 69" \
+    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 69"
 fi
 
-# NOTE: counts OCCURRENCES, not lines — no line currently carries two
-# [hook-driven only] tags, so this matches the line count. FEAT-022/TASK-008
-# added 1 more: §15's new "Bash-only sourcing and observed-state branch
-# creation" bullet, split out of the install/uninstall lifecycle bullet it
-# was originally folded into (20 + 1 = 21). FEAT-023/TASK-009 added 1 more:
-# §5's new "A gate-triggered stop announces itself" `stop_gate` bullet —
-# tagged [hook-driven only], not [enforced], because it is stop-hook.sh
-# behavior on the AFK gate path only (ADR-014), not a PreToolUse block
-# (21 + 1 = 22). FEAT-026/TASK-007 removed 1: §18's old "stop-hook detects
-# this" bullet, the deleted teardown gate's directive, has no replacement —
-# nothing hook-driven remains in the rewritten section (22 - 1 = 21).
+# 21 -> 22: FEAT-029 added §2's typed reconciliation quarantine, hook-driven
+# because stop-hook.sh writes the annotation and a direct dispatcher skips it.
 HOOK_DRIVEN_COUNT=$(awk '{ count += gsub(/\[hook-driven only\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$HOOK_DRIVEN_COUNT" -eq 21 ]; then
-  _pass "[hook-driven only] annotation count is exactly 21 (found: $HOOK_DRIVEN_COUNT)"
+if [ "$HOOK_DRIVEN_COUNT" -eq 22 ]; then
+  _pass "[hook-driven only] annotation count is exactly 22 (found: $HOOK_DRIVEN_COUNT)"
 else
-  _fail "[hook-driven only] annotation count is exactly 21" \
-    "found $HOOK_DRIVEN_COUNT occurrences of [hook-driven only] — expected exactly 21"
+  _fail "[hook-driven only] annotation count is exactly 22" \
+    "found $HOOK_DRIVEN_COUNT occurrences of [hook-driven only] — expected exactly 22"
 fi
 
-# ---------------------------------------------------------------------------
-# Test (e): the Parallel Dispatch section exists with honest tiers. Batch
-# selection and the two hard stops are computed by unconditional stop-hook
-# bash conditionals (no agent judgment gates whether they run), so per the
-# legend they are [enforced] — unlike the deleted Conductor's agent-invoked
-# equivalents, which were [advisory]. The approval gates remain a
-# continuation-message instruction a direct dispatch can bypass ->
-# [hook-driven only].
-# ---------------------------------------------------------------------------
+# §11: batch selection and the two hard stops are unconditional stop-hook bash,
+# while the approval gates are an instruction a direct dispatch can bypass.
 assert_file_contains \
   "RULES.md has a Parallel Dispatch section" \
   "$RULES_FILE" \
@@ -175,11 +104,7 @@ assert_file_contains \
   "$RULES_FILE" \
   'approve_plan,approve_batch,approve_final_pr.*`\[hook-driven only\]`'
 
-# ---------------------------------------------------------------------------
-# Test (f): the Parallel Dispatch Enforcement section exists with honest
-# tiers. Both guards are real PreToolUse hooks that deny (exit 2)
-# mechanically -> [enforced].
-# ---------------------------------------------------------------------------
+# §12: both guards are real PreToolUse hooks that deny with exit 2.
 assert_file_contains \
   "RULES.md has a Parallel Dispatch Enforcement section" \
   "$RULES_FILE" \
@@ -205,15 +130,8 @@ assert_file_not_contains \
   "$RULES_FILE" \
   "\`agents/conductor.md\`"
 
-# ---------------------------------------------------------------------------
-# Test (g): the Automation Heartbeat section (FEAT-008) exists with honest
-# tiers. The concurrency guard and the two hard stops are plain, unconditional
-# bash checked by the tick script itself (no agent judgment involved) -> [en-
-# forced], same class as stop-hook.sh's own internal gates. Atomic claim-then-
-# archive is a fixed single-outcome filesystem operation in that same flow ->
-# [enforced]. Opt-in/default-off and no-eval are agent/config discipline with
-# no mechanical guard against regression -> [advisory].
-# ---------------------------------------------------------------------------
+# §13: the concurrency guard, the two hard stops, and atomic claim-then-archive
+# are unconditional bash in the tick script; opt-in and no-eval are discipline.
 assert_file_contains \
   "RULES.md has an Automation Heartbeat section" \
   "$RULES_FILE" \
@@ -249,13 +167,8 @@ assert_file_contains \
   "$RULES_FILE" \
   "Branch isolation (§10) applies unchanged"
 
-# ---------------------------------------------------------------------------
-# Test (h): the Raising Findings section (FEAT-009 TASK-009) exists with
-# honest tiers. Nothing forces a sub-session to call raise_finding instead of
-# working around a finding, and the no-eval/neutralization safety is
-# test-backed today but not regression-guarded -> both [advisory], same class
-# as §13's no-eval bullet.
-# ---------------------------------------------------------------------------
+# §14: nothing forces a sub-session to call raise_finding, and the no-eval
+# safety is test-backed but not regression-guarded -> all [advisory].
 assert_file_contains \
   "RULES.md has a Raising Findings section" \
   "$RULES_FILE" \
@@ -276,13 +189,8 @@ assert_file_contains \
   "$RULES_FILE" \
   'Append-only sink.*`\[advisory\]`'
 
-# ---------------------------------------------------------------------------
-# Test (i): the Shared nazgul/ Root Resolver subsection (FEAT-021/ADR-008,
-# TASK-010) exists with honest tiers. Library adoption is review-only, no
-# guard blocks a hand-rolled resolution idiom -> [advisory]. The dispatch
-# guard's fail-open branch is a deterministic code path inside a real
-# PreToolUse guard, same class as MF-053's fail-closed branch -> [enforced].
-# ---------------------------------------------------------------------------
+# §15 resolver: library adoption is review-only; the fail-open branch is a
+# deterministic path inside a real PreToolUse guard.
 assert_file_contains \
   "RULES.md has a Shared nazgul/ Root Resolver subsection" \
   "$RULES_FILE" \
@@ -317,5 +225,52 @@ assert_file_contains \
   "_resolution_integrity_ok() fail-open does not relax MF-053" \
   "$RULES_FILE" \
   "relax, MF-053's fail-CLOSED-on-corrupt-config rule"
+
+# FEAT-029 doctrine: the claims TASK-003/005/006/011 carried forward must be
+# present by content, not merely counted by the tier tallies above.
+assert_file_contains \
+  "§2 states that preflight is not transition authority (ADR-020)" \
+  "$RULES_FILE" \
+  "Preflight is not authority"
+
+assert_file_contains \
+  "§2 names scripts/task-transition.sh as the sole sanctioned status writer" \
+  "$RULES_FILE" \
+  'SOLE sanctioned writer of a task.s status'
+
+assert_file_contains \
+  "§2 documents the typed reconciliation quarantine fields" \
+  "$RULES_FILE" \
+  'Blocked kind: reconciliation'
+
+assert_file_contains \
+  "§2 documents repair as the only exit from a quarantine" \
+  "$RULES_FILE" \
+  'only exit from a reconciliation quarantine'
+
+assert_file_contains \
+  "§2's dependency gate is qualified by review granularity" \
+  "$RULES_FILE" \
+  'dependency condition is granularity-aware'
+
+assert_file_contains \
+  "§7 states the generated-artifact evidence contract" \
+  "$RULES_FILE" \
+  "generated-artifact claim needs verified output"
+
+assert_file_contains \
+  "§15 carries the bound coverage-honesty entry-point registry" \
+  "$RULES_FILE" \
+  "registry of bound entry points lives HERE"
+
+assert_file_contains \
+  "§15's registry enrolls scripts/self-audit.sh" \
+  "$RULES_FILE" \
+  '`scripts/self-audit.sh` (enrolled FEAT-029/TASK-012'
+
+assert_file_not_contains \
+  "RULES.md no longer claims EnterWorktree is a live worktree-entry path" \
+  "$RULES_FILE" \
+  "the real worktree-entry paths are the"
 
 report_results
