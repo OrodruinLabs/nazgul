@@ -8,7 +8,7 @@ Nazgul is a Claude Code plugin that provides multi-agent autonomous development.
 
 ## Directory Structure
 
-```
+```text
 .claude-plugin/plugin.json           # Plugin manifest (must be at repo root)
 RULES.md                             # Enforceable operating rules (consolidated)
 skills/                              # User-facing commands (/nazgul:*)

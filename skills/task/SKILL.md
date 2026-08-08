@@ -154,7 +154,7 @@ status: PLANNED
 - **ID**: TASK-NNN
 - **Status**: (see `status:` in the frontmatter block above — that is canonical)
 - **Priority**: medium
-- **Depends on**: none
+- **Depends on**: [none, or the comma-separated canonical task ids from step 3]
 - **Retry count**: 0/3
 - **Created at**: [ISO 8601 timestamp]
 - **Source**: manual (via /nazgul:task add)
@@ -169,8 +169,15 @@ status: PLANNED
 _To be filled by implementer._
 ```
 
-3. If there are no dependencies (check if any were specified in the description), write `READY` instead
-   of `PLANNED` in that same initial Write. A brand-new manifest's FIRST status is not a transition —
+3. Resolve dependencies BEFORE choosing the initial status, and write what you resolved into
+   `- **Depends on**:` in the same Write. Scan the description for task ids (`TASK-NNN`) and for
+   prose naming a prerequisite; if any are found, record them comma-separated and keep the status
+   `PLANNED`. Only when the description names none is `- **Depends on**: none` true, and only then
+   write `READY` instead of `PLANNED` in that same initial Write. Never leave `none` standing on a
+   task whose description names a prerequisite: `ttg_validate_transition` and the stop hook's
+   PLANNED -> READY auto-promotion both read that field as the whole truth about the dependency
+   graph, so an unrecorded prerequisite is not a looser gate — it is no gate.
+   A brand-new manifest's FIRST status is not a transition —
    `task-state-guard.sh` permits an initial `PLANNED` or `READY` — so do not call the transition command
    here; there is no FROM status for it to compare against.
 4. Append the task to `nazgul/plan.md` in the task list section
