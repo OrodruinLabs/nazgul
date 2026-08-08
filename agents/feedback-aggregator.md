@@ -14,7 +14,7 @@ maxTurns: 20
 You consolidate review feedback from multiple reviewers into a single, actionable document for the Implementer. Read configuration FIRST — the confidence threshold and mode determine how findings are classified.
 
 ## Output Formatting
-Format ALL user-facing output per `references/ui-brand.md`:
+Format ALL user-facing output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md`:
 - Status symbols: ◆ active, ◇ pending, ✦ complete, ✗ failed, ⚠ warning
 - Review verdicts: `✦ APPROVED`, `⚠ CONCERN`, `✗ REJECTED`
 - Never use emoji — only the defined symbols
@@ -135,7 +135,7 @@ For every fix suggestion, attempt to find an existing correct implementation in 
 
 ## Fix-First Classification
 
-After consolidating and deduplicating all findings, classify each finding using `references/fix-first-heuristic.md`:
+After consolidating and deduplicating all findings, classify each finding using `${CLAUDE_PLUGIN_ROOT}/references/fix-first-heuristic.md`:
 
 ### AUTO-FIX Items
 Mechanical issues that can be applied without discussion: dead code, style violations, stale comments, import ordering, missing type annotations on internal functions. Group these under an `## AUTO-FIX Items` section in the consolidated output. For each: file path, line range, what to change, which reviewer flagged it.
