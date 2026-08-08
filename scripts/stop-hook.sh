@@ -223,12 +223,18 @@ fi
 # Upsert one `- **<Label>**: <value>` manifest line: replace the existing line
 # with that label, or append when the label is absent.
 set_manifest_field() {
-  local file="$1" label="$2" value="$3"
+  local file="$1" label="$2" value="$3" field_mode=""
   if grep -q "^- \*\*${label}\*\*:" "$file" 2>/dev/null; then
+    field_mode=$(_ttg_file_mode "$file") || field_mode=""
     NAZGUL_FIELD_LINE="- **${label}**: ${value}" awk -v pat="^- [*][*]${label}[*][*]:" \
       '$0 ~ pat { print ENVIRON["NAZGUL_FIELD_LINE"]; next } { print }' \
-      "$file" > "${file}.field.tmp" && mv "${file}.field.tmp" "$file"
+      "$file" > "${file}.field.tmp" || { rm -f "${file}.field.tmp"; return 1; }
+    [ -z "$field_mode" ] || chmod "$field_mode" "${file}.field.tmp" || true
+    mv "${file}.field.tmp" "$file" || { rm -f "${file}.field.tmp"; return 1; }
   else
+    # Every reader of these fields is `^`-anchored, so a manifest with no trailing
+    # newline would absorb the new field into its last line and hide it.
+    if [ -s "$file" ] && [ -n "$(tail -c 1 "$file")" ]; then printf '\n' >> "$file"; fi
     printf -- '- **%s**: %s\n' "$label" "$value" >> "$file"
   fi
 }

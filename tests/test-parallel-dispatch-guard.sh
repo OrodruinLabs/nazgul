@@ -155,6 +155,19 @@ assert_eq "nested named reviewer still denied" \
 assert_eq "unconfigured helper remains outside reviewer route" \
   "$(guard_json_ec "$(reviewer_envelope 'general-purpose' true 'helper' '')")" "0"
 
+# The foreground requirement is typed, not truthy: only boolean false satisfies
+# it, so a string/null/number in that field is a denial and not an accidental pass.
+for bg_raw in '"false"' '"true"' 'null' '0' '1'; do
+  assert_eq "non-boolean run_in_background ${bg_raw} denied on the reviewer route" \
+    "$(guard_json_ec "$(jq -nc --argjson bg "$bg_raw" \
+      '{tool_name:"Agent",tool_input:{subagent_type:"nazgul:code-reviewer",prompt:"Review the unit",run_in_background:$bg}}')")" \
+    "2"
+  assert_eq "non-boolean run_in_background ${bg_raw} denied from a nested caller too" \
+    "$(guard_json_ec "$(jq -nc --argjson bg "$bg_raw" \
+      '{tool_name:"Agent",agent_type:"nazgul:review-gate",tool_input:{subagent_type:"nazgul:code-reviewer",prompt:"Review the unit",run_in_background:$bg}}')")" \
+    "2"
+done
+
 jq '.agents.reviewers += ["performance-reviewer"]' "$WORK/nazgul/config.json" > "$WORK/c" && mv "$WORK/c" "$WORK/nazgul/config.json"
 assert_eq "project-generated configured reviewer uses the same route" \
   "$(guard_json_ec "$(reviewer_envelope 'nazgul:performance-reviewer' true '' '')")" "2"

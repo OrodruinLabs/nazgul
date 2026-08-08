@@ -79,7 +79,7 @@ denied by `task-state-guard.sh` (ADR-020): validating a request is not the same 
 a completed, disk-verified write records authority. A status that appears without that record is
 quarantined as BLOCKED by the stop-hook's reconciliation pass, even when the edit itself was legal.
 
-```
+```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition [TASK-ID] FROM TO
 # BLOCKED only: append --reason "one line"
 ```

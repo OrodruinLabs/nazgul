@@ -156,7 +156,10 @@ BEGIN {
   cmd_word = ""; seg_writes_manifest = 0; last_arg = ""
   has_inplace = 0; has_dash_c = 0; seg_heredoc = 0
   manifest_arg = 0; manifest_embedded = 0
-  any_manifest = 0; heredoc_interp = 0
+  wrapper_pending = 0; line_cont = 0
+  dq_subst = 0; paren_depth = 0; dq_btick = 0
+  in_heredoc = 0; heredoc_delim = ""; heredoc_delim_pending = 0
+  heredoc_owner_interp = 0
 }
 
 # Quotes are stripped during accumulation, so the reconstructed shell word is
@@ -194,15 +197,24 @@ function shell_dash_c(c) {
   return (c == "bash" || c == "sh" || c == "zsh" || c == "ksh" || c == "dash")
 }
 
+# Commands that run another command: the writer is the word AFTER them, so the
+# real command word is only found by looking through the wrapper.
+function wrapper_cmd(c) {
+  return (c == "env" || c == "command" || c == "nohup" || c == "nice" ||
+          c == "ionice" || c == "setsid" || c == "stdbuf" || c == "time" ||
+          c == "timeout" || c == "sudo" || c == "doas" || c == "xargs" ||
+          c == "exec" || c == "builtin")
+}
+
 # Flush the accumulated word. A word may be built from adjacent quoted and
 # unquoted fragments (e.g. "nazgul/tasks/"TASK-001.md) — quote chars are stripped
 # during accumulation, so the reconstructed shell word is validated as a whole.
 # Redirect targets are resolved BEFORE the command-word check so a leading
 # redirect (> file echo ok) attributes its target correctly.
-function flush_tok(    t) {
+function flush_tok(    t, d) {
   t = tok; tok = ""
   if (t == "") return
-  if (has_manifest_path(t)) any_manifest = 1
+  if (heredoc_delim_pending) { heredoc_delim = t; heredoc_delim_pending = 0; return }
   if (fd_target_pending) {
     # fd-duplication target (the 1 in 2>&1, the - in >&-) — never a command word
     fd_target_pending = 0
@@ -217,6 +229,11 @@ function flush_tok(    t) {
     # Leading VAR=value env assignments precede the command word in bash — skip
     # them so the real command word is still recognised.
     if (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/) return
+    # A wrapper (env, xargs, timeout …) delegates: skip its own options and
+    # operands so the wrapped command is classified instead of the wrapper.
+    if (wrapper_pending && (t ~ /^-/ || t ~ /^[0-9]+(\.[0-9]+)?[smhd]?$/)) return
+    if (wrapper_cmd(base_cmd(t))) { wrapper_pending = 1; return }
+    wrapper_pending = 0
     found_cmd = 1
     cmd_word = base_cmd(t)
     return
@@ -227,7 +244,14 @@ function flush_tok(    t) {
   } else {
     last_arg = t
   }
-  if (t ~ /^<</) seg_heredoc = 1
+  # `<<WORD` / `<<-WORD` opens a heredoc whose body is read from later lines;
+  # `<<<` is a here-string and carries its data inline, so it opens nothing.
+  if (t ~ /^<</ && t !~ /^<<</) {
+    seg_heredoc = 1
+    d = t; sub(/^<<-?/, "", d)
+    if (d != "") heredoc_delim = d
+    else heredoc_delim_pending = 1
+  }
   if (is_manifest_path(t)) manifest_arg = 1
   else if (has_manifest_path(t)) manifest_embedded = 1
 }
@@ -243,9 +267,14 @@ function end_segment() {
   # read-only inspection passes the path as its own bare argument instead.
   if (interpreter(cmd_word) && manifest_embedded) found = 1
   if (shell_dash_c(cmd_word) && has_dash_c && (manifest_arg || manifest_embedded)) found = 1
-  # A heredoc-fed interpreter: the body arrives on later lines, so pair it with a
-  # manifest path seen anywhere in the command rather than guess at the body.
-  if (interpreter(cmd_word) && seg_heredoc) heredoc_interp = 1
+  # `eval` runs its argument as shell text, not as an operand of a writer.
+  if (cmd_word == "eval" && (manifest_arg || manifest_embedded)) found = 1
+  # A heredoc-fed interpreter: evidence is scoped to THIS command — the path on
+  # its own line, or (below) in the body its own delimiter closes.
+  if (interpreter(cmd_word) && seg_heredoc) {
+    heredoc_owner_interp = 1
+    if (manifest_arg || manifest_embedded) found = 1
+  }
 }
 
 function reset_segment() {
@@ -253,7 +282,16 @@ function reset_segment() {
   found_cmd = 0; redirect_pending = 0; fd_target_pending = 0
   cmd_word = ""; seg_writes_manifest = 0; last_arg = ""
   has_inplace = 0; has_dash_c = 0; seg_heredoc = 0
-  manifest_arg = 0; manifest_embedded = 0
+  manifest_arg = 0; manifest_embedded = 0; wrapper_pending = 0
+}
+
+# A heredoc body is data, not shell code: lex nothing until its own delimiter
+# closes it, and charge a manifest path there to the interpreter that opened it.
+in_heredoc {
+  hd = $0; sub(/^[ \t]+/, "", hd); sub(/[ \t]+$/, "", hd)
+  if (hd == heredoc_delim) { in_heredoc = 0; heredoc_delim = ""; heredoc_owner_interp = 0; next }
+  if (heredoc_owner_interp && has_manifest_path($0)) found = 1
+  next
 }
 
 {
@@ -265,15 +303,36 @@ function reset_segment() {
       if (c == "'\''") in_sq = 0
       else tok = tok c
     } else if (in_dq) {
-      # Inside double quotes a backslash escapes the next char (\" \\ …), so it
-      # must not toggle quote state — append the escaped char literally.
+      # Command substitution stays live inside double quotes, so "$(sed -i … )"
+      # must be lexed as its own command rather than swallowed into one word.
       if (c == "\\" && i < n) { i++; tok = tok substr($0, i, 1) }
+      else if (c == "$" && i < n && substr($0, i+1, 1) == "(") {
+        i++; reset_segment(); dq_subst = 1; paren_depth = 0; in_dq = 0
+      }
+      else if (c == "`") { reset_segment(); dq_btick = 1; in_dq = 0 }
       else if (c == "\"") in_dq = 0
       else tok = tok c
     } else if (c == "'\''") {
       in_sq = 1
     } else if (c == "\"") {
       in_dq = 1
+    } else if (c == "\\") {
+      # A trailing unquoted backslash is a line continuation: the command has not
+      # ended, so its operands on the next line still belong to this segment.
+      if (i == n) line_cont = 1
+      else { i++; tok = tok substr($0, i, 1) }
+    } else if (c == "(") {
+      reset_segment()
+      if (dq_subst) paren_depth++
+    } else if (c == ")") {
+      reset_segment()
+      if (dq_subst) {
+        paren_depth--
+        if (paren_depth < 0) { dq_subst = 0; paren_depth = 0; in_dq = 1 }
+      }
+    } else if (c == "`") {
+      reset_segment()
+      if (dq_btick) { dq_btick = 0; in_dq = 1 }
     } else if (c == ">") {
       # An all-digit token glued before > is an fd descriptor (1>, 2>), not a
       # command word — discard it so the real command later still registers.
@@ -324,13 +383,17 @@ function reset_segment() {
   # segment could be mis-attributed and a manifest write slip through).
   if (in_sq || in_dq) {
     # quoted string spans the newline — keep accumulating
+  } else if (line_cont) {
+    line_cont = 0
+    flush_tok()
   } else {
+    flush_tok()
+    if (seg_heredoc && heredoc_delim != "") in_heredoc = 1
     reset_segment()
   }
 }
 
 END {
-  if (heredoc_interp && any_manifest) found = 1
   exit (found ? 2 : 0)
 }
 '

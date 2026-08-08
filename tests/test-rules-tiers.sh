@@ -236,7 +236,7 @@ assert_file_contains \
 assert_file_contains \
   "§2 names scripts/task-transition.sh as the sole sanctioned status writer" \
   "$RULES_FILE" \
-  'SOLE sanctioned writer of a task.s status'
+  "SOLE sanctioned writer of a task's status"
 
 assert_file_contains \
   "§2 documents the typed reconciliation quarantine fields" \

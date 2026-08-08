@@ -153,7 +153,7 @@ A status change with no completed transition behind it is not "corrected" — it
 
 The repo IS the installable plugin. Runtime state lives under `nazgul/` in each target project (created by `/nazgul:init`), never in this repo.
 
-```
+```text
 .claude-plugin/plugin.json   # Plugin manifest (must be at repo root)
 RULES.md                     # Enforceable operating rules (consolidated)
 agents/                      # Agent definitions (22 specs + reviewer template)

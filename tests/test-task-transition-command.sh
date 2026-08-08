@@ -190,15 +190,20 @@ assert_contains "race diagnostic is explicit" "$(cat "$TEST_DIR/race.err")" "cha
 # validation had already read the old bytes, then the hash/copy used new bytes
 # and the transition succeeded. The staged-snapshot implementation detects it.
 create_task_file TASK-008 READY
+REAL_SHA256SUM=$(command -v sha256sum) || REAL_SHA256SUM=""
+if [ -z "$REAL_SHA256SUM" ]; then
+  # Without a real tool to delegate to, the stub aborts on every call and all
+  # three assertions below would pass for the wrong reason. Not run is not passed.
+  _skip "staged-snapshot race (no real sha256sum on PATH to delegate to)"
+else
 HASHBIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-transition-hashbin.XXXXXX")
-REAL_SHA256SUM=$(command -v sha256sum)
 cat > "$HASHBIN/sha256sum" <<'FAKEHASH'
 #!/usr/bin/env bash
 if [ ! -f "${NAZGUL_TEST_HASH_MARKER:?}" ]; then
   : > "$NAZGUL_TEST_HASH_MARKER"
   printf '\nconcurrent-evidence: changed-before-hash\n' >> "${NAZGUL_TEST_MUTATE_FILE:?}"
 fi
-exec "${NAZGUL_REAL_SHA256SUM:?}"
+exec "${NAZGUL_REAL_SHA256SUM:?}" "$@"
 FAKEHASH
 chmod +x "$HASHBIN/sha256sum"
 SNAPSHOT_EC=0
@@ -210,11 +215,17 @@ PATH="$HASHBIN:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" \
   >/dev/null 2>"$TEST_DIR/snapshot.err" || SNAPSHOT_EC=$?
 rm -f "$HASHBIN/sha256sum"
 rmdir "$HASHBIN"
+# The marker is the proof the stub ran at all; without it the exit code below
+# would be reporting something other than the race this test stages.
+assert_file_exists "staged-snapshot race was actually staged" "$TEST_DIR/hash.marker"
 assert_exit_code "validation is bound to the staged snapshot" "$SNAPSHOT_EC" 1
 assert_eq "snapshot race preserves source status" \
   "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-008.md")" "READY"
 assert_contains "snapshot race preserves concurrent bytes" \
   "$(cat "$TEST_DIR/nazgul/tasks/TASK-008.md")" "concurrent-evidence: changed-before-hash"
+assert_contains "snapshot race diagnostic names the staged comparison" \
+  "$(cat "$TEST_DIR/snapshot.err")" "changed while its transition was staged"
+fi
 
 # Transition locks fail closed, and a reason is written in the same atomic
 # replacement when a BLOCKED edge succeeds.

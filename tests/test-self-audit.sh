@@ -80,6 +80,25 @@ git -C "$ROOT" commit -q -m "add todo"
 run_self_audit "$ROOT/nazgul"
 assert_exit_code "T3: exits 0" "$SA_EC" 0
 assert_contains "T3: TODO/FIXME delta finding present" "$(cat "$ROOT/nazgul/improvements.md")" "TODO/FIXME delta"
+assert_contains "T3: the finding names the file to act on" \
+  "$(cat "$ROOT/nazgul/improvements.md")" "src.txt"
+
+# --- Test 3b (PR #86 review): count and file list must use ONE pathspec, or a
+# nazgul/-only marker delta reports a count with no file to act on. ---
+ROOT=$(mk_project "t3b")
+printf 'no markers here\n' > "$ROOT/src.txt"
+git -C "$ROOT" add src.txt
+git -C "$ROOT" commit -q -m "add src"
+mkdir -p "$ROOT/nazgul/tasks"
+printf '# TASK-009\n# TODO: runtime note\n' > "$ROOT/nazgul/tasks/TASK-009.md"
+git -C "$ROOT" add -f nazgul/tasks/TASK-009.md
+git -C "$ROOT" commit -q -m "add runtime todo"
+run_self_audit "$ROOT/nazgul"
+assert_exit_code "T3b: exits 0" "$SA_EC" 0
+assert_not_contains "T3b: a nazgul/-only marker delta raises no unactionable finding" \
+  "$(cat "$ROOT/nazgul/improvements.md")" "TODO/FIXME delta"
+assert_not_contains "T3b: and never reports a count with no file to act on" \
+  "$(cat "$ROOT/nazgul/improvements.md")" "<no changed files>"
 
 # --- Test 4: task retry count -> one finding ---
 ROOT=$(mk_project "t4")

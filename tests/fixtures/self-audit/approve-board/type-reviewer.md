@@ -57,9 +57,10 @@ compiled-language surface at all.
 
 ## Summary
 - PASS: All applicable type-safety checklist items (no static-type surface exists in this diff)
-- CONCERN: none
+- CONCERN: none within type safety — the parser-heading durability note above is
+  non-blocking and belongs to the architect lane
 - REJECT: none
 
 This is a textbook "thin-surface" diff for a type reviewer — a shell-library addition
-with zero typed source changes, zero contract changes, and a clean static-analysis run
+with zero typed source changes, zero typed contract changes, and a clean static-analysis run
 independently confirmed. Approved.

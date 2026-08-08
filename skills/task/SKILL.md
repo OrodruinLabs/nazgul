@@ -140,15 +140,24 @@ Create a new task manifest and append it to the plan.
 1. Scan existing task files to determine the next available TASK-NNN number
 2. Create `nazgul/tasks/TASK-NNN.md` with the following template:
 
+Use the canonical field spellings below verbatim — `task-utils.sh` reads
+`- **Retry count**:` and `ttg_validate_transition` requires exactly one
+`- **Depends on**:` line before READY, so a renamed field reads as absent.
+
 ```markdown
+---
+status: PLANNED
+---
 # TASK-NNN: [description]
 
-- **Status:** PLANNED
-- **Priority:** medium
-- **Dependencies:** none
-- **Retry:** 0/3
-- **Created:** [ISO 8601 timestamp]
-- **Source:** manual (via /nazgul:task add)
+## Metadata
+- **ID**: TASK-NNN
+- **Status**: (see `status:` in the frontmatter block above — that is canonical)
+- **Priority**: medium
+- **Depends on**: none
+- **Retry count**: 0/3
+- **Created at**: [ISO 8601 timestamp]
+- **Source**: manual (via /nazgul:task add)
 
 ## Description
 [description]

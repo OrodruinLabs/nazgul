@@ -107,7 +107,7 @@ CANON_PROJECT_ROOT="$(cd "$PROJECT_ROOT" 2>/dev/null && pwd -P || printf '%s' "$
 # exact canonical leaf. This rejects both a symlinked tasks/ component and a
 # symlinked TASK leaf whether the target lands inside or outside the project.
 case "$REQUEST_FILE_PATH" in
-  "$PROJECT_ROOT"/nazgul/tasks/*)
+  "$PROJECT_ROOT"/nazgul/tasks/*|"$CANON_PROJECT_ROOT"/nazgul/tasks/*)
     REQUEST_TASK_BASENAME=$(basename "$REQUEST_FILE_PATH")
     if [[ "$REQUEST_TASK_BASENAME" =~ ^TASK-[0-9]+\.md$ ]]; then
       REQUEST_TASK_ID="${REQUEST_TASK_BASENAME%.md}"

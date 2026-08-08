@@ -219,10 +219,22 @@ for _repair_edge in ${REPAIR_EDGES[@]+"${REPAIR_EDGES[@]}"}; do
 done
 
 REPAIRED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-NAZGUL_REPAIR_LINE="- **Blocked kind**: reconciliation (repaired ${REPAIRED_AT})" awk \
+# The temp file takes the umask mode, so the manifest's own mode is carried over
+# explicitly; a silent failure here would leave the quarantine marker unrepaired.
+REPAIR_MODE=$(_ttg_file_mode "$MANIFEST_FILE") || REPAIR_MODE=""
+if [ -z "$REPAIR_MODE" ]; then
+  echo "task-transition: repair ${TASK_ID} completed its walk but could not read the manifest file mode; the quarantine marker was not updated" >&2
+  exit 1
+fi
+if ! { NAZGUL_REPAIR_LINE="- **Blocked kind**: reconciliation (repaired ${REPAIRED_AT})" awk \
   '$0 ~ /^- [*][*]Blocked kind[*][*]:/ { print ENVIRON["NAZGUL_REPAIR_LINE"]; next } { print }' \
   "$MANIFEST_FILE" > "${MANIFEST_FILE}.repair.tmp" \
-  && mv "${MANIFEST_FILE}.repair.tmp" "$MANIFEST_FILE"
+  && chmod "$REPAIR_MODE" "${MANIFEST_FILE}.repair.tmp" \
+  && mv "${MANIFEST_FILE}.repair.tmp" "$MANIFEST_FILE"; }; then
+  rm -f "${MANIFEST_FILE}.repair.tmp" 2>/dev/null || true
+  echo "task-transition: repair ${TASK_ID} completed its walk but could not mark the quarantine repaired; rerun repair after fixing the manifest" >&2
+  exit 1
+fi
 
 _ttg_emit_event "$NAZGUL_DIR" "reconciliation_repair" \
   task_id "$TASK_ID" action "repaired" review_unit "$REVIEW_UNIT" \

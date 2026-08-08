@@ -85,6 +85,39 @@ assert_eq "Q1: event records the action taken, not just the mismatch" \
   "$(printf '%s' "$QUARANTINE_EVENT" | jq -r '.action')" "quarantined"
 teardown_temp_dir
 
+# --- Q1b (PR #86 review): every reader of the typed quarantine fields is
+# `^`-anchored, so appending to a newline-less manifest would hide the first one.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]' \
+  '.learning.auto_distill_post_loop = false' '.docs.verify_comments = false' \
+  '.self_audit.enabled = false'
+create_plan
+create_review_dir "TASK-001"
+Q1B_BASE=$(git -C "$TEST_DIR" rev-parse HEAD~1)
+Q1B_HEAD=$(git -C "$TEST_DIR" rev-parse HEAD)
+reviewed_manifest TASK-001 IN_REVIEW "$Q1B_BASE" "$Q1B_HEAD" \
+  > "$TEST_DIR/nazgul/tasks/TASK-001.md"
+run_hook
+sed -i.bak 's/^status: IN_REVIEW/status: DONE/' "$TEST_DIR/nazgul/tasks/TASK-001.md" \
+  && rm -f "$TEST_DIR/nazgul/tasks/TASK-001.md.bak"
+printf '%s' "$(cat "$TEST_DIR/nazgul/tasks/TASK-001.md")" \
+  > "$TEST_DIR/nazgul/tasks/TASK-001.md.nonl" \
+  && mv "$TEST_DIR/nazgul/tasks/TASK-001.md.nonl" "$TEST_DIR/nazgul/tasks/TASK-001.md"
+assert_eq "Q1b: the fixture manifest really has no trailing newline" \
+  "$(tail -c 1 "$TEST_DIR/nazgul/tasks/TASK-001.md" | od -An -c | tr -d ' ')" "k"
+run_hook
+assert_eq "Q1b: a newline-less manifest is still quarantined" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "BLOCKED"
+assert_eq "Q1b: the first appended field is visible to its anchored reader" \
+  "$(manifest_field TASK-001 'Blocked kind')" "reconciliation"
+assert_eq "Q1b: the later appended fields are anchored too" \
+  "$(manifest_field TASK-001 'Blocked observed')" "DONE"
+run_cmd repair TASK-001
+assert_exit_code "Q1b: repair accepts the typed quarantine it can now read" "$CMD_EC" 0
+teardown_temp_dir
+
 # --- Q2: exact completed-edge reconciliation. Both directions come from ONE
 # fixture so neither can pass vacuously. ---
 setup_temp_dir
@@ -149,6 +182,32 @@ assert_contains "R1: a reconciliation_repair event records the outcome" \
 run_cmd repair TASK-001
 assert_exit_code "R1: a repaired task cannot be repaired again" "$CMD_EC" 1
 assert_contains "R1: the second refusal names the live status" "$CMD_OUT" "not BLOCKED"
+teardown_temp_dir
+
+# --- R1b (PR #86 review): the repaired-marker rewrite goes through a temp file,
+# which takes the umask mode unless the manifest's own mode is carried over. ---
+quarantine_fixture
+chmod 640 "$TEST_DIR/nazgul/tasks/TASK-001.md"
+R1B_MODE_BEFORE=$(stat -f '%Lp' "$TEST_DIR/nazgul/tasks/TASK-001.md" 2>/dev/null \
+  || stat -c '%a' "$TEST_DIR/nazgul/tasks/TASK-001.md")
+run_cmd repair TASK-001
+assert_exit_code "R1b: repair succeeds on a non-default-mode manifest" "$CMD_EC" 0
+R1B_MODE_AFTER=$(stat -f '%Lp' "$TEST_DIR/nazgul/tasks/TASK-001.md" 2>/dev/null \
+  || stat -c '%a' "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "R1b: the repaired-marker rewrite preserves the manifest mode" \
+  "$R1B_MODE_AFTER" "$R1B_MODE_BEFORE"
+assert_file_not_exists "R1b: no repair temp file is left on disk" \
+  "$TEST_DIR/nazgul/tasks/TASK-001.md.repair.tmp"
+teardown_temp_dir
+
+# --- R1c: a failed repaired-marker rewrite is loud and leaves no temp file,
+# rather than aborting under set -e after the walk has already completed. ---
+quarantine_fixture
+mkdir -p "$TEST_DIR/nazgul/tasks/TASK-001.md.repair.tmp"
+run_cmd repair TASK-001
+assert_exit_code "R1c: an unwritable repair temp path fails the command" "$CMD_EC" 1
+assert_contains "R1c: the failure names the unrepaired quarantine marker" \
+  "$CMD_OUT" "could not mark the quarantine repaired"
 teardown_temp_dir
 
 # --- R2: incomplete evidence is denied, and the denial names WHICH evidence ---

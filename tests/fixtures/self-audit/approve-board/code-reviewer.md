@@ -8,7 +8,7 @@ confidence: 97
 ## DECISION: APPROVE
 ## CONFIDENCE: 97
 ## BLOCKING: 0
-## CONCERNS: 0
+## CONCERNS: 1
 
 This is a shell-library change adding an evidence parser to an existing gate. I read
 the task's diff in full, confirmed it against the commit range recorded in the task

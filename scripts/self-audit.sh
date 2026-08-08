@@ -391,12 +391,14 @@ _mine_todo_delta() {
     _coverage "todo-delta" 1 0 1 0 0 0
     return 0
   fi
-  added=$(git -C "$PROJECT_ROOT" diff "${diff_ref}...HEAD" -- . 2>/dev/null \
+  # One pathspec for both, or a diff whose only new markers are in per-project
+  # runtime state reports a count with "<no changed files>" to act on.
+  added=$(git -C "$PROJECT_ROOT" diff "${diff_ref}...HEAD" -- . ':(exclude)nazgul/**' 2>/dev/null \
     | grep -acE '^\+[^+].*(TODO|FIXME)' 2>/dev/null) || added=0
   case "$added" in ''|*[!0-9]*) added=0 ;; esac
   if [ "$added" -gt 0 ]; then
-    files=$(git -C "$PROJECT_ROOT" diff --name-only "${diff_ref}...HEAD" -- . 2>/dev/null \
-      | grep -v '^nazgul/' | tr '\n' ',' | sed 's/,$//') || files=""
+    files=$(git -C "$PROJECT_ROOT" diff --name-only "${diff_ref}...HEAD" -- . ':(exclude)nazgul/**' 2>/dev/null \
+      | tr '\n' ',' | sed 's/,$//') || files=""
     if _append_finding "low" "low" \
       "TODO/FIXME delta: ${added} new marker(s) since ${diff_ref}" \
       "git diff ${diff_ref}...HEAD shows ${added} new TODO/FIXME line(s) in: ${files:-<no changed files>}" \

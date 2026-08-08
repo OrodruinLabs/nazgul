@@ -37,7 +37,7 @@ field is denied by `task-state-guard.sh` (ADR-020): validating a request is not 
 so only a completed, disk-verified write records authority. A status that appears without that record is
 quarantined as BLOCKED by the stop-hook's reconciliation pass, even when the edit itself was legal.
 
-```
+```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition [TASK-ID] FROM TO
 # BLOCKED only: append --reason "one line"
 ```
@@ -99,10 +99,12 @@ Before ANY pre-check runs, take custody of the unit's tasks so every later state
 edge from `IN_REVIEW` (`IMPLEMENTED -> IN_PROGRESS` is NOT in the graph — RULES.md §2 — so a
 pre-check failure cannot send a task "back to IN_PROGRESS" directly):
 
-1. `mkdir -p nazgul/reviews/[UNIT-ID]` — the transition below requires the unit's review directory
-   to exist, and Step 1.5 writes `diff.patch` into it.
-2. For EVERY task in the unit that is still `IMPLEMENTED`:
-   `"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition [TASK-ID] IMPLEMENTED IN_REVIEW`
+1. `mkdir -p "<main_worktree_path>/nazgul/reviews/[UNIT-ID]"` — review evidence always lives in the MAIN
+   worktree, never in whatever task worktree you happen to be dispatched from. The transition below
+   requires the unit's review directory to exist, and Step 1.5 writes `diff.patch` into it.
+2. For EVERY task in the unit that is still `IMPLEMENTED` (name the project root explicitly — task state
+   must be read and written in the main worktree too):
+   `CLAUDE_PROJECT_DIR="<main_worktree_path>" "${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition [TASK-ID] IMPLEMENTED IN_REVIEW`
 3. A task already at `IN_REVIEW` (a resumed cycle) is left alone. If the command refuses, stop and
    report its stderr — do not proceed to reviewers with a unit you do not hold.
 
@@ -115,13 +117,14 @@ Before ANY reviewer runs:
 3a. If `project.build_command` is set (non-null): run it → must pass. (Previously build_command was read but never executed — a task could pass review without building.)
 3b. If `project.smoke_command` is set (non-null): run it → must pass. The smoke command is a short, SELF-TERMINATING check that the built artifact runs (e.g. `--version`, an import-smoke, a healthcheck). If `smoke_command` is null, skip it and note "no smoke command configured — runtime smoke skipped."
 3c. Pre-check order is test → lint → build → smoke; stop at the first failure. A build or smoke failure is handled exactly like a test/lint failure (the steps below): back to the implementer via CHANGES_REQUESTED, write failure details to the manifest, increment the failure counter, and ≥3 consecutive → BLOCKED.
-4. If any pre-check (test, lint, build, or smoke) fails: write the failure details to the task manifest FIRST, then return the task to the implementer with
-   `"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition [TASK-ID] IN_REVIEW CHANGES_REQUESTED`. The implementer takes `CHANGES_REQUESTED -> IN_PROGRESS` itself; do not attempt that edge here.
+4. If any pre-check (test, lint, build, or smoke) fails: write the failure details to the task manifest FIRST (ordinary content, written with Edit).
 5. Track test failures: read `test_failures` count from the task manifest (field: `- **Test failures**: N`). If not present, assume 0.
-6. Increment test_failures count and write back to task manifest
-7. If test_failures >= 3: write detailed test output to `nazgul/reviews/[UNIT-ID]/test-failures.md`, then
-   `"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition [TASK-ID] IN_REVIEW BLOCKED --reason "3 consecutive test failures — requires human investigation"`. Do NOT retry.
-8. Only proceed to reviewers if test_failures < 3 AND ALL pre-checks pass
+6. Increment test_failures, write the new count back to the task manifest, and decide the destination BEFORE transitioning. The task is still `IN_REVIEW` here, and exactly ONE transition is taken out of that live status — transitioning first would make the `IN_REVIEW` FROM below stale, and `task-transition.sh` rejects a stale FROM and writes nothing.
+7. If the incremented test_failures >= 3: write detailed test output to `nazgul/reviews/[UNIT-ID]/test-failures.md`, then
+   `"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition [TASK-ID] IN_REVIEW BLOCKED --reason "3 consecutive test failures — requires human investigation"`. Do NOT retry, and do NOT also write CHANGES_REQUESTED — this is the one transition for this cycle.
+8. Otherwise (incremented test_failures < 3): return the task to the implementer with
+   `"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition [TASK-ID] IN_REVIEW CHANGES_REQUESTED`. The implementer takes `CHANGES_REQUESTED -> IN_PROGRESS` itself; do not attempt that edge here.
+9. Only proceed to reviewers if test_failures < 3 AND ALL pre-checks pass (a clean cycle takes neither transition above)
 
    (Do NOT write `nazgul/tasks/[TASK-ID]/verification.md` here — that file is the human-acceptance marker `/nazgul:verify` keys off. Pre-check failures are already captured in the task manifest and, on escalation, `nazgul/reviews/[UNIT-ID]/test-failures.md`; a task reaching DONE implies build/smoke passed.)
 
@@ -617,7 +620,7 @@ When verdict is CHANGES_REQUESTED and feedback-aggregator has classified finding
       (add `--doc <learning.rules_doc>` if config sets a non-default path)
       and include any output verbatim in the implementer's dispatch prompt.
    d. Delegate to implementer with ONLY the AUTO-FIX items
-   e. After implementer completes: re-run pre-checks (tests, lint)
+   e. After implementer completes: re-run the COMPLETE Step 1 pre-check sequence (test → lint → build → smoke, in that order, stopping at the first failure) — not just tests and lint. This path reaches DONE without a re-review, so an AUTO-FIX that breaks the build or the runtime smoke must be caught here
    f. If pre-checks pass AND no ASK items remain, complete it without a re-review (mechanical fixes only). The implementer leaves the task at `IMPLEMENTED`, so take both remaining edges:
       `transition [TASK-ID] IMPLEMENTED IN_REVIEW` then `transition [TASK-ID] IN_REVIEW DONE`
    g. If pre-checks pass AND ASK items remain: present ASK items per mode (HITL → ask user, AFK → apply if < HIGH, YOLO → apply all non-security)

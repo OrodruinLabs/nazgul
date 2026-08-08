@@ -102,10 +102,21 @@ PRE_SIMPLIFY_SHA=$(git -C "<task_worktree>" rev-parse HEAD)
 ```
 
 For each finding (highest confidence first):
-1. Apply the fix with the Edit tool, addressing the file by its absolute `<task_worktree>/...` path
-2. Run the test command in the worktree: `(cd "<task_worktree>" && <test_command>)`
-3. If tests pass → **commit immediately**: `git -C "<task_worktree>" commit -am "simplify: <brief description>"`
-4. If tests fail → revert **only this fix**: `git -C "<task_worktree>" checkout -- <affected-files>`, log as skipped
+1. Before touching anything, list the paths this fix will affect and note which of them do NOT yet exist — those are the paths the fix CREATES, and the only ones a rollback of this fix may delete
+2. Apply the fix with the Edit tool, addressing the file by its absolute `<task_worktree>/...` path
+3. Run the test command in the worktree: `(cd "<task_worktree>" && <test_command>)`
+4. If tests pass → stage EVERY affected path, new files included, then **commit immediately** (`commit -am` stages only already-tracked files, so a created file would silently stay out of the commit and out of the final diff):
+   ```bash
+   git -C "<task_worktree>" add -- <affected-files>
+   git -C "<task_worktree>" commit -m "simplify: <brief description>"
+   ```
+5. If tests fail → revert **only this fix** and log as skipped: restore the paths that already existed, and delete only the paths this fix created (leaving them behind pollutes the worktree and can break a later fix's tests):
+   ```bash
+   git -C "<task_worktree>" checkout -- <affected-paths-that-already-existed>
+   rm -f <paths-this-fix-created>
+   ```
+   Delete the enumerated paths only. A blanket untracked-file sweep would also remove
+   untracked files that predate the fix and belong to someone else.
 
 **Important:** Commit each passing fix individually so that a later failed fix cannot wipe earlier successful ones. The final squash commit in Step 5 combines them.
 

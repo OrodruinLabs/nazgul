@@ -105,6 +105,17 @@ Read the patch manifest's `## Flags` line (the authoritative on-disk record writ
 If the `## Flags` line contains `--no-review`:
 - Mark patch DONE immediately after implementation
 
+> **Patch status is written directly, and that is deliberate.** A patch manifest is
+> `nazgul/tasks/patches/PATCH-NNN.md`, which is outside the ADR-020 sanctioned-writer
+> funnel by construction: `task-state-guard.sh`, `pre-tool-guard.sh` and the stop-hook
+> reconciliation pass all match `nazgul/tasks/TASK-<digits>.md` strictly, and
+> `scripts/task-transition.sh` resolves only that shape. A patch has no PLANNED→DONE
+> state machine, no dependency graph, and none of the evidence a transition edge
+> validates, so routing it through the transition command would assert authority over a
+> walk it never takes. Direct `Write`/`Edit` on a patch manifest is therefore authorized,
+> not a bypass, and cannot be quarantined. `tests/test-pre-tool-guard.sh` pins that
+> blast radius explicitly (`allowed S-outside`).
+
 ### Step 6: Complete
 1. Update patch manifest status to DONE
 2. Append to `nazgul/plan.md` under `## Patches` section (create section if it doesn't exist):

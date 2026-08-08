@@ -23,7 +23,7 @@ The diff touches exactly two files:
 No agent spec, skill, hook registration, or template is touched. Verified against the
 commit's own changed-file list rather than the summary:
 
-```
+```text
  scripts/lib/task-transition-guard.sh   |  48 +++++++++++++-
  tests/test-task-transition-guard.sh    |  96 ++++++++++++++++++++++++++--
  2 files changed, 138 insertions(+), 6 deletions(-)

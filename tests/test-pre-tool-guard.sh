@@ -508,10 +508,62 @@ for writer_cmd in \
   assert_exit_code "blocked S-writer: '$writer_cmd'" "$ec" 2
 done
 
-# S-heredoc: an interpreter fed its program on later lines — the body is not on
-# the command segment, so a manifest path anywhere in the command is the signal.
+# S-heredoc: an interpreter fed its program on later lines — the body its own
+# delimiter closes is charged to it, so a write there is still the signal.
 ec=$(get_exit_code "$(printf 'python3 - <<PY\nfrom pathlib import Path\nPath("nazgul/tasks/TASK-001.md").write_text("x")\nPY')")
 assert_exit_code "blocked S-heredoc: python3 heredoc writing a manifest" "$ec" 2
+
+# S-heredoc-arg: the manifest is an operand of the heredoc-fed interpreter.
+ec=$(get_exit_code "$(printf 'python3 - nazgul/tasks/TASK-001.md <<PY\nimport sys\nPY')")
+assert_exit_code "blocked S-heredoc-arg: manifest operand of a heredoc-fed interpreter" "$ec" 2
+
+# S-heredoc-scope: heredoc evidence belongs to the command that opened it, so an
+# unrelated read-only manifest command outside that body must not be blocked.
+ec=$(get_exit_code "$(printf "python3 - <<'PY'\nprint(\"ok\")\nPY\ngrep Status nazgul/tasks/TASK-001.md")")
+assert_exit_code "allowed S-heredoc-scope: prose heredoc then an unrelated grep" "$ec" 0
+ec=$(get_exit_code "$(printf "grep Status nazgul/tasks/TASK-001.md\npython3 - <<'PY'\nprint(\"ok\")\nPY")")
+assert_exit_code "allowed S-heredoc-scope-2: grep then an unrelated prose heredoc" "$ec" 0
+
+# S-wrapped (PATCH-003): the parser classifies the first command word of a
+# segment, so a writer reached through a wrapper or a substitution used to pass.
+for wrapped_cmd in \
+  "env sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env FOO=1 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "command sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "nohup sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "timeout 5 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "nice -n 10 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env cp forged.md nazgul/tasks/TASK-001.md" \
+  "echo x | xargs sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "echo \"\$(sed -i 's/a/b/' nazgul/tasks/TASK-001.md)\"" \
+  "echo \$(cp forged.md nazgul/tasks/TASK-001.md)" \
+  "RESULT=\"\$(sed -i 's/a/b/' nazgul/tasks/TASK-001.md)\"" \
+  "echo \"\`sed -i 's/a/b/' nazgul/tasks/TASK-001.md\`\"" \
+  "( sed -i 's/a/b/' nazgul/tasks/TASK-001.md )" \
+  "eval \"sed -i 's/a/b/' nazgul/tasks/TASK-001.md\""; do
+  ec=$(get_exit_code "$wrapped_cmd")
+  assert_exit_code "blocked S-wrapped: '$wrapped_cmd'" "$ec" 2
+done
+
+# S-continued: an escaped newline does not end the command, so the segment must
+# not be reset there and lose the writer that owns the operand below.
+ec=$(get_exit_code "$(printf "sed -i 's/a/b/' \\\\\n  nazgul/tasks/TASK-001.md")")
+assert_exit_code "blocked S-continued: sed -i with the manifest on a continued line" "$ec" 2
+ec=$(get_exit_code "$(printf "cp forged.md \\\\\n  nazgul/tasks/TASK-001.md")")
+assert_exit_code "blocked S-continued-2: cp with the manifest on a continued line" "$ec" 2
+
+# The wrapper look-through must not turn read-only wrapped commands into writers.
+for wrapped_ro in \
+  "env grep Status nazgul/tasks/TASK-001.md" \
+  "timeout 5 cat nazgul/tasks/TASK-001.md" \
+  "sudo cp nazgul/tasks/TASK-001.md /tmp/backup.md" \
+  "env \"\${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh\" transition TASK-004 READY IN_PROGRESS" \
+  "echo \"\$(grep Status nazgul/tasks/TASK-001.md)\"" \
+  "diff <(cat nazgul/tasks/TASK-001.md) /tmp/other.md"; do
+  ec=$(get_exit_code "$wrapped_ro")
+  assert_exit_code "allowed S-wrapped-readonly: '$wrapped_ro'" "$ec" 0
+done
 
 # S-json: the production envelope path must deny a writer too — the guard
 # tokenizes .tool_input.command, never the JSON wrapper.

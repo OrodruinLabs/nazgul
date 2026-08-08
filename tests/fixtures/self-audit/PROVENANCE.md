@@ -75,6 +75,7 @@ Regenerate all of these with the commands given; do not hand-edit the numbers.
   otherwise. (This file is the fixture's documentation, not part of it: it sits one
   directory up, the tests copy only `approve-board/*.md`, so the mentions of `REJECT`
   in the prose here are never scanned by anything.)
+
   | Spelling | Count | Files |
   |---|---|---|
   | `- REJECT: none` | 5 | `a11y`, `api`, `db`, `performance`, `type` |
@@ -84,7 +85,8 @@ Regenerate all of these with the commands given; do not hand-edit the numbers.
   `grep -lE '^-[[:space:]]*\*{0,2}REJECT' approve-board/*.md | wc -l` — must print `6`.
 - **1** near-miss, at `architect-reviewer.md`:
   `- **Verdict**: PASS (confidence below CONCERN threshold; already covered by verification gate)`
-  It begins with `- `, so the consumer's `^[[:space:]]*\**verdict\**:` anchor does **not**
+  It begins with a list marker (`-` followed by a space), so the consumer's
+  `^[[:space:]]*\**verdict\**:` anchor does **not**
   match it. That is the point: it pins the anchor's tightness. Keep it.
 
 Total load-bearing surface: **17 lines** (11 verdict + 6 boilerplate), plus the

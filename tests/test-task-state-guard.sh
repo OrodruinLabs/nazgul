@@ -1963,6 +1963,39 @@ assert_exit_code "in-project write through symlinked project root still blocked"
 assert_contains "symlinked project root message" "$GUARD_STDERR" "No task is IN_PROGRESS"
 teardown_temp_dir
 
+# PR #86 review: with a symlinked PROJECT_ROOT the lexical and canonical task
+# paths differ, so an already-canonical write used to skip the leaf check.
+setup_temp_dir
+REAL_ROOT="$TEST_DIR/real-root"
+LINK_ROOT="$TEST_DIR/link-root"
+mkdir -p "$REAL_ROOT"
+ln -s "$REAL_ROOT" "$LINK_ROOT"
+OUTER_TEST_DIR="$TEST_DIR"
+TEST_DIR="$REAL_ROOT"
+setup_nazgul_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "IN_PROGRESS"
+TEST_DIR="$OUTER_TEST_DIR"
+CANON_REAL_ROOT=$(cd "$REAL_ROOT" && pwd -P)
+export CLAUDE_PROJECT_DIR="$LINK_ROOT"
+
+DECOY=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-decoy-XXXXXX")
+printf '# TASK-123\n- **Status**: READY\n' > "$DECOY/TASK-123.md"
+ln -s "$DECOY/TASK-123.md" "$REAL_ROOT/nazgul/tasks/TASK-123.md"
+input=$(make_write_input "$CANON_REAL_ROOT/nazgul/tasks/TASK-123.md" "DONE")
+run_guard "$input"
+assert_exit_code "canonical task path under a symlinked root is still leaf-checked" "$GUARD_EC" 2
+assert_contains "canonical task path leaf-check message" "$GUARD_STDERR" \
+  "does not resolve to its canonical project runtime path"
+
+input=$(make_write_input "$LINK_ROOT/nazgul/tasks/TASK-123.md" "DONE")
+run_guard "$input"
+assert_exit_code "lexical task path under a symlinked root stays leaf-checked" "$GUARD_EC" 2
+
+rm -f "$REAL_ROOT/nazgul/tasks/TASK-123.md"
+rm -rf "$DECOY"
+teardown_temp_dir
+
 # ---------------------------------------------------------------------------
 # Test 102 (TASK-002): another project's own nazgul/tasks/TASK-001.md is not
 # evaluated against THIS project's state (V7) — the bound runs before
