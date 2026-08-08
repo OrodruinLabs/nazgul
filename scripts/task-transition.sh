@@ -171,13 +171,50 @@ if [ -n "$REPAIR_FINDINGS" ]; then
   repair_deny "incomplete evidence for review unit ${REVIEW_UNIT}: ${REPAIR_FINDINGS}" "incomplete_evidence"
 fi
 
-for _repair_edge in "BLOCKED:IN_REVIEW" "IN_REVIEW:DONE"; do
+YOLO_MODE=$(jq -r 'if .afk.yolo == true then "true" else "false" end' \
+  "$NAZGUL_DIR/config.json" 2>/dev/null || echo "false")
+TASK_PR_MODE=$(jq -r 'if .afk.task_pr == true then "true" else "false" end' \
+  "$NAZGUL_DIR/config.json" 2>/dev/null || echo "false")
+# YOLO task-PR review reaches DONE only through APPROVED; hard-coding
+# IN_REVIEW -> DONE made every repair in that mode refuse at the second edge.
+if [ "$YOLO_MODE" = "true" ] && [ "$TASK_PR_MODE" = "true" ]; then
+  REPAIR_EDGES=("BLOCKED:IN_REVIEW" "IN_REVIEW:APPROVED" "APPROVED:DONE")
+else
+  REPAIR_EDGES=("BLOCKED:IN_REVIEW" "IN_REVIEW:DONE")
+fi
+
+# A halt after the first edge has already left the quarantine, so re-enter it
+# rather than report a preservation that did not happen.
+repair_halt() {
+  local edge="$1" live disposition detail
+  live=$(get_task_status "$MANIFEST_FILE" "")
+  if [ "$live" = "BLOCKED" ]; then
+    disposition="preserved"
+    detail="the quarantine is intact at BLOCKED"
+  else
+    # ttg_apply_transition can report failure after its rename lands, so the
+    # disposition is read back off disk instead of taken from the return code.
+    ttg_apply_transition "$NAZGUL_DIR" "$PROJECT_ROOT" "$TASK_ID" "$live" BLOCKED "" || true
+    live=$(get_task_status "$MANIFEST_FILE" "")
+    if [ "$live" = "BLOCKED" ]; then
+      disposition="restored"
+      detail="the walk had already left the quarantine at ${edge%%:*}; it was re-entered and repair may be retried"
+    else
+      disposition="stranded"
+      detail="the walk left the quarantine and could not re-enter it; the manifest is on disk at ${live:-missing} and needs human repair"
+    fi
+  fi
+  echo "task-transition: repair ${TASK_ID} halted at ${edge%%:*} -> ${edge##*:}; ${detail}" >&2
+  _ttg_emit_event "$NAZGUL_DIR" "reconciliation_repair" \
+    task_id "$TASK_ID" action "halted" reason "edge_refused" edge "$edge" \
+    quarantine "$disposition" live_status "${live:-missing}"
+  exit 1
+}
+
+for _repair_edge in ${REPAIR_EDGES[@]+"${REPAIR_EDGES[@]}"}; do
   if ! ttg_apply_transition "$NAZGUL_DIR" "$PROJECT_ROOT" \
     "$TASK_ID" "${_repair_edge%%:*}" "${_repair_edge##*:}" ""; then
-    echo "task-transition: repair ${TASK_ID} halted at ${_repair_edge%%:*} -> ${_repair_edge##*:}; the quarantine is preserved" >&2
-    _ttg_emit_event "$NAZGUL_DIR" "reconciliation_repair" \
-      task_id "$TASK_ID" action "halted" reason "edge_refused" edge "$_repair_edge"
-    exit 1
+    repair_halt "$_repair_edge"
   fi
 done
 

@@ -503,7 +503,9 @@ ttg_validate_transition() {
     case "$deps_raw" in none|None|NONE) deps_raw="" ;; esac
     deps_raw="${deps_raw//,/ }"
     IFS=' ' read -r -a deps <<< "$deps_raw"
-    for dep in "${deps[@]}"; do
+    # `Depends on: none` empties the array, and bash < 4.4 (/bin/bash 3.2) treats an
+    # unguarded value expansion of an empty array as unbound, aborting under `set -u`.
+    for dep in ${deps[@]+"${deps[@]}"}; do
       [[ "$dep" =~ ^TASK-[0-9]+$ ]] || {
         echo "ttg_validate_transition: READY dependency '${dep}' is not a canonical task id" >&2
         return 1

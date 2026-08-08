@@ -169,6 +169,63 @@ assert_eq "R3: a denied repair preserves the quarantine" \
   "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "BLOCKED"
 teardown_temp_dir
 
+# R4: the ledger append runs after the manifest rename, so a broken ledger fails
+# the edge with the new status already on disk — the real mid-walk case.
+quarantine_fixture
+rm -f "$TEST_DIR/nazgul/logs/guarded-transitions.jsonl"
+ln -s /dev/null "$TEST_DIR/nazgul/logs/guarded-transitions.jsonl"
+run_cmd repair TASK-001
+assert_exit_code "R4: a mid-walk edge failure fails the repair" "$CMD_EC" 1
+assert_eq "R4: the walk re-enters the quarantine it had already left" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "BLOCKED"
+assert_contains "R4: the message reports leaving and re-entering, not preservation" \
+  "$CMD_OUT" "had already left the quarantine"
+assert_not_contains "R4: the message does not claim the quarantine was untouched" \
+  "$CMD_OUT" "the quarantine is preserved"
+assert_contains "R4: the halt event types the disposition" \
+  "$(events_for reconciliation_repair)" '"quarantine":"restored"'
+assert_contains "R4: the halt event reports the true on-disk status" \
+  "$(events_for reconciliation_repair)" '"live_status":"BLOCKED"'
+assert_eq "R4: the restored quarantine is still typed and repairable" \
+  "$(manifest_field TASK-001 'Blocked kind')" "reconciliation"
+rm -f "$TEST_DIR/nazgul/logs/guarded-transitions.jsonl"
+run_cmd repair TASK-001
+assert_exit_code "R4: repair is retryable after a restored halt" "$CMD_EC" 0
+assert_eq "R4: the retry completes the walk" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "DONE"
+teardown_temp_dir
+
+# R5: a halt before the first write reports preservation, and truthfully.
+quarantine_fixture
+mkdir -p "$TEST_DIR/nazgul/locks"
+: > "$TEST_DIR/nazgul/locks/task-transition-TASK-001.lock"
+run_cmd repair TASK-001
+assert_exit_code "R5: an unusable lock fails the repair" "$CMD_EC" 1
+assert_eq "R5: nothing left the quarantine" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "BLOCKED"
+assert_contains "R5: preservation is claimed only when it is true" \
+  "$CMD_OUT" "the quarantine is intact at BLOCKED"
+assert_contains "R5: the halt event types the disposition" \
+  "$(events_for reconciliation_repair)" '"quarantine":"preserved"'
+teardown_temp_dir
+
+# R6: YOLO task-PR reaches DONE through APPROVED instead of refusing.
+quarantine_fixture
+jq '.afk.yolo = true | .afk.task_pr = true' "$TEST_DIR/nazgul/config.json" \
+  > "$TEST_DIR/config.tmp" && mv "$TEST_DIR/config.tmp" "$TEST_DIR/nazgul/config.json"
+run_cmd repair TASK-001
+assert_exit_code "R6: repair is not deterministically broken under task-PR review" "$CMD_EC" 0
+assert_eq "R6: repair still lands on DONE" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "DONE"
+LEDGER="$TEST_DIR/nazgul/logs/guarded-transitions.jsonl"
+assert_eq "R6: the walk goes through APPROVED, as this mode requires" \
+  "$(jq -sr '[.[] | select(.task_id == "TASK-001" and .from == "IN_REVIEW" and .to == "APPROVED")] | length' "$LEDGER")" "1"
+assert_eq "R6: APPROVED -> DONE is the recorded completion edge" \
+  "$(jq -sr '[.[] | select(.task_id == "TASK-001" and .from == "APPROVED" and .to == "DONE")] | length' "$LEDGER")" "1"
+assert_eq "R6: the mode-illegal direct edge is never attempted" \
+  "$(jq -sr '[.[] | select(.task_id == "TASK-001" and .from == "IN_REVIEW" and .to == "DONE")] | length' "$LEDGER")" "0"
+teardown_temp_dir
+
 # === AC3: blocker-class routing ===
 
 # --- B1: an ordinary typed blocker cannot use repair, and keeps its own route ---
