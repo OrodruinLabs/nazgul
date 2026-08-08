@@ -188,12 +188,12 @@ teardown_temp_dir
 # which takes the umask mode unless the manifest's own mode is carried over. ---
 quarantine_fixture
 chmod 640 "$TEST_DIR/nazgul/tasks/TASK-001.md"
-R1B_MODE_BEFORE=$(stat -f '%Lp' "$TEST_DIR/nazgul/tasks/TASK-001.md" 2>/dev/null \
-  || stat -c '%a' "$TEST_DIR/nazgul/tasks/TASK-001.md")
+R1B_MODE_BEFORE=$(_ttg_file_mode "$TEST_DIR/nazgul/tasks/TASK-001.md")
 run_cmd repair TASK-001
 assert_exit_code "R1b: repair succeeds on a non-default-mode manifest" "$CMD_EC" 0
-R1B_MODE_AFTER=$(stat -f '%Lp' "$TEST_DIR/nazgul/tasks/TASK-001.md" 2>/dev/null \
-  || stat -c '%a' "$TEST_DIR/nazgul/tasks/TASK-001.md")
+R1B_MODE_AFTER=$(_ttg_file_mode "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "R1b: the mode probe reads a real mode on this platform" \
+  "$(printf '%s' "$R1B_MODE_BEFORE" | grep -cE '^[0-7]{3,4}$')" "1"
 assert_eq "R1b: the repaired-marker rewrite preserves the manifest mode" \
   "$R1B_MODE_AFTER" "$R1B_MODE_BEFORE"
 assert_file_not_exists "R1b: no repair temp file is left on disk" \
