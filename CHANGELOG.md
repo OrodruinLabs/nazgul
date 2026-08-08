@@ -2,6 +2,175 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.31.0] - 2026-08-08
+
+FEAT-029, ADR-020 — **a validated request is not a completed write.** The whole release follows from
+that one sentence. `task-state-guard.sh` used to authorize a status transition at PreToolUse time and
+the loop later treated that authorization as proof the manifest had actually changed; between the two
+sat an unguarded gap in which nothing, or something else entirely, could land on disk. The same
+mistake had a second face: when reconciliation caught a manifest it could not account for, it wrote a
+prose blocker with no machine-readable statement of *what* disagreed and no route out except
+re-implementing finished work. Alongside that, the historical v2.28.1 dogfood report's remaining
+live findings — unconstrained reviewer dispatch, Bash-mediated manifest mutation, exact
+generated-artifact path claims made from intent alone, worktree instructions the host does not honour
+for subagents, shared prompt references that resolved only in a checkout of this repo, and a
+self-audit miner producing more false findings than real ones — are closed here. **MINOR, not PATCH:**
+this adds new capability an operator can invoke (`scripts/task-transition.sh`, including its `repair`
+subcommand) plus new default-on enforcement (direct status writes are now denied for everyone).
+**MAJOR is wrong:** no skill, agent, flag, or config key is removed or renamed, and every workflow
+that was already going through sanctioned routes behaves identically. **There is no config schema
+step — `schema_version` stays at 36**, which is itself the evidence that nothing an existing project
+stores had to change.
+
+### Added
+
+- **`scripts/task-transition.sh` — the sole sanctioned task-status writer.** Under a per-task lock it
+  validates one staged snapshot, rechecks the source status immediately before an atomic rename,
+  verifies the target on disk, and only then records the exact `FROM -> TO` edge. The lock serializes
+  authoritative writers; it makes no claim about an unrelated raw filesystem write.
+- **`task-transition.sh repair TASK-NNN` — an evidence-gated exit from quarantine that never
+  re-implements.** Closed to every blocker class except reconciliation, it revalidates five
+  independent evidence checks from local files and Git history before any write, then takes
+  `BLOCKED -> IN_REVIEW -> DONE` through the ordinary transactional primitive. It never uses `READY`
+  and never dispatches an implementer. Six named refusal reasons; a spent
+  `reconciliation (repaired …)` marker cannot re-authorize it.
+- **Typed reconciliation quarantine.** A quarantine now records `Blocked kind: reconciliation` plus
+  the checkpoint `Blocked from` and untrusted `Blocked observed` endpoints, emits
+  `reconciliation_quarantine`, and names the repair route in the manifest itself. Review-evidence,
+  review-provenance, and git-conflict blockers are typed too, so "the loop stopped" is no longer a
+  single undifferentiated state.
+- **An artifact claim evidence ledger for the doc generator** (`agents/doc-generator.md`). Source
+  intent and verified output are separate facts; exact-path certainty from intent alone is
+  prohibited; verification commands come from the project's own `project.*_command` config rather
+  than an assumed toolchain; unsafe or unavailable verification yields a visible `UNVERIFIED` marker
+  plus a test-plan obligation instead of invented evidence.
+- **Five adversarial test suites** — `test-task-transition-command.sh`,
+  `test-task-reconciliation-repair.sh`, `test-agent-worktree-contract.sh`,
+  `test-doc-generator-contract.sh`, `test-reference-paths.sh`. The discovered root suite moves
+  **93 → 98 files**, all green.
+
+### Changed
+
+- **Direct status writes are denied — this is the one behavior change every user sees.**
+  `task-state-guard.sh` now refuses EVERY direct `Write`/`Edit`/`MultiEdit` of a task's status, legal
+  or not, and routes the caller to the command. Preflight is no longer authority and can no longer
+  create the record reconciliation trusts. Agents, `agents/review-gate.md`, and
+  `skills/task/SKILL.md` (including its `sed` SKIPPED writer) were migrated to the command first,
+  and a forbidden-form scan reporting `scanned / skipped / checked / findings` keeps them there.
+- **Reconciliation resolves legitimacy from a chain of completed edges,** not one ledger entry — a
+  single loop iteration legitimately spans several transitions, and demanding one entry misread
+  normal progress as tampering.
+- **The `PLANNED -> READY` dependency gate is granularity-aware, via one authority.**
+  `ttg_dependency_satisfied` is now the sole implementation, shared by the command and the
+  stop-hook's auto-promote arm. Under `group`/`feature` granularity a dependency at `IMPLEMENTED` or
+  later satisfies the gate: requiring `DONE` there was **unsatisfiable**, because no task reaches
+  `DONE` until the aggregate board runs at the end of the objective. That deadlock became total the
+  moment direct manifest writes were closed, and it is fixed here rather than worked around.
+- **Reviewer dispatch is mechanically constrained** to explicit unnamed foreground dispatch from the
+  main session, enforced ahead of the parallel-mode branch. Missing background metadata is accepted
+  only when the hook caller identity proves a nested synchronous-only schema. `/nazgul:patch` lost
+  its background fork context and drives review from the main session under the one canonical
+  returned-text contract.
+- **Agents are handed an existing task worktree instead of being told to create one.** The
+  `EnterWorktree`/`ExitWorktree` grants are gone from `implementer`, `simplifier`, `review-gate`, and
+  `team-orchestrator` — a subagent session is not granted those tools, so the old text described a
+  contract the host does not honour for that caller. Implementer and simplifier verify the supplied
+  worktree with `git -C <path> rev-parse --show-toplevel` and STOP rather than creating one; every
+  git command names its directory with `-C`, and file tools take absolute paths.
+- **Every shared prompt reference is `${CLAUDE_PLUGIN_ROOT}`-qualified** across the agent roster and
+  all shipped skills, and is resolved against a package staged from the shipped file set — so a
+  reference that resolves only in a checkout of this repo now fails. `skills/start`'s
+  `greenfield-scaffolding` and `tool-preflight` citations resolve to `skills/start/references/`, not
+  the root directory; the naive plugin-root prefix would have broken them.
+
+### Fixed
+
+- **Bash-mediated manifest mutation.** `pre-tool-guard.sh`'s three text-substring rules are replaced
+  by a structural closed-writer policy over the existing no-eval tokenizer: redirects into a manifest
+  (any command), `mv`/`cp`/`install`/`ln` by final argument, `tee`, in-place `sed`/`perl`/`ruby`/`awk`,
+  an interpreter carrying a manifest path in its program text, one `bash -c` hop, and a heredoc-fed
+  interpreter. Path matching uses the strict `nazgul/tasks/TASK-<digits>.md` matcher, so patch
+  manifests, per-task artifact directories, and delegation briefs stay out of the blast radius; read-only
+  inspection and every spelling of the sanctioned route were verified to still work *before* the routes
+  were closed. **`RULES.md` states plainly that a denylist over a Turing-complete shell is not
+  exhaustive**, names what it does not catch, and names the layers that make an unsanctioned write
+  ineffective anyway.
+- **A lock liveness defect that could wedge a task permanently.** A writer killed between its `mkdir`
+  and its owner-file write left an ownerless lock no one could ever reclaim. It is now reclaimable
+  after a bounded grace via `rmdir`, which refuses a directory that has since gained an owner, and the
+  acquire publishes its token before the owner write so no signal window can skip the release trap.
+- **Four self-audit mining defects — the miner that audits the loop was the loudest producer of false
+  findings in it.** A cross-project census of 580 `improvements.md` entries found ~352 (61%) false or
+  duplicate, and 292 false model-drift findings buried 108 genuine ones 3:1. (1) Role attribution now
+  comes from `message.attributionAgent`, not the opaque `agent-<hex>.jsonl` filename, which matched no
+  role pattern and so compared every subagent against `models.default`; generic harness agent types are
+  reported unclassifiable rather than guessed at. (2) A configured **bare alias is a family pin**
+  (`sonnet` matches `claude-sonnet-5`) while a configured full model id stays an exact pin, so version
+  drift still reports and true cross-family drift still emits exactly one finding. (3) The verdict is
+  now the only rejection signal — the old `grep -q 'REJECT'` fallback matched `- **REJECT**: none.`,
+  the line a lane writes when it has *no* rejections, so a unanimous APPROVE board emitted a full set
+  of rejections; `grep -a` is mandatory on verdict reads because BSD grep reports no match in a
+  NUL-bearing file, making the same board mine differently depending on a byte nobody can see.
+  (4) Per-file high-water marks in `nazgul/self-audit-window.json` advance the mined window so the
+  line-oriented miners start after the last run (a shrunken file is re-mined from the start, loudly),
+  with a `(title, first line of evidence)` index seeded from the on-disk backlog to suppress
+  re-appends.
+- **Coverage honesty extended to `self-audit`.** Every miner emits `scanned / skipped / checked /
+  findings` with a closed reason list and a summable run total asserting `N == M + K`; `self-audit` is
+  now the seventh entry point bound by the contract in `tests/test-coverage-honesty.sh` — and is
+  actually driven by it, not merely listed.
+- **A durable contract that was anchored to a disposable document.** `tests/test-coverage-honesty.sh`
+  cited "TRD §6" — the *FEAT-028* TRD, archived when that objective completed, so the citation pointed
+  at a section the live TRD does not contain. The registry moved to `RULES.md` §15, which survives
+  objective rotation. Any test or guard citing "TRD §N" or "PRD ACn" as its authority has the same
+  expiry built in.
+
+### Historical report claims — explicit dispositions, not silent omissions
+
+FEAT-029 revalidated the v2.28.1 dogfood report against live v2.30.0 rather than trusting it. Eight
+claims were **not** implemented, each for a stated reason. They are recorded here so their absence
+from the "Fixed" list above is a decision with a reason attached rather than an oversight:
+
+- **Already fixed in v2.30.0** — (1) the discovery-generated self-writing reviewer template: discovery
+  renders the canonical reviewer base, generated reviewers are read-only, use `[UNIT-ID]`, return
+  `APPROVE | CHANGES_REQUESTED | UNVERIFIED`, and install no self-write hook. (2) The generated
+  reviewer `allowed-tools`/self-write contradiction, fixed at the template; the residual contradictory
+  prose in `review-gate` was live and *is* fixed in this release.
+- **Superseded** — (3) "naming alone creates an Agent-Teams teammate": named subagents and Agent Teams
+  are distinct under current host semantics. FEAT-029 still forbids reviewer names, as one-shot
+  hygiene, but does not rest on the historical causal claim. (4) "stale checkpoints are ignored even
+  for guarded transitions": since FEAT-015 a matching ledger endpoint after the checkpoint is
+  consulted; the live defects were pre-write authorization, non-contiguous trust, and no safe repair —
+  all addressed above. (5) "no `BLOCKED -> IN_REVIEW` route exists": the route exists for prose reasons
+  containing `review evidence`; what was genuinely missing was availability to *typed* reconciliation
+  blockers, which `repair` now provides. (6) "one fresh re-dispatch for empty/stub returns": the
+  universal `SubagentStop` same-context resume plus bounded gate retry and `UNVERIFIED` handling is
+  strictly stronger; correct dispatch routing was still required, because teammate routes bypass that
+  recovery.
+- **Not reproducible as stated** — (7) "the package entirely omits `ui-brand.md`": the root file *is*
+  packaged. The real defect was ambiguous relative resolution, fixed above. (8) "a normal subagent
+  `Edit` never fires the task-state hook": static wiring covers `Write|Edit|MultiEdit`, and this could
+  not be reproduced under the execution environment used here — so it is left open rather than
+  labelled fixed.
+
+### Known constraints (honest notes)
+
+- **No paid Claude run was performed for this objective.** Implementation and review used
+  Codex-native agents and tools; current host semantics are represented by official contract evidence
+  and real hook envelopes rather than by a live authenticated Claude execution. Claim (8) above stays
+  open for exactly this reason, and no assertion in this entry should be read as a result observed
+  from a paid run.
+- **The Bash writer denylist is not a proof of exclusion.** It closes the routes it enumerates and
+  says so in `RULES.md`; a sufficiently indirect shell construction can still reach a manifest. What
+  makes such a write ineffective is the layers behind it — reconciliation, the transition ledger, and
+  the evidence gates — not the denylist alone.
+- **`scripts/worktree-utils.sh:346` still repeats the stale claim** that `EnterWorktree` is a live
+  worktree-entry path. It was reported rather than edited, being outside the scope of the task that
+  found it.
+- **`tests/test-doc-generator-contract.sh` pins the prompt contract, not the doc generator's
+  compliance with it** — which is why the corresponding `RULES.md` §7 rule is tagged `[advisory]`
+  rather than `[enforced]`. Rule tier counts move to 69 enforced / 27 advisory / 22 hook-driven only.
+
 ## [2.30.0] - 2026-08-05
 
 FEAT-028, ADR-019 — a green test is evidence only after it proved it can turn red. The suite had
