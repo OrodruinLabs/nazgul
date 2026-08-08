@@ -1,5 +1,25 @@
 # self-audit fixture provenance
 
+## Machine-checked declaration
+
+`tests/test-repo-content-boundary.sh` R2 parses the fields below and RECOMPUTES every
+`pin:` line against this directory. A pin that drifts from disk fails the suite, which is
+the mechanism the prose version of these numbers lacked when it last rotted.
+
+tier: captured-redacted
+consumer: `scripts/self-audit.sh` `_review_verdict()`, via `tests/test-self-audit.sh` T22/T23/T24
+producer: real generated reviewers writing real verdicts in a real Nazgul run
+captured: 2026-08-08 (TASK-011, FEAT-029)
+redacted: 2026-08-08 (PATCH-001)
+
+```form-pins
+pin: file-count | 11 | approve-board | *.md
+pin: occurrences | 11 | approve-board | ^[[:space:]]*\**verdict\**:[[:space:]]*[A-Za-z_]+
+pin: occurrences | 6 | approve-board | REJECT
+pin: matching-files | 6 | approve-board | ^-[[:space:]]*\*{0,2}REJECT
+pin: occurrences | 1 | approve-board | ^- \*\*Verdict\*\*:
+```
+
 ## `approve-board/`
 
 - **Tier**: `captured-redacted` — the *form* was captured from a real producer; the
@@ -14,8 +34,9 @@
 ### Why it was redacted
 
 The files were first committed verbatim from a run in an unrelated **private** project,
-into this **public** repository. That violated `CLAUDE.md:117` ("Small product-input
-goldens; no Nazgul runtime state") and published, in the clear: absolute home-directory
+into this **public** repository. That violated the fixtures rule `CLAUDE.md` carried at the
+time ("Small product-input goldens; no Nazgul runtime state" — PATCH-002 has since rewritten
+that line to point at these provenance files) and published, in the clear: absolute home-directory
 paths, that project's commit SHAs and branch name, its architectural rules and
 critical-path source filenames, and its *unresolved* security posture — a list of named
 residual advisories, which is the one category here that is actively harmful to publish

@@ -46,9 +46,11 @@ to the RULES.md list and to that test in the same change.
 
 ## Test Files
 
-The runner discovers **98** root `test-*.sh` files — derive the current number with
+The runner discovers **99** root `test-*.sh` files — derive the current number with
 `ls tests/test-*.sh | wc -l` rather than trusting this line, and update it when it drifts. The count was
-93 at FEAT-028; FEAT-029 added the five adversarial suites listed below. The FEAT-028 retroactive audit
+93 at FEAT-028; FEAT-029 added the five adversarial suites listed below, and PATCH-002 added
+`test-repo-content-boundary.sh` (RULES.md §15's repo content boundary: no operator home path in tracked
+source, and a provenance declaration per `tests/fixtures/` subdirectory). The FEAT-028 retroactive audit
 covered 118 files when shared helpers, E2E files, and fixtures were included; see
 `docs/test-audit-2026-08.md` for that point-in-time, one-verdict-per-file ledger (it is dated and is not
 retro-edited as the suite grows).

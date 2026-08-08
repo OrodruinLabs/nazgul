@@ -540,6 +540,42 @@ note. This is §15's looked-vs-never-looked distinction applied to tests, guards
   TRD section, which was archived out from under the citation when that objective completed: the authority
   for a durable contract must live in a durable file.
 
+### Tests-facing application: the repo content boundary (PATCH-002)
+
+This repository is public, and the loop writes runtime state into it constantly. The FEAT-029 incident
+copied eleven reviewer verdict files out of an unrelated PRIVATE project into `tests/fixtures/` with a
+Bash `cp` — a path no `Write|Edit|MultiEdit` PreToolUse guard can observe, and one a Bash guard could
+only catch by inferring intent from a command string, which is precisely the non-convergence this
+section opens by rejecting. CI is therefore the only tier that binds: `.github/workflows/test.yml` runs
+`tests/run-tests.sh` on every push and PR, and `tests/test-repo-content-boundary.sh` runs inside it. It
+carries no config kill switch — a CI test does not get one. Both of its scans report
+`scanned / skipped / checked / findings` and assert `N == M + K`, with a floor that fails a zero-file
+scan as a broken scan rather than a clean repo.
+
+- **R1 — no tracked file may contain a real operator home path.** `[enforced]`
+  `tests/test-repo-content-boundary.sh` scans every path `git ls-files` reports for `/Users/<name>/`,
+  `/home/<name>/`, and `C:\Users\<name>\`, counting OCCURRENCES rather than matching lines. Exemption is
+  a CLOSED allowlist of synthetic placeholders (`dev`, `test`, `tester`, `user`, `example`, `runner`,
+  `ubuntu`, `alice`, `bob`, `someone`) — enumerate-the-allowed-set, so adding a name is a deliberate,
+  reviewable act rather than a widened grammar. The scan file exempts itself with a named, counted skip
+  reason, never a silent one, and the matcher is additionally driven against a synthetic corpus so the
+  detector is proven able to fire against a tree that is clean by construction.
+- **R2 — every immediate subdirectory of `tests/fixtures/` declares its provenance.** `[enforced]` Each
+  one carries a `PROVENANCE.md` naming a `tier:` from the closed set `{synthetic, captured-redacted,
+  verbatim}` plus that tier's required fields. A `captured-redacted` fixture additionally carries a
+  form-pins block whose every value the test RECOMPUTES from disk and compares — the pre-PATCH-002 prose
+  pins had rotted into claiming three `REJECT` spellings including a bold variant and two prose mentions
+  when disk held 6 occurrences in 2 plain spellings, zero bold, zero prose. A fixture whose content the
+  scrubber is supposed to contain (`bootstrap-transform/`) is exempted BY ITS OWN TIER DECLARATION,
+  living with the fixture — never by an inline suppression marker in the checker.
+- **R3 — no third-party subject matter in a fixture, at any tier.** `[advisory]` A golden may pin a real
+  producer's FORM; it may never carry another project's prose, package names, source filenames, commit
+  SHAs, branch names, or security posture. This tier is deliberate, not an oversight: the vocabulary of
+  "third-party subject matter" is open-ended and unknowable in advance, so no finite check can decide
+  it, and labelling it as mechanically enforced would be exactly the dishonesty the tier legend at the
+  top of this file exists to prevent. It is carried by review and by the `PROVENANCE.md` a fixture's
+  author must write.
+
 ## 16. GitHub Connector
 
 `scripts/lib/connector-github.sh` (FEAT-012, ADR-001) is the first real remote provider behind the

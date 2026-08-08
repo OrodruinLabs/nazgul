@@ -55,21 +55,21 @@ fi
 # The three counts are structural-freshness checks, NOT ceilings: bump one for a
 # genuinely new rule; never weaken a tag to keep a count unchanged (FEAT-022).
 ADVISORY_COUNT=$(awk '{ count += gsub(/\[advisory\]/, "") } END { print count + 0 }' "$RULES_FILE")  # occurrences, not lines
-if [ "$ADVISORY_COUNT" -eq 27 ]; then
-  _pass "[advisory] annotation count is exactly 27 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 28 ]; then
+  _pass "[advisory] annotation count is exactly 28 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 27" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 27"
+  _fail "[advisory] annotation count is exactly 28" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 28"
 fi
 
-# 64 -> 69: FEAT-029 added §2's preflight-is-not-authority rule, §2's
-# granularity-aware dependency gate, §2's two repair rules, and §15's registry.
+# 64 -> 69 by FEAT-029 (§2's preflight/dependency/repair rules and §15's registry);
+# 69 -> 71, and advisory 27 -> 28, by PATCH-002's §15 repo content boundary.
 ENFORCED_COUNT=$(awk '{ count += gsub(/\[enforced\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ENFORCED_COUNT" -eq 69 ]; then
-  _pass "[enforced] annotation count is exactly 69 (found: $ENFORCED_COUNT)"
+if [ "$ENFORCED_COUNT" -eq 71 ]; then
+  _pass "[enforced] annotation count is exactly 71 (found: $ENFORCED_COUNT)"
 else
-  _fail "[enforced] annotation count is exactly 69" \
-    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 69"
+  _fail "[enforced] annotation count is exactly 71" \
+    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 71"
 fi
 
 # 21 -> 22: FEAT-029 added §2's typed reconciliation quarantine, hook-driven
