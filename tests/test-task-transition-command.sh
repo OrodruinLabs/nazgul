@@ -750,5 +750,56 @@ assert_exit_code "external symlink alias to a task still reaches the state guard
 assert_contains "symlink alias is routed to the transaction command" \
   "$(cat "$TEST_DIR/alias.err")" "task-transition.sh transition TASK-014 READY IN_PROGRESS"
 
+# F1: an empty array's value expansion is fatal under `set -u` on bash < 4.4.
+# Shell-independent half — the guarded idiom is stripped, so what remains is unguarded.
+UNGUARDED=""
+for _f in "$REPO_ROOT/scripts/lib/task-transition-guard.sh" \
+  "$REPO_ROOT/scripts/task-transition.sh" "$REPO_ROOT/scripts/task-state-guard.sh"; do
+  _hits=$(sed 's/\${\([A-Za-z_][A-Za-z0-9_]*\)\[@\]+"\${\1\[@\]}"}//g' "$_f" \
+    | grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*\[[@*]\]\}' || true)
+  [ -z "$_hits" ] || UNGUARDED="${UNGUARDED}${UNGUARDED:+; }${_f##*/}:${_hits}"
+done
+assert_eq "no unguarded empty-array value expansion survives in the transition path" \
+  "$UNGUARDED" ""
+
+# PATH bash 5 tolerates the expansion, so only a real bash < 4.4 can turn this red.
+LEGACY_BASH=""
+for _cand in /bin/bash /usr/bin/bash; do
+  [ -x "$_cand" ] || continue
+  _v=$("$_cand" -c 'echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"' 2>/dev/null) || continue
+  case "$_v" in
+    3.*|4.0|4.1|4.2|4.3) LEGACY_BASH="$_cand"; break ;;
+  esac
+done
+
+if [ -z "$LEGACY_BASH" ]; then
+  _skip "dependency-less READY under bash < 4.4 (none installed; running $(bash --version | head -1 | sed 's/GNU bash, version //;s/ .*//'))"
+else
+  create_task_file TASK-015 PLANNED none
+  LEGACY_EC=0
+  CLAUDE_PROJECT_DIR="$TEST_DIR" "$LEGACY_BASH" "$COMMAND" transition TASK-015 PLANNED READY \
+    >/dev/null 2>"$TEST_DIR/legacy.err" || LEGACY_EC=$?
+  assert_exit_code "legacy bash ($_v): dependency-less PLANNED -> READY completes" "$LEGACY_EC" 0
+  assert_not_contains "legacy bash: no unbound-variable abort" \
+    "$(cat "$TEST_DIR/legacy.err")" "unbound variable"
+  assert_eq "legacy bash: reported success matches disk" \
+    "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-015.md")" "READY"
+  if ttg_transition_is_guarded "$TEST_DIR/nazgul" TASK-015 PLANNED READY "2000-01-01T00:00:00Z"; then
+    _pass "legacy bash: completed edge is recorded in the ledger"
+  else
+    _fail "legacy bash: completed edge is recorded in the ledger" "no exact ledger match"
+  fi
+
+  create_task_file TASK-016 PLANNED none
+  LEGACY_GUARD_EC=0
+  jq -nc --arg f "$TEST_DIR/nazgul/tasks/TASK-016.md" \
+    '{tool_name:"Edit",tool_input:{file_path:$f,old_string:"status: PLANNED",new_string:"status: READY"}}' \
+    | CLAUDE_PROJECT_DIR="$TEST_DIR" "$LEGACY_BASH" "$STATE_GUARD" \
+      >/dev/null 2>"$TEST_DIR/legacy-guard.err" || LEGACY_GUARD_EC=$?
+  assert_exit_code "legacy bash: PreToolUse gate denies rather than failing open" "$LEGACY_GUARD_EC" 2
+  assert_eq "legacy bash: denied gate leaves the manifest alone" \
+    "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-016.md")" "PLANNED"
+fi
+
 teardown_temp_dir
 report_results
