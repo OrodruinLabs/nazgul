@@ -9,13 +9,16 @@
 5. **Never skip the review gate.** ALL reviewers must approve. No exceptions.
 6. **Address ALL blocking feedback.** Fix every REJECT item when CHANGES_REQUESTED.
 7. **One task at a time.** Unless parallel mode with Agent Teams.
-8. **Update Recovery Pointer on every state change.** Survives compaction. Evidence gates enforce real work: IMPLEMENTED requires a commit SHA, IN_REVIEW requires a review directory, source edits require an IN_PROGRESS task.
+8. **Update Recovery Pointer on every state change.** Survives compaction. Write the status with `scripts/task-transition.sh` — the sole sanctioned writer. Evidence gates enforce real work: IMPLEMENTED requires a commit SHA, IN_REVIEW requires a review directory, source edits require an IN_PROGRESS task.
 9. **Commit in AFK mode.** Every state transition gets a commit with the dynamic prefix from config (e.g., `feat(FEAT-003):`).
 10. **NAZGUL_COMPLETE means ALL tasks DONE and post-loop finished.** Not before.
 
 ## Safety Guardrails
 
 - **Pre-tool guard** blocks: `rm -rf /`, `DROP TABLE`, `git push --force main`, fork bombs, `curl | sh`
+- **Task-manifest write policy** (ADR-020): `scripts/task-transition.sh` is the only sanctioned status writer. `task-state-guard.sh` denies EVERY direct status write through Write/Edit/MultiEdit — a legal adjacent transition typed by hand is refused too, with the exact command to run instead, while an illegal one is refused earlier and names its own cause; `pre-tool-guard.sh` denies the Bash routes around it — redirects into a manifest, `mv`/`cp`/`install`/`ln` into place, `tee`, in-place `sed`/`perl`/`ruby`/`awk`, an interpreter carrying a manifest path inside a larger word, one `bash -c` hop, and a heredoc-fed interpreter. **That Bash list is a denylist over a Turing-complete shell and is NOT exhaustive**: it misses `eval`, command substitution, a writer *script*, an unexpanded-variable path, nesting past one `-c`, and unlisted interpreter names, all of which degrade to allow by design. What makes an unsanctioned write ineffective is not the denylist but the two layers behind it — the transactional writer's compare-and-swap plus completed-transition ledger, and the reconciliation quarantine below. See RULES.md §5
+- **Completed writes are the transition authority**: a `PreToolUse` hook sees an intended write, never a completed one, so preflight approval can no longer authorize a later raw write. `scripts/task-transition.sh` validates the live manifest, compare-and-swap writes it, verifies the new status on disk, and only then records the exact `FROM -> TO` edge; reconciliation matches a chain of completed edges rather than a reusable endpoint pair (RULES.md §2)
+- **Reconciliation quarantine is typed, and its exit is evidence-gated**: a status change with no completed transition behind it is quarantined with machine-readable endpoints (`Blocked kind: reconciliation`, `Blocked from`, `Blocked observed`) plus a `reconciliation_quarantine` event — never silently "corrected", and never claimed to be a legal `DONE -> BLOCKED` graph edge. `scripts/task-transition.sh repair TASK-NNN` is the only exit: it revalidates commit evidence, red-run evidence, review-directory path safety, review verdicts, and review provenance, then takes `BLOCKED -> IN_REVIEW -> DONE` — never `READY`, never an implementer redispatch, since the work was already reviewed. Six named refusal reasons on stderr and as `reconciliation_repair` events; `repair` is closed to every other blocker class, which routes to `/nazgul:task unblock`
 - **Review gate enforcement**: 3-layer defense-in-depth — stop hook validates, task-state guard prevents bypasses, review-gate agent enforces. Tasks cannot reach DONE without ALL reviewers approving.
 - **Security rejections** in AFK mode → BLOCKED (requires human review)
 - **Max retries per task**: 3 (configurable)
@@ -38,7 +41,7 @@
 
 **Loop stops unexpectedly** — Check `nazgul/config.json` for `max_iterations` or `consecutive_failures`. Run `/nazgul:start` to resume.
 
-**Task stuck as BLOCKED** — Check the `- **Blocked reason**:` line in `nazgul/tasks/TASK-NNN.md`. Fix the issue manually, then run `/nazgul:task unblock TASK-NNN` or set status to READY and `/nazgul:start`.
+**Task stuck as BLOCKED** — Read `- **Blocked kind**:` first, then `- **Blocked reason**:`, in `nazgul/tasks/TASK-NNN.md`. `Blocked kind: reconciliation` is an integrity quarantine: do NOT unblock or re-implement it — run `scripts/task-transition.sh repair TASK-NNN`, which revalidates the evidence and restores reviewed work without redispatching an implementer. Every other kind (`review-evidence`, `review-provenance`, `git-conflict`, or an untyped blocker) is fixed manually and then cleared with `/nazgul:task unblock TASK-NNN`. Never hand-edit `status:` — direct status writes are denied, and a write that evades the denylist is re-quarantined at the next iteration.
 
 **Want to see what happened overnight?** — Run `/nazgul:log` for a full timeline of iterations, commits, reviews, and blockers.
 
