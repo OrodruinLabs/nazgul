@@ -572,10 +572,22 @@ if echo "$porcelain" | grep -qE '^(U.|.U|AA|DD) '; then
     "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"blocked"'
   assert_file_contains "blocked event names task" \
     "$TEST_DIR/nazgul/logs/events.jsonl" '"task_id":"TASK-001"'
+  # PR #86 suppressed finding: the reason used to be written only when a `Blocked
+  # reason` line already existed, so this task landed a kind with no reason.
+  conflict_field() { # <label>
+    grep -m1 "^- \*\*$1\*\*:" "$TEST_DIR/nazgul/tasks/TASK-001.md" \
+      | sed 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*$//'
+  }
+  assert_eq "git conflict quarantine is typed by kind" \
+    "$(conflict_field 'Blocked kind')" "git-conflict"
+  assert_eq "git conflict quarantine carries a reason, not just a kind" \
+    "$(conflict_field 'Blocked reason')" "git conflict — unmerged files detected"
 else
   _skip "git conflict blocks task (skipped — no conflict produced)"
   _skip "blocked event emitted on git conflict (skipped — no conflict produced)"
   _skip "blocked event names task (skipped — no conflict produced)"
+  _skip "git conflict quarantine is typed by kind (skipped — no conflict produced)"
+  _skip "git conflict quarantine carries a reason, not just a kind (skipped — no conflict produced)"
 fi
 teardown_temp_dir
 
@@ -1314,7 +1326,7 @@ assert_eq "recon: command-applied transition not reconciled to BLOCKED" \
 assert_eq "recon: same-window write by another route is still reconciled to BLOCKED" \
   "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-002.md")" "BLOCKED"
 assert_contains "recon: diagnostic names the completed-write authority" \
-  "$HOOK_OUTPUT" "no completed transition recorded by scripts/task-transition.sh"
+  "$HOOK_OUTPUT" 'no completed transition recorded by ${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh'
 teardown_temp_dir
 
 # --- RECON-4: the stop-hook's OWN auto-promote (PLANNED -> READY) runs after

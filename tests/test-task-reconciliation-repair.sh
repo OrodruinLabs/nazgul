@@ -72,6 +72,12 @@ assert_contains "Q1: human-readable reason is preserved alongside the typed fiel
   "$(manifest_field TASK-001 'Blocked reason')" "outside the guarded Write/Edit/MultiEdit path"
 assert_contains "Q1: diagnostic names the repair route" \
   "$HOOK_OUTPUT" "scripts/task-transition.sh repair TASK-001"
+# PR #86 suppressed finding: a bare relative path does not resolve from a project-root
+# shell — the plugin lives under the plugin cache, so the operator got an unrunnable cmd.
+assert_contains "Q1: repair route is rooted at the plugin, not the caller's cwd" \
+  "$HOOK_OUTPUT" 'with: ${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh repair TASK-001'
+assert_not_contains "Q1: no bare-relative repair command survives in the advisory" \
+  "$HOOK_OUTPUT" "with: scripts/task-transition.sh"
 
 QUARANTINE_EVENT=$(events_for reconciliation_quarantine)
 assert_contains "Q1: a reconciliation_quarantine event is emitted" "$QUARANTINE_EVENT" "reconciliation_quarantine"

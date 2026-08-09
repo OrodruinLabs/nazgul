@@ -266,7 +266,7 @@ if [ "$RECON_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
         if [ -n "$RECON_LIVE_STATUS" ] && [ "$RECON_LIVE_STATUS" != "$RECON_PREV_STATUS" ] \
           && ! ttg_transition_chain_is_guarded "$NAZGUL_DIR" "$RECON_TASK_ID" \
             "$RECON_PREV_STATUS" "$RECON_LIVE_STATUS" "$RECON_PREV_TS"; then
-          echo "NAZGUL BASH-WRITE RECONCILIATION: BLOCKED — ${RECON_TASK_ID} status changed ${RECON_PREV_STATUS} → ${RECON_LIVE_STATUS} outside the guarded Write/Edit/MultiEdit path, with no completed transition recorded by scripts/task-transition.sh" >&2
+          echo "NAZGUL BASH-WRITE RECONCILIATION: BLOCKED — ${RECON_TASK_ID} status changed ${RECON_PREV_STATUS} → ${RECON_LIVE_STATUS} outside the guarded Write/Edit/MultiEdit path, with no completed transition recorded by \${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" >&2
           RECON_REASON="status changed ${RECON_PREV_STATUS} → ${RECON_LIVE_STATUS} outside the guarded Write/Edit/MultiEdit path, with no completed transition recorded by scripts/task-transition.sh (stop-hook reconciliation, MF-022)"
           # Recheck red evidence when an untraceable IMPLEMENTED landing bypassed PreToolUse.
           if [ "$RECON_LIVE_STATUS" = "IMPLEMENTED" ] \
@@ -281,7 +281,7 @@ if [ "$RECON_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
           set_manifest_field "$recon_task_file" "Blocked from" "$RECON_PREV_STATUS"
           set_manifest_field "$recon_task_file" "Blocked observed" "$RECON_LIVE_STATUS"
           set_manifest_field "$recon_task_file" "Blocked reason" "$RECON_REASON"
-          echo "NAZGUL BASH-WRITE RECONCILIATION: ${RECON_TASK_ID} quarantined (kind=reconciliation, from=${RECON_PREV_STATUS}, observed=${RECON_LIVE_STATUS}) — revalidate evidence with: scripts/task-transition.sh repair ${RECON_TASK_ID}" >&2
+          echo "NAZGUL BASH-WRITE RECONCILIATION: ${RECON_TASK_ID} quarantined (kind=reconciliation, from=${RECON_PREV_STATUS}, observed=${RECON_LIVE_STATUS}) — revalidate evidence with: \${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh repair ${RECON_TASK_ID}" >&2
           emit_event "reconciliation_quarantine" \
             task_id "$RECON_TASK_ID" kind "reconciliation" \
             checkpoint_status "$RECON_PREV_STATUS" observed_status "$RECON_LIVE_STATUS" \
@@ -916,11 +916,10 @@ if echo "$GIT_PORCELAIN" | grep -qE '^(U.|.U|AA|DD) '; then
     # Post-checkpoint hook write — ledger-log it or next iteration's
     # reconciliation flags this legitimate conflict-block as a forgery.
     ttg_log_transition "$NAZGUL_DIR" "$ACTIVE_TASK" "$_active_task_status" "BLOCKED"
-    # Add or update blocked reason
-    if grep -q '^\- \*\*Blocked reason\*\*:' "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" 2>/dev/null; then
-      sed -i.bak 's/^\(- \*\*Blocked reason\*\*:\) .*/\1 git conflict — unmerged files detected/' "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" && rm -f "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md.bak"
-    fi
+    # Kind and reason are upserted together: the prior grep-guarded sed had no else
+    # branch, so a first-time block landed a typed quarantine with no reason at all.
     set_manifest_field "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" "Blocked kind" "git-conflict"
+    set_manifest_field "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" "Blocked reason" "git conflict — unmerged files detected"
     ACTIVE_BLOCKED_REASON="git conflict"
     # Emit blocked event (pure observer; state already set by set_task_status above).
     emit_event "blocked" task_id "${ACTIVE_TASK:-unknown}" reason "git conflict"
