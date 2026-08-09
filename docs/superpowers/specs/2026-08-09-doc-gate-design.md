@@ -95,16 +95,25 @@ a human is already reading the docs, and unreliably in the mode designed for by 
 **Backstop.** The `stop-hook.sh:952` branch survives, demoted, for the case where the planner
 is reached by another route. It carries two mandatory properties:
 
-- **A bounded attempt counter**, in the `read -r OBJ CNT` / non-numeric-coercion / `-lt 3`
-  shape at `stop-hook.sh:1091-1101`, with a loud stderr line, typed event, and — on
-  exhaustion — an attestation written in the (d) form recording `backstop_exhausted` as its
-  verdict, so an exhausted gate is a readable decision rather than an absent file
-  (`:1114-1118` is the shape, with the marker replaced by the content-keyed attestation). Line 952 precedes max-iterations (`:1230`), the budget ceiling
+- **A bounded attempt counter**, `nazgul/logs/.doc-gate-attempts`, in the `read -r OBJ CNT` /
+  non-numeric-coercion / `-lt 3` shape at `stop-hook.sh:1091-1101`, with a loud stderr line,
+  typed event, and — on exhaustion — an attestation written in the (d) form recording
+  `backstop_exhausted` as its verdict, so an exhausted gate is a readable decision rather than
+  an absent file. Line 952 precedes max-iterations (`:1230`), the budget ceiling
   (`:1240`), consecutive failures (`:1248`), and the parallel hard stop (`:1256`); a block
   there outranks all four. The hazard is already documented in this file at `:973-974`:
   *"A bounded attempt counter keeps an unwritable marker from bricking the loop (this exit
   path is BEFORE the max-iteration backstop)."* Decision 4's doc-generator retries count in
   **this same ladder** — two independent bounds around one gate can ping-pong.
+
+  **The ladder is objective-keyed (`feat_id`); the attestation is content-keyed. They must
+  not share a key.** Retries regenerate documents, which changes `docs_hash`. A ladder keyed
+  to the doc set would reset its own counter on every retry — an unbounded loop wearing a
+  bounded counter, at the position that outranks all four backstops above. The shipped pair
+  gets this right and is the shape to copy: `.docs-verified` and `.docs-verify-attempts` are
+  **both** objective-keyed, compared against `feat_id` (`stop-hook.sh:1082-1097`). Only the
+  attestation is content-keyed, because it attests bytes and regenerating must invalidate
+  it — that is the whole point of (d).
 - **An actively-driven-objective predicate.** `feat_id` ∧ `branch.feature` ∧ `objective` all
   non-null. Line 952 is the *"nothing is being driven, get out of the user's way"* branch —
   the opposite of the `IS_COMPLETE` branch (`:967`) the four post-loop gates live in.
@@ -271,15 +280,372 @@ If the doc gate becomes a checking entry point it joins the `RULES.md` §15 regi
 `tests/test-coverage-honesty.sh` in the same change — that registry is asserted, not assumed
 (`RULES.md:534-543`).
 
-## Open — not yet brainstormed
+## The typed contradiction artifact
 
-Settled here as proposals; they need review before planning:
+**Sidecar file for the DATA, in-prompt fenced block for the CONTRACT. Written by a script,
+never hand-authored by the agent.**
 
-- The exact schema of the generator's typed contradiction artifact (decision 2's first channel).
-- The classification rule separating *architecture-invariant* from ordinary findings — the cut
-  decision 1's severity split depends on entirely.
-- The test plan, including the red-run evidence a `scripts/**` change requires
-  (`guards.red_run_evidence`, `RULES.md` §15).
+The Artifact Claim Evidence Ledger is already this split, and reading it correctly settles the
+question rather than leaving it to taste. Its **contract** lives as the fenced
+`artifact-claim-ledger:begin/end` block in the agent prompt (`agents/doc-generator.md:140-148`)
+and is pinned by `tests/test-doc-generator-contract.sh` rendering the prompt through the real
+producer. Its **data** lives inside the document and is pinned by nothing — `RULES.md:230`
+says so without flinching. So: copy the contract half, reject the data half. Four reasons
+specific to this artifact:
+
+1. **Circularity with (d).** Findings inside a document change the document, which changes
+   `docs_hash`, which invalidates the attestation computed over it. Escaping that needs a
+   parser hash-excluding a Markdown region. A sidecar *named by* the hash is acyclic.
+2. **Findings are cross-document.** "The TRD asserts X, ADR-002 assumed Y, the code does Z"
+   has no owning document.
+3. **The consumer is a hook with a 10s budget** (`hooks/hooks.json:73-75`). The existing
+   contract test needed ~60 lines of `awk`/`sed` to parse a fixed three-row table. A gate
+   reads JSON with `jq` — this repo's own rule (`CLAUDE.md` Code Style).
+4. **Retry history must survive the retry.** An embedded block is overwritten by the pass that
+   fixes it.
+
+**Producer: `scripts/doc-gate.sh emit`, logic in `scripts/lib/doc-gate.sh`.** The generator
+has `Bash` and calls it once per finding, never writing JSON itself — the `raise_finding()`
+posture (`scripts/lib/raise-finding.sh:40-101`, `RULES.md:385-392`). Consequence: *malformed*
+means truncation or a crash mid-write, not a model formatting slip, which is what makes it
+safe to treat malformed as corrupt. `scripts/lib/doc-gate.sh` is also the **sole** computer of
+`docs_hash`, sourced by producer, guard, and backstop — the `resolve_review_unit()` discipline
+(`RULES.md:92`: *"both gates read from the same resolution instead of two independent
+re-derivations drifting apart"*).
+
+| Path | Contents | Key |
+|---|---|---|
+| `nazgul/docs/.review/<docs-hash>.contradictions.json` | Generator channel findings | content |
+| `nazgul/docs/.review/<docs-hash>.json` | (d) attestation: reviewer verdict + merged split | content |
+| `nazgul/logs/.doc-gate-attempts` | `<feat_id> <count>` | **objective** |
+
+Co-location follows `RULES.md:93`. Two free consequences: the post-loop doc-verifier's
+`find … -maxdepth 1 -name "*.md"` (`stop-hook.sh:1087`) does not see `.review/`; and
+`/nazgul:reset` (`skills/reset/SKILL.md:90`) and new-objective archival
+(`skills/start/SKILL.md:560`) move `nazgul/docs/` wholesale, so attestations archive with the
+documents they attest.
+
+### `docs_hash` — normative derivation
+
+Computed only by `doc_set_hash()`: candidate set `nazgul/docs/*.md` at `-maxdepth 1`,
+**excluding `manifest.md`** (bookkeeping about documents, not a document making claims; its
+`Approved` column churns without any claim changing); `LC_ALL=C sort` the relative paths; emit
+`<sha256>  <relpath>\n` per file; hash that stream; take the first 16 hex characters. SHA-256
+resolves through one helper choosing `shasum -a 256` / `sha256sum`. Neither present → **hard
+error, never a fallback hash**: a weaker key silently mints a different namespace and every
+doc set reads as unattested forever.
+
+### Sidecar schema — v1
+
+Top level, every field required; `findings` may be empty but never absent.
+
+| Field | Type | Notes |
+|---|---|---|
+| `sv` | int | `1`. Precedent: `sv:1` at `subagent-stop.sh:180`. |
+| `docs_hash` | string | The 16-hex key this finding set is bound to. |
+| `feat_id` | string | Objective id at emit time. |
+| `generator` | string | `"doc-generator"`. |
+| `generated_at` | string | `%Y-%m-%dT%H:%M:%SZ`, UTC. |
+| `scanned` / `skipped` / `checked` / `findings_count` | int | Coverage quadruple, **stored**, so the gate reports honestly without re-deriving. `scanned == skipped + checked` asserted at write. |
+| `skip_reasons` | object | `{<reason>: <count>}` over the closed set below; must sum to `skipped`. |
+| `findings` | array | Below. |
+
+Per finding:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `id` | string | yes | `DG-<docs-hash>-<NNN>`. Stable — (e) cites it. |
+| `doc` | string | yes | Repo-relative path of the claiming document. |
+| `claim` | string | yes | Verbatim quote of the claiming sentence. |
+| `claim_locator` | string | yes | `<doc>:<line>` at emit time. |
+| `class` | enum | yes | `architecture-invariant` \| `security` \| `ordinary` |
+| `invariant_ref` | string | yes when `architecture-invariant`, else `null` | An id from the closed registry below. **The field that makes classification decidable.** |
+| `verifiability` | enum | yes | `mechanical` \| `judgment` |
+| `expected` | string | yes when `mechanical`, else `null` | What the document asserts. |
+| `observed` | string | yes when `mechanical`, else `null` | What the code does. |
+| `evidence` | array[string] | yes when `mechanical`, `minItems: 1` | `file:line`; paths must resolve. |
+| `probe` | string \| null | yes (nullable) | The command actually run, or `null`. Never one that was not run. |
+| `severity` | enum | yes | `HIGH` \| `MEDIUM` \| `LOW` (`RULES.md:89`). |
+| `confidence` | int 0-100 | yes | Same axis as the board, so one threshold governs both channels (`RULES.md:85`). |
+| `disposition` | enum | yes | `open` \| `retry_filed` \| `converged` \| `dissent_recorded` \| `blocked` |
+| `retry_count` | int | yes | Default `0`. |
+
+Every enumerated field is **closed**. Precedent is load-bearing: `_TTG_RED_RUN_NA_TOKENS` is
+*"never a pattern guess — an open-ended excuse field is an allow-everything field"*
+(`task-transition-guard.sh:129-131`), with unrecognized tokens rejected by name (`:248-249`).
+
+### Fenced contract block — paste into `agents/doc-generator.md`
+
+Mirrors `:140-148` in form, so `spec_field()` parses it with no new machinery:
+
+```
+<!-- doc-contradiction-ledger:begin — checked against this contract by tests/test-doc-generator-contract.sh -->
+artifact: nazgul/docs/.review/<docs-hash>.contradictions.json
+writer: scripts/doc-gate.sh emit
+top_level: sv | docs_hash | feat_id | generator | generated_at | scanned | skipped | checked | findings_count | skip_reasons | findings
+finding_fields: id | doc | claim | claim_locator | class | invariant_ref | verifiability | expected | observed | evidence | probe | severity | confidence | disposition | retry_count
+class_tokens: architecture-invariant security ordinary
+verifiability_tokens: mechanical judgment
+severity_tokens: HIGH MEDIUM LOW
+disposition_tokens: open retry_filed converged dissent_recorded blocked
+skip_reasons: unreadable not-a-document no-channel-available
+mechanical_finding: expected != null; observed != null; evidence minItems 1; every evidence path resolves
+invariant_finding: class == architecture-invariant requires invariant_ref in the RULES.md §21 registry
+counts: scanned == skipped + checked; skip_reasons values sum to skipped
+forbidden: agent_authored_json; assumed_command; invented_observed; unenumerated_token
+absent_artifact_is_not_a_clean_one: true
+<!-- doc-contradiction-ledger:end -->
+```
+
+### The three absence states
+
+The generator writes documents, **then** hashes, **then** emits — so the sidecar is bound to
+the exact bytes it describes. Per `RULES.md:525-532`, "found none" must not collapse into
+"never looked":
+
+| On-disk state | Name | Gate disposition |
+|---|---|---|
+| Sidecar for current hash, `findings: []`, counts consistent | `looked_found_none` | Counts as **checked**; may proceed on this channel |
+| **No** sidecar for the current hash | `generator_channel_unrun` | Counts as **skipped** (`no-channel-available`). Never clean. If the reviewer channel also did not run, `K == 0` → NOTHING CHECKED → **block** |
+| Present but unparseable, count-inconsistent, or bound to a different hash | `generator_channel_corrupt` | **Fires as its own finding**, `class: architecture-invariant`, `invariant_ref: INV-COVERAGE` |
+
+The third row transplants the IMPLEMENTED gate's posture verbatim — *"a Base SHA present but
+unresolvable rejects the manifest as corrupt"* (`task-transition-guard.sh:210-211`). Absent is
+a weaker claim than present-and-wrong; they are not the same state.
+
+## Classification — architecture-invariant vs ordinary
+
+**Classify by citation, not by adjective.** A finding is architecture-invariant **iff it names
+an invariant from a closed registry and passes at least one of two file-set/reversibility
+tests.** That converts a judgment call into a lookup plus two yes/no questions answerable from
+the finding record alone — which is what makes it repeatable, and what lets a script verify
+the *form* of a classification whose *taste* it cannot verify.
+
+### The registry — new `RULES.md` §21, closed
+
+A durable file, not a per-objective TRD: the coverage registry already rotted once by citing a
+TRD section archived out from under it (`RULES.md:541-543`).
+
+| id | Invariant | Source | Implementing files |
+|---|---|---|---|
+| `INV-STATE` | State-machine edges and their evidence gates | §2, Rule 8 | `lib/task-transition-guard.sh`, `task-transition.sh` |
+| `INV-WRITER` | Sole sanctioned status writer; CAS + reconciliation | §2, §5 | `task-transition.sh`, `stop-hook.sh:249-300` |
+| `INV-BOARD` | Unanimous board, verdict grammar, confidence threshold, unit resolution | §3.1/3.2/3.6/3.9 | `lib/review-evidence.sh` |
+| `INV-SCOPE` | Implementer file scope + `PROJECT_ROOT` bound | §8 | `task-state-guard.sh` |
+| `INV-RECOVERY` | Recovery Pointer + checkpoint + manifest fully describe resumable state | §4, Rule 10 | `stop-hook.sh` checkpoint writer, `post-compact.sh` |
+| `INV-COVERAGE` | Coverage-honesty grammar; looked-vs-never-looked | §15 | every enrolled entry point |
+| `INV-DISPATCH` | One-shot dispatch primacy; caller-created worktrees | §18 | `parallel-dispatch-guard.sh`, agent specs |
+| `INV-DELIVERY` | Empty-return detection + bounded resume | §19 | `subagent-stop.sh` |
+| `INV-ROOT` | Single shared root resolver; `CLAUDE_PROJECT_DIR` precedence | §15 (ADR-008) | `lib/nazgul-root.sh` |
+| `INV-FAILCLOSED` | Fail-closed security posture; AFK security reject → BLOCKED | §3.5, §9 | `stop-hook.sh`, `lib/parallel-batch.sh` |
+| `INV-SECRET` | No credential in config or logs; `gh auth` only | §16 | `lib/connector-github.sh` |
+
+Adding an id is a deliberate, reviewable `RULES.md` edit — enumerate-the-allowed-set, as with
+R1's operator-name allowlist (`RULES.md:557-564`) and the red-run token list.
+
+### The procedure
+
+**T0 — Security override, before T1.** `class: security` is architecture-invariant
+unconditionally. Mirrors fix-first rule 2 (*"Security findings are ALWAYS ASK, regardless of
+confidence"*) and `RULES.md:88`.
+
+**T1 — Citation.** Does the finding name an `invariant_ref` present in §21 **and** quote the
+clause the document contradicts? → **No: `ordinary`. Stop.** No uncertainty branch here — this
+is what keeps T4 narrow by construction.
+
+**T2 — Blast.** Would the claim, implemented as written, require changing a file in the cited
+invariant's *Implementing files* column, **or** move any gate's decision in the **allow**
+direction (a check that blocks today ceasing to block; a degradation path becoming reachable)?
+
+**T3 — Reversibility.** If the objective ships with the claim uncorrected, is the state
+repairable by a later ordinary task — **without** a config migration, **without** re-reviewing
+already-`DONE` work, **without** a manual `task-transition.sh repair`? → Not repairable →
+architecture-invariant.
+
+**Rule: `architecture-invariant` iff T1 ∧ (T2 ∨ T3).**
+
+**T4 — Default when uncertain: `architecture-invariant` (fail closed).** Reachable only when
+T1 passed and T2/T3 are both genuinely ambiguous. Weighed for *this* gate rather than
+inherited, as `RULES.md` §15 / ADR-009 requires: a false deny costs **one human
+acknowledgement, before planning, nothing built yet, once per objective**. A false allow costs
+the FEAT-030 shape — thirteen tasks derived from a contradicted premise, each passing a code
+board with no way to know, because the board reviews diffs against docs it never questions.
+The asymmetry is not close.
+
+### Relationship to fix-first's AUTO-FIX/ASK
+
+**Orthogonal axes**, and the disagreement is real rather than a modelling artifact.
+
+| | fix-first | this design |
+|---|---|---|
+| Question | *Who applies the fix?* | *Can it converge by retry?* (`verifiability`) and *what happens if we proceed?* (`class`) |
+| Subject | Code review findings | Document findings |
+| Applied by | feedback-aggregator, **after** a board verdict | The gate, **before** planning |
+
+Proof of non-identity is the motivating case: fix-first lists *"Design/architecture decisions"*
+under ASK (`fix-first-heuristic.md:19`), routing the FEAT-030 finding to ASK — while this
+design routes it to a bounded retry that converges. Both are right on their own axis.
+
+**Composition, normative: `verifiability` governs the retry loop; `class` governs the terminal
+disposition. They compose in that order and never override each other.**
+
+1. `mechanical` → file a retry carrying `expected`/`observed`/`evidence`, bounded by the
+   **objective-keyed** ladder.
+2. On convergence → `disposition: converged`, and **`class` becomes irrelevant** — a corrected
+   document has nothing to fail closed about. This is why "mechanical ∧ architecture-invariant"
+   is not a deadlock: the retry runs first and normally ends it.
+3. On non-convergence after the bound, **or** `verifiability: judgment` → `class` decides.
+   `architecture-invariant` or `security` → objective **BLOCKS**. `ordinary` → proceed,
+   `disposition: dissent_recorded`.
+4. Independent of 1–3: any `converged` finding whose `class` is `architecture-invariant` still
+   triggers **(e)** if tasks already exist derived from the old claim. Convergence fixes the
+   document; it does not retro-fix the plan.
+
+### Worked example — the FEAT-030 finding
+
+The cell where the two classifications disagree. `class: architecture-invariant`,
+`invariant_ref: INV-ROOT`, `verifiability: mechanical`, `expected` = redirects a worktree-cwd
+caller to the main tree, `observed` = returns the worktree's own toplevel,
+`evidence: ["scripts/lib/nazgul-root.sh:49","…:56","…:68"]`, `HIGH`/`95`.
+
+Classification: T0 no. T1 yes. T2 **yes** — implemented as written, thirteen tasks would call
+`resolve_project_root()` expecting redirection, changing the behaviour of the invariant's own
+implementing file. → `architecture-invariant`.
+
+Routing: `mechanical` → step 1, retry filed. The generator rewrites the objective statement to
+*"resolve via an explicit `CLAUDE_PROJECT_DIR=` designation paired with `nazgul-root.sh`"*.
+Hash changes, re-emit clean → `converged`. Step 4: no tasks existed yet, so (e) is a no-op.
+**Planning proceeds. Nobody is woken.**
+
+That outcome is the argument for the split being placed correctly: the design's own motivating
+incident does **not** reach the fail-closed path. It needed one retry, not a human at 2am. The
+severity split exists for what retry cannot settle — `judgment` findings and non-convergence.
+
+## Test plan
+
+### Extended
+
+| File | What it gains | Can it fail? |
+|---|---|---|
+| `tests/test-config-schema.sh` | New keys in `templates/config.json`; kill switch defaults `true` | Yes — drop a key |
+| `tests/test-migrate-config.sh` | v36→v37 additive step; **explicit `false` preserved**, per `migrate-config.sh:376` | Yes — a `//` default re-enables an explicit `false` |
+| `tests/test-coverage-honesty.sh` | `doc-gate` added to `ENTRY_POINTS` (`:19`), driven under forced all-skip; the tally at `:220-230` fails if never driven | Yes, by construction |
+| `tests/test-doc-generator-contract.sh` | Parses the new ledger block from the **rendered** prompt via `render_agent_prompt` (`:144`), reusing `spec_field()`; plus a strip-the-block control in the `:277-287` shape | Yes — the shipped control proves it |
+| `tests/test-stop-hook.sh` | Driven-objective predicate; **objective-keyed** ladder; exhaustion writes a `backstop_exhausted` attestation | Yes |
+| `tests/test-subagent-stop.sh` | `doc-reviewer` must **not** resolve to a code review unit — assert `_resolve_review_unit_for_agent` returns empty against a populated `reviews/*/.dispatch.json` | Yes — substitute `architect-reviewer` and it resolves, making (c)'s rationale executable |
+| `tests/test-shellcheck.sh`, `test-agent-worktree-contract.sh` | No edit; both scan the whole tree/roster | Yes |
+
+### Added
+
+**`tests/test-doc-gate-guard.sh`** — driven through real Agent envelopes in the shipped shape
+(`tests/test-parallel-dispatch-guard.sh:21-52`).
+
+| # | Fixture state | Dispatch | Expect |
+|---|---|---|---|
+| 1 | Attestation for current hash, `APPROVE` | `nazgul:planner` | allow, 0 |
+| 2 | No attestation, no sidecar | `nazgul:planner` | **deny, 2** |
+| 3 | Sidecar current hash, `findings: []`, no reviewer | `nazgul:planner` | allow, 0 + `doc_gate reason:degraded_no_reviewer` |
+| 4 | Sidecar bound to a **stale** hash only | `nazgul:planner` | **deny, 2** |
+| 5 | Sidecar truncated mid-write | `nazgul:planner` | **deny, 2**, `generator_channel_corrupt` |
+| 6 | One `architecture-invariant`, `disposition: open` | `nazgul:planner` | **deny, 2** |
+| 7 | Same finding, `converged` | `nazgul:planner` | allow, 0 |
+| 8 | One `ordinary`, `dissent_recorded` | `nazgul:planner` | allow, 0 |
+| 9 | Any state | `nazgul:implementer` | allow, 0 — planner-scoped |
+| 10 | Kill switch `false`, state as case 6 | `nazgul:planner` | allow, 0, **event still fires** |
+| 11 | No `nazgul/config.json` | `nazgul:planner` | allow, 0 |
+
+Cases 2/3/7 are the semantic core and are mutually distinguishing: unrun ≠ clean ≠ converged.
+
+**`tests/test-doc-gate-lib.sh`** — `doc_set_hash()` determinism; sensitivity to a one-byte
+edit; **insensitivity to `manifest.md`**; stability under `LC_ALL=C` and creation order; hard
+error (not a fallback) with no SHA-256 binary. Then classification over stored records: T1 miss
+→ `ordinary`; T1 + T2 → invariant; T1 with T2/T3 ambiguous → invariant by T4; `security` →
+invariant with T1 unsatisfied; a non-registry `invariant_ref` → rejected, not silently
+downgraded. Then routing: mechanical+invariant → `retry_filed`; **the ladder does not reset
+when `docs_hash` changes but `feat_id` does not**.
+
+### Red-run evidence
+
+Every implementing script and both new test files are `scripts/**`/`tests/**`, so
+`_ttg_red_run_in_scope()` returns 0 (`task-transition-guard.sh:195`) and IMPLEMENTED is blocked
+without evidence. **No enumerated exemption is available to any task in this design** — the
+closed list is `docs-only comment-only revert fixture-capture-only` (`:131`) and none fits,
+including the prompt/RULES-only task, whose contract test lives under `tests/`.
+
+```
+scripts/red-run.sh TASK-NNN --filter=doc-gate-guard --project-root=<main worktree path>
+```
+
+One wrinkle to write into the manifest rather than discover: the red run for the
+**contract-test** task must copy the changed `test-doc-generator-contract.sh` into the
+pre-change tree and fail there *because the fenced block is absent from the pre-change prompt*
+— exactly what the shipped control asserts in-suite (`:282-287`). A green red run means the
+new assertions are not reading the new block.
+
+### Fixtures
+
+**`tests/fixtures/doc-gate/contradictions/`**, tier `captured-redacted`. Producer: a real run
+of the shipped `scripts/doc-gate.sh emit` against this repository's own `nazgul/docs/` on
+FEAT-030 — the six real contradictions, first-party subject matter and clear of R3. Form-pins
+recomputed from disk in the `tests/fixtures/self-audit/PROVENANCE.md:15-21` block form: file
+count, findings count, `mechanical`/`judgment` mix, exactly one `invariant_ref`-bearing
+finding, every enum token from the closed sets.
+
+**Mutation applied at test time, never committed** (`PROVENANCE.md:125-131`, *"a fixture that
+can only pass is evidence of nothing"*): flip one finding's `class` from
+`architecture-invariant` to `ordinary` via anchored `sed`; assert the split changes from block
+to proceed.
+
+**`tests/fixtures/doc-gate/envelopes/`**, tier `captured-redacted`. One **real**
+`nazgul:planner` PreToolUse envelope from a live dispatch, absolute paths redacted (R1 forbids
+`/Users/<name>/`, `RULES.md:557-564`). The guard is driven against **both** the captured
+envelope and `jq`-built variants: synthetics cover the matrix cheaply, the capture pins fields
+a hand-built envelope would omit (`agent_type`, `name`). Meets ADR-019's dogfooding requirement
+without a fixture zoo.
+
+### Coverage-honesty line
+
+Entry point `doc-gate`; candidate = one document in the doc set.
+
+```
+doc-gate: N scanned, M skipped (unreadable=<a>, not-a-document=<b>, no-channel-available=<c>), K checked, F findings
+```
+
+`N == M + K` asserted by the emitter. Closed skip reasons, each a genuine could-not-look:
+`unreadable`; `not-a-document` (non-`.md`, or `manifest.md` per the hash rule — **counted, not
+silently dropped**, per `RULES.md:531`); `no-channel-available` (neither sidecar nor
+doc-reviewer covered it).
+
+`K == 0` with `N > 0` → `doc-gate: NOTHING CHECKED — all <N> candidates skipped` on stderr,
+`coverage_vacuous` on the bus, **and the pre-planning gate blocks (exit 2)**. Chosen for this
+gate, not inherited: it matches `test-shellcheck` (blocking, `test-coverage-honesty.sh:96`)
+rather than `lean-comments` (advisory, `:83`), for the same asymmetry that decides T4.
+Enrollment is two edits in one change: `RULES.md` §15's registry (making eight entry points)
+and `ENTRY_POINTS` at `test-coverage-honesty.sh:19`.
+
+### What cannot be mechanically tested — advisory tier
+
+Stated in the register of `RULES.md:230`, which names its own limit without softening it.
+
+- **Whether the `doc-reviewer`'s judgment is any good.** `[advisory]` The gate pins the
+  channel, grammar, routing, and persistence. Nothing stops a reviewer returning `APPROVE`
+  over a document riddled with contradictions. A human reading the review must catch it.
+- **Whether the generator's self-findings are complete.** `[advisory]` A generator noticing
+  four of six emits a well-formed artifact reporting four. The schema is enforced; **recall is
+  not.** This is the structural reason decision 2 keeps both channels — and two incomplete
+  channels are not one complete channel.
+- **Whether a classification was applied honestly.** Split. `[enforced]`: `invariant_ref`
+  resolves to a real §21 id; a `mechanical` finding carries `expected`/`observed`/≥1 evidence
+  path; every evidence path exists. `[advisory]`: that the cited invariant is the *right* one
+  and that T2/T3 were reasoned rather than guessed.
+- **The second half of (e).** `[advisory]` A script can assert the annotation exists and names
+  affected task ids. It cannot assert that "replan / annotate / nothing" is the *correct*
+  disposition.
+- **Coverage of the generator's own emit call.** `[hook-driven only]` Nothing forces the
+  doc-generator to call `scripts/doc-gate.sh emit` — the limit `RULES.md:378-380` states for
+  `raise_finding`. What the gate enforces is that a missing call is *visible*:
+  `no-channel-available` is a counted skip and, alone, produces NOTHING CHECKED rather than a
+  clean board. The omission cannot hide; it cannot be prevented.
 
 ## Verification performed for this design
 
