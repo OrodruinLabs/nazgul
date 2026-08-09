@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # Nazgul Parallel Dispatch Guard — PreToolUse on the Agent tool.
-# Enforces the no-re-dispatch contract for the execution.parallel dispatch
-# option: a work unit already IMPLEMENTED/DONE is never re-dispatched.
-# Background/concurrent dispatch itself is the intended mechanism under
-# execution.parallel, so it is not restricted here. No-op unless
-# execution.parallel is on. Exit 0 = allow. Exit 2 = deny (reason on stderr).
+# Enforces two Agent-dispatch contracts: configured reviewers are always
+# unnamed foreground one-shot calls, and completed parallel work units are
+# never re-dispatched. Reviewer routing applies in both execution modes;
+# completed-unit enforcement applies only when execution.parallel is on.
+# Exit 0 = allow. Exit 2 = deny (reason on stderr).
 
 INPUT="${1:-}"
 [ -z "$INPUT" ] && INPUT=$(cat 2>/dev/null || echo "")
@@ -20,13 +20,12 @@ NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
 TASKS_DIR="$NAZGUL_DIR/tasks"
 
-# Scope: only when the parallel dispatch option is on. A present-but-corrupt
-# config can't be trusted to say "parallel is off", so it fails closed instead
-# of silently no-opping (MF-053, ADR-003 Decision 3).
+# A present-but-corrupt config cannot identify the reviewer roster, kill switch,
+# or parallel mode, so fail closed instead of silently no-oping (MF-053,
+# ADR-003 Decision 3).
 [ -f "$CONFIG" ] || exit 0
 jq -e . "$CONFIG" >/dev/null 2>&1 || { echo "NAZGUL PARALLEL: Blocked — config.json is unreadable; cannot verify parallel-dispatch safety" >&2; exit 2; }
 PARALLEL=$(jq -r '.execution.parallel // false' "$CONFIG")
-[ "$PARALLEL" = "true" ] || exit 0
 
 # Kill-switch (explicit false disables; absent/true enabled).
 ENFORCE=$(jq -r 'if .execution.enforce.dispatch_guard == null then "true" else (.execution.enforce.dispatch_guard|tostring) end' "$CONFIG" 2>/dev/null || echo "true")
@@ -39,6 +38,60 @@ TOOL=$(printf '%s' "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
 [ "$TOOL" = "Agent" ] || exit 0
 SUBAGENT=$(printf '%s' "$INPUT" | jq -r '.tool_input.subagent_type // ""' 2>/dev/null || echo "")
 PROMPT=$(printf '%s' "$INPUT" | jq -r '.tool_input.prompt // ""' 2>/dev/null || echo "")
+
+# Reviewer route invariant. The configured roster is authoritative, including
+# project-generated reviewers; plugin namespaces are not part of roster names.
+# A nested Agent context may omit run_in_background because the current host's
+# nested schema is synchronous-only. The main session must state false
+# explicitly because omission is ambiguous on background-by-default versions.
+SUBAGENT_NAME="${SUBAGENT##*:}"
+IS_REVIEWER=false
+if jq -e --arg r "$SUBAGENT_NAME" \
+  '(.agents.reviewers // []) | type == "array" and (index($r) != null)' \
+  "$CONFIG" >/dev/null 2>&1; then
+  IS_REVIEWER=true
+fi
+
+if [ "$IS_REVIEWER" = "true" ]; then
+  DISPATCH_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_input.name // ""' 2>/dev/null || echo "")
+  BACKGROUND_TYPE=$(printf '%s' "$INPUT" | jq -r '
+    (.tool_input // {}) as $input
+    | if ($input | has("run_in_background"))
+      then ($input.run_in_background | type)
+      else "missing"
+      end' 2>/dev/null || echo "invalid")
+  BACKGROUND_VALUE=$(printf '%s' "$INPUT" | jq -r '
+    (.tool_input // {}) as $input
+    | if ($input | has("run_in_background"))
+      then ($input.run_in_background | tostring)
+      else "missing"
+      end' 2>/dev/null || echo "invalid")
+  CALLER_TYPE=$(printf '%s' "$INPUT" | jq -r \
+    '.agent_type // .agent_name // .caller.agent_type // ""' 2>/dev/null || echo "")
+  NESTED_CALLER=false
+  case "$CALLER_TYPE" in
+    ""|main|primary) ;;
+    *) NESTED_CALLER=true ;;
+  esac
+
+  if [ -n "$DISPATCH_NAME" ]; then
+    echo "NAZGUL REVIEW DISPATCH: Blocked — ${SUBAGENT_NAME} must be an unnamed one-shot Agent call; remove tool_input.name." >&2
+    exit 2
+  fi
+  if [ "$BACKGROUND_TYPE" != "missing" ] \
+    && { [ "$BACKGROUND_TYPE" != "boolean" ] || [ "$BACKGROUND_VALUE" != "false" ]; }; then
+    echo "NAZGUL REVIEW DISPATCH: Blocked — ${SUBAGENT_NAME} must run in the foreground with run_in_background:false." >&2
+    exit 2
+  fi
+  if [ "$BACKGROUND_TYPE" = "missing" ] && [ "$NESTED_CALLER" != "true" ]; then
+    echo "NAZGUL REVIEW DISPATCH: Blocked — main-session reviewer calls must set run_in_background:false explicitly." >&2
+    exit 2
+  fi
+fi
+
+# Background/concurrent dispatch of non-review work is the intended mechanism
+# in parallel mode. The completed-unit check below has no work when it is off.
+[ "$PARALLEL" = "true" ] || exit 0
 
 is_work_unit() {
   case "$1" in

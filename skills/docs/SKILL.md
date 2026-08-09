@@ -24,7 +24,7 @@ $ARGUMENTS
 
 ## Instructions
 
-Format all output per `references/ui-brand.md` — use stage banners, status symbols, and display patterns defined there.
+Format all output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md` — use stage banners, status symbols, and display patterns defined there.
 
 Based on the user's request:
 

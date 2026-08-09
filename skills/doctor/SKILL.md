@@ -13,7 +13,7 @@ metadata:
 
 ## Instructions
 
-Format all output per `references/ui-brand.md` — stage banner, status symbols, no emoji.
+Format all output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md` — stage banner, status symbols, no emoji.
 
 ### Step 1: Run the Check Engine
 

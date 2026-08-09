@@ -3,7 +3,7 @@ set -uo pipefail
 # Note: NOT using set -e; assertions check return codes/content explicitly.
 
 # Test: the coverage-honesty contract holds across EVERY entry point named by
-# TRD §6 — one with no conforming line FAILS here, never "nothing to check".
+# RULES.md §15 — one with no conforming line FAILS here, never "nothing to check".
 TEST_NAME="test-coverage-honesty"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -14,9 +14,9 @@ echo "=== $TEST_NAME ==="
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-coverage-honesty-XXXXXX")
 trap 'rm -rf "$SCRATCH"' EXIT
 
-# Every entry point named by TRD §6; the tally at the bottom fails if one was
-# never driven through _entry_covered.
-ENTRY_POINTS="run-tests lean-comments test-shellcheck doctor comment-verifier heartbeat-triage"
+# Every entry point named by RULES.md §15; the tally at the bottom fails if one
+# was never driven through _entry_covered.
+ENTRY_POINTS="run-tests lean-comments test-shellcheck doctor comment-verifier heartbeat-triage self-audit"
 COVERED=""
 
 _entry_covered() {
@@ -34,10 +34,10 @@ _grammar_check() {
   done
   local grammar="^$entry: ([0-9]+) scanned, ([0-9]+) skipped \($reason_re\), ([0-9]+) checked, ([0-9]+) findings$"
   if ! printf '%s' "$line" | grep -qE "$grammar"; then
-    _fail "$label: coverage line conforms to the TRD §6 grammar" "got: '$line'"
+    _fail "$label: coverage line conforms to the RULES.md §15 grammar" "got: '$line'"
     return 1
   fi
-  _pass "$label: coverage line conforms to the TRD §6 grammar"
+  _pass "$label: coverage line conforms to the RULES.md §15 grammar"
 
   n=$(printf '%s' "$line" | sed -E 's/^[^:]*: ([0-9]+) scanned.*/\1/')
   m=$(printf '%s' "$line" | sed -E 's/^.* ([0-9]+) skipped \(.*/\1/')
@@ -175,6 +175,45 @@ assert_contains "heartbeat-triage: a real candidate is counted as checked, not s
   "$(_last_line "$(cat "$SCRATCH/hb2.err")")" "2 scanned, 1 skipped (unsafe-id=0, unreadable=1, malformed=0), 1 checked"
 assert_not_contains "heartbeat-triage: one checked candidate is not a vacuous run" \
   "$(cat "$SCRATCH/hb2.err")" "NOTHING CHECKED"
+
+# self-audit, forced all-skip: with no .git under the project root the todo-delta
+# miner's single candidate is not-applicable and every other miner enumerates none.
+mkdir -p "$SCRATCH/sa/nazgul" "$SCRATCH/sa-transcripts"
+printf '{"schema_version":1}\n' > "$SCRATCH/sa/nazgul/config.json"
+SA_OUT=$(NAZGUL_TRANSCRIPTS_DIR="$SCRATCH/sa-transcripts" \
+  bash "$REPO_ROOT/scripts/self-audit.sh" "$SCRATCH/sa/nazgul" 2>"$SCRATCH/sa.err")
+SA_RC=$?
+# Its run total is not the last stdout line — a completion notice follows it.
+SA_TOTAL=$(printf '%s\n' "$SA_OUT" | grep -E '^self-audit: [0-9]+ scanned' | tail -1)
+_grammar_check "self-audit (all-skip)" "self-audit" \
+  "unreadable unclassifiable not-applicable" "$SA_TOTAL" && _entry_covered self-audit
+assert_contains "self-audit: forced all-skip emits the nothing-checked signal" \
+  "$(cat "$SCRATCH/sa.err")" "self-audit: NOTHING CHECKED — all 1 candidate(s) skipped"
+assert_exit_code "self-audit: advisory post-loop miner — a vacuous run never fails it" "$SA_RC" 0
+_grammar_check "self-audit/todo-delta (per-miner)" "self-audit/todo-delta" \
+  "unreadable unclassifiable not-applicable" \
+  "$(printf '%s\n' "$SA_OUT" | grep -E '^self-audit/todo-delta: ' | tail -1)"
+
+# A run with a real candidate must actually check something: an entry point that
+# only ever conforms while vacuous is not covered by the contract.
+mkdir -p "$SCRATCH/sa2/nazgul/reviews/TASK-001"
+printf '{"schema_version":1}\n' > "$SCRATCH/sa2/nazgul/config.json"
+printf -- '---\nverdict: APPROVE\n---\nfine.\n' \
+  > "$SCRATCH/sa2/nazgul/reviews/TASK-001/code-reviewer.md"
+SA2_OUT=$(NAZGUL_TRANSCRIPTS_DIR="$SCRATCH/sa-transcripts" \
+  bash "$REPO_ROOT/scripts/self-audit.sh" "$SCRATCH/sa2/nazgul" 2>"$SCRATCH/sa2.err")
+SA2_TOTAL=$(printf '%s\n' "$SA2_OUT" | grep -E '^self-audit: [0-9]+ scanned' | tail -1)
+_grammar_check "self-audit (mixed)" "self-audit" \
+  "unreadable unclassifiable not-applicable" "$SA2_TOTAL"
+SA2_CHECKED=$(printf '%s' "$SA2_TOTAL" | sed -E 's/^.*\), ([0-9]+) checked.*/\1/')
+if [ "${SA2_CHECKED:-0}" -ge 1 ]; then
+  _pass "self-audit: a run with a real candidate actually checks something"
+else
+  _fail "self-audit: a run with a real candidate actually checks something" \
+    "checked: $SA2_CHECKED"
+fi
+assert_not_contains "self-audit: one checked candidate is not a vacuous run" \
+  "$(cat "$SCRATCH/sa2.err")" "NOTHING CHECKED"
 
 # Enumeration completeness — the point of the whole file: an entry point with no
 # emitter must FAIL here, not silently drop out of the list.

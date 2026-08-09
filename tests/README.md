@@ -36,11 +36,24 @@ run-tests: <N> scanned, <M> skipped (filtered-out=<count>, unreadable=<count>), 
 Skip reasons are a closed list — `filtered-out`, `unreadable`. The runner asserts `N == M + K` itself and
 exits `3` on a mismatch, because a summary that does not add up is a defect in the emitter.
 
+The runner is one of seven entry points bound by this contract. The registry lives in `RULES.md` §15 —
+not in a per-objective TRD, which is archived out from under the citation when its objective completes —
+and `tests/test-coverage-honesty.sh` drives every enumerated entry point under a forced all-skip input
+and FAILS if one was never driven. `scripts/self-audit.sh` was enrolled by FEAT-029/TASK-012; it emits a
+line per miner plus a run total, and its total is not the last line of stdout (a completion notice
+follows), so grep for `^self-audit: [0-9]+ scanned` rather than tailing. Add a new checking entry point
+to the RULES.md list and to that test in the same change.
+
 ## Test Files
 
-The runner discovers **93** root `test-*.sh` files. The FEAT-028 retroactive audit covers 118 files
-when shared helpers, E2E files, and fixtures are included; see `docs/test-audit-2026-08.md` for the
-one-verdict-per-file ledger.
+The runner discovers **99** root `test-*.sh` files — derive the current number with
+`ls tests/test-*.sh | wc -l` rather than trusting this line, and update it when it drifts. The count was
+93 at FEAT-028; FEAT-029 added the five adversarial suites listed below, and PATCH-002 added
+`test-repo-content-boundary.sh` (RULES.md §15's repo content boundary: no operator home path in tracked
+source, and a provenance declaration per `tests/fixtures/` subdirectory). The FEAT-028 retroactive audit
+covered 118 files when shared helpers, E2E files, and fixtures were included; see
+`docs/test-audit-2026-08.md` for that point-in-time, one-verdict-per-file ledger (it is dated and is not
+retro-edited as the suite grows).
 
 | Area | Coverage |
 |------|----------|
@@ -49,6 +62,26 @@ one-verdict-per-file ledger.
 | State/review loop | Task transitions, review evidence/provenance, dispatch granularity, stop-hook state machine |
 | Config + docs | Terminal schema v36, migration chain, frontmatter, JSON, template freshness, RULES consistency |
 | Paid validation | Manual skill E2E, GitHub stack E2E, and manual/nightly true-entry smoke in scratch projects |
+
+### Adversarial suites added by FEAT-029
+
+| File | What it drives adversarially |
+|------|------------------------------|
+| `test-task-transition-command.sh` | The transactional writer: stale preauthorization, a failed compare-and-swap, exact-edge ledger records, and the refusal of every non-adjacent edge |
+| `test-task-reconciliation-repair.sh` | The typed quarantine and `repair`: valid repair, incomplete evidence, a wrong or untyped blocker kind, corrupt quarantine metadata, and the absence of any `READY`/implementer route. Also fails if a direct-status-write instruction or `sed -i` reappears in `agents/review-gate.md` or `skills/task/SKILL.md` |
+| `test-agent-worktree-contract.sh` | The full 23-spec agent roster, not the diff: no `EnterWorktree`/`ExitWorktree` grant or body mention survives anywhere, every git command carries `-C`, and an agent handed no worktree stops instead of creating one |
+| `test-doc-generator-contract.sh` | The artifact-claim ledger parsed out of the prompt AS RENDERED by the real producer, with framework neutrality pinned negatively (the contract must name no build command) |
+| `test-reference-paths.sh` | Every `agents/*.md`, `agents/templates/*.md`, and `skills/*/SKILL.md` citation resolved against a staged package tree built from `git ls-files`, so a git-ignored or working-tree-only file cannot pass for a packaged one |
+
+Two existing suites carry FEAT-029 work rather than new files: `test-pre-tool-guard.sh` feeds the
+observed `sed`/Python/Perl/Ruby/awk/`cp`/`mv`/redirect manifest-write forms (plus legitimate reads and
+every spelling of the transition CLI) to the closed Bash policy, and `test-parallel-dispatch-guard.sh`
+feeds real Agent hook JSON envelopes for named, background, missing, and foreground reviewer calls.
+
+**Known scope gap, reported not fixed.** `skills/start/references/greenfield-scaffolding.md` is not a
+`SKILL.md` and is matched by no `SCAN_GLOBS` entry, so `test-reference-paths.sh` makes no claim about
+its citations — genuinely unscanned, not vacuously passing. Its one reference was qualified by hand in
+FEAT-029/TASK-012; adding the glob was outside that task's declared file scope.
 
 ## Red-Run Evidence
 

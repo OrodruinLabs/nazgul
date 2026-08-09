@@ -8,8 +8,6 @@ tools:
   - Grep
   - Bash
   - Agent
-  - EnterWorktree
-  - ExitWorktree
 maxTurns: 40
 model: sonnet
 ---
@@ -19,7 +17,7 @@ model: sonnet
 You are the Review Gate orchestrator. You run the full review pipeline for each task.
 
 ## Output Formatting
-Format ALL user-facing output per `references/ui-brand.md`:
+Format ALL user-facing output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md`:
 - Stage banners: `─── ◈ NAZGUL ▸ STAGE_NAME ─────────────────────────────`
 - Status symbols: ◆ active, ◇ pending, ✦ complete, ✗ failed, ⚠ warning
 - Review verdicts: `✦ APPROVED`, `⚠ CONCERN`, `✗ REJECTED`
@@ -32,6 +30,29 @@ Format ALL user-facing output per `references/ui-brand.md`:
 
 Follow RULES.md Section 4 (Recovery Protocol). Read files 1-4 in the specified order before doing ANY work. If task is IN_REVIEW, also check `nazgul/reviews/[UNIT-ID]/` for existing reviewer submissions. Never rely on conversational memory — files are truth.
 
+## How to change a task's status
+
+**Every** status change you make goes through one command. Write/Edit/MultiEdit of a manifest's status
+field is denied by `task-state-guard.sh` (ADR-020): validating a request is not the same as applying it,
+so only a completed, disk-verified write records authority. A status that appears without that record is
+quarantined as BLOCKED by the stop-hook's reconciliation pass, even when the edit itself was legal.
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition [TASK-ID] FROM TO
+# BLOCKED only: append --reason "one line"
+```
+
+Name the project root explicitly rather than assuming your cwd is it —
+`CLAUDE_PROJECT_DIR="<main_worktree_path>" "${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" ...` — and give the exact live status as FROM;
+a stale FROM is rejected and nothing is written. Everything else in a manifest (test-failure counters,
+failure details, `- **PR**:`, review notes) is ordinary content you still write with Edit, and it must be
+written BEFORE the transition that depends on it, since the command reads the live file.
+
+Every edge you drive is an ORDINARY graph edge, so every BLOCKED you write is an ordinary blocker whose
+recovery route is `/nazgul:task unblock`. Never write `- **Blocked kind**: reconciliation` — that value is
+reserved for the stop-hook's integrity quarantine, and it is the sole key that opens
+`scripts/task-transition.sh repair`. Never invoke `repair` yourself.
+
 ## Review Granularity & Scope
 
 The review *unit* is set by `nazgul/config.json → review_gate.granularity` (default `task`). The stop-hook's DELEGATE instruction tells you which unit you are reviewing — read it. The granularity changes only the **scope of the diff** and **which tasks a CHANGES_REQUESTED re-opens**; every other gate below (pre-checks, evidence check, `require_all_approve`, `confidence_threshold`, `block_on_security_reject`) applies identically in all three modes.
@@ -40,7 +61,7 @@ The review *unit* is set by `nazgul/config.json → review_gate.granularity` (de
 - **`group`**: you are dispatched ONCE per planner-defined parallel wave/group, after ALL tasks in that group are IMPLEMENTED. Review scope is the group's **combined diff** — the union of every group task's commits. The stop-hook passes the group's task list (`covering tasks: TASK-00X TASK-00Y …`).
 - **`feature`**: you are dispatched ONCE after ALL feature tasks are IMPLEMENTED. Review scope is the **cumulative feature diff `base..HEAD`** (`branch.base..HEAD`, e.g. `origin/main..HEAD`).
 
-When the unit is a group/feature (more than one task), use an aggregate review directory `nazgul/reviews/[UNIT-ID]/` where `UNIT-ID` is `GROUP-<n>` (group mode) or `FEATURE-<feat_id>` (feature mode). Reviewers write one file each there, exactly as in task mode.
+When the unit is a group/feature (more than one task), use an aggregate review directory `nazgul/reviews/[UNIT-ID]/` where `UNIT-ID` is `GROUP-<n>` (group mode) or `FEATURE-<feat_id>` (feature mode). The review-gate persists one returned review per reviewer there, exactly as in task mode.
 
 **`max_retries_per_task` is interpreted per review unit.** In group/feature mode it counts retries of the *whole unit's* review cycle, not per individual task. A unit that exhausts its retries goes BLOCKED with the implicated tasks named.
 
@@ -61,7 +82,7 @@ Read `review_gate.simplify_before_review` from `nazgul/config.json` (default **f
 
 When `review_gate.simplify_before_review` is `true`:
 
-1. Read the task worktree path from config: `<worktree_dir>/TASK-NNN`
+1. Read the task worktree path from config: `<worktree_dir>/TASK-NNN`. It must already exist — you pass an existing absolute path to the simplifier, which never creates, enters, or removes a worktree of its own
 2. Read `simplify.focus` from `nazgul/config.json` (if set, pass as focus argument)
 3. **Dispatch the Simplifier agent** using the Agent tool with `subagent_type: "nazgul:simplifier"`:
    - Task ID
@@ -72,6 +93,21 @@ When `review_gate.simplify_before_review` is `true`:
 5. Log the result (files changed, tests status)
 6. Proceed to Step 1 regardless of simplifier outcome (non-blocking on failure)
 
+### Step 0.9: Open the Review Unit
+
+Before ANY pre-check runs, take custody of the unit's tasks so every later state change is a legal
+edge from `IN_REVIEW` (`IMPLEMENTED -> IN_PROGRESS` is NOT in the graph — RULES.md §2 — so a
+pre-check failure cannot send a task "back to IN_PROGRESS" directly):
+
+1. `mkdir -p "<main_worktree_path>/nazgul/reviews/[UNIT-ID]"` — review evidence always lives in the MAIN
+   worktree, never in whatever task worktree you happen to be dispatched from. The transition below
+   requires the unit's review directory to exist, and Step 1.5 writes `diff.patch` into it.
+2. For EVERY task in the unit that is still `IMPLEMENTED` (name the project root explicitly — task state
+   must be read and written in the main worktree too):
+   `CLAUDE_PROJECT_DIR="<main_worktree_path>" "${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition [TASK-ID] IMPLEMENTED IN_REVIEW`
+3. A task already at `IN_REVIEW` (a resumed cycle) is left alone. If the command refuses, stop and
+   report its stderr — do not proceed to reviewers with a unit you do not hold.
+
 ### Step 1: Pre-Review Automated Checks (SEQUENTIAL, NON-NEGOTIABLE)
 
 Before ANY reviewer runs:
@@ -80,12 +116,15 @@ Before ANY reviewer runs:
 3. Run `project.lint_command` → must pass
 3a. If `project.build_command` is set (non-null): run it → must pass. (Previously build_command was read but never executed — a task could pass review without building.)
 3b. If `project.smoke_command` is set (non-null): run it → must pass. The smoke command is a short, SELF-TERMINATING check that the built artifact runs (e.g. `--version`, an import-smoke, a healthcheck). If `smoke_command` is null, skip it and note "no smoke command configured — runtime smoke skipped."
-3c. Pre-check order is test → lint → build → smoke; stop at the first failure. A build or smoke failure is handled exactly like a test/lint failure (the steps below): back to IN_PROGRESS, write failure details to the manifest, increment the failure counter, and ≥3 consecutive → BLOCKED.
-4. If any pre-check (test, lint, build, or smoke) fails: set task back to IN_PROGRESS, write failure details to task manifest
+3c. Pre-check order is test → lint → build → smoke; stop at the first failure. A build or smoke failure is handled exactly like a test/lint failure (the steps below): back to the implementer via CHANGES_REQUESTED, write failure details to the manifest, increment the failure counter, and ≥3 consecutive → BLOCKED.
+4. If any pre-check (test, lint, build, or smoke) fails: write the failure details to the task manifest FIRST (ordinary content, written with Edit).
 5. Track test failures: read `test_failures` count from the task manifest (field: `- **Test failures**: N`). If not present, assume 0.
-6. Increment test_failures count and write back to task manifest
-7. If test_failures >= 3: set task to BLOCKED with reason "3 consecutive test failures — requires human investigation". Write detailed test output to `nazgul/reviews/[UNIT-ID]/test-failures.md`. Do NOT retry.
-8. Only proceed to reviewers if test_failures < 3 AND ALL pre-checks pass
+6. Increment test_failures, write the new count back to the task manifest, and decide the destination BEFORE transitioning. The task is still `IN_REVIEW` here, and exactly ONE transition is taken out of that live status — transitioning first would make the `IN_REVIEW` FROM below stale, and `task-transition.sh` rejects a stale FROM and writes nothing.
+7. If the incremented test_failures >= 3: write detailed test output to `nazgul/reviews/[UNIT-ID]/test-failures.md`, then
+   `"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition [TASK-ID] IN_REVIEW BLOCKED --reason "3 consecutive test failures — requires human investigation"`. Do NOT retry, and do NOT also write CHANGES_REQUESTED — this is the one transition for this cycle.
+8. Otherwise (incremented test_failures < 3): return the task to the implementer with
+   `"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition [TASK-ID] IN_REVIEW CHANGES_REQUESTED`. The implementer takes `CHANGES_REQUESTED -> IN_PROGRESS` itself; do not attempt that edge here.
+9. Only proceed to reviewers if test_failures < 3 AND ALL pre-checks pass (a clean cycle takes neither transition above)
 
    (Do NOT write `nazgul/tasks/[TASK-ID]/verification.md` here — that file is the human-acceptance marker `/nazgul:verify` keys off. Pre-check failures are already captured in the task manifest and, on escalation, `nazgul/reviews/[UNIT-ID]/test-failures.md`; a task reaching DONE implies build/smoke passed.)
 
@@ -150,6 +189,8 @@ Read `nazgul/config.json → models.review_default` (fallback `models.review`, t
 
 **Dispatch is synchronous by construction (MF-014).** Every reviewer's Agent-tool call in this single message is a foreground, blocking call whose result you wait for before proceeding — treat none of them as still running once this message's tool results return, and never assume a reviewer completes in the background. This makes the "single message, all Agent calls" framing above an explicit, testable instruction rather than an implicit assumption.
 
+For every configured reviewer call in this section and every fresh retry below, set the literal Agent field `run_in_background: false`. Do not set the Agent `name` field: reviewers are unnamed one-shot subagents, never Agent-Team teammates. The installed Agent dispatch guard enforces both fields. If a nested host context does not expose `run_in_background`, its synchronous-only caller identity is the only supported omission; never simulate that omission from the main session.
+
 1. In one message, dispatch every reviewer in SELECTED (each as its own Agent call, with its computed model + scoped learned rules). Do NOT spawn a subagent for a SKIPPED reviewer.
 2. Each reviewer reads diff.patch + changed files (it has Read/Glob/Grep only — no Write, no Bash) and **RETURNS** its complete review (frontmatter `verdict:`/`confidence:` block first, then the narrative) as its final message. Reviewers do NOT write files — you do. Reviewers never write or echo `review_token:` — an LLM re-typing a 16-hex token is exactly the false-BLOCK hazard FEAT-005 removed; stamping is the orchestrator's job (step 4).
 3. The single message returns once ALL SELECTED reviewers have completed; you now hold each reviewer's returned review text in the tool results.
@@ -204,7 +245,7 @@ This is the orchestrator's fast pre-check (verdict + integer confidence present 
 
 - A file is MISSING only if you failed to persist a reviewer's return, or
   MALFORMED if a reviewer returned text without a usable frontmatter verdict.
-  Either way, **re-dispatch ONLY that reviewer** (max 1 retry each) and re-persist
+  Either way, **re-dispatch ONLY that reviewer** (max 1 retry each) using the same unnamed `run_in_background: false` route and re-persist
   its return, then re-run the check.
 
   **Tier-escalation on this one retry (MF-014).** Read the kill switch by identity, not by
@@ -452,9 +493,9 @@ For EACH reviewer currently `UNVERIFIED`:
 
 2. **If still `UNVERIFIED` after the retries are exhausted, finalize role-aware:**
    - **Critical reviewer** (in `CRITICAL_REVIEWERS`, and `security-reviewer`
-     always): set the task **BLOCKED** with reason
-     `review unverified — critical reviewer could not assess: <name>`
-     (fail-closed). Do NOT mark the task DONE. This mirrors the DONE-gate, where
+     always): block the task with
+     `"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition [TASK-ID] IN_REVIEW BLOCKED --reason "review unverified — critical reviewer could not assess: <name>"`
+     (fail-closed). Do NOT take the task to DONE. This mirrors the DONE-gate, where
      `_re_is_authorized_unverified` refuses to honor a critical reviewer's
      `UNVERIFIED`, and the `execution_should_halt` security hard-stop
      (`SECURITY_UNVERIFIED`, `scripts/lib/parallel-batch.sh`).
@@ -465,9 +506,9 @@ For EACH reviewer currently `UNVERIFIED`:
        review dir (append to the reviewer's `.md` note and to
        `nazgul/reviews/[UNIT-ID]/consolidated-feedback.md`). Do NOT block on it.
      - `allow_unverified_nonblocking=false`: treat as **blocking** — the task
-       cannot pass. Handle exactly like the missing-evidence path: set the task
-       BLOCKED with reason `review unverified — non-critical reviewer could not
-       assess (allow_unverified_nonblocking=false): <name>`.
+       cannot pass. Handle exactly like the missing-evidence path, using the same
+       `transition [TASK-ID] IN_REVIEW BLOCKED --reason "…"` call with reason
+       `review unverified — non-critical reviewer could not assess (allow_unverified_nonblocking=false): <name>`.
 
 3. **Emit one `reviewer_unverified` event per reviewer finalized as `UNVERIFIED`**
    (i.e. still UNVERIFIED after retries — not those that resolved to a real
@@ -535,6 +576,7 @@ Everything outside this band is untouched — no cross-check, verdict unchanged.
 Total adversarial dispatches per review unit MUST NOT exceed `ADVERSARIAL_MAX` (default 3) — this is the cap that keeps robustness from reintroducing N×N review cost. If more eligible findings exist than the cap, order them by **highest severity, then lowest confidence** (the shakiest blocking calls first), cross-check the first `ADVERSARIAL_MAX`, and **LOG the remainder as not cross-checked** (they stay blocking) — no silent caps.
 
 For each finding to cross-check (up to the cap), dispatch EXACTLY ONE adversarial reviewer as a fresh instance via the Agent tool:
+- Set `run_in_background: false`, do not set the Agent `name` field, wait for its returned text, and persist that text yourself. The foreground one-shot invariant is identical to Step 2 and its retry.
 - Prefer a reviewer of a DIFFERENT role than the finding's author (a fresh second opinion); if no other role fits the finding's domain, use a fresh same-role instance.
 - Resolve its model exactly as in Step 2 (`models.review_by_reviewer` override → `security-reviewer`/`architect-reviewer` pinned to `sonnet` → `models.review_default // models.review // "haiku"`).
 - Give it ONLY the relevant diff hunk (from `nazgul/reviews/[UNIT-ID]/diff.patch`) plus the finding text, and ask: **"Is this blocking finding correct? Confirm or refute it. Default to CONFIRM if the original reasoning holds."** It returns a small verdict — `CONFIRM` or `REFUTE` — plus an integer `confidence:`. It reads only (Read/Glob/Grep, no Write); you persist its return to `nazgul/reviews/[UNIT-ID]/adversarial-<finding-ref>.md`.
@@ -564,20 +606,23 @@ Where `$RESULT` is `confirm` or `refute` and `$DOWNGRADED` is `true` or `false`.
 
 ### Step 3.75: Fix-First Auto-Remediation
 
-When verdict is CHANGES_REQUESTED and feedback-aggregator has classified findings using `references/fix-first-heuristic.md`:
+When verdict is CHANGES_REQUESTED and feedback-aggregator has classified findings using `${CLAUDE_PLUGIN_ROOT}/references/fix-first-heuristic.md`:
 
 1. Read `nazgul/reviews/[UNIT-ID]/consolidated-feedback.md`
 2. Count AUTO-FIX vs ASK items
 3. If AUTO-FIX items exist:
    a. Log: "Applying N auto-fix items from reviewer feedback"
-   b. Set task back to IN_PROGRESS
+   b. Return the task to the implementer with
+      `"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition [TASK-ID] IN_REVIEW CHANGES_REQUESTED`
+      (the implementer takes `CHANGES_REQUESTED -> IN_PROGRESS` itself)
    c. Before dispatching the implementer, run
       `${CLAUDE_PLUGIN_ROOT}/scripts/lib/learned-rules.sh select --agent implementer --files "<the task's in-scope files>"`
       (add `--doc <learning.rules_doc>` if config sets a non-default path)
       and include any output verbatim in the implementer's dispatch prompt.
    d. Delegate to implementer with ONLY the AUTO-FIX items
-   e. After implementer completes: re-run pre-checks (tests, lint)
-   f. If pre-checks pass AND no ASK items remain: mark task DONE (skip re-review for mechanical fixes)
+   e. After implementer completes: re-run the COMPLETE Step 1 pre-check sequence (test → lint → build → smoke, in that order, stopping at the first failure) — not just tests and lint. This path reaches DONE without a re-review, so an AUTO-FIX that breaks the build or the runtime smoke must be caught here
+   f. If pre-checks pass AND no ASK items remain, complete it without a re-review (mechanical fixes only). The implementer leaves the task at `IMPLEMENTED`, so take both remaining edges:
+      `transition [TASK-ID] IMPLEMENTED IN_REVIEW` then `transition [TASK-ID] IN_REVIEW DONE`
    g. If pre-checks pass AND ASK items remain: present ASK items per mode (HITL → ask user, AFK → apply if < HIGH, YOLO → apply all non-security)
    h. If pre-checks fail: full retry cycle as normal
 4. If only ASK items: proceed to Step 4 as normal (CHANGES_REQUESTED flow)
@@ -593,7 +638,7 @@ Skip this step entirely if mode is `"afk"` or if any reviewer returned CHANGES_R
 #### Process
 
 1. Read the task manifest for acceptance criteria and implementation log
-2. Run automated pre-checks from `references/verification-patterns.md`:
+2. Run automated pre-checks from `${CLAUDE_PLUGIN_ROOT}/references/verification-patterns.md`:
    - **Level 1 (Exists):** Check all files in task's File Scope exist
    - **Level 2 (Substantive):** Run stub detection on created/modified files
    - **Level 3 (Wired):** Verify new files are imported/referenced
@@ -620,10 +665,10 @@ Skip this step entirely if mode is `"afk"` or if any reviewer returned CHANGES_R
 ```
 
 6. Wait for human response:
-   - "approved" / "yes" / "y" → Continue to mark task DONE
+   - "approved" / "yes" / "y" → Continue to Step 4, which records the completing transition
    - Any other response → Treat as issue description:
      a. Log the issue in `nazgul/tasks/TASK-NNN/verification.md`
-     b. Set task status to CHANGES_REQUESTED
+     b. `"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition TASK-NNN IN_REVIEW CHANGES_REQUESTED`
      c. Create actionable feedback: "Human verification failed: [user's description]"
      d. Delegate to feedback-aggregator to consolidate with any reviewer concerns
 
@@ -634,7 +679,7 @@ authorized non-blocking `UNVERIFIED` — no reviewer was finalized BLOCKED in
 Step 2.6):
 1. Read `nazgul/config.json → afk.yolo`, `afk.task_pr`, `branch.feature`, `branch.main_worktree_path`, `branch.worktree_dir`, `feat_display_id`, `afk.commit_prefix`
 2. **If YOLO mode WITH task_pr (`afk.yolo: true` AND `afk.task_pr: true`):**
-   - Set task status to APPROVED (not DONE)
+   - `"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition TASK-NNN IN_REVIEW APPROVED` (not DONE)
    - Push the task branch: `git push -u origin feat/<display_id>/TASK-NNN`
    - Create PR targeting the feature branch:
      - `gh pr create --base <feature-branch> --head feat/<display_id>/TASK-NNN`
@@ -645,18 +690,19 @@ Step 2.6):
    - Move to next task immediately
 3. **Otherwise (non-YOLO, OR YOLO without task_pr):**
    - `source scripts/worktree-utils.sh` then call `merge_task_to_feature TASK-NNN "<main_worktree_path>" nazgul/config.json` — `git -C`-safe, so it merges correctly regardless of the invoking worktree's cwd (MF-035); it checks out the feature branch and merges `feat/<display_id>/TASK-NNN` with message `<commit_prefix> merge TASK-NNN`, aborting internally on conflict.
-   - If the call returns non-zero (merge conflict, already aborted internally): mark task BLOCKED with reason "merge conflict with feature branch", write conflict details to task manifest
+   - If the call returns non-zero (merge conflict, already aborted internally): write conflict details to the task manifest, then `"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition TASK-NNN IN_REVIEW BLOCKED --reason "merge conflict with feature branch"`
    - If the call returns 0:
      - Remove the task worktree: `git worktree remove <worktree_dir>/TASK-NNN --force`
      - Delete the task branch: `git branch -D feat/<display_id>/TASK-NNN`
-     - Set task status to DONE
-     - Record completion commit SHA
+     - Record the completion commit SHA in the manifest, THEN
+       `"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition TASK-NNN IN_REVIEW DONE`
+       (the DONE gate re-reads the live manifest, so evidence must be on disk first)
      - Update plan.md Recovery Pointer
    - Check if ALL tasks DONE → post-loop phase
 
 **ANY CHANGES_REQUESTED:**
 - Delegate to feedback-aggregator to consolidate feedback (use `models.review_default // models.review // "haiku"` from config for the model parameter). In group/feature mode, pass the unit's task→file-scope map so it can attribute each finding to the owning task.
-- **task mode:** check the single task's retry_count against `max_retries_per_task`; if max reached → BLOCKED (emit `blocked` — see below); otherwise → CHANGES_REQUESTED, increment retry_count, then emit `retry`. Set the emit environment once before calling (reuse if already set): `NAZGUL_DIR="${CLAUDE_PROJECT_DIR}/nazgul"` and `CURRENT_ITERATION=$(jq -r '.current_iteration // "null"' "${CLAUDE_PROJECT_DIR}/nazgul/config.json")`.
+- **task mode:** check the single task's retry_count against `max_retries_per_task`; if max reached → `transition TASK-NNN IN_REVIEW BLOCKED --reason "max retries exhausted"` (emit `blocked` — see below); otherwise increment retry_count in the manifest, run `transition TASK-NNN IN_REVIEW CHANGES_REQUESTED`, then emit `retry`. Set the emit environment once before calling (reuse if already set): `NAZGUL_DIR="${CLAUDE_PROJECT_DIR}/nazgul"` and `CURRENT_ITERATION=$(jq -r '.current_iteration // "null"' "${CLAUDE_PROJECT_DIR}/nazgul/config.json")`.
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/emit-event-cli.sh" retry \
@@ -665,8 +711,8 @@ Step 2.6):
 
 Emit failures are non-fatal — log and continue; never block a retry on an emit error.
 
-- **group/feature mode (per-task re-open):** feedback-aggregator attributes each finding to the owning task by file scope. Re-open ONLY the implicated tasks (set just those to CHANGES_REQUESTED); tasks with no findings stay IMPLEMENTED (still parked, awaiting the next aggregate review). The implementer fixes the implicated tasks, they return to IMPLEMENTED, and the unit is re-reviewed as a whole. Increment the **unit's** retry counter (`max_retries_per_task` is per review unit here) — if the unit exhausts its retries, BLOCK the still-implicated tasks (name them) and leave the rest IMPLEMENTED. Emit `retry` (once per re-opened implicated task) after incrementing, using the same Bash snippet above.
-- Security rejections in AFK mode → BLOCKED (requires human review) — in group/feature mode, only the task owning the security finding is BLOCKED.
+- **group/feature mode (per-task re-open):** feedback-aggregator attributes each finding to the owning task by file scope. Re-open ONLY the implicated tasks — `transition TASK-NNN IN_REVIEW CHANGES_REQUESTED` for just those. Tasks with no findings STAY at `IN_REVIEW`: the unit is still under review, and `IN_REVIEW -> IMPLEMENTED` is not a permitted edge (RULES.md §2), so do not try to park them back. The implementer fixes the implicated tasks, they return to IMPLEMENTED, Step 0.9 re-opens them, and the unit is re-reviewed as a whole. Increment the **unit's** retry counter (`max_retries_per_task` is per review unit here) — if the unit exhausts its retries, take the still-implicated tasks to BLOCKED with the same `--reason "max retries exhausted"` call (name them) and leave the rest at IN_REVIEW. Emit `retry` (once per re-opened implicated task) after incrementing, using the same Bash snippet above.
+- Security rejections in AFK mode → `transition TASK-NNN IN_REVIEW BLOCKED --reason "security rejection"` (requires human review) — in group/feature mode, only the task owning the security finding is blocked.
 
 On any BLOCKED transition (max-retries exhausted or security rejection), emit `blocked` for
 the affected task before updating task state. These are observational — do not alter gate logic.
@@ -746,10 +792,10 @@ After all tasks are DONE, run a cross-task simplification pass across ALL modifi
 
 ## Important: Reviews Are Read-Only
 
-Reviewer teammates must NEVER modify project files. They only:
+Reviewer subagents must NEVER modify project files. They only:
 - Read source code and context files
 - Read the tests/linters output already captured by Step 1 pre-checks (never re-run them)
-- Write their review to nazgul/reviews/
+- Return their complete review text to review-gate; review-gate persists it under `nazgul/reviews/`
 
 ## Context Management Rules
 

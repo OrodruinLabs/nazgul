@@ -121,7 +121,7 @@ Present smart defaults based on prior answers (e.g., if TypeScript + Web -> sugg
 
 ## Step 2: Tool Pre-flight Check
 
-After stack selection, map the chosen stack to required CLI tools and check each. See `references/tool-preflight.md` for the full tool detection commands table.
+After stack selection, map the chosen stack to required CLI tools and check each. See `${CLAUDE_PLUGIN_ROOT}/skills/start/references/tool-preflight.md` for the full tool detection commands table.
 
 **For each required tool:**
 1. Run the check command

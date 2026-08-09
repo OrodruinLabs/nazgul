@@ -1,8 +1,7 @@
 ---
 name: nazgul:patch
 description: "Lightweight task mode for bug fixes, config changes, and small features. Supports --no-review and --discuss flags."
-context: fork
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, AskUserQuestion
 metadata:
   author: Jose Mejia
 ---
@@ -36,7 +35,7 @@ $ARGUMENTS
 3. If no description after parsing, ask interactively: "What do you want to patch?"
 
 ### Display Banner
-Output per references/ui-brand.md:
+Output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md`:
 ```
 ─── ◈ NAZGUL ▸ PATCHING ────────────────────────────────
 ```
@@ -75,13 +74,14 @@ Read the patch manifest's `## Flags` line (the authoritative on-disk record writ
 
 ### Step 3: Plan
 Use the planner agent to generate 1-3 subtasks for the patch:
-- Dispatch planner with a simplified prompt: "Generate 1-3 small subtasks for this patch. No research, no docs. Just implementation steps."
+- Dispatch planner as an unnamed foreground Agent call (`run_in_background: false`; do not set `name`) with a simplified prompt: "Generate 1-3 small subtasks for this patch. No research, no docs. Just implementation steps."
+- Wait for its returned plan and persist the subtasks into the patch manifest; do not assume a detached agent will write them.
 - Planner reads the patch description (and decisions if --discuss was used)
 - Subtasks are written into the patch manifest under `## Subtasks`
 
 ### Step 4: Implement
 Use the implementer agent to execute each subtask:
-- Dispatch implementer with the patch manifest
+- Dispatch implementer with the patch manifest as an unnamed foreground Agent call (`run_in_background: false`; do not set `name`) and wait for its return
 - Implementer follows existing patterns (reads CLAUDE.md, follows conventions)
 - Each subtask gets an atomic git commit with prefix: `patch(PATCH-NNN):`
 - Update patch manifest with implementation log
@@ -93,12 +93,28 @@ Read the patch manifest's `## Flags` line (the authoritative on-disk record writ
    - `.py` → code-reviewer
    - `.md/.json/.yaml` → skip review (docs/config only)
    - Mixed → code-reviewer
-2. Run the selected reviewer on the changed files
-3. If APPROVED: mark patch DONE
-4. If CHANGES_REQUESTED: show feedback, implementer fixes, re-review (max 2 retries)
+2. Run the selected reviewer on the changed files using a fresh Agent call with these literal routing fields:
+   - `subagent_type: "nazgul:<selected-reviewer>"`
+   - `run_in_background: false`
+   - Do not set the Agent `name` field; reviewers are unnamed one-shot calls, never teammates.
+3. Wait for the reviewer to return its complete review. The only verdicts are `APPROVE | CHANGES_REQUESTED | UNVERIFIED`; the reviewer never writes files. Validate the returned frontmatter, then persist the returned review text to `nazgul/reviews/PATCH-NNN/<reviewer>.md` from this main-session driver.
+4. If the return is empty or malformed, make one fresh unnamed foreground retry of that reviewer and persist the replacement. If the retry is still unusable, persist an `UNVERIFIED` stub with the reason, mark the patch BLOCKED, and do not represent it as approved.
+5. If `APPROVE`: record the approved review and continue to completion.
+6. If `CHANGES_REQUESTED`: show the persisted feedback, dispatch the implementer foreground to fix it, and re-review with a fresh unnamed foreground reviewer (max 2 implementation/review cycles). After the limit, mark the patch BLOCKED.
 
 If the `## Flags` line contains `--no-review`:
 - Mark patch DONE immediately after implementation
+
+> **Patch status is written directly, and that is deliberate.** A patch manifest is
+> `nazgul/tasks/patches/PATCH-NNN.md`, which is outside the ADR-020 sanctioned-writer
+> funnel by construction: `task-state-guard.sh`, `pre-tool-guard.sh` and the stop-hook
+> reconciliation pass all match `nazgul/tasks/TASK-<digits>.md` strictly, and
+> `scripts/task-transition.sh` resolves only that shape. A patch has no PLANNED→DONE
+> state machine, no dependency graph, and none of the evidence a transition edge
+> validates, so routing it through the transition command would assert authority over a
+> walk it never takes. Direct `Write`/`Edit` on a patch manifest is therefore authorized,
+> not a bypass, and cannot be quarantined. `tests/test-pre-tool-guard.sh` pins that
+> blast radius explicitly (`allowed S-outside`).
 
 ### Step 6: Complete
 1. Update patch manifest status to DONE
@@ -106,7 +122,7 @@ If the `## Flags` line contains `--no-review`:
    ```
    - [x] PATCH-NNN: [description] (sha: [commit])
    ```
-3. Display completion with Next Up block per ui-brand.md:
+3. Display completion with Next Up block per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md`:
    ```
    ─── ◈ NAZGUL ▸ COMPLETE ✦ ──────────────────────────────
 

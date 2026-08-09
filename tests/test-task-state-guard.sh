@@ -28,7 +28,8 @@ make_write_input() {
   local file_path="$1" status="$2"
   # Use printf to avoid interpretation of backslash sequences in content
   local content
-  content=$(printf '# TASK-001: Test\n\n- **Status**: %s\n- **Group**: 1' "$status")
+  content=$(printf '%s\n' '---' "status: $status" '---' '# TASK-001: Test' '' \
+    '- **Depends on**: none' '- **Group**: 1')
   jq -n \
     --arg fp "$file_path" \
     --arg content "$content" \
@@ -41,8 +42,8 @@ make_edit_input() {
   local file_path="$1" new_status="$2" old_status="${3:-READY}"
   jq -n \
     --arg fp "$file_path" \
-    --arg os "- **Status**: $old_status" \
-    --arg ns "- **Status**: $new_status" \
+    --arg os "status: $old_status" \
+    --arg ns "status: $new_status" \
     '{"tool_name":"Edit","tool_input":{"file_path":$fp,"old_string":$os,"new_string":$ns}}'
 }
 
@@ -106,7 +107,8 @@ create_task_file "TASK-001" "PLANNED"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "READY")
 run_guard "$input"
-assert_exit_code "PLANNED->READY allowed" "$GUARD_EC" 0
+assert_exit_code "PLANNED->READY direct write routed to command" "$GUARD_EC" 2
+assert_contains "PLANNED->READY names transactional route" "$GUARD_STDERR" "Direct task-status edits cannot record"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -118,7 +120,7 @@ create_task_file "TASK-001" "READY"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "IN_PROGRESS")
 run_guard "$input"
-assert_exit_code "READY->IN_PROGRESS allowed" "$GUARD_EC" 0
+assert_exit_code "READY->IN_PROGRESS direct write routed to command" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -131,11 +133,12 @@ setup_nazgul_dir
 create_task_file "TASK-001" "IN_PROGRESS"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 REAL_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
-content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- %s' "$REAL_SHA")
+content=$(printf '%s\n' '---' 'status: IMPLEMENTED' '---' '# TASK-001: Test' '' \
+  '- **Group**: 1' '' '## Commits' "- $REAL_SHA")
 input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
   '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
 run_guard "$input"
-assert_exit_code "IN_PROGRESS->IMPLEMENTED allowed" "$GUARD_EC" 0
+assert_exit_code "IN_PROGRESS->IMPLEMENTED direct write routed to command" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -147,7 +150,7 @@ create_task_file "TASK-001" "IN_PROGRESS"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "BLOCKED")
 run_guard "$input"
-assert_exit_code "IN_PROGRESS->BLOCKED allowed" "$GUARD_EC" 0
+assert_exit_code "IN_PROGRESS->BLOCKED direct write routed to command" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -199,11 +202,11 @@ TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "DONE")
 run_guard "$input"
 assert_exit_code "DONE without review dir blocked" "$GUARD_EC" 2
-assert_contains "DONE without review dir message" "$GUARD_STDERR" "No review directory"
+assert_contains "DONE without review dir message" "$GUARD_STDERR" "canonical non-symlink review directory"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# Test 13: Review gate — IN_REVIEW->DONE with approved review — allowed
+# Test 13: Review gate — approved IN_REVIEW->DONE passes evidence, then routes
 # create_review_dir creates nazgul/reviews/TASK-001/code-reviewer.md with APPROVED
 # ---------------------------------------------------------------------------
 setup_temp_dir
@@ -214,7 +217,8 @@ create_review_dir "TASK-001"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "DONE")
 run_guard "$input"
-assert_exit_code "DONE with approved review allowed" "$GUARD_EC" 0
+assert_exit_code "DONE with approved review routes to command" "$GUARD_EC" 2
+assert_contains "approved DONE reaches transactional route" "$GUARD_STDERR" "Direct task-status edits cannot record"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -231,7 +235,7 @@ TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "DONE")
 run_guard "$input"
 assert_exit_code "missing reviewer blocks DONE" "$GUARD_EC" 2
-assert_contains "missing reviewer message" "$GUARD_STDERR" "Missing reviews"
+assert_contains "missing reviewer message" "$GUARD_STDERR" "MISSING security-reviewer"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -253,7 +257,7 @@ TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "DONE")
 run_guard "$input"
 assert_exit_code "unapproved review blocks DONE" "$GUARD_EC" 2
-assert_contains "unapproved review message" "$GUARD_STDERR" "does not contain APPROVED"
+assert_contains "unapproved review message" "$GUARD_STDERR" "UNAPPROVED code-reviewer"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -274,7 +278,7 @@ TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "DONE")
 run_guard "$input"
 assert_exit_code "summary-only evidence blocked" "$GUARD_EC" 2
-assert_contains "summary-only evidence message" "$GUARD_STDERR" "Missing reviews"
+assert_contains "summary-only evidence message" "$GUARD_STDERR" "MISSING code-reviewer"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -283,13 +287,13 @@ teardown_temp_dir
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
-create_config '.afk.yolo = true' '.agents.reviewers = ["code-reviewer"]'
+create_config '.afk.yolo = true' '.afk.task_pr = true' '.agents.reviewers = ["code-reviewer"]'
 create_task_file "TASK-001" "IN_REVIEW"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "APPROVED")
 run_guard "$input"
 assert_exit_code "YOLO APPROVED without reviews blocked" "$GUARD_EC" 2
-assert_contains "YOLO APPROVED blocked message" "$GUARD_STDERR" "No review directory"
+assert_contains "YOLO APPROVED blocked message" "$GUARD_STDERR" "canonical non-symlink review directory"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -302,7 +306,7 @@ create_task_file "TASK-001" "READY"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_edit_input "$TASK_PATH" "IN_PROGRESS")
 run_guard "$input"
-assert_exit_code "Edit tool READY->IN_PROGRESS allowed" "$GUARD_EC" 0
+assert_exit_code "Edit tool READY->IN_PROGRESS routed to command" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -326,7 +330,7 @@ teardown_temp_dir
 
 # ---------------------------------------------------------------------------
 # Test 20: IN_PROGRESS -> IMPLEMENTED with a real, verifiable commit SHA
-# (Write) — allowed (MF-026)
+# (Write) — passes evidence, then routes (MF-026)
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_git_repo
@@ -334,11 +338,13 @@ setup_nazgul_dir
 create_task_file "TASK-001" "IN_PROGRESS"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 REAL_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
-content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- %s' "$REAL_SHA")
+content=$(printf '%s\n' '---' 'status: IMPLEMENTED' '---' '# TASK-001: Test' '' \
+  '- **Group**: 1' '' '## Commits' "- $REAL_SHA")
 input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
   '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
 run_guard "$input"
-assert_exit_code "IMPLEMENTED with commit SHA allowed" "$GUARD_EC" 0
+assert_exit_code "IMPLEMENTED with commit SHA routes to command" "$GUARD_EC" 2
+assert_contains "verified IMPLEMENTED reaches transactional route" "$GUARD_STDERR" "Direct task-status edits cannot record"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -349,12 +355,13 @@ setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
 REAL_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
-create_task_file_with_commits "TASK-001" "IN_PROGRESS" "$REAL_SHA"
+create_task_file "TASK-001" "IN_PROGRESS"
+printf '\n## Commits\n- %s\n' "$REAL_SHA" >> "$TEST_DIR/nazgul/tasks/TASK-001.md"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 # Edit only changes the status line — SHA is in the existing file, not in new_string
 input=$(make_edit_input "$TASK_PATH" "IMPLEMENTED" "IN_PROGRESS")
 run_guard "$input"
-assert_exit_code "IMPLEMENTED via Edit with SHA on disk allowed" "$GUARD_EC" 0
+assert_exit_code "IMPLEMENTED via Edit with SHA on disk routes to command" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -367,7 +374,8 @@ setup_git_repo
 setup_nazgul_dir
 create_task_file "TASK-001" "IN_PROGRESS"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
-content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- deadbeef1234')
+content=$(printf '%s\n' '---' 'status: IMPLEMENTED' '---' '# TASK-001: Test' '' \
+  '- **Group**: 1' '' '## Commits' '- deadbeef1234')
 input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
   '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
 run_guard "$input"
@@ -384,7 +392,8 @@ setup_temp_dir
 setup_nazgul_dir
 create_task_file "TASK-001" "IN_PROGRESS"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
-content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- deadbeef1234')
+content=$(printf '%s\n' '---' 'status: IMPLEMENTED' '---' '# TASK-001: Test' '' \
+  '- **Group**: 1' '' '## Commits' '- deadbeef1234')
 input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
   '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
 run_guard "$input"
@@ -405,7 +414,7 @@ assert_contains "IN_REVIEW without review dir message" "$GUARD_STDERR" "review d
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# Test 22: IMPLEMENTED -> IN_REVIEW with review directory — allowed
+# Test 22: IMPLEMENTED -> IN_REVIEW with review directory — routes
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
@@ -414,7 +423,7 @@ mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
 run_guard "$input"
-assert_exit_code "IN_REVIEW with review dir allowed" "$GUARD_EC" 0
+assert_exit_code "IN_REVIEW with review dir routes to command" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -531,7 +540,7 @@ REPORT_EOF
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "DONE")
 run_guard "$input"
-assert_exit_code "simplify-report.md excluded from reviewer count" "$GUARD_EC" 0
+assert_exit_code "simplify-report.md excluded before DONE routes to command" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -542,8 +551,8 @@ setup_nazgul_dir
 create_task_file "TASK-001" "PLANNED"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(jq -n --arg fp "$TASK_PATH" \
-  --arg os "- **Status**: PLANNED" \
-  --arg ns "- **Status**: DONE" '{
+  --arg os "status: PLANNED" \
+  --arg ns "status: DONE" '{
   "tool_name": "MultiEdit",
   "tool_input": {
     "edits": [
@@ -556,15 +565,15 @@ assert_exit_code "MultiEdit invalid transition blocked" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# Test 33: MultiEdit with valid state transition — allowed
+# Test 33: MultiEdit with valid state transition — routes
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
 create_task_file "TASK-001" "PLANNED"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(jq -n --arg fp "$TASK_PATH" \
-  --arg os "- **Status**: PLANNED" \
-  --arg ns "- **Status**: READY" '{
+  --arg os "status: PLANNED" \
+  --arg ns "status: READY" '{
   "tool_name": "MultiEdit",
   "tool_input": {
     "edits": [
@@ -573,7 +582,7 @@ input=$(jq -n --arg fp "$TASK_PATH" \
   }
 }')
 run_guard "$input"
-assert_exit_code "MultiEdit valid transition allowed" "$GUARD_EC" 0
+assert_exit_code "MultiEdit valid transition routed to command" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -636,7 +645,7 @@ assert_exit_code "source edit with DONE patch still blocked" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# Test 37: BLOCKED -> READY allowed (/nazgul:task unblock path)
+# Test 37: BLOCKED -> READY routes (/nazgul:task unblock path)
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
@@ -644,11 +653,11 @@ create_task_file "TASK-001" "BLOCKED"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "READY")
 run_guard "$input"
-assert_exit_code "BLOCKED->READY allowed (unblock)" "$GUARD_EC" 0
+assert_exit_code "BLOCKED->READY direct write routed (unblock)" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# Test 38: BLOCKED -> IN_REVIEW allowed when review dir exists AND the blocker
+# Test 38: BLOCKED -> IN_REVIEW routes when review dir exists AND the blocker
 # is a review-evidence blocker (--materialize)
 # ---------------------------------------------------------------------------
 setup_temp_dir
@@ -659,7 +668,7 @@ create_review_dir "TASK-001"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
 run_guard "$input"
-assert_exit_code "BLOCKED->IN_REVIEW with review dir allowed (materialize)" "$GUARD_EC" 0
+assert_exit_code "BLOCKED->IN_REVIEW with review dir routed (materialize)" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -797,7 +806,7 @@ create_task_with_file_scope "TASK-001" "IN_PROGRESS" "scripts/new-guard.sh"
 input=$(jq -n --arg fp "$TEST_DIR/nazgul/tasks/TASK-001.md" \
   '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":"# Task"}}')
 run_guard "$input"
-assert_exit_code "file-scope: nazgul/ path exempt from scope check" "$GUARD_EC" 0
+assert_exit_code "file-scope exemption does not bypass task-state integrity" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -859,7 +868,8 @@ setup_temp_dir
 setup_nazgul_dir
 create_task_file "TASK-001" "READY"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
-content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- abc1234def')
+content=$(printf '%s\n' '---' 'status: IMPLEMENTED' '---' '# TASK-001: Test' '' \
+  '- **Group**: 1' '' '## Commits' '- abc1234def')
 input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
   '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
 run_guard "$input"
@@ -956,26 +966,26 @@ assert_contains "DONE->IN_PROGRESS message names terminal state" "$GUARD_STDERR"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# ALLOWED TRANSITION COMPLETENESS TESTS (TASK-001 — precision gate)
+# VALID TRANSITION ROUTING COMPLETENESS TESTS (TASK-001 — precision gate)
 # Tests for transitions not yet explicitly covered in the existing suite.
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Test 54: ALLOWED — IN_REVIEW -> APPROVED (YOLO mode)
+# Test 54: ROUTED — IN_REVIEW -> APPROVED (YOLO mode)
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
-create_config '.afk.yolo = true' '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"'
+create_config '.afk.yolo = true' '.afk.task_pr = true' '.agents.reviewers = ["code-reviewer"]' '.review_gate.granularity = "task"'
 create_task_file "TASK-001" "IN_REVIEW"
 create_review_dir "TASK-001"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "APPROVED")
 run_guard "$input"
-assert_exit_code "IN_REVIEW->APPROVED allowed (YOLO)" "$GUARD_EC" 0
+assert_exit_code "IN_REVIEW->APPROVED routed (YOLO task-PR)" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# Test 55: ALLOWED — IN_REVIEW -> CHANGES_REQUESTED
+# Test 55: ROUTED — IN_REVIEW -> CHANGES_REQUESTED
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
@@ -983,15 +993,15 @@ create_task_file "TASK-001" "IN_REVIEW"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "CHANGES_REQUESTED")
 run_guard "$input"
-assert_exit_code "IN_REVIEW->CHANGES_REQUESTED allowed" "$GUARD_EC" 0
+assert_exit_code "IN_REVIEW->CHANGES_REQUESTED routed" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# Test 56: ALLOWED — APPROVED -> DONE (YOLO + task-pr)
+# Test 56: ROUTED — APPROVED -> DONE (YOLO + task-pr)
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
-create_config '.afk.yolo = true' '.agents.reviewers = ["code-reviewer"]'
+create_config '.afk.yolo = true' '.afk.task_pr = true' '.agents.reviewers = ["code-reviewer"]'
 # MF-001 regression: canonical frontmatter (not the legacy list-item fixture) now
 # that structured-state.sh's VALID_STATUSES includes APPROVED — proves the fix.
 create_task_file "TASK-001" "APPROVED"
@@ -999,11 +1009,13 @@ create_review_dir "TASK-001"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "DONE")
 run_guard "$input"
-assert_exit_code "APPROVED->DONE allowed (YOLO)" "$GUARD_EC" 0
+assert_exit_code "APPROVED->DONE routed (YOLO)" "$GUARD_EC" 2
+assert_contains "APPROVED->DONE reaches transactional route" "$GUARD_STDERR" \
+  "Direct task-status edits cannot record"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# Test 57: ALLOWED — CHANGES_REQUESTED -> IN_PROGRESS
+# Test 57: ROUTED — CHANGES_REQUESTED -> IN_PROGRESS
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
@@ -1011,7 +1023,7 @@ create_task_file "TASK-001" "CHANGES_REQUESTED"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "IN_PROGRESS")
 run_guard "$input"
-assert_exit_code "CHANGES_REQUESTED->IN_PROGRESS allowed" "$GUARD_EC" 0
+assert_exit_code "CHANGES_REQUESTED->IN_PROGRESS routed" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -1067,8 +1079,8 @@ assert_exit_code "full-manifest Write IN_PROGRESS->READY via frontmatter blocked
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# Test 61: ALLOWED — full-manifest Write IN_PROGRESS->IMPLEMENTED via YAML frontmatter
-# The 4th extractor must also allow valid transitions — no false positives.
+# Test 61: ROUTED — full-manifest Write IN_PROGRESS->IMPLEMENTED via YAML frontmatter
+# The 4th extractor must also recognize valid transitions — no false negatives.
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_git_repo
@@ -1091,12 +1103,12 @@ status: IMPLEMENTED
 input=$(jq -n --arg fp "$TASK_PATH" --arg content "$content" \
   '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
 run_guard "$input"
-assert_exit_code "full-manifest Write IN_PROGRESS->IMPLEMENTED via frontmatter allowed" "$GUARD_EC" 0
+assert_exit_code "full-manifest Write IN_PROGRESS->IMPLEMENTED routes to command" "$GUARD_EC" 2
 teardown_temp_dir
 
 
 # ---------------------------------------------------------------------------
-# Test 62: ALLOWED — IN_REVIEW -> BLOCKED
+# Test 62: ROUTED — IN_REVIEW -> BLOCKED
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
@@ -1104,11 +1116,11 @@ create_task_file "TASK-001" "IN_REVIEW"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "BLOCKED")
 run_guard "$input"
-assert_exit_code "IN_REVIEW->BLOCKED allowed" "$GUARD_EC" 0
+assert_exit_code "IN_REVIEW->BLOCKED routed" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# Test 63: ALLOWED — CHANGES_REQUESTED -> BLOCKED
+# Test 63: ROUTED — CHANGES_REQUESTED -> BLOCKED
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
@@ -1116,11 +1128,11 @@ create_task_file "TASK-001" "CHANGES_REQUESTED"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "BLOCKED")
 run_guard "$input"
-assert_exit_code "CHANGES_REQUESTED->BLOCKED allowed" "$GUARD_EC" 0
+assert_exit_code "CHANGES_REQUESTED->BLOCKED routed" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# Test 64: ALLOWED — PLANNED -> BLOCKED
+# Test 64: ROUTED — PLANNED -> BLOCKED
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
@@ -1128,11 +1140,11 @@ create_task_file "TASK-001" "PLANNED"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "BLOCKED")
 run_guard "$input"
-assert_exit_code "PLANNED->BLOCKED allowed" "$GUARD_EC" 0
+assert_exit_code "PLANNED->BLOCKED routed" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# Test 65: ALLOWED — READY -> BLOCKED
+# Test 65: ROUTED — READY -> BLOCKED
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
@@ -1140,11 +1152,11 @@ create_task_file "TASK-001" "READY"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "BLOCKED")
 run_guard "$input"
-assert_exit_code "READY->BLOCKED allowed" "$GUARD_EC" 0
+assert_exit_code "READY->BLOCKED routed" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# Test 66: ALLOWED — IMPLEMENTED -> BLOCKED
+# Test 66: ROUTED — IMPLEMENTED -> BLOCKED
 # ---------------------------------------------------------------------------
 setup_temp_dir
 setup_nazgul_dir
@@ -1152,7 +1164,7 @@ create_task_file "TASK-001" "IMPLEMENTED"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "BLOCKED")
 run_guard "$input"
-assert_exit_code "IMPLEMENTED->BLOCKED allowed" "$GUARD_EC" 0
+assert_exit_code "IMPLEMENTED->BLOCKED routed" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -1260,7 +1272,7 @@ teardown_temp_dir
 
 # ---------------------------------------------------------------------------
 # Test 75: Multi-line old_string spanning the YAML frontmatter fence —
-# IN_PROGRESS -> IMPLEMENTED with commit SHA on disk — allowed (regression
+# IN_PROGRESS -> IMPLEMENTED with commit SHA on disk — routes (regression
 # test for BSD/macOS awk "newline in string" on -v with embedded newlines)
 # ---------------------------------------------------------------------------
 setup_temp_dir
@@ -1282,7 +1294,7 @@ input=$(jq -n --arg fp "$TASK_PATH" \
   --arg ns $'---\nstatus: IMPLEMENTED\n---' \
   '{"tool_name":"Edit","tool_input":{"file_path":$fp,"old_string":$os,"new_string":$ns}}')
 run_guard "$input"
-assert_exit_code "multi-line frontmatter old_string, SHA on disk, allowed" "$GUARD_EC" 0
+assert_exit_code "multi-line frontmatter old_string, SHA on disk, routed" "$GUARD_EC" 2
 assert_not_contains "no raw awk crash on multi-line old_string" "$GUARD_STDERR" "newline in string"
 teardown_temp_dir
 
@@ -1384,7 +1396,7 @@ assert_exit_code "group mode: IN_REVIEW without reviews/GROUP-1 blocked" "$GUARD
 assert_contains "group mode: IN_REVIEW without reviews/GROUP-1 message" "$GUARD_STDERR" "review directory"
 teardown_temp_dir
 
-# Test 79: group mode — IMPLEMENTED -> IN_REVIEW allowed once reviews/GROUP-1 exists
+# Test 79: group mode — IMPLEMENTED -> IN_REVIEW routes once reviews/GROUP-1 exists
 # (reviews/TASK-001 deliberately absent — proves the resolver, not the old path, is used)
 setup_temp_dir
 setup_nazgul_dir
@@ -1394,11 +1406,11 @@ mkdir -p "$TEST_DIR/nazgul/reviews/GROUP-1"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
 run_guard "$input"
-assert_exit_code "group mode: IN_REVIEW with reviews/GROUP-1 allowed" "$GUARD_EC" 0
+assert_exit_code "group mode: IN_REVIEW with reviews/GROUP-1 routes to command" "$GUARD_EC" 2
 teardown_temp_dir
 
 # Test 80: group mode — IN_REVIEW -> DONE with an APPROVED review under
-# reviews/GROUP-1 (not reviews/TASK-001) — allowed
+# reviews/GROUP-1 (not reviews/TASK-001) — passes evidence, then routes
 setup_temp_dir
 setup_nazgul_dir
 create_config '.review_gate.granularity = "group"' '.agents.reviewers = ["code-reviewer"]'
@@ -1407,7 +1419,8 @@ create_review_dir "GROUP-1"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "DONE")
 run_guard "$input"
-assert_exit_code "group mode: DONE with reviews/GROUP-1 evidence allowed" "$GUARD_EC" 0
+assert_exit_code "group mode: DONE with reviews/GROUP-1 evidence routes to command" "$GUARD_EC" 2
+assert_contains "group evidence reaches transactional route" "$GUARD_STDERR" "Direct task-status edits cannot record"
 teardown_temp_dir
 
 # Test 81 (MF-013 core regression): group mode — IN_REVIEW -> DONE blocked when
@@ -1422,7 +1435,7 @@ TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "DONE")
 run_guard "$input"
 assert_exit_code "group mode: task-id-keyed evidence not honored: blocked" "$GUARD_EC" 2
-assert_contains "group mode: task-id-keyed evidence not honored: message" "$GUARD_STDERR" "No review directory"
+assert_contains "group mode: task-id-keyed evidence not honored: message" "$GUARD_STDERR" "canonical non-symlink review directory"
 teardown_temp_dir
 
 # Test 82: group mode — a task in a DIFFERENT group's reviews dir does not
@@ -1449,7 +1462,7 @@ run_guard "$input"
 assert_exit_code "feature mode: IN_REVIEW without reviews/FEATURE-FEAT-016 blocked" "$GUARD_EC" 2
 teardown_temp_dir
 
-# Test 84: feature mode — IMPLEMENTED -> IN_REVIEW allowed once reviews/FEATURE-FEAT-016 exists
+# Test 84: feature mode — IMPLEMENTED -> IN_REVIEW routes once reviews/FEATURE-FEAT-016 exists
 setup_temp_dir
 setup_nazgul_dir
 create_config '.review_gate.granularity = "feature"' '.feat_id = "FEAT-016"'
@@ -1458,11 +1471,11 @@ mkdir -p "$TEST_DIR/nazgul/reviews/FEATURE-FEAT-016"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "IN_REVIEW")
 run_guard "$input"
-assert_exit_code "feature mode: IN_REVIEW with reviews/FEATURE-FEAT-016 allowed" "$GUARD_EC" 0
+assert_exit_code "feature mode: IN_REVIEW with reviews/FEATURE-FEAT-016 routes to command" "$GUARD_EC" 2
 teardown_temp_dir
 
 # Test 85: feature mode — IN_REVIEW -> DONE with an APPROVED review under
-# reviews/FEATURE-<feat_id> — allowed (end-to-end IMPLEMENTED->IN_REVIEW->DONE
+# reviews/FEATURE-<feat_id> — passes evidence, then routes (end-to-end IMPLEMENTED->IN_REVIEW->DONE
 # for a feature-reviewed task, the exact path MF-013 names as non-functional)
 setup_temp_dir
 setup_nazgul_dir
@@ -1473,7 +1486,8 @@ create_review_dir "FEATURE-FEAT-016"
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "DONE")
 run_guard "$input"
-assert_exit_code "feature mode: DONE with reviews/FEATURE-FEAT-016 evidence allowed" "$GUARD_EC" 0
+assert_exit_code "feature mode: DONE with reviews/FEATURE-FEAT-016 evidence routes to command" "$GUARD_EC" 2
+assert_contains "feature evidence reaches transactional route" "$GUARD_STDERR" "Direct task-status edits cannot record"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -1576,7 +1590,7 @@ write_dispatched_review_with_receipt "TASK-001" "code-reviewer" "APPROVE" \
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "DONE")
 run_guard "$input"
-assert_exit_code "no receipts anywhere for unit: DONE allowed (capture never active)" "$GUARD_EC" 0
+assert_exit_code "no receipts anywhere for unit: DONE evidence passes then routes" "$GUARD_EC" 2
 teardown_temp_dir
 
 # Test 87b (the real FEAT-016/TASK-005 receipt-less reproduction, corrected
@@ -1598,7 +1612,7 @@ run_guard "$input"
 assert_exit_code "sibling receipt exists, this one missing: DONE blocked" "$GUARD_EC" 2
 teardown_temp_dir
 
-# Test 88: matching receipt (legitimate, unforged review) — DONE allowed.
+# Test 88: matching receipt (legitimate, unforged review) — DONE evidence passes.
 # Proves the gate isn't just failing every APPROVE verdict outright.
 setup_temp_dir
 setup_nazgul_dir
@@ -1610,7 +1624,8 @@ write_dispatched_review_with_receipt "TASK-001" "code-reviewer" "APPROVE" \
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "DONE")
 run_guard "$input"
-assert_exit_code "matching receipt: DONE allowed" "$GUARD_EC" 0
+assert_exit_code "matching receipt: DONE evidence passes then routes" "$GUARD_EC" 2
+assert_contains "matching receipt reaches transactional route" "$GUARD_STDERR" "Direct task-status edits cannot record"
 teardown_temp_dir
 
 # Test 89: review_gate.receipt_hash_enforcement: false — the kill switch
@@ -1626,7 +1641,7 @@ write_dispatched_review_with_receipt "TASK-001" "code-reviewer" "APPROVE" \
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "DONE")
 run_guard "$input"
-assert_exit_code "enforcement off: DONE allowed despite tampered body" "$GUARD_EC" 0
+assert_exit_code "enforcement off: DONE evidence passes then routes" "$GUARD_EC" 2
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -1686,11 +1701,11 @@ write_resolved_review() {
 
 # Test 90 (real TASK-002-board reproduction): a disclosed, note-backed
 # verdict flip (CHANGES_REQUESTED -> APPROVE, findings preserved verbatim
-# below the note) is allowed to reach DONE.
+# below the note) passes DONE evidence and routes.
 setup_temp_dir
 setup_nazgul_dir
 create_config '.agents.reviewers = ["security-reviewer"]' '.review_gate.granularity = "task"' \
-  '.review_gate.receipt_hash_enforcement = true'
+  '.review_gate.receipt_hash_enforcement = true' '.review_gate.require_provenance = false'
 create_task_file "TASK-001" "IN_REVIEW"
 write_resolved_review "TASK-001" "security-reviewer" "CHANGES_REQUESTED" "75" "APPROVE" \
   "## Scope of review
@@ -1699,7 +1714,7 @@ Read the diff. Found one HIGH finding, downgraded per Step 3.6 adversarial cross
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "DONE")
 run_guard "$input"
-assert_exit_code "disclosed verdict-only flip: DONE allowed" "$GUARD_EC" 0
+assert_exit_code "disclosed verdict-only flip: DONE evidence passes then routes" "$GUARD_EC" 2
 teardown_temp_dir
 
 # Test 91 (THE decisive check): a resolution note is present and well-formed
@@ -1753,7 +1768,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_nazgul_dir
 create_config '.agents.reviewers = ["security-reviewer"]' '.review_gate.granularity = "task"' \
-  '.review_gate.receipt_hash_enforcement = true'
+  '.review_gate.receipt_hash_enforcement = true' '.review_gate.require_provenance = false'
 create_task_file "TASK-001" "IN_REVIEW"
 mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
 cat > "$TEST_DIR/nazgul/reviews/TASK-001/security-reviewer.md" << 'REALFIXTURE'
@@ -1807,7 +1822,8 @@ jq -cn --arg u "TASK-001" --arg r "security-reviewer" --arg h "$REAL_HASH" --arg
 TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
 input=$(make_write_input "$TASK_PATH" "DONE")
 run_guard "$input"
-assert_exit_code "real TASK-002-shape board (both notes): DONE allowed" "$GUARD_EC" 0
+assert_exit_code "real TASK-002-shape board (both notes): DONE evidence passes then routes" "$GUARD_EC" 2
+assert_contains "real board reaches transactional route" "$GUARD_STDERR" "Direct task-status edits cannot record"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
@@ -1945,6 +1961,39 @@ input=$(jq -n --arg fp "$LINK_ROOT/src/a.py" '{"tool_name":"Write","tool_input":
 run_guard "$input"
 assert_exit_code "in-project write through symlinked project root still blocked" "$GUARD_EC" 2
 assert_contains "symlinked project root message" "$GUARD_STDERR" "No task is IN_PROGRESS"
+teardown_temp_dir
+
+# PR #86 review: with a symlinked PROJECT_ROOT the lexical and canonical task
+# paths differ, so an already-canonical write used to skip the leaf check.
+setup_temp_dir
+REAL_ROOT="$TEST_DIR/real-root"
+LINK_ROOT="$TEST_DIR/link-root"
+mkdir -p "$REAL_ROOT"
+ln -s "$REAL_ROOT" "$LINK_ROOT"
+OUTER_TEST_DIR="$TEST_DIR"
+TEST_DIR="$REAL_ROOT"
+setup_nazgul_dir
+create_config '.guards.requireActiveTask = true'
+create_task_file "TASK-001" "IN_PROGRESS"
+TEST_DIR="$OUTER_TEST_DIR"
+CANON_REAL_ROOT=$(cd "$REAL_ROOT" && pwd -P)
+export CLAUDE_PROJECT_DIR="$LINK_ROOT"
+
+DECOY=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-decoy-XXXXXX")
+printf '# TASK-123\n- **Status**: READY\n' > "$DECOY/TASK-123.md"
+ln -s "$DECOY/TASK-123.md" "$REAL_ROOT/nazgul/tasks/TASK-123.md"
+input=$(make_write_input "$CANON_REAL_ROOT/nazgul/tasks/TASK-123.md" "DONE")
+run_guard "$input"
+assert_exit_code "canonical task path under a symlinked root is still leaf-checked" "$GUARD_EC" 2
+assert_contains "canonical task path leaf-check message" "$GUARD_STDERR" \
+  "does not resolve to its canonical project runtime path"
+
+input=$(make_write_input "$LINK_ROOT/nazgul/tasks/TASK-123.md" "DONE")
+run_guard "$input"
+assert_exit_code "lexical task path under a symlinked root stays leaf-checked" "$GUARD_EC" 2
+
+rm -f "$REAL_ROOT/nazgul/tasks/TASK-123.md"
+rm -rf "$DECOY"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------

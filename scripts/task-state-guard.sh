@@ -11,13 +11,6 @@ source "$SCRIPT_DIR/lib/review-evidence.sh"
 source "$SCRIPT_DIR/lib/task-transition-guard.sh"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 
-# Single source of truth (ADR-002 Decision 1): derive the accepted-status regex
-# alternation from structured-state.sh's VALID_STATUSES (sourced transitively via
-# task-utils.sh above) instead of hand-maintaining a second enumeration here — the
-# two DID drift apart once (MF-001: this file already had APPROVED, the library
-# didn't).
-STATUS_REGEX_ALT="(${VALID_STATUSES// /|})"
-
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
 INPUT=$(cat 2>/dev/null || echo "")
 if [ -z "$INPUT" ]; then
@@ -27,9 +20,11 @@ fi
 # Parse JSON input with jq
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
 
-# Handle MultiEdit: fan out into per-edit Edit invocations
-# Aggregate new_string content per file so evidence gates (e.g., commit SHA)
-# can see text from sibling edits to the same file.
+# Handle MultiEdit by checking every edit independently. A task-status-bearing
+# edit is denied and routed to the transactional command, so there is no reason
+# to aggregate sibling strings (aggregation let an earlier same-status string
+# shadow a later real status change). A remove-then-add status sequence is
+# deliberately denied at the removal and must use the transition command.
 if [ "$TOOL_NAME" = "MultiEdit" ]; then
   EDITS_JSON=$(echo "$INPUT" | jq -c '.tool_input.edits // [] | .[]' 2>/dev/null || echo "")
   if [ -z "$EDITS_JSON" ]; then
@@ -37,15 +32,9 @@ if [ "$TOOL_NAME" = "MultiEdit" ]; then
   fi
   while IFS= read -r EDIT; do
     [ -z "$EDIT" ] && continue
-    # Aggregate all new_string values from edits targeting the SAME file
-    EDIT_FILE=$(echo "$EDIT" | jq -r '.file_path // ""')
-    SAME_FILE_STRINGS=$(echo "$INPUT" | jq -r --arg fp "$EDIT_FILE" '
-      .tool_input.edits // [] | .[] | select(.file_path == $fp) | .new_string // ""
-    ' 2>/dev/null || echo "")
-    SINGLE_INPUT=$(echo "$INPUT" | jq --argjson edit "$EDIT" --arg agg "$SAME_FILE_STRINGS" '
+    SINGLE_INPUT=$(echo "$INPUT" | jq --argjson edit "$EDIT" '
       .tool_name = "Edit"
       | .tool_input = $edit
-      | .tool_input.new_string = $agg
     ')
     EC=0
     echo "$SINGLE_INPUT" | "$0" || EC=$?
@@ -84,8 +73,8 @@ _tsg_canon_path() {
   dir="$(cd "$dir" 2>/dev/null && pwd -P || printf '%s' "$dir")"
   # Bounded symlink walk on the leaf, only when it exists and the prefix was
   # fully resolved (no literal suffix). Bounded to 16 hops so a symlink loop
-  # cannot hang a PreToolUse hook; on exhaustion we keep the last path, which
-  # degrades to the previous behaviour rather than failing the guard.
+  # cannot hang a PreToolUse hook; a still-symlinked leaf at the bound fails
+  # closed in the caller rather than becoming an outside-path allow.
   if [ -z "$suffix" ]; then
     local hops=0 target
     while [ -L "$dir/$base" ] && [ "$hops" -lt 16 ]; do
@@ -98,16 +87,40 @@ _tsg_canon_path() {
       dir="$(cd "$dir" 2>/dev/null && pwd -P || printf '%s' "$dir")"
       hops=$((hops + 1))
     done
+    [ ! -L "$dir/$base" ] || return 1
   fi
   printf '%s%s/%s' "$dir" "$suffix" "$base"
 }
 
 case "$FILE_PATH" in
-  /*) CANON_FILE_PATH="$FILE_PATH" ;;
-  *)  CANON_FILE_PATH="$PROJECT_ROOT/$FILE_PATH" ;;
+  /*) REQUEST_FILE_PATH="$FILE_PATH" ;;
+  *)  REQUEST_FILE_PATH="$PROJECT_ROOT/$FILE_PATH" ;;
 esac
-CANON_FILE_PATH="$(_tsg_canon_path "$CANON_FILE_PATH")"
+CANON_FILE_PATH="$REQUEST_FILE_PATH"
+if ! CANON_FILE_PATH="$(_tsg_canon_path "$CANON_FILE_PATH")"; then
+  echo "NAZGUL STATE GUARD: BLOCKED — file path contains an unresolved or overlong symlink chain" >&2
+  exit 2
+fi
 CANON_PROJECT_ROOT="$(cd "$PROJECT_ROOT" 2>/dev/null && pwd -P || printf '%s' "$PROJECT_ROOT")"
+
+# A request made through the project's lexical task path must resolve to that
+# exact canonical leaf. This rejects both a symlinked tasks/ component and a
+# symlinked TASK leaf whether the target lands inside or outside the project.
+case "$REQUEST_FILE_PATH" in
+  "$PROJECT_ROOT"/nazgul/tasks/*|"$CANON_PROJECT_ROOT"/nazgul/tasks/*)
+    REQUEST_TASK_BASENAME=$(basename "$REQUEST_FILE_PATH")
+    if [[ "$REQUEST_TASK_BASENAME" =~ ^TASK-[0-9]+\.md$ ]]; then
+      REQUEST_TASK_ID="${REQUEST_TASK_BASENAME%.md}"
+      EXPECTED_TASK_PATH="$CANON_PROJECT_ROOT/nazgul/tasks/$REQUEST_TASK_ID.md"
+      if [ "$CANON_FILE_PATH" != "$EXPECTED_TASK_PATH" ] \
+        || [ -L "$CANON_PROJECT_ROOT/nazgul/tasks" ] \
+        || [ -L "$EXPECTED_TASK_PATH" ]; then
+        echo "NAZGUL STATE GUARD: BLOCKED — task manifest does not resolve to its canonical project runtime path" >&2
+        exit 2
+      fi
+    fi
+    ;;
+esac
 # When the project root canonicalizes to "/", "$CANON_PROJECT_ROOT"/* expands
 # to "//*", which matches nothing with a single leading slash — so EVERY
 # descendant fell through to `exit 0` and the guard silently disarmed itself
@@ -132,7 +145,7 @@ is_nazgul_path() {
   esac
   # Absolute path under PROJECT_ROOT/nazgul/
   case "$p" in
-    "${PROJECT_ROOT}"/nazgul|"${PROJECT_ROOT}"/nazgul/*) return 0 ;;
+    "${CANON_PROJECT_ROOT}"/nazgul|"${CANON_PROJECT_ROOT}"/nazgul/*) return 0 ;;
   esac
   return 1
 }
@@ -157,7 +170,7 @@ is_review_diff() {
 }
 
 # If this is NOT a task manifest, check if it needs the active-task guard
-if ! is_task_manifest "$FILE_PATH"; then
+if ! is_task_manifest "$CANON_FILE_PATH"; then
   # Defense-in-depth (recompute-and-compare in review-evidence.sh is the real
   # fix): .dispatch.json and diff.patch are written by the review-gate
   # orchestrator only, which never runs while a task is IN_PROGRESS — the
@@ -166,12 +179,12 @@ if ! is_task_manifest "$FILE_PATH"; then
   # GROUP-* (that group's tasks), falling back to any-task-IN_PROGRESS only for
   # unrecognized unit ids — narrowing the trivial forge path (implementer has Bash+Write
   # under nazgul/).
-  if { is_dispatch_manifest "$FILE_PATH" || is_review_diff "$FILE_PATH"; } && [ -d "$PROJECT_ROOT/nazgul/tasks" ]; then
+  if { is_dispatch_manifest "$CANON_FILE_PATH" || is_review_diff "$CANON_FILE_PATH"; } && [ -d "$PROJECT_ROOT/nazgul/tasks" ]; then
     # Narrow to the review unit's own task(s) so a parallel Agent-Teams wave
     # with another unit's task IN_PROGRESS doesn't false-block this unit's
     # already-finished review bookkeeping. GROUP-<n>/FEATURE-* unit IDs (and
     # any unrecognized shape) fall back to the conservative any-task check.
-    _dm_unit_id=$(basename "$(dirname "$FILE_PATH")")
+    _dm_unit_id=$(basename "$(dirname "$CANON_FILE_PATH")")
     _dm_blocking=false
     case "$_dm_unit_id" in
       TASK-*|PATCH-*)
@@ -203,14 +216,14 @@ if ! is_task_manifest "$FILE_PATH"; then
         ;;
     esac
     if [ "$_dm_blocking" = true ]; then
-      echo "NAZGUL STATE GUARD: BLOCKED — $(basename "$FILE_PATH") may not be written while a task is IN_PROGRESS" >&2
+      echo "NAZGUL STATE GUARD: BLOCKED — $(basename "$CANON_FILE_PATH") may not be written while a task is IN_PROGRESS" >&2
       echo "This file is written by the review-gate orchestrator only, after a task reaches IMPLEMENTED." >&2
       exit 2
     fi
   fi
 
   # Files inside nazgul/ are always allowed (config, plan, reviews, etc.)
-  if is_nazgul_path "$FILE_PATH"; then
+  if is_nazgul_path "$CANON_FILE_PATH"; then
     exit 0
   fi
 
@@ -330,6 +343,18 @@ if ! is_task_manifest "$FILE_PATH"; then
   exit 0
 fi
 
+# Deny ordinary Write/Edit while a transition lock is already visible. The
+# PreToolUse check cannot hold that lock through a later tool completion, so it
+# narrows (but does not pretend to eliminate) the final check-to-rename window.
+# task-transition.sh is the sole status authority; TASK-004 separately funnels
+# direct shell mutation, and all cooperative metadata writers must avoid a task
+# while its transition lock exists.
+LOCKED_TASK_ID=$(basename "$CANON_FILE_PATH" .md)
+if [ -d "$CANON_PROJECT_ROOT/nazgul/locks/task-transition-${LOCKED_TASK_ID}.lock" ]; then
+  echo "NAZGUL STATE GUARD: BLOCKED — ${LOCKED_TASK_ID} is locked by an in-flight transactional transition" >&2
+  exit 2
+fi
+
 # Extract new content being written
 if [ "$TOOL_NAME" = "Edit" ]; then
   NEW_CONTENT=$(echo "$INPUT" | jq -r '.tool_input.new_string // ""' 2>/dev/null || echo "")
@@ -341,46 +366,38 @@ else
   exit 0
 fi
 
-# Check if this changes the Status field (supports list-item, ATX inline, ATX block, and YAML frontmatter)
-NEW_STATUS=$(echo "$NEW_CONTENT" | sed -n 's/.*\*\*Status\*\*:[[:space:]]*\([A-Z_]*\).*/\1/p' | head -1)
-if [ -z "$NEW_STATUS" ]; then
-  NEW_STATUS=$(echo "$NEW_CONTENT" | sed -n 's/^## Status:[[:space:]]*\([A-Z_]*\).*/\1/p' | head -1)
-fi
-if [ -z "$NEW_STATUS" ]; then
-  # Try ATX block format: ## Status\n<VALUE>
-  NEW_STATUS=$(echo "$NEW_CONTENT" | awk '/^## Status[[:space:]]*$/{getline; gsub(/^[[:space:]]+|[[:space:]]+$/, ""); if (/^[A-Z_]+$/) print; exit}')
-fi
-if [ -z "$NEW_STATUS" ]; then
-  # YAML frontmatter `status: TOKEN`. When the content has a leading --- ... ---
-  # block, scope the search to it so a `status:` line in the manifest BODY (e.g.
-  # inside a code block) can't be misread as a transition. For a partial edit
-  # that replaces only the status line (no --- delimiters), there is no body to
-  # confuse, so search the whole content. printf (not echo) keeps arbitrary
-  # multiline content POSIX-safe.
-  _fm_src="$NEW_CONTENT"
-  if printf '%s\n' "$NEW_CONTENT" | head -1 | grep -q '^---[[:space:]]*$'; then
-    _fm_src=$(printf '%s\n' "$NEW_CONTENT" | awk 'NR==1 && /^---[[:space:]]*$/{infm=1; next} infm && /^---[[:space:]]*$/{exit} infm')
-  fi
-  _fm_line=$(printf '%s\n' "$_fm_src" | \
-    grep -m1 -E "^status:[[:space:]]*${STATUS_REGEX_ALT}[[:space:]]*\$" 2>/dev/null || true)
-  NEW_STATUS=$(printf '%s' "$_fm_line" | sed 's/^status:[[:space:]]*//' | tr -d '[:space:]')
-fi
-if [ -z "$NEW_STATUS" ]; then
-  # Ordered last so frontmatter and structured headings take precedence; bare token
-  # is a catch-all for any remaining inline formats that slip past earlier extractors.
-  NEW_STATUS=$(printf '%s\n' "$NEW_CONTENT" | \
-    grep -m1 -E "^${STATUS_REGEX_ALT}[[:space:]]*\$" 2>/dev/null \
-    | tr -d '[:space:]' || true)
-fi
-if [ -z "$NEW_STATUS" ]; then
-  # Not a status change — allow
-  exit 0
+# Build the exact post-image and parse canonical state once. Regexing only the
+# replacement fragment was bypassable when stale body text appeared first,
+# canonical status was deleted/quoted, or MultiEdit supplied multiple strings.
+POST_IMAGE=$(mktemp "${TMPDIR:-/tmp}/nazgul-task-state.XXXXXX") || exit 2
+trap 'rm -f "$POST_IMAGE"' EXIT INT TERM
+if [ "$TOOL_NAME" = "Write" ]; then
+  printf '%s' "$NEW_CONTENT" > "$POST_IMAGE"
+elif [ -f "$CANON_FILE_PATH" ] && [ -n "$OLD_STRING" ]; then
+  OLD_STRING="$OLD_STRING" NEW_CONTENT="$NEW_CONTENT" awk '
+    BEGIN { buf=""; old=ENVIRON["OLD_STRING"]; new=ENVIRON["NEW_CONTENT"] }
+    { buf = buf (NR>1 ? "\n" : "") $0 }
+    END { idx = index(buf, old); if (idx) printf "%s", substr(buf, 1, idx-1) new substr(buf, idx+length(old)); else printf "%s", buf }
+  ' "$CANON_FILE_PATH" > "$POST_IMAGE"
+else
+  printf '%s' "$NEW_CONTENT" > "$POST_IMAGE"
 fi
 
-# Read current status from file on disk (supports both formats)
 OLD_STATUS=""
-if [ -f "$FILE_PATH" ]; then
-  OLD_STATUS=$(get_task_status "$FILE_PATH" "")
+OLD_CANON_RC=1
+if [ -f "$CANON_FILE_PATH" ]; then
+  OLD_STATUS=$(get_task_status "$CANON_FILE_PATH" "")
+  if read_task_status "$CANON_FILE_PATH" >/dev/null 2>&1; then OLD_CANON_RC=0; else OLD_CANON_RC=$?; fi
+fi
+NEW_STATUS=$(get_task_status "$POST_IMAGE" "")
+if read_task_status "$POST_IMAGE" >/dev/null 2>&1; then POST_CANON_RC=0; else POST_CANON_RC=$?; fi
+
+if [ "$NEW_STATUS" = "INVALID" ] \
+  || { [ -n "$OLD_STATUS" ] && [ -z "$NEW_STATUS" ]; } \
+  || { [ "$OLD_CANON_RC" -eq 0 ] && [ "$POST_CANON_RC" -ne 0 ]; }; then
+  echo "NAZGUL STATE GUARD: BLOCKED — task manifest post-image has missing or invalid canonical status" >&2
+  echo "Keep a valid status field and use the transactional command for status changes." >&2
+  exit 2
 fi
 
 # If file is new (first write), allow PLANNED or READY as initial status
@@ -417,127 +434,19 @@ if ! ttg_valid_transition "$OLD_STATUS" "$NEW_STATUS"; then
   exit 2
 fi
 
-# Derive task identity once — used by both evidence gates and the review gate below
-TASK_ID=$(basename "$FILE_PATH" .md)
-NAZGUL_DIR=$(dirname "$(dirname "$FILE_PATH")")
+# Derive identity from the canonical path so a symlink alias cannot downgrade a
+# task manifest into the generic nazgul-file allow branch.
+TASK_ID=$(basename "$CANON_FILE_PATH" .md)
+NAZGUL_DIR=$(dirname "$(dirname "$CANON_FILE_PATH")")
+MANIFEST_TEXT=$(cat "$POST_IMAGE")
 
-# --- ENFORCE EVIDENCE GATES ---
-# IN_PROGRESS -> IMPLEMENTED requires a commit SHA in the manifest content
-# For Write, NEW_CONTENT is the full post-edit file.
-# For Edit, reconstruct post-edit content by applying old_string→new_string on the file.
-if [ "$OLD_STATUS" = "IN_PROGRESS" ] && [ "$NEW_STATUS" = "IMPLEMENTED" ]; then
-  if [ "$TOOL_NAME" = "Write" ]; then
-    MANIFEST_TEXT="$NEW_CONTENT"
-  elif [ -f "$FILE_PATH" ] && [ -n "$OLD_STRING" ]; then
-    # Reconstruct post-edit file: replace old_string with new_string in on-disk content.
-    # old/new travel via ENVIRON, not -v: BSD awk rejects literal newlines in -v assignments,
-    # which silently no-ops the guard on multi-line old_string (e.g. the frontmatter fence).
-    MANIFEST_TEXT=$(OLD_STRING="$OLD_STRING" NEW_CONTENT="$NEW_CONTENT" awk '
-      BEGIN { buf=""; old=ENVIRON["OLD_STRING"]; new=ENVIRON["NEW_CONTENT"] }
-      { buf = buf (NR>1 ? "\n" : "") $0 }
-      END { idx = index(buf, old); if (idx) print substr(buf, 1, idx-1) new substr(buf, idx+length(old)); else print buf }
-    ' "$FILE_PATH")
-  else
-    MANIFEST_TEXT="$NEW_CONTENT"
-  fi
-  if ! ttg_verify_commit_evidence "$MANIFEST_TEXT" "$PROJECT_ROOT"; then
-    echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark IMPLEMENTED without a verified commit SHA" >&2
-    echo "Add a ## Commits section with a real, reachable commit hash (verified via git cat-file) to the task manifest." >&2
-    echo "If you implemented the work, you should have committed it. If git is unavailable, this blocks by design (fail closed)." >&2
-    exit 2
-  fi
-  # Red-run evidence (FEAT-028/TASK-002). Runs AFTER the commit check because
-  # the ancestry leg reads the SHAs the commit gate just proved real.
-  if ! ttg_verify_red_run_evidence "$MANIFEST_TEXT" "$PROJECT_ROOT" "$TASK_ID"; then
-    echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark IMPLEMENTED without verified red-run evidence" >&2
-    echo "Add a ## Red-Run Evidence section recording that the new/changed tests FAILED against the pre-change tree." >&2
-    echo "Capture it with scripts/red-run.sh, or declare an enumerated exemption: red-run: N/A — docs-only|comment-only|revert|fixture-capture-only" >&2
-    exit 2
-  fi
+if ! ttg_validate_transition "$NAZGUL_DIR" "$PROJECT_ROOT" "$TASK_ID" \
+  "$OLD_STATUS" "$NEW_STATUS" "$MANIFEST_TEXT"; then
+  echo "NAZGUL STATE GUARD: BLOCKED — ${TASK_ID} failed the shared transition/evidence validation" >&2
+  exit 2
 fi
 
-# IMPLEMENTED/BLOCKED -> IN_REVIEW requires review directory to exist
-# (BLOCKED -> IN_REVIEW is the /nazgul:review --materialize repair path)
-if { [ "$OLD_STATUS" = "IMPLEMENTED" ] || [ "$OLD_STATUS" = "BLOCKED" ]; } && [ "$NEW_STATUS" = "IN_REVIEW" ]; then
-  # resolve_review_unit (MF-013): in group/feature granularity the review
-  # directory is GROUP-<n>/FEATURE-<feat_id>, not reviews/<task_id>.
-  REVIEW_DIR_CHECK="$NAZGUL_DIR/reviews/$(resolve_review_unit "$NAZGUL_DIR" "$TASK_ID")"
-  if [ ! -d "$REVIEW_DIR_CHECK" ]; then
-    echo "NAZGUL STATE GUARD: BLOCKED — Cannot move to IN_REVIEW without a review directory" >&2
-    echo "Expected: ${REVIEW_DIR_CHECK}/" >&2
-    echo "The review-gate agent creates this directory when it starts reviewing." >&2
-    exit 2
-  fi
-fi
-
-# BLOCKED -> IN_REVIEW is reserved for review-evidence blockers. Tasks blocked
-# for other reasons (git conflicts, test failures, max retries) must not bypass
-# their blocker via the repair path — use /nazgul:task unblock instead.
-if [ "$OLD_STATUS" = "BLOCKED" ] && [ "$NEW_STATUS" = "IN_REVIEW" ]; then
-  if ! grep -qi '^\- \*\*Blocked reason\*\*:.*review evidence' "$FILE_PATH" 2>/dev/null; then
-    echo "NAZGUL STATE GUARD: BLOCKED — BLOCKED → IN_REVIEW is reserved for review-evidence repair" >&2
-    echo "This task's Blocked reason is not a review-evidence blocker." >&2
-    echo "Use /nazgul:task unblock to return it to READY instead." >&2
-    exit 2
-  fi
-fi
-
-# --- ENFORCE REVIEW GATE (Constitution Article IV) ---
-# In YOLO mode, gate APPROVED; in non-YOLO, gate DONE
-# APPROVED → DONE in YOLO needs no review checks (PR merge is external validation)
-CONFIG="$NAZGUL_DIR/config.json"
-YOLO_MODE="false"
-if [ -f "$CONFIG" ]; then
-  YOLO_MODE=$(jq -r '.afk.yolo // false' "$CONFIG" 2>/dev/null || echo "false")
-fi
-
-NEEDS_REVIEW_CHECK=false
-if [ "$YOLO_MODE" = "true" ] && [ "$NEW_STATUS" = "APPROVED" ]; then
-  NEEDS_REVIEW_CHECK=true
-elif [ "$YOLO_MODE" != "true" ] && [ "$NEW_STATUS" = "DONE" ]; then
-  NEEDS_REVIEW_CHECK=true
-fi
-
-if [ "$NEEDS_REVIEW_CHECK" = true ]; then
-  # Diagnostic-only path — the actual gate is ttg_verify_review_evidence below,
-  # which resolves the same reviews/<unit> the resolver computes; kept in sync
-  # here so the NO_REVIEW_DIR message names the directory that was really checked.
-  REVIEW_DIR="$NAZGUL_DIR/reviews/$(resolve_review_unit "$NAZGUL_DIR" "$TASK_ID")"
-  EVIDENCE_PROBLEMS=$(ttg_verify_review_evidence "$NAZGUL_DIR" "$TASK_ID") || true
-  if [ -n "$EVIDENCE_PROBLEMS" ]; then
-    echo "NAZGUL STATE GUARD: BLOCKED — Cannot mark ${TASK_ID} as ${NEW_STATUS}" >&2
-    # NO_REVIEW_DIR and NO_REVIEWERS_CONFIGURED are single-token outputs (the lib
-    # early-returns on them) — bare-token case patterns are safe. Any other
-    # output is MISSING/UNAPPROVED lines handled by the * branch.
-    case "$EVIDENCE_PROBLEMS" in
-      NO_REVIEW_DIR)
-        echo "No review directory at: ${REVIEW_DIR}" >&2
-        ;;
-      NO_REVIEWERS_CONFIGURED)
-        echo "No reviewers configured in nazgul/config.json (agents.reviewers is empty)." >&2
-        echo "Run Discovery to generate the reviewer roster." >&2
-        ;;
-      *)
-        MISSING_LIST=$(echo "$EVIDENCE_PROBLEMS" | awk '$1=="MISSING"{printf " %s", $2}')
-        UNAPPROVED_LIST=$(echo "$EVIDENCE_PROBLEMS" | awk '$1=="UNAPPROVED"{printf " %s", $2}')
-        if [ -n "$MISSING_LIST" ]; then
-          echo "Missing reviews from configured reviewers:${MISSING_LIST}" >&2
-        fi
-        if [ -n "$UNAPPROVED_LIST" ]; then
-          echo "Review does not contain APPROVED verdict:${UNAPPROVED_LIST}" >&2
-        fi
-        if [ -z "$MISSING_LIST" ] && [ -z "$UNAPPROVED_LIST" ]; then
-          echo "Unexpected review evidence problem: ${EVIDENCE_PROBLEMS}" >&2
-        fi
-        ;;
-    esac
-    echo "ALL reviewers must approve before ${NEW_STATUS} (Constitution Rule 5)." >&2
-    exit 2
-  fi
-fi
-
-# Valid transition — allow. Record it in the guarded-transition ledger so
-# stop-hook.sh's reconciliation pass can tell this legitimate
-# Write/Edit/MultiEdit-mediated change apart from a Bash-write bypass (MF-022).
-ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "$OLD_STATUS" "$NEW_STATUS"
-exit 0
+echo "NAZGUL STATE GUARD: BLOCKED — Direct task-status edits cannot record completed-write authority" >&2
+echo "Run: ${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}/scripts/task-transition.sh transition ${TASK_ID} ${OLD_STATUS} ${NEW_STATUS}" >&2
+echo "Edit non-status metadata first, then use the command for the locked status transition." >&2
+exit 2

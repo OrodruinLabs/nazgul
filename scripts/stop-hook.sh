@@ -220,14 +220,40 @@ if [ "$BUDGET_ENABLED" = "true" ]; then
   fi
 fi
 
+# Upsert one `- **<Label>**: <value>` manifest line: replace the existing line
+# with that label, or append when the label is absent.
+set_manifest_field() {
+  local file="$1" label="$2" value="$3"
+  # The append branch follows a symlinked manifest just as the replace branch
+  # once followed a symlinked `${file}.field.tmp`, so both are gated here.
+  if [ -L "$file" ] || [ ! -f "$file" ]; then
+    echo "set_manifest_field: refusing to write ${file}: not a regular non-symlink file" >&2
+    return 1
+  fi
+  if grep -q "^- \*\*${label}\*\*:" "$file" 2>/dev/null; then
+    # Exported explicitly: an assignment PREFIX reaches an external command, but
+    # nz_rewrite_file is a shell function, and awk runs one level below it.
+    export NAZGUL_FIELD_LINE="- **${label}**: ${value}"
+    nz_rewrite_file "$file" awk -v pat="^- [*][*]${label}[*][*]:" \
+      '$0 ~ pat { print ENVIRON["NAZGUL_FIELD_LINE"]; next } { print }' \
+      "$file" || { unset NAZGUL_FIELD_LINE; return 1; }
+    unset NAZGUL_FIELD_LINE
+  else
+    # Every reader of these fields is `^`-anchored, so a manifest with no trailing
+    # newline would absorb the new field into its last line and hide it.
+    if [ -s "$file" ] && [ -n "$(tail -c 1 "$file")" ]; then printf '\n' >> "$file"; fi
+    printf -- '- **%s**: %s\n' "$label" "$value" >> "$file"
+  fi
+}
+
 # --- BASH-WRITE RECONCILIATION (MF-022 / ADR-003 Decision 2) ---
 # Runs at the top of every iteration, before counting, so a flip to BLOCKED
 # below is already reflected in this iteration's counts. Diffs each task
-# manifest's live status against the status the LAST checkpoint recorded for
-# it; a change not traceable to a guarded transition (ttg_log_transition,
-# written only by task-state-guard.sh's PreToolUse path) since that
-# checkpoint's timestamp is untrusted — flag BLOCKED with a named diagnostic.
-# Detection/flagging only: never writes a "corrected" status, only BLOCKED.
+# manifest's live status against the LAST checkpoint's. Authority is the
+# completed-write ledger (ADR-020): only edges scripts/task-transition.sh
+# applied and verified on disk are recorded, so a live status the ledger
+# cannot chain to since that checkpoint is untrusted — flag BLOCKED, never
+# a "corrected" status.
 # Kill-switch: guards.bash_write_reconciliation (default true; an explicit
 # `false` must be honored, so this is NOT `// true`, which would
 # false-coalesce it back to true).
@@ -245,9 +271,10 @@ if [ "$RECON_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
         [ -n "$RECON_PREV_STATUS" ] || continue
         RECON_LIVE_STATUS=$(get_task_status "$recon_task_file" "")
         if [ -n "$RECON_LIVE_STATUS" ] && [ "$RECON_LIVE_STATUS" != "$RECON_PREV_STATUS" ] \
-          && ! ttg_transition_is_guarded "$NAZGUL_DIR" "$RECON_TASK_ID" "$RECON_LIVE_STATUS" "$RECON_PREV_TS"; then
-          echo "NAZGUL BASH-WRITE RECONCILIATION: BLOCKED — ${RECON_TASK_ID} status changed ${RECON_PREV_STATUS} → ${RECON_LIVE_STATUS} written outside the guarded Write/Edit/MultiEdit path" >&2
-          RECON_REASON="status changed ${RECON_PREV_STATUS} → ${RECON_LIVE_STATUS} outside the guarded Write/Edit/MultiEdit path (stop-hook reconciliation, MF-022)"
+          && ! ttg_transition_chain_is_guarded "$NAZGUL_DIR" "$RECON_TASK_ID" \
+            "$RECON_PREV_STATUS" "$RECON_LIVE_STATUS" "$RECON_PREV_TS"; then
+          echo "NAZGUL BASH-WRITE RECONCILIATION: BLOCKED — ${RECON_TASK_ID} status changed ${RECON_PREV_STATUS} → ${RECON_LIVE_STATUS} outside the guarded Write/Edit/MultiEdit path, with no completed transition recorded by \${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" >&2
+          RECON_REASON="status changed ${RECON_PREV_STATUS} → ${RECON_LIVE_STATUS} outside the guarded Write/Edit/MultiEdit path, with no completed transition recorded by scripts/task-transition.sh (stop-hook reconciliation, MF-022)"
           # Recheck red evidence when an untraceable IMPLEMENTED landing bypassed PreToolUse.
           if [ "$RECON_LIVE_STATUS" = "IMPLEMENTED" ] \
             && ! ttg_verify_red_run_evidence "$(cat "$recon_task_file")" "$PROJECT_ROOT" "$RECON_TASK_ID"; then
@@ -255,13 +282,17 @@ if [ "$RECON_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
             RECON_REASON="unverified red-run evidence (${TTG_RED_RUN_REASON}) on a status changed ${RECON_PREV_STATUS} → IMPLEMENTED outside the guarded Write/Edit/MultiEdit path (stop-hook reconciliation, FEAT-028)"
           fi
           set_task_status "$recon_task_file" "$RECON_LIVE_STATUS" "BLOCKED"
-          if grep -q '^\- \*\*Blocked reason\*\*:' "$recon_task_file" 2>/dev/null; then
-            awk -v reason="- **Blocked reason**: ${RECON_REASON}" \
-              '/^\- \*\*Blocked reason\*\*:/ { print reason; next } { print }' \
-              "$recon_task_file" > "${recon_task_file}.tmp" && mv "${recon_task_file}.tmp" "$recon_task_file"
-          else
-            echo "- **Blocked reason**: ${RECON_REASON}" >> "$recon_task_file"
-          fi
+          # Typed integrity annotation (ADR-020): the quarantine is NOT an
+          # ordinary graph edge, so it records machine-readable endpoints.
+          set_manifest_field "$recon_task_file" "Blocked kind" "reconciliation"
+          set_manifest_field "$recon_task_file" "Blocked from" "$RECON_PREV_STATUS"
+          set_manifest_field "$recon_task_file" "Blocked observed" "$RECON_LIVE_STATUS"
+          set_manifest_field "$recon_task_file" "Blocked reason" "$RECON_REASON"
+          echo "NAZGUL BASH-WRITE RECONCILIATION: ${RECON_TASK_ID} quarantined (kind=reconciliation, from=${RECON_PREV_STATUS}, observed=${RECON_LIVE_STATUS}) — revalidate evidence with: \${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh repair ${RECON_TASK_ID}" >&2
+          emit_event "reconciliation_quarantine" \
+            task_id "$RECON_TASK_ID" kind "reconciliation" \
+            checkpoint_status "$RECON_PREV_STATUS" observed_status "$RECON_LIVE_STATUS" \
+            since "$RECON_PREV_TS" action "quarantined"
         fi
       done
     fi
@@ -306,13 +337,8 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
           # Second consecutive violation — escalate to BLOCKED with remediation
           set_task_status "$task_file" "DONE" "BLOCKED"
           BLOCKED_REASON_TEXT="review evidence missing (${MISSING_LIST}) — run /nazgul:review --materialize ${TASK_ID}"
-          if grep -q '^\- \*\*Blocked reason\*\*:' "$task_file" 2>/dev/null; then
-            awk -v reason="- **Blocked reason**: ${BLOCKED_REASON_TEXT}" \
-              '/^\- \*\*Blocked reason\*\*:/ { print reason; next } { print }' \
-              "$task_file" > "${task_file}.tmp" && mv "${task_file}.tmp" "$task_file"
-          else
-            echo "- **Blocked reason**: ${BLOCKED_REASON_TEXT}" >> "$task_file"
-          fi
+          set_manifest_field "$task_file" "Blocked kind" "review-evidence"
+          set_manifest_field "$task_file" "Blocked reason" "$BLOCKED_REASON_TEXT"
           jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
           DONE_COUNT=$((DONE_COUNT - 1))
           BLOCKED_COUNT=$((BLOCKED_COUNT + 1))
@@ -341,13 +367,8 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
             # Second consecutive violation — escalate to BLOCKED with remediation
             set_task_status "$task_file" "DONE" "BLOCKED"
             BLOCKED_REASON_TEXT="review provenance invalid (${PROVENANCE_LIST}) — re-run review-gate so a fresh diff-bound dispatch manifest is written"
-            if grep -q '^\- \*\*Blocked reason\*\*:' "$task_file" 2>/dev/null; then
-              awk -v reason="- **Blocked reason**: ${BLOCKED_REASON_TEXT}" \
-                '/^\- \*\*Blocked reason\*\*:/ { print reason; next } { print }' \
-                "$task_file" > "${task_file}.tmp" && mv "${task_file}.tmp" "$task_file"
-            else
-              echo "- **Blocked reason**: ${BLOCKED_REASON_TEXT}" >> "$task_file"
-            fi
+            set_manifest_field "$task_file" "Blocked kind" "review-provenance"
+            set_manifest_field "$task_file" "Blocked reason" "$BLOCKED_REASON_TEXT"
             # Evidence passed to reach this branch — clear its (now-stale) counter too,
             # so a later fresh evidence issue doesn't over-escalate as a 2nd strike.
             jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | del(.safety._provenance_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
@@ -848,42 +869,38 @@ if [ -d "$NAZGUL_DIR/checkpoints" ]; then
   ls -1t "$NAZGUL_DIR/checkpoints/iteration-"*.json 2>/dev/null | tail -n +3 | xargs rm -f 2>/dev/null || true
 fi
 
-# --- Auto-promote PLANNED -> READY when dependencies are met ---
-# These writes happen AFTER this iteration's checkpoint captured its
-# task_statuses baseline, so they must be ledger-logged (ttg_log_transition)
-# or the next iteration's bash-write reconciliation would flag its own
-# hook's legitimate promotion as an out-of-band forgery.
+# --- Auto-promote PLANNED -> READY via the ADR-020 sanctioned path (PATCH-005) ---
+# ttg_apply_transition owns lock/CAS/readback/hashes/ledger AND the dep verdict.
 if [ -d "$NAZGUL_DIR/tasks" ]; then
   for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     STATUS=$(get_task_status "$task_file")
     if [ "$STATUS" = "PLANNED" ]; then
+      PROMOTE_ID=$(basename "$task_file" .md)
       DEPS=$(grep -m1 '^\- \*\*Depends on\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "none")
-      if [ "$DEPS" = "none" ] || [ -z "$DEPS" ]; then
-        set_task_status "$task_file" "PLANNED" "READY"
-        ttg_log_transition "$NAZGUL_DIR" "$(basename "$task_file" .md)" "PLANNED" "READY"
-        continue
-      fi
-      # Check if all dependencies are DONE (or APPROVED in YOLO mode)
+      # Cheap pre-filter. An ABSENT dependency manifest is "could not look", not
+      # "looked and found it satisfied" (RULES §15), so it fails closed here too.
       ALL_DONE=true
-      while IFS= read -r dep; do
-        dep_file="$NAZGUL_DIR/tasks/${dep}.md"
-        if [ -f "$dep_file" ]; then
-          DEP_STATUS=$(get_task_status "$dep_file")
-          if [ "$YOLO_MODE" = "true" ]; then
-            if [ "$DEP_STATUS" != "DONE" ] && [ "$DEP_STATUS" != "APPROVED" ]; then
-              ALL_DONE=false; break
-            fi
-          else
-            if [ "$DEP_STATUS" != "DONE" ]; then
-              ALL_DONE=false; break
-            fi
+      if [ "$DEPS" != "none" ] && [ -n "$DEPS" ]; then
+        while IFS= read -r dep; do
+          [ -n "$dep" ] || continue
+          dep_file="$NAZGUL_DIR/tasks/${dep}.md"
+          if [ ! -f "$dep_file" ] || [ -L "$dep_file" ]; then
+            echo "NAZGUL AUTO-PROMOTE: ${PROMOTE_ID} held at PLANNED — dependency ${dep} has no canonical manifest at ${dep_file}" >&2
+            ALL_DONE=false; break
           fi
-        fi
-      done <<< "$(echo "$DEPS" | tr ',' '\n' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')"
+          DEP_STATUS=$(get_task_status "$dep_file")
+          if ! ttg_dependency_satisfied "$NAZGUL_DIR" "$DEP_STATUS"; then
+            ALL_DONE=false; break
+          fi
+        done <<< "$(echo "$DEPS" | tr ',' '\n' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')"
+      fi
       if [ "$ALL_DONE" = true ]; then
-        set_task_status "$task_file" "PLANNED" "READY"
-        ttg_log_transition "$NAZGUL_DIR" "$(basename "$task_file" .md)" "PLANNED" "READY"
+        # A refusal is a verdict, not a hook failure: report it and leave the task
+        # PLANNED rather than letting `set -e` end the whole iteration.
+        if ! ttg_apply_transition "$NAZGUL_DIR" "$PROJECT_ROOT" "$PROMOTE_ID" PLANNED READY ""; then
+          echo "NAZGUL AUTO-PROMOTE: ${PROMOTE_ID} stays PLANNED — the sanctioned transition path declined the PLANNED -> READY edge" >&2
+        fi
       fi
     fi
   done
@@ -907,10 +924,10 @@ if echo "$GIT_PORCELAIN" | grep -qE '^(U.|.U|AA|DD) '; then
     # Post-checkpoint hook write — ledger-log it or next iteration's
     # reconciliation flags this legitimate conflict-block as a forgery.
     ttg_log_transition "$NAZGUL_DIR" "$ACTIVE_TASK" "$_active_task_status" "BLOCKED"
-    # Add or update blocked reason
-    if grep -q '^\- \*\*Blocked reason\*\*:' "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" 2>/dev/null; then
-      sed -i.bak 's/^\(- \*\*Blocked reason\*\*:\) .*/\1 git conflict — unmerged files detected/' "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" && rm -f "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md.bak"
-    fi
+    # Kind and reason are upserted together: the prior grep-guarded sed had no else
+    # branch, so a first-time block landed a typed quarantine with no reason at all.
+    set_manifest_field "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" "Blocked kind" "git-conflict"
+    set_manifest_field "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" "Blocked reason" "git conflict — unmerged files detected"
     ACTIVE_BLOCKED_REASON="git conflict"
     # Emit blocked event (pure observer; state already set by set_task_status above).
     emit_event "blocked" task_id "${ACTIVE_TASK:-unknown}" reason "git conflict"

@@ -22,6 +22,12 @@ run_hook() {
   HOOK_OUTPUT=$(bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 }
 
+# Probe that does NOT call the code under test, so a base-tree replay measures
+# the defect rather than the absence of a helper this patch introduces.
+file_mode_probe() {
+  nz_file_mode "$1"
+}
+
 # === EXIT CONDITIONS (exit 0) ===
 
 # --- Test 1: No config — exit 0 ---
@@ -572,10 +578,22 @@ if echo "$porcelain" | grep -qE '^(U.|.U|AA|DD) '; then
     "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"blocked"'
   assert_file_contains "blocked event names task" \
     "$TEST_DIR/nazgul/logs/events.jsonl" '"task_id":"TASK-001"'
+  # PR #86 suppressed finding: the reason used to be written only when a `Blocked
+  # reason` line already existed, so this task landed a kind with no reason.
+  conflict_field() { # <label>
+    grep -m1 "^- \*\*$1\*\*:" "$TEST_DIR/nazgul/tasks/TASK-001.md" \
+      | sed 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*$//'
+  }
+  assert_eq "git conflict quarantine is typed by kind" \
+    "$(conflict_field 'Blocked kind')" "git-conflict"
+  assert_eq "git conflict quarantine carries a reason, not just a kind" \
+    "$(conflict_field 'Blocked reason')" "git conflict — unmerged files detected"
 else
   _skip "git conflict blocks task (skipped — no conflict produced)"
   _skip "blocked event emitted on git conflict (skipped — no conflict produced)"
   _skip "blocked event names task (skipped — no conflict produced)"
+  _skip "git conflict quarantine is typed by kind (skipped — no conflict produced)"
+  _skip "git conflict quarantine carries a reason, not just a kind (skipped — no conflict produced)"
 fi
 teardown_temp_dir
 
@@ -1277,26 +1295,44 @@ assert_eq "recon: kill switch off — forged status left untouched" \
   "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "IMPLEMENTED"
 teardown_temp_dir
 
-# --- RECON-3: a legitimate Write-mediated transition (through
-# task-state-guard.sh, so it lands in the guarded-transition ledger) is NOT
-# flagged BLOCKED by the next iteration's reconciliation pass ---
+# --- RECON-3: authority is the completed-write ledger (ADR-020). An edge
+# applied by scripts/task-transition.sh is NOT reconciled to BLOCKED; a status
+# reached by any other route in the same window still is. Both directions are
+# asserted from one fixture so neither can pass vacuously. ---
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
 create_config '.agents.reviewers = ["code-reviewer"]'
 create_plan
-create_task_file "TASK-001" "IN_PROGRESS"
+RECON_BASE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD~1)
+RECON_HEAD_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+# Scope is deliberately outside scripts/** and tests/**, so this fixture
+# exercises the commit gate without needing captured red-run evidence.
+recon_cycle_manifest() { # <task-id> <status>
+  printf -- '---\nstatus: %s\n---\n# %s: Test task\n\n## Metadata\n- **Depends on**: none\n- **Group**: 1\n- **Retry count**: 0/3\n- **Files modified**: ["docs/foo.md"]\n- **Base SHA**: %s\n\n## Commits\n- %s — feat: work\n' \
+    "$2" "$1" "$RECON_BASE_SHA" "$RECON_HEAD_SHA"
+}
+run_transition_cmd() { # <task-id> <from> <to>
+  TRANSITION_EC=0
+  CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO_ROOT/scripts/task-transition.sh" \
+    transition "$1" "$2" "$3" >/dev/null 2>"$TEST_DIR/transition.err" || TRANSITION_EC=$?
+}
+
+recon_cycle_manifest TASK-001 IN_PROGRESS > "$TEST_DIR/nazgul/tasks/TASK-001.md"
+recon_cycle_manifest TASK-002 READY > "$TEST_DIR/nazgul/tasks/TASK-002.md"
 run_hook
-REAL_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
-RECON_TASK_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
-recon_content=$(printf '# TASK-001: Test\n\n- **Status**: IMPLEMENTED\n- **Group**: 1\n\n## Commits\n- %s' "$REAL_SHA")
-recon_input=$(jq -n --arg fp "$RECON_TASK_PATH" --arg content "$recon_content" \
-  '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$content}}')
-echo "$recon_input" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO_ROOT/scripts/task-state-guard.sh" >/dev/null 2>&1
-printf '%s' "$recon_content" > "$RECON_TASK_PATH"
+run_transition_cmd TASK-001 IN_PROGRESS IMPLEMENTED
+assert_exit_code "recon: sanctioned command applies the implementer's own edge" "$TRANSITION_EC" 0
+sed -i.bak 's/^status: READY/status: IN_PROGRESS/' "$TEST_DIR/nazgul/tasks/TASK-002.md" \
+  && rm -f "$TEST_DIR/nazgul/tasks/TASK-002.md.bak"
 run_hook
-assert_eq "recon: legitimate guarded transition not reconciled to BLOCKED" \
-  "$(get_task_status "$RECON_TASK_PATH")" "IMPLEMENTED"
+assert_eq "recon: command-applied transition not reconciled to BLOCKED" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "IMPLEMENTED"
+assert_eq "recon: same-window write by another route is still reconciled to BLOCKED" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-002.md")" "BLOCKED"
+assert_contains "recon: diagnostic names the completed-write authority" \
+  "$HOOK_OUTPUT" 'no completed transition recorded by ${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh'
 teardown_temp_dir
 
 # --- RECON-4: the stop-hook's OWN auto-promote (PLANNED -> READY) runs after
@@ -1315,6 +1351,141 @@ assert_eq "recon: auto-promote flipped PLANNED to READY" \
 run_hook
 assert_eq "recon: hook's own auto-promote not reconciled to BLOCKED" \
   "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "READY"
+teardown_temp_dir
+
+# --- PROMOTE-1 (PR #86 review): a dependency whose manifest is ABSENT is "could
+# not look", not "looked and found it satisfied" — the arm must fail closed. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-002" "PLANNED" "TASK-001"   # TASK-001.md is never created
+create_task_file "TASK-003" "READY"                # keeps the loop alive
+run_hook
+assert_eq "promote: a missing dependency manifest does NOT auto-promote" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-002.md")" "PLANNED"
+assert_contains "promote: the hold names the dependency that could not be read" \
+  "$HOOK_OUTPUT" "dependency TASK-001 has no canonical manifest"
+teardown_temp_dir
+
+# --- PROMOTE-2: the promotion goes through the ADR-020 sanctioned path, so its
+# ledger entry carries the before/after content hashes only that path computes. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "PLANNED"
+run_hook
+assert_eq "promote: a dependency-free task still reaches READY" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "READY"
+PROMOTE_LEDGER="$TEST_DIR/nazgul/logs/guarded-transitions.jsonl"
+PROMOTE_ENTRY=$(jq -c 'select(.task_id=="TASK-001" and .from=="PLANNED" and .to=="READY")' \
+  "$PROMOTE_LEDGER" 2>/dev/null | tail -1)
+assert_contains "promote: the edge is recorded in the completed-write ledger" \
+  "$PROMOTE_ENTRY" '"to":"READY"'
+assert_contains "promote: the ledger entry carries the source hash" \
+  "$PROMOTE_ENTRY" "before_sha256"
+assert_contains "promote: the ledger entry carries the verified target hash" \
+  "$PROMOTE_ENTRY" "after_sha256"
+teardown_temp_dir
+
+# --- PROMOTE-3: a dependency present but NOT satisfied still holds the task, and
+# a satisfied one still promotes — the pre-filter did not become a blanket deny. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "IN_PROGRESS"
+create_task_file "TASK-002" "PLANNED" "TASK-001"
+create_task_file "TASK-004" "DONE"
+create_review_dir "TASK-004"   # else the review gate resets DONE and moots the case
+create_task_file "TASK-005" "PLANNED" "TASK-004"
+run_hook
+assert_eq "promote: an unsatisfied dependency holds the task at PLANNED" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-002.md")" "PLANNED"
+assert_eq "promote: a satisfied dependency still promotes to READY" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-005.md")" "READY"
+teardown_temp_dir
+
+# --- FIELD-1 (PR #86 review): set_manifest_field staged through a PREDICTABLE
+# `${file}.field.tmp` that a pre-created symlink could aim at another file. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_plan
+# Seeded with a Blocked reason so the git-conflict upsert takes the REPLACE
+# branch — the only one that ever staged through `${file}.field.tmp`.
+create_task_file "TASK-001" "IN_PROGRESS" "none" "seed reason"
+FIELD_CANARY="$TEST_DIR/field-canary.txt"
+printf 'do-not-truncate\n' > "$FIELD_CANARY"
+chmod 600 "$FIELD_CANARY"
+ln -s "$FIELD_CANARY" "$TEST_DIR/nazgul/tasks/TASK-001.md.field.tmp"
+git -C "$TEST_DIR" checkout -q -b field-conflict-branch
+echo "conflict line A" > "$TEST_DIR/conflict.txt"
+git -C "$TEST_DIR" add conflict.txt
+git -C "$TEST_DIR" commit -q -m "branch A"
+git -C "$TEST_DIR" checkout -q main 2>/dev/null || git -C "$TEST_DIR" checkout -q master
+echo "conflict line B" > "$TEST_DIR/conflict.txt"
+git -C "$TEST_DIR" add conflict.txt
+git -C "$TEST_DIR" commit -q -m "branch B"
+git -C "$TEST_DIR" merge field-conflict-branch --no-commit 2>/dev/null || true
+field_porcelain=$(git -C "$TEST_DIR" status --porcelain 2>/dev/null || echo "")
+if echo "$field_porcelain" | grep -qE '^(U.|.U|AA|DD) '; then
+  run_hook
+  assert_eq "field: the upsert really took the replace branch" \
+    "$(grep -c '^- \*\*Blocked reason\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md")" "1"
+  assert_contains "field: the replaced value is the conflict reason" \
+    "$(cat "$TEST_DIR/nazgul/tasks/TASK-001.md")" "git conflict — unmerged files detected"
+  assert_eq "field: the symlink bait target is not truncated" \
+    "$(cat "$FIELD_CANARY")" "do-not-truncate"
+  assert_eq "field: the symlink bait target keeps its mode" \
+    "$(file_mode_probe "$FIELD_CANARY")" "600"
+  if [ -L "$TEST_DIR/nazgul/tasks/TASK-001.md" ]; then
+    _fail "field: the manifest is not replaced by the pre-placed symlink"
+  else
+    _pass "field: the manifest is not replaced by the pre-placed symlink"
+  fi
+else
+  _skip "field: the upsert really took the replace branch (skipped — no conflict produced)"
+  _skip "field: the replaced value is the conflict reason (skipped — no conflict produced)"
+  _skip "field: the symlink bait target is not truncated (skipped — no conflict produced)"
+  _skip "field: the symlink bait target keeps its mode (skipped — no conflict produced)"
+  _skip "field: the manifest is not replaced by the pre-placed symlink (skipped — no conflict produced)"
+fi
+teardown_temp_dir
+
+# --- RECON-5: the loop must not wedge on its own change. Every routine edge —
+# the implementer's claim and IMPLEMENTED, the review gate's IN_REVIEW and DONE
+# — must still complete once direct status writes are denied, and several of
+# them land inside ONE checkpoint window, so reconciliation has to resolve a
+# chain of completed edges rather than a single entry. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]' \
+  '.learning.auto_distill_post_loop = false' '.docs.verify_comments = false' \
+  '.self_audit.enabled = false'
+create_plan
+create_review_dir "TASK-001"
+RECON_BASE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD~1)
+RECON_HEAD_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+recon_cycle_manifest TASK-001 READY > "$TEST_DIR/nazgul/tasks/TASK-001.md"
+run_hook
+CYCLE_STEPS="READY:IN_PROGRESS IN_PROGRESS:IMPLEMENTED IMPLEMENTED:IN_REVIEW IN_REVIEW:DONE"
+for cycle_step in $CYCLE_STEPS; do
+  run_transition_cmd TASK-001 "${cycle_step%%:*}" "${cycle_step##*:}"
+  assert_exit_code "cycle: ${cycle_step%%:*} -> ${cycle_step##*:} completes through the command" \
+    "$TRANSITION_EC" 0
+done
+assert_eq "cycle: task reaches DONE entirely through the command" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "DONE"
+run_hook
+assert_eq "cycle: a multi-edge window is chained by the ledger, not quarantined" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "DONE"
 teardown_temp_dir
 
 # === MF-006: HITL pending-approval marker gates the DEFAULT sequential path ===

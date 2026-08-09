@@ -271,17 +271,16 @@ assert_exit_code "blocked Block R3: printf >> manifest" "$ec" 2
 output=$(run_guard 'printf "Status: DONE\n" >> nazgul/tasks/TASK-002.md')
 assert_contains "reason Block R3" "$output" "NAZGUL SAFETY"
 
-# Block R4: tee into manifest (existing tee rule)
+# Block R4: tee into manifest (now the structural tee rule, not a text pattern)
 ec=$(get_exit_code 'tee nazgul/tasks/TASK-003.md')
 assert_exit_code "blocked Block R4: tee manifest" "$ec" 2
 output=$(run_guard 'tee nazgul/tasks/TASK-003.md')
 assert_contains "reason Block R4" "$output" "NAZGUL SAFETY"
 
-# Block R5: sed reading manifest and piping to grep Status (existing sed rule fires when path precedes Status)
+# Allow R5 (TASK-004 declared loosening): the retired text rule blocked read-only
+# sed inspection while missing `sed -i` — an over-block AND an under-block.
 ec=$(get_exit_code 'sed -n p nazgul/tasks/TASK-001.md | grep Status')
-assert_exit_code "blocked Block R5: sed manifest | grep Status" "$ec" 2
-output=$(run_guard 'sed -n p nazgul/tasks/TASK-001.md | grep Status')
-assert_contains "reason Block R5" "$output" "NAZGUL SAFETY"
+assert_exit_code "allowed R5: sed -n p manifest | grep Status (read-only inspection)" "$ec" 0
 
 # --- Task manifest write protection: ALLOW cases (false-positives now fixed) ---
 # Allow FP-1: echo + mention of manifest path, no redirect into manifest
@@ -482,6 +481,218 @@ assert_exit_code "allowed R-6: mv src.txt /tmp/dest.txt (no manifest involved)" 
 ec=$(get_exit_code 'mv nazgul/tasks/TASK-005.md /tmp/archived-005.md')
 assert_exit_code "allowed R-7: mv nazgul/tasks/TASK-005.md /tmp/archived-005.md (manifest is source)" "$ec" 0
 
+# --- Category 13 (FEAT-029/TASK-004, AC5): closed writer policy. Every mutation
+# form the field report reproduced, in bare/quoted/./-prefixed/absolute/glob form.
+for writer_cmd in \
+  "sed -i 's/READY/DONE/' nazgul/tasks/TASK-001.md" \
+  "sed -i '' -e 's/READY/DONE/' nazgul/tasks/TASK-001.md" \
+  "sed -i.bak 's/a/b/' /Users/dev/proj/nazgul/tasks/TASK-001.md" \
+  "sed -E -i 's/a/b/' \"nazgul/tasks/TASK-001.md\"" \
+  "sed -i 's/a/b/' ./nazgul/tasks/TASK-001.md" \
+  "sed -i 's/a/b/' nazgul/tasks/TASK-*.md" \
+  "perl -pi -e 's/READY/DONE/' nazgul/tasks/TASK-001.md" \
+  "perl -i.bak -pe 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "ruby -e 'File.write(\"nazgul/tasks/TASK-001.md\", \"x\")'" \
+  "ruby -i -pe 'gsub(/READY/, \"DONE\")' nazgul/tasks/TASK-001.md" \
+  "python3 -c \"from pathlib import Path; Path('nazgul/tasks/TASK-001.md').write_text('x')\"" \
+  "python -c 'open(\"nazgul/tasks/TASK-001.md\", \"w\").write(\"x\")'" \
+  "awk '{print > \"nazgul/tasks/TASK-001.md\"}' input.md" \
+  "gawk -i inplace '{gsub(/READY/, \"DONE\")}1' nazgul/tasks/TASK-001.md" \
+  "cat staged.md > nazgul/tasks/TASK-001.md" \
+  "cat staged.md | tee -a nazgul/tasks/TASK-001.md" \
+  "install -m 644 forged.md nazgul/tasks/TASK-005.md" \
+  "ln -sf forged.md nazgul/tasks/TASK-005.md" \
+  "bash -c \"sed -i 's/a/b/' nazgul/tasks/TASK-001.md\"" \
+  "sh -c 'echo DONE > nazgul/tasks/TASK-001.md'"; do
+  ec=$(get_exit_code "$writer_cmd")
+  assert_exit_code "blocked S-writer: '$writer_cmd'" "$ec" 2
+done
+
+# S-heredoc: an interpreter fed its program on later lines — the body its own
+# delimiter closes is charged to it, so a write there is still the signal.
+ec=$(get_exit_code "$(printf 'python3 - <<PY\nfrom pathlib import Path\nPath("nazgul/tasks/TASK-001.md").write_text("x")\nPY')")
+assert_exit_code "blocked S-heredoc: python3 heredoc writing a manifest" "$ec" 2
+
+# S-heredoc-arg: the manifest is an operand of the heredoc-fed interpreter.
+ec=$(get_exit_code "$(printf 'python3 - nazgul/tasks/TASK-001.md <<PY\nimport sys\nPY')")
+assert_exit_code "blocked S-heredoc-arg: manifest operand of a heredoc-fed interpreter" "$ec" 2
+
+# S-heredoc-scope: heredoc evidence belongs to the command that opened it, so an
+# unrelated read-only manifest command outside that body must not be blocked.
+ec=$(get_exit_code "$(printf "python3 - <<'PY'\nprint(\"ok\")\nPY\ngrep Status nazgul/tasks/TASK-001.md")")
+assert_exit_code "allowed S-heredoc-scope: prose heredoc then an unrelated grep" "$ec" 0
+ec=$(get_exit_code "$(printf "grep Status nazgul/tasks/TASK-001.md\npython3 - <<'PY'\nprint(\"ok\")\nPY")")
+assert_exit_code "allowed S-heredoc-scope-2: grep then an unrelated prose heredoc" "$ec" 0
+
+# S-wrapped (PATCH-003): the parser classifies the first command word of a
+# segment, so a writer reached through a wrapper or a substitution used to pass.
+for wrapped_cmd in \
+  "env sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env FOO=1 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "command sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "nohup sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "timeout 5 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "nice -n 10 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env cp forged.md nazgul/tasks/TASK-001.md" \
+  "echo x | xargs sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "echo \"\$(sed -i 's/a/b/' nazgul/tasks/TASK-001.md)\"" \
+  "echo \$(cp forged.md nazgul/tasks/TASK-001.md)" \
+  "RESULT=\"\$(sed -i 's/a/b/' nazgul/tasks/TASK-001.md)\"" \
+  "echo \"\`sed -i 's/a/b/' nazgul/tasks/TASK-001.md\`\"" \
+  "( sed -i 's/a/b/' nazgul/tasks/TASK-001.md )" \
+  "eval \"sed -i 's/a/b/' nazgul/tasks/TASK-001.md\""; do
+  ec=$(get_exit_code "$wrapped_cmd")
+  assert_exit_code "blocked S-wrapped: '$wrapped_cmd'" "$ec" 2
+done
+
+# S-wrapopt (PATCH-005): a wrapper option that TAKES an argument used to donate
+# that argument to cmd_word, losing the writer behind it. See PATCH-005 Group A.
+for wrapopt_cmd in \
+  "sudo sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo -u root sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo -g wheel sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo -p 'pw:' sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo -C 3 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo --user=root sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo --user root sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo -- sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo -knu root sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo -h sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo --host=h sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo --host h sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo -a type sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "doas sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "doas -u root sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env -u FOO sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env -C /tmp sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env --unset=FOO sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env --unset FOO sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env -i sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env -- sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env --block-signal sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env --default-signal sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env --ignore-signal sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env --block-signal=INT sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "nice sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "nice -n 5 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "nice -n5 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "ionice sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "ionice -c 2 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "ionice -c2 -n 4 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "ionice -p 1 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "timeout 5 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "timeout -s KILL 5 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "timeout -k 1 5 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "timeout --signal=KILL 5 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "timeout --signal KILL 5 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "stdbuf -o0 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "stdbuf -o 0 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "stdbuf -i L -o L sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -n 1 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -I{} sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -I {} sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -P 4 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -d , sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -E EOF sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -L 1 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -a /tmp/f sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -i sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -e sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -i{} sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "exec -a name sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "time -o /tmp/t sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo -u root env -u FOO nice -n 5 cp forged.md nazgul/tasks/TASK-001.md" \
+  "sudo -u root -- sed -i 's/a/b/' nazgul/tasks/TASK-001.md"; do
+  ec=$(get_exit_code "$wrapopt_cmd")
+  assert_exit_code "blocked S-wrapopt: '$wrapopt_cmd'" "$ec" 2
+done
+
+# Consuming one word too many would misclassify a wrapped READ just as badly, so
+# the same option forms must still allow read-only wrapped commands.
+for wrapopt_ro in \
+  "sudo -u root cat nazgul/tasks/TASK-001.md" \
+  "env -u FOO grep Status nazgul/tasks/TASK-001.md" \
+  "timeout -s KILL 5 cat nazgul/tasks/TASK-001.md" \
+  "xargs -I {} grep Status nazgul/tasks/TASK-001.md" \
+  "sudo -u root cp nazgul/tasks/TASK-001.md /tmp/backup.md" \
+  "env -C /tmp \"\${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh\" transition TASK-004 READY IN_PROGRESS"; do
+  ec=$(get_exit_code "$wrapopt_ro")
+  assert_exit_code "allowed S-wrapopt-readonly: '$wrapopt_ro'" "$ec" 0
+done
+
+# S-continued: an escaped newline does not end the command, so the segment must
+# not be reset there and lose the writer that owns the operand below.
+ec=$(get_exit_code "$(printf "sed -i 's/a/b/' \\\\\n  nazgul/tasks/TASK-001.md")")
+assert_exit_code "blocked S-continued: sed -i with the manifest on a continued line" "$ec" 2
+ec=$(get_exit_code "$(printf "cp forged.md \\\\\n  nazgul/tasks/TASK-001.md")")
+assert_exit_code "blocked S-continued-2: cp with the manifest on a continued line" "$ec" 2
+
+# The wrapper look-through must not turn read-only wrapped commands into writers.
+for wrapped_ro in \
+  "env grep Status nazgul/tasks/TASK-001.md" \
+  "timeout 5 cat nazgul/tasks/TASK-001.md" \
+  "sudo cp nazgul/tasks/TASK-001.md /tmp/backup.md" \
+  "env \"\${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh\" transition TASK-004 READY IN_PROGRESS" \
+  "echo \"\$(grep Status nazgul/tasks/TASK-001.md)\"" \
+  "diff <(cat nazgul/tasks/TASK-001.md) /tmp/other.md"; do
+  ec=$(get_exit_code "$wrapped_ro")
+  assert_exit_code "allowed S-wrapped-readonly: '$wrapped_ro'" "$ec" 0
+done
+
+# S-json: the production envelope path must deny a writer too — the guard
+# tokenizes .tool_input.command, never the JSON wrapper.
+ec=$(get_exit_code_json "sed -i 's/READY/DONE/' nazgul/tasks/TASK-001.md")
+assert_exit_code "blocked S-json: JSON envelope sed -i on a manifest" "$ec" 2
+
+output=$(run_guard "sed -i 's/READY/DONE/' nazgul/tasks/TASK-001.md")
+assert_contains "reason S-writer names the sanctioned route" "$output" "NAZGUL SAFETY"
+
+# --- AC5 second half: read-only inspection and the sanctioned transition command
+# must remain usable, or the policy wedges the loop it is meant to protect. ---
+for readonly_cmd in \
+  "grep 'Status' nazgul/tasks/TASK-001.md" \
+  "grep -H -E '(^- \*\*Status\*\*:|^## Status:)' nazgul/tasks/TASK-*.md" \
+  "cat nazgul/tasks/TASK-001.md" \
+  "sed -n '1,20p' nazgul/tasks/TASK-001.md" \
+  "awk '/Status/ {print}' nazgul/tasks/TASK-001.md" \
+  "awk -F: '{print \$1}' nazgul/tasks/TASK-001.md" \
+  "head -5 nazgul/tasks/TASK-001.md && wc -l nazgul/tasks/TASK-001.md" \
+  "diff nazgul/tasks/TASK-001.md /tmp/other.md" \
+  "ls nazgul/tasks/TASK-*.md" \
+  "cp nazgul/tasks/TASK-001.md /tmp/backup.md" \
+  "scripts/task-transition.sh transition TASK-004 READY IN_PROGRESS" \
+  "\"\${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh\" transition TASK-004 IN_PROGRESS IMPLEMENTED" \
+  "bash scripts/task-transition.sh transition TASK-004 IN_REVIEW BLOCKED --reason 'merge conflict'" \
+  "\"\${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh\" repair TASK-004" \
+  "sed -i 's/a/b/' /tmp/notes.md" \
+  "python3 script.py"; do
+  ec=$(get_exit_code "$readonly_cmd")
+  assert_exit_code "allowed S-readonly: '$readonly_cmd'" "$ec" 0
+done
+
+# --- AC5 blast radius: patch manifests and per-task subdirectories are NOT task
+# manifests and stay writable (the strict TASK-NNN.md matcher, not a prefix). ---
+for outside_cmd in \
+  "sed -i '' -e 's/a/b/' nazgul/tasks/patches/PATCH-001.md" \
+  "mv forged.md nazgul/tasks/patches/PATCH-001.md" \
+  "cp report.md nazgul/tasks/TASK-005/verification.md" \
+  "echo notes > nazgul/tasks/TASK-005-delegation.md"; do
+  ec=$(get_exit_code "$outside_cmd")
+  assert_exit_code "allowed S-outside: '$outside_cmd'" "$ec" 0
+done
+
+# --- AC5 deliberate over-blocks: an interpreter carrying a manifest path inside
+# its program text is denied even when that program only reads it. ---
+for overblock_cmd in \
+  "python3 -c \"print(open('nazgul/tasks/TASK-001.md').read())\"" \
+  "bash -c 'grep Status nazgul/tasks/TASK-001.md'"; do
+  ec=$(get_exit_code "$overblock_cmd")
+  assert_exit_code "blocked S-overblock (deliberate): '$overblock_cmd'" "$ec" 2
+done
+
 # --- TASK-003 (Defect 1a): fork-free `[[ =~ ]]` matching must be verdict-
 # preserving, not just faster — plan.md V1/C1 pins the three ways a naive
 # `echo|grep` -> `[[ =~ ]]` swap diverges, and both directions of the
@@ -532,9 +743,8 @@ assert_contains "reason C1-sql" "$output" "NAZGUL SAFETY"
 # since this task is a single commit on top of it, genuinely the pre-fix file
 # forever — `git show HEAD:...` would collapse to a self-comparison the
 # instant the fix is committed, since HEAD then IS the post-fix blob) and the
-# guard in the working tree. Exit code AND full stderr must be byte-identical
-# for every case — "still green" is not sufficient, the verdicts themselves
-# are diffed. ---
+# guard in the working tree. Non-manifest cases must still be byte-identical in
+# exit code AND stderr; manifest cases are classified below, never skipped. ---
 # Re-pinned when PR #74 (FEAT-022) was SQUASH-merged to main. The prior pin,
 # 5483d70a1c2bd11c4bdaee813369bb7c5afacc5c, was a commit on the FEAT-022
 # BRANCH; a squash merge replaces that history with one commit, so the old SHA
@@ -564,6 +774,32 @@ if [ "$BASE_SHA_REACHABLE" -eq 1 ]; then
   git -C "$REPO_ROOT" show "$PRE_FIX_BASE_SHA":scripts/pre-tool-guard.sh > "$GUARD_OLD"
 fi
 
+MANIFEST_DIFFED=0
+IDENTITY_DIFFED=0
+
+# TASK-004 owns the manifest-policy verdicts, so those are no longer identity-
+# comparable — classify them instead of skipping them (see the counters below).
+_is_manifest_case() {
+  case "$1" in
+    *nazgul/tasks/TASK-*) return 0 ;;
+  esac
+  return 1
+}
+
+# The complete list of verdicts TASK-004 is permitted to LOOSEN. Anything else
+# may only stay the same or tighten; a silent loosening is a failure.
+_is_declared_loosening() {
+  case "$1" in
+    # Read-only inspection the retired `sed.*TASK-.*Status` text rule over-blocked.
+    'sed -n p nazgul/tasks/TASK-001.md | grep Status') return 0 ;;
+    # Non-manifest artifacts the old TASK-[^space]*.md matcher swept in; the strict
+    # TASK-NNN.md matcher (task-state-guard.sh) leaves both writable by design.
+    'cp report.md nazgul/tasks/TASK-005/verification.md') return 0 ;;
+    'echo notes > nazgul/tasks/TASK-005-delegation.md') return 0 ;;
+  esac
+  return 1
+}
+
 diff_verdict() {
   local mode="$1" cmd="$2"
   local old_ec=0 new_ec=0 old_err new_err
@@ -574,6 +810,25 @@ diff_verdict() {
     old_err=$(echo "$cmd" | bash "$GUARD_OLD" 2>&1 >/dev/null) || old_ec=$?
     new_err=$(echo "$cmd" | bash "$GUARD" 2>&1 >/dev/null) || new_ec=$?
   fi
+  if _is_manifest_case "$cmd"; then
+    MANIFEST_DIFFED=$((MANIFEST_DIFFED + 1))
+    if _is_declared_loosening "$cmd"; then
+      if [ "$old_ec" -eq 2 ] && [ "$new_ec" -eq 0 ]; then
+        _pass "manifest policy [$mode] declared loosening 2->0: ${cmd:0:80}"
+      else
+        _fail "manifest policy [$mode] declared loosening 2->0: ${cmd:0:80}" \
+          "old exit=$old_ec  new exit=$new_ec"
+      fi
+    elif [ "$new_ec" -ge "$old_ec" ]; then
+      _pass "manifest policy [$mode] $old_ec->$new_ec (not loosened): ${cmd:0:80}"
+    else
+      _fail "manifest policy [$mode] loosened without a declaration: ${cmd:0:80}" \
+        "old exit=$old_ec  new exit=$new_ec" \
+        "add it to _is_declared_loosening only if the loosening is intended"
+    fi
+    return
+  fi
+  IDENTITY_DIFFED=$((IDENTITY_DIFFED + 1))
   if [ "$old_ec" = "$new_ec" ] && [ "$old_err" = "$new_err" ]; then
     _pass "differential [$mode] exit=$new_ec: ${cmd:0:80}"
   else
@@ -590,10 +845,10 @@ diff_verdict() {
 # "0/0 passed" — a silent shrink, not a failure. Assert the recorded count by a
 # known-good floor, not by trusting the loop to run at all.
 EXERCISED_COUNT=$(tr -dc '\0' < "$EXERCISED_LOG" | wc -c | tr -d ' ')
-if [ "$EXERCISED_COUNT" -ge 160 ]; then
-  _pass "differential harness recorded >=160 commands (got $EXERCISED_COUNT)"
+if [ "$EXERCISED_COUNT" -ge 200 ]; then
+  _pass "differential harness recorded >=200 commands (got $EXERCISED_COUNT)"
 else
-  _fail "differential harness recorded >=160 commands" "got $EXERCISED_COUNT"
+  _fail "differential harness recorded >=200 commands" "got $EXERCISED_COUNT"
 fi
 
 # No dedup (associative arrays are bash 4+ only, and this must also pass under
@@ -605,6 +860,19 @@ if [ "$BASE_SHA_REACHABLE" -eq 1 ]; then
     _cmd="${_rec#*$'\x1f'}"
     diff_verdict "$_mode" "$_cmd"
   done < "$EXERCISED_LOG"
+  echo "  differential: ${IDENTITY_DIFFED} identity-compared, ${MANIFEST_DIFFED} manifest-policy-compared"
+  # Both paths must actually run: a classifier that swallowed every case, or a
+  # suite that lost its manifest cases, would otherwise report a clean pass.
+  if [ "$IDENTITY_DIFFED" -ge 100 ]; then
+    _pass "differential identity path checked >=100 commands (got $IDENTITY_DIFFED)"
+  else
+    _fail "differential identity path checked >=100 commands" "got $IDENTITY_DIFFED"
+  fi
+  if [ "$MANIFEST_DIFFED" -ge 60 ]; then
+    _pass "differential manifest-policy path checked >=60 commands (got $MANIFEST_DIFFED)"
+  else
+    _fail "differential manifest-policy path checked >=60 commands" "got $MANIFEST_DIFFED"
+  fi
 else
   _fail "differential harness baseline unreachable" \
     "pinned pre-fix SHA $PRE_FIX_BASE_SHA is not reachable in this checkout" \

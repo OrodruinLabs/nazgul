@@ -12,7 +12,7 @@ GUARD="$REPO_ROOT/scripts/parallel-dispatch-guard.sh"
 setup() {
   setup_temp_dir
   mkdir -p "$TEST_DIR/nazgul/tasks"
-  create_config '.execution.parallel = true'
+  create_config '.execution.parallel = true | .agents.reviewers = ["architect-reviewer", "code-reviewer", "security-reviewer", "qa-reviewer"]'
   WORK="$TEST_DIR"
 }
 teardown() { teardown_temp_dir; }
@@ -31,6 +31,24 @@ guard_stderr() { # <subagent_type> <run_in_background> <prompt>
   jq -n --arg t "$1" --argjson bg "$2" --arg p "$3" \
     '{tool_name:"Agent",tool_input:{subagent_type:$t,run_in_background:$bg,prompt:$p}}' \
     | bash "$GUARD" 2>&1 >/dev/null || true
+}
+
+# helper for caller-aware/name/missing-field cases the fixed-shape helper above
+# cannot represent.
+guard_json_ec() { # <json envelope>
+  local ec=0
+  printf '%s\n' "$1" | bash "$GUARD" >/dev/null 2>&1 || ec=$?
+  echo "$ec"
+}
+
+reviewer_envelope() { # <subagent> <bg-json-or-missing> <name-or-empty> <caller-or-empty>
+  local subagent="$1" bg="$2" name="$3" caller="$4"
+  jq -nc --arg t "$subagent" --arg bg "$bg" --arg n "$name" --arg caller "$caller" '
+    {tool_name:"Agent",tool_input:{subagent_type:$t,prompt:"Review the unit"}}
+    | if $bg != "missing" then .tool_input.run_in_background = ($bg == "true") else . end
+    | if $n != "" then .tool_input.name = $n else . end
+    | if $caller != "" then .agent_type = $caller else . end
+  '
 }
 
 setup
@@ -61,7 +79,9 @@ assert_eq "no unit line, non-work-unit agent allowed" "$(guard_ec "general-purpo
 assert_eq "unknown task id allowed" "$(guard_ec "nazgul:implementer" false "NAZGUL_UNIT: TASK-999")" "0"
 teardown
 
-# 10. off: execution.parallel=false -> ALLOW everything (no-op)
+# 10. off: execution.parallel=false -> no-redispatch rule is a no-op for
+# non-review work units. Reviewer routing is tested separately below and is
+# intentionally independent of parallel mode.
 setup
 create_task_file_with_commits TASK-002 DONE "abc1234"
 jq '.execution.parallel = false' "$WORK/nazgul/config.json" > "$WORK/c" && mv "$WORK/c" "$WORK/nazgul/config.json"
@@ -109,5 +129,82 @@ rm -f "$WORK/nazgul/config.json"
 create_task_file_with_commits TASK-002 DONE "abc1234"
 assert_eq "missing config still no-ops (allowed)" "$(guard_ec "nazgul:implementer" false "NAZGUL_UNIT: TASK-002")" "0"
 teardown
+
+# 18-26. FEAT-029: configured reviewers are foreground, unnamed one-shot
+# calls by mechanism, not prose. This rule applies even when task parallelism
+# is disabled. Current nested Agent contexts can omit run_in_background because
+# the host exposes only synchronous subagents there; the top-level agent_type
+# is the proof that the omission came from that schema, not the main session.
+setup
+jq '.execution.parallel = false' "$WORK/nazgul/config.json" > "$WORK/c" && mv "$WORK/c" "$WORK/nazgul/config.json"
+
+assert_eq "reviewer explicit foreground allowed outside parallel mode" \
+  "$(guard_json_ec "$(reviewer_envelope 'nazgul:code-reviewer' false '' '')")" "0"
+assert_eq "reviewer background denied outside parallel mode" \
+  "$(guard_json_ec "$(reviewer_envelope 'nazgul:code-reviewer' true '' '')")" "2"
+assert_eq "main-session reviewer missing explicit foreground denied" \
+  "$(guard_json_ec "$(reviewer_envelope 'nazgul:code-reviewer' missing '' '')")" "2"
+assert_eq "named reviewer denied even when foreground" \
+  "$(guard_json_ec "$(reviewer_envelope 'nazgul:code-reviewer' false 'review-1' '')")" "2"
+assert_eq "nested synchronous-only reviewer may omit unavailable background field" \
+  "$(guard_json_ec "$(reviewer_envelope 'nazgul:code-reviewer' missing '' 'nazgul:review-gate')")" "0"
+assert_eq "nested reviewer explicit background still denied" \
+  "$(guard_json_ec "$(reviewer_envelope 'nazgul:code-reviewer' true '' 'nazgul:review-gate')")" "2"
+assert_eq "nested named reviewer still denied" \
+  "$(guard_json_ec "$(reviewer_envelope 'nazgul:code-reviewer' missing 'review-1' 'nazgul:review-gate')")" "2"
+assert_eq "unconfigured helper remains outside reviewer route" \
+  "$(guard_json_ec "$(reviewer_envelope 'general-purpose' true 'helper' '')")" "0"
+
+# The foreground requirement is typed, not truthy: only boolean false satisfies
+# it, so a string/null/number in that field is a denial and not an accidental pass.
+for bg_raw in '"false"' '"true"' 'null' '0' '1'; do
+  assert_eq "non-boolean run_in_background ${bg_raw} denied on the reviewer route" \
+    "$(guard_json_ec "$(jq -nc --argjson bg "$bg_raw" \
+      '{tool_name:"Agent",tool_input:{subagent_type:"nazgul:code-reviewer",prompt:"Review the unit",run_in_background:$bg}}')")" \
+    "2"
+  assert_eq "non-boolean run_in_background ${bg_raw} denied from a nested caller too" \
+    "$(guard_json_ec "$(jq -nc --argjson bg "$bg_raw" \
+      '{tool_name:"Agent",agent_type:"nazgul:review-gate",tool_input:{subagent_type:"nazgul:code-reviewer",prompt:"Review the unit",run_in_background:$bg}}')")" \
+    "2"
+done
+
+jq '.agents.reviewers += ["performance-reviewer"]' "$WORK/nazgul/config.json" > "$WORK/c" && mv "$WORK/c" "$WORK/nazgul/config.json"
+assert_eq "project-generated configured reviewer uses the same route" \
+  "$(guard_json_ec "$(reviewer_envelope 'nazgul:performance-reviewer' true '' '')")" "2"
+teardown
+
+# 27. The existing dispatch-guard kill switch remains the emergency valve for
+# both reviewer-route and completed-unit enforcement.
+setup
+jq '.execution.parallel = false | .execution.enforce.dispatch_guard = false' "$WORK/nazgul/config.json" > "$WORK/c" && mv "$WORK/c" "$WORK/nazgul/config.json"
+assert_eq "kill-switch disables reviewer route enforcement" \
+  "$(guard_json_ec "$(reviewer_envelope 'nazgul:code-reviewer' true 'review-1' '')")" "0"
+teardown
+
+# 28-40. The producers must request the route the hook enforces and keep the
+# canonical returned-text contract. Keep these assertions beside the real
+# envelope tests so one red run covers both sides of the seam.
+REVIEW_GATE_TEXT=$(cat "$REPO_ROOT/agents/review-gate.md")
+PATCH_SKILL=$(cat "$REPO_ROOT/skills/patch/SKILL.md")
+assert_contains "review-gate makes reviewer foreground choice explicit" \
+  "$REVIEW_GATE_TEXT" '`run_in_background: false`'
+assert_contains "review-gate forbids reviewer Agent names" \
+  "$REVIEW_GATE_TEXT" 'Do not set the Agent `name` field'
+assert_not_contains "review-gate no longer calls reviewers teammates" \
+  "$REVIEW_GATE_TEXT" 'Reviewer teammates'
+assert_not_contains "review-gate no longer says reviewers write review files" \
+  "$REVIEW_GATE_TEXT" 'Write their review to nazgul/reviews/'
+assert_not_contains "patch is not a background fork" "$PATCH_SKILL" 'context: fork'
+assert_contains "patch main-session driver can ask interactive questions" "$PATCH_SKILL" 'AskUserQuestion'
+assert_contains "patch resolves shared UI guidance from plugin root" \
+  "$PATCH_SKILL" '${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md'
+assert_contains "patch dispatches its reviewer explicitly foreground" "$PATCH_SKILL" '`run_in_background: false`'
+assert_contains "patch forbids reviewer Agent names" "$PATCH_SKILL" 'Do not set the Agent `name` field'
+assert_contains "patch uses the canonical returned verdict enum" \
+  "$PATCH_SKILL" 'APPROVE | CHANGES_REQUESTED | UNVERIFIED'
+assert_contains "patch makes the orchestrator persist returned review text" \
+  "$PATCH_SKILL" 'persist the returned review text'
+assert_contains "patch handles empty or malformed reviewer returns" "$PATCH_SKILL" 'empty or malformed'
+assert_not_contains "patch no longer expects obsolete APPROVED token" "$PATCH_SKILL" 'If APPROVED:'
 
 report_results

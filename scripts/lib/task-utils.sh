@@ -6,6 +6,61 @@ _TU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$_TU_DIR/structured-state.sh"
 
+# Permission bits of a path in the first stat(1) dialect that answers; non-zero
+# when none can, so callers fail closed. Usage: nz_file_mode <path>
+nz_file_mode() {
+  local file="$1" mode=""
+  # GNU stat -f means --file-system and SUCCEEDS with unrelated output, so exit
+  # status cannot pick the dialect; accept a candidate only if it parses octal.
+  for _nz_fm in "-f %Lp" "-c %a"; do
+    # shellcheck disable=SC2086
+    mode=$(stat $_nz_fm "$file" 2>/dev/null) || mode=""
+    case "$mode" in ''|*[!0-7]*) mode="" ;; esac
+    [ -n "$mode" ] && break
+  done
+  unset _nz_fm
+  [ -n "$mode" ] || return 1
+  printf '%s\n' "$mode"
+}
+
+# Replace <dest> with the stdout of <producer…> through a colocated staging file,
+# preserving <dest>'s mode. Usage: nz_rewrite_file <dest> <producer> [args…]
+nz_rewrite_file() {
+  local dest="$1"; shift
+  local dir tmp mode
+  # A PREDICTABLE sibling can be pre-created as a symlink, and the redirection
+  # then truncates, re-modes, and installs over whatever it aims at (PATCH-005).
+  if [ -L "$dest" ] || [ ! -f "$dest" ]; then
+    echo "nz_rewrite_file: refusing to rewrite ${dest}: not a regular non-symlink file" >&2
+    return 1
+  fi
+  dir=$(dirname "$dest")
+  mode=$(nz_file_mode "$dest") || {
+    echo "nz_rewrite_file: could not read the mode of ${dest}" >&2
+    return 1
+  }
+  tmp=$(mktemp "${dir}/.nz-rewrite.XXXXXX") || {
+    echo "nz_rewrite_file: could not create a colocated staging file beside ${dest}" >&2
+    return 1
+  }
+  if ! "$@" > "$tmp"; then
+    rm -f "$tmp"
+    echo "nz_rewrite_file: producer failed for ${dest}" >&2
+    return 1
+  fi
+  if ! chmod "$mode" "$tmp"; then
+    rm -f "$tmp"
+    echo "nz_rewrite_file: could not preserve the mode of ${dest}" >&2
+    return 1
+  fi
+  if ! mv "$tmp" "$dest"; then
+    rm -f "$tmp"
+    echo "nz_rewrite_file: atomic replace failed for ${dest}" >&2
+    return 1
+  fi
+  return 0
+}
+
 # Extract status from a task manifest file.
 # Supports four formats:
 #   1. List-item:    - **Status**: X
@@ -53,7 +108,7 @@ set_task_status() {
     # value equals old_status (matches the list-item branch; a mismatch is a no-op).
     # CRLF-tolerant: strips a trailing \r from the current value before comparing,
     # and /^---[[:space:]]*$/ matches a trailing \r on the fence.
-    awk -v old="$old_status" -v new="$new_status" '
+    nz_rewrite_file "$file" awk -v old="$old_status" -v new="$new_status" '
       NR==1 {print; infm=1; next}
       infm && /^status[[:space:]]*:/ {
         cur=$0; sub(/^status[[:space:]]*:[[:space:]]*/, "", cur); sub(/\r$/, "", cur)
@@ -62,23 +117,26 @@ set_task_status() {
       }
       infm && /^---[[:space:]]*$/ {infm=0; print; next}
       {print}
-    ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+    ' "$file" || return 1
   elif grep -q '^## Status:' "$file" 2>/dev/null; then
     # ATX inline: ## Status: X
-    sed -i.bak "s/^## Status:[[:space:]]*${old_status}/## Status: ${new_status}/" "$file" && rm -f "${file}.bak"
+    nz_rewrite_file "$file" sed \
+      "s/^## Status:[[:space:]]*${old_status}/## Status: ${new_status}/" "$file" || return 1
   elif grep -q '^\- \*\*Status\*\*:' "$file" 2>/dev/null; then
     # List-item: - **Status**: X
-    sed -i.bak "s/^\(- \*\*Status\*\*:\)[[:space:]]*${old_status}/\1 ${new_status}/" "$file" && rm -f "${file}.bak"
+    nz_rewrite_file "$file" sed \
+      "s/^\(- \*\*Status\*\*:\)[[:space:]]*${old_status}/\1 ${new_status}/" "$file" || return 1
   elif grep -q '^## Status' "$file" 2>/dev/null; then
     # ATX block: ## Status\nX — convert to inline format
-    awk -v old="$old_status" -v new="$new_status" '
+    nz_rewrite_file "$file" awk -v old="$old_status" -v new="$new_status" '
       /^## Status[[:space:]]*$/ { print "## Status: " new; getline; next }
       { print }
-    ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+    ' "$file" || return 1
   elif awk '/^---$/{fm++; next} fm==1 && /^status:/{found=1; exit} END{exit !found}' "$file" 2>/dev/null; then
     # Legacy fallback: YAML frontmatter where line 1 is not a bare `---` (e.g. no
     # leading fence, so has_status_frontmatter above declined). Retained for old manifests.
-    sed -i.bak "s/^status:[[:space:]]*${old_status}/status: ${new_status}/" "$file" && rm -f "${file}.bak"
+    nz_rewrite_file "$file" sed \
+      "s/^status:[[:space:]]*${old_status}/status: ${new_status}/" "$file" || return 1
   fi
 }
 

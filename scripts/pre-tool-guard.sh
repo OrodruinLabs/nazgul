@@ -143,44 +143,134 @@ check_pattern 'curl\s+.*\|\s*(ba)?sh' "Piped internet execution (curl | sh)"
 check_pattern 'wget\s+.*\|\s*(ba)?sh' "Piped internet execution (wget | sh)"
 check_pattern 'curl\s+.*\|\s*sudo' "Piped internet execution with sudo"
 
-# Task manifest status protection — prevent bypassing Write/Edit hooks
-check_pattern 'sed.*nazgul/tasks/TASK-.*Status' "Direct sed on task manifest status (use Write/Edit tools)"
-check_pattern 'cat.*>.*nazgul/tasks/TASK-' "Direct cat redirect to task manifest (use Write/Edit tools)"
-check_pattern 'tee.*nazgul/tasks/TASK-' "Direct tee to task manifest (use Write/Edit tools)"
+# Task manifest status protection lives entirely in the structural funnel below
+# (the old text-substring sed/cat/tee rules both over- and under-matched).
 
-# Task manifest write protection: a segment is blocked when it EITHER (a) invokes
-# echo/printf AND has a REAL redirect operator (>, >>, >|, >>| outside quotes) whose
-# target resolves to a nazgul/tasks/TASK-*.md path — in either order, so a leading
-# redirect (`> nazgul/tasks/TASK-001.md echo ok`) is caught too — OR (b) invokes
-# mv/cp with a manifest path as its final non-flag argument (MF-022 funnel; the
-# common `mv/cp SRC nazgul/tasks/TASK-NNN.md` forgery shape). The awk tokenizer
-# tracks single/double-quote state (a > inside quotes is data, not a redirect) and
-# reconstructs the full shell word from adjacent quoted+unquoted fragments, so a
-# split target like `> "nazgul/tasks/"TASK-001.md` rejoins to one path before
-# validation. Compound commands (;, &&, ||, |, newline outside quotes) reset
-# per-segment state so each segment is checked independently. Scoped to
-# echo/printf/mv/cp; sed/cat/tee rules above handle those separately.
-#
-# Defense-in-depth note: primary protection is the Write/Edit tool hooks and
-# task-state guard. This is a best-effort secondary layer — the structural fix for
-# MF-022 is the stop-hook-time recompute-and-compare reconciliation (ADR-003
-# Decision 2), not this funnel. fd-numbered and combined redirects (1>, 2>, &>,
-# 2>&1) ARE handled. Deeply exotic shell forms (process substitution, eval'd
-# strings, nested subshells, command substitution) are out of scope by design and
-# degrade to allow.
+# Task manifest write funnel (ADR-020): scripts/task-transition.sh is the single
+# sanctioned status writer; RULES.md §5 states the rules and their known limits.
 _check_manifest_write_funnel() {
   printf '%s' "$CMD" | awk '
 BEGIN {
   in_sq = 0; in_dq = 0; tok = ""; found_cmd = 0
   redirect_pending = 0; found = 0; fd_target_pending = 0
-  seg_has_cmd = 0; seg_writes_manifest = 0
-  seg_is_mv_cp = 0; mv_cp_target = ""
+  cmd_word = ""; seg_writes_manifest = 0; last_arg = ""
+  has_inplace = 0; has_dash_c = 0; seg_heredoc = 0
+  manifest_arg = 0; manifest_embedded = 0
+  wrapper_pending = 0; line_cont = 0
+  dq_subst = 0; paren_depth = 0; dq_btick = 0
+  in_heredoc = 0; heredoc_delim = ""; heredoc_delim_pending = 0
+  heredoc_owner_interp = 0
 }
 
+# Quotes are stripped during accumulation, so the reconstructed shell word is
+# matched whole — bare, ./-prefixed and absolute spellings all resolve here.
 function is_manifest_path(t) {
-  # tok already has quotes stripped during accumulation — check the whole word.
-  while (substr(t,1,2) == "./") t = substr(t, 3)
-  return (t ~ /^nazgul\/tasks\/TASK-[^[:space:]]*\.md$/)
+  return (t ~ /(^|\/)nazgul\/tasks\/TASK-[0-9*?]+\.md$/)
+}
+
+# The same path INSIDE a larger word (interpreter script text, an option value),
+# which is the shape every one-liner writer takes.
+function has_manifest_path(t) {
+  return (t ~ /(^|[^A-Za-z0-9_.-])nazgul\/tasks\/TASK-[0-9*?]+\.md/)
+}
+
+function base_cmd(t) {
+  sub(/^.*\//, "", t)
+  return t
+}
+
+function writes_by_last_arg(c) {
+  return (c == "mv" || c == "cp" || c == "install" || c == "ln")
+}
+
+function edits_in_place(c) {
+  return (c == "sed" || c == "gsed" || c == "perl" || c == "ruby" || c == "awk" || c == "gawk")
+}
+
+function interpreter(c) {
+  return (c == "sed" || c == "gsed" || c == "awk" || c == "gawk" || c == "mawk" || c == "nawk" ||
+          c == "perl" || c == "python" || c == "python2" || c == "python3" || c == "ruby" ||
+          c == "node" || c == "php" || c == "ed" || c == "ex")
+}
+
+function shell_dash_c(c) {
+  return (c == "bash" || c == "sh" || c == "zsh" || c == "ksh" || c == "dash")
+}
+
+# Commands that run another command: the writer is the word AFTER them, so the
+# real command word is only found by looking through the wrapper.
+function wrapper_cmd(c) {
+  return (c == "env" || c == "command" || c == "nohup" || c == "nice" ||
+          c == "ionice" || c == "setsid" || c == "stdbuf" || c == "time" ||
+          c == "timeout" || c == "sudo" || c == "doas" || c == "xargs" ||
+          c == "exec" || c == "builtin")
+}
+
+# Which options of a wrapper consume the NEXT word as their value. Shape cannot
+# answer this, so the argument-taking options are enumerated per wrapper.
+function wrapper_short_optargs(w) {
+  # sudo -h is BOTH --help and -h host, i.e. optional-arg; only --host is safe.
+  if (w == "sudo")    return "ugpCaUrtTDR"
+  if (w == "doas")    return "uCa"
+  if (w == "env")     return "uC"
+  if (w == "nice")    return "n"
+  if (w == "ionice")  return "cnpPu"
+  if (w == "timeout") return "sk"
+  if (w == "stdbuf")  return "ioe"
+  # xargs -i/-e take an OPTIONAL, attached-only argument: consuming the next
+  # word there would swallow the real command. Only -I/-E are required-arg.
+  if (w == "xargs")   return "nPIdELsa"
+  if (w == "time")    return "of"
+  if (w == "exec")    return "a"
+  return ""
+}
+
+# Space-delimited so a lookup anchors on " name " and cannot match a prefix.
+function wrapper_long_optargs(w) {
+  if (w == "sudo")    return " user group prompt close-from host other-user role type command-timeout chdir chroot "
+  if (w == "doas")    return " user "
+  # env --block-signal/--default-signal/--ignore-signal are optional-arg, omitted.
+  if (w == "env")     return " unset chdir "
+  if (w == "nice")    return " adjustment "
+  if (w == "ionice")  return " class classdata pid pgid uid "
+  if (w == "timeout") return " signal kill-after "
+  if (w == "stdbuf")  return " input output error "
+  # --replace, --eof and --max-lines are optional-arg too, so they are omitted.
+  if (w == "xargs")   return " max-args max-procs delimiter max-chars arg-file "
+  if (w == "time")    return " format output "
+  return ""
+}
+
+# Consume one word of the option syntax belonging to wrapper w. Returns 1 when
+# the word is the wrappers, 0 when it should be treated as the command word.
+function wrapper_consume(w, t,    name, letters, i, ch) {
+  if (wrapper_endopts) return 0
+  if (t == "--") { wrapper_endopts = 1; return 1 }
+  if (t == "-") return 1
+  if (t ~ /^--/) {
+    name = substr(t, 3)
+    # `--opt=value` carries its value attached and consumes nothing after it.
+    if (index(name, "=") > 0) return 1
+    if (index(wrapper_long_optargs(w), " " name " ") > 0) wrapper_optarg_pending = 1
+    return 1
+  }
+  if (t ~ /^-/) {
+    letters = wrapper_short_optargs(w)
+    name = substr(t, 2)
+    for (i = 1; i <= length(name); i++) {
+      ch = substr(name, i, 1)
+      if (letters != "" && index(letters, ch) > 0) {
+        # Getopt clustering: the rest of the cluster is the value when any
+        # remains (`-o0`), otherwise the value is the next word.
+        if (i == length(name)) wrapper_optarg_pending = 1
+        return 1
+      }
+    }
+    return 1
+  }
+  # A bare numeric operand belongs to the wrapper (nice 10, timeout 5).
+  if (t ~ /^[0-9]+(\.[0-9]+)?[smhd]?$/) return 1
+  return 0
 }
 
 # Flush the accumulated word. A word may be built from adjacent quoted and
@@ -188,9 +278,10 @@ function is_manifest_path(t) {
 # during accumulation, so the reconstructed shell word is validated as a whole.
 # Redirect targets are resolved BEFORE the command-word check so a leading
 # redirect (> file echo ok) attributes its target correctly.
-function flush_tok(    t) {
+function flush_tok(    t, d) {
   t = tok; tok = ""
   if (t == "") return
+  if (heredoc_delim_pending) { heredoc_delim = t; heredoc_delim_pending = 0; return }
   if (fd_target_pending) {
     # fd-duplication target (the 1 in 2>&1, the - in >&-) — never a command word
     fd_target_pending = 0
@@ -201,33 +292,80 @@ function flush_tok(    t) {
     redirect_pending = 0
     return
   }
-  # mv/cp arguments: track the last non-flag word as the candidate destination
-  # (the common `mv/cp SRC DEST` shape — DEST is whatever word came last).
-  if (seg_is_mv_cp && t !~ /^-/) mv_cp_target = t
   if (!found_cmd) {
+    # The value of a wrapper option belongs to that wrapper whatever it looks
+    # like, so it is claimed before any other reading of this token.
+    if (wrapper_optarg_pending) { wrapper_optarg_pending = 0; return }
     # Leading VAR=value env assignments precede the command word in bash — skip
-    # them so a later echo/printf/mv/cp is still recognised as the command.
+    # them so the real command word is still recognised.
     if (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/) return
+    # A wrapper (env, xargs, timeout …) delegates: skip its own options and
+    # operands so the wrapped command is classified instead of the wrapper.
+    if (wrapper_pending && wrapper_consume(wrapper_name, t)) return
+    if (wrapper_cmd(base_cmd(t))) {
+      wrapper_pending = 1; wrapper_name = base_cmd(t); wrapper_endopts = 0
+      return
+    }
+    wrapper_pending = 0
     found_cmd = 1
-    if (t == "echo" || t == "printf") seg_has_cmd = 1
-    if (t == "mv" || t == "cp") seg_is_mv_cp = 1
+    cmd_word = base_cmd(t)
+    return
   }
+  if (t ~ /^-/) {
+    if (t == "-c") has_dash_c = 1
+    if (t ~ /^--in-place/ || t ~ /^-[A-Za-z0-9]*i(\.[A-Za-z0-9]*)?$/) has_inplace = 1
+  } else {
+    last_arg = t
+  }
+  # `<<WORD` / `<<-WORD` opens a heredoc whose body is read from later lines;
+  # `<<<` is a here-string and carries its data inline, so it opens nothing.
+  if (t ~ /^<</ && t !~ /^<<</) {
+    seg_heredoc = 1
+    d = t; sub(/^<<-?/, "", d)
+    if (d != "") heredoc_delim = d
+    else heredoc_delim_pending = 1
+  }
+  if (is_manifest_path(t)) manifest_arg = 1
+  else if (has_manifest_path(t)) manifest_embedded = 1
 }
 
-# A segment blocks when it either (a) invokes echo/printf AND redirects into a
-# manifest, in either order (handles leading redirects), or (b) invokes mv/cp with
-# a manifest path as the final argument.
 function end_segment() {
   flush_tok()
-  if (seg_has_cmd && seg_writes_manifest) found = 1
-  if (seg_is_mv_cp && is_manifest_path(mv_cp_target)) found = 1
+  # Any real redirect into a manifest, whatever the command (or none at all).
+  if (seg_writes_manifest) found = 1
+  if (writes_by_last_arg(cmd_word) && is_manifest_path(last_arg)) found = 1
+  if (cmd_word == "tee" && (manifest_arg || manifest_embedded)) found = 1
+  if (edits_in_place(cmd_word) && has_inplace && (manifest_arg || manifest_embedded)) found = 1
+  # An interpreter carrying the path inside its program text is a writer shape;
+  # read-only inspection passes the path as its own bare argument instead.
+  if (interpreter(cmd_word) && manifest_embedded) found = 1
+  if (shell_dash_c(cmd_word) && has_dash_c && (manifest_arg || manifest_embedded)) found = 1
+  # `eval` runs its argument as shell text, not as an operand of a writer.
+  if (cmd_word == "eval" && (manifest_arg || manifest_embedded)) found = 1
+  # A heredoc-fed interpreter: evidence is scoped to THIS command — the path on
+  # its own line, or (below) in the body its own delimiter closes.
+  if (interpreter(cmd_word) && seg_heredoc) {
+    heredoc_owner_interp = 1
+    if (manifest_arg || manifest_embedded) found = 1
+  }
 }
 
 function reset_segment() {
   end_segment()
   found_cmd = 0; redirect_pending = 0; fd_target_pending = 0
-  seg_has_cmd = 0; seg_writes_manifest = 0
-  seg_is_mv_cp = 0; mv_cp_target = ""
+  cmd_word = ""; seg_writes_manifest = 0; last_arg = ""
+  has_inplace = 0; has_dash_c = 0; seg_heredoc = 0
+  manifest_arg = 0; manifest_embedded = 0; wrapper_pending = 0
+  wrapper_name = ""; wrapper_endopts = 0; wrapper_optarg_pending = 0
+}
+
+# A heredoc body is data, not shell code: lex nothing until its own delimiter
+# closes it, and charge a manifest path there to the interpreter that opened it.
+in_heredoc {
+  hd = $0; sub(/^[ \t]+/, "", hd); sub(/[ \t]+$/, "", hd)
+  if (hd == heredoc_delim) { in_heredoc = 0; heredoc_delim = ""; heredoc_owner_interp = 0; next }
+  if (heredoc_owner_interp && has_manifest_path($0)) found = 1
+  next
 }
 
 {
@@ -239,15 +377,36 @@ function reset_segment() {
       if (c == "'\''") in_sq = 0
       else tok = tok c
     } else if (in_dq) {
-      # Inside double quotes a backslash escapes the next char (\" \\ …), so it
-      # must not toggle quote state — append the escaped char literally.
+      # Command substitution stays live inside double quotes, so "$(sed -i … )"
+      # must be lexed as its own command rather than swallowed into one word.
       if (c == "\\" && i < n) { i++; tok = tok substr($0, i, 1) }
+      else if (c == "$" && i < n && substr($0, i+1, 1) == "(") {
+        i++; reset_segment(); dq_subst = 1; paren_depth = 0; in_dq = 0
+      }
+      else if (c == "`") { reset_segment(); dq_btick = 1; in_dq = 0 }
       else if (c == "\"") in_dq = 0
       else tok = tok c
     } else if (c == "'\''") {
       in_sq = 1
     } else if (c == "\"") {
       in_dq = 1
+    } else if (c == "\\") {
+      # A trailing unquoted backslash is a line continuation: the command has not
+      # ended, so its operands on the next line still belong to this segment.
+      if (i == n) line_cont = 1
+      else { i++; tok = tok substr($0, i, 1) }
+    } else if (c == "(") {
+      reset_segment()
+      if (dq_subst) paren_depth++
+    } else if (c == ")") {
+      reset_segment()
+      if (dq_subst) {
+        paren_depth--
+        if (paren_depth < 0) { dq_subst = 0; paren_depth = 0; in_dq = 1 }
+      }
+    } else if (c == "`") {
+      reset_segment()
+      if (dq_btick) { dq_btick = 0; in_dq = 1 }
     } else if (c == ">") {
       # An all-digit token glued before > is an fd descriptor (1>, 2>), not a
       # command word — discard it so the real command later still registers.
@@ -298,12 +457,19 @@ function reset_segment() {
   # segment could be mis-attributed and a manifest write slip through).
   if (in_sq || in_dq) {
     # quoted string spans the newline — keep accumulating
+  } else if (line_cont) {
+    line_cont = 0
+    flush_tok()
   } else {
+    flush_tok()
+    if (seg_heredoc && heredoc_delim != "") in_heredoc = 1
     reset_segment()
   }
 }
 
-END { exit (found ? 2 : 0) }
+END {
+  exit (found ? 2 : 0)
+}
 '
 }
 

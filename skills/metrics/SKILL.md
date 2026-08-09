@@ -28,7 +28,7 @@ $ARGUMENTS
 
 ## Instructions
 
-Format all output per `references/ui-brand.md` — use stage banners, status symbols, progress bars, and display patterns defined there.
+Format all output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md` — use stage banners, status symbols, progress bars, and display patterns defined there.
 
 If Nazgul is not initialized, say so and stop.
 

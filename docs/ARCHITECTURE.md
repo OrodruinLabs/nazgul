@@ -95,7 +95,7 @@ Nazgul survives compaction, crashes, and session restarts:
 6. **Webhook forwarding** optionally notifies external systems on stop/compact events
 7. **TaskCompleted hook** fires immediately when spawned agents finish for faster transitions
 8. **Prompt guard hook** validates user prompts on submission
-9. **Task-state guard hook** prevents edits outside claimed task scope
+9. **Task-state guard hook** prevents edits outside claimed task scope, and preflight-rejects an illegal status transition — but it is not the transition authority; see Task-Transition Authority below
 10. **In-flight dispatch hold** — the stop-hook holds an ALLOWED, uncounted stop while a just-dispatched `Agent` is still running (`guards.in_flight_hold`), so the loop doesn't burn iterations re-invoking itself every ~15 seconds against work that hasn't finished. See In-Flight Dispatch Hold below.
 
 After any interruption:
@@ -110,7 +110,7 @@ When the review board returns CHANGES_REQUESTED, the feedback aggregator classif
 - **AUTO-FIX**: Mechanical issues (dead code, style, stale comments) — applied automatically
 - **ASK**: Risky changes (security, architecture, API contracts) — presented for judgment
 
-The review gate's Step 3.75 applies auto-fixes, re-runs tests, and only surfaces ASK items. This reduces review round-trips significantly. Evidence gates enforce real work: IMPLEMENTED requires a commit SHA in the task manifest, IN_REVIEW requires a review directory, and source edits require an IN_PROGRESS task.
+The review gate's Step 3.75 applies auto-fixes, re-runs tests, and only surfaces ASK items. This reduces review round-trips significantly. Evidence gates enforce real work: IMPLEMENTED requires a commit SHA in the task manifest, IN_REVIEW requires a review directory, and source edits require an IN_PROGRESS task. Reviewers are dispatched as unnamed one-shot `Agent` calls with `run_in_background: false` and RETURN their verdict as returned text; the orchestrator persists it. `scripts/parallel-dispatch-guard.sh` (PreToolUse on `Agent`) enforces both fields, and a main-session call that simply omits `run_in_background` is blocked — the omission is honored only when the hook caller identity proves a nested synchronous-only schema. Every status change the gate makes goes through `scripts/task-transition.sh` — see Task-Transition Authority below.
 
 ## Testing & CI
 
@@ -135,20 +135,35 @@ Agents optionally self-rate their experience (0-10) and file structured JSON rep
 ## Shared Task Utilities
 `scripts/lib/task-utils.sh` provides `get_task_status`, `set_task_status`, `count_tasks_by_status`, and `get_active_task`. Supports 4 status formats: list-item, ATX inline, ATX block, and YAML frontmatter.
 
+## Task-Transition Authority (ADR-020)
+
+`scripts/task-transition.sh` is the sole sanctioned writer of a task's status. Three call sites share one library, `scripts/lib/task-transition-guard.sh`, so the state machine cannot drift between them:
+
+- **`scripts/task-transition.sh`** — the authority. `ttg_apply_transition` takes a per-task lock, validates the staged manifest, rechecks the source status immediately before an atomic rename, verifies the target status on disk, and only then appends the completed edge (`ttg_log_transition` → `nazgul/logs/guarded-transitions.jsonl`, with before/after content hashes). The lock serializes authoritative writers; it does not claim to make an unrelated raw filesystem write transactional.
+- **`scripts/task-state-guard.sh`** — preflight only. It rejects EVERY direct status write at the `PreToolUse` boundary, including a legal adjacent one, naming the transition command to run instead; an illegal write is refused earlier by the shared validator so the two causes stay distinguishable. It sees an *intended* write, never a completed one, so it can no longer create the record reconciliation trusts. This is the ADR-020 correction: a cancelled or failed edit used to leave preauthorization behind that a later raw write could ride on.
+- **`scripts/stop-hook.sh`** — reconciliation. Each iteration it diffs live status against the previous checkpoint and requires a *chain* of completed edges, not a matching endpoint pair, to accept a change.
+
+`PLANNED -> READY`'s dependency condition runs through one shared `ttg_dependency_satisfied` used by both the transition validator and the stop-hook's auto-promote arm. Under `review_gate.granularity: task` a dependency must be DONE (APPROVED in YOLO); under `group`/`feature` every task parks at IMPLEMENTED until one aggregate board, so IMPLEMENTED or later satisfies it.
+
+### Typed quarantine and evidence-gated repair
+
+A status change with no completed transition behind it is not "corrected" — it is quarantined with machine-readable endpoints (`Blocked kind: reconciliation`, `Blocked from`, `Blocked observed`) and a `reconciliation_quarantine` event. `DONE -> BLOCKED` is deliberately not modeled as an ordinary graph edge; it is an integrity state outside the product flow, and preserving both endpoints is what makes recovery possible. `scripts/task-transition.sh repair TASK-NNN` is its only exit: five independent revalidations (commit evidence, red-run evidence, review-directory path safety, review verdicts, review provenance) run before any write, then `BLOCKED -> IN_REVIEW -> DONE` goes through the same transactional primitive as every other edge — never `READY`, never an implementer redispatch, because re-implementing reviewed work would destroy the evidence being validated. Refusals are individually named (`not_blocked`, `untyped_blocker`, `wrong_blocker_kind`, `corrupt_quarantine_metadata`, `unreviewed_observed_status`, `incomplete_evidence`) on stderr and as `reconciliation_repair` events, and `repair` is closed to every other blocker class. See RULES.md §2.
+
 ## Directory Structure
 
 The repo IS the installable plugin. Runtime state lives under `nazgul/` in each target project (created by `/nazgul:init`), never in this repo.
 
-```
+```text
 .claude-plugin/plugin.json   # Plugin manifest (must be at repo root)
 RULES.md                     # Enforceable operating rules (consolidated)
-agents/                      # Agent definitions (18 specs + reviewer template)
+agents/                      # Agent definitions (22 specs + reviewer template)
 │   └── templates/           # reviewer-base.md + reviewer-domains.json
-skills/                      # Slash commands (/nazgul:*) — 22 skills
-hooks/hooks.json             # Hook definitions (9 hook types: Stop, PreCompact,
-│                            #   PostCompact, PreToolUse, PostToolUse, SessionStart,
-│                            #   SessionEnd, TaskCompleted, UserPromptSubmit)
-scripts/                     # Hook + sync scripts (18 + 7 libs)
+skills/                      # Slash commands (/nazgul:*) — 26 skills
+hooks/hooks.json             # Hook definitions (12 hook types: Stop, StopFailure,
+│                            #   PreCompact, PostCompact, PreToolUse, PostToolUse,
+│                            #   SessionStart, SessionEnd, SubagentStop,
+│                            #   TaskCompleted, TeammateIdle, UserPromptSubmit)
+scripts/                     # Hook + entry-point scripts (34 + 24 libs)
 │   └── lib/                 # Shared libraries (task-utils, session-tracker,
 │                            #   emit-event, review-evidence, bootstrap-{scrub-map,render,preflight,relocate})
 templates/                   # Objective + doc templates
