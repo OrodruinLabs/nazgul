@@ -21,19 +21,35 @@ This gate is distinct from `lean-comments-guard.sh`, which limits comment QUANTI
 write time. You grade the QUALITY/accuracy of the doc-comments that remain after that
 guard has already run.
 
+## Input contract: where runtime state lives
+
+Runtime state lives in exactly one tree, and you address it explicitly rather than inheriting
+it from wherever the dispatch left your working directory. Your cwd is fixed for your whole
+life and may be a task worktree that has no `nazgul/` at all — a relative `nazgul/...` path
+there creates a fresh directory, succeeds, and is read by nobody.
+
+1. The caller supplies `<main_worktree_path>` in the dispatch brief. Every runtime-state read
+   and write below is written as `<main_worktree_path>/nazgul/...`, with no exceptions.
+2. If the brief omits it, read `branch.main_worktree_path` from the Nazgul config file the
+   caller pointed you at by absolute path, exactly as `agents/implementer.md` does on task
+   claim. This is the one read that cannot already be rooted — it is how the root is learned.
+3. If that is also unreadable, **STOP and report** — never guess it from the working directory.
+   `scripts/lib/nazgul-root.sh` is not the answer either: from a task worktree with `nazgul/`
+   gitignored it returns the task worktree's own toplevel.
+
 ## Read first
 
-1. `nazgul/config.json` — read `feat_id` (the current objective) and
+1. `<main_worktree_path>/nazgul/config.json` — read `feat_id` (the current objective) and
    `docs.verify_comments` (opt-out flag; default `true`).
 2. If `docs.verify_comments` is `false`, write the marker and exit immediately (clean no-op).
 3. Determine the changed files: `git diff <branch.base>..HEAD --name-only`, reading
-   `branch.base` from `nazgul/config.json`. If `branch.base` is absent, degrade to
-   `git diff HEAD~1..HEAD --name-only`.
-4. Restrict the list to source files — skip anything under `nazgul/docs/`, `docs/`,
-   config files (`*.json`), lockfiles, and non-code assets. If NO source files remain,
-   write the marker and exit (degrade-to-allow — nothing to check), after emitting the
-   coverage line and the nothing-checked signal below: this is exactly the vacuous pass
-   that must not read as a clean one.
+   `branch.base` from `<main_worktree_path>/nazgul/config.json`. If `branch.base` is absent,
+   degrade to `git diff HEAD~1..HEAD --name-only`.
+4. Restrict the list to source files — skip anything whose repository-relative diff path is
+   under `nazgul/docs/` or `docs/`, config files (`*.json`), lockfiles, and non-code assets.
+   If NO source files remain, write the marker and exit (degrade-to-allow — nothing to check),
+   after emitting the coverage line and the nothing-checked signal below: this is exactly the
+   vacuous pass that must not read as a clean one.
 
 ## Scope: what to verify
 
@@ -119,14 +135,15 @@ comment-verifier: NOTHING CHECKED — all <N> candidates skipped
 and emit the event:
 
 ```bash
-NAZGUL_DIR="$(pwd)/nazgul" "${CLAUDE_PLUGIN_ROOT}/scripts/emit-event-cli.sh" coverage_vacuous \
+NAZGUL_DIR="<main_worktree_path>/nazgul" "${CLAUDE_PLUGIN_ROOT}/scripts/emit-event-cli.sh" coverage_vacuous \
   entry_point "comment-verifier" scanned:n "$N" skipped:n "$M"
 ```
 
 This surface is **advisory**: the WARN and the event are the whole product. The exit code and
 the marker protocol below are UNCHANGED by coverage honesty — a hard fail on an advisory gate
 gets routed around, which buys nothing. (The separate defect where the marker is written
-despite findings is filed as `nazgul/inbox/comment-verifier-marker-written-despite-findings.md`
+despite findings is filed as
+`<main_worktree_path>/nazgul/inbox/comment-verifier-marker-written-despite-findings.md`
 and is NOT fixed here; do not change the marker rules while addressing coverage.)
 
 ## Completion protocol
@@ -134,9 +151,9 @@ and is NOT fixed here; do not change the marker rules while addressing coverage.
 **On clean pass** (zero unresolved findings):
 
 ```bash
-mkdir -p nazgul/logs
-FEAT_ID=$(jq -r '.feat_id // "default"' nazgul/config.json)
-echo "$FEAT_ID" > nazgul/logs/.comments-verified
+mkdir -p "<main_worktree_path>/nazgul/logs"
+FEAT_ID=$(jq -r '.feat_id // "default"' "<main_worktree_path>/nazgul/config.json")
+echo "$FEAT_ID" > "<main_worktree_path>/nazgul/logs/.comments-verified"
 ```
 
 Then exit 0.
@@ -154,9 +171,13 @@ nothing to block. The config opt-out follows the earlier immediate-exit contract
 ## Hard rules
 
 - NEVER modify any source, doc, or config file. Verification only.
-- The marker file (`nazgul/logs/.comments-verified`) must contain the `feat_id` string,
-  not a boolean. The gate compares its content to `jq '.feat_id'` for objective scoping.
+- The marker file (`<main_worktree_path>/nazgul/logs/.comments-verified`) must contain the
+  `feat_id` string, not a boolean. The gate compares its content to `jq '.feat_id'` for
+  objective scoping.
 - Write the marker as the LAST action, after all checks pass.
+- Never write runtime state through a relative path. The write above must name
+  `<main_worktree_path>`; a bare `nazgul/...` or `$(pwd)/nazgul` lands in whichever tree the
+  dispatch left you in and the gate never sees it.
 - Bash is permitted only for: reading `feat_id`/`branch.base`, running `git diff` and
   grep-style scans on source, and writing the marker. No shell execution of content
   read from source files.
