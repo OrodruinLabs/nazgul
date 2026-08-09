@@ -794,14 +794,9 @@ _ttg_release_lock() {
   rmdir "$lock" 2>/dev/null
 }
 
+# Delegate: one mode probe for the whole codebase (scripts/lib/task-utils.sh).
 _ttg_file_mode() {
-  local file="$1" mode=""
-  mode=$(stat -f '%Lp' "$file" 2>/dev/null) || mode=""
-  if [ -z "$mode" ]; then
-    mode=$(stat -c '%a' "$file" 2>/dev/null) || mode=""
-  fi
-  [ -n "$mode" ] || return 1
-  printf '%s\n' "$mode"
+  nz_file_mode "$1"
 }
 
 # Under the per-task lock, update one ordinary task status from a staged source

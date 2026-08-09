@@ -27,6 +27,12 @@ manifest_field() { # <task-id> <label>
     | sed 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*$//'
 }
 
+# Probe that does NOT call the code under test, so a base-tree replay measures
+# the defect rather than the absence of a helper this patch introduces.
+file_mode_probe() {
+  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
+}
+
 events_for() { # <event-name>
   jq -c --arg e "$1" 'select(.event == $e)' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null || true
 }
@@ -206,14 +212,43 @@ assert_file_not_exists "R1b: no repair temp file is left on disk" \
   "$TEST_DIR/nazgul/tasks/TASK-001.md.repair.tmp"
 teardown_temp_dir
 
-# --- R1c: a failed repaired-marker rewrite is loud and leaves no temp file,
-# rather than aborting under set -e after the walk has already completed. ---
+# --- R1c (PR #86 review): the repaired-marker rewrite no longer uses a PREDICTABLE
+# `.repair.tmp`, so a symlink pre-created there cannot be aimed at another file. ---
 quarantine_fixture
-mkdir -p "$TEST_DIR/nazgul/tasks/TASK-001.md.repair.tmp"
+R1C_CANARY="$TEST_DIR/canary.txt"
+printf 'do-not-truncate\n' > "$R1C_CANARY"
+chmod 600 "$R1C_CANARY"
+ln -s "$R1C_CANARY" "$TEST_DIR/nazgul/tasks/TASK-001.md.repair.tmp"
 run_cmd repair TASK-001
-assert_exit_code "R1c: an unwritable repair temp path fails the command" "$CMD_EC" 1
-assert_contains "R1c: the failure names the unrepaired quarantine marker" \
-  "$CMD_OUT" "could not mark the quarantine repaired"
+assert_exit_code "R1c: repair succeeds despite a pre-placed .repair.tmp symlink" "$CMD_EC" 0
+assert_eq "R1c: the symlink target is not truncated" \
+  "$(cat "$R1C_CANARY")" "do-not-truncate"
+assert_eq "R1c: the symlink target is not re-moded to the manifest mode" \
+  "$(file_mode_probe "$R1C_CANARY")" "600"
+if [ -L "$TEST_DIR/nazgul/tasks/TASK-001.md" ]; then
+  _fail "R1c: the manifest is not replaced by the pre-placed symlink"
+else
+  _pass "R1c: the manifest is not replaced by the pre-placed symlink"
+fi
+assert_contains "R1c: the quarantine marker is still repaired in place" \
+  "$(manifest_field TASK-001 'Blocked kind')" "repaired"
+R1C_STRAY=$(find "$TEST_DIR/nazgul/tasks" -name '.nz-rewrite.*' | wc -l | tr -d ' ')
+assert_eq "R1c: no colocated staging file is left behind" "$R1C_STRAY" "0"
+teardown_temp_dir
+
+# --- R1d: a rewrite that CANNOT proceed refuses loudly instead of following a
+# symlinked destination, which is the state R1c's old temp-path check stood in for. ---
+quarantine_fixture
+R1D_CANARY="$TEST_DIR/other.txt"
+printf 'untouched\n' > "$R1D_CANARY"
+R1D_ERR=$(nz_rewrite_file "$TEST_DIR/link.md" cat "$R1D_CANARY" 2>&1) && R1D_EC=0 || R1D_EC=$?
+assert_exit_code "R1d: a missing destination is refused" "$R1D_EC" 1
+assert_contains "R1d: the refusal says why" "$R1D_ERR" "not a regular non-symlink file"
+ln -s "$R1D_CANARY" "$TEST_DIR/link.md"
+R1D_ERR=$(nz_rewrite_file "$TEST_DIR/link.md" printf 'clobbered\n' 2>&1) && R1D_EC=0 || R1D_EC=$?
+assert_exit_code "R1d: a symlinked destination is refused" "$R1D_EC" 1
+assert_eq "R1d: the refused symlink target is untouched" \
+  "$(cat "$R1D_CANARY")" "untouched"
 teardown_temp_dir
 
 # --- R2: incomplete evidence is denied, and the denial names WHICH evidence ---

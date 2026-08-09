@@ -223,14 +223,21 @@ fi
 # Upsert one `- **<Label>**: <value>` manifest line: replace the existing line
 # with that label, or append when the label is absent.
 set_manifest_field() {
-  local file="$1" label="$2" value="$3" field_mode=""
+  local file="$1" label="$2" value="$3"
+  # The append branch follows a symlinked manifest just as the replace branch
+  # once followed a symlinked `${file}.field.tmp`, so both are gated here.
+  if [ -L "$file" ] || [ ! -f "$file" ]; then
+    echo "set_manifest_field: refusing to write ${file}: not a regular non-symlink file" >&2
+    return 1
+  fi
   if grep -q "^- \*\*${label}\*\*:" "$file" 2>/dev/null; then
-    field_mode=$(_ttg_file_mode "$file") || field_mode=""
-    NAZGUL_FIELD_LINE="- **${label}**: ${value}" awk -v pat="^- [*][*]${label}[*][*]:" \
+    # Exported explicitly: an assignment PREFIX reaches an external command, but
+    # nz_rewrite_file is a shell function, and awk runs one level below it.
+    export NAZGUL_FIELD_LINE="- **${label}**: ${value}"
+    nz_rewrite_file "$file" awk -v pat="^- [*][*]${label}[*][*]:" \
       '$0 ~ pat { print ENVIRON["NAZGUL_FIELD_LINE"]; next } { print }' \
-      "$file" > "${file}.field.tmp" || { rm -f "${file}.field.tmp"; return 1; }
-    [ -z "$field_mode" ] || chmod "$field_mode" "${file}.field.tmp" || true
-    mv "${file}.field.tmp" "$file" || { rm -f "${file}.field.tmp"; return 1; }
+      "$file" || { unset NAZGUL_FIELD_LINE; return 1; }
+    unset NAZGUL_FIELD_LINE
   else
     # Every reader of these fields is `^`-anchored, so a manifest with no trailing
     # newline would absorb the new field into its last line and hide it.
@@ -862,37 +869,38 @@ if [ -d "$NAZGUL_DIR/checkpoints" ]; then
   ls -1t "$NAZGUL_DIR/checkpoints/iteration-"*.json 2>/dev/null | tail -n +3 | xargs rm -f 2>/dev/null || true
 fi
 
-# --- Auto-promote PLANNED -> READY when dependencies are met ---
-# These writes happen AFTER this iteration's checkpoint captured its
-# task_statuses baseline, so they must be ledger-logged (ttg_log_transition)
-# or the next iteration's bash-write reconciliation would flag its own
-# hook's legitimate promotion as an out-of-band forgery.
+# --- Auto-promote PLANNED -> READY via the ADR-020 sanctioned path (PATCH-005) ---
+# ttg_apply_transition owns lock/CAS/readback/hashes/ledger AND the dep verdict.
 if [ -d "$NAZGUL_DIR/tasks" ]; then
   for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     STATUS=$(get_task_status "$task_file")
     if [ "$STATUS" = "PLANNED" ]; then
+      PROMOTE_ID=$(basename "$task_file" .md)
       DEPS=$(grep -m1 '^\- \*\*Depends on\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "none")
-      if [ "$DEPS" = "none" ] || [ -z "$DEPS" ]; then
-        set_task_status "$task_file" "PLANNED" "READY"
-        ttg_log_transition "$NAZGUL_DIR" "$(basename "$task_file" .md)" "PLANNED" "READY"
-        continue
-      fi
-      # Same authority as the transition command's READY gate, so the two
-      # cannot drift: ttg_dependency_satisfied is granularity-aware.
+      # Cheap pre-filter. An ABSENT dependency manifest is "could not look", not
+      # "looked and found it satisfied" (RULES §15), so it fails closed here too.
       ALL_DONE=true
-      while IFS= read -r dep; do
-        dep_file="$NAZGUL_DIR/tasks/${dep}.md"
-        if [ -f "$dep_file" ]; then
+      if [ "$DEPS" != "none" ] && [ -n "$DEPS" ]; then
+        while IFS= read -r dep; do
+          [ -n "$dep" ] || continue
+          dep_file="$NAZGUL_DIR/tasks/${dep}.md"
+          if [ ! -f "$dep_file" ] || [ -L "$dep_file" ]; then
+            echo "NAZGUL AUTO-PROMOTE: ${PROMOTE_ID} held at PLANNED — dependency ${dep} has no canonical manifest at ${dep_file}" >&2
+            ALL_DONE=false; break
+          fi
           DEP_STATUS=$(get_task_status "$dep_file")
           if ! ttg_dependency_satisfied "$NAZGUL_DIR" "$DEP_STATUS"; then
             ALL_DONE=false; break
           fi
-        fi
-      done <<< "$(echo "$DEPS" | tr ',' '\n' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')"
+        done <<< "$(echo "$DEPS" | tr ',' '\n' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')"
+      fi
       if [ "$ALL_DONE" = true ]; then
-        set_task_status "$task_file" "PLANNED" "READY"
-        ttg_log_transition "$NAZGUL_DIR" "$(basename "$task_file" .md)" "PLANNED" "READY"
+        # A refusal is a verdict, not a hook failure: report it and leave the task
+        # PLANNED rather than letting `set -e` end the whole iteration.
+        if ! ttg_apply_transition "$NAZGUL_DIR" "$PROJECT_ROOT" "$PROMOTE_ID" PLANNED READY ""; then
+          echo "NAZGUL AUTO-PROMOTE: ${PROMOTE_ID} stays PLANNED — the sanctioned transition path declined the PLANNED -> READY edge" >&2
+        fi
       fi
     fi
   done

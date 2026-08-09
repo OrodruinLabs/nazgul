@@ -174,6 +174,69 @@ set_task_status "$CAS" IN_REVIEW DONE   # old_status matches → transition
 assert_eq "frontmatter set transitions when old_status matches" "$(get_task_status "$CAS")" "DONE"
 rm -f "$CAS"
 
+# --- PATCH-005 (PR #86 review): every set_task_status branch staged through a
+# PREDICTABLE sibling that a pre-created symlink could aim at another file. ---
+setup_temp_dir
+SL_DIR="$TEST_DIR/symlink-cases"
+mkdir -p "$SL_DIR"
+
+# Probe that does NOT call the code under test, so a base-tree replay measures
+# the defect rather than the absence of a helper this patch introduces.
+file_mode_probe() {
+  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
+}
+
+# Each format exercises a different branch, and each branch had its own
+# predictable sibling: `.tmp` for the awk branches, `.bak` for the sed ones.
+sl_case() {
+  local name="$1" body="$2" old="$3" new="$4" bait="$5"
+  local f="$SL_DIR/${name}.md" canary="$SL_DIR/${name}.canary"
+  printf 'do-not-truncate\n' > "$canary"
+  chmod 600 "$canary"
+  printf -- "$body" > "$f"
+  ln -s "$canary" "${f}${bait}"
+  set_task_status "$f" "$old" "$new" 2>/dev/null || true
+  assert_eq "symlink bait ${bait} (${name}): status still transitions" \
+    "$(get_task_status "$f")" "$new"
+  assert_eq "symlink bait ${bait} (${name}): the bait target is not truncated" \
+    "$(cat "$canary")" "do-not-truncate"
+  assert_eq "symlink bait ${bait} (${name}): the bait target keeps its mode" \
+    "$(file_mode_probe "$canary")" "600"
+  if [ -L "$f" ]; then
+    _fail "symlink bait ${bait} (${name}): the manifest is not replaced by the bait"
+  else
+    _pass "symlink bait ${bait} (${name}): the manifest is not replaced by the bait"
+  fi
+}
+sl_case frontmatter '---\nstatus: READY\n---\n# T\n' READY IN_PROGRESS .tmp
+sl_case atxblock '# T\n\n## Status\nREADY\n' READY IN_PROGRESS .tmp
+sl_case atxinline '# T\n\n## Status: READY\n' READY IN_PROGRESS .bak
+sl_case listitem '# T\n\n- **Status**: READY\n' READY IN_PROGRESS .bak
+sl_case legacyfm '# T\n---\nstatus: READY\n---\n' READY IN_PROGRESS .bak
+
+# A symlinked MANIFEST is refused outright rather than followed to its target.
+SL_TARGET="$SL_DIR/target.md"
+printf -- '---\nstatus: READY\n---\n' > "$SL_TARGET"
+ln -s "$SL_TARGET" "$SL_DIR/manifest-link.md"
+SL_ERR=$(set_task_status "$SL_DIR/manifest-link.md" READY IN_PROGRESS 2>&1) && SL_EC=0 || SL_EC=$?
+assert_exit_code "a symlinked manifest is refused, not followed" "$SL_EC" 1
+assert_contains "the refusal says why" "$SL_ERR" "not a regular non-symlink file"
+assert_eq "the symlink target keeps its status" "$(get_task_status "$SL_TARGET")" "READY"
+
+# nz_rewrite_file preserves the destination mode, and leaves nothing behind.
+MODE_F="$SL_DIR/mode.md"
+printf -- '---\nstatus: READY\n---\n' > "$MODE_F"
+chmod 640 "$MODE_F"
+set_task_status "$MODE_F" READY IN_PROGRESS
+assert_eq "nz_rewrite_file preserves the destination mode" "$(file_mode_probe "$MODE_F")" "640"
+STRAY=$(find "$SL_DIR" -name '.nz-rewrite.*' | wc -l | tr -d ' ')
+assert_eq "no colocated staging file is left behind" "$STRAY" "0"
+# The baits must SURVIVE as untouched symlinks: consuming one would mean the
+# writer went to the predictable path after all.
+BAITS=$(find "$SL_DIR" -type l -name '*.md.tmp' -o -type l -name '*.md.bak' | wc -l | tr -d ' ')
+assert_eq "every predictable-path bait is left in place, unconsumed" "$BAITS" "5"
+teardown_temp_dir
+
 # --- Test 10: count_tasks_and_find_active buckets a mixed set, incl. canonical APPROVED (MF-001/002/009/011, TASK-003) ---
 setup_temp_dir
 setup_nazgul_dir

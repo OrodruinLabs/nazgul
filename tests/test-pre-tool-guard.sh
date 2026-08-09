@@ -546,6 +546,83 @@ for wrapped_cmd in \
   assert_exit_code "blocked S-wrapped: '$wrapped_cmd'" "$ec" 2
 done
 
+# S-wrapopt (PATCH-005): a wrapper option that TAKES an argument used to donate
+# that argument to cmd_word, losing the writer behind it. See PATCH-005 Group A.
+for wrapopt_cmd in \
+  "sudo sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo -u root sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo -g wheel sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo -p 'pw:' sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo -C 3 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo --user=root sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo --user root sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo -- sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo -knu root sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo -h sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo --host=h sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo --host h sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo -a type sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "doas sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "doas -u root sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env -u FOO sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env -C /tmp sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env --unset=FOO sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env --unset FOO sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env -i sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env -- sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env --block-signal sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env --default-signal sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env --ignore-signal sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "env --block-signal=INT sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "nice sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "nice -n 5 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "nice -n5 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "ionice sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "ionice -c 2 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "ionice -c2 -n 4 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "ionice -p 1 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "timeout 5 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "timeout -s KILL 5 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "timeout -k 1 5 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "timeout --signal=KILL 5 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "timeout --signal KILL 5 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "stdbuf -o0 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "stdbuf -o 0 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "stdbuf -i L -o L sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -n 1 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -I{} sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -I {} sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -P 4 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -d , sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -E EOF sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -L 1 sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -a /tmp/f sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -i sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -e sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "xargs -i{} sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "exec -a name sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "time -o /tmp/t sed -i 's/a/b/' nazgul/tasks/TASK-001.md" \
+  "sudo -u root env -u FOO nice -n 5 cp forged.md nazgul/tasks/TASK-001.md" \
+  "sudo -u root -- sed -i 's/a/b/' nazgul/tasks/TASK-001.md"; do
+  ec=$(get_exit_code "$wrapopt_cmd")
+  assert_exit_code "blocked S-wrapopt: '$wrapopt_cmd'" "$ec" 2
+done
+
+# Consuming one word too many would misclassify a wrapped READ just as badly, so
+# the same option forms must still allow read-only wrapped commands.
+for wrapopt_ro in \
+  "sudo -u root cat nazgul/tasks/TASK-001.md" \
+  "env -u FOO grep Status nazgul/tasks/TASK-001.md" \
+  "timeout -s KILL 5 cat nazgul/tasks/TASK-001.md" \
+  "xargs -I {} grep Status nazgul/tasks/TASK-001.md" \
+  "sudo -u root cp nazgul/tasks/TASK-001.md /tmp/backup.md" \
+  "env -C /tmp \"\${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh\" transition TASK-004 READY IN_PROGRESS"; do
+  ec=$(get_exit_code "$wrapopt_ro")
+  assert_exit_code "allowed S-wrapopt-readonly: '$wrapopt_ro'" "$ec" 0
+done
+
 # S-continued: an escaped newline does not end the command, so the segment must
 # not be reset there and lose the writer that owns the operand below.
 ec=$(get_exit_code "$(printf "sed -i 's/a/b/' \\\\\n  nazgul/tasks/TASK-001.md")")

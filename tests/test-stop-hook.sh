@@ -22,6 +22,12 @@ run_hook() {
   HOOK_OUTPUT=$(bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 }
 
+# Probe that does NOT call the code under test, so a base-tree replay measures
+# the defect rather than the absence of a helper this patch introduces.
+file_mode_probe() {
+  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
+}
+
 # === EXIT CONDITIONS (exit 0) ===
 
 # --- Test 1: No config — exit 0 ---
@@ -1345,6 +1351,111 @@ assert_eq "recon: auto-promote flipped PLANNED to READY" \
 run_hook
 assert_eq "recon: hook's own auto-promote not reconciled to BLOCKED" \
   "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "READY"
+teardown_temp_dir
+
+# --- PROMOTE-1 (PR #86 review): a dependency whose manifest is ABSENT is "could
+# not look", not "looked and found it satisfied" — the arm must fail closed. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-002" "PLANNED" "TASK-001"   # TASK-001.md is never created
+create_task_file "TASK-003" "READY"                # keeps the loop alive
+run_hook
+assert_eq "promote: a missing dependency manifest does NOT auto-promote" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-002.md")" "PLANNED"
+assert_contains "promote: the hold names the dependency that could not be read" \
+  "$HOOK_OUTPUT" "dependency TASK-001 has no canonical manifest"
+teardown_temp_dir
+
+# --- PROMOTE-2: the promotion goes through the ADR-020 sanctioned path, so its
+# ledger entry carries the before/after content hashes only that path computes. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "PLANNED"
+run_hook
+assert_eq "promote: a dependency-free task still reaches READY" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "READY"
+PROMOTE_LEDGER="$TEST_DIR/nazgul/logs/guarded-transitions.jsonl"
+PROMOTE_ENTRY=$(jq -c 'select(.task_id=="TASK-001" and .from=="PLANNED" and .to=="READY")' \
+  "$PROMOTE_LEDGER" 2>/dev/null | tail -1)
+assert_contains "promote: the edge is recorded in the completed-write ledger" \
+  "$PROMOTE_ENTRY" '"to":"READY"'
+assert_contains "promote: the ledger entry carries the source hash" \
+  "$PROMOTE_ENTRY" "before_sha256"
+assert_contains "promote: the ledger entry carries the verified target hash" \
+  "$PROMOTE_ENTRY" "after_sha256"
+teardown_temp_dir
+
+# --- PROMOTE-3: a dependency present but NOT satisfied still holds the task, and
+# a satisfied one still promotes — the pre-filter did not become a blanket deny. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "IN_PROGRESS"
+create_task_file "TASK-002" "PLANNED" "TASK-001"
+create_task_file "TASK-004" "DONE"
+create_review_dir "TASK-004"   # else the review gate resets DONE and moots the case
+create_task_file "TASK-005" "PLANNED" "TASK-004"
+run_hook
+assert_eq "promote: an unsatisfied dependency holds the task at PLANNED" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-002.md")" "PLANNED"
+assert_eq "promote: a satisfied dependency still promotes to READY" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-005.md")" "READY"
+teardown_temp_dir
+
+# --- FIELD-1 (PR #86 review): set_manifest_field staged through a PREDICTABLE
+# `${file}.field.tmp` that a pre-created symlink could aim at another file. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_plan
+# Seeded with a Blocked reason so the git-conflict upsert takes the REPLACE
+# branch — the only one that ever staged through `${file}.field.tmp`.
+create_task_file "TASK-001" "IN_PROGRESS" "none" "seed reason"
+FIELD_CANARY="$TEST_DIR/field-canary.txt"
+printf 'do-not-truncate\n' > "$FIELD_CANARY"
+chmod 600 "$FIELD_CANARY"
+ln -s "$FIELD_CANARY" "$TEST_DIR/nazgul/tasks/TASK-001.md.field.tmp"
+git -C "$TEST_DIR" checkout -q -b field-conflict-branch
+echo "conflict line A" > "$TEST_DIR/conflict.txt"
+git -C "$TEST_DIR" add conflict.txt
+git -C "$TEST_DIR" commit -q -m "branch A"
+git -C "$TEST_DIR" checkout -q main 2>/dev/null || git -C "$TEST_DIR" checkout -q master
+echo "conflict line B" > "$TEST_DIR/conflict.txt"
+git -C "$TEST_DIR" add conflict.txt
+git -C "$TEST_DIR" commit -q -m "branch B"
+git -C "$TEST_DIR" merge field-conflict-branch --no-commit 2>/dev/null || true
+field_porcelain=$(git -C "$TEST_DIR" status --porcelain 2>/dev/null || echo "")
+if echo "$field_porcelain" | grep -qE '^(U.|.U|AA|DD) '; then
+  run_hook
+  assert_eq "field: the upsert really took the replace branch" \
+    "$(grep -c '^- \*\*Blocked reason\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md")" "1"
+  assert_contains "field: the replaced value is the conflict reason" \
+    "$(cat "$TEST_DIR/nazgul/tasks/TASK-001.md")" "git conflict — unmerged files detected"
+  assert_eq "field: the symlink bait target is not truncated" \
+    "$(cat "$FIELD_CANARY")" "do-not-truncate"
+  assert_eq "field: the symlink bait target keeps its mode" \
+    "$(file_mode_probe "$FIELD_CANARY")" "600"
+  if [ -L "$TEST_DIR/nazgul/tasks/TASK-001.md" ]; then
+    _fail "field: the manifest is not replaced by the pre-placed symlink"
+  else
+    _pass "field: the manifest is not replaced by the pre-placed symlink"
+  fi
+else
+  _skip "field: the upsert really took the replace branch (skipped — no conflict produced)"
+  _skip "field: the replaced value is the conflict reason (skipped — no conflict produced)"
+  _skip "field: the symlink bait target is not truncated (skipped — no conflict produced)"
+  _skip "field: the symlink bait target keeps its mode (skipped — no conflict produced)"
+  _skip "field: the manifest is not replaced by the pre-placed symlink (skipped — no conflict produced)"
+fi
 teardown_temp_dir
 
 # --- RECON-5: the loop must not wedge on its own change. Every routine edge —

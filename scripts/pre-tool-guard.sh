@@ -206,6 +206,73 @@ function wrapper_cmd(c) {
           c == "exec" || c == "builtin")
 }
 
+# Which options of a wrapper consume the NEXT word as their value. Shape cannot
+# answer this, so the argument-taking options are enumerated per wrapper.
+function wrapper_short_optargs(w) {
+  # sudo -h is BOTH --help and -h host, i.e. optional-arg; only --host is safe.
+  if (w == "sudo")    return "ugpCaUrtTDR"
+  if (w == "doas")    return "uCa"
+  if (w == "env")     return "uC"
+  if (w == "nice")    return "n"
+  if (w == "ionice")  return "cnpPu"
+  if (w == "timeout") return "sk"
+  if (w == "stdbuf")  return "ioe"
+  # xargs -i/-e take an OPTIONAL, attached-only argument: consuming the next
+  # word there would swallow the real command. Only -I/-E are required-arg.
+  if (w == "xargs")   return "nPIdELsa"
+  if (w == "time")    return "of"
+  if (w == "exec")    return "a"
+  return ""
+}
+
+# Space-delimited so a lookup anchors on " name " and cannot match a prefix.
+function wrapper_long_optargs(w) {
+  if (w == "sudo")    return " user group prompt close-from host other-user role type command-timeout chdir chroot "
+  if (w == "doas")    return " user "
+  # env --block-signal/--default-signal/--ignore-signal are optional-arg, omitted.
+  if (w == "env")     return " unset chdir "
+  if (w == "nice")    return " adjustment "
+  if (w == "ionice")  return " class classdata pid pgid uid "
+  if (w == "timeout") return " signal kill-after "
+  if (w == "stdbuf")  return " input output error "
+  # --replace, --eof and --max-lines are optional-arg too, so they are omitted.
+  if (w == "xargs")   return " max-args max-procs delimiter max-chars arg-file "
+  if (w == "time")    return " format output "
+  return ""
+}
+
+# Consume one word of the option syntax belonging to wrapper w. Returns 1 when
+# the word is the wrappers, 0 when it should be treated as the command word.
+function wrapper_consume(w, t,    name, letters, i, ch) {
+  if (wrapper_endopts) return 0
+  if (t == "--") { wrapper_endopts = 1; return 1 }
+  if (t == "-") return 1
+  if (t ~ /^--/) {
+    name = substr(t, 3)
+    # `--opt=value` carries its value attached and consumes nothing after it.
+    if (index(name, "=") > 0) return 1
+    if (index(wrapper_long_optargs(w), " " name " ") > 0) wrapper_optarg_pending = 1
+    return 1
+  }
+  if (t ~ /^-/) {
+    letters = wrapper_short_optargs(w)
+    name = substr(t, 2)
+    for (i = 1; i <= length(name); i++) {
+      ch = substr(name, i, 1)
+      if (letters != "" && index(letters, ch) > 0) {
+        # Getopt clustering: the rest of the cluster is the value when any
+        # remains (`-o0`), otherwise the value is the next word.
+        if (i == length(name)) wrapper_optarg_pending = 1
+        return 1
+      }
+    }
+    return 1
+  }
+  # A bare numeric operand belongs to the wrapper (nice 10, timeout 5).
+  if (t ~ /^[0-9]+(\.[0-9]+)?[smhd]?$/) return 1
+  return 0
+}
+
 # Flush the accumulated word. A word may be built from adjacent quoted and
 # unquoted fragments (e.g. "nazgul/tasks/"TASK-001.md) — quote chars are stripped
 # during accumulation, so the reconstructed shell word is validated as a whole.
@@ -226,13 +293,19 @@ function flush_tok(    t, d) {
     return
   }
   if (!found_cmd) {
+    # The value of a wrapper option belongs to that wrapper whatever it looks
+    # like, so it is claimed before any other reading of this token.
+    if (wrapper_optarg_pending) { wrapper_optarg_pending = 0; return }
     # Leading VAR=value env assignments precede the command word in bash — skip
     # them so the real command word is still recognised.
     if (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/) return
     # A wrapper (env, xargs, timeout …) delegates: skip its own options and
     # operands so the wrapped command is classified instead of the wrapper.
-    if (wrapper_pending && (t ~ /^-/ || t ~ /^[0-9]+(\.[0-9]+)?[smhd]?$/)) return
-    if (wrapper_cmd(base_cmd(t))) { wrapper_pending = 1; return }
+    if (wrapper_pending && wrapper_consume(wrapper_name, t)) return
+    if (wrapper_cmd(base_cmd(t))) {
+      wrapper_pending = 1; wrapper_name = base_cmd(t); wrapper_endopts = 0
+      return
+    }
     wrapper_pending = 0
     found_cmd = 1
     cmd_word = base_cmd(t)
@@ -283,6 +356,7 @@ function reset_segment() {
   cmd_word = ""; seg_writes_manifest = 0; last_arg = ""
   has_inplace = 0; has_dash_c = 0; seg_heredoc = 0
   manifest_arg = 0; manifest_embedded = 0; wrapper_pending = 0
+  wrapper_name = ""; wrapper_endopts = 0; wrapper_optarg_pending = 0
 }
 
 # A heredoc body is data, not shell code: lex nothing until its own delimiter
