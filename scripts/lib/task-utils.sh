@@ -10,10 +10,15 @@ source "$_TU_DIR/structured-state.sh"
 # when none can, so callers fail closed. Usage: nz_file_mode <path>
 nz_file_mode() {
   local file="$1" mode=""
-  mode=$(stat -f '%Lp' "$file" 2>/dev/null) || mode=""
-  if [ -z "$mode" ]; then
-    mode=$(stat -c '%a' "$file" 2>/dev/null) || mode=""
-  fi
+  # GNU stat -f means --file-system and SUCCEEDS with unrelated output, so exit
+  # status cannot pick the dialect; accept a candidate only if it parses octal.
+  for _nz_fm in "-f %Lp" "-c %a"; do
+    # shellcheck disable=SC2086
+    mode=$(stat $_nz_fm "$file" 2>/dev/null) || mode=""
+    case "$mode" in ''|*[!0-7]*) mode="" ;; esac
+    [ -n "$mode" ] && break
+  done
+  unset _nz_fm
   [ -n "$mode" ] || return 1
   printf '%s\n' "$mode"
 }

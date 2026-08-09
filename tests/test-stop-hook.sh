@@ -25,7 +25,7 @@ run_hook() {
 # Probe that does NOT call the code under test, so a base-tree replay measures
 # the defect rather than the absence of a helper this patch introduces.
 file_mode_probe() {
-  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
+  nz_file_mode "$1"
 }
 
 # === EXIT CONDITIONS (exit 0) ===
