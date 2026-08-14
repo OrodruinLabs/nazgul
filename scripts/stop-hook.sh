@@ -1130,9 +1130,22 @@ DV_MSG
       CV_OBJ_ID=$(jq -r '.feat_id // "default"' "$CONFIG" 2>/dev/null || echo "default")
       CV_MARKER="$NAZGUL_DIR/logs/.comments-verified"
       CV_ATTEMPTS_FILE="$NAZGUL_DIR/logs/.comments-verify-attempts"
+      # ADR-021: three writers, three values. The verifier writes the bare feat_id, so a
+      # suffixed value can only have come from a gate that gave up rather than verified.
+      CV_DEGRADED_VALUE="${CV_OBJ_ID}:NO-SOURCE-CHANGED"
+      CV_EXHAUSTED_VALUE="${CV_OBJ_ID}:EXHAUSTED"
       CV_VERIFIED_FOR=""
+      CV_ATTEMPTS=0
       [ -f "$CV_MARKER" ] && CV_VERIFIED_FOR=$(cat "$CV_MARKER" 2>/dev/null || echo "")
-      if [ "$CV_VERIFIED_FOR" != "$CV_OBJ_ID" ]; then
+      CV_SATISFIED_BY=""
+      if [ "$CV_VERIFIED_FOR" = "$CV_OBJ_ID" ]; then
+        CV_SATISFIED_BY="verifier-clean"
+      elif [ "$CV_VERIFIED_FOR" = "$CV_DEGRADED_VALUE" ]; then
+        CV_SATISFIED_BY="degrade-to-allow"
+      elif [ "$CV_VERIFIED_FOR" = "$CV_EXHAUSTED_VALUE" ]; then
+        CV_SATISFIED_BY="backstop-exhausted"
+      fi
+      if [ -z "$CV_SATISFIED_BY" ]; then
         # Filter out docs/config/lockfiles — mirrors the comment-verifier agent's own
         # scope filter, so this cheap backstop doesn't spawn the agent for doc-only diffs.
         CV_CHANGED_JSON=$(files_modified_json "$PROJECT_ROOT" "$BASE_BRANCH" 2>/dev/null || echo '[]')
@@ -1142,9 +1155,10 @@ DV_MSG
         case "$CV_CHANGED_COUNT" in (*[!0-9]*|'') CV_CHANGED_COUNT=0 ;; esac
         if [ "$CV_CHANGED_COUNT" -eq 0 ]; then
           mkdir -p "$NAZGUL_DIR/logs"
-          printf '%s\n' "$CV_OBJ_ID" > "$CV_MARKER"
+          printf '%s\n' "$CV_DEGRADED_VALUE" > "$CV_MARKER"
+          CV_VERIFIED_FOR="$CV_DEGRADED_VALUE"
+          CV_SATISFIED_BY="degrade-to-allow"
         else
-          CV_ATTEMPTS=0
           if [ -f "$CV_ATTEMPTS_FILE" ]; then
             read -r CV_ATT_OBJ CV_ATT_CNT < "$CV_ATTEMPTS_FILE" 2>/dev/null || true
             if [ "${CV_ATT_OBJ:-}" = "$CV_OBJ_ID" ]; then
@@ -1170,11 +1184,21 @@ CV_MSG
             jq -n --arg r "Post-loop comment-verifier gate: comments not yet verified for ${CV_OBJ_ID}" '{"decision":"block","reason":$r}'
             exit 2
           else
-            echo "Nazgul: comment-verifier gate gave up after ${CV_ATTEMPTS} attempts for ${CV_OBJ_ID} — completing without comment verification. Run /nazgul:comment-verifier manually." >&2
+            echo "Nazgul: comment-verifier gate gave up after ${CV_ATTEMPTS} attempts for ${CV_OBJ_ID} — completing without comment verification, marker recorded as ${CV_EXHAUSTED_VALUE}. Run /nazgul:comment-verifier manually." >&2
             mkdir -p "$NAZGUL_DIR/logs"
-            printf '%s\n' "$CV_OBJ_ID" > "$CV_MARKER"
+            printf '%s\n' "$CV_EXHAUSTED_VALUE" > "$CV_MARKER"
+            CV_VERIFIED_FOR="$CV_EXHAUSTED_VALUE"
+            CV_SATISFIED_BY="backstop-exhausted"
           fi
         fi
+      fi
+      if [ -n "$CV_SATISFIED_BY" ]; then
+        emit_event "gate_attribution" \
+          gate "comment_verifier" \
+          writer "$CV_SATISFIED_BY" \
+          objective "$CV_OBJ_ID" \
+          marker "$CV_VERIFIED_FOR" \
+          attempts:n "$CV_ATTEMPTS"
       fi
     fi
     # Post-loop self-audit gate (ADR-001): marker + bounded backstop (≤3); never a hard
