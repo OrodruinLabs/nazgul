@@ -53,8 +53,17 @@ Output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md`:
 4. Summarize how many were retired. STOP (do not distill in --retire mode).
 
 ### Step 1: Distill
+Resolve `ROOT` once (`git rev-parse --show-toplevel` — the directory holding `nazgul/config.json`) and
+open the prompt with these two lines verbatim, `$ROOT` expanded; the learner's input contract
+(RULES.md §21) STOPs without them:
+
+```text
+Dispatch brief: <main_worktree_path> = /abs/path/to/project. Nazgul config: /abs/path/to/project/nazgul/config.json.
+Address every runtime-state path under that root, absolute and verbatim — your cwd is not it.
+```
+
 Dispatch the learner agent with the Agent tool, `subagent_type: "nazgul:learner"`.
-It reads mistake artifacts and writes `nazgul/learning/proposed-rules.md`.
+It reads mistake artifacts and writes `$ROOT/nazgul/learning/proposed-rules.md`.
 (For `--dry-run`, tell the learner in the prompt NOT to update `.last-run`.)
 
 ### Step 2: Interactive approval

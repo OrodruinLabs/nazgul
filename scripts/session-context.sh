@@ -9,6 +9,10 @@ source "$SCRIPT_DIR/lib/nazgul-root.sh"
 PROJECT_ROOT="$(resolve_project_root)"
 NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
+
+# The ONE dispatch-brief preamble every DELEGATE line below reuses verbatim —
+# every contract-bearing agent spec STOPs without <main_worktree_path>.
+DISPATCH_BRIEF="Dispatch brief: <main_worktree_path> = ${PROJECT_ROOT}. Nazgul config: ${CONFIG}. Address every runtime-state path under that root, absolute and verbatim — your cwd is not it."
 PLAN="$NAZGUL_DIR/plan.md"
 source "$SCRIPT_DIR/lib/task-utils.sh"
 source "$SCRIPT_DIR/lib/session-tracker.sh"
@@ -272,12 +276,12 @@ fi
 cat << CONTEXT_EOF2
 $([ -n "$MIGRATION_NOTICE" ] && echo "NOTICE: $MIGRATION_NOTICE" || true)
 Active task: ${ACTIVE_TASK:-none} (${ACTIVE_STATUS:-none})
-$([ "$GRANULARITY" = "task" ] && [ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. Do NOT skip the review gate." || true)
-$([ "$GRANULARITY" = "task" ] && [ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}." || true)
+$([ "$GRANULARITY" = "task" ] && [ "$ACTIVE_STATUS" = "IMPLEMENTED" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. ${DISPATCH_BRIEF} Do NOT skip the review gate." || true)
+$([ "$GRANULARITY" = "task" ] && [ "$ACTIVE_STATUS" = "IN_REVIEW" ] && echo "DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. ${DISPATCH_BRIEF}" || true)
 $([ "$GRANULARITY" != "task" ] && { [ "$ACTIVE_STATUS" = "IMPLEMENTED" ] || [ "$ACTIVE_STATUS" = "IN_REVIEW" ]; } && echo "NOTE: review granularity is ${GRANULARITY} — do NOT spawn a single-task review-gate for ${ACTIVE_TASK}; it is parked pending the aggregate review unit (MF-008). Read nazgul/plan.md for aggregate-review readiness before dispatching." || true)
-$([ "$ACTIVE_STATUS" = "READY" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}." || true)
-$([ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}." || true)
-$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first." || true)
+$([ "$ACTIVE_STATUS" = "READY" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}. ${DISPATCH_BRIEF} Create-or-recover its worktree and pass the printed path as <task_worktree>: bash -c 'source \"${SCRIPT_DIR}/worktree-utils.sh\" && create_task_worktree ${ACTIVE_TASK} \"${PROJECT_ROOT}\" \"${CONFIG}\"'" || true)
+$([ "$ACTIVE_STATUS" = "IN_PROGRESS" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}. ${DISPATCH_BRIEF} Create-or-recover its worktree and pass the printed path as <task_worktree>: bash -c 'source \"${SCRIPT_DIR}/worktree-utils.sh\" && create_task_worktree ${ACTIVE_TASK} \"${PROJECT_ROOT}\" \"${CONFIG}\"'" || true)
+$([ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ] && echo "DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}. ${DISPATCH_BRIEF} Read consolidated feedback first, and pass the retained <task_worktree> for this task." || true)
 Reviewers: ${REVIEWERS}
 $([ -n "$FEATURE_BRANCH" ] && echo "Branch: ${FEATURE_BRANCH} → ${BASE_BRANCH} | Worktrees: ${WORKTREE_COUNT}" || true)
 $([ -n "$STACK_LINE" ] && echo "$STACK_LINE" || true)

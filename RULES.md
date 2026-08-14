@@ -531,12 +531,14 @@ policy but emit `coverage_vacuous`. A filter that matches no file is also NOTHIN
 run. A new skip reason must be named and counted — it cannot disappear into `passed` or a free-form
 note. This is §15's looked-vs-never-looked distinction applied to tests, guards, smoke, and audits.
 
-- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Eight entry
+- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Nine entry
   points are bound by the contract above: `tests/run-tests.sh`, `scripts/lean-comments-guard.sh --check`,
   `tests/test-shellcheck.sh`, `scripts/doctor.sh`, `agents/comment-verifier.md`,
   `scripts/lib/heartbeat-triage.sh`, `scripts/self-audit.sh` (enrolled FEAT-029/TASK-012, which also
-  moved the registry here), and `scripts/audit-agent-state-paths.sh` (enrolled FEAT-030/TASK-002 — the
-  agent-roster state-path audit; advisory, always exit 0, so its `F == 0` gate is a separate test).
+  moved the registry here), `scripts/audit-agent-state-paths.sh` (enrolled FEAT-030/TASK-002 — the
+  agent-roster state-path audit; advisory, always exit 0, so its `F == 0` gate is a separate test), and
+  `tests/test-dispatch-brief-contract.sh` (enrolled FEAT-030 — the caller-side dispatch-brief scan of
+  §21 item 8; blocking, so nothing checked is its own failure).
   `tests/test-coverage-honesty.sh` drives every one of them under a forced
   all-skip input and FAILS if any enumerated entry point was never driven — membership is asserted, not
   assumed, so an entry point that conforms today cannot silently stop conforming tomorrow. Add a new
@@ -995,3 +997,24 @@ FEAT-030/ADR-021 states the rule; this section records what enforces each clause
    shell redirect that no guard blocks is one config change from breaking, and item 5 is the mitigation.
    **Falsifier:** if a roster audit or a future install mode produces a guard that DOES block that
    redirect, this decision is revisited and the grant made, scoped and pinned by a test.
+8. **The caller supplies what the contract demands, and that half is scanned too.** `[enforced]` Item 1
+   binds the party that must OBEY the contract; this binds the party that must SUPPLY it. Every site
+   that dispatches a contract-bearing agent — `scripts/**`, `skills/**`, and the agent-to-agent
+   dispatches inside `agents/**` — names `<main_worktree_path>` in its brief, using ONE preamble
+   (`Dispatch brief: <main_worktree_path> = <root>. Nazgul config: <root>/nazgul/config.json.` plus
+   `Address every runtime-state path under that root, absolute and verbatim — your cwd is not it.`)
+   rather than a per-site dialect: twenty specs read this text, and nine wordings of it is the next
+   defect. `scripts/stop-hook.sh`, `scripts/session-context.sh` and `scripts/post-compact.sh` each
+   define it once as `DISPATCH_BRIEF` and interpolate it. Where the dispatch also establishes a task
+   worktree, the caller CREATES-OR-RECOVERS it (`create_task_worktree`, `scripts/worktree-utils.sh` —
+   which had zero production callers while `agents/implementer.md` was told to STOP rather than create
+   one, so the loop's first READY task could not be implemented at all) and passes `<task_worktree>`.
+   `tests/test-dispatch-brief-contract.sh` scans the shipped surface, not the diff: a dispatch site is
+   a dispatch verb adjacent to a contract-bearing agent name (the roster is DERIVED from which specs
+   declare `## Input contract`, so a spec that grows one tomorrow is covered without editing the test),
+   and the brief must appear within eight lines of the site — the `${DISPATCH_BRIEF}` indirection is
+   accepted only in a file that itself defines the variable with the token in it, resolved rather than
+   trusted. It gates on `F == 0` with a `K > 0` floor and is dogfooded four ways: a synthetic rootless
+   site must be FOUND, the same site rooted must pass, a brief nine lines away must NOT count, and an
+   undefined `${DISPATCH_BRIEF}` reference must be refused. Its coverage-honesty membership is recorded
+   in §15's registry.

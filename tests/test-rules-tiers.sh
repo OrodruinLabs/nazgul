@@ -63,13 +63,14 @@ else
 fi
 
 # Bumped per objective, never weakened: 64->69 (FEAT-029), 69->71 (PATCH-002), 71->78
-# with advisory 28->31 (FEAT-030 §21). Bump for a genuinely new rule; never re-tag to fit.
+# with advisory 28->31 (FEAT-030 §21), 78->79 (FEAT-030 §21 item 8, the caller side
+# of the dispatch brief). Bump for a genuinely new rule; never re-tag to fit.
 ENFORCED_COUNT=$(awk '{ count += gsub(/\[enforced\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ENFORCED_COUNT" -eq 78 ]; then
-  _pass "[enforced] annotation count is exactly 78 (found: $ENFORCED_COUNT)"
+if [ "$ENFORCED_COUNT" -eq 79 ]; then
+  _pass "[enforced] annotation count is exactly 79 (found: $ENFORCED_COUNT)"
 else
-  _fail "[enforced] annotation count is exactly 78" \
-    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 78"
+  _fail "[enforced] annotation count is exactly 79" \
+    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 79"
 fi
 
 # 21 -> 22: FEAT-029 added §2's typed reconciliation quarantine, hook-driven

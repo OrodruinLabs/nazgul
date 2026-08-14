@@ -16,7 +16,7 @@ trap 'rm -rf "$SCRATCH"' EXIT
 
 # Every entry point named by RULES.md §15; the tally at the bottom fails if one
 # was never driven through _entry_covered.
-ENTRY_POINTS="run-tests lean-comments test-shellcheck doctor comment-verifier heartbeat-triage self-audit audit-agent-state-paths"
+ENTRY_POINTS="run-tests lean-comments test-shellcheck doctor comment-verifier heartbeat-triage self-audit audit-agent-state-paths test-dispatch-brief-contract"
 COVERED=""
 
 _entry_covered() {
@@ -239,6 +239,32 @@ if [ "$AP_CHECKED_N" -ge 1 ]; then
   _pass "audit-agent-state-paths: a full run actually checks something"
 else
   _fail "audit-agent-state-paths: a full run actually checks something" "checked: $AP_CHECKED"
+fi
+
+# test-dispatch-brief-contract, forced all-skip: a candidate file holding no
+# dispatch site at all — scanned, counted, and named, never never-looked-at.
+mkdir -p "$SCRATCH/db/skills/fake"
+printf '# nothing to dispatch here\n' > "$SCRATCH/db/skills/fake/SKILL.md"
+DB_OUT=$(NAZGUL_DISPATCH_SCAN_ROOT="$SCRATCH/db" \
+  bash "$REPO_ROOT/tests/test-dispatch-brief-contract.sh" 2>"$SCRATCH/db.err")
+DB_RC=$?
+_grammar_check "test-dispatch-brief-contract (all-skip)" "test-dispatch-brief-contract" \
+  "no-dispatch-site unreadable" "$(_last_line "$DB_OUT")" && _entry_covered test-dispatch-brief-contract
+assert_contains "test-dispatch-brief-contract: forced all-skip emits the nothing-checked signal" \
+  "$(cat "$SCRATCH/db.err")" "test-dispatch-brief-contract: NOTHING CHECKED — all 1 candidates skipped"
+assert_exit_code "test-dispatch-brief-contract: blocking — nothing checked is a failure" "$DB_RC" 1
+# Pinned, not derived: an inherited scan root would aim the "full run" at whatever
+# tree the caller named, and an empty tree passes while checking nothing.
+DB_FULL=$(NAZGUL_DISPATCH_SCAN_ROOT="$REPO_ROOT" \
+  bash "$REPO_ROOT/tests/test-dispatch-brief-contract.sh" 2>/dev/null)
+_grammar_check "test-dispatch-brief-contract (full run)" "test-dispatch-brief-contract" \
+  "no-dispatch-site unreadable" "$(_last_line "$DB_FULL")"
+DB_CHECKED=$(_last_line "$DB_FULL" | sed -E 's/^.*\), ([0-9]+) checked.*/\1/')
+case "${DB_CHECKED:-}" in ''|*[!0-9]*) DB_CHECKED_N=0 ;; *) DB_CHECKED_N="$DB_CHECKED" ;; esac
+if [ "$DB_CHECKED_N" -ge 1 ]; then
+  _pass "test-dispatch-brief-contract: a full run actually checks something"
+else
+  _fail "test-dispatch-brief-contract: a full run actually checks something" "checked: $DB_CHECKED"
 fi
 
 # Enumeration completeness — the point of the whole file: an entry point with no

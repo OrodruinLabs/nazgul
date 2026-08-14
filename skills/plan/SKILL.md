@@ -73,8 +73,8 @@ Don't over-ask; once you can state the idea crisply, confirm your understanding 
 2. Every dispatch below opens with the runtime-state root. Each of these agents' input contract (RULES.md §21) STOPs when the brief omits it and `branch.main_worktree_path` is unreadable — and that key is still `null` on a project that has never run `/nazgul:start`. Resolve `ROOT` once from this checkout (`git rev-parse --show-toplevel`, the directory holding `nazgul/config.json`) and prepend these two lines to each prompt, `$ROOT` expanded to the absolute path:
 
    ```text
-   <main_worktree_path> = /abs/path/to/project
-   Nazgul config (absolute): /abs/path/to/project/nazgul/config.json
+   Dispatch brief: <main_worktree_path> = /abs/path/to/project. Nazgul config: /abs/path/to/project/nazgul/config.json.
+   Address every runtime-state path under that root, absolute and verbatim — your cwd is not it.
    ```
 
 3. If `$ROOT/nazgul/context/discovery-summary.md` is absent, dispatch `nazgul:discovery` (Task tool) to profile the project.

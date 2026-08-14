@@ -128,8 +128,8 @@ Dispatch via the `Agent` tool with `subagent_type: "nazgul:discovery"` — **do 
 **The brief MUST open with the runtime-state root.** `agents/discovery.md`'s input contract (RULES.md §21) says: no `<main_worktree_path>` in the brief, fall back to `branch.main_worktree_path`, otherwise STOP. At init time that config key is still `null` — it is written later by `create_feature_branch` under `/nazgul:start` — so a brief without the root leaves discovery no legal way to proceed. Resolve `ROOT` here instead, from this project's own checkout (`git rev-parse --show-toplevel` — the directory holding `nazgul/config.json`, not necessarily the cwd you were invoked from), and prepend these two lines to the brief, `$ROOT` expanded to the absolute path:
 
 ```text
-<main_worktree_path> = /abs/path/to/project
-Nazgul config (absolute): /abs/path/to/project/nazgul/config.json
+Dispatch brief: <main_worktree_path> = /abs/path/to/project. Nazgul config: /abs/path/to/project/nazgul/config.json.
+Address every runtime-state path under that root, absolute and verbatim — your cwd is not it.
 ```
 
 The dispatch:

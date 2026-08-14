@@ -260,6 +260,40 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 - `/nazgul:doctor` — Read-only environment preflight: reports plugin-version drift, `jq`/`gh` deps, git-hooks drift, the bash-vs-zsh hazard, the `NAZGUL_DIR` footgun, config-schema staleness, and — when `execution.stacking` is enabled — gh-stack tooling readiness plus registry-vs-GitHub drift. Never writes state; its only fix path is text on stdout
 - `/nazgul:help` — Quick reference for all commands and modes
 
+## Backlog Rule — every inbox item exists on the GitHub board
+
+**Every file in `nazgul/inbox/` MUST have a GitHub issue on the `Nazgul: framework` project board**
+(org project #4, `OrodruinLabs/nazgul` issues). The inbox is gitignored and local-only, so an item
+that exists nowhere else is one machine failure away from gone — the board is the durable, shareable
+copy.
+
+The binding is recorded in the item's own frontmatter, which is what makes the rule checkable rather
+than aspirational:
+
+```yaml
+priority: 1        # p0..p7 -> the `pN` label
+type: bug          # bug | feature -> the `type: bug` / `type: feature` label
+rank: 6            # position within the whole queue -> the board's Rank number field
+issue: 94          # the GitHub issue. ABSENT = unsynced.
+```
+
+`type` is normalized to exactly two values. `rank` replaces file mtime as the ordering key — mtime
+does not survive a copy, clone, or re-save, so an order stored only in filesystem metadata is lost
+by any transport.
+
+**Mechanism:** `scripts/sync-inbox-to-github.sh`
+
+- `--check` — report only; **exits 1** if any item lacks an `issue:`. This is the enforcement.
+- no flag — normalize `type`/`rank` on new arrivals, create the missing issues, write `issue:` back,
+  add each to the board, and set its Rank.
+
+Idempotent: an item carrying `issue: N` is skipped, never re-created, so the command is safe to
+re-run and safe to interrupt. It reports `N scanned, M skipped, K created, F failed` — per RULES.md
+§15, "nothing to do" and "nothing was examined" must never print the same thing.
+
+Run it after filing anything. The inbox is written concurrently by other sessions, so the set grows
+without this session's knowledge; `--check` is the cheap way to find out.
+
 ## The 10 Rules for the Nazgul Loop
 
 1. **Always read plan.md first.** The Recovery Pointer tells you exactly where you are.

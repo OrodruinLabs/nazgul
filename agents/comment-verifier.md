@@ -41,7 +41,10 @@ there creates a fresh directory, succeeds, and is read by nobody.
 
 1. `<main_worktree_path>/nazgul/config.json` — read `feat_id` (the current objective) and
    `docs.verify_comments` (opt-out flag; default `true`).
-2. If `docs.verify_comments` is `false`, write the marker and exit immediately (clean no-op).
+2. If `docs.verify_comments` is `false`, exit immediately and write NOTHING — no marker, no
+   coverage line (clean no-op). An opted-out run has verified nothing, and the bare `feat_id`
+   the marker sequence would persist is the gate's `verifier-clean` value: it would satisfy a
+   later re-enabled run for the same objective as a clean pass that never happened.
 3. Determine the changed files: `git diff <branch.base>..HEAD --name-only`, reading
    `branch.base` from `<main_worktree_path>/nazgul/config.json`. If `branch.base` is absent,
    degrade to `git diff HEAD~1..HEAD --name-only`.
@@ -116,7 +119,7 @@ into a clean result.
 Emit this as the LAST line of stdout on every run that reaches changed-file
 determination — clean, findings, or degrade-to-allow. The explicit
 `docs.verify_comments: false` opt-out is the sole exception: it exits before
-enumeration and writes only the marker described above.
+enumeration and writes nothing at all — no marker, no line.
 
 ```text
 comment-verifier: <N> scanned, <M> skipped (non-source=<a>, unreadable=<b>), <K> checked, <F> findings
@@ -207,9 +210,13 @@ the zero-count coverage line, then exit 0. Nothing to check → nothing to block
 
 The bare `feat_id` is reserved for a pass that actually checked something: the stop-hook
 reads it as `writer: verifier-clean`, and your scope filter is stricter than the hook's, so
-a degrade you record as clean is a run that checked nothing wearing a verified badge. The
-config opt-out follows the earlier immediate-exit contract, and it too writes the marker
-through the sequence above — never by a shortcut.
+a degrade you record as clean is a run that checked nothing wearing a verified badge.
+
+**Config opt-out** (`docs.verify_comments: false`): exit 0 immediately, writing NOTHING. The
+stop-hook's own gate is already skipped in that configuration, so it never reads the marker —
+but a marker you leave behind outlives the opt-out, and re-enabling verification for the same
+objective would then find a bare `feat_id` and record `verifier-clean` for a run that checked
+nothing. `tests/test-comment-verifier-gate.sh` CV-1 asserts the marker's absence.
 
 ## Hard rules
 

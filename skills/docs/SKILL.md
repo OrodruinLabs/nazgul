@@ -37,7 +37,13 @@ If the user wants to see existing documents:
 ### Generate Documents
 If the user wants to generate or regenerate documents:
 1. Read `nazgul/context/project-classification.md` for project type
-2. Delegate to the doc-generator agent
+2. Delegate to the doc-generator agent, opening its prompt with the runtime-state root it STOPs
+   without (RULES.md §21) — `ROOT` from `git rev-parse --show-toplevel`, expanded absolute:
+
+   ```text
+   Dispatch brief: <main_worktree_path> = /abs/path/to/project. Nazgul config: /abs/path/to/project/nazgul/config.json.
+   Address every runtime-state path under that root, absolute and verbatim — your cwd is not it.
+   ```
 3. The doc-generator will use templates from `templates/docs/` and write to `nazgul/docs/`
 4. Update `nazgul/docs/manifest.md`
 

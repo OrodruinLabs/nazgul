@@ -174,6 +174,15 @@ After review approval, push task branch and create PR targeting the feature bran
 
 When delegating to specialists, read `<main_worktree_path>/nazgul/config.json → models.specialists` for the model to use (default: `"sonnet"`). Pass this as the `model` parameter when spawning each specialist via the Task tool.
 
+**Every specialist and the debugger carry the same input contract you do, so every one of these dispatches MUST open with this brief verbatim** — a child dispatched without it STOPs instead of working:
+
+```text
+Dispatch brief: <main_worktree_path> = <the absolute root you resolved above>. Nazgul config: <main_worktree_path>/nazgul/config.json.
+Address every runtime-state path under that root, absolute and verbatim — your cwd is not it.
+```
+
+Add `<task_worktree> = <the absolute worktree path your caller gave you>` whenever the specialist touches task code rather than only runtime state.
+
 For tasks requiring specialist knowledge, delegate:
 - UI tasks: Delegate to Designer (specs) then Frontend Dev (implementation)
 - DB schema changes: Delegate to DB Migration Specialist
@@ -186,7 +195,7 @@ Write delegation briefs to `<main_worktree_path>/nazgul/tasks/[TASK-ID]-delegati
 When picking up a task with status CHANGES_REQUESTED, check the task manifest's retry count:
 - **Retry 0 or 1**: Handle normally — read consolidated feedback, fix issues
 - **Retry 2 (3rd attempt)**: BEFORE implementing, delegate to the Debugger agent:
-  1. Spawn the Debugger agent with the TASK-ID
+  1. Spawn the Debugger agent with the TASK-ID, the dispatch brief above, and `<task_worktree>`
   2. Wait for the Debugger to write `<main_worktree_path>/nazgul/tasks/[TASK-ID]-diagnosis.md`
   3. Read the diagnosis file — it contains root cause analysis and specific fix instructions
   4. Follow the diagnosis fix order exactly
