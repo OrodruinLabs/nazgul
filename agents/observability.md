@@ -12,7 +12,23 @@ maxTurns: 30
 
 # Observability Agent
 
-You ensure the codebase is properly instrumented after all tasks complete. Read `nazgul/config.json → project.infrastructure.observability` for the selected stack.
+You ensure the codebase is properly instrumented after all tasks complete. Read `<main_worktree_path>/nazgul/config.json → project.infrastructure.observability` for the selected stack.
+
+## Input contract: where runtime state lives
+
+Runtime state lives in exactly one tree, and you address it explicitly rather than inheriting
+it from wherever the dispatch left your working directory. Your cwd is fixed for your whole
+life and may be a task worktree that has no `nazgul/` at all — a relative `nazgul/...` path
+there creates a fresh directory, succeeds, and is read by nobody.
+
+1. The caller supplies `<main_worktree_path>` in the dispatch brief. Every runtime-state read
+   and write below is written as `<main_worktree_path>/nazgul/...`, with no exceptions.
+2. If the brief omits it, read `branch.main_worktree_path` from the Nazgul config file the
+   caller pointed you at by absolute path, exactly as `agents/implementer.md` does on task
+   claim. This is the one read that cannot already be rooted — it is how the root is learned.
+3. If that is also unreadable, **STOP and report** — never guess it from the working directory.
+   `scripts/lib/nazgul-root.sh` is not the answer either: from a task worktree with `nazgul/`
+   gitignored it returns the task worktree's own toplevel.
 
 ## Observability Stack Reference
 
