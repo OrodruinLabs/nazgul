@@ -99,6 +99,12 @@ assert_gate_driven "GDP-2: doc-verifier gate emitted a DELEGATE message" "$DV_MS
 assert_contains "GDP-2: names <main_worktree_path>" "$DV_MSG" "<main_worktree_path> = $TEST_DIR"
 assert_contains "GDP-2: absolute .docs-verified marker" "$DV_MSG" "$TEST_DIR/nazgul/logs/.docs-verified"
 assert_no_relative_path "GDP-2: no bare relative marker" "$DV_MSG" "nazgul/logs/.docs-verified"
+# The doc-verifier gate names a READ target as well as a write target. RULES.md §21 item 4 is
+# scoped to write targets, but a relative read is the same ambiguity one channel over: the agent
+# would open a task worktree that has no nazgul/ at all.
+assert_contains "GDP-2: absolute docs scan target" "$DV_MSG" "$TEST_DIR/nazgul/docs/*.md"
+assert_no_relative_path "GDP-2: no bare relative docs scan target" "$DV_MSG" "nazgul/docs/"
+assert_no_relative_path "GDP-2: no bare relative opt-out config" "$DV_MSG" "nazgul/config.json"
 teardown_temp_dir
 
 # --- GDP-3: comment-verifier gate instructs with absolute marker ---

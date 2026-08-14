@@ -1004,7 +1004,7 @@ objective's review/diagnosis artifacts and write candidate rules to
 "${LEARN_DIR}/proposed-rules.md". It PROPOSES only — it never approves or edits the registry.
 When it finishes it MUST record completion: echo "${OBJ_ID}" > "${MARKER}"
 Do NOT output NAZGUL_COMPLETE until distillation has run and the marker is written.
-Opt out for future objectives with learning.auto_distill_post_loop=false in nazgul/config.json.
+Opt out for future objectives with learning.auto_distill_post_loop=false in ${CONFIG}.
 LEARN_MSG
           jq -n --arg r "Post-loop learning gate: distill learned rules for ${OBJ_ID}" '{"decision":"block","reason":$r}'
           exit 2
@@ -1106,12 +1106,12 @@ Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP DOC-VERIFI
 Generated docs have NOT been verified for this objective (${DV_OBJ_ID}) yet.
 Dispatch brief: <main_worktree_path> = ${PROJECT_ROOT}. Every path you must write is given
 absolute below — use it verbatim, never a path relative to your working directory.
-DELEGATE: Spawn the doc-verifier agent (nazgul:doc-verifier) to cross-check nazgul/docs/*.md
+DELEGATE: Spawn the doc-verifier agent (nazgul:doc-verifier) to cross-check ${DOCS_DIR}/*.md
 and CHANGELOG.md against source. It checks that every event type, config key, command, and
 named script referenced in docs exists in the codebase.
 When it finishes it MUST record completion: echo "${DV_OBJ_ID}" > "${DV_MARKER}"
 Do NOT output NAZGUL_COMPLETE until verification has run and the marker is written.
-Opt out for future objectives with docs.verify_post_loop=false in nazgul/config.json.
+Opt out for future objectives with docs.verify_post_loop=false in ${CONFIG}.
 DV_MSG
             jq -n --arg r "Post-loop doc-verifier gate: docs not yet verified for ${DV_OBJ_ID}" '{"decision":"block","reason":$r}'
             exit 2
@@ -1200,7 +1200,7 @@ source doc-comments (XML <summary>, JSDoc, docstrings) changed by this objective
 templated, restatement, or contradiction defects.
 When it finishes it MUST record completion: echo "${CV_OBJ_ID}" > "${CV_MARKER}"
 Do NOT output NAZGUL_COMPLETE until verification has run and the marker is written.
-Opt out for future objectives with docs.verify_comments=false in nazgul/config.json.
+Opt out for future objectives with docs.verify_comments=false in ${CONFIG}.
 CV_MSG
             jq -n --arg r "Post-loop comment-verifier gate: comments not yet verified for ${CV_OBJ_ID}" '{"decision":"block","reason":$r}'
             exit 2
@@ -1261,7 +1261,7 @@ signals from this objective and append findings to "${SA_BACKLOG_ABS}". It propo
 only — it never edits code or approves anything.
 When it finishes it MUST record completion: echo "${SA_OBJ_ID}" > "${SA_MARKER}"
 Do NOT output NAZGUL_COMPLETE until self-audit has run and the marker is written.
-Opt out for future objectives with self_audit.enabled=false in nazgul/config.json.
+Opt out for future objectives with self_audit.enabled=false in ${CONFIG}.
 SA_MSG
           jq -n --arg r "Post-loop self-audit gate: findings not yet recorded for ${SA_OBJ_ID}" '{"decision":"block","reason":$r}'
           exit 2

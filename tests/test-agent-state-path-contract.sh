@@ -100,7 +100,10 @@ assert_eq "R2: coverage accounting adds up over the roster (N == M + K)" \
 assert_not_contains "R2: a run that gated the roster is not a vacuous run" \
   "$AUDIT_ERR" "NOTHING CHECKED"
 
-ROSTER_FILES=$(find "$REPO_ROOT/agents" -type f -name '*.md' | grep -c . || true)
+# Mirror the auditor's own enumeration (scripts/audit-agent-state-paths.sh: find agents
+# \( -type f -o -type l \)) — counting only -type f would make this recount disagree with
+# AUDIT_K the moment a spec is symlinked, failing the contract for the wrong reason.
+ROSTER_FILES=$(find "$REPO_ROOT/agents" \( -type f -o -type l \) -name '*.md' | grep -c . || true)
 assert_eq "R2: the enumerator reached every .md spec under agents/ and agents/templates/" \
   "$AUDIT_K" "$ROSTER_FILES"
 
