@@ -112,6 +112,10 @@ cat > "$SCRATCH/dirty/agents/emitter.md" <<'SPEC'
 # emitter
 
 Emit the coverage event with `NAZGUL_DIR="$(pwd)/nazgul"` so the bus sees it.
+
+Emit the coverage event with `NAZGUL_DIR="$PWD/nazgul"` so the bus sees it.
+
+Emit the coverage event with `NAZGUL_DIR="${PWD}/nazgul"` so the bus sees it.
 SPEC
 cat > "$SCRATCH/dirty/agents/templates/prose.md" <<'SPEC'
 # prose only
@@ -141,15 +145,21 @@ assert_contains "AS-14: a relative prose-form config read FIRES as state-read" \
   "$DIRTY_OUT" "agents/writer.md:10: state-read"
 assert_contains "AS-15: the \$(pwd)/nazgul event idiom FIRES — cwd is not the main worktree" \
   "$DIRTY_OUT" 'agents/emitter.md:3: state-'
+# Same defect, other spellings: no trailing `nazgul/`, so a $(pwd)-only matcher yields
+# nothing on an admitted line and the occurrence counts as neither write, read, nor prose.
+assert_contains "AS-15b: the \$PWD/nazgul spelling FIRES too" \
+  "$DIRTY_OUT" 'agents/emitter.md:5: state-'
+assert_contains "AS-15c: the \${PWD}/nazgul spelling FIRES too" \
+  "$DIRTY_OUT" 'agents/emitter.md:7: state-'
 assert_not_contains "AS-16: a path another actor writes, under an explicit prohibition, stays prose" \
   "$DIRTY_OUT" "agents/templates/prose.md:"
 
 DIRTY_F=$(_f_of "$DIRTY_LINE")
-if [ "${DIRTY_F:-0}" -ge 4 ]; then
+if [ "${DIRTY_F:-0}" -ge 6 ]; then
   _pass "AS-17: every enumerated defect is counted in F ($DIRTY_F)"
 else
   _fail "AS-17: every enumerated defect is counted in F" \
-    "expected >= 4 findings on a corpus with four defects, got $DIRTY_F"
+    "expected >= 6 findings on a corpus with six defects, got $DIRTY_F"
 fi
 assert_contains "AS-18: the dirty corpus still counts its prose exemptions" \
   "$DIRTY_OUT" "prose="
@@ -162,6 +172,8 @@ sed -e 's#mkdir -p nazgul/logs#mkdir -p "<main_worktree_path>/nazgul/logs"#' \
     -e 's#`nazgul/config.json`#`<main_worktree_path>/nazgul/config.json`#' \
     "$SCRATCH/dirty/agents/writer.md" > "$SCRATCH/clean/agents/writer.md"
 sed -e 's#\$(pwd)/nazgul#<main_worktree_path>/nazgul#' \
+    -e 's#\${PWD}/nazgul#<main_worktree_path>/nazgul#' \
+    -e 's#\$PWD/nazgul#<main_worktree_path>/nazgul#' \
     "$SCRATCH/dirty/agents/emitter.md" > "$SCRATCH/clean/agents/emitter.md"
 cp "$SCRATCH/dirty/agents/templates/prose.md" "$SCRATCH/clean/agents/templates/prose.md"
 

@@ -51,7 +51,7 @@ Format ALL user-facing output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md`
 
 ## Excluded Directories
 
-**ALWAYS skip these directories when scanning.** They are Nazgul's own runtime/output files and must never be treated as project source code:
+**ALWAYS skip these directories when scanning.** They are Nazgul's own runtime/output files and must never be treated as project source code. Every entry below except the first is a directory NAME to exclude wherever it appears at any depth; the first is given as a rooted path because there is exactly one runtime directory and it lives at the main worktree root:
 
 - `<main_worktree_path>/nazgul/` — Nazgul runtime directory (config, context, tasks, reviews, checkpoints, logs)
 - `.claude/` — Claude Code configuration and generated agents

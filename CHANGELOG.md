@@ -73,10 +73,12 @@ nothing an existing project stores had to change.
   `<main_worktree_path>` supplied by the caller in the dispatch brief; if the brief omits it the agent
   falls back to `branch.main_worktree_path` in the config it was pointed at, and if that is unreadable
   too it STOPs and reports — never cwd, never a guess, never a worktree it creates for itself.
-  `NAZGUL_DIR="$(pwd)/nazgul"` is the same defect under another name and is a finding too:
-  `scripts/lib/emit-event.sh` returns 0 without writing when `NAZGUL_DIR` names a tree with no
-  initialised `nazgul/`, so the observability surface fails by the exact mechanism it exists to
-  observe.
+  `NAZGUL_DIR="$(pwd)/nazgul"` is the same defect under another name and is a finding too, in two
+  distinct shapes: `scripts/lib/emit-event.sh:21-22` returns 0 without writing when `NAZGUL_DIR` is
+  UNSET; when it is SET but names a tree with no initialised `nazgul/`, `:70-72` creates that tree's
+  `logs/` and writes the event into it, so the record lands where nobody reads it. Either way the
+  observability surface fails by the exact mechanism it exists to observe — but the second is a
+  misdirected write, not a missing one, and you diagnose it by finding the stray tree.
 - **A third resolution mechanism was deliberately NOT invented, and the reason is specific.**
   `scripts/lib/nazgul-root.sh` is unchanged and ADR-008 stands; agents pass
   `CLAUDE_PROJECT_DIR="<main_worktree_path>"` (or `--project-root=` for `scripts/red-run.sh`) when

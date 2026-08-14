@@ -1001,7 +1001,7 @@ Dispatch brief: <main_worktree_path> = ${PROJECT_ROOT}. Every path you must writ
 absolute below — use it verbatim, never a path relative to your working directory.
 DELEGATE: Spawn the learner agent (Agent tool, subagent_type "nazgul:learner") to mine this
 objective's review/diagnosis artifacts and write candidate rules to
-${LEARN_DIR}/proposed-rules.md. It PROPOSES only — it never approves or edits the registry.
+"${LEARN_DIR}/proposed-rules.md". It PROPOSES only — it never approves or edits the registry.
 When it finishes it MUST record completion: echo "${OBJ_ID}" > "${MARKER}"
 Do NOT output NAZGUL_COMPLETE until distillation has run and the marker is written.
 Opt out for future objectives with learning.auto_distill_post_loop=false in nazgul/config.json.
@@ -1135,7 +1135,16 @@ DV_MSG
       CV_DEGRADED_VALUE="${CV_OBJ_ID}:NO-SOURCE-CHANGED"
       CV_EXHAUSTED_VALUE="${CV_OBJ_ID}:EXHAUSTED"
       CV_VERIFIED_FOR=""
+      # Read once, before the satisfied/unsatisfied split: a gate satisfied by a
+      # pre-existing marker must still report the real attempt count, not 0.
       CV_ATTEMPTS=0
+      if [ -f "$CV_ATTEMPTS_FILE" ]; then
+        read -r CV_ATT_OBJ CV_ATT_CNT < "$CV_ATTEMPTS_FILE" 2>/dev/null || true
+        if [ "${CV_ATT_OBJ:-}" = "$CV_OBJ_ID" ]; then
+          case "${CV_ATT_CNT:-0}" in ''|*[!0-9]*) CV_ATT_CNT=0 ;; esac
+          CV_ATTEMPTS="$CV_ATT_CNT"
+        fi
+      fi
       [ -f "$CV_MARKER" ] && CV_VERIFIED_FOR=$(cat "$CV_MARKER" 2>/dev/null || echo "")
       CV_SATISFIED_BY=""
       if [ "$CV_VERIFIED_FOR" = "$CV_OBJ_ID" ]; then
@@ -1159,13 +1168,6 @@ DV_MSG
           CV_VERIFIED_FOR="$CV_DEGRADED_VALUE"
           CV_SATISFIED_BY="degrade-to-allow"
         else
-          if [ -f "$CV_ATTEMPTS_FILE" ]; then
-            read -r CV_ATT_OBJ CV_ATT_CNT < "$CV_ATTEMPTS_FILE" 2>/dev/null || true
-            if [ "${CV_ATT_OBJ:-}" = "$CV_OBJ_ID" ]; then
-              case "${CV_ATT_CNT:-0}" in ''|*[!0-9]*) CV_ATT_CNT=0 ;; esac
-              CV_ATTEMPTS="$CV_ATT_CNT"
-            fi
-          fi
           if [ "$CV_ATTEMPTS" -lt 3 ]; then
             mkdir -p "$NAZGUL_DIR/logs"
             printf '%s %s\n' "$CV_OBJ_ID" "$((CV_ATTEMPTS + 1))" > "$CV_ATTEMPTS_FILE"
@@ -1237,7 +1239,7 @@ Self-audit findings have NOT been recorded for this objective (${SA_OBJ_ID}) yet
 Dispatch brief: <main_worktree_path> = ${PROJECT_ROOT}. Every path you must write is given
 absolute below — use it verbatim, never a path relative to your working directory.
 DELEGATE: Spawn the self-audit agent (nazgul:self-audit) to mine cost/perf/correctness
-signals from this objective and append findings to ${SA_BACKLOG_ABS}. It proposes
+signals from this objective and append findings to "${SA_BACKLOG_ABS}". It proposes
 only — it never edits code or approves anything.
 When it finishes it MUST record completion: echo "${SA_OBJ_ID}" > "${SA_MARKER}"
 Do NOT output NAZGUL_COMPLETE until self-audit has run and the marker is written.

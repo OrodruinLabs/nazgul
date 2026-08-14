@@ -194,7 +194,7 @@ When picking up a task with status CHANGES_REQUESTED, check the task manifest's 
 
 ## Self-Improvement (Optional)
 
-After setting a task to IMPLEMENTED, if `self_improvement.enabled` is true in `nazgul/config.json`:
+After setting a task to IMPLEMENTED, if `self_improvement.enabled` is true in `<main_worktree_path>/nazgul/config.json`:
 
 1. Rate your experience implementing this task on a 0-10 scale (see `${CLAUDE_PLUGIN_ROOT}/references/self-improvement.md`)
 2. If your rating is below the configured threshold (default 7), file a report:

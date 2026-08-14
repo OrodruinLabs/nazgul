@@ -61,7 +61,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SCAN_ROOT="${NAZGUL_AGENT_AUDIT_SCAN_ROOT:-$REPO_ROOT}"
 ENTRY="audit-agent-state-paths"
 
-OCCURRENCE_RE='(\$\(pwd\)/nazgul|[^[:space:]'"'"'"`]*nazgul/[^[:space:]'"'"'"`]*)'
+OCCURRENCE_RE='(\$\(pwd\)/nazgul|\$PWD/nazgul|\$\{PWD\}/nazgul|[^[:space:]'"'"'"`]*nazgul/[^[:space:]'"'"'"`]*)'
 ROOT_MARKER='<main_worktree_path>/nazgul'
 
 BARE_OP='read|write|create|append|update|record|save|persist|load|open|emit|copy|move'
@@ -153,8 +153,8 @@ _check_file() {
     case "$undented" in
       '```'*|'~~~'*) in_fence=$((1 - in_fence)); continue ;;
     esac
-    # `nazgul`, not `nazgul/`: the $(pwd)/nazgul idiom carries no trailing slash,
-    # and a `nazgul/`-only prefilter drops it before the matcher ever sees it.
+    # `nazgul`, not `nazgul/`: the cwd-rooted idioms ($(pwd)|$PWD|${PWD})/nazgul carry no
+    # trailing slash, and a `nazgul/`-only prefilter drops them before the matcher sees them.
     case "$line" in
       *nazgul*) ;;
       *) continue ;;

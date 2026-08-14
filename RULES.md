@@ -923,13 +923,19 @@ FEAT-030/ADR-021 states the rule; this section records what enforces each clause
    an environment variable into a Bash tool call, and no static test of a spec can assert that it did, so
    the bridge is reinforcement — item 1, which a scan can assert, is the primary mechanism.
 3. **Event emission is state.** `[enforced]` over `agents/**`, by item 1's scan. `NAZGUL_DIR="$(pwd)/nazgul"`
-   is the same defect wearing a different name: `scripts/lib/emit-event.sh:21-22` returns 0 without
-   writing when `NAZGUL_DIR` is unset or names a tree with no initialised `nazgul/`, so the observability
-   surface fails by the exact mechanism it exists to observe, silently. The auditor's occurrence grammar
-   matches the bare `$(pwd)/nazgul` idiom as well as any `nazgul/...` path, so a spec that re-adds it is
-   a finding wherever it lands. The boundary is stated rather than implied: this binds `agents/**` only.
-   Nothing stops a human shell or a future script from exporting a wrong `NAZGUL_DIR`, and `emit_event`'s
-   no-op is itself deliberate — an uninitialised project must not have an events file forced into it.
+   is the same defect wearing a different name, and its two failure modes are NOT the same failure:
+   `scripts/lib/emit-event.sh:21-22` returns 0 without writing when `NAZGUL_DIR` is UNSET. SET but naming
+   a tree with no initialised `nazgul/` is worse — the config read at `:29` falls back to `true` and
+   `:70-72` creates that tree's `logs/` and writes the event there, so the record lands where nobody
+   reads it. Both fail by the exact mechanism the observability surface exists to observe, silently, but
+   the diagnostic differs: a missing event in one case, a stray tree to go find in the other. The
+   auditor's occurrence grammar matches the bare `$(pwd)/nazgul` idiom as well as any `nazgul/...` path,
+   so a spec that re-adds it is a finding wherever it lands. The boundary is stated rather than
+   implied: this binds `agents/**` only.
+   Nothing stops a human shell or a future script from exporting a wrong `NAZGUL_DIR`, and the UNSET
+   no-op is itself deliberate — a project that was never initialised must not have an events file forced
+   into it. The set-but-wrong write is not deliberate; it is why this item is enforced by scan rather
+   than left to care.
 4. **A gate must instruct in the grammar it can read.** `[enforced]` A gate that emits a DELEGATE
    instruction is bound by item 1 too. `scripts/stop-hook.sh`'s four post-loop gates (doc-verifier,
    comment-verifier, self-audit, learner) each hand the agent `<main_worktree_path> = ${PROJECT_ROOT}`

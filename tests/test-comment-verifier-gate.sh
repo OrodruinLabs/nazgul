@@ -287,8 +287,8 @@ for CV10_ATTEMPTS in 3 4 7 99; do
   teardown_temp_dir
 done
 
-# --- Test CV-11: degrade-to-allow is a third writer — its marker is distinguishable from
-# a clean pass, satisfies the gate on re-run, and is attributed as itself ---
+# --- Test CV-11: degrade-to-allow is a third writer, attributed as itself; the seeded
+# attempts file pins the pair's other half — attempts:0 reads as "gave up at zero". ---
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
@@ -300,6 +300,8 @@ create_config \
 create_plan
 create_task_file "TASK-001" "DONE"
 create_review_dir "TASK-001"
+mkdir -p "$TEST_DIR/nazgul/logs"
+printf '%s %s\n' "FEAT-CV11" "2" > "$TEST_DIR/nazgul/logs/.comments-verify-attempts"
 pin_base_to_head
 run_hook
 assert_exit_code "CV-11: degrade → exit 0" "$HOOK_EC" 0
@@ -309,10 +311,15 @@ CV11_ATTR=$(last_gate_attribution)
 assert_eq "CV-11: attribution names the degrade writer" "$(jq -r '.writer' <<<"$CV11_ATTR")" "degrade-to-allow"
 assert_eq "CV-11: attribution names the gate" "$(jq -r '.gate' <<<"$CV11_ATTR")" "comment_verifier"
 assert_eq "CV-11: attribution carries the persisted marker" "$(jq -r '.marker' <<<"$CV11_ATTR")" "$CV11_MARKER"
+assert_eq "CV-11: degrade reports the attempts actually spent, not 0" \
+  "$(jq -r '.attempts' <<<"$CV11_ATTR")" "2"
 run_hook
 assert_exit_code "CV-11: degrade marker satisfies the gate on re-run" "$HOOK_EC" 0
+CV11_ATTR2=$(last_gate_attribution)
 assert_eq "CV-11: re-run attributed to the degrade writer, not a clean pass" \
-  "$(last_gate_attribution | jq -r '.writer')" "degrade-to-allow"
+  "$(jq -r '.writer' <<<"$CV11_ATTR2")" "degrade-to-allow"
+assert_eq "CV-11: gate satisfied by a pre-existing marker still reports the real count" \
+  "$(jq -r '.attempts' <<<"$CV11_ATTR2")" "2"
 teardown_temp_dir
 
 # --- Test CV-12: a clean verifier pass (bare feat_id) is attributed as verifier-clean and
