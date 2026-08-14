@@ -158,9 +158,19 @@ complete_objective_fixture \
   '.self_audit.backlog_path = "/srv/nazgul-backlog.md"'
 run_hook
 SA6_MSG=$(gate_message "POST-LOOP SELF-AUDIT GATE")
+assert_exit_code "GDP-6: self-audit gate blocks" "$HOOK_EC" 2
 assert_gate_driven "GDP-6: self-audit gate emitted a DELEGATE message" "$SA6_MSG"
-assert_contains "GDP-6: absolute backlog passed through" "$SA6_MSG" "/srv/nazgul-backlog.md"
+# Quote-anchored: an unanchored search for the configured path is a substring of every
+# re-rooted spelling of it, so it would pass on exactly the regression this case exists for.
+assert_contains "GDP-6: absolute backlog passed through verbatim" \
+  "$SA6_MSG" '"/srv/nazgul-backlog.md"'
 assert_not_contains "GDP-6: not re-rooted at PROJECT_ROOT" "$SA6_MSG" "$TEST_DIR/srv/nazgul-backlog.md"
+# The likeliest regression is unconditional "$PROJECT_ROOT/$SA_BACKLOG", whose DOUBLE slash
+# the single-slash control cannot see; collapse slash runs so every spelling lands on one test.
+SA6_NORM=$(printf '%s' "$SA6_MSG" | sed 's|//*|/|g')
+SA6_ROOT_NORM=$(printf '%s' "$TEST_DIR" | sed 's|//*|/|g')
+assert_not_contains "GDP-6: not re-rooted by naive concatenation either (any slash run)" \
+  "$SA6_NORM" "$SA6_ROOT_NORM/srv/nazgul-backlog.md"
 teardown_temp_dir
 
 report_results

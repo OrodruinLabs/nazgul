@@ -171,9 +171,20 @@ SPEC_LIST
 # <main_worktree_path>"; these four files must contribute none of its findings.
 AUDIT="$REPO_ROOT/scripts/audit-agent-state-paths.sh"
 if [ -x "$AUDIT" ]; then
-  AUDIT_OUT="$(bash "$AUDIT" 2>/dev/null)"
+  # Pinned, not derived: an exported scan root would aim this at another tree, and a
+  # zero-finding result on a tree with no agents/ is the vacuous pass MR-A9 exists to deny.
+  AUDIT_OUT="$(NAZGUL_AGENT_AUDIT_SCAN_ROOT="$REPO_ROOT" bash "$AUDIT" 2>/dev/null)"
   FOUR_FINDINGS=$(printf '%s\n' "$AUDIT_OUT" \
     | grep -E '^  agents/(comment-verifier|doc-verifier|self-audit|learner)\.md:' || true)
+  AUDIT_CHECKED=$(printf '%s\n' "$AUDIT_OUT" | tail -1 \
+    | sed -E 's/^.*\), ([0-9]+) checked.*/\1/')
+  case "${AUDIT_CHECKED:-}" in ''|*[!0-9]*) AUDIT_CHECKED_N=0 ;; *) AUDIT_CHECKED_N="$AUDIT_CHECKED" ;; esac
+  if [ "$AUDIT_CHECKED_N" -ge 4 ]; then
+    _pass "MR-A9 floor: the audit actually reached the four specs ($AUDIT_CHECKED_N checked)"
+  else
+    _fail "MR-A9 floor: the audit actually reached the four specs" \
+      "checked '$AUDIT_CHECKED' — a zero-finding result over a roster this small proves nothing"
+  fi
   assert_eq "MR-A9: the roster audit reports no unrooted operational path in the four specs" \
     "$FOUR_FINDINGS" ""
 else
@@ -316,7 +327,8 @@ while IFS='|' read -r rel basename_marker prefix; do
   assert_not_contains "MR-B4 $rel: no success line claims a persisted value" \
     "$RUN_OUT" "$prefix: marker value $CURRENT_FEAT_ID"
 
-  # B5 — the marker path cannot be read back at all.
+  # B5 — marker path is a directory: neither write nor read can succeed. Exit != 0 alone
+  # would also hold for a dead-on-redirect recipe, so assert the read-back's own sentinel.
   UNREAD="$TMP_ROOT/unreadable"
   rm -rf "$UNREAD"
   mkdir -p "$UNREAD/nazgul"
@@ -330,6 +342,40 @@ while IFS='|' read -r rel basename_marker prefix; do
     _fail "MR-B5 $rel: an unreadable marker is a reported failure" "exit 0 with stdout '$RUN_OUT'"
   fi
   assert_contains "MR-B5 $rel: the unreadable case is reported as FAILURE" "$RUN_ERR" "FAILURE"
+  assert_contains "MR-B5 $rel: the read-back RAN and reported its unreadable sentinel" \
+    "$RUN_ERR" 'read "<unreadable>"'
+
+  # B5b — the case B4 and B5 both miss: the write LANDS and only the read fails. This is
+  # the read-back path in isolation, with no write-side failure to hide behind.
+  WONLY="$TMP_ROOT/writeonly"
+  rm -rf "$WONLY"
+  mkdir -p "$WONLY/nazgul"
+  write_config "$WONLY" "$CURRENT_FEAT_ID"
+  WONLY_MARKER="$(marker_path_of "$spec" "$WONLY")"
+  mkdir -p "$(dirname "$WONLY_MARKER")"
+  : > "$WONLY_MARKER"
+  chmod 0200 "$WONLY_MARKER"
+  if [ -r "$WONLY_MARKER" ]; then
+    # Running as root (or on a filesystem ignoring the mode bit): the condition could not
+    # be established, which is a named skip, never a quiet pass.
+    _skip "MR-B5b $rel: a write-only marker is still unreadable to this process" \
+      "the process can read a 0200 file — likely root; the read-back path cannot be isolated here"
+  else
+    run_recipe "$spec" "$WONLY"
+    if [ "$RUN_RC" -ne 0 ]; then
+      _pass "MR-B5b $rel: a write that landed but cannot be read back is still a failure"
+    else
+      _fail "MR-B5b $rel: a write that landed but cannot be read back is still a failure" \
+        "exit 0 with stdout '$RUN_OUT'"
+    fi
+    assert_contains "MR-B5b $rel: the unreadable read-back is reported as FAILURE" \
+      "$RUN_ERR" "FAILURE"
+    assert_contains "MR-B5b $rel: the failure names the sentinel the read-back produced" \
+      "$RUN_ERR" 'read "<unreadable>"'
+    assert_not_contains "MR-B5b $rel: no success line claims a persisted value" \
+      "$RUN_OUT" "$prefix: marker value $CURRENT_FEAT_ID"
+  fi
+  chmod 0600 "$WONLY_MARKER" 2>/dev/null || true
 done <<SPEC_LIST_B
 $SPEC_TABLE
 SPEC_LIST_B

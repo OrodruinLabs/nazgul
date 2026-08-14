@@ -123,6 +123,17 @@ cat > "$SCRATCH/dirty/agents/templates/prose.md" <<'SPEC'
 The orchestrator persists your returned review to `nazgul/reviews/[UNIT-ID]/x.md`
 for you. Do NOT attempt to write `nazgul/reviews/[UNIT-ID]/x.md` yourself.
 SPEC
+# Same exemption, sentence-initial. A negation is a negation wherever the sentence
+# starts, so the classifier must not read case as consent.
+cat > "$SCRATCH/dirty/agents/templates/prose-caps.md" <<'SPEC'
+# prose only, capitalised negations
+
+Don't write `nazgul/reviews/[UNIT-ID]/x.md` yourself — the orchestrator does it.
+
+Cannot write `nazgul/logs/.x` from here; the orchestrator owns that file.
+
+Must not write `nazgul/inbox/x.md` from a task worktree.
+SPEC
 
 _run "$SCRATCH/dirty"
 DIRTY_OUT="$RUN_OUT"
@@ -153,6 +164,8 @@ assert_contains "AS-15c: the \${PWD}/nazgul spelling FIRES too" \
   "$DIRTY_OUT" 'agents/emitter.md:7: state-'
 assert_not_contains "AS-16: a path another actor writes, under an explicit prohibition, stays prose" \
   "$DIRTY_OUT" "agents/templates/prose.md:"
+assert_not_contains "AS-16b: a capitalised prohibition is the same prohibition — still prose" \
+  "$DIRTY_OUT" "agents/templates/prose-caps.md:"
 
 DIRTY_F=$(_f_of "$DIRTY_LINE")
 if [ "${DIRTY_F:-0}" -ge 6 ]; then

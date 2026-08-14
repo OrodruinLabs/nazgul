@@ -1135,6 +1135,26 @@ DV_MSG
       CV_DEGRADED_VALUE="${CV_OBJ_ID}:NO-SOURCE-CHANGED"
       CV_EXHAUSTED_VALUE="${CV_OBJ_ID}:EXHAUSTED"
       CV_VERIFIED_FOR=""
+      # ADR-021 binds this hook's own fallback writers too: a redirect that returned 0 is
+      # not proof the file holds the value, so re-read the same path before claiming satisfied.
+      cv_write_marker() {
+        local value="$1" persisted=""
+        mkdir -p "$NAZGUL_DIR/logs" 2>/dev/null || true
+        printf '%s\n' "$value" > "$CV_MARKER" 2>/dev/null || true
+        persisted=$(cat "$CV_MARKER" 2>/dev/null) || persisted="<unreadable>"
+        [ "$persisted" = "$value" ] && return 0
+        echo "Nazgul: comment-verifier gate FAILURE - marker read-back mismatch at ${CV_MARKER}: wrote \"${value}\", read \"${persisted}\". Not recording the gate as satisfied." >&2
+        emit_event "stop_gate" \
+          reason "comment_verifier_marker_unverified" \
+          gate "comment_verifier" \
+          objective "$CV_OBJ_ID" \
+          marker "$CV_MARKER" \
+          intended "$value" \
+          persisted "$persisted"
+        jq -n --arg r "Post-loop comment-verifier gate: marker write at ${CV_MARKER} could not be read back — fix the path, then re-run." \
+          '{"decision":"block","reason":$r}'
+        return 1
+      }
       # Read once, before the satisfied/unsatisfied split: a gate satisfied by a
       # pre-existing marker must still report the real attempt count, not 0.
       CV_ATTEMPTS=0
@@ -1163,8 +1183,7 @@ DV_MSG
           ) ] | length' 2>/dev/null || echo 0)
         case "$CV_CHANGED_COUNT" in (*[!0-9]*|'') CV_CHANGED_COUNT=0 ;; esac
         if [ "$CV_CHANGED_COUNT" -eq 0 ]; then
-          mkdir -p "$NAZGUL_DIR/logs"
-          printf '%s\n' "$CV_DEGRADED_VALUE" > "$CV_MARKER"
+          cv_write_marker "$CV_DEGRADED_VALUE" || exit 2
           CV_VERIFIED_FOR="$CV_DEGRADED_VALUE"
           CV_SATISFIED_BY="degrade-to-allow"
         else
@@ -1187,8 +1206,7 @@ CV_MSG
             exit 2
           else
             echo "Nazgul: comment-verifier gate gave up after ${CV_ATTEMPTS} attempts for ${CV_OBJ_ID} — completing without comment verification, marker recorded as ${CV_EXHAUSTED_VALUE}. Run /nazgul:comment-verifier manually." >&2
-            mkdir -p "$NAZGUL_DIR/logs"
-            printf '%s\n' "$CV_EXHAUSTED_VALUE" > "$CV_MARKER"
+            cv_write_marker "$CV_EXHAUSTED_VALUE" || exit 2
             CV_VERIFIED_FOR="$CV_EXHAUSTED_VALUE"
             CV_SATISFIED_BY="backstop-exhausted"
           fi

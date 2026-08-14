@@ -30,6 +30,13 @@ assert_neq() {
   fi
 }
 
+last_marker_stop_gate() {
+  local events="$TEST_DIR/nazgul/logs/events.jsonl"
+  [ -f "$events" ] || return 0
+  jq -c 'select(.event == "stop_gate" and .reason == "comment_verifier_marker_unverified")' \
+    "$events" 2>/dev/null | tail -1
+}
+
 last_gate_attribution() {
   local events="$TEST_DIR/nazgul/logs/events.jsonl"
   [ -f "$events" ] || return 0
@@ -343,6 +350,99 @@ CV12_ATTR=$(last_gate_attribution)
 assert_eq "CV-12: attribution names the verifier" "$(jq -r '.writer' <<<"$CV12_ATTR")" "verifier-clean"
 assert_eq "CV-12: clean marker unchanged by the gate" \
   "$(cat "$TEST_DIR/nazgul/logs/.comments-verified")" "FEAT-CV12"
+teardown_temp_dir
+
+# --- Test CV-13: the degrade value taken from the AGENT SPEC and driven through the real
+# gate. Reading it out of the spec is what makes this dogfood, not a restatement. ---
+CV_SPEC="$REPO_ROOT/agents/comment-verifier.md"
+# The degrade paragraph, banner through the blank line that ends it.
+CV13_PARA=$(awk '/\*\*Degrade-to-allow\*\*/ { f = 1 } f { print } f && /^$/ { exit }' "$CV_SPEC")
+if [ -n "$CV13_PARA" ]; then
+  _pass "CV-13: the degrade-to-allow paragraph was extracted from the spec"
+else
+  _fail "CV-13: the degrade-to-allow paragraph was extracted from the spec" \
+    "no **Degrade-to-allow** section in $CV_SPEC — every assertion below would be vacuous"
+fi
+CV13_SUFFIX=$(printf '%s' "$CV13_PARA" | grep -o ':NO-SOURCE-CHANGED' | head -1)
+CV13_VALUE="FEAT-CV13${CV13_SUFFIX}"
+
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config \
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.feat_id = "FEAT-CV13"' \
+  '.learning.auto_distill_post_loop = false' \
+  '.self_audit.enabled = false'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+mkdir -p "$TEST_DIR/nazgul/logs"
+printf '%s\n' "$CV13_VALUE" > "$TEST_DIR/nazgul/logs/.comments-verified"
+run_hook
+assert_exit_code "CV-13: the spec's degrade value satisfies the gate" "$HOOK_EC" 0
+CV13_ATTR=$(last_gate_attribution)
+assert_eq "CV-13: the value the SPEC tells the degrade path to write is attributed to the degrade writer" \
+  "$(jq -r '.writer' <<<"$CV13_ATTR")" "degrade-to-allow"
+assert_neq "CV-13: a run that checked nothing is never recorded as a clean pass" \
+  "$(jq -r '.writer' <<<"$CV13_ATTR")" "verifier-clean"
+teardown_temp_dir
+
+# --- Test CV-14/CV-15: the hook's OWN give-up writers, held to the read-back rule. The
+# marker path is a directory, so a writer that only checks "I wrote it" claims satisfied. ---
+cv_block_marker_path() {
+  mkdir -p "$TEST_DIR/nazgul/logs/.comments-verified"
+}
+
+# CV-14 — degrade-to-allow: no source changed, and the marker cannot be written.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config \
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.feat_id = "FEAT-CV14"' \
+  '.learning.auto_distill_post_loop = false' \
+  '.self_audit.enabled = false'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+pin_base_to_head
+cv_block_marker_path
+run_hook
+assert_exit_code "CV-14: an unverifiable degrade write blocks rather than completing" "$HOOK_EC" 2
+assert_contains "CV-14: the failure names the marker it could not prove" \
+  "$HOOK_OUTPUT" "$TEST_DIR/nazgul/logs/.comments-verified"
+assert_contains "CV-14: the failure is reported as a read-back failure" \
+  "$HOOK_OUTPUT" "marker read-back"
+assert_eq "CV-14: no attribution claims the gate was satisfied" "$(last_gate_attribution)" ""
+CV14_SG=$(last_marker_stop_gate)
+assert_eq "CV-14: the existing stop_gate diagnostic names the unverified marker" \
+  "$(jq -r '.marker' <<<"${CV14_SG:-{\}}")" "$TEST_DIR/nazgul/logs/.comments-verified"
+teardown_temp_dir
+
+# CV-15 — backstop-exhausted: source changed, attempts spent, and the marker cannot be written.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config \
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.feat_id = "FEAT-CV15"' \
+  '.learning.auto_distill_post_loop = false' \
+  '.self_audit.enabled = false'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+mkdir -p "$TEST_DIR/nazgul/logs"
+printf '%s %s\n' "FEAT-CV15" "3" > "$TEST_DIR/nazgul/logs/.comments-verify-attempts"
+cv_block_marker_path
+run_hook
+assert_exit_code "CV-15: an unverifiable exhausted write blocks rather than completing" "$HOOK_EC" 2
+assert_contains "CV-15: the failure is reported as a read-back failure" \
+  "$HOOK_OUTPUT" "marker read-back"
+assert_eq "CV-15: no attribution claims the gate was satisfied" "$(last_gate_attribution)" ""
+CV15_SG=$(last_marker_stop_gate)
+assert_eq "CV-15: the existing stop_gate diagnostic names the unverified marker" \
+  "$(jq -r '.marker' <<<"${CV15_SG:-{\}}")" "$TEST_DIR/nazgul/logs/.comments-verified"
 teardown_temp_dir
 
 report_results

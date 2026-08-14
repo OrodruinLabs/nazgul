@@ -157,6 +157,9 @@ replaced by the value resolved in the input contract above:
 
 ```bash
 MARKER="<main_worktree_path>/nazgul/logs/.comments-verified"
+# Empty on a clean pass; the degrade-to-allow path below sets it to ":NO-SOURCE-CHANGED"
+# before running this sequence. Same protocol, different recorded value.
+MARKER_SUFFIX="${MARKER_SUFFIX:-}"
 FEAT_ID=$(jq -r '.feat_id // empty' "<main_worktree_path>/nazgul/config.json" 2>/dev/null)
 case "$FEAT_ID" in
   FEAT-*) ;;
@@ -165,6 +168,7 @@ case "$FEAT_ID" in
       "$MARKER" "$FEAT_ID" >&2
     exit 1 ;;
 esac
+FEAT_ID="${FEAT_ID}${MARKER_SUFFIX}"
 mkdir -p "<main_worktree_path>/nazgul/logs"
 printf '%s\n' "$FEAT_ID" > "$MARKER"
 PERSISTED=$(cat "$MARKER" 2>/dev/null) || PERSISTED="<unreadable>"
@@ -197,9 +201,15 @@ with a clean pass. This gate is bounded (≤3 backstop) and degrades to allow pa
 limit, matching the doc-verifier gate's behavior.
 
 **Degrade-to-allow** (no source files changed): run the same sequence as the clean-pass
-case, report the same two lines, emit the zero-count coverage line, then exit 0. Nothing to
-check → nothing to block. The config opt-out follows the earlier immediate-exit contract,
-and it too writes the marker through the sequence above — never by a shortcut.
+case with `MARKER_SUFFIX=":NO-SOURCE-CHANGED"` set beforehand, so the persisted value is
+`<feat_id>:NO-SOURCE-CHANGED` and NOT the bare `feat_id`. Report the same two lines, emit
+the zero-count coverage line, then exit 0. Nothing to check → nothing to block.
+
+The bare `feat_id` is reserved for a pass that actually checked something: the stop-hook
+reads it as `writer: verifier-clean`, and your scope filter is stricter than the hook's, so
+a degrade you record as clean is a run that checked nothing wearing a verified badge. The
+config opt-out follows the earlier immediate-exit contract, and it too writes the marker
+through the sequence above — never by a shortcut.
 
 ## Hard rules
 

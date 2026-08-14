@@ -126,7 +126,7 @@ _classify() {
   fi
   # A sentence forbidding the operation is not an instruction to perform it: the
   # negation overrides the textual signals, never a real command or redirect.
-  printf '%s' "$prefix" | grep -qE "$NEGATION_RE" && textual=0
+  printf '%s' "$prefix" | grep -qiE "$NEGATION_RE" && textual=0
 
   if [ "$in_fence" != "1" ] && [ "$redirect" != "1" ] && [ "$textual" != "1" ]; then
     printf 'prose'

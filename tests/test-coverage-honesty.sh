@@ -227,11 +227,15 @@ _grammar_check "audit-agent-state-paths (all-skip)" "audit-agent-state-paths" \
 assert_contains "audit-agent-state-paths: forced all-skip emits the nothing-checked signal" \
   "$(cat "$SCRATCH/ap.err")" "audit-agent-state-paths: NOTHING CHECKED — all 1 candidate(s) skipped"
 assert_exit_code "audit-agent-state-paths: advisory roster audit — a vacuous run never fails it" "$AP_RC" 0
-AP_FULL=$(bash "$REPO_ROOT/scripts/audit-agent-state-paths.sh" 2>/dev/null)
+# Pinned, not derived: an exported NAZGUL_AGENT_AUDIT_SCAN_ROOT would aim the "full run" at
+# whatever tree the caller named, and an empty tree passes every assertion while checking nothing.
+AP_FULL=$(NAZGUL_AGENT_AUDIT_SCAN_ROOT="$REPO_ROOT" \
+  bash "$REPO_ROOT/scripts/audit-agent-state-paths.sh" 2>/dev/null)
 _grammar_check "audit-agent-state-paths (full run)" "audit-agent-state-paths" \
   "non-spec unreadable not-a-file" "$(_last_line "$AP_FULL")"
 AP_CHECKED=$(_last_line "$AP_FULL" | sed -E 's/^.*\), ([0-9]+) checked.*/\1/')
-if [ "${AP_CHECKED:-0}" -ge 1 ]; then
+case "${AP_CHECKED:-}" in ''|*[!0-9]*) AP_CHECKED_N=0 ;; *) AP_CHECKED_N="$AP_CHECKED" ;; esac
+if [ "$AP_CHECKED_N" -ge 1 ]; then
   _pass "audit-agent-state-paths: a full run actually checks something"
 else
   _fail "audit-agent-state-paths: a full run actually checks something" "checked: $AP_CHECKED"
