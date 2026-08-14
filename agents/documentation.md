@@ -14,15 +14,32 @@ maxTurns: 40
 
 You update project documentation after all tasks complete. Read project context FIRST — match the existing documentation style exactly.
 
+## Input contract: where runtime state lives
+
+Runtime state lives in exactly one tree, and you address it explicitly rather than inheriting
+it from wherever the dispatch left your working directory. Your cwd is fixed for your whole
+life and may be a task worktree that has no `nazgul/` at all — a relative `nazgul/...` path
+there creates a fresh directory, succeeds, and is read by nobody. This applies to your `Write`
+tool exactly as it applies to `Bash`: a relative target is resolved against that same cwd.
+
+1. The caller supplies `<main_worktree_path>` in the dispatch brief. Every runtime-state read
+   and write below is written as `<main_worktree_path>/nazgul/...`, with no exceptions.
+2. If the brief omits it, read `branch.main_worktree_path` from the Nazgul config file the
+   caller pointed you at by absolute path, exactly as `agents/implementer.md` does on task
+   claim. This is the one read that cannot already be rooted — it is how the root is learned.
+3. If that is also unreadable, **STOP and report** — never guess it from the working directory.
+   `scripts/lib/nazgul-root.sh` is not the answer either: from a task worktree with `nazgul/`
+   gitignored it returns the task worktree's own toplevel.
+
 ## Context Reading (MANDATORY — Do This First)
 
-1. Read `nazgul/config.json -> project.classification` for project type
-2. Read `nazgul/config.json -> project.language` and `project.framework` for language-specific doc conventions
-3. Read `nazgul/config.json -> project.stack` for API style and framework
-4. Read `nazgul/context/project-profile.md` for existing documentation tools and formats
-5. Read `nazgul/context/style-conventions.md` for documentation style (JSDoc, docstrings, Godoc, etc.)
-6. Read `nazgul/docs/manifest.md` for which documents were generated during this loop
-7. Read ALL task manifests in `nazgul/tasks/` to catalog what changed
+1. Read `<main_worktree_path>/nazgul/config.json -> project.classification` for project type
+2. Read `<main_worktree_path>/nazgul/config.json -> project.language` and `project.framework` for language-specific doc conventions
+3. Read `<main_worktree_path>/nazgul/config.json -> project.stack` for API style and framework
+4. Read `<main_worktree_path>/nazgul/context/project-profile.md` for existing documentation tools and formats
+5. Read `<main_worktree_path>/nazgul/context/style-conventions.md` for documentation style (JSDoc, docstrings, Godoc, etc.)
+6. Read `<main_worktree_path>/nazgul/docs/manifest.md` for which documents were generated during this loop
+7. Read ALL task manifests in `<main_worktree_path>/nazgul/tasks/` to catalog what changed
 
 ## Documentation Matrix by Project Type
 
@@ -111,11 +128,11 @@ Read the existing CHANGELOG.md (or CHANGELOG, HISTORY.md) to detect format:
    c. Categorize changes (Added, Changed, Fixed, Removed)
    d. Include task IDs for traceability
 7. Check `.env.example` for new environment variables — add any that were introduced
-8. Update `nazgul/docs/` status:
+8. Update `<main_worktree_path>/nazgul/docs/` status:
    a. Mark PRD acceptance criteria as "Implemented" where tasks completed them
    b. Update TRD if architecture changed during implementation
 9. If breaking changes detected (from task manifests or API changes):
-   a. Generate migration guide (`nazgul/docs/migration-guide.md`)
+   a. Generate migration guide (`<main_worktree_path>/nazgul/docs/migration-guide.md`)
    b. Include before/after examples
    c. Reference in CHANGELOG under "Breaking Changes"
 10. Verify code examples in documentation are still runnable (syntax check at minimum)
@@ -128,7 +145,7 @@ Read the existing CHANGELOG.md (or CHANGELOG, HISTORY.md) to detect format:
 - API documentation files (API.md, openapi.yaml, etc.)
 - Doc comments in source files (ONLY doc comments, not implementation code)
 - `.env.example` (adding new variables with descriptions)
-- `nazgul/docs/` (updating status of PRD/TRD)
+- `<main_worktree_path>/nazgul/docs/` (updating status of PRD/TRD)
 
 **MUST NOT modify:**
 - Application source code (logic, tests, configs)

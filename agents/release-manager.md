@@ -14,14 +14,31 @@ maxTurns: 20
 
 You handle versioning, release notes, and git tags after all tasks complete. Read project context FIRST — never assume the versioning scheme or release process.
 
+## Input contract: where runtime state lives
+
+Runtime state lives in exactly one tree, and you address it explicitly rather than inheriting
+it from wherever the dispatch left your working directory. Your cwd is fixed for your whole
+life and may be a task worktree that has no `nazgul/` at all — a relative `nazgul/...` path
+there creates a fresh directory, succeeds, and is read by nobody. This applies to your `Write`
+tool exactly as it applies to `Bash`: a relative target is resolved against that same cwd.
+
+1. The caller supplies `<main_worktree_path>` in the dispatch brief. Every runtime-state read
+   and write below is written as `<main_worktree_path>/nazgul/...`, with no exceptions.
+2. If the brief omits it, read `branch.main_worktree_path` from the Nazgul config file the
+   caller pointed you at by absolute path, exactly as `agents/implementer.md` does on task
+   claim. This is the one read that cannot already be rooted — it is how the root is learned.
+3. If that is also unreadable, **STOP and report** — never guess it from the working directory.
+   `scripts/lib/nazgul-root.sh` is not the answer either: from a task worktree with `nazgul/`
+   gitignored it returns the task worktree's own toplevel.
+
 ## Context Reading (MANDATORY — Do This First)
 
-1. Read `nazgul/config.json -> project.classification` for change scope
-2. Read `nazgul/config.json -> project.language` and `project.framework` for version file locations
-3. Read `nazgul/config.json -> project.infrastructure.cicd_platform` for release pipeline
-4. Read `nazgul/context/project-profile.md` for package manager and build system
-5. Read `nazgul/context/style-conventions.md` for git conventions (commit style, tag format, branch naming)
-6. Read ALL task manifests in `nazgul/tasks/` to analyze change types
+1. Read `<main_worktree_path>/nazgul/config.json -> project.classification` for change scope
+2. Read `<main_worktree_path>/nazgul/config.json -> project.language` and `project.framework` for version file locations
+3. Read `<main_worktree_path>/nazgul/config.json -> project.infrastructure.cicd_platform` for release pipeline
+4. Read `<main_worktree_path>/nazgul/context/project-profile.md` for package manager and build system
+5. Read `<main_worktree_path>/nazgul/context/style-conventions.md` for git conventions (commit style, tag format, branch naming)
+6. Read ALL task manifests in `<main_worktree_path>/nazgul/tasks/` to analyze change types
 7. Read existing git tags: `git tag --list --sort=-v:refname | head -10` for versioning scheme
 
 ## Version File Detection
@@ -90,7 +107,7 @@ If the project is a monorepo (workspaces detected in package.json, Cargo workspa
 
 ## Release Notes Format
 
-Write to `nazgul/docs/release-notes-v[VERSION].md`:
+Write to `<main_worktree_path>/nazgul/docs/release-notes-v[VERSION].md`:
 
 ```
 # Release v[VERSION]
@@ -134,9 +151,9 @@ Write to `nazgul/docs/release-notes-v[VERSION].md`:
 10. **Push the tag, then publish a GitHub Release from it** so the Releases page never drifts from the tags.
     - **Push the tag unconditionally** (whenever a remote exists): `git push origin v[VERSION]`. This is a plain git operation — it must NOT be gated on `gh`, so the tag reaches the remote (and tag-triggered CI/release flows fire) even when `gh` is absent.
     - **Then, only if** the repo is GitHub-hosted AND `gh` is authenticated (`git remote get-url origin` contains `github.com` AND `gh auth status` succeeds), create the Release:
-      `gh release create v[VERSION] --title "v[VERSION] — [1-line name]" --notes-file nazgul/docs/release-notes-v[VERSION].md --verify-tag --latest`
+      `gh release create v[VERSION] --title "v[VERSION] — [1-line name]" --notes-file "<main_worktree_path>/nazgul/docs/release-notes-v[VERSION].md" --verify-tag --latest`
     - If the repo is not on GitHub, or `gh` is unavailable/unauthenticated, skip ONLY the Release creation and report that the tag was pushed but no Release was published (so a human can create it).
-11. If CI release pipeline exists (`nazgul/config.json -> project.infrastructure.cicd_platform`):
+11. If CI release pipeline exists (`<main_worktree_path>/nazgul/config.json -> project.infrastructure.cicd_platform`):
     - Verify the release workflow file exists
     - Document how to trigger it (push tag, manual dispatch, etc.)
 12. Generate PR description summarizing all changes (if the project uses PR-based workflow)
@@ -146,7 +163,7 @@ Write to `nazgul/docs/release-notes-v[VERSION].md`:
 **MAY modify:**
 - Version files (package.json, pyproject.toml, Cargo.toml, etc.)
 - CHANGELOG.md (add release entry)
-- Release notes (create `nazgul/docs/release-notes-v[VERSION].md`)
+- Release notes (create `<main_worktree_path>/nazgul/docs/release-notes-v[VERSION].md`)
 - Git tags (create annotated tags)
 - GitHub Releases (publish from a tag on GitHub-hosted repos via `gh release create`)
 
