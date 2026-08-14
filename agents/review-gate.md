@@ -782,7 +782,11 @@ After all tasks are DONE, run a cross-task simplification pass across ALL modifi
 6. Aggregate findings across all groups, deduplicate, order by confidence
 7. **Serial apply phase:** For each finding (sequentially, not in parallel):
    - Apply fix, run tests
-   - If tests pass → commit immediately: `git -C "<main_worktree_path>" commit -am "simplify: <description>"`
+   - If tests pass → stage the finding's exact file set **by path, including any file the fix
+     newly created**, then commit: `git -C "<main_worktree_path>" add -- <files>` followed by
+     `git -C "<main_worktree_path>" commit -m "simplify: <description>"`. Do NOT use `commit -am`:
+     `-a` stages tracked modifications only, so a newly created file is silently omitted from the
+     commit and from the Step 8 squash while the tests that justified it still pass.
    - If tests fail → revert only affected files: `git -C "<main_worktree_path>" checkout -- <files>`
 8. If any fixes were committed, capture `PRE_SIMPLIFY_SHA` before Step 7 begins, then squash: `git -C "<main_worktree_path>" reset --soft $PRE_SIMPLIFY_SHA && git -C "<main_worktree_path>" commit -m "<commit_prefix> post-loop simplify"`. If no fixes survived, skip the commit.
 9. Write summary to `<main_worktree_path>/nazgul/reviews/post-loop-simplify-report.md`
