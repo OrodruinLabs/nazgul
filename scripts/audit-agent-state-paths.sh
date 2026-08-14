@@ -64,6 +64,10 @@ ENTRY="audit-agent-state-paths"
 OCCURRENCE_RE='(\$\(pwd\)/nazgul|\$PWD/nazgul|\$\{PWD\}/nazgul|[^[:space:]'"'"'"`]*nazgul/[^[:space:]'"'"'"`]*)'
 ROOT_MARKER='<main_worktree_path>/nazgul'
 
+# A bare `nazgul` DIRECTORY argument (`self-audit.sh nazgul`) is the same cwd-dependent read
+# with no slash for OCCURRENCE_RE to see; argument-position-scoped so prose mentions stay prose.
+BARE_DIR_RE='(^|[[:space:]])["'"'"'`(]*(bash|sh|cd|ls|cat|source|[^[:space:]"'"'"'`]*\.(sh|bash))["'"'"'`)]*[[:space:]]+nazgul([[:space:]"'"'"'`);,.]|$)'
+
 BARE_OP='read|write|create|append|update|record|save|persist|load|open|emit|copy|move'
 BARE_OP="$BARE_OP"'|delete|remove|add|set|store|run|check|verify|scan|list|parse|log'
 BARE_OP="$BARE_OP"'|generate|produce|overwrite|go|use'
@@ -110,6 +114,20 @@ _is_token() {
   printf '%s' "$1" | grep -qiE "^($2)\$"
 }
 
+# _is_rooted <match> — rooted means BEGINS at the symbolic root, after only syntactic
+# delimiters; a substring test counts `$PWD/<main_worktree_path>/nazgul/x` as rooted.
+_is_rooted() {
+  local s="$1"
+  while [ -n "$s" ]; do
+    case "$s" in
+      '='*|'('*|'['*|'{'*|'"'*|"'"*|'`'*) s="${s#?}" ;;
+      *) break ;;
+    esac
+  done
+  case "$s" in "$ROOT_MARKER"*) return 0 ;; esac
+  return 1
+}
+
 # _classify <line> <in_fence> <prefix-before-match> -> state-write|state-read|prose
 _classify() {
   local line="$1" in_fence="$2" prefix="$3" first_tok prev_tok redirect=0 textual=0
@@ -144,7 +162,7 @@ _classify() {
 
 _check_file() {
   local rel="$1" full="$SCAN_ROOT/$1"
-  local line lineno=0 in_fence=0 hit off match cls prefix undented
+  local line lineno=0 in_fence=0 hit off match cls prefix undented tail_after bare_off
   while IFS= read -r line || [ -n "$line" ]; do
     lineno=$((lineno + 1))
     # Fences in this roster are frequently indented under a numbered step; a
@@ -170,13 +188,31 @@ _check_file() {
         state-write) OCC_WRITE=$((OCC_WRITE + 1)) ;;
         state-read) OCC_READ=$((OCC_READ + 1)) ;;
       esac
-      case "$match" in
-        *"$ROOT_MARKER"*) OCC_ROOTED=$((OCC_ROOTED + 1)); continue ;;
-      esac
+      if _is_rooted "$match"; then
+        OCC_ROOTED=$((OCC_ROOTED + 1)); continue
+      fi
       FINDINGS=$((FINDINGS + 1))
       FINDING_LINES="${FINDING_LINES}  ${rel}:${lineno}: ${cls} — ${match}
 "
     done < <(printf '%s\n' "$line" | grep -obE "$OCCURRENCE_RE" || true)
+    # A command taking a bare `nazgul` directory argument is a real command, so it is
+    # operational for the same reason a fenced line is — hence in_fence=1 below.
+    while IFS= read -r hit; do
+      [ -n "$hit" ] || continue
+      off="${hit%%:*}"
+      match="${hit#*:}"
+      tail_after="${match##*nazgul}"
+      bare_off=$((off + ${#match} - ${#tail_after} - 6))
+      prefix="${line:0:$bare_off}"
+      cls="$(_classify "$line" 1 "$prefix")"
+      case "$cls" in
+        state-write) OCC_WRITE=$((OCC_WRITE + 1)) ;;
+        *) cls="state-read"; OCC_READ=$((OCC_READ + 1)) ;;
+      esac
+      FINDINGS=$((FINDINGS + 1))
+      FINDING_LINES="${FINDING_LINES}  ${rel}:${lineno}: ${cls} — nazgul
+"
+    done < <(printf '%s\n' "$line" | grep -obE "$BARE_DIR_RE" || true)
   done < "$full"
 }
 

@@ -123,10 +123,19 @@ The decision record (`config.json`, `plan.md`, `tasks/`, `reviews/`, `docs/`, `c
 4. If this is a reinitialization (`--force`) of a project that already committed the ephemeral paths, tell the user they can stop tracking them with the one-shot in Step 4's summary.
 
 ### Step 3: Run Discovery
-Dispatch via the `Agent` tool with `subagent_type: "nazgul:discovery"` — **do not pass a `name`/`-n` parameter.** Naming an `Agent`-tool dispatch folds it into team/roster infrastructure even without an explicit team spawn (ADR-017); discovery is one-shot work (scan, write, return), so it stays on the unnamed one-shot subagent primitive. The dispatch:
-1. Generates project context files in `nazgul/context/`
-2. Generates tailored reviewer agents in `.claude/agents/generated/`
-3. Updates `nazgul/config.json` with discovered project settings
+Dispatch via the `Agent` tool with `subagent_type: "nazgul:discovery"` — **do not pass a `name`/`-n` parameter.** Naming an `Agent`-tool dispatch folds it into team/roster infrastructure even without an explicit team spawn (ADR-017); discovery is one-shot work (scan, write, return), so it stays on the unnamed one-shot subagent primitive.
+
+**The brief MUST open with the runtime-state root.** `agents/discovery.md`'s input contract (RULES.md §21) says: no `<main_worktree_path>` in the brief, fall back to `branch.main_worktree_path`, otherwise STOP. At init time that config key is still `null` — it is written later by `create_feature_branch` under `/nazgul:start` — so a brief without the root leaves discovery no legal way to proceed. Resolve `ROOT` here instead, from this project's own checkout (`git rev-parse --show-toplevel` — the directory holding `nazgul/config.json`, not necessarily the cwd you were invoked from), and prepend these two lines to the brief, `$ROOT` expanded to the absolute path:
+
+```text
+<main_worktree_path> = /abs/path/to/project
+Nazgul config (absolute): /abs/path/to/project/nazgul/config.json
+```
+
+The dispatch:
+1. Generates project context files in `$ROOT/nazgul/context/`
+2. Generates tailored reviewer agents in `$ROOT/.claude/agents/generated/`
+3. Updates `$ROOT/nazgul/config.json` with discovered project settings
 
 The dispatch is a single exchange — its return value is the summary Step 4 displays below. No `nazgul/dispatch/<name>.json` manifest is written for this call (it is not a teammate, so the Report Contract's Layer 2 does not apply); instead it inherits `SubagentStop`'s empty-return detection + bounded resume (RULES.md §19) automatically, with no extra instrumentation needed here.
 

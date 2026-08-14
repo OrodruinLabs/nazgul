@@ -971,7 +971,7 @@ FEAT-030/ADR-021 states the rule; this section records what enforces each clause
    backstop on exhaustion (`CV_EXHAUSTED_VALUE="${CV_OBJ_ID}:EXHAUSTED"`, `:1136`). The `:` suffix is
    unreachable from the clean-pass write path, so a suffixed marker can only have come from a gate that
    gave up rather than verified — at ANY attempt count, not merely at the bound. Every satisfied path
-   then emits the ADDITIVE `gate_attribution` event (`:1196`) carrying `gate`, `writer`
+   then emits the ADDITIVE `gate_attribution` event (`:1216`) carrying `gate`, `writer`
    (`verifier-clean` / `degrade-to-allow` / `backstop-exhausted`), `objective`, `marker` and `attempts`.
    Additive rather than a new `stop_gate` reason on purpose: `stop_gate` means a gate ENDED or
    short-circuited an autonomous run (§5, ADR-014) and its population is deliberately narrow so a

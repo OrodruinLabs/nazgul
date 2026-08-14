@@ -36,7 +36,7 @@ nothing an existing project stores had to change.
   the roster was still unconverted, and a nonzero exit would have held the suite red across five
   conversion tasks. The gate is the test, not the script.
 - **`gate_attribution` — an additive event that names which writer satisfied a gate.** Emitted by
-  `scripts/stop-hook.sh:1196` on every satisfied comment-verifier path, carrying `gate`, `writer`,
+  `scripts/stop-hook.sh:1216` on every satisfied comment-verifier path, carrying `gate`, `writer`,
   `objective`, `marker`, and `attempts`. `writer` is one of `verifier-clean`, `degrade-to-allow`, or
   `backstop-exhausted`. Additive rather than a new `stop_gate` reason on purpose: `stop_gate` means a
   gate ENDED or short-circuited a run (ADR-014) and its population is deliberately narrow so a consumer

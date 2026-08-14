@@ -70,11 +70,18 @@ Don't over-ask; once you can state the idea crisply, confirm your understanding 
 
 ### Step 3: Generate tasks (reuse the pipeline)
 1. Scrub the superseded objective's transient artifacts (the pre-flight check above already guarantees no open tasks): run `"$CLAUDE_PLUGIN_ROOT/scripts/scrub-stale-review-artifacts.sh" --for-new-objective "$FEAT_ID"`. This archives stale `nazgul/reviews/` and `nazgul/learning/proposed-rules.md`/`.distilled` from the completed prior objective into `nazgul/archive/`, so `nazgul:doc-generator`/`nazgul:planner` never read stale verdicts or rules as current. It no-ops cleanly if nothing is stale.
-2. If `nazgul/context/discovery-summary.md` is absent, dispatch `nazgul:discovery` (Task tool) to profile the project.
-3. Dispatch `nazgul:doc-generator` (Task tool) — it reads the per-idea spec as PRIMARY and produces feature-scoped docs.
-4. Dispatch `nazgul:planner` (Task tool) — it decomposes the objective into `nazgul/tasks/TASK-*.md`.
-5. If any of these fail, report the failure and STOP (do not offer to run a broken plan).
-5. Show the generated task list (ids + titles) for the user to review.
+2. Every dispatch below opens with the runtime-state root. Each of these agents' input contract (RULES.md §21) STOPs when the brief omits it and `branch.main_worktree_path` is unreadable — and that key is still `null` on a project that has never run `/nazgul:start`. Resolve `ROOT` once from this checkout (`git rev-parse --show-toplevel`, the directory holding `nazgul/config.json`) and prepend these two lines to each prompt, `$ROOT` expanded to the absolute path:
+
+   ```text
+   <main_worktree_path> = /abs/path/to/project
+   Nazgul config (absolute): /abs/path/to/project/nazgul/config.json
+   ```
+
+3. If `$ROOT/nazgul/context/discovery-summary.md` is absent, dispatch `nazgul:discovery` (Task tool) to profile the project.
+4. Dispatch `nazgul:doc-generator` (Task tool) — it reads the per-idea spec as PRIMARY and produces feature-scoped docs.
+5. Dispatch `nazgul:planner` (Task tool) — it decomposes the objective into task manifests under `$ROOT/nazgul/tasks/`.
+6. If any of these fail, report the failure and STOP (do not offer to run a broken plan).
+7. Show the generated task list (ids + titles) for the user to review.
 
 ### Step 4: Offer to run
 Ask with `AskUserQuestion`: "Spec + N tasks ready. Start now?"

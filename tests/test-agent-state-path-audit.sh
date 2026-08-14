@@ -134,6 +134,29 @@ Cannot write `nazgul/logs/.x` from here; the orchestrator owns that file.
 
 Must not write `nazgul/inbox/x.md` from a task worktree.
 SPEC
+# A bare `nazgul` DIRECTORY argument carries no slash, so a `nazgul/`-only matcher
+# reports zero findings on a live cwd-dependent read (the pre-FEAT-030 invocation).
+cat > "$SCRATCH/dirty/agents/bare-arg.md" <<'SPEC'
+# bare directory argument
+
+Run `bash "$CLAUDE_PLUGIN_ROOT/scripts/self-audit.sh" nazgul` to audit the backlog.
+SPEC
+# The word appears constantly in prose; an argument-position scope must leave it alone.
+cat > "$SCRATCH/dirty/agents/templates/bare-prose.md" <<'SPEC'
+# prose mentions of the word
+
+The nazgul loop is the only driver, and scripts/lib/nazgul-root.sh resolves its root.
+
+Start it with /nazgul:start. Everything lives in that tree. nazgul is just the dir name.
+
+A nazgul, and nazgul. `nazgul` alone is not an instruction.
+SPEC
+# Rooted is a POSITION, not a substring: this one still resolves from cwd.
+cat > "$SCRATCH/dirty/agents/pseudo-root.md" <<'SPEC'
+# rooted-looking, cwd-resolved
+
+Write the event to `$PWD/<main_worktree_path>/nazgul/logs/x.jsonl` when the gate passes.
+SPEC
 
 _run "$SCRATCH/dirty"
 DIRTY_OUT="$RUN_OUT"
@@ -166,13 +189,19 @@ assert_not_contains "AS-16: a path another actor writes, under an explicit prohi
   "$DIRTY_OUT" "agents/templates/prose.md:"
 assert_not_contains "AS-16b: a capitalised prohibition is the same prohibition — still prose" \
   "$DIRTY_OUT" "agents/templates/prose-caps.md:"
+assert_contains "AS-16c: a bare \`nazgul\` directory ARGUMENT FIRES — no slash, same cwd read" \
+  "$DIRTY_OUT" "agents/bare-arg.md:3: state-"
+assert_not_contains "AS-16d: prose mentions of the word are not argument position — no findings" \
+  "$DIRTY_OUT" "agents/templates/bare-prose.md:"
+assert_contains "AS-16e: \$PWD/<main_worktree_path>/nazgul FIRES — rooted is a position, not a substring" \
+  "$DIRTY_OUT" 'agents/pseudo-root.md:3: state-write — $PWD/<main_worktree_path>/nazgul/logs/x.jsonl'
 
 DIRTY_F=$(_f_of "$DIRTY_LINE")
-if [ "${DIRTY_F:-0}" -ge 6 ]; then
+if [ "${DIRTY_F:-0}" -ge 8 ]; then
   _pass "AS-17: every enumerated defect is counted in F ($DIRTY_F)"
 else
   _fail "AS-17: every enumerated defect is counted in F" \
-    "expected >= 6 findings on a corpus with six defects, got $DIRTY_F"
+    "expected >= 8 findings on a corpus with eight defects, got $DIRTY_F"
 fi
 assert_contains "AS-18: the dirty corpus still counts its prose exemptions" \
   "$DIRTY_OUT" "prose="
@@ -189,6 +218,11 @@ sed -e 's#\$(pwd)/nazgul#<main_worktree_path>/nazgul#' \
     -e 's#\$PWD/nazgul#<main_worktree_path>/nazgul#' \
     "$SCRATCH/dirty/agents/emitter.md" > "$SCRATCH/clean/agents/emitter.md"
 cp "$SCRATCH/dirty/agents/templates/prose.md" "$SCRATCH/clean/agents/templates/prose.md"
+cp "$SCRATCH/dirty/agents/templates/bare-prose.md" "$SCRATCH/clean/agents/templates/bare-prose.md"
+sed -e 's#self-audit.sh" nazgul#self-audit.sh" "<main_worktree_path>/nazgul/"#' \
+    "$SCRATCH/dirty/agents/bare-arg.md" > "$SCRATCH/clean/agents/bare-arg.md"
+sed -e 's#\$PWD/<main_worktree_path>/nazgul#<main_worktree_path>/nazgul#' \
+    "$SCRATCH/dirty/agents/pseudo-root.md" > "$SCRATCH/clean/agents/pseudo-root.md"
 
 _run "$SCRATCH/clean"
 CLEAN_OUT="$RUN_OUT"
@@ -196,7 +230,7 @@ CLEAN_LINE=$(_last_line "$CLEAN_OUT")
 assert_eq "AS-20: the same corpus rooted at <main_worktree_path> yields zero findings" \
   "$(_f_of "$CLEAN_LINE")" "0"
 assert_eq "AS-21: a clean corpus is still fully checked, never skipped into silence" \
-  "$(_k_of "$CLEAN_LINE")" "3"
+  "$(_k_of "$CLEAN_LINE")" "6"
 assert_contains "AS-22: the rooted occurrences are counted, not made invisible" \
   "$CLEAN_OUT" " already rooted"
 

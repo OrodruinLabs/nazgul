@@ -179,4 +179,70 @@ assert_not_contains "GDP-6: not re-rooted by naive concatenation either (any sla
   "$SA6_NORM" "$SA6_ROOT_NORM/srv/nazgul-backlog.md"
 teardown_temp_dir
 
+# The implementer dispatch briefs are the same obligation one dispatch site over: the
+# agent's input contract STOPs without <main_worktree_path>, so omitting it breaks the loop.
+
+# --- GDP-7: sequential READY dispatch names the root and an absolute manifest ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.mode = "afk"' '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "READY"
+run_hook
+assert_contains "GDP-7: sequential brief names <main_worktree_path>" \
+  "$HOOK_OUTPUT" "for TASK-001. Dispatch brief: <main_worktree_path> = $TEST_DIR."
+assert_contains "GDP-7: sequential brief names the absolute manifest" \
+  "$HOOK_OUTPUT" "Task manifest: $TEST_DIR/nazgul/tasks/TASK-001.md."
+teardown_temp_dir
+
+# --- GDP-8: CHANGES_REQUESTED dispatch roots the feedback path too ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.mode = "afk"' '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-002" "CHANGES_REQUESTED"
+run_hook
+assert_contains "GDP-8: retry brief names <main_worktree_path>" \
+  "$HOOK_OUTPUT" "for TASK-002. Read consolidated feedback first. Dispatch brief: <main_worktree_path> = $TEST_DIR."
+assert_contains "GDP-8: absolute consolidated-feedback path" \
+  "$HOOK_OUTPUT" "IMPORTANT: Read $TEST_DIR/nazgul/reviews/TASK-002/consolidated-feedback.md"
+assert_no_relative_path "GDP-8: no bare relative consolidated-feedback path" \
+  "$HOOK_OUTPUT" "nazgul/reviews/TASK-002/consolidated-feedback.md"
+teardown_temp_dir
+
+# --- GDP-9: the parallel batch brief stops contradicting the contract ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.mode = "afk"' '.agents.reviewers = ["code-reviewer"]' \
+  '.execution.parallel = true' '.execution.max_parallel = 3' \
+  '.review_gate.granularity = "task"'
+create_task_file "TASK-001" "READY"
+printf -- '- **Files modified**: ["src/a.sh"]\n' >> "$TEST_DIR/nazgul/tasks/TASK-001.md"
+create_task_file "TASK-002" "READY"
+printf -- '- **Files modified**: ["src/b.sh"]\n' >> "$TEST_DIR/nazgul/tasks/TASK-002.md"
+cat > "$TEST_DIR/nazgul/plan.md" <<'PLAN'
+# Plan
+
+## Recovery Pointer
+- test
+
+## Wave Groups
+
+### Wave 1
+- TASK-001, TASK-002 (independent, no file overlap)
+PLAN
+run_hook
+assert_contains "GDP-9: batch fired (otherwise the assertions below are vacuous)" \
+  "$HOOK_OUTPUT" "DELEGATE (PARALLEL BATCH"
+assert_contains "GDP-9: per-implementer prompt carries <main_worktree_path>" \
+  "$HOOK_OUTPUT" "'<main_worktree_path> = $TEST_DIR'"
+assert_contains "GDP-9: per-implementer prompt carries an absolute manifest path" \
+  "$HOOK_OUTPUT" "its manifest path $TEST_DIR/nazgul/tasks/<id>.md"
+assert_contains "GDP-9: per-implementer prompt carries <task_worktree>" \
+  "$HOOK_OUTPUT" "<task_worktree> ="
+assert_not_contains "GDP-9: the ONLY-its-task-id instruction no longer contradicts the contract" \
+  "$HOOK_OUTPUT" "gets ONLY its task id"
+assert_no_relative_path "GDP-9: no bare relative batch manifest path" \
+  "$HOOK_OUTPUT" "nazgul/tasks/<id>.md"
+assert_no_relative_path "GDP-9: no bare relative dispatch manifest path" \
+  "$HOOK_OUTPUT" "nazgul/dispatch/<session-name>.json"
+teardown_temp_dir
+
 report_results
