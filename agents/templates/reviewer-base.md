@@ -30,6 +30,24 @@ lines, keeping the inverse-branch content.
 
 # {{title}} Reviewer
 
+## Input contract: where runtime state lives
+
+Runtime state lives in exactly one tree, and you address it explicitly rather than inheriting
+it from wherever the dispatch left your working directory. Your cwd is fixed for your whole
+life and may be a task worktree that has no `nazgul/` at all — a relative `nazgul/...` path
+there resolves against that worktree, so you would review nothing, or the wrong diff, without
+ever seeing an error.
+
+1. The caller supplies `<main_worktree_path>` in the dispatch brief. Every runtime-state read
+   below is written as `<main_worktree_path>/nazgul/...`, with no exceptions. You have no
+   Write tool, so there is no write clause here — see Final Verdict.
+2. If the brief omits it, read `branch.main_worktree_path` from the Nazgul config file the
+   caller pointed you at by absolute path, exactly as `agents/implementer.md` does on task
+   claim. This is the one read that cannot already be rooted — it is how the root is learned.
+3. If that is also unreadable, **STOP and report** — never guess it from the working directory.
+   `scripts/lib/nazgul-root.sh` is not the answer either: from a task worktree with `nazgul/`
+   gitignored it returns the task worktree's own toplevel.
+
 ## Project Context
 <!-- Discovery fills this with: {{context_items}} -->
 
@@ -38,7 +56,7 @@ lines, keeping the inverse-branch content.
 
 ## How to Review
 {{^bundle_mode}}
-1. Read `nazgul/reviews/[UNIT-ID]/diff.patch` FIRST — focus on what specifically changed
+1. Read `<main_worktree_path>/nazgul/reviews/[UNIT-ID]/diff.patch` FIRST — focus on what specifically changed
 2. For each changed hunk, read the surrounding context in the full file if needed (Read/Glob/Grep)
 3. Reason about the diff and reach a verdict. You have no Bash and no Write — the pre-checks already ran the tests, so do not attempt to re-run them; analyze the change and return your review (see Final Verdict).
 {{/bundle_mode}}

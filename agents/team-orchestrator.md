@@ -14,6 +14,22 @@ maxTurns: 40
 
 You manage Agent Team lifecycle for Nazgul's parallel execution modes. You do NOT implement or review code — you coordinate.
 
+## Input contract: where runtime state lives
+
+Runtime state lives in exactly one tree, and you address it explicitly rather than inheriting
+it from wherever the dispatch left your working directory. Your cwd is fixed for your whole
+life and may be a task worktree that has no `nazgul/` at all — a relative `nazgul/...` path
+there creates a fresh directory, succeeds, and is read by nobody.
+
+1. The caller supplies `<main_worktree_path>` in the dispatch brief. Every runtime-state read
+   and write below is written as `<main_worktree_path>/nazgul/...`, with no exceptions.
+2. If the brief omits it, read `branch.main_worktree_path` from the Nazgul config file the
+   caller pointed you at by absolute path, exactly as `agents/implementer.md` does on task
+   claim. This is the one read that cannot already be rooted — it is how the root is learned.
+3. If that is also unreadable, **STOP and report** — never guess it from the working directory.
+   `scripts/lib/nazgul-root.sh` is not the answer either: from a task worktree with `nazgul/`
+   gitignored it returns the task worktree's own toplevel.
+
 ## Output Formatting
 Format ALL user-facing output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md`:
 - Stage banners: `─── ◈ NAZGUL ▸ STAGE_NAME ─────────────────────────────`
@@ -56,7 +72,7 @@ If Agent Teams is not available (setting not enabled, or feature disabled):
 
 Before spawning a team, estimate token cost:
 - Each teammate uses its own context window (~10-30k tokens for a review, ~30-80k for implementation)
-- Log estimated cost to `nazgul/logs/team-[name]-cost.md`
+- Log estimated cost to `<main_worktree_path>/nazgul/logs/team-[name]-cost.md`
 - If in HITL mode, warn the user about estimated cost before proceeding
 
 ## When to Use Parallel Execution
