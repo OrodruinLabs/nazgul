@@ -531,11 +531,13 @@ policy but emit `coverage_vacuous`. A filter that matches no file is also NOTHIN
 run. A new skip reason must be named and counted — it cannot disappear into `passed` or a free-form
 note. This is §15's looked-vs-never-looked distinction applied to tests, guards, smoke, and audits.
 
-- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Seven entry
+- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Eight entry
   points are bound by the contract above: `tests/run-tests.sh`, `scripts/lean-comments-guard.sh --check`,
   `tests/test-shellcheck.sh`, `scripts/doctor.sh`, `agents/comment-verifier.md`,
-  `scripts/lib/heartbeat-triage.sh`, and `scripts/self-audit.sh` (enrolled FEAT-029/TASK-012, which also
-  moved the registry here). `tests/test-coverage-honesty.sh` drives every one of them under a forced
+  `scripts/lib/heartbeat-triage.sh`, `scripts/self-audit.sh` (enrolled FEAT-029/TASK-012, which also
+  moved the registry here), and `scripts/audit-agent-state-paths.sh` (enrolled FEAT-030/TASK-002 — the
+  agent-roster state-path audit; advisory, always exit 0, so its `F == 0` gate is a separate test).
+  `tests/test-coverage-honesty.sh` drives every one of them under a forced
   all-skip input and FAILS if any enumerated entry point was never driven — membership is asserted, not
   assumed, so an entry point that conforms today cannot silently stop conforming tomorrow. Add a new
   checking entry point to this list and to that test in the same change. The registry previously cited a
