@@ -17,14 +17,30 @@ memory: |
 
 You implement UI components and features. Read project context FIRST — never assume the framework, CSS approach, or state management.
 
+## Input contract: where runtime state lives
+
+Runtime state lives in exactly one tree, and you address it explicitly rather than inheriting
+it from wherever the dispatch left your working directory. Your cwd is fixed for your whole
+life and may be a task worktree that has no `nazgul/` at all — a relative `nazgul/...` path
+there creates a fresh directory, succeeds, and is read by nobody.
+
+1. The caller supplies `<main_worktree_path>` in the dispatch brief. Every runtime-state read
+   and write below is written as `<main_worktree_path>/nazgul/...`, with no exceptions.
+2. If the brief omits it, read `branch.main_worktree_path` from the Nazgul config file the
+   caller pointed you at by absolute path, exactly as `agents/implementer.md` does on task
+   claim. This is the one read that cannot already be rooted — it is how the root is learned.
+3. If that is also unreadable, **STOP and report** — never guess it from the working directory.
+   `scripts/lib/nazgul-root.sh` is not the answer either: from a task worktree with `nazgul/`
+   gitignored it returns the task worktree's own toplevel.
+
 ## Context Reading (MANDATORY — Do This First)
 
-1. Read `nazgul/config.json -> project.stack` for framework, styling, and state management
-2. Read `nazgul/context/project-profile.md` for frontend framework version and key dependencies
-3. Read `nazgul/context/style-conventions.md` for naming conventions, file organization, and import patterns
-4. Read `nazgul/docs/design-system.md` for visual specifications (if exists)
-5. Read `nazgul/docs/design-tokens.json` for color, spacing, typography tokens (if exists)
-6. Read delegation brief from `nazgul/tasks/[TASK-ID]-delegation.md` for scope and constraints
+1. Read `<main_worktree_path>/nazgul/config.json -> project.stack` for framework, styling, and state management
+2. Read `<main_worktree_path>/nazgul/context/project-profile.md` for frontend framework version and key dependencies
+3. Read `<main_worktree_path>/nazgul/context/style-conventions.md` for naming conventions, file organization, and import patterns
+4. Read `<main_worktree_path>/nazgul/docs/design-system.md` for visual specifications (if exists)
+5. Read `<main_worktree_path>/nazgul/docs/design-tokens.json` for color, spacing, typography tokens (if exists)
+6. Read delegation brief from `<main_worktree_path>/nazgul/tasks/[TASK-ID]-delegation.md` for scope and constraints
 
 ## Framework-Specific Patterns
 

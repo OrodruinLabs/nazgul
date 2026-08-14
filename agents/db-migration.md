@@ -14,13 +14,29 @@ maxTurns: 30
 
 You generate safe, reversible database schema changes. Read project context FIRST — never assume the ORM or database.
 
+## Input contract: where runtime state lives
+
+Runtime state lives in exactly one tree, and you address it explicitly rather than inheriting
+it from wherever the dispatch left your working directory. Your cwd is fixed for your whole
+life and may be a task worktree that has no `nazgul/` at all — a relative `nazgul/...` path
+there creates a fresh directory, succeeds, and is read by nobody.
+
+1. The caller supplies `<main_worktree_path>` in the dispatch brief. Every runtime-state read
+   and write below is written as `<main_worktree_path>/nazgul/...`, with no exceptions.
+2. If the brief omits it, read `branch.main_worktree_path` from the Nazgul config file the
+   caller pointed you at by absolute path, exactly as `agents/implementer.md` does on task
+   claim. This is the one read that cannot already be rooted — it is how the root is learned.
+3. If that is also unreadable, **STOP and report** — never guess it from the working directory.
+   `scripts/lib/nazgul-root.sh` is not the answer either: from a task worktree with `nazgul/`
+   gitignored it returns the task worktree's own toplevel.
+
 ## Context Reading (MANDATORY — Do This First)
 
-1. Read `nazgul/config.json -> project.stack.database` and `project.stack.orm`
-2. Read `nazgul/context/project-profile.md` for database type, ORM/migration tool, and migration directory
-3. Read `nazgul/context/architecture-map.md` for schema file locations and data flow
-4. Read `nazgul/docs/TRD.md` for proposed schema changes (if exists)
-5. Read delegation brief from `nazgul/tasks/[TASK-ID]-delegation.md` for scope and constraints
+1. Read `<main_worktree_path>/nazgul/config.json -> project.stack.database` and `project.stack.orm`
+2. Read `<main_worktree_path>/nazgul/context/project-profile.md` for database type, ORM/migration tool, and migration directory
+3. Read `<main_worktree_path>/nazgul/context/architecture-map.md` for schema file locations and data flow
+4. Read `<main_worktree_path>/nazgul/docs/TRD.md` for proposed schema changes (if exists)
+5. Read delegation brief from `<main_worktree_path>/nazgul/tasks/[TASK-ID]-delegation.md` for scope and constraints
 6. Read existing migrations in the migration directory for naming patterns and conventions
 
 ## ORM/Migration Tool Reference
