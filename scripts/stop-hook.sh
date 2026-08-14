@@ -997,10 +997,12 @@ if [ "$TOTAL_COUNT" -gt 0 ]; then
           cat >&2 << LEARN_MSG
 Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP LEARNING GATE (mandatory).
 Candidate Learned Rules have NOT been distilled for this objective (${OBJ_ID}) yet.
+Dispatch brief: <main_worktree_path> = ${PROJECT_ROOT}. Every path you must write is given
+absolute below — use it verbatim, never a path relative to your working directory.
 DELEGATE: Spawn the learner agent (Agent tool, subagent_type "nazgul:learner") to mine this
 objective's review/diagnosis artifacts and write candidate rules to
-nazgul/learning/proposed-rules.md. It PROPOSES only — it never approves or edits the registry.
-When it finishes it MUST record completion: echo "${OBJ_ID}" > nazgul/learning/.distilled
+${LEARN_DIR}/proposed-rules.md. It PROPOSES only — it never approves or edits the registry.
+When it finishes it MUST record completion: echo "${OBJ_ID}" > "${MARKER}"
 Do NOT output NAZGUL_COMPLETE until distillation has run and the marker is written.
 Opt out for future objectives with learning.auto_distill_post_loop=false in nazgul/config.json.
 LEARN_MSG
@@ -1102,10 +1104,12 @@ GRAN_BLOCK_MSG
             cat >&2 << DV_MSG
 Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP DOC-VERIFIER GATE (mandatory).
 Generated docs have NOT been verified for this objective (${DV_OBJ_ID}) yet.
+Dispatch brief: <main_worktree_path> = ${PROJECT_ROOT}. Every path you must write is given
+absolute below — use it verbatim, never a path relative to your working directory.
 DELEGATE: Spawn the doc-verifier agent (nazgul:doc-verifier) to cross-check nazgul/docs/*.md
 and CHANGELOG.md against source. It checks that every event type, config key, command, and
 named script referenced in docs exists in the codebase.
-When it finishes it MUST record completion: echo "${DV_OBJ_ID}" > nazgul/logs/.docs-verified
+When it finishes it MUST record completion: echo "${DV_OBJ_ID}" > "${DV_MARKER}"
 Do NOT output NAZGUL_COMPLETE until verification has run and the marker is written.
 Opt out for future objectives with docs.verify_post_loop=false in nazgul/config.json.
 DV_MSG
@@ -1154,10 +1158,12 @@ DV_MSG
             cat >&2 << CV_MSG
 Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP COMMENT-VERIFIER GATE (mandatory).
 Inline doc-comments have NOT been verified for this objective (${CV_OBJ_ID}) yet.
+Dispatch brief: <main_worktree_path> = ${PROJECT_ROOT}. Every path you must write is given
+absolute below — use it verbatim, never a path relative to your working directory.
 DELEGATE: Spawn the comment-verifier agent (nazgul:comment-verifier) to cross-check inline
 source doc-comments (XML <summary>, JSDoc, docstrings) changed by this objective for
 templated, restatement, or contradiction defects.
-When it finishes it MUST record completion: echo "${CV_OBJ_ID}" > nazgul/logs/.comments-verified
+When it finishes it MUST record completion: echo "${CV_OBJ_ID}" > "${CV_MARKER}"
 Do NOT output NAZGUL_COMPLETE until verification has run and the marker is written.
 Opt out for future objectives with docs.verify_comments=false in nazgul/config.json.
 CV_MSG
@@ -1180,6 +1186,11 @@ CV_MSG
       # real file (self-audit.sh writes to self_audit.backlog_path); default it.
       SA_BACKLOG=$(jq -r '.self_audit.backlog_path // "nazgul/improvements.md"' "$CONFIG" 2>/dev/null || echo "nazgul/improvements.md")
       [ -n "$SA_BACKLOG" ] || SA_BACKLOG="nazgul/improvements.md"
+      # Message-only rendering: self-audit.sh still reads the configured value verbatim.
+      case "$SA_BACKLOG" in
+        /*) SA_BACKLOG_ABS="$SA_BACKLOG" ;;
+        *) SA_BACKLOG_ABS="$PROJECT_ROOT/$SA_BACKLOG" ;;
+      esac
       SA_MARKER="$NAZGUL_DIR/logs/.self-audited"
       SA_ATTEMPTS_FILE="$NAZGUL_DIR/logs/.self-audit-attempts"
       SA_AUDITED_FOR=""
@@ -1199,10 +1210,12 @@ CV_MSG
           cat >&2 << SA_MSG
 Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP SELF-AUDIT GATE (mandatory).
 Self-audit findings have NOT been recorded for this objective (${SA_OBJ_ID}) yet.
+Dispatch brief: <main_worktree_path> = ${PROJECT_ROOT}. Every path you must write is given
+absolute below — use it verbatim, never a path relative to your working directory.
 DELEGATE: Spawn the self-audit agent (nazgul:self-audit) to mine cost/perf/correctness
-signals from this objective and append findings to ${SA_BACKLOG}. It proposes
+signals from this objective and append findings to ${SA_BACKLOG_ABS}. It proposes
 only — it never edits code or approves anything.
-When it finishes it MUST record completion: echo "${SA_OBJ_ID}" > nazgul/logs/.self-audited
+When it finishes it MUST record completion: echo "${SA_OBJ_ID}" > "${SA_MARKER}"
 Do NOT output NAZGUL_COMPLETE until self-audit has run and the marker is written.
 Opt out for future objectives with self_audit.enabled=false in nazgul/config.json.
 SA_MSG
