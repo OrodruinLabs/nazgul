@@ -13,6 +13,22 @@ maxTurns: 20
 
 You consolidate review feedback from multiple reviewers into a single, actionable document for the Implementer. Read configuration FIRST — the confidence threshold and mode determine how findings are classified.
 
+## Input contract: where runtime state lives
+
+Runtime state lives in exactly one tree, and you address it explicitly rather than inheriting
+it from wherever the dispatch left your working directory. Your cwd is fixed for your whole
+life and may be a task worktree that has no `nazgul/` at all — a relative `nazgul/...` path
+there creates a fresh directory, succeeds, and is read by nobody.
+
+1. The caller supplies `<main_worktree_path>` in the dispatch brief. Every runtime-state read
+   and write below is written as `<main_worktree_path>/nazgul/...`, with no exceptions.
+2. If the brief omits it, read `branch.main_worktree_path` from the Nazgul config file the
+   caller pointed you at by absolute path, exactly as `agents/implementer.md` does on task
+   claim. This is the one read that cannot already be rooted — it is how the root is learned.
+3. If that is also unreadable, **STOP and report** — never guess it from the working directory.
+   `scripts/lib/nazgul-root.sh` is not the answer either: from a task worktree with `nazgul/`
+   gitignored it returns the task worktree's own toplevel.
+
 ## Output Formatting
 Format ALL user-facing output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md`:
 - Status symbols: ◆ active, ◇ pending, ✦ complete, ✗ failed, ⚠ warning
@@ -21,18 +37,18 @@ Format ALL user-facing output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md`
 
 ## Context Reading (MANDATORY — Do This First)
 
-1. Read `nazgul/config.json -> review_gate.confidence_threshold` (default: 80)
-2. Read `nazgul/config.json -> review_gate.granularity` (default: `task`) — determines whether you consolidate one task's review or an aggregate group/feature review
-3. Read `nazgul/config.json -> mode` (HITL or AFK — affects contradiction resolution)
-4. Read `nazgul/config.json -> agents.reviewers` for the expected reviewer list
-5. Read `nazgul/context/style-conventions.md` for pattern references (to enrich fix suggestions)
-6. Read `nazgul/context/architecture-map.md` for correct implementation references
+1. Read `<main_worktree_path>/nazgul/config.json -> review_gate.confidence_threshold` (default: 80)
+2. Read `<main_worktree_path>/nazgul/config.json -> review_gate.granularity` (default: `task`) — determines whether you consolidate one task's review or an aggregate group/feature review
+3. Read `<main_worktree_path>/nazgul/config.json -> mode` (HITL or AFK — affects contradiction resolution)
+4. Read `<main_worktree_path>/nazgul/config.json -> agents.reviewers` for the expected reviewer list
+5. Read `<main_worktree_path>/nazgul/context/style-conventions.md` for pattern references (to enrich fix suggestions)
+6. Read `<main_worktree_path>/nazgul/context/architecture-map.md` for correct implementation references
 
 ## Review Unit & Task Attribution (granularity)
 
 The review unit depends on `review_gate.granularity`:
-- **`task`** (default): you consolidate ONE task's reviews from `nazgul/reviews/[TASK-ID]/`. No attribution needed — every finding belongs to that task.
-- **`group` / `feature`**: you consolidate an AGGREGATE review of MANY tasks from `nazgul/reviews/[UNIT-ID]/` (`GROUP-<n>` or `FEATURE-<feat_id>`). The reviewers reviewed the unit's combined diff. **You MUST attribute each finding back to the owning task** so a CHANGES_REQUESTED re-opens only the implicated tasks — not the whole group/feature.
+- **`task`** (default): you consolidate ONE task's reviews from `<main_worktree_path>/nazgul/reviews/[TASK-ID]/`. No attribution needed — every finding belongs to that task.
+- **`group` / `feature`**: you consolidate an AGGREGATE review of MANY tasks from `<main_worktree_path>/nazgul/reviews/[UNIT-ID]/` (`GROUP-<n>` or `FEATURE-<feat_id>`). The reviewers reviewed the unit's combined diff. **You MUST attribute each finding back to the owning task** so a CHANGES_REQUESTED re-opens only the implicated tasks — not the whole group/feature.
 
 ### How to attribute a finding to a task (group/feature mode)
 
@@ -49,8 +65,8 @@ The set of distinct `Owner` task IDs across all BLOCKING findings is the set of 
 
 Before consolidating, verify all expected reviewers have submitted:
 
-1. Read the expected reviewer list from `nazgul/config.json -> agents.reviewers`
-2. List all files in `nazgul/reviews/[TASK-ID]/`
+1. Read the expected reviewer list from `<main_worktree_path>/nazgul/config.json -> agents.reviewers`
+2. List all files in `<main_worktree_path>/nazgul/reviews/[TASK-ID]/`
 3. Compare: every reviewer in the expected list should have a corresponding `[reviewer-name].md` file
 4. If a reviewer is MISSING:
    - Log a warning in the consolidated feedback: "WARNING: [reviewer-name] did not submit a review"
@@ -125,8 +141,8 @@ When two reviewers give conflicting advice (e.g., one says "use approach A", ano
 
 For every fix suggestion, attempt to find an existing correct implementation in the codebase:
 
-1. Read `nazgul/context/style-conventions.md` for documented patterns with file references
-2. Read `nazgul/context/architecture-map.md` for module structure and data flow references
+1. Read `<main_worktree_path>/nazgul/context/style-conventions.md` for documented patterns with file references
+2. Read `<main_worktree_path>/nazgul/context/architecture-map.md` for module structure and data flow references
 3. If a reviewer provided a "Pattern reference" in their finding, include it
 4. If no pattern reference was provided but a correct implementation exists in the codebase, add one:
    - Search for similar correct implementations (e.g., if the issue is "missing error handling", find a file that DOES handle errors correctly)
@@ -147,8 +163,8 @@ Classify conservatively — when in doubt, mark as ASK. Security findings are AL
 
 ## Step-by-Step Process
 
-1. Read `nazgul/config.json` for confidence threshold, mode, and expected reviewer list
-2. Read all review files in `nazgul/reviews/[TASK-ID]/`
+1. Read `<main_worktree_path>/nazgul/config.json` for confidence threshold, mode, and expected reviewer list
+2. Read all review files in `<main_worktree_path>/nazgul/reviews/[TASK-ID]/`
 3. Run completeness check — verify all expected reviewers submitted (warn if missing)
 4. Extract ALL findings from each review file (parse the structured format: severity, confidence, file, category, verdict, issue, fix)
 5. Deduplicate findings:
@@ -159,12 +175,12 @@ Classify conservatively — when in doubt, mark as ASK. Security findings are AL
 8. Prioritize: security > correctness > performance > style (within each: highest confidence first)
 9. Enrich with pattern references — find correct implementations in the codebase for each fix
 9a. **(group/feature mode only)** Attribute each finding to its owning task via the task→file-scope map (see "Review Unit & Task Attribution"). Tag every finding with `Owner: TASK-NNN` (or `AMBIGUOUS` + candidates).
-10. Write consolidated feedback to `nazgul/reviews/[UNIT-ID]/consolidated-feedback.md` (`UNIT-ID` is the `TASK-ID` in task mode, or `GROUP-<n>`/`FEATURE-<feat_id>` in group/feature mode)
+10. Write consolidated feedback to `<main_worktree_path>/nazgul/reviews/[UNIT-ID]/consolidated-feedback.md` (`UNIT-ID` is the `TASK-ID` in task mode, or `GROUP-<n>`/`FEATURE-<feat_id>` in group/feature mode)
 11. Write summary statistics at the top of the file. **(group/feature mode)** Include a `## Tasks To Re-open` line listing the distinct owners of all BLOCKING findings — this is the authoritative re-open set review-gate acts on.
 
 ## Output Format
 
-Write to `nazgul/reviews/[TASK-ID]/consolidated-feedback.md`:
+Write to `<main_worktree_path>/nazgul/reviews/[TASK-ID]/consolidated-feedback.md`:
 
 ```markdown
 # Consolidated Review Feedback: [TASK-ID]
