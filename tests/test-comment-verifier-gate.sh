@@ -19,6 +19,23 @@ run_hook() {
   HOOK_OUTPUT=$(bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 }
 
+# The gate's three writers must be mutually distinguishable, so the marker assertions
+# below are inequalities against the clean-pass value, not pins on a chosen literal.
+assert_neq() {
+  local name="$1" actual="$2" forbidden="$3"
+  if [ "$actual" != "$forbidden" ]; then
+    _pass "$name"
+  else
+    _fail "$name" "expected anything BUT: '$forbidden'" "  actual: '$actual'"
+  fi
+}
+
+last_gate_attribution() {
+  local events="$TEST_DIR/nazgul/logs/events.jsonl"
+  [ -f "$events" ] || return 0
+  jq -c 'select(.event == "gate_attribution" and .gate == "comment_verifier")' "$events" 2>/dev/null | tail -1
+}
+
 # setup_git_repo leaves HEAD~1..HEAD non-empty (README.md added in 2nd commit),
 # so the default fixture always has "source changed". Pin branch.base to HEAD to
 # exercise the degrade-to-allow (no source changed) path deterministically.
@@ -64,7 +81,9 @@ pin_base_to_head
 run_hook
 assert_exit_code "CV-2: no source changed → degrade exit 0" "$HOOK_EC" 0
 assert_file_exists "CV-2: marker written on degrade" "$TEST_DIR/nazgul/logs/.comments-verified"
-assert_eq "CV-2: marker contains feat_id" "$(cat "$TEST_DIR/nazgul/logs/.comments-verified")" "FEAT-CV2"
+CV2_MARKER=$(cat "$TEST_DIR/nazgul/logs/.comments-verified")
+assert_contains "CV-2: degrade marker scoped to feat_id" "$CV2_MARKER" "FEAT-CV2"
+assert_neq "CV-2: degrade marker distinguishable from a clean pass" "$CV2_MARKER" "FEAT-CV2"
 teardown_temp_dir
 
 # --- Test CV-3: only doc/config files changed — degrade-to-allow, exit 0 ---
@@ -183,8 +202,14 @@ run_hook
 assert_exit_code "CV-8: backstop → exit 0" "$HOOK_EC" 0
 assert_contains "CV-8: backstop warns" "$HOOK_OUTPUT" "gave up"
 assert_file_exists "CV-8: backstop writes marker" "$TEST_DIR/nazgul/logs/.comments-verified"
-assert_eq "CV-8: backstop marker contains feat_id" \
-  "$(cat "$TEST_DIR/nazgul/logs/.comments-verified")" "FEAT-CV8"
+CV8_MARKER=$(cat "$TEST_DIR/nazgul/logs/.comments-verified")
+assert_neq "CV-8: backstop marker distinguishable from a clean pass" "$CV8_MARKER" "FEAT-CV8"
+assert_contains "CV-8: backstop marker scoped to feat_id" "$CV8_MARKER" "FEAT-CV8"
+run_hook
+assert_exit_code "CV-8: backstop marker satisfies the gate on re-run" "$HOOK_EC" 0
+assert_not_contains "CV-8: no re-block after backstop" "$HOOK_OUTPUT" "comment-verifier gate: comments not yet verified"
+assert_eq "CV-8: backstop marker stable across re-run" \
+  "$(cat "$TEST_DIR/nazgul/logs/.comments-verified")" "$CV8_MARKER"
 teardown_temp_dir
 
 # --- Test CV-9: reset-counter split — provenance-only violation after an evidence
@@ -231,6 +256,86 @@ assert_eq "CV-9: provenance counter starts its own ladder at 1" "$prov_count" "1
 # violation straight to BLOCKED.
 evid_count=$(jq -r 'if (.safety._review_reset_counts | has("TASK-001")) then .safety._review_reset_counts["TASK-001"] else "absent" end' "$TEST_DIR/nazgul/config.json")
 assert_eq "CV-9: stale evidence counter cleared on provenance branch" "$evid_count" "absent"
+teardown_temp_dir
+
+# --- Test CV-10: backstop at every attempt count at or past the bound — the marker is
+# never the value a clean pass writes, and the gate is satisfied on the next run ---
+for CV10_ATTEMPTS in 3 4 7 99; do
+  setup_temp_dir
+  setup_git_repo
+  setup_nazgul_dir
+  create_config \
+    '.agents.reviewers = ["code-reviewer"]' \
+    '.feat_id = "FEAT-CV10"' \
+    '.learning.auto_distill_post_loop = false' \
+    '.self_audit.enabled = false'
+  create_plan
+  create_task_file "TASK-001" "DONE"
+  create_review_dir "TASK-001"
+  mkdir -p "$TEST_DIR/nazgul/logs"
+  printf '%s %s\n' "FEAT-CV10" "$CV10_ATTEMPTS" > "$TEST_DIR/nazgul/logs/.comments-verify-attempts"
+  run_hook
+  assert_exit_code "CV-10(attempts=$CV10_ATTEMPTS): backstop → exit 0" "$HOOK_EC" 0
+  CV10_MARKER=$(cat "$TEST_DIR/nazgul/logs/.comments-verified" 2>/dev/null || echo "")
+  assert_neq "CV-10(attempts=$CV10_ATTEMPTS): marker distinguishable from a clean pass" \
+    "$CV10_MARKER" "FEAT-CV10"
+  assert_contains "CV-10(attempts=$CV10_ATTEMPTS): marker scoped to feat_id" "$CV10_MARKER" "FEAT-CV10"
+  assert_eq "CV-10(attempts=$CV10_ATTEMPTS): attribution names the backstop" \
+    "$(last_gate_attribution | jq -r '.writer')" "backstop-exhausted"
+  run_hook
+  assert_exit_code "CV-10(attempts=$CV10_ATTEMPTS): satisfied on re-run, no deadlock" "$HOOK_EC" 0
+  teardown_temp_dir
+done
+
+# --- Test CV-11: degrade-to-allow is a third writer — its marker is distinguishable from
+# a clean pass, satisfies the gate on re-run, and is attributed as itself ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config \
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.feat_id = "FEAT-CV11"' \
+  '.learning.auto_distill_post_loop = false' \
+  '.self_audit.enabled = false'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+pin_base_to_head
+run_hook
+assert_exit_code "CV-11: degrade → exit 0" "$HOOK_EC" 0
+CV11_MARKER=$(cat "$TEST_DIR/nazgul/logs/.comments-verified")
+assert_neq "CV-11: degrade marker distinguishable from a clean pass" "$CV11_MARKER" "FEAT-CV11"
+CV11_ATTR=$(last_gate_attribution)
+assert_eq "CV-11: attribution names the degrade writer" "$(jq -r '.writer' <<<"$CV11_ATTR")" "degrade-to-allow"
+assert_eq "CV-11: attribution names the gate" "$(jq -r '.gate' <<<"$CV11_ATTR")" "comment_verifier"
+assert_eq "CV-11: attribution carries the persisted marker" "$(jq -r '.marker' <<<"$CV11_ATTR")" "$CV11_MARKER"
+run_hook
+assert_exit_code "CV-11: degrade marker satisfies the gate on re-run" "$HOOK_EC" 0
+assert_eq "CV-11: re-run attributed to the degrade writer, not a clean pass" \
+  "$(last_gate_attribution | jq -r '.writer')" "degrade-to-allow"
+teardown_temp_dir
+
+# --- Test CV-12: a clean verifier pass (bare feat_id) is attributed as verifier-clean and
+# is never confused with either give-up writer ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config \
+  '.agents.reviewers = ["code-reviewer"]' \
+  '.feat_id = "FEAT-CV12"' \
+  '.learning.auto_distill_post_loop = false' \
+  '.self_audit.enabled = false'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+mkdir -p "$TEST_DIR/nazgul/logs"
+printf '%s\n' "FEAT-CV12" > "$TEST_DIR/nazgul/logs/.comments-verified"
+run_hook
+assert_exit_code "CV-12: clean marker → exit 0" "$HOOK_EC" 0
+CV12_ATTR=$(last_gate_attribution)
+assert_eq "CV-12: attribution names the verifier" "$(jq -r '.writer' <<<"$CV12_ATTR")" "verifier-clean"
+assert_eq "CV-12: clean marker unchanged by the gate" \
+  "$(cat "$TEST_DIR/nazgul/logs/.comments-verified")" "FEAT-CV12"
 teardown_temp_dir
 
 report_results
