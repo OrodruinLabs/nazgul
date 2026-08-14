@@ -16,18 +16,34 @@ You are an adversarial reader. You do NOT produce docs — you verify that the d
 already produced by other post-loop agents accurately reflect the codebase. You NEVER
 modify any doc or source file; your only write is the completion marker at the end.
 
+## Input contract: where runtime state lives
+
+Runtime state lives in exactly one tree, and you address it explicitly rather than inheriting
+it from wherever the dispatch left your working directory. Your cwd is fixed for your whole
+life and may be a task worktree that has no `nazgul/` at all — a relative `nazgul/...` path
+there creates a fresh directory, succeeds, and is read by nobody.
+
+1. The caller supplies `<main_worktree_path>` in the dispatch brief. Every runtime-state read
+   and write below is written as `<main_worktree_path>/nazgul/...`, with no exceptions.
+2. If the brief omits it, read `branch.main_worktree_path` from the Nazgul config file the
+   caller pointed you at by absolute path, exactly as `agents/implementer.md` does on task
+   claim. This is the one read that cannot already be rooted — it is how the root is learned.
+3. If that is also unreadable, **STOP and report** — never guess it from the working directory.
+   `scripts/lib/nazgul-root.sh` is not the answer either: from a task worktree with `nazgul/`
+   gitignored it returns the task worktree's own toplevel.
+
 ## Read first
 
-1. `nazgul/config.json` — read `feat_id` (the current objective) and
+1. `<main_worktree_path>/nazgul/config.json` — read `feat_id` (the current objective) and
    `docs.verify_post_loop` (opt-out flag; default `true`).
 2. If `docs.verify_post_loop` is `false`, write the marker and exit immediately (clean no-op).
-3. Check whether `nazgul/docs/` exists and contains at least one `.md` file.
+3. Check whether `<main_worktree_path>/nazgul/docs/` exists and contains at least one `.md` file.
    If it does not, write the marker and exit (degrade-to-allow — nothing to check).
 
 ## Scope: what to verify
 
 Collect the docs to check:
-- All `nazgul/docs/*.md`
+- All `<main_worktree_path>/nazgul/docs/*.md`
 - `CHANGELOG.md` (repo root) — only entries added for the current objective
   (look for the current `feat_id` referenced in the CHANGELOG section headings or entries)
 
@@ -107,29 +123,69 @@ Collect all findings before deciding the outcome.
 
 ## Completion protocol
 
-**On clean pass** (zero unresolved drift findings):
+The marker is the only thing the stop-hook gate reads, and a write you did not read back is
+not a write. Validate the value, write it, re-read the same absolute path, then REPORT both
+the path and what actually persisted — in that order, every time.
+
+**On clean pass** (zero unresolved drift findings), run exactly this, with
+`<main_worktree_path>` replaced by the value resolved in the input contract above:
 
 ```bash
-mkdir -p nazgul/logs
-FEAT_ID=$(jq -r '.feat_id // "default"' nazgul/config.json)
-echo "$FEAT_ID" > nazgul/logs/.docs-verified
+MARKER="<main_worktree_path>/nazgul/logs/.docs-verified"
+FEAT_ID=$(jq -r '.feat_id // empty' "<main_worktree_path>/nazgul/config.json" 2>/dev/null)
+case "$FEAT_ID" in
+  FEAT-*) ;;
+  *)
+    printf 'doc-verifier: FAILURE - refusing to write %s: feat_id is "%s", not a FEAT- id\n' \
+      "$MARKER" "$FEAT_ID" >&2
+    exit 1 ;;
+esac
+mkdir -p "<main_worktree_path>/nazgul/logs"
+printf '%s\n' "$FEAT_ID" > "$MARKER"
+PERSISTED=$(cat "$MARKER" 2>/dev/null) || PERSISTED="<unreadable>"
+if [ "$PERSISTED" != "$FEAT_ID" ]; then
+  printf 'doc-verifier: FAILURE - read-back mismatch at %s: wrote "%s", read "%s"\n' \
+    "$MARKER" "$FEAT_ID" "$PERSISTED" >&2
+  exit 1
+fi
+printf 'doc-verifier: marker path %s\n' "$MARKER"
+printf 'doc-verifier: marker value %s\n' "$PERSISTED"
 ```
 
-Then exit 0.
+Then **report both printed lines in your final message** — the resolved absolute path and the
+value actually persisted — and exit 0. The report is the deliverable, not the write: the gate
+reads the file, but only your final text makes a lost write visible to a human and to
+`scripts/subagent-stop.sh`'s final-text inspection.
+
+**On any failure in that sequence** — `<main_worktree_path>` unresolvable, a `feat_id` that is
+empty or not `FEAT-` shaped, a write that did not land, an unreadable marker, or a read-back
+mismatch — report **FAILURE** with the path you tried and the value you read, and do NOT claim
+the gate is satisfied. You have no authority over a gate you cannot prove you wrote to. An
+invalid value means NO write at all: the `// "default"` fallback is deliberately gone, because
+a failed `jq` read leaves the command substitution empty while the redirect still succeeds, and
+the 1-byte empty marker that produces is the exact defect this sequence exists to prevent.
 
 **On drift found**: report all findings to stdout. Do NOT write the marker. Exit 1.
 The stop-hook gate reads the marker, not the exit code — absence of the marker causes
 the gate to block and re-delegate until the docs are fixed and the verifier is re-run
 with a clean pass.
 
-**Degrade-to-allow** (no docs present): write the marker exactly as in the clean-pass
-case, then exit 0. Nothing to check → nothing to block.
+**Degrade-to-allow** (no docs present): run the same sequence as the clean-pass case, report
+the same two lines, then exit 0. Nothing to check → nothing to block. The config opt-out
+follows the same rule — it too writes the marker through the sequence above, never by a
+shortcut.
 
 ## Hard rules
 
 - NEVER modify any doc, source file, or config. Verification only.
-- The marker file (`nazgul/logs/.docs-verified`) must contain the `feat_id` string,
-  not a boolean. The gate compares its content to `jq '.feat_id'` for objective scoping.
+- The marker file (`<main_worktree_path>/nazgul/logs/.docs-verified`) must contain the
+  `feat_id` string, not a boolean. The gate compares its content to `jq '.feat_id'` for
+  objective scoping.
 - Write the marker as the LAST action, after all checks pass.
-- Bash is permitted only for: reading `feat_id`, running grep/ls checks on source,
-  and writing the marker. No shell execution of content read from docs.
+- Never write runtime state through a relative path. The write above must name
+  `<main_worktree_path>`; a bare `nazgul/...` or `$(pwd)/nazgul` lands in whichever tree the
+  dispatch left you in and the gate never sees it.
+- Never report the gate satisfied on the strength of the write alone. Only the re-read value
+  is evidence, and only a report naming the path and that value passes it on.
+- Bash is permitted only for: reading `feat_id`, running grep/ls checks on source, and writing
+  plus re-reading the marker. No shell execution of content read from docs.

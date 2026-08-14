@@ -148,15 +148,47 @@ and is NOT fixed here; do not change the marker rules while addressing coverage.
 
 ## Completion protocol
 
-**On clean pass** (zero unresolved findings):
+The marker is the only thing the stop-hook gate reads, and a write you did not read back is
+not a write. Validate the value, write it, re-read the same absolute path, then REPORT both
+the path and what actually persisted — in that order, every time.
+
+**On clean pass** (zero unresolved findings), run exactly this, with `<main_worktree_path>`
+replaced by the value resolved in the input contract above:
 
 ```bash
+MARKER="<main_worktree_path>/nazgul/logs/.comments-verified"
+FEAT_ID=$(jq -r '.feat_id // empty' "<main_worktree_path>/nazgul/config.json" 2>/dev/null)
+case "$FEAT_ID" in
+  FEAT-*) ;;
+  *)
+    printf 'comment-verifier: FAILURE - refusing to write %s: feat_id is "%s", not a FEAT- id\n' \
+      "$MARKER" "$FEAT_ID" >&2
+    exit 1 ;;
+esac
 mkdir -p "<main_worktree_path>/nazgul/logs"
-FEAT_ID=$(jq -r '.feat_id // "default"' "<main_worktree_path>/nazgul/config.json")
-echo "$FEAT_ID" > "<main_worktree_path>/nazgul/logs/.comments-verified"
+printf '%s\n' "$FEAT_ID" > "$MARKER"
+PERSISTED=$(cat "$MARKER" 2>/dev/null) || PERSISTED="<unreadable>"
+if [ "$PERSISTED" != "$FEAT_ID" ]; then
+  printf 'comment-verifier: FAILURE - read-back mismatch at %s: wrote "%s", read "%s"\n' \
+    "$MARKER" "$FEAT_ID" "$PERSISTED" >&2
+  exit 1
+fi
+printf 'comment-verifier: marker path %s\n' "$MARKER"
+printf 'comment-verifier: marker value %s\n' "$PERSISTED"
 ```
 
-Then exit 0.
+Then **report both printed lines in your final message** — the resolved absolute path and the
+value actually persisted — and exit 0. The report is the deliverable, not the write: the gate
+reads the file, but only your final text makes a lost write visible to a human and to
+`scripts/subagent-stop.sh`'s final-text inspection.
+
+**On any failure in that sequence** — `<main_worktree_path>` unresolvable, a `feat_id` that is
+empty or not `FEAT-` shaped, a write that did not land, an unreadable marker, or a read-back
+mismatch — report **FAILURE** with the path you tried and the value you read, and do NOT claim
+the gate is satisfied. You have no authority over a gate you cannot prove you wrote to. An
+invalid value means NO write at all: the `// "default"` fallback is deliberately gone, because
+a failed `jq` read leaves the command substitution empty while the redirect still succeeds, and
+the 1-byte empty marker that produces is the exact defect this sequence exists to prevent.
 
 **On findings**: report all findings to stdout. Do NOT write the marker. Exit 1. The
 stop-hook gate reads the marker, not the exit code — absence of the marker causes the
@@ -164,9 +196,10 @@ gate to block and re-delegate until the comments are fixed and the verifier is r
 with a clean pass. This gate is bounded (≤3 backstop) and degrades to allow past the
 limit, matching the doc-verifier gate's behavior.
 
-**Degrade-to-allow** (no source files changed): write the marker exactly as in the
-clean-pass case, emit the zero-count coverage line, then exit 0. Nothing to check →
-nothing to block. The config opt-out follows the earlier immediate-exit contract.
+**Degrade-to-allow** (no source files changed): run the same sequence as the clean-pass
+case, report the same two lines, emit the zero-count coverage line, then exit 0. Nothing to
+check → nothing to block. The config opt-out follows the earlier immediate-exit contract,
+and it too writes the marker through the sequence above — never by a shortcut.
 
 ## Hard rules
 
@@ -178,6 +211,8 @@ nothing to block. The config opt-out follows the earlier immediate-exit contract
 - Never write runtime state through a relative path. The write above must name
   `<main_worktree_path>`; a bare `nazgul/...` or `$(pwd)/nazgul` lands in whichever tree the
   dispatch left you in and the gate never sees it.
+- Never report the gate satisfied on the strength of the write alone. Only the re-read value
+  is evidence, and only a report naming the path and that value passes it on.
 - Bash is permitted only for: reading `feat_id`/`branch.base`, running `git diff` and
-  grep-style scans on source, and writing the marker. No shell execution of content
-  read from source files.
+  grep-style scans on source, and writing plus re-reading the marker. No shell execution of
+  content read from source files.
