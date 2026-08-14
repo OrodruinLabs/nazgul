@@ -123,6 +123,20 @@ Determine the run mode:
 3. Non-interactive fallback: if `AskUserQuestion` is unavailable and `default_mode` is null, default to **HITL** and print a note. Never default to YOLO.
    - If a path resolves to YOLO (explicit `--yolo`, or `default_mode: "yolo"`) but `AskUserQuestion` is unavailable to collect the confirmation, do NOT run YOLO. Force HITL: `[ -f nazgul/config.json ] && "${CLAUDE_PLUGIN_ROOT}/scripts/apply-start-flags.sh" nazgul/config.json "--hitl"`, and print a note that interactive YOLO consent could not be collected. (YOLO never runs without an interactive YES.)
 
+### Dispatch Brief (every agent dispatch in this skill)
+
+Every agent this skill dispatches carries the runtime-state input contract of RULES.md §21 and
+**STOPs** when the brief omits the root. Resolve `ROOT` once (`git rev-parse --show-toplevel` — the
+directory holding `nazgul/config.json`) and open EVERY agent prompt below with these two lines
+verbatim, `$ROOT` expanded to the absolute path:
+
+```text
+Dispatch brief: <main_worktree_path> = /abs/path/to/project. Nazgul config: /abs/path/to/project/nazgul/config.json.
+Address every runtime-state path under that root, absolute and verbatim — your cwd is not it.
+```
+
+Where the dispatch also establishes a task worktree, add `<task_worktree> = <its absolute path>`.
+
 ### Parallel Option (after Resolve Run Mode)
 
 Read `nazgul/config.json → execution.parallel` (set by `--parallel`; `--conductor` is a
@@ -132,7 +146,8 @@ below runs its "Delegate to Implementer / Stop hook takes over" step exactly as 
 in BOTH modes; when a parallel batch is eligible the stop-hook's continuation message
 carries a `DELEGATE (PARALLEL BATCH ...)` instruction instead of the single-task one.
 Follow that instruction exactly: all batch Agent dispatches in ONE message, each prompt
-carrying its `NAZGUL_UNIT: <task id>` line, one worktree per task, sequential merges,
+carrying the `<main_worktree_path>` dispatch brief (see **Dispatch Brief** below) and its
+`NAZGUL_UNIT: <task id>` line, one worktree per task, sequential merges,
 then the batch's review-gates in one message.
 
 Parallel batch dispatch only fires when `review_gate.granularity` is `"task"`. The
@@ -372,10 +387,23 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 2. Check if post-loop agents have already run (look for release notes, updated CHANGELOG, etc.)
 3. If post-loop NOT run yet:
    - Tell user: "All [N] tasks complete. Running post-loop agents (documentation, release, observability)..."
-   - Delegate to post-loop agents (documentation → release-manager → observability)
+   - **Every dispatch in this state opens with the runtime-state root.** Each agent below carries the
+     input contract of RULES.md §21 and STOPs when the brief omits it. Resolve `ROOT` once
+     (`git rev-parse --show-toplevel` — the directory holding `nazgul/config.json`) and prepend these
+     two lines verbatim to every prompt, `$ROOT` expanded to the absolute path:
+
+     ```text
+     Dispatch brief: <main_worktree_path> = /abs/path/to/project. Nazgul config: /abs/path/to/project/nazgul/config.json.
+     Address every runtime-state path under that root, absolute and verbatim — your cwd is not it.
+     ```
+
+   - Dispatch documentation (`nazgul:documentation`), then release-manager (`nazgul:release-manager`),
+     then observability (`nazgul:observability`) — in that order, each an unnamed foreground Agent call
+     carrying the brief above. A dispatch without it produces no deliverable at all.
    - **Verify generated docs (cross-check — MANDATORY gate).** If
      `nazgul/config.json` has `.docs.verify_post_loop` true (or absent — default true),
-     dispatch the doc-verifier agent (Agent tool, `subagent_type: "nazgul:doc-verifier"`).
+     dispatch the doc-verifier agent (Agent tool, `subagent_type: "nazgul:doc-verifier"`) with the
+     `<main_worktree_path>` brief above.
      It cross-checks `nazgul/docs/*.md` and the current-objective entries in `CHANGELOG.md`
      against source: every event type, config key, command/skill name, named script, and
      schema version in the docs must exist in the codebase. On a clean pass it records
@@ -387,7 +415,8 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
      verification set `docs.verify_post_loop: false` in `nazgul/config.json` (clean no-op).
    - **Auto-distill learnings (proposes only — MANDATORY gate).** If
      `nazgul/config.json` has `.learning.enabled` AND `.learning.auto_distill_post_loop`
-     both true, dispatch the learner agent (Agent tool, `subagent_type: "nazgul:learner"`).
+     both true, dispatch the learner agent (Agent tool, `subagent_type: "nazgul:learner"`) with the
+     `<main_worktree_path>` brief above.
      It mines this objective's review/diagnosis artifacts and writes candidate rules to
      `nazgul/learning/proposed-rules.md` for the user to review later via `/nazgul:learn`.
      It NEVER approves or edits the rules registry. The stop hook **gates loop
@@ -432,12 +461,12 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 2. If no objective: read the PRD overview section as the objective, store it in config.json
 3. **Branch Setup** (if `branch.feature` is null): follow **Branch Setup via `create_feature_branch`** above.
 4. Tell user: "Regenerating documents from current context before planning..."
-5. Delegate to Doc Generator agent (regenerates all docs to reflect current objective and context)
+5. Delegate to Doc Generator agent with the `<main_worktree_path>` dispatch brief (regenerates all docs to reflect current objective and context)
 6. In HITL mode, pause for doc review.
 7. Tell user: "Docs ready. Running planner..."
-8. Delegate to Planner agent
+8. Delegate to Planner agent with the `<main_worktree_path>` dispatch brief
 9. Review Plan (HITL mode: show plan for approval. AFK: continue.)
-10. Delegate to Implementer.
+10. Delegate to Implementer with the `<main_worktree_path>` dispatch brief and its `<task_worktree>`.
 11. Stop hook takes over.
 
 ---
@@ -449,9 +478,9 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 2. If no objective: run **Objective Derivation** (see below)
 3. **Branch Setup:** follow **Branch Setup via `create_feature_branch`** above.
 4. Tell user: "Discovery complete. Generating documents, then planning..."
-5. Delegate to Doc Generator agent. In HITL mode, pause for doc review.
-6. Delegate to Planner agent. In HITL mode, pause for plan review.
-7. Delegate to Implementer.
+5. Delegate to Doc Generator agent with the `<main_worktree_path>` dispatch brief. In HITL mode, pause for doc review.
+6. Delegate to Planner agent with the same brief. In HITL mode, pause for plan review.
+7. Delegate to Implementer with that brief and its `<task_worktree>`.
 8. Stop hook takes over.
 
 ---
@@ -461,9 +490,9 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 **Action:** Fresh project — need discovery + everything.
 1. Run **Objective Derivation** (see below) if no objective in config.json
 2. **Branch Setup:** follow **Branch Setup via `create_feature_branch`** above (worktree dir is created as a sibling of the project root, e.g. `../<project>-worktrees/`).
-3. Run Discovery agent (scans codebase, classifies project, generates reviewers)
+3. Run Discovery agent with the `<main_worktree_path>` dispatch brief (scans codebase, classifies project, generates reviewers)
 4. Classify Project: In HITL mode, confirm classification with user.
-5. Generate Documents: Delegate to Doc Generator. In HITL mode, pause for doc review.
+5. Generate Documents: Delegate to Doc Generator with the `<main_worktree_path>` dispatch brief. In HITL mode, pause for doc review.
 6. Collect Context: Based on objective type, collect targeted context.
 6.5. **Board Sync Prompt** (HITL mode only):
    - Check `nazgul/context/project-profile.md` for "## GitHub Integration" section
@@ -477,9 +506,9 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
      - If (b): let user pick, then `bash scripts/board-sync-github.sh setup [number]`
      - If (c): continue without board sync
    - In AFK mode: skip board prompt (user must run `/nazgul:board` explicitly)
-8. Delegate to Planner: Planner reads context + docs, decomposes into tasks.
+8. Delegate to Planner with the `<main_worktree_path>` dispatch brief: Planner reads context + docs, decomposes into tasks.
 9. Review Plan (HITL): Show plan for approval. AFK: continue.
-10. Delegate to Implementer: start working on the first READY task.
+10. Delegate to Implementer with that brief and its `<task_worktree>`: start working on the first READY task.
 11. Stop hook takes over.
 
 ---

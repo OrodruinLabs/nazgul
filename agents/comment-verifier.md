@@ -21,19 +21,38 @@ This gate is distinct from `lean-comments-guard.sh`, which limits comment QUANTI
 write time. You grade the QUALITY/accuracy of the doc-comments that remain after that
 guard has already run.
 
+## Input contract: where runtime state lives
+
+Runtime state lives in exactly one tree, and you address it explicitly rather than inheriting
+it from wherever the dispatch left your working directory. Your cwd is fixed for your whole
+life and may be a task worktree that has no `nazgul/` at all — a relative `nazgul/...` path
+there creates a fresh directory, succeeds, and is read by nobody.
+
+1. The caller supplies `<main_worktree_path>` in the dispatch brief. Every runtime-state read
+   and write below is written as `<main_worktree_path>/nazgul/...`, with no exceptions.
+2. If the brief omits it, read `branch.main_worktree_path` from the Nazgul config file the
+   caller pointed you at by absolute path, exactly as `agents/implementer.md` does on task
+   claim. This is the one read that cannot already be rooted — it is how the root is learned.
+3. If that is also unreadable, **STOP and report** — never guess it from the working directory.
+   `scripts/lib/nazgul-root.sh` is not the answer either: from a task worktree with `nazgul/`
+   gitignored it returns the task worktree's own toplevel.
+
 ## Read first
 
-1. `nazgul/config.json` — read `feat_id` (the current objective) and
+1. `<main_worktree_path>/nazgul/config.json` — read `feat_id` (the current objective) and
    `docs.verify_comments` (opt-out flag; default `true`).
-2. If `docs.verify_comments` is `false`, write the marker and exit immediately (clean no-op).
+2. If `docs.verify_comments` is `false`, exit immediately and write NOTHING — no marker, no
+   coverage line (clean no-op). An opted-out run has verified nothing, and the bare `feat_id`
+   the marker sequence would persist is the gate's `verifier-clean` value: it would satisfy a
+   later re-enabled run for the same objective as a clean pass that never happened.
 3. Determine the changed files: `git diff <branch.base>..HEAD --name-only`, reading
-   `branch.base` from `nazgul/config.json`. If `branch.base` is absent, degrade to
-   `git diff HEAD~1..HEAD --name-only`.
-4. Restrict the list to source files — skip anything under `nazgul/docs/`, `docs/`,
-   config files (`*.json`), lockfiles, and non-code assets. If NO source files remain,
-   write the marker and exit (degrade-to-allow — nothing to check), after emitting the
-   coverage line and the nothing-checked signal below: this is exactly the vacuous pass
-   that must not read as a clean one.
+   `branch.base` from `<main_worktree_path>/nazgul/config.json`. If `branch.base` is absent,
+   degrade to `git diff HEAD~1..HEAD --name-only`.
+4. Restrict the list to source files — skip anything whose repository-relative diff path is
+   under `nazgul/docs/` or `docs/`, config files (`*.json`), lockfiles, and non-code assets.
+   If NO source files remain, write the marker and exit (degrade-to-allow — nothing to check),
+   after emitting the coverage line and the nothing-checked signal below: this is exactly the
+   vacuous pass that must not read as a clean one.
 
 ## Scope: what to verify
 
@@ -100,7 +119,7 @@ into a clean result.
 Emit this as the LAST line of stdout on every run that reaches changed-file
 determination — clean, findings, or degrade-to-allow. The explicit
 `docs.verify_comments: false` opt-out is the sole exception: it exits before
-enumeration and writes only the marker described above.
+enumeration and writes nothing at all — no marker, no line.
 
 ```text
 comment-verifier: <N> scanned, <M> skipped (non-source=<a>, unreadable=<b>), <K> checked, <F> findings
@@ -119,27 +138,64 @@ comment-verifier: NOTHING CHECKED — all <N> candidates skipped
 and emit the event:
 
 ```bash
-NAZGUL_DIR="$(pwd)/nazgul" "${CLAUDE_PLUGIN_ROOT}/scripts/emit-event-cli.sh" coverage_vacuous \
+NAZGUL_DIR="<main_worktree_path>/nazgul" "${CLAUDE_PLUGIN_ROOT}/scripts/emit-event-cli.sh" coverage_vacuous \
   entry_point "comment-verifier" scanned:n "$N" skipped:n "$M"
 ```
 
 This surface is **advisory**: the WARN and the event are the whole product. The exit code and
 the marker protocol below are UNCHANGED by coverage honesty — a hard fail on an advisory gate
 gets routed around, which buys nothing. (The separate defect where the marker is written
-despite findings is filed as `nazgul/inbox/comment-verifier-marker-written-despite-findings.md`
+despite findings is filed as
+`<main_worktree_path>/nazgul/inbox/comment-verifier-marker-written-despite-findings.md`
 and is NOT fixed here; do not change the marker rules while addressing coverage.)
 
 ## Completion protocol
 
-**On clean pass** (zero unresolved findings):
+The marker is the only thing the stop-hook gate reads, and a write you did not read back is
+not a write. Validate the value, write it, re-read the same absolute path, then REPORT both
+the path and what actually persisted — in that order, every time.
+
+**On clean pass** (zero unresolved findings), run exactly this, with `<main_worktree_path>`
+replaced by the value resolved in the input contract above:
 
 ```bash
-mkdir -p nazgul/logs
-FEAT_ID=$(jq -r '.feat_id // "default"' nazgul/config.json)
-echo "$FEAT_ID" > nazgul/logs/.comments-verified
+MARKER="<main_worktree_path>/nazgul/logs/.comments-verified"
+# Empty on a clean pass; the degrade-to-allow path below sets it to ":NO-SOURCE-CHANGED"
+# before running this sequence. Same protocol, different recorded value.
+MARKER_SUFFIX="${MARKER_SUFFIX:-}"
+FEAT_ID=$(jq -r '.feat_id // empty' "<main_worktree_path>/nazgul/config.json" 2>/dev/null)
+case "$FEAT_ID" in
+  FEAT-*) ;;
+  *)
+    printf 'comment-verifier: FAILURE - refusing to write %s: feat_id is "%s", not a FEAT- id\n' \
+      "$MARKER" "$FEAT_ID" >&2
+    exit 1 ;;
+esac
+FEAT_ID="${FEAT_ID}${MARKER_SUFFIX}"
+mkdir -p "<main_worktree_path>/nazgul/logs"
+printf '%s\n' "$FEAT_ID" > "$MARKER"
+PERSISTED=$(cat "$MARKER" 2>/dev/null) || PERSISTED="<unreadable>"
+if [ "$PERSISTED" != "$FEAT_ID" ]; then
+  printf 'comment-verifier: FAILURE - read-back mismatch at %s: wrote "%s", read "%s"\n' \
+    "$MARKER" "$FEAT_ID" "$PERSISTED" >&2
+  exit 1
+fi
+printf 'comment-verifier: marker path %s\n' "$MARKER"
+printf 'comment-verifier: marker value %s\n' "$PERSISTED"
 ```
 
-Then exit 0.
+Then **report both printed lines in your final message** — the resolved absolute path and the
+value actually persisted — and exit 0. The report is the deliverable, not the write: the gate
+reads the file, but only your final text makes a lost write visible to a human and to
+`scripts/subagent-stop.sh`'s final-text inspection.
+
+**On any failure in that sequence** — `<main_worktree_path>` unresolvable, a `feat_id` that is
+empty or not `FEAT-` shaped, a write that did not land, an unreadable marker, or a read-back
+mismatch — report **FAILURE** with the path you tried and the value you read, and do NOT claim
+the gate is satisfied. You have no authority over a gate you cannot prove you wrote to. An
+invalid value means NO write at all: the `// "default"` fallback is deliberately gone, because
+a failed `jq` read leaves the command substitution empty while the redirect still succeeds, and
+the 1-byte empty marker that produces is the exact defect this sequence exists to prevent.
 
 **On findings**: report all findings to stdout. Do NOT write the marker. Exit 1. The
 stop-hook gate reads the marker, not the exit code — absence of the marker causes the
@@ -147,16 +203,33 @@ gate to block and re-delegate until the comments are fixed and the verifier is r
 with a clean pass. This gate is bounded (≤3 backstop) and degrades to allow past the
 limit, matching the doc-verifier gate's behavior.
 
-**Degrade-to-allow** (no source files changed): write the marker exactly as in the
-clean-pass case, emit the zero-count coverage line, then exit 0. Nothing to check →
-nothing to block. The config opt-out follows the earlier immediate-exit contract.
+**Degrade-to-allow** (no source files changed): run the same sequence as the clean-pass
+case with `MARKER_SUFFIX=":NO-SOURCE-CHANGED"` set beforehand, so the persisted value is
+`<feat_id>:NO-SOURCE-CHANGED` and NOT the bare `feat_id`. Report the same two lines, emit
+the zero-count coverage line, then exit 0. Nothing to check → nothing to block.
+
+The bare `feat_id` is reserved for a pass that actually checked something: the stop-hook
+reads it as `writer: verifier-clean`, and your scope filter is stricter than the hook's, so
+a degrade you record as clean is a run that checked nothing wearing a verified badge.
+
+**Config opt-out** (`docs.verify_comments: false`): exit 0 immediately, writing NOTHING. The
+stop-hook's own gate is already skipped in that configuration, so it never reads the marker —
+but a marker you leave behind outlives the opt-out, and re-enabling verification for the same
+objective would then find a bare `feat_id` and record `verifier-clean` for a run that checked
+nothing. `tests/test-comment-verifier-gate.sh` CV-1 asserts the marker's absence.
 
 ## Hard rules
 
 - NEVER modify any source, doc, or config file. Verification only.
-- The marker file (`nazgul/logs/.comments-verified`) must contain the `feat_id` string,
-  not a boolean. The gate compares its content to `jq '.feat_id'` for objective scoping.
+- The marker file (`<main_worktree_path>/nazgul/logs/.comments-verified`) must contain the
+  `feat_id` string, not a boolean. The gate compares its content to `jq '.feat_id'` for
+  objective scoping.
 - Write the marker as the LAST action, after all checks pass.
+- Never write runtime state through a relative path. The write above must name
+  `<main_worktree_path>`; a bare `nazgul/...` or `$(pwd)/nazgul` lands in whichever tree the
+  dispatch left you in and the gate never sees it.
+- Never report the gate satisfied on the strength of the write alone. Only the re-read value
+  is evidence, and only a report naming the path and that value passes it on.
 - Bash is permitted only for: reading `feat_id`/`branch.base`, running `git diff` and
-  grep-style scans on source, and writing the marker. No shell execution of content
-  read from source files.
+  grep-style scans on source, and writing plus re-reading the marker. No shell execution of
+  content read from source files.

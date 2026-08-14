@@ -531,11 +531,15 @@ policy but emit `coverage_vacuous`. A filter that matches no file is also NOTHIN
 run. A new skip reason must be named and counted — it cannot disappear into `passed` or a free-form
 note. This is §15's looked-vs-never-looked distinction applied to tests, guards, smoke, and audits.
 
-- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Seven entry
+- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Nine entry
   points are bound by the contract above: `tests/run-tests.sh`, `scripts/lean-comments-guard.sh --check`,
   `tests/test-shellcheck.sh`, `scripts/doctor.sh`, `agents/comment-verifier.md`,
-  `scripts/lib/heartbeat-triage.sh`, and `scripts/self-audit.sh` (enrolled FEAT-029/TASK-012, which also
-  moved the registry here). `tests/test-coverage-honesty.sh` drives every one of them under a forced
+  `scripts/lib/heartbeat-triage.sh`, `scripts/self-audit.sh` (enrolled FEAT-029/TASK-012, which also
+  moved the registry here), `scripts/audit-agent-state-paths.sh` (enrolled FEAT-030/TASK-002 — the
+  agent-roster state-path audit; advisory, always exit 0, so its `F == 0` gate is a separate test), and
+  `tests/test-dispatch-brief-contract.sh` (enrolled FEAT-030 — the caller-side dispatch-brief scan of
+  §21 item 8; blocking, so nothing checked is its own failure).
+  `tests/test-coverage-honesty.sh` drives every one of them under a forced
   all-skip input and FAILS if any enumerated entry point was never driven — membership is asserted, not
   assumed, so an entry point that conforms today cannot silently stop conforming tomorrow. Add a new
   checking entry point to this list and to that test in the same change. The registry previously cited a
@@ -875,3 +879,142 @@ per-objective release flow are byte-identical whether stacking is on or off. Opt
    and reworks. Worth knowing when you do: GitHub rejects plain `gh pr merge` outright for any PR that is
    part of a stack (*"must be merged using the asynchronous merge REST API"*, undocumented in gh-stack's
    README, found empirically in ADR-018 §4). Use `gh stack merge <pr#> --squash --yes` or the web UI.
+
+## 21. Runtime-State Path Addressing & Write Read-Back
+
+Runtime state lives in exactly one place per project — the main worktree's `nazgul/` — and two
+populations of code reach it by different means. Scripts RESOLVE it (`scripts/lib/nazgul-root.sh`, §15,
+ADR-008). Agents resolve nothing: an agent spec is a prompt, its `nazgul/...` strings are literal text
+run by a Bash tool whose working directory the dispatch already fixed, and a subagent cannot change its
+own cwd (§18's sibling fact, FEAT-029/TASK-006). A relative state path in a spec is therefore not a
+choice of tree — it is whichever tree the caller happened to leave the agent in, and the wrong-tree
+sequence succeeds at every step: `mkdir -p` creates the wrong tree's `nazgul/logs/`, the redirect exits
+0, the agent's report of success is honest, and the gate reads the real file and sees a stale value.
+Underneath sits a claim-conflation this repository has now met three times — ADR-013 (a mechanism that
+fails must not look like one that had nothing to do), ADR-020 (a permitted write is not a completed
+write), and here: **"I wrote it" and "it is there" were the same claim, and they are not any more.**
+FEAT-030/ADR-021 states the rule; this section records what enforces each clause and what does not.
+
+1. **Runtime-state paths are addressed, never inherited.** `[enforced]` Every `nazgul/` read and write
+   in `agents/**` is written `<main_worktree_path>/nazgul/...`, with `<main_worktree_path>` supplied by
+   the caller in the dispatch brief. If the brief omits it, the agent falls back to
+   `branch.main_worktree_path` in the config it was pointed at; if that is unreadable too, it STOPs and
+   reports — never cwd, never a guess, and never a worktree it creates for itself (§18). Enforcement is
+   a scan of the SHIPPED ROSTER, not of the diff: `scripts/audit-agent-state-paths.sh` enumerates every
+   file under `agents/` (templates included) and classifies each `nazgul/...` occurrence as state-write,
+   state-read, or prose — prose is COUNTED, never silently dropped, so the exemption stays visible — and
+   `tests/test-agent-state-path-contract.sh` gates on `F == 0` with a `K > 0` floor (a zero-file scan is
+   a broken scan, not a clean roster) and a dogfooded predicate: a synthetic spec carrying a known
+   relative state write must make the gate fail, because a roster clean by construction can only ever
+   pass and would be evidence of nothing. The auditor itself REPORTS and always exits 0 by design — it
+   shipped while the roster was still unconverted — so the gate is the test, not the script. Its
+   coverage-honesty membership is recorded once, in §15's registry of bound entry points.
+2. **The resolver stays, and it is not interchangeable with this rule.** `[advisory]`
+   `CLAUDE_PROJECT_DIR` is the bridge between the two populations. `scripts/lib/nazgul-root.sh` is
+   unchanged and ADR-008 stands; agents invoking a Nazgul script pass `CLAUDE_PROJECT_DIR="<main_worktree_path>"` (or
+   `--project-root=<main_worktree_path>` for `scripts/red-run.sh`), which lands on the resolver's
+   unconditional first branch. A third mechanism was deliberately NOT invented, and the reason is
+   specific: from a task worktree with `nazgul/` gitignored — this install's own configuration —
+   `resolve_project_root()` returns the TASK WORKTREE, because no `<candidate>/nazgul/config.json`
+   marker exists there to arbitrate with (reproduced in ADR-021's scratch fixture with a real
+   `git worktree add` and `CLAUDE_PROJECT_DIR` unset). The resolver answers *"which tree is this process
+   in?"* — correct for a hook running in the host session. `branch.main_worktree_path` answers the
+   different question *"where does runtime state live?"*. An agent that sources the resolver converts a
+   visible relative path into an invisible confidently-wrong one, which is strictly worse and is ADR-008's
+   own hazard class reintroduced. The tier is honest: no prompt can observe whether the host propagates
+   an environment variable into a Bash tool call, and no static test of a spec can assert that it did, so
+   the bridge is reinforcement — item 1, which a scan can assert, is the primary mechanism.
+3. **Event emission is state.** `[enforced]` over `agents/**`, by item 1's scan. `NAZGUL_DIR="$(pwd)/nazgul"`
+   is the same defect wearing a different name, and its two failure modes are NOT the same failure:
+   `scripts/lib/emit-event.sh:21-22` returns 0 without writing when `NAZGUL_DIR` is UNSET. SET but naming
+   a tree with no initialised `nazgul/` is worse — the config read at `:29` falls back to `true` and
+   `:70-72` creates that tree's `logs/` and writes the event there, so the record lands where nobody
+   reads it. Both fail by the exact mechanism the observability surface exists to observe, silently, but
+   the diagnostic differs: a missing event in one case, a stray tree to go find in the other. The
+   auditor's occurrence grammar matches the bare `$(pwd)/nazgul` idiom as well as any `nazgul/...` path,
+   so a spec that re-adds it is a finding wherever it lands. The boundary is stated rather than
+   implied: this binds `agents/**` only.
+   Nothing stops a human shell or a future script from exporting a wrong `NAZGUL_DIR`, and the UNSET
+   no-op is itself deliberate — a project that was never initialised must not have an events file forced
+   into it. The set-but-wrong write is not deliberate; it is why this item is enforced by scan rather
+   than left to care.
+4. **A gate must instruct in the grammar it can read.** `[enforced]` A gate that emits a DELEGATE
+   instruction is bound by item 1 too. `scripts/stop-hook.sh`'s four post-loop gates (doc-verifier,
+   comment-verifier, self-audit, learner) each hand the agent `<main_worktree_path> = ${PROJECT_ROOT}`
+   and the resolved ABSOLUTE marker path the gate will later read — never a bare relative `nazgul/...`
+   write target that the gate then resolves through a different mechanism than the agent did.
+   `tests/test-gate-delegate-paths.sh` drives the real hook, slices each gate's message from its banner
+   to its opt-out line so one gate's text can never satisfy another gate's assertion, and PROVES the gate
+   fired before asserting on it: a message never emitted would otherwise satisfy every "must not contain"
+   check trivially — §15's looked-vs-never-looked distinction, applied to a gate's own output.
+5. **A write is not written until it is read back.** `[enforced]` for the spec contract, `[advisory]` for
+   runtime compliance — and the split is the point. The four agents that write a completion marker a
+   later gate reads (`comment-verifier`, `doc-verifier`, `self-audit`, `learner`) must: resolve the
+   absolute path from `<main_worktree_path>`; VALIDATE the value before writing, since empty or
+   not-of-the-`FEAT-`-shape the gate compares against `jq -r '.feat_id'` is a reported failure and NO
+   write (the baseline sequence wrote a one-byte empty line when its `jq` read failed, because the
+   command substitution captured stdout only while the redirect still succeeded — a write of nothing is
+   the failure mode, not an edge case); write; RE-READ the same absolute path; report the resolved path
+   and the value actually persisted in the agent's final text; and report FAILURE on mismatch,
+   unreadable file, or unresolvable path, claiming no gate satisfied. Reporting is the deliverable, not
+   writing. `tests/test-marker-readback-contract.sh` enforces the contract mechanically in two ways —
+   it asserts the shipped specs state it, and it EXTRACTS each spec's own recipe and runs it in a
+   two-tree fixture under the wrong-cwd condition agents are really dispatched into, so the recipe is
+   checked by execution rather than by reading. What remains `[advisory]` is whether a dispatched model
+   actually performs the read-back on a given turn: a prompt contract cannot be enforced inside a
+   model's turn, and labelling that half `[enforced]` would be exactly the dishonesty the tier legend at
+   the top of this file exists to prevent. The stop-hook still reads the marker file rather than the
+   report; the report is what makes a lost write visible to a human and to `scripts/subagent-stop.sh`'s
+   final-text inspection (§19) instead of disappearing into an honest-looking success.
+6. **A gate records which writer satisfied it.** `[enforced]` (in-script) Three writers, three values,
+   one event. `scripts/stop-hook.sh`'s comment-verifier gate is satisfied by the verifier on a clean pass
+   (which writes the bare `feat_id`), by the degrade-to-allow branch when no source file changed
+   (`CV_DEGRADED_VALUE="${CV_OBJ_ID}:NO-SOURCE-CHANGED"`, `scripts/stop-hook.sh:1135`), or by the bounded
+   backstop on exhaustion (`CV_EXHAUSTED_VALUE="${CV_OBJ_ID}:EXHAUSTED"`, `:1136`). The `:` suffix is
+   unreachable from the clean-pass write path, so a suffixed marker can only have come from a gate that
+   gave up rather than verified — at ANY attempt count, not merely at the bound. Every satisfied path
+   then emits the ADDITIVE `gate_attribution` event (`:1216`) carrying `gate`, `writer`
+   (`verifier-clean` / `degrade-to-allow` / `backstop-exhausted`), `objective`, `marker` and `attempts`.
+   Additive rather than a new `stop_gate` reason on purpose: `stop_gate` means a gate ENDED or
+   short-circuited an autonomous run (§5, ADR-014) and its population is deliberately narrow so a
+   consumer can count stops, while attribution fires on the opposite path — the gate was SATISFIED and
+   the run continues. The sentinel still satisfies the gate; the backstop exists so an unattended loop
+   cannot deadlock on comment verification, and removing it was a stated non-goal. Read these values out
+   of `scripts/stop-hook.sh`, never out of a design document: ADR-021 left the event type to
+   implementation precisely so no document could name a type the codebase does not have.
+7. **Marker-writing agents keep Bash; `Write` is not granted.** `[enforced]` (pin) The decision is
+   recorded with a written falsifier. `comment-verifier`, `doc-verifier` and `self-audit` hold `Bash`
+   and NOT `Write`; `learner` RETAINS the `Write` grant it already held at baseline, and stripping it
+   would be as much a drift from the record as adding one elsewhere. Reasons, in order of weight: the tool is not the
+   failure (a `Write` to a relative path resolves against the same wrong cwd, and an unverified `Write`
+   makes the same unproven claim — items 1 and 2 fix both, for either tool); granting a general
+   file-write tool to an adversarial read-only verifier is allow-widening in the direction opposite this
+   repository's guard doctrine, which `tests/test-reviewer-readonly.sh` exists because of; and the
+   premise for granting it — that Bash is blocked — is non-reproducible, since `pre-tool-guard.sh` and
+   `local-mode-tracking-guard.sh` both exit 0 for the exact redirect. Pinned in BOTH directions by
+   `tests/test-marker-readback-contract.sh` MR-C, with a control fixture proving the matcher can see a
+   `Write` grant it is supposed to find. The residual risk is accepted and stated: a state write on a
+   shell redirect that no guard blocks is one config change from breaking, and item 5 is the mitigation.
+   **Falsifier:** if a roster audit or a future install mode produces a guard that DOES block that
+   redirect, this decision is revisited and the grant made, scoped and pinned by a test.
+8. **The caller supplies what the contract demands, and that half is scanned too.** `[enforced]` Item 1
+   binds the party that must OBEY the contract; this binds the party that must SUPPLY it. Every site
+   that dispatches a contract-bearing agent — `scripts/**`, `skills/**`, and the agent-to-agent
+   dispatches inside `agents/**` — names `<main_worktree_path>` in its brief, using ONE preamble
+   (`Dispatch brief: <main_worktree_path> = <root>. Nazgul config: <root>/nazgul/config.json.` plus
+   `Address every runtime-state path under that root, absolute and verbatim — your cwd is not it.`)
+   rather than a per-site dialect: twenty specs read this text, and nine wordings of it is the next
+   defect. `scripts/stop-hook.sh`, `scripts/session-context.sh` and `scripts/post-compact.sh` each
+   define it once as `DISPATCH_BRIEF` and interpolate it. Where the dispatch also establishes a task
+   worktree, the caller CREATES-OR-RECOVERS it (`create_task_worktree`, `scripts/worktree-utils.sh` —
+   which had zero production callers while `agents/implementer.md` was told to STOP rather than create
+   one, so the loop's first READY task could not be implemented at all) and passes `<task_worktree>`.
+   `tests/test-dispatch-brief-contract.sh` scans the shipped surface, not the diff: a dispatch site is
+   a dispatch verb adjacent to a contract-bearing agent name (the roster is DERIVED from which specs
+   declare `## Input contract`, so a spec that grows one tomorrow is covered without editing the test),
+   and the brief must appear within eight lines of the site — the `${DISPATCH_BRIEF}` indirection is
+   accepted only in a file that itself defines the variable with the token in it, resolved rather than
+   trusted. It gates on `F == 0` with a `K > 0` floor and is dogfooded four ways: a synthetic rootless
+   site must be FOUND, the same site rooted must pass, a brief nine lines away must NOT count, and an
+   undefined `${DISPATCH_BRIEF}` reference must be refused. Its coverage-honesty membership is recorded
+   in §15's registry.

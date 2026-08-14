@@ -55,21 +55,22 @@ fi
 # The three counts are structural-freshness checks, NOT ceilings: bump one for a
 # genuinely new rule; never weaken a tag to keep a count unchanged (FEAT-022).
 ADVISORY_COUNT=$(awk '{ count += gsub(/\[advisory\]/, "") } END { print count + 0 }' "$RULES_FILE")  # occurrences, not lines
-if [ "$ADVISORY_COUNT" -eq 28 ]; then
-  _pass "[advisory] annotation count is exactly 28 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 31 ]; then
+  _pass "[advisory] annotation count is exactly 31 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 28" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 28"
+  _fail "[advisory] annotation count is exactly 31" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 31"
 fi
 
-# 64 -> 69 by FEAT-029 (§2's preflight/dependency/repair rules and §15's registry);
-# 69 -> 71, and advisory 27 -> 28, by PATCH-002's §15 repo content boundary.
+# Bumped per objective, never weakened: 64->69 (FEAT-029), 69->71 (PATCH-002), 71->78
+# with advisory 28->31 (FEAT-030 §21), 78->79 (FEAT-030 §21 item 8, the caller side
+# of the dispatch brief). Bump for a genuinely new rule; never re-tag to fit.
 ENFORCED_COUNT=$(awk '{ count += gsub(/\[enforced\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ENFORCED_COUNT" -eq 71 ]; then
-  _pass "[enforced] annotation count is exactly 71 (found: $ENFORCED_COUNT)"
+if [ "$ENFORCED_COUNT" -eq 79 ]; then
+  _pass "[enforced] annotation count is exactly 79 (found: $ENFORCED_COUNT)"
 else
-  _fail "[enforced] annotation count is exactly 71" \
-    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 71"
+  _fail "[enforced] annotation count is exactly 79" \
+    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 79"
 fi
 
 # 21 -> 22: FEAT-029 added §2's typed reconciliation quarantine, hook-driven
@@ -267,6 +268,55 @@ assert_file_contains \
   "§15's registry enrolls scripts/self-audit.sh" \
   "$RULES_FILE" \
   '`scripts/self-audit.sh` (enrolled FEAT-029/TASK-012'
+
+# FEAT-030 §21: the runtime-state addressing rule must state its own enforcement
+# honestly, and must not drift from the sentinel and event type that actually shipped.
+assert_file_contains \
+  "RULES.md has a Runtime-State Path Addressing section" \
+  "$RULES_FILE" \
+  "## 21. Runtime-State Path Addressing & Write Read-Back"
+
+assert_file_contains \
+  "§21's addressing rule is tagged [enforced]" \
+  "$RULES_FILE" \
+  'Runtime-state paths are addressed.*`\[enforced\]`'
+
+assert_file_contains \
+  "§21's CLAUDE_PROJECT_DIR bridge is tagged [advisory]" \
+  "$RULES_FILE" \
+  'The resolver stays.*`\[advisory\]`'
+
+assert_file_contains \
+  "§21 states why the resolver is not interchangeable with <main_worktree_path>" \
+  "$RULES_FILE" \
+  "returns the TASK WORKTREE"
+
+assert_file_contains \
+  "§21 splits the read-back rule into an enforced contract and advisory runtime compliance" \
+  "$RULES_FILE" \
+  '`\[enforced\]` for the spec contract, `\[advisory\]` for'
+
+assert_file_contains \
+  "§21 records the Write-tool decision in the learner's direction too" \
+  "$RULES_FILE" \
+  'RETAINS the `Write` grant'
+
+# The gate-attribution clause is pinned against the SHIPPED code, not against ADR-021's
+# suggestion: a sentinel or event type the stop-hook does not emit is a fabricated rule.
+STOP_HOOK="$REPO_ROOT/scripts/stop-hook.sh"
+for token in ':NO-SOURCE-CHANGED' ':EXHAUSTED' 'gate_attribution'; do
+  assert_file_contains "§21 names '$token', which scripts/stop-hook.sh emits" "$RULES_FILE" "$token"
+  assert_file_contains "scripts/stop-hook.sh still ships '$token'" "$STOP_HOOK" "$token"
+done
+
+# §15 owns the coverage-honesty registry; §21 cross-references it rather than restating it.
+REGISTRY_HITS=$(grep -c "registry of bound entry points lives HERE" "$RULES_FILE" || true)
+if [ "$REGISTRY_HITS" -eq 1 ]; then
+  _pass "the coverage-honesty registry is declared exactly once (§15)"
+else
+  _fail "the coverage-honesty registry is declared exactly once (§15)" \
+    "found $REGISTRY_HITS declarations — a second copy is a registry that can drift"
+fi
 
 assert_file_not_contains \
   "RULES.md no longer claims EnterWorktree is a live worktree-entry path" \

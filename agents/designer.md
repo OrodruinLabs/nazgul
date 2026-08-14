@@ -17,14 +17,31 @@ memory: |
 
 You create or extend design systems and visual specifications. Read project context FIRST — greenfield projects CREATE new systems, brownfield projects EXTEND existing ones.
 
+## Input contract: where runtime state lives
+
+Runtime state lives in exactly one tree, and you address it explicitly rather than inheriting
+it from wherever the dispatch left your working directory. Your cwd is fixed for your whole
+life and may be a task worktree that has no `nazgul/` at all — a relative `nazgul/...` path
+there creates a fresh directory, succeeds, and is read by nobody. This applies to your `Write`
+tool exactly as it applies to `Bash`: a relative target is resolved against that same cwd.
+
+1. The caller supplies `<main_worktree_path>` in the dispatch brief. Every runtime-state read
+   and write below is written as `<main_worktree_path>/nazgul/...`, with no exceptions.
+2. If the brief omits it, read `branch.main_worktree_path` from the Nazgul config file the
+   caller pointed you at by absolute path, exactly as `agents/implementer.md` does on task
+   claim. This is the one read that cannot already be rooted — it is how the root is learned.
+3. If that is also unreadable, **STOP and report** — never guess it from the working directory.
+   `scripts/lib/nazgul-root.sh` is not the answer either: from a task worktree with `nazgul/`
+   gitignored it returns the task worktree's own toplevel.
+
 ## Context Reading (MANDATORY — Do This First)
 
-1. Read `nazgul/config.json -> project.classification` (GREENFIELD, BROWNFIELD, REFACTOR)
-2. Read `nazgul/config.json -> project.stack.styling` for CSS framework/methodology
-3. Read `nazgul/context/project-profile.md` for frontend framework and key dependencies
-4. Read `nazgul/context/style-conventions.md` for existing visual and naming patterns
-5. Read delegation brief from `nazgul/tasks/[TASK-ID]-delegation.md` for scope and constraints
-6. Read the PRD (`nazgul/docs/PRD.md`) for user experience requirements
+1. Read `<main_worktree_path>/nazgul/config.json -> project.classification` (GREENFIELD, BROWNFIELD, REFACTOR)
+2. Read `<main_worktree_path>/nazgul/config.json -> project.stack.styling` for CSS framework/methodology
+3. Read `<main_worktree_path>/nazgul/context/project-profile.md` for frontend framework and key dependencies
+4. Read `<main_worktree_path>/nazgul/context/style-conventions.md` for existing visual and naming patterns
+5. Read delegation brief from `<main_worktree_path>/nazgul/tasks/[TASK-ID]-delegation.md` for scope and constraints
+6. Read the PRD (`<main_worktree_path>/nazgul/docs/PRD.md`) for user experience requirements
 
 ## Conditional Behavior by Project Type
 
@@ -106,8 +123,8 @@ Do NOT change the visual design. Only restructure implementation:
     - States (default, hover, active, focus, disabled, loading, error)
     - Responsive behavior at each breakpoint
     - Accessibility requirements (contrast ratios, focus indicators)
-11. Write `nazgul/docs/design-system.md` with all design decisions and specifications
-12. Write `nazgul/docs/design-tokens.json` with all tokens in structured format
+11. Write `<main_worktree_path>/nazgul/docs/design-system.md` with all design decisions and specifications
+12. Write `<main_worktree_path>/nazgul/docs/design-tokens.json` with all tokens in structured format
 13. Validate: design-tokens.json is valid JSON, all colors in design-system.md appear in tokens, breakpoints are consistent between system and tokens
 
 ## Output Format

@@ -11,6 +11,11 @@ PROJECT_ROOT="$(resolve_project_root)"
 NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
 PLAN="$NAZGUL_DIR/plan.md"
+
+# The ONE dispatch-brief preamble every DELEGATE instruction below reuses verbatim —
+# every contract-bearing agent spec STOPs without <main_worktree_path>.
+DISPATCH_BRIEF="Dispatch brief: <main_worktree_path> = ${PROJECT_ROOT}. Nazgul config: ${CONFIG}.
+Address every runtime-state path under that root, absolute and verbatim — your cwd is not it."
 source "$SCRIPT_DIR/lib/task-utils.sh"
 source "$SCRIPT_DIR/lib/session-tracker.sh"
 source "$SCRIPT_DIR/lib/review-evidence.sh"
@@ -350,7 +355,7 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
           jq --arg t "$TASK_ID" '.safety._review_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
           DONE_COUNT=$((DONE_COUNT - 1))
           IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
-          REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} reset DONE → IMPLEMENTED — missing/unapproved reviews: ${MISSING_LIST}. Fix: spawn review-gate for ${TASK_ID}, or run /nazgul:review --materialize ${TASK_ID}
+          REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} reset DONE → IMPLEMENTED — missing/unapproved reviews: ${MISSING_LIST}. Fix: spawn review-gate for ${TASK_ID} with <main_worktree_path> = ${PROJECT_ROOT}, or run /nazgul:review --materialize ${TASK_ID}
 "
         fi
       else
@@ -753,7 +758,7 @@ if [ -f "$PLAN" ]; then
   fi
   # Granularity-aware recovery hints (survive compaction via plan.md Next Action).
   if [ "$GRANULARITY" != "task" ] && [ "$AGGREGATE_REVIEW_READY" = "true" ]; then
-    NEXT_ACTION_TEXT="AGGREGATE REVIEW (${GRANULARITY}) ready for [${AGGREGATE_REVIEW_SCOPE}] — spawn review-gate over the combined diff for tasks: ${AGGREGATE_REVIEW_TASKS}"
+    NEXT_ACTION_TEXT="AGGREGATE REVIEW (${GRANULARITY}) ready for [${AGGREGATE_REVIEW_SCOPE}] — spawn review-gate with <main_worktree_path> = ${PROJECT_ROOT} over the combined diff for tasks: ${AGGREGATE_REVIEW_TASKS}"
   elif [ "$GRANULARITY" != "task" ] && [ "$AWAITING_AGGREGATE_REVIEW" = "true" ]; then
     NEXT_ACTION_TEXT="AWAITING AGGREGATE REVIEW (${GRANULARITY}) — parked IMPLEMENTED tasks (${AGGREGATE_REVIEW_TASKS}); keep implementing the rest of the review unit, do NOT review/re-implement parked tasks"
   fi
@@ -997,12 +1002,13 @@ if [ "$TOTAL_COUNT" -gt 0 ]; then
           cat >&2 << LEARN_MSG
 Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP LEARNING GATE (mandatory).
 Candidate Learned Rules have NOT been distilled for this objective (${OBJ_ID}) yet.
+${DISPATCH_BRIEF}
 DELEGATE: Spawn the learner agent (Agent tool, subagent_type "nazgul:learner") to mine this
 objective's review/diagnosis artifacts and write candidate rules to
-nazgul/learning/proposed-rules.md. It PROPOSES only — it never approves or edits the registry.
-When it finishes it MUST record completion: echo "${OBJ_ID}" > nazgul/learning/.distilled
+"${LEARN_DIR}/proposed-rules.md". It PROPOSES only — it never approves or edits the registry.
+When it finishes it MUST record completion: echo "${OBJ_ID}" > "${MARKER}"
 Do NOT output NAZGUL_COMPLETE until distillation has run and the marker is written.
-Opt out for future objectives with learning.auto_distill_post_loop=false in nazgul/config.json.
+Opt out for future objectives with learning.auto_distill_post_loop=false in ${CONFIG}.
 LEARN_MSG
           jq -n --arg r "Post-loop learning gate: distill learned rules for ${OBJ_ID}" '{"decision":"block","reason":$r}'
           exit 2
@@ -1102,12 +1108,13 @@ GRAN_BLOCK_MSG
             cat >&2 << DV_MSG
 Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP DOC-VERIFIER GATE (mandatory).
 Generated docs have NOT been verified for this objective (${DV_OBJ_ID}) yet.
-DELEGATE: Spawn the doc-verifier agent (nazgul:doc-verifier) to cross-check nazgul/docs/*.md
+${DISPATCH_BRIEF}
+DELEGATE: Spawn the doc-verifier agent (nazgul:doc-verifier) to cross-check ${DOCS_DIR}/*.md
 and CHANGELOG.md against source. It checks that every event type, config key, command, and
 named script referenced in docs exists in the codebase.
-When it finishes it MUST record completion: echo "${DV_OBJ_ID}" > nazgul/logs/.docs-verified
+When it finishes it MUST record completion: echo "${DV_OBJ_ID}" > "${DV_MARKER}"
 Do NOT output NAZGUL_COMPLETE until verification has run and the marker is written.
-Opt out for future objectives with docs.verify_post_loop=false in nazgul/config.json.
+Opt out for future objectives with docs.verify_post_loop=false in ${CONFIG}.
 DV_MSG
             jq -n --arg r "Post-loop doc-verifier gate: docs not yet verified for ${DV_OBJ_ID}" '{"decision":"block","reason":$r}'
             exit 2
@@ -1126,9 +1133,51 @@ DV_MSG
       CV_OBJ_ID=$(jq -r '.feat_id // "default"' "$CONFIG" 2>/dev/null || echo "default")
       CV_MARKER="$NAZGUL_DIR/logs/.comments-verified"
       CV_ATTEMPTS_FILE="$NAZGUL_DIR/logs/.comments-verify-attempts"
+      # ADR-021: three writers, three values. The verifier writes the bare feat_id, so a
+      # suffixed value can only have come from a gate that gave up rather than verified.
+      CV_DEGRADED_VALUE="${CV_OBJ_ID}:NO-SOURCE-CHANGED"
+      CV_EXHAUSTED_VALUE="${CV_OBJ_ID}:EXHAUSTED"
       CV_VERIFIED_FOR=""
+      # ADR-021 binds this hook's own fallback writers too: a redirect that returned 0 is
+      # not proof the file holds the value, so re-read the same path before claiming satisfied.
+      cv_write_marker() {
+        local value="$1" persisted=""
+        mkdir -p "$NAZGUL_DIR/logs" 2>/dev/null || true
+        printf '%s\n' "$value" > "$CV_MARKER" 2>/dev/null || true
+        persisted=$(cat "$CV_MARKER" 2>/dev/null) || persisted="<unreadable>"
+        [ "$persisted" = "$value" ] && return 0
+        echo "Nazgul: comment-verifier gate FAILURE - marker read-back mismatch at ${CV_MARKER}: wrote \"${value}\", read \"${persisted}\". Not recording the gate as satisfied." >&2
+        emit_event "stop_gate" \
+          reason "comment_verifier_marker_unverified" \
+          gate "comment_verifier" \
+          objective "$CV_OBJ_ID" \
+          marker "$CV_MARKER" \
+          intended "$value" \
+          persisted "$persisted"
+        jq -n --arg r "Post-loop comment-verifier gate: marker write at ${CV_MARKER} could not be read back — fix the path, then re-run." \
+          '{"decision":"block","reason":$r}'
+        return 1
+      }
+      # Read once, before the satisfied/unsatisfied split: a gate satisfied by a
+      # pre-existing marker must still report the real attempt count, not 0.
+      CV_ATTEMPTS=0
+      if [ -f "$CV_ATTEMPTS_FILE" ]; then
+        read -r CV_ATT_OBJ CV_ATT_CNT < "$CV_ATTEMPTS_FILE" 2>/dev/null || true
+        if [ "${CV_ATT_OBJ:-}" = "$CV_OBJ_ID" ]; then
+          case "${CV_ATT_CNT:-0}" in ''|*[!0-9]*) CV_ATT_CNT=0 ;; esac
+          CV_ATTEMPTS="$CV_ATT_CNT"
+        fi
+      fi
       [ -f "$CV_MARKER" ] && CV_VERIFIED_FOR=$(cat "$CV_MARKER" 2>/dev/null || echo "")
-      if [ "$CV_VERIFIED_FOR" != "$CV_OBJ_ID" ]; then
+      CV_SATISFIED_BY=""
+      if [ "$CV_VERIFIED_FOR" = "$CV_OBJ_ID" ]; then
+        CV_SATISFIED_BY="verifier-clean"
+      elif [ "$CV_VERIFIED_FOR" = "$CV_DEGRADED_VALUE" ]; then
+        CV_SATISFIED_BY="degrade-to-allow"
+      elif [ "$CV_VERIFIED_FOR" = "$CV_EXHAUSTED_VALUE" ]; then
+        CV_SATISFIED_BY="backstop-exhausted"
+      fi
+      if [ -z "$CV_SATISFIED_BY" ]; then
         # Filter out docs/config/lockfiles — mirrors the comment-verifier agent's own
         # scope filter, so this cheap backstop doesn't spawn the agent for doc-only diffs.
         CV_CHANGED_JSON=$(files_modified_json "$PROJECT_ROOT" "$BASE_BRANCH" 2>/dev/null || echo '[]')
@@ -1137,38 +1186,41 @@ DV_MSG
           ) ] | length' 2>/dev/null || echo 0)
         case "$CV_CHANGED_COUNT" in (*[!0-9]*|'') CV_CHANGED_COUNT=0 ;; esac
         if [ "$CV_CHANGED_COUNT" -eq 0 ]; then
-          mkdir -p "$NAZGUL_DIR/logs"
-          printf '%s\n' "$CV_OBJ_ID" > "$CV_MARKER"
+          cv_write_marker "$CV_DEGRADED_VALUE" || exit 2
+          CV_VERIFIED_FOR="$CV_DEGRADED_VALUE"
+          CV_SATISFIED_BY="degrade-to-allow"
         else
-          CV_ATTEMPTS=0
-          if [ -f "$CV_ATTEMPTS_FILE" ]; then
-            read -r CV_ATT_OBJ CV_ATT_CNT < "$CV_ATTEMPTS_FILE" 2>/dev/null || true
-            if [ "${CV_ATT_OBJ:-}" = "$CV_OBJ_ID" ]; then
-              case "${CV_ATT_CNT:-0}" in ''|*[!0-9]*) CV_ATT_CNT=0 ;; esac
-              CV_ATTEMPTS="$CV_ATT_CNT"
-            fi
-          fi
           if [ "$CV_ATTEMPTS" -lt 3 ]; then
             mkdir -p "$NAZGUL_DIR/logs"
             printf '%s %s\n' "$CV_OBJ_ID" "$((CV_ATTEMPTS + 1))" > "$CV_ATTEMPTS_FILE"
             cat >&2 << CV_MSG
 Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP COMMENT-VERIFIER GATE (mandatory).
 Inline doc-comments have NOT been verified for this objective (${CV_OBJ_ID}) yet.
+${DISPATCH_BRIEF}
 DELEGATE: Spawn the comment-verifier agent (nazgul:comment-verifier) to cross-check inline
 source doc-comments (XML <summary>, JSDoc, docstrings) changed by this objective for
 templated, restatement, or contradiction defects.
-When it finishes it MUST record completion: echo "${CV_OBJ_ID}" > nazgul/logs/.comments-verified
+When it finishes it MUST record completion: echo "${CV_OBJ_ID}" > "${CV_MARKER}"
 Do NOT output NAZGUL_COMPLETE until verification has run and the marker is written.
-Opt out for future objectives with docs.verify_comments=false in nazgul/config.json.
+Opt out for future objectives with docs.verify_comments=false in ${CONFIG}.
 CV_MSG
             jq -n --arg r "Post-loop comment-verifier gate: comments not yet verified for ${CV_OBJ_ID}" '{"decision":"block","reason":$r}'
             exit 2
           else
-            echo "Nazgul: comment-verifier gate gave up after ${CV_ATTEMPTS} attempts for ${CV_OBJ_ID} — completing without comment verification. Run /nazgul:comment-verifier manually." >&2
-            mkdir -p "$NAZGUL_DIR/logs"
-            printf '%s\n' "$CV_OBJ_ID" > "$CV_MARKER"
+            echo "Nazgul: comment-verifier gate gave up after ${CV_ATTEMPTS} attempts for ${CV_OBJ_ID} — completing without comment verification, marker recorded as ${CV_EXHAUSTED_VALUE}. Run /nazgul:comment-verifier manually." >&2
+            cv_write_marker "$CV_EXHAUSTED_VALUE" || exit 2
+            CV_VERIFIED_FOR="$CV_EXHAUSTED_VALUE"
+            CV_SATISFIED_BY="backstop-exhausted"
           fi
         fi
+      fi
+      if [ -n "$CV_SATISFIED_BY" ]; then
+        emit_event "gate_attribution" \
+          gate "comment_verifier" \
+          writer "$CV_SATISFIED_BY" \
+          objective "$CV_OBJ_ID" \
+          marker "$CV_VERIFIED_FOR" \
+          attempts:n "$CV_ATTEMPTS"
       fi
     fi
     # Post-loop self-audit gate (ADR-001): marker + bounded backstop (≤3); never a hard
@@ -1180,6 +1232,11 @@ CV_MSG
       # real file (self-audit.sh writes to self_audit.backlog_path); default it.
       SA_BACKLOG=$(jq -r '.self_audit.backlog_path // "nazgul/improvements.md"' "$CONFIG" 2>/dev/null || echo "nazgul/improvements.md")
       [ -n "$SA_BACKLOG" ] || SA_BACKLOG="nazgul/improvements.md"
+      # Message-only rendering: self-audit.sh still reads the configured value verbatim.
+      case "$SA_BACKLOG" in
+        /*) SA_BACKLOG_ABS="$SA_BACKLOG" ;;
+        *) SA_BACKLOG_ABS="$PROJECT_ROOT/$SA_BACKLOG" ;;
+      esac
       SA_MARKER="$NAZGUL_DIR/logs/.self-audited"
       SA_ATTEMPTS_FILE="$NAZGUL_DIR/logs/.self-audit-attempts"
       SA_AUDITED_FOR=""
@@ -1199,12 +1256,13 @@ CV_MSG
           cat >&2 << SA_MSG
 Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP SELF-AUDIT GATE (mandatory).
 Self-audit findings have NOT been recorded for this objective (${SA_OBJ_ID}) yet.
+${DISPATCH_BRIEF}
 DELEGATE: Spawn the self-audit agent (nazgul:self-audit) to mine cost/perf/correctness
-signals from this objective and append findings to ${SA_BACKLOG}. It proposes
+signals from this objective and append findings to "${SA_BACKLOG_ABS}". It proposes
 only — it never edits code or approves anything.
-When it finishes it MUST record completion: echo "${SA_OBJ_ID}" > nazgul/logs/.self-audited
+When it finishes it MUST record completion: echo "${SA_OBJ_ID}" > "${SA_MARKER}"
 Do NOT output NAZGUL_COMPLETE until self-audit has run and the marker is written.
-Opt out for future objectives with self_audit.enabled=false in nazgul/config.json.
+Opt out for future objectives with self_audit.enabled=false in ${CONFIG}.
 SA_MSG
           jq -n --arg r "Post-loop self-audit gate: findings not yet recorded for ${SA_OBJ_ID}" '{"decision":"block","reason":$r}'
           exit 2
@@ -1290,16 +1348,27 @@ if [ "$GRANULARITY" != "task" ] && [ "$AGGREGATE_REVIEW_READY" = "true" ]; then
   else
     REVIEW_DIFF_HINT="the combined diff for ${AGGREGATE_REVIEW_SCOPE} (its tasks' commits)"
   fi
-  DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for the AGGREGATE review unit [${AGGREGATE_REVIEW_SCOPE}]. Review SCOPE is ${REVIEW_DIFF_HINT}, covering tasks: ${AGGREGATE_REVIEW_TASKS}. Pass granularity=${GRANULARITY} and the task list so feedback-aggregator can attribute findings back to the owning task by file scope. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition. Dispatch review-gate at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context."
+  DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for the AGGREGATE review unit [${AGGREGATE_REVIEW_SCOPE}]. ${DISPATCH_BRIEF}
+Review SCOPE is ${REVIEW_DIFF_HINT}, covering tasks: ${AGGREGATE_REVIEW_TASKS}. Pass granularity=${GRANULARITY} and the task list so feedback-aggregator can attribute findings back to the owning task by file scope. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition. Dispatch review-gate at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context."
 elif [ "$GRANULARITY" = "task" ] && [ "$ACTIVE_STATUS" = "IMPLEMENTED" ]; then
-  DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition. Dispatch review-gate at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context."
+  DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. ${DISPATCH_BRIEF}
+MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition. Dispatch review-gate at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context."
 elif [ "$GRANULARITY" = "task" ] && [ "$ACTIVE_STATUS" = "IN_REVIEW" ]; then
-  DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. Dispatch review-gate at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context."
+  DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. ${DISPATCH_BRIEF}
+Dispatch review-gate at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context."
 elif [ "$ACTIVE_STATUS" = "READY" ] || [ "$ACTIVE_STATUS" = "IN_PROGRESS" ]; then
-  DISPATCH_INSTR="DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}."
+  DISPATCH_INSTR="DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}. ${DISPATCH_BRIEF}
+Task manifest: ${PROJECT_ROOT}/nazgul/tasks/${ACTIVE_TASK}.md.
+FIRST create-or-recover this task's worktree yourself and pass the absolute path it prints as '<task_worktree> = <path>' in the implementer's prompt — the implementer STOPs rather than creating one, so a dispatch without it never implements anything:
+  TASK_WORKTREE=\$(bash -c 'source \"${SCRIPT_DIR}/worktree-utils.sh\" && create_task_worktree ${ACTIVE_TASK} \"${PROJECT_ROOT}\" \"${CONFIG}\"')
+It is create-or-recover: an existing worktree/branch for ${ACTIVE_TASK} is reused, never rebuilt. Leave it on disk when the implementer returns; you remove it after the merge."
 elif [ "$ACTIVE_STATUS" = "CHANGES_REQUESTED" ]; then
-  DISPATCH_INSTR="DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first.
-IMPORTANT: Read nazgul/reviews/${ACTIVE_TASK}/consolidated-feedback.md before re-implementing."
+  DISPATCH_INSTR="DELEGATE: Spawn implementer agent (nazgul:implementer) for ${ACTIVE_TASK}. Read consolidated feedback first. Dispatch brief: <main_worktree_path> = ${PROJECT_ROOT}. Nazgul config: ${CONFIG}.
+Address every runtime-state path under that root, absolute and verbatim — your cwd is not it.
+Task manifest: ${PROJECT_ROOT}/nazgul/tasks/${ACTIVE_TASK}.md.
+Pass the RETAINED worktree from the previous attempt as '<task_worktree> = <path>'; if it is gone, recover it with the same command the fresh path uses:
+  TASK_WORKTREE=\$(bash -c 'source \"${SCRIPT_DIR}/worktree-utils.sh\" && create_task_worktree ${ACTIVE_TASK} \"${PROJECT_ROOT}\" \"${CONFIG}\"')
+IMPORTANT: Read ${PROJECT_ROOT}/nazgul/reviews/${ACTIVE_TASK}/consolidated-feedback.md before re-implementing."
 fi
 
 # Default Active-task line (sequential mode / no batch). Only overridden below
@@ -1324,9 +1393,9 @@ if [ "$EXEC_PARALLEL" = "true" ] && [ "$GRANULARITY" = "task" ] \
     ACTIVE_LINE="Batch tasks: ${BATCH_TASKS}"
     DISPATCH_INSTR="DELEGATE (PARALLEL BATCH of ${BATCH_COUNT}): ${BATCH_TASKS}.
 0. Crash recovery first: if a batch task already has a worktree/branch feat/<display_id>/<id> left by an interrupted batch — a branch WITH commits is resumed (skip re-implementing, continue from step 2 using its existing commit), a dirty/commit-less one is removed (git worktree remove --force, delete the branch) before dispatching. Deterministic rule, no judgment.
-1. Dispatch ONE implementer agent (nazgul:implementer) PER task — ALL Agent calls in a SINGLE message so they run concurrently. Each prompt gets ONLY its task id, its manifest path nazgul/tasks/<id>.md, its file scope, and the line 'NAZGUL_UNIT: <id>'. Each implementer works in its OWN git worktree (branch feat/<display_id>/<id> off the feature branch) and commits there — NEVER in the shared working tree. If dispatching implementers as TEAMMATES (not foreground Agent calls): first write nazgul/dispatch/<session-name>.json per templates/skill-partials/report-contract.md with report_path nazgul/tasks/<id>.md, and END each prompt with the Report Contract block — a teammate's final text is delivered to NO ONE. After consuming each teammate's manifest update, send that teammate a SendMessage shutdown_request and, once approved, delete its nazgul/dispatch/<session-name>.json — teammates are never left idling.
+1. Dispatch ONE implementer agent (nazgul:implementer) PER task — ALL Agent calls in a SINGLE message so they run concurrently. Each prompt gets its task id, '<main_worktree_path> = ${PROJECT_ROOT}', its manifest path ${PROJECT_ROOT}/nazgul/tasks/<id>.md, its '<task_worktree> = <the absolute path of the worktree you created for it>', its file scope, and the line 'NAZGUL_UNIT: <id>' — and nothing beyond those. Each implementer works in its OWN git worktree (branch feat/<display_id>/<id> off the feature branch) and commits there — NEVER in the shared working tree; YOU create-or-recover that worktree and pass the absolute path it prints, since a subagent cannot change its own cwd — run, per task: TASK_WORKTREE=\$(bash -c 'source \"${SCRIPT_DIR}/worktree-utils.sh\" && create_task_worktree <id> \"${PROJECT_ROOT}\" \"${CONFIG}\"'). If dispatching implementers as TEAMMATES (not foreground Agent calls): first write ${PROJECT_ROOT}/nazgul/dispatch/<session-name>.json per templates/skill-partials/report-contract.md with report_path ${PROJECT_ROOT}/nazgul/tasks/<id>.md, and END each prompt with the Report Contract block — a teammate's final text is delivered to NO ONE. After consuming each teammate's manifest update, send that teammate a SendMessage shutdown_request and, once approved, delete its ${PROJECT_ROOT}/nazgul/dispatch/<session-name>.json — teammates are never left idling.
 2. WAIT for every implementer to return. Then, for EACH task (no merge yet), record the implementer's own branch-tip FULL 40-character commit SHA (never abbreviated — the pre-merge guard matches full SHAs only) under its manifest's ## Commits and set Status: IMPLEMENTED — immediately after the implementer's own commit and BEFORE any merge.
-3. Dispatch ONE review-gate agent (nazgul:review-gate) PER task — all in a single message — each prompt carrying 'NAZGUL_UNIT: <id>' and reviewing that task's OWN branch diff (task branch vs. feature branch, unmerged) rather than a post-merge diff — the same diff-scoping already used for group/feature aggregate review of unmerged tasks' commits. Each review-gate dispatch must run at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context.
+3. Dispatch ONE review-gate agent (nazgul:review-gate) PER task — all in a single message — each prompt carrying '${DISPATCH_BRIEF}' and 'NAZGUL_UNIT: <id>', and reviewing that task's OWN branch diff (task branch vs. feature branch, unmerged) rather than a post-merge diff — the same diff-scoping already used for group/feature aggregate review of unmerged tasks' commits. Each review-gate dispatch must run at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context.
 4. WAIT for every review-gate to return. Merge (git merge --no-ff) ONLY a task whose manifest reaches Status: DONE — it already lists that branch's SHA under ## Commits, so the pre-merge-commit (H2) guard finds a match and correctly ALLOWS. On conflict: git merge --abort, set that task CHANGES_REQUESTED with a note, keep its branch for inspection — never force-merge. A task at CHANGES_REQUESTED or BLOCKED is NOT merged; its branch/worktree is kept for rework.
 Do not start any task outside this batch until every batch task reaches a terminal state — merged-after-DONE or left-unmerged-for-rework."
     if execution_should_pause "$CONFIG" approve_batch "$MODE"; then

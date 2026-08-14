@@ -33,6 +33,15 @@ $ARGUMENTS
    - Remaining text → patch description
    - These flags are persisted to the manifest's `## Flags` line in Step 1 and are the authoritative on-disk record; Step 2 and Step 5 read the decision back from that line (do not rely on remembered variables, which are lost on compaction).
 3. If no description after parsing, ask interactively: "What do you want to patch?"
+4. Resolve `ROOT` once (`git rev-parse --show-toplevel` — the directory holding `nazgul/config.json`)
+   and open EVERY agent prompt below with these two lines verbatim, `$ROOT` expanded to the absolute
+   path. Every agent this skill dispatches carries the runtime-state input contract (RULES.md §21)
+   and STOPs without them:
+
+```text
+Dispatch brief: <main_worktree_path> = /abs/path/to/project. Nazgul config: /abs/path/to/project/nazgul/config.json.
+Address every runtime-state path under that root, absolute and verbatim — your cwd is not it.
+```
 
 ### Display Banner
 Output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md`:
@@ -74,14 +83,14 @@ Read the patch manifest's `## Flags` line (the authoritative on-disk record writ
 
 ### Step 3: Plan
 Use the planner agent to generate 1-3 subtasks for the patch:
-- Dispatch planner as an unnamed foreground Agent call (`run_in_background: false`; do not set `name`) with a simplified prompt: "Generate 1-3 small subtasks for this patch. No research, no docs. Just implementation steps."
+- Dispatch planner as an unnamed foreground Agent call (`run_in_background: false`; do not set `name`) with the Pre-flight dispatch brief (`<main_worktree_path>` + config path) followed by a simplified prompt: "Generate 1-3 small subtasks for this patch. No research, no docs. Just implementation steps."
 - Wait for its returned plan and persist the subtasks into the patch manifest; do not assume a detached agent will write them.
 - Planner reads the patch description (and decisions if --discuss was used)
 - Subtasks are written into the patch manifest under `## Subtasks`
 
 ### Step 4: Implement
 Use the implementer agent to execute each subtask:
-- Dispatch implementer with the patch manifest as an unnamed foreground Agent call (`run_in_background: false`; do not set `name`) and wait for its return
+- Dispatch implementer with the Pre-flight dispatch brief (`<main_worktree_path>` + config path) and the patch manifest as an unnamed foreground Agent call (`run_in_background: false`; do not set `name`) and wait for its return. A patch runs in the main worktree, so pass `<task_worktree> = <main_worktree_path>` explicitly rather than leaving the implementer to STOP on a missing one.
 - Implementer follows existing patterns (reads CLAUDE.md, follows conventions)
 - Each subtask gets an atomic git commit with prefix: `patch(PATCH-NNN):`
 - Update patch manifest with implementation log
@@ -93,14 +102,14 @@ Read the patch manifest's `## Flags` line (the authoritative on-disk record writ
    - `.py` → code-reviewer
    - `.md/.json/.yaml` → skip review (docs/config only)
    - Mixed → code-reviewer
-2. Run the selected reviewer on the changed files using a fresh Agent call with these literal routing fields:
+2. Run the selected reviewer on the changed files using a fresh Agent call carrying the Pre-flight dispatch brief (`<main_worktree_path>` + config path — the generated reviewer STOPs without it) and these literal routing fields:
    - `subagent_type: "nazgul:<selected-reviewer>"`
    - `run_in_background: false`
    - Do not set the Agent `name` field; reviewers are unnamed one-shot calls, never teammates.
 3. Wait for the reviewer to return its complete review. The only verdicts are `APPROVE | CHANGES_REQUESTED | UNVERIFIED`; the reviewer never writes files. Validate the returned frontmatter, then persist the returned review text to `nazgul/reviews/PATCH-NNN/<reviewer>.md` from this main-session driver.
 4. If the return is empty or malformed, make one fresh unnamed foreground retry of that reviewer and persist the replacement. If the retry is still unusable, persist an `UNVERIFIED` stub with the reason, mark the patch BLOCKED, and do not represent it as approved.
 5. If `APPROVE`: record the approved review and continue to completion.
-6. If `CHANGES_REQUESTED`: show the persisted feedback, dispatch the implementer foreground to fix it, and re-review with a fresh unnamed foreground reviewer (max 2 implementation/review cycles). After the limit, mark the patch BLOCKED.
+6. If `CHANGES_REQUESTED`: show the persisted feedback, dispatch the implementer foreground (same `<main_worktree_path>` dispatch brief) to fix it, and re-review with a fresh unnamed foreground reviewer (max 2 implementation/review cycles). After the limit, mark the patch BLOCKED.
 
 If the `## Flags` line contains `--no-review`:
 - Mark patch DONE immediately after implementation

@@ -76,8 +76,7 @@ unset CLAUDE_PROJECT_DIR
 
 # --- Command-substitution call: the SAME function, called via $(...), forks
 # a subshell — the export happens in that subshell and is discarded when it
-# exits. This is the asymmetry TASK-008 itself documented as the reason
-# create_task_worktree() has no live production caller today.
+# exits. This is the shape the stop-hook/session-context DELEGATE lines use.
 TASK_DIR_SUBSHELL=$(create_task_worktree TASK-101 "$TEST_DIR" "$CFG" 2>/dev/null | tail -n1)
 assert_eq "subshell call (\$(...)): CLAUDE_PROJECT_DIR is NOT exported to the caller (discarded with the subshell)" "${CLAUDE_PROJECT_DIR:-}" ""
 if [ -d "$TASK_DIR_SUBSHELL" ]; then
@@ -86,6 +85,23 @@ else
   _fail "subshell call: the worktree itself was still created (only the export is lost)" "missing: $TASK_DIR_SUBSHELL"
 fi
 
+# Create-or-recover: the DELEGATE line runs this on every dispatch of the same
+# task, so a second call must return the SAME path instead of failing.
+TASK_DIR_FIRST=$(create_task_worktree TASK-102 "$TEST_DIR" "$CFG" 2>/dev/null | tail -n1)
+TASK_DIR_AGAIN=$(create_task_worktree TASK-102 "$TEST_DIR" "$CFG" 2>/dev/null | tail -n1)
+RECOVER_RC=$?
+assert_eq "re-dispatch: create_task_worktree recovers the existing worktree (same path)" \
+  "$TASK_DIR_AGAIN" "$TASK_DIR_FIRST"
+assert_exit_code "re-dispatch: recovering an existing worktree succeeds" "$RECOVER_RC" 0
+
+# Worktree removed but the branch kept — the CHANGES_REQUESTED retry shape.
+git -C "$TEST_DIR" worktree remove "$TASK_DIR_FIRST" --force >/dev/null 2>&1
+TASK_DIR_REBUILT=$(create_task_worktree TASK-102 "$TEST_DIR" "$CFG" 2>/dev/null | tail -n1)
+assert_eq "re-dispatch: a removed worktree is rebuilt on its existing branch" \
+  "$TASK_DIR_REBUILT" "$TASK_DIR_FIRST"
+assert_dir_exists "re-dispatch: the rebuilt worktree exists on disk" "$TASK_DIR_REBUILT"
+
+cleanup_task_worktree TASK-102 "$TEST_DIR" "$CFG"
 cleanup_task_worktree TASK-101 "$TEST_DIR" "$CFG"
 rm -rf "$WORKTREE_DIR"
 teardown_temp_dir

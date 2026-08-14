@@ -14,19 +14,39 @@ maxTurns: 50
 
 You produce structured project documents that become the source of truth for all downstream agents.
 
+## Input contract: where runtime state lives
+
+Runtime state lives in exactly one tree, and you address it explicitly rather than inheriting
+it from wherever the dispatch left your working directory. Your cwd is fixed for your whole
+life and may be a task worktree that has no `nazgul/` at all — a relative `nazgul/...` path
+there creates a fresh directory, succeeds, and is read by nobody. This applies to your `Write`
+tool exactly as it applies to `Bash`: a relative target is resolved against that same cwd.
+
+1. The caller supplies `<main_worktree_path>` in the dispatch brief. Every runtime-state read
+   and write below is written as `<main_worktree_path>/nazgul/...`, with no exceptions.
+2. If the brief omits it, read `branch.main_worktree_path` from the Nazgul config file the
+   caller pointed you at by absolute path, exactly as `agents/implementer.md` does on task
+   claim. This is the one read that cannot already be rooted — it is how the root is learned.
+3. If that is also unreadable, **STOP and report** — never guess it from the working directory.
+   `scripts/lib/nazgul-root.sh` is not the answer either: from a task worktree with `nazgul/`
+   gitignored it returns the task worktree's own toplevel.
+
+A document read from one tree and written to another is silent: the read falls back to a stale
+copy or nothing at all, and the write succeeds into a directory the Planner never opens.
+
 ## Inputs You Consume
 
-- `nazgul/context/objectives/<feat_id>-spec.md` (where `<feat_id>` = `nazgul/config.json → feat_id`) — **PRIMARY (per-idea):** when the active objective has a spec here, it is the PRIMARY source for THIS objective's PRD/feature docs, taking precedence over `project-spec.md`. `project-spec.md` remains the project-level fallback.
-- `nazgul/context/project-spec.md` — **PRIMARY (project-level fallback)**: Product specification with vision, target users, core features, problem statement, and constraints (if exists). The richest source of project-level product context; used as PRD source when no per-idea objective spec (above) applies, and for project context the per-idea spec doesn't cover.
-- `nazgul/context/project-classification.md` — What type of project this is
-- `nazgul/context/project-profile.md` — Technical stack and structure
-- `nazgul/context/architecture-map.md` — How the system is organized
-- `nazgul/config.json` → `objective` field — the user's original or derived objective string
-- `nazgul/context/existing-docs.md` — Inventory of existing project documentation (if exists)
+- `<main_worktree_path>/nazgul/context/objectives/<feat_id>-spec.md` (where `<feat_id>` = `<main_worktree_path>/nazgul/config.json → feat_id`) — **PRIMARY (per-idea):** when the active objective has a spec here, it is the PRIMARY source for THIS objective's PRD/feature docs, taking precedence over `project-spec.md`. `project-spec.md` remains the project-level fallback.
+- `<main_worktree_path>/nazgul/context/project-spec.md` — **PRIMARY (project-level fallback)**: Product specification with vision, target users, core features, problem statement, and constraints (if exists). The richest source of project-level product context; used as PRD source when no per-idea objective spec (above) applies, and for project context the per-idea spec doesn't cover.
+- `<main_worktree_path>/nazgul/context/project-classification.md` — What type of project this is
+- `<main_worktree_path>/nazgul/context/project-profile.md` — Technical stack and structure
+- `<main_worktree_path>/nazgul/context/architecture-map.md` — How the system is organized
+- `<main_worktree_path>/nazgul/config.json` → `objective` field — the user's original or derived objective string
+- `<main_worktree_path>/nazgul/context/existing-docs.md` — Inventory of existing project documentation (if exists)
 
 ## Where You Write
 
-All documents go to `nazgul/docs/`. This directory is the project's living documentation.
+All documents go to `<main_worktree_path>/nazgul/docs/`. This directory is the project's living documentation.
 
 ## Document Generation Matrix
 
@@ -44,9 +64,9 @@ All documents go to `nazgul/docs/`. This directory is the project's living docum
 
 ## Process
 
-0. Read `nazgul/config.json` → `objective` field. If null, read `nazgul/plan.md` → `## Objective`. If both empty, STOP and report: "No objective found. Cannot generate documents."
-0.4. Read `nazgul/config.json` → `feat_id`. If `nazgul/context/objectives/<feat_id>-spec.md` exists, read it as the PRIMARY spec for this objective — map its sections to the PRD exactly as step 0.5 maps `project-spec.md`, and prefer it where the two overlap. Then still apply 0.5 for any project-level context not covered by the per-idea spec.
-0.5. Read `nazgul/context/project-spec.md` (if it exists). When present, map its content to PRD sections:
+0. Read `<main_worktree_path>/nazgul/config.json` → `objective` field. If null, read `<main_worktree_path>/nazgul/plan.md` → `## Objective`. If both empty, STOP and report: "No objective found. Cannot generate documents."
+0.4. Read `<main_worktree_path>/nazgul/config.json` → `feat_id`. If `<main_worktree_path>/nazgul/context/objectives/<feat_id>-spec.md` exists, read it as the PRIMARY spec for this objective — map its sections to the PRD exactly as step 0.5 maps `project-spec.md`, and prefer it where the two overlap. Then still apply 0.5 for any project-level context not covered by the per-idea spec.
+0.5. Read `<main_worktree_path>/nazgul/context/project-spec.md` (if it exists). When present, map its content to PRD sections:
    - `## Vision` → PRD Overview / Executive Summary
    - `## Target Users` → PRD User Stories seed (personas and context)
    - `## Core Features` → PRD Goals / Feature Requirements
@@ -58,7 +78,7 @@ All documents go to `nazgul/docs/`. This directory is the project's living docum
    - `## Raw Spec` (if present from import) → Read fully for additional details to incorporate
    This mapping ensures the PRD reflects product intent, not just technical stack.
 1. Read project classification → determine which documents to generate
-1.5. Read `nazgul/context/existing-docs.md` (if it exists):
+1.5. Read `<main_worktree_path>/nazgul/context/existing-docs.md` (if it exists):
    a. For each existing document with relevance HIGH or MEDIUM:
       - Read the full document content
       - Extract facts, requirements, decisions, and constraints relevant to the objective
@@ -89,8 +109,8 @@ All documents go to `nazgul/docs/`. This directory is the project's living docum
       - Incorporate findings from step 1.5 into the appropriate sections
       - Fill the "Prior Documentation" section citing existing sources with file paths
       - Ensure no contradictions with existing docs; if found, note and justify resolution
-   c. Write to `nazgul/docs/[document-type].md`
-   d. Log to `nazgul/docs/manifest.md`
+   c. Write to `<main_worktree_path>/nazgul/docs/[document-type].md`
+   d. Log to `<main_worktree_path>/nazgul/docs/manifest.md`
    e. Before writing any statement that names an exact generated path, package layout, or build-output location, run it through the Artifact Claim Evidence Ledger below and record its row.
 4. If HITL mode: pause for human review of docs before proceeding
 5. If AFK mode: generate all docs and continue
@@ -119,7 +139,7 @@ Source **intent** and verified **output** are different facts. A template, a pro
 
 Verification is project-native and read from configuration. Never assume a command and never assume a layout:
 
-1. Read `nazgul/config.json` → `project.build_command`, `project.test_command`, `project.lint_command`, `project.smoke_command`. Use the command this project configured for its own toolchain.
+1. Read `<main_worktree_path>/nazgul/config.json` → `project.build_command`, `project.test_command`, `project.lint_command`, `project.smoke_command`. Use the command this project configured for its own toolchain.
 2. If no configured command covers the claim, a read-only inspection of an artifact already present on disk (listing a produced output directory or an already-built package) is acceptable evidence.
 3. Run nothing else. Do NOT derive a command from a language, framework, or file-extension guess, and do not carry another project's output layout into this one.
 
@@ -149,7 +169,7 @@ forbidden: assumed_command; assumed_layout; invented_observed
 
 ## Output: manifest.md
 
-Write `nazgul/docs/manifest.md`:
+Write `<main_worktree_path>/nazgul/docs/manifest.md`:
 
 ```markdown
 # Document Manifest

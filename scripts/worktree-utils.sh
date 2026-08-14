@@ -334,23 +334,22 @@ create_task_worktree() {
   local feat_ref="${board_issue:-$feat_display}"
   local task_branch="feat/${feat_ref}/${task_id}"
 
-  git -C "$project_root" worktree add "$task_dir" -b "$task_branch" "$feature_branch" 2>/dev/null
+  # Create-or-recover: an interrupted loop leaves the worktree, the branch, or
+  # both behind, and re-running must return the SAME path rather than fail.
+  if ! git -C "$task_dir" rev-parse --show-toplevel >/dev/null 2>&1; then
+    if git -C "$project_root" show-ref --verify --quiet "refs/heads/$task_branch"; then
+      git -C "$project_root" worktree add "$task_dir" "$task_branch" >/dev/null 2>&1 || true
+    else
+      git -C "$project_root" worktree add "$task_dir" -b "$task_branch" "$feature_branch" >/dev/null 2>&1 || true
+    fi
+  fi
+  if ! git -C "$task_dir" rev-parse --show-toplevel >/dev/null 2>&1; then
+    echo "ERROR: create_task_worktree: no usable worktree at '$task_dir' for branch '$task_branch'" >&2
+    return 1
+  fi
 
-  # ADR-008 Option 2: export the MAIN checkout, not $task_dir. nazgul/ is
-  # gitignored and per-worktree, so a task worktree never carries its own
-  # nazgul/config.json — pointing CLAUDE_PROJECT_DIR at $task_dir would fail
-  # resolve_project_root()'s marker validation and could clobber an
-  # already-correct value.
-  #
-  # STATUS: no live caller exercises this. create_task_worktree() has no
-  # production caller (real path is the EnterWorktree tool or a raw
-  # `git worktree add` — agents/implementer.md:113); the only return channel
-  # is `echo "$task_dir"`, so every real caller captures via $(...), and that
-  # subshell discards the export before it reaches the caller. Correctly
-  # targeted and ready if a future direct (non-subshell) caller is wired up —
-  # such a caller would then keep this export for the rest of its own
-  # process, including any later unrelated resolve_project_root() calls in
-  # that same shell.
+  # ADR-008 Option 2: export the MAIN checkout, not $task_dir — a task worktree
+  # carries no nazgul/config.json for resolve_project_root() to validate.
   export CLAUDE_PROJECT_DIR="$project_root"
 
   # Apply sparse checkout if configured

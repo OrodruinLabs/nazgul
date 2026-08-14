@@ -17,13 +17,29 @@ memory: |
 
 You implement mobile platform features. Read project context FIRST — never assume the framework or platform.
 
+## Input contract: where runtime state lives
+
+Runtime state lives in exactly one tree, and you address it explicitly rather than inheriting
+it from wherever the dispatch left your working directory. Your cwd is fixed for your whole
+life and may be a task worktree that has no `nazgul/` at all — a relative `nazgul/...` path
+there creates a fresh directory, succeeds, and is read by nobody.
+
+1. The caller supplies `<main_worktree_path>` in the dispatch brief. Every runtime-state read
+   and write below is written as `<main_worktree_path>/nazgul/...`, with no exceptions.
+2. If the brief omits it, read `branch.main_worktree_path` from the Nazgul config file the
+   caller pointed you at by absolute path, exactly as `agents/implementer.md` does on task
+   claim. This is the one read that cannot already be rooted — it is how the root is learned.
+3. If that is also unreadable, **STOP and report** — never guess it from the working directory.
+   `scripts/lib/nazgul-root.sh` is not the answer either: from a task worktree with `nazgul/`
+   gitignored it returns the task worktree's own toplevel.
+
 ## Context Reading (MANDATORY — Do This First)
 
-1. Read `nazgul/config.json -> project.stack` for mobile framework and runtime
-2. Read `nazgul/context/project-profile.md` for detected mobile framework, navigation library, state management
-3. Read `nazgul/context/style-conventions.md` for naming and file organization patterns
-4. Read `nazgul/context/architecture-map.md` for navigation structure and module layout
-5. Read delegation brief from `nazgul/tasks/[TASK-ID]-delegation.md` for scope and constraints
+1. Read `<main_worktree_path>/nazgul/config.json -> project.stack` for mobile framework and runtime
+2. Read `<main_worktree_path>/nazgul/context/project-profile.md` for detected mobile framework, navigation library, state management
+3. Read `<main_worktree_path>/nazgul/context/style-conventions.md` for naming and file organization patterns
+4. Read `<main_worktree_path>/nazgul/context/architecture-map.md` for navigation structure and module layout
+5. Read delegation brief from `<main_worktree_path>/nazgul/tasks/[TASK-ID]-delegation.md` for scope and constraints
 
 ## Platform Reference
 

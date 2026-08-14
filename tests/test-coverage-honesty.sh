@@ -16,7 +16,7 @@ trap 'rm -rf "$SCRATCH"' EXIT
 
 # Every entry point named by RULES.md §15; the tally at the bottom fails if one
 # was never driven through _entry_covered.
-ENTRY_POINTS="run-tests lean-comments test-shellcheck doctor comment-verifier heartbeat-triage self-audit"
+ENTRY_POINTS="run-tests lean-comments test-shellcheck doctor comment-verifier heartbeat-triage self-audit audit-agent-state-paths test-dispatch-brief-contract"
 COVERED=""
 
 _entry_covered() {
@@ -214,6 +214,58 @@ else
 fi
 assert_not_contains "self-audit: one checked candidate is not a vacuous run" \
   "$(cat "$SCRATCH/sa2.err")" "NOTHING CHECKED"
+
+# audit-agent-state-paths, forced all-skip: a roster holding one non-spec file, so
+# the sole candidate is scanned, named, and counted rather than never looked at.
+mkdir -p "$SCRATCH/ap/agents"
+printf '{"domains":[]}\n' > "$SCRATCH/ap/agents/reviewer-domains.json"
+AP_OUT=$(NAZGUL_AGENT_AUDIT_SCAN_ROOT="$SCRATCH/ap" \
+  bash "$REPO_ROOT/scripts/audit-agent-state-paths.sh" 2>"$SCRATCH/ap.err")
+AP_RC=$?
+_grammar_check "audit-agent-state-paths (all-skip)" "audit-agent-state-paths" \
+  "non-spec unreadable not-a-file" "$(_last_line "$AP_OUT")" && _entry_covered audit-agent-state-paths
+assert_contains "audit-agent-state-paths: forced all-skip emits the nothing-checked signal" \
+  "$(cat "$SCRATCH/ap.err")" "audit-agent-state-paths: NOTHING CHECKED — all 1 candidate(s) skipped"
+assert_exit_code "audit-agent-state-paths: advisory roster audit — a vacuous run never fails it" "$AP_RC" 0
+# Pinned, not derived: an exported NAZGUL_AGENT_AUDIT_SCAN_ROOT would aim the "full run" at
+# whatever tree the caller named, and an empty tree passes every assertion while checking nothing.
+AP_FULL=$(NAZGUL_AGENT_AUDIT_SCAN_ROOT="$REPO_ROOT" \
+  bash "$REPO_ROOT/scripts/audit-agent-state-paths.sh" 2>/dev/null)
+_grammar_check "audit-agent-state-paths (full run)" "audit-agent-state-paths" \
+  "non-spec unreadable not-a-file" "$(_last_line "$AP_FULL")"
+AP_CHECKED=$(_last_line "$AP_FULL" | sed -E 's/^.*\), ([0-9]+) checked.*/\1/')
+case "${AP_CHECKED:-}" in ''|*[!0-9]*) AP_CHECKED_N=0 ;; *) AP_CHECKED_N="$AP_CHECKED" ;; esac
+if [ "$AP_CHECKED_N" -ge 1 ]; then
+  _pass "audit-agent-state-paths: a full run actually checks something"
+else
+  _fail "audit-agent-state-paths: a full run actually checks something" "checked: $AP_CHECKED"
+fi
+
+# test-dispatch-brief-contract, forced all-skip: a candidate file holding no
+# dispatch site at all — scanned, counted, and named, never never-looked-at.
+mkdir -p "$SCRATCH/db/skills/fake"
+printf '# nothing to dispatch here\n' > "$SCRATCH/db/skills/fake/SKILL.md"
+DB_OUT=$(NAZGUL_DISPATCH_SCAN_ROOT="$SCRATCH/db" \
+  bash "$REPO_ROOT/tests/test-dispatch-brief-contract.sh" 2>"$SCRATCH/db.err")
+DB_RC=$?
+_grammar_check "test-dispatch-brief-contract (all-skip)" "test-dispatch-brief-contract" \
+  "no-dispatch-site unreadable" "$(_last_line "$DB_OUT")" && _entry_covered test-dispatch-brief-contract
+assert_contains "test-dispatch-brief-contract: forced all-skip emits the nothing-checked signal" \
+  "$(cat "$SCRATCH/db.err")" "test-dispatch-brief-contract: NOTHING CHECKED — all 1 candidates skipped"
+assert_exit_code "test-dispatch-brief-contract: blocking — nothing checked is a failure" "$DB_RC" 1
+# Pinned, not derived: an inherited scan root would aim the "full run" at whatever
+# tree the caller named, and an empty tree passes while checking nothing.
+DB_FULL=$(NAZGUL_DISPATCH_SCAN_ROOT="$REPO_ROOT" \
+  bash "$REPO_ROOT/tests/test-dispatch-brief-contract.sh" 2>/dev/null)
+_grammar_check "test-dispatch-brief-contract (full run)" "test-dispatch-brief-contract" \
+  "no-dispatch-site unreadable" "$(_last_line "$DB_FULL")"
+DB_CHECKED=$(_last_line "$DB_FULL" | sed -E 's/^.*\), ([0-9]+) checked.*/\1/')
+case "${DB_CHECKED:-}" in ''|*[!0-9]*) DB_CHECKED_N=0 ;; *) DB_CHECKED_N="$DB_CHECKED" ;; esac
+if [ "$DB_CHECKED_N" -ge 1 ]; then
+  _pass "test-dispatch-brief-contract: a full run actually checks something"
+else
+  _fail "test-dispatch-brief-contract: a full run actually checks something" "checked: $DB_CHECKED"
+fi
 
 # Enumeration completeness — the point of the whole file: an entry point with no
 # emitter must FAIL here, not silently drop out of the list.
