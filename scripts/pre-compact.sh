@@ -36,10 +36,10 @@ rm -rf "$NAZGUL_DIR/.compaction_count.lock"
 mkdir -p "$NAZGUL_DIR/checkpoints"
 CHECKPOINT="$NAZGUL_DIR/checkpoints/iteration-$(printf '%03d' "$ITERATION").json"
 
-# Get active task + count tasks by status (all 8 states), shared helper
-# (MF-009) — sets ACTIVE_TASK, ACTIVE_STATUS, ACTIVE_RETRY, DONE_COUNT,
-# READY_COUNT, IN_PROGRESS_COUNT, IN_REVIEW_COUNT, APPROVED_COUNT,
-# CHANGES_COUNT, BLOCKED_COUNT, PLANNED_COUNT, INVALID_COUNT, TOTAL_COUNT
+# Get active task + count tasks by status (all 9 states), shared helper (MF-009)
+# — sets ACTIVE_TASK, ACTIVE_STATUS, ACTIVE_RETRY, DONE_COUNT, READY_COUNT,
+# IN_PROGRESS_COUNT, IN_REVIEW_COUNT, APPROVED_COUNT, CHANGES_COUNT, BLOCKED_COUNT,
+# PLANNED_COUNT, CANCELLED_COUNT, INVALID_COUNT, TOTAL_COUNT
 count_tasks_and_find_active "$NAZGUL_DIR/tasks"
 
 # Capture files modified this iteration as a JSON array. Robust against a
@@ -99,6 +99,7 @@ else
     --argjson changes_requested "$CHANGES_COUNT" \
     --argjson blocked "$BLOCKED_COUNT" \
     --argjson planned "$PLANNED_COUNT" \
+    --argjson cancelled "$CANCELLED_COUNT" \
     --arg git_branch "$GIT_BRANCH" \
     --arg git_sha "$GIT_SHA" \
     --arg git_msg "$GIT_MSG" \
@@ -126,7 +127,8 @@ else
         in_review: $in_review,
         changes_requested: $changes_requested,
         blocked: $blocked,
-        planned: $planned
+        planned: $planned,
+        cancelled: $cancelled
       },
       git: {
         branch: $git_branch,
