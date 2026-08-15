@@ -23,6 +23,8 @@ REWORK_GUARD="$REPO_ROOT/scripts/parallel-rework-guard.sh"
 STOP_HOOK="$REPO_ROOT/scripts/stop-hook.sh"
 PRE_MERGE="$REPO_ROOT/scripts/git-hooks/pre-merge-commit"
 DISPATCH="$REPO_ROOT/scripts/git-hooks/_dispatch.sh"
+DISPATCH_GUARD="$REPO_ROOT/scripts/parallel-dispatch-guard.sh"
+TRANSITION="$REPO_ROOT/scripts/task-transition.sh"
 
 # Fake `gh`/`curl`, first on PATH only for the two consumers that shell out.
 # Each records its argv verbatim; neither touches the network.
@@ -70,7 +72,7 @@ run_hook() {
   HOOK_OUTPUT=$(bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 }
 
-# 1/19 scripts/session-context.sh. FIRST deliberately: at the pre-change base the
+# 1/21 scripts/session-context.sh. FIRST deliberately: at the pre-change base the
 # injected summary carries no cancelled figure, so this reads as "it did not exist".
 consumer_begin
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
@@ -114,7 +116,7 @@ assert_contains "session-context: an uncancelled run reports zero, not silence" 
   "$SC_ALL_DONE" "0 cancelled"
 consumer_end
 
-# 2/19 scripts/post-compact.sh — the same summary, re-injected after compaction.
+# 2/21 scripts/post-compact.sh — the same summary, re-injected after compaction.
 consumer_begin
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
 create_config
@@ -131,7 +133,7 @@ assert_contains "post-compact: the cancelled task still counts into the total" \
 teardown_temp_dir
 consumer_end
 
-# 3/19 scripts/pre-compact.sh — the checkpoint is what recovery reads, so its
+# 3/21 scripts/pre-compact.sh — the checkpoint is what recovery reads, so its
 # buckets must still sum to total with a cancelled task present.
 consumer_begin
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
@@ -155,7 +157,7 @@ assert_eq "pre-compact: the checkpoint buckets sum to total_tasks" "$CP_SUM" "$C
 teardown_temp_dir
 consumer_end
 
-# 4/19 scripts/board-sync-github.sh. Its unhandled-status path REOPENS the issue,
+# 4/21 scripts/board-sync-github.sh. Its unhandled-status path REOPENS the issue,
 # so the miss-mode here is an active wrong action, not a stall.
 board_fixture() { # <status>
   setup_temp_dir; setup_git_repo; setup_nazgul_dir
@@ -215,7 +217,7 @@ else
 fi
 consumer_end
 
-# 5/19 skills/status/SKILL.md — the operator-facing report.
+# 5/21 skills/status/SKILL.md — the operator-facing report.
 consumer_begin
 STATUS_SKILL="$REPO_ROOT/skills/status/SKILL.md"
 if [ ! -r "$STATUS_SKILL" ]; then
@@ -236,7 +238,7 @@ else
 fi
 consumer_end
 
-# 6/19 scripts/lib/structured-state.sh (TASK-002) — vocabulary, never the
+# 6/21 scripts/lib/structured-state.sh (TASK-002) — vocabulary, never the
 # off-vocabulary placeholder.
 consumer_begin
 setup_temp_dir; setup_nazgul_dir
@@ -252,7 +254,7 @@ fi
 teardown_temp_dir
 consumer_end
 
-# 7/19 scripts/lib/task-transition-guard.sh (TASK-002) — the edge set, the
+# 7/21 scripts/lib/task-transition-guard.sh (TASK-002) — the edge set, the
 # quarantine refusal, and the dependency gate.
 consumer_begin
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
@@ -287,7 +289,7 @@ fi
 teardown_temp_dir
 consumer_end
 
-# 8/19 scripts/lib/task-utils.sh (TASK-002) — the one counter five call sites read.
+# 8/21 scripts/lib/task-utils.sh (TASK-002) — the one counter five call sites read.
 consumer_begin
 setup_temp_dir; setup_nazgul_dir
 create_task_file "TASK-001" "CANCELLED"
@@ -304,7 +306,7 @@ consumer_end
 COMPLETION_CONFIG=('.agents.reviewers = ["code-reviewer"]' '.learning.auto_distill_post_loop = false'
   '.docs.verify_comments = false' '.self_audit.enabled = false')
 
-# 9/19 scripts/stop-hook.sh completion predicate (TASK-002).
+# 9/21 scripts/stop-hook.sh completion predicate (TASK-002).
 consumer_begin
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
 create_config "${COMPLETION_CONFIG[@]}"
@@ -320,7 +322,7 @@ assert_contains "stop-hook completion: the done/cancelled split is reported" \
 teardown_temp_dir
 consumer_end
 
-# 10/19 scripts/stop-hook.sh aggregate-unit walk (TASK-003) — CANCELLED leaves the
+# 10/21 scripts/stop-hook.sh aggregate-unit walk (TASK-003) — CANCELLED leaves the
 # unit, BLOCKED still holds it.
 consumer_begin
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
@@ -349,7 +351,7 @@ assert_not_contains "stop-hook unit walk: a BLOCKED sibling still holds the unit
 teardown_temp_dir
 consumer_end
 
-# 11/19 skills/task/SKILL.md `skip` (TASK-002).
+# 11/21 skills/task/SKILL.md `skip` (TASK-002).
 consumer_begin
 TASK_SKILL="$REPO_ROOT/skills/task/SKILL.md"
 if [ ! -r "$TASK_SKILL" ]; then
@@ -369,10 +371,11 @@ else
 fi
 consumer_end
 
-# 12/19 NON-CONSUMER scripts/lib/parallel-batch.sh. _pb_blocked_tasks matches only
-# BLOCKED and INVALID|"", which is what makes veto sites 3 and 4 free.
+# 12/21 CONSUMER scripts/lib/parallel-batch.sh. ADR-022 called it a non-consumer on
+# `_pb_blocked_tasks` alone; two further status predicates vetoed a cancelled dep.
 consumer_begin
 setup_temp_dir; setup_nazgul_dir
+create_config
 create_task_file "TASK-001" "DONE"
 create_task_file "TASK-002" "CANCELLED"
 consumer_checked
@@ -389,9 +392,119 @@ else
   _pass "parallel-batch: a BLOCKED task still halts execution"
 fi
 teardown_temp_dir
+
+# compute_dispatch_batch's dependency gate was a second, hand-inlined copy of the
+# predicate ttg_dependency_satisfied owns; it now calls that authority.
+setup_temp_dir; setup_nazgul_dir
+create_config
+create_task_file "TASK-001" "CANCELLED"
+create_task_file "TASK-002" "READY" "TASK-001"
+PB_OUT=$(compute_dispatch_batch "$TEST_DIR/nazgul/tasks" "$TEST_DIR/nazgul/plan.md" 3)
+assert_eq "parallel-batch: a CANCELLED dependency does not veto dispatch" \
+  "$(jq -r '.tasks | join(",")' <<< "$PB_OUT")" "TASK-002"
+teardown_temp_dir
+
+setup_temp_dir; setup_nazgul_dir
+create_config
+create_task_file "TASK-001" "DONE"
+create_task_file "TASK-002" "READY" "TASK-001"
+PB_OUT=$(compute_dispatch_batch "$TEST_DIR/nazgul/tasks" "$TEST_DIR/nazgul/plan.md" 3)
+assert_eq "parallel-batch control: a DONE dependency dispatches, as it always did" \
+  "$(jq -r '.tasks | join(",")' <<< "$PB_OUT")" "TASK-002"
+teardown_temp_dir
+
+setup_temp_dir; setup_nazgul_dir
+create_config
+create_task_file "TASK-001" "IN_PROGRESS"
+create_task_file "TASK-002" "READY" "TASK-001"
+PB_OUT=$(compute_dispatch_batch "$TEST_DIR/nazgul/tasks" "$TEST_DIR/nazgul/plan.md" 3)
+assert_eq "parallel-batch control: an unfinished dependency still vetoes" \
+  "$(jq -r '.reason' <<< "$PB_OUT")" "no dispatchable tasks"
+teardown_temp_dir
+
+# Routing through the one authority also makes the parallel path granularity-aware,
+# which the inline copy never was.
+setup_temp_dir; setup_nazgul_dir
+create_config '.review_gate.granularity = "group"'
+create_task_file "TASK-001" "IMPLEMENTED"
+create_task_file "TASK-002" "READY" "TASK-001"
+PB_OUT=$(compute_dispatch_batch "$TEST_DIR/nazgul/tasks" "$TEST_DIR/nazgul/plan.md" 3)
+assert_eq "parallel-batch: the dependency gate honours review_gate.granularity" \
+  "$(jq -r '.tasks | join(",")' <<< "$PB_OUT")" "TASK-002"
+teardown_temp_dir
+
+# _pb_layer_waves partitions on the terminal set, so a cancelled task is neither a
+# dispatchable unit nor a dependency its dependents wait behind.
+setup_temp_dir; setup_nazgul_dir
+create_config
+create_task_file "TASK-001" "CANCELLED"
+create_task_file "TASK-002" "READY" "TASK-001"
+create_task_file "TASK-003" "BLOCKED"
+create_task_file "TASK-004" "READY" "TASK-003"
+PB_WAVES=$(compute_waves "$TEST_DIR/nazgul/tasks")
+assert_not_contains "parallel-batch: a CANCELLED task is no dispatchable wave unit" \
+  "$PB_WAVES" "TASK-001"
+assert_eq "parallel-batch: its dependent layers into wave 1, not behind it" \
+  "$(jq -r '.[0].units | join(",")' <<< "$PB_WAVES")" "TASK-002,TASK-003"
+assert_eq "parallel-batch control: a BLOCKED dependency still layers its dependent behind" \
+  "$(jq -r '.[1].units | join(",")' <<< "$PB_WAVES")" "TASK-004"
+teardown_temp_dir
 consumer_end
 
-# 13/19 NON-CONSUMER scripts/parallel-rework-guard.sh — ownership needs
+# 13/21 CONSUMER scripts/parallel-dispatch-guard.sh — never enumerated by ADR-022 at
+# all. A CANCELLED unit will never ship, so re-dispatching it is the wasted work.
+dispatch_ec() { # <subagent_type> <prompt>
+  local ec=0
+  jq -n --arg t "$1" --arg p "$2" \
+    '{tool_name:"Agent",tool_input:{subagent_type:$t,run_in_background:false,prompt:$p}}' \
+    | bash "$DISPATCH_GUARD" >/dev/null 2>&1 || ec=$?
+  echo "$ec"
+}
+
+consumer_begin
+setup_temp_dir; setup_nazgul_dir
+create_config '.execution.parallel = true'
+create_task_file "TASK-001" "CANCELLED"
+create_task_file "TASK-002" "READY"
+consumer_checked
+assert_eq "dispatch guard: a CANCELLED unit is not re-dispatched to an implementer" \
+  "$(dispatch_ec implementer "NAZGUL_UNIT: TASK-001")" "2"
+assert_eq "dispatch guard: nor re-dispatched to the review board" \
+  "$(dispatch_ec review-gate "NAZGUL_UNIT: TASK-001")" "2"
+assert_eq "dispatch guard control: a READY unit is still dispatchable" \
+  "$(dispatch_ec implementer "NAZGUL_UNIT: TASK-002")" "0"
+teardown_temp_dir
+consumer_end
+
+# 14/21 CONSUMER scripts/task-transition.sh — ADR-022 exempted it as hardcoding no
+# status vocabulary; `repair`'s quarantine-metadata check hardcodes one.
+repair_stderr() {
+  { CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TRANSITION" repair TASK-001 >/dev/null; } 2>&1 || true
+}
+quarantine_manifest() { # <blocked-from> <blocked-observed>
+  local dest="$TEST_DIR/nazgul/tasks/TASK-001.md"
+  printf -- '---\nstatus: BLOCKED\n---\n# TASK-001\n\n## Metadata\n- **Depends on**: none\n- **Blocked kind**: reconciliation\n- **Blocked from**: %s\n- **Blocked observed**: %s\n' \
+    "$1" "$2" > "$dest"
+}
+
+consumer_begin
+setup_temp_dir; setup_nazgul_dir
+create_config
+quarantine_manifest CANCELLED DONE
+consumer_checked
+TT_ERR=$(repair_stderr)
+assert_not_contains "task-transition: a CANCELLED quarantine endpoint is not corrupt metadata" \
+  "$TT_ERR" "not a canonical status"
+assert_contains "task-transition: the refusal names its real cause instead" \
+  "$TT_ERR" "repair refused"
+quarantine_manifest NOT_A_STATUS DONE
+TT_ERR=$(repair_stderr)
+assert_contains "task-transition control: a genuinely off-vocabulary endpoint is still corrupt" \
+  "$TT_ERR" "not a canonical status"
+teardown_temp_dir
+consumer_end
+
+# 15/21 NON-CONSUMER scripts/parallel-rework-guard.sh — ownership needs
 # DONE|IMPLEMENTED *and* a recorded commit, so a cancelled task can own no scope.
 rework_ec() { # <file_path>
   local ec=0
@@ -422,7 +535,7 @@ assert_eq "rework guard control: the same manifest at DONE does own it" \
 teardown_temp_dir
 consumer_end
 
-# 14/19 NON-CONSUMER scripts/webhook-forward.sh — counts DONE only, via its own
+# 16/21 NON-CONSUMER scripts/webhook-forward.sh — counts DONE only, via its own
 # legacy-format grep, so the fixture is legacy or the assertion would be vacuous.
 consumer_begin
 setup_temp_dir; setup_nazgul_dir
@@ -446,7 +559,7 @@ fi
 teardown_temp_dir
 consumer_end
 
-# 15/19 NON-CONSUMER scripts/git-hooks/pre-merge-commit — identity is a SHA under
+# 17/21 NON-CONSUMER scripts/git-hooks/pre-merge-commit — identity is a SHA under
 # ## Commits or a feat/<x>/TASK-NNN ref; a cancelled task ships neither.
 pm_init_repo() {
   mkdir -p "$1"
@@ -505,9 +618,20 @@ pm_merge "$TEST_DIR/repo" "feat/FEAT-031/TASK-003"
 assert_exit_code "pre-merge control: an unapproved unit is still blocked" "$PM_EC" 1
 assert_contains "pre-merge control: the block names the unapproved unit" "$PM_STDERR" "TASK-003"
 teardown_temp_dir
+
+# ADR-022 exempted this guard as UNREACHABLE by a cancelled task. IMPLEMENTED ->
+# CANCELLED is a legal edge, so such a task ships both signals and is reached.
+setup_temp_dir
+pm_init_repo "$TEST_DIR/repo"
+PM_SHA=$(pm_branch "$TEST_DIR/repo" "feat/FEAT-031/TASK-004")
+pm_task "$TEST_DIR/repo" "TASK-004" "CANCELLED" "$PM_SHA"
+pm_merge "$TEST_DIR/repo" "feat/FEAT-031/TASK-004"
+assert_exit_code "pre-merge: a task cancelled AFTER implementing is reached, and blocks" "$PM_EC" 1
+assert_contains "pre-merge: the block names the cancelled unit" "$PM_STDERR" "TASK-004"
+teardown_temp_dir
 consumer_end
 
-# 16/19 NON-CONSUMER scripts/scrub-stale-review-artifacts.sh — examined and exempt:
+# 18/21 NON-CONSUMER scripts/scrub-stale-review-artifacts.sh — examined and exempt:
 # its guard enumerates the OPEN statuses, and CANCELLED is terminal.
 consumer_begin
 SCRUB="$REPO_ROOT/scripts/scrub-stale-review-artifacts.sh"
@@ -528,7 +652,7 @@ else
 fi
 consumer_end
 
-# 17/19 skills/metrics/SKILL.md — the outcome report an operator reads after a run.
+# 19/21 skills/metrics/SKILL.md — the outcome report an operator reads after a run.
 consumer_begin
 METRICS_SKILL="$REPO_ROOT/skills/metrics/SKILL.md"
 if [ ! -r "$METRICS_SKILL" ]; then
@@ -549,7 +673,7 @@ else
 fi
 consumer_end
 
-# 18/19 templates/task-manifest.md — the state-machine contract every new manifest carries.
+# 20/21 templates/task-manifest.md — the state-machine contract every new manifest carries.
 consumer_begin
 MANIFEST_TEMPLATE="$REPO_ROOT/templates/task-manifest.md"
 if [ ! -r "$MANIFEST_TEMPLATE" ]; then
@@ -581,7 +705,7 @@ else
 fi
 consumer_end
 
-# 19/19 RULES.md — the durable contract; §2 is where a reader learns the status exists.
+# 21/21 RULES.md — the durable contract; §2 is where a reader learns the status exists.
 consumer_begin
 RULES_DOC="$REPO_ROOT/RULES.md"
 if [ ! -r "$RULES_DOC" ]; then
@@ -618,6 +742,6 @@ rm -rf "$FAKEBIN"
 echo "  consumer-scan: ${CS_SCANNED} scanned, ${CS_SKIPPED} skipped (undrivable=${CS_UNDRIVABLE}), ${CS_CHECKED} checked, ${CS_FINDINGS} findings"
 assert_eq "consumer-scan: scanned == skipped + checked" \
   "$CS_SCANNED" "$((CS_SKIPPED + CS_CHECKED))"
-assert_eq "consumer-scan: every consumer row was driven" "$CS_CHECKED" "19"
+assert_eq "consumer-scan: every consumer row was driven" "$CS_CHECKED" "21"
 
 report_results

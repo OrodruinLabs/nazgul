@@ -118,8 +118,8 @@ _resolution_integrity_ok() {
 
 # Never re-dispatch a completed unit. Prompt carries `NAZGUL_UNIT: TASK-NNN`
 # (grepped as data — never eval'd). Status source is the task manifest —
-# canonical state, no stored graph. An IMPLEMENTED unit still legitimately
-# needs its review-gate dispatch; only a DONE unit's review is wasted work.
+# canonical state, no stored graph. An IMPLEMENTED unit still needs its
+# review-gate dispatch; a DONE or CANCELLED unit's does not (ADR-022).
 UNIT=$(printf '%s' "$PROMPT" | grep -oE 'NAZGUL_UNIT: TASK-[0-9]+' | head -1 | sed 's/^NAZGUL_UNIT: //' || true)
 if [ -n "$UNIT" ] && [ -f "$TASKS_DIR/$UNIT.md" ] && is_work_unit "$SUBAGENT"; then
   # shellcheck source=/dev/null
@@ -127,8 +127,8 @@ if [ -n "$UNIT" ] && [ -f "$TASKS_DIR/$UNIT.md" ] && is_work_unit "$SUBAGENT"; t
   STATUS=$(get_task_status "$TASKS_DIR/$UNIT.md" "")
   BLOCK=""
   case "$SUBAGENT" in
-    *review-gate*) case "$STATUS" in DONE) BLOCK=1 ;; esac ;;
-    *)             case "$STATUS" in IMPLEMENTED|DONE) BLOCK=1 ;; esac ;;
+    *review-gate*) case "$STATUS" in DONE|CANCELLED) BLOCK=1 ;; esac ;;
+    *)             case "$STATUS" in IMPLEMENTED|DONE|CANCELLED) BLOCK=1 ;; esac ;;
   esac
   if [ -n "$BLOCK" ]; then
     # Only checked before trusting a BLOCK verdict, so it never emits
