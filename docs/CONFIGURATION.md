@@ -330,6 +330,10 @@ boundary, and "looked and found none" is kept distinct from "never looked":
 | Section absent, scope touches `scripts/**` or `tests/**` | **BLOCK** (`absent`) |
 | Section absent, scope touches neither | ALLOW, and the skipped check is announced on stderr (`not_applicable`) |
 | Section present with no parseable `red-run:` entry | **BLOCK** as corrupt (`corrupt`) — present-but-unreadable is a stronger trouble signal than absent |
+| Section present but its whole payload sits inside an HTML comment, scope in | **BLOCK** (`commented_out`) — deliberately not `absent`: a comment is present-but-not-a-record, and the two are different trouble signals |
+| Section present but its whole payload sits inside an HTML comment, scope out | ALLOW, announced on stderr (`not_applicable`) — same disposition as an absent section out of scope |
+| `project.test_roots` is unusable (see below), so the roots set cannot be derived | **BLOCK** (`roots_undeterminable`) — the scope predicate fails CLOSED and treats the task as in scope |
+| Every configured tests root was skipped, so none resolves under the project root | **BLOCK** (`roots_unresolved`) — kept distinct from `roots_undeterminable`: "the config could not be read" is not "the config read fine and nothing it names exists" |
 | Entry present but its test path or `pre-change-ref` is unresolvable, not an ancestor, or records exit 0 | **BLOCK** (`ref_unresolvable` / `not_ancestor` / `exit_zero`) — the evidence claims something git can refute |
 | `red-run: N/A — <token>` with `<token>` in the closed list `docs-only`, `comment-only`, `revert`, `fixture-capture-only` | ALLOW, recorded (`enumerated_na`) |
 | `red-run: N/A — <free text>` | **BLOCK** (`bad_na_token`) — an open-ended excuse field is an allow-everything field |
@@ -337,6 +341,16 @@ boundary, and "looked and found none" is kept distinct from "never looked":
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `guards.red_run_evidence` | `true` | Set to `false` to suppress the **block only**. Detection still runs: the stderr diagnostic still names the reason, the `red_run_missing` event is still emitted, and a second stderr line records that the block was suppressed. There is no setting that makes the gate stop looking. |
+| `project.test_roots` | absent (⇒ `["tests"]`) | Repository-relative directories that hold this project's tests. Both halves of the gate read it: which file scopes TRIGGER the requirement, and where a recorded entry's test path must live. A project whose tests are in `spec/` and `src/__tests__/` sets `["spec","src/__tests__"]`. |
+
+**How `project.test_roots` degrades, and why the two failures are named separately.** Absent, or
+unreadable because `jq` is missing or `config.json` cannot be read/parsed, falls back to the historical
+default `["tests"]` — a project that never configured it behaves exactly as before. But an array that is
+*present and unusable* (empty, not an array, or containing a non-string or empty-string entry) is a
+different state: the set is **undeterminable**, so the scope predicate fails CLOSED and treats the task as
+in scope (`roots_undeterminable`). A usable array none of whose entries resolves to a real directory
+inside the project root is a third state again (`roots_unresolved`). Configuration that could not be read
+is never silently equated with configuration that says nothing is a test.
 
 It ships default-on deliberately. This is an enforcement mechanism, and a default-off enforcement
 mechanism reproduces the problem it exists to fix — the objective's whole premise is that a test suite
@@ -441,7 +455,10 @@ The stream captures:
 - **stack_sync_conflict** — `gh stack sync` hit a conflict or a divergence it cannot auto-resolve; stacking is halted and a p1 inbox item filed. Fields `reason`/`exit_code`/`detail`
 - **stack_api_failure** — a `gh`/`gh stack` API call failed; fields `stage`/`auth_status` (an independent `gh auth status` probe, since gh-stack can misattribute auth failures) plus the call's own identifiers
 - **stack_remote_layer_imported** / **stack_remote_layer_import_failed** — an explicit `gh stack checkout <pr>` of a remote layer that `sync` left un-imported succeeded / failed; fields `pr`/`feat_id`/`branch`, or `pr`/`exit_code`/`detail`
-- **red_run_missing** — the IMPLEMENTED red-run evidence check found no usable evidence; fields `task_id` and `reason` (`absent`, `corrupt`, `ref_unresolvable`, `not_ancestor`, `exit_zero`, `bad_na_token`). Emitted whether or not `guards.red_run_evidence` suppressed the block — see Red-Run Evidence Gate above
+- **red_run_missing** — the IMPLEMENTED red-run evidence check found no usable evidence; fields `task_id` and `reason`. The refusal vocabulary is CLOSED and has nine members: `absent`, `bad_na_token`, `commented_out`, `corrupt`, `exit_zero`, `not_ancestor`, `ref_unresolvable`, `roots_undeterminable`, `roots_unresolved`. It is asserted against the shipped source by `tests/test-red-run-evidence.sh`, so this list is checkable rather than narrated — a new state must become a named member, never a bucket. Emitted whether or not `guards.red_run_evidence` suppressed the block — see Red-Run Evidence Gate above
+- **merge_evidence_missing** — the `## Merge Evidence` check that admits `IMPLEMENTED -> DONE` (and the alternative route to `IN_REVIEW -> DONE`) found nothing usable; fields `task_id` and `reason`, from the closed set `absent`, `commented_out`, `truncated` (a required field of `host`/`pr`/`merged-at`/`merge-commit` is missing), `malformed` (a field is present but fails its shape check). This gate has **no kill switch** — a switch on the last gate before DONE would be the bypass — see RULES.md §2
+- **merge_provider_unsupported_host** / **merge_provider_no_remote** / **merge_provider_unavailable** / **merge_provider_api_failure** / **merge_provider_invalid_pr** — the merge-observation seam (`scripts/lib/merge-provider.sh`) could not be asked, or was asked and did not usefully answer. Every one of these means "could not look" and none of them may be read as "not merged"; the seam never falls back to git ancestry (RULES.md §16)
+- **aggregate_board_blocked_carveout** — a `group`/`feature` review unit reached readiness only because tasks were carried out of it as `CANCELLED`; fields `unit`, `blocked_tasks` (the name predates the `CANCELLED` token and carries the carried-out task ids), `implemented`, `total`. Readiness reached by exclusion and readiness where every task shipped must not read identically
 - **stop_gate** — a gate ended or short-circuited an autonomous run rather than exiting silently; `reason` values include `in_flight_hold`, `in_flight_stale`, and `stacking_unavailable` (stacking enabled but the tooling is unusable — the loop fell back to a plain PR)
 
 See `docs/superpowers/specs/2026-06-24-telemetry-bus-design.md` for the full event schema and payload details.
