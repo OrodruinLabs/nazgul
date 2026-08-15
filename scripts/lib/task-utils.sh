@@ -200,7 +200,8 @@ count_tasks_by_status() {
 # every call site keep working unchanged):
 #   Sets these globals (not `local` — intentionally visible to the caller):
 #     DONE_COUNT READY_COUNT IN_PROGRESS_COUNT IN_REVIEW_COUNT APPROVED_COUNT
-#     CHANGES_COUNT BLOCKED_COUNT PLANNED_COUNT INVALID_COUNT TOTAL_COUNT
+#     CHANGES_COUNT BLOCKED_COUNT PLANNED_COUNT CANCELLED_COUNT INVALID_COUNT
+#     TOTAL_COUNT
 #       - one bucket per canonical status (IMPLEMENTED and IN_REVIEW both land
 #         in IN_REVIEW_COUNT, matching the existing case blocks); TOTAL_COUNT is
 #         incremented for every manifest found, INCLUDING invalid ones (faithful
@@ -225,7 +226,7 @@ count_tasks_and_find_active() {
 
   DONE_COUNT=0; READY_COUNT=0; IN_PROGRESS_COUNT=0; IN_REVIEW_COUNT=0
   APPROVED_COUNT=0; CHANGES_COUNT=0; BLOCKED_COUNT=0; PLANNED_COUNT=0
-  INVALID_COUNT=0; TOTAL_COUNT=0
+  CANCELLED_COUNT=0; INVALID_COUNT=0; TOTAL_COUNT=0
   ACTIVE_TASK=""; ACTIVE_STATUS=""; ACTIVE_RETRY=0
   INVALID_TASKS=""
 
@@ -244,6 +245,7 @@ count_tasks_and_find_active() {
         CHANGES_REQUESTED) CHANGES_COUNT=$((CHANGES_COUNT + 1)) ;;
         BLOCKED) BLOCKED_COUNT=$((BLOCKED_COUNT + 1)) ;;
         PLANNED) PLANNED_COUNT=$((PLANNED_COUNT + 1)) ;;
+        CANCELLED) CANCELLED_COUNT=$((CANCELLED_COUNT + 1)) ;;
         *)
           task_id=$(basename "$task_file" .md)
           # get_task_status() normalizes any off-vocabulary frontmatter value to
