@@ -194,17 +194,156 @@ _ttg_strip_html_comments() {
     }'
 }
 
+# project.test_roots -> _TTG_ROOTS_REL (trigger prefixes), _TTG_ROOTS_RESOLVED
+# ("rel<TAB>abs", containment) and the scan counters; 1 = set undeterminable.
+_ttg_red_run_roots() {
+  local project_root="$1" nazgul_dir="$2"
+  local kind raw rel abs
+  _TTG_ROOTS_REL=""
+  _TTG_ROOTS_RESOLVED=""
+  _TTG_ROOTS_DETAIL=""
+  _TTG_ROOTS_SOURCE="default"
+  _TTG_ROOTS_SCANNED=0
+  _TTG_ROOTS_UNSAFE=0
+  _TTG_ROOTS_UNRESOLVABLE=0
+  _TTG_ROOTS_CHECKED=0
+
+  if ! command -v jq >/dev/null 2>&1; then
+    kind="jq-unavailable"
+  elif [ ! -r "$nazgul_dir/config.json" ]; then
+    kind="config-unreadable"
+  else
+    kind=$(jq -r '.project.test_roots
+        | if . == null then "absent"
+          elif type != "array" then "malformed"
+          elif length == 0 then "empty"
+          elif any(.[]; type != "string" or . == "") then "malformed"
+          else "ok" end' "$nazgul_dir/config.json" 2>/dev/null) || kind="config-unparseable"
+    [ -n "$kind" ] || kind="config-unparseable"
+  fi
+
+  case "$kind" in
+    ok)
+      _TTG_ROOTS_SOURCE="config"
+      raw=$(jq -r '.project.test_roots[]' "$nazgul_dir/config.json" 2>/dev/null || true)
+      ;;
+    absent|jq-unavailable|config-unreadable|config-unparseable)
+      _TTG_ROOTS_SOURCE="default:${kind}"
+      raw="tests"
+      ;;
+    empty)
+      _TTG_ROOTS_DETAIL="an empty array"
+      _TTG_ROOTS_SOURCE="undeterminable"
+      return 1
+      ;;
+    *)
+      _TTG_ROOTS_DETAIL="not an array of non-empty repository-relative paths"
+      _TTG_ROOTS_SOURCE="undeterminable"
+      return 1
+      ;;
+  esac
+
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    _TTG_ROOTS_SCANNED=$((_TTG_ROOTS_SCANNED + 1))
+    rel="${rel#./}"
+    rel="${rel%/}"
+    case "$rel" in
+      ""|/*)
+        _TTG_ROOTS_UNSAFE=$((_TTG_ROOTS_UNSAFE + 1))
+        continue
+        ;;
+    esac
+    case "/$rel/" in
+      */../*|*/./*)
+        _TTG_ROOTS_UNSAFE=$((_TTG_ROOTS_UNSAFE + 1))
+        continue
+        ;;
+    esac
+    _TTG_ROOTS_REL="${_TTG_ROOTS_REL}${rel}
+"
+    if abs=$(cd "$project_root/$rel" 2>/dev/null && pwd -P) && [ -n "$abs" ]; then
+      _TTG_ROOTS_RESOLVED="${_TTG_ROOTS_RESOLVED}${rel}	${abs}
+"
+      _TTG_ROOTS_CHECKED=$((_TTG_ROOTS_CHECKED + 1))
+    else
+      _TTG_ROOTS_UNRESOLVABLE=$((_TTG_ROOTS_UNRESOLVABLE + 1))
+    fi
+  done <<EOF
+$raw
+EOF
+  return 0
+}
+
+# The configured roots as one space-separated list, for diagnostics.
+_ttg_red_run_roots_list() {
+  printf '%s' "$_TTG_ROOTS_REL" | tr '\n' ' ' | sed 's/[[:space:]]*$//'
+}
+
+# A root set that quietly shrank to empty would re-create the unsatisfiable gate.
+_ttg_red_run_roots_report() {
+  printf 'ttg_verify_red_run_evidence: %s: tests-root scan: %d scanned, %d skipped (unsafe=%d, unresolvable=%d), %d checked, %d findings; source=%s; roots=[%s]\n' \
+    "$1" "$_TTG_ROOTS_SCANNED" "$((_TTG_ROOTS_UNSAFE + _TTG_ROOTS_UNRESOLVABLE))" \
+    "$_TTG_ROOTS_UNSAFE" "$_TTG_ROOTS_UNRESOLVABLE" "$_TTG_ROOTS_CHECKED" \
+    "$((_TTG_ROOTS_UNSAFE + _TTG_ROOTS_UNRESOLVABLE))" "$_TTG_ROOTS_SOURCE" "$(_ttg_red_run_roots_list)" >&2
+}
+
+# A configured root is data, never a pattern: src/App.Tests/tests must not match src/AppXTests/tests.
+_ttg_ere_escape() {
+  printf '%s' "$1" | sed 's/[]$.^*+?|(){}\\[]/\\&/g'
+}
+
+# scripts/ plus every configured root, so trigger and satisfier read one set.
+_ttg_red_run_scope_alternation() {
+  local alt="scripts" rel
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    alt="${alt}|$(_ttg_ere_escape "$rel")"
+  done <<EOF
+$_TTG_ROOTS_REL
+EOF
+  printf '%s' "$alt"
+}
+
+# A prohibition is not a declaration: "Must NOT touch scripts/" used to put a task
+# into a scope it could never satisfy. Drops the label and its continuation.
+_ttg_drop_prohibitions() {
+  awk '
+    {
+      lab = $0
+      sub(/^[[:space:]]*[-*+][[:space:]]*/, "", lab)
+      sub(/^[[:space:]]+/, "", lab)
+      gsub(/\*/, "", lab)
+      low = tolower(lab)
+      if (low ~ /^(must not|must never|do not|dont|never)[[:space:]]+(touch|modify|edit|change|alter|create|add)/ ||
+          low ~ /^(out of scope|prohibited|forbidden|excluded)([[:space:]]|:|$)/) {
+        skip = 1
+        next
+      }
+      if ($0 ~ /^[[:space:]]*\*\*[^*]+\*\*/) skip = 0
+      if (!skip) print
+    }'
+}
+
 # Scope is the union of declared paths and Base SHA..HEAD; diff failure degrades loudly to manifest-only.
 _ttg_red_run_in_scope() {
   local manifest_text="$1" project_root="$2"
-  local declared diff_out base_sha degrade=""
+  local nazgul_dir="${3:-$project_root/nazgul}"
+  local declared diff_out base_sha degrade="" alt
+
+  if ! _ttg_red_run_roots "$project_root" "$nazgul_dir"; then
+    echo "ttg_verify_red_run_evidence: red-run scope predicate could not determine the tests roots (project.test_roots is ${_TTG_ROOTS_DETAIL}) — failing closed, this task is treated as in scope" >&2
+    return 0
+  fi
+  _ttg_red_run_roots_report "red-run scope predicate"
+  alt=$(_ttg_red_run_scope_alternation)
 
   declared=$(printf '%s\n' "$manifest_text" \
     | grep -iE '^[[:space:]]*-[[:space:]]*\*\*Files modified\*\*' || true)
   declared="${declared}
-$(printf '%s' "$manifest_text" | awk '/^## File Scope/{f=1;next} /^## /{f=0} f')"
+$(printf '%s' "$manifest_text" | awk '/^## File Scope/{f=1;next} /^## /{f=0} f' | _ttg_drop_prohibitions)"
   declared=$(printf '%s\n' "$declared" | _ttg_strip_html_comments)
-  if printf '%s\n' "$declared" | grep -qE '(^|[^[:alnum:]_./-])(scripts|tests)/'; then
+  if printf '%s\n' "$declared" | grep -qE "(^|[^[:alnum:]_./-])(${alt})/"; then
     return 0
   fi
 
@@ -223,7 +362,7 @@ $(printf '%s' "$manifest_text" | awk '/^## File Scope/{f=1;next} /^## /{f=0} f')
       degrade="Base SHA ${base_sha} does not resolve"
     elif ! diff_out=$(git -C "$project_root" diff --name-only "${base_sha}..HEAD" 2>/dev/null); then
       degrade="git diff ${base_sha}..HEAD failed"
-    elif printf '%s\n' "$diff_out" | grep -qE '^(scripts|tests)/'; then
+    elif printf '%s\n' "$diff_out" | grep -qE "^(${alt})/"; then
       return 0
     fi
   fi
@@ -237,7 +376,8 @@ $(printf '%s' "$manifest_text" | awk '/^## File Scope/{f=1;next} /^## /{f=0} f')
 # Check one entry's referential integrity; QA owns whether the recorded failure is meaningful.
 _ttg_red_run_check_entry() {
   local entry="$1" project_root="$2" nazgul_dir="$3" task_id="$4" commits="$5"
-  local payload test_path abs_path tests_root resolved_parent ref result_line exit_code na_token tok found
+  local payload test_path abs_path resolved_parent ref result_line exit_code na_token tok found
+  local rel abs roots_list shaped contained
 
   payload=$(printf '%s\n' "$entry" | head -1 \
     | sed -E 's/^[[:space:]]*-[[:space:]]*(\*\*)?red-run(\*\*)?:[[:space:]]*//')
@@ -265,16 +405,42 @@ _ttg_red_run_check_entry() {
   fi
 
   test_path=$(printf '%s' "$payload" | awk '{print $1}' | tr -d '`')
-  case "$test_path" in
-    tests/*) ;;
-    *)
-      if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "corrupt" \
-        "red-run entry test path '${test_path}' must be repository-relative and under tests/"; then
-        return 1
-      fi
-      return 0
-      ;;
-  esac
+  if ! _ttg_red_run_roots "$project_root" "$nazgul_dir"; then
+    if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "roots_undeterminable" \
+      "red-run entry test path '${test_path}' cannot be judged: project.test_roots is ${_TTG_ROOTS_DETAIL}, so the tests-root set is undeterminable"; then
+      return 1
+    fi
+    return 0
+  fi
+  roots_list=$(_ttg_red_run_roots_list)
+  shaped=false
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    case "$test_path" in
+      "$rel"/*)
+        shaped=true
+        break
+        ;;
+    esac
+  done <<EOF
+$_TTG_ROOTS_REL
+EOF
+  if [ "$shaped" != true ]; then
+    _ttg_red_run_roots_report "red-run entry path shape"
+    if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "corrupt" \
+      "red-run entry test path '${test_path}' must be repository-relative and under a configured tests root (${roots_list})"; then
+      return 1
+    fi
+    return 0
+  fi
+  if [ "$_TTG_ROOTS_CHECKED" -eq 0 ]; then
+    _ttg_red_run_roots_report "red-run entry containment"
+    if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "roots_unresolved" \
+      "red-run entry test path '${test_path}' cannot be contained: every configured tests root (${roots_list}) was skipped, so no root resolves under ${project_root}"; then
+      return 1
+    fi
+    return 0
+  fi
   case "/$test_path/" in
     */../*|*/./*)
       if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "corrupt" \
@@ -292,25 +458,35 @@ _ttg_red_run_check_entry() {
     fi
     return 0
   fi
-  tests_root=$(cd "$project_root/tests" 2>/dev/null && pwd -P) || tests_root=""
   resolved_parent=$(cd "$(dirname "$abs_path")" 2>/dev/null && pwd -P) || resolved_parent=""
-  if [ -z "$tests_root" ] || [ -z "$resolved_parent" ]; then
+  if [ -z "$resolved_parent" ]; then
     if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "corrupt" \
-      "red-run entry test path '${test_path}' could not be resolved under the repository tests/ tree"; then
+      "red-run entry test path '${test_path}' could not be resolved under any configured tests root (${roots_list})"; then
       return 1
     fi
     return 0
   fi
-  case "$resolved_parent/" in
-    "$tests_root/"*) ;;
-    *)
-      if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "corrupt" \
-        "red-run entry test path '${test_path}' resolves outside the repository tests/ tree"; then
-        return 1
-      fi
-      return 0
-      ;;
-  esac
+  contained=false
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    abs="${rel#*	}"
+    case "$resolved_parent/" in
+      "$abs"/*)
+        contained=true
+        break
+        ;;
+    esac
+  done <<EOF
+$_TTG_ROOTS_RESOLVED
+EOF
+  if [ "$contained" != true ]; then
+    _ttg_red_run_roots_report "red-run entry containment"
+    if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "corrupt" \
+      "red-run entry test path '${test_path}' resolves outside every configured tests root (${roots_list})"; then
+      return 1
+    fi
+    return 0
+  fi
 
   ref=$(printf '%s\n' "$entry" \
     | grep -iE '^[[:space:]]*-?[[:space:]]*(\*\*)?pre-change-ref(\*\*)?:' | head -1 \
@@ -405,7 +581,7 @@ ttg_verify_red_run_evidence() {
   [ -n "$task_id" ] || task_id="unknown"
 
   if ! printf '%s\n' "$manifest_text" | grep -q '^## Red-Run Evidence'; then
-    if _ttg_red_run_in_scope "$manifest_text" "$project_root"; then
+    if _ttg_red_run_in_scope "$manifest_text" "$project_root" "$nazgul_dir"; then
       if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "absent" \
         "no ## Red-Run Evidence section, but this task's scope touches scripts/** or tests/**"; then
         return 1
@@ -422,7 +598,7 @@ ttg_verify_red_run_evidence() {
   section=$(printf '%s\n' "$raw_section" | _ttg_strip_html_comments)
   if ! printf '%s\n' "$section" | grep -qE '^[[:space:]]*-[[:space:]]*(\*\*)?red-run(\*\*)?:'; then
     if ! printf '%s' "$section" | grep -q '[^[:space:]]'; then
-      if _ttg_red_run_in_scope "$manifest_text" "$project_root"; then
+      if _ttg_red_run_in_scope "$manifest_text" "$project_root" "$nazgul_dir"; then
         if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "absent" \
           "## Red-Run Evidence contains only template commentary, but this task's scope touches scripts/** or tests/**"; then
           return 1
