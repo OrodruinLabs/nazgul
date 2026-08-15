@@ -194,7 +194,7 @@ cmd_setup() {
     --owner "$owner" \
     --name "Nazgul Status" \
     --data-type "SINGLE_SELECT" \
-    --single-select-options "PLANNED,READY,IN_PROGRESS,IMPLEMENTED,IN_REVIEW,CHANGES_REQUESTED,DONE,BLOCKED" \
+    --single-select-options "PLANNED,READY,IN_PROGRESS,IMPLEMENTED,IN_REVIEW,CHANGES_REQUESTED,DONE,BLOCKED,CANCELLED" \
     --format json 2>/dev/null) || {
     nazgul_status_field_json=$(gh project field-list "$project_number" --owner "$owner" --format json --jq '.fields[] | select(.name == "Nazgul Status")' 2>/dev/null) || {
       log_error "Failed to create or find 'Nazgul Status' field"
@@ -237,7 +237,7 @@ cmd_setup() {
 
   # Build status_option_ids map
   local status_option_ids="{}"
-  for status_name in PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED; do
+  for status_name in PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED CANCELLED; do
     local option_id
     option_id=$(echo "$status_options" | jq -r --arg name "$status_name" '.[] | select(.name == $name) | .id // empty')
     if [ -n "$option_id" ]; then
@@ -249,7 +249,7 @@ cmd_setup() {
 
   # Create labels
   log_info "Creating labels..."
-  for label in "nazgul" "nazgul:planned" "nazgul:ready" "nazgul:in-progress" "nazgul:implemented" "nazgul:in-review" "nazgul:changes-requested" "nazgul:done" "nazgul:blocked"; do
+  for label in "nazgul" "nazgul:planned" "nazgul:ready" "nazgul:in-progress" "nazgul:implemented" "nazgul:in-review" "nazgul:changes-requested" "nazgul:done" "nazgul:blocked" "nazgul:cancelled"; do
     gh label create "$label" --repo "$owner/$repo" --force 2>/dev/null || true
   done
 
@@ -467,7 +467,7 @@ cmd_sync_task() {
   local status_label
   status_label=$(echo "$status" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
 
-  for old_label in "nazgul:planned" "nazgul:ready" "nazgul:in-progress" "nazgul:implemented" "nazgul:in-review" "nazgul:changes-requested" "nazgul:done" "nazgul:blocked"; do
+  for old_label in "nazgul:planned" "nazgul:ready" "nazgul:in-progress" "nazgul:implemented" "nazgul:in-review" "nazgul:changes-requested" "nazgul:done" "nazgul:blocked" "nazgul:cancelled"; do
     gh issue edit "$issue_number" --repo "$owner/$repo" --remove-label "$old_label" 2>/dev/null || true
   done
 
@@ -477,6 +477,11 @@ cmd_sync_task() {
   if [ "$status" = "DONE" ]; then
     gh issue close "$issue_number" --repo "$owner/$repo" 2>/dev/null || true
     log_info "$task_id -> DONE (issue #$issue_number closed)"
+  elif [ "$status" = "CANCELLED" ]; then
+    # Terminal but unshipped: "not planned" keeps it distinguishable from a
+    # delivered task, and the else arm below would REOPEN it (ADR-022).
+    gh issue close "$issue_number" --repo "$owner/$repo" --reason "not planned" 2>/dev/null || true
+    log_info "$task_id -> CANCELLED (issue #$issue_number closed as not planned)"
   elif [ "$status" = "BLOCKED" ]; then
     local blocked_reason
     blocked_reason=$(grep -m1 '^\- \*\*Blocked reason\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "Unknown reason")
@@ -557,7 +562,7 @@ cmd_archive_all() {
   # Clean stale nazgul labels
   local repo
   repo=$(echo "$repo_info" | jq -r '.name')
-  for label in "nazgul:planned" "nazgul:ready" "nazgul:in-progress" "nazgul:implemented" "nazgul:in-review" "nazgul:changes-requested" "nazgul:done" "nazgul:blocked"; do
+  for label in "nazgul:planned" "nazgul:ready" "nazgul:in-progress" "nazgul:implemented" "nazgul:in-review" "nazgul:changes-requested" "nazgul:done" "nazgul:blocked" "nazgul:cancelled"; do
     gh label delete "$label" --repo "$owner/$repo" --yes 2>/dev/null || true
   done
   log_info "Cleaned stale nazgul labels"
