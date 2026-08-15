@@ -855,5 +855,188 @@ if command -v jq >/dev/null 2>&1; then
     "$RRG_CHECKED" "$RRG_SCANNED"
 fi
 
+# --- multi-root capture: project.test_roots drives the PRODUCER too ----------
+# TASK-007/010 made the evidence gate honour project.test_roots. Until this
+# block the capture half was still single-root tests/, so the gate accepted
+# evidence the only sanctioned producer could not generate.
+RRM_SCANNED=0
+RRM_CHECKED=0
+RRM_SKIPPED=0
+RRM_NOJQ=0
+RRM_FINDINGS=0
+RRM_MARK=0
+
+rrm_begin() {
+  RRM_SCANNED=$((RRM_SCANNED + 1))
+  if ! command -v jq >/dev/null 2>&1; then
+    RRM_SKIPPED=$((RRM_SKIPPED + 1))
+    RRM_NOJQ=$((RRM_NOJQ + 1))
+    _skip "multi-root: $1 (jq unavailable — red-run cannot read a project config)"
+    return 1
+  fi
+  RRM_CHECKED=$((RRM_CHECKED + 1))
+  RRM_MARK="$TESTS_FAILED"
+  return 0
+}
+
+rrm_end() {
+  [ "$TESTS_FAILED" -eq "$RRM_MARK" ] || RRM_FINDINGS=$((RRM_FINDINGS + 1))
+}
+
+# The exact monorepo shape ADR-024 describes: tests live under src/Api/tests and
+# there is NO repository-root tests/ anywhere, so a surviving hardcode dies here.
+setup_monorepo_project() {
+  setup_temp_dir
+  git -C "$TEST_DIR" init -q -b main
+  git -C "$TEST_DIR" config user.email "test@nazgul.dev"
+  git -C "$TEST_DIR" config user.name "Nazgul Test"
+  mkdir -p "$TEST_DIR/src/Api/tests" "$TEST_DIR/src/Api/src" "$TEST_DIR/nazgul/tasks"
+  cat > "$TEST_DIR/run-my-tests.sh" <<'MONO_RUNNER'
+#!/usr/bin/env bash
+set -uo pipefail
+only=""
+for a in "$@"; do
+  case "$a" in --only=*) only="${a#--only=}" ;; esac
+done
+root="$(cd "$(dirname "$0")" && pwd)"
+matched=0
+failed=""
+for f in "$root"/src/Api/tests/test-*.sh; do
+  [ -e "$f" ] || continue
+  base=$(basename "$f")
+  case "$base" in *"$only"*) ;; *) continue ;; esac
+  matched=1
+  bash "$f" || failed="${failed}  - ${base}
+"
+done
+if [ "$matched" -eq 0 ]; then
+  echo "run-my-tests: nothing matched --only=$only"
+  exit 2
+fi
+if [ -n "$failed" ]; then
+  printf 'Failed test files:\n%s\n' "$failed"
+  exit 1
+fi
+exit 0
+MONO_RUNNER
+  chmod +x "$TEST_DIR/run-my-tests.sh"
+  git -C "$TEST_DIR" add -A
+  git -C "$TEST_DIR" commit -q -m "base: monorepo runner, tests live under src/Api/tests"
+  MONO_BASE=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  printf '#!/usr/bin/env bash\necho feature\n' > "$TEST_DIR/src/Api/src/feature.sh"
+  cat > "$TEST_DIR/src/Api/tests/test-epsilon.sh" <<'EPSILON'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "=== test-epsilon ==="
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/src/feature.sh" ]; then
+  echo "  PASS: epsilon needs the feature"
+  exit 0
+fi
+echo "  FAIL: epsilon needs the feature"
+exit 1
+EPSILON
+  git -C "$TEST_DIR" add -A
+  git -C "$TEST_DIR" commit -q -m "the task's work"
+  MONO_HEAD=$(git -C "$TEST_DIR" rev-parse HEAD)
+}
+
+write_mono_manifest() {
+  local id="$1"
+  {
+    printf -- '---\nstatus: IN_PROGRESS\n---\n# %s: scratch task\n\n' "$id"
+    printf -- '## Metadata\n- **ID**: %s\n- **Base SHA**: %s\n\n' "$id" "$MONO_BASE"
+    printf -- '## Commits\n%s\n\n' "$MONO_HEAD"
+    printf -- '## Test Obligation\n- **Scoped filter**: `./run-my-tests.sh --only=epsilon`\n\n'
+    printf -- '## Implementation Log\n- nothing yet\n'
+  } > "$TEST_DIR/nazgul/tasks/${id}.md"
+}
+
+write_mono_config() {
+  write_project_config <<'CFG'
+{
+  "schema_version": 37,
+  "project": {
+    "test_command": "./run-my-tests.sh",
+    "test_filter_template": "--only={filter}",
+    "test_roots": ["src/Api/tests"]
+  }
+}
+CFG
+}
+
+setup_monorepo_project
+if rrm_begin "a configured non-tests/ root derives, copies and records"; then
+  write_mono_config
+  write_mono_manifest TASK-130
+  MANIFEST130="$TEST_DIR/nazgul/tasks/TASK-130.md"
+  run_capture TASK-130 --filter=epsilon
+  assert_exit_code "multi-root: a project with no repo-root tests/ still captures" "$RR_EC" 0
+  assert_not_contains "multi-root: the derivation is NOT reported as empty" "$RR_OUT" \
+    "changes no copyable file"
+  assert_file_contains "multi-root: the entry records the path under the configured root" \
+    "$MANIFEST130" 'red-run: src/Api/tests/test-epsilon.sh'
+  assert_file_not_contains "multi-root: the entry never reconstructs a tests/ path" \
+    "$MANIFEST130" 'red-run: tests/test-epsilon.sh'
+  assert_file_contains "multi-root: provenance is still the capturer" \
+    "$MANIFEST130" 'captured-by: scripts/red-run.sh at 20'
+  assert_eq "multi-root: the scratch worktree is removed" "$(worktree_count)" "1"
+  rrm_end
+fi
+
+if rrm_begin "--copy= accepts a path under a configured root"; then
+  write_mono_config
+  write_mono_manifest TASK-131
+  run_capture TASK-131 --filter=epsilon --copy=src/Api/tests/test-epsilon.sh
+  assert_exit_code "multi-root --copy: a configured-root path is accepted" "$RR_EC" 0
+  assert_file_contains "multi-root --copy: the pinned path is what gets recorded" \
+    "$TEST_DIR/nazgul/tasks/TASK-131.md" 'red-run: src/Api/tests/test-epsilon.sh'
+  rrm_end
+fi
+
+if rrm_begin "--copy= refuses a path outside every configured root, and names the set"; then
+  write_mono_config
+  write_mono_manifest TASK-132
+  run_capture TASK-132 --filter=epsilon --copy=tests/test-epsilon.sh
+  assert_exit_code "multi-root --copy: an off-root path exits 1" "$RR_EC" 1
+  assert_contains "multi-root --copy: the refusal names the configured roots" "$RR_OUT" \
+    "test roots [src/Api/tests]"
+  assert_file_not_contains "multi-root --copy: writes NO evidence block" \
+    "$TEST_DIR/nazgul/tasks/TASK-132.md" '## Red-Run Evidence'
+  rrm_end
+fi
+
+if rrm_begin "an unusable project.test_roots is a named refusal, not a silent tests/ default"; then
+  write_project_config <<'CFG'
+{
+  "schema_version": 37,
+  "project": {
+    "test_command": "./run-my-tests.sh",
+    "test_filter_template": "--only={filter}",
+    "test_roots": []
+  }
+}
+CFG
+  write_mono_manifest TASK-133
+  run_capture TASK-133 --filter=epsilon
+  assert_exit_code "unusable test_roots: exits 1" "$RR_EC" 1
+  assert_contains "unusable test_roots: names the key and what is wrong with it" "$RR_OUT" \
+    "project.test_roots"
+  assert_contains "unusable test_roots: says the gate fails closed on the same value" "$RR_OUT" \
+    "fails closed on the same value"
+  assert_contains "unusable test_roots: says nothing ran" "$RR_OUT" "nothing was run at all"
+  assert_file_not_contains "unusable test_roots: writes NO evidence block" \
+    "$TEST_DIR/nazgul/tasks/TASK-133.md" '## Red-Run Evidence'
+  rrm_end
+fi
+
+echo "  multi-root: ${RRM_SCANNED} scanned, ${RRM_SKIPPED} skipped (jq-unavailable=${RRM_NOJQ}), ${RRM_CHECKED} checked, ${RRM_FINDINGS} findings"
+assert_eq "multi-root: scanned == skipped + checked" \
+  "$RRM_SCANNED" "$((RRM_SKIPPED + RRM_CHECKED))"
+if command -v jq >/dev/null 2>&1; then
+  assert_eq "multi-root: every scenario was driven where jq is available" \
+    "$RRM_CHECKED" "$RRM_SCANNED"
+fi
+
 teardown_temp_dir
 report_results

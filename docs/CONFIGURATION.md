@@ -341,7 +341,7 @@ boundary, and "looked and found none" is kept distinct from "never looked":
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `guards.red_run_evidence` | `true` | Set to `false` to suppress the **block only**. Detection still runs: the stderr diagnostic still names the reason, the `red_run_missing` event is still emitted, and a second stderr line records that the block was suppressed. There is no setting that makes the gate stop looking. |
-| `project.test_roots` | absent (⇒ `["tests"]`) | Repository-relative directories that hold this project's tests. Both halves of the gate read it: which file scopes TRIGGER the requirement, and where a recorded entry's test path must live. A project whose tests are in `spec/` and `src/__tests__/` sets `["spec","src/__tests__"]`. |
+| `project.test_roots` | absent (⇒ `["tests"]`) | Repository-relative directories that hold this project's tests. All THREE readers share it: which file scopes TRIGGER the requirement, where a recorded entry's test path must live, and — since FEAT-031 — where `scripts/red-run.sh` derives its copy set, validates `--copy=` paths, contains the scratch destination and writes the entry's path. A project whose tests are in `spec/` and `src/__tests__/` sets `["spec","src/__tests__"]`. |
 
 **How `project.test_roots` degrades, and why the two failures are named separately.** Absent, or
 unreadable because `jq` is missing or `config.json` cannot be read/parsed, falls back to the historical
@@ -351,6 +351,13 @@ different state: the set is **undeterminable**, so the scope predicate fails CLO
 in scope (`roots_undeterminable`). A usable array none of whose entries resolves to a real directory
 inside the project root is a third state again (`roots_unresolved`). Configuration that could not be read
 is never silently equated with configuration that says nothing is a test.
+
+**The producer reads the same value, through the same reader.** `scripts/red-run.sh` resolves the root
+set with `_ttg_red_run_roots`, the function the gate itself uses — not a second reader. That matters
+because it was single-root `tests/` while the gate was already multi-root, so the gate accepted evidence
+the only sanctioned producer could not generate, and the operator's only remaining route was to
+hand-author a block carrying no `captured-by:` provenance. red-run refuses by name on the same
+undeterminable set the gate blocks on, rather than falling back to `tests/` behind the operator's back.
 
 It ships default-on deliberately. This is an enforcement mechanism, and a default-off enforcement
 mechanism reproduces the problem it exists to fix — the objective's whole premise is that a test suite

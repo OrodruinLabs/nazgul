@@ -24,7 +24,13 @@ set -euo pipefail
 # whose failure modes are a fabricated red (flag rejected) and an unscoped full
 # suite reported as a scoped one (flag ignored).
 #
-# The copy set defaults to the task's changed files under `tests/` MINUS the
+# The tests-root set is `project.test_roots` (default `["tests"]`), read through
+# the SAME `_ttg_red_run_roots` the evidence gate uses. A second reader here is
+# how trigger and satisfier drifted apart before: the gate would accept
+# multi-root evidence this producer could not generate, pushing the operator back
+# to hand-authoring the block ADR-019 exists to mechanize.
+#
+# The copy set defaults to the task's changed files under those roots MINUS the
 # harness itself: copying a changed `tests/run-tests.sh` into the pre-change tree
 # would run the new tests under the changed runner, which is the change being
 # present — the exact vacuity this script exists to detect. `--copy=` (repeatable)
@@ -142,10 +148,8 @@ PROJECT_ROOT="$(cd "$PROJECT_ROOT" && pwd -P)"
 
 validate_copy_path() {
   local rel="$1" source parent
-  case "$rel" in
-    tests/*) ;;
-    *) die "copy path must be repository-relative and under tests/: $rel" ;;
-  esac
+  rr_rel_under_roots "$rel" || die \
+    "copy path must be repository-relative and under one of this project's test roots [$RR_ROOTS_LIST]: $rel"
   case "/$rel/" in
     */../*|*/./*) die "copy path must not contain '.' or '..' segments: $rel" ;;
   esac
@@ -154,10 +158,8 @@ validate_copy_path() {
   [ -f "$source" ] || return 0
   [ ! -L "$source" ] || die "copy path must not be a symlink: $rel"
   parent=$(cd "$(dirname "$source")" && pwd -P) || die "cannot resolve copy path parent: $rel"
-  case "$parent/" in
-    "$PROJECT_ROOT/tests/"*) ;;
-    *) die "copy path resolves outside the repository tests/ tree: $rel" ;;
-  esac
+  rr_dir_under_roots "$parent/" "$PROJECT_ROOT" || die \
+    "copy path resolves outside this project's test roots [$RR_ROOTS_LIST]: $rel"
 }
 
 MANIFEST="$PROJECT_ROOT/nazgul/tasks/$TASK_ID.md"
@@ -190,6 +192,53 @@ fi
 # Config lives under the gitignored `nazgul/`, so it is read from the LIVE project
 # root and never from the detached pre-change worktree, which has no copy of it.
 RR_CONFIG="$PROJECT_ROOT/nazgul/config.json"
+
+# shellcheck source=./lib/task-transition-guard.sh
+source "$SCRIPT_DIR/lib/task-transition-guard.sh"
+if ! _ttg_red_run_roots "$PROJECT_ROOT" "$PROJECT_ROOT/nazgul"; then
+  die \
+    "project.test_roots in $RR_CONFIG is $_TTG_ROOTS_DETAIL, so this project's test roots cannot be determined." \
+    "The evidence gate fails closed on the same value, so a capture against a guessed root would write evidence that gate then rejects." \
+    "This is not a red run that failed — nothing was run at all."
+fi
+RR_ROOTS="$_TTG_ROOTS_REL"
+RR_ROOTS_LIST="$(_ttg_red_run_roots_list)"
+[ -n "$RR_ROOTS" ] || die \
+  "project.test_roots in $RR_CONFIG named no usable repository-relative root (source: $_TTG_ROOTS_SOURCE)." \
+  "This is not a red run that failed — nothing was run at all."
+
+RR_ROOT_PATHSPEC=()
+while IFS= read -r _rr_root; do
+  [ -n "$_rr_root" ] || continue
+  RR_ROOT_PATHSPEC+=("$_rr_root/")
+done <<EOF
+$RR_ROOTS
+EOF
+
+rr_rel_under_roots() {
+  local rel="$1" root
+  while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    case "$rel" in "$root"/*) return 0 ;; esac
+  done <<EOF
+$RR_ROOTS
+EOF
+  return 1
+}
+
+# Containment for a resolved directory against every root under $2 — the live
+# tree for the copy set, the scratch tree for the destination, one rule for both.
+rr_dir_under_roots() {
+  local candidate="$1" base="$2" root abs
+  while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    abs=$(cd "$base/$root" 2>/dev/null && pwd -P) || continue
+    case "$candidate" in "$abs"/*) return 0 ;; esac
+  done <<EOF
+$RR_ROOTS
+EOF
+  return 1
+}
 
 rr_cfg_kind() {
   local key="$1" out
@@ -286,9 +335,9 @@ if [ -n "$EXPLICIT_COPY" ]; then
   echo "red-run: copy set pinned by --copy; no derivation, no exclusions" >&2
 else
   TEST_FILES=$( {
-      git -C "$PROJECT_ROOT" diff --name-only "${BASE_SHA}..HEAD" -- tests/ 2>/dev/null || true
-      git -C "$PROJECT_ROOT" diff --name-only HEAD -- tests/ 2>/dev/null || true
-      git -C "$PROJECT_ROOT" ls-files --others --exclude-standard -- tests/ 2>/dev/null || true
+      git -C "$PROJECT_ROOT" diff --name-only "${BASE_SHA}..HEAD" -- "${RR_ROOT_PATHSPEC[@]}" 2>/dev/null || true
+      git -C "$PROJECT_ROOT" diff --name-only HEAD -- "${RR_ROOT_PATHSPEC[@]}" 2>/dev/null || true
+      git -C "$PROJECT_ROOT" ls-files --others --exclude-standard -- "${RR_ROOT_PATHSPEC[@]}" 2>/dev/null || true
     } | sort -u | grep -v '^$' || true)
 fi
 
@@ -325,7 +374,7 @@ $TEST_FILES
 EOF
 
 [ -n "$COPY_LIST" ] || die \
-  "$TASK_ID changes no copyable file under tests/ (looked at ${BASE_SHA}..HEAD, the working tree, and untracked files)." \
+  "$TASK_ID changes no copyable file under this project's test roots [$RR_ROOTS_LIST] (looked at ${BASE_SHA}..HEAD, the working tree, and untracked files)." \
   "There is nothing to red-run. If that is correct, record an enumerated N/A token instead." \
   "If the only changed test-tree file is the harness itself, pin the copy set with --copy=<path>."
 
@@ -354,10 +403,8 @@ while IFS= read -r rel; do
   dest_dir="$SCRATCH/$(dirname "$rel")"
   mkdir -p "$dest_dir"
   dest_parent=$(cd "$dest_dir" && pwd -P) || die "cannot resolve scratch destination for $rel"
-  case "$dest_parent/" in
-    "$SCRATCH/tests/"*) ;;
-    *) die "scratch destination resolves outside the detached tests/ tree: $rel" ;;
-  esac
+  rr_dir_under_roots "$dest_parent/" "$SCRATCH" || die \
+    "scratch destination resolves outside the detached test roots [$RR_ROOTS_LIST]: $rel"
   cp "$PROJECT_ROOT/$rel" "$SCRATCH/$rel"
   COPIED=$((COPIED + 1))
 done <<EOF
@@ -457,6 +504,22 @@ if [ "$RUN_EC" -eq 3 ]; then
     "$RUN_TAIL"
 fi
 
+# A runner reports a failing test by BASENAME; the copy set holds the root it
+# actually came from, so the recorded path is looked up rather than reconstructed.
+rr_rel_for_name() {
+  local name="$1" rel
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    if [ "${rel##*/}" = "$name" ]; then
+      printf '%s' "$rel"
+      return 0
+    fi
+  done <<EOF
+$COPY_LIST
+EOF
+  return 1
+}
+
 first_fail_for() {
   awk -v h="=== ${1} ===" '$0==h{f=1;next} /^=== /{f=0} f' "$OUT_FILE" \
     | grep -m1 -E '^[[:space:]]*FAIL:' || true
@@ -471,11 +534,11 @@ if [ -n "$FAILED_NAMES" ]; then
   COPIED_FAILED_NAMES=""
   while IFS= read -r name; do
     [ -n "$name" ] || continue
-    if grep -qFx -e "tests/$name" <<<"$COPY_LIST"; then
+    if rr_rel_for_name "$name" >/dev/null; then
       COPIED_FAILED_NAMES="${COPIED_FAILED_NAMES}${name}
 "
     else
-      echo "red-run: ignoring reported failure outside the copied test set: tests/$name" >&2
+      echo "red-run: ignoring reported failure outside the copied test set: $name" >&2
     fi
   done <<EOF
 $FAILED_NAMES
@@ -503,7 +566,8 @@ while IFS= read -r name; do
     case_name="(no FAIL: line reported)"
     result_detail="the file exited non-zero without naming a case"
   fi
-  rel_path="tests/$name"
+  rel_path=$(rr_rel_for_name "$name") || die \
+    "the pre-change run named $name, which is not in the copied test set — refusing to record a path this capture did not produce"
   if [ ! -f "$PROJECT_ROOT/$rel_path" ]; then
     echo "red-run: WARNING — $rel_path does not exist in the live tree; the evidence gate will reject this entry" >&2
   fi
