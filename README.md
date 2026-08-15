@@ -90,8 +90,9 @@ Nazgul auto-detects project state: active work resumes, existing docs trigger pl
 | `/nazgul:start` | Smart start/resume — auto-detects state, derives objective |
 | `/nazgul:status` | Check loop progress, task counts, reviewer board |
 | `/nazgul:pause` | Gracefully pause at next iteration boundary |
-| `/nazgul:task` | Task lifecycle: skip, unblock, add, prioritize, list |
+| `/nazgul:task` | Task lifecycle: skip (records `CANCELLED`), unblock, add, prioritize, list |
 | `/nazgul:review` | Manually trigger review for a task |
+| `/nazgul:complete` | Close an objective whose PR merged — walks stranded tasks to DONE on host merge evidence only |
 | `/nazgul:log` | View run history — iterations, commits, reviews |
 | `/nazgul:board` | Connect task tracking to GitHub Projects |
 | `/nazgul:docs` | View or regenerate project documents |
