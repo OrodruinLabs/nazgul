@@ -28,6 +28,9 @@ ttg_valid_transition() {
     IN_PROGRESS_BLOCKED)           return 0 ;;
     IMPLEMENTED_BLOCKED)           return 0 ;;
     IMPLEMENTED_IN_REVIEW)         return 0 ;;
+    # ADR-023 decision 3: the merge-closure edge. In the graph, NEVER unconditional —
+    # ttg_validate_transition refuses it unless ttg_verify_merge_evidence validates.
+    IMPLEMENTED_DONE)              return 0 ;;
     IN_REVIEW_DONE)                return 0 ;;
     IN_REVIEW_APPROVED)            return 0 ;;
     IN_REVIEW_CHANGES_REQUESTED)   return 0 ;;
@@ -655,6 +658,153 @@ ${line}"
   return "$rc"
 }
 
+# The four facts a closure records, in the order they are reported. `## Merge Evidence`
+# is the enforcement boundary exactly as `## Commits` is — a token outside it is not evidence.
+_TTG_MERGE_REQUIRED_FIELDS="host pr merged-at merge-commit"
+
+# Closed refusal vocabulary, never bucketed (RULES.md §15) and asserted from this source in
+# tests/test-task-transition-guard.sh: absent commented_out truncated malformed
+
+# Last merge verdict: one of the closed vocabulary above, or `verified`.
+# shellcheck disable=SC2034  # read by callers, not within this file
+TTG_MERGE_REASON=""
+# Corroboration outcome: corroborated | squash_signature | unavailable. Never a verdict.
+# shellcheck disable=SC2034  # read by callers, not within this file
+TTG_MERGE_ANCESTRY=""
+# Identity of the evidence that validated, for the caller's which-route diagnostic.
+# shellcheck disable=SC2034  # read by callers, not within this file
+TTG_MERGE_ROUTE=""
+
+# Deliberately NO kill switch (unlike guards.red_run_evidence, which only suppresses a block
+# on the way IN to IMPLEMENTED): a switch on the last gate before DONE IS the bypass.
+_ttg_merge_deny() {
+  local nazgul_dir="$1" task_id="$2" reason="$3" detail="$4"
+  TTG_MERGE_REASON="$reason"
+  echo "ttg_verify_merge_evidence: ${detail} [reason: ${reason}]" >&2
+  _ttg_emit_event "$nazgul_dir" "merge_evidence_missing" task_id "$task_id" reason "$reason"
+  return 1
+}
+
+# One `- **key**: value` / `- key: value` field out of a section; empty when absent.
+_ttg_merge_field() {
+  printf '%s\n' "$2" \
+    | grep -iE "^[[:space:]]*-[[:space:]]*(\*\*)?$1(\*\*)?:" \
+    | head -1 \
+    | sed -E 's/^[^:]*:[[:space:]]*//; s/[[:space:]]+$//' \
+    | tr -d '`'
+}
+
+_ttg_merge_shape_ok() {
+  local key="$1" value="$2"
+  case "$key" in
+    host)         [[ "$value" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] ;;
+    pr)           [[ "$value" =~ ^[0-9]+$ ]] ;;
+    merged-at)    [[ "$value" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})$ ]] ;;
+    merge-commit) [[ "$value" =~ ^[0-9a-fA-F]{7,64}$ ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+# lean-comments: allow-run — ADR-023 decision 1's rationale, kept where a reader would
+# otherwise "fix" this into a predicate.
+# CORROBORATION ONLY, never a predicate. After a server-side squash NO recorded SHA
+# reaches the merge commit, so a FAILING check is the NORMAL case on a squash host: it is
+# the expected squash signature, not an anomaly, and blocking on it would report "not
+# shipped" for work that demonstrably shipped. Every path returns 0; the outcome lands in
+# TTG_MERGE_ANCESTRY and never in the verdict.
+_ttg_merge_ancestry() {
+  local project_root="$1" merge_commit="$2" commits="$3" sha
+  TTG_MERGE_ANCESTRY="unavailable"
+  command -v git >/dev/null 2>&1 || return 0
+  git -C "$project_root" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  TTG_MERGE_ANCESTRY="squash_signature"
+  git -C "$project_root" cat-file -e "${merge_commit}^{commit}" 2>/dev/null || return 0
+  while IFS= read -r sha; do
+    [ -n "$sha" ] || continue
+    git -C "$project_root" cat-file -e "${sha}^{commit}" 2>/dev/null || continue
+    if git -C "$project_root" merge-base --is-ancestor "$sha" "$merge_commit" 2>/dev/null; then
+      TTG_MERGE_ANCESTRY="corroborated"
+      return 0
+    fi
+  done < <(printf '%s' "$commits" | grep -oE '[0-9a-f]{7,64}' || true)
+  return 0
+}
+
+# Merge-evidence verification (ADR-023 decision 3), third verifier in the established shape.
+# Usage: ttg_verify_merge_evidence <manifest_text> <project_root> [task_id]
+ttg_verify_merge_evidence() {
+  local manifest_text="$1" project_root="$2" task_id="${3:-}"
+  local nazgul_dir="${NAZGUL_DIR:-$project_root/nazgul}"
+  local raw_section section key value missing="" bad="" commits phrase
+  local host pr merge_commit
+
+  TTG_MERGE_REASON=""
+  TTG_MERGE_ANCESTRY=""
+  TTG_MERGE_ROUTE=""
+  if [ -z "$task_id" ]; then
+    task_id=$(printf '%s' "$manifest_text" \
+      | awk '/^## Metadata/{f=1;next} /^## /{f=0} f' \
+      | grep -oE '(TASK|PATCH)-[0-9]+' | head -1 || true)
+  fi
+  [ -n "$task_id" ] || task_id="unknown"
+
+  if ! printf '%s\n' "$manifest_text" | grep -q '^## Merge Evidence'; then
+    _ttg_merge_deny "$nazgul_dir" "$task_id" "absent" \
+      "no ## Merge Evidence section — that heading is the enforcement boundary, so merge fields recorded anywhere else in the manifest are not evidence"
+    return 1
+  fi
+
+  raw_section=$(printf '%s' "$manifest_text" | awk '/^## Merge Evidence/{f=1;next} /^## /{f=0} f')
+  section=$(printf '%s\n' "$raw_section" | _ttg_strip_html_comments)
+  if ! printf '%s' "$section" | grep -q '[^[:space:]]'; then
+    # TASK-008's pre/post-strip comparison, reused rather than re-derived: what the one
+    # stripper removed IS what "inside a comment" means, so the two readings cannot drift.
+    if printf '%s' "$raw_section" | grep -q '[^[:space:]]'; then
+      _ttg_merge_deny "$nazgul_dir" "$task_id" "commented_out" \
+        "## Merge Evidence carries content only inside an HTML comment — present, but a comment is not a record, so nothing was counted"
+    else
+      _ttg_merge_deny "$nazgul_dir" "$task_id" "absent" \
+        "## Merge Evidence section is present but empty"
+    fi
+    return 1
+  fi
+
+  for key in $_TTG_MERGE_REQUIRED_FIELDS; do
+    value=$(_ttg_merge_field "$key" "$section")
+    if [ -z "$value" ]; then
+      missing="${missing}${missing:+, }${key}"
+    elif ! _ttg_merge_shape_ok "$key" "$value"; then
+      bad="${bad}${bad:+, }${key}='${value}'"
+    fi
+  done
+  if [ -n "$missing" ]; then
+    _ttg_merge_deny "$nazgul_dir" "$task_id" "truncated" \
+      "## Merge Evidence is missing required field(s) ${missing} — a closure records all of: ${_TTG_MERGE_REQUIRED_FIELDS// /, }"
+    return 1
+  fi
+  if [ -n "$bad" ]; then
+    _ttg_merge_deny "$nazgul_dir" "$task_id" "malformed" \
+      "## Merge Evidence field(s) present but unusable: ${bad}"
+    return 1
+  fi
+
+  host=$(_ttg_merge_field host "$section")
+  pr=$(_ttg_merge_field pr "$section")
+  merge_commit=$(_ttg_merge_field merge-commit "$section")
+  commits=$(printf '%s' "$manifest_text" | awk '/^## Commits/{f=1;next} /^## /{f=0} f')
+  _ttg_merge_ancestry "$project_root" "$merge_commit" "$commits"
+  case "$TTG_MERGE_ANCESTRY" in
+    corroborated) phrase="a recorded ## Commits SHA corroborates it" ;;
+    squash_signature) phrase="no recorded ## Commits SHA reaches it — the expected squash signature, recorded and non-blocking" ;;
+    *) phrase="not checkable here (no git repository at the project root) — corroboration only, non-blocking" ;;
+  esac
+
+  TTG_MERGE_REASON="verified"
+  TTG_MERGE_ROUTE="host=${host} pr=${pr} merged-at=$(_ttg_merge_field merged-at "$section") merge-commit=${merge_commit} ancestry=${TTG_MERGE_ANCESTRY}"
+  echo "ttg_verify_merge_evidence: verified — ${TTG_MERGE_ROUTE}; ${phrase}" >&2
+  return 0
+}
+
 # Thin pass-through to review-evidence.sh's validate_review_evidence so both
 # call sites exercise the identical review-gate evidence check (Constitution
 # Rule 5) through this one library.
@@ -671,6 +821,7 @@ ttg_verify_review_evidence() {
 ttg_validate_transition() {
   local nazgul_dir="$1" project_root="$2" task_id="$3" from="$4" to="$5" manifest_text="$6"
   local review_dir review_unit problems provenance_problems deps_lines deps_count deps_raw dep dep_file dep_status
+  local review_problem=""
   local -a deps
   local yolo_mode="false" task_pr_mode="false" require_provenance="true" needs_review=false
 
@@ -772,6 +923,17 @@ ttg_validate_transition() {
     fi
   fi
 
+  # ADR-023 decision 3: the merge-closure route. The edge is in the graph, but the
+  # evidence is what admits it — an unconditional edge here would be a second forgery route.
+  if [ "$from" = "IMPLEMENTED" ] && [ "$to" = "DONE" ]; then
+    if ! ttg_verify_merge_evidence "$manifest_text" "$project_root" "$task_id"; then
+      echo "ttg_validate_transition: IMPLEMENTED -> DONE requires verified merge evidence under ## Merge Evidence (${_TTG_MERGE_REQUIRED_FIELDS// /, }); none validated [reason: ${TTG_MERGE_REASON}]" >&2
+      return 1
+    fi
+    echo "ttg_validate_transition: DONE via the merge-evidence route (${TTG_MERGE_ROUTE}) — no review board was consulted for this edge" >&2
+    return 0
+  fi
+
   # Review-gate has two mutually exclusive completion routes. Preserve that
   # distinction here so the generic graph's IN_REVIEW endpoints cannot bypass
   # the mode-specific evidence gate.
@@ -799,25 +961,36 @@ ttg_validate_transition() {
   if [ "$needs_review" = "true" ]; then
     review_unit=$(resolve_review_unit "$nazgul_dir" "$task_id")
     if ! review_dir=$(ttg_review_dir_path "$nazgul_dir" "$review_unit"); then
-      echo "ttg_validate_transition: ${to} requires a canonical non-symlink review directory for ${review_unit}" >&2
-      return 1
-    fi
-    if ! ttg_review_evidence_paths_safe "$nazgul_dir" "$review_dir"; then
-      echo "ttg_validate_transition: ${to} review evidence contains an unsafe name, symlink, or non-regular leaf" >&2
-      return 1
-    fi
-    problems=$(ttg_verify_review_evidence "$nazgul_dir" "$task_id") || true
-    if [ -n "$problems" ]; then
-      echo "ttg_validate_transition: ${to} requires complete configured review evidence: ${problems}" >&2
-      return 1
-    fi
-    if [ "$require_provenance" = "true" ]; then
-      provenance_problems=$(validate_review_provenance "$nazgul_dir" "$review_unit") || true
-      if [ -n "$provenance_problems" ]; then
-        echo "ttg_validate_transition: ${to} failed the configured legacy-compatible review provenance validator: ${provenance_problems}" >&2
-        return 1
+      review_problem="${to} requires a canonical non-symlink review directory for ${review_unit}"
+    elif ! ttg_review_evidence_paths_safe "$nazgul_dir" "$review_dir"; then
+      review_problem="${to} review evidence contains an unsafe name, symlink, or non-regular leaf"
+    else
+      problems=$(ttg_verify_review_evidence "$nazgul_dir" "$task_id") || true
+      if [ -n "$problems" ]; then
+        review_problem="${to} requires complete configured review evidence: ${problems}"
+      elif [ "$require_provenance" = "true" ]; then
+        provenance_problems=$(validate_review_provenance "$nazgul_dir" "$review_unit") || true
+        if [ -n "$provenance_problems" ]; then
+          review_problem="${to} failed the configured legacy-compatible review provenance validator: ${provenance_problems}"
+        fi
       fi
     fi
+
+    if [ -z "$review_problem" ]; then
+      echo "ttg_validate_transition: ${to} via the review-evidence route (${review_unit}, all configured verdicts present)" >&2
+      return 0
+    fi
+    echo "ttg_validate_transition: ${review_problem}" >&2
+    # ADR-023: merge evidence is an ALTERNATIVE to the review route for DONE, never a
+    # bypass of it — one of the two must validate, and the accepted one is always named.
+    if [ "$to" = "DONE" ]; then
+      if ttg_verify_merge_evidence "$manifest_text" "$project_root" "$task_id"; then
+        echo "ttg_validate_transition: DONE via the merge-evidence route (${TTG_MERGE_ROUTE}); the review-evidence route did not validate" >&2
+        return 0
+      fi
+      echo "ttg_validate_transition: DONE requires ONE of the review-evidence route or the merge-evidence route to validate; neither did (merge evidence [reason: ${TTG_MERGE_REASON}])" >&2
+    fi
+    return 1
   fi
   return 0
 }
