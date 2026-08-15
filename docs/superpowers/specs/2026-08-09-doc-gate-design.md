@@ -5,6 +5,29 @@
 **Reviewed by:** `architect-reviewer` (verdict `CHANGES_REQUESTED`, confidence 87) — every REJECT and CONCERN it raised is folded into the design below
 **Verified against:** commit `c44add2`, worktree `.claude/worktrees/doc-gate-design`, baseline `99 files checked, 99 passed, 0 failed`
 
+> **Freshness re-check — 2026-08-15, against `d6f7582` (v2.32.0).** Two releases shipped since this
+> design was written (FEAT-029 v2.31.0, FEAT-030 v2.32.0). Re-verified:
+>
+> - **The core thesis is unchanged.** Generated documents are still consumed as source of truth and
+>   still reviewed by nothing; the post-loop doc-verifier still fires at objective end and still only
+>   existence-checks. The design's reason to exist stands.
+> - **The motivating incident below still reproduces.** `nazgul-root.sh:56` is still
+>   `git rev-parse --show-toplevel` and `_nr_has_marker` is still at `:44`. Probed from a worktree cwd
+>   on 2026-08-15 with `CLAUDE_PROJECT_DIR` unset: `resolve_nazgul_dir` returns the *worktree's own*
+>   `nazgul/`, exactly as recorded below. FEAT-030 did **not** change the resolver — it made callers
+>   designate the main worktree explicitly (`CLAUDE_PROJECT_DIR=`, `<main_worktree_path>/` in agent
+>   specs), which mitigates the agent-facing blast radius without removing the mechanism. Read the
+>   incident as "still true, now less reachable from the loop's own agents."
+> - **Three citations were corrected** for line drift: `stop-hook.sh:1077`→`:1083` (doc-verifier
+>   gate), `stop-hook.sh:952`→`:957` (`TOTAL_COUNT == 0` exit), and `doc-generator.md:112-148`→
+>   `:114,130,132` (Artifact Claim Evidence Ledger — that range now holds FEAT-030's rewritten
+>   `<main_worktree_path>` path handling, so the old citation pointed at different content, not just a
+>   shifted line). `RULES.md:230` was checked and is still exact.
+> - **Not audited:** the remaining ~30 file:line citations in this spec and its plan. All cited files
+>   exist; individual line numbers were not each re-verified. Treat them as indicative and re-check
+>   before implementing.
+> - Baseline in the header (`99 files checked`) predates the current suite (105 test files).
+
 ## Problem
 
 `agents/doc-generator.md` produces the PRD, TRD, ADRs, and test plan that every downstream
@@ -13,15 +36,15 @@ agent treats as source of truth. Nothing reviews them.
 - The review board gates **code only**. No document ever passes a reviewer. The planner
   consumes the TRD the moment it is written.
 - The one existing document check — the post-loop doc-verifier gate at
-  `scripts/stop-hook.sh:1077` — fires at objective **end**, after every task already
+  `scripts/stop-hook.sh:1083` — fires at objective **end**, after every task already
   consumed the docs, and only existence-checks event names, config keys, and script paths.
   It does not assess design soundness.
 - The one honesty mechanism inside the generator, the Artifact Claim Evidence Ledger
-  (`agents/doc-generator.md:112-148`), covers only generated-path claims, and `RULES.md:230`
+  (`agents/doc-generator.md:114,130,132`), covers only generated-path claims, and `RULES.md:230`
   states its tier plainly: *"Nothing mechanically stops that claim; a reviewer must catch it."*
 
 The whole pre-planning phase is model-driven prose in `skills/start/SKILL.md`. The stop-hook
-is inert there by construction — `scripts/stop-hook.sh:952` exits unconditionally when
+is inert there by construction — `scripts/stop-hook.sh:957` exits unconditionally when
 `TOTAL_COUNT == 0`.
 
 ## Motivating incident
@@ -83,7 +106,7 @@ dispatch when doc-gate evidence is absent for the current doc set. Precedent is 
 production: `hooks/hooks.json:88-102` with `scripts/parallel-dispatch-guard.sh`, and
 `RULES.md:92` states it verbatim — *"Subagent dispatch CAN now be pre-gated."*
 
-**Why not the Stop event.** Gating `stop-hook.sh:952` keys on what the loop happens to hold
+**Why not the Stop event.** Gating `stop-hook.sh:957` keys on what the loop happens to hold
 *when a turn ends*, which is not the pre-planning phase. In `DOCS_READY` the skill runs
 doc-generator → planner inside one uninterrupted turn (`skills/start/SKILL.md:435-438`);
 `DISCOVERY_DONE` (`:452-453`) and `FRESH` (`:466+`) do the same. So in AFK the planner
@@ -92,7 +115,7 @@ never sees the state it was written for. In HITL, *"pause for doc review"* (`:43
 guarantees a stop in exactly that state. The gate would fire reliably only in the mode where
 a human is already reading the docs, and unreliably in the mode designed for by decision 1.
 
-**Backstop.** The `stop-hook.sh:952` branch survives, demoted, for the case where the planner
+**Backstop.** The `stop-hook.sh:957` branch survives, demoted, for the case where the planner
 is reached by another route. It carries two mandatory properties:
 
 - **A bounded attempt counter**, `nazgul/logs/.doc-gate-attempts`, in the `read -r OBJ CNT` /
@@ -652,7 +675,7 @@ Stated in the register of `RULES.md:230`, which names its own limit without soft
 | Claim | Method | Result |
 |---|---|---|
 | `nazgul-root.sh` resolves to worktree root | Direct probe, `CLAUDE_PROJECT_DIR` empty, worktree cwd | Confirmed |
-| Stop-hook inert pre-planning | Read `stop-hook.sh:952-954` | Confirmed |
+| Stop-hook inert pre-planning | Read `stop-hook.sh:957-954` | Confirmed |
 | Bounded-counter hazard at line 952 | Read `stop-hook.sh:967-980` | Confirmed — documented in-file at `:973-974` |
 | Reviewer name-keyed unit resolution | Read `subagent-stop.sh:197-217`, `:264-282` | Confirmed |
 | Baseline green at `c44add2` | `tests/run-tests.sh` | 99 scanned, 0 skipped, 99 checked, 0 findings |
