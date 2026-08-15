@@ -2,6 +2,260 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.33.0] - 2026-08-15
+
+FEAT-031, ADR-022/023/024/025 — **a state machine whose terminal edge is unreachable does not fail
+loudly; it converts its own operators into forgers.** `DONE` was the last edge, and on the
+configuration this repo and its consumer projects actually run it could not be reached — in four
+independent places along the same edge. The aggregate review board cannot fire while any sibling is
+`BLOCKED`, and `/nazgul:task skip` is what wrote `BLOCKED`. `scripts/red-run.sh` could only run this
+repo's own bash harness, so `IN_PROGRESS -> IMPLEMENTED` was unsatisfiable anywhere else. Nothing in
+the plugin observed a merge, so off GitHub — or on it with server-side squash — no code path closed a
+task after its work shipped. And `scripts/prompt-guard.sh:40` blocked prose *about* the state machine,
+so the field report describing all of the above could not be pasted into Claude Code. Four of
+twenty-one manifests on the last consumer objective were closed by hand-editing frontmatter, because
+every in-tool path correctly refused. This release restores a legitimate key at each point, or makes
+the refusal honest about what it is refusing. **MINOR, not PATCH:** a new `/nazgul:complete` command, a
+new conditional `IMPLEMENTED -> DONE` edge, a second terminal status, a readiness predicate that carves
+out cancelled tasks, a red-run that executes the project's own runner, and a narrowed prompt-guard are
+all operator-visible. **MAJOR is wrong:** nothing is removed, nothing is renamed, no gate changes
+meaning, and no operator action is required. **`schema_version` steps 36 → 37** for two additive
+`project.*` keys whose defaults reproduce today's behaviour exactly — the same additive-step-as-MINOR
+precedent as 34 → 35 (2.29.0) and 35 → 36 (2.30.0).
+
+### Added
+
+- **`CANCELLED` — the second terminal status, and the first way to say "finished, shipped nothing".**
+  `VALID_STATUSES` (`scripts/lib/structured-state.sh:17`) carries it; `ttg_valid_transition`
+  (`scripts/lib/task-transition-guard.sh`) enumerates its in-edges from every non-terminal status and
+  defines no `CANCELLED_*` case at all, so "terminal" is a property of the table rather than a
+  convention. It is written only through `scripts/task-transition.sh`, the sole sanctioned writer, and
+  it is refused out of a `Blocked kind: reconciliation` quarantine — a second terminal status reachable
+  from an integrity quarantine would be a second way to make an untraceable change permanent.
+  `CANCELLED_COUNT` is its own bucket (`scripts/lib/task-utils.sh:229,248`), loop completion is
+  `DONE + CANCELLED == TOTAL` (`scripts/stop-hook.sh`), and the completion line says which:
+  `all N/M tasks complete` when nothing was cancelled, `N/M done, K cancelled` when something was. A
+  cancelled task never passes for a shipped one. `/nazgul:task skip` writes it instead of `BLOCKED`,
+  records a `- **Cancelled reason**:` line first, and **no longer edits any `Depends on` line** — a
+  `CANCELLED` dependency satisfies `ttg_dependency_satisfied` in every granularity, so the plan graph
+  survives the cancellation instead of being destroyed to route around a predicate.
+- **`## Merge Evidence` — what makes `IMPLEMENTED -> DONE` reachable, and the only thing that does.**
+  `ttg_verify_merge_evidence` (`scripts/lib/task-transition-guard.sh:735`) validates four fields under
+  that exact heading — `host`, `pr`, `merged-at`, `merge-commit`
+  (`_TTG_MERGE_REQUIRED_FIELDS`, `:663`) — each shape-checked (`_ttg_merge_shape_ok`, `:697-706`). The
+  heading IS the enforcement boundary exactly as `## Commits` is: merge fields recorded anywhere else in
+  the manifest are not evidence. Four closed refusal reasons, each emitting `merge_evidence_missing`
+  (`:684`): `absent`, `commented_out`, `truncated`, `malformed`. For `IN_REVIEW -> DONE` merge evidence
+  is an **alternative** route, never a bypass — the review-evidence route is tried first, and the
+  accepted route is always named on stderr so an auditor can tell which fact admitted the edge.
+  Unlike the red-run gate this one ships with **no kill switch**, stated at `:678-679`: a switch on the
+  last gate before `DONE` would be the bypass.
+- **`scripts/lib/merge-provider.sh` — merge observation as a seam, with named degradations.** Three
+  functions: detect the host from `git remote get-url`, ask that host's PR API for merge state, report
+  whether the detected arm is usable now. Callers never speak `gh`. `merge_provider_pr_state` always
+  returns one JSON object whose `result` is exactly one of `ok` (exit 0), `unsupported_host` (2),
+  `no_remote` (3), `provider_unavailable` (4), `api_failure` (5), `invalid_pr` (6), and `merged` is
+  three-valued — `true`/`false` only when the host answered, JSON `null` when it did not — because a
+  bare `false` collapses "the host says not merged" into "we could not find out". Five additive event
+  types, read out of the emitter and not out of the ADR: `merge_provider_unsupported_host` (`:166`),
+  `merge_provider_no_remote` (`:171`), `merge_provider_unavailable` (`:210`),
+  `merge_provider_api_failure` (`:285`), `merge_provider_invalid_pr` (`:324`). Note the deliberate
+  asymmetry: the *event* is `merge_provider_unavailable` while the *result value* is
+  `provider_unavailable` — the event name is already namespaced by its prefix.
+- **`scripts/close-objective.sh` and `/nazgul:complete` — the honest replacement for frontmatter
+  surgery.** Given a merged PR it reads merge state through the seam, writes `## Merge Evidence` into
+  each stranded manifest **from the host's own answer** (with a `- **recorded-by**: scripts/close-objective.sh
+  (host API, <result>)` provenance line, `:184`), and walks each task to `DONE` through
+  `scripts/task-transition.sh`. It is a **caller** of the sole writer and never a writer: no frontmatter
+  is touched, no review directory or verdict is fabricated. Its terminal record is the §15 grammar with
+  this entry point's domain nouns in the last two slots (`close-objective.sh:29,316-318`):
+  `close-objective: N scanned, M skipped (already-terminal=…, not-closable-status=…, unreadable=…,
+  not-merged=…, merge-unverifiable=…, evidence-write-failed=…, transition-refused=…), K closed,
+  F refused`, with `N == M + K` asserted by the emitter and the seven skip reasons a closed set always
+  printed in that order. `not-merged` and `merge-unverifiable` are separate members on purpose — "could
+  not look" is not "not merged", which is the whole thesis of the seam. Five additive events:
+  `close_objective_refused` (`:118`), `close_objective_blocked` (`:170`), `close_objective_closed`
+  (`:251`), `coverage_vacuous` (`:309`), `close_objective_summary` (`:313`). Exit policy is blocking and
+  stated in the file: `0` closed something with no refusal, `1` a refusal, `2` NOTHING CHECKED, `3`
+  usage error or an internal coverage-accounting defect.
+- **`aggregate_board_blocked_carveout` — an additive event for readiness reached by exclusion.**
+  Emitted by `scripts/stop-hook.sh:546` when a `group`/`feature` unit becomes review-ready only because
+  `CANCELLED` tasks left it, carrying `unit`, `blocked_tasks`, `implemented`, `total` (`:547-550`).
+  `blocked_tasks` holds the **carried-out** ids — the field name predates the `CANCELLED` token and is
+  kept rather than silently repurposed under a new one. The dispatch text carries the same facts as a
+  `CARVE-OUT:` note (`:545`): `N of M unit tasks reviewed — K carried out CANCELLED (ids); a cancelled
+  task is removed from the unit, never approved by it.` Readiness where every task shipped and
+  readiness reached by exclusion must not read identically.
+- **Five test files — the discovered root suite moves 104 → 109, all green.**
+  `tests/test-cancelled-status.sh` (the status itself: edges, the quarantine refusal, the dependency
+  gate, the counters), `tests/test-cancelled-status-consumers.sh` (the vocabulary's whole consumer set,
+  every member DRIVEN with a `CANCELLED` fixture — including the recorded NON-consumers, which are
+  examined and shown exempt rather than omitted), `tests/test-merge-provider.sh`,
+  `tests/test-close-objective.sh`, and `tests/test-red-run-script.sh`.
+
+### Changed
+
+- **`schema_version` 36 → 37, two additive `project.*` keys, and a project setting neither sees no
+  behaviour change at all.** `project.test_roots` defaults to `["tests"]` and `project.test_filter_template`
+  to `"--filter={filter}"` (`templates/config.json:18-19`; `migrate_36_to_37`,
+  `scripts/migrate-config.sh:747-757`). Both defaults reproduce the previously hardcoded behaviour
+  byte-for-byte, explicit values are preserved, and the migration is the same additive shape as
+  `migrate_35_to_36`. The two keys are read by both halves of the red-run gate: which file scopes
+  TRIGGER the requirement, and where a recorded entry's test path must live.
+- **`scripts/red-run.sh` runs the PROJECT's runner, and the record names what ran.** Resolution order is
+  stated in the file (`:19-25`): the live project root's `project.test_command`, else `tests/run-tests.sh`
+  if the pre-change tree carries one, else a **named refusal** — "this is not a runner that failed: no
+  runner could be determined at all" (`:205`). The scoped filter is interpolated through
+  `project.test_filter_template` as a literal `{filter}` substitution, never `eval`, and a project with
+  no template and a non-legacy runner is refused rather than guessed at (`:224-225`), because appending
+  a flag Nazgul chose to a command the project chose has two failure modes that both look like success:
+  a rejected flag exits non-zero and reads as RED confirmed, an ignored one runs the whole suite as if
+  it were scoped. Every capture line now names the command (`:488`):
+  `- capture: \`<cmd>\` in a detached worktree at \`<base>\`; N changed test file(s) copied in…; runner exit E in Ts`.
+- **The red-run gate reports "present but commented" distinctly from "absent".** `commented_out` joins
+  the closed refusal vocabulary — `absent bad_na_token commented_out corrupt exit_zero not_ancestor
+  ref_unresolvable roots_undeterminable roots_unresolved`, nine members, declared at
+  `scripts/lib/task-transition-guard.sh:162-163` and asserted **against that source** by
+  `tests/test-red-run-evidence.sh:192`, so the list is checkable rather than narrated. A section whose
+  whole payload sits inside an HTML comment is present-but-not-a-record; folding it into `absent` was
+  one collapsed state wearing two names. `## Merge Evidence` reuses the one stripper for the same
+  distinction (`:757-768`) rather than re-deriving it, so the two readings cannot drift.
+- **`scripts/prompt-guard.sh` narrowed to the unambiguous shape (ADR-025).** The old single-line
+  `grep -qE '(set.*status.*to|change.*status.*to|mark.*as).*(DONE|APPROVED|IN_REVIEW|IMPLEMENTED)'`
+  matched prose, quotes, and field reports about the guard itself. The replacement requires all three of
+  an imperative verb at line start (after an optional politeness prefix), a `TASK-NNN`, and a status
+  word — and suppresses the match inside fenced blocks, blockquotes, and inline code spans. Two honest
+  consequences ship with it: a block now prints the matched line number, the offending substring, and
+  how to discuss the text instead of running it; and a candidate that only STRIPPING made invisible is
+  **reported on stderr as suppressed**, never collapsed into "no match", so "looked and found none" stays
+  distinct from "never looked". The file header also corrects a standing inaccuracy — this hook fires in
+  every mode, not only HITL, and it is not what makes an illegitimate status change ineffective.
+- **`RULES.md` gains four rule clusters and the tier counts they force.** §2 Cancellation (2 rules) and
+  Merge Evidence (3), §2's Dependency Gate (1), §3 item 15 the carve-out record, and §16's
+  Merge-State Provider Seam (3). Tier counts move to **88 enforced / 31 advisory / 23 hook-driven only**
+  (`tests/test-rules-tiers.sh:69,78`) — bumped for genuinely new rules, never re-tagged to fit. §3.15 is
+  `[hook-driven only]` and says why in its own boundary: the note and the event are produced where the
+  dispatch is decided, so a board dispatched by hand for the same unit reports no carve-out even when one
+  applies.
+- **`scripts/close-objective.sh` is §15 registry member ten** (`RULES.md:551-565`), enrolled by
+  FEAT-031/TASK-011 and actually DRIVEN by `tests/test-coverage-honesty.sh`, not merely listed. Unlike
+  `scripts/doctor.sh` and `scripts/audit-agent-state-paths.sh` it is **blocking**: nothing closed while
+  candidates were scanned exits non-zero.
+
+### Fixed
+
+- **A never-shipping task vetoed forward progress at five sites; the state machine now has a word for
+  it.** Aggregate readiness (`stop-hook.sh`), loop completion, heartbeat auto-start, the parallel hard
+  stop, and the dependency gate all treated "operator gave up on this task" as "this task is coming".
+  `CANCELLED` resolves all five, **two of them with no edit at all**: `_pb_blocked_tasks`
+  (`scripts/lib/parallel-batch.sh:161-162`) matches `BLOCKED` and `INVALID|""`, and `CANCELLED` is
+  neither, so the heartbeat and the parallel hard stop are correct by default — verified by driving them,
+  not by reading them.
+- **Declaring a path out of scope put it IN scope (red-run defect 2.5, pulled forward).**
+  `_ttg_red_run_in_scope` grepped the WHOLE `## File Scope` section for `(scripts|tests)/` — including
+  the `Must NOT touch:` prohibition line — so writing "Must NOT touch `scripts/`" was how you *demanded*
+  red-run evidence for a task that touches no script. `_ttg_drop_prohibitions`
+  (`scripts/lib/task-transition-guard.sh:332-348`) now drops prohibition lines before the scan, keyed on
+  the label rather than on the path, and resets at the next bolded field so a prohibition cannot swallow
+  the rest of the section. The scope predicate is a UNION of the manifest and the real
+  `git diff <Base SHA>..HEAD`, so dropping a prohibition line cannot hide a scripts/tests file that was
+  actually changed; when git cannot answer, the degradation to manifest-only is announced on stderr
+  (`:392-394`), never taken silently.
+- **The trigger and the satisfier read the same roots.** Both halves of the red-run gate now derive from
+  `project.test_roots`, and its two failure modes are named separately: `roots_undeterminable` (the array
+  is present and unusable — empty, not an array, or carrying a non-string) fails **closed** and treats the
+  task as in scope, while `roots_unresolved` (a usable array, none of whose entries resolves to a real
+  directory) is a different state again. Configuration that could not be read is never silently equated
+  with configuration that says nothing is a test. An absent key, or `jq`/config unreadable, still falls
+  back to `["tests"]` — a project that never configured it behaves exactly as before.
+- **Three test assertions were deliberately inverted or pinned, each recorded here so a reader of the
+  diff sees the direction of travel.** (1) `tests/test-prompt-guard.sh:70-72` at the base (now `:77-84`) asserted that
+  the bare string `"mark as APPROVED"` — no task id, no context — must be **blocked**. That assertion
+  pinned the over-match; it is now `allowed (exit 0)`, labelled *ADR-025 Decision 1 inversion*, and it
+  arrives alongside a new test 4b that drives the verbatim field-report line which could not be pasted at
+  `e18aa18` and asserts it is allowed both bare and backticked. The guard did not get weaker: the same
+  file gains the shape-based block cases, the fence/quote/backtick suppression cases, and the
+  suppressed-candidate report. (2) `tests/test-red-run-evidence.sh:186` at the base asserted the
+  diagnostic said `"repository-relative and under tests/"` — a message that hardcoded the single root.
+  It now asserts `"must be repository-relative and under a configured tests root (tests)"`
+  (`:503`): the same guarantee, stated over the roots the project actually declared. (3)
+  `tests/test-stop-hook.sh:1002-1015` at the base (now `:1002-1018`) was the one that pinned a **deadlock** as correct — a unit with a
+  `BLOCKED` sibling dispatches no board. It was deliberately **not** inverted. `BLOCKED` means "needs
+  human help, will resume", which is not "will never ship", so it still vetoes the whole unit; the block
+  gains an explicit `assert_not_contains "NO aggregate board while a sibling is BLOCKED"` and a comment
+  naming ADR-022, converting an implicit behaviour into a stated one. Only `CANCELLED` is carried out.
+
+### Decided and recorded, with a falsifier
+
+- **ADR-022 was decided as Option B, and REVERSED to Option A before any of it was implemented.** The
+  original decision was a typed manifest marker, `Blocked kind: skipped`, read by the unit walk — no new
+  status token. It was reversed on 2026-08-15 after operator rejection (*"that's just a comment not a
+  status"*) and an architecture review that falsified the evidence B rested on. **The shipped decision is
+  Option A: a new terminal status token, `CANCELLED`** — and with it the state machine has, for the first
+  time, a terminal status meaning *finished, shipped nothing*, closing a gap that stood for as long as
+  `DONE` was the only terminal state. **Why B was rejected, because the reason IS this objective's
+  thesis:** a never-shipping task must not veto forward progress, and that veto has **five** sites —
+  aggregate readiness (`stop-hook.sh:530` at `e18aa18`), loop completion (`:964-970`, which burns to
+  `max_iterations` and exits at `:1288`), heartbeat auto-start (`heartbeat.sh:208` → `_pb_blocked_tasks`,
+  unconditional and mode-independent, running before the enabled check), the parallel hard stop
+  (`stop-hook.sh:1311-1320`, same helper), and the dependency gate (`ttg_dependency_satisfied`). The
+  marker fixed **one**. ADR-022 asserted the remaining consumers were "correct unchanged", and code
+  falsified it: the dependency gate is precisely why `/nazgul:task skip` used to instruct the operator to
+  delete the skipped id from every downstream `Depends on` line (`skills/task/SKILL.md:97-100`),
+  irreversibly destroying plan-graph state to route around a predicate. This entry states the correction
+  rather than presenting A as the choice all along — a decision record that conceals its own correction
+  is the failure class this objective exists to close.
+- **Not `SKIPPED`, and the reason is a live collision.** That token is already a member of
+  `VALID_VERDICTS` (`scripts/lib/structured-state.sh:13`) meaning *a review that was skipped*. Reusing it
+  for a task status would put two meanings on one string in one vocabulary file.
+  **Falsifier:** if `SKIPPED` is ever retired from `VALID_VERDICTS`, this reason expires and the naming
+  is open again.
+- **ADR-023 decision 1 — the host's PR API is the authority, and git ancestry is corroboration that can
+  never become a predicate.** `_ttg_merge_ancestry` (`scripts/lib/task-transition-guard.sh:715-731`)
+  records `corroborated`, `squash_signature`, or `unavailable`, and **every path returns 0**. This is not
+  caution, it is correctness: after a server-side squash NO SHA recorded under `## Commits` is an ancestor
+  of the merge commit, so on a squash host a failing ancestry check is the EXPECTED reading and blocking
+  on it would report "not shipped" for work that demonstrably shipped. `scripts/close-objective.sh` states
+  the same rule in its own header (`:18-25`) so a future reader does not "simplify" it into
+  `git merge-base --is-ancestor`. **Falsifier:** a host that guarantees merge-commit ancestry for every
+  merge strategy could take ancestry as a predicate there — no such guarantee exists on GitHub today.
+- **The `## Merge Evidence` gate ships with no kill switch, deliberately.** `guards.red_run_evidence`
+  exists because the red-run gate blocks on the way IN to `IMPLEMENTED`; this one is the last gate before
+  `DONE`. A switch on it would be the bypass, not an escape hatch. **Falsifier:** if a legitimate host or
+  workflow is found that cannot produce all four fields, the answer is a new named provider arm or a new
+  named refusal reason — not a boolean.
+
+### Known constraints (honest notes)
+
+- **`CANCELLED` is the one status with no evidence gate, and that is a judgement, not a fact about the
+  code.** An unshippable task produces no artifact to gate on. Nothing verifies the operator was right;
+  what keeps the judgement visible instead of absorbed into "done" is the separate count and the
+  `N/M done, K cancelled` completion line.
+- **A downstream task that genuinely needed cancelled work is auto-promoted anyway.** No mechanism can
+  distinguish "the dependency was optional" from "the operator cancelled something load-bearing". The
+  mitigation is the record rather than a gate: `skip` writes a `Cancelled reason` line, reports how many
+  downstream tasks it releases, and leaves the cancelled id on every `Depends on` line it released.
+- **A merge-closed task was never reviewed, and the diagnostic says so.** `IMPLEMENTED -> DONE` on merge
+  evidence is a legitimate closure for work that shipped outside the loop — not an equivalent one to a
+  task that passed the board. The accepted route is always named on stderr.
+- **Seven sibling red-run defects remain filed, not fixed.** Only 2.1 (the hardcoded runner), the tests-root
+  addendum, and 2.5 (the scope-prohibition inversion, pulled forward per the PRD's open question 2) ship
+  here. 2.2 (failure attribution parses only bash/bats markers), 2.3 (the basename fallback flattens paths
+  into self-rejecting entries), 2.4/2.6/2.7 (the closed N/A token list encodes one theory of what a change
+  can be — no token is truthful for tooling-only changes, shipped-behaviour measurements, or a defect whose
+  subject IS the test), 2.8 (a mis-formatted N/A token is reported as *missing* evidence rather than as a
+  format error), and 2.9 (a same-line rationale after the token is rejected) stay in
+  `nazgul/inbox/red-run-hardcodes-nazgul-own-test-harness.md`. 2.4/2.6/2.7 are one design decision about
+  whether the list stays closed at all, and are deliberately not three patches.
+- **The merge seam has one arm.** Only `github.com` is implemented. `NAZGUL_MERGE_PROVIDER` overrides
+  detection for an operator or a test, and an unrecognised value is NOT defaulted — it reaches the refusal
+  arm. Every other host gets `unsupported_host`, which is a named refusal and not a silent failure, but it
+  is still not closure.
+- **The prompt-guard remains a heuristic over free text.** ADR-025's own premise is that a substring cannot
+  detect intent. What makes an illegitimate status change ineffective is `task-transition.sh`'s
+  compare-and-swap plus the stop-hook's reconciliation pass (ADR-020), and the guard's file header now says
+  so rather than implying otherwise.
+
 ## [2.32.0] - 2026-08-14
 
 FEAT-030, ADR-021 — **"I wrote it" and "it is there" were the same claim, and they are not any more.**
