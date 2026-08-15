@@ -40,6 +40,16 @@ ttg_valid_transition() {
     # /nazgul:review --materialize (still requires a review directory).
     BLOCKED_READY)                 return 0 ;;
     BLOCKED_IN_REVIEW)             return 0 ;;
+    # ADR-022: CANCELLED is operator-declared "will never ship". Terminal like
+    # DONE, so every non-terminal status reaches it and it has no out-edge.
+    PLANNED_CANCELLED)             return 0 ;;
+    READY_CANCELLED)               return 0 ;;
+    IN_PROGRESS_CANCELLED)         return 0 ;;
+    IMPLEMENTED_CANCELLED)         return 0 ;;
+    IN_REVIEW_CANCELLED)           return 0 ;;
+    APPROVED_CANCELLED)            return 0 ;;
+    CHANGES_REQUESTED_CANCELLED)   return 0 ;;
+    BLOCKED_CANCELLED)             return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -56,20 +66,22 @@ ttg_dependency_satisfied() {
     "$nazgul_dir/config.json" 2>/dev/null || echo "task")
   yolo=$(jq -r 'if .afk.yolo == true then "true" else "false" end' \
     "$nazgul_dir/config.json" 2>/dev/null || echo "false")
+  # ADR-022: a CANCELLED dependency satisfies in every granularity — it will never
+  # ship, so waiting on it is waiting forever, and its `Depends on` record survives.
   case "$granularity" in
     group|feature)
-      TTG_DEP_EXPECTED="IMPLEMENTED or later (review_gate.granularity=${granularity})"
+      TTG_DEP_EXPECTED="IMPLEMENTED or later (review_gate.granularity=${granularity}) or CANCELLED"
       case "$dep_status" in
-        IMPLEMENTED|IN_REVIEW|APPROVED|DONE) return 0 ;;
+        IMPLEMENTED|IN_REVIEW|APPROVED|DONE|CANCELLED) return 0 ;;
       esac
       ;;
     *)
       if [ "$yolo" = "true" ]; then
-        TTG_DEP_EXPECTED="APPROVED/DONE"
-        case "$dep_status" in DONE|APPROVED) return 0 ;; esac
+        TTG_DEP_EXPECTED="APPROVED/DONE/CANCELLED"
+        case "$dep_status" in DONE|APPROVED|CANCELLED) return 0 ;; esac
       else
-        TTG_DEP_EXPECTED="DONE"
-        if [ "$dep_status" = "DONE" ]; then return 0; fi
+        TTG_DEP_EXPECTED="DONE or CANCELLED"
+        case "$dep_status" in DONE|CANCELLED) return 0 ;; esac
       fi
       ;;
   esac
@@ -552,6 +564,15 @@ ttg_validate_transition() {
     if ! printf '%s\n' "$manifest_text" | grep -qi '^\- \*\*Blocked reason\*\*:.*review evidence' \
       && ! printf '%s\n' "$manifest_text" | grep -qiE '^\- \*\*Blocked kind\*\*:[[:space:]]*reconciliation[[:space:]]*$'; then
       echo "ttg_validate_transition: BLOCKED -> IN_REVIEW is reserved for review-evidence repair and typed reconciliation repair" >&2
+      return 1
+    fi
+  fi
+
+  # ADR-022: CANCELLED must not become a second exit from the ADR-020 quarantine.
+  # Anchored like the check above, so an already-repaired kind cannot be caught by it.
+  if [ "$from" = "BLOCKED" ] && [ "$to" = "CANCELLED" ]; then
+    if printf '%s\n' "$manifest_text" | grep -qiE '^\- \*\*Blocked kind\*\*:[[:space:]]*reconciliation[[:space:]]*$'; then
+      echo "ttg_validate_transition: BLOCKED -> CANCELLED is refused for a typed reconciliation quarantine — its only sanctioned exit is scripts/task-transition.sh repair" >&2
       return 1
     fi
   fi

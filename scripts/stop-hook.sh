@@ -306,7 +306,7 @@ fi
 
 # Count tasks by status (shared helper, MF-009 — sets DONE_COUNT, READY_COUNT,
 # IN_PROGRESS_COUNT, IN_REVIEW_COUNT, APPROVED_COUNT, CHANGES_COUNT,
-# BLOCKED_COUNT, PLANNED_COUNT, INVALID_COUNT, TOTAL_COUNT, plus
+# BLOCKED_COUNT, PLANNED_COUNT, CANCELLED_COUNT, INVALID_COUNT, TOTAL_COUNT, plus
 # ACTIVE_TASK/ACTIVE_STATUS/ACTIVE_RETRY as a side effect; the active-task scan
 # below re-runs the helper after the review-gate loop may mutate task files, so
 # those three are recomputed and superseded there)
@@ -964,12 +964,21 @@ fi
 if [ "$TOTAL_COUNT" -gt 0 ]; then
   IS_COMPLETE=false
   if [ "$YOLO_MODE" = "true" ]; then
-    [ "$((APPROVED_COUNT + DONE_COUNT))" -eq "$TOTAL_COUNT" ] && IS_COMPLETE=true
-  elif [ "$DONE_COUNT" -eq "$TOTAL_COUNT" ]; then
+    [ "$((APPROVED_COUNT + DONE_COUNT + CANCELLED_COUNT))" -eq "$TOTAL_COUNT" ] && IS_COMPLETE=true
+  elif [ "$((DONE_COUNT + CANCELLED_COUNT))" -eq "$TOTAL_COUNT" ]; then
     IS_COMPLETE=true
   fi
 
+  # A run that shipped nothing must not report the same line as one that shipped
+  # everything (RULES.md §15) — so a cancelled task is named, never absorbed.
+  COMPLETION_SUMMARY="all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete"
+  if [ "$CANCELLED_COUNT" -gt 0 ]; then
+    COMPLETION_SUMMARY="${DONE_COUNT}/${TOTAL_COUNT} done, ${CANCELLED_COUNT} cancelled"
+    [ "$DONE_COUNT" -eq 0 ] && COMPLETION_SUMMARY="${COMPLETION_SUMMARY} — no task shipped"
+  fi
+
   if [ "$IS_COMPLETE" = "true" ]; then
+    [ "$CANCELLED_COUNT" -gt 0 ] && echo "Nazgul: ${COMPLETION_SUMMARY}." >&2
     # --- Post-loop learning gate (mandatory; honors opt-out) ------------------
     # Distilling candidate Learned Rules is otherwise advisory — only the start
     # skill's OBJECTIVE_COMPLETE prose asks for it, so it silently gets skipped.
@@ -1000,7 +1009,7 @@ if [ "$TOTAL_COUNT" -gt 0 ]; then
           mkdir -p "$LEARN_DIR"
           printf '%s %s\n' "$OBJ_ID" "$((ATTEMPTS + 1))" > "$ATTEMPTS_FILE"
           cat >&2 << LEARN_MSG
-Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP LEARNING GATE (mandatory).
+Nazgul: ${COMPLETION_SUMMARY} — POST-LOOP LEARNING GATE (mandatory).
 Candidate Learned Rules have NOT been distilled for this objective (${OBJ_ID}) yet.
 ${DISPATCH_BRIEF}
 DELEGATE: Spawn the learner agent (Agent tool, subagent_type "nazgul:learner") to mine this
@@ -1106,7 +1115,7 @@ GRAN_BLOCK_MSG
             mkdir -p "$NAZGUL_DIR/logs"
             printf '%s %s\n' "$DV_OBJ_ID" "$((DV_ATTEMPTS + 1))" > "$DV_ATTEMPTS_FILE"
             cat >&2 << DV_MSG
-Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP DOC-VERIFIER GATE (mandatory).
+Nazgul: ${COMPLETION_SUMMARY} — POST-LOOP DOC-VERIFIER GATE (mandatory).
 Generated docs have NOT been verified for this objective (${DV_OBJ_ID}) yet.
 ${DISPATCH_BRIEF}
 DELEGATE: Spawn the doc-verifier agent (nazgul:doc-verifier) to cross-check ${DOCS_DIR}/*.md
@@ -1194,7 +1203,7 @@ DV_MSG
             mkdir -p "$NAZGUL_DIR/logs"
             printf '%s %s\n' "$CV_OBJ_ID" "$((CV_ATTEMPTS + 1))" > "$CV_ATTEMPTS_FILE"
             cat >&2 << CV_MSG
-Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP COMMENT-VERIFIER GATE (mandatory).
+Nazgul: ${COMPLETION_SUMMARY} — POST-LOOP COMMENT-VERIFIER GATE (mandatory).
 Inline doc-comments have NOT been verified for this objective (${CV_OBJ_ID}) yet.
 ${DISPATCH_BRIEF}
 DELEGATE: Spawn the comment-verifier agent (nazgul:comment-verifier) to cross-check inline
@@ -1254,7 +1263,7 @@ CV_MSG
           mkdir -p "$NAZGUL_DIR/logs"
           printf '%s %s\n' "$SA_OBJ_ID" "$((SA_ATTEMPTS + 1))" > "$SA_ATTEMPTS_FILE"
           cat >&2 << SA_MSG
-Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP SELF-AUDIT GATE (mandatory).
+Nazgul: ${COMPLETION_SUMMARY} — POST-LOOP SELF-AUDIT GATE (mandatory).
 Self-audit findings have NOT been recorded for this objective (${SA_OBJ_ID}) yet.
 ${DISPATCH_BRIEF}
 DELEGATE: Spawn the self-audit agent (nazgul:self-audit) to mine cost/perf/correctness
@@ -1279,6 +1288,7 @@ SA_MSG
     emit_event "objective_complete" \
       total_tasks:n "$TOTAL_COUNT" \
       done_count:n "$DONE_COUNT" \
+      cancelled_count:n "$CANCELLED_COUNT" \
       iterations_used:n "$NEW_ITER"
     exit 0
   fi

@@ -516,7 +516,7 @@ assert_contains "pin: task skill routes a reconciliation blocker to repair" \
   "$TASK_SKILL_TEXT" "repair TASK-NNN"
 assert_contains "pin: task skill unblocks ordinary blockers through the command" \
   "$TASK_SKILL_TEXT" "transition TASK-NNN BLOCKED READY"
-assert_contains "pin: task skill explains why SKIPPED is not written" \
-  "$TASK_SKILL_TEXT" "VALID_STATUSES"
+assert_contains "pin: task skill records a skip as CANCELLED through the command" \
+  "$TASK_SKILL_TEXT" "transition TASK-NNN <CURRENT_STATUS> CANCELLED"
 
 report_results
