@@ -142,7 +142,8 @@ ttg_verify_commit_evidence() {
 # pattern guess — an open-ended excuse field is an allow-everything field).
 _TTG_RED_RUN_NA_TOKENS="docs-only comment-only revert fixture-capture-only"
 
-# Last red-run verdict: six block reasons or verified/enumerated_na/not_applicable.
+# Last red-run verdict: one of the closed block-reason vocabulary below, or
+# verified/enumerated_na/not_applicable.
 # shellcheck disable=SC2034  # read by scripts/stop-hook.sh, not within this file
 TTG_RED_RUN_REASON=""
 
@@ -154,6 +155,9 @@ _ttg_emit_event() {
   # shellcheck disable=SC2030,SC2034  # both are read by emit_event, sourced above
   ( NAZGUL_DIR="$nazgul_dir"; EVENTS_FILE="$nazgul_dir/logs/events.jsonl"; emit_event "$@" ) || true
 }
+
+# Closed refusal vocabulary, asserted from this source in tests/test-red-run-evidence.sh:
+# absent commented_out corrupt bad_na_token ref_unresolvable not_ancestor exit_zero roots_unresolved roots_undeterminable
 
 # Emit a distinct red-run diagnostic/event; the kill switch suppresses only the block.
 _ttg_red_run_deny() {
@@ -170,6 +174,21 @@ _ttg_red_run_deny() {
   # Remediation is derived from the token list, never a second copy of it.
   echo "ttg_verify_red_run_evidence: capture it with scripts/red-run.sh, or declare an enumerated exemption: red-run: N/A — ${_TTG_RED_RUN_NA_TOKENS// /|}" >&2
   return 1
+}
+
+# One disposition for both post-strip empties: in scope the named refusal, out of
+# scope the announced skip. The caller names which state it saw.
+_ttg_red_run_empty_payload() {
+  local nazgul_dir="$1" task_id="$2" reason="$3" phrase="$4" manifest_text="$5" project_root="$6"
+  if _ttg_red_run_in_scope "$manifest_text" "$project_root" "$nazgul_dir"; then
+    _ttg_red_run_deny "$nazgul_dir" "$task_id" "$reason" \
+      "## Red-Run Evidence ${phrase}, and this task's scope touches scripts/** or tests/**" || return 1
+    return 0
+  fi
+  # shellcheck disable=SC2034  # read by scripts/stop-hook.sh, not within this file
+  TTG_RED_RUN_REASON="not_applicable"
+  echo "ttg_verify_red_run_evidence: ## Red-Run Evidence ${phrase}, and no scripts/** or tests/** path is in scope — red-run check not applicable, skipped" >&2
+  return 0
 }
 
 _ttg_strip_html_comments() {
@@ -557,12 +576,12 @@ EOF
 # token anywhere else in the manifest is invisible here, exactly as a hex token
 # outside `## Commits` is invisible to the commit gate.
 #
-# Six dispositions, never one collapsed allow (RULES §15 / ADR-009 — weighed
+# Seven dispositions, never one collapsed allow (RULES §15 / ADR-009 — weighed
 # per guard, not inherited by proximity): section absent + in scope BLOCKs
 # (a false deny costs one manifest edit; a false allow makes the whole charter
 # decorative); section absent + out of scope ALLOWs and announces the skipped
-# check; a comment-only template section is treated as logically absent; a
-# non-comment section with no parseable entry BLOCKs as corrupt;
+# check; a section emptied ONLY by the comment strip BLOCKs as commented_out and
+# one empty before it as absent; a section with unparseable content as corrupt;
 # an entry whose ref, ancestry, or recorded exit code git can refute BLOCKs
 # naming which check failed; an enumerated `N/A` token ALLOWs; a free-text
 # `N/A` BLOCKs.
@@ -598,16 +617,16 @@ ttg_verify_red_run_evidence() {
   section=$(printf '%s\n' "$raw_section" | _ttg_strip_html_comments)
   if ! printf '%s\n' "$section" | grep -qE '^[[:space:]]*-[[:space:]]*(\*\*)?red-run(\*\*)?:'; then
     if ! printf '%s' "$section" | grep -q '[^[:space:]]'; then
-      if _ttg_red_run_in_scope "$manifest_text" "$project_root" "$nazgul_dir"; then
-        if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "absent" \
-          "## Red-Run Evidence contains only template commentary, but this task's scope touches scripts/** or tests/**"; then
-          return 1
-        fi
-        return 0
+      # Pre- vs post-strip payload, never a second reading of comment syntax:
+      # what the one stripper removed is what "inside a comment" means here.
+      if printf '%s' "$raw_section" | grep -q '[^[:space:]]'; then
+        _ttg_red_run_empty_payload "$nazgul_dir" "$task_id" "commented_out" \
+          "carries content only inside an HTML comment (a comment is not a record, so nothing was counted)" \
+          "$manifest_text" "$project_root" || return 1
+      else
+        _ttg_red_run_empty_payload "$nazgul_dir" "$task_id" "absent" \
+          "section is present but empty" "$manifest_text" "$project_root" || return 1
       fi
-      # shellcheck disable=SC2034  # read by scripts/stop-hook.sh, not within this file
-      TTG_RED_RUN_REASON="not_applicable"
-      echo "ttg_verify_red_run_evidence: ## Red-Run Evidence contains only template commentary and no scripts/** or tests/** path is in scope — red-run check not applicable, skipped" >&2
       return 0
     fi
     if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "corrupt" \
