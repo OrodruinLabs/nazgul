@@ -49,6 +49,23 @@ set -euo pipefail
 #   3  NOTHING MATCHED — the scoped filter matched no test file in the pre-change tree
 #   4  the pre-change harness reported an internal coverage-accounting defect
 #   5  REFUSED TO EXECUTE — the configured command is denylisted; nothing was run
+#   6  INDETERMINATE — the runner exited non-zero but no failing test file could be
+#      identified from its output; nothing written
+#
+# How a RUNNER's exit code is read — declared here, not inherited from the one
+# harness this script was written against. Only 0 is universal: a pre-change run
+# that passes is vacuous whatever produced it. 2 and 3 are `tests/run-tests.sh`'s
+# own contract, read as its two "did not really run" states; another runner's 2
+# or 3 is misreported but still fails CLOSED, writing nothing. Every other
+# non-zero code is only a CANDIDATE red and has to earn it — the output must name
+# a failing test file, or a failing case, or at least mention a copied test file
+# by name. Failing all three is exit 6, never a red. The code that makes this
+# load-bearing is pytest's 5 ("no tests were collected"): under the old reading it
+# fell through to RED confirmed and an evidence block was written for a run in
+# which nothing executed. ADR-024 decision 3 closed exactly this hazard for the
+# filter flag ("a rejected flag makes the runner exit non-zero, which red-run
+# reads as RED confirmed — a fabricated red"); the same hazard in the exit-code
+# reading was not carried across at the time.
 
 BEGIN_MARK="<!-- red-run.sh:begin — generated block, refreshed in place on re-capture -->"
 END_MARK="<!-- red-run.sh:end -->"
@@ -520,6 +537,21 @@ EOF
   return 1
 }
 
+# Last rung of the identification ladder: a non-zero exit earns a red only if the
+# output at least NAMES a copied test file, so "nothing ran" cannot read as red.
+rr_names_mentioned_in_output() {
+  local rel name
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    name="${rel##*/}"
+    if grep -qF -e "$name" "$OUT_FILE"; then
+      printf '%s\n' "$name"
+    fi
+  done <<EOF
+$COPY_LIST
+EOF
+}
+
 first_fail_for() {
   awk -v h="=== ${1} ===" '$0==h{f=1;next} /^=== /{f=0} f' "$OUT_FILE" \
     | grep -m1 -E '^[[:space:]]*FAIL:' || true
@@ -543,15 +575,30 @@ if [ -n "$FAILED_NAMES" ]; then
   done <<EOF
 $FAILED_NAMES
 EOF
-  [ -n "$COPIED_FAILED_NAMES" ] || die \
-    "the pre-change run exited $RUN_EC, but none of its reported failing test files belongs to the copied test set — refusing unrelated evidence"
+  [ -n "$COPIED_FAILED_NAMES" ] || die_code 6 \
+    "INDETERMINATE RESULT — the pre-change run exited $RUN_EC, but none of its reported failing test files belongs to the copied test set." \
+    "Refusing unrelated evidence. No evidence block was written." \
+    "--- last lines of the pre-change run ---" \
+    "$RUN_TAIL"
   FAILED_NAMES="$COPIED_FAILED_NAMES"
-else
-  echo "red-run: the pre-change run exited $RUN_EC but named no failed test file — falling back to the copied files matching '$FILTER'" >&2
+elif [ -n "$GLOBAL_FIRST_FAIL" ]; then
+  echo "red-run: the pre-change run exited $RUN_EC and reported a failing case but named no failed test file — falling back to the copied files matching '$FILTER'" >&2
   FAILED_NAMES=$(printf '%s' "$COPY_LIST" | sed -E 's%^.*/%%' | grep -F -e "$FILTER" || true)
+else
+  FAILED_NAMES=$(rr_names_mentioned_in_output)
+  [ -n "$FAILED_NAMES" ] || die_code 6 \
+    "INDETERMINATE RESULT — the runner exited $RUN_EC, but nothing identifiable ran." \
+    "$RUN_CMD named no failing test file, no failing case, and not one of the ${COPIED} copied test file(s) by name." \
+    "A non-zero exit alone is not a red: pytest exits 5 when it collects NO tests, go test exits 2 on a build failure, and a rejected flag exits non-zero too." \
+    "Writing an entry here would record a red for a run in which nothing executed. No evidence block was written." \
+    "If the runner really did fail this task's test, make it name the file or the case; see docs/CONFIGURATION.md for the exit-code contract." \
+    "--- last lines of the pre-change run ---" \
+    "$RUN_TAIL"
+  echo "red-run: the pre-change run named no failing case; identifying the red from the copied test file(s) its output names" >&2
 fi
-[ -n "$FAILED_NAMES" ] || die \
-  "the pre-change run exited $RUN_EC but no failing test file could be identified — refusing to write an entry naming nothing"
+[ -n "$FAILED_NAMES" ] || die_code 6 \
+  "INDETERMINATE RESULT — the pre-change run exited $RUN_EC but no failing test file could be identified." \
+  "Refusing to write an entry naming nothing. No evidence block was written."
 
 ENTRIES=""
 while IFS= read -r name; do

@@ -359,6 +359,34 @@ the only sanctioned producer could not generate, and the operator's only remaini
 hand-author a block carrying no `captured-by:` provenance. red-run refuses by name on the same
 undeterminable set the gate blocks on, rather than falling back to `tests/` behind the operator's back.
 
+**How `scripts/red-run.sh` reads YOUR runner's exit code — declared, not inferred.** Only exit `0` is
+universal: a pre-change run that passes is vacuous whatever produced it. Exit `2` and `3` are
+`tests/run-tests.sh`'s own contract and are read as its two "did not really run" states; another
+runner's `2`/`3` is misreported but still fails **closed**, writing nothing. Every other non-zero code is
+only a *candidate* red and has to earn it — the output must name a failing test file, a failing case, or
+at least mention a copied test file by name. Failing all three is red-run's exit `6`
+(`INDETERMINATE RESULT`), never a red. The code that makes this load-bearing is **pytest's 5**
+("no tests were collected"): under the previous reading it fell straight through to RED confirmed and an
+evidence block was written for a run in which nothing executed. ADR-024 decision 3 closed exactly this
+hazard for the filter flag; the identical hazard in the exit-code reading was not carried across then.
+
+| red-run exit | Meaning |
+|---|---|
+| `0` | RED confirmed — the evidence block was written |
+| `1` | usage or environment error — nothing written |
+| `2` | VACUOUS — the pre-change run PASSED |
+| `3` | NOTHING MATCHED — the runner reported that the scoped filter matched no test file |
+| `4` | the pre-change harness reported an internal coverage-accounting defect |
+| `5` | REFUSED TO EXECUTE — the configured command is on the destructive-command denylist; nothing was run |
+| `6` | INDETERMINATE — the runner exited non-zero but no failing test file could be identified |
+
+`5` exists because red-run executes `project.test_command` itself rather than through the Bash tool, so
+`scripts/pre-tool-guard.sh` never sees it. Both `scripts/red-run.sh` and `scripts/task-state-guard.sh`
+(which stops a denylisted value from being written into `project.test_command` /
+`project.test_filter_template` in the first place) screen against the one authority,
+`scripts/lib/destructive-patterns.sh`. A runner is executed code, so a non-denylisted command in that
+key still runs — what is closed is the denylist becoming bypassable by relocating a command into config.
+
 It ships default-on deliberately. This is an enforcement mechanism, and a default-off enforcement
 mechanism reproduces the problem it exists to fix — the objective's whole premise is that a test suite
 whose redness was never observed is a count, not evidence (RULES.md §1 rule 4). Existing projects with a

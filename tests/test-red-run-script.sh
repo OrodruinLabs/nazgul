@@ -213,7 +213,11 @@ assert_file_not_contains "multi: a pre-existing failure outside the copy set is 
 write_manifest TASK-013 "$BASE_SHA"
 MANIFEST13="$TEST_DIR/nazgul/tasks/TASK-013.md"
 run_capture TASK-013 --filter=mask
-assert_exit_code "unrelated failure: refuses evidence when no copied test failed" "$RR_EC" 1
+# Exit 6, not 1: "the runner failed but nothing identifiable ran" is its own
+# state, mechanically distinct from a usage/environment error.
+assert_exit_code "unrelated failure: refuses evidence when no copied test failed" "$RR_EC" 6
+assert_contains "unrelated failure: names the indeterminate state" "$RR_OUT" \
+  "INDETERMINATE RESULT"
 assert_contains "unrelated failure: explains why the runner's failure is insufficient" "$RR_OUT" \
   "none of its reported failing test files belongs to the copied test set"
 assert_file_not_contains "unrelated failure: writes NO evidence block" "$MANIFEST13" \
@@ -1037,6 +1041,135 @@ if command -v jq >/dev/null 2>&1; then
   assert_eq "multi-root: every scenario was driven where jq is available" \
     "$RRM_CHECKED" "$RRM_SCANNED"
 fi
+
+# --- the harness exit-code contract, declared instead of inherited -----------
+# Only 0 is universal. Every other non-zero code is a CANDIDATE red that must
+# name a failing file, a failing case, or a copied test file — pytest exits 5
+# when it collects nothing, which the old reading admitted as a red.
+RRX_SCANNED=0
+RRX_CHECKED=0
+RRX_SKIPPED=0
+RRX_NOJQ=0
+RRX_FINDINGS=0
+RRX_MARK=0
+
+rrx_begin() {
+  RRX_SCANNED=$((RRX_SCANNED + 1))
+  if ! command -v jq >/dev/null 2>&1; then
+    RRX_SKIPPED=$((RRX_SKIPPED + 1))
+    RRX_NOJQ=$((RRX_NOJQ + 1))
+    _skip "exit-code contract: $1 (jq unavailable — red-run cannot read a project config)"
+    return 1
+  fi
+  RRX_CHECKED=$((RRX_CHECKED + 1))
+  RRX_MARK="$TESTS_FAILED"
+  return 0
+}
+
+rrx_end() {
+  [ "$TESTS_FAILED" -eq "$RRX_MARK" ] || RRX_FINDINGS=$((RRX_FINDINGS + 1))
+}
+
+# The runner is committed at BASE, so its behaviour is the PRE-CHANGE tree's:
+# one scratch project per exit-code shape, never a mode flag red-run could miss.
+setup_exitcode_project() {
+  setup_temp_dir
+  git -C "$TEST_DIR" init -q -b main
+  git -C "$TEST_DIR" config user.email "test@nazgul.dev"
+  git -C "$TEST_DIR" config user.name "Nazgul Test"
+  mkdir -p "$TEST_DIR/tests" "$TEST_DIR/scripts" "$TEST_DIR/nazgul/tasks"
+  cat > "$TEST_DIR/run-my-tests.sh"
+  chmod +x "$TEST_DIR/run-my-tests.sh"
+  git -C "$TEST_DIR" add -A
+  git -C "$TEST_DIR" commit -q -m "base: a runner with a non-bash-harness exit contract"
+  EXITC_BASE=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  printf '#!/usr/bin/env bash\necho feature\n' > "$TEST_DIR/scripts/feature.sh"
+  printf '#!/usr/bin/env bash\necho zeta\nexit 1\n' > "$TEST_DIR/tests/test-zeta.sh"
+  git -C "$TEST_DIR" add -A
+  git -C "$TEST_DIR" commit -q -m "the task's work"
+  EXITC_HEAD=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  write_project_config <<'CFG'
+{
+  "schema_version": 37,
+  "project": {
+    "test_command": "./run-my-tests.sh",
+    "test_filter_template": "--only={filter}",
+    "test_roots": ["tests"]
+  }
+}
+CFG
+}
+
+write_exitc_manifest() {
+  local id="$1"
+  {
+    printf -- '---\nstatus: IN_PROGRESS\n---\n# %s: scratch task\n\n' "$id"
+    printf -- '## Metadata\n- **ID**: %s\n- **Base SHA**: %s\n\n' "$id" "$EXITC_BASE"
+    printf -- '## Commits\n%s\n\n' "$EXITC_HEAD"
+    printf -- '## Test Obligation\n- **Scoped filter**: `./run-my-tests.sh --only=zeta`\n\n'
+    printf -- '## Implementation Log\n- nothing yet\n'
+  } > "$TEST_DIR/nazgul/tasks/${id}.md"
+}
+
+if rrx_begin "a runner that collected nothing is INDETERMINATE, never a red"; then
+  setup_exitcode_project <<'PYTEST5'
+#!/usr/bin/env bash
+echo "collected 0 items"
+echo "no tests ran in 0.01s"
+exit 5
+PYTEST5
+  write_exitc_manifest TASK-140
+  MANIFEST140="$TEST_DIR/nazgul/tasks/TASK-140.md"
+  run_capture TASK-140 --filter=zeta
+  assert_exit_code "pytest-5 shape: exits 6, its own code" "$RR_EC" 6
+  assert_contains "pytest-5 shape: names the indeterminate state" "$RR_OUT" \
+    "INDETERMINATE RESULT"
+  assert_contains "pytest-5 shape: says nothing identifiable ran" "$RR_OUT" \
+    "nothing identifiable ran"
+  assert_contains "pytest-5 shape: names the exit code that makes this load-bearing" \
+    "$RR_OUT" "pytest exits 5"
+  assert_not_contains "pytest-5 shape: is never reported as a red" "$RR_OUT" "RED confirmed"
+  assert_file_not_contains "pytest-5 shape: writes NO evidence block" \
+    "$MANIFEST140" 'red-run: tests/test-zeta.sh'
+  assert_eq "pytest-5 shape: the scratch worktree is removed" "$(worktree_count)" "1"
+  teardown_temp_dir
+  rrx_end
+fi
+
+if rrx_begin "a non-zero exit that NAMES a copied test file still earns its red"; then
+  setup_exitcode_project <<'PYTEST_FAIL'
+#!/usr/bin/env bash
+echo "FAILED tests/test-zeta.sh::test_needs_feature - AssertionError"
+echo "1 failed in 0.02s"
+exit 5
+PYTEST_FAIL
+  write_exitc_manifest TASK-141
+  MANIFEST141="$TEST_DIR/nazgul/tasks/TASK-141.md"
+  run_capture TASK-141 --filter=zeta
+  assert_exit_code "named-file shape: the last rung of the ladder captures" "$RR_EC" 0
+  assert_contains "named-file shape: says how the red was identified" "$RR_OUT" \
+    "identifying the red from the copied test file(s) its output names"
+  assert_file_contains "named-file shape: the entry names the file" \
+    "$MANIFEST141" 'red-run: tests/test-zeta.sh'
+  assert_file_contains "named-file shape: the record is honest that no case was named" \
+    "$MANIFEST141" 'the file exited non-zero without naming a case'
+  assert_file_contains "named-file shape: the recorded exit code is the runner's own" \
+    "$MANIFEST141" 'result: FAILED (exit 5)'
+  teardown_temp_dir
+  rrx_end
+fi
+
+echo "  exit-code contract: ${RRX_SCANNED} scanned, ${RRX_SKIPPED} skipped (jq-unavailable=${RRX_NOJQ}), ${RRX_CHECKED} checked, ${RRX_FINDINGS} findings"
+assert_eq "exit-code contract: scanned == skipped + checked" \
+  "$RRX_SCANNED" "$((RRX_SKIPPED + RRX_CHECKED))"
+if command -v jq >/dev/null 2>&1; then
+  assert_eq "exit-code contract: every scenario was driven where jq is available" \
+    "$RRX_CHECKED" "$RRX_SCANNED"
+fi
+
+setup_temp_dir
 
 teardown_temp_dir
 report_results
