@@ -10,7 +10,7 @@ status: PLANNED
 - **ID**: TASK-000
 - **Group**: 0
 - **Status**: (see `status:` in the frontmatter block at the top — that is canonical, read by scripts/lib/structured-state.sh; not duplicated here to avoid drift)
-<!-- Valid states: PLANNED | READY | IN_PROGRESS | IMPLEMENTED | IN_REVIEW | APPROVED | CHANGES_REQUESTED | DONE | BLOCKED
+<!-- Valid states: PLANNED | READY | IN_PROGRESS | IMPLEMENTED | IN_REVIEW | APPROVED | CHANGES_REQUESTED | DONE | BLOCKED | CANCELLED
      State machine rules — NO skipping states:
        PLANNED -> READY (when all depends_on tasks are DONE, or APPROVED in YOLO)
        READY -> IN_PROGRESS (when implementer claims the task)
@@ -21,10 +21,20 @@ status: PLANNED
        IN_REVIEW -> CHANGES_REQUESTED (when ANY reviewer rejects)
        APPROVED -> DONE (when the Task-PR merges, YOLO + task-pr only)
        CHANGES_REQUESTED -> IN_PROGRESS (when implementer addresses feedback)
-       IN_PROGRESS/CHANGES_REQUESTED -> BLOCKED (when max retries hit or unresolvable) -->
+       IN_PROGRESS/CHANGES_REQUESTED -> BLOCKED (when max retries hit or unresolvable)
+       IMPLEMENTED -> DONE (ONLY with verified `## Merge Evidence` below — never unconditional)
+       <any non-terminal state> -> CANCELLED (operator declares the task will never ship, via
+         /nazgul:task skip; refused out of a `Blocked kind: reconciliation` quarantine)
+     DONE and CANCELLED are both terminal — neither has an out-edge. -->
 - **Depends on**: none
 <!-- Comma-separated task IDs, e.g. TASK-001, TASK-002
-     Task cannot move to READY until ALL dependencies are DONE.
+     Task cannot move to READY until every dependency SATISFIES the gate, which is not the same as
+     being DONE (`ttg_dependency_satisfied`, scripts/lib/task-transition-guard.sh):
+       review_gate.granularity = task     -> DONE (or APPROVED in YOLO)
+       review_gate.granularity = group|feature -> IMPLEMENTED, IN_REVIEW, APPROVED, or DONE, because
+         every task parks at IMPLEMENTED until ONE aggregate board and DONE is unsatisfiable there
+       any granularity                    -> CANCELLED also satisfies: a task that will never ship is
+         a dependency that will never be met, so the id STAYS on this line rather than being deleted
      The stop hook auto-promotes PLANNED -> READY when deps are met. -->
 - **Delegates to**: none
 <!-- Specialist agents this task delegates to, e.g. designer, frontend-dev

@@ -41,7 +41,8 @@ If the typed arguments (`$ARGUMENTS`, the substituted value — not this literal
 Read these sources to compute metrics:
 
 1. **Task manifests** (`nazgul/tasks/TASK-*.md`):
-   - Count by status: DONE, APPROVED, IN_PROGRESS, READY, CHANGES_REQUESTED, BLOCKED, PLANNED
+   - Count by status: DONE, APPROVED, IN_PROGRESS, READY, CHANGES_REQUESTED, BLOCKED, PLANNED, CANCELLED
+   - `CANCELLED` is its own row and is never folded into DONE: a cancelled task is terminal but shipped nothing, so an outcome reported as `N done` when `K` were cancelled overstates the objective
    - For each task: count retry attempts (how many times status went to CHANGES_REQUESTED)
    - Extract claimed_at and completed_at timestamps for velocity
 
