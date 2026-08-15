@@ -46,7 +46,7 @@ chmod +x "$FAKEBIN/gh" "$FAKEBIN/curl"
 # Coverage accounting (RULES.md §15): a row is "checked" only once its fixture
 # actually ran; an unbuildable one is skipped, never counted as passed.
 CS_SCANNED=0; CS_CHECKED=0; CS_SKIPPED=0
-CS_UNDRIVABLE=0; CS_DEFERRED=0; CS_FINDINGS=0
+CS_UNDRIVABLE=0; CS_FINDINGS=0
 CS_FAILED_AT_ENTRY=0
 
 consumer_begin() {
@@ -61,12 +61,6 @@ consumer_undrivable() {
   _skip "consumer [$1]: fixture unbuildable — not checked"
 }
 
-consumer_deferred() {
-  CS_SCANNED=$((CS_SCANNED + 1))
-  CS_SKIPPED=$((CS_SKIPPED + 1)); CS_DEFERRED=$((CS_DEFERRED + 1))
-  _skip "consumer [$1]: deferred-to-TASK-013 (Wave 6) — not asserted here"
-}
-
 consumer_end() {
   [ "$TESTS_FAILED" -gt "$CS_FAILED_AT_ENTRY" ] && CS_FINDINGS=$((CS_FINDINGS + 1))
   return 0
@@ -76,7 +70,7 @@ run_hook() {
   HOOK_OUTPUT=$(bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 }
 
-# 1/16 scripts/session-context.sh. FIRST deliberately: at the pre-change base the
+# 1/19 scripts/session-context.sh. FIRST deliberately: at the pre-change base the
 # injected summary carries no cancelled figure, so this reads as "it did not exist".
 consumer_begin
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
@@ -120,7 +114,7 @@ assert_contains "session-context: an uncancelled run reports zero, not silence" 
   "$SC_ALL_DONE" "0 cancelled"
 consumer_end
 
-# 2/16 scripts/post-compact.sh — the same summary, re-injected after compaction.
+# 2/19 scripts/post-compact.sh — the same summary, re-injected after compaction.
 consumer_begin
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
 create_config
@@ -137,7 +131,7 @@ assert_contains "post-compact: the cancelled task still counts into the total" \
 teardown_temp_dir
 consumer_end
 
-# 3/16 scripts/pre-compact.sh — the checkpoint is what recovery reads, so its
+# 3/19 scripts/pre-compact.sh — the checkpoint is what recovery reads, so its
 # buckets must still sum to total with a cancelled task present.
 consumer_begin
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
@@ -161,7 +155,7 @@ assert_eq "pre-compact: the checkpoint buckets sum to total_tasks" "$CP_SUM" "$C
 teardown_temp_dir
 consumer_end
 
-# 4/16 scripts/board-sync-github.sh. Its unhandled-status path REOPENS the issue,
+# 4/19 scripts/board-sync-github.sh. Its unhandled-status path REOPENS the issue,
 # so the miss-mode here is an active wrong action, not a stall.
 board_fixture() { # <status>
   setup_temp_dir; setup_git_repo; setup_nazgul_dir
@@ -221,7 +215,7 @@ else
 fi
 consumer_end
 
-# 5/16 skills/status/SKILL.md — the operator-facing report.
+# 5/19 skills/status/SKILL.md — the operator-facing report.
 consumer_begin
 STATUS_SKILL="$REPO_ROOT/skills/status/SKILL.md"
 if [ ! -r "$STATUS_SKILL" ]; then
@@ -242,7 +236,7 @@ else
 fi
 consumer_end
 
-# 6/16 scripts/lib/structured-state.sh (TASK-002) — vocabulary, never the
+# 6/19 scripts/lib/structured-state.sh (TASK-002) — vocabulary, never the
 # off-vocabulary placeholder.
 consumer_begin
 setup_temp_dir; setup_nazgul_dir
@@ -258,7 +252,7 @@ fi
 teardown_temp_dir
 consumer_end
 
-# 7/16 scripts/lib/task-transition-guard.sh (TASK-002) — the edge set, the
+# 7/19 scripts/lib/task-transition-guard.sh (TASK-002) — the edge set, the
 # quarantine refusal, and the dependency gate.
 consumer_begin
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
@@ -293,7 +287,7 @@ fi
 teardown_temp_dir
 consumer_end
 
-# 8/16 scripts/lib/task-utils.sh (TASK-002) — the one counter five call sites read.
+# 8/19 scripts/lib/task-utils.sh (TASK-002) — the one counter five call sites read.
 consumer_begin
 setup_temp_dir; setup_nazgul_dir
 create_task_file "TASK-001" "CANCELLED"
@@ -310,7 +304,7 @@ consumer_end
 COMPLETION_CONFIG=('.agents.reviewers = ["code-reviewer"]' '.learning.auto_distill_post_loop = false'
   '.docs.verify_comments = false' '.self_audit.enabled = false')
 
-# 9/16 scripts/stop-hook.sh completion predicate (TASK-002).
+# 9/19 scripts/stop-hook.sh completion predicate (TASK-002).
 consumer_begin
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
 create_config "${COMPLETION_CONFIG[@]}"
@@ -326,7 +320,7 @@ assert_contains "stop-hook completion: the done/cancelled split is reported" \
 teardown_temp_dir
 consumer_end
 
-# 10/16 scripts/stop-hook.sh aggregate-unit walk (TASK-003) — CANCELLED leaves the
+# 10/19 scripts/stop-hook.sh aggregate-unit walk (TASK-003) — CANCELLED leaves the
 # unit, BLOCKED still holds it.
 consumer_begin
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
@@ -355,7 +349,7 @@ assert_not_contains "stop-hook unit walk: a BLOCKED sibling still holds the unit
 teardown_temp_dir
 consumer_end
 
-# 11/16 skills/task/SKILL.md `skip` (TASK-002).
+# 11/19 skills/task/SKILL.md `skip` (TASK-002).
 consumer_begin
 TASK_SKILL="$REPO_ROOT/skills/task/SKILL.md"
 if [ ! -r "$TASK_SKILL" ]; then
@@ -375,7 +369,7 @@ else
 fi
 consumer_end
 
-# 12/16 NON-CONSUMER scripts/lib/parallel-batch.sh. _pb_blocked_tasks matches only
+# 12/19 NON-CONSUMER scripts/lib/parallel-batch.sh. _pb_blocked_tasks matches only
 # BLOCKED and INVALID|"", which is what makes veto sites 3 and 4 free.
 consumer_begin
 setup_temp_dir; setup_nazgul_dir
@@ -397,7 +391,7 @@ fi
 teardown_temp_dir
 consumer_end
 
-# 13/16 NON-CONSUMER scripts/parallel-rework-guard.sh — ownership needs
+# 13/19 NON-CONSUMER scripts/parallel-rework-guard.sh — ownership needs
 # DONE|IMPLEMENTED *and* a recorded commit, so a cancelled task can own no scope.
 rework_ec() { # <file_path>
   local ec=0
@@ -428,7 +422,7 @@ assert_eq "rework guard control: the same manifest at DONE does own it" \
 teardown_temp_dir
 consumer_end
 
-# 14/16 NON-CONSUMER scripts/webhook-forward.sh — counts DONE only, via its own
+# 14/19 NON-CONSUMER scripts/webhook-forward.sh — counts DONE only, via its own
 # legacy-format grep, so the fixture is legacy or the assertion would be vacuous.
 consumer_begin
 setup_temp_dir; setup_nazgul_dir
@@ -452,7 +446,7 @@ fi
 teardown_temp_dir
 consumer_end
 
-# 15/16 NON-CONSUMER scripts/git-hooks/pre-merge-commit — identity is a SHA under
+# 15/19 NON-CONSUMER scripts/git-hooks/pre-merge-commit — identity is a SHA under
 # ## Commits or a feat/<x>/TASK-NNN ref; a cancelled task ships neither.
 pm_init_repo() {
   mkdir -p "$1"
@@ -513,7 +507,7 @@ assert_contains "pre-merge control: the block names the unapproved unit" "$PM_ST
 teardown_temp_dir
 consumer_end
 
-# 16/16 NON-CONSUMER scripts/scrub-stale-review-artifacts.sh — examined and exempt:
+# 16/19 NON-CONSUMER scripts/scrub-stale-review-artifacts.sh — examined and exempt:
 # its guard enumerates the OPEN statuses, and CANCELLED is terminal.
 consumer_begin
 SCRUB="$REPO_ROOT/scripts/scrub-stale-review-artifacts.sh"
@@ -534,17 +528,96 @@ else
 fi
 consumer_end
 
-# Deferred, named rather than omitted (TASK-013, Wave 6).
-consumer_deferred "skills/metrics/SKILL.md"
-consumer_deferred "templates/task-manifest.md"
-consumer_deferred "RULES.md"
+# 17/19 skills/metrics/SKILL.md — the outcome report an operator reads after a run.
+consumer_begin
+METRICS_SKILL="$REPO_ROOT/skills/metrics/SKILL.md"
+if [ ! -r "$METRICS_SKILL" ]; then
+  consumer_undrivable "skills/metrics/SKILL.md"
+else
+  consumer_checked
+  MANIFEST_SOURCE=$(awk '/^1\. \*\*Task manifests\*\*/{f=1;next} f && /^2\. /{exit} f' "$METRICS_SKILL")
+  if [ -z "$MANIFEST_SOURCE" ]; then
+    _fail "metrics skill: the task-manifest source block was located" \
+      "awk range matched zero lines — the rows below would trivially pass against an empty string"
+  else
+    _pass "metrics skill: the task-manifest source block was located"
+  fi
+  assert_contains "metrics skill: CANCELLED is a counted status" "$MANIFEST_SOURCE" "CANCELLED"
+  assert_contains "metrics skill: beside BLOCKED, which it does not replace" "$MANIFEST_SOURCE" "BLOCKED"
+  assert_contains "metrics skill: it is never folded into DONE" \
+    "$MANIFEST_SOURCE" "never folded into DONE"
+fi
+consumer_end
+
+# 18/19 templates/task-manifest.md — the state-machine contract every new manifest carries.
+consumer_begin
+MANIFEST_TEMPLATE="$REPO_ROOT/templates/task-manifest.md"
+if [ ! -r "$MANIFEST_TEMPLATE" ]; then
+  consumer_undrivable "templates/task-manifest.md"
+else
+  consumer_checked
+  VALID_STATES_BLOCK=$(awk '/^<!-- Valid states:/{f=1} f{print} f && /-->/{exit}' "$MANIFEST_TEMPLATE")
+  if [ -z "$VALID_STATES_BLOCK" ]; then
+    _fail "manifest template: the valid-states comment was located" \
+      "awk range matched zero lines — the rows below would trivially pass against an empty string"
+  else
+    _pass "manifest template: the valid-states comment was located"
+  fi
+  assert_contains "manifest template: CANCELLED is in the valid-state vocabulary" \
+    "$VALID_STATES_BLOCK" "| CANCELLED"
+  assert_contains "manifest template: the in-edge is recorded" \
+    "$VALID_STATES_BLOCK" "-> CANCELLED"
+  assert_contains "manifest template: both terminal states are named as terminal" \
+    "$VALID_STATES_BLOCK" "DONE and CANCELLED are both terminal"
+  DEPENDS_BLOCK=$(awk '/^- \*\*Depends on\*\*/{f=1;next} f{print} f && /-->/{exit}' "$MANIFEST_TEMPLATE")
+  if [ -z "$DEPENDS_BLOCK" ]; then
+    _fail "manifest template: the Depends on comment was located" \
+      "awk range matched zero lines — the row below would trivially pass against an empty string"
+  else
+    _pass "manifest template: the Depends on comment was located"
+  fi
+  assert_contains "manifest template: a CANCELLED dependency satisfies the gate" \
+    "$DEPENDS_BLOCK" "CANCELLED also satisfies"
+fi
+consumer_end
+
+# 19/19 RULES.md — the durable contract; §2 is where a reader learns the status exists.
+consumer_begin
+RULES_DOC="$REPO_ROOT/RULES.md"
+if [ ! -r "$RULES_DOC" ]; then
+  consumer_undrivable "RULES.md"
+else
+  consumer_checked
+  CANCEL_SECTION=$(awk '/^### Cancellation, the Second Terminal Status/{f=1;next} f && /^### /{exit} f' "$RULES_DOC")
+  if [ -z "$CANCEL_SECTION" ]; then
+    _fail "RULES.md: the cancellation section was located" \
+      "awk range matched zero lines — the rows below would trivially pass against an empty string"
+  else
+    _pass "RULES.md: the cancellation section was located"
+  fi
+  assert_contains "RULES.md: the section carries a tier, like every rule" "$CANCEL_SECTION" "[enforced]"
+  assert_contains "RULES.md: CANCELLED has no out-edge" "$CANCEL_SECTION" "no out-edge"
+  assert_contains "RULES.md: the reconciliation quarantine is refused a cancellation" \
+    "$CANCEL_SECTION" "Blocked kind: reconciliation"
+  TRANSITION_TABLE=$(awk '/^### Permitted Transitions/{f=1;next} f && /^### /{exit} f' "$RULES_DOC")
+  assert_contains "RULES.md: the permitted-transition table carries the in-edge" \
+    "$TRANSITION_TABLE" "| CANCELLED |"
+  FORBIDDEN=$(awk '/^### Forbidden Transitions/{f=1;next} f && /^### /{exit} f' "$RULES_DOC")
+  assert_contains "RULES.md: the forbidden list names both terminal statuses" \
+    "$FORBIDDEN" "DONE, CANCELLED -> any state"
+  DEP_GATE=$(awk '/^### Dependency Gate/{f=1;next} f && /^### /{exit} f' "$RULES_DOC")
+  assert_contains "RULES.md: a CANCELLED dependency satisfies the gate in every granularity" \
+    "$DEP_GATE" "CANCELLED"
+fi
+consumer_end
 
 rm -rf "$FAKEBIN"
 
-echo "  consumer-scan: ${CS_SCANNED} scanned, ${CS_SKIPPED} skipped (undrivable=${CS_UNDRIVABLE}, deferred-to-TASK-013=${CS_DEFERRED}), ${CS_CHECKED} checked, ${CS_FINDINGS} findings"
+# `deferred-to-TASK-013` is retired, not kept at a permanent =0: TASK-013 landed, so no
+# call site can produce it, and a reason that cannot occur misreports the scan (RULES.md §15).
+echo "  consumer-scan: ${CS_SCANNED} scanned, ${CS_SKIPPED} skipped (undrivable=${CS_UNDRIVABLE}), ${CS_CHECKED} checked, ${CS_FINDINGS} findings"
 assert_eq "consumer-scan: scanned == skipped + checked" \
   "$CS_SCANNED" "$((CS_SKIPPED + CS_CHECKED))"
-assert_eq "consumer-scan: every consumer row was driven" "$CS_CHECKED" "16"
-assert_eq "consumer-scan: the deferred surfaces are named, not omitted" "$CS_DEFERRED" "3"
+assert_eq "consumer-scan: every consumer row was driven" "$CS_CHECKED" "19"
 
 report_results
