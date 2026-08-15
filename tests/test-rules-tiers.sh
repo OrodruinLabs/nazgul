@@ -62,25 +62,24 @@ else
     "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 31"
 fi
 
-# Bumped per objective, never weakened: 64->69 (FEAT-029), 69->71 (PATCH-002), 71->78
-# with advisory 28->31 (FEAT-030 §21), 78->79 (FEAT-030 §21 item 8, the caller side
-# of the dispatch brief). Bump for a genuinely new rule; never re-tag to fit.
+# Bumped per objective, never weakened: 64->69->71->78->79->88, the last step FEAT-031
+# (§2 cancellation x2, the CANCELLED dependency gate, §2 merge evidence x3, §16 seam x3).
 ENFORCED_COUNT=$(awk '{ count += gsub(/\[enforced\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ENFORCED_COUNT" -eq 79 ]; then
-  _pass "[enforced] annotation count is exactly 79 (found: $ENFORCED_COUNT)"
+if [ "$ENFORCED_COUNT" -eq 88 ]; then
+  _pass "[enforced] annotation count is exactly 88 (found: $ENFORCED_COUNT)"
 else
-  _fail "[enforced] annotation count is exactly 79" \
-    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 79"
+  _fail "[enforced] annotation count is exactly 88" \
+    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 88"
 fi
 
-# 21 -> 22: FEAT-029 added §2's typed reconciliation quarantine, hook-driven
-# because stop-hook.sh writes the annotation and a direct dispatcher skips it.
+# 21->22 (FEAT-029, §2's typed quarantine), 22->23 (FEAT-031, §3.15's carve-out record):
+# both hook-driven because stop-hook.sh produces them and a direct dispatch does not.
 HOOK_DRIVEN_COUNT=$(awk '{ count += gsub(/\[hook-driven only\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$HOOK_DRIVEN_COUNT" -eq 22 ]; then
-  _pass "[hook-driven only] annotation count is exactly 22 (found: $HOOK_DRIVEN_COUNT)"
+if [ "$HOOK_DRIVEN_COUNT" -eq 23 ]; then
+  _pass "[hook-driven only] annotation count is exactly 23 (found: $HOOK_DRIVEN_COUNT)"
 else
-  _fail "[hook-driven only] annotation count is exactly 22" \
-    "found $HOOK_DRIVEN_COUNT occurrences of [hook-driven only] — expected exactly 22"
+  _fail "[hook-driven only] annotation count is exactly 23" \
+    "found $HOOK_DRIVEN_COUNT occurrences of [hook-driven only] — expected exactly 23"
 fi
 
 # §11: batch selection and the two hard stops are unconditional stop-hook bash,
