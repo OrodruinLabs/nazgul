@@ -1,5 +1,5 @@
 {
-  "schema_version": 36,
+  "schema_version": 37,
   "install_mode": "shared",
   "mode": "hitl",
   "default_mode": null,
@@ -15,6 +15,8 @@
     "language": null,
     "framework": null,
     "test_command": null,
+    "test_roots": ["tests"],
+    "test_filter_template": "--filter={filter}",
     "build_command": null,
     "smoke_command": null,
     "lint_command": null,
