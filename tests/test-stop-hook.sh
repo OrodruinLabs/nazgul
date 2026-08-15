@@ -1013,7 +1013,128 @@ run_hook
 assert_exit_code "group blocked unit: exit 2" "$HOOK_EC" 2
 assert_contains "group blocked unit: awaiting aggregate review" "$HOOK_OUTPUT" "AWAITING AGGREGATE REVIEW"
 assert_not_contains "group blocked unit: NO per-task review for TASK-001" "$HOOK_OUTPUT" "Spawn review-gate agent (nazgul:review-gate) for TASK-001"
+# FEAT-031/ADR-022: BLOCKED means "needs human help, will resume", so it keeps vetoing
+# the board; only CANCELLED is carried out of the unit.
+assert_not_contains "group blocked unit: NO aggregate board while a sibling is BLOCKED" "$HOOK_OUTPUT" "AGGREGATE review unit"
 teardown_temp_dir
+
+# === AGGREGATE CARVE-OUT (board #90): CANCELLED leaves the unit, BLOCKED holds it ===
+# Each row builds a fixture and runs the hook; an unbuildable one is skipped, not passed.
+CO_SCANNED=0; CO_CHECKED=0; CO_SKIPPED=0; CO_UNBUILDABLE=0; CO_FINDINGS=0
+CO_FAILED_AT_ENTRY=0
+EVENTS=""
+
+co_fixture() {
+  # Usage: co_fixture <name> <granularity> <STATUS:group>...
+  local name="$1" gran="$2"; shift 2
+  local i=0 spec status group id
+  CO_SCANNED=$((CO_SCANNED + 1))
+  CO_FAILED_AT_ENTRY=$TESTS_FAILED
+  setup_temp_dir; setup_git_repo; setup_nazgul_dir
+  create_config ".review_gate.granularity = \"${gran}\"" \
+    '.agents.reviewers = ["code-reviewer"]' '.learning.auto_distill_post_loop = false' \
+    '.docs.verify_comments = false' '.self_audit.enabled = false'
+  create_plan
+  for spec in "$@"; do
+    i=$((i + 1))
+    status="${spec%%:*}"; group="${spec##*:}"
+    id=$(printf 'TASK-%03d' "$i")
+    create_task_file "$id" "$status"
+    set_task_group "$id" "$group"
+  done
+  EVENTS="$TEST_DIR/nazgul/logs/events.jsonl"
+  if [ ! -s "$TEST_DIR/nazgul/config.json" ] || [ "$i" -eq 0 ]; then
+    CO_SKIPPED=$((CO_SKIPPED + 1)); CO_UNBUILDABLE=$((CO_UNBUILDABLE + 1))
+    _skip "carve-out [${name}]: fixture unbuildable — not checked"
+    return 1
+  fi
+  CO_CHECKED=$((CO_CHECKED + 1))
+  run_hook
+  return 0
+}
+
+co_close() {
+  if [ "$TESTS_FAILED" -gt "$CO_FAILED_AT_ENTRY" ]; then
+    CO_FINDINGS=$((CO_FINDINGS + 1))
+  fi
+  teardown_temp_dir
+}
+
+# --- 1/5: the headline defect — a task that ships nothing no longer deadlocks the unit ---
+if co_fixture "group carve-out" group IMPLEMENTED:1 IMPLEMENTED:1 CANCELLED:1; then
+  assert_exit_code "carve-out group: exit 2" "$HOOK_EC" 2
+  assert_contains "carve-out group: board fires" "$HOOK_OUTPUT" "AGGREGATE REVIEW READY"
+  assert_contains "carve-out group: board covers ONLY the implemented pair" \
+    "$HOOK_OUTPUT" "covering tasks: TASK-001 TASK-002."
+  assert_contains "carve-out group: names the carried-out task" \
+    "$HOOK_OUTPUT" "carried out CANCELLED (TASK-003)"
+  assert_contains "carve-out group: reports the partial count" \
+    "$HOOK_OUTPUT" "2 of 3 unit tasks reviewed"
+  assert_file_contains "carve-out group: event emitted" "$EVENTS" \
+    '"event":"aggregate_board_blocked_carveout"'
+  assert_file_contains "carve-out group: event names the unit" "$EVENTS" '"unit":"group 1"'
+  assert_file_contains "carve-out group: event carries the carried-out ids" \
+    "$EVENTS" '"blocked_tasks":"TASK-003"'
+  assert_file_contains "carve-out group: event carries implemented" "$EVENTS" '"implemented":2'
+  assert_file_contains "carve-out group: event carries total" "$EVENTS" '"total":3'
+  assert_dir_not_exists "carve-out group: cancelled task acquires no review dir" \
+    "$TEST_DIR/nazgul/reviews/TASK-003"
+fi
+co_close
+
+# --- 2/5: one granularity up, where the unit spans every group ---
+if co_fixture "feature carve-out" feature IMPLEMENTED:1 IMPLEMENTED:2 CANCELLED:3; then
+  assert_exit_code "carve-out feature: exit 2" "$HOOK_EC" 2
+  assert_contains "carve-out feature: board fires" "$HOOK_OUTPUT" "AGGREGATE REVIEW READY"
+  assert_contains "carve-out feature: board covers ONLY the implemented pair" \
+    "$HOOK_OUTPUT" "covering tasks: TASK-001 TASK-002."
+  assert_contains "carve-out feature: names the carried-out task" \
+    "$HOOK_OUTPUT" "carried out CANCELLED (TASK-003)"
+  assert_file_contains "carve-out feature: event names the unit" "$EVENTS" '"unit":"feature"'
+  assert_file_contains "carve-out feature: event carries total" "$EVENTS" '"total":3'
+fi
+co_close
+
+# --- 3/5: the half that proves the check was not simply deleted ---
+if co_fixture "blocked veto" group IMPLEMENTED:1 IMPLEMENTED:1 BLOCKED:1; then
+  assert_exit_code "blocked veto: exit 2" "$HOOK_EC" 2
+  assert_contains "blocked veto: unit stays parked" "$HOOK_OUTPUT" "AWAITING AGGREGATE REVIEW"
+  assert_not_contains "blocked veto: NO aggregate board" "$HOOK_OUTPUT" "AGGREGATE review unit"
+  assert_not_contains "blocked veto: nothing is carried out" "$HOOK_OUTPUT" "CARVE-OUT"
+  assert_file_not_contains "blocked veto: no carve-out event" "$EVENTS" \
+    '"event":"aggregate_board_blocked_carveout"'
+fi
+co_close
+
+# --- 4/5: an empty board is not a clean one ---
+if co_fixture "all cancelled" feature CANCELLED:1 CANCELLED:1; then
+  assert_exit_code "all cancelled: exit 0" "$HOOK_EC" 0
+  assert_contains "all cancelled: the no-dispatch path is reported" \
+    "$HOOK_OUTPUT" "has nothing to review"
+  assert_not_contains "all cancelled: no board readiness" "$HOOK_OUTPUT" "AGGREGATE REVIEW READY"
+  assert_not_contains "all cancelled: no board dispatched" "$HOOK_OUTPUT" "AGGREGATE review unit"
+  assert_file_contains "all cancelled: event records an empty board" "$EVENTS" '"implemented":0'
+  assert_file_contains "all cancelled: event carries both ids" "$EVENTS" \
+    '"blocked_tasks":"TASK-001 TASK-002"'
+fi
+co_close
+
+# --- 5/5: which unit is "active" must not be decided by a task that ships nothing ---
+if co_fixture "active-group scan" group CANCELLED:1 CANCELLED:1 IMPLEMENTED:2; then
+  assert_exit_code "active-group scan: exit 2" "$HOOK_EC" 2
+  assert_contains "active-group scan: unit resolves to group 2" "$HOOK_OUTPUT" "group 2"
+  assert_contains "active-group scan: board fires" "$HOOK_OUTPUT" "AGGREGATE REVIEW READY"
+  assert_contains "active-group scan: board covers TASK-003" \
+    "$HOOK_OUTPUT" "covering tasks: TASK-003."
+  assert_not_contains "active-group scan: group 1's cancelled pair is not this unit's carve-out" \
+    "$HOOK_OUTPUT" "CARVE-OUT"
+fi
+co_close
+
+echo "  carve-out scan: ${CO_SCANNED} scanned, ${CO_SKIPPED} skipped (unbuildable=${CO_UNBUILDABLE}), ${CO_CHECKED} checked, ${CO_FINDINGS} findings"
+assert_eq "carve-out scan: scanned == skipped + checked" \
+  "$CO_SCANNED" "$((CO_SKIPPED + CO_CHECKED))"
+assert_eq "carve-out scan: every scenario was checked" "$CO_CHECKED" "5"
 
 # --- Granularity feature, INCOMPLETE: park IMPLEMENTED across groups, keep building ---
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
