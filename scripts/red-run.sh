@@ -30,12 +30,19 @@ set -euo pipefail
 # present — the exact vacuity this script exists to detect. `--copy=` (repeatable)
 # pins the set explicitly and suppresses derivation entirely.
 #
+# The resolved command is SCREENED against scripts/lib/destructive-patterns.sh
+# before it runs. This script executes `project.test_command` directly, so it
+# never passes the PreToolUse Bash guard the way the old hardcoded invocation
+# did; without the screen, every denylisted command would be reachable by writing
+# it into nazgul/config.json and letting the loop trigger a red run.
+#
 # Exit codes:
 #   0  RED confirmed — the evidence block was written
 #   1  usage or environment error — nothing written
 #   2  VACUOUS — the pre-change run PASSED (exit 0); nothing written
 #   3  NOTHING MATCHED — the scoped filter matched no test file in the pre-change tree
 #   4  the pre-change harness reported an internal coverage-accounting defect
+#   5  REFUSED TO EXECUTE — the configured command is denylisted; nothing was run
 
 BEGIN_MARK="<!-- red-run.sh:begin — generated block, refreshed in place on re-capture -->"
 END_MARK="<!-- red-run.sh:end -->"
@@ -55,6 +62,31 @@ die_code() {
 
 usage() {
   echo "Usage: scripts/red-run.sh <TASK-ID> [--filter=<name>] [--project-root=<path>] [--copy=<path> ...]"
+}
+
+# The value IS the argv, so correct argv handling is exactly why it does not
+# help: `touch /tmp/x` needs no metacharacter to escape the project.
+rr_screen_command() {
+  local cmd="$1" ec=0
+  dp_scan_command "$cmd" || ec=$?
+  if [ "$ec" -eq 2 ]; then
+    die_code 5 \
+      "REFUSED TO EXECUTE — the command this project configured is on Nazgul's destructive-command denylist." \
+      "Denylisted as: $DP_REASON" \
+      "Command contained: $DP_PATTERN" \
+      "Composed command: $cmd" \
+      "It came from ${RUNNER_SOURCE:-the resolved runner} and red-run executes it directly, so it never reaches the PreToolUse Bash guard; relocating a denylisted command into nazgul/config.json would otherwise run it unguarded on any scripts/ or tests/ task." \
+      "This is not a red run that failed — nothing was run at all."
+  fi
+  ec=0
+  dp_scan_manifest_write "$cmd" || ec=$?
+  if [ "$ec" -eq 2 ]; then
+    die_code 5 \
+      "REFUSED TO EXECUTE — the command this project configured writes a task manifest." \
+      "Only scripts/task-transition.sh may write a manifest status (ADR-020), and a red-run runner has no business writing one at all." \
+      "Composed command: $cmd" \
+      "This is not a red run that failed — nothing was run at all."
+  fi
 }
 
 # Implementation, not test input: never derived into the pre-change tree. Not extended
@@ -92,6 +124,9 @@ done
   || die "'$TASK_ID' is not a TASK-NNN / PATCH-NNN id"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=./lib/destructive-patterns.sh
+source "$SCRIPT_DIR/lib/destructive-patterns.sh"
+
 if [ -z "$PROJECT_ROOT" ]; then
   _RR_ROOT_LIB="$SCRIPT_DIR/lib/nazgul-root.sh"
   if [ -f "$_RR_ROOT_LIB" ]; then
@@ -383,6 +418,7 @@ $RUNNER_REL
 fi
 
 RUN_CMD="${RUNNER_ARGV[*]} ${FILTER_ARGV[*]}"
+rr_screen_command "$RUN_CMD"
 
 OUT_FILE="$SCRATCH_PARENT/run.log"
 STARTED=$(date +%s)
