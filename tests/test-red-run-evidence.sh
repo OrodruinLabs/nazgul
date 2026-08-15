@@ -109,6 +109,227 @@ assert_contains "absent + out of scope: skipped check is announced, not silent" 
 STDERR_NOT_APPLICABLE="$RR_STDERR"
 teardown_temp_dir
 
+# ADR-024 decision 4: both halves read project.test_roots. No repo-root tests/
+# here ON PURPOSE — the defect is invisible where the hardcode is right.
+setup_monorepo_repo() {
+  setup_temp_dir
+  git -C "$TEST_DIR" init -q
+  git -C "$TEST_DIR" config user.email "test@nazgul.dev"
+  git -C "$TEST_DIR" config user.name "Nazgul Test"
+  mkdir -p "$TEST_DIR/src/App/tests" "$TEST_DIR/src/Worker/tests" "$TEST_DIR/scripts"
+  printf '#!/usr/bin/env bash\n' > "$TEST_DIR/src/App/tests/test-app.sh"
+  printf '#!/usr/bin/env bash\n' > "$TEST_DIR/src/Worker/tests/test-worker.sh"
+  git -C "$TEST_DIR" add -A
+  git -C "$TEST_DIR" commit -q -m "base"
+  BASE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+  printf 'echo work\n' >> "$TEST_DIR/scripts/foo.sh"
+  git -C "$TEST_DIR" add -A
+  git -C "$TEST_DIR" commit -q -m "the task's work"
+  HEAD_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+  setup_nazgul_dir
+}
+
+mono_entry() {
+  printf -- '- red-run: %s :: case "monorepo acceptance"\n  - pre-change-ref: %s\n  - result: FAILED (exit 1) — "FAIL: monorepo acceptance"\n  - captured-by: scripts/red-run.sh at 2026-08-15T00:00:00Z' \
+    "$1" "$BASE_SHA"
+}
+
+setup_monorepo_repo
+create_config '.project.test_roots = ["src/App/tests"]'
+
+# THE case this task exists for: red at the base SHA, where the satisfier still
+# demands a literal repo-root tests/ path this project does not have.
+rr_call "$(rr_manifest '["scripts/foo.sh"]' "$(mono_entry src/App/tests/test-app.sh)")" "$TEST_DIR"
+assert_exit_code "monorepo: evidence under the configured non-tests/ root is accepted" "$RR_EC" 0
+assert_eq "monorepo: reason is 'verified'" "$RR_REASON" "verified"
+
+# ...and the requirement that demanded it is the SAME one the trigger raises, so
+# a repo-root scripts/** touch in a monorepo now produces a SATISFIABLE demand.
+MONO_NO_EVIDENCE=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["scripts/foo.sh"]\n- **Base SHA**: %s\n\n## Commits\n- %s\n\n## Description\nx\n' "$BASE_SHA" "$HEAD_SHA")
+rr_call "$MONO_NO_EVIDENCE" "$TEST_DIR"
+assert_exit_code "monorepo: a repo-root scripts/** touch still raises the requirement" "$RR_EC" 1
+assert_eq "monorepo: unmet requirement still reasons 'absent'" "$RR_REASON" "absent"
+
+# The trigger reads the configured roots too, not a hardcoded tests/.
+MONO_ROOT_SCOPE=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["src/App/tests/test-app.sh"]\n- **Base SHA**: %s\n\n## Commits\n- %s\n\n## Description\nx\n' "$HEAD_SHA" "$HEAD_SHA")
+rr_call "$MONO_ROOT_SCOPE" "$TEST_DIR"
+assert_exit_code "monorepo: a configured-root path in the manifest triggers the requirement" "$RR_EC" 1
+assert_eq "monorepo: configured-root trigger reasons 'absent'" "$RR_REASON" "absent"
+
+# A repo-root tests/ path is NOT a configured root here: still denied, and the
+# diagnostic names the set it was judged against rather than a hardcoded tree.
+rr_call "$(rr_manifest '["scripts/foo.sh"]' "$(mono_entry tests/test-app.sh)")" "$TEST_DIR"
+assert_exit_code "monorepo: a path outside every configured root is still denied" "$RR_EC" 1
+assert_eq "monorepo: outside-every-root reason is 'corrupt'" "$RR_REASON" "corrupt"
+assert_contains "monorepo: the denial names the configured root set" \
+  "$RR_STDERR" "under a configured tests root (src/App/tests)"
+
+# Every safety check is kept and evaluated PER ROOT — widening the traversal
+# rules to reach a monorepo would trade a deadlock for a path escape.
+rr_call "$(rr_manifest '["scripts/foo.sh"]' "$(mono_entry src/App/tests/../../../etc/hosts)")" "$TEST_DIR"
+assert_eq "monorepo: '..' segments are still rejected under a configured root" "$RR_REASON" "corrupt"
+assert_contains "monorepo: dot-segment rejection is unchanged" \
+  "$RR_STDERR" "must not contain '.' or '..' segments"
+
+ln -s "$TEST_DIR/scripts/foo.sh" "$TEST_DIR/src/App/tests/test-linked.sh"
+rr_call "$(rr_manifest '["scripts/foo.sh"]' "$(mono_entry src/App/tests/test-linked.sh)")" "$TEST_DIR"
+assert_eq "monorepo: symlinked evidence path is still rejected" "$RR_REASON" "corrupt"
+assert_contains "monorepo: regular non-symlink requirement is unchanged" \
+  "$RR_STDERR" "regular non-symlink file"
+
+mkdir -p "$TEST_DIR/outside/tests"
+printf '#!/usr/bin/env bash\n' > "$TEST_DIR/outside/tests/test-escape.sh"
+ln -s "$TEST_DIR/outside/tests" "$TEST_DIR/src/App/tests/escape"
+rr_call "$(rr_manifest '["scripts/foo.sh"]' "$(mono_entry src/App/tests/escape/test-escape.sh)")" "$TEST_DIR"
+assert_eq "monorepo: a symlinked directory cannot escape the configured root" "$RR_REASON" "corrupt"
+assert_contains "monorepo: containment is still resolved-parent based" \
+  "$RR_STDERR" "resolves outside every configured tests root"
+rm -f "$TEST_DIR/src/App/tests/escape" "$TEST_DIR/src/App/tests/test-linked.sh"
+
+# An unresolvable configured root is SKIPPED AND COUNTED, never silently dropped:
+# a root set that quietly shrinks to empty re-creates the same unsatisfiable gate.
+create_config '.project.test_roots = ["src/Ghost/tests", "src/App/tests"]'
+MONO_OUT_OF_SCOPE=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n- **Base SHA**: %s\n\n## Commits\n- %s\n\n## Description\nx\n' "$HEAD_SHA" "$HEAD_SHA")
+rr_call "$MONO_OUT_OF_SCOPE" "$TEST_DIR"
+assert_exit_code "skipped root: an out-of-scope task is still allowed" "$RR_EC" 0
+assert_contains "skipped root: the scan reports what it examined, with the reason named" \
+  "$RR_STDERR" "tests-root scan: 2 scanned, 1 skipped (unsafe=0, unresolvable=1), 1 checked, 1 findings"
+assert_contains "skipped root: the scan names where the set came from" "$RR_STDERR" "source=config"
+
+# "Could not determine the roots" is a DIFFERENT state from "determined them and
+# nothing matched", and it fails closed rather than quietly excusing the task.
+create_config '.project.test_roots = []'
+rr_call "$MONO_OUT_OF_SCOPE" "$TEST_DIR"
+assert_exit_code "undeterminable roots: fails closed on an out-of-scope task" "$RR_EC" 1
+assert_contains "undeterminable roots: distinct, loud diagnostic" \
+  "$RR_STDERR" "could not determine the tests roots (project.test_roots is an empty array)"
+assert_not_contains "undeterminable roots: never printed as a completed scan" \
+  "$RR_STDERR" "tests-root scan:"
+assert_not_contains "undeterminable roots: never printed as the degrade path" \
+  "$RR_STDERR" "degraded to manifest-only"
+
+rr_call "$(rr_manifest '["scripts/foo.sh"]' "$(mono_entry src/App/tests/test-app.sh)")" "$TEST_DIR"
+assert_exit_code "undeterminable roots: an entry cannot be judged either" "$RR_EC" 1
+assert_eq "undeterminable roots: reason is 'roots_undeterminable'" "$RR_REASON" "roots_undeterminable"
+
+create_config '.project.test_roots = "src/App/tests"'
+rr_call "$(rr_manifest '["scripts/foo.sh"]' "$(mono_entry src/App/tests/test-app.sh)")" "$TEST_DIR"
+assert_eq "a non-array test_roots is undeterminable, not one root" "$RR_REASON" "roots_undeterminable"
+assert_contains "a non-array test_roots says what is wrong with it" \
+  "$RR_STDERR" "not an array of non-empty repository-relative paths"
+
+# Every configured root unresolvable is its own named state — not "your evidence
+# file is missing", which is what the operator would otherwise go looking for.
+create_config '.project.test_roots = ["src/Ghost/tests"]'
+rr_call "$(rr_manifest '["scripts/foo.sh"]' "$(mono_entry src/Ghost/tests/test-x.sh)")" "$TEST_DIR"
+assert_exit_code "no root resolves: blocks" "$RR_EC" 1
+assert_eq "no root resolves: reason is 'roots_unresolved'" "$RR_REASON" "roots_unresolved"
+assert_contains "no root resolves: names the set that resolved to nothing" \
+  "$RR_STDERR" "every configured tests root (src/Ghost/tests) was skipped"
+
+# The default reproduces today's single-root behaviour exactly, both when the key
+# is configured to it and when the key is absent altogether.
+create_config '.project.test_roots = ["tests"]'
+rr_call "$(rr_manifest '["scripts/foo.sh"]' "$(mono_entry src/App/tests/test-app.sh)")" "$TEST_DIR"
+assert_eq "default root: a monorepo path is rejected exactly as before" "$RR_REASON" "corrupt"
+assert_contains "default root: the message names the single legacy root" \
+  "$RR_STDERR" "under a configured tests root (tests)"
+create_config 'del(.project.test_roots)'
+rr_call "$(rr_manifest '["scripts/foo.sh"]' "$(mono_entry src/App/tests/test-app.sh)")" "$TEST_DIR"
+assert_eq "absent key: falls back to the single legacy root" "$RR_REASON" "corrupt"
+assert_contains "absent key: the fallback names itself rather than passing as config" \
+  "$RR_STDERR" "source=default:absent"
+
+# Root-set matrix, so "checked nothing" cannot read as "found nothing"
+# (RULES.md §15). Columns: roots json | entry path | expected reason | exit.
+ROOT_CASES='["src/App/tests"]|src/App/tests/test-app.sh|verified|0
+["src/App/tests"]|src/Worker/tests/test-worker.sh|corrupt|1
+["src/App/tests","src/Worker/tests"]|src/App/tests/test-app.sh|verified|0
+["src/App/tests","src/Worker/tests"]|src/Worker/tests/test-worker.sh|verified|0
+["src/Ghost/tests","src/App/tests"]|src/App/tests/test-app.sh|verified|0
+["src/Ghost/tests"]|src/Ghost/tests/test-x.sh|roots_unresolved|1
+[]|src/App/tests/test-app.sh|roots_undeterminable|1
+["tests"]|src/App/tests/test-app.sh|corrupt|1
+["../outside/tests"]|src/App/tests/test-app.sh|corrupt|1'
+RC_SCANNED=0; RC_CHECKED=0; RC_UNCONFIGURABLE=0; RC_FINDINGS=0
+while IFS='|' read -r rc_roots rc_path rc_reason rc_ec; do
+  [ -n "$rc_roots" ] || continue
+  RC_SCANNED=$((RC_SCANNED + 1))
+  if ! create_config ".project.test_roots = ${rc_roots}" 2>/dev/null; then
+    RC_UNCONFIGURABLE=$((RC_UNCONFIGURABLE + 1))
+    _skip "root-matrix: ${rc_roots} could not be written to the config — not checked"
+    continue
+  fi
+  RC_CHECKED=$((RC_CHECKED + 1))
+  rr_call "$(rr_manifest '["scripts/foo.sh"]' "$(mono_entry "$rc_path")")" "$TEST_DIR"
+  if [ "$RR_REASON" = "$rc_reason" ] && [ "$RR_EC" -eq "$rc_ec" ]; then
+    _pass "root-matrix: roots=${rc_roots} path=${rc_path} → ${rc_reason} (exit ${rc_ec})"
+  else
+    RC_FINDINGS=$((RC_FINDINGS + 1))
+    _fail "root-matrix: roots=${rc_roots} path=${rc_path} → ${rc_reason} (exit ${rc_ec})" \
+      "expected: ${rc_reason} / exit ${rc_ec}" "  actual: ${RR_REASON} / exit ${RR_EC}"
+  fi
+done <<< "$ROOT_CASES"
+RC_SKIPPED=$((RC_SCANNED - RC_CHECKED))
+echo "  root-matrix: ${RC_SCANNED} scanned, ${RC_SKIPPED} skipped (unconfigurable=${RC_UNCONFIGURABLE}), ${RC_CHECKED} checked, ${RC_FINDINGS} findings"
+assert_eq "root-matrix: scanned == skipped + checked" "$RC_SCANNED" "$((RC_SKIPPED + RC_CHECKED))"
+assert_eq "root-matrix: every configured row was actually checked" "$RC_CHECKED" "9"
+teardown_temp_dir
+
+# ADR-024 Planner decision 3: declaring a path OUT of scope used to put it IN
+# scope, raising a demand the task could never meet. Keys on declared CHANGES.
+setup_rr_repo
+setup_nazgul_dir
+create_config
+
+# Base SHA is HEAD, so the diff arm genuinely says docs-only and the verdict
+# rests on the declared-scope arm alone.
+prohibition_manifest() {
+  printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n- **Base SHA**: %s\n\n## Commits\n- %s\n\n## File Scope\n%s\n\n## Description\nx\n' \
+    "$HEAD_SHA" "$HEAD_SHA" "$1"
+}
+
+rr_call "$(prohibition_manifest '**Modifies**:
+- docs/PRD.md
+
+**Must NOT touch**: `scripts/red-run.sh` (TASK-006), the commit-evidence verifier')" "$TEST_DIR"
+assert_exit_code "prohibition: a Must NOT touch line does not put the task in scope" "$RR_EC" 0
+assert_eq "prohibition: the docs-only task stays 'not_applicable'" "$RR_REASON" "not_applicable"
+
+rr_call "$(prohibition_manifest '**Modifies**:
+- docs/PRD.md
+
+**Must NOT touch**:
+- `scripts/red-run.sh`
+- `tests/run-tests.sh`')" "$TEST_DIR"
+assert_exit_code "prohibition: continuation lines under the label are excluded too" "$RR_EC" 0
+assert_eq "prohibition: multi-line prohibition stays 'not_applicable'" "$RR_REASON" "not_applicable"
+
+# The exclusion is bounded by the next label — it must not swallow a real
+# declaration that happens to follow the prohibition.
+rr_call "$(prohibition_manifest '**Must NOT touch**: docs/
+
+**Modifies**:
+- tests/test-foo.sh')" "$TEST_DIR"
+assert_exit_code "prohibition: a declaration AFTER the prohibition still triggers" "$RR_EC" 1
+assert_eq "prohibition: post-prohibition declaration reasons 'absent'" "$RR_REASON" "absent"
+
+rr_call "$(prohibition_manifest '**Modifies**:
+- scripts/foo.sh
+
+**Must NOT touch**: docs/')" "$TEST_DIR"
+assert_exit_code "prohibition: a genuine declaration on any other line still triggers" "$RR_EC" 1
+assert_eq "prohibition: genuine declaration reasons 'absent'" "$RR_REASON" "absent"
+
+# NOT VACUOUS — this gate judges the very task that changed it, so the shape of
+# that task's own manifest is the one shape that must never stop demanding.
+SELF_SHAPED=$(printf '## Metadata\n- **ID**: TASK-007\n- **Files modified**: ["scripts/lib/task-transition-guard.sh","tests/test-red-run-evidence.sh"]\n- **Base SHA**: %s\n\n## Commits\n- %s\n\n## File Scope\n**Modifies**:\n- `scripts/lib/task-transition-guard.sh`\n- `tests/test-red-run-evidence.sh`\n\n**Must NOT touch**: `scripts/red-run.sh` (TASK-006)\n\n## Description\nx\n' \
+  "$HEAD_SHA" "$HEAD_SHA")
+rr_call "$SELF_SHAPED" "$TEST_DIR" TASK-007
+assert_exit_code "not vacuous: a scripts/** + tests/** task still REQUIRES evidence" "$RR_EC" 1
+assert_eq "not vacuous: the unmet requirement still reasons 'absent'" "$RR_REASON" "absent"
+teardown_temp_dir
+
 # ---------------------------------------------------------------------------
 # STATE 3 — non-comment section content with no parseable entry: BLOCK as corrupt.
 # ---------------------------------------------------------------------------
@@ -183,7 +404,7 @@ rr_call "$(rr_manifest '["scripts/foo.sh"]' "- red-run: ${TEST_DIR}/tests/test-f
   - pre-change-ref: ${BASE_SHA}
   - result: FAILED (exit 1)")" "$TEST_DIR"
 assert_eq "absolute test path: reason is corrupt" "$RR_REASON" "corrupt"
-assert_contains "absolute test path: repository-relative tests path required" "$RR_STDERR" "repository-relative and under tests/"
+assert_contains "absolute test path: repository-relative tests path required" "$RR_STDERR" "must be repository-relative and under a configured tests root (tests)"
 
 rr_call "$(rr_manifest '["scripts/foo.sh"]' "- red-run: tests/../scripts/foo.sh :: case \"x\"
   - pre-change-ref: ${BASE_SHA}
