@@ -16,6 +16,14 @@ set -euo pipefail
 # `## Test Obligation` section. There is no full-suite mode: the ~300s per-task
 # bar is a stated boundary, and a red run that blows it gets routed around.
 #
+# The runner is the PROJECT's own, resolved in one stated order: the live project
+# root's `project.test_command`, else `tests/run-tests.sh` if the pre-change tree
+# carries one, else a named refusal. The scoped filter is interpolated through
+# `project.test_filter_template` — a literal `{filter}` substitution, never eval —
+# because appending a flag Nazgul chose to a command the project chose is a guess
+# whose failure modes are a fabricated red (flag rejected) and an unscoped full
+# suite reported as a scoped one (flag ignored).
+#
 # The copy set defaults to the task's changed files under `tests/` MINUS the
 # harness itself: copying a changed `tests/run-tests.sh` into the pre-change tree
 # would run the new tests under the changed runner, which is the change being
@@ -49,11 +57,16 @@ usage() {
   echo "Usage: scripts/red-run.sh <TASK-ID> [--filter=<name>] [--project-root=<path>] [--copy=<path> ...]"
 }
 
-# Files under tests/ that are implementation, not test input: never copied into
-# the pre-change tree by the derived set.
+# Implementation, not test input: never derived into the pre-change tree. Not extended
+# per project — a resolved runner inside the copy set is reported below, never dropped.
 RR_NEVER_COPY="tests/run-tests.sh
 tests/lib/assertions.sh
 tests/lib/setup.sh"
+
+# The pre-configuration convention: the runner precedence order falls back to it,
+# and the shipped filter template is the flag it has always accepted.
+RR_LEGACY_RUNNER="tests/run-tests.sh"
+RR_DEFAULT_FILTER_TEMPLATE="--filter={filter}"
 
 TASK_ID=""
 FILTER=""
@@ -139,6 +152,100 @@ fi
   "no scoped filter given and none found in $TASK_ID's ## Test Obligation section." \
   "Pass --filter=<name>; a full-suite red run is out of the per-task time budget."
 
+# Config lives under the gitignored `nazgul/`, so it is read from the LIVE project
+# root and never from the detached pre-change worktree, which has no copy of it.
+RR_CONFIG="$PROJECT_ROOT/nazgul/config.json"
+
+rr_cfg_kind() {
+  local key="$1" out
+  [ -f "$RR_CONFIG" ] || { echo absent; return 0; }
+  out=$(jq -r --arg k "$key" '
+    (if (.project | type) == "object" then .project else {} end) as $p
+    | if ($p | has($k) | not) then "absent"
+      elif $p[$k] == null then "absent"
+      elif ($p[$k] | type) != "string" then "nonstring"
+      elif ($p[$k] | length) == 0 then "empty"
+      else "string" end' "$RR_CONFIG" 2>/dev/null) || out="unreadable"
+  [ -n "$out" ] || out="unreadable"
+  printf '%s' "$out"
+}
+
+rr_cfg_value() {
+  jq -r --arg k "$1" '(if (.project | type) == "object" then .project else {} end)[$k]' \
+    "$RR_CONFIG" 2>/dev/null || true
+}
+
+# The legacy convention is recognised by value, not by where it came from, so
+# precedence order 2 and the shipped default filter template always agree.
+rr_is_legacy_runner() {
+  local first="${1:-}"
+  case "$first" in
+    bash|sh) first="${2:-}" ;;
+  esac
+  [ "${first#./}" = "$RR_LEGACY_RUNNER" ]
+}
+
+if [ -f "$RR_CONFIG" ]; then
+  command -v jq >/dev/null 2>&1 || die \
+    "$RR_CONFIG exists but jq is not available, so project.test_command cannot be read." \
+    "Refusing to run a runner this project may not use. Install jq and re-capture."
+fi
+
+TEST_COMMAND=""
+RUNNER_SOURCE=""
+CMD_KIND=$(rr_cfg_kind test_command)
+case "$CMD_KIND" in
+  string)
+    TEST_COMMAND=$(rr_cfg_value test_command)
+    RUNNER_SOURCE="project.test_command"
+    ;;
+  absent) ;;
+  *) die \
+    "project.test_command in $RR_CONFIG is unusable ($CMD_KIND) — it must be a non-empty string." \
+    "This is not a runner that failed: no runner could be determined at all." ;;
+esac
+
+RUNNER_ARGV=()
+if [ -n "$TEST_COMMAND" ]; then
+  read -r -a RUNNER_ARGV <<<"$TEST_COMMAND"
+fi
+[ "${#RUNNER_ARGV[@]}" -gt 0 ] || RUNNER_SOURCE=""
+
+TPL_KIND=$(rr_cfg_kind test_filter_template)
+FILTER_TEMPLATE=""
+case "$TPL_KIND" in
+  string) FILTER_TEMPLATE=$(rr_cfg_value test_filter_template) ;;
+  absent)
+    if [ "${#RUNNER_ARGV[@]}" -eq 0 ] || rr_is_legacy_runner "${RUNNER_ARGV[0]:-}" "${RUNNER_ARGV[1]:-}"; then
+      FILTER_TEMPLATE="$RR_DEFAULT_FILTER_TEMPLATE"
+    else
+      die \
+        "project.test_filter_template is not configured in $RR_CONFIG, and '$TEST_COMMAND' is not the $RR_LEGACY_RUNNER convention the shipped default describes." \
+        "Refusing to append a scoping flag this project never declared: a flag the runner rejects would exit non-zero and be read as RED confirmed, and a flag it ignores would run the whole suite as if it were scoped." \
+        "Set project.test_filter_template to the runner's own scoping form with a single {filter} placeholder (e.g. \"--filter {filter}\", \"-run {filter}\", \"-k {filter}\")."
+    fi
+    ;;
+  *) die \
+    "project.test_filter_template in $RR_CONFIG is unusable ($TPL_KIND) — it must be a non-empty string carrying one {filter} placeholder." \
+    "This is not a runner that failed: the scoped run was never composed." ;;
+esac
+
+case "$FILTER_TEMPLATE" in
+  *"{filter}"*) ;;
+  *) die \
+    "project.test_filter_template in $RR_CONFIG carries no {filter} placeholder: '$FILTER_TEMPLATE'." \
+    "There is nowhere to put the scoped filter, and appending it blindly is the guess this template exists to replace." \
+    "This is not a runner that failed: the scoped run was never composed." ;;
+esac
+
+FILTER_ARGV=()
+read -r -a RR_TPL_TOKENS <<<"$FILTER_TEMPLATE"
+for tok in "${RR_TPL_TOKENS[@]}"; do
+  FILTER_ARGV+=("${tok//\{filter\}/$FILTER}")
+done
+[ "${#FILTER_ARGV[@]}" -gt 0 ] || die \
+  "project.test_filter_template in $RR_CONFIG expands to no argument: '$FILTER_TEMPLATE'."
+
 if [ -n "$EXPLICIT_COPY" ]; then
   TEST_FILES="$EXPLICIT_COPY"
   echo "red-run: copy set pinned by --copy; no derivation, no exclusions" >&2
@@ -222,13 +329,65 @@ done <<EOF
 $COPY_LIST
 EOF
 
-[ -f "$SCRATCH/tests/run-tests.sh" ] || die \
-  "the pre-change tree at $BASE_SHA has no tests/run-tests.sh — nothing can be run there"
+if [ "${#RUNNER_ARGV[@]}" -eq 0 ]; then
+  if [ -f "$SCRATCH/$RR_LEGACY_RUNNER" ]; then
+    RUNNER_ARGV=("$RR_LEGACY_RUNNER")
+    RUNNER_SOURCE="the $RR_LEGACY_RUNNER convention"
+  else
+    die \
+      "no test runner could be determined for this project." \
+      "project.test_command is not set in $RR_CONFIG, and the pre-change tree at $BASE_SHA has no $RR_LEGACY_RUNNER to fall back to." \
+      "This is not a red run that failed — nothing was run at all. Set project.test_command, and project.test_filter_template beside it."
+  fi
+fi
+
+RUNNER_BIN="${RUNNER_ARGV[0]}"
+RUNNER_REL=""
+case "$RUNNER_BIN" in
+  /*)
+    [ -x "$RUNNER_BIN" ] || die \
+      "the runner named by $RUNNER_SOURCE is not an executable file: $RUNNER_BIN." \
+      "This is not a red run that failed — nothing was run at all."
+    ;;
+  */*)
+    RUNNER_REL="${RUNNER_BIN#./}"
+    case "/$RUNNER_REL/" in
+      */../*|*/./*) die \
+        "the runner named by $RUNNER_SOURCE escapes the pre-change tree: '$RUNNER_BIN' carries a '.' or '..' segment." \
+        "Resolved from the detached worktree it would run a file from another tree — possibly the changed one, which is the vacuity this script exists to detect." \
+        "This is not a red run that failed — nothing was run at all." ;;
+    esac
+    [ -f "$SCRATCH/$RUNNER_REL" ] || die \
+      "the runner named by $RUNNER_SOURCE is absent from the pre-change tree: $BASE_SHA has no $RUNNER_REL." \
+      "A runner that does not exist at the base commit cannot be run there; track it, or pin it into the copy set." \
+      "This is not a red run that failed — nothing was run at all."
+    # A tracked-but-not-executable runner is run under bash, as this script did
+    # before the runner was configurable; the recorded command says which form ran.
+    [ -x "$SCRATCH/$RUNNER_REL" ] || RUNNER_ARGV=(bash "${RUNNER_ARGV[@]}")
+    ;;
+  *)
+    command -v "$RUNNER_BIN" >/dev/null 2>&1 || die \
+      "the runner named by $RUNNER_SOURCE is not on PATH: '$RUNNER_BIN' cannot be executed here." \
+      "This is not a red run that failed — nothing was run at all."
+    ;;
+esac
+
+if [ -n "$RUNNER_REL" ]; then
+  case "
+$COPY_LIST
+" in
+    *"
+$RUNNER_REL
+"*) echo "red-run: WARNING — the copy set carries $RUNNER_REL, the resolved runner; the pre-change run will execute the CHANGED runner, so both a fabricated red and a vacuous green are possible. Pin the set with --copy= to exclude it." >&2 ;;
+  esac
+fi
+
+RUN_CMD="${RUNNER_ARGV[*]} ${FILTER_ARGV[*]}"
 
 OUT_FILE="$SCRATCH_PARENT/run.log"
 STARTED=$(date +%s)
 set +e
-( cd "$SCRATCH" && bash tests/run-tests.sh --filter="$FILTER" </dev/null ) >"$OUT_FILE" 2>&1
+( cd "$SCRATCH" && "${RUNNER_ARGV[@]}" "${FILTER_ARGV[@]}" </dev/null ) >"$OUT_FILE" 2>&1
 RUN_EC=$?
 set -e
 ELAPSED=$(( $(date +%s) - STARTED ))
@@ -238,7 +397,7 @@ RUN_TAIL=$(tail -n 25 "$OUT_FILE" || true)
 if [ "$RUN_EC" -eq 0 ]; then
   die_code 2 \
     "VACUOUS TEST — the pre-change run PASSED." \
-    "tests/run-tests.sh --filter=$FILTER exited 0 against the tree at $BASE_SHA, where this task's" \
+    "$RUN_CMD exited 0 against the tree at $BASE_SHA, where this task's" \
     "change does not exist. A test that passes without the change under test is evidence of nothing." \
     "No evidence block was written. Rewrite the test so it fails for the reason the change fixes." \
     "--- last lines of the pre-change run ---" \
@@ -247,7 +406,7 @@ fi
 if [ "$RUN_EC" -eq 2 ]; then
   die_code 3 \
     "NOTHING CHECKED — the scoped filter matched no test files in the pre-change tree." \
-    "tests/run-tests.sh --filter=$FILTER exited 2 at $BASE_SHA after $COPIED file(s) were copied in." \
+    "$RUN_CMD exited 2 at $BASE_SHA after $COPIED file(s) were copied in." \
     "This is not a red run: nothing ran. Check the filter spelling against the copied test file names." \
     "No evidence block was written." \
     "--- last lines of the pre-change run ---" \
@@ -326,7 +485,7 @@ CAPTURE_NOTE=""
 [ -n "$EXPLICIT_COPY" ] && CAPTURE_NOTE="; copy set pinned by --copy"
 
 BLOCK="${BEGIN_MARK}
-- capture: \`tests/run-tests.sh --filter=${FILTER}\` in a detached worktree at \`${BASE_SHA}\`; ${COPIED} changed test file(s) copied in${CAPTURE_NOTE}; runner exit ${RUN_EC} in ${ELAPSED}s
+- capture: \`${RUN_CMD}\` in a detached worktree at \`${BASE_SHA}\`; ${COPIED} changed test file(s) copied in${CAPTURE_NOTE}; runner exit ${RUN_EC} in ${ELAPSED}s
 ${ENTRIES}${END_MARK}"
 
 # In-place file write, never `mv`/`cp` over a manifest: the bash-write
