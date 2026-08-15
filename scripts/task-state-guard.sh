@@ -10,6 +10,8 @@ source "$SCRIPT_DIR/lib/task-utils.sh"
 source "$SCRIPT_DIR/lib/review-evidence.sh"
 source "$SCRIPT_DIR/lib/task-transition-guard.sh"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
+# shellcheck source=./lib/destructive-patterns.sh
+source "$SCRIPT_DIR/lib/destructive-patterns.sh"
 
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
 INPUT=$(cat 2>/dev/null || echo "")
@@ -222,7 +224,53 @@ if ! is_task_manifest "$CANON_FILE_PATH"; then
     fi
   fi
 
-  # Files inside nazgul/ are always allowed (config, plan, reviews, etc.)
+  # Two keys are carved OUT of the nazgul/ allow below: scripts/red-run.sh executes
+  # them directly, so this write is the one route past pre-tool-guard.sh entirely.
+  _tsg_project_command_values() {
+    local payload="$1" out=""
+    if command -v jq >/dev/null 2>&1; then
+      out=$(printf '%s' "$payload" | jq -r '
+        (if (.project | type) == "object" then .project else {} end)
+        | (.test_command, .test_filter_template)
+        | select(type == "string" and . != "")' 2>/dev/null || true)
+    fi
+    # An Edit new_string is a FRAGMENT, not parseable JSON: recover the values
+    # textually rather than treating an unparseable payload as nothing to check.
+    if [ -z "$out" ]; then
+      out=$(printf '%s' "$payload" \
+        | grep -oE '"(test_command|test_filter_template)"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' \
+        | sed -E 's/^"[^"]*"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)
+    fi
+    printf '%s' "$out"
+  }
+
+  _tsg_screen_project_commands() {
+    local payload values value ec
+    payload=$(echo "$INPUT" | jq -r '.tool_input.content // .tool_input.new_string // ""' 2>/dev/null || echo "")
+    [ -n "$payload" ] || return 0
+    values=$(_tsg_project_command_values "$payload")
+    [ -n "$values" ] || return 0
+    while IFS= read -r value; do
+      [ -n "$value" ] || continue
+      ec=0
+      dp_scan_command "$value" || ec=$?
+      [ "$ec" -eq 2 ] || continue
+      echo "NAZGUL STATE GUARD: BLOCKED — this write would set a project command that is on the destructive-command denylist" >&2
+      echo "Denylisted as: $DP_REASON" >&2
+      echo "Value contained: $DP_PATTERN" >&2
+      echo "Value: $value" >&2
+      echo "project.test_command and project.test_filter_template are executed by scripts/red-run.sh, not through the Bash tool, so pre-tool-guard.sh never sees them." >&2
+      exit 2
+    done <<EOF
+$values
+EOF
+  }
+
+  case "$CANON_FILE_PATH" in
+    */nazgul/config.json) _tsg_screen_project_commands ;;
+  esac
+
+  # Everything else inside nazgul/ is always allowed (plan, reviews, etc.)
   if is_nazgul_path "$CANON_FILE_PATH"; then
     exit 0
   fi
