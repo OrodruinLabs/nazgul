@@ -361,4 +361,365 @@ assert_contains "no changed tests: points at the enumerated N/A escape" "$RR_OUT
 assert_eq "no changed tests: no scratch worktree is left behind" "$(worktree_count)" "1"
 
 teardown_temp_dir
+
+# The project's own runner, not this repo's harness. Ordered FIRST among the
+# runner-resolution cases: each dies at the pre-change base on the old hardcode.
+RRS_SCANNED=0
+RRS_CHECKED=0
+RRS_SKIPPED=0
+RRS_NOJQ=0
+RRS_FINDINGS=0
+RRS_MARK=0
+
+# A scenario red-run cannot be driven through here (it needs jq to read a project
+# config at all) is SKIPPED and counted, never silently passed.
+rrs_begin() {
+  RRS_SCANNED=$((RRS_SCANNED + 1))
+  if [ "${2:-}" = "jq" ] && ! command -v jq >/dev/null 2>&1; then
+    RRS_SKIPPED=$((RRS_SKIPPED + 1))
+    RRS_NOJQ=$((RRS_NOJQ + 1))
+    _skip "runner-resolution: $1 (jq unavailable — red-run cannot read a project config)"
+    return 1
+  fi
+  RRS_CHECKED=$((RRS_CHECKED + 1))
+  RRS_MARK="$TESTS_FAILED"
+  return 0
+}
+
+rrs_end() {
+  [ "$TESTS_FAILED" -eq "$RRS_MARK" ] || RRS_FINDINGS=$((RRS_FINDINGS + 1))
+}
+
+write_project_config() {
+  cat > "$TEST_DIR/nazgul/config.json"
+}
+
+# The capture line's command, between the backticks — the provenance string a
+# reviewer reads as "this is what ran".
+capture_cmd() {
+  grep -o '^- capture: `[^`]*`' "$1" | head -1 | sed -e 's/^- capture: `//' -e 's/`$//'
+}
+
+# Scratch project whose ONLY runner is ./run-my-tests.sh, scoped with --only=.
+# tests/run-tests.sh is never created here, so a surviving hardcode cannot pass.
+setup_custom_runner_project() {
+  setup_temp_dir
+  git -C "$TEST_DIR" init -q -b main
+  git -C "$TEST_DIR" config user.email "test@nazgul.dev"
+  git -C "$TEST_DIR" config user.name "Nazgul Test"
+  mkdir -p "$TEST_DIR/tests" "$TEST_DIR/scripts" "$TEST_DIR/nazgul/tasks"
+  cat > "$TEST_DIR/run-my-tests.sh" <<'CUSTOM_RUNNER'
+#!/usr/bin/env bash
+set -uo pipefail
+only=""
+for a in "$@"; do
+  case "$a" in --only=*) only="${a#--only=}" ;; esac
+done
+if [ -z "$only" ]; then
+  echo "run-my-tests: no --only= scope given"
+  exit 9
+fi
+root="$(cd "$(dirname "$0")" && pwd)"
+matched=0
+failed=""
+for f in "$root"/tests/test-*.sh; do
+  [ -e "$f" ] || continue
+  base=$(basename "$f")
+  case "$base" in *"$only"*) ;; *) continue ;; esac
+  matched=1
+  bash "$f" || failed="${failed}  - ${base}
+"
+done
+if [ "$matched" -eq 0 ]; then
+  echo "run-my-tests: nothing matched --only=$only"
+  exit 2
+fi
+if [ -n "$failed" ]; then
+  printf 'Failed test files:\n%s\n' "$failed"
+  exit 1
+fi
+exit 0
+CUSTOM_RUNNER
+  chmod +x "$TEST_DIR/run-my-tests.sh"
+  git -C "$TEST_DIR" add -A
+  git -C "$TEST_DIR" commit -q -m "base: the project's own runner, no nazgul harness"
+  CUSTOM_BASE=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  printf '#!/usr/bin/env bash\necho feature\n' > "$TEST_DIR/scripts/feature.sh"
+  cat > "$TEST_DIR/tests/test-delta.sh" <<'DELTA'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "=== test-delta ==="
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/scripts/feature.sh" ]; then
+  echo "  PASS: delta needs the feature"
+  exit 0
+fi
+echo "  FAIL: delta needs the feature"
+exit 1
+DELTA
+  git -C "$TEST_DIR" add -A
+  git -C "$TEST_DIR" commit -q -m "the task's work"
+  CUSTOM_HEAD=$(git -C "$TEST_DIR" rev-parse HEAD)
+}
+
+write_custom_manifest() {
+  local id="$1"
+  {
+    printf -- '---\nstatus: IN_PROGRESS\n---\n# %s: scratch task\n\n' "$id"
+    printf -- '## Metadata\n- **ID**: %s\n- **Base SHA**: %s\n\n' "$id" "$CUSTOM_BASE"
+    printf -- '## Commits\n%s\n\n' "$CUSTOM_HEAD"
+    printf -- '## Test Obligation\n- **Scoped filter**: `./run-my-tests.sh --only=delta`\n\n'
+    printf -- '## Implementation Log\n- nothing yet\n'
+  } > "$TEST_DIR/nazgul/tasks/${id}.md"
+}
+
+setup_custom_runner_project
+if rrs_begin "project.test_command composes and runs, and the record names it" jq; then
+  write_project_config <<'CFG'
+{
+  "schema_version": 37,
+  "project": {
+    "test_command": "./run-my-tests.sh",
+    "test_filter_template": "--only={filter}",
+    "test_roots": ["tests"]
+  }
+}
+CFG
+  write_custom_manifest TASK-101
+  MANIFEST101="$TEST_DIR/nazgul/tasks/TASK-101.md"
+  run_capture TASK-101 --filter=delta
+  assert_exit_code "custom runner: a project without tests/run-tests.sh still captures" "$RR_EC" 0
+  assert_contains "custom runner: reports RED confirmed" "$RR_OUT" "RED confirmed for TASK-101"
+  assert_eq "custom runner: the record names the composed project command" \
+    "$(capture_cmd "$MANIFEST101")" "./run-my-tests.sh --only=delta"
+  assert_file_not_contains "custom runner: the record never names a harness that did not run" \
+    "$MANIFEST101" 'run-tests.sh'
+  assert_file_contains "custom runner: the entry names the failing test file" \
+    "$MANIFEST101" 'red-run: tests/test-delta.sh'
+  assert_file_contains "custom runner: the case name comes from the project runner's own output" \
+    "$MANIFEST101" 'case "delta needs the feature"'
+  assert_file_contains "custom runner: provenance is still the capturer" \
+    "$MANIFEST101" 'captured-by: scripts/red-run.sh at 20'
+  assert_eq "custom runner: the scratch worktree is removed" "$(worktree_count)" "1"
+  rrs_end
+fi
+
+if rrs_begin "a configured runner absent from the pre-change tree is named as such" jq; then
+  write_project_config <<'CFG'
+{
+  "schema_version": 37,
+  "project": {
+    "test_command": "./run-my-tests-v2.sh",
+    "test_filter_template": "--only={filter}"
+  }
+}
+CFG
+  write_custom_manifest TASK-102
+  run_capture TASK-102 --filter=delta
+  assert_exit_code "absent runner: exits 1 — an environment error, not a red run" "$RR_EC" 1
+  assert_contains "absent runner: names the runner and the tree it is missing from" "$RR_OUT" \
+    "is absent from the pre-change tree: $CUSTOM_BASE has no run-my-tests-v2.sh"
+  assert_contains "absent runner: says nothing ran, so this is not a failed run" "$RR_OUT" \
+    "nothing was run at all"
+  assert_not_contains "absent runner: is NOT the undeterminable-runner state" "$RR_OUT" \
+    "no test runner could be determined"
+  assert_not_contains "absent runner: is never reported as a vacuous test" "$RR_OUT" "VACUOUS TEST"
+  assert_file_not_contains "absent runner: writes NO evidence block" \
+    "$TEST_DIR/nazgul/tasks/TASK-102.md" '## Red-Run Evidence'
+  rrs_end
+fi
+
+if rrs_begin "a runner path that escapes the pre-change tree is refused" jq; then
+  write_project_config <<'CFG'
+{
+  "schema_version": 37,
+  "project": {
+    "test_command": "./tests/../run-my-tests.sh",
+    "test_filter_template": "--only={filter}"
+  }
+}
+CFG
+  write_custom_manifest TASK-111
+  run_capture TASK-111 --filter=delta
+  assert_exit_code "traversal runner: exits 1 rather than running a file from another tree" "$RR_EC" 1
+  assert_contains "traversal runner: names the segment it refused" "$RR_OUT" \
+    "carries a '.' or '..' segment"
+  assert_contains "traversal runner: says which tree it would have run from" "$RR_OUT" \
+    "possibly the changed one"
+  assert_file_not_contains "traversal runner: writes NO evidence block" \
+    "$TEST_DIR/nazgul/tasks/TASK-111.md" '## Red-Run Evidence'
+  rrs_end
+fi
+
+if rrs_begin "a configured runner that is not on PATH is named as such" jq; then
+  write_project_config <<'CFG'
+{
+  "schema_version": 37,
+  "project": {
+    "test_command": "nazgul-no-such-runner-xyz test",
+    "test_filter_template": "--only={filter}"
+  }
+}
+CFG
+  write_custom_manifest TASK-103
+  run_capture TASK-103 --filter=delta
+  assert_exit_code "unreachable runner: exits 1" "$RR_EC" 1
+  assert_contains "unreachable runner: names the command it could not execute" "$RR_OUT" \
+    "is not on PATH: 'nazgul-no-such-runner-xyz' cannot be executed here"
+  assert_contains "unreachable runner: says nothing ran" "$RR_OUT" "nothing was run at all"
+  assert_file_not_contains "unreachable runner: writes NO evidence block" \
+    "$TEST_DIR/nazgul/tasks/TASK-103.md" '## Red-Run Evidence'
+  rrs_end
+fi
+
+if rrs_begin "a custom runner with no filter template is refused, not appended to" jq; then
+  write_project_config <<'CFG'
+{
+  "schema_version": 37,
+  "project": {
+    "test_command": "./run-my-tests.sh"
+  }
+}
+CFG
+  write_custom_manifest TASK-104
+  run_capture TASK-104 --filter=delta
+  assert_exit_code "no template: exits 1 rather than guessing a scoping flag" "$RR_EC" 1
+  assert_contains "no template: names the missing configuration key" "$RR_OUT" \
+    "project.test_filter_template is not configured"
+  assert_contains "no template: names the command it refused to scope" "$RR_OUT" "./run-my-tests.sh"
+  assert_contains "no template: says why a blind append is refused" "$RR_OUT" \
+    "would exit non-zero and be read as RED confirmed"
+  assert_not_contains "no template: is never reported as a vacuous test" "$RR_OUT" "VACUOUS TEST"
+  assert_file_not_contains "no template: writes NO evidence block" \
+    "$TEST_DIR/nazgul/tasks/TASK-104.md" '## Red-Run Evidence'
+  rrs_end
+fi
+
+if rrs_begin "a filter template carrying no {filter} is refused distinctly" jq; then
+  write_project_config <<'CFG'
+{
+  "schema_version": 37,
+  "project": {
+    "test_command": "./run-my-tests.sh",
+    "test_filter_template": "--only"
+  }
+}
+CFG
+  write_custom_manifest TASK-105
+  run_capture TASK-105 --filter=delta
+  assert_exit_code "placeholderless template: exits 1" "$RR_EC" 1
+  assert_contains "placeholderless template: names the placeholder it wanted, and the value it got" \
+    "$RR_OUT" "carries no {filter} placeholder: '--only'"
+  assert_not_contains "placeholderless template: is NOT the absent-template message" "$RR_OUT" \
+    "is not configured"
+  assert_file_not_contains "placeholderless template: writes NO evidence block" \
+    "$TEST_DIR/nazgul/tasks/TASK-105.md" '## Red-Run Evidence'
+  rrs_end
+fi
+
+if rrs_begin "an unusable config value is refused as unusable, not as a failed run" jq; then
+  write_project_config <<'CFG'
+{
+  "schema_version": 37,
+  "project": {
+    "test_command": ["./run-my-tests.sh"],
+    "test_filter_template": "--only={filter}"
+  }
+}
+CFG
+  write_custom_manifest TASK-106
+  run_capture TASK-106 --filter=delta
+  assert_exit_code "nonstring test_command: exits 1" "$RR_EC" 1
+  assert_contains "nonstring test_command: names the key and what is wrong with it" "$RR_OUT" \
+    "project.test_command in"
+  assert_contains "nonstring test_command: reports the value's kind" "$RR_OUT" "unusable (nonstring)"
+  assert_contains "nonstring test_command: distinguishes itself from a failed runner" "$RR_OUT" \
+    "no runner could be determined at all"
+  rrs_end
+fi
+
+if rrs_begin "no runner anywhere is a distinct, named refusal" ""; then
+  rm -f "$TEST_DIR/nazgul/config.json"
+  write_custom_manifest TASK-107
+  run_capture TASK-107 --filter=delta
+  assert_exit_code "no runner: exits 1" "$RR_EC" 1
+  assert_contains "no runner: says no runner could be determined" "$RR_OUT" \
+    "no test runner could be determined for this project"
+  assert_contains "no runner: names both the key and the fallback it looked for" "$RR_OUT" \
+    "project.test_command is not set"
+  assert_contains "no runner: names the convention it fell back to" "$RR_OUT" \
+    "has no tests/run-tests.sh to fall back to"
+  assert_contains "no runner: says nothing ran at all" "$RR_OUT" "nothing was run at all"
+  assert_not_contains "no runner: is never reported as a vacuous test" "$RR_OUT" "VACUOUS TEST"
+  assert_not_contains "no runner: is never reported as nothing-checked" "$RR_OUT" "NOTHING CHECKED"
+  assert_file_not_contains "no runner: writes NO evidence block" \
+    "$TEST_DIR/nazgul/tasks/TASK-107.md" '## Red-Run Evidence'
+  rrs_end
+fi
+
+# The shipped defaults must reproduce the pre-configuration capture exactly.
+teardown_temp_dir
+setup_project
+if rrs_begin "no config at all: the legacy convention captures byte-identically" ""; then
+  write_manifest TASK-108 "$BASE_SHA"
+  MANIFEST108="$TEST_DIR/nazgul/tasks/TASK-108.md"
+  run_capture TASK-108 --filter=alpha
+  assert_exit_code "default runner: a project with no config still captures" "$RR_EC" 0
+  assert_eq "default runner: the recorded command is the pre-configuration string, unchanged" \
+    "$(capture_cmd "$MANIFEST108")" "tests/run-tests.sh --filter=alpha"
+  LEGACY_CAPTURE_CMD=$(capture_cmd "$MANIFEST108")
+  rrs_end
+fi
+
+if rrs_begin "an unmigrated config naming the legacy harness captures identically" jq; then
+  write_project_config <<'CFG'
+{
+  "schema_version": 36,
+  "project": {
+    "test_command": "tests/run-tests.sh"
+  }
+}
+CFG
+  write_manifest TASK-109 "$BASE_SHA"
+  MANIFEST109="$TEST_DIR/nazgul/tasks/TASK-109.md"
+  run_capture TASK-109 --filter=alpha
+  assert_exit_code "legacy test_command: a schema-36 config with no template still captures" "$RR_EC" 0
+  assert_eq "legacy test_command: precedence 1 and precedence 2 record the same command" \
+    "$(capture_cmd "$MANIFEST109")" "${LEGACY_CAPTURE_CMD:-<unset>}"
+  assert_file_contains "legacy test_command: the entry is unchanged too" \
+    "$MANIFEST109" 'red-run: tests/test-alpha.sh'
+  rrs_end
+fi
+
+if rrs_begin "an explicit default template is identical to the shipped default" jq; then
+  write_project_config <<'CFG'
+{
+  "schema_version": 37,
+  "project": {
+    "test_command": "tests/run-tests.sh",
+    "test_filter_template": "--filter={filter}",
+    "test_roots": ["tests"]
+  }
+}
+CFG
+  write_manifest TASK-110 "$BASE_SHA"
+  MANIFEST110="$TEST_DIR/nazgul/tasks/TASK-110.md"
+  run_capture TASK-110 --filter=alpha
+  assert_exit_code "migrated config: captures" "$RR_EC" 0
+  assert_eq "migrated config: the shipped default reproduces the hardcoded command exactly" \
+    "$(capture_cmd "$MANIFEST110")" "${LEGACY_CAPTURE_CMD:-<unset>}"
+  rrs_end
+fi
+
+echo "  runner-resolution: ${RRS_SCANNED} scanned, ${RRS_SKIPPED} skipped (jq-unavailable=${RRS_NOJQ}), ${RRS_CHECKED} checked, ${RRS_FINDINGS} findings"
+assert_eq "runner-resolution: scanned == skipped + checked" \
+  "$RRS_SCANNED" "$((RRS_SKIPPED + RRS_CHECKED))"
+if command -v jq >/dev/null 2>&1; then
+  assert_eq "runner-resolution: every scenario was driven where jq is available" \
+    "$RRS_CHECKED" "$RRS_SCANNED"
+else
+  assert_eq "runner-resolution: the jq-free scenarios were still driven" "$RRS_CHECKED" "2"
+fi
+
+teardown_temp_dir
 report_results
