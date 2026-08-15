@@ -480,6 +480,7 @@ fi
 AGGREGATE_REVIEW_READY="false"
 AGGREGATE_REVIEW_SCOPE=""
 AGGREGATE_REVIEW_TASKS=""
+AGGREGATE_CARVEOUT_NOTE=""
 AWAITING_AGGREGATE_REVIEW="false"
 if [ "$GRANULARITY" != "task" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
   # The "active group" is the group of the lowest-numbered task that is not yet
@@ -495,18 +496,19 @@ if [ "$GRANULARITY" != "task" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
     [ -f "$task_file" ] || continue
     STATUS=$(get_task_status "$task_file")
     [ "$STATUS" = "DONE" ] && continue
+    # A CANCELLED task ships nothing, so it must not be the one that names the unit.
+    [ "$STATUS" = "CANCELLED" ] && continue
     ACTIVE_GROUP=$(resolve_review_unit "$NAZGUL_DIR" "$(basename "$task_file" .md)")
     ACTIVE_GROUP="${ACTIVE_GROUP#GROUP-}"
     break
   done
 
-  # Walk the review unit: in group mode, only tasks whose Group matches ACTIVE_GROUP;
-  # in feature mode, every non-DONE task. The unit is "review-ready" when it has at
-  # least one task and every task in it is IMPLEMENTED (none still READY/IN_PROGRESS/
-  # CHANGES_REQUESTED/BLOCKED). A BLOCKED task holds the whole unit back.
+  # Walk the review unit: group mode takes only ACTIVE_GROUP's tasks, feature mode every
+  # non-DONE one. Ready when >=1 task and all are IMPLEMENTED; BLOCKED still vetoes.
   UNIT_TOTAL=0
   UNIT_IMPLEMENTED=0
-  UNIT_BLOCKED=0
+  UNIT_EXCLUDED=0
+  UNIT_EXCLUDED_TASKS=""
   for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     STATUS=$(get_task_status "$task_file")
@@ -516,28 +518,49 @@ if [ "$GRANULARITY" != "task" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
       TGROUP="${TGROUP#GROUP-}"
       [ "$TGROUP" = "$ACTIVE_GROUP" ] || continue
     fi
+    # CANCELLED leaves the unit exactly as DONE does, but its id is recorded first —
+    # readiness reached by exclusion is not readiness where every task shipped.
+    if [ "$STATUS" = "CANCELLED" ]; then
+      UNIT_EXCLUDED=$((UNIT_EXCLUDED + 1))
+      UNIT_EXCLUDED_TASKS="${UNIT_EXCLUDED_TASKS}$(basename "$task_file" .md) "
+      continue
+    fi
     UNIT_TOTAL=$((UNIT_TOTAL + 1))
     case "$STATUS" in
       IMPLEMENTED|IN_REVIEW)
         UNIT_IMPLEMENTED=$((UNIT_IMPLEMENTED + 1))
         AGGREGATE_REVIEW_TASKS="${AGGREGATE_REVIEW_TASKS}$(basename "$task_file" .md) "
         ;;
-      BLOCKED) UNIT_BLOCKED=$((UNIT_BLOCKED + 1)) ;;
     esac
   done
   AGGREGATE_REVIEW_TASKS=$(printf '%s' "$AGGREGATE_REVIEW_TASKS" | sed 's/[[:space:]]*$//')
+  UNIT_EXCLUDED_TASKS=$(printf '%s' "$UNIT_EXCLUDED_TASKS" | sed 's/[[:space:]]*$//')
+  UNIT_MEMBERS=$((UNIT_TOTAL + UNIT_EXCLUDED))
+  if [ "$GRANULARITY" = "group" ]; then
+    UNIT_SCOPE_LABEL="group ${ACTIVE_GROUP}"
+  else
+    UNIT_SCOPE_LABEL="feature"
+  fi
+  if [ "$UNIT_EXCLUDED" -gt 0 ]; then
+    AGGREGATE_CARVEOUT_NOTE=" CARVE-OUT: ${UNIT_IMPLEMENTED} of ${UNIT_MEMBERS} unit tasks reviewed — ${UNIT_EXCLUDED} carried out CANCELLED (${UNIT_EXCLUDED_TASKS}); a cancelled task is removed from the unit, never approved by it."
+    emit_event "aggregate_board_blocked_carveout" \
+      unit "$UNIT_SCOPE_LABEL" \
+      blocked_tasks "$UNIT_EXCLUDED_TASKS" \
+      implemented:n "$UNIT_IMPLEMENTED" \
+      total:n "$UNIT_MEMBERS"
+  fi
 
-  if [ "$UNIT_TOTAL" -gt 0 ] && [ "$UNIT_IMPLEMENTED" -eq "$UNIT_TOTAL" ]; then
+  # The -gt 0 floor subsumes the old UNIT_TOTAL -gt 0: an all-cancelled unit has
+  # nothing to review, and an empty board is not a clean one.
+  if [ "$UNIT_IMPLEMENTED" -gt 0 ] && [ "$UNIT_IMPLEMENTED" -eq "$UNIT_TOTAL" ]; then
     AGGREGATE_REVIEW_READY="true"
-    if [ "$GRANULARITY" = "group" ]; then
-      AGGREGATE_REVIEW_SCOPE="group ${ACTIVE_GROUP}"
-    else
-      AGGREGATE_REVIEW_SCOPE="feature"
-    fi
+    AGGREGATE_REVIEW_SCOPE="$UNIT_SCOPE_LABEL"
   elif [ "$UNIT_IMPLEMENTED" -gt 0 ]; then
     # Some tasks in the unit are IMPLEMENTED-but-parked, but the unit is not yet
     # complete — record the "awaiting aggregate review" condition for recovery.
     AWAITING_AGGREGATE_REVIEW="true"
+  elif [ "$UNIT_EXCLUDED" -gt 0 ] && [ "$UNIT_TOTAL" -eq 0 ]; then
+    echo "Nazgul: review unit [${UNIT_SCOPE_LABEL}] has nothing to review — ${UNIT_EXCLUDED} task(s) carried out CANCELLED (${UNIT_EXCLUDED_TASKS}), 0 implemented; no aggregate board dispatched." >&2
   fi
 
   # If the active task is IMPLEMENTED (or a stale IN_REVIEW left over from a
@@ -758,7 +781,7 @@ if [ -f "$PLAN" ]; then
   fi
   # Granularity-aware recovery hints (survive compaction via plan.md Next Action).
   if [ "$GRANULARITY" != "task" ] && [ "$AGGREGATE_REVIEW_READY" = "true" ]; then
-    NEXT_ACTION_TEXT="AGGREGATE REVIEW (${GRANULARITY}) ready for [${AGGREGATE_REVIEW_SCOPE}] — spawn review-gate with <main_worktree_path> = ${PROJECT_ROOT} over the combined diff for tasks: ${AGGREGATE_REVIEW_TASKS}"
+    NEXT_ACTION_TEXT="AGGREGATE REVIEW (${GRANULARITY}) ready for [${AGGREGATE_REVIEW_SCOPE}] — spawn review-gate with <main_worktree_path> = ${PROJECT_ROOT} over the combined diff for tasks: ${AGGREGATE_REVIEW_TASKS}${AGGREGATE_CARVEOUT_NOTE}"
   elif [ "$GRANULARITY" != "task" ] && [ "$AWAITING_AGGREGATE_REVIEW" = "true" ]; then
     NEXT_ACTION_TEXT="AWAITING AGGREGATE REVIEW (${GRANULARITY}) — parked IMPLEMENTED tasks (${AGGREGATE_REVIEW_TASKS}); keep implementing the rest of the review unit, do NOT review/re-implement parked tasks"
   fi
@@ -1359,7 +1382,7 @@ if [ "$GRANULARITY" != "task" ] && [ "$AGGREGATE_REVIEW_READY" = "true" ]; then
     REVIEW_DIFF_HINT="the combined diff for ${AGGREGATE_REVIEW_SCOPE} (its tasks' commits)"
   fi
   DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for the AGGREGATE review unit [${AGGREGATE_REVIEW_SCOPE}]. ${DISPATCH_BRIEF}
-Review SCOPE is ${REVIEW_DIFF_HINT}, covering tasks: ${AGGREGATE_REVIEW_TASKS}. Pass granularity=${GRANULARITY} and the task list so feedback-aggregator can attribute findings back to the owning task by file scope. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition. Dispatch review-gate at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context."
+Review SCOPE is ${REVIEW_DIFF_HINT}, covering tasks: ${AGGREGATE_REVIEW_TASKS}.${AGGREGATE_CARVEOUT_NOTE} Pass granularity=${GRANULARITY} and the task list so feedback-aggregator can attribute findings back to the owning task by file scope. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition. Dispatch review-gate at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context."
 elif [ "$GRANULARITY" = "task" ] && [ "$ACTIVE_STATUS" = "IMPLEMENTED" ]; then
   DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. ${DISPATCH_BRIEF}
 MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition. Dispatch review-gate at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context."
@@ -1420,9 +1443,9 @@ fi
 # or re-implement parked tasks.
 AGGREGATE_MARKER=""
 if [ "$GRANULARITY" != "task" ] && [ "$AWAITING_AGGREGATE_REVIEW" = "true" ] && [ "$AGGREGATE_REVIEW_READY" != "true" ]; then
-  AGGREGATE_MARKER="AWAITING AGGREGATE REVIEW (${GRANULARITY}): tasks already IMPLEMENTED and PARKED — do NOT re-review or re-implement them: ${AGGREGATE_REVIEW_TASKS}. Keep implementing the rest of the review unit; the review board fires once the whole ${GRANULARITY} is IMPLEMENTED."
+  AGGREGATE_MARKER="AWAITING AGGREGATE REVIEW (${GRANULARITY}): tasks already IMPLEMENTED and PARKED — do NOT re-review or re-implement them: ${AGGREGATE_REVIEW_TASKS}. Keep implementing the rest of the review unit; the review board fires once the whole ${GRANULARITY} is IMPLEMENTED.${AGGREGATE_CARVEOUT_NOTE}"
 elif [ "$GRANULARITY" != "task" ] && [ "$AGGREGATE_REVIEW_READY" = "true" ]; then
-  AGGREGATE_MARKER="AGGREGATE REVIEW READY (${GRANULARITY}): review unit [${AGGREGATE_REVIEW_SCOPE}] fully IMPLEMENTED — tasks: ${AGGREGATE_REVIEW_TASKS}."
+  AGGREGATE_MARKER="AGGREGATE REVIEW READY (${GRANULARITY}): review unit [${AGGREGATE_REVIEW_SCOPE}] fully IMPLEMENTED — tasks: ${AGGREGATE_REVIEW_TASKS}.${AGGREGATE_CARVEOUT_NOTE}"
 fi
 
 # --- MF-006: mechanical HITL pending-approval gate ---------------------------
