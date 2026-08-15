@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "36"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "37"
 assert_eq "v33 guards.team_teardown is absent (dead consumer removed)" \
   "$(jq -r '.guards | has("team_teardown")' "$CONFIG")" "false"
 assert_json_field "v31 guards.team_sweep is true" "$CONFIG" ".guards.team_sweep" "true"

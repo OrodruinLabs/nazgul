@@ -744,6 +744,19 @@ migrate_35_to_36() {
   log_migration "v35→v36: added guards.red_run_evidence:true (kill switch for the IMPLEMENTED red-run evidence gate — false suppresses the block only, the diagnostic and the red_run_missing event still fire; additive, explicit values preserved)"
 }
 
+migrate_36_to_37() {
+  local tmp; tmp=$(mktemp)
+  # Project-declared tests roots + scoped-filter template (ADR-024). Defaults reproduce the
+  # previously hardcoded behaviour byte-for-byte; additive, explicit values preserved.
+  jq '
+    .project = ((if (.project | type) == "object" then .project else {} end)
+      | .test_roots = (if has("test_roots") then .test_roots else ["tests"] end)
+      | .test_filter_template = (if has("test_filter_template") then .test_filter_template else "--filter={filter}" end))
+    | .schema_version = 37
+  ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+  log_migration "v36→v37: added project.test_roots:[\"tests\"], project.test_filter_template:\"--filter={filter}\" (red-run runs the project's own runner against the project's own tests roots — both defaults reproduce the previously hardcoded behaviour exactly; additive, explicit values preserved)"
+}
+
 # --- Run incremental migrations ---
 
 VERSION="$CURRENT_VERSION"
