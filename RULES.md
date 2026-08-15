@@ -531,15 +531,20 @@ policy but emit `coverage_vacuous`. A filter that matches no file is also NOTHIN
 run. A new skip reason must be named and counted — it cannot disappear into `passed` or a free-form
 note. This is §15's looked-vs-never-looked distinction applied to tests, guards, smoke, and audits.
 
-- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Nine entry
-  points are bound by the contract above: `tests/run-tests.sh`, `scripts/lean-comments-guard.sh --check`,
+- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Ten entry points are bound
+  by the contract above: `tests/run-tests.sh`, `scripts/lean-comments-guard.sh --check`,
   `tests/test-shellcheck.sh`, `scripts/doctor.sh`, `agents/comment-verifier.md`,
   `scripts/lib/heartbeat-triage.sh`, `scripts/self-audit.sh` (enrolled FEAT-029/TASK-012, which also
   moved the registry here), `scripts/audit-agent-state-paths.sh` (enrolled FEAT-030/TASK-002 — the
-  agent-roster state-path audit; advisory, always exit 0, so its `F == 0` gate is a separate test), and
+  agent-roster state-path audit; advisory, always exit 0, so its `F == 0` gate is a separate test),
   `tests/test-dispatch-brief-contract.sh` (enrolled FEAT-030 — the caller-side dispatch-brief scan of
-  §21 item 8; blocking, so nothing checked is its own failure).
-  `tests/test-coverage-honesty.sh` drives every one of them under a forced
+  §21 item 8; blocking, so nothing checked is its own failure), and `scripts/close-objective.sh`
+  (enrolled FEAT-031/TASK-011 — the objective closer; blocking, so nothing closed while candidates were
+  scanned exits nonzero). The closer's terminal record reads `K closed, F refused`: the same three-slot
+  line with this entry point's domain nouns in the `checked`/`findings` slots, because it closes tasks
+  rather than checking files. Its seven skip reasons are a closed set like any other, and `not-merged`
+  and `merge-unverifiable` are deliberately separate members of it — "could not look" is not "not
+  merged". `tests/test-coverage-honesty.sh` drives every one of them under a forced
   all-skip input and FAILS if any enumerated entry point was never driven — membership is asserted, not
   assumed, so an entry point that conforms today cannot silently stop conforming tomorrow. Add a new
   checking entry point to this list and to that test in the same change. The registry previously cited a

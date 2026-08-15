@@ -16,23 +16,24 @@ trap 'rm -rf "$SCRATCH"' EXIT
 
 # Every entry point named by RULES.md §15; the tally at the bottom fails if one
 # was never driven through _entry_covered.
-ENTRY_POINTS="run-tests lean-comments test-shellcheck doctor comment-verifier heartbeat-triage self-audit audit-agent-state-paths test-dispatch-brief-contract"
+ENTRY_POINTS="run-tests lean-comments test-shellcheck doctor comment-verifier heartbeat-triage self-audit audit-agent-state-paths test-dispatch-brief-contract close-objective"
 COVERED=""
 
 _entry_covered() {
   COVERED="$COVERED $1"
 }
 
-# _grammar_check <label> <entry-point> <closed-reason-list> <line> — grammar,
-# N == M + K, and the closed reason list in order, summing to M.
+# _grammar_check <label> <entry-point> <closed-reason-list> <line> [<k-noun> <f-noun>] —
+# grammar, N == M + K, reasons in order summing to M; nouns default to checked/findings.
 _grammar_check() {
   local label="$1" entry="$2" reasons="$3" line="$4"
+  local knoun="${5:-checked}" fnoun="${6:-findings}"
   local reason_re="" r first=1 n m k f sum
   for r in $reasons; do
     if [ "$first" = "1" ]; then reason_re="$r=([0-9]+)"; first=0
     else reason_re="$reason_re, $r=([0-9]+)"; fi
   done
-  local grammar="^$entry: ([0-9]+) scanned, ([0-9]+) skipped \($reason_re\), ([0-9]+) checked, ([0-9]+) findings$"
+  local grammar="^$entry: ([0-9]+) scanned, ([0-9]+) skipped \($reason_re\), ([0-9]+) $knoun, ([0-9]+) $fnoun$"
   if ! printf '%s' "$line" | grep -qE "$grammar"; then
     _fail "$label: coverage line conforms to the RULES.md §15 grammar" "got: '$line'"
     return 1
@@ -41,8 +42,8 @@ _grammar_check() {
 
   n=$(printf '%s' "$line" | sed -E 's/^[^:]*: ([0-9]+) scanned.*/\1/')
   m=$(printf '%s' "$line" | sed -E 's/^.* ([0-9]+) skipped \(.*/\1/')
-  k=$(printf '%s' "$line" | sed -E 's/^.*\), ([0-9]+) checked.*/\1/')
-  f=$(printf '%s' "$line" | sed -E 's/^.*, ([0-9]+) findings$/\1/')
+  k=$(printf '%s' "$line" | sed -E "s/^.*\), ([0-9]+) $knoun.*/\1/")
+  f=$(printf '%s' "$line" | sed -E "s/^.*, ([0-9]+) $fnoun\$/\1/")
   assert_eq "$label: N == M + K" "$n" "$((m + k))"
 
   sum=0
@@ -266,6 +267,22 @@ if [ "$DB_CHECKED_N" -ge 1 ]; then
 else
   _fail "test-dispatch-brief-contract: a full run actually checks something" "checked: $DB_CHECKED"
 fi
+
+# close-objective, forced all-skip: one already-DONE manifest in a tree with no git
+# remote, so the sole candidate is scanned, named, and counted — and no host is asked.
+CO_REASONS="already-terminal not-closable-status unreadable not-merged merge-unverifiable evidence-write-failed transition-refused"
+mkdir -p "$SCRATCH/co/nazgul/tasks" "$SCRATCH/co/nazgul/logs"
+printf '{"schema_version":1}\n' > "$SCRATCH/co/nazgul/config.json"
+printf -- '---\nstatus: DONE\n---\n# TASK-001: already closed\n' > "$SCRATCH/co/nazgul/tasks/TASK-001.md"
+CO_OUT=$(bash "$REPO_ROOT/scripts/close-objective.sh" --pr 1 --project-root "$SCRATCH/co" 2>"$SCRATCH/co.err")
+CO_RC=$?
+_grammar_check "close-objective (all-skip)" "close-objective" "$CO_REASONS" "$(_last_line "$CO_OUT")" \
+  closed refused && _entry_covered close-objective
+assert_contains "close-objective: forced all-skip emits the nothing-checked signal" \
+  "$(cat "$SCRATCH/co.err")" "close-objective: NOTHING CHECKED — all 1 candidate(s) skipped"
+assert_exit_code "close-objective: blocking — nothing closed is a failure" "$CO_RC" 2
+assert_contains "close-objective: the vacuous run reaches the bus" \
+  "$(cat "$SCRATCH/co/nazgul/logs/events.jsonl" 2>/dev/null)" '"entry_point":"close-objective"'
 
 # Enumeration completeness — the point of the whole file: an entry point with no
 # emitter must FAIL here, not silently drop out of the list.
