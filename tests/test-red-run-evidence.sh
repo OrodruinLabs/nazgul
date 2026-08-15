@@ -109,6 +109,102 @@ assert_contains "absent + out of scope: skipped check is announced, not silent" 
 STDERR_NOT_APPLICABLE="$RR_STDERR"
 teardown_temp_dir
 
+# STATE 2b — the payload is present but lives ONLY inside an HTML comment, which
+# the strip removes before parsing. Still a refusal; no longer named as absent.
+setup_rr_repo
+COMMENTED_ENTRY=$(printf '<!--\n%s\n-->' "$(valid_entry)")
+rr_call "$(rr_manifest '["scripts/foo.sh"]' "$COMMENTED_ENTRY")" "$TEST_DIR"
+assert_exit_code "commented entry + in scope: still refuses — a comment is not a record" "$RR_EC" 1
+assert_eq "commented entry: reason is 'commented_out', not 'absent'" "$RR_REASON" "commented_out"
+assert_contains "commented entry: the diagnostic says where the payload actually is" \
+  "$RR_STDERR" "carries content only inside an HTML comment"
+assert_not_contains "commented entry: it is not reported as an empty section" \
+  "$RR_STDERR" "section is present but empty"
+STDERR_COMMENTED="$RR_STDERR"
+assert_eq "commented entry: red_run_missing carries the distinguishing token" \
+  "$(jq -r 'select(.event == "red_run_missing") | .reason' "$TEST_DIR/nazgul/logs/events.jsonl" | tail -1)" \
+  "commented_out"
+
+# The other half of the split: nothing was stripped, so nothing was ever there.
+rr_call "$(rr_manifest '["scripts/foo.sh"]' '')" "$TEST_DIR"
+assert_exit_code "empty section + in scope: still refuses" "$RR_EC" 1
+assert_eq "empty section: reason stays 'absent'" "$RR_REASON" "absent"
+assert_contains "empty section: named as empty, not as commented" \
+  "$RR_STDERR" "section is present but empty"
+assert_not_contains "empty section: never reported as content hidden in a comment" \
+  "$RR_STDERR" "only inside an HTML comment"
+
+# Payload-state matrix, so a state that stopped being reachable cannot read as a
+# state that never existed (RULES.md §15). Columns: body | scope | base | reason | exit.
+payload_body() {
+  case "$1" in
+    empty) printf '' ;;
+    blank) printf '   \n\n' ;;
+    commented) printf '<!--\n%s\n-->' "$(valid_entry)" ;;
+    commented-prose) printf '<!-- not filled in yet -->' ;;
+    prose) printf 'not a red-run entry' ;;
+    entry) valid_entry ;;
+    *) return 1 ;;
+  esac
+}
+
+payload_manifest() {
+  printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: %s\n- **Base SHA**: %s\n\n## Commits\n- %s — feat: work\n\n## Red-Run Evidence\n%s\n\n## Description\nx\n' \
+    "$2" "$3" "$HEAD_SHA" "$1"
+}
+
+PAYLOAD_CASES='empty|["scripts/foo.sh"]|base|absent|1
+blank|["scripts/foo.sh"]|base|absent|1
+commented|["scripts/foo.sh"]|base|commented_out|1
+commented-prose|["scripts/foo.sh"]|base|commented_out|1
+empty|["docs/PRD.md"]|head|not_applicable|0
+commented|["docs/PRD.md"]|head|not_applicable|0
+prose|["scripts/foo.sh"]|base|corrupt|1
+entry|["scripts/foo.sh"]|base|verified|0'
+PM_SCANNED=0; PM_CHECKED=0; PM_UNRENDERABLE=0; PM_FINDINGS=0
+while IFS='|' read -r pm_body pm_scope pm_base pm_reason pm_ec; do
+  [ -n "$pm_body" ] || continue
+  PM_SCANNED=$((PM_SCANNED + 1))
+  if ! pm_rendered=$(payload_body "$pm_body"); then
+    PM_UNRENDERABLE=$((PM_UNRENDERABLE + 1))
+    _skip "payload-matrix: body '${pm_body}' could not be rendered — not checked"
+    continue
+  fi
+  PM_CHECKED=$((PM_CHECKED + 1))
+  case "$pm_base" in head) pm_sha="$HEAD_SHA" ;; *) pm_sha="$BASE_SHA" ;; esac
+  rr_call "$(payload_manifest "$pm_rendered" "$pm_scope" "$pm_sha")" "$TEST_DIR"
+  if [ "$RR_REASON" = "$pm_reason" ] && [ "$RR_EC" -eq "$pm_ec" ]; then
+    _pass "payload-matrix: body=${pm_body} scope=${pm_scope} → ${pm_reason} (exit ${pm_ec})"
+  else
+    PM_FINDINGS=$((PM_FINDINGS + 1))
+    _fail "payload-matrix: body=${pm_body} scope=${pm_scope} → ${pm_reason} (exit ${pm_ec})" \
+      "expected: ${pm_reason} / exit ${pm_ec}" "  actual: ${RR_REASON} / exit ${RR_EC}"
+  fi
+done <<< "$PAYLOAD_CASES"
+PM_SKIPPED=$((PM_SCANNED - PM_CHECKED))
+echo "  payload-matrix: ${PM_SCANNED} scanned, ${PM_SKIPPED} skipped (unrenderable=${PM_UNRENDERABLE}), ${PM_CHECKED} checked, ${PM_FINDINGS} findings"
+assert_eq "payload-matrix: scanned == skipped + checked" "$PM_SCANNED" "$((PM_SKIPPED + PM_CHECKED))"
+assert_eq "payload-matrix: every row was actually checked" "$PM_CHECKED" "8"
+teardown_temp_dir
+
+# The refusal vocabulary is CLOSED, and read out of the source rather than narrated
+# here: a state folded into an existing bucket would leave this set unchanged.
+VOCAB_EXPECTED='absent bad_na_token commented_out corrupt exit_zero not_ancestor ref_unresolvable roots_undeterminable roots_unresolved'
+VOCAB_ARGS=$(grep -oE '_ttg_red_run_(deny|empty_payload) "[^"]*" "[^"]*" "[^"]*"' \
+  "$REPO_ROOT/scripts/lib/task-transition-guard.sh" | sed -E 's/.*"([^"]*)"$/\1/')
+VOCAB_SCANNED=$(printf '%s\n' "$VOCAB_ARGS" | grep -c '[^[:space:]]')
+VOCAB_CHECKED=$(printf '%s\n' "$VOCAB_ARGS" | grep -cE '^[a-z_]+$')
+VOCAB_PASSTHROUGH=$((VOCAB_SCANNED - VOCAB_CHECKED))
+VOCAB_SET=$(printf '%s\n' "$VOCAB_ARGS" | grep -E '^[a-z_]+$' | sort -u)
+VOCAB_FINDINGS=$(comm -3 <(printf '%s\n' "$VOCAB_SET") \
+  <(printf '%s\n' "$VOCAB_EXPECTED" | tr ' ' '\n' | sort) | grep -c '[^[:space:]]')
+echo "  reason-vocabulary: ${VOCAB_SCANNED} scanned, ${VOCAB_PASSTHROUGH} skipped (variable-passthrough=${VOCAB_PASSTHROUGH}), ${VOCAB_CHECKED} checked, ${VOCAB_FINDINGS} findings"
+assert_eq "reason-vocabulary: scanned == skipped + checked" "$VOCAB_SCANNED" "$((VOCAB_PASSTHROUGH + VOCAB_CHECKED))"
+assert_eq "reason-vocabulary: the closed set is exactly the enumerated reasons" \
+  "$(printf '%s\n' "$VOCAB_SET" | tr '\n' ' ')" \
+  "$(printf '%s\n' "$VOCAB_EXPECTED" | tr ' ' '\n' | sort | tr '\n' ' ')"
+assert_eq "reason-vocabulary: the new state is a named member, not a bucket" "$VOCAB_FINDINGS" "0"
+
 # ADR-024 decision 4: both halves read project.test_roots. No repo-root tests/
 # here ON PURPOSE — the defect is invisible where the hardcode is right.
 setup_monorepo_repo() {
@@ -354,8 +450,8 @@ assert_exit_code "template scope comments: example test paths do not put a docs 
 assert_eq "template scope comments: reason is not_applicable" "$RR_REASON" "not_applicable"
 
 rr_call "$(rr_manifest '["scripts/foo.sh"]' '<!-- not filled in yet -->')" "$TEST_DIR"
-assert_exit_code "comment-only + in scope: blocks as absent evidence" "$RR_EC" 1
-assert_eq "comment-only + in scope: reason is absent" "$RR_REASON" "absent"
+assert_exit_code "comment-only + in scope: blocks — a comment is not a record" "$RR_EC" 1
+assert_eq "comment-only + in scope: reason is commented_out" "$RR_REASON" "commented_out"
 
 # ---------------------------------------------------------------------------
 # STATE 4 — a real, referentially intact entry: ALLOW
@@ -447,8 +543,8 @@ rr_call "$(rr_manifest '["scripts/foo.sh"]' '- red-run: N/A — docs-only-ish')"
 assert_eq "N/A list is exact-match, not substring" "$RR_REASON" "bad_na_token"
 
 # ---------------------------------------------------------------------------
-# SIX DISTINCT DIAGNOSTICS — a reason the operator cannot tell apart from
-# another reason is one collapsed state wearing six names.
+# SEVEN DISTINCT DIAGNOSTICS — a reason the operator cannot tell apart from
+# another reason is one collapsed state wearing seven names.
 # ---------------------------------------------------------------------------
 # Compared as whole diagnostics, not as lines: every blocking reason shares one
 # trailing remediation line, so a line-wise sort -u would count that shared line
@@ -462,8 +558,8 @@ distinct_diagnostics() {
 }
 DISTINCT_COUNT=$(distinct_diagnostics \
   "$STDERR_ABSENT" "$STDERR_CORRUPT" "$STDERR_REF" "$STDERR_ANCESTOR" \
-  "$STDERR_EXIT_ZERO" "$STDERR_BAD_NA")
-assert_eq "six block reasons emit six distinct stderr diagnostics" "$DISTINCT_COUNT" "6"
+  "$STDERR_EXIT_ZERO" "$STDERR_BAD_NA" "$STDERR_COMMENTED")
+assert_eq "seven block reasons emit seven distinct stderr diagnostics" "$DISTINCT_COUNT" "7"
 assert_not_contains "the allow-with-announce diagnostic is distinct from the absent block" \
   "$STDERR_NOT_APPLICABLE" "no ## Red-Run Evidence section, but this task's scope touches"
 
@@ -482,7 +578,7 @@ assert_eq "decoy entry does not satisfy the gate" "$RR_REASON" "absent"
 AFTER_BOUNDARY=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["scripts/foo.sh"]\n- **Base SHA**: %s\n\n## Commits\n- %s\n\n## Red-Run Evidence\n<!-- empty -->\n\n## Description\n- red-run: N/A — docs-only\n' \
   "$BASE_SHA" "$HEAD_SHA")
 rr_call "$AFTER_BOUNDARY" "$TEST_DIR"
-assert_eq "entry after the next ## heading does not count as an entry" "$RR_REASON" "absent"
+assert_eq "entry after the next ## heading does not count as an entry" "$RR_REASON" "commented_out"
 
 # ---------------------------------------------------------------------------
 # KILL SWITCH — guards.red_run_evidence: false suppresses the BLOCK ONLY.
@@ -741,7 +837,8 @@ else
 fi
 rr_call "$TEMPLATE_FILLED" "$TEST_DIR"
 assert_exit_code "template's untouched Red-Run section fails this gate" "$RR_EC" 1
-assert_eq "template's untouched Red-Run section is treated as absent evidence" "$RR_REASON" "absent"
+assert_eq "template's untouched Red-Run section is named as commented, not as absent" \
+  "$RR_REASON" "commented_out"
 teardown_temp_dir
 
 report_results
