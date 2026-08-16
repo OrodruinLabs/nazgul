@@ -125,7 +125,7 @@ Close with the Next Up block.
 
 - **Closure is on merge evidence only.** The script asks the host's PR API through
   `scripts/lib/merge-provider.sh` and closes nothing unless that host ANSWERS that the PR merged and
-  returns a usable `host` / `pr` / `merged-at` / `merge-commit`. It never consults git ancestry: after
+  returns a usable `host` / `pr` / `merged-at` / `merge-commit` / `head-ref`. It never consults git ancestry: after
   a server-side squash merge no SHA in any manifest's `## Commits` section is an ancestor of the base
   branch, so ancestry is inverted there, not merely weak.
 - **`could not look` is never `not merged`.** `merge-unverifiable` and `not-merged` are separate

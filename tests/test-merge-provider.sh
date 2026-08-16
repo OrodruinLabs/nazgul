@@ -25,6 +25,8 @@ set -uo pipefail
 #   sha256:        fe905b27b767c4a1d5bb062a85c7a7554aedb7daa7b64a8c37a19b74e7268fd6  merged payload
 #                  922e914161ecc04ae741ea54f5788e1dffca5f438357ecb8646805a5e43be849  open payload
 #                  0cacbfff6ea53b1f26a7a3c2e79c2f85c5973ecbcd15e094611b3944a2d3476d  error stderr
+#   consumers:     scripts/close-objective.sh AND ttg_verify_merge_evidence — the gate is
+#                  reachable without the closer, so both are pinned below.
 #   note:          PR 88's real headRefName is FEAT-030's branch, not this objective's.
 #                  That is not incidental — it is the captured instance of the hazard the
 #                  binding check exists for: a genuinely merged PR of a DIFFERENT
@@ -172,6 +174,14 @@ assert_contains "the seam asks the host the merge-state question AND which branc
 assert_eq "merged PR: the head branch is carried, so a caller can bind the PR to an objective" \
   "$(_field '.head_ref')" "feat/FEAT-030-worktree-relative-runtime-state-path-resolution-pr"
 assert_eq "merged PR: the base branch is carried too" "$(_field '.base_ref')" "main"
+
+# TWO consumers, and the gate is the one that blocks — it is reachable through
+# task-transition.sh without the closer, so a head_ref only the closer reads defends one side.
+MP_GATE_SRC=$(cat "$REPO_ROOT/scripts/lib/task-transition-guard.sh")
+assert_contains "the merge-evidence gate consumes head_ref, not the closer alone" \
+  "$MP_GATE_SRC" "jq -r '.head_ref // empty'"
+assert_contains "the gate binds the head branch through the shared predicate" \
+  "$MP_GATE_SRC" "ttg_pr_bound"
 
 # A host-authored branch name no git ref could carry is DROPPED, so a caller needing the
 # binding fails closed rather than matching attacker-chosen text. (SYNTHETIC.)

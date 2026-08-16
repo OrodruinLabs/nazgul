@@ -119,22 +119,43 @@ status: PLANNED
      `ttg_verify_commit_evidence` reads only what falls under `## Commits`. A `host:` or `pr:` line
      anywhere else in this manifest is invisible to the gate.
 
-     Four required fields, each shape-checked, and four closed refusal reasons — `absent` (no section,
-     or one with nothing in it), `commented_out` (content present but only inside an HTML comment: a
-     comment is not a record, and this template's own block reads as exactly that), `truncated` (a
-     required field is missing), `malformed` (a field is present but fails its shape check). Each
-     emits `merge_evidence_missing`. There is NO kill switch: a switch on the last gate before DONE
-     would be the bypass.
+     THE SHAPE CHECK IS ONLY THE FIRST HALF. The gate does not stop at counting fields: it calls
+     `merge_provider_pr_state` and admits the edge ONLY when the host answered `result: "ok"` AND
+     `merged: true`, and when the host's own `merged-at`, `merge-commit` and head branch match what
+     is recorded here. A gate that stopped at the shape would certify whoever typed the lines, which
+     is the forgery route this section exists to remove.
+
+     AND IT ASKS WHOSE PR IT IS. "Is PR N merged?" is not the question — "did THIS objective ship as
+     PR N?" is. `head-ref` must equal the head branch the host reports, and that branch must be this
+     objective's `branch.feature` or the branch of the `stack.layers[]` entry registered for its
+     `feat_id`. Without that binding a genuinely merged PR of ANY other objective would be real,
+     host-verified evidence for closing any task on disk.
+
+     Six required fields, each shape-checked — `host`, `pr`, `merged-at`, `merge-commit`, `head-ref`,
+     `recorded-by` — and eight closed refusal reasons: `absent` (no section, or one with nothing in
+     it), `commented_out` (content present but only inside an HTML comment: a comment is not a record,
+     and this template's own block reads as exactly that), `truncated` (a required field is missing),
+     `malformed` (a field is present but fails its shape check, including a `recorded-by` naming
+     something outside the closed producer set), `not_merged` (the host ANSWERED and says this PR is
+     not merged), `unverifiable` (the host could not be asked, or answered unusably, or reported
+     merged without returning the fields to compare against), `contradicted` (the host answered and
+     its `merged-at`, its `merge-commit`, its head branch, or the merge commit's containment in the
+     base disagrees with this section), `not_this_objective` (the host confirms the merge, but of a
+     PR that is not this objective's). Each emits `merge_evidence_missing`. `unverifiable` and
+     `not_merged` are separate on purpose: "could not look" is not "not merged". There is NO kill
+     switch: a switch on the last gate before DONE would be the bypass.
 
      Git ancestry is corroboration and never a predicate — after a server-side squash no SHA recorded
      under `## Commits` reaches the merge commit, so `squash_signature` is the expected reading there
      and is recorded, not blocked on.
 
-     Example:
+     Example (all six fields — a block missing any one of them is refused as `truncated`):
      - **host**: github.com
      - **pr**: 88
      - **merged-at**: 2026-08-14T09:31:07Z
-     - **merge-commit**: d6f7582a1c4b9e30f2a7c85be1490fd3ac62b7e1 -->
+     - **merge-commit**: d6f7582a1c4b9e30f2a7c85be1490fd3ac62b7e1
+     - **head-ref**: feat/FEAT-031-objective-closure
+     - **recorded-by**: scripts/close-objective.sh (host API, ok) -->
 
 ## Description
 <!-- Clear, specific description of what this task accomplishes.

@@ -353,11 +353,68 @@ teardown_temp_dir
 
 # TASK-010 (ADR-023 decision 3) — ttg_verify_merge_evidence and the conditional merge-closure
 # route to DONE. A NEW route to DONE, so the negatives are asserted first and by name.
-MERGE_VALID_BODY='- **host**: github.com
+
+# lean-comments: allow-run — provenance for the seam stub every merge assertion below rides on.
+# SEAM-STUB PROVENANCE — derived-from-captured, and PINNED to the real producer instead of
+# authored from the consumer that reads it.
+#   tier:          derived-from-captured
+#   producer:      merge_provider_pr_state (scripts/lib/merge-provider.sh), driven for real
+#                  once below over the gh bytes tests/test-merge-provider.sh captured
+#                  verbatim (gh 2.80.0, `gh pr view 88 --json state,mergedAt,mergeCommit,
+#                  headRefName,baseRefName`, OrodruinLabs/nazgul PR 88, re-captured
+#                  2026-08-16). MP_CAPTURED_MERGED below is those bytes, byte-for-byte.
+#   pinned-by:     MP_STUB_KEYS == MP_REAL_KEYS — the stub emits the producer's OWN key
+#                  set, so a producer-side rename fails HERE rather than leaving every
+#                  merge assertion in this file green over a shape nothing returns.
+#   why:           the previous stub emitted exactly the four keys the parser read, and
+#                  that is why no test here could drive the wrong-objective case: the
+#                  mock's shape decided the test's reach (FEAT-031 second board, QA-2).
+#   synthetic:     only the merged-at/merge-commit VALUES are fixture-controlled, so the
+#                  ancestry cases can use this repo fixture's own shas.
+MP_CAPTURED_MERGED='{"baseRefName":"main","headRefName":"feat/FEAT-030-worktree-relative-runtime-state-path-resolution-pr","mergeCommit":{"oid":"d6f7582f7d9ee8f74706ea02202d15dd5bc83146"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}'
+
+# This objective vs. the captured OTHER one: PR 88's real head branch is FEAT-030's, the
+# captured instance of the hazard — a genuinely merged PR of a DIFFERENT objective.
+MERGE_FEAT_ID="FEAT-031"
+MERGE_BRANCH="feat/FEAT-031-objective-closure"
+MERGE_OTHER_BRANCH="feat/FEAT-030-worktree-relative-runtime-state-path-resolution-pr"
+merge_config() {
+  create_config ".feat_id = \"$MERGE_FEAT_ID\"" ".branch.feature = \"$MERGE_BRANCH\"" "$@"
+}
+
+MERGE_VALID_BODY="- **host**: github.com
 - **pr**: 91
 - **merged-at**: 2026-08-15T12:00:00Z
 - **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
-- **recorded-by**: scripts/close-objective.sh (host API, ok)'
+- **head-ref**: ${MERGE_BRANCH}
+- **recorded-by**: scripts/close-objective.sh (host API, ok)"
+
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+git -C "$TEST_DIR" remote add origin "https://github.com/OrodruinLabs/nazgul.git"
+MP_FAKEBIN="$TEST_DIR/fakebin"
+mkdir -p "$MP_FAKEBIN"
+cat > "$MP_FAKEBIN/gh" << 'MP_GH_EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  auth) exit 0 ;;
+  pr) [ "${2:-}" = "view" ] || exit 1; printf '%s\n' "${NAZGUL_TEST_MP_PAYLOAD:-}"; exit 0 ;;
+esac
+exit 1
+MP_GH_EOF
+chmod +x "$MP_FAKEBIN/gh"
+export NAZGUL_TEST_MP_PAYLOAD="$MP_CAPTURED_MERGED"
+MP_PATH_SAVED="$PATH"
+export PATH="$MP_FAKEBIN:$PATH"
+MP_REAL_JSON=$(merge_provider_pr_state "$TEST_DIR" 88)
+export PATH="$MP_PATH_SAVED"
+unset NAZGUL_TEST_MP_PAYLOAD
+MP_REAL_KEYS=$(printf '%s' "$MP_REAL_JSON" | jq -r 'keys | sort | join(",")')
+assert_eq "seam stub: the captured payload really does carry ANOTHER objective's head branch" \
+  "$(printf '%s' "$MP_REAL_JSON" | jq -r '.head_ref')" "$MERGE_OTHER_BRANCH"
+teardown_temp_dir
 
 # The gate's answer must come from OUTSIDE the manifest, so the seam is stubbed and the
 # fixtures drive it: only result=ok + merged=true + matching fields may ever verify.
@@ -365,19 +422,37 @@ MP_RESULT="ok"
 MP_MERGED="true"
 MP_AT="2026-08-15T12:00:00Z"
 MP_COMMIT="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+MP_HEAD_REF="$MERGE_BRANCH"
+MP_BASE_REF="main"
+MP_STATE="MERGED"
+MP_DIAG=""
 merge_provider_pr_state() {
   jq -cn --arg r "$MP_RESULT" --arg m "$MP_MERGED" --arg a "$MP_AT" --arg c "$MP_COMMIT" \
+    --arg h "$MP_HEAD_REF" --arg b "$MP_BASE_REF" --arg s "$MP_STATE" --arg d "$MP_DIAG" \
+    --arg p "${2:-}" \
     '{result:$r,
+      provider:"github",
+      host:"github.com",
+      pr:$p,
+      state:(if $s == "" then null else $s end),
       merged:(if $m == "true" then true elif $m == "false" then false else null end),
       merged_at:(if $a == "" then null else $a end),
-      merge_commit:(if $c == "" then null else $c end)}'
+      merge_commit:(if $c == "" then null else $c end),
+      diagnostic:(if $d == "" then null else $d end),
+      head_ref:(if $h == "" then null else $h end),
+      base_ref:(if $b == "" then null else $b end)}'
   [ "$MP_RESULT" = "ok" ] || return 5
 }
 mp_reset() {
   MP_RESULT="ok"; MP_MERGED="true"
   MP_AT="2026-08-15T12:00:00Z"
   MP_COMMIT="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+  MP_HEAD_REF="$MERGE_BRANCH"; MP_BASE_REF="main"; MP_STATE="MERGED"; MP_DIAG=""
 }
+
+MP_STUB_KEYS=$(merge_provider_pr_state "" 91 | jq -r 'keys | sort | join(",")')
+assert_eq "seam stub: emits the PRODUCER's key set, not the subset its consumer reads" \
+  "$MP_STUB_KEYS" "$MP_REAL_KEYS"
 
 merge_manifest() {
   # Usage: merge_manifest <merge-evidence-body> [commits-body]
@@ -413,7 +488,7 @@ me_verify() {
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]'
+merge_config '.agents.reviewers = ["code-reviewer"]'
 NAZGUL_DIR="$TEST_DIR/nazgul"
 
 me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && ME_EC=0 || ME_EC=$?
@@ -470,36 +545,40 @@ assert_eq "ttg_verify_merge_evidence: a missing required field reasons 'truncate
 assert_contains "ttg_verify_merge_evidence: the truncated diagnostic names the missing field" \
   "$TRUNCATED_STDERR" "merged-at"
 
-me_verify "$(merge_manifest '- **host**: github.com
+me_verify "$(merge_manifest "- **host**: github.com
 - **pr**: not-a-number
 - **merged-at**: 2026-08-15T12:00:00Z
 - **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
-- **recorded-by**: scripts/close-objective.sh')" "$TEST_DIR" TASK-050 && MALF_EC=0 || MALF_EC=$?
+- **head-ref**: ${MERGE_BRANCH}
+- **recorded-by**: scripts/close-objective.sh")" "$TEST_DIR" TASK-050 && MALF_EC=0 || MALF_EC=$?
 MALFORMED_STDERR="$ME_STDERR"
 assert_exit_code "ttg_verify_merge_evidence: a non-numeric pr is refused" "$MALF_EC" 1
 assert_eq "ttg_verify_merge_evidence: a bad field value reasons 'malformed'" "$TTG_MERGE_REASON" "malformed"
 assert_contains "ttg_verify_merge_evidence: the malformed diagnostic names the offending field" \
   "$MALFORMED_STDERR" "pr="
 
-ttg_verify_merge_evidence "$(merge_manifest '- **host**: github.com
+ttg_verify_merge_evidence "$(merge_manifest "- **host**: github.com
 - **pr**: 91
 - **merged-at**: yesterday
 - **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
-- **recorded-by**: scripts/close-objective.sh')" "$TEST_DIR" TASK-050 2>/dev/null
+- **head-ref**: ${MERGE_BRANCH}
+- **recorded-by**: scripts/close-objective.sh")" "$TEST_DIR" TASK-050 2>/dev/null
 assert_eq "ttg_verify_merge_evidence: a free-text merged-at reasons 'malformed'" "$TTG_MERGE_REASON" "malformed"
 
-ttg_verify_merge_evidence "$(merge_manifest '- **host**: github.com
+ttg_verify_merge_evidence "$(merge_manifest "- **host**: github.com
 - **pr**: 91
 - **merged-at**: 2026-08-15T12:00:00Z
 - **merge-commit**: zzzznotahexsha
-- **recorded-by**: scripts/close-objective.sh')" "$TEST_DIR" TASK-050 2>/dev/null
+- **head-ref**: ${MERGE_BRANCH}
+- **recorded-by**: scripts/close-objective.sh")" "$TEST_DIR" TASK-050 2>/dev/null
 assert_eq "ttg_verify_merge_evidence: a non-hex merge-commit reasons 'malformed'" "$TTG_MERGE_REASON" "malformed"
 
-ttg_verify_merge_evidence "$(merge_manifest '- **host**: not a host name
+ttg_verify_merge_evidence "$(merge_manifest "- **host**: not a host name
 - **pr**: 91
 - **merged-at**: 2026-08-15T12:00:00Z
 - **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
-- **recorded-by**: scripts/close-objective.sh')" "$TEST_DIR" TASK-050 2>/dev/null
+- **head-ref**: ${MERGE_BRANCH}
+- **recorded-by**: scripts/close-objective.sh")" "$TEST_DIR" TASK-050 2>/dev/null
 assert_eq "ttg_verify_merge_evidence: a whitespace-bearing host reasons 'malformed'" "$TTG_MERGE_REASON" "malformed"
 
 # The forged block ADR-023 names as a REJECTED alternative: four shaped lines a human can
@@ -568,22 +647,112 @@ mp_reset
 
 # A manifest recording an abbreviation of the host's oid names the same commit.
 MP_COMMIT="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-me_verify "$(merge_manifest '- **host**: github.com
+me_verify "$(merge_manifest "- **host**: github.com
 - **pr**: 91
 - **merged-at**: 2026-08-15T12:00:00.000Z
 - **merge-commit**: deadbeef
-- **recorded-by**: scripts/close-objective.sh')" "$TEST_DIR" TASK-050 && ABBR_EC=0 || ABBR_EC=$?
+- **head-ref**: ${MERGE_BRANCH}
+- **recorded-by**: scripts/close-objective.sh")" "$TEST_DIR" TASK-050 && ABBR_EC=0 || ABBR_EC=$?
 assert_exit_code "host: an abbreviated merge-commit and a fractional timestamp still verify" "$ABBR_EC" 0
+mp_reset
+
+# THE OBJECTIVE BINDING (FEAT-031 second board). "Is PR N merged?" is not the question: another
+# objective's merged PR, copied from the host's own answer, passes every check above.
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && BOUND_EC=0 || BOUND_EC=$?
+assert_exit_code "binding: a PR merged from THIS objective's branch still verifies" "$BOUND_EC" 0
+assert_contains "binding: the verified route names the head branch it bound against" \
+  "$ME_STDERR" "head-ref=${MERGE_BRANCH}"
+
+MP_HEAD_REF="$MERGE_OTHER_BRANCH"
+me_verify "$(merge_manifest "- **host**: github.com
+- **pr**: 88
+- **merged-at**: 2026-08-15T12:00:00Z
+- **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+- **head-ref**: ${MERGE_OTHER_BRANCH}
+- **recorded-by**: scripts/close-objective.sh (host API, ok)")" "$TEST_DIR" TASK-050 \
+  && OTHEROBJ_EC=0 || OTHEROBJ_EC=$?
+NOT_THIS_OBJ_STDERR="$ME_STDERR"
+assert_exit_code "binding: another objective's genuinely merged PR is REFUSED" "$OTHEROBJ_EC" 1
+assert_eq "binding: a merged PR of another objective reasons 'not_this_objective'" \
+  "$TTG_MERGE_REASON" "not_this_objective"
+assert_contains "binding: the refusal names the branch it actually merged from" \
+  "$NOT_THIS_OBJ_STDERR" "$MERGE_OTHER_BRANCH"
+assert_contains "binding: the refusal names this objective's own branch" \
+  "$NOT_THIS_OBJ_STDERR" "$MERGE_BRANCH"
+assert_contains "binding: the refusal says outright whose evidence this is" \
+  "$NOT_THIS_OBJ_STDERR" "evidence about a DIFFERENT objective"
+mp_reset
+
+# The manifest is operator-writable, so a head-ref it claims that the host does not report
+# is the same class of lie as a wrong merge-commit, and lands in the same reason.
+MP_HEAD_REF="$MERGE_OTHER_BRANCH"
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && HRMIS_EC=0 || HRMIS_EC=$?
+HEADREF_MISMATCH_STDERR="$ME_STDERR"
+assert_exit_code "binding: a head-ref the host contradicts is refused" "$HRMIS_EC" 1
+assert_eq "binding: a contradicted head-ref reasons 'contradicted'" "$TTG_MERGE_REASON" "contradicted"
+assert_contains "binding: the contradiction quotes both sides" \
+  "$HEADREF_MISMATCH_STDERR" "was merged from ${MERGE_OTHER_BRANCH}"
+mp_reset
+
+# Fail CLOSED on a host that returned no usable head branch: a PR that cannot be SHOWN to
+# be this objective's is not thereby this objective's.
+MP_HEAD_REF=""
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && NOHEAD_EC=0 || NOHEAD_EC=$?
+NO_HEAD_REF_STDERR="$ME_STDERR"
+assert_exit_code "binding: a merged PR with no head branch in the answer is REFUSED" "$NOHEAD_EC" 1
+assert_eq "binding: an unattributable merge reasons 'unverifiable', not 'verified'" \
+  "$TTG_MERGE_REASON" "unverifiable"
+assert_eq "binding: the host state names the missing fact rather than a generic failure" \
+  "$TTG_MERGE_HOST_RESULT" "ok_no_head_ref"
+assert_contains "binding: the refusal says a merge nobody can attribute closes nothing" \
+  "$NO_HEAD_REF_STDERR" "no usable head branch"
+mp_reset
+
+# A branch name no git ref could carry is refused at the shape, exactly as
+# merge-provider.sh drops such a value rather than passing it on.
+me_verify "$(merge_manifest "- **host**: github.com
+- **pr**: 91
+- **merged-at**: 2026-08-15T12:00:00Z
+- **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+- **head-ref**: not a branch name
+- **recorded-by**: scripts/close-objective.sh")" "$TEST_DIR" TASK-050 && HRSHAPE_EC=0 || HRSHAPE_EC=$?
+assert_exit_code "binding: a head-ref that is not ref-shaped is refused" "$HRSHAPE_EC" 1
+assert_eq "binding: an unusable head-ref reasons 'malformed'" "$TTG_MERGE_REASON" "malformed"
+
+# Under stacking the PR is opened from the layer's branch, which need not be branch.feature
+# — the registry entry for this feat_id binds it just as well. ONE authority, both callers.
+merge_config '.branch.feature = null' \
+  ".stack.layers = [{feat_id: \"$MERGE_FEAT_ID\", branch: \"feat/FEAT-031-layer-2\", pr: \"\",
+                     base: \"main\", state: \"open\", opened_at: \"2026-08-16T00:00:00Z\",
+                     merged_at: null}]"
+MP_HEAD_REF="feat/FEAT-031-layer-2"
+me_verify "$(merge_manifest "- **host**: github.com
+- **pr**: 91
+- **merged-at**: 2026-08-15T12:00:00Z
+- **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+- **head-ref**: feat/FEAT-031-layer-2
+- **recorded-by**: scripts/close-objective.sh")" "$TEST_DIR" TASK-050 && STACKED_EC=0 || STACKED_EC=$?
+assert_exit_code "binding: a stack layer's own branch binds the PR to this objective" "$STACKED_EC" 0
+
+# No feat_id is not "anything binds" — it is "nothing can be shown to bind".
+mp_reset
+merge_config '.feat_id = null'
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && NOFEAT_EC=0 || NOFEAT_EC=$?
+assert_exit_code "binding: with no feat_id the gate fails CLOSED" "$NOFEAT_EC" 1
+assert_eq "binding: an unnameable objective reasons 'not_this_objective'" \
+  "$TTG_MERGE_REASON" "not_this_objective"
+merge_config '.agents.reviewers = ["code-reviewer"]'
 mp_reset
 
 # Every refusal state must be its own token AND its own sentence — a state folded into
 # a neighbour's bucket would leave both censuses unchanged.
-MERGE_DISTINCT=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$ABSENT_STDERR" "$COMMENTED_STDERR" \
+MERGE_DISTINCT=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$ABSENT_STDERR" "$COMMENTED_STDERR" \
   "$TRUNCATED_STDERR" "$MALFORMED_STDERR" "$UNVERIFIABLE_STDERR" "$NOT_MERGED_STDERR" \
+  "$NOT_THIS_OBJ_STDERR" "$NO_HEAD_REF_STDERR" \
   | sort -u | grep -c '[^[:space:]]')
-assert_eq "ttg_verify_merge_evidence: six refusal diagnostics, six distinct sentences" "$MERGE_DISTINCT" "6"
+assert_eq "ttg_verify_merge_evidence: eight refusal diagnostics, eight distinct sentences" "$MERGE_DISTINCT" "8"
 
-MERGE_VOCAB_EXPECTED='absent commented_out contradicted malformed not_merged truncated unverifiable'
+MERGE_VOCAB_EXPECTED='absent commented_out contradicted malformed not_merged not_this_objective truncated unverifiable'
 MERGE_VOCAB_ARGS=$(grep -oE '_ttg_merge_deny "[^"]*" "[^"]*" "[^"]*"' \
   "$REPO_ROOT/scripts/lib/task-transition-guard.sh" | sed -E 's/.*"([^"]*)"$/\1/')
 MERGE_VOCAB_SCANNED=$(printf '%s\n' "$MERGE_VOCAB_ARGS" | grep -c '[^[:space:]]')
@@ -610,12 +779,13 @@ NAZGUL_DIR="$TEST_DIR/nazgul"
 ANC_HEAD=$(git -C "$TEST_DIR" rev-parse HEAD)
 ANC_PARENT=$(git -C "$TEST_DIR" rev-parse HEAD~1)
 ANC_BASE=$(git -C "$TEST_DIR" rev-parse --abbrev-ref HEAD)
-create_config ".branch.base = \"${ANC_BASE}\""
+merge_config ".branch.base = \"${ANC_BASE}\""
 
 ANC_BODY="- **host**: github.com
 - **pr**: 91
 - **merged-at**: 2026-08-15T12:00:00Z
 - **merge-commit**: ${ANC_HEAD}
+- **head-ref**: ${MERGE_BRANCH}
 - **recorded-by**: scripts/close-objective.sh"
 MP_COMMIT="$ANC_HEAD"
 me_verify "$(merge_manifest "$ANC_BODY" "- ${ANC_PARENT}")" "$TEST_DIR" TASK-050 && CORROB_EC=0 || CORROB_EC=$?
@@ -628,6 +798,7 @@ INV_BODY="- **host**: github.com
 - **pr**: 91
 - **merged-at**: 2026-08-15T12:00:00Z
 - **merge-commit**: ${ANC_PARENT}
+- **head-ref**: ${MERGE_BRANCH}
 - **recorded-by**: scripts/close-objective.sh"
 MP_COMMIT="$ANC_PARENT"
 me_verify "$(merge_manifest "$INV_BODY" "- ${ANC_HEAD}")" "$TEST_DIR" TASK-050 && SQUASH_EC=0 || SQUASH_EC=$?
@@ -659,6 +830,7 @@ me_verify "$(merge_manifest "- **host**: github.com
 - **pr**: 91
 - **merged-at**: 2026-08-15T12:00:00Z
 - **merge-commit**: ${ANC_OFFBASE}
+- **head-ref**: ${MERGE_BRANCH}
 - **recorded-by**: scripts/close-objective.sh" "- ${ANC_HEAD}")" "$TEST_DIR" TASK-050 && OFFBASE_EC=0 || OFFBASE_EC=$?
 OFFBASE_STDERR="$ME_STDERR"
 assert_exit_code "base ancestry: a resolvable merge commit off the base branch is REFUSED" "$OFFBASE_EC" 1
@@ -671,7 +843,7 @@ teardown_temp_dir
 
 setup_temp_dir
 setup_nazgul_dir
-create_config
+merge_config
 NAZGUL_DIR="$TEST_DIR/nazgul"
 ttg_verify_merge_evidence "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 2>/dev/null \
   && NOGIT_EC=0 || NOGIT_EC=$?
@@ -686,7 +858,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.agents.reviewers = ["code-reviewer"]' '.afk.yolo = false' '.afk.task_pr = false'
+merge_config '.agents.reviewers = ["code-reviewer"]' '.afk.yolo = false' '.afk.task_pr = false'
 NAZGUL_DIR="$TEST_DIR/nazgul"
 create_task_file TASK-050 IMPLEMENTED
 

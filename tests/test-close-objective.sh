@@ -267,6 +267,8 @@ assert_contains "squash close: merged-at comes from the API response" \
   "$MANIFEST_1" "- **merged-at**: 2026-08-14T23:16:50Z"
 assert_contains "squash close: merge-commit comes from the API response" \
   "$MANIFEST_1" "- **merge-commit**: $MERGE_SHA"
+assert_contains "squash close: the head branch is recorded, so the gate can re-bind the PR later" \
+  "$MANIFEST_1" "- **head-ref**: $FIX_BRANCH"
 assert_contains "squash close: the evidence names its producer" \
   "$MANIFEST_1" "- **recorded-by**: scripts/close-objective.sh"
 assert_eq "squash close: exactly one status line survives in the frontmatter" \
@@ -594,6 +596,15 @@ assert_eq "the guard's required merge-evidence field set is readable from its ow
   "$(printf '%s' "$CO_GATE_FIELDS" | grep -c 'host')" "1"
 assert_eq "the closer records exactly the field set the gate requires — drift is named, not inferred" \
   "$CO_WRITER_FIELDS" "$CO_GATE_FIELDS"
+
+# ONE authority for "is this PR ours", not two: the gate enforces the same question through
+# the sanctioned writer, and a copy here could drift from the boundary that actually blocks.
+assert_contains "the closer asks the SHARED binding predicate, not a local copy" \
+  "$CLOSER_SRC" 'ttg_pr_bound "$NAZGUL_DIR" "$CFG_FEAT_ID" "$EV_HEAD_REF"'
+assert_not_contains "the closer keeps no second implementation of the binding" \
+  "$CLOSER_SRC" "_co_pr_bound()"
+assert_not_contains "the closer keeps no second implementation of the objective branch set" \
+  "$CLOSER_SRC" "_co_objective_branches()"
 
 # The constraint the whole objective rests on: this script is a CALLER of the sole
 # sanctioned writer, never a writer. Asserted against its source, not its behaviour.

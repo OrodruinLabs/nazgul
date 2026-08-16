@@ -650,8 +650,8 @@ case "${1:-}" in
   auth) exit 0 ;;
   pr)
     [ "${2:-}" = "view" ] || exit 1
-    printf '{"mergeCommit":{"oid":"%s"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}\n' \
-      "${NAZGUL_TEST_MERGE_SHA:-}"
+    printf '{"baseRefName":"main","headRefName":"%s","mergeCommit":{"oid":"%s"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}\n' \
+      "${NAZGUL_TEST_MERGE_BRANCH:-}" "${NAZGUL_TEST_MERGE_SHA:-}"
     exit 0 ;;
 esac
 exit 1
@@ -667,6 +667,7 @@ mc_evidence() {
     printf -- '- **pr**: 91\n'
     printf -- '- **merged-at**: 2026-08-14T23:16:50Z\n'
     printf -- '- **merge-commit**: %s\n' "$NAZGUL_TEST_MERGE_SHA"
+    printf -- '- **head-ref**: %s\n' "$NAZGUL_TEST_MERGE_BRANCH"
     [ -z "$2" ] || printf -- '- **recorded-by**: %s\n' "$2"
   } >> "$mf"
 }
@@ -679,8 +680,11 @@ mc_setup() {
   MC_BASE=$(git -C "$TEST_DIR" rev-parse --abbrev-ref HEAD)
   NAZGUL_TEST_MERGE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
   export NAZGUL_TEST_MERGE_SHA
+  NAZGUL_TEST_MERGE_BRANCH="feat/FEAT-031-merge-closed"
+  export NAZGUL_TEST_MERGE_BRANCH
   create_config '.agents.reviewers = ["code-reviewer"]' \
-    ".branch.base = \"${MC_BASE}\"" '.review_gate.require_provenance = false'
+    ".branch.base = \"${MC_BASE}\"" '.review_gate.require_provenance = false' \
+    '.feat_id = "FEAT-031"' ".branch.feature = \"${NAZGUL_TEST_MERGE_BRANCH}\""
   create_plan
   create_task_file "TASK-001" "DONE"    # deliberately NO review dir — merge route only
   create_task_file "TASK-002" "READY"   # keeps the loop alive (exit 2 path)
@@ -706,7 +710,7 @@ assert_contains "a forged merge block still logs the review-gate violation" \
   "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
 teardown_temp_dir
 rm -rf "$MC_BIN"
-unset NAZGUL_TEST_MERGE_SHA
+unset NAZGUL_TEST_MERGE_SHA NAZGUL_TEST_MERGE_BRANCH
 
 # --- Test: YOLO without task-pr — all APPROVED exits cleanly (MF-005 regression) ---
 # Canonical-frontmatter fixtures (create_task_file). Proves the MF-001 fix (TASK-002,
