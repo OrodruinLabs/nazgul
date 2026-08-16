@@ -169,21 +169,28 @@ EV_BASE_REF=$(printf '%s' "$MP_JSON" | jq -r '.base_ref // ""' 2>/dev/null || ec
 PR_SAFE="$EV_PR"
 [ -n "$PR_SAFE" ] || PR_SAFE=$(_mp_oneline "$PR_INPUT")
 
+# The provenance line the gate validates against its own closed producer set. Defined
+# once, so what is WRITTEN and what is pre-validated cannot be two different strings.
+_co_recorded_by() {
+  printf 'scripts/close-objective.sh (host API, %s)' "$MP_RESULT"
+}
+
 # The writer reuses the VERIFIER's own shape predicate rather than restating its
 # regexes, so the two can never drift into writing evidence the gate then rejects.
 _co_evidence_usable() {
   local key value
-  if [ "$_TTG_MERGE_REQUIRED_FIELDS" != "host pr merged-at merge-commit" ]; then
-    printf 'the transition guard now requires "%s"; this writer only knows how to record host/pr/merged-at/merge-commit' \
+  if [ "$_TTG_MERGE_REQUIRED_FIELDS" != "host pr merged-at merge-commit recorded-by" ]; then
+    printf 'the transition guard now requires "%s"; this writer only knows how to record host/pr/merged-at/merge-commit/recorded-by' \
       "$_TTG_MERGE_REQUIRED_FIELDS"
     return 1
   fi
-  for key in host pr merged-at merge-commit; do
+  for key in host pr merged-at merge-commit recorded-by; do
     case "$key" in
       host)         value="$EV_HOST" ;;
       pr)           value="$EV_PR" ;;
       merged-at)    value="$EV_MERGED_AT" ;;
       merge-commit) value="$EV_MERGE_COMMIT" ;;
+      recorded-by)  value="$(_co_recorded_by)" ;;
     esac
     if [ -z "$value" ] || ! _ttg_merge_shape_ok "$key" "$value"; then
       printf "the host reported MERGED but its answer is not usable as evidence: %s='%s'" "$key" "$value"
@@ -314,7 +321,7 @@ _co_evidence_block() {
   printf -- '- **pr**: %s\n' "$EV_PR"
   printf -- '- **merged-at**: %s\n' "$EV_MERGED_AT"
   printf -- '- **merge-commit**: %s\n' "$EV_MERGE_COMMIT"
-  printf -- '- **recorded-by**: scripts/close-objective.sh (host API, %s)\n' "$MP_RESULT"
+  printf -- '- **recorded-by**: %s\n' "$(_co_recorded_by)"
   printf '\n'
 }
 

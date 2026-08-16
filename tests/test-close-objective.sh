@@ -586,6 +586,15 @@ _reason "roster drift" "not-this-objective" 1
 assert_contains "roster drift: the diagnostic names both ids rather than silently picking one" \
   "$CO_ERR" "declares feat_id \"FEAT-999\" but config names \"$FIX_FEAT_ID\""
 
+# Writer/gate field-set agreement, asserted BY NAME: the closer's refusal on a widened
+# required set otherwise surfaces as every close failing, which reads as a broken closer.
+CO_GATE_FIELDS=$(grep -oE '^_TTG_MERGE_REQUIRED_FIELDS="[^"]*"' "$REPO_ROOT/scripts/lib/task-transition-guard.sh" | head -1 | sed -E 's/^[^"]*"//; s/"$//')
+CO_WRITER_FIELDS=$(printf '%s\n' "$CLOSER_SRC" | grep -oE '\[ "\$_TTG_MERGE_REQUIRED_FIELDS" != "[^"]*"' | head -1 | sed -E 's/^.*!= "//; s/"$//')
+assert_eq "the guard's required merge-evidence field set is readable from its own source" \
+  "$(printf '%s' "$CO_GATE_FIELDS" | grep -c 'host')" "1"
+assert_eq "the closer records exactly the field set the gate requires — drift is named, not inferred" \
+  "$CO_WRITER_FIELDS" "$CO_GATE_FIELDS"
+
 # The constraint the whole objective rests on: this script is a CALLER of the sole
 # sanctioned writer, never a writer. Asserted against its source, not its behaviour.
 assert_contains "the closer routes its status changes through the sanctioned command" \
