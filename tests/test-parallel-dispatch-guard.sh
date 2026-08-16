@@ -130,11 +130,9 @@ create_task_file_with_commits TASK-002 DONE "abc1234"
 assert_eq "missing config still no-ops (allowed)" "$(guard_ec "nazgul:implementer" false "NAZGUL_UNIT: TASK-002")" "0"
 teardown
 
-# 18-26. FEAT-029: configured reviewers are foreground, unnamed one-shot
+# 18-25. FEAT-029: configured reviewers are foreground, unnamed one-shot
 # calls by mechanism, not prose. This rule applies even when task parallelism
-# is disabled. Current nested Agent contexts can omit run_in_background because
-# the host exposes only synchronous subagents there; the top-level agent_type
-# is the proof that the omission came from that schema, not the main session.
+# is disabled. An omitted run_in_background is its own case (#205, below).
 setup
 jq '.execution.parallel = false' "$WORK/nazgul/config.json" > "$WORK/c" && mv "$WORK/c" "$WORK/nazgul/config.json"
 
@@ -142,8 +140,6 @@ assert_eq "reviewer explicit foreground allowed outside parallel mode" \
   "$(guard_json_ec "$(reviewer_envelope 'nazgul:code-reviewer' false '' '')")" "0"
 assert_eq "reviewer background denied outside parallel mode" \
   "$(guard_json_ec "$(reviewer_envelope 'nazgul:code-reviewer' true '' '')")" "2"
-assert_eq "main-session reviewer missing explicit foreground denied" \
-  "$(guard_json_ec "$(reviewer_envelope 'nazgul:code-reviewer' missing '' '')")" "2"
 assert_eq "named reviewer denied even when foreground" \
   "$(guard_json_ec "$(reviewer_envelope 'nazgul:code-reviewer' false 'review-1' '')")" "2"
 assert_eq "nested synchronous-only reviewer may omit unavailable background field" \
@@ -172,6 +168,30 @@ jq '.agents.reviewers += ["performance-reviewer"]' "$WORK/nazgul/config.json" > 
 assert_eq "project-generated configured reviewer uses the same route" \
   "$(guard_json_ec "$(reviewer_envelope 'nazgul:performance-reviewer' true '' '')")" "2"
 teardown
+
+# #205: a host whose Agent schema lacks run_in_background makes the field
+# unsupplyable — "missing" is now ALLOW + named event, never a block.
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["security-reviewer"]'
+PAYLOAD=$(jq -cn '{tool_name:"Agent",tool_input:{subagent_type:"security-reviewer",prompt:"review it"}}')
+EC=0
+OUT=$(cd "$TEST_DIR" && printf '%s' "$PAYLOAD" | bash "$GUARD" 2>&1) || EC=$?
+assert_exit_code "#205: reviewer dispatch with run_in_background ABSENT is allowed" "$EC" 0
+assert_contains "#205: the allow announces itself on stderr" "$OUT" "run_in_background absent"
+EVENT_LINE=$(grep 'dispatch_guard_background_unverifiable' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | head -1 || true)
+assert_contains "#205: dispatch_guard_background_unverifiable event emitted" "$EVENT_LINE" "security-reviewer"
+teardown_temp_dir
+
+# Explicit true is STILL blocked (unchanged contract).
+setup_temp_dir
+setup_nazgul_dir
+create_config '.agents.reviewers = ["security-reviewer"]'
+PAYLOAD=$(jq -cn '{tool_name:"Agent",tool_input:{subagent_type:"security-reviewer",prompt:"review",run_in_background:true}}')
+EC=0
+(cd "$TEST_DIR" && printf '%s' "$PAYLOAD" | bash "$GUARD" >/dev/null 2>&1) || EC=$?
+assert_exit_code "#205: explicit run_in_background:true still blocked" "$EC" 2
+teardown_temp_dir
 
 # 27. The existing dispatch-guard kill switch remains the emergency valve for
 # both reviewer-route and completed-unit enforcement.
