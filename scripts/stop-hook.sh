@@ -29,17 +29,17 @@ if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
-# Refresh the session lock every iteration (ADR-007 Option A) — read
-# persisted ID to match session-context.sh. Removed only on a
-# genuinely-ending (exit 0) run via the EXIT trap below, so
-# tt_sweep_orphaned_teams's "provably dead" signal and
-# is_concurrent_session_warning() stay honest for a session's full lifetime.
+# Refresh the session lock every iteration — read persisted ID to match
+# session-context.sh. Lock LIFETIME is the session's, not the turn's (#195):
+# removal happens at SessionEnd (session-staging.sh) or via the pid-liveness
+# sweep in cleanup_stale_sessions — NEVER on this hook's own exit, which
+# fires on every allowed stop (held sessions included, the exact case the
+# lock exists to make visible).
 SESSION_ID="${CLAUDE_SESSION_ID:-}"
 if [ -z "$SESSION_ID" ] && [ -f "$NAZGUL_DIR/.session_id" ]; then
   SESSION_ID=$(cat "$NAZGUL_DIR/.session_id")
 fi
 [ -n "$SESSION_ID" ] && register_session "$SESSION_ID" "$NAZGUL_DIR/sessions"
-trap '[ "$?" -eq 0 ] && [ -n "$SESSION_ID" ] && unregister_session "$SESSION_ID" "$NAZGUL_DIR/sessions" || true' EXIT
 
 # Read current state (batched into single jq call)
 CONFIG_STATE=$(jq -r '[

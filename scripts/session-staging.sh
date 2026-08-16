@@ -41,6 +41,9 @@ output_result() {
     exit 0
 }
 
+STAGING_STDIN=""
+if [ ! -t 0 ]; then STAGING_STDIN=$(cat 2>/dev/null || echo ""); fi
+
 # --- Check if disabled ---
 if [[ "${NAZGUL_STAGING_DISABLE:-0}" == "1" ]]; then
     debug_log "Disabled (NAZGUL_STAGING_DISABLE=1)"
@@ -107,5 +110,23 @@ if [[ "$STAGED_COUNT" -gt 0 ]]; then
 else
     debug_log "No files to stage"
 fi
+
+# Session-lock release (#195): the lock's lifetime is the session's, and this is
+# its end. Payload session_id first; persisted .session_id is a LAST-WRITER fallback.
+release_session_lock() {
+    local sd nd sid
+    sd="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    source "$sd/lib/nazgul-root.sh" 2>/dev/null || return 0
+    nd="$(resolve_nazgul_dir 2>/dev/null)" || return 0
+    [ -d "$nd/sessions" ] || return 0
+    sid=$(printf '%s' "$STAGING_STDIN" | jq -r '.session_id // empty' 2>/dev/null || echo "")
+    if [ -z "$sid" ] && [ -s "$nd/.session_id" ]; then
+        sid=$(cat "$nd/.session_id" 2>/dev/null || echo "")
+    fi
+    [ -n "$sid" ] || return 0
+    source "$sd/lib/session-tracker.sh" 2>/dev/null || return 0
+    unregister_session "$sid" "$nd/sessions" 2>/dev/null || true
+}
+release_session_lock || true
 
 output_result

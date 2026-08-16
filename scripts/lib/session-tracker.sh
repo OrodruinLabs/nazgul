@@ -13,11 +13,29 @@ register_session() {
   local sessions_dir="${2:-nazgul/sessions}"
   mkdir -p "$sessions_dir"
 
+  # Identity must be liveness-checkable (kill -0), i.e. the SESSION process —
+  # never this hook shell's own $$, which is dead moments later (#195/V7).
+  local session_pid=""
+  # The messaging socket's basename IS the session pid when exported
+  # (read-only parse; RULES §22 forbids ever CONNECTING to it from here).
+  case "${CLAUDE_CODE_MESSAGING_SOCKET:-}" in
+    *.sock) session_pid="$(basename "${CLAUDE_CODE_MESSAGING_SOCKET%.sock}")" ;;
+  esac
+  case "$session_pid" in ''|*[!0-9]*) session_pid="$PPID" ;; esac
+
+  # Tree identity for the shared-checkout warning (#195). </dev/null bounds
+  # the #201 command-substitution hang class; failures degrade to "".
+  local cwd toplevel branch
+  cwd="$(pwd -P 2>/dev/null || pwd)"
+  toplevel="$(git rev-parse --show-toplevel </dev/null 2>/dev/null || echo "")"
+  branch="$(git branch --show-current </dev/null 2>/dev/null || echo "")"
+
   jq -n \
-    --arg pid "$$" \
+    --arg pid "$session_pid" \
     --arg session "$session_id" \
     --arg started "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-    '{pid: $pid, session: $session, started: $started}' \
+    --arg cwd "$cwd" --arg toplevel "$toplevel" --arg branch "$branch" \
+    '{pid: $pid, session: $session, started: $started, cwd: $cwd, toplevel: $toplevel, branch: $branch}' \
     > "$sessions_dir/${session_id}.lock"
 }
 
@@ -52,6 +70,18 @@ cleanup_stale_sessions() {
 
   while IFS= read -r lock_file; do
     [ -f "$lock_file" ] || continue
+    # Liveness outranks age (#195/V7): a live recorded pid is never swept, a
+    # dead one goes immediately; legacy pid-less locks fall to the age rule.
+    local lock_pid
+    lock_pid=$(jq -r '.pid // ""' "$lock_file" 2>/dev/null || echo "")
+    if [ -n "$lock_pid" ] && [[ "$lock_pid" =~ ^[0-9]+$ ]]; then
+      if kill -0 "$lock_pid" 2>/dev/null; then
+        continue
+      else
+        rm -f "$lock_file"
+        continue
+      fi
+    fi
     local file_age
     # Linux (GNU stat) uses -c %Y, macOS (BSD stat) uses -f %m
     file_age=$(stat -c %Y "$lock_file" 2>/dev/null || stat -f %m "$lock_file" 2>/dev/null || echo "0")

@@ -62,4 +62,29 @@ warning=$(is_concurrent_session_warning "$sessions_dir" 2>&1) || true
 assert_contains "concurrent warning message" "$warning" "concurrent"
 teardown_temp_dir
 
+# --- lock payload: identity + tree fields (#195) ---
+setup_temp_dir
+setup_nazgul_dir
+mkdir -p "$TEST_DIR/nazgul/sessions"
+(cd "$TEST_DIR" && CLAUDE_CODE_MESSAGING_SOCKET="/tmp/cc-socks/424242.sock" \
+  bash -c 'source "'"$REPO_ROOT"'/scripts/lib/session-tracker.sh"; register_session "sess-a" nazgul/sessions')
+LOCK=$(ls "$TEST_DIR"/nazgul/sessions/*.lock | head -1)
+assert_eq "register: pid derived from messaging-socket basename" "$(jq -r '.pid' "$LOCK")" "424242"
+assert_eq "register: cwd recorded" "$(jq -r '.cwd' "$LOCK")" "$(cd "$TEST_DIR" && pwd -P)"
+CONTAINS_KEYS=$(jq -r 'has("toplevel") and has("branch")' "$LOCK")
+assert_eq "register: toplevel and branch keys present" "$CONTAINS_KEYS" "true"
+teardown_temp_dir
+
+# --- liveness outranks age; dead pid removed promptly ---
+setup_temp_dir
+mkdir -p "$TEST_DIR/sessions"
+DEAD_PID=$(bash -c 'echo $$')   # that shell has exited; its pid is dead
+jq -cn --arg p "$DEAD_PID" '{pid:$p, session:"dead", started:"2026-01-01T00:00:00Z"}' > "$TEST_DIR/sessions/dead.lock"
+jq -cn --arg p "$$" '{pid:$p, session:"live", started:"2026-01-01T00:00:00Z"}' > "$TEST_DIR/sessions/live.lock"
+touch -t 202601010000 "$TEST_DIR/sessions/dead.lock" "$TEST_DIR/sessions/live.lock"
+(source "$REPO_ROOT/scripts/lib/session-tracker.sh"; cleanup_stale_sessions "$TEST_DIR/sessions" 7200)
+assert_file_not_exists "cleanup: dead-pid lock removed regardless of age policy" "$TEST_DIR/sessions/dead.lock"
+assert_file_exists "cleanup: live-pid lock SURVIVES despite being over-age" "$TEST_DIR/sessions/live.lock"
+teardown_temp_dir
+
 report_results
