@@ -531,14 +531,16 @@ policy but emit `coverage_vacuous`. A filter that matches no file is also NOTHIN
 run. A new skip reason must be named and counted — it cannot disappear into `passed` or a free-form
 note. This is §15's looked-vs-never-looked distinction applied to tests, guards, smoke, and audits.
 
-- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Nine entry
+- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Ten entry
   points are bound by the contract above: `tests/run-tests.sh`, `scripts/lean-comments-guard.sh --check`,
   `tests/test-shellcheck.sh`, `scripts/doctor.sh`, `agents/comment-verifier.md`,
   `scripts/lib/heartbeat-triage.sh`, `scripts/self-audit.sh` (enrolled FEAT-029/TASK-012, which also
   moved the registry here), `scripts/audit-agent-state-paths.sh` (enrolled FEAT-030/TASK-002 — the
-  agent-roster state-path audit; advisory, always exit 0, so its `F == 0` gate is a separate test), and
+  agent-roster state-path audit; advisory, always exit 0, so its `F == 0` gate is a separate test),
   `tests/test-dispatch-brief-contract.sh` (enrolled FEAT-030 — the caller-side dispatch-brief scan of
-  §21 item 8; blocking, so nothing checked is its own failure).
+  §21 item 8; blocking, so nothing checked is its own failure), and
+  `tests/test-messaging-posture.sh` (enrolled FEAT-032/TASK-012 — the shipped-surface messaging-posture
+  scan of §22 rules 2 and 3; blocking, K>0 floor, dogfooded synthetic violators).
   `tests/test-coverage-honesty.sh` drives every one of them under a forced
   all-skip input and FAILS if any enumerated entry point was never driven — membership is asserted, not
   assumed, so an entry point that conforms today cannot silently stop conforming tomorrow. Add a new
