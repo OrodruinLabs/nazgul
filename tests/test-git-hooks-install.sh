@@ -395,4 +395,30 @@ UNTOUCHED=$(git -C "$TEST_DIR/repo" config --get core.hooksPath)
 assert_eq "self-heal: non-object .branch leaves core.hooksPath alone" "$UNTOUCHED" ".git/hooks-other"
 teardown_temp_dir
 
+# --- 0-E: clean's ordering contract — uninstall BEFORE nazgul/ deletion restores
+#     core.hooksPath (deletion-without-uninstall leaves it dangling); pins the ordering skills/clean/SKILL.md Step 3b depends on ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.branch.feature = "FEAT-999"' '.guards.git_hooks = true'
+(cd "$TEST_DIR" && source "$REPO_ROOT/scripts/lib/git-hooks.sh" && install_git_hooks "$TEST_DIR" "$TEST_DIR/nazgul/config.json")
+HP=$(git -C "$TEST_DIR" config --get core.hooksPath || echo unset)
+assert_eq "0-E precondition: managed hooksPath installed" "$HP" "nazgul/.githooks"
+(cd "$TEST_DIR" && source "$REPO_ROOT/scripts/lib/git-hooks.sh" && uninstall_git_hooks "$TEST_DIR" "$TEST_DIR/nazgul/config.json")
+rm -rf "$TEST_DIR/nazgul"
+HP=$(git -C "$TEST_DIR" config --get core.hooksPath || echo unset)
+assert_eq "0-E: uninstall-then-delete leaves hooksPath restored (unset)" "$HP" "unset"
+teardown_temp_dir
+
+# --- 0-E (skill side): the function-level contract above is only reachable if the
+#     uninstall runs between confirmation and deletion, i.e. between Step 3 and Step 4 ---
+CLEAN_SKILL="$REPO_ROOT/skills/clean/SKILL.md"
+STEP3_LN=$(grep -n '^### Step 3: Confirm with User' "$CLEAN_SKILL" | head -1 | cut -d: -f1)
+RESTORE_LN=$(grep -n 'uninstall_git_hooks' "$CLEAN_SKILL" | head -1 | cut -d: -f1)
+STEP4_LN=$(grep -n '^### Step 4: Remove Runtime State' "$CLEAN_SKILL" | head -1 | cut -d: -f1)
+if [ -n "$STEP3_LN" ] && [ -n "$RESTORE_LN" ] && [ -n "$STEP4_LN" ] \
+  && [ "$STEP3_LN" -lt "$RESTORE_LN" ] && [ "$RESTORE_LN" -lt "$STEP4_LN" ]; then ORDER_EC=0; else ORDER_EC=1; fi
+assert_exit_code "0-E: clean skill restores hooks between Step 3 and Step 4" "$ORDER_EC" 0
+assert_file_contains "0-E: clean skill clears a hooksPath still pointing into nazgul/" "$CLEAN_SKILL" "git config --unset core.hooksPath"
+
 report_results

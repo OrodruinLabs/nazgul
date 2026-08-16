@@ -88,6 +88,22 @@ Then use `AskUserQuestion`:
 
 If Abort: stop immediately.
 
+### Step 3b: Restore Git Hooks BEFORE Deleting nazgul/
+
+`nazgul/.githooks/` lives INSIDE the directory Step 4 deletes, and `core.hooksPath` may point at
+it. Deleting first leaves `core.hooksPath` dangling at a nonexistent directory — git then runs NO
+hooks at all, including the user's own pre-existing hooks, silently. Restore first:
+
+```bash
+bash -c 'source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/git-hooks.sh" && uninstall_git_hooks "$(pwd)" "$(pwd)/nazgul/config.json"'
+# Belt-and-braces: if core.hooksPath STILL points into nazgul/ (e.g. prior_hooks_path
+# was never recorded because install ran under an older version), clear it outright:
+CURRENT_HP=$(git config --get core.hooksPath 2>/dev/null || echo "")
+case "$CURRENT_HP" in nazgul/*) git config --unset core.hooksPath ;; esac
+```
+
+Verify: `git config --get core.hooksPath` must print nothing or a path OUTSIDE `nazgul/`.
+
 ### Step 4: Remove Runtime State
 
 Delete the entire `nazgul/` directory:
