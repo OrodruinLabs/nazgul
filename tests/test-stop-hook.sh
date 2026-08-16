@@ -292,6 +292,56 @@ assert_exit_code "CHANGES_REQUESTED: exit 2" "$HOOK_EC" 2
 assert_contains "changes requested warning" "$HOOK_OUTPUT" "CHANGES_REQUESTED"
 teardown_temp_dir
 
+# --- Test 9b (RW-B, FEAT-031 rework): the per-iteration census must count
+# CANCELLED and reconcile against TOTAL, as post-compact.sh:101 already does. ---
+census_line() {
+  printf '%s\n' "$HOOK_OUTPUT" | grep -m1 '^Tasks: ' || true
+}
+
+census_sum() {
+  printf '%s\n' "$1" | sed 's/^Tasks: //; s/ | Total:.*//' \
+    | tr ',' '\n' | awk '{s += $1} END {print s + 0}'
+}
+
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+create_task_file "TASK-002" "CANCELLED"
+create_task_file "TASK-003" "READY"
+run_hook
+assert_exit_code "census: loop continues with a cancelled task present" "$HOOK_EC" 2
+CENSUS=$(census_line)
+if [ -n "$CENSUS" ]; then
+  _pass "census: the iteration status line was emitted (anchor matched)"
+else
+  _fail "census: the iteration status line was emitted (anchor matched)" \
+    "no line starting 'Tasks: ' in the hook output — the assertions below would be vacuous"
+fi
+assert_contains "census: cancelled bucket is printed" "$CENSUS" "1 cancelled"
+assert_contains "census: the total is printed" "$CENSUS" "| Total: 3"
+assert_eq "census: printed buckets reconcile against TOTAL" "$(census_sum "$CENSUS")" "3"
+teardown_temp_dir
+
+# Control: with nothing cancelled the same line still reconciles, so the
+# assertion above measures the cancelled bucket and not the sum by luck.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+create_task_file "TASK-002" "READY"
+run_hook
+CENSUS=$(census_line)
+assert_contains "census control: zero cancelled is still printed" "$CENSUS" "0 cancelled"
+assert_eq "census control: buckets reconcile with nothing cancelled" "$(census_sum "$CENSUS")" "2"
+teardown_temp_dir
+
 # === STATE MUTATIONS ===
 
 # --- Test 10: Iteration incremented ---

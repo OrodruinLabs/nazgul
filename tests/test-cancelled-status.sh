@@ -286,8 +286,12 @@ create_review_dir "TASK-002"
 run_hook
 assert_file_not_contains "completion: a BLOCKED task does not complete the loop" \
   "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"objective_complete"'
+# RW-B: the per-iteration census now always prints a `N cancelled` bucket, so the
+# original whole-output substring match hit its own zero. Count, then exclude it.
+assert_contains "completion: the census counts the BLOCKED task as blocked, not cancelled" \
+  "$HOOK_OUTPUT" "1 blocked, 0 planned, 0 cancelled"
 assert_not_contains "completion: a 'skip'-worded BLOCKED reason is not read as cancellation" \
-  "$HOOK_OUTPUT" "cancelled"
+  "$(printf '%s\n' "$HOOK_OUTPUT" | grep -v '^Tasks: ')" "cancelled"
 teardown_temp_dir
 
 SKILL="$REPO_ROOT/skills/task/SKILL.md"

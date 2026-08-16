@@ -736,6 +736,65 @@ assert_exit_code "blocked C1-sql: DB-CLI token and DROP TABLE on separate lines"
 output=$(run_guard "$(printf 'psql\nDROP TABLE users;')")
 assert_contains "reason C1-sql" "$output" "NAZGUL SAFETY"
 
+# --- RW-B (security Finding 3): the extracted denylist must fail CLOSED — a
+# PreToolUse hook blocks only on exit 2, so an unloadable library allowed all. ---
+DP_ABSENT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-dp-absent-XXXXXX")
+mkdir -p "$DP_ABSENT_DIR/lib"
+cp "$GUARD" "$DP_ABSENT_DIR/pre-tool-guard.sh"
+DESTRUCTIVE_CMD="rm -rf /"
+
+dp_probe() {
+  # Echoes "<exit_code>\x1f<combined output>" for the COPIED guard. Deliberately
+  # not _record_exercised: this probes the load path, not a verdict.
+  local ec=0 out
+  out=$(echo "$DESTRUCTIVE_CMD" | bash "$DP_ABSENT_DIR/pre-tool-guard.sh" 2>&1) || ec=$?
+  printf '%s\x1f%s' "$ec" "$out"
+}
+
+# Case 1: library missing entirely (partial install / scripts/lib not synced).
+rm -f "$DP_ABSENT_DIR/lib/destructive-patterns.sh"
+DP_RES=$(dp_probe)
+DP_EC="${DP_RES%%$'\x1f'*}"; DP_OUT="${DP_RES#*$'\x1f'}"
+assert_exit_code "denylist missing: guard fails CLOSED (exit 2), never allows" "$DP_EC" 2
+assert_contains "denylist missing: diagnostic names the missing authority" "$DP_OUT" "lib/destructive-patterns.sh"
+assert_contains "denylist missing: diagnostic is a NAZGUL SAFETY block" "$DP_OUT" "NAZGUL SAFETY"
+assert_contains "denylist missing: diagnostic states which failure occurred" "$DP_OUT" "file is missing"
+
+# Case 2: library present but unreadable (mode 000). Skipped under a uid that
+# ignores the permission bits, since the probe would then be vacuous.
+cp "$REPO_ROOT/scripts/lib/destructive-patterns.sh" "$DP_ABSENT_DIR/lib/destructive-patterns.sh"
+chmod 000 "$DP_ABSENT_DIR/lib/destructive-patterns.sh"
+if [ -r "$DP_ABSENT_DIR/lib/destructive-patterns.sh" ]; then
+  _skip "denylist unreadable: guard fails CLOSED (running as a uid that bypasses mode 000)"
+else
+  DP_RES=$(dp_probe)
+  DP_EC="${DP_RES%%$'\x1f'*}"; DP_OUT="${DP_RES#*$'\x1f'}"
+  assert_exit_code "denylist unreadable: guard fails CLOSED (exit 2)" "$DP_EC" 2
+  assert_contains "denylist unreadable: diagnostic names the authority" "$DP_OUT" "lib/destructive-patterns.sh"
+fi
+chmod 644 "$DP_ABSENT_DIR/lib/destructive-patterns.sh"
+
+# Case 3: library loads but defines nothing (truncated/renamed API). Sourcing
+# succeeds, so only a post-source definition check catches this.
+printf '#!/usr/bin/env bash\n# truncated\n' > "$DP_ABSENT_DIR/lib/destructive-patterns.sh"
+DP_RES=$(dp_probe)
+DP_EC="${DP_RES%%$'\x1f'*}"; DP_OUT="${DP_RES#*$'\x1f'}"
+assert_exit_code "denylist defines no screen: guard fails CLOSED (exit 2)" "$DP_EC" 2
+assert_contains "denylist defines no screen: diagnostic names dp_scan_command" "$DP_OUT" "dp_scan_command"
+
+# Control: with the real library restored, the SAME copied guard blocks for the
+# ordinary reason and allows a benign command — proving the three cases above
+# measure the load path, not a permanently-broken copy.
+cp "$REPO_ROOT/scripts/lib/destructive-patterns.sh" "$DP_ABSENT_DIR/lib/destructive-patterns.sh"
+DP_RES=$(dp_probe)
+DP_EC="${DP_RES%%$'\x1f'*}"; DP_OUT="${DP_RES#*$'\x1f'}"
+assert_exit_code "control: restored library still blocks rm -rf /" "$DP_EC" 2
+assert_not_contains "control: block is the pattern verdict, not a load failure" "$DP_OUT" "screen unavailable"
+DP_CTRL_EC=0
+echo "ls -la" | bash "$DP_ABSENT_DIR/pre-tool-guard.sh" >/dev/null 2>&1 || DP_CTRL_EC=$?
+assert_exit_code "control: restored library allows a benign command" "$DP_CTRL_EC" 0
+rm -rf "$DP_ABSENT_DIR"
+
 # --- AC1: differential verdict harness. Every command string this suite has
 # exercised the guard with (recorded above via _record_exercised, including
 # the six pins just above) is replayed against BOTH the pre-fix guard, pinned
