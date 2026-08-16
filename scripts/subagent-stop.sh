@@ -53,12 +53,8 @@ fi
 # CURRENT_ITERATION intentionally omitted — emit_event treats unset as null.
 emit_event "subagent_stop" agent "$AGENT"
 
-# In-flight marker clear (ADR-015 Part 2, TASK-008): one completion clears one
-# dispatch. Prefer the OLDEST marker matching both `agent` AND this subagent's
-# unit (grep-as-data from its transcript head, same NAZGUL_UNIT pattern the
-# writer records) so concurrent same-agent dispatches pair correctly even when
-# completions arrive out of order; fall back to agent-only oldest-match when no
-# unit is derivable (PR #78 review). No match is a silent no-op.
+# In-flight marker clear (ADR-015 Part 2, #104): one completion clears one
+# dispatch, three ways — unit matched, unit derived-but-unmatched, underivable.
 _clear_in_flight_marker() {
   command -v jq >/dev/null 2>&1 || return 0
   local marker_dir="$NAZGUL_DIR/in-flight"
@@ -70,7 +66,7 @@ _clear_in_flight_marker() {
     unit=$(head -c 262144 "$tpath" 2>/dev/null | grep -oE 'NAZGUL_UNIT: TASK-[0-9]+' | head -1 | sed 's/^NAZGUL_UNIT: //' || true)
   fi
 
-  local oldest="" oldest_epoch="" fallback="" fallback_epoch="" f epoch a u
+  local matched="" matched_epoch="" newest="" newest_epoch="" f epoch a u
   for f in "$marker_dir"/*.json; do
     [ -f "$f" ] || continue
     a=$(jq -r '.agent // ""' "$f" 2>/dev/null) || continue
@@ -79,19 +75,30 @@ _clear_in_flight_marker() {
     if [ -n "$unit" ]; then
       u=$(jq -r '.unit // ""' "$f" 2>/dev/null) || u=""
       if [ "$u" = "$unit" ]; then
-        if [ -z "$oldest" ] || [ "$epoch" -lt "$oldest_epoch" ] 2>/dev/null; then
-          oldest="$f"
-          oldest_epoch="$epoch"
+        # Oldest-within-match: concurrent same-agent same-unit completions
+        # pair correctly even when they arrive out of order (unchanged).
+        if [ -z "$matched" ] || [ "$epoch" -lt "$matched_epoch" ] 2>/dev/null; then
+          matched="$f"; matched_epoch="$epoch"
         fi
       fi
     fi
-    if [ -z "$fallback" ] || [ "$epoch" -lt "$fallback_epoch" ] 2>/dev/null; then
-      fallback="$f"
-      fallback_epoch="$epoch"
+    if [ -z "$newest" ] || [ "$epoch" -gt "$newest_epoch" ] 2>/dev/null; then
+      newest="$f"; newest_epoch="$epoch"
     fi
   done
-  [ -z "$oldest" ] && oldest="$fallback"
-  [ -n "$oldest" ] && rm -f "$oldest" 2>/dev/null
+  # Three cases, each named (#104 Gap 3 was the collapse of the middle one):
+  if [ -n "$matched" ]; then
+    rm -f "$matched" 2>/dev/null
+  elif [ -n "$unit" ]; then
+    # Unit DERIVED but unmatched: clearing steals a different unit's live marker
+    # — the exact 2026-08-04 incident. Orphans are the hold classifier's problem.
+    emit_event "clear_skipped_no_match" agent "$AGENT" unit "$unit"
+  elif [ -n "$newest" ]; then
+    # Unit UNDERIVABLE: newest agent-match is the best-effort pair (a fresh
+    # completion pairs with the freshest dispatch, never an aged orphan).
+    emit_event "clear_fallback_underivable" agent "$AGENT" marker "$(basename "$newest")"
+    rm -f "$newest" 2>/dev/null
+  fi
   return 0
 }
 _clear_in_flight_marker || true

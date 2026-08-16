@@ -215,7 +215,8 @@ assert_exit_code "clear-then-resume: next stop-hook blocks normally (exit 2)" "$
 assert_contains "clear-then-resume: normal dispatch instruction present" "$HOOK_OUTPUT" "DELEGATE: Spawn implementer agent (nazgul:implementer) for TASK-001"
 teardown_temp_dir
 
-# One completion clears the OLDEST matching marker only (fan-out pairing).
+# One completion clears ONE dispatch: with no derivable unit the NEWEST agent
+# match is the pair (#104 three-way contract) and the other marker survives.
 setup_temp_dir
 setup_nazgul_dir
 create_config
@@ -224,8 +225,8 @@ _write_marker "$TEST_DIR/nazgul/in-flight/older.json" "nazgul:implementer" "TASK
 _write_marker "$TEST_DIR/nazgul/in-flight/newer.json" "nazgul:implementer" "TASK-002" "2000"
 PAYLOAD=$(jq -cn '{subagent_type:"nazgul:implementer"}')
 printf '%s' "$PAYLOAD" | bash "$CLEARER" >/dev/null 2>&1
-assert_file_not_exists "clear: oldest matching marker removed" "$TEST_DIR/nazgul/in-flight/older.json"
-assert_file_exists "clear: newer matching marker survives (one clear = one dispatch)" "$TEST_DIR/nazgul/in-flight/newer.json"
+assert_file_not_exists "clear: newest agent match removed when no unit is derivable" "$TEST_DIR/nazgul/in-flight/newer.json"
+assert_file_exists "clear: older marker survives (one clear = one dispatch)" "$TEST_DIR/nazgul/in-flight/older.json"
 teardown_temp_dir
 
 # Non-matching agent -> no-op, no error.
@@ -259,8 +260,8 @@ assert_file_not_exists "unit-aware clear: the COMPLETED unit's marker removed (n
 assert_file_exists "unit-aware clear: the other unit's marker survives" "$TEST_DIR/nazgul/in-flight/older.json"
 teardown_temp_dir
 
-# Unit-aware pairing fallback: transcript names a unit with NO matching marker
-# -> agent-only oldest-match (one completion still clears one dispatch).
+# Unit derived from a real jsonl transcript but matching NO marker -> clears
+# NOTHING (#104): the marker present belongs to a different, still-live unit.
 setup_temp_dir
 setup_nazgul_dir
 create_config
@@ -271,7 +272,38 @@ TRANSCRIPT="$TEST_DIR/transcript.jsonl"
 PAYLOAD=$(jq -cn --arg t "$TRANSCRIPT" '{subagent_type:"nazgul:implementer", agent_transcript_path:$t}')
 printf '%s' "$PAYLOAD" | bash "$CLEARER" >/dev/null 2>&1; EC=$?
 assert_exit_code "unit-fallback clear: exits cleanly" "$EC" 0
-assert_file_not_exists "unit-fallback clear: agent-only oldest still cleared" "$TEST_DIR/nazgul/in-flight/older.json"
+assert_file_exists "unit-fallback clear: unmatched unit clears nothing" "$TEST_DIR/nazgul/in-flight/older.json"
+assert_file_contains "unit-fallback clear: emits clear_skipped_no_match" "$TEST_DIR/nazgul/logs/events.jsonl" "clear_skipped_no_match"
+teardown_temp_dir
+
+# --- #104: derived-but-unmatched clears NOTHING (cross-unit theft fix) ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/m1.json" "nazgul:implementer" "TASK-002" 1000
+TRANSCRIPT="$TEST_DIR/transcript.jsonl"
+printf 'NAZGUL_UNIT: TASK-001\n' > "$TRANSCRIPT"
+PAYLOAD=$(jq -cn --arg t "$TRANSCRIPT" '{subagent_type:"nazgul:implementer",agent_transcript_path:$t}')
+(cd "$TEST_DIR" && printf '%s' "$PAYLOAD" | bash "$CLEARER" >/dev/null 2>&1) || true
+assert_file_exists "clearer: derived-but-unmatched unit clears NOTHING" "$TEST_DIR/nazgul/in-flight/m1.json"
+assert_contains "clearer: derived-but-unmatched emits clear_skipped_no_match" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" "clear_skipped_no_match"
+teardown_temp_dir
+
+# --- #104: underivable unit clears the NEWEST agent match, named ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/old.json" "nazgul:implementer" "TASK-001" 1000
+_write_marker "$TEST_DIR/nazgul/in-flight/new.json" "nazgul:implementer" "TASK-009" 2000
+PAYLOAD=$(jq -cn '{subagent_type:"nazgul:implementer"}')
+(cd "$TEST_DIR" && printf '%s' "$PAYLOAD" | bash "$CLEARER" >/dev/null 2>&1) || true
+assert_file_exists "clearer: underivable keeps the OLD marker" "$TEST_DIR/nazgul/in-flight/old.json"
+assert_file_not_exists "clearer: underivable clears the NEWEST marker" "$TEST_DIR/nazgul/in-flight/new.json"
+assert_contains "clearer: underivable emits clear_fallback_underivable" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" "clear_fallback_underivable"
 teardown_temp_dir
 
 if command -v shellcheck >/dev/null 2>&1; then

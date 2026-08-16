@@ -287,14 +287,16 @@ Added by the additive `migrate_31_to_32` migration (schema v31→v32); existing 
 `guards.in_flight_hold` (default `true`, config schema v34) lets the stop-hook take an ALLOWED, uncounted
 stop instead of burning an iteration when the work it just dispatched is still running. `PreToolUse(Agent)`
 writes a marker (`scripts/in-flight-marker.sh`, one file per dispatch under `nazgul/in-flight/`, never
-blocking — a failed write is a silent no-op); `SubagentStop` clears the oldest marker matching the
-completing subagent (`scripts/subagent-stop.sh`); and `stop-hook.sh` checks for a fresh marker right before
-the iteration increment. A fresh marker allows the stop (`exit 0`), leaves `current_iteration` and
-`safety.consecutive_failures` untouched, and emits one `stop_gate` event with `reason: "in_flight_hold"`
-naming the held units and their count — the wake-up comes from the harness's own task-notification when the
-dispatched agent finishes, not a poll. Without this gate, a session could otherwise burn an iteration on
-every ~15-second re-invocation while dispatched work was still running, until a soft limit (or the harness's
-own `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`) force-ended the turn from outside the loop's own control.
+blocking — a failed write is a silent no-op); `SubagentStop` clears the marker matching the completing
+subagent's unit; a derived-but-unmatched unit clears nothing (`clear_skipped_no_match`), and an underivable
+unit clears the newest agent match (`clear_fallback_underivable`) — see `scripts/subagent-stop.sh`; and
+`stop-hook.sh` checks for a fresh marker right before the iteration increment. A fresh marker allows the
+stop (`exit 0`), leaves `current_iteration` and `safety.consecutive_failures` untouched, and emits one
+`stop_gate` event with `reason: "in_flight_hold"` naming the held units and their count — the wake-up comes
+from the harness's own task-notification when the dispatched agent finishes, not a poll. Without this gate,
+a session could otherwise burn an iteration on every ~15-second re-invocation while dispatched work was
+still running, until a soft limit (or the harness's own `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`) force-ended
+the turn from outside the loop's own control.
 
 A marker older than `guards.in_flight_stale_minutes` (default `30`, floored to `>=1`) is NOT held on — the
 stop proceeds normally (iteration increments) — but the staleness is surfaced loudly: a stderr line plus a
