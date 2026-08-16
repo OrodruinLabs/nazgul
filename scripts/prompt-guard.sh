@@ -9,6 +9,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
+source "$SCRIPT_DIR/lib/structured-state.sh"
+
+# One vocabulary, one definition: a restated copy here is how CANCELLED — the terminal
+# status with no evidence gate — stayed unguarded through the objective that shipped it.
+STATUS_ALT=$(printf '%s' "$VALID_STATUSES" | tr -s ' \t\n' '|' | sed 's/^|//; s/|$//')
 
 NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
@@ -36,17 +41,20 @@ if echo "$USER_PROMPT" | grep -q 'NAZGUL_COMPLETE'; then
 fi
 
 # A substring cannot detect intent (ADR-025), so this covers only the unambiguous shape: an
-# imperative verb at line start, a TASK-NNN, and a status word, outside fences/quotes/backticks.
+# imperative verb at line start, a TASK-NNN/PATCH-NNN, and a status word, outside fences/quotes/backticks.
 scan_status_imperative() {
-  printf '%s\n' "$1" | awk '
+  printf '%s\n' "$1" | awk -v statuses="$STATUS_ALT" '
     BEGIN {
-      polite = "^[[:space:]]*(([Pp]lease|[Cc]an[[:space:]]+you|[Cc]ould[[:space:]]+you)[[:space:],]+)*"
+      # CLOSED enumerations — a list marker or lead-in absorbed before the verb, never a general matcher.
+      marker = "([-*+]|[0-9]+[.)])[[:space:]]+"
+      leadin = "([Pp]lease|[Cc]an[[:space:]]+you|[Cc]ould[[:space:]]+you|[Jj]ust|[Nn]ow|[Oo]kay|[Oo][Kk]|[Gg]o[[:space:]]+ahead[[:space:]]+and)[[:space:],]+"
+      lead   = "^[[:space:]]*(" marker ")?(" leadin ")*"
       verb   = "^([Ss]et|[Cc]hange|[Mm]ark(s|ed)?)([^[:alnum:]_]|$)"
-      taskre = "(^|[^[:alnum:]_])TASK-[0-9][0-9][0-9]([^[:alnum:]_]|$)"
-      statre = "(^|[^[:alnum:]_])(DONE|APPROVED|IN_REVIEW|IMPLEMENTED)([^[:alnum:]_]|$)"
+      taskre = "(^|[^[:alnum:]_])(TASK|PATCH)-[0-9][0-9][0-9]([^[:alnum:]_]|$)"
+      statre = "(^|[^[:alnum:]_])(" statuses ")([^[:alnum:]_]|$)"
     }
     function span_of(s,   pfx, rest, tend, send, last, sp) {
-      if (!match(s, polite)) return ""
+      if (!match(s, lead)) return ""
       pfx = RLENGTH
       rest = substr(s, pfx + 1)
       if (!match(rest, verb)) return ""

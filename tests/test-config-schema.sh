@@ -22,6 +22,8 @@ assert_json_field "v31 guards.team_sweep_min_age_hours is 24" "$CONFIG" ".guards
 assert_json_field "v32 guards.subagent_resume is true" "$CONFIG" ".guards.subagent_resume" "true"
 assert_json_field "v34 guards.in_flight_hold is true" "$CONFIG" ".guards.in_flight_hold" "true"
 assert_json_field "v34 guards.in_flight_stale_minutes is 30" "$CONFIG" ".guards.in_flight_stale_minutes" "30"
+assert_eq "v37 project.test_roots default" "$(jq -c '.project.test_roots' "$CONFIG")" '["tests"]'
+assert_json_field "v37 project.test_filter_template default" "$CONFIG" ".project.test_filter_template" "--filter={filter}"
 assert_json_field "review_gate.simplify_before_review default false" "$CONFIG" ".review_gate.simplify_before_review" "false"
 assert_json_field "review_gate.enforce_granularity default block" "$CONFIG" ".review_gate.enforce_granularity" "block"
 assert_json_field "has .default_mode" "$CONFIG" ".default_mode" "null"
