@@ -370,4 +370,40 @@ assert_eq "get_task_files_modified: missing field returns empty" "$result" ""
 assert_eq "get_task_files_modified: missing field emits no stderr diagnostic" "$STDERR_OUT" ""
 teardown_temp_dir
 
+# --- Test 19 (board-3 NEW-4): a manifest matching NO inline status form must reach
+# get_task_status's default; the no-match `grep` used to abort an errexit caller. ---
+setup_temp_dir
+setup_nazgul_dir
+printf '# TASK-BLOCK\n\n## Status\nDONE\n' > "$TEST_DIR/nazgul/tasks/TASK-BLOCK.md"
+printf '# TASK-NONE\n\nthis manifest carries no status in any format\n' > "$TEST_DIR/nazgul/tasks/TASK-NONE.md"
+
+# Direct call, NOT a command substitution: bash leaves `inherit_errexit` off by
+# default, which masks an in-function abort at every call site in the tree.
+probe_errexit() {
+  bash -euo pipefail -c 'source "$1"; get_task_status "$2" "PLANNED"; echo REACHED' _ "$LIB" "$1" 2>&1
+}
+
+TU_OUT=$(probe_errexit "$TEST_DIR/nazgul/tasks/TASK-BLOCK.md"); TU_EC=$?
+assert_exit_code "errexit caller: ATX-block manifest does not abort get_task_status" "$TU_EC" 0
+assert_contains "errexit caller: ATX-block manifest still parses to DONE" "$TU_OUT" "DONE"
+assert_contains "errexit caller: the caller reaches the statement after the call" "$TU_OUT" "REACHED"
+
+TU_OUT=$(probe_errexit "$TEST_DIR/nazgul/tasks/TASK-NONE.md"); TU_EC=$?
+assert_exit_code "errexit caller: status-less manifest does not abort get_task_status" "$TU_EC" 0
+assert_contains "errexit caller: status-less manifest returns the supplied default" "$TU_OUT" "PLANNED"
+assert_contains "errexit caller: status-less manifest lets the caller continue" "$TU_OUT" "REACHED"
+
+# The same fact through the shape every call site in the tree actually uses,
+# with the masking shopt turned on so the substitution cannot hide the abort.
+if bash -c 'shopt -s inherit_errexit' >/dev/null 2>&1; then
+  TU_OUT=$(bash -euo pipefail -O inherit_errexit -c \
+    'source "$1"; s=$(get_task_status "$2" "PLANNED"); echo "$s REACHED"' _ "$LIB" \
+    "$TEST_DIR/nazgul/tasks/TASK-BLOCK.md" 2>&1); TU_EC=$?
+  assert_exit_code "inherit_errexit caller: substitution shape does not abort" "$TU_EC" 0
+  assert_contains "inherit_errexit caller: substitution shape still yields DONE" "$TU_OUT" "DONE REACHED"
+else
+  _skip "inherit_errexit caller: substitution shape does not abort (bash lacks inherit_errexit)"
+fi
+teardown_temp_dir
+
 report_results

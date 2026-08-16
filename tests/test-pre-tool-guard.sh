@@ -782,6 +782,30 @@ DP_EC="${DP_RES%%$'\x1f'*}"; DP_OUT="${DP_RES#*$'\x1f'}"
 assert_exit_code "denylist defines no screen: guard fails CLOSED (exit 2)" "$DP_EC" 2
 assert_contains "denylist defines no screen: diagnostic names dp_scan_command" "$DP_OUT" "dp_scan_command"
 
+# Case 4 (S-4): a library that does not PARSE. `bash -n` establishes this as its
+# own fact, so the diagnostic names the real cause instead of "could not be sourced".
+printf '#!/usr/bin/env bash\ndp_scan_command() {\n  if [ 1\n}\n' > "$DP_ABSENT_DIR/lib/destructive-patterns.sh"
+DP_RES=$(dp_probe)
+DP_EC="${DP_RES%%$'\x1f'*}"; DP_OUT="${DP_RES#*$'\x1f'}"
+assert_exit_code "denylist syntax error: guard fails CLOSED (exit 2)" "$DP_EC" 2
+assert_contains "denylist syntax error: diagnostic is a NAZGUL SAFETY block" "$DP_OUT" "NAZGUL SAFETY"
+# bash prints its own "syntax error near..." to the same stream, so the guard's
+# OWN sentence is what is asserted — the bare token would pass either way.
+assert_contains "denylist syntax error: the guard's own diagnostic names the parse failure" "$DP_OUT" "screen unavailable: file has a syntax error"
+
+# Case 5 (S-4): a library that parses, defines both screens, and whose LAST top-level
+# statement returns non-zero. `source` reports that status; the library is not broken.
+cp "$REPO_ROOT/scripts/lib/destructive-patterns.sh" "$DP_ABSENT_DIR/lib/destructive-patterns.sh"
+printf '\nfalse\n' >> "$DP_ABSENT_DIR/lib/destructive-patterns.sh"
+DP_RES=$(dp_probe)
+DP_EC="${DP_RES%%$'\x1f'*}"; DP_OUT="${DP_RES#*$'\x1f'}"
+assert_exit_code "denylist returns non-zero on load: still blocks the destructive control (exit 2)" "$DP_EC" 2
+assert_not_contains "denylist returns non-zero on load: block is the pattern verdict, not a load failure" "$DP_OUT" "screen unavailable"
+assert_contains "denylist returns non-zero on load: the benign non-zero is reported, not silent" "$DP_OUT" "returned 1 on load"
+DP_NZ_EC=0
+echo "ls -la" | bash "$DP_ABSENT_DIR/pre-tool-guard.sh" >/dev/null 2>&1 || DP_NZ_EC=$?
+assert_exit_code "denylist returns non-zero on load: a benign command is still allowed" "$DP_NZ_EC" 0
+
 # Control: with the real library restored, the SAME copied guard blocks for the
 # ordinary reason and allows a benign command — proving the three cases above
 # measure the load path, not a permanently-broken copy.
