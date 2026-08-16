@@ -1062,7 +1062,7 @@ else
   _fail "template boundary is platform-version-scoped" "no version scope found"
 fi
 
-print_test_summary
+report_results
 ```
 
 (Match the summary-printing idiom of sibling tests — grep how `test-review-contract.sh` ends and mirror it exactly.)
@@ -1188,7 +1188,7 @@ grep -qE 'crossSessionInbound|isolatePeerMachines' "$SCRATCH/v2.sh" \
 printf 'test-messaging-posture: %d scanned, %d skipped (unreadable=%d), %d checked, %d findings\n' \
   "$scanned" "$skipped_unreadable" "$skipped_unreadable" "$checked" "$findings"
 
-print_test_summary
+report_results
 ```
 
 (As in Task 11: mirror the exact summary/exit idiom of sibling tests.)
