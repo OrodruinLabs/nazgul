@@ -65,19 +65,21 @@ precedent as 34 → 35 (2.29.0) and 35 → 36 (2.30.0).
 - **`scripts/close-objective.sh` and `/nazgul:complete` — the honest replacement for frontmatter
   surgery.** Given a merged PR it reads merge state through the seam, writes `## Merge Evidence` into
   each stranded manifest **from the host's own answer** (with a `- **recorded-by**: scripts/close-objective.sh
-  (host API, <result>)` provenance line, `:184`), and walks each task to `DONE` through
+  (host API, <result>)` provenance line, `:317` — the field the merge-evidence gate now REQUIRES and
+  checks against a closed producer set), and walks each task to `DONE` through
   `scripts/task-transition.sh`. It is a **caller** of the sole writer and never a writer: no frontmatter
   is touched, no review directory or verdict is fabricated. Its terminal record is the §15 grammar with
-  this entry point's domain nouns in the last two slots (`close-objective.sh:29,316-318`):
+  this entry point's domain nouns in the last two slots (`close-objective.sh:50,492-495`):
   `close-objective: N scanned, M skipped (already-terminal=…, not-closable-status=…, unreadable=…,
-  not-merged=…, merge-unverifiable=…, evidence-write-failed=…, transition-refused=…), K closed,
-  F refused`, with `N == M + K` asserted by the emitter and the seven skip reasons a closed set always
-  printed in that order. `not-merged` and `merge-unverifiable` are separate members on purpose — "could
-  not look" is not "not merged", which is the whole thesis of the seam. Five additive events:
-  `close_objective_refused` (`:118`), `close_objective_blocked` (`:170`), `close_objective_closed`
-  (`:251`), `coverage_vacuous` (`:309`), `close_objective_summary` (`:313`). Exit policy is blocking and
-  stated in the file: `0` closed something with no refusal, `1` a refusal, `2` NOTHING CHECKED, `3`
-  usage error or an internal coverage-accounting defect.
+  not-this-objective=…, pr-not-this-objective=…, not-merged=…, merge-unverifiable=…,
+  evidence-write-failed=…, transition-refused=…), K closed, F refused`, with `N == M + K` asserted by
+  the emitter and the nine skip reasons a closed set always printed in that order. `not-merged` and
+  `merge-unverifiable` are separate members on purpose — "could not look" is not "not merged", which is
+  the whole thesis of the seam. Seven additive events: `close_objective_refused`,
+  `close_objective_blocked`, `close_objective_closed`, `close_objective_rollback_failed`,
+  `close_objective_roster_unreadable`, `coverage_vacuous`, `close_objective_summary`. Exit policy is
+  blocking and stated in the file: `0` closed something with no refusal, `1` a refusal, `2` NOTHING
+  CHECKED, `3` usage/precondition error or an internal coverage-accounting defect.
 - **`aggregate_board_cancelled_carveout` — an additive event for readiness reached by exclusion.**
   Emitted by `scripts/stop-hook.sh`'s aggregate-review arm when a `group`/`feature` unit becomes
   review-ready only because `CANCELLED` tasks left it, carrying `unit`, `cancelled_tasks` (the ids
