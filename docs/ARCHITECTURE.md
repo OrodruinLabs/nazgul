@@ -41,7 +41,7 @@ The event stream captures the complete lifecycle:
 - **Compaction milestones** — checkpoints during context compression
 - **Subagent lifecycle** — when specialized agents (implementer, discovery, etc.) complete
 - **Subagent empty/verdict-less returns** — `subagent_empty_return` (reasons `empty_final_text`|`no_verdict_line`, actions `resumed`|`exhausted`|`detected_only`) fires for any completing subagent whose transcript shows no usable final text, or (for reviewers) no fenced verdict line
-- **Gate-triggered stops** — `stop_gate` (reasons `afk_timeout`, `in_flight_hold`, `in_flight_stale`, `stacking_unavailable`) fires whenever a stop-hook gate ends or holds a turn, so the telemetry always shows a mechanism acted rather than a bare `exit 0`
+- **Gate-triggered stops** — `stop_gate` (reasons `afk_timeout`, `in_flight_hold`, `in_flight_orphan`, `in_flight_stale`, `stacking_unavailable`) fires whenever a stop-hook gate ends or holds a turn, so the telemetry always shows a mechanism acted rather than a bare `exit 0`
 - **Stacked-PR continuation lifecycle** — `stack_layer_merged`, `stack_rework_filed`, `stack_sync_conflict`, `stack_api_failure`, `stack_remote_layer_imported`/`stack_remote_layer_import_failed` (opt-in, `execution.stacking`) — see `docs/CONFIGURATION.md` → **Stacked-PR Continuation**
 - **Budget/cost warnings** — proactive alerts before spending limits
 
@@ -66,9 +66,12 @@ Used by:
 `nazgul/in-flight/` for every subagent dispatch — never blocking, a failed write is a silent no-op.
 `scripts/subagent-stop.sh` clears the oldest marker matching the completing subagent right after its
 existing `subagent_stop` telemetry append. `scripts/stop-hook.sh` checks for a fresh marker immediately
-before its iteration increment: with one present, it ALLOWS the stop (`exit 0`) without touching
-`current_iteration` or `safety.consecutive_failures`, relying on the harness's own task-notification to wake
-the loop when the dispatched agent finishes rather than polling. A marker older than
+before its iteration increment: with a provably-background unnamed one present, it ALLOWS the stop (`exit 0`)
+without touching `current_iteration` or `safety.consecutive_failures`, relying on the harness's own
+task-notification to wake the loop when the dispatched agent finishes rather than polling. A fresh marker
+that is NOT provably background (`"false"`, `"missing"`, or named) is a leak rather than awaited work — a
+synchronous dispatch cannot outlive its own turn — so it is quarantined under `nazgul/in-flight/quarantine/`,
+reported as `stop_gate` `reason: "in_flight_orphan"`, and the loop continues NORMALLY (#104 Gap 3). A marker older than
 `guards.in_flight_stale_minutes` (default 30) does not hold the stop — the loop proceeds normally — but is
 reported loudly (stderr + a distinguishable `stop_gate` event) rather than silently ignored. Kill-switched by
 `guards.in_flight_hold` (default `true`, config schema v34). Both ends of the mechanism are hooks, per
@@ -96,7 +99,7 @@ Nazgul survives compaction, crashes, and session restarts:
 7. **TaskCompleted hook** fires immediately when spawned agents finish for faster transitions
 8. **Prompt guard hook** validates user prompts on submission
 9. **Task-state guard hook** prevents edits outside claimed task scope, and preflight-rejects an illegal status transition — but it is not the transition authority; see Task-Transition Authority below
-10. **In-flight dispatch hold** — the stop-hook holds an ALLOWED, uncounted stop while a just-dispatched `Agent` is still running (`guards.in_flight_hold`), so the loop doesn't burn iterations re-invoking itself every ~15 seconds against work that hasn't finished. See In-Flight Dispatch Hold below.
+10. **In-flight dispatch hold** — the stop-hook holds an ALLOWED, uncounted stop while a just-dispatched BACKGROUND `Agent` is still running (`guards.in_flight_hold`), so the loop doesn't burn iterations re-invoking itself every ~15 seconds against work that hasn't finished; a foreground/legacy/named marker is quarantined as an orphan instead of held on. See In-Flight Dispatch Hold below.
 
 After any interruption:
 ```bash

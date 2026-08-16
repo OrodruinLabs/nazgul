@@ -110,7 +110,7 @@ create_config '.current_iteration = 5' '.safety.consecutive_failures = 2'
 create_plan
 create_task_file "TASK-001" "READY"
 mkdir -p "$TEST_DIR/nazgul/in-flight"
-_write_marker "$TEST_DIR/nazgul/in-flight/marker-1.json" "nazgul:implementer" "TASK-001" "$(date +%s)"
+_write_marker "$TEST_DIR/nazgul/in-flight/marker-1.json" "nazgul:implementer" "TASK-001" "$(date +%s)" "true"
 BEFORE_ITER=$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")
 BEFORE_FAIL=$(jq -r '.safety.consecutive_failures' "$TEST_DIR/nazgul/config.json")
 run_hook
@@ -134,7 +134,7 @@ create_config '.guards.in_flight_hold = false'
 create_plan
 create_task_file "TASK-001" "READY"
 mkdir -p "$TEST_DIR/nazgul/in-flight"
-_write_marker "$TEST_DIR/nazgul/in-flight/marker-1.json" "nazgul:implementer" "TASK-001" "$(date +%s)"
+_write_marker "$TEST_DIR/nazgul/in-flight/marker-1.json" "nazgul:implementer" "TASK-001" "$(date +%s)" "true"
 run_hook
 assert_exit_code "kill-switch off: exit 2 (normal block, hold not taken)" "$HOOK_EC" 2
 EVENT_COUNT=$(grep -c '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null); EVENT_COUNT="${EVENT_COUNT:-0}"
@@ -184,7 +184,7 @@ create_config '.guards.in_flight_stale_minutes = "garbage"'
 create_plan
 create_task_file "TASK-001" "READY"
 mkdir -p "$TEST_DIR/nazgul/in-flight"
-_write_marker "$TEST_DIR/nazgul/in-flight/marker-1.json" "nazgul:implementer" "TASK-001" "$(date +%s)"
+_write_marker "$TEST_DIR/nazgul/in-flight/marker-1.json" "nazgul:implementer" "TASK-001" "$(date +%s)" "true"
 run_hook
 CRASH_SAFE=$([ "$HOOK_EC" = "0" ] || [ "$HOOK_EC" = "2" ] && echo yes || echo no)
 assert_eq "malformed stale_minutes (string): never a bash fatal (exit 0 or 2)" "$CRASH_SAFE" "yes"
@@ -201,11 +201,66 @@ create_config '.guards.in_flight_stale_minutes = 30.5'
 create_plan
 create_task_file "TASK-001" "READY"
 mkdir -p "$TEST_DIR/nazgul/in-flight"
-_write_marker "$TEST_DIR/nazgul/in-flight/marker-1.json" "nazgul:implementer" "TASK-001" "$(date +%s)"
+_write_marker "$TEST_DIR/nazgul/in-flight/marker-1.json" "nazgul:implementer" "TASK-001" "$(date +%s)" "true"
 run_hook
 CRASH_SAFE=$([ "$HOOK_EC" = "0" ] || [ "$HOOK_EC" = "2" ] && echo yes || echo no)
 assert_eq "malformed stale_minutes (fractional): never a bash fatal (exit 0 or 2)" "$CRASH_SAFE" "yes"
 assert_exit_code "malformed stale_minutes (fractional): falls back to 30-min default (fresh marker holds, exit 0)" "$HOOK_EC" 0
+teardown_temp_dir
+
+# --- classification: a fresh FOREGROUND marker is a leak, never a hold ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+NOW=$(date +%s)
+_write_marker "$TEST_DIR/nazgul/in-flight/fg.json" "nazgul:implementer" "TASK-001" "$NOW" "false"
+run_hook
+assert_file_not_exists "hold: fresh foreground marker is moved out of in-flight/" "$TEST_DIR/nazgul/in-flight/fg.json"
+assert_file_exists "hold: quarantined under in-flight/quarantine/" "$TEST_DIR/nazgul/in-flight/quarantine/fg.json"
+assert_contains "hold: stop_gate reason in_flight_orphan emitted" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" "in_flight_orphan"
+if grep -q '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null; then
+  _fail "hold: NO in_flight_hold event for a foreground marker"
+else
+  _pass "hold: NO in_flight_hold event for a foreground marker"
+fi
+teardown_temp_dir
+
+# --- classification: 'missing' classifies as foreground (cost-weighed) ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+NOW=$(date +%s)
+_write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$NOW" "missing"
+run_hook
+assert_file_exists "hold: 'missing' marker quarantined like foreground" "$TEST_DIR/nazgul/in-flight/quarantine/legacy.json"
+teardown_temp_dir
+
+# --- classification: background=true still holds (exit 0 + in_flight_hold) ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+NOW=$(date +%s)
+_write_marker "$TEST_DIR/nazgul/in-flight/bg.json" "nazgul:implementer" "TASK-003" "$NOW" "true"
+run_hook
+assert_exit_code "hold: background marker still takes the uncounted hold" "$HOOK_EC" 0
+assert_contains "hold: in_flight_hold event names the unit" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" "in_flight_hold"
+assert_file_exists "hold: background marker NOT quarantined" "$TEST_DIR/nazgul/in-flight/bg.json"
+teardown_temp_dir
+
+# --- classification: a NAMED background dispatch never holds (teammate-shaped) ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+NOW=$(date +%s)
+_write_marker "$TEST_DIR/nazgul/in-flight/nm.json" "nazgul:implementer" "TASK-004" "$NOW" "true" "true"
+run_hook
+assert_file_exists "hold: named dispatch marker quarantined (report contract owns it)" "$TEST_DIR/nazgul/in-flight/quarantine/nm.json"
 teardown_temp_dir
 
 # === Clear: scripts/subagent-stop.sh ===

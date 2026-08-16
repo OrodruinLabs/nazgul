@@ -153,8 +153,23 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
     m_agent=$(jq -r '.agent // "unknown"' "$marker" 2>/dev/null || echo "unknown")
     case "$m_epoch" in ''|*[!0-9]*) m_epoch=0 ;; esac
     if [ "$m_epoch" -gt 0 ] && [ "$m_epoch" -ge "$IN_FLIGHT_CUTOFF" ]; then
-      FRESH_COUNT=$((FRESH_COUNT + 1))
-      FRESH_UNITS="${FRESH_UNITS}${FRESH_UNITS:+ }${m_unit}"
+      # Legacy markers lack both fields: the jq defaults classify them foreground
+      # by ADR-009 cost-weighing (a false hold costs the run; a false continue, one iteration).
+      m_bg=$(jq -r '.background // "missing"' "$marker" 2>/dev/null || echo "missing")
+      m_named=$(jq -r '.named // "false"' "$marker" 2>/dev/null || echo "false")
+      if [ "$m_bg" = "true" ] && [ "$m_named" != "true" ]; then
+        # Provably-background, unnamed: the documented harness resume IS the
+        # confirmed wake path (D-002; docs/CONFIGURATION.md In-Flight Hold).
+        FRESH_COUNT=$((FRESH_COUNT + 1))
+        FRESH_UNITS="${FRESH_UNITS}${FRESH_UNITS:+ }${m_unit}"
+      else
+        # Fresh but not provably background (foreground / "missing" / named) is
+        # a proven LEAK (#104 Gap 3): a sync dispatch cannot span a Stop.
+        mkdir -p "$NAZGUL_DIR/in-flight/quarantine" 2>/dev/null || true
+        mv "$marker" "$NAZGUL_DIR/in-flight/quarantine/" 2>/dev/null || true
+        echo "Nazgul: ORPHAN in-flight marker for ${m_unit} (${m_agent}, background=${m_bg}, named=${m_named}) — quarantined; a foreground dispatch cannot outlive its turn. Continuing normally." >&2
+        emit_event "stop_gate" reason "in_flight_orphan" unit "$m_unit" agent "$m_agent" background "$m_bg"
+      fi
     else
       # Stale markers are NEVER silently deleted here — a crashed subagent's
       # marker is diagnostic evidence for the next tick, and only
@@ -166,7 +181,7 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
     fi
   done
   if [ "$FRESH_COUNT" -gt 0 ]; then
-    echo "Nazgul: in-flight hold — waiting on ${FRESH_COUNT} dispatched unit(s): ${FRESH_UNITS}. Allowing stop; the harness resumes this loop when the background agent finishes." >&2
+    echo "Nazgul: in-flight hold — waiting on ${FRESH_COUNT} BACKGROUND dispatch(es): ${FRESH_UNITS}. Allowing stop; the harness's task-notification resumes this loop when the background agent finishes." >&2
     emit_event "stop_gate" reason "in_flight_hold" units "$FRESH_UNITS" count:n "$FRESH_COUNT"
     exit 0
   fi

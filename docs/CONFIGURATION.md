@@ -290,10 +290,18 @@ writes a marker (`scripts/in-flight-marker.sh`, one file per dispatch under `naz
 blocking — a failed write is a silent no-op); `SubagentStop` clears the marker matching the completing
 subagent's unit; a derived-but-unmatched unit clears nothing (`clear_skipped_no_match`), and an underivable
 unit clears the newest agent match (`clear_fallback_underivable`) — see `scripts/subagent-stop.sh`; and
-`stop-hook.sh` checks for a fresh marker right before the iteration increment. A fresh marker allows the
-stop (`exit 0`), leaves `current_iteration` and `safety.consecutive_failures` untouched, and emits one
-`stop_gate` event with `reason: "in_flight_hold"` naming the held units and their count — the wake-up comes
-from the harness's own task-notification when the dispatched agent finishes, not a poll. Without this gate,
+`stop-hook.sh` checks for a fresh marker right before the iteration increment. A fresh marker whose
+recorded dispatch class is provably background (`background: "true"` captured at write time from
+`tool_input.run_in_background`, and not a named/teammate-shaped dispatch) allows the stop
+(`exit 0`), leaves `current_iteration` and `safety.consecutive_failures` untouched, and
+emits one `stop_gate` event with `reason: "in_flight_hold"` — for that class the wake-up genuinely
+is the harness's own task-notification when the dispatched agent finishes. A fresh marker that is
+NOT provably background (`"false"`, `"missing"` — including every pre-upgrade marker — or a named
+dispatch) is a proven leak: a synchronous dispatch cannot outlive its own turn, so no resume is
+coming. It is moved to `nazgul/in-flight/quarantine/` (evidence preserved, re-fire stopped), a
+`stop_gate` event with `reason: "in_flight_orphan"` is emitted, and the loop continues NORMALLY —
+a productive iteration, not a burned one. This closes the 2026-08-04 incident class (#104 Gap 3):
+an 8-hour sleep on a foreground marker whose completion had already fired. Without this gate,
 a session could otherwise burn an iteration on every ~15-second re-invocation while dispatched work was
 still running, until a soft limit (or the harness's own `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`) force-ended
 the turn from outside the loop's own control.
