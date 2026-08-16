@@ -308,6 +308,18 @@ rr_call "$(rr_manifest '["scripts/foo.sh"]' "$(mono_entry src/App/tests/test-app
 assert_exit_code "undeterminable roots: an entry cannot be judged either" "$RR_EC" 1
 assert_eq "undeterminable roots: reason is 'roots_undeterminable'" "$RR_REASON" "roots_undeterminable"
 
+# A well-formed array whose every entry is REJECTED has the same semantics as [] —
+# nothing left to trigger on — so it must take the same disposition, not the opposite.
+create_config '.project.test_roots = ["/tests"]'
+rr_call "$MONO_OUT_OF_SCOPE" "$TEST_DIR"
+assert_exit_code "all-unsafe roots: fails closed exactly as the empty array does" "$RR_EC" 1
+assert_contains "all-unsafe roots: names why the set is undeterminable" \
+  "$RR_STDERR" "every entry (1 of 1) was rejected as an unsafe path"
+assert_not_contains "all-unsafe roots: never printed as a completed scan" \
+  "$RR_STDERR" "tests-root scan:"
+rr_call "$(rr_manifest '["scripts/foo.sh"]' "$(mono_entry src/App/tests/test-app.sh)")" "$TEST_DIR"
+assert_eq "all-unsafe roots: an entry cannot be judged either" "$RR_REASON" "roots_undeterminable"
+
 create_config '.project.test_roots = "src/App/tests"'
 rr_call "$(rr_manifest '["scripts/foo.sh"]' "$(mono_entry src/App/tests/test-app.sh)")" "$TEST_DIR"
 assert_eq "a non-array test_roots is undeterminable, not one root" "$RR_REASON" "roots_undeterminable"
@@ -346,7 +358,8 @@ ROOT_CASES='["src/App/tests"]|src/App/tests/test-app.sh|verified|0
 ["src/Ghost/tests"]|src/Ghost/tests/test-x.sh|roots_unresolved|1
 []|src/App/tests/test-app.sh|roots_undeterminable|1
 ["tests"]|src/App/tests/test-app.sh|corrupt|1
-["../outside/tests"]|src/App/tests/test-app.sh|corrupt|1'
+["../outside/tests"]|src/App/tests/test-app.sh|roots_undeterminable|1
+["/tests","./../x"]|src/App/tests/test-app.sh|roots_undeterminable|1'
 RC_SCANNED=0; RC_CHECKED=0; RC_UNCONFIGURABLE=0; RC_FINDINGS=0
 while IFS='|' read -r rc_roots rc_path rc_reason rc_ec; do
   [ -n "$rc_roots" ] || continue
@@ -369,7 +382,7 @@ done <<< "$ROOT_CASES"
 RC_SKIPPED=$((RC_SCANNED - RC_CHECKED))
 echo "  root-matrix: ${RC_SCANNED} scanned, ${RC_SKIPPED} skipped (unconfigurable=${RC_UNCONFIGURABLE}), ${RC_CHECKED} checked, ${RC_FINDINGS} findings"
 assert_eq "root-matrix: scanned == skipped + checked" "$RC_SCANNED" "$((RC_SKIPPED + RC_CHECKED))"
-assert_eq "root-matrix: every configured row was actually checked" "$RC_CHECKED" "9"
+assert_eq "root-matrix: every configured row was actually checked" "$RC_CHECKED" "10"
 teardown_temp_dir
 
 # ADR-024 Planner decision 3: declaring a path OUT of scope used to put it IN

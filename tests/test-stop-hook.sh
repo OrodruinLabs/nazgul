@@ -641,6 +641,73 @@ status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "DONE with reviews stays DONE" "$status" "DONE"
 teardown_temp_dir
 
+# Merge-closed DONE vs the REACTIVE gate (FEAT-031, ADR-023): a host-corroborated
+# closure survives this pass, and a forged block with the SAME host answer does not.
+MC_BIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-stop-gh-XXXXXX")
+cat > "$MC_BIN/gh" << 'MC_GH_EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  auth) exit 0 ;;
+  pr)
+    [ "${2:-}" = "view" ] || exit 1
+    printf '{"mergeCommit":{"oid":"%s"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}\n' \
+      "${NAZGUL_TEST_MERGE_SHA:-}"
+    exit 0 ;;
+esac
+exit 1
+MC_GH_EOF
+chmod +x "$MC_BIN/gh"
+
+# Usage: mc_evidence <task-id> <recorded-by value, empty for the forged block>
+mc_evidence() {
+  local mf="$TEST_DIR/nazgul/tasks/${1}.md"
+  {
+    printf '\n## Merge Evidence\n'
+    printf -- '- **host**: github.com\n'
+    printf -- '- **pr**: 91\n'
+    printf -- '- **merged-at**: 2026-08-14T23:16:50Z\n'
+    printf -- '- **merge-commit**: %s\n' "$NAZGUL_TEST_MERGE_SHA"
+    [ -z "$2" ] || printf -- '- **recorded-by**: %s\n' "$2"
+  } >> "$mf"
+}
+
+mc_setup() {
+  setup_temp_dir
+  setup_git_repo
+  setup_nazgul_dir
+  git -C "$TEST_DIR" remote add origin "https://github.com/OrodruinLabs/nazgul.git"
+  MC_BASE=$(git -C "$TEST_DIR" rev-parse --abbrev-ref HEAD)
+  NAZGUL_TEST_MERGE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+  export NAZGUL_TEST_MERGE_SHA
+  create_config '.agents.reviewers = ["code-reviewer"]' \
+    ".branch.base = \"${MC_BASE}\"" '.review_gate.require_provenance = false'
+  create_plan
+  create_task_file "TASK-001" "DONE"    # deliberately NO review dir — merge route only
+  create_task_file "TASK-002" "READY"   # keeps the loop alive (exit 2 path)
+}
+
+mc_setup
+mc_evidence TASK-001 "scripts/close-objective.sh (host API, ok)"
+HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "merge-closed DONE is NOT reverted by the reactive gate" "$status" "DONE"
+assert_not_contains "merge-closed DONE: no review-gate violation" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+assert_contains "merge-closed DONE: the admitting route is named" \
+  "$HOOK_OUTPUT" "admitted via the merge-evidence route"
+teardown_temp_dir
+
+mc_setup
+mc_evidence TASK-001 ""
+HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "a forged merge block does NOT admit DONE — the review route is unweakened" \
+  "$status" "IMPLEMENTED"
+assert_contains "a forged merge block still logs the review-gate violation" \
+  "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+teardown_temp_dir
+rm -rf "$MC_BIN"
+unset NAZGUL_TEST_MERGE_SHA
+
 # --- Test: YOLO without task-pr — all APPROVED exits cleanly (MF-005 regression) ---
 # Canonical-frontmatter fixtures (create_task_file). Proves the MF-001 fix (TASK-002,
 # APPROVED added to VALID_STATUSES) and the MF-009 counting repoint (TASK-003/004) land
@@ -1071,10 +1138,10 @@ if co_fixture "group carve-out" group IMPLEMENTED:1 IMPLEMENTED:1 CANCELLED:1; t
   assert_contains "carve-out group: reports the partial count" \
     "$HOOK_OUTPUT" "2 of 3 unit tasks reviewed"
   assert_file_contains "carve-out group: event emitted" "$EVENTS" \
-    '"event":"aggregate_board_blocked_carveout"'
+    '"event":"aggregate_board_cancelled_carveout"'
   assert_file_contains "carve-out group: event names the unit" "$EVENTS" '"unit":"group 1"'
   assert_file_contains "carve-out group: event carries the carried-out ids" \
-    "$EVENTS" '"blocked_tasks":"TASK-003"'
+    "$EVENTS" '"cancelled_tasks":"TASK-003"'
   assert_file_contains "carve-out group: event carries implemented" "$EVENTS" '"implemented":2'
   assert_file_contains "carve-out group: event carries total" "$EVENTS" '"total":3'
   assert_dir_not_exists "carve-out group: cancelled task acquires no review dir" \
@@ -1102,7 +1169,7 @@ if co_fixture "blocked veto" group IMPLEMENTED:1 IMPLEMENTED:1 BLOCKED:1; then
   assert_not_contains "blocked veto: NO aggregate board" "$HOOK_OUTPUT" "AGGREGATE review unit"
   assert_not_contains "blocked veto: nothing is carried out" "$HOOK_OUTPUT" "CARVE-OUT"
   assert_file_not_contains "blocked veto: no carve-out event" "$EVENTS" \
-    '"event":"aggregate_board_blocked_carveout"'
+    '"event":"aggregate_board_cancelled_carveout"'
 fi
 co_close
 
@@ -1115,7 +1182,7 @@ if co_fixture "all cancelled" feature CANCELLED:1 CANCELLED:1; then
   assert_not_contains "all cancelled: no board dispatched" "$HOOK_OUTPUT" "AGGREGATE review unit"
   assert_file_contains "all cancelled: event records an empty board" "$EVENTS" '"implemented":0'
   assert_file_contains "all cancelled: event carries both ids" "$EVENTS" \
-    '"blocked_tasks":"TASK-001 TASK-002"'
+    '"cancelled_tasks":"TASK-001 TASK-002"'
 fi
 co_close
 

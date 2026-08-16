@@ -356,7 +356,28 @@ teardown_temp_dir
 MERGE_VALID_BODY='- **host**: github.com
 - **pr**: 91
 - **merged-at**: 2026-08-15T12:00:00Z
-- **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
+- **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+- **recorded-by**: scripts/close-objective.sh (host API, ok)'
+
+# The gate's answer must come from OUTSIDE the manifest, so the seam is stubbed and the
+# fixtures drive it: only result=ok + merged=true + matching fields may ever verify.
+MP_RESULT="ok"
+MP_MERGED="true"
+MP_AT="2026-08-15T12:00:00Z"
+MP_COMMIT="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+merge_provider_pr_state() {
+  jq -cn --arg r "$MP_RESULT" --arg m "$MP_MERGED" --arg a "$MP_AT" --arg c "$MP_COMMIT" \
+    '{result:$r,
+      merged:(if $m == "true" then true elif $m == "false" then false else null end),
+      merged_at:(if $a == "" then null else $a end),
+      merge_commit:(if $c == "" then null else $c end)}'
+  [ "$MP_RESULT" = "ok" ] || return 5
+}
+mp_reset() {
+  MP_RESULT="ok"; MP_MERGED="true"
+  MP_AT="2026-08-15T12:00:00Z"
+  MP_COMMIT="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+}
 
 merge_manifest() {
   # Usage: merge_manifest <merge-evidence-body> [commits-body]
@@ -452,7 +473,8 @@ assert_contains "ttg_verify_merge_evidence: the truncated diagnostic names the m
 me_verify "$(merge_manifest '- **host**: github.com
 - **pr**: not-a-number
 - **merged-at**: 2026-08-15T12:00:00Z
-- **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef')" "$TEST_DIR" TASK-050 && MALF_EC=0 || MALF_EC=$?
+- **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+- **recorded-by**: scripts/close-objective.sh')" "$TEST_DIR" TASK-050 && MALF_EC=0 || MALF_EC=$?
 MALFORMED_STDERR="$ME_STDERR"
 assert_exit_code "ttg_verify_merge_evidence: a non-numeric pr is refused" "$MALF_EC" 1
 assert_eq "ttg_verify_merge_evidence: a bad field value reasons 'malformed'" "$TTG_MERGE_REASON" "malformed"
@@ -462,27 +484,106 @@ assert_contains "ttg_verify_merge_evidence: the malformed diagnostic names the o
 ttg_verify_merge_evidence "$(merge_manifest '- **host**: github.com
 - **pr**: 91
 - **merged-at**: yesterday
-- **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef')" "$TEST_DIR" TASK-050 2>/dev/null
+- **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+- **recorded-by**: scripts/close-objective.sh')" "$TEST_DIR" TASK-050 2>/dev/null
 assert_eq "ttg_verify_merge_evidence: a free-text merged-at reasons 'malformed'" "$TTG_MERGE_REASON" "malformed"
 
 ttg_verify_merge_evidence "$(merge_manifest '- **host**: github.com
 - **pr**: 91
 - **merged-at**: 2026-08-15T12:00:00Z
-- **merge-commit**: zzzznotahexsha')" "$TEST_DIR" TASK-050 2>/dev/null
+- **merge-commit**: zzzznotahexsha
+- **recorded-by**: scripts/close-objective.sh')" "$TEST_DIR" TASK-050 2>/dev/null
 assert_eq "ttg_verify_merge_evidence: a non-hex merge-commit reasons 'malformed'" "$TTG_MERGE_REASON" "malformed"
 
 ttg_verify_merge_evidence "$(merge_manifest '- **host**: not a host name
 - **pr**: 91
 - **merged-at**: 2026-08-15T12:00:00Z
-- **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef')" "$TEST_DIR" TASK-050 2>/dev/null
+- **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+- **recorded-by**: scripts/close-objective.sh')" "$TEST_DIR" TASK-050 2>/dev/null
 assert_eq "ttg_verify_merge_evidence: a whitespace-bearing host reasons 'malformed'" "$TTG_MERGE_REASON" "malformed"
+
+# The forged block ADR-023 names as a REJECTED alternative: four shaped lines a human can
+# type. Without a named producer it is refused before the host is ever asked.
+FORGED_BODY='- **host**: x
+- **pr**: 1
+- **merged-at**: 1970-01-01T00:00:00Z
+- **merge-commit**: 0000000'
+me_verify "$(merge_manifest "$FORGED_BODY")" "$TEST_DIR" TASK-050 && FORGED_EC=0 || FORGED_EC=$?
+FORGED_STDERR="$ME_STDERR"
+assert_exit_code "forgery: a hand-typed four-line block is REFUSED" "$FORGED_EC" 1
+assert_eq "forgery: a block with no producer reasons 'truncated'" "$TTG_MERGE_REASON" "truncated"
+assert_contains "forgery: the refusal names the missing provenance field" \
+  "$FORGED_STDERR" "recorded-by"
+
+me_verify "$(merge_manifest "${MERGE_VALID_BODY%$'\n'*}
+- **recorded-by**: me, by hand")" "$TEST_DIR" TASK-050 && PROD_EC=0 || PROD_EC=$?
+assert_exit_code "forgery: a producer outside the closed set is REFUSED" "$PROD_EC" 1
+assert_eq "forgery: an unrecognised producer reasons 'malformed'" "$TTG_MERGE_REASON" "malformed"
+
+# The host is the authority, so its three unusable answers stay three separate verdicts.
+MP_RESULT="api_failure"
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && UNVER_EC=0 || UNVER_EC=$?
+UNVERIFIABLE_STDERR="$ME_STDERR"
+assert_exit_code "host: an unreachable host does NOT admit a closure" "$UNVER_EC" 1
+assert_eq "host: an unaskable host reasons 'unverifiable'" "$TTG_MERGE_REASON" "unverifiable"
+assert_contains "host: 'could not look' is stated as distinct from 'not merged'" \
+  "$UNVERIFIABLE_STDERR" "NOT 'not merged'"
+assert_contains "host: the merge-provider result token is carried through" \
+  "$UNVERIFIABLE_STDERR" "api_failure"
+mp_reset
+
+MP_MERGED="false"
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && NOTM_EC=0 || NOTM_EC=$?
+NOT_MERGED_STDERR="$ME_STDERR"
+assert_exit_code "host: a PR the host says is NOT merged is refused" "$NOTM_EC" 1
+assert_eq "host: an answered-and-open PR reasons 'not_merged'" "$TTG_MERGE_REASON" "not_merged"
+assert_contains "host: the not-merged diagnostic says the host ANSWERED" "$NOT_MERGED_STDERR" "ANSWERED"
+if [ "$NOT_MERGED_STDERR" != "$UNVERIFIABLE_STDERR" ]; then
+  _pass "host: 'not merged' and 'could not look' are different sentences"
+else
+  _fail "host: 'not merged' and 'could not look' are different sentences" \
+    "expected: different stderr text" "  actual: byte-identical"
+fi
+mp_reset
+
+MP_AT="2026-01-01T00:00:00Z"
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && CTS_EC=0 || CTS_EC=$?
+CONTRADICTED_STDERR="$ME_STDERR"
+assert_exit_code "host: a merged-at the host contradicts is refused" "$CTS_EC" 1
+assert_eq "host: a contradicted merged-at reasons 'contradicted'" "$TTG_MERGE_REASON" "contradicted"
+mp_reset
+
+MP_COMMIT="cafebabecafebabecafebabecafebabecafebabe"
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && CTC_EC=0 || CTC_EC=$?
+assert_exit_code "host: a merge-commit the host contradicts is refused" "$CTC_EC" 1
+assert_eq "host: a contradicted merge-commit reasons 'contradicted'" "$TTG_MERGE_REASON" "contradicted"
+mp_reset
+
+# A host answer with no fields to compare corroborates nothing — it is not a pass.
+MP_AT=""
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && THIN_EC=0 || THIN_EC=$?
+assert_exit_code "host: merged=true with no merged-at is unverifiable, not verified" "$THIN_EC" 1
+assert_eq "host: a fieldless merged answer reasons 'unverifiable'" "$TTG_MERGE_REASON" "unverifiable"
+mp_reset
+
+# A manifest recording an abbreviation of the host's oid names the same commit.
+MP_COMMIT="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+me_verify "$(merge_manifest '- **host**: github.com
+- **pr**: 91
+- **merged-at**: 2026-08-15T12:00:00.000Z
+- **merge-commit**: deadbeef
+- **recorded-by**: scripts/close-objective.sh')" "$TEST_DIR" TASK-050 && ABBR_EC=0 || ABBR_EC=$?
+assert_exit_code "host: an abbreviated merge-commit and a fractional timestamp still verify" "$ABBR_EC" 0
+mp_reset
 
 # Every refusal state must be its own token AND its own sentence — a state folded into
 # a neighbour's bucket would leave both censuses unchanged.
-MERGE_DISTINCT=$(printf '%s\n%s\n%s\n%s\n' "$ABSENT_STDERR" "$COMMENTED_STDERR" "$TRUNCATED_STDERR" "$MALFORMED_STDERR" | sort -u | grep -c '[^[:space:]]')
-assert_eq "ttg_verify_merge_evidence: four refusal states, four distinct diagnostics" "$MERGE_DISTINCT" "4"
+MERGE_DISTINCT=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$ABSENT_STDERR" "$COMMENTED_STDERR" \
+  "$TRUNCATED_STDERR" "$MALFORMED_STDERR" "$UNVERIFIABLE_STDERR" "$NOT_MERGED_STDERR" \
+  | sort -u | grep -c '[^[:space:]]')
+assert_eq "ttg_verify_merge_evidence: six refusal diagnostics, six distinct sentences" "$MERGE_DISTINCT" "6"
 
-MERGE_VOCAB_EXPECTED='absent commented_out malformed truncated'
+MERGE_VOCAB_EXPECTED='absent commented_out contradicted malformed not_merged truncated unverifiable'
 MERGE_VOCAB_ARGS=$(grep -oE '_ttg_merge_deny "[^"]*" "[^"]*" "[^"]*"' \
   "$REPO_ROOT/scripts/lib/task-transition-guard.sh" | sed -E 's/.*"([^"]*)"$/\1/')
 MERGE_VOCAB_SCANNED=$(printf '%s\n' "$MERGE_VOCAB_ARGS" | grep -c '[^[:space:]]')
@@ -508,11 +609,15 @@ create_config
 NAZGUL_DIR="$TEST_DIR/nazgul"
 ANC_HEAD=$(git -C "$TEST_DIR" rev-parse HEAD)
 ANC_PARENT=$(git -C "$TEST_DIR" rev-parse HEAD~1)
+ANC_BASE=$(git -C "$TEST_DIR" rev-parse --abbrev-ref HEAD)
+create_config ".branch.base = \"${ANC_BASE}\""
 
 ANC_BODY="- **host**: github.com
 - **pr**: 91
 - **merged-at**: 2026-08-15T12:00:00Z
-- **merge-commit**: ${ANC_HEAD}"
+- **merge-commit**: ${ANC_HEAD}
+- **recorded-by**: scripts/close-objective.sh"
+MP_COMMIT="$ANC_HEAD"
 me_verify "$(merge_manifest "$ANC_BODY" "- ${ANC_PARENT}")" "$TEST_DIR" TASK-050 && CORROB_EC=0 || CORROB_EC=$?
 CORROB_STDERR="$ME_STDERR"
 assert_exit_code "ancestry: a reachable merge commit verifies" "$CORROB_EC" 0
@@ -522,7 +627,9 @@ assert_contains "ancestry: corroboration is named in the diagnostic" "$CORROB_ST
 INV_BODY="- **host**: github.com
 - **pr**: 91
 - **merged-at**: 2026-08-15T12:00:00Z
-- **merge-commit**: ${ANC_PARENT}"
+- **merge-commit**: ${ANC_PARENT}
+- **recorded-by**: scripts/close-objective.sh"
+MP_COMMIT="$ANC_PARENT"
 me_verify "$(merge_manifest "$INV_BODY" "- ${ANC_HEAD}")" "$TEST_DIR" TASK-050 && SQUASH_EC=0 || SQUASH_EC=$?
 SQUASH_STDERR="$ME_STDERR"
 assert_exit_code "ancestry: a FAILED is-ancestor check against API-merged evidence does NOT block" "$SQUASH_EC" 0
@@ -530,11 +637,36 @@ assert_eq "ancestry: a failed check is recorded as the expected squash signature
 assert_contains "ancestry: the squash signature is recorded, not reported as an anomaly" \
   "$SQUASH_STDERR" "expected squash signature"
 
+mp_reset
 ttg_verify_merge_evidence "$(merge_manifest "$MERGE_VALID_BODY" "- ${ANC_HEAD}")" "$TEST_DIR" TASK-050 2>/dev/null \
   && GONE_EC=0 || GONE_EC=$?
 assert_exit_code "ancestry: a merge commit absent from local history does not block" "$GONE_EC" 0
 assert_eq "ancestry: an unresolvable merge commit is the squash signature, not 'malformed'" \
   "$TTG_MERGE_ANCESTRY" "squash_signature"
+assert_eq "base ancestry: an unresolvable merge commit is 'unresolved', the post-squash norm" \
+  "$TTG_MERGE_BASE_ANCESTRY" "unresolved"
+
+# Positive-only base containment: unresolvable stays non-blocking (above), but a SHA that
+# resolves here to an unrelated commit is the fabrication this check exists to stop.
+git -C "$TEST_DIR" checkout -q -b anc-side-branch
+echo "side" > "$TEST_DIR/side.txt"
+git -C "$TEST_DIR" add side.txt
+git -C "$TEST_DIR" commit -q -m "off-base commit"
+ANC_OFFBASE=$(git -C "$TEST_DIR" rev-parse HEAD)
+git -C "$TEST_DIR" checkout -q "$ANC_BASE"
+MP_COMMIT="$ANC_OFFBASE"
+me_verify "$(merge_manifest "- **host**: github.com
+- **pr**: 91
+- **merged-at**: 2026-08-15T12:00:00Z
+- **merge-commit**: ${ANC_OFFBASE}
+- **recorded-by**: scripts/close-objective.sh" "- ${ANC_HEAD}")" "$TEST_DIR" TASK-050 && OFFBASE_EC=0 || OFFBASE_EC=$?
+OFFBASE_STDERR="$ME_STDERR"
+assert_exit_code "base ancestry: a resolvable merge commit off the base branch is REFUSED" "$OFFBASE_EC" 1
+assert_eq "base ancestry: an off-base merge commit reasons 'contradicted'" "$TTG_MERGE_REASON" "contradicted"
+assert_eq "base ancestry: the outcome is named 'not_ancestor'" "$TTG_MERGE_BASE_ANCESTRY" "not_ancestor"
+assert_contains "base ancestry: the refusal says the commit resolves but is off-base" \
+  "$OFFBASE_STDERR" "not contained in the base branch"
+mp_reset
 teardown_temp_dir
 
 setup_temp_dir
@@ -545,6 +677,8 @@ ttg_verify_merge_evidence "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TA
   && NOGIT_EC=0 || NOGIT_EC=$?
 assert_exit_code "ancestry: a non-git project root does not block the merge route" "$NOGIT_EC" 0
 assert_eq "ancestry: an uncheckable corroboration is named 'unavailable'" "$TTG_MERGE_ANCESTRY" "unavailable"
+assert_eq "base ancestry: with no repository the outcome is named 'no_git'" \
+  "$TTG_MERGE_BASE_ANCESTRY" "no_git"
 teardown_temp_dir
 
 # The edge and its condition are two separate facts, so both are asserted: present in

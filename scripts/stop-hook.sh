@@ -319,6 +319,19 @@ count_tasks_and_find_active "$NAZGUL_DIR/tasks"
 # In YOLO mode, APPROVED tasks have been locally reviewed; DONE only happens via PR merge
 REQUIRE_PROVENANCE=$(jq -r 'if .review_gate.require_provenance == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
 REVIEW_VIOLATIONS=""
+if [ "$YOLO_MODE" = "true" ] && [ "$TASK_PR_MODE" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
+  # Skipped by design here (YOLO+PR reaches DONE by merge), but a skipped enforcement
+  # pass and one that found nothing must not print the same thing — so say how many.
+  YOLO_UNCHECKED=0
+  for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
+    [ -f "$task_file" ] || continue
+    [ "$(get_task_status "$task_file")" = "DONE" ] || continue
+    YOLO_UNCHECKED=$((YOLO_UNCHECKED + 1))
+  done
+  echo "NAZGUL REVIEW GATE: reactive enforcement skipped in YOLO+task_pr mode — ${YOLO_UNCHECKED} DONE task(s) unchecked; DONE is reached by PR merge here, so no local review board is expected" >&2
+  emit_event "review_gate_enforcement_skipped" \
+    reason "yolo_task_pr_mode" unchecked:n "$YOLO_UNCHECKED"
+fi
 if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NAZGUL_DIR/tasks" ]; then
   for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
@@ -335,12 +348,26 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
     case "$PROV_RESET_COUNT" in (*[!0-9]*|'') PROV_RESET_COUNT=0 ;; esac
 
     if [ "$STATUS" = "DONE" ]; then
+      # ADR-023: DONE has TWO admitting routes and this pass knew only the review one.
+      # The heading is the pre-filter, so a review-closed task pays for no host call.
+      MERGE_ADMITTED=false
+      if grep -q '^## Merge Evidence' "$task_file" 2>/dev/null; then
+        if ttg_verify_merge_evidence "$(cat "$task_file")" "$PROJECT_ROOT" "$TASK_ID"; then
+          MERGE_ADMITTED=true
+        fi
+      fi
       EVIDENCE_PROBLEMS=$(validate_review_evidence "$NAZGUL_DIR" "$TASK_ID") || true
-      if [ -n "$EVIDENCE_PROBLEMS" ]; then
+      if [ "$MERGE_ADMITTED" = "true" ]; then
+        echo "NAZGUL REVIEW GATE: ${TASK_ID} DONE admitted via the merge-evidence route (${TTG_MERGE_ROUTE}) — no review board was consulted for this edge" >&2
+        if [ "$EVID_RESET_COUNT" != "0" ] || [ "$PROV_RESET_COUNT" != "0" ]; then
+          jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | del(.safety._provenance_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+        fi
+      elif [ -n "$EVIDENCE_PROBLEMS" ]; then
         MISSING_LIST=$(echo "$EVIDENCE_PROBLEMS" | awk 'NF>1 {out = out sep $2; sep = ", "} NF==1 {out = out sep $1; sep = ", "} END {print out}')
         if [ "$EVID_RESET_COUNT" -ge 1 ]; then
           # Second consecutive violation — escalate to BLOCKED with remediation
           set_task_status "$task_file" "DONE" "BLOCKED"
+          ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "BLOCKED" "" "" "stop-hook" || true
           BLOCKED_REASON_TEXT="review evidence missing (${MISSING_LIST}) — run /nazgul:review --materialize ${TASK_ID}"
           set_manifest_field "$task_file" "Blocked kind" "review-evidence"
           set_manifest_field "$task_file" "Blocked reason" "$BLOCKED_REASON_TEXT"
@@ -350,8 +377,10 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
           REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} escalated to BLOCKED — review evidence missing: ${MISSING_LIST}. Run /nazgul:review --materialize ${TASK_ID}
 "
         else
-          # First violation — reset to IMPLEMENTED with diagnostics
+          # First violation — reset to IMPLEMENTED. Ledger-logged with a writer, or the
+          # ledger says DONE while the manifest says IMPLEMENTED: unreadable as tampering.
           set_task_status "$task_file" "DONE" "IMPLEMENTED"
+          ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "IMPLEMENTED" "" "" "stop-hook" || true
           jq --arg t "$TASK_ID" '.safety._review_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
           DONE_COUNT=$((DONE_COUNT - 1))
           IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
@@ -371,6 +400,7 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
           if [ "$PROV_RESET_COUNT" -ge 1 ]; then
             # Second consecutive violation — escalate to BLOCKED with remediation
             set_task_status "$task_file" "DONE" "BLOCKED"
+            ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "BLOCKED" "" "" "stop-hook" || true
             BLOCKED_REASON_TEXT="review provenance invalid (${PROVENANCE_LIST}) — re-run review-gate so a fresh diff-bound dispatch manifest is written"
             set_manifest_field "$task_file" "Blocked kind" "review-provenance"
             set_manifest_field "$task_file" "Blocked reason" "$BLOCKED_REASON_TEXT"
@@ -386,6 +416,7 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
             # Evidence passed to reach this branch — clear its (now-stale) counter so
             # the two gates' ladders stay independent (evidence is currently valid).
             set_task_status "$task_file" "DONE" "IMPLEMENTED"
+            ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "IMPLEMENTED" "" "" "stop-hook" || true
             jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | .safety._provenance_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
             DONE_COUNT=$((DONE_COUNT - 1))
             IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
@@ -543,9 +574,9 @@ if [ "$GRANULARITY" != "task" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
   fi
   if [ "$UNIT_EXCLUDED" -gt 0 ]; then
     AGGREGATE_CARVEOUT_NOTE=" CARVE-OUT: ${UNIT_IMPLEMENTED} of ${UNIT_MEMBERS} unit tasks reviewed — ${UNIT_EXCLUDED} carried out CANCELLED (${UNIT_EXCLUDED_TASKS}); a cancelled task is removed from the unit, never approved by it."
-    emit_event "aggregate_board_blocked_carveout" \
+    emit_event "aggregate_board_cancelled_carveout" \
       unit "$UNIT_SCOPE_LABEL" \
-      blocked_tasks "$UNIT_EXCLUDED_TASKS" \
+      cancelled_tasks "$UNIT_EXCLUDED_TASKS" \
       implemented:n "$UNIT_IMPLEMENTED" \
       total:n "$UNIT_MEMBERS"
   fi
@@ -951,7 +982,7 @@ if echo "$GIT_PORCELAIN" | grep -qE '^(U.|.U|AA|DD) '; then
     set_task_status "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" "$_active_task_status" "BLOCKED"
     # Post-checkpoint hook write — ledger-log it or next iteration's
     # reconciliation flags this legitimate conflict-block as a forgery.
-    ttg_log_transition "$NAZGUL_DIR" "$ACTIVE_TASK" "$_active_task_status" "BLOCKED"
+    ttg_log_transition "$NAZGUL_DIR" "$ACTIVE_TASK" "$_active_task_status" "BLOCKED" "" "" "stop-hook"
     # Kind and reason are upserted together: the prior grep-guarded sed had no else
     # branch, so a first-time block landed a typed quarantine with no reason at all.
     set_manifest_field "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" "Blocked kind" "git-conflict"

@@ -12,6 +12,8 @@ source "$_TTG_DIR/task-utils.sh"
 source "$_TTG_DIR/review-evidence.sh"
 # shellcheck source=/dev/null
 source "$_TTG_DIR/emit-event.sh"
+# shellcheck source=/dev/null
+source "$_TTG_DIR/merge-provider.sh"
 
 # Constitution Article III state machine — single source of truth for both
 # call sites (was previously duplicated as a local function in
@@ -216,6 +218,26 @@ _ttg_strip_html_comments() {
     }'
 }
 
+# Usage: _ttg_section_emptiness <raw> <stripped> -> content | commented_out | absent.
+# ONE stripper decides: what _ttg_strip_html_comments removed IS "inside a comment".
+_ttg_section_emptiness() {
+  if printf '%s' "$2" | grep -q '[^[:space:]]'; then
+    printf 'content'
+  elif printf '%s' "$1" | grep -q '[^[:space:]]'; then
+    printf 'commented_out'
+  else
+    printf 'absent'
+  fi
+}
+
+# The task id under `## Metadata`, or empty. Shared by every verifier that accepts an
+# optional id argument, so the fallback derivation is one expression, not one per gate.
+_ttg_manifest_task_id() {
+  printf '%s' "$1" \
+    | awk '/^## Metadata/{f=1;next} /^## /{f=0} f' \
+    | grep -oE '(TASK|PATCH)-[0-9]+' | head -1 || true
+}
+
 # project.test_roots -> _TTG_ROOTS_REL (trigger prefixes), _TTG_ROOTS_RESOLVED
 # ("rel<TAB>abs", containment) and the scan counters; 1 = set undeterminable.
 _ttg_red_run_roots() {
@@ -294,6 +316,13 @@ _ttg_red_run_roots() {
   done <<EOF
 $raw
 EOF
+  # A set whose every entry was rejected has the same semantics as the empty set, so it
+  # takes the `empty` arm: returning 0 here silently switched the tests/** trigger off.
+  if [ -z "$_TTG_ROOTS_REL" ]; then
+    _TTG_ROOTS_DETAIL="an array whose every entry (${_TTG_ROOTS_UNSAFE} of ${_TTG_ROOTS_SCANNED}) was rejected as an unsafe path"
+    _TTG_ROOTS_SOURCE="undeterminable"
+    return 1
+  fi
   return 0
 }
 
@@ -595,11 +624,7 @@ ttg_verify_red_run_evidence() {
   local raw_section section commits entry="" line rc=0
 
   TTG_RED_RUN_REASON=""
-  if [ -z "$task_id" ]; then
-    task_id=$(printf '%s' "$manifest_text" \
-      | awk '/^## Metadata/{f=1;next} /^## /{f=0} f' \
-      | grep -oE '(TASK|PATCH)-[0-9]+' | head -1 || true)
-  fi
+  [ -n "$task_id" ] || task_id=$(_ttg_manifest_task_id "$manifest_text")
   [ -n "$task_id" ] || task_id="unknown"
 
   if ! printf '%s\n' "$manifest_text" | grep -q '^## Red-Run Evidence'; then
@@ -619,19 +644,17 @@ ttg_verify_red_run_evidence() {
   raw_section=$(printf '%s' "$manifest_text" | awk '/^## Red-Run Evidence/{f=1;next} /^## /{f=0} f')
   section=$(printf '%s\n' "$raw_section" | _ttg_strip_html_comments)
   if ! printf '%s\n' "$section" | grep -qE '^[[:space:]]*-[[:space:]]*(\*\*)?red-run(\*\*)?:'; then
-    if ! printf '%s' "$section" | grep -q '[^[:space:]]'; then
-      # Pre- vs post-strip payload, never a second reading of comment syntax:
-      # what the one stripper removed is what "inside a comment" means here.
-      if printf '%s' "$raw_section" | grep -q '[^[:space:]]'; then
+    case "$(_ttg_section_emptiness "$raw_section" "$section")" in
+      commented_out)
         _ttg_red_run_empty_payload "$nazgul_dir" "$task_id" "commented_out" \
           "carries content only inside an HTML comment (a comment is not a record, so nothing was counted)" \
           "$manifest_text" "$project_root" || return 1
-      else
+        return 0 ;;
+      absent)
         _ttg_red_run_empty_payload "$nazgul_dir" "$task_id" "absent" \
           "section is present but empty" "$manifest_text" "$project_root" || return 1
-      fi
-      return 0
-    fi
+        return 0 ;;
+    esac
     if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "corrupt" \
       "## Red-Run Evidence section is present but carries no parseable 'red-run:' entry"; then
       return 1
@@ -658,12 +681,15 @@ ${line}"
   return "$rc"
 }
 
-# The four facts a closure records, in the order they are reported. `## Merge Evidence`
-# is the enforcement boundary exactly as `## Commits` is — a token outside it is not evidence.
-_TTG_MERGE_REQUIRED_FIELDS="host pr merged-at merge-commit"
+# The five facts a closure records, under `## Merge Evidence` and nowhere else. `recorded-by`
+# is REQUIRED: without it a hand-typed block and a producer-written one are the same lines.
+_TTG_MERGE_REQUIRED_FIELDS="host pr merged-at merge-commit recorded-by"
 
-# Closed refusal vocabulary, never bucketed (RULES.md §15) and asserted from this source in
-# tests/test-task-transition-guard.sh: absent commented_out truncated malformed
+# Closed producer set for `recorded-by`. A value naming anything else is `malformed`.
+_TTG_MERGE_PRODUCERS="scripts/close-objective.sh"
+
+# Closed refusal vocabulary, never bucketed (RULES.md §15), asserted from this source in
+# tests: absent commented_out truncated malformed unverifiable not_merged contradicted
 
 # Last merge verdict: one of the closed vocabulary above, or `verified`.
 # shellcheck disable=SC2034  # read by callers, not within this file
@@ -674,6 +700,13 @@ TTG_MERGE_ANCESTRY=""
 # Identity of the evidence that validated, for the caller's which-route diagnostic.
 # shellcheck disable=SC2034  # read by callers, not within this file
 TTG_MERGE_ROUTE=""
+# Base-branch containment outcome: ancestor_of_base | not_ancestor | unresolved |
+# base_unresolvable | no_git. Only not_ancestor blocks.
+# shellcheck disable=SC2034  # read by callers, not within this file
+TTG_MERGE_BASE_ANCESTRY=""
+# The host's own answer for the last check: ok | not_merged | <merge-provider result>.
+# shellcheck disable=SC2034  # read by callers, not within this file
+TTG_MERGE_HOST_RESULT=""
 
 # Deliberately NO kill switch (unlike guards.red_run_evidence, which only suppresses a block
 # on the way IN to IMPLEMENTED): a switch on the last gate before DONE IS the bypass.
@@ -701,8 +734,21 @@ _ttg_merge_shape_ok() {
     pr)           [[ "$value" =~ ^[0-9]+$ ]] ;;
     merged-at)    [[ "$value" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})$ ]] ;;
     merge-commit) [[ "$value" =~ ^[0-9a-fA-F]{7,64}$ ]] ;;
+    recorded-by)  _ttg_merge_producer_ok "$value" ;;
     *) return 1 ;;
   esac
+}
+
+# `<producer>` or `<producer> (<detail>)` for one member of the closed producer set.
+_ttg_merge_producer_ok() {
+  local value="$1" producer
+  for producer in $_TTG_MERGE_PRODUCERS; do
+    case "$value" in
+      "$producer") return 0 ;;
+      "$producer ("*")") return 0 ;;
+    esac
+  done
+  return 1
 }
 
 # lean-comments: allow-run — ADR-023 decision 1's rationale, kept where a reader would
@@ -730,22 +776,93 @@ _ttg_merge_ancestry() {
   return 0
 }
 
+# Timestamps and SHAs from two producers are compared as VALUES, not as bytes: the host
+# may render the same instant with a fractional part or a numeric offset.
+_ttg_merge_norm_ts() {
+  printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | sed -E 's/\.[0-9]+//; s/\+00:?00$/Z/'
+}
+
+# True iff two hex SHAs name the same commit — one abbreviation of the other counts,
+# since a manifest may record a short form of the host's full oid.
+_ttg_sha_agree() {
+  local a b
+  a=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  b=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')
+  [ -n "$a" ] && [ -n "$b" ] || return 1
+  case "$a" in "$b"*) return 0 ;; esac
+  case "$b" in "$a"*) return 0 ;; esac
+  return 1
+}
+
+# lean-comments: allow-run — this is the answer to "the gate validates nothing"; a reader
+# must not shorten it back into a shape check.
+# Ask the HOST, because every field above is operator-writable text and a shape check on
+# operator-writable text certifies whoever typed it. The manifest is only ever compared
+# against merge_provider_pr_state's answer, and the three outcomes stay separate:
+#   0  the host answered and says merged (TTG_MERGE_HOST_* carry its answer)
+#   1  the host answered and says NOT merged
+#   2  the host could not be asked, or answered unusably — NEVER read as "not merged"
+_ttg_merge_host_state() {
+  local project_root="$1" pr="$2" json="" result="" merged=""
+  TTG_MERGE_HOST_RESULT="unavailable"
+  TTG_MERGE_HOST_AT=""
+  TTG_MERGE_HOST_COMMIT=""
+  declare -F merge_provider_pr_state >/dev/null 2>&1 || return 2
+  command -v jq >/dev/null 2>&1 || return 2
+  json=$(merge_provider_pr_state "$project_root" "$pr") || true
+  [ -n "$json" ] || return 2
+  result=$(printf '%s' "$json" | jq -r '.result // empty' 2>/dev/null) || result=""
+  [ -n "$result" ] || return 2
+  TTG_MERGE_HOST_RESULT="$result"
+  [ "$result" = "ok" ] || return 2
+  merged=$(printf '%s' "$json" | jq -r '.merged | tostring' 2>/dev/null) || merged=""
+  TTG_MERGE_HOST_AT=$(printf '%s' "$json" | jq -r '.merged_at // empty' 2>/dev/null) || TTG_MERGE_HOST_AT=""
+  TTG_MERGE_HOST_COMMIT=$(printf '%s' "$json" | jq -r '.merge_commit // empty' 2>/dev/null) || TTG_MERGE_HOST_COMMIT=""
+  case "$merged" in
+    true)  return 0 ;;
+    false) TTG_MERGE_HOST_RESULT="not_merged"; return 1 ;;
+    *)     TTG_MERGE_HOST_RESULT="ok_merged_unknown"; return 2 ;;
+  esac
+}
+
+# Positive-only base containment: a merge commit that does not resolve locally stays
+# non-blocking, but one that DOES resolve must sit on the base. Only not_ancestor blocks.
+_ttg_merge_base_ancestry() {
+  local project_root="$1" nazgul_dir="$2" merge_commit="$3" base ref resolved=false
+  TTG_MERGE_BASE_ANCESTRY="no_git"
+  command -v git >/dev/null 2>&1 || return 0
+  git -C "$project_root" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  TTG_MERGE_BASE_ANCESTRY="unresolved"
+  git -C "$project_root" cat-file -e "${merge_commit}^{commit}" 2>/dev/null || return 0
+  base=$(jq -r '.branch.base // empty' "$nazgul_dir/config.json" 2>/dev/null || true)
+  [ -n "$base" ] || base="main"
+  TTG_MERGE_BASE_ANCESTRY="base_unresolvable"
+  for ref in "$base" "origin/$base"; do
+    git -C "$project_root" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null 2>&1 || continue
+    resolved=true
+    if git -C "$project_root" merge-base --is-ancestor "$merge_commit" "$ref" 2>/dev/null; then
+      TTG_MERGE_BASE_ANCESTRY="ancestor_of_base"
+      return 0
+    fi
+  done
+  [ "$resolved" = "true" ] && TTG_MERGE_BASE_ANCESTRY="not_ancestor"
+  return 0
+}
+
 # Merge-evidence verification (ADR-023 decision 3), third verifier in the established shape.
 # Usage: ttg_verify_merge_evidence <manifest_text> <project_root> [task_id]
 ttg_verify_merge_evidence() {
   local manifest_text="$1" project_root="$2" task_id="${3:-}"
   local nazgul_dir="${NAZGUL_DIR:-$project_root/nazgul}"
   local raw_section section key value missing="" bad="" commits phrase
-  local host pr merge_commit
+  local host pr merge_commit merged_at host_rc=0
 
   TTG_MERGE_REASON=""
   TTG_MERGE_ANCESTRY=""
   TTG_MERGE_ROUTE=""
-  if [ -z "$task_id" ]; then
-    task_id=$(printf '%s' "$manifest_text" \
-      | awk '/^## Metadata/{f=1;next} /^## /{f=0} f' \
-      | grep -oE '(TASK|PATCH)-[0-9]+' | head -1 || true)
-  fi
+  TTG_MERGE_BASE_ANCESTRY=""
+  TTG_MERGE_HOST_RESULT=""
+  [ -n "$task_id" ] || task_id=$(_ttg_manifest_task_id "$manifest_text")
   [ -n "$task_id" ] || task_id="unknown"
 
   if ! printf '%s\n' "$manifest_text" | grep -q '^## Merge Evidence'; then
@@ -756,18 +873,16 @@ ttg_verify_merge_evidence() {
 
   raw_section=$(printf '%s' "$manifest_text" | awk '/^## Merge Evidence/{f=1;next} /^## /{f=0} f')
   section=$(printf '%s\n' "$raw_section" | _ttg_strip_html_comments)
-  if ! printf '%s' "$section" | grep -q '[^[:space:]]'; then
-    # TASK-008's pre/post-strip comparison, reused rather than re-derived: what the one
-    # stripper removed IS what "inside a comment" means, so the two readings cannot drift.
-    if printf '%s' "$raw_section" | grep -q '[^[:space:]]'; then
+  case "$(_ttg_section_emptiness "$raw_section" "$section")" in
+    commented_out)
       _ttg_merge_deny "$nazgul_dir" "$task_id" "commented_out" \
         "## Merge Evidence carries content only inside an HTML comment — present, but a comment is not a record, so nothing was counted"
-    else
+      return 1 ;;
+    absent)
       _ttg_merge_deny "$nazgul_dir" "$task_id" "absent" \
         "## Merge Evidence section is present but empty"
-    fi
-    return 1
-  fi
+      return 1 ;;
+  esac
 
   for key in $_TTG_MERGE_REQUIRED_FIELDS; do
     value=$(_ttg_merge_field "$key" "$section")
@@ -790,7 +905,43 @@ ttg_verify_merge_evidence() {
 
   host=$(_ttg_merge_field host "$section")
   pr=$(_ttg_merge_field pr "$section")
+  merged_at=$(_ttg_merge_field merged-at "$section")
   merge_commit=$(_ttg_merge_field merge-commit "$section")
+
+  _ttg_merge_host_state "$project_root" "$pr" || host_rc=$?
+  if [ "$host_rc" -eq 1 ]; then
+    _ttg_merge_deny "$nazgul_dir" "$task_id" "not_merged" \
+      "the host ANSWERED for PR ${pr} and reports it is not merged — the manifest's ## Merge Evidence says otherwise"
+    return 1
+  fi
+  if [ "$host_rc" -ne 0 ]; then
+    _ttg_merge_deny "$nazgul_dir" "$task_id" "unverifiable" \
+      "PR ${pr} could not be verified against ${host} [merge-provider: ${TTG_MERGE_HOST_RESULT}] — this is NOT 'not merged', and an unreachable host never admits a closure"
+    return 1
+  fi
+  if [ -z "$TTG_MERGE_HOST_AT" ] || [ -z "$TTG_MERGE_HOST_COMMIT" ]; then
+    _ttg_merge_deny "$nazgul_dir" "$task_id" "unverifiable" \
+      "the host reports PR ${pr} merged but returned no merged-at/merge-commit to compare the manifest against — nothing outside the manifest corroborates it"
+    return 1
+  fi
+  if [ "$(_ttg_merge_norm_ts "$merged_at")" != "$(_ttg_merge_norm_ts "$TTG_MERGE_HOST_AT")" ]; then
+    _ttg_merge_deny "$nazgul_dir" "$task_id" "contradicted" \
+      "## Merge Evidence records merged-at=${merged_at} but ${host} reports ${TTG_MERGE_HOST_AT} for PR ${pr}"
+    return 1
+  fi
+  if ! _ttg_sha_agree "$merge_commit" "$TTG_MERGE_HOST_COMMIT"; then
+    _ttg_merge_deny "$nazgul_dir" "$task_id" "contradicted" \
+      "## Merge Evidence records merge-commit=${merge_commit} but ${host} reports ${TTG_MERGE_HOST_COMMIT} for PR ${pr}"
+    return 1
+  fi
+
+  _ttg_merge_base_ancestry "$project_root" "$nazgul_dir" "$merge_commit"
+  if [ "$TTG_MERGE_BASE_ANCESTRY" = "not_ancestor" ]; then
+    _ttg_merge_deny "$nazgul_dir" "$task_id" "contradicted" \
+      "merge-commit ${merge_commit} resolves in local history but is not contained in the base branch — a merge commit that exists here must sit on the base"
+    return 1
+  fi
+
   commits=$(printf '%s' "$manifest_text" | awk '/^## Commits/{f=1;next} /^## /{f=0} f')
   _ttg_merge_ancestry "$project_root" "$merge_commit" "$commits"
   case "$TTG_MERGE_ANCESTRY" in
@@ -800,8 +951,8 @@ ttg_verify_merge_evidence() {
   esac
 
   TTG_MERGE_REASON="verified"
-  TTG_MERGE_ROUTE="host=${host} pr=${pr} merged-at=$(_ttg_merge_field merged-at "$section") merge-commit=${merge_commit} ancestry=${TTG_MERGE_ANCESTRY}"
-  echo "ttg_verify_merge_evidence: verified — ${TTG_MERGE_ROUTE}; ${phrase}" >&2
+  TTG_MERGE_ROUTE="host=${host} pr=${pr} merged-at=${merged_at} merge-commit=${merge_commit} recorded-by=$(_ttg_merge_field recorded-by "$section") host-state=${TTG_MERGE_HOST_RESULT} base=${TTG_MERGE_BASE_ANCESTRY} ancestry=${TTG_MERGE_ANCESTRY}"
+  echo "ttg_verify_merge_evidence: verified against the host — ${TTG_MERGE_ROUTE}; ${phrase}" >&2
   return 0
 }
 
@@ -1337,11 +1488,11 @@ ttg_apply_transition() {
 
 # Append one completed entry to the guarded-transition ledger. Callers invoke
 # this only after verifying the target status on disk. Trim to the newest 500
-# lines so the runtime ledger remains bounded.
-# Usage: ttg_log_transition <nazgul_dir> <task_id> <from> <to>
+# lines so the runtime ledger remains bounded. <writer> attributes an out-of-command edge.
+# Usage: ttg_log_transition <nazgul_dir> <task_id> <from> <to> [before] [after] [writer]
 ttg_log_transition() {
   local nazgul_dir="$1" task_id="$2" from="$3" to="$4"
-  local before_hash="${5:-}" after_hash="${6:-}"
+  local before_hash="${5:-}" after_hash="${6:-}" writer="${7:-}"
   local logs ledger lock
   logs=$(_ttg_runtime_dir_path "$nazgul_dir" logs true) || {
     echo "ttg_log_transition: logs/ is not a canonical runtime directory" >&2
@@ -1366,11 +1517,12 @@ ttg_log_transition() {
     fi
     tmp=$(mktemp "$logs/.guarded-transitions.XXXXXX") || return 1
     line=$(jq -nc --arg t "$task_id" --arg f "$from" --arg to "$to" \
-      --arg before "$before_hash" --arg after "$after_hash" \
+      --arg before "$before_hash" --arg after "$after_hash" --arg writer "$writer" \
       --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       '{task_id:$t, from:$f, to:$to, timestamp:$ts}
        + (if $before == "" then {} else {before_sha256:$before} end)
-       + (if $after == "" then {} else {after_sha256:$after} end)') || return 1
+       + (if $after == "" then {} else {after_sha256:$after} end)
+       + (if $writer == "" then {} else {writer:$writer} end)') || return 1
     if [ -f "$ledger" ]; then
       tail -n 499 "$ledger" > "$tmp" || return 1
     else
