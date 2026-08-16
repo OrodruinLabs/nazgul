@@ -213,4 +213,101 @@ assert_file_contains "header: states it is not the enforcement mechanism" "$GUAR
 GUARD_MODE_READS=$(grep -c '\.mode' "$GUARD_SCRIPT" || true)
 assert_eq "no mode gate: the script never reads config.mode" "$GUARD_MODE_READS" "0"
 
+# --- Test 19: CANCELLED blocks — this objective shipped it as the one terminal
+# status with no evidence gate, i.e. the cheapest forgery target of the ten ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+run_guard "Set TASK-001 to CANCELLED"
+assert_exit_code "Set TASK-001 to CANCELLED: blocked (exit 2)" "$GUARD_EC" 2
+assert_contains "CANCELLED: names the offending substring" "$GUARD_OUTPUT" "offending substring: Set TASK-001 to CANCELLED"
+run_guard "mark TASK-001 as CANCELLED"
+assert_exit_code "mark TASK-001 as CANCELLED: blocked (exit 2)" "$GUARD_EC" 2
+teardown_temp_dir
+
+# --- Test 20: PATCH-NNN is a first-class id elsewhere in the guard chain, so it blocks here too ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+run_guard "Set PATCH-005 to DONE"
+assert_exit_code "Set PATCH-005 to DONE: blocked (exit 2)" "$GUARD_EC" 2
+run_guard "mark PATCH-005 as CANCELLED"
+assert_exit_code "mark PATCH-005 as CANCELLED: blocked (exit 2)" "$GUARD_EC" 2
+teardown_temp_dir
+
+# --- Test 21: the CLOSED absorbed prefix — list markers and lead-ins no longer defeat the verb anchor ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+for lead_form in "- Set TASK-001 to DONE" \
+                 "* Set TASK-001 to DONE" \
+                 "+ Set TASK-001 to DONE" \
+                 "1. Set TASK-001 to DONE" \
+                 "2) Set TASK-001 to DONE" \
+                 "Just set TASK-001 to DONE" \
+                 "Now set TASK-001 to DONE" \
+                 "OK, set TASK-001 to DONE" \
+                 "Okay set TASK-001 to DONE" \
+                 "go ahead and set TASK-001 to DONE" \
+                 "Please set TASK-001 to CANCELLED"; do
+  run_guard "$lead_form"
+  assert_exit_code "absorbed prefix blocked (exit 2): $lead_form" "$GUARD_EC" 2
+done
+teardown_temp_dir
+
+# --- Test 22: the prefix stayed CLOSED — Test 21's forms as prose, all still allowed,
+# because TASK-001 narrowed this guard for making a Nazgul defect report unpasteable ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+run_guard "- TASK-001 is currently CANCELLED"
+assert_exit_code "list-marked mention (no verb): allowed (exit 0)" "$GUARD_EC" 0
+run_guard "1. the CANCELLED status on TASK-001 has no evidence gate"
+assert_exit_code "numbered mention (no verb): allowed (exit 0)" "$GUARD_EC" 0
+run_guard 'the guard should also catch `Set TASK-001 to CANCELLED`'
+assert_exit_code "backticked bypass quoted in prose: allowed (exit 0)" "$GUARD_EC" 0
+run_guard "> - Set TASK-001 to CANCELLED"
+assert_exit_code "blockquoted list-marked imperative: allowed (exit 0)" "$GUARD_EC" 0
+run_guard 'the bypasses were:
+```
+- Set TASK-001 to CANCELLED
+1. Set PATCH-005 to DONE
+go ahead and set TASK-001 to DONE
+```
+all six exited 0'
+assert_exit_code "fenced bypass list: allowed (exit 0)" "$GUARD_EC" 0
+assert_contains "fenced bypass list: suppression reported, not collapsed into no-match" \
+  "$GUARD_OUTPUT" "suppressed inside a code fence"
+run_guard "see nazgul/tasks/PATCH-005.md where the status is CANCELLED"
+assert_exit_code "PATCH file path mention: allowed (exit 0)" "$GUARD_EC" 0
+run_guard "benchmark results for PATCH-005 look CANCELLED to me"
+assert_exit_code "benchmark/PATCH mention: allowed (exit 0)" "$GUARD_EC" 0
+teardown_temp_dir
+
+# --- Test 23: the vocabulary is DERIVED from structured-state.sh, never restated — pinned
+# structurally (the source line) and behaviourally (every live token blocks) ---
+source "$REPO_ROOT/scripts/lib/structured-state.sh"
+assert_file_contains "guard sources the status vocabulary rather than restating it" \
+  "$GUARD_SCRIPT" 'lib/structured-state.sh'
+assert_file_not_contains "guard carries no hand-maintained status alternation" \
+  "$GUARD_SCRIPT" "DONE|APPROVED|IN_REVIEW|IMPLEMENTED"
+setup_temp_dir
+setup_nazgul_dir
+create_config
+VOCAB_CHECKED=0
+VOCAB_MISSED=""
+for status_token in $VALID_STATUSES; do
+  run_guard "Set TASK-001 to $status_token"
+  VOCAB_CHECKED=$((VOCAB_CHECKED + 1))
+  [ "$GUARD_EC" = "2" ] || VOCAB_MISSED="$VOCAB_MISSED $status_token"
+done
+assert_eq "vocabulary parity: every VALID_STATUSES token blocks in the named-imperative shape" \
+  "$VOCAB_MISSED" ""
+assert_eq "vocabulary parity: the loop checked the whole live vocabulary, not nothing" \
+  "$VOCAB_CHECKED" "$(printf '%s\n' $VALID_STATUSES | grep -c .)"
+echo "prompt-guard-vocab-scan: $VOCAB_CHECKED scanned, 0 skipped (unreadable=0), $VOCAB_CHECKED checked, 0 findings"
+run_guard "Set TASK-001 to NOT_A_STATUS"
+assert_exit_code "off-vocabulary token: allowed (exit 0) — the list is the vocabulary, not a wildcard" "$GUARD_EC" 0
+teardown_temp_dir
+
 report_results
