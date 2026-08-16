@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/assertions.sh"
 source "$SCRIPT_DIR/lib/setup.sh"
+source "$SCRIPT_DIR/lib/status-consumer-scan.sh"
 source "$REPO_ROOT/scripts/lib/task-transition-guard.sh"
 
 echo "=== $TEST_NAME ==="
@@ -310,33 +311,87 @@ assert_contains "unblock: refuses a terminal status" "$UNBLOCK_SECTION" "which i
 assert_contains "unblock: still refuses a reconciliation quarantine" \
   "$UNBLOCK_SECTION" "\`reconciliation\` — do NOT unblock"
 
-# "Looked and found none" must not print the same as "never looked" (RULES.md §15).
-SURFACES="scripts/lib/structured-state.sh
-scripts/lib/task-transition-guard.sh
-scripts/lib/task-utils.sh
-scripts/stop-hook.sh
-skills/task/SKILL.md"
-SURF_SCANNED=0; SURF_CHECKED=0; SURF_UNREADABLE=0; SURF_FINDINGS=0
-while IFS= read -r rel; do
-  [ -n "$rel" ] || continue
-  SURF_SCANNED=$((SURF_SCANNED + 1))
-  if [ ! -r "$REPO_ROOT/$rel" ]; then
-    SURF_UNREADABLE=$((SURF_UNREADABLE + 1))
-    _skip "surface-scan: $rel is unreadable — not checked"
-    continue
-  fi
-  SURF_CHECKED=$((SURF_CHECKED + 1))
-  if grep -q "CANCELLED" "$REPO_ROOT/$rel"; then
-    _pass "surface-scan: $rel names CANCELLED"
+# THE GATE. An authored list prints neither "looked and found none" nor "never
+# looked" (RULES.md §15); this population is derived by tests/lib/status-consumer-scan.sh.
+scan_report() { # <label>
+  local rel
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    _pass "consumer-scan [$rel]: CANCELLED-aware"
+  done <<< "$SCS_AWARE"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    _skip "consumer-scan [$rel]: exempt — $(scs_exemption "$rel")"
+  done <<< "$SCS_EXEMPT"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    _skip "consumer-scan [$rel]: exemption retired — the file is CANCELLED-aware now"
+  done <<< "$SCS_RETIRED"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    _fail "consumer-scan [$rel]: CANCELLED-aware or enumerated-exempt" \
+      "this file reads task status, does not name CANCELLED, and is on no exemption list" \
+      "  fix: make it CANCELLED-aware, or add a justified entry to scs_exemption() in tests/lib/status-consumer-scan.sh"
+  done <<< "$SCS_UNCLASSIFIED"
+  scs_coverage_line "$1"
+}
+
+if ! scs_run "$REPO_ROOT"; then
+  _fail "consumer-scan: the shipped tree is walkable" "no scripts/ directory under $REPO_ROOT"
+else
+  scan_report "consumer-scan"
+  assert_eq "consumer-scan: coverage accounting adds up (N == M + K)" \
+    "$SCS_N" "$((SCS_M + SCS_K))"
+  assert_eq "consumer-scan: every status consumer is CANCELLED-aware or enumerated-exempt" \
+    "$SCS_F" "0"
+
+  # K > 0 floor: a scan that discovers no consumers is a broken predicate, not a
+  # clean tree. The floor sits well under the current population.
+  CONSUMER_FLOOR="${NAZGUL_STATUS_CONSUMER_FLOOR:-12}"
+  if [ "$SCS_K" -ge "$CONSUMER_FLOOR" ]; then
+    _pass "consumer-scan: the walk actually reached the tree ($SCS_K consumers >= $CONSUMER_FLOOR)"
   else
-    SURF_FINDINGS=$((SURF_FINDINGS + 1))
-    _fail "surface-scan: $rel names CANCELLED" "expected: at least one occurrence" "  actual: none"
+    _fail "consumer-scan: the walk actually reached the tree" \
+      "only $SCS_K consumer(s) discovered of $SCS_N file(s) walked — a broken predicate, not a clean tree"
   fi
-done <<< "$SURFACES"
-SURF_SKIPPED=$((SURF_SCANNED - SURF_CHECKED))
-echo "  surface-scan: ${SURF_SCANNED} scanned, ${SURF_SKIPPED} skipped (unreadable=${SURF_UNREADABLE}), ${SURF_CHECKED} checked, ${SURF_FINDINGS} findings"
-assert_eq "surface-scan: scanned == skipped + checked" \
-  "$SURF_SCANNED" "$((SURF_SKIPPED + SURF_CHECKED))"
-assert_eq "surface-scan: every surface was checked" "$SURF_CHECKED" "5"
+
+  # Two live cases pin the predicate against narrowing — both were invisible to
+  # the authored list this scan replaces.
+  for known in scripts/webhook-forward.sh scripts/notify.sh; do
+    assert_contains "consumer-scan: discovery still reaches $known" "$SCS_CONSUMERS" "$known"
+  done
+fi
+
+# The gate predicate, dogfooded against a tree dirty by construction. The shipped
+# tree is clean, so a gate exercised only against it is a rule that can only pass.
+SCS_SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-consumer-scan-XXXXXX")
+mkdir -p "$SCS_SCRATCH/scripts"
+cat > "$SCS_SCRATCH/scripts/blind-consumer.sh" <<'BLIND'
+#!/usr/bin/env bash
+st=$(get_task_status "$NAZGUL_DIR/tasks/$1.md" "")
+case "$st" in DONE|BLOCKED) exit 0 ;; esac
+BLIND
+cat > "$SCS_SCRATCH/scripts/aware-consumer.sh" <<'AWARE'
+#!/usr/bin/env bash
+st=$(get_task_status "$NAZGUL_DIR/tasks/$1.md" "")
+case "$st" in DONE|CANCELLED) exit 0 ;; esac
+AWARE
+printf '#!/usr/bin/env bash\necho hello\n' > "$SCS_SCRATCH/scripts/not-a-consumer.sh"
+if scs_run "$SCS_SCRATCH"; then
+  assert_eq "dogfood: a CANCELLED-blind, unexempted consumer is a finding" "$SCS_F" "1"
+  assert_contains "dogfood: the finding names the offending file" \
+    "$SCS_UNCLASSIFIED" "scripts/blind-consumer.sh"
+  assert_contains "dogfood: the CANCELLED-aware sibling classifies clean" \
+    "$SCS_AWARE" "scripts/aware-consumer.sh"
+  assert_not_contains "dogfood: a file that reads no task status is not a consumer" \
+    "$SCS_CONSUMERS" "scripts/not-a-consumer.sh"
+  assert_eq "dogfood: coverage accounting adds up on the dirty tree (N == M + K)" \
+    "$SCS_N" "$((SCS_M + SCS_K))"
+  assert_eq "dogfood: the non-consumer was skipped with a reason, not dropped" \
+    "$SCS_M_NONCONSUMER" "1"
+else
+  _skip "dogfood: the scratch tree could not be built — gate predicate not exercised"
+fi
+rm -rf "$SCS_SCRATCH"
 
 report_results
