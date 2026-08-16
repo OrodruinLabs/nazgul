@@ -78,13 +78,14 @@ precedent as 34 → 35 (2.29.0) and 35 → 36 (2.30.0).
   (`:251`), `coverage_vacuous` (`:309`), `close_objective_summary` (`:313`). Exit policy is blocking and
   stated in the file: `0` closed something with no refusal, `1` a refusal, `2` NOTHING CHECKED, `3`
   usage error or an internal coverage-accounting defect.
-- **`aggregate_board_blocked_carveout` — an additive event for readiness reached by exclusion.**
-  Emitted by `scripts/stop-hook.sh:546` when a `group`/`feature` unit becomes review-ready only because
-  `CANCELLED` tasks left it, carrying `unit`, `blocked_tasks`, `implemented`, `total` (`:547-550`).
-  `blocked_tasks` holds the **carried-out** ids — the field name predates the `CANCELLED` token and is
-  kept rather than silently repurposed under a new one. The dispatch text carries the same facts as a
-  `CARVE-OUT:` note (`:545`): `N of M unit tasks reviewed — K carried out CANCELLED (ids); a cancelled
-  task is removed from the unit, never approved by it.` Readiness where every task shipped and
+- **`aggregate_board_cancelled_carveout` — an additive event for readiness reached by exclusion.**
+  Emitted by `scripts/stop-hook.sh`'s aggregate-review arm when a `group`/`feature` unit becomes
+  review-ready only because `CANCELLED` tasks left it, carrying `unit`, `cancelled_tasks` (the ids
+  carried out), `implemented`, and `total`. Both names say `cancelled` because `CANCELLED` is the only
+  status the carve-out acts on: a `BLOCKED` task is deliberately NOT carried out, so a field named for
+  blocking would have described the one case that never appears in it. The dispatch text carries the
+  same facts as a `CARVE-OUT:` note: `N of M unit tasks reviewed — K carried out CANCELLED (ids); a
+  cancelled task is removed from the unit, never approved by it.` Readiness where every task shipped and
   readiness reached by exclusion must not read identically.
 - **Five test files — the discovered root suite moves 104 → 109, all green.**
   `tests/test-cancelled-status.sh` (the status itself: edges, the quarantine refusal, the dependency

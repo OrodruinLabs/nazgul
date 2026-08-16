@@ -103,6 +103,39 @@ status: PLANNED
        - captured-by: scripts/red-run.sh at 2026-08-04T11:02:31Z
      - red-run: N/A — docs-only -->
 
+## Merge Evidence
+<!-- Populated by scripts/close-objective.sh (/nazgul:complete), the SOLE writer of this section.
+     No agent hand-writes it. The closer asks the host about the PR through the merge-provider seam
+     (scripts/lib/merge-provider.sh) and writes these fields only when the host answered `ok` AND
+     reported the PR merged; every other seam outcome is a named skip and nothing is written.
+
+     This is what makes IMPLEMENTED -> DONE reachable at all — work that merged outside the loop can
+     be closed on the host's answer instead of on a hand-edited `status:` field. For IN_REVIEW -> DONE
+     it is an ALTERNATIVE to the review route, never a bypass: the review route is evaluated first and
+     the accepted route is always named on stderr.
+
+     The `## Merge Evidence` heading IS the enforcement boundary — `ttg_verify_merge_evidence`
+     (scripts/lib/task-transition-guard.sh) reads only what falls under it, exactly as
+     `ttg_verify_commit_evidence` reads only what falls under `## Commits`. A `host:` or `pr:` line
+     anywhere else in this manifest is invisible to the gate.
+
+     Four required fields, each shape-checked, and four closed refusal reasons — `absent` (no section,
+     or one with nothing in it), `commented_out` (content present but only inside an HTML comment: a
+     comment is not a record, and this template's own block reads as exactly that), `truncated` (a
+     required field is missing), `malformed` (a field is present but fails its shape check). Each
+     emits `merge_evidence_missing`. There is NO kill switch: a switch on the last gate before DONE
+     would be the bypass.
+
+     Git ancestry is corroboration and never a predicate — after a server-side squash no SHA recorded
+     under `## Commits` reaches the merge commit, so `squash_signature` is the expected reading there
+     and is recorded, not blocked on.
+
+     Example:
+     - **host**: github.com
+     - **pr**: 88
+     - **merged-at**: 2026-08-14T09:31:07Z
+     - **merge-commit**: d6f7582a1c4b9e30f2a7c85be1490fd3ac62b7e1 -->
+
 ## Description
 <!-- Clear, specific description of what this task accomplishes.
      Written by the Planner. Should be understandable without reading other tasks.
