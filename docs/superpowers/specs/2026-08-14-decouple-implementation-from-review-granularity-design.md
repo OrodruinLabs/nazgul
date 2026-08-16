@@ -16,7 +16,7 @@ six tasks as one unit" implies "implement them one at a time."
 
 This is not hypothetical. An operator on taxguardian-core ran parallel task branches under
 group/feature review, was blocked by `scripts/git-hooks/pre-merge-commit`, and merged with
-`--no-verify` — recorded in `nazgul/inbox/premerge-guard-not-granularity-aware-deadlocks-integration.md`
+`--no-verify` — recorded in `premerge-guard-not-granularity-aware-deadlocks-integration.md`
 (p1). The framework fights this configuration at three independent layers.
 
 ## Why the coupling exists
