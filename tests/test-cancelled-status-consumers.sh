@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/assertions.sh"
 source "$SCRIPT_DIR/lib/setup.sh"
+source "$SCRIPT_DIR/lib/status-consumer-scan.sh"
 source "$REPO_ROOT/scripts/lib/task-transition-guard.sh"
 source "$REPO_ROOT/scripts/lib/parallel-batch.sh"
 
@@ -742,6 +743,43 @@ rm -rf "$FAKEBIN"
 echo "  consumer-scan: ${CS_SCANNED} scanned, ${CS_SKIPPED} skipped (undrivable=${CS_UNDRIVABLE}), ${CS_CHECKED} checked, ${CS_FINDINGS} findings"
 assert_eq "consumer-scan: scanned == skipped + checked" \
   "$CS_SCANNED" "$((CS_SKIPPED + CS_CHECKED))"
-assert_eq "consumer-scan: every consumer row was driven" "$CS_CHECKED" "21"
+assert_eq "consumer-row registry: every row in THIS file was driven" "$CS_CHECKED" "21"
+
+# The rows above are an authored registry, which certifies its author. The
+# denominator it cannot discharge is asked mechanically here instead.
+if ! scs_run "$REPO_ROOT"; then
+  _fail "population-scan: the shipped tree is walkable" "no scripts/ directory under $REPO_ROOT"
+else
+  PS_SCANNED=0; PS_PINNED=0; PS_UNPINNED=0; PS_SKIPPED=0; PS_VANISHED=0
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    PS_SCANNED=$((PS_SCANNED + 1))
+    if [ ! -r "$REPO_ROOT/$rel" ]; then
+      PS_SKIPPED=$((PS_SKIPPED + 1)); PS_VANISHED=$((PS_VANISHED + 1))
+      _skip "population-scan [$rel]: unreadable between discovery and pin check — not checked"
+      continue
+    fi
+    if grep -rlF -e "$rel" "$REPO_ROOT"/tests/test-*.sh >/dev/null 2>&1; then
+      PS_PINNED=$((PS_PINNED + 1))
+    else
+      PS_UNPINNED=$((PS_UNPINNED + 1))
+      _fail "population-scan [$rel]: pinned by at least one test file" \
+        "this file reads task status and no tests/test-*.sh names it" \
+        "  fix: drive it with a CANCELLED fixture here, or wherever its behaviour belongs"
+    fi
+  done <<< "$SCS_CONSUMERS"
+  echo "  population-scan: ${PS_SCANNED} scanned, ${PS_SKIPPED} skipped (vanished=${PS_VANISHED}), $((PS_PINNED + PS_UNPINNED)) checked, ${PS_UNPINNED} findings"
+  assert_eq "population-scan: coverage accounting adds up (N == M + K)" \
+    "$PS_SCANNED" "$((PS_SKIPPED + PS_PINNED + PS_UNPINNED))"
+  assert_eq "population-scan: every discovered status consumer is pinned by a test" "$PS_UNPINNED" "0"
+
+  POP_FLOOR="${NAZGUL_STATUS_CONSUMER_FLOOR:-12}"
+  if [ "$PS_PINNED" -ge "$POP_FLOOR" ]; then
+    _pass "population-scan: the walk actually reached the tree ($PS_PINNED consumers >= $POP_FLOOR)"
+  else
+    _fail "population-scan: the walk actually reached the tree" \
+      "only $PS_PINNED consumer(s) pinned — a broken predicate, not a clean tree"
+  fi
+fi
 
 report_results
