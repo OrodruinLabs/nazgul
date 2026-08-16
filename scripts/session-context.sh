@@ -49,13 +49,35 @@ fi
 
 # Session tracking — register this session and warn on concurrent
 SESSIONS_DIR="$NAZGUL_DIR/sessions"
-# Persist resolved session ID so stop-hook can unregister it
+# Persist resolved session ID so the SessionEnd hook can unregister it
 printf '%s' "$SESSION_ID" > "$NAZGUL_DIR/.session_id"
 register_session "$SESSION_ID" "$SESSIONS_DIR"
 cleanup_stale_sessions "$SESSIONS_DIR"
 CONCURRENT_WARNING=""
 if warning_msg=$(is_concurrent_session_warning "$SESSIONS_DIR"); then
   CONCURRENT_WARNING="$warning_msg"
+fi
+
+# In-flight marker hygiene (#104 direction c): markers past the staleness bound are
+# quarantined (never deleted — stop-hook.sh doctrine) so an orphan backlog never regrows.
+source "$SCRIPT_DIR/lib/emit-event.sh"
+IN_FLIGHT_DIR="$NAZGUL_DIR/in-flight"
+if [ -d "$IN_FLIGHT_DIR" ]; then
+  STALE_MIN=$(jq -r '[.guards.in_flight_stale_minutes // 30, 1] | max' "$CONFIG" 2>/dev/null || echo 30)
+  case "$STALE_MIN" in ''|*[!0-9]*) STALE_MIN=30 ;; esac
+  IFM_NOW=$(date +%s)
+  IFM_CUTOFF=$((IFM_NOW - STALE_MIN * 60))
+  for ifm in "$IN_FLIGHT_DIR"/*.json; do
+    [ -f "$ifm" ] || continue
+    ifm_epoch=$(jq -r '.dispatched_at_epoch // 0' "$ifm" 2>/dev/null || echo 0)
+    case "$ifm_epoch" in ''|*[!0-9]*) ifm_epoch=0 ;; esac
+    if [ "$ifm_epoch" -lt "$IFM_CUTOFF" ]; then
+      ifm_unit=$(jq -r '.unit // "unknown"' "$ifm" 2>/dev/null || echo "unknown")
+      mkdir -p "$IN_FLIGHT_DIR/quarantine" 2>/dev/null || true
+      mv "$ifm" "$IN_FLIGHT_DIR/quarantine/" 2>/dev/null || true
+      emit_event "in_flight_orphan" source "session_start_sweep" unit "$ifm_unit" age_minutes:n "$(( (IFM_NOW - ifm_epoch) / 60 ))" || true
+    fi
+  done
 fi
 
 # Orphaned-team sweep (spec 2026-07-24) — dead-session Agent-Teams state
