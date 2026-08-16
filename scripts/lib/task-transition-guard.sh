@@ -681,15 +681,19 @@ ${line}"
   return "$rc"
 }
 
-# The five facts a closure records, under `## Merge Evidence` and nowhere else. `recorded-by`
+# lean-comments: allow-run — `head-ref` is the answer to "merged, but whose?"; a reader
+# must not drop it back to five as a redundant field.
+# The six facts a closure records, under `## Merge Evidence` and nowhere else. `recorded-by`
 # is REQUIRED: without it a hand-typed block and a producer-written one are the same lines.
-_TTG_MERGE_REQUIRED_FIELDS="host pr merged-at merge-commit recorded-by"
+# `head-ref` is what binds the PR to THIS objective: without it a genuinely merged PR of
+# ANY other objective is equally good evidence for closing any task on disk.
+_TTG_MERGE_REQUIRED_FIELDS="host pr merged-at merge-commit head-ref recorded-by"
 
 # Closed producer set for `recorded-by`. A value naming anything else is `malformed`.
 _TTG_MERGE_PRODUCERS="scripts/close-objective.sh"
 
-# Closed refusal vocabulary, never bucketed (RULES.md §15), asserted from this source in
-# tests: absent commented_out truncated malformed unverifiable not_merged contradicted
+# Closed refusal vocabulary, never bucketed (RULES.md §15), asserted from this source in tests:
+# absent commented_out truncated malformed unverifiable not_merged contradicted not_this_objective
 
 # Last merge verdict: one of the closed vocabulary above, or `verified`.
 # shellcheck disable=SC2034  # read by callers, not within this file
@@ -704,9 +708,13 @@ TTG_MERGE_ROUTE=""
 # base_unresolvable | no_git. Only not_ancestor blocks.
 # shellcheck disable=SC2034  # read by callers, not within this file
 TTG_MERGE_BASE_ANCESTRY=""
-# The host's own answer for the last check: ok | not_merged | <merge-provider result>.
+# The host's own answer for the last check: ok | not_merged | ok_no_head_ref |
+# <merge-provider result>.
 # shellcheck disable=SC2034  # read by callers, not within this file
 TTG_MERGE_HOST_RESULT=""
+# The head branch the host reports for the PR, empty when it returned none usable.
+# shellcheck disable=SC2034  # read by callers, not within this file
+TTG_MERGE_HOST_HEAD_REF=""
 
 # Deliberately NO kill switch (unlike guards.red_run_evidence, which only suppresses a block
 # on the way IN to IMPLEMENTED): a switch on the last gate before DONE IS the bypass.
@@ -734,6 +742,7 @@ _ttg_merge_shape_ok() {
     pr)           [[ "$value" =~ ^[0-9]+$ ]] ;;
     merged-at)    [[ "$value" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})$ ]] ;;
     merge-commit) [[ "$value" =~ ^[0-9a-fA-F]{7,64}$ ]] ;;
+    head-ref)     _mp_ref_ok "$value" ;;
     recorded-by)  _ttg_merge_producer_ok "$value" ;;
     *) return 1 ;;
   esac
@@ -802,11 +811,16 @@ _ttg_sha_agree() {
 #   0  the host answered and says merged (TTG_MERGE_HOST_* carry its answer)
 #   1  the host answered and says NOT merged
 #   2  the host could not be asked, or answered unusably — NEVER read as "not merged"
+# A merged PR whose head branch the host did not return lands in the third outcome, never
+# the first: the seam drops a ref it cannot vouch for, and merge-provider.sh's own contract
+# says a caller needing the binding must fail closed on null. A PR that cannot be SHOWN to
+# be this objective's is not thereby this objective's.
 _ttg_merge_host_state() {
   local project_root="$1" pr="$2" json="" result="" merged=""
   TTG_MERGE_HOST_RESULT="unavailable"
   TTG_MERGE_HOST_AT=""
   TTG_MERGE_HOST_COMMIT=""
+  TTG_MERGE_HOST_HEAD_REF=""
   declare -F merge_provider_pr_state >/dev/null 2>&1 || return 2
   command -v jq >/dev/null 2>&1 || return 2
   json=$(merge_provider_pr_state "$project_root" "$pr") || true
@@ -818,11 +832,62 @@ _ttg_merge_host_state() {
   merged=$(printf '%s' "$json" | jq -r '.merged | tostring' 2>/dev/null) || merged=""
   TTG_MERGE_HOST_AT=$(printf '%s' "$json" | jq -r '.merged_at // empty' 2>/dev/null) || TTG_MERGE_HOST_AT=""
   TTG_MERGE_HOST_COMMIT=$(printf '%s' "$json" | jq -r '.merge_commit // empty' 2>/dev/null) || TTG_MERGE_HOST_COMMIT=""
+  TTG_MERGE_HOST_HEAD_REF=$(printf '%s' "$json" | jq -r '.head_ref // empty' 2>/dev/null) || TTG_MERGE_HOST_HEAD_REF=""
+  _mp_ref_ok "$TTG_MERGE_HOST_HEAD_REF" || TTG_MERGE_HOST_HEAD_REF=""
   case "$merged" in
-    true)  return 0 ;;
     false) TTG_MERGE_HOST_RESULT="not_merged"; return 1 ;;
+    true)  ;;
     *)     TTG_MERGE_HOST_RESULT="ok_merged_unknown"; return 2 ;;
   esac
+  if [ -z "$TTG_MERGE_HOST_HEAD_REF" ]; then
+    TTG_MERGE_HOST_RESULT="ok_no_head_ref"
+    return 2
+  fi
+  return 0
+}
+
+# The branches this objective may legitimately have shipped from. Under stacking the PR
+# is opened from the layer's branch, which need not equal `branch.feature`.
+ttg_objective_branches() {
+  local nazgul_dir="$1" feat_id="$2"
+  jq -r --arg f "$feat_id" '
+    [ (.branch.feature // empty), (.stack.layers[]? | select(.feat_id == $f) | .branch // empty) ]
+    | map(select(. != "")) | unique | .[]' "$nazgul_dir/config.json" 2>/dev/null || true
+}
+
+# lean-comments: allow-run — the fail-closed reading is the finding this function closes.
+# ttg_pr_bound <nazgul_dir> <feat_id> <head_ref> <pr_label> [base_ref] -> 0 iff the merged
+# PR is THIS objective's PR, else the reason on stdout. THE one authority for that question:
+# the merge-evidence gate and scripts/close-objective.sh both call it, because a binding
+# enforced in the caller only leaves the gate — which is independently reachable through
+# the sanctioned writer — admitting any merged PR in the repository. Fails closed on every
+# ambiguity, including a host that returned no usable head branch: a PR that cannot be
+# SHOWN to be ours is not thereby ours. `base_ref` is reported but never gated on — under
+# stacking it is the previous layer, not `branch.base`.
+ttg_pr_bound() {
+  local nazgul_dir="$1" feat_id="$2" head_ref="$3" pr_label="$4" base_ref="${5:-}" want b
+  if [ -z "$feat_id" ]; then
+    printf 'config.json names no feat_id, so no PR can be shown to belong to this objective'
+    return 1
+  fi
+  if [ -z "$head_ref" ]; then
+    printf 'the host returned no usable head branch for PR %s, so it cannot be shown to be %s'"'"'s PR — a merged PR of some other objective is real evidence about that objective, not licence to close this one' \
+      "$pr_label" "$feat_id"
+    return 1
+  fi
+  want=$(ttg_objective_branches "$nazgul_dir" "$feat_id")
+  if [ -z "$want" ]; then
+    printf 'neither branch.feature nor a stack.layers[] entry for %s names a branch, so there is nothing for PR %s'"'"'s head branch %s to be matched against' \
+      "$feat_id" "$pr_label" "$head_ref"
+    return 1
+  fi
+  while IFS= read -r b; do
+    if [ "$b" = "$head_ref" ]; then return 0; fi
+  done <<< "$want"
+  printf 'PR %s was merged from %s (into %s), which is not %s'"'"'s branch (%s) — its merge is genuine, host-verified evidence about a DIFFERENT objective' \
+    "$pr_label" "$head_ref" "${base_ref:-<unknown>}" "$feat_id" \
+    "$(printf '%s' "$want" | tr '\n' ' ')"
+  return 1
 }
 
 # Positive-only base containment: a merge commit that does not resolve locally stays
@@ -855,13 +920,14 @@ ttg_verify_merge_evidence() {
   local manifest_text="$1" project_root="$2" task_id="${3:-}"
   local nazgul_dir="${NAZGUL_DIR:-$project_root/nazgul}"
   local raw_section section key value missing="" bad="" commits phrase
-  local host pr merge_commit merged_at host_rc=0
+  local host pr merge_commit merged_at head_ref feat_id bind_why host_rc=0
 
   TTG_MERGE_REASON=""
   TTG_MERGE_ANCESTRY=""
   TTG_MERGE_ROUTE=""
   TTG_MERGE_BASE_ANCESTRY=""
   TTG_MERGE_HOST_RESULT=""
+  TTG_MERGE_HOST_HEAD_REF=""
   [ -n "$task_id" ] || task_id=$(_ttg_manifest_task_id "$manifest_text")
   [ -n "$task_id" ] || task_id="unknown"
 
@@ -907,11 +973,17 @@ ttg_verify_merge_evidence() {
   pr=$(_ttg_merge_field pr "$section")
   merged_at=$(_ttg_merge_field merged-at "$section")
   merge_commit=$(_ttg_merge_field merge-commit "$section")
+  head_ref=$(_ttg_merge_field head-ref "$section")
 
   _ttg_merge_host_state "$project_root" "$pr" || host_rc=$?
   if [ "$host_rc" -eq 1 ]; then
     _ttg_merge_deny "$nazgul_dir" "$task_id" "not_merged" \
       "the host ANSWERED for PR ${pr} and reports it is not merged — the manifest's ## Merge Evidence says otherwise"
+    return 1
+  fi
+  if [ "$TTG_MERGE_HOST_RESULT" = "ok_no_head_ref" ]; then
+    _ttg_merge_deny "$nazgul_dir" "$task_id" "unverifiable" \
+      "the host reports PR ${pr} merged but returned no usable head branch, so the PR cannot be bound to an objective — a merge nobody can attribute never admits a closure"
     return 1
   fi
   if [ "$host_rc" -ne 0 ]; then
@@ -935,6 +1007,18 @@ ttg_verify_merge_evidence() {
     return 1
   fi
 
+  if [ "$head_ref" != "$TTG_MERGE_HOST_HEAD_REF" ]; then
+    _ttg_merge_deny "$nazgul_dir" "$task_id" "contradicted" \
+      "## Merge Evidence records head-ref=${head_ref} but ${host} reports PR ${pr} was merged from ${TTG_MERGE_HOST_HEAD_REF}"
+    return 1
+  fi
+  feat_id=$(jq -r '.feat_id // empty' "$nazgul_dir/config.json" 2>/dev/null) || feat_id=""
+  if ! bind_why=$(ttg_pr_bound "$nazgul_dir" "$feat_id" "$TTG_MERGE_HOST_HEAD_REF" "$pr"); then
+    _ttg_merge_deny "$nazgul_dir" "$task_id" "not_this_objective" \
+      "the host confirms PR ${pr} merged, but it is not this objective's PR — ${bind_why}"
+    return 1
+  fi
+
   _ttg_merge_base_ancestry "$project_root" "$nazgul_dir" "$merge_commit"
   if [ "$TTG_MERGE_BASE_ANCESTRY" = "not_ancestor" ]; then
     _ttg_merge_deny "$nazgul_dir" "$task_id" "contradicted" \
@@ -951,7 +1035,7 @@ ttg_verify_merge_evidence() {
   esac
 
   TTG_MERGE_REASON="verified"
-  TTG_MERGE_ROUTE="host=${host} pr=${pr} merged-at=${merged_at} merge-commit=${merge_commit} recorded-by=$(_ttg_merge_field recorded-by "$section") host-state=${TTG_MERGE_HOST_RESULT} base=${TTG_MERGE_BASE_ANCESTRY} ancestry=${TTG_MERGE_ANCESTRY}"
+  TTG_MERGE_ROUTE="host=${host} pr=${pr} merged-at=${merged_at} merge-commit=${merge_commit} head-ref=${head_ref} recorded-by=$(_ttg_merge_field recorded-by "$section") host-state=${TTG_MERGE_HOST_RESULT} base=${TTG_MERGE_BASE_ANCESTRY} ancestry=${TTG_MERGE_ANCESTRY}"
   echo "ttg_verify_merge_evidence: verified against the host — ${TTG_MERGE_ROUTE}; ${phrase}" >&2
   return 0
 }

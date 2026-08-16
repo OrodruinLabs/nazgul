@@ -179,17 +179,18 @@ _co_recorded_by() {
 # regexes, so the two can never drift into writing evidence the gate then rejects.
 _co_evidence_usable() {
   local key value
-  if [ "$_TTG_MERGE_REQUIRED_FIELDS" != "host pr merged-at merge-commit recorded-by" ]; then
-    printf 'the transition guard now requires "%s"; this writer only knows how to record host/pr/merged-at/merge-commit/recorded-by' \
+  if [ "$_TTG_MERGE_REQUIRED_FIELDS" != "host pr merged-at merge-commit head-ref recorded-by" ]; then
+    printf 'the transition guard now requires "%s"; this writer only knows how to record host/pr/merged-at/merge-commit/head-ref/recorded-by' \
       "$_TTG_MERGE_REQUIRED_FIELDS"
     return 1
   fi
-  for key in host pr merged-at merge-commit recorded-by; do
+  for key in host pr merged-at merge-commit head-ref recorded-by; do
     case "$key" in
       host)         value="$EV_HOST" ;;
       pr)           value="$EV_PR" ;;
       merged-at)    value="$EV_MERGED_AT" ;;
       merge-commit) value="$EV_MERGE_COMMIT" ;;
+      head-ref)     value="$EV_HEAD_REF" ;;
       recorded-by)  value="$(_co_recorded_by)" ;;
     esac
     if [ -z "$value" ] || ! _ttg_merge_shape_ok "$key" "$value"; then
@@ -200,44 +201,8 @@ _co_evidence_usable() {
   return 0
 }
 
-# The branches this objective may legitimately have shipped from. Under stacking the PR
-# is opened from the layer's branch, which need not equal `branch.feature`.
-_co_objective_branches() {
-  jq -r --arg f "$CFG_FEAT_ID" '
-    [ (.branch.feature // empty), (.stack.layers[]? | select(.feat_id == $f) | .branch // empty) ]
-    | map(select(. != "")) | unique | .[]' "$NAZGUL_DIR/config.json" 2>/dev/null || true
-}
-
-# lean-comments: allow-run — the fail-closed reading is the finding this function closes.
-# _co_pr_bound -> 0 iff the merged PR is THIS objective's PR, else the reason on stdout.
-# Fails closed on every ambiguity, including a host that returned no usable head branch:
-# a PR that cannot be SHOWN to be ours is not thereby ours. `base_ref` is reported but
-# never gated on — under stacking it is the previous layer, not `branch.base`.
-_co_pr_bound() {
-  local want b
-  if [ -z "$CFG_FEAT_ID" ]; then
-    printf 'config.json names no feat_id, so no PR can be shown to belong to this objective'
-    return 1
-  fi
-  if [ -z "$EV_HEAD_REF" ]; then
-    printf 'the host returned no usable head branch for PR %s, so it cannot be shown to be %s'"'"'s PR — a merged PR of some other objective is real evidence about that objective, not licence to close this one' \
-      "$PR_SAFE" "$CFG_FEAT_ID"
-    return 1
-  fi
-  want=$(_co_objective_branches)
-  if [ -z "$want" ]; then
-    printf 'neither branch.feature nor a stack.layers[] entry for %s names a branch, so there is nothing for PR %s'"'"'s head branch %s to be matched against' \
-      "$CFG_FEAT_ID" "$PR_SAFE" "$EV_HEAD_REF"
-    return 1
-  fi
-  while IFS= read -r b; do
-    if [ "$b" = "$EV_HEAD_REF" ]; then return 0; fi
-  done <<< "$want"
-  printf 'PR %s was merged from %s (into %s), which is not %s'"'"'s branch (%s) — its merge is genuine, host-verified evidence about a DIFFERENT objective' \
-    "$PR_SAFE" "$EV_HEAD_REF" "${EV_BASE_REF:-<unknown>}" "$CFG_FEAT_ID" \
-    "$(printf '%s' "$want" | tr '\n' ' ')"
-  return 1
-}
+# Which PR belongs to this objective is asked in ONE place, ttg_pr_bound: the merge-evidence
+# gate enforces the same question independently, so a copy here is a copy that can drift.
 
 # lean-comments: allow-run — RULES.md §15's two-answers distinction, at the guard it binds.
 # _co_objective_roster -> the task ids this objective's own nazgul/plan.md lists, one per
@@ -297,11 +262,11 @@ GLOBAL_WHY=""
 if [ "$MP_RESULT" != "ok" ]; then
   GLOBAL_SKIP="merge-unverifiable"
   GLOBAL_WHY="the host was not usefully asked about PR ${PR_SAFE} [result: ${MP_RESULT}] — this is NOT 'not merged', and no closure may be inferred from it"
-elif ! GLOBAL_WHY=$(_co_pr_bound); then
+elif ! GLOBAL_WHY=$(ttg_pr_bound "$NAZGUL_DIR" "$CFG_FEAT_ID" "$EV_HEAD_REF" "$PR_SAFE" "$EV_BASE_REF"); then
   GLOBAL_SKIP="pr-not-this-objective"
 elif [ "$MP_MERGED" != "true" ]; then
   GLOBAL_SKIP="not-merged"
-  GLOBAL_WHY="the host ANSWERED and reports PR ${PR_SAFE} is not merged [state: $(printf '%s' "$MP_JSON" | jq -r '.state // "unknown"')] — nothing shipped, so nothing closes"
+  GLOBAL_WHY="the host ANSWERED and reports PR ${PR_SAFE} is not merged [state: $(printf '%s' "$MP_JSON" | jq -r '.state // "unknown"' 2>/dev/null || echo "unknown")] — nothing shipped, so nothing closes"
 elif ! GLOBAL_WHY=$(_co_evidence_usable); then
   GLOBAL_SKIP="merge-unverifiable"
 fi
@@ -321,6 +286,7 @@ _co_evidence_block() {
   printf -- '- **pr**: %s\n' "$EV_PR"
   printf -- '- **merged-at**: %s\n' "$EV_MERGED_AT"
   printf -- '- **merge-commit**: %s\n' "$EV_MERGE_COMMIT"
+  printf -- '- **head-ref**: %s\n' "$EV_HEAD_REF"
   printf -- '- **recorded-by**: %s\n' "$(_co_recorded_by)"
   printf '\n'
 }
