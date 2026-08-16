@@ -18,7 +18,7 @@
 - New RULES.md numbered bold rules MUST carry a tier label (`[enforced]`/`[hook-driven only]`/`[advisory]`) — `tests/test-rules-tiers.sh` fails otherwise.
 - Every new event name must land in ALL FOUR taxonomy sites in the same task that documents it (Task 13): `agents/doc-verifier.md` list, `docs/CONFIGURATION.md` Event Types, `skills/log/SKILL.md` TYPE map, `tests/smoke/run-smoke.sh:268-269` comment.
 - Test harness: run a single file with `tests/run-tests.sh --filter=<name>`; exit 0 pass, 1 fail, 2 nothing-checked (a zero-match filter is a FAILURE).
-- Branch: continue on `spec/cross-session-messaging-adoption` (or a `feat/` branch off it). Never commit to `main`.
+- Branch: implementation happens on a NEW branch off `main` (suggested: `feat/messaging-adoption`) AFTER docs-only PR #206 (spec+plan+evidence) merges. Never commit to `main` directly; never add implementation commits to the `spec/cross-session-messaging-adoption` branch — that PR is docs-only by decision. Tracking issue: #207.
 - Version work happens ONLY in Task 16 (2.33.0, MINOR, CHANGELOG states "no schema step").
 - New events minted by this plan (complete list — do not invent others): `dispatch_guard_background_unverifiable`, `clear_skipped_no_match`, `clear_fallback_underivable`, `in_flight_orphan` (both as a `stop_gate` reason at Stop time and as a standalone event from the SessionStart sweep).
 
@@ -1473,12 +1473,13 @@ git add .claude-plugin/plugin.json README.md CHANGELOG.md
 git commit -m "release: 2.33.0 — cross-session messaging adoption (no schema step)"
 ```
 
-- [ ] **Step 5: Open the PR** (do not merge; human review):
+- [ ] **Step 5: Open the implementation PR** (do not merge; human review). NOTE: the spec/plan/evidence already merged via docs-only PR #206 — this PR is the implementation branch:
 
 ```bash
-git push -u origin spec/cross-session-messaging-adoption
+git push -u origin feat/messaging-adoption
 gh pr create --repo OrodruinLabs/nazgul --title "Cross-session messaging adoption: class-aware hold, session-lifetime locks, posture scan (v2.33.0)" --body "$(cat <<'EOF'
-Implements docs/superpowers/specs/2026-08-16-cross-session-messaging-adoption-design.md.
+Implements docs/superpowers/specs/2026-08-16-cross-session-messaging-adoption-design.md
+(merged via #206). Tracking: #207.
 
 Fixes #104 (Gap 3), #205, #94; partial #195; closes #184. Evidence:
 docs/superpowers/specs/2026-08-16-cross-session-messaging-platform-facts.md (P1–P6).
