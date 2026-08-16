@@ -9,13 +9,17 @@ set -uo pipefail
 # RESPONSE PROVENANCE — derived-from-captured, and named as such rather than passed
 # off as either. The gh payload SHAPE below is the one tests/test-merge-provider.sh
 # captured verbatim from the real producer (gh 2.80.0, 2025-09-23, `gh pr view <n>
-# --json state,mergedAt,mergeCommit` against this repo's own PRs); only the
+# --json state,mergedAt,mergeCommit,headRefName,baseRefName` against this repo's own
+# PRs, re-captured 2026-08-16 for the two branch-name fields); only the
 # `mergeCommit.oid` is substituted, with this fixture's OWN commit sha. That
 # substitution is load-bearing, not cosmetic: the squash property this file exists to
 # prove — an ancestry check FAILING for the recorded sha — is only real if both shas
 # exist in the fixture repo, and a captured oid from another repository could not be
-# an ancestor of anything here for the wrong reason. The unauthenticated and
-# unsupported-host cases are SYNTHETIC: neither can be captured from a healthy
+# an ancestor of anything here for the wrong reason. `headRefName` is fixture-controlled
+# for the same reason, EXCEPT in the wrong-objective scenario, which uses the genuinely
+# captured value: PR 88's real head branch is FEAT-030's, not this objective's, so the
+# hazard is driven by a real merged PR of a real different objective. The unauthenticated
+# and unsupported-host cases are SYNTHETIC: neither can be captured from a healthy
 # authenticated GitHub host.
 #
 # Coverage population (RULES.md §15): the CLOSED skip-reason set is extracted from the
@@ -52,7 +56,7 @@ CLOSER_SRC=$(cat "$CLOSER")
 
 # The closed skip-reason set, EXTRACTED from the closer in its documented order; the
 # grammar check below then asserts the emitter agrees with it, slot for slot.
-REASONS=$(printf '%s\n' "$CLOSER_SRC" | grep -oE '^#   [a-z][a-z-]+ ' | sed 's/^#   //; s/ *$//' | awk '!seen[$0]++')
+REASONS=$(printf '%s\n' "$CLOSER_SRC" | grep -oE '^#   [a-z][a-z-]+ {2,}' | sed 's/^#   //; s/ *$//' | awk '!seen[$0]++')
 CO_SCANNED=$(printf '%s\n' "$REASONS" | grep -c '[a-z]')
 CO_CHECKED=0
 CO_SKIP_UNDRIVEN=0
@@ -85,14 +89,20 @@ case "$sub" in
     [ "${1:-}" = "view" ] || exit 1
     case "${NAZGUL_TEST_GH_CASE:-merged}" in
       merged)
-        printf '{"mergeCommit":{"oid":"%s"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}\n' \
-          "${NAZGUL_TEST_MERGE_SHA:-}"
+        printf '{"baseRefName":"main","headRefName":"%s","mergeCommit":{"oid":"%s"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}\n' \
+          "${NAZGUL_TEST_HEAD_REF:-}" "${NAZGUL_TEST_MERGE_SHA:-}"
         exit 0 ;;
       open)
-        printf '%s\n' '{"mergeCommit":null,"mergedAt":null,"state":"OPEN"}'
+        printf '{"baseRefName":"main","headRefName":"%s","mergeCommit":null,"mergedAt":null,"state":"OPEN"}\n' \
+          "${NAZGUL_TEST_HEAD_REF:-}"
         exit 0 ;;
       no_commit)
-        printf '%s\n' '{"mergeCommit":null,"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}'
+        printf '{"baseRefName":"main","headRefName":"%s","mergeCommit":null,"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}\n' \
+          "${NAZGUL_TEST_HEAD_REF:-}"
+        exit 0 ;;
+      no_head_ref)
+        printf '{"baseRefName":"main","mergeCommit":{"oid":"%s"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}\n' \
+          "${NAZGUL_TEST_MERGE_SHA:-}"
         exit 0 ;;
       error)
         printf '%s\n' 'GraphQL: Could not resolve to a PullRequest with the number of 999999. (repository.pullRequest)' >&2
@@ -106,14 +116,23 @@ chmod +x "$FAKEBIN/gh"
 export NAZGUL_TEST_GH_LOG="$GH_LOG"
 ORIG_PATH="$PATH"
 
-# _fixture <name> [remote] — a project whose recorded feature sha is provably NOT an
-# ancestor of the base tip. Sets FX, FEAT_SHA, MERGE_SHA.
+FIX_FEAT_ID="FEAT-777"
+FIX_BRANCH="feat/FEAT-777-fixture-objective"
+# The genuinely captured head branch of PR 88 — a real merged PR of a real DIFFERENT
+# objective, which is exactly the input the objective binding exists to refuse.
+OTHER_BRANCH="feat/FEAT-030-worktree-relative-runtime-state-path-resolution-pr"
+
+# _fixture <name> [remote] — a project whose recorded feature sha is provably NOT an ancestor
+# of the base tip, naming an objective and carrying its plan.md roster. Sets FX/FEAT_SHA/MERGE_SHA.
 _fixture() {
   local name="$1" remote="${2:-https://github.com/OrodruinLabs/nazgul.git}" base
   FX="$SCRATCH/$name"
   mkdir -p "$FX/nazgul/tasks" "$FX/nazgul/logs"
-  jq '.review_gate.granularity = "task" | .telemetry.bus_enabled = true' \
+  jq --arg f "$FIX_FEAT_ID" --arg b "$FIX_BRANCH" \
+    '.review_gate.granularity = "task" | .telemetry.bus_enabled = true
+     | .feat_id = $f | .branch.feature = $b' \
     "$REPO_ROOT/templates/config.json" > "$FX/nazgul/config.json"
+  _plan
   git -C "$FX" init -q
   git -C "$FX" config user.email "test@nazgul.dev"
   git -C "$FX" config user.name "Nazgul Test"
@@ -130,12 +149,24 @@ _fixture() {
   MERGE_SHA=$(git -C "$FX" rev-parse HEAD)
   git -C "$FX" remote add origin "$remote"
   export NAZGUL_TEST_MERGE_SHA="$MERGE_SHA"
+  export NAZGUL_TEST_HEAD_REF="$FIX_BRANCH"
 }
 
-# _manifest <id> <status> [with_commits] — a pre-FEAT-031-shaped manifest: canonical
-# frontmatter, no `## Merge Evidence` section anywhere.
+# _plan — this objective's own plan.md: the frontmatter feat_id config must agree with,
+# and the `## Tasks` roster that says which manifests on disk are this objective's.
+_plan() {
+  {
+    printf -- '---\nfeat_id: %s\n---\n# Plan — %s\n\n' "$FIX_FEAT_ID" "$FIX_FEAT_ID"
+    printf '## Tasks\n\n| ID | Title | Status |\n|----|-------|--------|\n'
+    printf '| TASK-000 | roster anchor, no manifest on disk | PLANNED |\n'
+  } > "$FX/nazgul/plan.md"
+}
+
+# _manifest <id> <status> [with_commits] [in_roster] — a pre-FEAT-031-shaped manifest, no
+# `## Merge Evidence` anywhere. `in_roster=no` omits it from plan.md: a neighbour's task.
 _manifest() {
-  local id="$1" status="$2" with_commits="${3:-yes}"
+  local id="$1" status="$2" with_commits="${3:-yes}" in_roster="${4:-yes}"
+  [ "$in_roster" = "yes" ] && printf '| %s | fixture | %s |\n' "$id" "$status" >> "$FX/nazgul/plan.md"
   {
     printf -- '---\nstatus: %s\n---\n' "$status"
     printf '# %s: stranded by an external merge\n\n' "$id"
@@ -280,6 +311,7 @@ assert_contains "stranded manifest: evidence was written from the API response" 
 # Scenario B2 — a stale MID-FILE evidence section is replaced in place, with the
 # sections after it intact: a rerun after a re-merge must not append a second record.
 _fixture restale
+printf '| TASK-008 | fixture | IMPLEMENTED |\n' >> "$FX/nazgul/plan.md"
 {
   printf -- '---\nstatus: IMPLEMENTED\n---\n# TASK-008: closed once against a stale record\n\n'
   printf '## Merge Evidence\n- **host**: github.com\n- **pr**: 1\n'
@@ -381,6 +413,27 @@ assert_eq "transition refused: the task stayed where it was" \
   "$(get_task_status "$FX/nazgul/tasks/TASK-061.md")" "IMPLEMENTED"
 assert_contains "transition refused: the closer never claims a clean close-out" \
   "$CO_ERR" "NOTHING CHECKED"
+
+# lean-comments: allow-run — states what makes this a proof rather than a spot check.
+# The refusal must leave NOTHING behind: `## Merge Evidence` satisfies the DONE gate on its
+# own, so a section written for a close that then refused is a standing token any later
+# transition would spend. The proof is not that the section is gone but that, with the
+# obstruction removed, the sanctioned writer still refuses — which it could only do if the
+# residue is genuinely absent.
+assert_not_contains "transition refused: no ## Merge Evidence residue survives the refusal" \
+  "$(cat "$FX/nazgul/tasks/TASK-061.md")" "## Merge Evidence"
+assert_contains "transition refused: the refusal record says the manifest was rolled back" \
+  "$CO_ERR" "rolled back to its pre-close bytes"
+rm -f "$FX/nazgul/locks"
+RESIDUE_OUT=$(CLAUDE_PROJECT_DIR="$FX" bash "$REPO_ROOT/scripts/task-transition.sh" \
+  transition TASK-061 IMPLEMENTED DONE 2>&1)
+RESIDUE_RC=$?
+assert_exit_code "transition refused: a later IMPLEMENTED -> DONE cannot spend the refused run's evidence" \
+  "$RESIDUE_RC" 1
+assert_eq "transition refused: and the task is still where the refusal left it" \
+  "$(get_task_status "$FX/nazgul/tasks/TASK-061.md")" "IMPLEMENTED"
+assert_contains "transition refused: the writer refuses for want of merge evidence, naming it" \
+  "$RESIDUE_OUT" "merge evidence"
 _drove transition-refused
 
 # Scenario G — an unwritable manifest is a named refusal, not a traceback.
@@ -422,6 +475,116 @@ _grammar "no manifests"
 assert_eq "no manifests: zero scanned" "$CO_N" "0"
 assert_contains "no manifests: named as its own condition, not as an all-skip run" \
   "$CO_ERR" "NOTHING CHECKED — no task manifests discovered"
+
+# lean-comments: allow-run — names the hazard, and why the fixture proves it rather than mimics it.
+# Scenario J — "is PR N merged?" is not the question. PR 88 is genuinely, host-verifiably
+# merged — of a DIFFERENT objective (its head branch is the captured FEAT-030 one).
+# Answering only the merge question would walk every closable manifest on disk to DONE on
+# real, ledger-recorded evidence.
+_fixture wrongpr
+_manifest TASK-081 IMPLEMENTED
+_manifest TASK-082 IN_REVIEW
+: > "$GH_LOG"
+NAZGUL_TEST_HEAD_REF="$OTHER_BRANCH" NAZGUL_TEST_GH_CASE=merged _run "$FX" 88
+assert_exit_code "another objective's merged PR: nothing closed" "$CO_RC" 2
+_grammar "another objective's PR"
+_reason "another objective's PR" "pr-not-this-objective" 2
+_reason "another objective's PR" "not-merged" 0
+_reason "another objective's PR" "merge-unverifiable" 0
+assert_eq "another objective's PR: nothing was closed" "$CO_K" "0"
+assert_contains "another objective's PR: the host really was asked, and really said merged" \
+  "$(cat "$GH_LOG")" "pr view 88 --json state,mergedAt,mergeCommit,headRefName,baseRefName"
+assert_eq "another objective's PR: the task is untouched at IMPLEMENTED" \
+  "$(get_task_status "$FX/nazgul/tasks/TASK-081.md")" "IMPLEMENTED"
+assert_not_contains "another objective's PR: no evidence was written from a merge that is not ours" \
+  "$(cat "$FX/nazgul/tasks/TASK-081.md")" "## Merge Evidence"
+assert_contains "another objective's PR: the diagnostic names the branch it actually merged from" \
+  "$CO_ERR" "$OTHER_BRANCH"
+assert_contains "another objective's PR: the diagnostic names this objective's own branch" \
+  "$CO_ERR" "$FIX_BRANCH"
+assert_contains "another objective's PR: the report says outright whose evidence this is" \
+  "$CO_ERR" "evidence about a DIFFERENT objective"
+assert_file_contains "another objective's PR: the refusal is typed on the bus" \
+  "$FX/nazgul/logs/events.jsonl" '"reason":"pr-not-this-objective"'
+_drove pr-not-this-objective
+
+# A host that returns no usable head branch fails CLOSED. A PR that cannot be SHOWN to be
+# this objective's is not thereby this objective's.
+_fixture noheadref
+_manifest TASK-083 IMPLEMENTED
+NAZGUL_TEST_GH_CASE=no_head_ref _run "$FX" 88
+assert_exit_code "no head branch in the answer: nothing closed" "$CO_RC" 2
+_reason "no head branch" "pr-not-this-objective" 1
+assert_contains "no head branch: the refusal names the missing fact, not a guess" \
+  "$CO_ERR" "no usable head branch"
+assert_eq "no head branch: the task is untouched" \
+  "$(get_task_status "$FX/nazgul/tasks/TASK-083.md")" "IMPLEMENTED"
+
+# Under stacking the PR is opened from the layer's branch, which need not be
+# branch.feature — so the registry entry for this feat_id binds it just as well.
+_fixture stacked
+jq --arg f "$FIX_FEAT_ID" '.branch.feature = null
+  | .stack.layers = [{feat_id: $f, branch: "feat/FEAT-777-layer", pr: "", base: "main",
+                      state: "open", opened_at: "2026-08-16T00:00:00Z", merged_at: null}]' \
+  "$FX/nazgul/config.json" > "$FX/nazgul/config.tmp"
+mv "$FX/nazgul/config.tmp" "$FX/nazgul/config.json"
+_manifest TASK-091 IMPLEMENTED
+NAZGUL_TEST_HEAD_REF="feat/FEAT-777-layer" NAZGUL_TEST_GH_CASE=merged _run "$FX" 88
+assert_exit_code "stacked layer: the layer's own branch binds the PR" "$CO_RC" 0
+_grammar "stacked layer"
+assert_eq "stacked layer: it closed" "$CO_K" "1"
+_reason "stacked layer" "pr-not-this-objective" 0
+assert_eq "stacked layer: reached DONE" \
+  "$(get_task_status "$FX/nazgul/tasks/TASK-091.md")" "DONE"
+
+# Scenario K — the candidate scan is the objective's roster, not every manifest on disk.
+# A neighbouring objective's task sits in the same nazgul/tasks/ and must survive intact.
+_fixture neighbour
+_manifest TASK-101 IMPLEMENTED
+_manifest TASK-102 IMPLEMENTED yes no
+NAZGUL_TEST_GH_CASE=merged _run "$FX" 88
+assert_exit_code "neighbouring objective: ours closed, nothing refused" "$CO_RC" 0
+_grammar "neighbouring objective"
+_reason "neighbouring objective" "not-this-objective" 1
+assert_eq "neighbouring objective: exactly one task closed" "$CO_K" "1"
+assert_eq "neighbouring objective: OUR task reached DONE" \
+  "$(get_task_status "$FX/nazgul/tasks/TASK-101.md")" "DONE"
+assert_eq "neighbouring objective: THEIR task is untouched at IMPLEMENTED" \
+  "$(get_task_status "$FX/nazgul/tasks/TASK-102.md")" "IMPLEMENTED"
+assert_not_contains "neighbouring objective: their manifest got no evidence from our merge" \
+  "$(cat "$FX/nazgul/tasks/TASK-102.md")" "## Merge Evidence"
+assert_contains "neighbouring objective: the skip says whose roster it is missing from" \
+  "$CO_ERR" "skipped TASK-102 [not-this-objective]"
+_drove not-this-objective
+
+# An unreadable roster is NOT an empty one: "does not list it" and "there is no roster to
+# read" are different answers, and the second must not degrade into an unscoped scan.
+_fixture noroster
+_manifest TASK-111 IMPLEMENTED
+rm -f "$FX/nazgul/plan.md"
+NAZGUL_TEST_GH_CASE=merged _run "$FX" 88
+assert_exit_code "no roster: nothing closed" "$CO_RC" 2
+_grammar "no roster"
+_reason "no roster" "not-this-objective" 1
+assert_eq "no roster: the task is untouched" \
+  "$(get_task_status "$FX/nazgul/tasks/TASK-111.md")" "IMPLEMENTED"
+assert_contains "no roster: the run says once, up front, that membership was never established" \
+  "$CO_ERR" "the objective roster could not be read"
+assert_contains "no roster: and says what it refused to do instead" \
+  "$CO_ERR" "rather than closed on an unscoped scan"
+assert_file_contains "no roster: the condition reaches the bus as its own event" \
+  "$FX/nazgul/logs/events.jsonl" '"event":"close_objective_roster_unreadable"'
+
+# A roster that names a DIFFERENT objective cannot scope this one either.
+_fixture rosterdrift
+_manifest TASK-121 IMPLEMENTED
+sed -e "s/^feat_id: .*/feat_id: FEAT-999/" "$FX/nazgul/plan.md" > "$FX/nazgul/plan.rewritten"
+mv "$FX/nazgul/plan.rewritten" "$FX/nazgul/plan.md"
+NAZGUL_TEST_GH_CASE=merged _run "$FX" 88
+assert_exit_code "roster drift: nothing closed" "$CO_RC" 2
+_reason "roster drift" "not-this-objective" 1
+assert_contains "roster drift: the diagnostic names both ids rather than silently picking one" \
+  "$CO_ERR" "declares feat_id \"FEAT-999\" but config names \"$FIX_FEAT_ID\""
 
 # The constraint the whole objective rests on: this script is a CALLER of the sole
 # sanctioned writer, never a writer. Asserted against its source, not its behaviour.

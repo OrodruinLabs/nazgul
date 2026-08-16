@@ -268,11 +268,13 @@ else
   _fail "test-dispatch-brief-contract: a full run actually checks something" "checked: $DB_CHECKED"
 fi
 
-# close-objective, forced all-skip: one already-DONE manifest in a tree with no git
-# remote, so the sole candidate is scanned, named, and counted — and no host is asked.
-CO_REASONS="already-terminal not-closable-status unreadable not-merged merge-unverifiable evidence-write-failed transition-refused"
+# close-objective, forced all-skip: one already-DONE manifest, listed in its objective's own
+# roster so the scan reaches it, in a tree with no remote — counted, and no host is asked.
+CO_REASONS="already-terminal not-closable-status unreadable not-this-objective pr-not-this-objective not-merged merge-unverifiable evidence-write-failed transition-refused"
 mkdir -p "$SCRATCH/co/nazgul/tasks" "$SCRATCH/co/nazgul/logs"
-printf '{"schema_version":1}\n' > "$SCRATCH/co/nazgul/config.json"
+printf '{"schema_version":1,"feat_id":"FEAT-001"}\n' > "$SCRATCH/co/nazgul/config.json"
+printf -- '---\nfeat_id: FEAT-001\n---\n# Plan\n\n## Tasks\n\n| TASK-001 | already closed | DONE |\n' \
+  > "$SCRATCH/co/nazgul/plan.md"
 printf -- '---\nstatus: DONE\n---\n# TASK-001: already closed\n' > "$SCRATCH/co/nazgul/tasks/TASK-001.md"
 CO_OUT=$(bash "$REPO_ROOT/scripts/close-objective.sh" --pr 1 --project-root "$SCRATCH/co" 2>"$SCRATCH/co.err")
 CO_RC=$?

@@ -119,6 +119,32 @@ _mp_provider_for_host() {
   esac
 }
 
+# _mp_url_repo <url> -> lowercased "owner/repo", empty + return 1 when the URL names
+# none. Handles scheme://[user@]host/owner/repo[...] and the scp-like host:owner/repo.
+_mp_url_repo() {
+  local url="$1" path owner rest repo
+  case "$url" in
+    *://*) path="${url#*://}"; path="${path#*/}" ;;
+    *:*)   path="${url#*:}" ;;
+    *)     path="$url" ;;
+  esac
+  path="${path%%\?*}"
+  path="${path%%#*}"
+  path="${path#/}"
+  owner="${path%%/*}"
+  rest="${path#*/}"
+  repo="${rest%%/*}"
+  repo="${repo%.git}"
+  { [ -n "$owner" ] && [ -n "$repo" ] && [ "$owner" != "$path" ]; } || return 1
+  printf '%s' "$owner/$repo" | tr '[:upper:]' '[:lower:]'
+}
+
+# _mp_ref_ok <ref> -> 0 iff <ref> is shaped like a git ref name. Branch names are the only
+# remote-authored strings this seam carries; one that fails this is dropped, never passed on.
+_mp_ref_ok() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$ ]]
+}
+
 # lean-comments: allow-run — the NAZGUL_MERGE_PROVIDER escape hatch is the one thing
 # here a reader must not discover by accident.
 # _mp_detect_raw <project_root> -> "<provider_or_state>\t<host>", returning 0/2/3 for
@@ -232,6 +258,7 @@ _mp_result() {
     --arg provider "$1" --arg host "$2" --arg pr "$3" --arg result "$4" \
     --arg state "$5" --arg merged "$6" --arg merged_at "$7" \
     --arg merge_commit "$8" --arg diagnostic "$9" \
+    --arg head_ref "${10:-}" --arg base_ref "${11:-}" \
     '{
       provider: (if $provider == "" then null else $provider end),
       host: (if $host == "" then null else $host end),
@@ -241,44 +268,57 @@ _mp_result() {
       merged: (if $merged == "true" then true elif $merged == "false" then false else null end),
       merged_at: (if $merged_at == "" then null else $merged_at end),
       merge_commit: (if $merge_commit == "" then null else $merge_commit end),
+      head_ref: (if $head_ref == "" then null else $head_ref end),
+      base_ref: (if $base_ref == "" then null else $base_ref end),
       diagnostic: (if $diagnostic == "" then null else $diagnostic end)
     }'
 }
 
-# _mp_normalize_pr <pr> -> the bare PR number, empty + return 1 otherwise. An unchecked
-# value could reach the host CLI as a flag (leading "-") or a branch name.
+# lean-comments: allow-run — the two accepted forms and why nothing between them is.
+# _mp_normalize_pr <pr> -> "<number>\t<host>\t<owner/repo>", the last two empty for a
+# bare number; empty + return 1 otherwise. An unchecked value could reach the host CLI as
+# a flag (leading "-") or a branch name. A URL's host and repo are RETURNED rather than
+# discarded, because a PR NUMBER is only meaningful against the repository it belongs to:
+# without them "https://elsewhere.example/o/r/pull/9" resolves to 9 and gets asked of
+# whatever `origin` points at, and the recorded evidence — local host, bare number — is
+# internally consistent and gives an auditor no signal that a different repo was named.
+# Exactly two forms are accepted, and a partial URL is NOT one of them: a schemeless
+# "o/r/pull/9" carries no checkable host, and accepting it would reopen the same gap.
 _mp_normalize_pr() {
-  local pr="$1" n
+  local pr="$1" n host repo
   case "$pr" in
-    ''|*[!0-9]*)
-      case "$pr" in
-        */pull/*)
-          n="${pr##*/pull/}"
-          n="${n%%/*}"
-          n="${n%%\?*}"
-          case "$n" in ''|*[!0-9]*) return 1 ;; esac
-          printf '%s' "$n"
-          return 0 ;;
-        *) return 1 ;;
-      esac ;;
-    *) printf '%s' "$pr"; return 0 ;;
+    ''|*[!0-9]*) ;;
+    *) printf '%s\t\t' "$pr"; return 0 ;;
   esac
+  case "$pr" in *://*/pull/*) ;; *) return 1 ;; esac
+  n="${pr##*/pull/}"
+  n="${n%%/*}"
+  n="${n%%\?*}"
+  n="${n%%#*}"
+  case "$n" in ''|*[!0-9]*) return 1 ;; esac
+  host=$(_mp_url_host "$pr")
+  repo=$(_mp_url_repo "$pr") || repo=""
+  { [ -n "$host" ] && [ -n "$repo" ]; } || return 1
+  printf '%s\t%s\t%s' "$n" "$host" "$repo"
 }
 
 # lean-comments: allow-run — names both api_failure shapes, incl. the exit-0 one.
 # _mp_github_pr_state <project_root> <host> <pr> -> the github arm's normalised result,
-# asking exactly what stack_reconcile already asks (`gh pr view <pr> --json
-# state,mergedAt,mergeCommit`). A non-zero gh exit, OR a zero exit whose payload has no
-# parseable `state`, is `api_failure` — never a quietly not-merged `ok`.
+# asking what stack_reconcile asks (`state,mergedAt,mergeCommit`) plus the head and base
+# branch names, WITHOUT which a merged PR cannot be bound to any particular objective and
+# every merged PR in the repo is equally good evidence for closing anything. A non-zero
+# gh exit, OR a zero exit whose payload has no parseable `state`, is `api_failure` —
+# never a quietly not-merged `ok`. The two branch names are the only remote-authored
+# strings returned; both are shape-checked and dropped when they fail.
 _mp_github_pr_state() {
-  local root="$1" host="$2" pr="$3" out rc state merged_at merge_commit merged why
+  local root="$1" host="$2" pr="$3" out rc state merged_at merge_commit merged why head_ref base_ref
   why=$(_mp_github_health) || {
     _mp_warn "provider_unavailable: github arm cannot run for PR $pr — $why"
     _mp_emit "$root" "merge_provider_unavailable" provider "github" host "$host" pr "$pr" reason "$why"
     _mp_result "github" "$host" "$pr" "provider_unavailable" "" "" "" "" "$why"
     return 4
   }
-  out=$( (cd "$root" 2>/dev/null && gh pr view "$pr" --json state,mergedAt,mergeCommit) 2>&1 ); rc=$?
+  out=$( (cd "$root" 2>/dev/null && gh pr view "$pr" --json state,mergedAt,mergeCommit,headRefName,baseRefName) 2>&1 ); rc=$?
   if [ "$rc" -ne 0 ]; then
     why="gh pr view $pr failed (exit $rc): $(_mp_oneline "$out")"
     _mp_warn "api_failure: $why — this is NOT 'not merged'; no closure may be inferred from it"
@@ -296,8 +336,12 @@ _mp_github_pr_state() {
   fi
   merged_at=$(printf '%s' "$out" | jq -r '.mergedAt // empty' 2>/dev/null) || merged_at=""
   merge_commit=$(printf '%s' "$out" | jq -r '.mergeCommit.oid // empty' 2>/dev/null) || merge_commit=""
+  head_ref=$(printf '%s' "$out" | jq -r '.headRefName // empty' 2>/dev/null) || head_ref=""
+  base_ref=$(printf '%s' "$out" | jq -r '.baseRefName // empty' 2>/dev/null) || base_ref=""
+  _mp_ref_ok "$head_ref" || head_ref=""
+  _mp_ref_ok "$base_ref" || base_ref=""
   if [ "$state" = "MERGED" ]; then merged="true"; else merged="false"; fi
-  _mp_result "github" "$host" "$pr" "ok" "$state" "$merged" "$merged_at" "$merge_commit" ""
+  _mp_result "github" "$host" "$pr" "ok" "$state" "$merged" "$merged_at" "$merge_commit" "" "$head_ref" "$base_ref"
   return 0
 }
 
@@ -311,20 +355,38 @@ _mp_github_pr_state() {
 #   no_remote (3)            no remote to derive a host from
 #   provider_unavailable (4) an arm exists but cannot run now (tool/auth)
 #   api_failure (5)          the host was asked and did not usefully answer
-#   invalid_pr (6)           <pr> is not a PR number or .../pull/<n> URL
+#   invalid_pr (6)           <pr> is neither a PR number nor a scheme://host/
+#                            owner/repo/pull/<n> URL naming THIS repo's remote
+#
+# On `ok` the object also carries `head_ref`/`base_ref` — the branch the PR
+# merged FROM and INTO. They exist so a caller can bind the PR to a particular
+# objective: without them every merged PR in the repository is equally good
+# evidence for closing any task, which is a genuine, host-verified answer to a
+# question nobody asked. Either is null when the host did not return a
+# ref-shaped name; a caller that needs the binding must fail closed on null.
 #
 # Only `ok` may be read as merge state. The other five mean "could not look",
 # and callers MUST NOT infer "not merged" from any of them — nor fall back to
 # git ancestry, which post-squash reports every shipped commit as unshipped.
+#
+# <pr> is treated as untrusted operator input on every path: it can carry
+# credentials in its userinfo, so it is redacted before it is warned, emitted,
+# or returned, and once normalisation succeeds only the bare number is used.
 merge_provider_pr_state() {
-  local root="${1:-}" pr_in="${2:-}" raw rc provider host pr why
-  pr=$(_mp_normalize_pr "$pr_in") || {
-    why="'${pr_in}' is not a PR number or a .../pull/<n> URL"
+  local root="${1:-}" pr_in="${2:-}" raw rc provider host pr why pr_shown rest
+  local url_host url_repo remote_url remote_host remote_repo
+  pr_shown=$(_mp_oneline "$pr_in")
+  raw=$(_mp_normalize_pr "$pr_in") || {
+    why="'${pr_shown}' is not a PR number or a scheme://host/owner/repo/pull/<n> URL"
     _mp_warn "invalid_pr: $why"
-    _mp_emit "$root" "merge_provider_invalid_pr" pr "$pr_in" project_root "$root"
-    _mp_result "" "" "$pr_in" "invalid_pr" "" "" "" "" "$why"
+    _mp_emit "$root" "merge_provider_invalid_pr" pr "$pr_shown" project_root "$root"
+    _mp_result "" "" "$pr_shown" "invalid_pr" "" "" "" "" "$why"
     return 6
   }
+  pr="${raw%%$'\t'*}"
+  rest="${raw#*$'\t'}"
+  url_host="${rest%%$'\t'*}"
+  url_repo="${rest#*$'\t'}"
   raw=$(_mp_detect_raw "$root"); rc=$?
   provider="${raw%%$'\t'*}"
   host="${raw#*$'\t'}"
@@ -341,6 +403,19 @@ merge_provider_pr_state() {
     _mp_emit "$root" "merge_provider_unsupported_host" pr "$pr" host "$host" project_root "$root"
     _mp_result "" "$host" "$pr" "unsupported_host" "" "" "" "" "$why"
     return 2
+  fi
+  if [ -n "$url_host" ]; then
+    remote_url=$(_mp_remote_url "$root") || remote_url=""
+    remote_host=$(_mp_url_host "$remote_url")
+    remote_repo=$(_mp_url_repo "$remote_url") || remote_repo=""
+    if [ -z "$remote_repo" ] || [ "$url_host" != "$remote_host" ] || [ "$url_repo" != "$remote_repo" ]; then
+      why="the PR URL names ${url_host}/${url_repo}, but this project's remote is ${remote_host:-<none>}/${remote_repo:-<none>} — PR ${pr} would have been asked of the wrong repository, and the answer recorded as if it were about this one"
+      _mp_warn "invalid_pr: $why"
+      _mp_emit "$root" "merge_provider_invalid_pr" pr "$pr" url_host "$url_host" \
+        url_repo "$url_repo" remote_host "$remote_host" remote_repo "$remote_repo" project_root "$root"
+      _mp_result "" "$remote_host" "$pr" "invalid_pr" "" "" "" "" "$why"
+      return 6
+    fi
   fi
   case "$provider" in
     github) _mp_github_pr_state "$root" "$host" "$pr" ;;
