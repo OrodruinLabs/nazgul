@@ -15,17 +15,25 @@ set -uo pipefail
 #   tier:          captured
 #   producer:      gh version 2.80.0 (2025-09-23)
 #   captured:      2026-08-15, TASK-009, by the implementer, authenticated `gh auth`
-#   captured-with: gh pr view 88     --json state,mergedAt,mergeCommit   # merged
-#                  gh pr view 194    --json state,mergedAt,mergeCommit   # open
-#                  gh pr view 999999 --json state,mergedAt,mergeCommit   # error (exit 1)
+#   recaptured:    2026-08-16, TASK-011 rework, same producer and repo, with the two new
+#                  fields the objective-binding check needs; the bytes below are the
+#                  re-capture, so the sha256 lines for the two payloads changed with it.
+#   captured-with: gh pr view 88     --json state,mergedAt,mergeCommit,headRefName,baseRefName  # merged
+#                  gh pr view 194    --json state,mergedAt,mergeCommit,headRefName,baseRefName  # open
+#                  gh pr view 999999 --json state,mergedAt,mergeCommit,headRefName,baseRefName  # error (exit 1)
 #   source-repo:   OrodruinLabs/nazgul (this repo's own PRs — no third-party subject matter)
-#   sha256:        0941620b6a1b302486558973a4ea9811216521ef05b93673729c24078330f60d  merged payload
-#                  66b83ed712556f563c08485099e46f51cefb25e9bd90d91b6a5228fe51228ba4  open payload
+#   sha256:        fe905b27b767c4a1d5bb062a85c7a7554aedb7daa7b64a8c37a19b74e7268fd6  merged payload
+#                  922e914161ecc04ae741ea54f5788e1dffca5f438357ecb8646805a5e43be849  open payload
 #                  0cacbfff6ea53b1f26a7a3c2e79c2f85c5973ecbcd15e094611b3944a2d3476d  error stderr
-#   not-captured:  the unauthenticated and unparseable-payload cases. `gh auth
-#                  status` failing and a truncated body cannot be captured from a
-#                  healthy authenticated host, so those two are SYNTHETIC and are
-#                  named as such rather than passed off as captured.
+#   note:          PR 88's real headRefName is FEAT-030's branch, not this objective's.
+#                  That is not incidental — it is the captured instance of the hazard the
+#                  binding check exists for: a genuinely merged PR of a DIFFERENT
+#                  objective. It is used as such below rather than being edited away.
+#   not-captured:  the unauthenticated, unparseable-payload, and malformed-ref cases.
+#                  `gh auth status` failing, a truncated body, and a host returning a
+#                  branch name no git ref could carry cannot be captured from a healthy
+#                  authenticated host, so those three are SYNTHETIC and are named as
+#                  such rather than passed off as captured.
 #
 # No tests/fixtures/ subdirectory is added: TASK-009's file scope is exactly this
 # file and the library, and the manifest directs that the shape be declared in
@@ -95,8 +103,9 @@ case "$sub" in
     action="${1:-}"; shift || true
     [ "$action" = "view" ] || exit 1
     case "${NAZGUL_TEST_GH_PR_CASE:-merged}" in
-      merged) printf '%s\n' '{"mergeCommit":{"oid":"d6f7582f7d9ee8f74706ea02202d15dd5bc83146"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}'; exit 0 ;;
-      open)   printf '%s\n' '{"mergeCommit":null,"mergedAt":null,"state":"OPEN"}'; exit 0 ;;
+      merged) printf '%s\n' '{"baseRefName":"main","headRefName":"feat/FEAT-030-worktree-relative-runtime-state-path-resolution-pr","mergeCommit":{"oid":"d6f7582f7d9ee8f74706ea02202d15dd5bc83146"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}'; exit 0 ;;
+      open)   printf '%s\n' '{"baseRefName":"main","headRefName":"docs/granularity-decoupling-spec","mergeCommit":null,"mergedAt":null,"state":"OPEN"}'; exit 0 ;;
+      badref) printf '%s\n' '{"baseRefName":"main","headRefName":"a branch; rm -rf /","mergeCommit":{"oid":"d6f7582f7d9ee8f74706ea02202d15dd5bc83146"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}'; exit 0 ;;
       error)  printf '%s\n' 'GraphQL: Could not resolve to a PullRequest with the number of 999999. (repository.pullRequest)' >&2; exit 1 ;;
       leaky)  printf 'HTTP 401: Bad credentials (token ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA)\n' >&2; exit 1 ;;
       garbage) printf '%s\n' 'not json at all'; exit 0 ;;
@@ -158,8 +167,17 @@ assert_eq "merged PR: merged_at is normalised from mergedAt" "$(_field '.merged_
 assert_eq "merged PR: merge_commit is normalised from mergeCommit.oid" \
   "$(_field '.merge_commit')" "d6f7582f7d9ee8f74706ea02202d15dd5bc83146"
 assert_eq "merged PR: the provider is named in the result" "$(_field '.provider')" "github"
-assert_contains "the seam asks the host exactly the merge-state question, by PR" \
-  "$(cat "$GH_LOG")" "pr view 88 --json state,mergedAt,mergeCommit"
+assert_contains "the seam asks the host the merge-state question AND which branches, by PR" \
+  "$(cat "$GH_LOG")" "pr view 88 --json state,mergedAt,mergeCommit,headRefName,baseRefName"
+assert_eq "merged PR: the head branch is carried, so a caller can bind the PR to an objective" \
+  "$(_field '.head_ref')" "feat/FEAT-030-worktree-relative-runtime-state-path-resolution-pr"
+assert_eq "merged PR: the base branch is carried too" "$(_field '.base_ref')" "main"
+
+# A host-authored branch name no git ref could carry is DROPPED, so a caller needing the
+# binding fails closed rather than matching attacker-chosen text. (SYNTHETIC.)
+NAZGUL_TEST_GH_PR_CASE=badref _drive 88
+assert_eq "a head branch that is not ref-shaped is dropped, not carried" "$(_field '.head_ref')" "null"
+assert_eq "dropping an unusable ref does not turn the answer into a failure" "$(_field '.result')" "ok"
 
 # --- ok / OPEN: "looked and found NOT merged" — merged is false, not null. ---
 NAZGUL_TEST_GH_PR_CASE=open _drive 194
@@ -168,6 +186,8 @@ assert_eq "open PR: state is OPEN" "$(_field '.state')" "OPEN"
 assert_eq "open PR: merged is FALSE — the host was asked and said no" "$(_field '.merged')" "false"
 assert_eq "open PR: merged_at is null" "$(_field '.merged_at')" "null"
 assert_eq "open PR: merge_commit is null" "$(_field '.merge_commit')" "null"
+assert_eq "open PR: the head branch is still carried — it is not merge state" \
+  "$(_field '.head_ref')" "docs/granularity-decoupling-spec"
 
 # --- api_failure: the single most important property. A host that did not
 # answer must NEVER read as an unmerged PR. ---
@@ -253,9 +273,49 @@ git -C "$TEST_DIR" remote add origin "https://github.com/OrodruinLabs/nazgul.git
 _drive "-x"
 _observe invalid_pr "$(_want_exit invalid_pr)"
 assert_eq "an unusable PR id is refused before the host is contacted" "$(cat "$GH_LOG")" ""
-_drive "https://github.com/o/r/pull/88"
-assert_eq "a PR URL is normalised to its number rather than refused" "$(_field '.result')" "ok"
+_drive "https://github.com/OrodruinLabs/nazgul/pull/88"
+assert_eq "a PR URL naming THIS repo is normalised to its number rather than refused" \
+  "$(_field '.result')" "ok"
 assert_eq "a PR URL records the normalised number" "$(_field '.pr')" "88"
+
+# lean-comments: allow-run — why an internally consistent record can still be the wrong one.
+# A `.../pull/N` URL from ANY host used to resolve to N locally: host and repo were
+# discarded and the number asked of whatever `origin` points at, while the recorded
+# evidence — local host, bare number — stayed internally consistent and gave an auditor
+# no signal that a different repository had been named.
+: > "$GH_LOG"
+_drive "https://evil.example/o/r/pull/9"
+assert_eq "a PR URL from another HOST is refused, not silently resolved locally" \
+  "$(_field '.result')" "invalid_pr"
+assert_eq "a PR URL from another host never reaches the host CLI" "$(cat "$GH_LOG")" ""
+assert_contains "the refusal names both the URL's repo and this project's own" \
+  "$(_field '.diagnostic')" "evil.example/o/r"
+assert_contains "the refusal names what the local remote actually is" \
+  "$(_field '.diagnostic')" "github.com/orodruinlabs/nazgul"
+_drive "https://github.com/someone-else/other-repo/pull/9"
+assert_eq "a PR URL on the right host but ANOTHER repo is refused too" \
+  "$(_field '.result')" "invalid_pr"
+_drive "o/r/pull/9"
+assert_eq "a schemeless pseudo-URL carries no checkable host, so it is refused" \
+  "$(_field '.result')" "invalid_pr"
+
+# A credential can only realistically arrive through --pr, and that was the one path
+# that echoed its input raw into stderr and the event bus.
+: > "$EVENTS"
+_drive "https://user:ghp_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@github.com/OrodruinLabs/nazgul/pull/88"
+assert_eq "a credential-bearing PR URL still resolves to its number" "$(_field '.pr')" "88"
+assert_not_contains "a credential in --pr never reaches stderr" "$MP_ERR" "ghp_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+assert_not_contains "a credential in --pr never reaches the result JSON" "$MP_OUT" "ghp_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+assert_not_contains "a credential in --pr never reaches the event bus" \
+  "$(cat "$EVENTS" 2>/dev/null)" "ghp_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+_drive "https://user:ghp_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC@github.com/o/r/notapr"
+assert_eq "an unnormalisable credential-bearing --pr is invalid_pr" "$(_field '.result')" "invalid_pr"
+assert_not_contains "the unnormalisable value is REDACTED where it is echoed back" \
+  "$MP_OUT" "ghp_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+assert_not_contains "the unnormalisable value is redacted on stderr too" \
+  "$MP_ERR" "ghp_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+assert_not_contains "the unnormalisable value is redacted on the bus too" \
+  "$(cat "$EVENTS" 2>/dev/null)" "ghp_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
 
 # --- Every named result is DISTINCT. This is the property the whole seam
 # exists for: six answers, six tokens, six exit codes, no collapsing. ---

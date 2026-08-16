@@ -15,6 +15,27 @@ set -euo pipefail
 # forgery route: a status written any other way is quarantined by the stop-hook's
 # bash-write reconciliation pass at the next iteration.
 #
+# THE PR MUST BIND TO THIS OBJECTIVE, TWICE, OR NOTHING CLOSES. "Is PR N merged?" is
+# not the question this script needs answered; "did THIS objective ship as PR N?" is.
+# Asking only the first turns any merged PR in the repository into genuine, host-verified,
+# ledger-recorded authority to walk every closable manifest on disk to DONE — no forgery
+# required, and every downstream gate correctly satisfied. So two independent bindings are
+# checked before a single manifest is touched, and each fails CLOSED:
+#     PR -> objective        its head branch must be `branch.feature`, or the branch of
+#                            the `stack.layers[]` entry registered for `feat_id`
+#     manifest -> objective  it must be listed in this objective's own `nazgul/plan.md`
+#                            roster, whose frontmatter feat_id must agree with config's
+# Neither is a formality. A merged PR whose head is another objective's branch is real
+# evidence about a different objective, and a manifest absent from the roster belongs to
+# a different one; both are refused BY NAME rather than closed.
+#
+# A REFUSED CLOSE LEAVES NO EVIDENCE BEHIND. `## Merge Evidence` is gate-satisfying on
+# its own, so a section written for a close that then refused would sit in the manifest
+# indistinguishable from a successful one and admit a later `transition <id> IMPLEMENTED
+# DONE` by any agent, on residue. Every manifest is therefore snapshotted before the write
+# and restored on any later refusal; a rollback that itself fails says so, loudly, in the
+# refusal record and in the run's final report.
+#
 # API FIRST, ANCESTRY NEVER (ADR-023 decision 1). This script never runs
 # `git merge-base --is-ancestor` and must not be "simplified" into doing so: after a
 # server-side SQUASH merge no SHA in any manifest's `## Commits` section is an ancestor
@@ -31,10 +52,13 @@ set -euo pipefail
 # tail nouns are this entry point's domain reading of the §15 slots (checked = closed,
 # findings = refused): it closes tasks, it does not check files.
 #
-# SKIP REASONS (closed set — always all seven, always in this order):
+# SKIP REASONS (closed set — always all nine, always in this order):
 #   already-terminal       DONE/CANCELLED — nothing left to close
 #   not-closable-status    a real status, but not IMPLEMENTED or IN_REVIEW
 #   unreadable             no resolvable regular non-symlink manifest for that id
+#   not-this-objective     the manifest is not in this objective's roster, or no roster
+#                          could be read at all — both refuse, and each says which
+#   pr-not-this-objective  the PR merged, but from a branch that is not this objective's
 #   not-merged             the host ANSWERED and says this PR is not merged
 #   merge-unverifiable     the host could not be asked, or answered unusably
 #   evidence-write-failed  the `## Merge Evidence` section could not be recorded
@@ -57,6 +81,16 @@ usage() {
   echo "Usage: scripts/close-objective.sh --pr <number|url> [--project-root <path>]" >&2
 }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=./lib/nazgul-root.sh
+source "$SCRIPT_DIR/lib/nazgul-root.sh"
+# shellcheck source=./lib/task-transition-guard.sh
+source "$SCRIPT_DIR/lib/task-transition-guard.sh"
+# The libraries are sourced BEFORE the arguments are parsed so that the untrusted --pr
+# value can be redacted through the seam's own `_mp_oneline` the first time it is echoed.
+# shellcheck source=./lib/merge-provider.sh
+source "$SCRIPT_DIR/lib/merge-provider.sh"
+
 PR_INPUT=""
 PROJECT_ROOT_ARG=""
 while [ "$#" -gt 0 ]; do
@@ -66,18 +100,10 @@ while [ "$#" -gt 0 ]; do
     --project-root=*) PROJECT_ROOT_ARG="${1#--project-root=}"; shift ;;
     --project-root)   [ "$#" -ge 2 ] || { usage; exit 3; }; PROJECT_ROOT_ARG="$2"; shift 2 ;;
     -h|--help)        usage; exit 3 ;;
-    *)                echo "$ENTRY: unknown argument: $1" >&2; usage; exit 3 ;;
+    *)                echo "$ENTRY: unknown argument: $(_mp_oneline "$1")" >&2; usage; exit 3 ;;
   esac
 done
 [ -n "$PR_INPUT" ] || { echo "$ENTRY: --pr is required — there is no PR to ask the host about" >&2; usage; exit 3; }
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-# shellcheck source=./lib/nazgul-root.sh
-source "$SCRIPT_DIR/lib/nazgul-root.sh"
-# shellcheck source=./lib/task-transition-guard.sh
-source "$SCRIPT_DIR/lib/task-transition-guard.sh"
-# shellcheck source=./lib/merge-provider.sh
-source "$SCRIPT_DIR/lib/merge-provider.sh"
 
 if [ -n "$PROJECT_ROOT_ARG" ]; then
   PROJECT_ROOT="$PROJECT_ROOT_ARG"
@@ -102,6 +128,8 @@ REFUSED=0
 SKIP_ALREADY_TERMINAL=0
 SKIP_NOT_CLOSABLE=0
 SKIP_UNREADABLE=0
+SKIP_NOT_THIS_OBJECTIVE=0
+SKIP_PR_NOT_THIS_OBJECTIVE=0
 SKIP_NOT_MERGED=0
 SKIP_UNVERIFIABLE=0
 SKIP_EVIDENCE_WRITE=0
@@ -109,6 +137,9 @@ SKIP_TRANSITION=0
 ANC_CORROBORATED=0
 ANC_SQUASH=0
 ANC_OTHER=0
+ROLLBACK_FAILED=0
+CO_ROLLBACK_NOTE=""
+CFG_FEAT_ID=$(jq -r '.feat_id // ""' "$NAZGUL_DIR/config.json" 2>/dev/null || echo "")
 
 # _refuse <task_id> <reason> <detail> — one TYPED record per refusal, on stderr and on
 # the bus, so "3 tasks stayed open" can never read as a clean close-out.
@@ -116,11 +147,12 @@ _refuse() {
   REFUSED=$((REFUSED + 1))
   printf '%s: REFUSED %s [reason: %s] — %s\n' "$ENTRY" "$1" "$2" "$3" >&2
   _ttg_emit_event "$NAZGUL_DIR" "close_objective_refused" \
-    task_id "$1" reason "$2" detail "$3" pr "$PR_INPUT"
+    task_id "$1" reason "$2" detail "$3" pr "$PR_SAFE"
 }
 
 MP_ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/nazgul-close-objective.XXXXXX")
-trap 'rm -f "$MP_ERR_FILE" 2>/dev/null || true' EXIT
+SNAPSHOT_FILE=$(mktemp "${TMPDIR:-/tmp}/nazgul-close-objective-snap.XXXXXX")
+trap 'rm -f "$MP_ERR_FILE" "$SNAPSHOT_FILE" 2>/dev/null || true' EXIT
 MP_JSON=$(merge_provider_pr_state "$PROJECT_ROOT" "$PR_INPUT" 2>"$MP_ERR_FILE") || true
 cat "$MP_ERR_FILE" >&2 || true
 MP_RESULT=$(printf '%s' "$MP_JSON" | jq -r '.result // "api_failure"' 2>/dev/null || echo "api_failure")
@@ -129,6 +161,13 @@ EV_HOST=$(printf '%s' "$MP_JSON" | jq -r '.host // ""' 2>/dev/null || echo "")
 EV_PR=$(printf '%s' "$MP_JSON" | jq -r '.pr // ""' 2>/dev/null || echo "")
 EV_MERGED_AT=$(printf '%s' "$MP_JSON" | jq -r '.merged_at // ""' 2>/dev/null || echo "")
 EV_MERGE_COMMIT=$(printf '%s' "$MP_JSON" | jq -r '.merge_commit // ""' 2>/dev/null || echo "")
+EV_HEAD_REF=$(printf '%s' "$MP_JSON" | jq -r '.head_ref // ""' 2>/dev/null || echo "")
+EV_BASE_REF=$(printf '%s' "$MP_JSON" | jq -r '.base_ref // ""' 2>/dev/null || echo "")
+
+# --pr can carry credentials in its userinfo, so the normalised number is what every
+# record carries; an unnormalisable value goes through the seam's own redaction.
+PR_SAFE="$EV_PR"
+[ -n "$PR_SAFE" ] || PR_SAFE=$(_mp_oneline "$PR_INPUT")
 
 # The writer reuses the VERIFIER's own shape predicate rather than restating its
 # regexes, so the two can never drift into writing evidence the gate then rejects.
@@ -154,21 +193,115 @@ _co_evidence_usable() {
   return 0
 }
 
+# The branches this objective may legitimately have shipped from. Under stacking the PR
+# is opened from the layer's branch, which need not equal `branch.feature`.
+_co_objective_branches() {
+  jq -r --arg f "$CFG_FEAT_ID" '
+    [ (.branch.feature // empty), (.stack.layers[]? | select(.feat_id == $f) | .branch // empty) ]
+    | map(select(. != "")) | unique | .[]' "$NAZGUL_DIR/config.json" 2>/dev/null || true
+}
+
+# lean-comments: allow-run — the fail-closed reading is the finding this function closes.
+# _co_pr_bound -> 0 iff the merged PR is THIS objective's PR, else the reason on stdout.
+# Fails closed on every ambiguity, including a host that returned no usable head branch:
+# a PR that cannot be SHOWN to be ours is not thereby ours. `base_ref` is reported but
+# never gated on — under stacking it is the previous layer, not `branch.base`.
+_co_pr_bound() {
+  local want b
+  if [ -z "$CFG_FEAT_ID" ]; then
+    printf 'config.json names no feat_id, so no PR can be shown to belong to this objective'
+    return 1
+  fi
+  if [ -z "$EV_HEAD_REF" ]; then
+    printf 'the host returned no usable head branch for PR %s, so it cannot be shown to be %s'"'"'s PR — a merged PR of some other objective is real evidence about that objective, not licence to close this one' \
+      "$PR_SAFE" "$CFG_FEAT_ID"
+    return 1
+  fi
+  want=$(_co_objective_branches)
+  if [ -z "$want" ]; then
+    printf 'neither branch.feature nor a stack.layers[] entry for %s names a branch, so there is nothing for PR %s'"'"'s head branch %s to be matched against' \
+      "$CFG_FEAT_ID" "$PR_SAFE" "$EV_HEAD_REF"
+    return 1
+  fi
+  while IFS= read -r b; do
+    if [ "$b" = "$EV_HEAD_REF" ]; then return 0; fi
+  done <<< "$want"
+  printf 'PR %s was merged from %s (into %s), which is not %s'"'"'s branch (%s) — its merge is genuine, host-verified evidence about a DIFFERENT objective' \
+    "$PR_SAFE" "$EV_HEAD_REF" "${EV_BASE_REF:-<unknown>}" "$CFG_FEAT_ID" \
+    "$(printf '%s' "$want" | tr '\n' ' ')"
+  return 1
+}
+
+# lean-comments: allow-run — RULES.md §15's two-answers distinction, at the guard it binds.
+# _co_objective_roster -> the task ids this objective's own nazgul/plan.md lists, one per
+# line; non-zero with the reason on stdout when membership cannot be established at all.
+# "the roster does not list it" and "there is no readable roster" are different answers,
+# and only the first is a quiet per-manifest skip; the second is announced once for the
+# run. Both refuse, because an unscoped scan closes every other objective's work too.
+_co_objective_roster() {
+  local plan="$NAZGUL_DIR/plan.md" plan_feat ids
+  if [ -z "$CFG_FEAT_ID" ]; then
+    printf 'config.json names no feat_id, so no objective owns any manifest'
+    return 1
+  fi
+  if [ ! -f "$plan" ] || [ -L "$plan" ]; then
+    printf 'no regular non-symlink %s, so which manifests belong to %s is unknowable' "$plan" "$CFG_FEAT_ID"
+    return 1
+  fi
+  plan_feat=$(awk 'NR==1 && /^---[[:space:]]*$/ {f=1; next} f && /^---[[:space:]]*$/ {exit} f && /^feat_id:/ {sub(/^feat_id:[[:space:]]*/, ""); gsub(/[]["'"'"'[:space:]]/, ""); print; exit}' "$plan")
+  if [ "$plan_feat" != "$CFG_FEAT_ID" ]; then
+    printf '%s declares feat_id "%s" but config names "%s" — the roster and the objective disagree, so neither can scope the other' \
+      "$plan" "${plan_feat:-<none>}" "$CFG_FEAT_ID"
+    return 1
+  fi
+  ids=$(awk '/^## Tasks/{f=1;next} f && /^## /{exit} f' "$plan" | grep -oE '(TASK|PATCH)-[0-9]+' | LC_ALL=C sort -u)
+  if [ -z "$ids" ]; then
+    printf '%s carries no ## Tasks roster to read, so no manifest can be shown to belong to %s' "$plan" "$CFG_FEAT_ID"
+    return 1
+  fi
+  printf '%s\n' "$ids"
+}
+
+ROSTER=""
+ROSTER_SKIP_WHY=""
+if ROSTER=$(_co_objective_roster); then
+  ROSTER_SKIP_WHY="it is not listed in ${CFG_FEAT_ID}'s roster in ${NAZGUL_DIR}/plan.md — another objective's manifest is not closed by this objective's merge"
+else
+  ROSTER_SKIP_WHY="the objective roster could not be read, so membership was never established"
+  printf '%s: the objective roster could not be read [%s] — every candidate is skipped as not-this-objective rather than closed on an unscoped scan\n' \
+    "$ENTRY" "$ROSTER" >&2
+  _ttg_emit_event "$NAZGUL_DIR" "close_objective_roster_unreadable" \
+    feat_id "$CFG_FEAT_ID" reason "$ROSTER" pr "$PR_SAFE"
+  ROSTER=""
+fi
+
+_co_in_roster() {
+  [ -n "$ROSTER" ] || return 1
+  local id
+  while IFS= read -r id; do
+    if [ "$id" = "$1" ]; then return 0; fi
+  done <<< "$ROSTER"
+
+  return 1
+}
+
 GLOBAL_SKIP=""
 GLOBAL_WHY=""
 if [ "$MP_RESULT" != "ok" ]; then
   GLOBAL_SKIP="merge-unverifiable"
-  GLOBAL_WHY="the host was not usefully asked about PR ${PR_INPUT} [result: ${MP_RESULT}] — this is NOT 'not merged', and no closure may be inferred from it"
+  GLOBAL_WHY="the host was not usefully asked about PR ${PR_SAFE} [result: ${MP_RESULT}] — this is NOT 'not merged', and no closure may be inferred from it"
+elif ! GLOBAL_WHY=$(_co_pr_bound); then
+  GLOBAL_SKIP="pr-not-this-objective"
 elif [ "$MP_MERGED" != "true" ]; then
   GLOBAL_SKIP="not-merged"
-  GLOBAL_WHY="the host ANSWERED and reports PR ${PR_INPUT} is not merged [state: $(printf '%s' "$MP_JSON" | jq -r '.state // "unknown"')] — nothing shipped, so nothing closes"
+  GLOBAL_WHY="the host ANSWERED and reports PR ${PR_SAFE} is not merged [state: $(printf '%s' "$MP_JSON" | jq -r '.state // "unknown"')] — nothing shipped, so nothing closes"
 elif ! GLOBAL_WHY=$(_co_evidence_usable); then
   GLOBAL_SKIP="merge-unverifiable"
 fi
 if [ -n "$GLOBAL_SKIP" ]; then
-  printf '%s: no closure for PR %s [%s] — %s\n' "$ENTRY" "$PR_INPUT" "$GLOBAL_SKIP" "$GLOBAL_WHY" >&2
+  printf '%s: no closure for PR %s [%s] — %s\n' "$ENTRY" "$PR_SAFE" "$GLOBAL_SKIP" "$GLOBAL_WHY" >&2
   _ttg_emit_event "$NAZGUL_DIR" "close_objective_blocked" \
-    pr "$PR_INPUT" reason "$GLOBAL_SKIP" result "$MP_RESULT" detail "$GLOBAL_WHY"
+    pr "$PR_SAFE" reason "$GLOBAL_SKIP" result "$MP_RESULT" detail "$GLOBAL_WHY"
 else
   GLOBAL_WHY=""
 fi
@@ -222,9 +355,36 @@ _co_tally_ancestry() {
   esac
 }
 
+# lean-comments: allow-run — why a refused close must undo its own write, not just report.
+# _co_rollback <manifest> -> restore the pre-close bytes, leaving the outcome in
+# CO_ROLLBACK_NOTE for the refusal record. `## Merge Evidence` satisfies the DONE gate on
+# its own and carries no trace of the refusal that followed it, so a section left behind
+# by a refused close is a standing token any later `transition <id> IMPLEMENTED DONE`
+# would spend. Restoring the snapshot, rather than stripping the section, also undoes the
+# replacement of a pre-existing one.
+_co_rollback() {
+  local out
+  CO_ROLLBACK_NOTE=""
+  if out=$(nz_rewrite_file "$1" cat "$SNAPSHOT_FILE" 2>&1); then
+    CO_ROLLBACK_NOTE="; the manifest was rolled back to its pre-close bytes, so no ## Merge Evidence residue remains"
+    return 0
+  fi
+  ROLLBACK_FAILED=$((ROLLBACK_FAILED + 1))
+  CO_ROLLBACK_NOTE="; ROLLBACK FAILED ($(printf '%s' "$out" | tr '\n' ' ')) — ${1} still carries a ## Merge Evidence section that no closure stands behind; remove it by hand before any transition is attempted"
+  return 1
+}
+
 _co_close_one() {
   local task_id="$1" manifest="$2" from="$3" err rc=0
 
+  if ! cat "$manifest" > "$SNAPSHOT_FILE" 2>/dev/null; then
+    SKIP_EVIDENCE_WRITE=$((SKIP_EVIDENCE_WRITE + 1))
+    _refuse "$task_id" "evidence-write-failed" "could not snapshot ${manifest} before writing evidence, so nothing was written — a write that could not be undone must not be attempted"
+    return 0
+  fi
+
+  # No rollback on this arm: nz_rewrite_file installs through an atomic rename, so a
+  # failed write left the manifest untouched and a restore here could only add noise.
   if ! err=$(_co_write_evidence "$manifest" 2>&1); then
     SKIP_EVIDENCE_WRITE=$((SKIP_EVIDENCE_WRITE + 1))
     _refuse "$task_id" "evidence-write-failed" "could not record ## Merge Evidence in ${manifest}: $(printf '%s' "$err" | tr '\n' ' ')"
@@ -232,7 +392,8 @@ _co_close_one() {
   fi
   if ! err=$(ttg_verify_merge_evidence "$(cat "$manifest")" "$PROJECT_ROOT" "$task_id" 2>&1); then
     SKIP_EVIDENCE_WRITE=$((SKIP_EVIDENCE_WRITE + 1))
-    _refuse "$task_id" "evidence-write-failed" "the recorded ## Merge Evidence did not read back as verifiable [${TTG_MERGE_REASON}] — nothing was closed on it"
+    _co_rollback "$manifest" || true
+    _refuse "$task_id" "evidence-write-failed" "the recorded ## Merge Evidence did not read back as verifiable [${TTG_MERGE_REASON}] — nothing was closed on it${CO_ROLLBACK_NOTE}"
     return 0
   fi
 
@@ -240,7 +401,8 @@ _co_close_one() {
     transition "$task_id" "$from" DONE 2>&1) || rc=$?
   if [ "$rc" -ne 0 ]; then
     SKIP_TRANSITION=$((SKIP_TRANSITION + 1))
-    _refuse "$task_id" "transition-refused" "${from} -> DONE was refused by the sole sanctioned writer: $(printf '%s' "$err" | tr '\n' ' ')"
+    _co_rollback "$manifest" || true
+    _refuse "$task_id" "transition-refused" "${from} -> DONE was refused by the sole sanctioned writer: $(printf '%s' "$err" | tr '\n' ' ')${CO_ROLLBACK_NOTE}"
     return 0
   fi
 
@@ -262,6 +424,11 @@ if [ -d "$TASKS_DIR" ]; then
       printf '%s: skipped %s [unreadable] — no resolvable regular non-symlink manifest\n' "$ENTRY" "$task_id" >&2
       continue
     fi
+    if ! _co_in_roster "$task_id"; then
+      SKIP_NOT_THIS_OBJECTIVE=$((SKIP_NOT_THIS_OBJECTIVE + 1))
+      printf '%s: skipped %s [not-this-objective] — %s\n' "$ENTRY" "$task_id" "$ROSTER_SKIP_WHY" >&2
+      continue
+    fi
     status=$(get_task_status "$manifest" "")
     case "$status" in
       DONE|CANCELLED)
@@ -276,11 +443,12 @@ if [ -d "$TASKS_DIR" ]; then
     esac
     if [ -n "$GLOBAL_SKIP" ]; then
       case "$GLOBAL_SKIP" in
-        not-merged)         SKIP_NOT_MERGED=$((SKIP_NOT_MERGED + 1)) ;;
-        merge-unverifiable) SKIP_UNVERIFIABLE=$((SKIP_UNVERIFIABLE + 1)) ;;
+        pr-not-this-objective) SKIP_PR_NOT_THIS_OBJECTIVE=$((SKIP_PR_NOT_THIS_OBJECTIVE + 1)) ;;
+        not-merged)            SKIP_NOT_MERGED=$((SKIP_NOT_MERGED + 1)) ;;
+        merge-unverifiable)    SKIP_UNVERIFIABLE=$((SKIP_UNVERIFIABLE + 1)) ;;
       esac
-      printf '%s: skipped %s [%s] — it is closable but the merge was not confirmed\n' \
-        "$ENTRY" "$task_id" "$GLOBAL_SKIP" >&2
+      printf '%s: skipped %s [%s] — it is closable, but PR %s was not confirmed to be this objective'"'"'s merge\n' \
+        "$ENTRY" "$task_id" "$GLOBAL_SKIP" "$PR_SAFE" >&2
       continue
     fi
     _co_close_one "$task_id" "$manifest" "$status"
@@ -292,8 +460,15 @@ if [ "$CLOSED" -gt 0 ]; then
     "$ENTRY" "$ANC_CORROBORATED" "$ANC_SQUASH" "$ANC_OTHER"
 fi
 
-SKIPPED=$((SKIP_ALREADY_TERMINAL + SKIP_NOT_CLOSABLE + SKIP_UNREADABLE + SKIP_NOT_MERGED \
-  + SKIP_UNVERIFIABLE + SKIP_EVIDENCE_WRITE + SKIP_TRANSITION))
+if [ "$ROLLBACK_FAILED" -gt 0 ]; then
+  printf '%s: %d manifest(s) kept a ## Merge Evidence section a refused close wrote — that section satisfies the DONE gate on its own, so remove it by hand before any transition is attempted\n' \
+    "$ENTRY" "$ROLLBACK_FAILED" >&2
+  _ttg_emit_event "$NAZGUL_DIR" "close_objective_rollback_failed" \
+    count:n "$ROLLBACK_FAILED" pr "$PR_SAFE"
+fi
+
+SKIPPED=$((SKIP_ALREADY_TERMINAL + SKIP_NOT_CLOSABLE + SKIP_UNREADABLE + SKIP_NOT_THIS_OBJECTIVE \
+  + SKIP_PR_NOT_THIS_OBJECTIVE + SKIP_NOT_MERGED + SKIP_UNVERIFIABLE + SKIP_EVIDENCE_WRITE + SKIP_TRANSITION))
 ACCOUNTING_OK=1
 if [ "$SCANNED" -ne $((SKIPPED + CLOSED)) ]; then
   ACCOUNTING_OK=0
@@ -307,14 +482,16 @@ if [ "$CLOSED" -eq 0 ]; then
     printf '%s: NOTHING CHECKED — no task manifests discovered under %s\n' "$ENTRY" "$TASKS_DIR" >&2
   fi
   _ttg_emit_event "$NAZGUL_DIR" "coverage_vacuous" entry_point "$ENTRY" \
-    scanned:n "$SCANNED" skipped:n "$SKIPPED" refused:n "$REFUSED" pr "$PR_INPUT"
+    scanned:n "$SCANNED" skipped:n "$SKIPPED" refused:n "$REFUSED" pr "$PR_SAFE"
 fi
 
-_ttg_emit_event "$NAZGUL_DIR" "close_objective_summary" pr "$PR_INPUT" result "$MP_RESULT" \
+_ttg_emit_event "$NAZGUL_DIR" "close_objective_summary" pr "$PR_SAFE" result "$MP_RESULT" \
+  feat_id "$CFG_FEAT_ID" head_ref "$EV_HEAD_REF" \
   scanned:n "$SCANNED" skipped:n "$SKIPPED" closed:n "$CLOSED" refused:n "$REFUSED"
 
-printf '%s: %d scanned, %d skipped (already-terminal=%d, not-closable-status=%d, unreadable=%d, not-merged=%d, merge-unverifiable=%d, evidence-write-failed=%d, transition-refused=%d), %d closed, %d refused\n' \
+printf '%s: %d scanned, %d skipped (already-terminal=%d, not-closable-status=%d, unreadable=%d, not-this-objective=%d, pr-not-this-objective=%d, not-merged=%d, merge-unverifiable=%d, evidence-write-failed=%d, transition-refused=%d), %d closed, %d refused\n' \
   "$ENTRY" "$SCANNED" "$SKIPPED" "$SKIP_ALREADY_TERMINAL" "$SKIP_NOT_CLOSABLE" "$SKIP_UNREADABLE" \
+  "$SKIP_NOT_THIS_OBJECTIVE" "$SKIP_PR_NOT_THIS_OBJECTIVE" \
   "$SKIP_NOT_MERGED" "$SKIP_UNVERIFIABLE" "$SKIP_EVIDENCE_WRITE" "$SKIP_TRANSITION" "$CLOSED" "$REFUSED"
 
 [ "$ACCOUNTING_OK" -eq 1 ] || exit 3
