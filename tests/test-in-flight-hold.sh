@@ -19,10 +19,11 @@ run_hook() {
   HOOK_OUTPUT=$(bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 }
 
-# <path> <agent> <unit> <epoch>
+# <path> <agent> <unit> <epoch> [background] [named]
 _write_marker() {
   jq -cn --arg a "$2" --arg u "$3" --argjson e "$4" \
-    '{agent:$a, unit:$u, dispatched_at:"2026-08-01T00:00:00Z", dispatched_at_epoch:$e, prompt_head:("NAZGUL_UNIT: "+$u)}' > "$1"
+    --arg bg "${5:-missing}" --arg nm "${6:-false}" \
+    '{agent:$a, unit:$u, dispatched_at:"2026-08-01T00:00:00Z", dispatched_at_epoch:$e, prompt_head:("NAZGUL_UNIT: "+$u), background:$bg, named:$nm}' > "$1"
 }
 
 # === Writer: scripts/in-flight-marker.sh (never blocks) ===
@@ -41,6 +42,28 @@ assert_eq "writer: marker unit field" "$(jq -r '.unit' "$MARKER_FILE")" "TASK-00
 assert_contains "writer: marker prompt_head carries the prompt prefix" "$(jq -r '.prompt_head' "$MARKER_FILE")" "NAZGUL_UNIT"
 EPOCH_OK=$([ "$(jq -r '.dispatched_at_epoch' "$MARKER_FILE")" -gt 0 ] 2>/dev/null && echo yes || echo no)
 assert_eq "writer: dispatched_at_epoch is a positive number" "$EPOCH_OK" "yes"
+assert_eq "writer: background field is 'missing' when payload lacks it" "$(jq -r '.background' "$MARKER_FILE")" "missing"
+assert_eq "writer: named field is 'false' when payload lacks a name" "$(jq -r '.named' "$MARKER_FILE")" "false"
+teardown_temp_dir
+
+# --- dispatch-class capture: explicit background + named dispatch ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+PAYLOAD=$(jq -cn '{tool_name:"Agent",tool_input:{subagent_type:"nazgul:implementer",prompt:"NAZGUL_UNIT: TASK-003 x",run_in_background:true,name:"helper"}}')
+(cd "$TEST_DIR" && printf '%s' "$PAYLOAD" | bash "$WRITER" >/dev/null 2>&1) || true
+MARKER_FILE=$(find "$TEST_DIR/nazgul/in-flight" -type f | head -1)
+assert_eq "writer: background captured as 'true'" "$(jq -r '.background' "$MARKER_FILE")" "true"
+assert_eq "writer: named captured as 'true'" "$(jq -r '.named' "$MARKER_FILE")" "true"
+teardown_temp_dir
+
+setup_temp_dir
+setup_nazgul_dir
+create_config
+PAYLOAD=$(jq -cn '{tool_name:"Agent",tool_input:{subagent_type:"nazgul:implementer",prompt:"NAZGUL_UNIT: TASK-004 x",run_in_background:false}}')
+(cd "$TEST_DIR" && printf '%s' "$PAYLOAD" | bash "$WRITER" >/dev/null 2>&1) || true
+MARKER_FILE=$(find "$TEST_DIR/nazgul/in-flight" -type f | head -1)
+assert_eq "writer: background captured as 'false'" "$(jq -r '.background' "$MARKER_FILE")" "false"
 teardown_temp_dir
 
 setup_temp_dir
