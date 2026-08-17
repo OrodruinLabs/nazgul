@@ -22,6 +22,9 @@ metadata:
 - Wave layout: !`P=$(jq -r '.execution.parallel // false' nazgul/config.json 2>/dev/null); if [ "$P" = "true" ] && [ -d nazgul/tasks ]; then { source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/parallel-batch.sh" 2>/dev/null && compute_waves nazgul/tasks; } 2>/dev/null || echo "[]"; else echo "[]"; fi`
 - AFK: !`jq -r 'if .afk.enabled then "enabled" else "disabled" end' nazgul/config.json 2>/dev/null || echo "disabled"`
 - Paused: !`jq -r '.paused // false' nazgul/config.json 2>/dev/null || echo "false"`
+- In-flight markers: !`ls nazgul/in-flight/*.json 2>/dev/null | wc -l | tr -d ' '`
+- Quarantined markers: !`ls nazgul/in-flight/quarantine/*.json 2>/dev/null | wc -l | tr -d ' '`
+- Last stop gate: !`grep '"stop_gate"' nazgul/logs/events.jsonl 2>/dev/null | tail -1 | jq -r '"\(.reason // "?") @ \(.ts // "?")"' 2>/dev/null | grep . || echo "none"`
 - Reviewers: !`jq -r '.agents.reviewers // [] | join(", ")' nazgul/config.json 2>/dev/null || echo "none"`
 - Specialists: !`jq -r '.agents.specialists // [] | join(", ")' nazgul/config.json 2>/dev/null || echo "none"`
 - Consecutive failures: !`jq -r '.safety.consecutive_failures // 0' nazgul/config.json 2>/dev/null || echo "0"`
@@ -56,6 +59,15 @@ below unchanged.
 and say the registry could not be read (config missing/corrupt) — never render it as healthy when the read
 failed. If `readable` is `true` and `enabled` is `false` with an empty `layers` array, omit the Stack section
 entirely (nothing to show). Otherwise render it after Board Sync per the format below.
+
+**In-flight markers**: if Quarantined markers > 0, note: "orphaned dispatch markers were quarantined
+(stop_gate reason in_flight_orphan) — see nazgul/in-flight/quarantine/ for the evidence; this is diagnostic
+residue, not pending work." The Quarantined markers count is the signal that covers BOTH quarantine
+producers, because both write to that one directory: `scripts/stop-hook.sh` (emits `stop_gate` with reason
+`in_flight_orphan`) and `scripts/session-context.sh`'s SessionStart sweep (emits a standalone
+`in_flight_orphan` event, `source: session_start_sweep`). Last stop gate reads `stop_gate` events ONLY, so a
+sweep-quarantined marker never appears there — never present Last stop gate as the whole orphan story, and
+never report Quarantined > 0 with a `none`/unrelated Last stop gate as a contradiction.
 
 ### Status Report Format (default — parallel execution disabled)
 
