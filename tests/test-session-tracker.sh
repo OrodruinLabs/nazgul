@@ -101,8 +101,10 @@ teardown_temp_dir
 # of session-context.sh calling it as `if warning_msg=$(...)`.
 setup_temp_dir
 mkdir -p "$TEST_DIR/sessions"
-jq -cn '{pid:"2147483646", session:"a"}' > "$TEST_DIR/sessions/a.lock"
-jq -cn '{pid:"2147483645", session:"b"}' > "$TEST_DIR/sessions/b.lock"
+# LIVE pids with no toplevel — board R3 made counting liveness-filtered, so the
+# original dead-pid fixture now returns before ever reaching the scan under test.
+jq -cn --arg p "$$" '{pid:$p, session:"a"}' > "$TEST_DIR/sessions/a.lock"
+jq -cn --arg p "$$" '{pid:$p, session:"b"}' > "$TEST_DIR/sessions/b.lock"
 SURVIVED=$(bash -c '
 set -euo pipefail
 source "$1"
@@ -110,6 +112,30 @@ is_concurrent_session_warning "$2/sessions" >/dev/null
 echo SURVIVED
 ' _ "$REPO_ROOT/scripts/lib/session-tracker.sh" "$TEST_DIR" 2>/dev/null)
 assert_eq "bare call under set -euo pipefail survives an empty duplicate scan" "$SURVIVED" "SURVIVED"
+teardown_temp_dir
+
+# --- Board R3: _session_lock_is_live is the ONE predicate, and liveness is the
+# COUNTING path — not just the sweep's ---
+setup_temp_dir
+mkdir -p "$TEST_DIR/sessions"
+jq -cn '{pid:"99999", session:"dead"}' > "$TEST_DIR/sessions/dead.lock"
+jq -cn --arg p "$$" '{pid:$p, session:"live"}' > "$TEST_DIR/sessions/live.lock"
+jq -cn '{session:"legacy"}' > "$TEST_DIR/sessions/legacy.lock"
+
+RC=0; _session_lock_is_live "$TEST_DIR/sessions/live.lock" || RC=$?
+assert_eq "predicate: live pid -> 0" "$RC" "0"
+RC=0; _session_lock_is_live "$TEST_DIR/sessions/dead.lock" || RC=$?
+assert_eq "predicate: unreachable pid -> 1" "$RC" "1"
+RC=0; _session_lock_is_live "$TEST_DIR/sessions/legacy.lock" || RC=$?
+assert_eq "predicate: no recorded pid -> 2 (unknown, never 'dead')" "$RC" "2"
+
+COUNT=$(count_active_sessions "$TEST_DIR/sessions")
+assert_eq "count: dead lock excluded, live + pid-less legacy still counted" "$COUNT" "2"
+assert_file_exists "count: counting NEVER deletes — sweeping is cleanup's job" "$TEST_DIR/sessions/dead.lock"
+
+rm -f "$TEST_DIR/sessions/live.lock" "$TEST_DIR/sessions/legacy.lock"
+COUNT=$(count_active_sessions "$TEST_DIR/sessions")
+assert_eq "count: a lone dead lock no longer reads as an active session" "$COUNT" "0"
 teardown_temp_dir
 
 report_results

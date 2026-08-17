@@ -46,13 +46,32 @@ unregister_session() {
   rm -f "$sessions_dir/${session_id}.lock"
 }
 
-count_active_sessions() {
-  local sessions_dir="${1:-nazgul/sessions}"
-  if [ -d "$sessions_dir" ] && ls "$sessions_dir"/*.lock >/dev/null 2>&1; then
-    ls "$sessions_dir"/*.lock 2>/dev/null | wc -l | tr -d ' '
-  else
-    echo "0"
+# One shared tri-state liveness predicate — 0 live, 1 unreachable-by-us (`kill -0`
+# cannot tell "gone" from EPERM), 2 no numeric pid recorded, which is never "dead".
+_session_lock_is_live() {
+  local lock_file="$1" lock_pid
+  [ -f "$lock_file" ] || return 1
+  lock_pid=$(jq -r '.pid // ""' "$lock_file" 2>/dev/null || echo "")
+  if [ -z "$lock_pid" ] || ! [[ "$lock_pid" =~ ^[0-9]+$ ]]; then
+    return 2
   fi
+  kill -0 "$lock_pid" 2>/dev/null
+}
+
+# Liveness is the COUNTING path, not just the sweep's (FEAT-032 board R3): only
+# a provably-dead lock is dropped, so a pid-less legacy lock still counts.
+count_active_sessions() {
+  local sessions_dir="${1:-nazgul/sessions}" f n=0 live
+  [ -d "$sessions_dir" ] || { echo "0"; return 0; }
+  for f in "$sessions_dir"/*.lock; do
+    [ -f "$f" ] || continue
+    live=0
+    _session_lock_is_live "$f" || live=$?   # bare call would abort a `set -e` caller
+    if [ "$live" -ne 1 ]; then
+      n=$((n + 1))
+    fi
+  done
+  echo "$n"
 }
 
 cleanup_stale_sessions() {
@@ -72,15 +91,13 @@ cleanup_stale_sessions() {
     [ -f "$lock_file" ] || continue
     # Liveness outranks age (#195/V7): a live recorded pid is never swept, a
     # dead one goes immediately; legacy pid-less locks fall to the age rule.
-    local lock_pid
-    lock_pid=$(jq -r '.pid // ""' "$lock_file" 2>/dev/null || echo "")
-    if [ -n "$lock_pid" ] && [[ "$lock_pid" =~ ^[0-9]+$ ]]; then
-      if kill -0 "$lock_pid" 2>/dev/null; then
-        continue
-      else
-        rm -f "$lock_file"
-        continue
-      fi
+    local live=0
+    _session_lock_is_live "$lock_file" || live=$?
+    if [ "$live" -eq 0 ]; then
+      continue
+    elif [ "$live" -eq 1 ]; then
+      rm -f "$lock_file"
+      continue
     fi
     local file_age
     # Linux (GNU stat) uses -c %Y, macOS (BSD stat) uses -f %m
@@ -99,14 +116,15 @@ cleanup_stale_sessions() {
 # The first working tree recorded by >=2 LIVE locks, or "" when there is none —
 # the #195 shared-checkout shape (one session committed another's staged work).
 duplicate_live_toplevel() {
-  local sessions_dir="${1:-nazgul/sessions}" f lp
+  local sessions_dir="${1:-nazgul/sessions}" f live
   [ -d "$sessions_dir" ] || return 0
   # No duplicate is an ANSWER, not an error: without the guard the empty pipeline
   # exits 1 and aborts any caller running under `set -e` (FEAT-032 board R1).
   for f in "$sessions_dir"/*.lock; do
     [ -f "$f" ] || continue
-    lp=$(jq -r '.pid // ""' "$f" 2>/dev/null)
-    if [ -n "$lp" ] && [[ "$lp" =~ ^[0-9]+$ ]] && ! kill -0 "$lp" 2>/dev/null; then continue; fi
+    live=0
+    _session_lock_is_live "$f" || live=$?
+    if [ "$live" -eq 1 ]; then continue; fi
     jq -r '.toplevel // ""' "$f" 2>/dev/null
   done | grep -v '^$' | sort | uniq -d | head -1 || true
 }

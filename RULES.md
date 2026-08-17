@@ -328,9 +328,22 @@ something Nazgul schedules itself.
   meaningful only because locks are session-lifetime — registered at SessionStart, refreshed per Stop,
   released at SessionEnd, swept by pid-liveness (2026-08-16 fix; before it, the stop-hook's EXIT trap
   deleted the lock on every allowed stop, so a held or housekeeping session was uncounted and this
-  rule's claim was false in practice). `heartbeat.sh:36`'s own "secondary, non-primary check" hedge is
-  thereby resolved: the count is now a primary, honest signal within one root. Covered by
-  `tests/test-heartbeat-session-guard.sh`.
+  rule's claim was false in practice). Both halves of that lifetime were made real by FEAT-032's board
+  rework, because until then the record described a lifecycle the code did not implement. **Release
+  (R2):** `session-staging.sh` installs `trap 'release_session_lock || true' EXIT` before its four
+  staging gates, so the lock is released on every SessionEnd path — previously the release sat *after*
+  those gates, so every HITL session (`afk.enabled: false`, the template default) registered a lock and
+  never released it, which is exactly the housekeeping-session population #195 is about. **Counting
+  (R3):** `count_active_sessions` is itself liveness-filtered; it, `cleanup_stale_sessions` and
+  `duplicate_live_toplevel` share ONE predicate, `_session_lock_is_live`, and `heartbeat.sh` sweeps
+  before it counts (nothing else sweeps a root between ticks, so a dead lock used to block auto-start
+  unboundedly). `heartbeat.sh`'s own "secondary, non-primary check" hedge is thereby resolved: the count
+  is a primary, honest signal within one root, bounded by three stated limits — `kill -0` cannot
+  distinguish a gone pid from one this user may not signal (EPERM reads as gone); a lock recording no
+  numeric pid counts as active, because unknown is never dead; and a session already launched but not
+  yet registered is invisible to any count, which is why the MF-039 atomic `mkdir` claim, not this
+  count, is what closes that window. Covered by `tests/test-heartbeat-session-guard.sh`,
+  `tests/test-session-staging.sh`, and `tests/test-session-tracker.sh`.
 - **The two hard stops are unconditional — independent of `enabled` and of `mode`, including `yolo`.** `[enforced]`
   `scripts/heartbeat.sh` calls `execution_should_halt` (`scripts/lib/parallel-batch.sh`, the
   identical fail-closed function §11/§12 document for parallel dispatch) as the very first thing it does
