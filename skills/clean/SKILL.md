@@ -100,7 +100,13 @@ Resolve the project ROOT first — never `$(pwd)` (PR #223 review #10). Run in b
 bash -c '
 set -u
 source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/nazgul-root.sh"
-ROOT="$(resolve_project_root)" || { echo "clean: cannot resolve the project root — NOT touching core.hooksPath" >&2; exit 1; }
+# resolve_project_root ALWAYS returns 0 (it falls back to the first candidate on a
+# non-git host), so test the VALUE, never the status — `|| { ... }` here is dead code.
+ROOT="$(resolve_project_root)"
+if [ -z "$ROOT" ] || { [ ! -d "$ROOT/.git" ] && [ ! -f "$ROOT/.git" ]; }; then
+  echo "clean: \"$ROOT\" is not a git repository — NOT touching core.hooksPath. Re-run from the project root." >&2
+  exit 1
+fi
 source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/git-hooks.sh"
 uninstall_git_hooks "$ROOT" "$ROOT/nazgul/config.json"
 

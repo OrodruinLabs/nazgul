@@ -392,7 +392,7 @@ jq -cn --argjson e "$NOW" '{agent:"nazgul:implementer", unit:"TASK-002", dispatc
 (cd "$TEST_DIR" && bash "$SESSION_SCRIPT" </dev/null >/dev/null 2>&1) || true
 assert_file_exists "sweep: over-age marker quarantined" "$TEST_DIR/nazgul/in-flight/quarantine/ancient.json"
 assert_file_exists "sweep: fresh marker untouched" "$TEST_DIR/nazgul/in-flight/fresh.json"
-assert_contains "sweep: in_flight_orphan event carries source" \
+assert_contains "sweep: in_flight_swept event carries source" \
   "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" "session_start_sweep"
 assert_contains "sweep: emits in_flight_swept, NOT the proven-class in_flight_orphan (PR #223 review #2)" \
   "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" '"event":"in_flight_swept"'

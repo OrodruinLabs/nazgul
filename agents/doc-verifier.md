@@ -65,6 +65,7 @@ clear_fallback_underivable              in_flight_swept
 coverage_vacuous                        reconciliation_quarantine
 subagent_empty_return                   gate_attribution
 dispatch_guard_resolution_unconfirmed
+reviewer_skipped    reviewer_unverified    adversarial_crosscheck
 ```
 
 The last five were live emitters absent from this fence (PR #223 re-review) —
