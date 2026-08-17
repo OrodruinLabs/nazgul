@@ -19,6 +19,12 @@ SURFACE_ROOT="${NAZGUL_POSTURE_SURFACE_ROOT:-$REPO_ROOT}"
 SURFACES="scripts skills agents templates hooks"
 # Read-only allowlist (repo-relative), exactly per the spec's Global Constraint:
 ALLOW_RE='^(scripts/doctor\.sh|scripts/lib/session-tracker\.sh)$'
+R1_KEY_RE='crossSessionInbound|isolatePeerMachines'
+# doctor.sh must NAME a posture key to report the operator's effective posture
+# (plan Global Constraint). R1's real subject there is WRITING one (design §298).
+ALLOW_R1_RE='^scripts/doctor\.sh$'
+R1_WRITE_RE='(crossSessionInbound|isolatePeerMachines)["'"'"']? *=[^=]'
+R1_SETTINGS_WRITE_RE='(>|>>|tee|sponge)[^|;&]*settings(\.local)?\.json'
 
 scanned=0; skipped_unreadable=0; checked=0; findings=0
 
@@ -27,10 +33,16 @@ scan_file() {
   scanned=$((scanned + 1))
   if [ ! -r "$f" ]; then skipped_unreadable=$((skipped_unreadable + 1)); return 0; fi
   checked=$((checked + 1))
-  hits=$(grep -nE 'crossSessionInbound|isolatePeerMachines' "$f" 2>/dev/null | head -3)
-  if [ -n "$hits" ]; then
+  hits=$(grep -nE "$R1_KEY_RE" "$f" 2>/dev/null | head -3)
+  if [ -n "$hits" ] && ! printf '%s' "$rel" | grep -qE "$ALLOW_R1_RE"; then
     findings=$((findings + 1))
     _fail "R1: $rel names an inbound-posture settings key" "$hits"
+  elif [ -n "$hits" ]; then
+    hits=$(grep -nE "$R1_WRITE_RE|$R1_SETTINGS_WRITE_RE" "$f" 2>/dev/null | head -3)
+    if [ -n "$hits" ]; then
+      findings=$((findings + 1))
+      _fail "R1: $rel WRITES an inbound-posture setting (allowlisted to read one, never to set one)" "$hits"
+    fi
   fi
   if ! printf '%s' "$rel" | grep -qE "$ALLOW_RE"; then
     hits=$(grep -nE 'CLAUDE_CODE_MESSAGING_(SOCKET|TOKEN)' "$f" 2>/dev/null | head -3)
@@ -63,9 +75,20 @@ grep -qE 'CLAUDE_CODE_MESSAGING_(SOCKET|TOKEN)' "$SCRATCH/v1.sh" \
   && _pass "dogfood: synthetic socket-poster caught by R2 predicate" \
   || _fail "dogfood: synthetic socket-poster caught by R2 predicate"
 printf 'jq %s.crossSessionInbound="accept"%s s.json\n' "'" "'" > "$SCRATCH/v2.sh"
-grep -qE 'crossSessionInbound|isolatePeerMachines' "$SCRATCH/v2.sh" \
+grep -qE "$R1_KEY_RE" "$SCRATCH/v2.sh" \
   && _pass "dogfood: synthetic posture-writer caught by R1 predicate" \
   || _fail "dogfood: synthetic posture-writer caught by R1 predicate"
+grep -qE "$R1_WRITE_RE|$R1_SETTINGS_WRITE_RE" "$SCRATCH/v2.sh" \
+  && _pass "dogfood: the allowlisted-file write predicate catches jq mutation syntax" \
+  || _fail "dogfood: the allowlisted-file write predicate catches jq mutation syntax"
+printf 'printf %s{"crossSessionInbound":"accept"}%s > ~/.claude/settings.json\n' "'" "'" > "$SCRATCH/v3.sh"
+grep -qE "$R1_WRITE_RE|$R1_SETTINGS_WRITE_RE" "$SCRATCH/v3.sh" \
+  && _pass "dogfood: the allowlisted-file write predicate catches a JSON-literal settings write" \
+  || _fail "dogfood: the allowlisted-file write predicate catches a JSON-literal settings write"
+printf 'v=$(jq -r %s.crossSessionInbound // empty%s "$f" 2>/dev/null)\n' "'" "'" > "$SCRATCH/v4.sh"
+grep -qE "$R1_WRITE_RE|$R1_SETTINGS_WRITE_RE" "$SCRATCH/v4.sh" \
+  && _fail "dogfood: a read of the key is not a write" \
+  || _pass "dogfood: a read of the key is not a write"
 
 # Sibling idiom (tests/test-dispatch-brief-contract.sh:215-220): the coverage
 # line is the LAST stdout line, and the verdict is the exit code.

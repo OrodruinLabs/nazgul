@@ -24,7 +24,7 @@ skills/                              # User-facing commands (/nazgul:*)
 │   ├── verify/SKILL.md
 │   ├── metrics/SKILL.md
 │   ├── heartbeat/SKILL.md           # Opt-in automation-heartbeat tick (inbox triage + auto-start)
-│   ├── doctor/SKILL.md              # Read-only environment preflight diagnostic (ten checks)
+│   ├── doctor/SKILL.md              # Read-only environment preflight diagnostic (thirteen checks)
 │   └── bootstrap-project/SKILL.md   # Emit portable Nazgul-free bundle (one-shot)
 agents/                              # Subagent definitions
 │   ├── discovery.md                 # Pipeline: scans codebase, classifies project
@@ -76,7 +76,7 @@ scripts/                             # Shell scripts for hooks
 │   ├── gen-skill-docs.sh            # Skill template: resolve {{PARTIAL:name}}
 │   ├── bootstrap-transform.sh       # bootstrap-project: Nazgul-token scrub pass
 │   ├── heartbeat.sh                 # Opt-in automation-heartbeat tick engine (separate entry path)
-│   ├── doctor.sh                    # Read-only preflight diagnostic (ten checks, never writes state)
+│   ├── doctor.sh                    # Read-only preflight diagnostic (thirteen checks, never writes state)
 │   ├── audit-agent-state-paths.sh   # Agent-roster runtime-state path audit (advisory; §15 entry point)
 │   ├── git-hooks/                   # Templates installed into the managed core.hooksPath dir
 │   │   ├── _dispatch.sh             # Chain-dispatcher: forwards to any pre-existing user hook
@@ -113,7 +113,7 @@ references/                          # Shared reference docs for agents
 │   ├── fix-first-heuristic.md       # AUTO-FIX vs ASK classification rules
 │   └── self-improvement.md          # Agent self-rating protocol
 tests/                               # Plugin validation tests
-│   ├── run-tests.sh                 # Test runner (104 unit/integration files); exit 2 = nothing checked
+│   ├── run-tests.sh                 # Test runner (107 unit/integration files); exit 2 = nothing checked
 │   ├── test-*.sh                    # Unit/integration tests
 │   ├── fixtures/                    # Provenance-declared goldens (tests/fixtures/*/PROVENANCE.md); no third-party subject matter
 │   ├── lib/                         # Test assertions + setup helpers
@@ -196,7 +196,7 @@ tests/                               # Plugin validation tests
 ## Testing
 
 ```bash
-tests/run-tests.sh                    # Run all unit/integration tests (104 files)
+tests/run-tests.sh                    # Run all unit/integration tests (107 files)
 tests/run-tests.sh --filter=stop-hook # Run specific test file
 tests/e2e/run-e2e.sh                  # Run E2E skill tests (requires claude CLI, costs money)
 tests/e2e/run-stack-e2e.sh            # Two-layer gh-stack E2E (real repo/PRs; CI-only via e2e-stack.yml)
@@ -257,7 +257,7 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 - `/nazgul:patch` — Lightweight task mode for bug fixes, config changes, and small features
 - `/nazgul:verify` — Human acceptance testing for completed tasks
 - `/nazgul:heartbeat` — Run one automation-heartbeat tick by hand: triages `nazgul/inbox/` and auto-starts the next objective if idle and clear. Opt-in and default-off (`automation.heartbeat.enabled: false`); a separate entry path from the main loop with no changes to the sequential or parallel execution path
-- `/nazgul:doctor` — Read-only environment preflight: reports plugin-version drift, `jq`/`gh` deps, git-hooks drift, the bash-vs-zsh hazard, the `NAZGUL_DIR` footgun, config-schema staleness, and — when `execution.stacking` is enabled — gh-stack tooling readiness plus registry-vs-GitHub drift. Never writes state; its only fix path is text on stdout
+- `/nazgul:doctor` — Read-only environment preflight: reports plugin-version drift, `jq`/`gh` deps, git-hooks drift, the bash-vs-zsh hazard, the `NAZGUL_DIR` footgun, config-schema staleness, cross-session messaging and Remote Control eligibility, shared-working-tree session collisions, and — when `execution.stacking` is enabled — gh-stack tooling readiness plus registry-vs-GitHub drift. Never writes state; its only fix path is text on stdout
 - `/nazgul:help` — Quick reference for all commands and modes
 
 ## Backlog Rule — every inbox item exists on the GitHub board
