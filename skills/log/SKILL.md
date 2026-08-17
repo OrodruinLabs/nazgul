@@ -82,6 +82,11 @@ Map event types to display TYPE labels:
 | `stop_failure` | `stop_failure` lines | ERROR |
 | `budget_threshold` | — | BUDGET |
 | `objective_complete` | — | COMPLETE |
+| `stop_gate` | — | GATE |
+| `in_flight_orphan` | — | ORPHAN |
+| `dispatch_guard_background_unverifiable` | — | GUARD |
+| `clear_skipped_no_match` | — | MARKER |
+| `clear_fallback_underivable` | — | MARKER |
 | heartbeat tick (`nazgul/logs/heartbeat-*.jsonl`) | — | HEARTBEAT |
 
 ### Step 5: Output Formatted Timeline

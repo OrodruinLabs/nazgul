@@ -59,7 +59,9 @@ The canonical event taxonomy is defined by callers of `emit_event` in
 ```text
 iteration_boundary  objective_complete  blocked  budget_threshold
 task_completed      subagent_stop       stop_failure  compaction
-reviewer_verdict    retry
+reviewer_verdict    retry               stop_gate
+dispatch_guard_background_unverifiable  clear_skipped_no_match
+clear_fallback_underivable              in_flight_orphan
 ```
 
 Verify by running both:
