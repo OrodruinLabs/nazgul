@@ -27,6 +27,15 @@ CONFIG="$NAZGUL_DIR/config.json"
 [ -f "$CONFIG" ] || exit 0
 jq -e . "$CONFIG" >/dev/null 2>&1 || exit 0
 
+# Gated on the SAME switch as every consumer (PR #223 re-review). This used to write
+# unconditionally, which was harmless while the stop-hook quarantined what it could not
+# classify. It is not harmless now: the unobservable class is left in place (review #11)
+# and the SessionStart sweep that retires it is itself gated on this flag (review #2), so
+# with the guard OFF a marker would be written with NO retirement path at all. A guard
+# that disables a subsystem must disable its producer too, not just its readers.
+IFM_HOLD_ENABLED=$(jq -r 'if .guards.in_flight_hold == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+[ "$IFM_HOLD_ENABLED" = "true" ] || exit 0
+
 TOOL=$(printf '%s' "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
 [ "$TOOL" = "Agent" ] || exit 0
 

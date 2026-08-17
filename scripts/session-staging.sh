@@ -48,9 +48,12 @@ output_result() {
 # is last-writer-wins — session-context.sh rewrites it on every SessionStart — so in the
 # shared-working-tree case this feature exists to protect (#195), session A ending would
 # read B's id and unregister B's LIVE lock while A's own leaked. Releasing the wrong
-# session's lock is strictly worse than releasing none: an unreleased lock is retired by
-# the pid-liveness sweep, whereas a wrongly-released one silently disarms the collision
-# warning for a session that is still running.
+# session's lock is strictly worse than releasing none, because a wrongly-released one
+# silently disarms the collision warning for a session that is STILL RUNNING.
+# The honest cost of releasing none (PR #223 re-review): a lock CARRYING a pid is retired
+# promptly by the pid-liveness sweep, but after review #5 a lock whose session pid could
+# not be determined carries none, and those fall to the AGE rule alone
+# (`cleanup_stale_sessions`, 2h default). Slower — and still bounded, unlike a wrong release.
 release_session_lock() {
     local sd nd sid
     sd="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

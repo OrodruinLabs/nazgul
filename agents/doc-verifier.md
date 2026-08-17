@@ -61,15 +61,28 @@ iteration_boundary  objective_complete  blocked  budget_threshold
 task_completed      subagent_stop       stop_failure  compaction
 reviewer_verdict    retry               stop_gate
 dispatch_guard_background_unverifiable  clear_skipped_no_match
-clear_fallback_underivable              in_flight_orphan
+clear_fallback_underivable              in_flight_swept
+coverage_vacuous                        reconciliation_quarantine
+subagent_empty_return                   gate_attribution
+dispatch_guard_resolution_unconfirmed
 ```
+
+The last five were live emitters absent from this fence (PR #223 re-review) —
+`lean-comments-guard.sh`, `stop-hook.sh` (x2), `subagent-stop.sh`, and
+`parallel-dispatch-guard.sh` respectively. Verify with the two greps below before trusting
+this list; a name that is here but not in source, or in source but not here, is a finding
+either way.
 
 This list is EVENT names only. A `stop_gate` `reason` is not an event and must never be added here —
 `in_flight_hold`, `in_flight_stale`, `in_flight_orphan`, `in_flight_unverifiable`, `afk_timeout`, and
 `stacking_unavailable` are reasons carried by the single `stop_gate` event, and the reason enumeration
-lives in `docs/CONFIGURATION.md` Event Types plus `RULES.md` §5. `in_flight_orphan` appears above because
-it is ALSO a standalone event — that dual role is the exception, not the rule. The SessionStart sweep
-emits `in_flight_swept`, deliberately NOT `in_flight_orphan`: it proves AGE, never dispatch class.
+lives in `docs/CONFIGURATION.md` Event Types plus `RULES.md` §5.
+
+`in_flight_orphan` is NOT in the list above and must not be re-added (PR #223 review #2). It is a
+`stop_gate` reason ONLY. It used to be dual-role — also a standalone event from the SessionStart sweep
+— but that sweep now emits `in_flight_swept`, because it proves AGE and never dispatch class, and
+`grep -rn 'emit_event "in_flight_orphan"' scripts/ skills/ agents/` returns nothing. This fence is what
+the verifier checks other docs against, so a name kept here out of habit propagates as fact.
 
 Verify by running both:
 - `grep -rn 'emit_event "' scripts/ skills/ agents/ | grep -v '#'`  (hook-emitted events)

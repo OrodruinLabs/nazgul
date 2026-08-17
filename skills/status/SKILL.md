@@ -67,23 +67,28 @@ holds two populations with opposite operator meanings, and the count alone canno
 - Any `in_flight_orphan` — "orphaned dispatch markers were quarantined (stop_gate reason
   in_flight_orphan) — see nazgul/in-flight/quarantine/ for the evidence; this is diagnostic residue, not
   pending work." The dispatch class was PROVEN (`background: "false"`, or a named dispatch), so the marker
-  really is residue.
-- Any `in_flight_unverifiable` — "dispatch markers were quarantined because the dispatch class was not
-  observable at write time (stop_gate reason in_flight_unverifiable) — see nazgul/in-flight/quarantine/.
-  This is NOT evidence of a leak, and on a fork-mode host it is the normal outcome for a HEALTHY background
-  dispatch that may still be running (#218)."
-- Both, or a count with no matching `stop_gate` event (the SessionStart sweep, below) — say the count and
-  say which producers could account for it. Never assert residue for a marker whose class was never read.
+  really is residue, and it really was moved to quarantine/.
+- Any `in_flight_unverifiable` — "dispatch markers were recorded as unverifiable because the dispatch class
+  was not observable at write time (stop_gate reason in_flight_unverifiable). These are NOT quarantined and
+  NOT evidence of a leak — they are still in nazgul/in-flight/, and on a fork-mode host this is the normal
+  outcome for a HEALTHY background dispatch that may still be running (#218)."
+  Do NOT send the operator to nazgul/in-flight/quarantine/ for this class: the marker is deliberately LEFT
+  IN PLACE, because the move is irreversible and the dispatch may be live.
+- Both, or a Quarantined count with no matching `stop_gate` event (the SessionStart sweep, below) — say the
+  count and say which producers could account for it. Never assert residue for a marker whose class was
+  never read.
 
-Reporting an unverifiable quarantine as "diagnostic residue, not pending work" is the specific falsehood
-this wording exists to prevent: on a fork-mode host `run_in_background` is absent from the exposed Agent
-schema, so EVERY marker quarantines unverifiable while its agent is still working.
+Reporting an unverifiable marker as "diagnostic residue, not pending work" is the specific falsehood this
+wording exists to prevent: on a fork-mode host `run_in_background` is absent from the exposed Agent schema,
+so EVERY marker takes that branch while its agent is still working.
 
-The Quarantined markers count is the signal that covers BOTH quarantine
-producers, because both write to that one directory: `scripts/stop-hook.sh` (emits `stop_gate` with reason
-`in_flight_orphan` or `in_flight_unverifiable`) and `scripts/session-context.sh`'s SessionStart sweep (emits a standalone
-`in_flight_swept` event, `source: session_start_sweep` — AGE only, never a proven class). Last stop gate reads `stop_gate` events ONLY, so a
-sweep-quarantined marker never appears there — never present Last stop gate as the whole orphan story, and
+The Quarantined count and the in-flight count answer DIFFERENT questions, and only two producers write to
+quarantine/: `scripts/stop-hook.sh` for the PROVEN class only (`stop_gate` reason `in_flight_orphan`), and
+`scripts/session-context.sh`'s SessionStart sweep for over-age markers (standalone `in_flight_swept` event,
+`source: session_start_sweep` — AGE only, never a proven class). The unverifiable class writes to NEITHER:
+it stays in nazgul/in-flight/ and shows up in the in-flight count, not the quarantined one. Last stop gate
+reads `stop_gate` events ONLY, so a sweep-quarantined marker never appears there — never present Last stop
+gate as the whole orphan story, and
 never report Quarantined > 0 with a `none`/unrelated Last stop gate as a contradiction.
 
 ### Status Report Format (default — parallel execution disabled)

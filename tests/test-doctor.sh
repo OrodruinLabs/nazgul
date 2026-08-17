@@ -903,4 +903,62 @@ OUT=$("$DOCTOR" --only= 2>&1); EXIT=$?
 assert_exit_code "an empty --only value is a usage error" "$EXIT" 1
 teardown_temp_dir
 
+# --- (k) messaging: a flag set to a FALSY value is NOT a killer (PR #223 review #6) ---
+# `jq has($v)` reported a killer for {"env":{"DISABLE_TELEMETRY":"0"}}, so an operator who
+# explicitly turned a flag OFF had messaging reported unavailable and doctor's exit pushed
+# to 1 on a healthy host. The shell-env arm already required a non-empty value; both arms
+# now share _doc_flag_is_on. These two cases are the ones that shipped untested.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+  '.board.enabled = false' '.guards.git_hooks = false'
+mkdir -p "$TEST_DIR/.claude"
+jq -n '{env:{DISABLE_TELEMETRY:"0", DO_NOT_TRACK:"false"}}' > "$TEST_DIR/.claude/settings.json"
+OUT=$(env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR "$DOCTOR" 2>&1); EXIT=$?
+assert_not_contains "falsy env flags are not killers: DISABLE_TELEMETRY=\"0\" is not reported" \
+  "$OUT" "DISABLE_TELEMETRY"
+assert_not_contains "falsy env flags are not killers: DO_NOT_TRACK=\"false\" is not reported" \
+  "$OUT" "DO_NOT_TRACK"
+assert_exit_code "falsy env flags do not push the aggregate exit to 1" "$EXIT" 0
+teardown_temp_dir
+
+# --- (k) messaging: a flag set to a TRUTHY value IS still a killer ---
+# The negative above must not be achievable by breaking detection outright.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+  '.board.enabled = false' '.guards.git_hooks = false'
+mkdir -p "$TEST_DIR/.claude"
+jq -n '{env:{DISABLE_TELEMETRY:"1"}}' > "$TEST_DIR/.claude/settings.json"
+OUT=$(env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR "$DOCTOR" 2>&1)
+assert_contains "a truthy env flag IS still reported as a killer" "$OUT" "DISABLE_TELEMETRY"
+teardown_temp_dir
+
+# --- (l) remote-control: settings.local.json is read (PR #223 review #7) ---
+# check_remote_control read only the macOS managed-settings path and dropped
+# settings.local.json, so it disagreed with _doc_flag_killers about what
+# "env/settings" means — and an enterprise policy on Linux/WSL passed clean.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+  '.board.enabled = false' '.guards.git_hooks = false'
+mkdir -p "$TEST_DIR/.claude"
+jq -n '{disableRemoteControl:true}' > "$TEST_DIR/.claude/settings.local.json"
+OUT=$(env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR "$DOCTOR" 2>&1)
+assert_contains "disableRemoteControl in settings.local.json is detected" \
+  "$OUT" "disableRemoteControl"
+assert_contains "remote-control reports warn, not a clean pass" "$OUT" "$(printf 'warn\tremote-control')"
+teardown_temp_dir
+
+# --- (l) remote-control: the Linux/WSL managed-settings path is in the search list ---
+# Platform-independent: assert the PATH is consulted, since the real /etc path cannot be
+# planted in a temp fixture. A macOS-only list is invisible on this repo's own CI platform.
+assert_file_contains "check_remote_control consults the Linux/WSL managed-settings path" \
+  "$DOCTOR" "/etc/claude-code/managed-settings.json"
+assert_file_contains "check_remote_control consults settings.local.json" \
+  "$DOCTOR" 'settings.local.json'
+
 report_results

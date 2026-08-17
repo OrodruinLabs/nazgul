@@ -91,7 +91,7 @@ engages, `stop_gate` `reason: "in_flight_unverifiable"` fires on essentially eve
 continues concurrently with live subagents. This is a known, tracked defect (#218). The authoritative
 signals exist one event later and are documented — `PostToolUse` `tool_response.status` (`async_launched`
 vs `completed`) and the `background_tasks[]` array on `Stop`/`SubagentStop` — and this mechanism does not
-yet read either. `reason: "in_flight_orphan"` is reserved for `background: "false"` or a named dispatch,
+yet read either. Only the PROVEN class is quarantined; the unobservable class is LEFT IN PLACE (moving it is irreversible and the dispatch may still be running — it would also foreclose #218's fix, which reconciles these markers against the Stop payload's `background_tasks[]`). `reason: "in_flight_orphan"` is reserved for `background: "false"` or a named dispatch,
 which are genuinely proven.
 
 ### Migration: Single-Write + Dual-Read
@@ -115,7 +115,7 @@ Nazgul survives compaction, crashes, and session restarts:
 7. **TaskCompleted hook** fires immediately when spawned agents finish for faster transitions
 8. **Prompt guard hook** validates user prompts on submission
 9. **Task-state guard hook** prevents edits outside claimed task scope, and preflight-rejects an illegal status transition — but it is not the transition authority; see Task-Transition Authority below
-10. **In-flight dispatch hold** — the stop-hook holds an ALLOWED, uncounted stop while a just-dispatched BACKGROUND `Agent` is still running (`guards.in_flight_hold`), so the loop doesn't burn iterations re-invoking itself every ~15 seconds against work that hasn't finished; any other marker is quarantined instead of held on — as an orphan when the class was proven, as `in_flight_unverifiable` when it was not observable. See In-Flight Dispatch Hold below.
+10. **In-flight dispatch hold** — the stop-hook holds an ALLOWED, uncounted stop while a just-dispatched BACKGROUND `Agent` is still running (`guards.in_flight_hold`), so the loop doesn't burn iterations re-invoking itself every ~15 seconds against work that hasn't finished; any other marker is not held on — quarantined as an orphan when the class was PROVEN, or recorded as `in_flight_unverifiable` and left in place when it was not observable (the move is irreversible and the dispatch may still be running). See In-Flight Dispatch Hold below.
 
 After any interruption:
 ```bash
