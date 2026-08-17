@@ -82,6 +82,15 @@ Map event types to display TYPE labels:
 | `stop_failure` | `stop_failure` lines | ERROR |
 | `budget_threshold` | — | BUDGET |
 | `objective_complete` | — | COMPLETE |
+| `stop_gate` | — | GATE |
+| `in_flight_orphan` | — | ORPHAN |
+| `in_flight_swept` | — | SWEPT |
+<!-- No row for `in_flight_unverifiable`: it is a `stop_gate` REASON, never a standalone event, so it
+     renders as GATE via the `stop_gate` row above. `in_flight_orphan` earns a row because it is BOTH a
+     stop_gate reason AND a standalone event emitted by the SessionStart sweep. Checked, not overlooked. -->
+| `dispatch_guard_background_unverifiable` | — | GUARD |
+| `clear_skipped_no_match` | — | MARKER |
+| `clear_fallback_underivable` | — | MARKER |
 | heartbeat tick (`nazgul/logs/heartbeat-*.jsonl`) | — | HEARTBEAT |
 
 ### Step 5: Output Formatted Timeline

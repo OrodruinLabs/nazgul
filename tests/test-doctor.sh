@@ -7,7 +7,8 @@ set -uo pipefail
 # Test: scripts/doctor.sh — the read-only preflight check engine (TASK-001,
 # checks (b)/(f)/(g)) plus checks (a) cache-vs-repo version, (c) git-hooks
 # drift, (d) bash-vs-zsh hazard (TASK-002), and (e) NAZGUL_DIR footgun
-# (TASK-003).
+# (TASK-003), and (k) messaging / (l) remote-control / (m) sessions
+# (FEAT-032/TASK-009).
 TEST_NAME="test-doctor"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -18,6 +19,11 @@ source "$REPO_ROOT/scripts/lib/git-hooks.sh"
 echo "=== $TEST_NAME ==="
 
 DOCTOR="$REPO_ROOT/scripts/doctor.sh"
+
+# Checks (k)/(l) read the operator's real shell env, so a host that exports a
+# feature-flag killer would flip every full-run aggregate-exit assertion below.
+unset DO_NOT_TRACK DISABLE_TELEMETRY DISABLE_GROWTHBOOK CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+unset ANTHROPIC_BASE_URL CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX
 
 _dr_hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -94,6 +100,12 @@ assert_exit_code "no-config fixture: aggregate exit 1 (worst=warn)" "$EXIT" 1
 assert_contains "no-config fixture: config-present warns" "$OUT" "$(printf 'warn\tconfig-present')"
 assert_contains "no-config fixture: still runs dependencies check" "$OUT" "$(printf '\tdependencies\t')"
 assert_contains "no-config fixture: still prints stdin-hazard note" "$OUT" "$(printf 'note\tstdin-hazard')"
+# A run that ABORTS mid-roster also exits 1, so the exit code alone cannot tell a
+# warn from a truncated run: only the coverage line proves main() reached the end.
+assert_contains "no-config fixture: every check after config-present ran too" "$OUT" "$(printf '\tmessaging\t')"
+assert_contains "no-config fixture: the last check in the roster ran" "$OUT" "$(printf '\tsessions\t')"
+assert_contains "no-config fixture: the run reached the coverage line, so it was not truncated" \
+  "$(printf '%s' "$OUT" | tail -1)" "13 scanned"
 teardown_temp_dir
 
 # --- (b) dependencies: fail branch — jq entirely absent from PATH ---
@@ -747,6 +759,93 @@ assert_eq "stacking zero-write guarantee: nazgul/ snapshot identical before/afte
 rm -rf "$FAKEBIN_STACK2"
 teardown_temp_dir
 
+# --- (k) messaging eligibility: three states, never two ---
+# HOME is pinned to the scratch tree: _doc_flag_killers reads ~/.claude/settings.json.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+OUT=$(cd "$TEST_DIR" && HOME="$TEST_DIR" DO_NOT_TRACK=1 CLAUDE_CODE_MESSAGING_SOCKET= bash "$DOCTOR" --only=messaging 2>/dev/null)
+assert_contains "doctor messaging: flag-killer named with source" "$OUT" "DO_NOT_TRACK"
+assert_contains "doctor messaging: a flag killer is a warn, not a note" "$OUT" "$(printf 'warn\tmessaging')"
+assert_contains "doctor messaging: the killer's source is named, not just the variable" "$OUT" "DO_NOT_TRACK (shell env)"
+OUT=$(cd "$TEST_DIR" && HOME="$TEST_DIR" env -u DO_NOT_TRACK -u DISABLE_TELEMETRY -u DISABLE_GROWTHBOOK -u CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC \
+  CLAUDE_CODE_MESSAGING_SOCKET= bash "$DOCTOR" --only=messaging 2>/dev/null)
+assert_contains "doctor messaging: socket-unset is UNDETERMINED, not unavailable" "$OUT" "UNDETERMINED"
+assert_contains "doctor messaging: UNDETERMINED is a note, so it never scores the run" "$OUT" "$(printf 'note\tmessaging')"
+assert_not_contains "doctor messaging: an unexported socket is never the flag-killer OFF claim" "$OUT" "Cross-session messaging is OFF"
+assert_contains "doctor messaging: the note explicitly disclaims an unavailability claim" "$OUT" "NOT a claim that messaging is unavailable"
+OUT=$(cd "$TEST_DIR" && HOME="$TEST_DIR" env -u DO_NOT_TRACK -u DISABLE_TELEMETRY -u DISABLE_GROWTHBOOK -u CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC \
+  CLAUDE_CODE_MESSAGING_SOCKET=/tmp/cc-socks/1.sock bash "$DOCTOR" --only=messaging 2>/dev/null)
+assert_contains "doctor messaging: socket exported reports available" "$OUT" "pass"
+assert_contains "doctor messaging: the pass is the messaging check's own verdict" "$OUT" "$(printf 'pass\tmessaging')"
+# Zero-write is doctor's charter and the socket is never connected: the check
+# reads the env var and reports, it never talks to the path it names.
+BEFORE_MSG=$(_dr_snapshot "$TEST_DIR/nazgul")
+(cd "$TEST_DIR" && HOME="$TEST_DIR" CLAUDE_CODE_MESSAGING_SOCKET=/tmp/cc-socks/1.sock bash "$DOCTOR" --only=messaging,remote-control,sessions >/dev/null 2>&1)
+assert_eq "the three new checks write nothing under nazgul/" \
+  "$(_dr_snapshot "$TEST_DIR/nazgul")" "$BEFORE_MSG"
+teardown_temp_dir
+
+# --- (l) remote-control: named causes ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+OUT=$(cd "$TEST_DIR" && HOME="$TEST_DIR" env -u DO_NOT_TRACK -u DISABLE_TELEMETRY -u DISABLE_GROWTHBOOK -u CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC \
+  ANTHROPIC_BASE_URL="https://proxy.example" bash "$DOCTOR" --only=remote-control 2>/dev/null)
+assert_contains "doctor remote-control: names ANTHROPIC_BASE_URL" "$OUT" "ANTHROPIC_BASE_URL"
+assert_contains "doctor remote-control: points at claude doctor" "$OUT" "claude doctor"
+assert_contains "doctor remote-control: a named cause is a warn" "$OUT" "$(printf 'warn\tremote-control')"
+# The clean path must still point at the authoritative check — doctor never
+# probes auth type, so "no blockers found" is not "Remote Control works".
+OUT=$(cd "$TEST_DIR" && HOME="$TEST_DIR" env -u DO_NOT_TRACK -u DISABLE_TELEMETRY -u DISABLE_GROWTHBOOK \
+  -u CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC -u ANTHROPIC_BASE_URL -u CLAUDE_CODE_USE_BEDROCK -u CLAUDE_CODE_USE_VERTEX \
+  bash "$DOCTOR" --only=remote-control 2>/dev/null)
+assert_contains "doctor remote-control: no blockers is a pass" "$OUT" "$(printf 'pass\tremote-control')"
+assert_contains "doctor remote-control: the pass still names claude doctor as authoritative" "$OUT" "claude doctor"
+teardown_temp_dir
+
+# --- (m) sessions: shared-tree collision ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/sessions"
+jq -cn --arg p "$$" '{pid:$p, session:"a", toplevel:"/repo/x"}' > "$TEST_DIR/nazgul/sessions/a.lock"
+jq -cn --arg p "$$" '{pid:$p, session:"b", toplevel:"/repo/x"}' > "$TEST_DIR/nazgul/sessions/b.lock"
+OUT=$(cd "$TEST_DIR" && bash "$DOCTOR" --only=sessions 2>/dev/null)
+assert_contains "doctor sessions: shared-tree warn names the tree" "$OUT" "/repo/x"
+assert_contains "doctor sessions: a collision is a warn" "$OUT" "$(printf 'warn\tsessions')"
+# A DEAD pid is not a live session: two locks on one tree where one owner is
+# gone is the ordinary sequential case, not the #195 hazard.
+jq -cn '{pid:"2147483646", session:"c", toplevel:"/repo/x"}' > "$TEST_DIR/nazgul/sessions/b.lock"
+OUT=$(cd "$TEST_DIR" && bash "$DOCTOR" --only=sessions 2>/dev/null)
+assert_contains "doctor sessions: a dead lock owner is not a live collision" "$OUT" "$(printf 'pass\tsessions')"
+assert_not_contains "doctor sessions: no tree is named when there is no live collision" "$OUT" "/repo/x"
+rm -f "$TEST_DIR"/nazgul/sessions/*.lock
+OUT=$(cd "$TEST_DIR" && bash "$DOCTOR" --only=sessions 2>"$TEST_DIR/sessions.err")
+assert_contains "doctor sessions: no locks is a named no-candidates skip" "$OUT" "sessions"
+assert_contains "doctor sessions: the empty case is skipped, not passed on nothing" \
+  "$(printf '%s' "$OUT" | tail -1)" "no-candidates=1"
+assert_contains "doctor sessions: the skip uses the Not applicable convention" \
+  "$OUT" "$(printf 'pass\tsessions\tNot applicable')"
+assert_contains "doctor sessions: an all-skipped run says so on stderr" \
+  "$(cat "$TEST_DIR/sessions.err")" "doctor: NOTHING CHECKED — all 1 candidates skipped"
+teardown_temp_dir
+
+# --- (m) sessions: a lock set the liveness filter empties must not abort main() ---
+# Board R1: pre-2.33 locks record the old hook-shell $$ (dead by any later read) and no toplevel, so the duplicate scan sees nothing on the ordinary upgrade path.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false'
+mkdir -p "$TEST_DIR/nazgul/sessions"
+jq -cn '{pid:"2147483646", session:"legacy"}' > "$TEST_DIR/nazgul/sessions/legacy.lock"
+OUT=$(cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR bash "$DOCTOR" 2>/dev/null)
+assert_contains "empty-scan fixture: the sessions check still reports" "$OUT" "$(printf 'pass\tsessions')"
+# sessions is the LAST check, so a mid-check abort takes the coverage line with it.
+assert_contains "empty-scan fixture: the run reached the coverage line, so it was not truncated" \
+  "$(printf '%s' "$OUT" | tail -1)" "13 scanned"
+teardown_temp_dir
+
 # Coverage honesty (FEAT-028 TASK-015, TRD §6): a check with nothing to inspect is
 # skipped with an enumerated reason, and the vacuous case writes nothing.
 
@@ -764,7 +863,7 @@ else
 fi
 read -r D_SCANNED D_SKIPPED D_CHECKED <<<"$(printf '%s' "$COVERAGE" | sed -E "s/$DR_GRAMMAR/\1 \2 \7/")"
 assert_eq "coverage line adds up (N == M + K)" "$D_SCANNED" "$((D_SKIPPED + D_CHECKED))"
-assert_eq "every check reports exactly once, so N is the full check roster" "$D_SCANNED" "10"
+assert_eq "every check reports exactly once, so N is the full check roster" "$D_SCANNED" "13"
 if [ "$D_SKIPPED" -ge 1 ]; then
   _pass "the disabled-guard check is counted as skipped, not as a check that passed on nothing"
 else
@@ -803,5 +902,63 @@ assert_not_contains "an empty --only list cannot report a vacuous coverage pass"
 OUT=$("$DOCTOR" --only= 2>&1); EXIT=$?
 assert_exit_code "an empty --only value is a usage error" "$EXIT" 1
 teardown_temp_dir
+
+# --- (k) messaging: a flag set to a FALSY value is NOT a killer (PR #223 review #6) ---
+# `jq has($v)` reported a killer for {"env":{"DISABLE_TELEMETRY":"0"}}, so an operator who
+# explicitly turned a flag OFF had messaging reported unavailable and doctor's exit pushed
+# to 1 on a healthy host. The shell-env arm already required a non-empty value; both arms
+# now share _doc_flag_is_on. These two cases are the ones that shipped untested.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+  '.board.enabled = false' '.guards.git_hooks = false'
+mkdir -p "$TEST_DIR/.claude"
+jq -n '{env:{DISABLE_TELEMETRY:"0", DO_NOT_TRACK:"false"}}' > "$TEST_DIR/.claude/settings.json"
+OUT=$(env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR "$DOCTOR" 2>&1); EXIT=$?
+assert_not_contains "falsy env flags are not killers: DISABLE_TELEMETRY=\"0\" is not reported" \
+  "$OUT" "DISABLE_TELEMETRY"
+assert_not_contains "falsy env flags are not killers: DO_NOT_TRACK=\"false\" is not reported" \
+  "$OUT" "DO_NOT_TRACK"
+assert_exit_code "falsy env flags do not push the aggregate exit to 1" "$EXIT" 0
+teardown_temp_dir
+
+# --- (k) messaging: a flag set to a TRUTHY value IS still a killer ---
+# The negative above must not be achievable by breaking detection outright.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+  '.board.enabled = false' '.guards.git_hooks = false'
+mkdir -p "$TEST_DIR/.claude"
+jq -n '{env:{DISABLE_TELEMETRY:"1"}}' > "$TEST_DIR/.claude/settings.json"
+OUT=$(env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR "$DOCTOR" 2>&1)
+assert_contains "a truthy env flag IS still reported as a killer" "$OUT" "DISABLE_TELEMETRY"
+teardown_temp_dir
+
+# --- (l) remote-control: settings.local.json is read (PR #223 review #7) ---
+# check_remote_control read only the macOS managed-settings path and dropped
+# settings.local.json, so it disagreed with _doc_flag_killers about what
+# "env/settings" means — and an enterprise policy on Linux/WSL passed clean.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+  '.board.enabled = false' '.guards.git_hooks = false'
+mkdir -p "$TEST_DIR/.claude"
+jq -n '{disableRemoteControl:true}' > "$TEST_DIR/.claude/settings.local.json"
+OUT=$(env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR "$DOCTOR" 2>&1)
+assert_contains "disableRemoteControl in settings.local.json is detected" \
+  "$OUT" "disableRemoteControl"
+assert_contains "remote-control reports warn, not a clean pass" "$OUT" "$(printf 'warn\tremote-control')"
+teardown_temp_dir
+
+# --- (l) remote-control: the Linux/WSL managed-settings path is in the search list ---
+# Platform-independent: assert the PATH is consulted, since the real /etc path cannot be
+# planted in a temp fixture. A macOS-only list is invisible on this repo's own CI platform.
+assert_file_contains "check_remote_control consults the Linux/WSL managed-settings path" \
+  "$DOCTOR" "/etc/claude-code/managed-settings.json"
+assert_file_contains "check_remote_control consults settings.local.json" \
+  "$DOCTOR" 'settings.local.json'
 
 report_results

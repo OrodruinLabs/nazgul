@@ -287,14 +287,40 @@ Added by the additive `migrate_31_to_32` migration (schema v31→v32); existing 
 `guards.in_flight_hold` (default `true`, config schema v34) lets the stop-hook take an ALLOWED, uncounted
 stop instead of burning an iteration when the work it just dispatched is still running. `PreToolUse(Agent)`
 writes a marker (`scripts/in-flight-marker.sh`, one file per dispatch under `nazgul/in-flight/`, never
-blocking — a failed write is a silent no-op); `SubagentStop` clears the oldest marker matching the
-completing subagent (`scripts/subagent-stop.sh`); and `stop-hook.sh` checks for a fresh marker right before
-the iteration increment. A fresh marker allows the stop (`exit 0`), leaves `current_iteration` and
-`safety.consecutive_failures` untouched, and emits one `stop_gate` event with `reason: "in_flight_hold"`
-naming the held units and their count — the wake-up comes from the harness's own task-notification when the
-dispatched agent finishes, not a poll. Without this gate, a session could otherwise burn an iteration on
-every ~15-second re-invocation while dispatched work was still running, until a soft limit (or the harness's
-own `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`) force-ended the turn from outside the loop's own control.
+blocking — a failed write is a silent no-op); `SubagentStop` clears the marker matching the completing
+subagent's unit; a derived-but-unmatched unit clears nothing (`clear_skipped_no_match`), and an underivable
+unit clears the newest agent match (`clear_fallback_underivable`) — see `scripts/subagent-stop.sh`; and
+`stop-hook.sh` checks for a fresh marker right before the iteration increment. A fresh marker whose
+recorded dispatch class is provably background (`background: "true"` captured at write time from
+`tool_input.run_in_background`, and not a named/teammate-shaped dispatch) allows the stop
+(`exit 0`), leaves `current_iteration` and `safety.consecutive_failures` untouched, and
+emits one `stop_gate` event with `reason: "in_flight_hold"` — for that class the wake-up genuinely
+is the harness's own task-notification when the dispatched agent finishes. A fresh marker that is
+NOT provably background (`"false"`, `"missing"` — including every pre-upgrade marker — or a named
+dispatch) is not provably awaited work, so no resume can be relied on. It is moved to
+`nazgul/in-flight/quarantine/` (evidence preserved, re-fire stopped), a `stop_gate` event is emitted
+with `reason: "in_flight_orphan"` when the class was proven (`background: "false"`, or a named
+dispatch whose report contract owns it) or `reason: "in_flight_unverifiable"` when the class was not
+observable at all, and the loop continues NORMALLY —
+a productive iteration, not a burned one. This closes the 2026-08-04 incident class (#104 Gap 3):
+an 8-hour sleep on a foreground marker whose completion had already fired. Without this gate,
+a session could otherwise burn an iteration on every ~15-second re-invocation while dispatched work was
+still running, until a soft limit (or the harness's own `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`) force-ended
+the turn from outside the loop's own control.
+
+A fresh marker whose `background` field is `"missing"` records that the dispatch class was **not observable
+at write time** — it does not record a foreground dispatch. Claude Code omits the Agent tool's
+`run_in_background` parameter from the exposed schema in fork mode (the interactive default since v2.1.232)
+and under `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, and absence means the **opposite** thing in those two
+configurations: background in the first, foreground in the second. In the session type this loop runs in,
+absence therefore means the dispatch is most likely **background**, so quarantining it is a cost-weighed
+default that is usually wrong about the dispatch it names. On such a host the class-aware hold never
+engages, `stop_gate` `reason: "in_flight_unverifiable"` fires on essentially every dispatch, and the loop
+continues concurrently with live subagents. This is a known, tracked defect (#218). The authoritative
+signals exist one event later and are documented — `PostToolUse` `tool_response.status` (`async_launched`
+vs `completed`) and the `background_tasks[]` array on `Stop`/`SubagentStop` — and this mechanism does not
+yet read either. `reason: "in_flight_orphan"` is reserved for `background: "false"` or a named dispatch,
+which are genuinely proven.
 
 A marker older than `guards.in_flight_stale_minutes` (default `30`, floored to `>=1`) is NOT held on — the
 stop proceeds normally (iteration increments) — but the staleness is surfaced loudly: a stderr line plus a
@@ -494,7 +520,11 @@ The stream captures:
 - **merge_evidence_missing** — the `## Merge Evidence` check that admits `IMPLEMENTED -> DONE` (and the alternative route to `IN_REVIEW -> DONE`) found nothing usable; fields `task_id` and `reason`, from a closed set of EIGHT: `absent`, `commented_out`, `truncated` (a required field of `host`/`pr`/`merged-at`/`merge-commit`/`head-ref`/`recorded-by` is missing), `malformed` (a field is present but fails its shape check, including a `recorded-by` naming something outside the closed producer set), `not_merged` (the host answered and says the PR is not merged), `unverifiable` (the host could not be asked, or answered unusably, or reported merged without returning a `merged_at`/`merge_commit`/`head_ref` to compare against), `contradicted` (the host answered and its `merged_at`, its `merge_commit`, its head branch, or the merge commit's containment in the base disagrees with the manifest), `not_this_objective` (the host confirms the merge, but of a PR whose head branch is neither `branch.feature` nor a `stack.layers[]` branch for this `feat_id` — genuine evidence about a DIFFERENT objective). The last four exist because the gate does not stop at the shape: it calls `merge_provider_pr_state` and admits the edge only on `result: "ok"` AND `merged: true`, and only for a PR it can bind to this objective. `unverifiable` is deliberately NOT `not_merged` — an unreachable host never admits a closure. This gate has **no kill switch** — a switch on the last gate before DONE would be the bypass — see RULES.md §2
 - **merge_provider_unsupported_host** / **merge_provider_no_remote** / **merge_provider_unavailable** / **merge_provider_api_failure** / **merge_provider_invalid_pr** — the merge-observation seam (`scripts/lib/merge-provider.sh`) could not be asked, or was asked and did not usefully answer. Every one of these means "could not look" and none of them may be read as "not merged"; the seam never falls back to git ancestry (RULES.md §16)
 - **aggregate_board_cancelled_carveout** — a `group`/`feature` review unit reached readiness only because tasks were carried out of it as `CANCELLED`; fields `unit`, `cancelled_tasks` (the carried-out task ids), `implemented`, `total`. The event and the field are both named for `CANCELLED` because that is the only status the carve-out acts on — a `BLOCKED` task is never carried out. Readiness reached by exclusion and readiness where every task shipped must not read identically
-- **stop_gate** — a gate ended or short-circuited an autonomous run rather than exiting silently; `reason` values include `in_flight_hold`, `in_flight_stale`, and `stacking_unavailable` (stacking enabled but the tooling is unusable — the loop fell back to a plain PR)
+- **stop_gate** — a gate ended or short-circuited an autonomous run rather than exiting silently; `reason` values include `in_flight_hold`, `in_flight_stale`, `in_flight_orphan` (a provably non-background in-flight marker found at Stop time — `background: "false"`, or a named dispatch whose report contract owns it — so the marker is moved to `nazgul/in-flight/quarantine/` and the loop continues normally; fields `unit`/`agent`/`background`), `in_flight_unverifiable` (dispatch class not observable at write time; fires on every dispatch where `run_in_background` is omitted from the exposed schema — same fields as `in_flight_orphan` but explicitly NOT the same disposition: the marker is LEFT IN PLACE, never quarantined, because the class was never observed, the dispatch may still be running, and `mv` is irreversible — it would also foreclose #218's fix, which reconciles these markers against the Stop payload's `background_tasks[]`. See In-Flight Dispatch Hold above and #218), and `stacking_unavailable` (stacking enabled but the tooling is unusable — the loop fell back to a plain PR)
+- **in_flight_swept** — the SessionStart sweep quarantined an over-age in-flight marker; fields `source` (`session_start_sweep`), `unit`, and `age_minutes` (a JSON number). Named distinctly from the `stop_gate` reason `in_flight_orphan` ON PURPOSE (PR #223 review #2): `orphan` asserts a PROVEN dispatch class, whereas this sweep only ever proves AGE. Same quarantine directory, different producer, different fields, different claim — a consumer keying only on `stop_gate` misses every SessionStart sweep, and one keying on `in_flight_orphan` must not count these as leaks. Skipped entirely when `guards.in_flight_hold` is `false` or when SessionStart's `source` is `compact` (compaction is not a new session, and sweeping there destroyed a running AFK loop's crashed-subagent evidence)
+- **dispatch_guard_background_unverifiable** — `scripts/parallel-dispatch-guard.sh` allowed an unnamed reviewer dispatch whose payload carried no `run_in_background` field at all, because on schemas lacking that field it is unsupplyable (#205); fields `agent`/`caller`
+- **clear_skipped_no_match** — a completing subagent cleared no in-flight marker because none matched its unit; fields `agent`/`unit`
+- **clear_fallback_underivable** — a completing subagent could not derive its unit, so the OLDEST marker for that agent was cleared as a fallback; fields `agent`/`marker`. Oldest, not newest (PR #223 review #3): newest-first deleted the marker of the dispatch most likely STILL RUNNING, so with two concurrent implementers the first to finish silently stripped the second of its hold. An aged marker needs no help from this fallback — the hold classifies it stale and the SessionStart sweep retires it
 
 See `docs/superpowers/specs/2026-06-24-telemetry-bus-design.md` for the full event schema and payload details.
 

@@ -22,6 +22,9 @@ metadata:
 - Wave layout: !`P=$(jq -r '.execution.parallel // false' nazgul/config.json 2>/dev/null); if [ "$P" = "true" ] && [ -d nazgul/tasks ]; then { source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/parallel-batch.sh" 2>/dev/null && compute_waves nazgul/tasks; } 2>/dev/null || echo "[]"; else echo "[]"; fi`
 - AFK: !`jq -r 'if .afk.enabled then "enabled" else "disabled" end' nazgul/config.json 2>/dev/null || echo "disabled"`
 - Paused: !`jq -r '.paused // false' nazgul/config.json 2>/dev/null || echo "false"`
+- In-flight markers: !`ls nazgul/in-flight/*.json 2>/dev/null | wc -l | tr -d ' '`
+- Quarantined markers: !`ls nazgul/in-flight/quarantine/*.json 2>/dev/null | wc -l | tr -d ' '`
+- Last stop gate: !`grep '"stop_gate"' nazgul/logs/events.jsonl 2>/dev/null | tail -1 | jq -r '"\(.reason // "?") @ \(.ts // "?")"' 2>/dev/null | grep . || echo "none"`
 - Reviewers: !`jq -r '.agents.reviewers // [] | join(", ")' nazgul/config.json 2>/dev/null || echo "none"`
 - Specialists: !`jq -r '.agents.specialists // [] | join(", ")' nazgul/config.json 2>/dev/null || echo "none"`
 - Consecutive failures: !`jq -r '.safety.consecutive_failures // 0' nazgul/config.json 2>/dev/null || echo "0"`
@@ -56,6 +59,37 @@ below unchanged.
 and say the registry could not be read (config missing/corrupt) — never render it as healthy when the read
 failed. If `readable` is `true` and `enabled` is `false` with an empty `layers` array, omit the Stack section
 entirely (nothing to show). Otherwise render it after Board Sync per the format below.
+
+**In-flight markers**: if Quarantined markers > 0, do NOT report them as a single kind — the directory
+holds two populations with opposite operator meanings, and the count alone cannot tell them apart. Read the
+`reason` on the corresponding `stop_gate` events and render whichever applies:
+
+- Any `in_flight_orphan` — "orphaned dispatch markers were quarantined (stop_gate reason
+  in_flight_orphan) — see nazgul/in-flight/quarantine/ for the evidence; this is diagnostic residue, not
+  pending work." The dispatch class was PROVEN (`background: "false"`, or a named dispatch), so the marker
+  really is residue, and it really was moved to quarantine/.
+- Any `in_flight_unverifiable` — "dispatch markers were recorded as unverifiable because the dispatch class
+  was not observable at write time (stop_gate reason in_flight_unverifiable). These are NOT quarantined and
+  NOT evidence of a leak — they are still in nazgul/in-flight/, and on a fork-mode host this is the normal
+  outcome for a HEALTHY background dispatch that may still be running (#218)."
+  Do NOT send the operator to nazgul/in-flight/quarantine/ for this class: the marker is deliberately LEFT
+  IN PLACE, because the move is irreversible and the dispatch may be live.
+- Both, or a Quarantined count with no matching `stop_gate` event (the SessionStart sweep, below) — say the
+  count and say which producers could account for it. Never assert residue for a marker whose class was
+  never read.
+
+Reporting an unverifiable marker as "diagnostic residue, not pending work" is the specific falsehood this
+wording exists to prevent: on a fork-mode host `run_in_background` is absent from the exposed Agent schema,
+so EVERY marker takes that branch while its agent is still working.
+
+The Quarantined count and the in-flight count answer DIFFERENT questions, and only two producers write to
+quarantine/: `scripts/stop-hook.sh` for the PROVEN class only (`stop_gate` reason `in_flight_orphan`), and
+`scripts/session-context.sh`'s SessionStart sweep for over-age markers (standalone `in_flight_swept` event,
+`source: session_start_sweep` — AGE only, never a proven class). The unverifiable class writes to NEITHER:
+it stays in nazgul/in-flight/ and shows up in the in-flight count, not the quarantined one. Last stop gate
+reads `stop_gate` events ONLY, so a sweep-quarantined marker never appears there — never present Last stop
+gate as the whole orphan story, and
+never report Quarantined > 0 with a `none`/unrelated Last stop gate as a contradiction.
 
 ### Status Report Format (default — parallel execution disabled)
 

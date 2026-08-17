@@ -41,7 +41,7 @@ The event stream captures the complete lifecycle:
 - **Compaction milestones** — checkpoints during context compression
 - **Subagent lifecycle** — when specialized agents (implementer, discovery, etc.) complete
 - **Subagent empty/verdict-less returns** — `subagent_empty_return` (reasons `empty_final_text`|`no_verdict_line`, actions `resumed`|`exhausted`|`detected_only`) fires for any completing subagent whose transcript shows no usable final text, or (for reviewers) no fenced verdict line
-- **Gate-triggered stops** — `stop_gate` (reasons `afk_timeout`, `in_flight_hold`, `in_flight_stale`, `stacking_unavailable`) fires whenever a stop-hook gate ends or holds a turn, so the telemetry always shows a mechanism acted rather than a bare `exit 0`
+- **Gate-triggered stops** — `stop_gate` (reasons `afk_timeout`, `in_flight_hold`, `in_flight_orphan`, `in_flight_stale`, `in_flight_unverifiable`, `stacking_unavailable`) fires whenever a stop-hook gate ends or holds a turn, so the telemetry always shows a mechanism acted rather than a bare `exit 0`
 - **Stacked-PR continuation lifecycle** — `stack_layer_merged`, `stack_rework_filed`, `stack_sync_conflict`, `stack_api_failure`, `stack_remote_layer_imported`/`stack_remote_layer_import_failed` (opt-in, `execution.stacking`) — see `docs/CONFIGURATION.md` → **Stacked-PR Continuation**
 - **Budget/cost warnings** — proactive alerts before spending limits
 
@@ -66,14 +66,33 @@ Used by:
 `nazgul/in-flight/` for every subagent dispatch — never blocking, a failed write is a silent no-op.
 `scripts/subagent-stop.sh` clears the oldest marker matching the completing subagent right after its
 existing `subagent_stop` telemetry append. `scripts/stop-hook.sh` checks for a fresh marker immediately
-before its iteration increment: with one present, it ALLOWS the stop (`exit 0`) without touching
-`current_iteration` or `safety.consecutive_failures`, relying on the harness's own task-notification to wake
-the loop when the dispatched agent finishes rather than polling. A marker older than
+before its iteration increment: with a provably-background unnamed one present, it ALLOWS the stop (`exit 0`)
+without touching `current_iteration` or `safety.consecutive_failures`, relying on the harness's own
+task-notification to wake the loop when the dispatched agent finishes rather than polling. A fresh marker
+that is NOT provably background (`"false"`, `"missing"`, or named) is not provably awaited work, so it is
+quarantined under `nazgul/in-flight/quarantine/` and the loop continues NORMALLY (#104 Gap 3) — reported as
+`stop_gate` `reason: "in_flight_orphan"` when the class was proven (`background: "false"`, or a named
+dispatch whose report contract owns it), and as `reason: "in_flight_unverifiable"` when the class was not
+observable at all. A marker older than
 `guards.in_flight_stale_minutes` (default 30) does not hold the stop — the loop proceeds normally — but is
 reported loudly (stderr + a distinguishable `stop_gate` event) rather than silently ignored. Kill-switched by
 `guards.in_flight_hold` (default `true`, config schema v34). Both ends of the mechanism are hooks, per
 ADR-015 — the trigger is never orchestrator memory. See RULES.md §1, `docs/CONFIGURATION.md`, ADR-017
 (FEAT-026).
+
+A fresh marker whose `background` field is `"missing"` records that the dispatch class was **not observable
+at write time** — it does not record a foreground dispatch. Claude Code omits the Agent tool's
+`run_in_background` parameter from the exposed schema in fork mode (the interactive default since v2.1.232)
+and under `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, and absence means the **opposite** thing in those two
+configurations: background in the first, foreground in the second. In the session type this loop runs in,
+absence therefore means the dispatch is most likely **background**, so quarantining it is a cost-weighed
+default that is usually wrong about the dispatch it names. On such a host the class-aware hold never
+engages, `stop_gate` `reason: "in_flight_unverifiable"` fires on essentially every dispatch, and the loop
+continues concurrently with live subagents. This is a known, tracked defect (#218). The authoritative
+signals exist one event later and are documented — `PostToolUse` `tool_response.status` (`async_launched`
+vs `completed`) and the `background_tasks[]` array on `Stop`/`SubagentStop` — and this mechanism does not
+yet read either. Only the PROVEN class is quarantined; the unobservable class is LEFT IN PLACE (moving it is irreversible and the dispatch may still be running — it would also foreclose #218's fix, which reconciles these markers against the Stop payload's `background_tasks[]`). `reason: "in_flight_orphan"` is reserved for `background: "false"` or a named dispatch,
+which are genuinely proven.
 
 ### Migration: Single-Write + Dual-Read
 
@@ -96,7 +115,7 @@ Nazgul survives compaction, crashes, and session restarts:
 7. **TaskCompleted hook** fires immediately when spawned agents finish for faster transitions
 8. **Prompt guard hook** validates user prompts on submission
 9. **Task-state guard hook** prevents edits outside claimed task scope, and preflight-rejects an illegal status transition — but it is not the transition authority; see Task-Transition Authority below
-10. **In-flight dispatch hold** — the stop-hook holds an ALLOWED, uncounted stop while a just-dispatched `Agent` is still running (`guards.in_flight_hold`), so the loop doesn't burn iterations re-invoking itself every ~15 seconds against work that hasn't finished. See In-Flight Dispatch Hold below.
+10. **In-flight dispatch hold** — the stop-hook holds an ALLOWED, uncounted stop while a just-dispatched BACKGROUND `Agent` is still running (`guards.in_flight_hold`), so the loop doesn't burn iterations re-invoking itself every ~15 seconds against work that hasn't finished; any other marker is not held on — quarantined as an orphan when the class was PROVEN, or recorded as `in_flight_unverifiable` and left in place when it was not observable (the move is irreversible and the dispatch may still be running). See In-Flight Dispatch Hold below.
 
 After any interruption:
 ```bash
@@ -110,7 +129,7 @@ When the review board returns CHANGES_REQUESTED, the feedback aggregator classif
 - **AUTO-FIX**: Mechanical issues (dead code, style, stale comments) — applied automatically
 - **ASK**: Risky changes (security, architecture, API contracts) — presented for judgment
 
-The review gate's Step 3.75 applies auto-fixes, re-runs tests, and only surfaces ASK items. This reduces review round-trips significantly. Evidence gates enforce real work: IMPLEMENTED requires a commit SHA in the task manifest, IN_REVIEW requires a review directory, and source edits require an IN_PROGRESS task. Reviewers are dispatched as unnamed one-shot `Agent` calls with `run_in_background: false` and RETURN their verdict as returned text; the orchestrator persists it. `scripts/parallel-dispatch-guard.sh` (PreToolUse on `Agent`) enforces both fields, and a main-session call that simply omits `run_in_background` is blocked — the omission is honored only when the hook caller identity proves a nested synchronous-only schema. Every status change the gate makes goes through `scripts/task-transition.sh` — see Task-Transition Authority below.
+The review gate's Step 3.75 applies auto-fixes, re-runs tests, and only surfaces ASK items. This reduces review round-trips significantly. Evidence gates enforce real work: IMPLEMENTED requires a commit SHA in the task manifest, IN_REVIEW requires a review directory, and source edits require an IN_PROGRESS task. Reviewers are dispatched as unnamed one-shot `Agent` calls with `run_in_background: false` and RETURN their verdict as returned text; the orchestrator persists it. `scripts/parallel-dispatch-guard.sh` (PreToolUse on `Agent`) enforces the `name` absence and an explicit `run_in_background: false`; a call that simply OMITS `run_in_background` is allowed with a `dispatch_guard_background_unverifiable` event, because on hosts whose Agent schema lacks the field the value is unsupplyable and a block there disables the whole board (#205). Every status change the gate makes goes through `scripts/task-transition.sh` — see Task-Transition Authority below.
 
 ## Testing & CI
 

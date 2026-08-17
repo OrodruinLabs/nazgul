@@ -208,7 +208,7 @@ This guard governs comment QUANTITY at write time. See §7 for the complementary
 | AFK timeout | 90 min | `afk.timeout_minutes` |
 | Confidence threshold | 80 | `review_gate.confidence_threshold` |
 
-- **A gate-triggered stop announces itself.** `[hook-driven only]` When the AFK timeout gate ends a run, `scripts/stop-hook.sh` emits a `stop_gate` event to `nazgul/logs/events.jsonl` — fields `reason` (`"afk_timeout"`), `computed` (elapsed minutes), and `limit` (the configured timeout) — before exiting, so a run stopped by a safety gate is distinguishable in telemetry from a run that simply ended (FEAT-023/TASK-001, ADR-014: a mechanism that fails must not look like a mechanism that had nothing to do). FEAT-026/TASK-008 extended the same `stop_gate` event to the in-flight dispatch hold (`reason: "in_flight_hold"`, naming the units and count an ALLOWED, uncounted stop is waiting on) and to a stale marker declined for that hold (`reason: "in_flight_stale"`, naming the unit and its age) — see Config Upgrades / In-Flight Dispatch Hold in `docs/CONFIGURATION.md`. Other soft-limit stops in the table above still do not emit it, and this rule must not be read as claiming they do.
+- **A gate-triggered stop announces itself.** `[hook-driven only]` When the AFK timeout gate ends a run, `scripts/stop-hook.sh` emits a `stop_gate` event to `nazgul/logs/events.jsonl` — fields `reason` (`"afk_timeout"`), `computed` (elapsed minutes), and `limit` (the configured timeout) — before exiting, so a run stopped by a safety gate is distinguishable in telemetry from a run that simply ended (FEAT-023/TASK-001, ADR-014: a mechanism that fails must not look like a mechanism that had nothing to do). FEAT-026/TASK-008 extended the same `stop_gate` event to the in-flight dispatch hold (`reason: "in_flight_hold"`, naming the units and count an ALLOWED, uncounted stop is waiting on) and to a stale marker declined for that hold (`reason: "in_flight_stale"`, naming the unit and its age) — and, since the 2026-08-16 classification fix, to a quarantined non-background marker, under two DISTINCT reasons that must not be collapsed: `reason: "in_flight_orphan"` when the dispatch class was PROVEN (`background: "false"`, or a named dispatch whose report contract owns the marker) — a fresh marker a synchronous dispatch left behind — and `reason: "in_flight_unverifiable"` when the class was NOT OBSERVABLE at marker-write time, which on a fork-mode host is every marker, since `run_in_background` is omitted from the exposed Agent tool schema there. Both name unit/agent/background and both continue the loop normally, but they do DIFFERENT things to the marker, and that difference is the point: `in_flight_orphan` MOVES it to `nazgul/in-flight/quarantine/` (the class was proven, so it is residue), while `in_flight_unverifiable` LEAVES IT IN PLACE (the class was never observed, the dispatch may still be running, and `mv` is irreversible — destroying it would also foreclose #218's fix, which reconciles these markers against the Stop payload's `background_tasks[]`). Only the first asserts a leak, and only the first quarantines. A telemetry consumer counting `in_flight_orphan` as "leaks detected" must not silently absorb the second (#218) — see Config Upgrades / In-Flight Dispatch Hold in `docs/CONFIGURATION.md`. Other soft-limit stops in the table above still do not emit it, and this rule must not be read as claiming they do.
 - **Evidence degradation announces itself.** `[enforced]` A required red run that is absent, corrupt, non-ancestral, exit-zero, or covered by an invalid N/A token emits `red_run_missing` even when `guards.red_run_evidence: false` suppresses the block. A checking entry point that had candidates but checked none emits `coverage_vacuous` when an event bus is available. These signals are the loud-degradation list for test evidence; neither may be replaced by a green summary.
 
 ---
@@ -292,7 +292,7 @@ driver agent, `nazgul/conductor/graph.json` state, and engine-specific guards in
 an optional parallel-batch mode (the Parallel Execution Collapse).
 
 - **Batch selection: Planner-marked and zero-overlap only, capped at `execution.max_parallel`.** `[enforced]` `compute_dispatch_batch` (`scripts/lib/parallel-batch.sh`) runs as a plain, unconditional bash conditional inside `stop-hook.sh`'s own continuation-message construction whenever `execution.parallel` is `true` and the active task is a fresh `READY` dispatch in `task` granularity — the interpreter always evaluates it, no agent judgment gates whether the check runs (the same "script-level gate" class §13 already credits `[enforced]` for `scripts/heartbeat.sh`, not the agent-protocol-invoked `[advisory]` tier the deleted Conductor's equivalent wave rule carried). A batch requires `>=2` `READY` candidates (all deps `DONE`) named TOGETHER on one `nazgul/plan.md` `## Wave Groups` line with pairwise-disjoint `Files modified` scopes; any doubt — missing scope, overlap, no Wave Groups section, different wave lines — falls back to a batch of one, the proven sequential behavior. Batches never exceed `execution.max_parallel` (default `3`).
-- **The two hard stops are unconditional — never gated, never yolo-bypassable by config.** `[enforced]` Any `BLOCKED` task or any non-`APPROVE` `security-reviewer.md` verdict halts the loop for a human. `execution_should_halt` (`scripts/lib/parallel-batch.sh`) fails CLOSED on ambiguity (`BLOCKED_TASKS_AMBIGUOUS`, `SECURITY_REJECTION_AMBIGUOUS`, `*_UNREADABLE`) and ignores every `execution.gates` value and mode, including `yolo`. `stop-hook.sh` calls it as a plain, unconditional bash `if` whenever `execution.parallel` is `true`, before any dispatch instruction is built — this extends §3.5's AFK security-rejection stop and §5's hard-block list into parallel mode, and (unlike the deleted Conductor's own agent-protocol-invoked use of the equivalent check) no LLM judgment intervenes at this call site.
+- **The two hard stops are unconditional — never gated, never yolo-bypassable by config.** `[enforced]` Any `BLOCKED` task or any non-`APPROVE` `security-reviewer.md` verdict halts the loop for a human. `execution_should_halt` (`scripts/lib/parallel-batch.sh`) fails CLOSED on ambiguity (`BLOCKED_TASKS_AMBIGUOUS`, `SECURITY_REJECTION_AMBIGUOUS`, `*_UNREADABLE`) and ignores every `execution.gates` value and mode, including `yolo`. `stop-hook.sh` calls it as a plain, unconditional bash `if` whenever `execution.parallel` is `true`, before any dispatch instruction is built — this extends §3.5's AFK security-rejection stop and §5's hard-block list into parallel mode, and (unlike the deleted Conductor's own agent-protocol-invoked use of the equivalent check) no LLM judgment intervenes at this call site. Scope: per resolved `nazgul/` root — under sibling-worktree peer sessions (one loop per feature worktree), a BLOCKED task or security rejection in one root does not halt a loop in another; "unconditional" is true per root and must not be read as per project.
 - **`execution.gates.{approve_plan,approve_batch,approve_final_pr}`** (all default `false`, autonomous-first) let a human pause before the plan is accepted, before a parallel batch dispatches, or before the final PR. `[hook-driven only]` `execution_gate_effective`/`execution_should_pause` (`scripts/lib/parallel-batch.sh`) compute the EFFECTIVE value — `mode == "hitl"` flips `approve_plan` on without mutating the stored config — and `stop-hook.sh` prepends a `GATE approve_batch: ... WAIT for explicit approval` instruction ahead of the batch `DISPATCH_INSTR` when the gate is active. This is a continuation-message instruction, not a PreToolUse block: a human or orchestrator that dispatches implementers directly, bypassing the stop-hook's suggested batch, is not stopped from proceeding without approval.
 - **Dispatch order is review-then-merge, not merge-then-review.** `[advisory]` — a `stop-hook.sh` continuation-message instruction the orchestrator follows, not a PreToolUse block; the actual merge block is what §15's H2 guard enforces. The parallel-batch `DISPATCH_INSTR` sequence is: (1) dispatch one implementer per task in its own worktree/branch; (2) once an implementer commits, immediately record that branch-tip commit SHA under the task's manifest `## Commits` and set `Status: IMPLEMENTED` — BEFORE any merge; (3) dispatch one review-gate agent per task against that task's OWN branch diff (task branch vs. feature branch, unmerged); (4) `git merge --no-ff` ONLY a task that reaches `Status: DONE` — a task at `CHANGES_REQUESTED`/`BLOCKED` is never merged, its branch/worktree kept for rework. This restores the precondition §15's H2 `pre-merge-commit` guard was always designed to check: before this ordering existed, the merge ran BEFORE the manifest's `## Commits` section listed the merged SHA, so the guard's per-task lookup structurally could never find a matching candidate and fell through to allow on every parallel-batch merge (the FEAT-016 HIGH finding, closed FEAT-017/TASK-001).
 
@@ -340,7 +340,27 @@ something Nazgul schedules itself.
   skipped, reason: active_session` and `exit 0`. This is a single top-of-flow bash conditional the
   interpreter always evaluates on every invocation, not a step an agent's own protocol could choose to
   skip — the same class of internal script gate `[enforced]` already credits `stop-hook.sh` with
-  elsewhere in this document (§1 Rule 4). Covered by `tests/test-heartbeat-session-guard.sh`.
+  elsewhere in this document (§1 Rule 4). Scope, stated honestly: the count is per-`nazgul/` root
+  (sibling worktrees hold separate `sessions/` dirs and are invisible to each other), and it is
+  meaningful only because locks are session-lifetime — registered at SessionStart, refreshed per Stop,
+  released at SessionEnd, swept by pid-liveness (2026-08-16 fix; before it, the stop-hook's EXIT trap
+  deleted the lock on every allowed stop, so a held or housekeeping session was uncounted and this
+  rule's claim was false in practice). Both halves of that lifetime were made real by FEAT-032's board
+  rework, because until then the record described a lifecycle the code did not implement. **Release
+  (R2):** `session-staging.sh` installs `trap 'release_session_lock || true' EXIT` before its four
+  staging gates, so the lock is released on every SessionEnd path — previously the release sat *after*
+  those gates, so every HITL session (`afk.enabled: false`, the template default) registered a lock and
+  never released it, which is exactly the housekeeping-session population #195 is about. **Counting
+  (R3):** `count_active_sessions` is itself liveness-filtered; it, `cleanup_stale_sessions` and
+  `duplicate_live_toplevel` share ONE predicate, `_session_lock_is_live`, and `heartbeat.sh` sweeps
+  before it counts (nothing else sweeps a root between ticks, so a dead lock used to block auto-start
+  unboundedly). `heartbeat.sh`'s own "secondary, non-primary check" hedge is thereby resolved: the count
+  is a primary, honest signal within one root, bounded by three stated limits — `kill -0` cannot
+  distinguish a gone pid from one this user may not signal (EPERM reads as gone); a lock recording no
+  numeric pid counts as active, because unknown is never dead; and a session already launched but not
+  yet registered is invisible to any count, which is why the MF-039 atomic `mkdir` claim, not this
+  count, is what closes that window. Covered by `tests/test-heartbeat-session-guard.sh`,
+  `tests/test-session-staging.sh`, and `tests/test-session-tracker.sh`.
 - **The two hard stops are unconditional — independent of `enabled` and of `mode`, including `yolo`.** `[enforced]`
   `scripts/heartbeat.sh` calls `execution_should_halt` (`scripts/lib/parallel-batch.sh`, the
   identical fail-closed function §11/§12 document for parallel dispatch) as the very first thing it does
@@ -351,6 +371,9 @@ something Nazgul schedules itself.
   script runs — no agent judgment intervenes, mirroring the distinction this document already draws
   between agent-protocol-invoked checks and plain script-level gates. Covered by
   `tests/test-heartbeat-hard-stops.sh` across `enabled: true`, `enabled: false`, and `mode: yolo`.
+  Scope: per resolved `nazgul/` root — under sibling-worktree peer sessions (one loop per feature
+  worktree), a BLOCKED task or security rejection in one root does not halt a loop in another;
+  "unconditional" is true per root and must not be read as per project.
 - **Idempotent atomic claim-then-archive.** `[enforced]` The picked candidate is moved into
   `<inbox>/archive/` via a single `mv -f` (`inbox_archive`, `scripts/lib/inbox-provider.sh`) BEFORE
   `/nazgul:start` is invoked — archive-then-start, so the move itself is the atomic claim: a crash
@@ -548,7 +571,7 @@ policy but emit `coverage_vacuous`. A filter that matches no file is also NOTHIN
 run. A new skip reason must be named and counted — it cannot disappear into `passed` or a free-form
 note. This is §15's looked-vs-never-looked distinction applied to tests, guards, smoke, and audits.
 
-- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Ten entry points are bound
+- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Eleven entry points are bound
   by the contract above: `tests/run-tests.sh`, `scripts/lean-comments-guard.sh --check`,
   `tests/test-shellcheck.sh`, `scripts/doctor.sh`, `agents/comment-verifier.md`,
   `scripts/lib/heartbeat-triage.sh`, `scripts/self-audit.sh` (enrolled FEAT-029/TASK-012, which also
@@ -563,7 +586,14 @@ note. This is §15's looked-vs-never-looked distinction applied to tests, guards
   `not-closable-status`, `unreadable`, `not-this-objective`, `pr-not-this-objective`, `not-merged`,
   `merge-unverifiable`, `evidence-write-failed`, `transition-refused` — always printed in that order,
   and `not-merged` and `merge-unverifiable` are deliberately separate members of it: "could not look"
-  is not "not merged". `tests/test-coverage-honesty.sh` drives every one of them under a forced
+  is not "not merged". The eleventh is
+  `tests/test-messaging-posture.sh` (enrolled FEAT-032/TASK-012 — the shipped-surface messaging-posture
+  scan of §22 rules 2 and 3; blocking, K>0 floor plus per-surface and enumerator-completeness floors,
+  dogfooded synthetic violators driven end to end through the scanner rather than only against its
+  regexes. Its population is the shipped file set, not an extension whitelist — an extension glob
+  silently redefines the surface, so the enumeration's own completeness is asserted against a pinned
+  roster of the shipped files no glob reaches).
+  `tests/test-coverage-honesty.sh` drives every one of them under a forced
   all-skip input and FAILS if any enumerated entry point was never driven — membership is asserted, not
   assumed, so an entry point that conforms today cannot silently stop conforming tomorrow. Add a new
   checking entry point to this list and to that test in the same change. The registry previously cited a
@@ -1050,3 +1080,53 @@ FEAT-030/ADR-021 states the rule; this section records what enforces each clause
    site must be FOUND, the same site rooted must pass, a brief nine lines away must NOT count, and an
    undefined `${DISPATCH_BRIEF}` reference must be refused. Its coverage-honesty membership is recorded
    in §15's registry.
+
+---
+
+## 22. Cross-Session Messaging Posture
+
+Adopted 2026-08-16 (see `docs/DECISION-LOG-2026-08-16-cross-session-messaging.md` and the design
+spec it cites). Cross-session messaging is an operator surface and an attack surface — never a
+loop mechanism.
+
+1. **An unguaranteed channel may shorten a wait, but may never authorize one.** `[advisory]`
+   (doctrine; enforced indirectly by rule 2 — no poster can exist). Delivery has three outcomes
+   (delivered/held/refused), a refusal produces no sender-side notice — note that a *refusal*
+   (`crossSessionInbound: refuse`, dropped on arrival) is NOT the same state as a *denial* (a human
+   dismissing a hold dialog); `peer_message_status` reports `held`/`denied`/`expired`/`delivered`
+   and has no `refused` member, so the silent case is refusal alone — throttling is opaque, and
+   unrelated settings changes silently reconfigure the transport. Nothing with those properties
+   may be what a hold's legality, a gate, or any state transition rests on. `decision:"block"`
+   on Stop remains the only sanctioned turn source.
+2. **No shipped surface posts to the messaging socket, ever.** `[enforced]`
+   (`tests/test-messaging-posture.sh`, §15-enrolled: K>0 floor, per-surface and
+   enumerator-completeness floors, dogfooded end to end). The scanned surface is the shipped FILE
+   SET under `scripts/ skills/ agents/ templates/ hooks/` — never an extension whitelist, which is
+   a second and unstated surface definition: three shipped files carry no scanned extension (two
+   extensionless git hooks git runs from the managed `core.hooksPath`, one template `/nazgul:init`
+   injects), and the scan's first version could not see any of them. Any reference to
+   `CLAUDE_CODE_MESSAGING_SOCKET`/`CLAUDE_CODE_MESSAGING_TOKEN` outside the read-only allowlist
+   (doctor's eligibility read; session-tracker's basename-as-pid parse) is a finding, and INSIDE
+   that two-file allowlist a connect construct is a finding too — reading the value is allowed,
+   posting to it never is. This also mechanically covers "the token is never stored, logged, or
+   placed in event fields" for shipped text. Honest boundary: the scan binds shipped text (a
+   model's runtime conduct is `[advisory]`, §21 precedent), and the allowlist's second tier is a
+   denylist of connect constructs (`nc -U`, `socat UNIX-CONNECT`, `openssl s_client`,
+   `curl --unix-socket`, `/dev/tcp`, and any redirect or pipe whose target is the socket variable),
+   so a post construct outside that denylist, in exactly those two files, is bounded by review
+   rather than by the predicate.
+3. **Nazgul never writes `crossSessionInbound` or `isolatePeerMachines`.** `[enforced]` (same
+   scan). Inbound posture is the operator's; Nazgul documents it (README remote-ops section) and
+   never sets it. Stated plainly: **nothing in Nazgul gates inbound messages** — the platform's
+   inbound controls are the only inbound mechanism today. Receipt IS hook-observable
+   (UserPromptSubmit carries the message text as its prompt — probe P6), so an enforced inbound
+   gate is buildable if ever warranted; buildable is not built.
+4. **A message is untrusted input at every level.** `[advisory]` behaviorally, with an
+   `[enforced]` presence test (`tests/test-session-trust-boundary.sh`): the session-level MF-059
+   boundary in `templates/CLAUDE.md.template` and `skills/start/SKILL.md`. A peer message never
+   counts as operator consent, never carries authoritative state, never changes configuration.
+5. **Threat model, stated.** `[advisory]` Any same-user process can have its CONNECTION accepted
+   on any session's socket; delivery then follows the receiver's inbound controls. Socket file
+   permissions (0700 dir / 0600 socket) are the entire authentication boundary; the per-session
+   token is exported into every Bash tool call, so an environment leak is a turn-injection
+   capability for that session. See also `docs/SAFETY.md`.
