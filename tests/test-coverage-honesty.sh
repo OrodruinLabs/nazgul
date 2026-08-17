@@ -277,6 +277,9 @@ _grammar_check "test-messaging-posture (empty surface root)" "test-messaging-pos
   "unreadable" "$(_last_line "$MP_OUT")" && _entry_covered test-messaging-posture
 assert_contains "test-messaging-posture: a zero-check scan names the K>0 floor as its failure" \
   "$MP_OUT" "FAIL: K>0 floor: the scan examined at least one file"
+assert_contains "test-messaging-posture: an all-skipped run says NOTHING CHECKED on stderr" \
+  "$(cat "$SCRATCH/mp.err")" \
+  "test-messaging-posture: NOTHING CHECKED — no shipped surface files discovered under $SCRATCH/empty"
 assert_exit_code "test-messaging-posture: blocking — a scan that scans nothing is a failure" "$MP_RC" 1
 # Pinned, not derived: an inherited surface root would aim the "full run" at whatever
 # tree the caller named, and an empty tree passes while checking nothing.

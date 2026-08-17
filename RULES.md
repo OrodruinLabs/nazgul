@@ -563,7 +563,11 @@ note. This is §15's looked-vs-never-looked distinction applied to tests, guards
   `tests/test-dispatch-brief-contract.sh` (enrolled FEAT-030 — the caller-side dispatch-brief scan of
   §21 item 8; blocking, so nothing checked is its own failure), and
   `tests/test-messaging-posture.sh` (enrolled FEAT-032/TASK-012 — the shipped-surface messaging-posture
-  scan of §22 rules 2 and 3; blocking, K>0 floor, dogfooded synthetic violators).
+  scan of §22 rules 2 and 3; blocking, K>0 floor plus per-surface and enumerator-completeness floors,
+  dogfooded synthetic violators driven end to end through the scanner rather than only against its
+  regexes. Its population is the shipped file set, not an extension whitelist — an extension glob
+  silently redefines the surface, so the enumeration's own completeness is asserted against a pinned
+  roster of the shipped files no glob reaches).
   `tests/test-coverage-honesty.sh` drives every one of them under a forced
   all-skip input and FAILS if any enumerated entry point was never driven — membership is asserted, not
   assumed, so an entry point that conforms today cannot silently stop conforming tomorrow. Add a new
@@ -1062,12 +1066,22 @@ loop mechanism.
    may be what a hold's legality, a gate, or any state transition rests on. `decision:"block"`
    on Stop remains the only sanctioned turn source.
 2. **No shipped surface posts to the messaging socket, ever.** `[enforced]`
-   (`tests/test-messaging-posture.sh`, §15-enrolled: K>0 floor, dogfooded). Any reference to
+   (`tests/test-messaging-posture.sh`, §15-enrolled: K>0 floor, per-surface and
+   enumerator-completeness floors, dogfooded end to end). The scanned surface is the shipped FILE
+   SET under `scripts/ skills/ agents/ templates/ hooks/` — never an extension whitelist, which is
+   a second and unstated surface definition: three shipped files carry no scanned extension (two
+   extensionless git hooks git runs from the managed `core.hooksPath`, one template `/nazgul:init`
+   injects), and the scan's first version could not see any of them. Any reference to
    `CLAUDE_CODE_MESSAGING_SOCKET`/`CLAUDE_CODE_MESSAGING_TOKEN` outside the read-only allowlist
-   (doctor's eligibility read; session-tracker's basename-as-pid parse) is a finding. This also
-   mechanically covers "the token is never stored, logged, or placed in event fields" for shipped
-   text. Honest boundary: the scan binds shipped text; a model's runtime conduct is `[advisory]`
-   (§21 precedent).
+   (doctor's eligibility read; session-tracker's basename-as-pid parse) is a finding, and INSIDE
+   that two-file allowlist a connect construct is a finding too — reading the value is allowed,
+   posting to it never is. This also mechanically covers "the token is never stored, logged, or
+   placed in event fields" for shipped text. Honest boundary: the scan binds shipped text (a
+   model's runtime conduct is `[advisory]`, §21 precedent), and the allowlist's second tier is a
+   denylist of connect constructs (`nc -U`, `socat UNIX-CONNECT`, `openssl s_client`,
+   `curl --unix-socket`, `/dev/tcp`, and any redirect or pipe whose target is the socket variable),
+   so a post construct outside that denylist, in exactly those two files, is bounded by review
+   rather than by the predicate.
 3. **Nazgul never writes `crossSessionInbound` or `isolatePeerMachines`.** `[enforced]` (same
    scan). Inbound posture is the operator's; Nazgul documents it (README remote-ops section) and
    never sets it. Stated plainly: **nothing in Nazgul gates inbound messages** — the platform's
