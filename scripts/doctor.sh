@@ -527,7 +527,7 @@ check_stack_registry() {
 # Prints "VAR (source); " for each feature-flag killer that is set.
 _doc_flag_killers() {
   local v f proot
-  proot="$(cd "$NAZGUL_DIR/.." 2>/dev/null && pwd)"
+  proot="$PROJECT_ROOT"
   for v in CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC DISABLE_TELEMETRY DO_NOT_TRACK DISABLE_GROWTHBOOK; do
     [ -n "$(printenv "$v" 2>/dev/null || true)" ] && printf '%s (shell env); ' "$v"
   done
@@ -545,7 +545,7 @@ _doc_flag_killers() {
 # Prints "<value> from <file>" for the highest-precedence readable setting, or "".
 _doc_effective_inbound() {
   local f v proot
-  proot="$(cd "$NAZGUL_DIR/.." 2>/dev/null && pwd)"
+  proot="$PROJECT_ROOT"
   for f in "$proot/.claude/settings.local.json" "$proot/.claude/settings.json" "${HOME:-}/.claude/settings.json"; do
     [ -f "$f" ] || continue
     v=$(jq -r '.crossSessionInbound // empty' "$f" 2>/dev/null || true)
@@ -587,7 +587,7 @@ check_remote_control() {
   for v in CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX; do
     [ -n "$(printenv "$v" 2>/dev/null || true)" ] && causes="${causes}${v} set (provider routing); "
   done
-  proot="$(cd "$NAZGUL_DIR/.." 2>/dev/null && pwd)"
+  proot="$PROJECT_ROOT"
   for f in "/Library/Application Support/ClaudeCode/managed-settings.json" "${HOME:-}/.claude/settings.json" "$proot/.claude/settings.json"; do
     [ -f "$f" ] || continue
     if jq -e '.disableRemoteControl == true' "$f" >/dev/null 2>&1; then

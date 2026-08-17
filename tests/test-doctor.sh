@@ -100,6 +100,12 @@ assert_exit_code "no-config fixture: aggregate exit 1 (worst=warn)" "$EXIT" 1
 assert_contains "no-config fixture: config-present warns" "$OUT" "$(printf 'warn\tconfig-present')"
 assert_contains "no-config fixture: still runs dependencies check" "$OUT" "$(printf '\tdependencies\t')"
 assert_contains "no-config fixture: still prints stdin-hazard note" "$OUT" "$(printf 'note\tstdin-hazard')"
+# A run that ABORTS mid-roster also exits 1, so the exit code alone cannot tell a
+# warn from a truncated run: only the coverage line proves main() reached the end.
+assert_contains "no-config fixture: every check after config-present ran too" "$OUT" "$(printf '\tmessaging\t')"
+assert_contains "no-config fixture: the last check in the roster ran" "$OUT" "$(printf '\tsessions\t')"
+assert_contains "no-config fixture: the run reached the coverage line, so it was not truncated" \
+  "$(printf '%s' "$OUT" | tail -1)" "13 scanned"
 teardown_temp_dir
 
 # --- (b) dependencies: fail branch — jq entirely absent from PATH ---
