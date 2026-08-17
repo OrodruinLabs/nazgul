@@ -33,10 +33,17 @@ pages.
    experimental, teammates cannot background their own children, and there is no session
    resumption for a teammate that stalls. Rejected: same class of undocumented-resume
    risk as the background subagent it would replace.
+
+   > *Annotation (2026-08-16): partially retired for the OWN-SESSION case — see
+   > DECISION-LOG-2026-08-16-cross-session-messaging.md D-005; intact for teammates.*
+
 4. **Background subagent + watchdog.** Automates the babysitting instead of eliminating
    it — some other process still has to notice the stall and re-poke the conductor, and
    the drive mechanism that would wake it remains undocumented. Rejected: treats the
    symptom, not the cause.
+
+   > *Annotation (2026-08-16): reaffirmed — the assessed-and-cut "doorbell" was exactly this
+   > shape; see DECISION-LOG-2026-08-16-cross-session-messaging.md D-002.*
 
 ## D-003 — Decision
 
@@ -50,6 +57,9 @@ second, opt-in engine. `execution.engine` is removed from the config schema.
 
 **Closing rule:** do not reintroduce a background-subagent driver unless the platform
 documents parent re-engagement on child completion.
+
+> *Amended by → DECISION-LOG-2026-08-16-cross-session-messaging.md D-005 (adjacent
+> delivery-guarantee rule; the closing rule itself stands).*
 
 ## D-004 — Follow-on facts recorded for the release
 

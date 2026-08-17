@@ -265,8 +265,9 @@ scenario_loop() {
     echo "  SKIP: B: lifecycle ordering — no session id and checkpoint pair to compare (not checked)"
   fi
 
-  # Only afk_timeout / in_flight_hold / in_flight_stale emit stop_gate (RULES §5). A live session
-  # cannot be made to hit one on demand, so the real hook is driven against the state it produced.
+  # stop_gate reasons: afk_timeout / in_flight_hold / in_flight_stale / in_flight_orphan /
+  # in_flight_unverifiable / stacking_unavailable (RULES §5).
+  # A live session cannot be made to hit one on demand, so the real hook is driven against the state it produced.
   events="$proj/nazgul/logs/events.jsonl"
   gate_events_before=$(grep -c '"stop_gate"' "$events" 2>/dev/null || true)
   jq '.afk.timeout_minutes = 0 | .objective_set_at = "2000-01-01T00:00:00Z"' "$proj/nazgul/config.json" \

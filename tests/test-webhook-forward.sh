@@ -244,6 +244,31 @@ assert_eq "legacy format: CANCELLED still counted" \
   "$(printf '%s' "$PAYLOAD" | jq -r '.tasks_cancelled')" "1"
 teardown_temp_dir
 
+# --- board-3 NEW-4: the hook declares its POST best-effort, so a manifest matching none
+# of the parser's inline status forms must not end the run before curl, and must count. ---
+setup_temp_dir
+setup_nazgul_dir
+create_config \
+  '.webhooks.enabled = true' \
+  '.webhooks.url = "https://example.invalid/hook"' \
+  '.webhooks.events = ["Stop"]'
+create_task_file "TASK-001" "DONE"
+printf '# TASK-BLOCK\n\n## Status\nDONE\n' > "$TEST_DIR/nazgul/tasks/TASK-BLOCK.md"
+printf '# TASK-NONE\n\nthis manifest carries no status in any format\n' > "$TEST_DIR/nazgul/tasks/TASK-NONE.md"
+run_webhook "Stop"
+PAYLOAD=$(curl_payload) || PAYLOAD=""
+if [ -n "$PAYLOAD" ]; then
+  _pass "no-inline-status manifest: the hook still reached curl (payload captured)"
+else
+  _fail "no-inline-status manifest: the hook still reached curl (payload captured)" \
+    "no argv token followed '-d' — webhook-forward.sh ended before POSTing"
+fi
+assert_eq "no-inline-status manifest: ATX-block DONE is counted alongside frontmatter DONE" \
+  "$(printf '%s' "$PAYLOAD" | jq -r '.tasks_done')" "2"
+assert_eq "no-inline-status manifest: the status-less manifest still enters the census" \
+  "$(printf '%s' "$PAYLOAD" | jq -r '.tasks_total')" "3"
+teardown_temp_dir
+
 rm -rf "$FAKEBIN"
 
 # --- Test 6: bash -n / shellcheck sanity (project convention) ---
