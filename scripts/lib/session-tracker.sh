@@ -96,21 +96,27 @@ cleanup_stale_sessions() {
   done <<< "$lock_files"
 }
 
+# The first working tree recorded by >=2 LIVE locks, or "" when there is none —
+# the #195 shared-checkout shape (one session committed another's staged work).
+duplicate_live_toplevel() {
+  local sessions_dir="${1:-nazgul/sessions}" f lp
+  [ -d "$sessions_dir" ] || return 0
+  # No duplicate is an ANSWER, not an error: without the guard the empty pipeline
+  # exits 1 and aborts any caller running under `set -e` (FEAT-032 board R1).
+  for f in "$sessions_dir"/*.lock; do
+    [ -f "$f" ] || continue
+    lp=$(jq -r '.pid // ""' "$f" 2>/dev/null)
+    if [ -n "$lp" ] && [[ "$lp" =~ ^[0-9]+$ ]] && ! kill -0 "$lp" 2>/dev/null; then continue; fi
+    jq -r '.toplevel // ""' "$f" 2>/dev/null
+  done | grep -v '^$' | sort | uniq -d | head -1 || true
+}
+
 is_concurrent_session_warning() {
   local sessions_dir="${1:-nazgul/sessions}"
-  local count dup_tree f lp
+  local count dup_tree
   count=$(count_active_sessions "$sessions_dir")
   [ "$count" -gt 1 ] || return 1
-  # Group LIVE locks by recorded toplevel; >=2 against one tree is the #195
-  # shared-checkout shape (one session committed another's staged work).
-  dup_tree=$(
-    for f in "$sessions_dir"/*.lock; do
-      [ -f "$f" ] || continue
-      lp=$(jq -r '.pid // ""' "$f" 2>/dev/null)
-      if [ -n "$lp" ] && [[ "$lp" =~ ^[0-9]+$ ]] && ! kill -0 "$lp" 2>/dev/null; then continue; fi
-      jq -r '.toplevel // ""' "$f" 2>/dev/null
-    done | grep -v '^$' | sort | uniq -d | head -1
-  )
+  dup_tree=$(duplicate_live_toplevel "$sessions_dir")
   if [ -n "$dup_tree" ]; then
     echo "WARNING: multiple live Nazgul sessions shared one working tree ($dup_tree) — the #195 shared-checkout hazard: one session can commit another's staged work. Give each concurrent loop its own worktree. State corruption risk."
     return 0

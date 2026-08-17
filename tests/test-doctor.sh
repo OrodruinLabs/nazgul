@@ -831,6 +831,21 @@ assert_contains "doctor sessions: an all-skipped run says so on stderr" \
   "$(cat "$TEST_DIR/sessions.err")" "doctor: NOTHING CHECKED — all 1 candidates skipped"
 teardown_temp_dir
 
+# --- (m) sessions: a lock set the liveness filter empties must not abort main() ---
+# Board R1: pre-2.33 locks record the old hook-shell $$ (dead by any later read) and no toplevel, so the duplicate scan sees nothing on the ordinary upgrade path.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.guards.git_hooks = false'
+mkdir -p "$TEST_DIR/nazgul/sessions"
+jq -cn '{pid:"2147483646", session:"legacy"}' > "$TEST_DIR/nazgul/sessions/legacy.lock"
+OUT=$(cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR bash "$DOCTOR" 2>/dev/null)
+assert_contains "empty-scan fixture: the sessions check still reports" "$OUT" "$(printf 'pass\tsessions')"
+# sessions is the LAST check, so a mid-check abort takes the coverage line with it.
+assert_contains "empty-scan fixture: the run reached the coverage line, so it was not truncated" \
+  "$(printf '%s' "$OUT" | tail -1)" "13 scanned"
+teardown_temp_dir
+
 # Coverage honesty (FEAT-028 TASK-015, TRD §6): a check with nothing to inspect is
 # skipped with an enumerated reason, and the vacuous case writes nothing.
 

@@ -23,6 +23,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 # shellcheck source=lib/git-hooks.sh
 source "$SCRIPT_DIR/lib/git-hooks.sh"
+# Check (m) reads locks through session-tracker's own read-only predicate, so reader and writer cannot drift.
+# shellcheck source=lib/session-tracker.sh
+source "$SCRIPT_DIR/lib/session-tracker.sh"
 
 # Captured before this script's own NAZGUL_DIR assignment below shadows it —
 # check (e) needs to know what the OPERATOR's environment held, not what
@@ -604,19 +607,12 @@ check_remote_control() {
 # (m) Shared-working-tree collision among LIVE session locks — the #195 hazard,
 # read from the pid/toplevel fields scripts/lib/session-tracker.sh records.
 check_sessions() {
-  local sessions_dir="$NAZGUL_DIR/sessions" f lp dup
+  local sessions_dir="$NAZGUL_DIR/sessions" dup
   if [ ! -d "$sessions_dir" ] || ! ls "$sessions_dir"/*.lock >/dev/null 2>&1; then
     _doc_skip pass sessions no-candidates "Not applicable — no session locks under nazgul/sessions/, so there is nothing to check."
     return 0
   fi
-  dup=$(
-    for f in "$sessions_dir"/*.lock; do
-      [ -f "$f" ] || continue
-      lp=$(jq -r '.pid // ""' "$f" 2>/dev/null)
-      if [ -n "$lp" ] && printf '%s' "$lp" | grep -qE '^[0-9]+$' && ! kill -0 "$lp" 2>/dev/null; then continue; fi
-      jq -r '.toplevel // ""' "$f" 2>/dev/null
-    done | grep -v '^$' | sort | uniq -d | head -1
-  )
+  dup=$(duplicate_live_toplevel "$sessions_dir")
   if [ -n "$dup" ]; then
     _doc_report warn sessions "Multiple live Nazgul sessions share one working tree ($dup) — the #195 shared-checkout hazard. Give each concurrent loop its own worktree."
   else

@@ -97,4 +97,19 @@ assert_contains "warning: names the shared tree" "$MSG" "/repo/one"
 assert_contains "warning: names the #195 hazard class" "$MSG" "shared"
 teardown_temp_dir
 
+# Board R1 twin: the predicate is `set -e`-safe on its own, not by the accident
+# of session-context.sh calling it as `if warning_msg=$(...)`.
+setup_temp_dir
+mkdir -p "$TEST_DIR/sessions"
+jq -cn '{pid:"2147483646", session:"a"}' > "$TEST_DIR/sessions/a.lock"
+jq -cn '{pid:"2147483645", session:"b"}' > "$TEST_DIR/sessions/b.lock"
+SURVIVED=$(bash -c '
+set -euo pipefail
+source "$1"
+is_concurrent_session_warning "$2/sessions" >/dev/null
+echo SURVIVED
+' _ "$REPO_ROOT/scripts/lib/session-tracker.sh" "$TEST_DIR" 2>/dev/null)
+assert_eq "bare call under set -euo pipefail survives an empty duplicate scan" "$SURVIVED" "SURVIVED"
+teardown_temp_dir
+
 report_results
