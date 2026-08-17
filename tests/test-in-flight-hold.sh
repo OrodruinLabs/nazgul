@@ -54,6 +54,7 @@ PAYLOAD=$(jq -cn '{tool_name:"Agent",tool_input:{subagent_type:"nazgul:implement
 (cd "$TEST_DIR" && printf '%s' "$PAYLOAD" | bash "$WRITER" >/dev/null 2>&1) || true
 MARKER_FILE=$(find "$TEST_DIR/nazgul/in-flight" -type f | head -1)
 assert_eq "writer: background captured as 'true'" "$(jq -r '.background' "$MARKER_FILE")" "true"
+assert_eq "writer: background is a JSON string, not a boolean" "$(jq -r '.background|type' "$MARKER_FILE")" "string"
 assert_eq "writer: named captured as 'true'" "$(jq -r '.named' "$MARKER_FILE")" "true"
 teardown_temp_dir
 
@@ -64,6 +65,7 @@ PAYLOAD=$(jq -cn '{tool_name:"Agent",tool_input:{subagent_type:"nazgul:implement
 (cd "$TEST_DIR" && printf '%s' "$PAYLOAD" | bash "$WRITER" >/dev/null 2>&1) || true
 MARKER_FILE=$(find "$TEST_DIR/nazgul/in-flight" -type f | head -1)
 assert_eq "writer: background captured as 'false'" "$(jq -r '.background' "$MARKER_FILE")" "false"
+assert_eq "writer: 'false' is a JSON string — a boolean would be swallowed by the consumer's // default and misread as unobservable" "$(jq -r '.background|type' "$MARKER_FILE")" "string"
 teardown_temp_dir
 
 setup_temp_dir
@@ -225,9 +227,11 @@ if grep -q '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/d
 else
   _pass "hold: NO in_flight_hold event for a foreground marker"
 fi
+assert_not_contains "hold: a PROVEN foreground marker is never recorded as unverifiable" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" "in_flight_unverifiable"
 teardown_temp_dir
 
-# --- classification: 'missing' classifies as foreground (cost-weighed) ---
+# --- classification: 'missing' is not observable at write time, not foreground (#218) ---
 setup_temp_dir
 setup_nazgul_dir
 create_config
@@ -236,6 +240,28 @@ NOW=$(date +%s)
 _write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$NOW" "missing"
 run_hook
 assert_file_exists "hold: 'missing' marker quarantined like foreground" "$TEST_DIR/nazgul/in-flight/quarantine/legacy.json"
+assert_contains "hold: 'missing' emits stop_gate reason in_flight_unverifiable" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" '"reason":"in_flight_unverifiable"'
+assert_not_contains "hold: 'missing' is NOT recorded as a proven orphan" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" "in_flight_orphan"
+assert_contains "hold: 'missing' event carries the observed background value" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" '"background":"missing"'
+assert_contains "hold: 'missing' stderr names the unobservable class" "$HOOK_OUTPUT" "background=missing"
+assert_contains "hold: 'missing' stderr refuses the proven-leak claim" "$HOOK_OUTPUT" "NOT a proven foreground leak"
+teardown_temp_dir
+
+# --- classification: a named dispatch is proven regardless of an unobservable class ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+NOW=$(date +%s)
+_write_marker "$TEST_DIR/nazgul/in-flight/nm-legacy.json" "nazgul:implementer" "TASK-002" "$NOW" "missing" "true"
+run_hook
+assert_contains "hold: named + 'missing' stays a proven orphan" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" '"reason":"in_flight_orphan"'
+assert_not_contains "hold: named + 'missing' is not unverifiable" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" "in_flight_unverifiable"
 teardown_temp_dir
 
 # --- classification: background=true still holds (exit 0 + in_flight_hold) ---
@@ -261,6 +287,8 @@ NOW=$(date +%s)
 _write_marker "$TEST_DIR/nazgul/in-flight/nm.json" "nazgul:implementer" "TASK-004" "$NOW" "true" "true"
 run_hook
 assert_file_exists "hold: named dispatch marker quarantined (report contract owns it)" "$TEST_DIR/nazgul/in-flight/quarantine/nm.json"
+assert_contains "hold: named dispatch is a proven orphan, not unverifiable" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" '"reason":"in_flight_orphan"'
 teardown_temp_dir
 
 # === Clear: scripts/subagent-stop.sh ===

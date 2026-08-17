@@ -153,8 +153,8 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
     m_agent=$(jq -r '.agent // "unknown"' "$marker" 2>/dev/null || echo "unknown")
     case "$m_epoch" in ''|*[!0-9]*) m_epoch=0 ;; esac
     if [ "$m_epoch" -gt 0 ] && [ "$m_epoch" -ge "$IN_FLIGHT_CUTOFF" ]; then
-      # Legacy markers lack both fields: the jq defaults classify them foreground
-      # by ADR-009 cost-weighing (a false hold costs the run; a false continue, one iteration).
+      # "missing" = dispatch class NOT OBSERVABLE at write time, not foreground. run_in_background is omitted from the exposed Agent schema in fork mode (the interactive default since v2.1.232) and under CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
+      # absence means the OPPOSITE in those two configs (background / foreground). #218: read background_tasks[] at Stop instead of predicting at dispatch time.
       m_bg=$(jq -r '.background // "missing"' "$marker" 2>/dev/null || echo "missing")
       m_named=$(jq -r '.named // "false"' "$marker" 2>/dev/null || echo "false")
       if [ "$m_bg" = "true" ] && [ "$m_named" != "true" ]; then
@@ -163,12 +163,17 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
         FRESH_COUNT=$((FRESH_COUNT + 1))
         FRESH_UNITS="${FRESH_UNITS}${FRESH_UNITS:+ }${m_unit}"
       else
-        # Fresh but not provably background (foreground / "missing" / named) is
-        # a proven LEAK (#104 Gap 3): a sync dispatch cannot span a Stop.
+        # We continue rather than hold (#104 Gap 3): a false hold stalls the run with no wake path this code reads. But on a fork-mode host this is usually WRONG about the
+        # dispatch, and the marker is MOVED (not merely skipped), so the call can never be reconsidered — hence in_flight_unverifiable, never "proven leak".
         mkdir -p "$NAZGUL_DIR/in-flight/quarantine" 2>/dev/null || true
         mv "$marker" "$NAZGUL_DIR/in-flight/quarantine/" 2>/dev/null || true
-        echo "Nazgul: ORPHAN in-flight marker for ${m_unit} (${m_agent}, background=${m_bg}, named=${m_named}) — quarantined; a foreground dispatch cannot outlive its turn. Continuing normally." >&2
-        emit_event "stop_gate" reason "in_flight_orphan" unit "$m_unit" agent "$m_agent" background "$m_bg"
+        if [ "$m_bg" = "false" ] || [ "$m_named" = "true" ]; then
+          echo "Nazgul: ORPHAN in-flight marker for ${m_unit} (${m_agent}, background=${m_bg}, named=${m_named}) — quarantined; a foreground dispatch cannot outlive its turn. Continuing normally." >&2
+          emit_event "stop_gate" reason "in_flight_orphan" unit "$m_unit" agent "$m_agent" background "$m_bg"
+        else
+          echo "Nazgul: UNVERIFIABLE in-flight marker for ${m_unit} (${m_agent}, background=${m_bg}) — dispatch class not observable at write time; quarantined by cost-weighing, NOT a proven foreground leak. On this host class the hold never engages (#218). Continuing normally." >&2
+          emit_event "stop_gate" reason "in_flight_unverifiable" unit "$m_unit" agent "$m_agent" background "$m_bg"
+        fi
       fi
     else
       # Stale markers are NEVER silently deleted here — a crashed subagent's
