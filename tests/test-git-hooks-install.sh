@@ -419,6 +419,13 @@ STEP4_LN=$(grep -n '^### Step 4: Remove Runtime State' "$CLEAN_SKILL" | head -1 
 if [ -n "$STEP3_LN" ] && [ -n "$RESTORE_LN" ] && [ -n "$STEP4_LN" ] \
   && [ "$STEP3_LN" -lt "$RESTORE_LN" ] && [ "$RESTORE_LN" -lt "$STEP4_LN" ]; then ORDER_EC=0; else ORDER_EC=1; fi
 assert_exit_code "0-E: clean skill restores hooks between Step 3 and Step 4" "$ORDER_EC" 0
-assert_file_contains "0-E: clean skill clears a hooksPath still pointing into nazgul/" "$CLEAN_SKILL" "git config --unset core.hooksPath"
+# Pattern relaxed from the cwd-relative `git config --unset ...` to the root-relative
+# form (PR #223 review #10): the old spelling silently no-opped from a subdirectory or
+# worktree, leaving core.hooksPath dangling at a deleted directory — git then ran NO
+# hooks at all. The two assertions below pin the FIX, not just the presence of a clear:
+# it must resolve the project root and must address the repo explicitly with -C.
+assert_file_contains "0-E: clean skill clears a hooksPath still pointing into nazgul/" "$CLEAN_SKILL" "config --unset core.hooksPath"
+assert_file_contains "0-E: clean skill resolves the project root, never cwd" "$CLEAN_SKILL" "resolve_project_root"
+assert_file_contains "0-E: clean skill addresses the repo explicitly (git -C), so a subdir run cannot no-op" "$CLEAN_SKILL" 'git -C "$ROOT" config --unset core.hooksPath'
 
 report_results

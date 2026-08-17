@@ -79,14 +79,20 @@ run_session_end "$TEST_DIR"
 assert_eq "non-git tree: lock still released" "$(lock_count "$TEST_DIR")" "0"
 teardown_temp_dir
 
-# --- Test 6: no session_id in the payload -> the persisted .session_id fallback ---
+# --- Test 6: no session_id in the payload -> release NOTHING ---
+# INVERTED DELIBERATELY (PR #223 review #9). This asserted the `.session_id` fallback,
+# which is last-writer-wins: session-context.sh rewrites that file on every SessionStart,
+# so in the shared-working-tree case #195 exists to protect, session A ending here would
+# have unregistered session B's LIVE lock while A's own leaked. An unreleased lock is
+# retired by the pid-liveness sweep; a wrongly-released one silently disarms the
+# collision warning for a session that is still running. Absent beats wrong.
 setup_temp_dir
 plant_session "$TEST_DIR" false
 printf 'sess-a' > "$TEST_DIR/nazgul/.session_id"
 ( cd "$TEST_DIR" && printf '{}' \
     | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO_ROOT/scripts/session-staging.sh" >/dev/null 2>&1 )
-assert_eq "payload without session_id: released via the .session_id fallback" \
-  "$(lock_count "$TEST_DIR")" "0"
+assert_eq "payload without session_id: releases NOTHING — .session_id cannot identify the ending session" \
+  "$(lock_count "$TEST_DIR")" "1"
 teardown_temp_dir
 
 # --- Test 7: another session's lock is never collateral damage ---

@@ -94,15 +94,39 @@ If Abort: stop immediately.
 it. Deleting first leaves `core.hooksPath` dangling at a nonexistent directory — git then runs NO
 hooks at all, including the user's own pre-existing hooks, silently. Restore first:
 
+Resolve the project ROOT first — never `$(pwd)` (PR #223 review #10). Run in bash, not zsh:
+
 ```bash
-bash -c 'source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/git-hooks.sh" && uninstall_git_hooks "$(pwd)" "$(pwd)/nazgul/config.json"'
+bash -c '
+set -u
+source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/nazgul-root.sh"
+ROOT="$(resolve_project_root)" || { echo "clean: cannot resolve the project root — NOT touching core.hooksPath" >&2; exit 1; }
+source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/git-hooks.sh"
+uninstall_git_hooks "$ROOT" "$ROOT/nazgul/config.json"
+
 # Belt-and-braces: if core.hooksPath STILL points into nazgul/ (e.g. prior_hooks_path
-# was never recorded because install ran under an older version), clear it outright:
-CURRENT_HP=$(git config --get core.hooksPath 2>/dev/null || echo "")
-case "$CURRENT_HP" in nazgul/*) git config --unset core.hooksPath ;; esac
+# was never recorded because install ran under an older version), clear it outright.
+# Every state is REPORTED — "no match" and "nothing to do" must not print the same
+# thing (RULES §15), and an inherited --global value cannot be cleared by --unset.
+CURRENT_HP=$(git -C "$ROOT" config --get core.hooksPath 2>/dev/null || echo "")
+GLOBAL_HP=$(git config --global --get core.hooksPath 2>/dev/null || echo "")
+case "$CURRENT_HP" in
+  "")                       echo "clean: core.hooksPath is unset locally — nothing to restore." ;;
+  nazgul/*|"$ROOT"/nazgul/*) git -C "$ROOT" config --unset core.hooksPath                                && echo "clean: cleared core.hooksPath (was $CURRENT_HP, inside nazgul/)." ;;
+  *)                        echo "clean: core.hooksPath is $CURRENT_HP — OUTSIDE nazgul/, left untouched. Verify this is yours." ;;
+esac
+if [ -n "$GLOBAL_HP" ]; then
+  case "$GLOBAL_HP" in
+    *nazgul/*) echo "clean: WARNING — a GLOBAL core.hooksPath ($GLOBAL_HP) points into a nazgul/ directory. --unset touches local config only; clear it yourself with: git config --global --unset core.hooksPath" >&2 ;;
+  esac
+fi
+'
 ```
 
-Verify: `git config --get core.hooksPath` must print nothing or a path OUTSIDE `nazgul/`.
+Verify: `git -C "$ROOT" config --get core.hooksPath` must print nothing or a path OUTSIDE `nazgul/`.
+Both the absolute and relative spellings are matched above: `_GH_MANAGED_RELDIR` makes the relative
+form correct today, but a pattern that silently stops matching if that ever changes is exactly the
+"a guard that finds nothing must know why" failure this repo prosecutes elsewhere.
 
 ### Step 4: Remove Runtime State
 

@@ -68,8 +68,8 @@ This list is EVENT names only. A `stop_gate` `reason` is not an event and must n
 `in_flight_hold`, `in_flight_stale`, `in_flight_orphan`, `in_flight_unverifiable`, `afk_timeout`, and
 `stacking_unavailable` are reasons carried by the single `stop_gate` event, and the reason enumeration
 lives in `docs/CONFIGURATION.md` Event Types plus `RULES.md` §5. `in_flight_orphan` appears above because
-it is ALSO a standalone event (the SessionStart sweep, `source: session_start_sweep`) — that dual role is
-the exception, not the rule.
+it is ALSO a standalone event — that dual role is the exception, not the rule. The SessionStart sweep
+emits `in_flight_swept`, deliberately NOT `in_flight_orphan`: it proves AGE, never dispatch class.
 
 Verify by running both:
 - `grep -rn 'emit_event "' scripts/ skills/ agents/ | grep -v '#'`  (hook-emitted events)

@@ -394,6 +394,8 @@ assert_file_exists "sweep: over-age marker quarantined" "$TEST_DIR/nazgul/in-fli
 assert_file_exists "sweep: fresh marker untouched" "$TEST_DIR/nazgul/in-flight/fresh.json"
 assert_contains "sweep: in_flight_orphan event carries source" \
   "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" "session_start_sweep"
+assert_contains "sweep: emits in_flight_swept, NOT the proven-class in_flight_orphan (PR #223 review #2)" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" '"event":"in_flight_swept"'
 teardown_temp_dir
 
 report_results

@@ -41,8 +41,16 @@ output_result() {
     exit 0
 }
 
-# Session-lock release (#195): the lock's lifetime is the session's, and this is
-# its end. Payload session_id first; persisted .session_id is a LAST-WRITER fallback.
+# Session-lock release (#195): the lock's lifetime is the session's, and this is its
+# end. The hook payload's session_id is the ONLY identity used.
+#
+# There is deliberately NO `nazgul/.session_id` fallback (PR #223 review #9). That file
+# is last-writer-wins — session-context.sh rewrites it on every SessionStart — so in the
+# shared-working-tree case this feature exists to protect (#195), session A ending would
+# read B's id and unregister B's LIVE lock while A's own leaked. Releasing the wrong
+# session's lock is strictly worse than releasing none: an unreleased lock is retired by
+# the pid-liveness sweep, whereas a wrongly-released one silently disarms the collision
+# warning for a session that is still running.
 release_session_lock() {
     local sd nd sid
     sd="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,9 +58,6 @@ release_session_lock() {
     nd="$(resolve_nazgul_dir 2>/dev/null)" || return 0
     [ -d "$nd/sessions" ] || return 0
     sid=$(printf '%s' "$STAGING_STDIN" | jq -r '.session_id // empty' 2>/dev/null || echo "")
-    if [ -z "$sid" ] && [ -s "$nd/.session_id" ]; then
-        sid=$(cat "$nd/.session_id" 2>/dev/null || echo "")
-    fi
     [ -n "$sid" ] || return 0
     source "$sd/lib/session-tracker.sh" 2>/dev/null || return 0
     unregister_session "$sid" "$nd/sessions" 2>/dev/null || true

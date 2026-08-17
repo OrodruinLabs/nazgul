@@ -527,20 +527,53 @@ check_stack_registry() {
 # (k)/(l)/(m) messaging, Remote Control, session collisions — env/settings reads
 # ONLY, never a socket connect (RULES §22; doctor is allowlisted read-only).
 
+# A flag is a KILLER only when its value is affirmatively on. "0"/"false"/"" mean
+# the operator turned it OFF and must not be reported as a blocker (PR #223 review #6).
+_doc_flag_is_on() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    ''|0|false|no|off) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+_DOC_KILLERS_CACHE=""
+_DOC_KILLERS_COMPUTED=""
+
 # Prints "VAR (source); " for each feature-flag killer that is set.
+# Memoised (PR #223 review #14): it was recomputed per check — ~24 jq spawns per run
+# for four boolean answers, on a pre-loop startup path. Same shape as _EMIT_BUS_ENABLED.
 _doc_flag_killers() {
-  local v f proot
+  if [ -n "$_DOC_KILLERS_COMPUTED" ]; then
+    printf '%s' "$_DOC_KILLERS_CACHE"
+    return 0
+  fi
+  local v f proot out="" val present
   proot="$PROJECT_ROOT"
   for v in CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC DISABLE_TELEMETRY DO_NOT_TRACK DISABLE_GROWTHBOOK; do
-    [ -n "$(printenv "$v" 2>/dev/null || true)" ] && printf '%s (shell env); ' "$v"
+    val="$(printenv "$v" 2>/dev/null || true)"
+    _doc_flag_is_on "$val" && out="${out}${v} (shell env); "
   done
   for f in "${HOME:-}/.claude/settings.json" "$proot/.claude/settings.json" "$proot/.claude/settings.local.json"; do
     [ -f "$f" ] || continue
-    for v in CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC DISABLE_TELEMETRY DO_NOT_TRACK DISABLE_GROWTHBOOK; do
-      jq -e --arg v "$v" '(.env // {}) | has($v)' "$f" >/dev/null 2>&1 && printf '%s (env map in %s); ' "$v" "$f"
-    done
+    # ONE jq per file, not one per (file, var): emit "VAR=value" for present keys.
+    present=$(jq -r '(.env // {}) | to_entries[] | "\(.key)=\(.value)"' "$f" 2>/dev/null || true)
+    [ -n "$present" ] || continue
+    while IFS= read -r kv; do
+      [ -n "$kv" ] || continue
+      v="${kv%%=*}"; val="${kv#*=}"
+      case "$v" in
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC|DISABLE_TELEMETRY|DO_NOT_TRACK|DISABLE_GROWTHBOOK) ;;
+        *) continue ;;
+      esac
+      _doc_flag_is_on "$val" && out="${out}${v} (env map in ${f}); "
+    done <<EOF
+$present
+EOF
   done
-  # A killer-less run leaves the last && list false; without this the caller's
+  _DOC_KILLERS_CACHE="$out"
+  _DOC_KILLERS_COMPUTED="yes"
+  printf '%s' "$out"
+  # A killer-less run must still succeed; without this the caller's
   # `killers=$(_doc_flag_killers)` fails and set -e aborts the whole diagnostic.
   return 0
 }
@@ -591,7 +624,15 @@ check_remote_control() {
     [ -n "$(printenv "$v" 2>/dev/null || true)" ] && causes="${causes}${v} set (provider routing); "
   done
   proot="$PROJECT_ROOT"
-  for f in "/Library/Application Support/ClaudeCode/managed-settings.json" "${HOME:-}/.claude/settings.json" "$proot/.claude/settings.json"; do
+  # Both managed-settings locations, and settings.local.json (PR #223 review #7): the
+  # macOS-only path meant an enterprise disableRemoteControl policy on Linux/WSL — this
+  # repo's own CI platform — reported as a CLEAN PASS. Dropping settings.local.json also
+  # made this function disagree with _doc_flag_killers about what "env/settings" means.
+  for f in "/Library/Application Support/ClaudeCode/managed-settings.json" \
+           "/etc/claude-code/managed-settings.json" \
+           "${HOME:-}/.claude/settings.json" \
+           "$proot/.claude/settings.json" \
+           "$proot/.claude/settings.local.json"; do
     [ -f "$f" ] || continue
     if jq -e '.disableRemoteControl == true' "$f" >/dev/null 2>&1; then
       causes="${causes}disableRemoteControl in ${f}; "

@@ -82,7 +82,7 @@ schema, so EVERY marker quarantines unverifiable while its agent is still workin
 The Quarantined markers count is the signal that covers BOTH quarantine
 producers, because both write to that one directory: `scripts/stop-hook.sh` (emits `stop_gate` with reason
 `in_flight_orphan` or `in_flight_unverifiable`) and `scripts/session-context.sh`'s SessionStart sweep (emits a standalone
-`in_flight_orphan` event, `source: session_start_sweep`). Last stop gate reads `stop_gate` events ONLY, so a
+`in_flight_swept` event, `source: session_start_sweep` — AGE only, never a proven class). Last stop gate reads `stop_gate` events ONLY, so a
 sweep-quarantined marker never appears there — never present Last stop gate as the whole orphan story, and
 never report Quarantined > 0 with a `none`/unrelated Last stop gate as a contradiction.
 
