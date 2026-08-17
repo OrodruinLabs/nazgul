@@ -55,21 +55,24 @@ fi
 # The three counts are structural-freshness checks, NOT ceilings: bump one for a
 # genuinely new rule; never weaken a tag to keep a count unchanged (FEAT-022).
 ADVISORY_COUNT=$(awk '{ count += gsub(/\[advisory\]/, "") } END { print count + 0 }' "$RULES_FILE")  # occurrences, not lines
-if [ "$ADVISORY_COUNT" -eq 31 ]; then
-  _pass "[advisory] annotation count is exactly 31 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 35 ]; then
+  _pass "[advisory] annotation count is exactly 35 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 31" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 31"
+  _fail "[advisory] annotation count is exactly 35" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 35"
 fi
 
-# Bumped per objective, never weakened: 64->69->71->78->79->88, the last step FEAT-031
-# (§2 cancellation x2, the CANCELLED dependency gate, §2 merge evidence x3, §16 seam x3).
+# Bumped per objective, never weakened: 64->69 (FEAT-029), 69->71 (PATCH-002), 71->78
+# +advisory 28->31, 78->79 (FEAT-030 §21 + item 8), 79->82 +advisory 31->35 (FEAT-032 §22),
+# 82->91 (FEAT-031: §2 cancellation x2, the CANCELLED dependency gate, §2 merge evidence x3,
+# §16 seam x3). FEAT-031 and FEAT-032 landed concurrently; 91 is the counted total of both,
+# not the sum either branch asserted alone.
 ENFORCED_COUNT=$(awk '{ count += gsub(/\[enforced\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ENFORCED_COUNT" -eq 88 ]; then
-  _pass "[enforced] annotation count is exactly 88 (found: $ENFORCED_COUNT)"
+if [ "$ENFORCED_COUNT" -eq 91 ]; then
+  _pass "[enforced] annotation count is exactly 91 (found: $ENFORCED_COUNT)"
 else
-  _fail "[enforced] annotation count is exactly 88" \
-    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 88"
+  _fail "[enforced] annotation count is exactly 91" \
+    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 91"
 fi
 
 # 21->22 (FEAT-029, §2's typed quarantine), 22->23 (FEAT-031, §3.15's carve-out record):
@@ -321,5 +324,27 @@ assert_file_not_contains \
   "RULES.md no longer claims EnterWorktree is a live worktree-entry path" \
   "$RULES_FILE" \
   "the real worktree-entry paths are the"
+
+# FEAT-032 §22: the posture must state its own enforcement and must not overclaim
+# — receipt IS hook-observable (probe P6), so "buildable" is the honest word.
+assert_file_contains \
+  "RULES.md has a Cross-Session Messaging Posture section" \
+  "$RULES_FILE" \
+  "## 22. Cross-Session Messaging Posture"
+
+assert_file_contains \
+  "§22's doctrine rule is tagged [advisory]" \
+  "$RULES_FILE" \
+  'may never authorize one.*`\[advisory\]`'
+
+assert_file_contains \
+  "§22's no-poster rule is tagged [enforced]" \
+  "$RULES_FILE" \
+  'posts to the messaging socket, ever.*`\[enforced\]`'
+
+assert_file_contains \
+  "§22 states inbound gating is unbuilt, not impossible" \
+  "$RULES_FILE" \
+  "buildable is not built"
 
 report_results

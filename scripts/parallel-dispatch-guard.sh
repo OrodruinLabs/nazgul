@@ -44,6 +44,9 @@ PROMPT=$(printf '%s' "$INPUT" | jq -r '.tool_input.prompt // ""' 2>/dev/null || 
 # A nested Agent context may omit run_in_background because the current host's
 # nested schema is synchronous-only. The main session must state false
 # explicitly because omission is ambiguous on background-by-default versions.
+# On hosts whose Agent schema has no run_in_background field at all, omission
+# is the ONLY possible payload (#205), so the missing case allows with a named
+# event instead of blocking.
 SUBAGENT_NAME="${SUBAGENT##*:}"
 IS_REVIEWER=false
 if jq -e --arg r "$SUBAGENT_NAME" \
@@ -84,8 +87,14 @@ if [ "$IS_REVIEWER" = "true" ]; then
     exit 2
   fi
   if [ "$BACKGROUND_TYPE" = "missing" ] && [ "$NESTED_CALLER" != "true" ]; then
-    echo "NAZGUL REVIEW DISPATCH: Blocked — main-session reviewer calls must set run_in_background:false explicitly." >&2
-    exit 2
+    # #205: the hook payload cannot distinguish "schema lacks the field" from
+    # "caller omitted it", and on schemas without the field it is unsupplyable
+    # — a block here disables the entire review board. ADR-009 cost-weighing:
+    # a false BLOCK costs the review discipline; a false ALLOW is bounded by
+    # FEAT-024's empty-return detection and this guard's other checks. Allow,
+    # and record that verifiability was ABSENT, not confirmed.
+    echo "NAZGUL REVIEW DISPATCH: Allowed — run_in_background absent from the payload (#205: unsupplyable on schemas without the field). Background-verifiability recorded as absent, not assumed." >&2
+    emit_event "dispatch_guard_background_unverifiable" agent "$SUBAGENT_NAME" caller "${CALLER_TYPE:-main}"
   fi
 fi
 

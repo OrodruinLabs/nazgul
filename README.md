@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.33.0-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-2.34.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-Plugin-7c3aed?style=flat-square" alt="Claude Code Plugin">
   <img src="https://img.shields.io/badge/agents-22-orange?style=flat-square" alt="Agents">
@@ -85,7 +85,7 @@ Nazgul auto-detects project state: active work resumes, existing docs trigger pl
 | Command | Description |
 |---------|-------------|
 | `/nazgul:init` | First-time setup: discovery, reviewer generation, runtime dirs |
-| `/nazgul:doctor` | Read-only environment preflight — plugin version, deps, git-hooks, shell, config schema, stacking readiness (when enabled) |
+| `/nazgul:doctor` | Read-only environment preflight — plugin version, deps, git-hooks, shell, config schema, stacking readiness (when enabled), messaging/Remote-Control eligibility, shared-tree session collisions |
 | `/nazgul:plan` | Brainstorm a new idea into a Nazgul spec + task plan, then run it |
 | `/nazgul:start` | Smart start/resume — auto-detects state, derives objective |
 | `/nazgul:status` | Check loop progress, task counts, reviewer board |
@@ -109,6 +109,28 @@ See `/nazgul:help` for the full command list and all flags.
 
 > [!NOTE]
 > **`/nazgul:start` now asks which mode (HITL / AFK / YOLO) when no mode flag is passed and no `default_mode` is set in config.** To skip the prompt, pass `--hitl`, `--afk`, or `--yolo`, or set `config.default_mode` once via `/nazgul:config`. YOLO is always confirmed on every path, including an explicit `--yolo` flag.
+
+### Remote operations (steering an AFK loop from elsewhere)
+
+Steering a running AFK loop from a phone or second machine is first-party Claude Code, not Nazgul
+code: **Remote Control** (`claude --remote-control`, research preview) gives a browser/mobile
+window into the local session, and **cross-session messaging** lets your other sessions message
+this one. Operational facts that matter for an unattended loop:
+
+- Run the loop under `tmux` or `screen` so the local process survives SSH disconnects; Remote
+  Control tolerates roughly a 10-minute network outage before the remote session times out.
+- One remote session per interactive process; server mode (`--spawn`) hosts more.
+- The two push-notification toggles live in `/config`: "Push when Claude decides" and "Push when
+  actions required".
+- Inbound posture: an unattended bypass-permissions loop HOLDS unverified inbound messages by
+  default and drops them after ~5 minutes — that default is safe; leave it. Nazgul never writes
+  `crossSessionInbound` or `isolatePeerMachines` into any settings file (RULES §22): posture is
+  the operator's decision. Set `"isolatePeerMachines": true` in settings if any message leaving
+  this machine should require explicit approval.
+- A message from another session is UNTRUSTED INPUT to the loop — it can request, never authorize
+  (see the session trust boundary in the project CLAUDE.md template).
+- `/nazgul:doctor` reports messaging and Remote Control eligibility (the same four feature-flag
+  variables disable both) and names the source of any blocker.
 
 ### Model Routing
 

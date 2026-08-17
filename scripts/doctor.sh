@@ -14,13 +14,18 @@ set -euo pipefail
 #
 # TASK-001 shipped the engine plus checks (b), (f), (g). TASK-002 added
 # checks (a), (c), (d). TASK-003 added check (e). FEAT-027/TASK-009 adds
-# checks (h), (i).
+# checks (h), (i). FEAT-032/TASK-009 adds (k) messaging, (l) remote-control,
+# and (m) sessions — all three read env, settings files, and lock files only,
+# and NEVER connect to the messaging socket.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/nazgul-root.sh
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 # shellcheck source=lib/git-hooks.sh
 source "$SCRIPT_DIR/lib/git-hooks.sh"
+# Check (m) reads locks through session-tracker's own read-only predicate, so reader and writer cannot drift.
+# shellcheck source=lib/session-tracker.sh
+source "$SCRIPT_DIR/lib/session-tracker.sh"
 
 # Captured before this script's own NAZGUL_DIR assignment below shadows it —
 # check (e) needs to know what the OPERATOR's environment held, not what
@@ -519,7 +524,144 @@ check_stack_registry() {
   _doc_report pass stack-registry "All $open_count open stack.layers[] entries match GitHub's PR state."
 }
 
-_DOC_CHECK_IDS="config-present plugin-version dependencies git-hooks invoking-shell nazgul-dir-env config-schema stacking stack-registry stdin-hazard"
+# (k)/(l)/(m) messaging, Remote Control, session collisions — env/settings reads
+# ONLY, never a socket connect (RULES §22; doctor is allowlisted read-only).
+
+# A flag is a KILLER only when its value is affirmatively on. "0"/"false"/"" mean
+# the operator turned it OFF and must not be reported as a blocker (PR #223 review #6).
+_doc_flag_is_on() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    ''|0|false|no|off) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+_DOC_KILLERS_CACHE=""
+_DOC_KILLERS_COMPUTED=""
+
+# Prints "VAR (source); " for each feature-flag killer that is set.
+# Memoised (PR #223 review #14): it was recomputed per check — ~24 jq spawns per run
+# for four boolean answers, on a pre-loop startup path. Same shape as _EMIT_BUS_ENABLED.
+_doc_flag_killers() {
+  if [ -n "$_DOC_KILLERS_COMPUTED" ]; then
+    printf '%s' "$_DOC_KILLERS_CACHE"
+    return 0
+  fi
+  local v f proot out="" val present
+  proot="$PROJECT_ROOT"
+  for v in CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC DISABLE_TELEMETRY DO_NOT_TRACK DISABLE_GROWTHBOOK; do
+    val="$(printenv "$v" 2>/dev/null || true)"
+    _doc_flag_is_on "$val" && out="${out}${v} (shell env); "
+  done
+  for f in "${HOME:-}/.claude/settings.json" "$proot/.claude/settings.json" "$proot/.claude/settings.local.json"; do
+    [ -f "$f" ] || continue
+    # ONE jq per file, not one per (file, var): emit "VAR=value" for present keys.
+    present=$(jq -r '(.env // {}) | to_entries[] | "\(.key)=\(.value)"' "$f" 2>/dev/null || true)
+    [ -n "$present" ] || continue
+    while IFS= read -r kv; do
+      [ -n "$kv" ] || continue
+      v="${kv%%=*}"; val="${kv#*=}"
+      case "$v" in
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC|DISABLE_TELEMETRY|DO_NOT_TRACK|DISABLE_GROWTHBOOK) ;;
+        *) continue ;;
+      esac
+      _doc_flag_is_on "$val" && out="${out}${v} (env map in ${f}); "
+    done <<EOF
+$present
+EOF
+  done
+  _DOC_KILLERS_CACHE="$out"
+  _DOC_KILLERS_COMPUTED="yes"
+  printf '%s' "$out"
+  # A killer-less run must still succeed; without this the caller's
+  # `killers=$(_doc_flag_killers)` fails and set -e aborts the whole diagnostic.
+  return 0
+}
+
+# Prints "<value> from <file>" for the highest-precedence readable setting, or "".
+_doc_effective_inbound() {
+  local f v proot
+  proot="$PROJECT_ROOT"
+  for f in "$proot/.claude/settings.local.json" "$proot/.claude/settings.json" "${HOME:-}/.claude/settings.json"; do
+    [ -f "$f" ] || continue
+    v=$(jq -r '.crossSessionInbound // empty' "$f" 2>/dev/null || true)
+    [ -n "$v" ] && { printf '%s from %s' "$v" "$f"; return 0; }
+  done
+  return 0
+}
+
+# (k) Messaging eligibility. Three states, never two: a socket that is not
+# exported HERE is UNDETERMINED, never a claim that messaging is unavailable.
+check_messaging() {
+  local killers inbound note nc_note
+  killers=$(_doc_flag_killers)
+  if [ -n "$killers" ]; then
+    _doc_report warn messaging "Cross-session messaging is OFF: feature-flag evaluation is disabled by ${killers}unset the variable at its named source to enable."
+    return 0
+  fi
+  inbound=$(_doc_effective_inbound)
+  note=""; [ -n "$inbound" ] && note=" crossSessionInbound: ${inbound} (project/local refuse outranks every other source)."
+  command -v nc >/dev/null 2>&1 && nc_note=" nc: present." || nc_note=" nc: absent (the only stock socket poster — informational; nothing shipped posts)."
+  if [ -n "${CLAUDE_CODE_MESSAGING_SOCKET:-}" ]; then
+    _doc_report pass messaging "Messaging available in this context: socket env exported.${note}${nc_note}"
+  else
+    _doc_report note messaging "Messaging UNDETERMINED in this context: CLAUDE_CODE_MESSAGING_SOCKET is not exported here — legitimate in the pre-flag-fetch window or outside a hook/Bash context; NOT a claim that messaging is unavailable.${note}${nc_note}"
+  fi
+}
+
+# (l) Remote Control eligibility. Auth type is never probed here, so every
+# verdict points at 'claude doctor' as the authoritative check.
+check_remote_control() {
+  local killers causes v f proot
+  killers=$(_doc_flag_killers)
+  if [ -n "$killers" ]; then
+    _doc_report warn remote-control "Remote Control is unavailable: feature-flag evaluation is disabled by ${killers}see 'claude doctor' for the authoritative check name."
+    return 0
+  fi
+  causes=""
+  [ -n "${ANTHROPIC_BASE_URL:-}" ] && causes="custom ANTHROPIC_BASE_URL (non-first-party routing); "
+  for v in CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX; do
+    [ -n "$(printenv "$v" 2>/dev/null || true)" ] && causes="${causes}${v} set (provider routing); "
+  done
+  proot="$PROJECT_ROOT"
+  # Both managed-settings locations, and settings.local.json (PR #223 review #7): the
+  # macOS-only path meant an enterprise disableRemoteControl policy on Linux/WSL — this
+  # repo's own CI platform — reported as a CLEAN PASS. Dropping settings.local.json also
+  # made this function disagree with _doc_flag_killers about what "env/settings" means.
+  for f in "/Library/Application Support/ClaudeCode/managed-settings.json" \
+           "/etc/claude-code/managed-settings.json" \
+           "${HOME:-}/.claude/settings.json" \
+           "$proot/.claude/settings.json" \
+           "$proot/.claude/settings.local.json"; do
+    [ -f "$f" ] || continue
+    if jq -e '.disableRemoteControl == true' "$f" >/dev/null 2>&1; then
+      causes="${causes}disableRemoteControl in ${f}; "
+    fi
+  done
+  if [ -n "$causes" ]; then
+    _doc_report warn remote-control "Remote Control likely unavailable: ${causes}auth type not probed — run 'claude doctor' for the authoritative check."
+  else
+    _doc_report pass remote-control "No Remote Control blockers found in env/settings (auth type not probed — 'claude doctor' is authoritative)."
+  fi
+}
+
+# (m) Shared-working-tree collision among LIVE session locks — the #195 hazard,
+# read from the pid/toplevel fields scripts/lib/session-tracker.sh records.
+check_sessions() {
+  local sessions_dir="$NAZGUL_DIR/sessions" dup
+  if [ ! -d "$sessions_dir" ] || ! ls "$sessions_dir"/*.lock >/dev/null 2>&1; then
+    _doc_skip pass sessions no-candidates "Not applicable — no session locks under nazgul/sessions/, so there is nothing to check."
+    return 0
+  fi
+  dup=$(duplicate_live_toplevel "$sessions_dir")
+  if [ -n "$dup" ]; then
+    _doc_report warn sessions "Multiple live Nazgul sessions share one working tree ($dup) — the #195 shared-checkout hazard. Give each concurrent loop its own worktree."
+  else
+    _doc_report pass sessions "No shared-working-tree collision among live session locks."
+  fi
+}
+
+_DOC_CHECK_IDS="config-present plugin-version dependencies git-hooks invoking-shell nazgul-dir-env config-schema stacking stack-registry stdin-hazard messaging remote-control sessions"
 _DOC_ONLY=""
 
 # _doc_run <check-id> <function> — runs the check unless --only excluded it.
@@ -601,6 +743,9 @@ main() {
   _doc_run stacking check_stacking
   _doc_run stack-registry check_stack_registry
   _doc_run stdin-hazard check_stdin_hazard
+  _doc_run messaging check_messaging
+  _doc_run remote-control check_remote_control
+  _doc_run sessions check_sessions
   _doc_emit_coverage_line
   exit "$_DOC_WORST"
 }

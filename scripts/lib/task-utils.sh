@@ -76,8 +76,8 @@ get_task_status() {
   if [ "$fm_rc" -eq 0 ]; then echo "$fm_status"; return; fi
   if [ "$fm_rc" -eq 2 ]; then echo "INVALID"; return; fi
   # fm_rc==1 (no status frontmatter): fall through to legacy parsing below.
-  # Try inline formats first (colon on same line)
-  result=$(grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$1" 2>/dev/null | sed 's/.*:[[:space:]]*//')
+  # Inline formats first; `|| true` so a no-match reaches this function's own documented default instead of aborting an errexit caller.
+  result=$(grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$1" 2>/dev/null | sed 's/.*:[[:space:]]*//' || true)
   if [ -n "$result" ]; then
     echo "$result"
     return

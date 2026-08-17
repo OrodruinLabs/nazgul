@@ -33,8 +33,11 @@ create_config '.automation.heartbeat.enabled = true'
 mkdir -p "$TEST_DIR/nazgul/inbox"
 jq -n '{title:"FEAT-999 test objective", body:"do the thing", priority:1}' > "$TEST_DIR/nazgul/inbox/cand.json"
 mkdir -p "$TEST_DIR/nazgul/sessions"
-echo '{"pid":"1","session":"s1","started":"now"}' > "$TEST_DIR/nazgul/sessions/s1.lock"
-bash "$REPO_ROOT/scripts/heartbeat.sh"
+# A live pid we own: board R3 made counting liveness-filtered, and pid 1 is alive
+# but unsignalable (EPERM), so the old fixture stopped reading as an active session.
+jq -cn --arg p "$$" '{pid:$p, session:"s1", started:"now"}' > "$TEST_DIR/nazgul/sessions/s1.lock"
+# Pinned so a regression in the guard ASSERTS rather than launching a real claude -p.
+NAZGUL_HEARTBEAT_START_CMD="true" bash "$REPO_ROOT/scripts/heartbeat.sh"
 LOG=$(latest_log)
 assert_file_exists "active-session: log file written" "$LOG"
 assert_json_field "active-session: decision is skipped" "$LOG" '.decision' "skipped"
@@ -64,8 +67,8 @@ create_config '.automation.heartbeat.enabled = true | .automation.heartbeat.inbo
 mkdir -p "$TEST_DIR/nazgul/inbox"
 jq -n '{title:"FEAT-999 test objective", body:"do the thing", priority:1}' > "$TEST_DIR/nazgul/inbox/cand.json"
 mkdir -p "$TEST_DIR/nazgul/sessions"
-echo '{"pid":"1","session":"s1","started":"now"}' > "$TEST_DIR/nazgul/sessions/s1.lock"
-bash "$REPO_ROOT/scripts/heartbeat.sh"
+jq -cn --arg p "$$" '{pid:$p, session:"s1", started:"now"}' > "$TEST_DIR/nazgul/sessions/s1.lock"
+NAZGUL_HEARTBEAT_START_CMD="true" bash "$REPO_ROOT/scripts/heartbeat.sh"
 LOG=$(latest_log)
 assert_json_field "file-provider: triage still runs (picked candidate)" "$LOG" '.picked' "cand.json"
 teardown_temp_dir
@@ -136,14 +139,14 @@ create_config '.automation.heartbeat.enabled = true | .automation.heartbeat.lock
 mkdir -p "$TEST_DIR/nazgul/inbox"
 jq -n '{title:"FEAT-999 test objective", body:"do the thing", priority:1}' > "$TEST_DIR/nazgul/inbox/cand.json"
 mkdir -p "$TEST_DIR/nazgul/sessions"
-echo '{"pid":"1","session":"s1","started":"now"}' > "$TEST_DIR/nazgul/sessions/s1.lock"
+jq -cn --arg p "$$" '{pid:$p, session:"s1", started:"now"}' > "$TEST_DIR/nazgul/sessions/s1.lock"
 mkdir -p "$TEST_DIR/nazgul/.heartbeat.lock"
 sleep 0.1 &
 DEAD_HOLDER=$!
 wait "$DEAD_HOLDER" 2>/dev/null || true
 echo "$DEAD_HOLDER" > "$TEST_DIR/nazgul/.heartbeat.lock/pid"
 touch -t 202001010000 "$TEST_DIR/nazgul/.heartbeat.lock"
-CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO_ROOT/scripts/heartbeat.sh"
+NAZGUL_HEARTBEAT_START_CMD="true" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO_ROOT/scripts/heartbeat.sh"
 LOG=$(latest_log)
 assert_json_field "MF-039: dead-owner stale lock reclaimed, tick triaged" "$LOG" '.picked' "cand.json"
 assert_file_not_exists "MF-039: reclaimed lock released after tick exit" "$TEST_DIR/nazgul/.heartbeat.lock"

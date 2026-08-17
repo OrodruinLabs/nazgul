@@ -379,4 +379,23 @@ output=$(bash "$SESSION_SCRIPT" 2>&1)
 assert_contains "halted: flag surfaced on Stack line" "$output" "HALTED: conflict"
 teardown_temp_dir
 
+# --- Test 26 (TASK-005): #104 fix direction (c): over-age in-flight markers quarantined at SessionStart ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+jq -cn '{agent:"nazgul:implementer", unit:"TASK-001", dispatched_at:"2026-08-01T00:00:00Z", dispatched_at_epoch:1000, prompt_head:"x", background:"true", named:"false"}' \
+  > "$TEST_DIR/nazgul/in-flight/ancient.json"
+NOW=$(date +%s)
+jq -cn --argjson e "$NOW" '{agent:"nazgul:implementer", unit:"TASK-002", dispatched_at:"x", dispatched_at_epoch:$e, prompt_head:"x", background:"true", named:"false"}' \
+  > "$TEST_DIR/nazgul/in-flight/fresh.json"
+(cd "$TEST_DIR" && bash "$SESSION_SCRIPT" </dev/null >/dev/null 2>&1) || true
+assert_file_exists "sweep: over-age marker quarantined" "$TEST_DIR/nazgul/in-flight/quarantine/ancient.json"
+assert_file_exists "sweep: fresh marker untouched" "$TEST_DIR/nazgul/in-flight/fresh.json"
+assert_contains "sweep: in_flight_swept event carries source" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" "session_start_sweep"
+assert_contains "sweep: emits in_flight_swept, NOT the proven-class in_flight_orphan (PR #223 review #2)" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" '"event":"in_flight_swept"'
+teardown_temp_dir
+
 report_results

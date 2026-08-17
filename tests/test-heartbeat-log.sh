@@ -73,8 +73,10 @@ create_config '.automation.heartbeat.enabled = true'
 mkdir -p "$TEST_DIR/nazgul/inbox"
 jq -n '{title:"FEAT-999 test objective", body:"do the thing", priority:1}' > "$TEST_DIR/nazgul/inbox/cand.json"
 mkdir -p "$TEST_DIR/nazgul/sessions"
-echo '{"pid":"1","session":"s1","started":"now"}' > "$TEST_DIR/nazgul/sessions/s1.lock"
-bash "$REPO_ROOT/scripts/heartbeat.sh"
+# A live pid we own: board R3 made counting liveness-filtered, and pid 1 is alive
+# but unsignalable (EPERM), so the old fixture stopped reading as an active session.
+jq -cn --arg p "$$" '{pid:$p, session:"s1", started:"now"}' > "$TEST_DIR/nazgul/sessions/s1.lock"
+NAZGUL_HEARTBEAT_START_CMD="true" bash "$REPO_ROOT/scripts/heartbeat.sh"
 LOG=$(latest_log)
 assert_valid_ndjson "skipped" "$LOG" 1
 assert_eq "skipped: decision" "$(line_field "$LOG" 1 '.decision')" "skipped"

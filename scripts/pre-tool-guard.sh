@@ -37,10 +37,17 @@ dp_unavailable() {
 
 [ -f "$DP_LIB" ] || dp_unavailable "file is missing"
 [ -r "$DP_LIB" ] || dp_unavailable "file is not readable"
+# `source` returns the sourced file's LAST statement's status, so a non-zero there
+# is not evidence of a broken library — parse and API are asked as separate facts.
+bash -n "$DP_LIB" 2>/dev/null || dp_unavailable "file has a syntax error (bash -n rejected it)"
+dp_src_rc=0
 # shellcheck source=./lib/destructive-patterns.sh
-source "$DP_LIB" || dp_unavailable "file could not be sourced"
-declare -F dp_scan_command >/dev/null || dp_unavailable "dp_scan_command is not defined after sourcing"
-declare -F dp_scan_manifest_write >/dev/null || dp_unavailable "dp_scan_manifest_write is not defined after sourcing"
+source "$DP_LIB" || dp_src_rc=$?
+declare -F dp_scan_command >/dev/null || dp_unavailable "dp_scan_command is not defined after sourcing (source returned $dp_src_rc)"
+declare -F dp_scan_manifest_write >/dev/null || dp_unavailable "dp_scan_manifest_write is not defined after sourcing (source returned $dp_src_rc)"
+if [ "$dp_src_rc" -ne 0 ]; then
+  echo "NAZGUL SAFETY: note — $DP_LIB returned $dp_src_rc on load, but both screen functions are defined; screening proceeds." >&2
+fi
 
 # The patterns live in ONE sourceable authority because red-run.sh executes a
 # config-supplied command outside the Bash tool and must screen the same list.

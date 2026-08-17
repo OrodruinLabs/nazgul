@@ -183,14 +183,15 @@ assert_file_exists "lock: still present after refresh (not one-shot)" "$LOCK_FIL
 unset CLAUDE_SESSION_ID
 teardown_temp_dir
 
-# --- 21b: lock removed only on a genuinely-ending (exit 0) run ---
+# --- 21b (INVERTED by #195): an exit-0 run no longer removes the lock — lifetime
+# is the session's; SessionEnd or the pid-liveness sweep owns removal ---
 setup_temp_dir; setup_git_repo; setup_nazgul_dir; create_config '.paused = true'
 create_plan; create_task_file TASK-001 READY none
 export CLAUDE_SESSION_ID="lock-lifecycle-test-0002"
 LOCK_FILE="$TEST_DIR/nazgul/sessions/$(_sanitize_session_id "$CLAUDE_SESSION_ID").lock"
 run_hook
 assert_exit_code "lock: genuinely-ending run exits 0" "$HOOK_EC" 0
-assert_file_not_exists "lock: removed after genuinely-ending run" "$LOCK_FILE"
+assert_file_exists "lock: SURVIVES a genuinely-ending run (session-lifetime, #195)" "$LOCK_FILE"
 unset CLAUDE_SESSION_ID
 teardown_temp_dir
 

@@ -16,7 +16,7 @@ trap 'rm -rf "$SCRATCH"' EXIT
 
 # Every entry point named by RULES.md §15; the tally at the bottom fails if one
 # was never driven through _entry_covered.
-ENTRY_POINTS="run-tests lean-comments test-shellcheck doctor comment-verifier heartbeat-triage self-audit audit-agent-state-paths test-dispatch-brief-contract close-objective"
+ENTRY_POINTS="run-tests lean-comments test-shellcheck doctor comment-verifier heartbeat-triage self-audit audit-agent-state-paths test-dispatch-brief-contract close-objective test-messaging-posture"
 COVERED=""
 
 _entry_covered() {
@@ -285,6 +285,34 @@ assert_contains "close-objective: forced all-skip emits the nothing-checked sign
 assert_exit_code "close-objective: blocking — nothing closed is a failure" "$CO_RC" 2
 assert_contains "close-objective: the vacuous run reaches the bus" \
   "$(cat "$SCRATCH/co/nazgul/logs/events.jsonl" 2>/dev/null)" '"entry_point":"close-objective"'
+
+# test-messaging-posture, forced empty surface root: no shipped surface exists to
+# enumerate, so the K>0 floor must FAIL rather than report a clean surface.
+mkdir -p "$SCRATCH/empty"
+MP_OUT=$(NAZGUL_POSTURE_SURFACE_ROOT="$SCRATCH/empty" \
+  bash "$REPO_ROOT/tests/test-messaging-posture.sh" 2>"$SCRATCH/mp.err")
+MP_RC=$?
+_grammar_check "test-messaging-posture (empty surface root)" "test-messaging-posture" \
+  "unreadable" "$(_last_line "$MP_OUT")" && _entry_covered test-messaging-posture
+assert_contains "test-messaging-posture: a zero-check scan names the K>0 floor as its failure" \
+  "$MP_OUT" "FAIL: K>0 floor: the scan examined at least one file"
+assert_contains "test-messaging-posture: an all-skipped run says NOTHING CHECKED on stderr" \
+  "$(cat "$SCRATCH/mp.err")" \
+  "test-messaging-posture: NOTHING CHECKED — no shipped surface files discovered under $SCRATCH/empty"
+assert_exit_code "test-messaging-posture: blocking — a scan that scans nothing is a failure" "$MP_RC" 1
+# Pinned, not derived: an inherited surface root would aim the "full run" at whatever
+# tree the caller named, and an empty tree passes while checking nothing.
+MP_FULL=$(NAZGUL_POSTURE_SURFACE_ROOT="$REPO_ROOT" \
+  bash "$REPO_ROOT/tests/test-messaging-posture.sh" 2>/dev/null)
+_grammar_check "test-messaging-posture (full run)" "test-messaging-posture" \
+  "unreadable" "$(_last_line "$MP_FULL")"
+MP_CHECKED=$(_last_line "$MP_FULL" | sed -E 's/^.*\), ([0-9]+) checked.*/\1/')
+case "${MP_CHECKED:-}" in ''|*[!0-9]*) MP_CHECKED_N=0 ;; *) MP_CHECKED_N="$MP_CHECKED" ;; esac
+if [ "$MP_CHECKED_N" -ge 1 ]; then
+  _pass "test-messaging-posture: a full run actually checks something"
+else
+  _fail "test-messaging-posture: a full run actually checks something" "checked: $MP_CHECKED"
+fi
 
 # Enumeration completeness — the point of the whole file: an entry point with no
 # emitter must FAIL here, not silently drop out of the list.

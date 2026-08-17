@@ -255,6 +255,13 @@ into the parent row. That layer is ours. Registry + files are primary for row ex
 and loop state; Agent View is progressive enhancement, and absence from it is never a
 death signal (it legitimately cannot see foreground, remote, or other-machine loops).
 
+> **Amendment (2026-08-16, messaging-adoption cycle):** measured on 2.1.233,
+> `claude agents --json` DOES list foreground/interactive local sessions (fields observed:
+> id/sessionId/name/kind/state/cwd/startedAt, pid on some rows). The conclusion (absence ≠ death)
+> stands for remote/other-machine/bare-mode sessions; the local rationale is corrected.
+> `pid: null` is NOT a liveness filter — a done session carried a pid; blocked ones lacked the
+> key. Liveness = kind/state + kill -0 when pid present; degradation is always a named skip.
+
 ### C1. Registry
 
 `~/.nazgul/registry.json`, appended by `/nazgul:init` and `create_feature_worktree`:
