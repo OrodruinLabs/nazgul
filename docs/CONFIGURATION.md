@@ -297,14 +297,30 @@ recorded dispatch class is provably background (`background: "true"` captured at
 emits one `stop_gate` event with `reason: "in_flight_hold"` — for that class the wake-up genuinely
 is the harness's own task-notification when the dispatched agent finishes. A fresh marker that is
 NOT provably background (`"false"`, `"missing"` — including every pre-upgrade marker — or a named
-dispatch) is a proven leak: a synchronous dispatch cannot outlive its own turn, so no resume is
-coming. It is moved to `nazgul/in-flight/quarantine/` (evidence preserved, re-fire stopped), a
-`stop_gate` event with `reason: "in_flight_orphan"` is emitted, and the loop continues NORMALLY —
+dispatch) is not provably awaited work, so no resume can be relied on. It is moved to
+`nazgul/in-flight/quarantine/` (evidence preserved, re-fire stopped), a `stop_gate` event is emitted
+with `reason: "in_flight_orphan"` when the class was proven (`background: "false"`, or a named
+dispatch whose report contract owns it) or `reason: "in_flight_unverifiable"` when the class was not
+observable at all, and the loop continues NORMALLY —
 a productive iteration, not a burned one. This closes the 2026-08-04 incident class (#104 Gap 3):
 an 8-hour sleep on a foreground marker whose completion had already fired. Without this gate,
 a session could otherwise burn an iteration on every ~15-second re-invocation while dispatched work was
 still running, until a soft limit (or the harness's own `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`) force-ended
 the turn from outside the loop's own control.
+
+A fresh marker whose `background` field is `"missing"` records that the dispatch class was **not observable
+at write time** — it does not record a foreground dispatch. Claude Code omits the Agent tool's
+`run_in_background` parameter from the exposed schema in fork mode (the interactive default since v2.1.232)
+and under `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, and absence means the **opposite** thing in those two
+configurations: background in the first, foreground in the second. In the session type this loop runs in,
+absence therefore means the dispatch is most likely **background**, so quarantining it is a cost-weighed
+default that is usually wrong about the dispatch it names. On such a host the class-aware hold never
+engages, `stop_gate` `reason: "in_flight_unverifiable"` fires on essentially every dispatch, and the loop
+continues concurrently with live subagents. This is a known, tracked defect (#218). The authoritative
+signals exist one event later and are documented — `PostToolUse` `tool_response.status` (`async_launched`
+vs `completed`) and the `background_tasks[]` array on `Stop`/`SubagentStop` — and this mechanism does not
+yet read either. `reason: "in_flight_orphan"` is reserved for `background: "false"` or a named dispatch,
+which are genuinely proven.
 
 A marker older than `guards.in_flight_stale_minutes` (default `30`, floored to `>=1`) is NOT held on — the
 stop proceeds normally (iteration increments) — but the staleness is surfaced loudly: a stderr line plus a
@@ -452,7 +468,7 @@ The stream captures:
 - **stack_api_failure** — a `gh`/`gh stack` API call failed; fields `stage`/`auth_status` (an independent `gh auth status` probe, since gh-stack can misattribute auth failures) plus the call's own identifiers
 - **stack_remote_layer_imported** / **stack_remote_layer_import_failed** — an explicit `gh stack checkout <pr>` of a remote layer that `sync` left un-imported succeeded / failed; fields `pr`/`feat_id`/`branch`, or `pr`/`exit_code`/`detail`
 - **red_run_missing** — the IMPLEMENTED red-run evidence check found no usable evidence; fields `task_id` and `reason` (`absent`, `corrupt`, `ref_unresolvable`, `not_ancestor`, `exit_zero`, `bad_na_token`). Emitted whether or not `guards.red_run_evidence` suppressed the block — see Red-Run Evidence Gate above
-- **stop_gate** — a gate ended or short-circuited an autonomous run rather than exiting silently; `reason` values include `in_flight_hold`, `in_flight_stale`, `in_flight_orphan` (a non-background in-flight marker found at Stop time — a foreground dispatch cannot outlive its turn, so the marker is moved to `nazgul/in-flight/quarantine/` and the loop continues normally; fields `unit`/`agent`/`background`), and `stacking_unavailable` (stacking enabled but the tooling is unusable — the loop fell back to a plain PR)
+- **stop_gate** — a gate ended or short-circuited an autonomous run rather than exiting silently; `reason` values include `in_flight_hold`, `in_flight_stale`, `in_flight_orphan` (a provably non-background in-flight marker found at Stop time — `background: "false"`, or a named dispatch whose report contract owns it — so the marker is moved to `nazgul/in-flight/quarantine/` and the loop continues normally; fields `unit`/`agent`/`background`), `in_flight_unverifiable` (dispatch class not observable at write time; quarantined by cost-weighing; fires on every dispatch where `run_in_background` is omitted from the exposed schema — same fields and same quarantine as `in_flight_orphan`, see In-Flight Dispatch Hold above and #218), and `stacking_unavailable` (stacking enabled but the tooling is unusable — the loop fell back to a plain PR)
 - **in_flight_orphan** — the SessionStart sweep quarantined an over-age in-flight marker; fields `source` (`session_start_sweep`), `unit`, and `age_minutes` (a JSON number). Distinct from the `stop_gate` reason of the same name: same quarantine directory, different producer and different fields — a consumer keying only on `stop_gate` misses every SessionStart sweep
 - **dispatch_guard_background_unverifiable** — `scripts/parallel-dispatch-guard.sh` allowed an unnamed reviewer dispatch whose payload carried no `run_in_background` field at all, because on schemas lacking that field it is unsupplyable (#205); fields `agent`/`caller`
 - **clear_skipped_no_match** — a completing subagent cleared no in-flight marker because none matched its unit; fields `agent`/`unit`
