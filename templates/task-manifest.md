@@ -146,9 +146,9 @@ status: PLANNED
      base disagrees with this section), `not_this_objective` (the host confirms the merge, but of a
      PR that is not this objective's), and `not_this_objectives_task` (it IS this objective's merged
      PR, but this manifest is not in this objective's roster — or no roster could be read at all).
-     Each emits `merge_evidence_missing`. `unverifiable` and
-     `not_merged` are separate on purpose: "could not look" is not "not merged". There is NO kill
-     switch: a switch on the last gate before DONE would be the bypass.
+     Each emits `merge_evidence_missing`. `unverifiable` and `not_merged` are separate on purpose:
+     "could not look" is not "not merged". There is NO kill switch: a switch on the last gate
+     before DONE would be the bypass.
 
      Git ancestry is corroboration and never a predicate — after a server-side squash no SHA recorded
      under `## Commits` reaches the merge commit, so `squash_signature` is the expected reading there

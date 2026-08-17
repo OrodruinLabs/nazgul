@@ -695,6 +695,13 @@ assert_contains "binding: the refusal names the base branch the host reported, n
   "$NOT_THIS_OBJ_STDERR" "(into main)"
 assert_eq "binding: the host's base branch is captured for the caller that reports it" \
   "$TTG_MERGE_HOST_BASE_REF" "main"
+# An unreported base must not be printed as a base literally named "<unknown>". The host
+# blanks a base failing _mp_ref_ok, so this form is reachable, not hypothetical.
+NOBASE_WHY=$(ttg_pr_bound "$TEST_DIR/nazgul" "$MERGE_FEAT_ID" "$MERGE_OTHER_BRANCH" 91)
+assert_contains "binding: an unreported base says the host reported none" \
+  "$NOBASE_WHY" "the host reported no usable base branch"
+assert_not_contains "binding: and never invents a base branch called <unknown>" \
+  "$NOBASE_WHY" "<unknown>"
 mp_reset
 
 # The manifest is operator-writable, so a head-ref it claims that the host does not report
@@ -839,6 +846,40 @@ merge_config '.agents.reviewers = ["code-reviewer"]' \
 me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && HISTNEAR_EC=0 || HISTNEAR_EC=$?
 assert_exit_code "history: PR 191 is not PR 91 — a suffix match would refuse the wrong closure" \
   "$HISTNEAR_EC" 0
+merge_config '.agents.reviewers = ["code-reviewer"]'
+
+# lean-comments: allow-run — an assertion that PASSES on a bypass needs its reason attached.
+# DELIBERATELY INVERTED: this asserts the residual gap RULES.md §2 states, so the boundary is
+# a recorded fact rather than a rediscovered one. `branch.feature` is the binding's only
+# anchor and `task-state-guard.sh` blanket-permits config.json, so ONE key edit — with the PR
+# registry silent, which is the ordinary case — still admits a foreign objective's real merge.
+# If a future change closes this, THIS TEST GOES RED: update §2's boundary sentence with it,
+# never delete the case to restore green.
+mp_reset
+MP_HEAD_REF="$MERGE_OTHER_BRANCH"
+merge_config '.agents.reviewers = ["code-reviewer"]' \
+  ".branch.feature = \"$MERGE_OTHER_BRANCH\"" '.objectives_history = []'
+ONEKEY_BODY="- **host**: github.com
+- **pr**: 91
+- **merged-at**: 2026-08-15T12:00:00Z
+- **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+- **head-ref**: ${MERGE_OTHER_BRANCH}
+- **recorded-by**: scripts/close-objective.sh (host API, ok)"
+me_verify "$(merge_manifest "$ONEKEY_BODY")" "$TEST_DIR" TASK-050 && ONEKEY_EC=0 || ONEKEY_EC=$?
+assert_exit_code "boundary: one branch.feature edit STILL admits a foreign merge (§2, stated not fixed)" \
+  "$ONEKEY_EC" 0
+assert_eq "boundary: and it is admitted as fully verified, not as a degraded pass" \
+  "$TTG_MERGE_REASON" "verified"
+# The corroboration that DOES bite: same one-key edit, registry naming the PR's real owner.
+merge_config '.agents.reviewers = ["code-reviewer"]' \
+  ".branch.feature = \"$MERGE_OTHER_BRANCH\"" \
+  '.objectives_history = [{feat_id: "FEAT-030", objective: "prior", started_at: "2026-08-09T00:00:00Z",
+                           pr: "https://github.com/OrodruinLabs/nazgul/pull/91"}]'
+me_verify "$(merge_manifest "$ONEKEY_BODY")" "$TEST_DIR" TASK-050 && ONEKEY2_EC=0 || ONEKEY2_EC=$?
+assert_exit_code "boundary: the one-key edit IS refused once the registry records that PR" "$ONEKEY2_EC" 1
+assert_eq "boundary: refused because config contradicts itself, not because the branch was checked" \
+  "$TTG_MERGE_REASON" "not_this_objective"
+mp_reset
 merge_config '.agents.reviewers = ["code-reviewer"]'
 
 # Every refusal state must be its own token AND its own sentence — a state folded into

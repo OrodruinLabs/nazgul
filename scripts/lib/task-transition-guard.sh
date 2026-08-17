@@ -886,7 +886,7 @@ _ttg_pr_history_owner() {
 # SHOWN to be ours is not thereby ours. `base_ref` is reported but never gated on — under
 # stacking it is the previous layer, not `branch.base`.
 ttg_pr_bound() {
-  local nazgul_dir="$1" feat_id="$2" head_ref="$3" pr_label="$4" base_ref="${5:-}" want b owner
+  local nazgul_dir="$1" feat_id="$2" head_ref="$3" pr_label="$4" base_ref="${5:-}" want b owner into
   if [ -z "$feat_id" ]; then
     printf 'config.json names no feat_id, so no PR can be shown to belong to this objective'
     return 1
@@ -911,8 +911,11 @@ ttg_pr_bound() {
   while IFS= read -r b; do
     if [ "$b" = "$head_ref" ]; then return 0; fi
   done <<< "$want"
-  printf 'PR %s was merged from %s (into %s), which is not %s'"'"'s branch (%s) — its merge is genuine, host-verified evidence about a DIFFERENT objective' \
-    "$pr_label" "$head_ref" "${base_ref:-<unknown>}" "$feat_id" \
+  # An absent base is the host not reporting one (or reporting an unusable one), not a
+  # base named "<unknown>" — the diagnostic says which, since no predicate reads it.
+  if [ -n "$base_ref" ]; then into=" (into $base_ref)"; else into=" (the host reported no usable base branch)"; fi
+  printf 'PR %s was merged from %s%s, which is not %s'"'"'s branch (%s) — its merge is genuine, host-verified evidence about a DIFFERENT objective' \
+    "$pr_label" "$head_ref" "$into" "$feat_id" \
     "$(printf '%s' "$want" | tr '\n' ' ')"
   return 1
 }

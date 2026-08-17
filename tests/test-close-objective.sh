@@ -645,7 +645,26 @@ assert_contains "the why-ancestry-is-only-corroboration rationale lives where a 
 RULES=$(cat "$REPO_ROOT/RULES.md")
 assert_contains "RULES.md §15 registers the closer as a bound entry point" \
   "$RULES" "scripts/close-objective.sh"
-assert_contains "RULES.md §15 corrects the registry count to ten" "$RULES" "Ten entry points are bound"
+# DERIVED from the members §15 enumerates, never authored: the literal "Ten" this replaces
+# had already rotted against FEAT-032's eleventh entry point.
+REG_BLOCK=$(awk '/^- \*\*The registry of bound entry points lives HERE/{f=1} f && /drives every one of them/{exit} f' "$REPO_ROOT/RULES.md")
+REG_MEMBERS=$(printf '%s\n' "$REG_BLOCK" \
+  | grep -oE '`(scripts|tests|agents)/[A-Za-z0-9._/-]+\.(sh|md)( --[a-z-]+)?`' \
+  | tr -d '`' | awk '{print $1}' | LC_ALL=C sort -u)
+REG_COUNT=$(printf '%s\n' "$REG_MEMBERS" | grep -c '[^[:space:]]')
+REG_WORD=$(printf '%s\n' "$REG_BLOCK" | sed -n 's/.*`\[enforced\]` \([A-Za-z]*\) entry points are bound.*/\1/p')
+case "$REG_COUNT" in
+  9) REG_EXPECT="Nine" ;; 10) REG_EXPECT="Ten" ;; 11) REG_EXPECT="Eleven" ;;
+  12) REG_EXPECT="Twelve" ;; 13) REG_EXPECT="Thirteen" ;; 14) REG_EXPECT="Fourteen" ;;
+  *) REG_EXPECT="" ;;
+esac
+if [ -z "$REG_EXPECT" ]; then
+  _fail "RULES.md §15 registry count is spellable" "$REG_COUNT members enumerated; extend the word map in this test"
+else
+  assert_eq "RULES.md §15 states the count its own enumeration carries" "$REG_WORD" "$REG_EXPECT"
+fi
+assert_contains "the closer is one of the enumerated members, not just named in the prose" \
+  "$REG_MEMBERS" "scripts/close-objective.sh"
 assert_contains "tests/test-coverage-honesty.sh enumerates the closer" \
   "$(cat "$REPO_ROOT/tests/test-coverage-honesty.sh")" "close-objective"
 
