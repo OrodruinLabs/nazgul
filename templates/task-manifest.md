@@ -125,14 +125,17 @@ status: PLANNED
      is recorded here. A gate that stopped at the shape would certify whoever typed the lines, which
      is the forgery route this section exists to remove.
 
-     AND IT ASKS WHOSE PR IT IS. "Is PR N merged?" is not the question — "did THIS objective ship as
-     PR N?" is. `head-ref` must equal the head branch the host reports, and that branch must be this
-     objective's `branch.feature` or the branch of the `stack.layers[]` entry registered for its
-     `feat_id`. Without that binding a genuinely merged PR of ANY other objective would be real,
-     host-verified evidence for closing any task on disk.
+     AND IT ASKS WHOSE PR IT IS, AND WHOSE TASK. "Is PR N merged?" is not the question — "did THIS
+     objective ship as PR N, and is this one of its tasks?" is. `head-ref` must equal the head branch
+     the host reports, and that branch must be this objective's `branch.feature` or the branch of the
+     `stack.layers[]` entry registered for its `feat_id`; and this manifest must be listed in the
+     `## Tasks` roster of the objective's own nazgul/plan.md, whose frontmatter `feat_id` must agree
+     with config's. Without the first binding a genuinely merged PR of ANY other objective would be
+     real, host-verified evidence for closing any task on disk; without the second, this objective's
+     own genuine merge would close every other objective's stranded manifests too.
 
      Six required fields, each shape-checked — `host`, `pr`, `merged-at`, `merge-commit`, `head-ref`,
-     `recorded-by` — and eight closed refusal reasons: `absent` (no section, or one with nothing in
+     `recorded-by` — and nine closed refusal reasons: `absent` (no section, or one with nothing in
      it), `commented_out` (content present but only inside an HTML comment: a comment is not a record,
      and this template's own block reads as exactly that), `truncated` (a required field is missing),
      `malformed` (a field is present but fails its shape check, including a `recorded-by` naming
@@ -141,7 +144,9 @@ status: PLANNED
      merged without returning the fields to compare against), `contradicted` (the host answered and
      its `merged-at`, its `merge-commit`, its head branch, or the merge commit's containment in the
      base disagrees with this section), `not_this_objective` (the host confirms the merge, but of a
-     PR that is not this objective's). Each emits `merge_evidence_missing`. `unverifiable` and
+     PR that is not this objective's), and `not_this_objectives_task` (it IS this objective's merged
+     PR, but this manifest is not in this objective's roster — or no roster could be read at all).
+     Each emits `merge_evidence_missing`. `unverifiable` and
      `not_merged` are separate on purpose: "could not look" is not "not merged". There is NO kill
      switch: a switch on the last gate before DONE would be the bypass.
 
@@ -149,12 +154,15 @@ status: PLANNED
      under `## Commits` reaches the merge commit, so `squash_signature` is the expected reading there
      and is recorded, not blocked on.
 
-     Example (all six fields — a block missing any one of them is refused as `truncated`):
-     - **host**: github.com
-     - **pr**: 88
-     - **merged-at**: 2026-08-14T09:31:07Z
-     - **merge-commit**: d6f7582a1c4b9e30f2a7c85be1490fd3ac62b7e1
-     - **head-ref**: feat/FEAT-031-objective-closure
+     Example (all six fields — a block missing any one of them is refused as `truncated`). Every
+     value below is deliberately unresolvable against any real host: an example that names a real
+     merged PR and its real merge commit is a working forgery skeleton shipped inside the artifact
+     this gate polices.
+     - **host**: example.invalid
+     - **pr**: 999999
+     - **merged-at**: 2026-01-01T00:00:00Z
+     - **merge-commit**: 0000000000000000000000000000000000000000
+     - **head-ref**: feat/EXAMPLE-000-example-objective
      - **recorded-by**: scripts/close-objective.sh (host API, ok) -->
 
 ## Description

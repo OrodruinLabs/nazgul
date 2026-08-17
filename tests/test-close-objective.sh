@@ -606,6 +606,23 @@ assert_not_contains "the closer keeps no second implementation of the binding" \
 assert_not_contains "the closer keeps no second implementation of the objective branch set" \
   "$CLOSER_SRC" "_co_objective_branches()"
 
+# The SAME property for the manifest binding, which the gate now enforces too: the roster
+# predicate reached only this caller, so once this objective's PR merged, the block written
+# into a roster manifest was valid evidence in any manifest on disk (FEAT-031 third board).
+assert_contains "the closer asks the SHARED roster predicate, not a local copy" \
+  "$CLOSER_SRC" 'ttg_objective_roster "$NAZGUL_DIR"'
+assert_contains "and asks the shared membership predicate per candidate" \
+  "$CLOSER_SRC" 'ttg_id_in_roster "$ROSTER"'
+assert_not_contains "the closer keeps no second implementation of the roster" \
+  "$CLOSER_SRC" "_co_objective_roster()"
+assert_not_contains "the closer keeps no second implementation of roster membership" \
+  "$CLOSER_SRC" "_co_in_roster()"
+GUARD_SRC=$(cat "$REPO_ROOT/scripts/lib/task-transition-guard.sh")
+assert_contains "the shared roster authority lives beside the shared PR binding" \
+  "$GUARD_SRC" "ttg_task_in_objective()"
+assert_contains "and the merge-evidence gate actually calls it — a lifted check nobody calls is a deleted one" \
+  "$GUARD_SRC" 'ttg_task_in_objective "$nazgul_dir" "$task_id"'
+
 # The constraint the whole objective rests on: this script is a CALLER of the sole
 # sanctioned writer, never a writer. Asserted against its source, not its behaviour.
 assert_contains "the closer routes its status changes through the sanctioned command" \

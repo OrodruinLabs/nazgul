@@ -327,6 +327,22 @@ assert_not_contains "the unnormalisable value is redacted on stderr too" \
 assert_not_contains "the unnormalisable value is redacted on the bus too" \
   "$(cat "$EVENTS" 2>/dev/null)" "ghp_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
 
+# lean-comments: allow-run — why the cases above did not already cover this one.
+# Every credential above is `gh`-token-SHAPED, so the token rules caught them and the
+# userinfo went unexamined. A basic-auth password, a GitLab `glpat-`, or an Azure DevOps
+# PAT matches no token rule at all, and the invalid_pr path echoes its input to stderr,
+# onto the bus, and back as `.pr` — three copies of a live secret.
+: > "$EVENTS"
+_drive "https://svc-account:hunter2-not-token-shaped@github.com/o/r/notapr"
+assert_eq "a non-token-shaped credential in --pr is still invalid_pr" "$(_field '.result')" "invalid_pr"
+assert_not_contains "URL userinfo is stripped from the echoed value" \
+  "$MP_OUT" "hunter2-not-token-shaped"
+assert_not_contains "URL userinfo is stripped on stderr" "$MP_ERR" "hunter2-not-token-shaped"
+assert_not_contains "URL userinfo is stripped on the event bus" \
+  "$(cat "$EVENTS" 2>/dev/null)" "hunter2-not-token-shaped"
+assert_contains "the redaction is visible where the userinfo was, not a silent truncation" \
+  "$(_field '.pr')" "https://***@github.com/o/r/notapr"
+
 # --- Every named result is DISTINCT. This is the property the whole seam
 # exists for: six answers, six tokens, six exit codes, no collapsing. ---
 DISTINCT=$(printf '%s\n' ${VOCAB[@]+"${VOCAB[@]}"} | awk '{print $1}' | sort -u | wc -l | tr -d ' ')

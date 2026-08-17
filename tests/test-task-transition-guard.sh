@@ -382,6 +382,15 @@ merge_config() {
   create_config ".feat_id = \"$MERGE_FEAT_ID\"" ".branch.feature = \"$MERGE_BRANCH\"" "$@"
 }
 
+# This objective's own plan.md: the frontmatter feat_id config must agree with, and the
+# `## Tasks` roster that says which manifests on disk are this objective's.
+merge_plan() {
+  {
+    printf -- '---\nfeat_id: %s\n---\n# Plan — %s\n\n## Tasks\n\n' "$MERGE_FEAT_ID" "$MERGE_FEAT_ID"
+    printf -- '- TASK-050\n- TASK-051\n- TASK-052\n- TASK-053\n- TASK-054\n'
+  } > "$TEST_DIR/nazgul/plan.md"
+}
+
 MERGE_VALID_BODY="- **host**: github.com
 - **pr**: 91
 - **merged-at**: 2026-08-15T12:00:00Z
@@ -489,6 +498,7 @@ setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
 merge_config '.agents.reviewers = ["code-reviewer"]'
+merge_plan
 NAZGUL_DIR="$TEST_DIR/nazgul"
 
 me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && ME_EC=0 || ME_EC=$?
@@ -681,6 +691,10 @@ assert_contains "binding: the refusal names this objective's own branch" \
   "$NOT_THIS_OBJ_STDERR" "$MERGE_BRANCH"
 assert_contains "binding: the refusal says outright whose evidence this is" \
   "$NOT_THIS_OBJ_STDERR" "evidence about a DIFFERENT objective"
+assert_contains "binding: the refusal names the base branch the host reported, not <unknown>" \
+  "$NOT_THIS_OBJ_STDERR" "(into main)"
+assert_eq "binding: the host's base branch is captured for the caller that reports it" \
+  "$TTG_MERGE_HOST_BASE_REF" "main"
 mp_reset
 
 # The manifest is operator-writable, so a head-ref it claims that the host does not report
@@ -744,15 +758,98 @@ assert_eq "binding: an unnameable objective reasons 'not_this_objective'" \
 merge_config '.agents.reviewers = ["code-reviewer"]'
 mp_reset
 
+# lean-comments: allow-run — names the hazard and why the fixture is the real one.
+# THE TASK BINDING (FEAT-031 third board), the same defect one granularity down. Everything
+# above establishes that PR 91 is THIS objective's genuinely merged PR — so the block the
+# closer writes into a roster manifest is valid evidence, and copying it verbatim into a
+# manifest of a DIFFERENT objective must still be refused. Nothing here is forged: the
+# evidence is perfect, only the task is somebody else's.
+mp_reset
+merge_config '.agents.reviewers = ["code-reviewer"]'
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-999 && NEIGHBOUR_EC=0 || NEIGHBOUR_EC=$?
+NOT_OUR_TASK_STDERR="$ME_STDERR"
+assert_exit_code "roster: this objective's own merge does NOT close another objective's task" \
+  "$NEIGHBOUR_EC" 1
+assert_eq "roster: a manifest outside the roster reasons 'not_this_objectives_task'" \
+  "$TTG_MERGE_REASON" "not_this_objectives_task"
+assert_contains "roster: the refusal names the task it refused" "$NOT_OUR_TASK_STDERR" "TASK-999"
+assert_contains "roster: the refusal names the roster it is missing from" \
+  "$NOT_OUR_TASK_STDERR" "## Tasks roster"
+assert_contains "roster: and says outright that the PR itself is genuine" \
+  "$NOT_OUR_TASK_STDERR" "genuinely merged PR, but"
+
+# A roster member with the identical evidence still closes: the refusal above is about
+# membership, not about the evidence, and a check that refused both would prove neither.
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && ROSTERED_EC=0 || ROSTERED_EC=$?
+assert_exit_code "roster: the same evidence still verifies for a task the roster lists" "$ROSTERED_EC" 0
+
+# "the roster does not list it" and "there is no roster to read" are different answers.
+# The second must fail CLOSED rather than degrade into closing anything on disk.
+mv "$TEST_DIR/nazgul/plan.md" "$TEST_DIR/nazgul/plan.md.away"
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && NOROSTER_EC=0 || NOROSTER_EC=$?
+NO_ROSTER_STDERR="$ME_STDERR"
+mv "$TEST_DIR/nazgul/plan.md.away" "$TEST_DIR/nazgul/plan.md"
+assert_exit_code "roster: an unreadable roster refuses rather than admits" "$NOROSTER_EC" 1
+assert_eq "roster: an unreadable roster reasons 'not_this_objectives_task'" \
+  "$TTG_MERGE_REASON" "not_this_objectives_task"
+assert_contains "roster: it says membership was never established, not that the id is absent" \
+  "$NO_ROSTER_STDERR" "membership was never established"
+if [ "$NOT_OUR_TASK_STDERR" != "$NO_ROSTER_STDERR" ]; then
+  _pass "roster: not-listed and no-roster are the same reason but different sentences"
+else
+  _fail "roster: not-listed and no-roster are the same reason but different sentences" \
+    "both printed: $NO_ROSTER_STDERR"
+fi
+
+# A roster whose frontmatter names a DIFFERENT objective cannot scope this one either.
+printf -- '---\nfeat_id: FEAT-999\n---\n# Plan\n\n## Tasks\n\n- TASK-050\n' > "$TEST_DIR/nazgul/plan.md"
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && DRIFT_EC=0 || DRIFT_EC=$?
+ROSTER_DRIFT_STDERR="$ME_STDERR"
+merge_plan
+assert_exit_code "roster: a plan declaring another objective refuses" "$DRIFT_EC" 1
+assert_contains "roster: the drift diagnostic names both ids rather than silently picking one" \
+  "$ROSTER_DRIFT_STDERR" 'declares feat_id "FEAT-999" but config names "FEAT-031"'
+
+# The binding's anchor is config.json itself, so config contradicting ITSELF cannot bind:
+# objectives_history attributing this PR to another objective refuses even while
+# branch.feature says otherwise. Not an independent anchor — a one-key edit is simply
+# no longer enough (RULES.md §2, the stated boundary).
+merge_config '.agents.reviewers = ["code-reviewer"]' \
+  '.objectives_history = [{feat_id: "FEAT-030", objective: "prior", started_at: "2026-08-09T00:00:00Z",
+                           pr: "https://github.com/OrodruinLabs/nazgul/pull/91"}]'
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && HIST_EC=0 || HIST_EC=$?
+HIST_STDERR="$ME_STDERR"
+assert_exit_code "history: a PR config itself attributes to another objective is REFUSED" "$HIST_EC" 1
+assert_eq "history: an internally contradicted binding reasons 'not_this_objective'" \
+  "$TTG_MERGE_REASON" "not_this_objective"
+assert_contains "history: the refusal names the objective config credits the PR to" \
+  "$HIST_STDERR" "records PR 91 as FEAT-030's PR"
+
+# The same registry naming THIS objective is not an obstacle — the check refuses a
+# contradiction, never the ordinary case where history and identity agree.
+merge_config '.agents.reviewers = ["code-reviewer"]' \
+  '.objectives_history = [{feat_id: "FEAT-031", objective: "this one", started_at: "2026-08-15T00:00:00Z",
+                           pr: "https://github.com/OrodruinLabs/nazgul/pull/91"}]'
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && HISTOK_EC=0 || HISTOK_EC=$?
+assert_exit_code "history: our own registered PR still verifies" "$HISTOK_EC" 0
+# A neighbouring PR number must not be read as this one: 191 ends in 91.
+merge_config '.agents.reviewers = ["code-reviewer"]' \
+  '.objectives_history = [{feat_id: "FEAT-030", objective: "prior", started_at: "2026-08-09T00:00:00Z",
+                           pr: "https://github.com/OrodruinLabs/nazgul/pull/191"}]'
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && HISTNEAR_EC=0 || HISTNEAR_EC=$?
+assert_exit_code "history: PR 191 is not PR 91 — a suffix match would refuse the wrong closure" \
+  "$HISTNEAR_EC" 0
+merge_config '.agents.reviewers = ["code-reviewer"]'
+
 # Every refusal state must be its own token AND its own sentence — a state folded into
 # a neighbour's bucket would leave both censuses unchanged.
-MERGE_DISTINCT=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$ABSENT_STDERR" "$COMMENTED_STDERR" \
+MERGE_DISTINCT=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$ABSENT_STDERR" "$COMMENTED_STDERR" \
   "$TRUNCATED_STDERR" "$MALFORMED_STDERR" "$UNVERIFIABLE_STDERR" "$NOT_MERGED_STDERR" \
-  "$NOT_THIS_OBJ_STDERR" "$NO_HEAD_REF_STDERR" \
+  "$NOT_THIS_OBJ_STDERR" "$NO_HEAD_REF_STDERR" "$NOT_OUR_TASK_STDERR" \
   | sort -u | grep -c '[^[:space:]]')
-assert_eq "ttg_verify_merge_evidence: eight refusal diagnostics, eight distinct sentences" "$MERGE_DISTINCT" "8"
+assert_eq "ttg_verify_merge_evidence: nine refusal diagnostics, nine distinct sentences" "$MERGE_DISTINCT" "9"
 
-MERGE_VOCAB_EXPECTED='absent commented_out contradicted malformed not_merged not_this_objective truncated unverifiable'
+MERGE_VOCAB_EXPECTED='absent commented_out contradicted malformed not_merged not_this_objective not_this_objectives_task truncated unverifiable'
 MERGE_VOCAB_ARGS=$(grep -oE '_ttg_merge_deny "[^"]*" "[^"]*" "[^"]*"' \
   "$REPO_ROOT/scripts/lib/task-transition-guard.sh" | sed -E 's/.*"([^"]*)"$/\1/')
 MERGE_VOCAB_SCANNED=$(printf '%s\n' "$MERGE_VOCAB_ARGS" | grep -c '[^[:space:]]')
@@ -780,6 +877,7 @@ ANC_HEAD=$(git -C "$TEST_DIR" rev-parse HEAD)
 ANC_PARENT=$(git -C "$TEST_DIR" rev-parse HEAD~1)
 ANC_BASE=$(git -C "$TEST_DIR" rev-parse --abbrev-ref HEAD)
 merge_config ".branch.base = \"${ANC_BASE}\""
+merge_plan
 
 ANC_BODY="- **host**: github.com
 - **pr**: 91
@@ -844,6 +942,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_nazgul_dir
 merge_config
+merge_plan
 NAZGUL_DIR="$TEST_DIR/nazgul"
 ttg_verify_merge_evidence "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 2>/dev/null \
   && NOGIT_EC=0 || NOGIT_EC=$?
@@ -859,6 +958,7 @@ setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
 merge_config '.agents.reviewers = ["code-reviewer"]' '.afk.yolo = false' '.afk.task_pr = false'
+merge_plan
 NAZGUL_DIR="$TEST_DIR/nazgul"
 create_task_file TASK-050 IMPLEMENTED
 

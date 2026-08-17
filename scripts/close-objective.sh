@@ -19,8 +19,8 @@ set -euo pipefail
 # not the question this script needs answered; "did THIS objective ship as PR N?" is.
 # Asking only the first turns any merged PR in the repository into genuine, host-verified,
 # ledger-recorded authority to walk every closable manifest on disk to DONE — no forgery
-# required, and every downstream gate correctly satisfied. So two independent bindings are
-# checked before a single manifest is touched, and each fails CLOSED:
+# required, and every downstream gate correctly satisfied. So two bindings are checked
+# before a single manifest is touched, and each fails CLOSED:
 #     PR -> objective        its head branch must be `branch.feature`, or the branch of
 #                            the `stack.layers[]` entry registered for `feat_id`
 #     manifest -> objective  it must be listed in this objective's own `nazgul/plan.md`
@@ -28,6 +28,13 @@ set -euo pipefail
 # Neither is a formality. A merged PR whose head is another objective's branch is real
 # evidence about a different objective, and a manifest absent from the roster belongs to
 # a different one; both are refused BY NAME rather than closed.
+#
+# NEITHER BINDING IS ENFORCED HERE. Both live in scripts/lib/task-transition-guard.sh —
+# `ttg_pr_bound` and `ttg_objective_roster`/`ttg_task_in_objective` — and this script is
+# one of their two callers; the merge-evidence gate is the other, and it is independently
+# reachable through `scripts/task-transition.sh transition <id> IMPLEMENTED DONE`. A
+# binding enforced only in this caller would leave that gate admitting what this script
+# refuses, which is exactly the defect the shared functions exist to prevent.
 #
 # A REFUSED CLOSE LEAVES NO EVIDENCE BEHIND. `## Merge Evidence` is gate-satisfying on
 # its own, so a section written for a close that then refused would sit in the manifest
@@ -201,42 +208,14 @@ _co_evidence_usable() {
   return 0
 }
 
-# Which PR belongs to this objective is asked in ONE place, ttg_pr_bound: the merge-evidence
-# gate enforces the same question independently, so a copy here is a copy that can drift.
-
-# lean-comments: allow-run — RULES.md §15's two-answers distinction, at the guard it binds.
-# _co_objective_roster -> the task ids this objective's own nazgul/plan.md lists, one per
-# line; non-zero with the reason on stdout when membership cannot be established at all.
-# "the roster does not list it" and "there is no readable roster" are different answers,
-# and only the first is a quiet per-manifest skip; the second is announced once for the
-# run. Both refuse, because an unscoped scan closes every other objective's work too.
-_co_objective_roster() {
-  local plan="$NAZGUL_DIR/plan.md" plan_feat ids
-  if [ -z "$CFG_FEAT_ID" ]; then
-    printf 'config.json names no feat_id, so no objective owns any manifest'
-    return 1
-  fi
-  if [ ! -f "$plan" ] || [ -L "$plan" ]; then
-    printf 'no regular non-symlink %s, so which manifests belong to %s is unknowable' "$plan" "$CFG_FEAT_ID"
-    return 1
-  fi
-  plan_feat=$(awk 'NR==1 && /^---[[:space:]]*$/ {f=1; next} f && /^---[[:space:]]*$/ {exit} f && /^feat_id:/ {sub(/^feat_id:[[:space:]]*/, ""); gsub(/[]["'"'"'[:space:]]/, ""); print; exit}' "$plan")
-  if [ "$plan_feat" != "$CFG_FEAT_ID" ]; then
-    printf '%s declares feat_id "%s" but config names "%s" — the roster and the objective disagree, so neither can scope the other' \
-      "$plan" "${plan_feat:-<none>}" "$CFG_FEAT_ID"
-    return 1
-  fi
-  ids=$(awk '/^## Tasks/{f=1;next} f && /^## /{exit} f' "$plan" | grep -oE '(TASK|PATCH)-[0-9]+' | LC_ALL=C sort -u)
-  if [ -z "$ids" ]; then
-    printf '%s carries no ## Tasks roster to read, so no manifest can be shown to belong to %s' "$plan" "$CFG_FEAT_ID"
-    return 1
-  fi
-  printf '%s\n' "$ids"
-}
+# Both bindings are asked in ONE place each — ttg_pr_bound for the PR, ttg_objective_roster
+# for the manifest: the merge-evidence gate enforces the same two questions independently
+# through the sanctioned writer, so a copy here is a copy that can drift away from the
+# boundary that actually blocks.
 
 ROSTER=""
 ROSTER_SKIP_WHY=""
-if ROSTER=$(_co_objective_roster); then
+if ROSTER=$(ttg_objective_roster "$NAZGUL_DIR"); then
   ROSTER_SKIP_WHY="it is not listed in ${CFG_FEAT_ID}'s roster in ${NAZGUL_DIR}/plan.md — another objective's manifest is not closed by this objective's merge"
 else
   ROSTER_SKIP_WHY="the objective roster could not be read, so membership was never established"
@@ -246,16 +225,6 @@ else
     feat_id "$CFG_FEAT_ID" reason "$ROSTER" pr "$PR_SAFE"
   ROSTER=""
 fi
-
-_co_in_roster() {
-  [ -n "$ROSTER" ] || return 1
-  local id
-  while IFS= read -r id; do
-    if [ "$id" = "$1" ]; then return 0; fi
-  done <<< "$ROSTER"
-
-  return 1
-}
 
 GLOBAL_SKIP=""
 GLOBAL_WHY=""
@@ -397,7 +366,7 @@ if [ -d "$TASKS_DIR" ]; then
       printf '%s: skipped %s [unreadable] — no resolvable regular non-symlink manifest\n' "$ENTRY" "$task_id" >&2
       continue
     fi
-    if ! _co_in_roster "$task_id"; then
+    if ! ttg_id_in_roster "$ROSTER" "$task_id"; then
       SKIP_NOT_THIS_OBJECTIVE=$((SKIP_NOT_THIS_OBJECTIVE + 1))
       printf '%s: skipped %s [not-this-objective] — %s\n' "$ENTRY" "$task_id" "$ROSTER_SKIP_WHY" >&2
       continue

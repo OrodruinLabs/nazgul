@@ -69,10 +69,16 @@ _mp_emit() {
   return 0
 }
 
+# lean-comments: allow-run — the userinfo rule is the one a reader would drop as redundant.
 # _mp_redact <text> -> token-shaped substrings replaced by ***. A diagnostic built
 # from remote stderr is the one place a credential could reach a log (RULES.md §16).
+# The userinfo rule is not about remote stderr: `--pr` is operator input that may be a
+# `scheme://user:secret@host/...` URL, and an unnormalisable one is warned, emitted onto
+# the bus, and returned as `.pr` — so a host-shaped token rule alone leaks basic-auth
+# passwords and any non-`gh` PAT verbatim into nazgul/logs/events.jsonl.
 _mp_redact() {
   printf '%s' "$1" | sed -E \
+    -e 's#([A-Za-z][A-Za-z0-9+.-]*://)[^/@[:space:]]+@#\1***@#g' \
     -e 's/gh[pousr]_[A-Za-z0-9_]{8,}/***/g' \
     -e 's/github_pat_[A-Za-z0-9_]{8,}/***/g' \
     -e 's/(Bearer|token|Authorization:)[[:space:]]+[A-Za-z0-9._~+\/-]{8,}=*/\1 ***/gi'

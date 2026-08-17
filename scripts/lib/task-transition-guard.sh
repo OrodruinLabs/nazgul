@@ -694,6 +694,7 @@ _TTG_MERGE_PRODUCERS="scripts/close-objective.sh"
 
 # Closed refusal vocabulary, never bucketed (RULES.md §15), asserted from this source in tests:
 # absent commented_out truncated malformed unverifiable not_merged contradicted not_this_objective
+# not_this_objectives_task
 
 # Last merge verdict: one of the closed vocabulary above, or `verified`.
 # shellcheck disable=SC2034  # read by callers, not within this file
@@ -715,6 +716,9 @@ TTG_MERGE_HOST_RESULT=""
 # The head branch the host reports for the PR, empty when it returned none usable.
 # shellcheck disable=SC2034  # read by callers, not within this file
 TTG_MERGE_HOST_HEAD_REF=""
+# The base branch the host reports for the PR. Reported, never gated on.
+# shellcheck disable=SC2034  # read by callers, not within this file
+TTG_MERGE_HOST_BASE_REF=""
 
 # Deliberately NO kill switch (unlike guards.red_run_evidence, which only suppresses a block
 # on the way IN to IMPLEMENTED): a switch on the last gate before DONE IS the bypass.
@@ -821,6 +825,7 @@ _ttg_merge_host_state() {
   TTG_MERGE_HOST_AT=""
   TTG_MERGE_HOST_COMMIT=""
   TTG_MERGE_HOST_HEAD_REF=""
+  TTG_MERGE_HOST_BASE_REF=""
   declare -F merge_provider_pr_state >/dev/null 2>&1 || return 2
   command -v jq >/dev/null 2>&1 || return 2
   json=$(merge_provider_pr_state "$project_root" "$pr") || true
@@ -834,6 +839,8 @@ _ttg_merge_host_state() {
   TTG_MERGE_HOST_COMMIT=$(printf '%s' "$json" | jq -r '.merge_commit // empty' 2>/dev/null) || TTG_MERGE_HOST_COMMIT=""
   TTG_MERGE_HOST_HEAD_REF=$(printf '%s' "$json" | jq -r '.head_ref // empty' 2>/dev/null) || TTG_MERGE_HOST_HEAD_REF=""
   _mp_ref_ok "$TTG_MERGE_HOST_HEAD_REF" || TTG_MERGE_HOST_HEAD_REF=""
+  TTG_MERGE_HOST_BASE_REF=$(printf '%s' "$json" | jq -r '.base_ref // empty' 2>/dev/null) || TTG_MERGE_HOST_BASE_REF=""
+  _mp_ref_ok "$TTG_MERGE_HOST_BASE_REF" || TTG_MERGE_HOST_BASE_REF=""
   case "$merged" in
     false) TTG_MERGE_HOST_RESULT="not_merged"; return 1 ;;
     true)  ;;
@@ -855,6 +862,20 @@ ttg_objective_branches() {
     | map(select(. != "")) | unique | .[]' "$nazgul_dir/config.json" 2>/dev/null || true
 }
 
+# lean-comments: allow-run — states what this check is and, more importantly, what it is not.
+# _ttg_pr_history_owner <nazgul_dir> <pr> -> the feat_id config's OWN objectives_history
+# attributes this PR number to, empty when it attributes it to nobody. Not an independent
+# anchor — it is the same operator-writable file the branch set comes from — but a binding
+# read out of a file that contradicts itself is not a binding, and this makes the one-key
+# `.branch.feature` edit insufficient on its own.
+_ttg_pr_history_owner() {
+  local nazgul_dir="$1" pr="$2"
+  case "$pr" in ''|*[!0-9]*) return 0 ;; esac
+  jq -r --arg p "$pr" '
+    [ .objectives_history[]? | select(((.pr // "") | tostring) | test("(^|/)" + $p + "$"))
+      | .feat_id // empty ] | unique | .[]' "$nazgul_dir/config.json" 2>/dev/null | head -1 || true
+}
+
 # lean-comments: allow-run — the fail-closed reading is the finding this function closes.
 # ttg_pr_bound <nazgul_dir> <feat_id> <head_ref> <pr_label> [base_ref] -> 0 iff the merged
 # PR is THIS objective's PR, else the reason on stdout. THE one authority for that question:
@@ -865,7 +886,7 @@ ttg_objective_branches() {
 # SHOWN to be ours is not thereby ours. `base_ref` is reported but never gated on — under
 # stacking it is the previous layer, not `branch.base`.
 ttg_pr_bound() {
-  local nazgul_dir="$1" feat_id="$2" head_ref="$3" pr_label="$4" base_ref="${5:-}" want b
+  local nazgul_dir="$1" feat_id="$2" head_ref="$3" pr_label="$4" base_ref="${5:-}" want b owner
   if [ -z "$feat_id" ]; then
     printf 'config.json names no feat_id, so no PR can be shown to belong to this objective'
     return 1
@@ -873,6 +894,12 @@ ttg_pr_bound() {
   if [ -z "$head_ref" ]; then
     printf 'the host returned no usable head branch for PR %s, so it cannot be shown to be %s'"'"'s PR — a merged PR of some other objective is real evidence about that objective, not licence to close this one' \
       "$pr_label" "$feat_id"
+    return 1
+  fi
+  owner=$(_ttg_pr_history_owner "$nazgul_dir" "$pr_label")
+  if [ -n "$owner" ] && [ "$owner" != "$feat_id" ]; then
+    printf 'config.json'"'"'s own objectives_history records PR %s as %s'"'"'s PR, not %s'"'"'s — the objective identity and the PR registry in that file contradict each other, and no binding can be read out of a contradiction' \
+      "$pr_label" "$owner" "$feat_id"
     return 1
   fi
   want=$(ttg_objective_branches "$nazgul_dir" "$feat_id")
@@ -887,6 +914,65 @@ ttg_pr_bound() {
   printf 'PR %s was merged from %s (into %s), which is not %s'"'"'s branch (%s) — its merge is genuine, host-verified evidence about a DIFFERENT objective' \
     "$pr_label" "$head_ref" "${base_ref:-<unknown>}" "$feat_id" \
     "$(printf '%s' "$want" | tr '\n' ' ')"
+  return 1
+}
+
+# lean-comments: allow-run — RULES.md §15's two-answers distinction, at the guard it binds.
+# ttg_objective_roster <nazgul_dir> -> the task ids this objective's own nazgul/plan.md
+# lists under `## Tasks`, one per line; non-zero with the reason on stdout when membership
+# cannot be established AT ALL. "the roster does not list it" and "there is no readable
+# roster" are different answers, and neither may degrade into an unscoped one.
+ttg_objective_roster() {
+  local nazgul_dir="$1" plan="$1/plan.md" feat_id plan_feat ids
+  feat_id=$(jq -r '.feat_id // empty' "$nazgul_dir/config.json" 2>/dev/null) || feat_id=""
+  if [ -z "$feat_id" ]; then
+    printf 'config.json names no feat_id, so no objective owns any manifest'
+    return 1
+  fi
+  if [ ! -f "$plan" ] || [ -L "$plan" ]; then
+    printf 'no regular non-symlink %s, so which manifests belong to %s is unknowable' "$plan" "$feat_id"
+    return 1
+  fi
+  plan_feat=$(awk 'NR==1 && /^---[[:space:]]*$/ {f=1; next} f && /^---[[:space:]]*$/ {exit} f && /^feat_id:/ {sub(/^feat_id:[[:space:]]*/, ""); gsub(/[]["'"'"'[:space:]]/, ""); print; exit}' "$plan")
+  if [ "$plan_feat" != "$feat_id" ]; then
+    printf '%s declares feat_id "%s" but config names "%s" — the roster and the objective disagree, so neither can scope the other' \
+      "$plan" "${plan_feat:-<none>}" "$feat_id"
+    return 1
+  fi
+  ids=$(awk '/^## Tasks/{f=1;next} f && /^## /{exit} f' "$plan" | grep -oE '(TASK|PATCH)-[0-9]+' | LC_ALL=C sort -u)
+  if [ -z "$ids" ]; then
+    printf '%s carries no ## Tasks roster to read, so no manifest can be shown to belong to %s' "$plan" "$feat_id"
+    return 1
+  fi
+  printf '%s\n' "$ids"
+}
+
+# ttg_id_in_roster <roster> <task_id> -> 0 iff the id is one of the roster's own lines.
+ttg_id_in_roster() {
+  local id
+  { [ -n "$1" ] && [ -n "$2" ]; } || return 1
+  while IFS= read -r id; do
+    if [ "$id" = "$2" ]; then return 0; fi
+  done <<< "$1"
+  return 1
+}
+
+# lean-comments: allow-run — the sibling of ttg_pr_bound's rationale, one granularity down.
+# ttg_task_in_objective <nazgul_dir> <task_id> -> 0 iff this objective's roster lists the
+# task, else the reason on stdout. THE one authority for that question: the merge-evidence
+# gate and scripts/close-objective.sh both call it, because a binding enforced in the caller
+# only leaves the gate — independently reachable through the sanctioned writer — admitting
+# any manifest on disk once this objective's PR genuinely merges, since the block the closer
+# writes into a roster manifest is valid evidence copied verbatim into a stranded one.
+ttg_task_in_objective() {
+  local nazgul_dir="$1" task_id="$2" roster
+  if ! roster=$(ttg_objective_roster "$nazgul_dir"); then
+    printf 'membership was never established: %s' "$roster"
+    return 1
+  fi
+  ttg_id_in_roster "$roster" "$task_id" && return 0
+  printf '%s is not listed in the ## Tasks roster of %s/plan.md — a manifest absent from this objective'"'"'s roster belongs to a different one, and this objective'"'"'s merge does not close it' \
+    "${task_id:-<unnamed>}" "$nazgul_dir"
   return 1
 }
 
@@ -920,7 +1006,7 @@ ttg_verify_merge_evidence() {
   local manifest_text="$1" project_root="$2" task_id="${3:-}"
   local nazgul_dir="${NAZGUL_DIR:-$project_root/nazgul}"
   local raw_section section key value missing="" bad="" commits phrase
-  local host pr merge_commit merged_at head_ref feat_id bind_why host_rc=0
+  local host pr merge_commit merged_at head_ref feat_id bind_why roster_why host_rc=0
 
   TTG_MERGE_REASON=""
   TTG_MERGE_ANCESTRY=""
@@ -928,6 +1014,7 @@ ttg_verify_merge_evidence() {
   TTG_MERGE_BASE_ANCESTRY=""
   TTG_MERGE_HOST_RESULT=""
   TTG_MERGE_HOST_HEAD_REF=""
+  TTG_MERGE_HOST_BASE_REF=""
   [ -n "$task_id" ] || task_id=$(_ttg_manifest_task_id "$manifest_text")
   [ -n "$task_id" ] || task_id="unknown"
 
@@ -1013,9 +1100,15 @@ ttg_verify_merge_evidence() {
     return 1
   fi
   feat_id=$(jq -r '.feat_id // empty' "$nazgul_dir/config.json" 2>/dev/null) || feat_id=""
-  if ! bind_why=$(ttg_pr_bound "$nazgul_dir" "$feat_id" "$TTG_MERGE_HOST_HEAD_REF" "$pr"); then
+  if ! bind_why=$(ttg_pr_bound "$nazgul_dir" "$feat_id" "$TTG_MERGE_HOST_HEAD_REF" "$pr" "$TTG_MERGE_HOST_BASE_REF"); then
     _ttg_merge_deny "$nazgul_dir" "$task_id" "not_this_objective" \
       "the host confirms PR ${pr} merged, but it is not this objective's PR — ${bind_why}"
+    return 1
+  fi
+
+  if ! roster_why=$(ttg_task_in_objective "$nazgul_dir" "$task_id"); then
+    _ttg_merge_deny "$nazgul_dir" "$task_id" "not_this_objectives_task" \
+      "PR ${pr} is this objective's genuinely merged PR, but ${task_id} is not this objective's task — ${roster_why}"
     return 1
   fi
 
