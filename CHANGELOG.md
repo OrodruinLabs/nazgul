@@ -140,6 +140,71 @@ itself the evidence that nothing an existing project stores had to change.
 - **`/nazgul:status`'s last-stop-gate line needed a `grep .` guard.** `jq` exits 0 on empty input, so
   the `|| echo "none"` fallback was dead code and a project with no `stop_gate` event rendered a blank
   field instead of `none`.
+- **A new `stop_gate` reason, `in_flight_unverifiable`, replaces a false "proven leak" claim for an
+  unobservable dispatch class (round-2 board finding F-E; TASK-004 code half, TASK-013 record half).**
+  The in-flight hold (`scripts/stop-hook.sh:153-176`) read a marker's `background` field as if it had
+  two reachable values and treated `"missing"` as PROVEN foreground, quarantining it under
+  `stop_gate reason:"in_flight_orphan"` with stderr claiming "a foreground dispatch cannot outlive its
+  turn." That claim was false: `run_in_background` is omitted from the exposed Agent tool schema under
+  fork mode (the interactive default since Claude Code v2.1.232) and under
+  `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, and absence means the OPPOSITE thing in those two
+  configurations — so `"missing"` is not observed-foreground, it is not-observable-at-all.
+  `in_flight_orphan` is now RESERVED for a PROVEN class (`background: "false"`, or a named dispatch
+  whose report contract owns the marker); the unobservable case mints `in_flight_unverifiable` instead,
+  carrying the same `unit`/`agent`/`background` fields. Behaviour is byte-for-byte unchanged — same
+  `mkdir -p nazgul/in-flight/quarantine/`, same `mv`, same continue-normally — only the reason and the
+  stderr text differ, because the move is irreversible and a misclassified call can never be
+  reconsidered. Recorded across `RULES.md` §5, `docs/CONFIGURATION.md`, `docs/ARCHITECTURE.md`,
+  `docs/SAFETY.md`, `docs/loop-engineering.md`, `skills/status/SKILL.md`, `skills/log/SKILL.md`, and
+  `agents/doc-verifier.md`. Honest boundary below. Refs #104, #205, #218.
+- **`tests/test-messaging-posture.sh`'s shipped-surface scan closed three round-2 board findings
+  (F-A, F-B, F-C) before this release ever shipped — no live socket/token violation was found; this is
+  a scanning-gap fix, not a leak fix.** (F-A) The enumerator's `*.sh|*.md|*.json` extension whitelist was
+  a second, unstated definition of "the shipped surface" and could not see three shipped files:
+  `scripts/git-hooks/pre-commit` and `scripts/git-hooks/pre-merge-commit` (extensionless shell git runs
+  from the managed `core.hooksPath` on every commit/merge) and `templates/CLAUDE.md.template` (injected
+  by `/nazgul:init`). The population is now the shipped file set (`tests/test-messaging-posture.sh:86`),
+  with per-surface floors that fail an absent or zero-contributing surface (`:79-89`) instead of
+  silently skipping it, pinned against a roster naming the three previously-invisible paths. (F-B) The
+  scan never emitted the `NOTHING CHECKED` token its own §15 enrollment requires, and
+  `tests/test-coverage-honesty.sh` captured its stderr and never read it — both now write and assert it
+  (`tests/test-messaging-posture.sh:145,147`). (F-C) The two-file read allowlist (`scripts/doctor.sh`,
+  `scripts/lib/session-tracker.sh`) previously skipped the socket/token scan WHOLESALE for those files,
+  so a poster added inside either would have passed clean; it now applies a second-tier connect-construct
+  denylist inside the allowlist (`nc -U`, `socat UNIX-CONNECT`, `openssl s_client`, `curl --unix-socket`,
+  `/dev/tcp`, and any redirect/pipe targeting the socket variable — `tests/test-messaging-posture.sh:33`),
+  so reading the value stays allowed and posting to it never is. `RULES.md` §22 rule 2 states the
+  residual honestly: the second tier is a denylist of connect constructs, not a proof.
+- **Session locks leaked for every HITL session, and the active-session count did not filter for
+  liveness — both closed by round-1 board findings R2/R3.** (R2) `release_session_lock` sat at the END
+  of `scripts/session-staging.sh`'s main flow, behind four early `output_result` exits unrelated to lock
+  lifetime (`NAZGUL_STAGING_DISABLE`, a cwd-relative config probe, `afk.enabled != true`,
+  not-in-a-git-repo) — so only an AFK session in a git repo at cwd-root ever released its lock, and every
+  HITL session (`afk.enabled: false`, the template default — exactly the housekeeping-session population
+  #195 is about) registered a lock at SessionStart and never released it. Fixed by hoisting the function
+  and installing `trap 'release_session_lock || true' EXIT` (`scripts/session-staging.sh:66`) right after
+  the stdin read and before the first gate, so release now survives every SessionEnd path, including a
+  `set -e` abort. (R3) `count_active_sessions` was still `ls *.lock | wc -l` with no liveness filter, so
+  one dead lock counted as an active session and blocked heartbeat auto-start until some other session
+  started in that root — nothing else sweeps between ticks. `count_active_sessions`,
+  `cleanup_stale_sessions`, and `duplicate_live_toplevel` now share one tri-state predicate,
+  `_session_lock_is_live` (`scripts/lib/session-tracker.sh:51`: live / unreachable-by-us — `kill -0`
+  cannot distinguish a gone pid from EPERM — / no numeric pid recorded, which is never treated as dead),
+  and `scripts/heartbeat.sh` sweeps stale locks before counting (`:275-278`). `RULES.md` §13's
+  `[enforced]` claim that the session count is "a primary, honest signal" is now actually true of the
+  code it cites. New `tests/test-session-staging.sh` (14 assertions).
+- **`/nazgul:doctor`'s `sessions` check — the last of the thirteen — could abort the whole roster under
+  `set -euo pipefail` on the ordinary upgrade path (round-1 board finding R1).** `check_sessions`'s
+  duplicate-toplevel scan ended `grep -v '^$' | sort | uniq -d | head -1`; when the loop emitted nothing
+  (every pre-2.33 lock records the now-dead old hook-shell `$$`, so every lock was `continue`d), `grep -v`
+  exits 1, the pipeline status is 1, the assignment fails, and `set -e` terminated `doctor.sh` before it
+  ever reached `_doc_emit_coverage_line` — no coverage line, exit 1, indistinguishable from a run that
+  merely found a warn, in a §15-enrolled entry point whose contract is that it always reports. Extracted
+  into one shared predicate, `duplicate_live_toplevel` (`scripts/lib/session-tracker.sh:118`, guarded
+  with `|| true`), used by both `doctor.sh check_sessions` and `is_concurrent_session_warning` — the twin
+  expression in the latter was safe only by the accident of its caller suppressing `set -e`. New
+  assertions in `tests/test-doctor.sh` and `tests/test-session-tracker.sh` pin the empty-scan case
+  surviving a bare `set -euo pipefail` call.
 
 ### Known constraints (honest notes)
 
@@ -156,6 +221,17 @@ itself the evidence that nothing an existing project stores had to change.
 - **Suite: the discovered root suite moves 105 → 107 files, all green.** `CLAUDE.md`'s stale count of
   104 is corrected in the same pass; `/nazgul:doctor`'s roster description moves ten → thirteen in
   `CLAUDE.md` and `README.md`.
+- **On a fork-mode host, the in-flight hold effectively never engages.** `run_in_background` is omitted
+  from the exposed Agent tool schema there (the interactive default since Claude Code v2.1.232) and under
+  `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, so every marker records `background: "missing"` and quarantines
+  as `stop_gate reason:"in_flight_unverifiable"` rather than being held on — usually a healthy background
+  dispatch, not a leak. Reading the actual dispatch class from `PostToolUse` `tool_response.status` or the
+  Stop payload's `background_tasks[]`, instead of predicting it from `run_in_background` at dispatch time,
+  would make the class observable rather than inferred; that is issue #218 and is deliberately NOT in this
+  release.
+- **Suite count correction: two board-rework fixes after the paragraph above was written add a 108th
+  file.** `tests/test-session-staging.sh` is new (round-1 finding R2); the discovered root suite is 108,
+  not 107 — `CLAUDE.md`'s test-count sites already read 108 to match.
 
 ## [2.32.0] - 2026-08-14
 
