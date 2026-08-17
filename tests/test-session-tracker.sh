@@ -87,4 +87,14 @@ assert_file_not_exists "cleanup: dead-pid lock removed regardless of age policy"
 assert_file_exists "cleanup: live-pid lock SURVIVES despite being over-age" "$TEST_DIR/sessions/live.lock"
 teardown_temp_dir
 
+# --- #195: >=2 LIVE locks against one tree is its own, sharper warning ---
+setup_temp_dir
+mkdir -p "$TEST_DIR/sessions"
+jq -cn --arg p "$$" '{pid:$p, session:"a", started:"x", toplevel:"/repo/one"}' > "$TEST_DIR/sessions/a.lock"
+jq -cn --arg p "$$" '{pid:$p, session:"b", started:"x", toplevel:"/repo/one"}' > "$TEST_DIR/sessions/b.lock"
+MSG=$(source "$REPO_ROOT/scripts/lib/session-tracker.sh"; is_concurrent_session_warning "$TEST_DIR/sessions")
+assert_contains "warning: names the shared tree" "$MSG" "/repo/one"
+assert_contains "warning: names the #195 hazard class" "$MSG" "shared"
+teardown_temp_dir
+
 report_results

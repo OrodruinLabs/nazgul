@@ -98,11 +98,23 @@ cleanup_stale_sessions() {
 
 is_concurrent_session_warning() {
   local sessions_dir="${1:-nazgul/sessions}"
-  local count
+  local count dup_tree f lp
   count=$(count_active_sessions "$sessions_dir")
-  if [ "$count" -gt 1 ]; then
-    echo "WARNING: $count concurrent Nazgul sessions detected. State corruption risk."
+  [ "$count" -gt 1 ] || return 1
+  # Group LIVE locks by recorded toplevel; >=2 against one tree is the #195
+  # shared-checkout shape (one session committed another's staged work).
+  dup_tree=$(
+    for f in "$sessions_dir"/*.lock; do
+      [ -f "$f" ] || continue
+      lp=$(jq -r '.pid // ""' "$f" 2>/dev/null)
+      if [ -n "$lp" ] && [[ "$lp" =~ ^[0-9]+$ ]] && ! kill -0 "$lp" 2>/dev/null; then continue; fi
+      jq -r '.toplevel // ""' "$f" 2>/dev/null
+    done | grep -v '^$' | sort | uniq -d | head -1
+  )
+  if [ -n "$dup_tree" ]; then
+    echo "WARNING: multiple live Nazgul sessions shared one working tree ($dup_tree) — the #195 shared-checkout hazard: one session can commit another's staged work. Give each concurrent loop its own worktree. State corruption risk."
     return 0
   fi
-  return 1
+  echo "WARNING: $count concurrent Nazgul sessions detected. State corruption risk."
+  return 0
 }
