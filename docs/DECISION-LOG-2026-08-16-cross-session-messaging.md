@@ -28,10 +28,34 @@ judgment, not a capability gap.
 
 ## D-003 — #104 Gap 3's fix is per-marker classification, not a hold inversion
 
-"Confirmed wake path" is a per-dispatch property decidable at marker-write time: background
-dispatches have the documented harness resume; a foreground marker present at Stop time is a
-proven leak (a synchronous call cannot span a Stop). Hold only `background=="true"` unnamed
-markers; quarantine the rest as `in_flight_orphan` and continue normally. The rejected
+"Confirmed wake path" is a per-dispatch property decidable at marker-write time *when the class
+is observable at all*: background dispatches have the documented harness resume; a foreground
+marker present at Stop time is a proven leak (a synchronous call cannot span a Stop). Hold only
+`background=="true"` unnamed markers; quarantine the rest and continue normally.
+
+**Amended 2026-08-17 (round-2 board finding F-E).** The sentence above was written as if the
+tri-state had only two reachable values. It has three, and on a fork-mode host — the interactive
+default since Claude Code v2.1.232 — `"missing"` is the ONLY one ever recorded, because
+`run_in_background` is omitted from the exposed Agent schema there. So the hold branch never
+engages on that host class, and every marker it quarantines belongs to a healthy background
+dispatch. Two consequences for this decision as recorded:
+
+1. `"missing"` is NOT a proven leak, and is no longer reported as one. `in_flight_orphan` is now
+   reserved for a PROVEN class (`background:"false"`, or a named dispatch whose report contract
+   owns the marker); the unobservable case emits `stop_gate reason:"in_flight_unverifiable"`.
+   #205's `dispatch_guard_background_unverifiable` had already decided this exact question the
+   same way for the same field one task earlier; RULES §15/ADR-009 forbids inheriting that answer
+   by proximity, so the weighing is restated rather than copied — we continue (a false hold stalls
+   the run with no wake path this code reads) without claiming a leak we did not observe.
+2. The cost of a false continue was understated in the original weighing as "one iteration". The
+   branch `mv`s the marker to `nazgul/in-flight/quarantine/`, so the hold can never be
+   reconsidered for that dispatch. The action is irreversible, not merely retried.
+
+The decision itself — classification rather than hold inversion — stands; what was wrong was
+treating an unobservable class as a decided one. Making the class OBSERVABLE (reading
+`tool_response.status` at `PostToolUse`, or `background_tasks[]` on the Stop payload, instead of
+predicting from `run_in_background` at dispatch time) is the real repair and is deliberately out of
+this objective's scope — issue #218. The rejected
 alternative (block-and-burn unless a session-global wake flag) was quantified: it force-stops a
 legitimate hour-long background dispatch in ≤5 burned iterations, unrecoverably, and does not
 clear the leaked marker that caused the incident.

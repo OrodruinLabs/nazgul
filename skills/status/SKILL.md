@@ -60,11 +60,28 @@ and say the registry could not be read (config missing/corrupt) — never render
 failed. If `readable` is `true` and `enabled` is `false` with an empty `layers` array, omit the Stack section
 entirely (nothing to show). Otherwise render it after Board Sync per the format below.
 
-**In-flight markers**: if Quarantined markers > 0, note: "orphaned dispatch markers were quarantined
-(stop_gate reason in_flight_orphan) — see nazgul/in-flight/quarantine/ for the evidence; this is diagnostic
-residue, not pending work." The Quarantined markers count is the signal that covers BOTH quarantine
+**In-flight markers**: if Quarantined markers > 0, do NOT report them as a single kind — the directory
+holds two populations with opposite operator meanings, and the count alone cannot tell them apart. Read the
+`reason` on the corresponding `stop_gate` events and render whichever applies:
+
+- Any `in_flight_orphan` — "orphaned dispatch markers were quarantined (stop_gate reason
+  in_flight_orphan) — see nazgul/in-flight/quarantine/ for the evidence; this is diagnostic residue, not
+  pending work." The dispatch class was PROVEN (`background: "false"`, or a named dispatch), so the marker
+  really is residue.
+- Any `in_flight_unverifiable` — "dispatch markers were quarantined because the dispatch class was not
+  observable at write time (stop_gate reason in_flight_unverifiable) — see nazgul/in-flight/quarantine/.
+  This is NOT evidence of a leak, and on a fork-mode host it is the normal outcome for a HEALTHY background
+  dispatch that may still be running (#218)."
+- Both, or a count with no matching `stop_gate` event (the SessionStart sweep, below) — say the count and
+  say which producers could account for it. Never assert residue for a marker whose class was never read.
+
+Reporting an unverifiable quarantine as "diagnostic residue, not pending work" is the specific falsehood
+this wording exists to prevent: on a fork-mode host `run_in_background` is absent from the exposed Agent
+schema, so EVERY marker quarantines unverifiable while its agent is still working.
+
+The Quarantined markers count is the signal that covers BOTH quarantine
 producers, because both write to that one directory: `scripts/stop-hook.sh` (emits `stop_gate` with reason
-`in_flight_orphan`) and `scripts/session-context.sh`'s SessionStart sweep (emits a standalone
+`in_flight_orphan` or `in_flight_unverifiable`) and `scripts/session-context.sh`'s SessionStart sweep (emits a standalone
 `in_flight_orphan` event, `source: session_start_sweep`). Last stop gate reads `stop_gate` events ONLY, so a
 sweep-quarantined marker never appears there — never present Last stop gate as the whole orphan story, and
 never report Quarantined > 0 with a `none`/unrelated Last stop gate as a contradiction.
