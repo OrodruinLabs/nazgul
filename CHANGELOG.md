@@ -2,6 +2,161 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.33.0] - 2026-08-17
+
+FEAT-032 — **Cross-session messaging adoption: the loop keeps its one engine.** Thesis: *an
+unguaranteed channel may shorten a wait, but may never authorize one.* Claude Code's cross-session
+messaging was probed end to end on a live host — six probes, committed as
+`docs/superpowers/specs/2026-08-16-cross-session-messaging-platform-facts.md` — and the socket-post
+"doorbell" was proven to WORK: P1 delivered a turn injected by a Bash command that had already
+exited, and P5's controlled A/B — an ordinary turn's Stop as the baseline, then an idle session woken
+by an inert doorbell payload — showed the woken turn's Stop hook blocking and driving the loop
+exactly as the ordinary one's did. (Under bypass permissions: P4's `acceptEdits` run stalled the
+driven continuation, which is a property of the session's permission mode, not of the transport.)
+It was cut anyway. Delivery is not guaranteed — the identical payload without
+an auth frame was HELD behind a human approval click (P2's controlled A/B), the transport is
+silently reconfigurable by settings Nazgul does not own, and where the doorbell works it is redundant
+with the turn sources the loop already has. So messaging is adopted as an **operator surface and an
+attack surface, never a loop mechanism**: `decision:"block"` on Stop plus the harness's documented
+background-dispatch resume remain the only sanctioned ways a turn begins. What shipped is that
+posture — written down and mechanically scanned — plus the live defects the evaluation exposed while
+it was looking hard at the in-flight hold, the session locks, and the dispatch guard.
+
+**MINOR, not PATCH:** new behavior an operator can observe — three new `/nazgul:doctor` checks, three
+new `/nazgul:status` lines, four new event types, a new §15-enrolled scan, and a session-lock
+lifetime that changed from per-turn to per-session. **MAJOR is wrong:** no skill, agent, flag, or
+config key is removed or renamed, no gate changes meaning, and no default is inverted. **No schema
+step — config schema stays v36; this release adds zero config keys.** Neither
+`scripts/migrate-config.sh` nor `templates/config.json` appears in this objective's diff, which is
+itself the evidence that nothing an existing project stores had to change.
+
+### Added
+
+- **`RULES.md` §22 — Cross-Session Messaging Posture**, five rules with an honest tier on each. Rule
+  1 (the doctrine above) is `[advisory]`, enforced only indirectly — by rule 2, which makes a poster
+  impossible to ship. Rules 2 and 3 are `[enforced]` by the new scan. Rule 4 (a message is untrusted
+  input) is `[advisory]` behaviorally with an `[enforced]` presence test. Rule 5 states the threat
+  model plainly: any same-user process can have its CONNECTION accepted on any session's socket, the
+  0700-dir/0600-socket file permissions are the entire authentication boundary, and the per-session
+  token is exported into every Bash tool call — so an environment leak is a turn-injection capability
+  for that session.
+- **`tests/test-messaging-posture.sh` — the §15 registry moves nine entry points → ten.** Two
+  mechanical rules over the shipped surface: no shipped file names `crossSessionInbound` or
+  `isolatePeerMachines`, and no shipped file references `CLAUDE_CODE_MESSAGING_SOCKET` /
+  `CLAUDE_CODE_MESSAGING_TOKEN` outside a read-only allowlist of exactly two sites (doctor's
+  eligibility read; `session-tracker.sh`'s basename-as-pid parse). With no sanctioned poster, ANY
+  other reference is a potential post — which is also what mechanically covers "the token is never
+  stored or logged" for shipped text. Blocking, `K > 0` floor, dogfooded against synthetic violators
+  so a scan that can only ever pass is caught.
+- **Three new `/nazgul:doctor` checks — the roster goes ten → thirteen.** `messaging`,
+  `remote-control`, and `sessions`, all read-only and env/settings/file-reads only; doctor is
+  allowlisted for the read and nothing more, and never connects to the socket. `messaging` and
+  `remote-control` are **three-state on purpose** — a `note` verdict says UNDETERMINED in this
+  context (the socket env is legitimately unexported in the pre-flag-fetch window or outside a
+  hook/Bash context) rather than claiming unavailability it cannot observe, and every blocker names
+  the file or variable it came from. `sessions` reports the shared-working-tree collision.
+- **Remote-ops operator documentation** (`README.md`): steering an unattended AFK loop from
+  elsewhere, and the inbound-posture guidance that ends with "that default is safe; leave it".
+- **Session-level peer trust boundary (MF-059 extension)** in `templates/CLAUDE.md.template` and
+  `skills/start/SKILL.md`, with `tests/test-session-trust-boundary.sh` as its enforced presence
+  layer: a peer message never counts as operator consent, never carries authoritative state, never
+  changes configuration — and the wording is platform-versioned so the boundary cannot overclaim
+  permanence.
+- **`/nazgul:status` shows in-flight and quarantined markers, plus the last `stop_gate` reason.** The
+  quarantined count is deliberately read from the quarantine DIRECTORY rather than from one event
+  type, because the two quarantine producers emit different shapes (below) and a renderer keying on
+  either alone would silently miss the other. The skill states that explicitly so a `Quarantined > 0`
+  with a `none` last-stop-gate is never read as a contradiction.
+- **Four new event types**, registered across the taxonomy sites (`skills/log/SKILL.md`,
+  `docs/ARCHITECTURE.md`, `RULES.md`, `agents/doc-verifier.md`): `in_flight_orphan` — registered BOTH
+  as a `stop_gate` reason (stop-hook, with `unit`/`agent`/`background`) and as a standalone event
+  (SessionStart sweep, with `source: session_start_sweep` and a numeric `age_minutes`) —
+  `dispatch_guard_background_unverifiable`, `clear_skipped_no_match`, and
+  `clear_fallback_underivable`.
+- **`docs/DECISION-LOG-2026-08-16-cross-session-messaging.md`** — five decisions with their
+  falsifiers, including D-002 "the doorbell was proven to WORK, and cut anyway" and D-005, an
+  amendment to the 2026-07-21 parallel-execution-collapse log's closing rule made **by pointer, not
+  by edit**.
+
+### Changed
+
+- **The in-flight hold is class-aware — #104 Gap 3 closed by classification, not by inversion.**
+  Markers now record their dispatch class at write time (`background` as a tri-state
+  `true`/`false`/`missing`, and `named`), and the hold fires ONLY for a provably-background unnamed
+  dispatch, whose harness resume is the documented wake path. A fresh marker that is foreground,
+  `missing`, or named is a proven leak — a synchronous dispatch cannot span a Stop — so it is
+  quarantined to `nazgul/in-flight/quarantine/` and announced as `stop_gate reason:in_flight_orphan`
+  while the loop continues normally. Legacy markers lacking both fields classify as foreground by
+  ADR-009 cost-weighing: a false hold costs the whole run, a false continue costs one iteration.
+- **Session locks live for the session, not the turn (#195).** They are registered at SessionStart,
+  refreshed each Stop, released at SessionEnd (`session-staging.sh`), and swept by pid liveness —
+  liveness outranks age, so a live session is never swept and a dead one goes immediately. The
+  stop-hook `EXIT` trap that deleted the lock on every allowed stop is **gone**; it was deleting the
+  lock in exactly the case the lock exists to make visible (a held or housekeeping session), which is
+  how a live tree could show four running sessions and zero lock files. Locks now also carry
+  `cwd` / `toplevel` / `branch`, and the recorded pid is the SESSION's — parsed read-only from the
+  messaging socket's basename, falling back to `$PPID` — never the hook shell's own `$$`, which is
+  dead moments later. RULES §11/§13 gain the matching honest scope correction: these counts are
+  per-resolved-`nazgul/`-root, and "unconditional" hard stops are unconditional per root, not per
+  project.
+- **Two live sessions sharing one working tree now warn loudly and specifically**, naming the tree
+  and the hazard (one session commits another's staged work) instead of the generic concurrent-session
+  message, which is retained for the non-shared case.
+- **In-flight marker clear is three-way, ending cross-unit marker theft.** A completion whose unit
+  matched clears that marker (oldest-within-match, unchanged); a completion whose unit was DERIVED but
+  matched nothing now clears NOTHING and emits `clear_skipped_no_match` — the collapse of that middle
+  case into the fallback is what let one unit's completion delete another unit's live marker (the
+  2026-08-04 incident); a completion with no derivable unit takes the newest agent-match and says so
+  via `clear_fallback_underivable`.
+- **SessionStart sweeps over-age in-flight markers** into the same quarantine directory, so an orphan
+  backlog cannot regrow between runs. Quarantined, never deleted — a crashed subagent's marker is
+  diagnostic evidence.
+
+### Fixed
+
+- **#205 / #94 — the review board could be disabled by a host's Agent schema.** On a host whose Agent
+  tool schema has no `run_in_background` field, omission is the ONLY possible payload, and
+  `parallel-dispatch-guard.sh` blocked every main-session reviewer dispatch for it. The missing-field
+  case now ALLOWS with a named `dispatch_guard_background_unverifiable` event, recording that
+  background-verifiability was ABSENT rather than confirmed. ADR-009 cost-weighing: a false block
+  costs the entire review discipline; a false allow is bounded by this guard's other checks and by
+  FEAT-024's empty-return detection. The explicit-`true` block and the `name`-absence block are
+  unchanged.
+- **`/nazgul:clean` left `core.hooksPath` dangling.** `nazgul/.githooks/` lives inside the directory
+  clean deletes, so deleting first pointed git at a nonexistent hooks directory — which silently
+  disabled ALL git hooks, the user's own pre-existing ones included. Clean now restores
+  `core.hooksPath` BEFORE deleting `nazgul/`, with a belt-and-braces unset for configs installed by a
+  version that never recorded `prior_hooks_path`.
+- **`scripts/doctor.sh` truncated its own roster mid-run.** Three new helpers re-derived the project
+  root as `proot="$(cd "$NAZGUL_DIR/.." 2>/dev/null && pwd)"`; when `nazgul/` does not exist that `cd`
+  fails, and a failed command-substitution assignment under `set -euo pipefail` aborts the script. From
+  any directory without `nazgul/` — the "has not run `/nazgul:init` yet" case `check_config_present`
+  explicitly tolerates — the roster stopped after `messaging`: `remote-control` and `sessions` never
+  ran and no coverage line printed, while the aggregate exit stayed `1`, indistinguishable from a run
+  that merely found a warn. `PROJECT_ROOT` was already resolved and is `$NAZGUL_DIR/..` by
+  construction, so the derivation bought nothing and cost the run. The fixture is hardened to assert
+  the LAST check ran and the coverage line was reached, because an exit code cannot tell a warn from a
+  truncated run.
+- **`/nazgul:status`'s last-stop-gate line needed a `grep .` guard.** `jq` exits 0 on empty input, so
+  the `|| echo "none"` fallback was dead code and a project with no `stop_gate` event rendered a blank
+  field instead of `none`.
+
+### Known constraints (honest notes)
+
+- **Nothing in Nazgul gates inbound messages.** The platform's own inbound controls are the only
+  inbound mechanism today, and posture is the operator's decision — Nazgul documents it and never
+  writes it. Receipt IS hook-observable (P6: `UserPromptSubmit` carries the message text as its
+  prompt), so an enforced inbound gate is buildable if it is ever warranted. Buildable is not built.
+- **UPGRADE NOTE — a pre-existing fresh foreground marker now quarantines at the next Stop instead of
+  holding.** This is strictly corrective in live AFK runs: that marker was never going to be cleared
+  by a completion that had already happened. No action is required.
+- **The posture scan binds shipped TEXT, not runtime conduct.** Rule 2's `[enforced]` tier covers the
+  files in this repository; whether a model posts to a socket on its own turn is `[advisory]`, the
+  same honest boundary §21 draws for the read-back contract.
+- **Suite: the discovered root suite moves 105 → 107 files, all green.** `CLAUDE.md`'s stale count of
+  104 is corrected in the same pass; `/nazgul:doctor`'s roster description moves ten → thirteen in
+  `CLAUDE.md` and `README.md`.
+
 ## [2.32.0] - 2026-08-14
 
 FEAT-030, ADR-021 — **"I wrote it" and "it is there" were the same claim, and they are not any more.**
