@@ -27,11 +27,29 @@ CONFIG="$NAZGUL_DIR/config.json"
 [ -f "$CONFIG" ] || exit 0
 jq -e . "$CONFIG" >/dev/null 2>&1 || exit 0
 
+# Gated on the SAME switch as every consumer (PR #223 re-review). This used to write
+# unconditionally, which was harmless while the stop-hook quarantined what it could not
+# classify. It is not harmless now: the unobservable class is left in place (review #11)
+# and the SessionStart sweep that retires it is itself gated on this flag (review #2), so
+# with the guard OFF a marker would be written with NO retirement path at all. A guard
+# that disables a subsystem must disable its producer too, not just its readers.
+IFM_HOLD_ENABLED=$(jq -r 'if .guards.in_flight_hold == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+[ "$IFM_HOLD_ENABLED" = "true" ] || exit 0
+
 TOOL=$(printf '%s' "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
 [ "$TOOL" = "Agent" ] || exit 0
 
 SUBAGENT=$(printf '%s' "$INPUT" | jq -r '.tool_input.subagent_type // ""' 2>/dev/null || echo "")
 PROMPT=$(printf '%s' "$INPUT" | jq -r '.tool_input.prompt // ""' 2>/dev/null || echo "")
+
+# Dispatch class captured at write time (spec 0-C.1) — tri-state extraction, the exact
+# pattern of parallel-dispatch-guard.sh:58-70; absent-field and false differ (#104, #205).
+BACKGROUND=$(printf '%s' "$INPUT" | jq -r '
+  (.tool_input // {}) as $i
+  | if ($i | has("run_in_background")) then ($i.run_in_background | tostring) else "missing" end' \
+  2>/dev/null || echo "missing")
+case "$BACKGROUND" in true|false) : ;; *) BACKGROUND="missing" ;; esac
+NAMED=$(printf '%s' "$INPUT" | jq -r 'if ((.tool_input.name // "") != "") then "true" else "false" end' 2>/dev/null || echo "false")
 
 # Same grep-as-data extraction as parallel-dispatch-guard.sh:70 — never eval'd.
 UNIT=$(printf '%s' "$PROMPT" | grep -oE 'NAZGUL_UNIT: TASK-[0-9]+' | head -1 | sed 's/^NAZGUL_UNIT: //' || true)
@@ -61,7 +79,8 @@ PROMPT_HEAD=$(printf '%s' "$PROMPT" | cut -c1-200)
 
 jq -cn --arg agent "$SUBAGENT" --arg unit "$UNIT" --arg ts "$TS" \
   --argjson epoch "$EPOCH" --arg head "$PROMPT_HEAD" \
-  '{agent:$agent, unit:$unit, dispatched_at:$ts, dispatched_at_epoch:$epoch, prompt_head:$head}' \
+  --arg bg "$BACKGROUND" --arg named "$NAMED" \
+  '{agent:$agent, unit:$unit, dispatched_at:$ts, dispatched_at_epoch:$epoch, prompt_head:$head, background:$bg, named:$named}' \
   > "$MARKER_FILE" 2>/dev/null || true
 
 exit 0

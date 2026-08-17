@@ -32,8 +32,8 @@ source "$SCRIPT_DIR/lib/stack-utils.sh"
 # Degrade to a safe no-op when Nazgul is uninitialized, matching stop-hook.sh.
 [ -f "$CONFIG" ] || exit 0
 
-# MF-039: atomic concurrency claim, first action after the degrade gate and
-# ahead of count_active_sessions (which stays a secondary, non-primary check).
+# MF-039: atomic concurrency claim, first action after the degrade gate. It still
+# leads the (now liveness-filtered) count, which cannot see an unregistered session.
 # `mkdir` is atomic at the filesystem level, so two overlapping ticks race on
 # the mkdir itself rather than a stale `ls` read. Held for the tick's whole
 # lifetime (including the blocking _hb_start call) via `trap ... EXIT`.
@@ -272,6 +272,9 @@ _hb_own_session_id() {
 # treat that as ambiguity to report, never as "no other sessions".
 _hb_other_session_count() {
   local total
+  # Sweep BEFORE counting (board R3): nothing else sweeps this root between ticks,
+  # so a dead session's lock would otherwise block auto-start unboundedly.
+  cleanup_stale_sessions "$NAZGUL_DIR/sessions" 2>/dev/null || true
   total=$(count_active_sessions "$NAZGUL_DIR/sessions")
   case "$total" in ''|*[!0-9]*) total=0 ;; esac
   [ "$total" -eq 0 ] && { printf '0'; return 0; }

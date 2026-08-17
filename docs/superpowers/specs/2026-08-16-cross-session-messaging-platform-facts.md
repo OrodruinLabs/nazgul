@@ -241,3 +241,28 @@ socket-posted peer message, with the message text as `.prompt`. CONSEQUENCES:
     typed prompt is UNPROBED — only .prompt was logged.)
 (2) prompt-guard.sh (already registered on UserPromptSubmit) runs on every inbound peer message in
     Nazgul projects TODAY; its #92 over-block can silently eat a legitimate peer/operator message.
+
+## V4 / V5 — `claude agents --json` (re-measured 2026-08-17, claude 2.1.233)
+
+Recorded here because the adoption design cites this file as the home of V1–V10; the measurements
+had been written only into that design's §4, leaving the citation unresolvable. Re-measured
+independently before recording (FEAT-032/TASK-015).
+
+**V4 — the registry is scriptable and covers ALL local sessions, not only background ones.** Nine
+rows observed, in three distinct key shapes:
+
+| shape | count | keys present | keys ABSENT |
+|---|---|---|---|
+| `kind=background`, `state=blocked` | 4 | `id`, `kind`, `state`, `cwd`, `startedAt` | **`pid`** |
+| `kind=interactive` | 4 | `pid`, `status`, `name`, `cwd` | `id`, `state` |
+| `kind=background`, `state=done` | 1 | `state=done`, `status=idle`, **`pid=81283`** | — |
+
+**`pid` presence is NOT a liveness filter.** A `state:"done"` session carried a pid while
+`state:"blocked"` sessions lacked the key entirely, so a `pid == null` test misclassifies in both
+directions. Liveness = `kind`/`state` plus `kill -0` when a pid is present, and any dependency
+degrades to a named skip — Agent View is a research preview and this shape is not contractual.
+
+**V5 — a shared-working-tree collision is detectable from a script**, via
+`group_by(.cwd) | map(select(length > 1))`. Filter to live rows first (`kind == "interactive" or
+state != "done"`), since an unfiltered count includes completed sessions and overstates the
+collision.

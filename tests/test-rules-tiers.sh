@@ -55,22 +55,21 @@ fi
 # The three counts are structural-freshness checks, NOT ceilings: bump one for a
 # genuinely new rule; never weaken a tag to keep a count unchanged (FEAT-022).
 ADVISORY_COUNT=$(awk '{ count += gsub(/\[advisory\]/, "") } END { print count + 0 }' "$RULES_FILE")  # occurrences, not lines
-if [ "$ADVISORY_COUNT" -eq 31 ]; then
-  _pass "[advisory] annotation count is exactly 31 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 35 ]; then
+  _pass "[advisory] annotation count is exactly 35 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 31" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 31"
+  _fail "[advisory] annotation count is exactly 35" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 35"
 fi
 
 # Bumped per objective, never weakened: 64->69 (FEAT-029), 69->71 (PATCH-002), 71->78
-# with advisory 28->31 (FEAT-030 §21), 78->79 (FEAT-030 §21 item 8, the caller side
-# of the dispatch brief). Bump for a genuinely new rule; never re-tag to fit.
+# +advisory 28->31, 78->79 (FEAT-030 §21 + item 8), 79->82 +advisory 31->35 (FEAT-032 §22).
 ENFORCED_COUNT=$(awk '{ count += gsub(/\[enforced\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ENFORCED_COUNT" -eq 79 ]; then
-  _pass "[enforced] annotation count is exactly 79 (found: $ENFORCED_COUNT)"
+if [ "$ENFORCED_COUNT" -eq 82 ]; then
+  _pass "[enforced] annotation count is exactly 82 (found: $ENFORCED_COUNT)"
 else
-  _fail "[enforced] annotation count is exactly 79" \
-    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 79"
+  _fail "[enforced] annotation count is exactly 82" \
+    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 82"
 fi
 
 # 21 -> 22: FEAT-029 added §2's typed reconciliation quarantine, hook-driven
@@ -322,5 +321,27 @@ assert_file_not_contains \
   "RULES.md no longer claims EnterWorktree is a live worktree-entry path" \
   "$RULES_FILE" \
   "the real worktree-entry paths are the"
+
+# FEAT-032 §22: the posture must state its own enforcement and must not overclaim
+# — receipt IS hook-observable (probe P6), so "buildable" is the honest word.
+assert_file_contains \
+  "RULES.md has a Cross-Session Messaging Posture section" \
+  "$RULES_FILE" \
+  "## 22. Cross-Session Messaging Posture"
+
+assert_file_contains \
+  "§22's doctrine rule is tagged [advisory]" \
+  "$RULES_FILE" \
+  'may never authorize one.*`\[advisory\]`'
+
+assert_file_contains \
+  "§22's no-poster rule is tagged [enforced]" \
+  "$RULES_FILE" \
+  'posts to the messaging socket, ever.*`\[enforced\]`'
+
+assert_file_contains \
+  "§22 states inbound gating is unbuilt, not impossible" \
+  "$RULES_FILE" \
+  "buildable is not built"
 
 report_results

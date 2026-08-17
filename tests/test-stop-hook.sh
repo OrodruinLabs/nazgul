@@ -1529,4 +1529,19 @@ run_hook
 assert_contains "MF-006c: non-hitl mode dispatches despite marker" "$HOOK_OUTPUT" "DELEGATE: Spawn implementer agent (nazgul:implementer) for TASK-001"
 teardown_temp_dir
 
+# --- 0-D: the session lock SURVIVES an allowed stop (exit-0 no longer unregisters) ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+printf 'sess-hold' > "$TEST_DIR/nazgul/.session_id"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+NOW=$(date +%s)
+jq -cn --argjson e "$NOW" '{agent:"nazgul:implementer",unit:"TASK-001",dispatched_at:"x",dispatched_at_epoch:$e,prompt_head:"x",background:"true",named:"false"}' \
+  > "$TEST_DIR/nazgul/in-flight/bg.json"
+(cd "$TEST_DIR" && bash "$REPO_ROOT/scripts/stop-hook.sh" </dev/null >/dev/null 2>&1); EC=$?
+assert_exit_code "0-D: hold path exits 0" "$EC" 0
+LOCKS=$(ls "$TEST_DIR"/nazgul/sessions/*.lock 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "0-D: session lock persists through the allowed stop" "$LOCKS" "1"
+teardown_temp_dir
+
 report_results

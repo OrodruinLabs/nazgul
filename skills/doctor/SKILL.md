@@ -1,6 +1,6 @@
 ---
 name: nazgul:doctor
-description: Run the Nazgul read-only preflight diagnostic — checks jq/gh presence and auth, git-hooks drift, cache-vs-repo plugin version, the bash-vs-zsh hazard, the NAZGUL_DIR footgun, config-schema staleness, and (when execution.stacking is enabled) gh-stack tooling readiness and registry-vs-GitHub drift. Use when asked to "check my nazgul environment", "run doctor", "why isn't my plugin change taking effect", or before starting a loop.
+description: Run the Nazgul read-only preflight diagnostic — checks jq/gh presence and auth, git-hooks drift, cache-vs-repo plugin version, the bash-vs-zsh hazard, the NAZGUL_DIR footgun, config-schema staleness, cross-session messaging and Remote Control eligibility, shared-working-tree session collisions, and (when execution.stacking is enabled) gh-stack tooling readiness and registry-vs-GitHub drift. Use when asked to "check my nazgul environment", "run doctor", "why isn't my plugin change taking effect", or before starting a loop.
 allowed-tools: Bash, Read
 metadata:
   author: Jose Mejia
@@ -9,7 +9,7 @@ metadata:
 # Nazgul Doctor
 
 ## Examples
-- `/nazgul:doctor` — Run all ten checks (a config-present engine check plus the nine environment checks (a)-(i), where (h)/(i) cover stacking tooling readiness and registry-vs-GitHub drift) and report pass/warn/fail with remediation
+- `/nazgul:doctor` — Run all thirteen checks (a config-present engine check plus the twelve environment checks (a)-(i) and (k)-(m), where (h)/(i) cover stacking tooling readiness and registry-vs-GitHub drift and (k)/(l)/(m) cover messaging eligibility, Remote Control eligibility, and shared-working-tree session collisions) and report pass/warn/fail with remediation
 
 ## Instructions
 
@@ -22,7 +22,7 @@ Format all output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md` — stage b
 ```
 
 Capture both stdout and the exit code. This is the entire implementation — `scripts/doctor.sh` runs
-all ten checks read-only. It never writes to `nazgul/`, git config, or anywhere else; this skill only
+all thirteen checks read-only. It never writes to `nazgul/`, git config, or anywhere else; this skill only
 formats what it reports. Every stdout line has the shape `<verdict>\t<check-id>\t<message>`, verdict one
 of `pass`/`warn`/`fail`/`note`. The exit code is the aggregate: 0 = all pass, 1 = worst is warn, 2 = worst
 is fail.

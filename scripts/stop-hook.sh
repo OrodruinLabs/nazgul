@@ -29,17 +29,17 @@ if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
-# Refresh the session lock every iteration (ADR-007 Option A) — read
-# persisted ID to match session-context.sh. Removed only on a
-# genuinely-ending (exit 0) run via the EXIT trap below, so
-# tt_sweep_orphaned_teams's "provably dead" signal and
-# is_concurrent_session_warning() stay honest for a session's full lifetime.
+# Refresh the session lock every iteration — read persisted ID to match
+# session-context.sh. Lock LIFETIME is the session's, not the turn's (#195):
+# removal happens at SessionEnd (session-staging.sh) or via the pid-liveness
+# sweep in cleanup_stale_sessions — NEVER on this hook's own exit, which
+# fires on every allowed stop (held sessions included, the exact case the
+# lock exists to make visible).
 SESSION_ID="${CLAUDE_SESSION_ID:-}"
 if [ -z "$SESSION_ID" ] && [ -f "$NAZGUL_DIR/.session_id" ]; then
   SESSION_ID=$(cat "$NAZGUL_DIR/.session_id")
 fi
 [ -n "$SESSION_ID" ] && register_session "$SESSION_ID" "$NAZGUL_DIR/sessions"
-trap '[ "$?" -eq 0 ] && [ -n "$SESSION_ID" ] && unregister_session "$SESSION_ID" "$NAZGUL_DIR/sessions" || true' EXIT
 
 # Read current state (batched into single jq call)
 CONFIG_STATE=$(jq -r '[
@@ -153,8 +153,36 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
     m_agent=$(jq -r '.agent // "unknown"' "$marker" 2>/dev/null || echo "unknown")
     case "$m_epoch" in ''|*[!0-9]*) m_epoch=0 ;; esac
     if [ "$m_epoch" -gt 0 ] && [ "$m_epoch" -ge "$IN_FLIGHT_CUTOFF" ]; then
-      FRESH_COUNT=$((FRESH_COUNT + 1))
-      FRESH_UNITS="${FRESH_UNITS}${FRESH_UNITS:+ }${m_unit}"
+      # "missing" = dispatch class NOT OBSERVABLE at write time, not foreground. run_in_background is omitted from the exposed Agent schema in fork mode (the interactive default since v2.1.232) and under CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
+      # absence means the OPPOSITE in those two configs (background / foreground). #218: read background_tasks[] at Stop instead of predicting at dispatch time.
+      m_bg=$(jq -r '.background // "missing"' "$marker" 2>/dev/null || echo "missing")
+      m_named=$(jq -r '.named // "false"' "$marker" 2>/dev/null || echo "false")
+      if [ "$m_bg" = "true" ] && [ "$m_named" != "true" ]; then
+        # Provably-background, unnamed: the documented harness resume IS the
+        # confirmed wake path (D-002; docs/CONFIGURATION.md In-Flight Hold).
+        FRESH_COUNT=$((FRESH_COUNT + 1))
+        FRESH_UNITS="${FRESH_UNITS}${FRESH_UNITS:+ }${m_unit}"
+      elif [ "$m_bg" = "false" ] || [ "$m_named" = "true" ]; then
+        # PROVEN class only: a synchronous dispatch cannot span a Stop, so this marker
+        # is residue and quarantining it is what keeps the backlog from regrowing.
+        mkdir -p "$NAZGUL_DIR/in-flight/quarantine" 2>/dev/null || true
+        mv "$marker" "$NAZGUL_DIR/in-flight/quarantine/" 2>/dev/null || true
+        echo "Nazgul: ORPHAN in-flight marker for ${m_unit} (${m_agent}, background=${m_bg}, named=${m_named}) — quarantined; a foreground dispatch cannot outlive its turn. Continuing normally." >&2
+        emit_event "stop_gate" reason "in_flight_orphan" unit "$m_unit" agent "$m_agent" background "$m_bg"
+      else
+        # UNOBSERVABLE class: do not hold (a false hold stalls the run with no wake path
+        # this code reads) — but do NOT destroy the marker either (PR #223 review #11).
+        # `mv` is irreversible, on a fork-mode host EVERY marker takes this branch on the
+        # first Stop, and the dispatch it belongs to is usually still RUNNING. Deleting it
+        # also forecloses #218's stated fix, which reconciles these markers against the
+        # Stop payload's background_tasks[] — there would be nothing left to reconcile.
+        # Not counting toward FRESH_COUNT already achieves "continue rather than hold";
+        # destroying evidence was never part of that. Left in place exactly like the STALE
+        # branch below, whose doctrine this now matches; the SessionStart sweep is the
+        # bounded backstop that eventually retires it.
+        echo "Nazgul: UNVERIFIABLE in-flight marker for ${m_unit} (${m_agent}, background=${m_bg}) — dispatch class not observable at write time; NOT held on and NOT quarantined, because it is not proven residue and may belong to a running dispatch (#218). Continuing normally." >&2
+        emit_event "stop_gate" reason "in_flight_unverifiable" unit "$m_unit" agent "$m_agent" background "$m_bg"
+      fi
     else
       # Stale markers are NEVER silently deleted here — a crashed subagent's
       # marker is diagnostic evidence for the next tick, and only
@@ -166,7 +194,7 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
     fi
   done
   if [ "$FRESH_COUNT" -gt 0 ]; then
-    echo "Nazgul: in-flight hold — waiting on ${FRESH_COUNT} dispatched unit(s): ${FRESH_UNITS}. Allowing stop; the harness resumes this loop when the background agent finishes." >&2
+    echo "Nazgul: in-flight hold — waiting on ${FRESH_COUNT} BACKGROUND dispatch(es): ${FRESH_UNITS}. Allowing stop; the harness's task-notification resumes this loop when the background agent finishes." >&2
     emit_event "stop_gate" reason "in_flight_hold" units "$FRESH_UNITS" count:n "$FRESH_COUNT"
     exit 0
   fi

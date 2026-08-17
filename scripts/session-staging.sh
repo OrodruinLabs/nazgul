@@ -5,8 +5,8 @@
 # Safety net for AFK/YOLO sessions: stages all modified files at session end
 # so work isn't lost if the session terminates unexpectedly mid-task.
 #
-# Only runs when AFK mode is enabled. No-op for HITL sessions.
-# NEVER commits — only stages (git add).
+# STAGING only runs when AFK mode is enabled; it never commits, only stages.
+# The session-lock RELEASE runs on every SessionEnd path, HITL included.
 #
 # Environment Variables:
 #   NAZGUL_STAGING_DISABLE  - Set to "1" to disable (default: enabled)
@@ -40,6 +40,38 @@ output_result() {
     echo '{"continue": true}'
     exit 0
 }
+
+# Session-lock release (#195): the lock's lifetime is the session's, and this is its
+# end. The hook payload's session_id is the ONLY identity used.
+#
+# There is deliberately NO `nazgul/.session_id` fallback (PR #223 review #9). That file
+# is last-writer-wins — session-context.sh rewrites it on every SessionStart — so in the
+# shared-working-tree case this feature exists to protect (#195), session A ending would
+# read B's id and unregister B's LIVE lock while A's own leaked. Releasing the wrong
+# session's lock is strictly worse than releasing none, because a wrongly-released one
+# silently disarms the collision warning for a session that is STILL RUNNING.
+# The honest cost of releasing none (PR #223 re-review): a lock CARRYING a pid is retired
+# promptly by the pid-liveness sweep, but after review #5 a lock whose session pid could
+# not be determined carries none, and those fall to the AGE rule alone
+# (`cleanup_stale_sessions`, 2h default). Slower — and still bounded, unlike a wrong release.
+release_session_lock() {
+    local sd nd sid
+    sd="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    source "$sd/lib/nazgul-root.sh" 2>/dev/null || return 0
+    nd="$(resolve_nazgul_dir 2>/dev/null)" || return 0
+    [ -d "$nd/sessions" ] || return 0
+    sid=$(printf '%s' "$STAGING_STDIN" | jq -r '.session_id // empty' 2>/dev/null || echo "")
+    [ -n "$sid" ] || return 0
+    source "$sd/lib/session-tracker.sh" 2>/dev/null || return 0
+    unregister_session "$sid" "$nd/sessions" 2>/dev/null || true
+}
+
+STAGING_STDIN=""
+if [ ! -t 0 ]; then STAGING_STDIN=$(cat 2>/dev/null || echo ""); fi
+
+# Lock lifetime is the SESSION's, not staging's: released on every SessionEnd path,
+# including the four staging gates below and any `set -e` abort (board R2).
+trap 'release_session_lock || true' EXIT
 
 # --- Check if disabled ---
 if [[ "${NAZGUL_STAGING_DISABLE:-0}" == "1" ]]; then
