@@ -53,6 +53,8 @@ test_second_worktree_install_does_not_disarm_first() {
 - [ ] **Step 4: Run** filter — PASS. Confirm existing single-worktree git-hooks tests still pass unchanged.
 - [ ] **Step 5: Commit**: `fix: worktree-scoped core.hooksPath — second feature worktree no longer disarms the first's guards`
 
+> **Amendment (2026-08-16, messaging-adoption cycle):** Task 1 (the SPATIAL per-worktree hooksPath fix) additionally inherits the TEMPORAL question this cycle filed: what protects the base branch between objectives, given the pre-commit guard's own predicate exits when branch.feature is empty? Sequencing: spatial scoping lands first or together — an install-more-often change before spatial scoping aggravates the clobber. /nazgul:clean now restores core.hooksPath (2026-08-16); cleanup_all_worktrees' uninstall is unchanged by that cycle.
+
 ### Task 1.5: Probe — Remote Control server-mode composability (timeboxed, non-blocking)
 
 Half-day timebox, before Task 2 freezes the worktree directory convention (2026-08-03
@@ -202,3 +204,5 @@ test_stacked_layer_pr_merged_but_content_not_in_main_is_unmerged() {
 ## Self-review notes (done at plan time)
 
 Spec coverage: §4 B1→Task 2, B2→Task 1 (ordered first — it ships for all users and Task 2 depends on it), B3→docs in Task 5 (no mechanism: stacking-off is the existing default path; the rule is convention + doctor visibility), B4→Tasks 3-4-5, B5→Tasks 5-6. E2E two-loop manual workflow lives in Task 5's CLAUDE.md paragraph; automated two-loop E2E deliberately not planned (needs two live sessions — out of harness reach; the isolation invariants are covered by Tasks 1-2 unit tests). Type consistency: `rg_gate` exit codes 0/3/4/5 and reason words `unmerged`/`unresolvable`/`ambiguous` used identically in Tasks 3, 4, 5.
+
+> **Amendment (2026-08-16, messaging-adoption cycle):** premise now questionable — `--name`, `-p` inbox sockets, and scriptable `claude agents --json` may put a two-live-session harness in reach; anthropics/claude-code#84945 (silent same-directory bind failure) is the known hazard. Re-evaluate at pickup.
