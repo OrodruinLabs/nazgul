@@ -265,7 +265,8 @@ scenario_loop() {
     echo "  SKIP: B: lifecycle ordering — no session id and checkpoint pair to compare (not checked)"
   fi
 
-  # stop_gate reasons: afk_timeout / in_flight_hold / in_flight_stale / in_flight_orphan / stacking_unavailable (RULES §5).
+  # stop_gate reasons: afk_timeout / in_flight_hold / in_flight_stale / in_flight_orphan /
+  # in_flight_unverifiable / stacking_unavailable (RULES §5).
   # A live session cannot be made to hit one on demand, so the real hook is driven against the state it produced.
   events="$proj/nazgul/logs/events.jsonl"
   gate_events_before=$(grep -c '"stop_gate"' "$events" 2>/dev/null || true)
