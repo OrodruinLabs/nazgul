@@ -162,18 +162,26 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
         # confirmed wake path (D-002; docs/CONFIGURATION.md In-Flight Hold).
         FRESH_COUNT=$((FRESH_COUNT + 1))
         FRESH_UNITS="${FRESH_UNITS}${FRESH_UNITS:+ }${m_unit}"
-      else
-        # We continue rather than hold (#104 Gap 3): a false hold stalls the run with no wake path this code reads. But on a fork-mode host this is usually WRONG about the
-        # dispatch, and the marker is MOVED (not merely skipped), so the call can never be reconsidered — hence in_flight_unverifiable, never "proven leak".
+      elif [ "$m_bg" = "false" ] || [ "$m_named" = "true" ]; then
+        # PROVEN class only: a synchronous dispatch cannot span a Stop, so this marker
+        # is residue and quarantining it is what keeps the backlog from regrowing.
         mkdir -p "$NAZGUL_DIR/in-flight/quarantine" 2>/dev/null || true
         mv "$marker" "$NAZGUL_DIR/in-flight/quarantine/" 2>/dev/null || true
-        if [ "$m_bg" = "false" ] || [ "$m_named" = "true" ]; then
-          echo "Nazgul: ORPHAN in-flight marker for ${m_unit} (${m_agent}, background=${m_bg}, named=${m_named}) — quarantined; a foreground dispatch cannot outlive its turn. Continuing normally." >&2
-          emit_event "stop_gate" reason "in_flight_orphan" unit "$m_unit" agent "$m_agent" background "$m_bg"
-        else
-          echo "Nazgul: UNVERIFIABLE in-flight marker for ${m_unit} (${m_agent}, background=${m_bg}) — dispatch class not observable at write time; quarantined by cost-weighing, NOT a proven foreground leak. On this host class the hold never engages (#218). Continuing normally." >&2
-          emit_event "stop_gate" reason "in_flight_unverifiable" unit "$m_unit" agent "$m_agent" background "$m_bg"
-        fi
+        echo "Nazgul: ORPHAN in-flight marker for ${m_unit} (${m_agent}, background=${m_bg}, named=${m_named}) — quarantined; a foreground dispatch cannot outlive its turn. Continuing normally." >&2
+        emit_event "stop_gate" reason "in_flight_orphan" unit "$m_unit" agent "$m_agent" background "$m_bg"
+      else
+        # UNOBSERVABLE class: do not hold (a false hold stalls the run with no wake path
+        # this code reads) — but do NOT destroy the marker either (PR #223 review #11).
+        # `mv` is irreversible, on a fork-mode host EVERY marker takes this branch on the
+        # first Stop, and the dispatch it belongs to is usually still RUNNING. Deleting it
+        # also forecloses #218's stated fix, which reconciles these markers against the
+        # Stop payload's background_tasks[] — there would be nothing left to reconcile.
+        # Not counting toward FRESH_COUNT already achieves "continue rather than hold";
+        # destroying evidence was never part of that. Left in place exactly like the STALE
+        # branch below, whose doctrine this now matches; the SessionStart sweep is the
+        # bounded backstop that eventually retires it.
+        echo "Nazgul: UNVERIFIABLE in-flight marker for ${m_unit} (${m_agent}, background=${m_bg}) — dispatch class not observable at write time; NOT held on and NOT quarantined, because it is not proven residue and may belong to a running dispatch (#218). Continuing normally." >&2
+        emit_event "stop_gate" reason "in_flight_unverifiable" unit "$m_unit" agent "$m_agent" background "$m_bg"
       fi
     else
       # Stale markers are NEVER silently deleted here — a crashed subagent's

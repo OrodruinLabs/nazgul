@@ -239,7 +239,13 @@ mkdir -p "$TEST_DIR/nazgul/in-flight"
 NOW=$(date +%s)
 _write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$NOW" "missing"
 run_hook
-assert_file_exists "hold: 'missing' marker quarantined like foreground" "$TEST_DIR/nazgul/in-flight/quarantine/legacy.json"
+# INVERTED DELIBERATELY (PR #223 review #11). This asserted that an unobservable class
+# is quarantined "like foreground" — the defect, not the contract. `mv` is irreversible,
+# every marker on a fork-mode host reaches this branch on the first Stop, and the
+# dispatch is usually still RUNNING. Preserving it also keeps #218's fix possible, which
+# reconciles these markers against the Stop payload's background_tasks[].
+assert_file_not_exists "hold: an unobservable-class marker is NOT quarantined — it may belong to a running dispatch" "$TEST_DIR/nazgul/in-flight/quarantine/legacy.json"
+assert_file_exists "hold: the unobservable-class marker is left in place for reconciliation (#218)" "$TEST_DIR/nazgul/in-flight/legacy.json"
 assert_contains "hold: 'missing' emits stop_gate reason in_flight_unverifiable" \
   "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" '"reason":"in_flight_unverifiable"'
 assert_not_contains "hold: 'missing' is NOT recorded as a proven orphan" \
@@ -247,7 +253,8 @@ assert_not_contains "hold: 'missing' is NOT recorded as a proven orphan" \
 assert_contains "hold: 'missing' event carries the observed background value" \
   "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" '"background":"missing"'
 assert_contains "hold: 'missing' stderr names the unobservable class" "$HOOK_OUTPUT" "background=missing"
-assert_contains "hold: 'missing' stderr refuses the proven-leak claim" "$HOOK_OUTPUT" "NOT a proven foreground leak"
+assert_contains "hold: 'missing' stderr refuses the proven-residue claim" "$HOOK_OUTPUT" "not proven residue"
+assert_contains "hold: 'missing' stderr states the marker was NOT quarantined" "$HOOK_OUTPUT" "NOT quarantined"
 teardown_temp_dir
 
 # --- classification: a named dispatch is proven regardless of an unobservable class ---
@@ -331,8 +338,12 @@ _write_marker "$TEST_DIR/nazgul/in-flight/older.json" "nazgul:implementer" "TASK
 _write_marker "$TEST_DIR/nazgul/in-flight/newer.json" "nazgul:implementer" "TASK-002" "2000"
 PAYLOAD=$(jq -cn '{subagent_type:"nazgul:implementer"}')
 printf '%s' "$PAYLOAD" | bash "$CLEARER" >/dev/null 2>&1
-assert_file_not_exists "clear: newest agent match removed when no unit is derivable" "$TEST_DIR/nazgul/in-flight/newer.json"
-assert_file_exists "clear: older marker survives (one clear = one dispatch)" "$TEST_DIR/nazgul/in-flight/older.json"
+# INVERTED DELIBERATELY (PR #223 review #3). Newest-first deleted the marker of the
+# dispatch most likely STILL RUNNING: with two concurrent implementers, A completing
+# removed B's fresh marker and B silently lost its hold. Oldest-first pairs a completion
+# with the longest-outstanding dispatch, which is the one it most likely is.
+assert_file_not_exists "clear: OLDEST agent match removed when no unit is derivable" "$TEST_DIR/nazgul/in-flight/older.json"
+assert_file_exists "clear: the FRESHER marker survives — it likely belongs to a running dispatch" "$TEST_DIR/nazgul/in-flight/newer.json"
 teardown_temp_dir
 
 # Non-matching agent -> no-op, no error.
@@ -406,8 +417,9 @@ _write_marker "$TEST_DIR/nazgul/in-flight/old.json" "nazgul:implementer" "TASK-0
 _write_marker "$TEST_DIR/nazgul/in-flight/new.json" "nazgul:implementer" "TASK-009" 2000
 PAYLOAD=$(jq -cn '{subagent_type:"nazgul:implementer"}')
 (cd "$TEST_DIR" && printf '%s' "$PAYLOAD" | bash "$CLEARER" >/dev/null 2>&1) || true
-assert_file_exists "clearer: underivable keeps the OLD marker" "$TEST_DIR/nazgul/in-flight/old.json"
-assert_file_not_exists "clearer: underivable clears the NEWEST marker" "$TEST_DIR/nazgul/in-flight/new.json"
+# INVERTED DELIBERATELY (PR #223 review #3) — see the rationale above.
+assert_file_not_exists "clearer: underivable clears the OLDEST marker" "$TEST_DIR/nazgul/in-flight/old.json"
+assert_file_exists "clearer: underivable KEEPS the newest — a running dispatch must not lose its hold" "$TEST_DIR/nazgul/in-flight/new.json"
 assert_contains "clearer: underivable emits clear_fallback_underivable" \
   "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" "clear_fallback_underivable"
 teardown_temp_dir

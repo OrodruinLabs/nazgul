@@ -66,7 +66,7 @@ _clear_in_flight_marker() {
     unit=$(head -c 262144 "$tpath" 2>/dev/null | grep -oE 'NAZGUL_UNIT: TASK-[0-9]+' | head -1 | sed 's/^NAZGUL_UNIT: //' || true)
   fi
 
-  local matched="" matched_epoch="" newest="" newest_epoch="" f epoch a u
+  local matched="" matched_epoch="" oldest="" oldest_epoch="" f epoch a u
   for f in "$marker_dir"/*.json; do
     [ -f "$f" ] || continue
     a=$(jq -r '.agent // ""' "$f" 2>/dev/null) || continue
@@ -82,8 +82,8 @@ _clear_in_flight_marker() {
         fi
       fi
     fi
-    if [ -z "$newest" ] || [ "$epoch" -gt "$newest_epoch" ] 2>/dev/null; then
-      newest="$f"; newest_epoch="$epoch"
+    if [ -z "$oldest" ] || [ "$epoch" -lt "$oldest_epoch" ] 2>/dev/null; then
+      oldest="$f"; oldest_epoch="$epoch"
     fi
   done
   # Three cases, each named (#104 Gap 3 was the collapse of the middle one):
@@ -93,11 +93,17 @@ _clear_in_flight_marker() {
     # Unit DERIVED but unmatched: clearing steals a different unit's live marker
     # — the exact 2026-08-04 incident. Orphans are the hold classifier's problem.
     emit_event "clear_skipped_no_match" agent "$AGENT" unit "$unit"
-  elif [ -n "$newest" ]; then
-    # Unit UNDERIVABLE: newest agent-match is the best-effort pair (a fresh
-    # completion pairs with the freshest dispatch, never an aged orphan).
-    emit_event "clear_fallback_underivable" agent "$AGENT" marker "$(basename "$newest")"
-    rm -f "$newest" 2>/dev/null
+  elif [ -n "$oldest" ]; then
+    # Unit UNDERIVABLE: clear the OLDEST agent-match, not the newest (PR #223 review #3).
+    # Newest-first deletes the marker of the dispatch most likely STILL RUNNING: with two
+    # concurrent implementers, A completing removed B's fresh marker, B silently lost its
+    # hold, and A's own marker was left behind as the orphan. Oldest-first pairs a
+    # completion with the dispatch that has been outstanding longest, which is the one it
+    # most likely is. The "never an aged orphan" worry that motivated newest-first is
+    # already covered by IN_FLIGHT_CUTOFF: an aged marker is classified stale by the hold
+    # and retired by the SessionStart sweep, so it needs no help from this fallback.
+    emit_event "clear_fallback_underivable" agent "$AGENT" marker "$(basename "$oldest")"
+    rm -f "$oldest" 2>/dev/null
   fi
   return 0
 }

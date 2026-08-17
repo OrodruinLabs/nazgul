@@ -18,7 +18,13 @@ source "$SCRIPT_DIR/lib/assertions.sh"
 echo "=== $TEST_NAME ==="
 
 SURFACE_ROOT="${NAZGUL_POSTURE_SURFACE_ROOT:-$REPO_ROOT}"
-SURFACES="scripts skills agents templates hooks"
+# `references` and `.claude-plugin` are shipped plugin content and were missing
+# (PR #223 review #13): agents read `${CLAUDE_PLUGIN_ROOT}/references/*.md` at runtime,
+# and `.claude-plugin/` is the manifest the host loads. RULES §22 rule 2 claims "no
+# shipped surface posts to the messaging socket, EVER" — a claim the scan must actually
+# bind, or the rule's `[enforced]` tier is unearned. This is F-A's defect one level up:
+# F-A fixed WHICH FILES within a surface are scanned; this fixes WHICH SURFACES exist.
+SURFACES="scripts skills agents templates hooks references .claude-plugin"
 # Read-only allowlist (repo-relative), exactly per the spec's Global Constraint:
 ALLOW_RE='^(scripts/doctor\.sh|scripts/lib/session-tracker\.sh)$'
 R1_KEY_RE='crossSessionInbound|isolatePeerMachines'
@@ -37,6 +43,10 @@ POSTURE_ROSTER='scripts/git-hooks/pre-commit
 scripts/git-hooks/pre-merge-commit
 templates/CLAUDE.md.template'
 
+# EVERY _fail below must increment `findings` before firing (PR #223 review #8). The
+# coverage line this file emits is its §15 contract, `tests/test-coverage-honesty.sh`
+# asserts the number, and a failing run that printed "0 findings" would be exactly the
+# dishonest-accounting defect this scan exists to catch — committed by the scan itself.
 scanned=0; skipped_unreadable=0; checked=0; findings=0
 CHECKED_LIST=""
 
@@ -77,6 +87,7 @@ scan_file() {
 for s in $SURFACES; do
   before=$checked
   if [ ! -d "$SURFACE_ROOT/$s" ]; then
+    findings=$((findings + 1))
     _fail "surface floor: shipped surface '$s' exists" \
       "$SURFACE_ROOT/$s is absent — a renamed or emptied surface must fail, not drop out of the population"
     continue
@@ -85,6 +96,7 @@ for s in $SURFACES; do
     scan_file "$f"
   done < <(find "$SURFACE_ROOT/$s" -type f 2>/dev/null | sort)
   if [ "$checked" -eq "$before" ]; then
+    findings=$((findings + 1))
     _fail "surface floor: shipped surface '$s' contributed a checked file" \
       "0 checked under $SURFACE_ROOT/$s — an enumerator that reaches nothing is not a clean surface"
   fi
@@ -108,6 +120,7 @@ while IFS= read -r rel; do
   inv_count=$((inv_count + 1))
   printf '%s' "$CHECKED_LIST" | grep -Fxq "$rel" && continue
   inv_missing=$((inv_missing + 1))
+  findings=$((findings + 1))
   _fail "enumerator completeness: $rel is in the checked set" \
     "a shipped file no extension glob reaches was enumerated away — the surface is the shipped file set"
 done <<EOF
@@ -128,6 +141,7 @@ if [ "$SURFACE_ROOT" = "$REPO_ROOT" ]; then
     if printf '%s' "$CHECKED_LIST" | grep -Fxq "$rel"; then
       _pass "enumerator roster: $rel is enumerated"
     else
+      findings=$((findings + 1))
       _fail "enumerator roster: $rel is enumerated" \
         "absent from the checked set — either the enumerator missed it or it was deleted; update the roster deliberately"
     fi
@@ -146,10 +160,12 @@ else
   else
     echo "$TEST_NAME: NOTHING CHECKED — all $scanned candidates skipped" >&2
   fi
+  findings=$((findings + 1))
   _fail "K>0 floor: the scan examined at least one file" "checked=0 — a scan that scans nothing is a broken scan, not a clean surface"
 fi
 if [ "$scanned" -ne $((skipped_unreadable + checked)) ]; then
   echo "$TEST_NAME: INTERNAL — coverage accounting mismatch: $scanned scanned != $skipped_unreadable skipped + $checked checked" >&2
+  findings=$((findings + 1))
   _fail "coverage accounting adds up (N == M + K)" "$scanned != $skipped_unreadable + $checked"
 fi
 
@@ -195,8 +211,10 @@ grep -qE "$R1_WRITE_RE|$R1_SETTINGS_WRITE_RE" "$SCRATCH/v4.sh" \
 DOG="$SCRATCH/surface"
 _dog_reset() {
   rm -rf "$DOG"
+  # Every name in SURFACES must be materialised here or the per-surface floor fires —
+  # which is the floor working, not a fixture bug. Adding a surface means adding it here.
   mkdir -p "$DOG/scripts/git-hooks" "$DOG/scripts/lib" "$DOG/skills" "$DOG/agents" \
-    "$DOG/templates" "$DOG/hooks"
+    "$DOG/templates" "$DOG/hooks" "$DOG/references" "$DOG/.claude-plugin"
   printf '#!/usr/bin/env bash\necho ok\n' > "$DOG/scripts/x.sh"
   printf '#!/bin/sh\nexit 0\n' > "$DOG/scripts/git-hooks/pre-commit"
   printf '#!/bin/sh\nexit 0\n' > "$DOG/scripts/git-hooks/pre-merge-commit"
@@ -204,6 +222,8 @@ _dog_reset() {
   printf '# agent\n' > "$DOG/agents/x.md"
   printf '# template\n' > "$DOG/templates/CLAUDE.md.template"
   printf '{}\n' > "$DOG/hooks/hooks.json"
+  printf '# reference\n' > "$DOG/references/x.md"
+  printf '{"name":"x","version":"0.0.0"}\n' > "$DOG/.claude-plugin/plugin.json"
   cp "$REPO_ROOT/scripts/doctor.sh" "$DOG/scripts/doctor.sh"
   cp "$REPO_ROOT/scripts/lib/session-tracker.sh" "$DOG/scripts/lib/session-tracker.sh"
 }
