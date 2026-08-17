@@ -1041,7 +1041,10 @@ loop mechanism.
 
 1. **An unguaranteed channel may shorten a wait, but may never authorize one.** `[advisory]`
    (doctrine; enforced indirectly by rule 2 — no poster can exist). Delivery has three outcomes
-   (delivered/held/refused), a refusal produces no sender-side notice, throttling is opaque, and
+   (delivered/held/refused), a refusal produces no sender-side notice — note that a *refusal*
+   (`crossSessionInbound: refuse`, dropped on arrival) is NOT the same state as a *denial* (a human
+   dismissing a hold dialog); `peer_message_status` reports `held`/`denied`/`expired`/`delivered`
+   and has no `refused` member, so the silent case is refusal alone — throttling is opaque, and
    unrelated settings changes silently reconfigure the transport. Nothing with those properties
    may be what a hold's legality, a gate, or any state transition rests on. `decision:"block"`
    on Stop remains the only sanctioned turn source.
