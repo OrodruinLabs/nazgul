@@ -339,6 +339,31 @@ else
   _fail "test-messaging-posture: a full run actually checks something" "checked: $MP_CHECKED"
 fi
 
+# test-doc-contract-fields, forced empty doc root: both documents are unreadable, so
+# every field binding is scanned and skipped rather than never enumerated.
+mkdir -p "$SCRATCH/nodocs"
+DC_OUT=$(NAZGUL_DOC_CONTRACT_DOC_ROOT="$SCRATCH/nodocs" \
+  bash "$REPO_ROOT/tests/test-doc-contract-fields.sh" 2>"$SCRATCH/dc.err")
+DC_RC=$?
+_grammar_check "test-doc-contract-fields (all-skip)" "test-doc-contract-fields" \
+  "unreadable" "$(_last_line "$DC_OUT")" && _entry_covered test-doc-contract-fields
+assert_contains "test-doc-contract-fields: forced all-skip emits the nothing-checked signal" \
+  "$(cat "$SCRATCH/dc.err")" "test-doc-contract-fields: NOTHING CHECKED — all 12 candidates skipped"
+assert_exit_code "test-doc-contract-fields: blocking — nothing checked is a failure" "$DC_RC" 1
+# Pinned, not derived: an inherited doc root would aim the "full run" at whatever tree
+# the caller named, and a tree holding no documents passes while checking nothing.
+DC_FULL=$(NAZGUL_DOC_CONTRACT_DOC_ROOT="$REPO_ROOT" \
+  bash "$REPO_ROOT/tests/test-doc-contract-fields.sh" 2>/dev/null)
+_grammar_check "test-doc-contract-fields (full run)" "test-doc-contract-fields" \
+  "unreadable" "$(_last_line "$DC_FULL")"
+DC_CHECKED=$(_last_line "$DC_FULL" | sed -E 's/^.*\), ([0-9]+) checked.*/\1/')
+case "${DC_CHECKED:-}" in ''|*[!0-9]*) DC_CHECKED_N=0 ;; *) DC_CHECKED_N="$DC_CHECKED" ;; esac
+if [ "$DC_CHECKED_N" -ge 1 ]; then
+  _pass "test-doc-contract-fields: a full run actually checks something"
+else
+  _fail "test-doc-contract-fields: a full run actually checks something" "checked: $DC_CHECKED"
+fi
+
 # The derivation, dogfooded against scratch registries: the shipped RULES.md
 # yields exactly the driven set, so the failing directions never run against it.
 REG_MUT="$SCRATCH/rules-mutant.md"

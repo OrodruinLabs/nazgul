@@ -571,7 +571,7 @@ policy but emit `coverage_vacuous`. A filter that matches no file is also NOTHIN
 run. A new skip reason must be named and counted — it cannot disappear into `passed` or a free-form
 note. This is §15's looked-vs-never-looked distinction applied to tests, guards, smoke, and audits.
 
-- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Eleven entry points are bound
+- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Twelve entry points are bound
   by the contract above: `tests/run-tests.sh`, `scripts/lean-comments-guard.sh --check`,
   `tests/test-shellcheck.sh`, `scripts/doctor.sh`, `agents/comment-verifier.md`,
   `scripts/lib/heartbeat-triage.sh`, `scripts/self-audit.sh` (enrolled FEAT-029/TASK-012, which also
@@ -592,7 +592,11 @@ note. This is §15's looked-vs-never-looked distinction applied to tests, guards
   dogfooded synthetic violators driven end to end through the scanner rather than only against its
   regexes. Its population is the shipped file set, not an extension whitelist — an extension glob
   silently redefines the surface, so the enumeration's own completeness is asserted against a pinned
-  roster of the shipped files no glob reaches).
+  roster of the shipped files no glob reaches). The twelfth is
+  `tests/test-doc-contract-fields.sh` (enrolled FEAT-031/TASK-016 — the doc/gate merge-evidence field
+  binding of §2; blocking, so nothing checked is its own failure. Its field list is DERIVED from
+  `_TTG_MERGE_REQUIRED_FIELDS` in the gate library, never authored in the test, so a field added to the
+  constant and not to the docs turns the documents red instead of quietly stale).
   `tests/test-coverage-honesty.sh` drives every one of them under a forced
   all-skip input and FAILS if any enumerated entry point was never driven — membership is asserted, not
   assumed, so an entry point that conforms today cannot silently stop conforming tomorrow. Add a new

@@ -18,13 +18,28 @@ CONST_NAME="_TTG_MERGE_REQUIRED_FIELDS"
 # of DOCUMENTS, not of fields — the fields come from the constant below.
 DOC_PATHS="CLAUDE.md RULES.md"
 REGION_MARKER="## Merge Evidence"
+# The documents are resolved against an injectable root; the constant never is, so a
+# forced all-skip run still derives the real field list it fails to find documented.
+DOC_ROOT="${NAZGUL_DOC_CONTRACT_DOC_ROOT:-$REPO_ROOT}"
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-doc-contract-XXXXXX")
 trap 'rm -rf "$SCRATCH"' EXIT
 
+SCANNED=0
+SKIPPED_UNREADABLE=0
+CHECKED=0
+FINDINGS=0
+
+_emit_coverage() {
+  printf '%s: %d scanned, %d skipped (unreadable=%d), %d checked, %d findings\n' \
+    "$TEST_NAME" "$SCANNED" "$SKIPPED_UNREADABLE" "$SKIPPED_UNREADABLE" "$CHECKED" "$FINDINGS"
+}
+
 if [ ! -r "$GUARD_LIB" ]; then
   _fail "the gate library is readable" "not readable: $GUARD_LIB"
+  echo "$TEST_NAME: NOTHING CHECKED — the gate library is unreadable, so no field list exists to bind" >&2
   report_results
+  _emit_coverage
   exit 1
 fi
 
@@ -40,7 +55,9 @@ if [ -z "$FIELDS" ]; then
   _fail "${CONST_NAME} is readable from the shell source" \
     "the constant is empty or unset after sourcing $GUARD_LIB" \
     "the field list could not be derived — this is 'never looked', not 'looked and found none'"
+  echo "$TEST_NAME: NOTHING CHECKED — the constant yielded no fields to bind" >&2
   report_results
+  _emit_coverage
   exit 1
 fi
 _pass "${CONST_NAME} is derived from the shell source (fields: ${FIELDS})"
@@ -57,12 +74,9 @@ _field_in_file() {
 }
 
 SCANNED=$((DOC_COUNT * FIELD_COUNT))
-SKIPPED_UNREADABLE=0
-CHECKED=0
-FINDINGS=0
 
 for doc in $DOC_PATHS; do
-  doc_path="$REPO_ROOT/$doc"
+  doc_path="$DOC_ROOT/$doc"
   if [ ! -r "$doc_path" ]; then
     SKIPPED_UNREADABLE=$((SKIPPED_UNREADABLE + FIELD_COUNT))
     _skip "$doc: unreadable — its $FIELD_COUNT field bindings were not checked"
@@ -117,9 +131,21 @@ for doc in $DOC_PATHS; do
   done
 done
 
-SKIPPED=$SKIPPED_UNREADABLE
-COVERAGE_LINE="$TEST_NAME: $SCANNED scanned, $SKIPPED skipped (unreadable=$SKIPPED_UNREADABLE), $CHECKED checked, $FINDINGS findings"
-echo "  $COVERAGE_LINE"
-assert_eq "$TEST_NAME: N == M + K" "$SCANNED" "$((SKIPPED + CHECKED))"
+assert_eq "$TEST_NAME: N == M + K" "$SCANNED" "$((SKIPPED_UNREADABLE + CHECKED))"
 
-report_results
+if [ "$CHECKED" -eq 0 ]; then
+  if [ "$SCANNED" -eq 0 ]; then
+    echo "$TEST_NAME: NOTHING CHECKED — no field/document bindings discovered under $DOC_ROOT" >&2
+    _fail "the enumerator produced at least one field/document binding" \
+      "zero candidates — a broken enumerator, not a fully documented contract"
+  else
+    echo "$TEST_NAME: NOTHING CHECKED — all $SCANNED candidates skipped" >&2
+    _fail "at least one document was readable enough to bind a field to" \
+      "all $SCANNED candidate bindings skipped under $DOC_ROOT"
+  fi
+fi
+
+RC=0
+report_results || RC=1
+_emit_coverage
+exit "$RC"
