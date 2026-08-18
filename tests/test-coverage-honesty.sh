@@ -339,23 +339,33 @@ else
   _fail "test-messaging-posture: a full run actually checks something" "checked: $MP_CHECKED"
 fi
 
-# test-doc-contract-fields, forced empty doc root: both documents are unreadable, so
-# every field binding is scanned and skipped rather than never enumerated.
+# test-doc-contract-fields, forced empty doc root: every document is unreadable, so every
+# claim binding is scanned and skipped rather than never enumerated.
 mkdir -p "$SCRATCH/nodocs"
 DC_OUT=$(NAZGUL_DOC_CONTRACT_DOC_ROOT="$SCRATCH/nodocs" \
   bash "$REPO_ROOT/tests/test-doc-contract-fields.sh" 2>"$SCRATCH/dc.err")
 DC_RC=$?
 _grammar_check "test-doc-contract-fields (all-skip)" "test-doc-contract-fields" \
-  "unreadable" "$(_last_line "$DC_OUT")" && _entry_covered test-doc-contract-fields
+  "unreadable no-claim" "$(_last_line "$DC_OUT")" && _entry_covered test-doc-contract-fields
+# The candidate count is read back off the same run's own coverage line: pinning the number
+# here would make a document added to the derived population read as a defect.
+DC_SCANNED=$(_last_line "$DC_OUT" | sed -E 's/^[^:]*: ([0-9]+) scanned.*/\1/')
+case "${DC_SCANNED:-}" in ''|*[!0-9]*) DC_SCANNED_N=0 ;; *) DC_SCANNED_N="$DC_SCANNED" ;; esac
 assert_contains "test-doc-contract-fields: forced all-skip emits the nothing-checked signal" \
-  "$(cat "$SCRATCH/dc.err")" "test-doc-contract-fields: NOTHING CHECKED — all 12 candidates skipped"
+  "$(cat "$SCRATCH/dc.err")" "test-doc-contract-fields: NOTHING CHECKED — all $DC_SCANNED_N candidates skipped"
+if [ "$DC_SCANNED_N" -ge 12 ]; then
+  _pass "test-doc-contract-fields: the all-skip run still enumerated its candidates ($DC_SCANNED_N >= 12)"
+else
+  _fail "test-doc-contract-fields: the all-skip run still enumerated its candidates" \
+    "scanned $DC_SCANNED_N — an all-skip run that enumerates nothing proves nothing"
+fi
 assert_exit_code "test-doc-contract-fields: blocking — nothing checked is a failure" "$DC_RC" 1
 # Pinned, not derived: an inherited doc root would aim the "full run" at whatever tree
 # the caller named, and a tree holding no documents passes while checking nothing.
 DC_FULL=$(NAZGUL_DOC_CONTRACT_DOC_ROOT="$REPO_ROOT" \
   bash "$REPO_ROOT/tests/test-doc-contract-fields.sh" 2>/dev/null)
 _grammar_check "test-doc-contract-fields (full run)" "test-doc-contract-fields" \
-  "unreadable" "$(_last_line "$DC_FULL")"
+  "unreadable no-claim" "$(_last_line "$DC_FULL")"
 DC_CHECKED=$(_last_line "$DC_FULL" | sed -E 's/^.*\), ([0-9]+) checked.*/\1/')
 case "${DC_CHECKED:-}" in ''|*[!0-9]*) DC_CHECKED_N=0 ;; *) DC_CHECKED_N="$DC_CHECKED" ;; esac
 if [ "$DC_CHECKED_N" -ge 1 ]; then

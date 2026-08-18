@@ -40,16 +40,22 @@ precedent as 34 → 35 (2.29.0) and 35 → 36 (2.30.0).
   `CANCELLED` dependency satisfies `ttg_dependency_satisfied` in every granularity, so the plan graph
   survives the cancellation instead of being destroyed to route around a predicate.
 - **`## Merge Evidence` — what makes `IMPLEMENTED -> DONE` reachable, and the only thing that does.**
-  `ttg_verify_merge_evidence` (`scripts/lib/task-transition-guard.sh:735`) validates four fields under
-  that exact heading — `host`, `pr`, `merged-at`, `merge-commit`
-  (`_TTG_MERGE_REQUIRED_FIELDS`, `:663`) — each shape-checked (`_ttg_merge_shape_ok`, `:697-706`). The
-  heading IS the enforcement boundary exactly as `## Commits` is: merge fields recorded anywhere else in
-  the manifest are not evidence. Four closed refusal reasons, each emitting `merge_evidence_missing`
-  (`:684`): `absent`, `commented_out`, `truncated`, `malformed`. For `IN_REVIEW -> DONE` merge evidence
-  is an **alternative** route, never a bypass — the review-evidence route is tried first, and the
-  accepted route is always named on stderr so an auditor can tell which fact admitted the edge.
-  Unlike the red-run gate this one ships with **no kill switch**, stated at `:678-679`: a switch on the
-  last gate before `DONE` would be the bypass.
+  `ttg_verify_merge_evidence` (`scripts/lib/task-transition-guard.sh`) validates six fields under
+  that exact heading — `host`, `pr`, `merged-at`, `merge-commit`, `head-ref`, `recorded-by`
+  (`_TTG_MERGE_REQUIRED_FIELDS`) — each shape-checked (`_ttg_merge_shape_ok`). `head-ref` is what binds
+  the PR to THIS objective and `recorded-by` is what separates a producer-written block from a
+  hand-typed one, which is why neither may be dropped as decoration. The heading IS the enforcement
+  boundary exactly as `## Commits` is: merge fields recorded anywhere else in the manifest are not
+  evidence. Nine closed refusal reasons, each emitting `merge_evidence_missing` (`_ttg_merge_deny`):
+  `absent`, `commented_out`, `truncated`, `malformed`, `not_merged`, `unverifiable`, `contradicted`,
+  `not_this_objective`, `not_this_objectives_task` — the last five are the host-verification half, and
+  `not_merged` (the host answered) is deliberately not `unverifiable` (it could not be asked). For
+  `IN_REVIEW -> DONE` merge evidence is an **alternative** route, never a bypass — the review-evidence
+  route is tried first, and the accepted route is always named on stderr so an auditor can tell which
+  fact admitted the edge. Unlike the red-run gate this one ships with **no kill switch**: a switch on
+  the last gate before `DONE` would be the bypass. Both closed sets are read out of the gate by
+  `tests/test-doc-contract-fields.sh`, which now checks this file too — the counts above are asserted
+  against the source, not transcribed from it.
 - **`scripts/lib/merge-provider.sh` — merge observation as a seam, with named degradations.** Three
   functions: detect the host from `git remote get-url`, ask that host's PR API for merge state, report
   whether the detected arm is usable now. Callers never speak `gh`. `merge_provider_pr_state` always
@@ -89,12 +95,17 @@ precedent as 34 → 35 (2.29.0) and 35 → 36 (2.30.0).
   same facts as a `CARVE-OUT:` note: `N of M unit tasks reviewed — K carried out CANCELLED (ids); a
   cancelled task is removed from the unit, never approved by it.` Readiness where every task shipped and
   readiness reached by exclusion must not read identically.
-- **Five test files — the discovered root suite moves 104 → 109, all green.**
+- **New test files — the discovered root suite ships 115 files, all green.**
   `tests/test-cancelled-status.sh` (the status itself: edges, the quarantine refusal, the dependency
   gate, the counters), `tests/test-cancelled-status-consumers.sh` (the vocabulary's whole consumer set,
   every member DRIVEN with a `CANCELLED` fixture — including the recorded NON-consumers, which are
   examined and shown exempt rather than omitted), `tests/test-merge-provider.sh`,
-  `tests/test-close-objective.sh`, and `tests/test-red-run-script.sh`.
+  `tests/test-close-objective.sh`, `tests/test-plan-objective-binding.sh`,
+  `tests/test-hook-command-modes.sh` and `tests/test-doc-contract-fields.sh`, plus two shared libraries
+  (`tests/lib/rules-registry.sh`, `tests/lib/status-consumer-scan.sh`). The suite size above is read
+  from the tree by `tests/test-doc-contract-fields.sh`: the release entry that stated it stood at
+  `104 → 109` while 115 shipped, and `tests/test-red-run-script.sh` was listed here although it
+  predates this release.
 
 ### Changed
 
@@ -116,13 +127,15 @@ precedent as 34 → 35 (2.29.0) and 35 → 36 (2.30.0).
   it were scoped. Every capture line now names the command (`:488`):
   `- capture: \`<cmd>\` in a detached worktree at \`<base>\`; N changed test file(s) copied in…; runner exit E in Ts`.
 - **The red-run gate reports "present but commented" distinctly from "absent".** `commented_out` joins
-  the closed refusal vocabulary — `absent bad_na_token commented_out corrupt exit_zero not_ancestor
-  ref_unresolvable roots_undeterminable roots_unresolved`, nine members, declared at
-  `scripts/lib/task-transition-guard.sh:162-163` and asserted **against that source** by
-  `tests/test-red-run-evidence.sh:192`, so the list is checkable rather than narrated. A section whose
+  the closed refusal vocabulary — `absent absent_in_tree bad_na_token commented_out corrupt exit_zero
+  not_ancestor ref_unresolvable roots_undeterminable roots_unresolved uncovered_test_file`, eleven
+  members, derived from the `_ttg_red_run_deny`/`_ttg_red_run_empty_payload` call sites in
+  `scripts/lib/task-transition-guard.sh` and asserted **against that source** by
+  `tests/test-red-run-evidence.sh`, so the list is checkable rather than narrated. The prose comment
+  above those call sites still enumerates nine and is the stale copy, not the vocabulary. A section whose
   whole payload sits inside an HTML comment is present-but-not-a-record; folding it into `absent` was
   one collapsed state wearing two names. `## Merge Evidence` reuses the one stripper for the same
-  distinction (`:757-768`) rather than re-deriving it, so the two readings cannot drift.
+  distinction (`_ttg_strip_html_comments`) rather than re-deriving it, so the two readings cannot drift.
 - **`scripts/prompt-guard.sh` narrowed to the unambiguous shape (ADR-025).** The old single-line
   `grep -qE '(set.*status.*to|change.*status.*to|mark.*as).*(DONE|APPROVED|IN_REVIEW|IMPLEMENTED)'`
   matched prose, quotes, and field reports about the guard itself. The replacement requires all three of
@@ -135,8 +148,9 @@ precedent as 34 → 35 (2.29.0) and 35 → 36 (2.30.0).
   every mode, not only HITL, and it is not what makes an illegitimate status change ineffective.
 - **`RULES.md` gains four rule clusters and the tier counts they force.** §2 Cancellation (2 rules) and
   Merge Evidence (3), §2's Dependency Gate (1), §3 item 15 the carve-out record, and §16's
-  Merge-State Provider Seam (3). Tier counts move to **88 enforced / 31 advisory / 23 hook-driven only**
-  (`tests/test-rules-tiers.sh:69,78`) — bumped for genuinely new rules, never re-tagged to fit. §3.15 is
+  Merge-State Provider Seam (3). Tier counts move to **92 enforced / 36 advisory / 23 hook-driven only**
+  (pinned by `tests/test-rules-tiers.sh`, and read back out of `RULES.md`'s own tags by
+  `tests/test-doc-contract-fields.sh`) — bumped for genuinely new rules, never re-tagged to fit. §3.15 is
   `[hook-driven only]` and says why in its own boundary: the note and the event are produced where the
   dispatch is decided, so a board dispatched by hand for the same unit reports no carve-out even when one
   applies.

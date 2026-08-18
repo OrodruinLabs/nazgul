@@ -70,7 +70,7 @@ Cancelled:   <any non-terminal> -> CANCELLED                            (termina
 ### Cancellation, the Second Terminal Status (ADR-022)
 
 - **`CANCELLED` means operator-declared unshippable, and it is a status like every other one.** `[enforced]` It is written only through `scripts/task-transition.sh` (the sole-writer rule above), reachable from every non-terminal status, and has no out-edge — `ttg_valid_transition` enumerates the in-edges and defines no `CANCELLED_*` case, so the terminal claim is a property of the table rather than a convention. `/nazgul:task skip` is the operator route; the manifest, its `Depends on` record, and its place in the counts all survive, because a deleted task is an unanswerable question later. `CANCELLED_COUNT` is its own bucket (`scripts/lib/task-utils.sh`), and loop completion is `DONE + CANCELLED == TOTAL`, reported as `N/M done, K cancelled` rather than as a clean sweep. **What this does not cover:** nothing verifies that the operator was right. `CANCELLED` is the one status with no evidence gate, deliberately — an unshippable task produces no artifact to gate on — so it records a judgement, not a fact about the code, and the count above is what keeps that judgement visible instead of absorbed into "done".
-- **`BLOCKED -> CANCELLED` is permitted, except out of a typed reconciliation quarantine.** `[enforced]` `ttg_validate_transition` refuses it when the manifest carries `Blocked kind: reconciliation`, naming `scripts/task-transition.sh repair` as the only sanctioned exit. Without that refusal, cancelling would launder an integrity quarantine: the ADR-020 quarantine exists because a status change could not be traced to a completed write, and a second terminal status reachable from it would be a second way to make that untraceable change permanent. The match is anchored, so an already-repaired kind cannot re-qualify. Every other blocker class (`review-evidence`, `review-provenance`, `git-conflict`, untyped) still cancels normally — the refusal is scoped to the one class whose whole point is that its endpoint is untrusted.
+- **`BLOCKED -> CANCELLED` is permitted, except out of a typed reconciliation quarantine.** `[enforced]` `ttg_validate_transition` refuses it when the manifest carries `Blocked kind: reconciliation`, naming `scripts/task-transition.sh repair` as the only sanctioned exit. Without that refusal, cancelling would launder an integrity quarantine: the ADR-020 quarantine exists because a status change could not be traced to a completed write, and a second terminal status reachable from it would be a second way to make that untraceable change permanent. The match is anchored, so an already-repaired kind cannot re-qualify. Every other blocker class (`review-evidence`, `review-provenance`, `git-conflict`, untyped) still cancels normally — the refusal is scoped to the one class whose whole point is that its endpoint is untrusted. **Residual, executed rather than reasoned (#232), and stated at its real size because a boundary stated smaller than it is reads as a stronger guarantee than the code gives:** the predicate reads one line in a file, and the unlock has TWO shapes, not one. (1) DELETE the `- **Blocked kind**:` line — nothing is left to match. (2) MUTATE its value past the end-of-line anchor — `reconciliation (repaired by hand)`, `reconciliation-quarantine` and `reconciliation.` are all admitted, because the same `[[:space:]]*$` that keeps an already-repaired kind from re-qualifying also keeps a tampered one from matching at all. One property, two consequences; the anchor is not an oversight and neither is the hole it opens. Both shapes were run against the shipped predicate: intact refused, both admitted, case variants and trailing whitespace still caught. The ceiling is `CANCELLED`, not `DONE`, which is why this is disclosed rather than trapped. `task-state-guard.sh` refuses BOTH shapes on the Write/Edit route — it compares the three quarantine fields' values, so an alteration is refused as an alteration and a deletion as a deletion — and `pre-tool-guard.sh` refuses the Bash writes its funnel recognizes (§5, closed but not exhaustive). What remains open is a write neither observes, and closing it means widening those two write paths, not trapping this gate: a refusal here keyed on the mere PRESENCE of a `Blocked kind` would trap the ordinary `review-evidence` blocks that carry one.
 
 ### Dependency Gate
 
@@ -596,7 +596,14 @@ note. This is §15's looked-vs-never-looked distinction applied to tests, guards
   `tests/test-doc-contract-fields.sh` (enrolled FEAT-031/TASK-016 — the doc/gate merge-evidence field
   binding of §2; blocking, so nothing checked is its own failure. Its field list is DERIVED from
   `_TTG_MERGE_REQUIRED_FIELDS` in the gate library, never authored in the test, so a field added to the
-  constant and not to the docs turns the documents red instead of quietly stale). The thirteenth is
+  constant and not to the docs turns the documents red instead of quietly stale. FEAT-031/TASK-021 widened
+  it from one claim in two listed documents to every count those documents state about this contract — the
+  field list and the refusal vocabulary from the gate's own deny call sites, this registry's size and the
+  ordinals in the bullet itself, and the rule-tier totals from this file's own tags — over a document
+  population DERIVED from the tree instead of listed, because an authored population relocates the drift
+  rather than closing it. A release-noted document is checked in its newest section only: earlier entries
+  are frozen records. Each claim family carries its own floor, so a regex that stops matching reads as
+  nothing checked rather than as a clean run). The thirteenth is
   `scripts/lib/task-transition-guard.sh` (enrolled FEAT-031/TASK-019 — the IMPLEMENTED red-run evidence
   gate, whose two scans print under the entry token `red-run-evidence`: `red-run-evidence/tests-root`
   over `project.test_roots` and `red-run-evidence/files` over the changed test files the recorded commits
@@ -620,10 +627,15 @@ note. This is §15's looked-vs-never-looked distinction applied to tests, guards
   asserting on a literal line is not mistaken for a mechanism that emits one), never from an authored
   list. **Boundary, stated rather than discovered:** the converse binds `scripts/**` and `agents/**`,
   where a checking entry point is driven by the loop and has no other binding; a `tests/**` emitter is
-  counted and reported in the `tests-tree` skip bucket, not treated as a finding, because the four
-  registered members that live there are already bound by the forward direction and the rest are internal
-  scans inside `tests/run-tests.sh`'s own population. So a NEW unregistered emitter added under `tests/`
-  is skipped, not caught — a named, counted residual rather than a silent one.
+  counted and reported in the `tests-tree` skip bucket, not treated as a finding, because the registered
+  members that live there are already bound by the forward direction. **The rest are NOT all bound, and
+  the sentence that used to say they were is deleted rather than softened:** most are test files inside
+  `tests/run-tests.sh`'s discovery population, but that population is `tests/test-*.sh` at the TOP LEVEL
+  only, so `tests/smoke/run-smoke.sh` and `tests/e2e/run-e2e.sh` — separate, paid, manually-triggered
+  entry points that `.github/workflows/test.yml` never runs — emit this grammar bound by nothing at all:
+  not §15 membership, not the runner's population, not `tests/test-coverage-honesty.sh`'s drive. That is
+  the residual, stated as measured. So a NEW unregistered emitter added under `tests/` is skipped, not
+  caught — a named, counted residual rather than a silent one.
 
 ### Tests-facing application: the repo content boundary (PATCH-002)
 
