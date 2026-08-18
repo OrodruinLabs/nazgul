@@ -29,7 +29,7 @@ REGISTRY_N=$(printf '%s\n' "$REGISTRY_MEMBERS" | grep -c . || true)
 ENTRY_POINTS=""
 while IFS= read -r _rp; do
   [ -n "$_rp" ] || continue
-  ENTRY_POINTS="${ENTRY_POINTS}$(_registry_token "$_rp")
+  ENTRY_POINTS="${ENTRY_POINTS}$(_registry_token "$_rp" "$REPO_ROOT")
 "
 done <<< "$REGISTRY_MEMBERS"
 COVERED=""
@@ -364,6 +364,77 @@ else
   _fail "test-doc-contract-fields: a full run actually checks something" "checked: $DC_CHECKED"
 fi
 
+# red-run-evidence (scripts/lib/task-transition-guard.sh), all-skip on BOTH its scans; the
+# gate's seven dispositions decide allow/deny, so a vacuous scan reports, never re-decides.
+mkdir -p "$SCRATCH/rr/nazgul" "$SCRATCH/rr/tests"
+source "$REPO_ROOT/scripts/lib/task-transition-guard.sh"
+printf '{"schema_version":1,"project":{"test_roots":["gone-a","gone-b"]}}\n' > "$SCRATCH/rr/nazgul/config.json"
+NAZGUL_DIR="$SCRATCH/rr/nazgul" \
+  _ttg_red_run_in_scope "## Metadata
+- **ID**: TASK-001
+- **Files modified**: [\"docs/PRD.md\"]
+" "$SCRATCH/rr" "$SCRATCH/rr/nazgul" >/dev/null 2>"$SCRATCH/rr-roots.err"
+RR_ROOTS_LINE=$(grep -E '^red-run-evidence/tests-root: [0-9]+ scanned' "$SCRATCH/rr-roots.err" | tail -1)
+_grammar_check "red-run-evidence/tests-root (all-skip)" "red-run-evidence/tests-root" \
+  "unsafe unresolvable" "$RR_ROOTS_LINE" && RR_ROOTS_OK=1
+assert_contains "red-run-evidence/tests-root: forced all-skip emits the nothing-checked signal" \
+  "$(cat "$SCRATCH/rr-roots.err")" "red-run-evidence/tests-root: NOTHING CHECKED — all 2 candidate(s) skipped"
+assert_contains "red-run-evidence/tests-root: the §15 line ends at findings; context is its own line" \
+  "$(cat "$SCRATCH/rr-roots.err")" "red-run-evidence/tests-root: context=red-run scope predicate;"
+
+# The per-file scan, forced all-skip: one changed test file discharged by an enumerated
+# N/A, so the population is enumerated and every member lands in a named skip bucket.
+git -C "$SCRATCH/rr" init -q 2>/dev/null
+git -C "$SCRATCH/rr" config user.email t@t.t; git -C "$SCRATCH/rr" config user.name t
+printf '{"schema_version":1,"project":{"test_roots":["tests"]}}\n' > "$SCRATCH/rr/nazgul/config.json"
+printf '#!/usr/bin/env bash\necho x\n' > "$SCRATCH/rr/tests/test-x.sh"
+git -C "$SCRATCH/rr" add -A >/dev/null 2>&1
+git -C "$SCRATCH/rr" commit -q -m "seed" >/dev/null 2>&1
+RR_SHA=$(git -C "$SCRATCH/rr" rev-parse HEAD)
+NAZGUL_DIR="$SCRATCH/rr/nazgul" ttg_verify_red_run_evidence "## Metadata
+- **ID**: TASK-001
+- **Files modified**: [\"tests/test-x.sh\"]
+
+## Commits
+- $RR_SHA
+
+## Red-Run Evidence
+- red-run: N/A — revert
+" "$SCRATCH/rr" TASK-001 2>"$SCRATCH/rr-files.err"
+RR_FILES_LINE=$(grep -E '^red-run-evidence/files: [0-9]+ scanned' "$SCRATCH/rr-files.err" | tail -1)
+_grammar_check "red-run-evidence/files (all-skip)" "red-run-evidence/files" \
+  "support enumerated-na" "$RR_FILES_LINE" && RR_FILES_OK=1
+assert_contains "red-run-evidence/files: forced all-skip emits the nothing-checked signal" \
+  "$(cat "$SCRATCH/rr-files.err")" "red-run-evidence/files: NOTHING CHECKED — all 1 candidate(s) skipped"
+# One entry point, two scans: it is covered only when BOTH conform, never on the easier one.
+[ "${RR_ROOTS_OK:-0}${RR_FILES_OK:-0}" = "11" ] && _entry_covered red-run-evidence
+
+# And a run with a real candidate must actually check something: an entry point that only
+# ever conforms while vacuous is not covered by the contract.
+printf '#!/usr/bin/env bash\necho y\n' > "$SCRATCH/rr/tests/test-y.sh"
+git -C "$SCRATCH/rr" add -A >/dev/null 2>&1
+git -C "$SCRATCH/rr" commit -q -m "second" >/dev/null 2>&1
+RR_SHA2=$(git -C "$SCRATCH/rr" rev-parse HEAD)
+NAZGUL_DIR="$SCRATCH/rr/nazgul" ttg_verify_red_run_evidence "## Metadata
+- **ID**: TASK-001
+- **Files modified**: [\"tests/test-y.sh\"]
+
+## Commits
+- $RR_SHA2
+
+## Red-Run Evidence
+- red-run: tests/test-y.sh :: case \"x\"
+  - pre-change-ref: $RR_SHA
+  - result: FAILED (exit 1)
+" "$SCRATCH/rr" TASK-001 2>"$SCRATCH/rr-full.err"
+RR_FULL_LINE=$(grep -E '^red-run-evidence/files: [0-9]+ scanned' "$SCRATCH/rr-full.err" | tail -1)
+_grammar_check "red-run-evidence/files (mixed)" "red-run-evidence/files" \
+  "support enumerated-na" "$RR_FULL_LINE"
+assert_contains "red-run-evidence: a run with a real candidate actually checks something" \
+  "$RR_FULL_LINE" "1 checked"
+assert_not_contains "red-run-evidence: one checked candidate is not a vacuous run" \
+  "$(cat "$SCRATCH/rr-full.err")" "NOTHING CHECKED"
+
 # The derivation, dogfooded against scratch registries: the shipped RULES.md
 # yields exactly the driven set, so the failing directions never run against it.
 REG_MUT="$SCRATCH/rules-mutant.md"
@@ -378,7 +449,7 @@ assert_contains "registry dogfood: a member added to the bullet is derived" \
   "$MUT_MEMBERS" "tests/test-phantom-entry.sh"
 assert_not_contains "registry dogfood: the driver named in its own bullet is not a member" \
   "$MUT_MEMBERS" "tests/test-coverage-honesty.sh"
-MUT_TOKENS=$(while IFS= read -r _rp; do [ -n "$_rp" ] || continue; _registry_token "$_rp"; done <<< "$MUT_MEMBERS")
+MUT_TOKENS=$(while IFS= read -r _rp; do [ -n "$_rp" ] || continue; _registry_token "$_rp" "$REPO_ROOT"; done <<< "$MUT_MEMBERS")
 assert_contains "registry dogfood: a registered member nothing drives is reported missing" \
   "$(_registry_missing "$MUT_TOKENS" "$COVERED")" "test-phantom-entry"
 assert_eq "registry dogfood: the stated size is read from the bullet, not from the list" \
@@ -410,6 +481,70 @@ for entry in $COVERED; do
          "this file drives it, the registry does not list it — enroll it there or stop counting it here" ;;
   esac
 done
+
+# The CONVERSE direction (RULES §15): every shipped §15-grammar emitter is a registered entry
+# point. The loops above ask only "is every member driven?". Population DERIVED, not authored.
+EMIT_SCANNED=0; EMIT_SKIP_TESTS=0; EMIT_SKIP_UNREADABLE=0; EMIT_CHECKED=0; EMIT_FINDINGS=0
+EMIT_UNREGISTERED=""
+REGISTRY_MEMBERS_ALL="$REGISTRY_MEMBERS
+$REGISTRY_DRIVER_REL"
+while IFS="$(printf '\t')" read -r _state _rel; do
+  [ -n "${_rel:-}" ] || continue
+  EMIT_SCANNED=$((EMIT_SCANNED + 1))
+  if [ "$_state" = "unreadable" ]; then
+    EMIT_SKIP_UNREADABLE=$((EMIT_SKIP_UNREADABLE + 1)); continue
+  fi
+  case "$_rel" in
+    tests/*) EMIT_SKIP_TESTS=$((EMIT_SKIP_TESTS + 1)); continue ;;
+  esac
+  EMIT_CHECKED=$((EMIT_CHECKED + 1))
+  if ! printf '%s\n' "$REGISTRY_MEMBERS_ALL" | grep -qxF "$_rel"; then
+    EMIT_FINDINGS=$((EMIT_FINDINGS + 1)); EMIT_UNREGISTERED="$EMIT_UNREGISTERED$_rel "
+  fi
+done <<< "$(_registry_emitter_scan "$REPO_ROOT")"
+
+_grammar_check "registry converse (emitter -> member)" "registry-converse" \
+  "tests-tree unreadable" \
+  "registry-converse: $EMIT_SCANNED scanned, $((EMIT_SKIP_TESTS + EMIT_SKIP_UNREADABLE)) skipped (tests-tree=$EMIT_SKIP_TESTS, unreadable=$EMIT_SKIP_UNREADABLE), $EMIT_CHECKED checked, $EMIT_FINDINGS findings"
+if [ "$EMIT_CHECKED" -ge 5 ]; then
+  _pass "registry converse: the emitter derivation actually looked ($EMIT_CHECKED checked >= 5)"
+else
+  _fail "registry converse: the emitter derivation actually looked" \
+    "checked $EMIT_CHECKED under $REPO_ROOT — a derivation that finds nothing is 'never looked', not a clean tree"
+fi
+assert_eq "registry converse: every scripts/** and agents/** grammar emitter is a §15 member" \
+  "${EMIT_UNREGISTERED% }" ""
+
+# Mutation, the direction TASK-016/017's B1/B2 do not cover: an emitter added with no
+# registration must go RED. A registered member with no driver is already covered above.
+EMIT_MUT="$SCRATCH/emitter-mutant"
+mkdir -p "$EMIT_MUT/scripts" "$EMIT_MUT/tests"
+printf "printf 'rogue: %%d scanned, %%d skipped (why=%%d), %%d checked, %%d findings\\\\n'\n" \
+  > "$EMIT_MUT/scripts/rogue-check.sh"
+printf "printf 'in-tests: %%d scanned, %%d skipped (why=%%d), %%d checked, %%d findings\\\\n'\n" \
+  > "$EMIT_MUT/tests/test-rogue.sh"
+MUT_SCAN=$(_registry_emitter_scan "$EMIT_MUT")
+assert_contains "[mutation] an unregistered scripts/ emitter is derived from the tree" \
+  "$MUT_SCAN" "scripts/rogue-check.sh"
+MUT_UNREG=""
+while IFS="$(printf '\t')" read -r _state _rel; do
+  [ "${_state:-}" = "emitter" ] || continue
+  case "$_rel" in tests/*) continue ;; esac
+  printf '%s\n' "$REGISTRY_MEMBERS_ALL" | grep -qxF "$_rel" || MUT_UNREG="$MUT_UNREG$_rel "
+done <<< "$MUT_SCAN"
+assert_eq "[mutation] and the same predicate that passes on the shipped tree reports it" \
+  "${MUT_UNREG% }" "scripts/rogue-check.sh"
+assert_contains "[mutation] the stated tests/** residual is real, not assumed: it is skipped, not found" \
+  "$MUT_SCAN" "tests/test-rogue.sh"
+
+# A test that only asserts on a literal coverage line is not an emitter — otherwise the
+# scan would name every file in this directory and the finding would mean nothing.
+NOT_EMIT="$SCRATCH/not-emitter"
+mkdir -p "$NOT_EMIT/scripts"
+printf 'assert_contains "x" "$OUT" "doctor: 3 scanned, 0 skipped (a=0), 3 checked, 0 findings"\n' \
+  > "$NOT_EMIT/scripts/asserts-only.sh"
+assert_eq "registry converse: a literal assertion is not mistaken for a producer" \
+  "$(_registry_emitter_scan "$NOT_EMIT" | grep -c . || true)" "0"
 
 COVERED_COUNT=$(printf '%s' "$COVERED" | wc -w | tr -d ' ')
 assert_eq "every entry point RULES.md §15 registers was driven" "$COVERED_COUNT" "$REGISTRY_N"

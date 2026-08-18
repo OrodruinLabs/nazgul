@@ -220,7 +220,7 @@ assert_contains "[advisory] skills/init/SKILL.md says the placeholder is inert a
 # Case 8 | ONE roster parser, not two. Board 4 found the producer and the predicate each
 # carrying the same three-stage pipeline while the producer's header claimed it was shared.
 ROSTER_AWK='/^## Tasks/{f=1;next} f && /^## /{exit} f'
-ROSTER_PIPE="grep -oE '(TASK|PATCH)-[0-9]+' | LC_ALL=C sort -u"
+ROSTER_PIPE='grep -oE "$_TTG_ROSTER_ID_RE" | LC_ALL=C sort -u'
 
 roster_parser_sites() { grep -rlF -- "$ROSTER_AWK" "$1" 2>/dev/null | LC_ALL=C sort; }
 roster_pipe_sites()   { grep -rlF -- "$ROSTER_PIPE" "$1" 2>/dev/null | LC_ALL=C sort; }
@@ -249,8 +249,8 @@ assert_file_contains "the producer reaches the roster through the shared functio
 assert_file_contains "and so does the gate's own predicate" \
   "$REPO_ROOT/scripts/lib/task-transition-guard.sh" "ids=\$(ttg_objective_roster_ids \"\$plan\")"
 
-# Case 8b | agreement on input built to separate the two parsers if they ever diverge:
-# a commented id, a duplicate, a PATCH id, and an id below the terminating heading.
+# Case 8b | input built to separate the two parsers if they ever diverge: a commented id, a
+# duplicate, a PATCH id no producer writes and no gate can ask about, an id past the heading.
 P5="$SCRATCH/tricky"
 born_project "$P5" FEAT-042
 awk '/^## Tasks/ {print; print "";
@@ -261,12 +261,16 @@ awk '/^## Tasks/ {print; print "";
   "$P5/nazgul/plan.md" > "$P5/nazgul/plan.new" && mv "$P5/nazgul/plan.new" "$P5/nazgul/plan.md"
 TRICKY=$(bash "$STAMPER" --project-root "$P5" 2>&1); TRICKY_EC=$?
 assert_exit_code "the producer stamps the tricky roster" "$TRICKY_EC" 0
-assert_contains "the producer counts exactly the three real ids" "$TRICKY" "roster_tasks=3"
+assert_contains "the producer counts exactly the two real ids" "$TRICKY" "roster_tasks=2"
 GATE_IDS=$(roster_of "$P5")
 assert_eq "the gate returns the identical id set, so producer and predicate agree" \
-  "$(printf '%s' "$GATE_IDS" | tr '\n' ' ')" "PATCH-007 TASK-001 TASK-002"
+  "$(printf '%s' "$GATE_IDS" | tr '\n' ' ')" "TASK-001 TASK-002"
 assert_not_contains "neither parser admits a commented example" "$GATE_IDS" "TASK-900"
 assert_not_contains "nor an id below the terminating heading" "$GATE_IDS" "TASK-800"
+assert_not_contains "nor a patch id: an arm no producer can reach was removed, not left dead" \
+  "$GATE_IDS" "PATCH-007"
+assert_not_contains "and the producer agrees, so the two did not diverge on the removal" \
+  "$TRICKY" "PATCH-007"
 
 # Case 9 | the file mode is READ or the write is refused — never guessed. chmod --reference
 # is a GNU extension, so on this repo's stated platform its fallback was the only branch.

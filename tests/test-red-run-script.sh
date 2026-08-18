@@ -155,7 +155,7 @@ assert_contains "seam: the never-run file is named" "$GATE_STDERR" "tests/test-g
 assert_not_contains "seam: the file that WAS red is not blamed" \
   "$(printf '%s\n' "$GATE_STDERR" | grep 'no red-run entry naming them')" "tests/test-alpha.sh"
 assert_contains "seam: the gate reports the population it derived from the capture's own task" \
-  "$GATE_STDERR" "red-run file coverage: 4 scanned, 0 skipped (support=0, enumerated-na=0), 4 checked, 3 findings"
+  "$GATE_STDERR" "red-run-evidence/files: 4 scanned, 0 skipped (support=0, enumerated-na=0), 4 checked, 3 findings"
 rm -f "$GATE_ERR"
 
 # The seam itself, on a task whose change IS its capture: one changed test file,

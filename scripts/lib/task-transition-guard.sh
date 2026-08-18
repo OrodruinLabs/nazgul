@@ -238,6 +238,18 @@ _ttg_manifest_task_id() {
     | grep -oE '(TASK|PATCH)-[0-9]+' | head -1 || true
 }
 
+# Looked-and-found-none vs never-looked. The gate's seven dispositions decide allow/deny,
+# so this reports the vacuity and never changes the verdict (RULES.md §15, entry red-run-evidence).
+_ttg_rr_nothing_checked() {
+  local entry="$1" scanned="$2" checked="$3" empty_why="$4"
+  [ "$checked" -eq 0 ] || return 0
+  if [ "$scanned" -eq 0 ]; then
+    printf '%s: NOTHING CHECKED — %s\n' "$entry" "$empty_why" >&2
+  else
+    printf '%s: NOTHING CHECKED — all %d candidate(s) skipped\n' "$entry" "$scanned" >&2
+  fi
+}
+
 # project.test_roots -> _TTG_ROOTS_REL (trigger prefixes), _TTG_ROOTS_RESOLVED
 # ("rel<TAB>abs", containment) and the scan counters; 1 = set undeterminable.
 _ttg_red_run_roots() {
@@ -332,11 +344,16 @@ _ttg_red_run_roots_list() {
 }
 
 # A root set that quietly shrank to empty would re-create the unsatisfiable gate.
+# The §15 line ends at `findings`; context/source/roots follow on their own line.
 _ttg_red_run_roots_report() {
-  printf 'ttg_verify_red_run_evidence: %s: tests-root scan: %d scanned, %d skipped (unsafe=%d, unresolvable=%d), %d checked, %d findings; source=%s; roots=[%s]\n' \
-    "$1" "$_TTG_ROOTS_SCANNED" "$((_TTG_ROOTS_UNSAFE + _TTG_ROOTS_UNRESOLVABLE))" \
+  printf 'red-run-evidence/tests-root: %d scanned, %d skipped (unsafe=%d, unresolvable=%d), %d checked, %d findings\n' \
+    "$_TTG_ROOTS_SCANNED" "$((_TTG_ROOTS_UNSAFE + _TTG_ROOTS_UNRESOLVABLE))" \
     "$_TTG_ROOTS_UNSAFE" "$_TTG_ROOTS_UNRESOLVABLE" "$_TTG_ROOTS_CHECKED" \
-    "$((_TTG_ROOTS_UNSAFE + _TTG_ROOTS_UNRESOLVABLE))" "$_TTG_ROOTS_SOURCE" "$(_ttg_red_run_roots_list)" >&2
+    "$((_TTG_ROOTS_UNSAFE + _TTG_ROOTS_UNRESOLVABLE))" >&2
+  _ttg_rr_nothing_checked "red-run-evidence/tests-root" "$_TTG_ROOTS_SCANNED" "$_TTG_ROOTS_CHECKED" \
+    "no tests root was enumerated"
+  printf 'red-run-evidence/tests-root: context=%s; source=%s; roots=[%s]\n' \
+    "$1" "$_TTG_ROOTS_SOURCE" "$(_ttg_red_run_roots_list)" >&2
 }
 
 # A configured root is data, never a pattern: src/App.Tests/tests must not match src/AppXTests/tests.
@@ -552,8 +569,10 @@ _ttg_red_run_file_coverage() {
 $_TTG_RR_CHANGED
 EOF
 
-  printf 'ttg_verify_red_run_evidence: %s: red-run file coverage: %d scanned, %d skipped (support=%d, enumerated-na=%d), %d checked, %d findings; source=%s\n' \
-    "$task_id" "$n" "$m" "$skip_support" "$skip_na" "$k" "$f" "$_TTG_RR_DENOM_SOURCE" >&2
+  printf 'red-run-evidence/files: %d scanned, %d skipped (support=%d, enumerated-na=%d), %d checked, %d findings\n' \
+    "$n" "$m" "$skip_support" "$skip_na" "$k" "$f" >&2
+  _ttg_rr_nothing_checked "red-run-evidence/files" "$n" "$k" "the recorded commits changed no test file"
+  printf 'red-run-evidence/files: task=%s; source=%s\n' "$task_id" "$_TTG_RR_DENOM_SOURCE" >&2
   [ -z "$support" ] || echo "ttg_verify_red_run_evidence: red-run file coverage: harness or non-test input, so it carries no entry of its own: ${support% }" >&2
   if [ "$f" -gt 0 ]; then
     _ttg_red_run_deny "$nazgul_dir" "$task_id" "uncovered_test_file" \
@@ -1092,11 +1111,18 @@ _ttg_roster_section() {
   awk '/^## Tasks/{f=1;next} f && /^## /{exit} f' "$1" 2>/dev/null
 }
 
-# ttg_objective_roster_ids <plan_file> -> the roster's ids, one per line, comments stripped;
-# empty and 0 when none. THE one roster parser: the gate and the producer both call it.
+# TASK-only by construction: ttg_task_manifest_path and ttg_apply_transition both refuse
+# any id outside ^TASK-[0-9]+$, so no PATCH id can ever reach the membership question.
+_TTG_ROSTER_ID_RE='TASK-[0-9]+'
+# Recognised only to REFUSE by its own name — skills/patch/SKILL.md writes patch records
+# under `## Patches`, a section this parser does not read, because a patch takes no edge.
+_TTG_ROSTER_PATCH_RE='PATCH-[0-9]+'
+
+# ttg_objective_roster_ids <plan_file> -> the roster's TASK ids, one per line, comments
+# stripped; empty when none. THE one roster parser: gate and producer both call it.
 ttg_objective_roster_ids() {
   _ttg_roster_section "$1" | _ttg_strip_html_comments \
-    | grep -oE '(TASK|PATCH)-[0-9]+' | LC_ALL=C sort -u || true
+    | grep -oE "$_TTG_ROSTER_ID_RE" | LC_ALL=C sort -u || true
 }
 
 # lean-comments: allow-run — RULES.md §15's two-answers distinction, at the guard it binds.
@@ -1137,13 +1163,22 @@ ttg_objective_roster() {
   fi
   # templates/plan.md documents its roster format with COMMENTED example entries, so an
   # unplanned plan used to yield a one-id roster: TASK-001, a task nobody ever wrote.
-  local commented
+  local commented patches
   ids=$(ttg_objective_roster_ids "$plan")
   if [ -z "$ids" ]; then
-    commented=$(_ttg_roster_section "$plan" | grep -coE '(TASK|PATCH)-[0-9]+' || true)
+    commented=$(_ttg_roster_section "$plan" | grep -coE "$_TTG_ROSTER_ID_RE" || true)
     if [ "${commented:-0}" -gt 0 ]; then
-      printf '%s'"'"'s ## Tasks section names task ids ONLY inside HTML comments — those are templates/plan.md'"'"'s example entries, not a roster, so no manifest can be shown to belong to %s' \
+      printf '%s'"'"'s ## Tasks section names task ids ONLY inside HTML comments — a comment is not a roster entry (templates/plan.md ships its examples that way), so no manifest can be shown to belong to %s' \
         "$plan" "$feat_id"
+      return 1
+    fi
+    # "names only patch ids" is not "names nothing": a patch id is a real record this gate
+    # is scoped away from, and collapsing the two would re-create the arm this replaced.
+    patches=$(_ttg_roster_section "$plan" | _ttg_strip_html_comments \
+      | grep -oE "$_TTG_ROSTER_PATCH_RE" | LC_ALL=C sort -u | tr '\n' ' ' || true)
+    if [ -n "${patches// /}" ]; then
+      printf '%s'"'"'s ## Tasks section names ONLY patch ids (%s) — merge closure is scoped to TASK-NNN manifests, the only shape scripts/task-transition.sh resolves, so a patch record places no manifest in %s'"'"'s roster' \
+        "$plan" "${patches% }" "$feat_id"
       return 1
     fi
     printf '%s carries no ## Tasks roster to read, so no manifest can be shown to belong to %s' "$plan" "$feat_id"
@@ -1176,7 +1211,7 @@ ttg_task_in_objective() {
     return 1
   fi
   ttg_id_in_roster "$roster" "$task_id" && return 0
-  printf '%s is not listed in the ## Tasks roster of %s/plan.md — a manifest absent from this objective'"'"'s roster belongs to a different one, and this objective'"'"'s merge does not close it' \
+  printf '%s is not listed in the ## Tasks roster of %s/plan.md — this objective'"'"'s merge closes the manifests its own roster names, and that roster does not name this one' \
     "${task_id:-<unnamed>}" "$nazgul_dir"
   return 1
 }

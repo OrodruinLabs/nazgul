@@ -289,7 +289,7 @@ MONO_OUT_OF_SCOPE=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified*
 rr_call "$MONO_OUT_OF_SCOPE" "$TEST_DIR"
 assert_exit_code "skipped root: an out-of-scope task is still allowed" "$RR_EC" 0
 assert_contains "skipped root: the scan reports what it examined, with the reason named" \
-  "$RR_STDERR" "tests-root scan: 2 scanned, 1 skipped (unsafe=0, unresolvable=1), 1 checked, 1 findings"
+  "$RR_STDERR" "red-run-evidence/tests-root: 2 scanned, 1 skipped (unsafe=0, unresolvable=1), 1 checked, 1 findings"
 assert_contains "skipped root: the scan names where the set came from" "$RR_STDERR" "source=config"
 
 # "Could not determine the roots" is a DIFFERENT state from "determined them and
@@ -300,7 +300,7 @@ assert_exit_code "undeterminable roots: fails closed on an out-of-scope task" "$
 assert_contains "undeterminable roots: distinct, loud diagnostic" \
   "$RR_STDERR" "could not determine the tests roots (project.test_roots is an empty array)"
 assert_not_contains "undeterminable roots: never printed as a completed scan" \
-  "$RR_STDERR" "tests-root scan:"
+  "$RR_STDERR" "red-run-evidence/tests-root:"
 assert_not_contains "undeterminable roots: never printed as the degrade path" \
   "$RR_STDERR" "degraded to manifest-only"
 
@@ -316,7 +316,7 @@ assert_exit_code "all-unsafe roots: fails closed exactly as the empty array does
 assert_contains "all-unsafe roots: names why the set is undeterminable" \
   "$RR_STDERR" "every entry (1 of 1) was rejected as an unsafe path"
 assert_not_contains "all-unsafe roots: never printed as a completed scan" \
-  "$RR_STDERR" "tests-root scan:"
+  "$RR_STDERR" "red-run-evidence/tests-root:"
 rr_call "$(rr_manifest '["scripts/foo.sh"]' "$(mono_entry src/App/tests/test-app.sh)")" "$TEST_DIR"
 assert_eq "all-unsafe roots: an entry cannot be judged either" "$RR_REASON" "roots_undeterminable"
 
@@ -473,9 +473,9 @@ rr_call "$(rr_manifest '["scripts/foo.sh","tests/test-foo.sh"]' "$(valid_entry)"
 assert_exit_code "valid entry: allows" "$RR_EC" 0
 assert_eq "valid entry: reason is 'verified'" "$RR_REASON" "verified"
 assert_eq "valid entry: stderr is the per-file coverage record and nothing else" \
-  "$(printf '%s\n' "$RR_STDERR" | grep -cv 'red-run file coverage:')" "0"
+  "$(printf '%s\n' "$RR_STDERR" | grep -cv 'red-run-evidence/files:')" "0"
 assert_contains "valid entry: the per-file scan reports what it enumerated" \
-  "$RR_STDERR" "red-run file coverage: 0 scanned, 0 skipped (support=0, enumerated-na=0), 0 checked, 0 findings"
+  "$RR_STDERR" "red-run-evidence/files: 0 scanned, 0 skipped (support=0, enumerated-na=0), 0 checked, 0 findings"
 
 # --- ref unresolvable ---
 rr_call "$(rr_manifest '["scripts/foo.sh"]' '- red-run: tests/test-foo.sh :: case "x"
@@ -862,10 +862,10 @@ assert_contains "per-file: the refusal names the uncovered file" "$RR_STDERR" "t
 assert_not_contains "per-file: the covered file is not blamed" \
   "$(printf '%s\n' "$RR_STDERR" | grep 'no red-run entry naming them')" "tests/test-a.sh"
 
-RR_COV_LINE=$(printf '%s\n' "$RR_STDERR" | grep -o 'red-run file coverage: [0-9].*findings' | head -1)
+RR_COV_LINE=$(printf '%s\n' "$RR_STDERR" | grep -o 'red-run-evidence/files: [0-9].*findings' | head -1)
 assert_eq "per-file: the coverage line reports the derived population" "$RR_COV_LINE" \
-  "red-run file coverage: 4 scanned, 2 skipped (support=2, enumerated-na=0), 2 checked, 1 findings"
-RR_COV_N=$(printf '%s' "$RR_COV_LINE" | sed -E 's/^.*coverage: ([0-9]+) scanned.*/\1/')
+  "red-run-evidence/files: 4 scanned, 2 skipped (support=2, enumerated-na=0), 2 checked, 1 findings"
+RR_COV_N=$(printf '%s' "$RR_COV_LINE" | sed -E 's/^.*files: ([0-9]+) scanned.*/\1/')
 RR_COV_M=$(printf '%s' "$RR_COV_LINE" | sed -E 's/^.* ([0-9]+) skipped.*/\1/')
 RR_COV_K=$(printf '%s' "$RR_COV_LINE" | sed -E 's/^.*\), ([0-9]+) checked.*/\1/')
 assert_eq "per-file: N == M + K on the gate's own line" "$RR_COV_N" "$((RR_COV_M + RR_COV_K))"
@@ -877,7 +877,7 @@ $(rr_entry_for tests/test-b.sh)")" "$TEST_DIR"
 assert_exit_code "per-file: an entry for each changed test file ALLOWS" "$RR_EC" 0
 assert_eq "per-file: covered both, so the reason is 'verified'" "$RR_REASON" "verified"
 assert_contains "per-file: both files counted as checked, none as a finding" "$RR_STDERR" \
-  "red-run file coverage: 4 scanned, 2 skipped (support=2, enumerated-na=0), 2 checked, 0 findings"
+  "red-run-evidence/files: 4 scanned, 2 skipped (support=2, enumerated-na=0), 2 checked, 0 findings"
 
 # The harness exclusion is READ from the producer, so the two cannot drift apart.
 assert_eq "per-file: the never-copy set is the producer's own RR_NEVER_COPY" \
@@ -889,7 +889,7 @@ assert_eq "per-file: the never-copy set is the producer's own RR_NEVER_COPY" \
 rr_call "$(rr_manifest '["tests/test-a.sh","tests/test-b.sh"]' '- red-run: N/A — revert')" "$TEST_DIR"
 assert_exit_code "per-file: an enumerated N/A still allows" "$RR_EC" 0
 assert_contains "per-file: the N/A discharge is counted in its own bucket, not as checked" \
-  "$RR_STDERR" "red-run file coverage: 4 scanned, 4 skipped (support=0, enumerated-na=4), 0 checked, 0 findings"
+  "$RR_STDERR" "red-run-evidence/files: 4 scanned, 4 skipped (support=0, enumerated-na=4), 0 checked, 0 findings"
 
 # Attribution is each recorded commit's OWN diff: a manifest's planning-time Base SHA is
 # routinely merges behind the branch point, so a range charges this task with others' work.
@@ -907,7 +907,7 @@ STALE_BASE=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["te
 rr_call "$STALE_BASE" "$TEST_DIR"
 assert_exit_code "attribution: a stale Base SHA does not charge this task with another's files" "$RR_EC" 0
 assert_contains "attribution: only the recorded commit's own diff is the population" \
-  "$RR_STDERR" "red-run file coverage: 1 scanned, 0 skipped (support=0, enumerated-na=0), 1 checked, 0 findings"
+  "$RR_STDERR" "red-run-evidence/files: 1 scanned, 0 skipped (support=0, enumerated-na=0), 1 checked, 0 findings"
 assert_not_contains "attribution: the interloper commit's file is not in the denominator" \
   "$RR_STDERR" "tests/test-someone-elses.sh"
 assert_contains "attribution: the source names what it enumerated" \

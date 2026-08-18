@@ -842,6 +842,45 @@ assert_exit_code "roster: a plan declaring another objective refuses" "$DRIFT_EC
 assert_contains "roster: the drift diagnostic names both ids rather than silently picking one" \
   "$ROSTER_DRIFT_STDERR" 'declares feat_id "FEAT-999" but config names "FEAT-031"'
 
+# THE PATCH ARM (FEAT-031 fifth board, arch-F1): removed, not left dead — no id outside
+# ^TASK-[0-9]+$ reaches the question, and what replaced it names the section it read.
+printf -- '---\nfeat_id: %s\n---\n# Plan\n\n## Tasks\n\n- PATCH-007: a patch record, not a roster entry\n' \
+  "$MERGE_FEAT_ID" > "$TEST_DIR/nazgul/plan.md"
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && PATCHONLY_EC=0 || PATCHONLY_EC=$?
+PATCH_ONLY_STDERR="$ME_STDERR"
+assert_exit_code "patch arm: a roster of only patch ids scopes nothing, so the gate refuses" \
+  "$PATCHONLY_EC" 1
+assert_contains "patch arm: the refusal names the patch id it actually read" \
+  "$PATCH_ONLY_STDERR" "names ONLY patch ids (PATCH-007)"
+assert_contains "patch arm: and states the scope limit rather than a cause it cannot establish" \
+  "$PATCH_ONLY_STDERR" "merge closure is scoped to TASK-NNN manifests"
+assert_not_contains "patch arm: 'names only patch ids' is NOT collapsed into 'names nothing'" \
+  "$PATCH_ONLY_STDERR" "carries no ## Tasks roster to read"
+
+# An empty section still gets the OTHER answer: the refusal added a state, not absorbed one.
+printf -- '---\nfeat_id: %s\n---\n# Plan\n\n## Tasks\n\n## Wave Groups\n' \
+  "$MERGE_FEAT_ID" > "$TEST_DIR/nazgul/plan.md"
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && EMPTYROSTER_EC=0 || EMPTYROSTER_EC=$?
+assert_exit_code "patch arm: an empty roster still refuses" "$EMPTYROSTER_EC" 1
+assert_contains "patch arm: an empty roster gets its own sentence, not the patch one" \
+  "$ME_STDERR" "carries no ## Tasks roster to read"
+
+# A patch id beside real entries is simply not a member: the roster still scopes this
+# objective, and the task it does list still closes on the same evidence.
+printf -- '---\nfeat_id: %s\n---\n# Plan\n\n## Tasks\n\n- TASK-050\n- PATCH-007 named inline\n' \
+  "$MERGE_FEAT_ID" > "$TEST_DIR/nazgul/plan.md"
+assert_eq "patch arm: the parser returns the TASK ids and drops the patch id" \
+  "$(ttg_objective_roster_ids "$TEST_DIR/nazgul/plan.md" | tr '\n' ' ')" "TASK-050 "
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && MIXED_EC=0 || MIXED_EC=$?
+assert_exit_code "patch arm: a listed task still closes beside an ignored patch record" "$MIXED_EC" 0
+merge_plan
+
+# arch-F1's second half: a refusal may state what the gate read, never why the id is absent.
+assert_not_contains "roster: the refusal claims no cause the predicate cannot establish" \
+  "$NOT_OUR_TASK_STDERR" "belongs to a different one"
+assert_contains "roster: it states the checked fact instead" \
+  "$NOT_OUR_TASK_STDERR" "that roster does not name this one"
+
 # The binding's anchor is config.json itself, so config contradicting ITSELF cannot bind:
 # objectives_history attributing this PR to another objective refuses even while
 # branch.feature says otherwise. Not an independent anchor — a one-key edit is simply

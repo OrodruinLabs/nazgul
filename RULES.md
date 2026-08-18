@@ -571,7 +571,7 @@ policy but emit `coverage_vacuous`. A filter that matches no file is also NOTHIN
 run. A new skip reason must be named and counted — it cannot disappear into `passed` or a free-form
 note. This is §15's looked-vs-never-looked distinction applied to tests, guards, smoke, and audits.
 
-- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Twelve entry points are bound
+- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Thirteen entry points are bound
   by the contract above: `tests/run-tests.sh`, `scripts/lean-comments-guard.sh --check`,
   `tests/test-shellcheck.sh`, `scripts/doctor.sh`, `agents/comment-verifier.md`,
   `scripts/lib/heartbeat-triage.sh`, `scripts/self-audit.sh` (enrolled FEAT-029/TASK-012, which also
@@ -596,13 +596,34 @@ note. This is §15's looked-vs-never-looked distinction applied to tests, guards
   `tests/test-doc-contract-fields.sh` (enrolled FEAT-031/TASK-016 — the doc/gate merge-evidence field
   binding of §2; blocking, so nothing checked is its own failure. Its field list is DERIVED from
   `_TTG_MERGE_REQUIRED_FIELDS` in the gate library, never authored in the test, so a field added to the
-  constant and not to the docs turns the documents red instead of quietly stale).
+  constant and not to the docs turns the documents red instead of quietly stale). The thirteenth is
+  `scripts/lib/task-transition-guard.sh` (enrolled FEAT-031/TASK-019 — the IMPLEMENTED red-run evidence
+  gate, whose two scans print under the entry token `red-run-evidence`: `red-run-evidence/tests-root`
+  over `project.test_roots` and `red-run-evidence/files` over the changed test files the recorded commits
+  name. Both are driven under forced all-skip, and the entry is counted as covered only when BOTH
+  conform. Its disposition is NOT set by coverage: the gate's seven dispositions decide allow/deny, and a
+  vacuous scan reports `NOTHING CHECKED` without re-deciding anything — the same "exit code encodes the
+  worst verdict, not the coverage" rule `scripts/doctor.sh` follows).
   `tests/test-coverage-honesty.sh` drives every one of them under a forced
   all-skip input and FAILS if any enumerated entry point was never driven — membership is asserted, not
   assumed, so an entry point that conforms today cannot silently stop conforming tomorrow. Add a new
   checking entry point to this list and to that test in the same change. The registry previously cited a
   TRD section, which was archived out from under the citation when that objective completed: the authority
   for a durable contract must live in a durable file.
+
+- **Both directions are mechanical, not just member-has-driver.** `[enforced]` An emitter with no
+  registration is now a finding too. The forward direction (every registered member is driven) was the
+  whole contract until FEAT-031/TASK-019, so a mechanism could emit a bound checker's grammar while bound
+  to nothing — which is how this library's two scans shipped unenrolled. `tests/test-coverage-honesty.sh`
+  now also DERIVES the emitter population by scanning the shipped trees for the grammar's producer shape
+  (a format string whose count slots are unresolved — `%d`, or `<N>` in an agent spec — so a test
+  asserting on a literal line is not mistaken for a mechanism that emits one), never from an authored
+  list. **Boundary, stated rather than discovered:** the converse binds `scripts/**` and `agents/**`,
+  where a checking entry point is driven by the loop and has no other binding; a `tests/**` emitter is
+  counted and reported in the `tests-tree` skip bucket, not treated as a finding, because the four
+  registered members that live there are already bound by the forward direction and the rest are internal
+  scans inside `tests/run-tests.sh`'s own population. So a NEW unregistered emitter added under `tests/`
+  is skipped, not caught — a named, counted residual rather than a silent one.
 
 ### Tests-facing application: the repo content boundary (PATCH-002)
 

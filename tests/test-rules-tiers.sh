@@ -68,13 +68,14 @@ fi
 # prompt, so §2 states that half as advisory rather than implying the whole is enforced),
 # 82->91 (FEAT-031: §2 cancellation x2, the CANCELLED dependency gate, §2 merge evidence x3,
 # §16 seam x3). FEAT-031 and FEAT-032 landed concurrently; 91 is the counted total of both,
-# not the sum either branch asserted alone.
+# not the sum either branch asserted alone. 91->92 (FEAT-031/TASK-019: §15's converse direction —
+# every shipped grammar emitter is a registered entry point).
 ENFORCED_COUNT=$(awk '{ count += gsub(/\[enforced\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ENFORCED_COUNT" -eq 91 ]; then
-  _pass "[enforced] annotation count is exactly 91 (found: $ENFORCED_COUNT)"
+if [ "$ENFORCED_COUNT" -eq 92 ]; then
+  _pass "[enforced] annotation count is exactly 92 (found: $ENFORCED_COUNT)"
 else
-  _fail "[enforced] annotation count is exactly 91" \
-    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 91"
+  _fail "[enforced] annotation count is exactly 92" \
+    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 92"
 fi
 
 # 21->22 (FEAT-029, §2's typed quarantine), 22->23 (FEAT-031, §3.15's carve-out record):
