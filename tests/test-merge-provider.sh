@@ -15,15 +15,18 @@ set -uo pipefail
 #   tier:          captured
 #   producer:      gh version 2.80.0 (2025-09-23)
 #   captured:      2026-08-15, TASK-009, by the implementer, authenticated `gh auth`
-#   recaptured:    2026-08-16, TASK-011 rework, same producer and repo, with the two new
-#                  fields the objective-binding check needs; the bytes below are the
-#                  re-capture, so the sha256 lines for the two payloads changed with it.
-#   captured-with: gh pr view 88     --json state,mergedAt,mergeCommit,headRefName,baseRefName  # merged
-#                  gh pr view 194    --json state,mergedAt,mergeCommit,headRefName,baseRefName  # open
-#                  gh pr view 999999 --json state,mergedAt,mergeCommit,headRefName,baseRefName  # error (exit 1)
+#   recaptured:    2026-08-16, TASK-011 rework, with the two branch-name fields the
+#                  objective-binding check needs.
+#   recaptured:    2026-08-18, TASK-020, same producer and repo, with `url` — the field that
+#                  makes the host's answer name the repository it is ABOUT. The OPEN payload
+#                  is re-captured from PR 87 rather than 194 because 194 has since merged and
+#                  a payload no PR still produces is authored, not captured.
+#   captured-with: gh pr view 88     --repo github.com/OrodruinLabs/nazgul --json state,mergedAt,mergeCommit,headRefName,baseRefName,url  # merged
+#                  gh pr view 87     --repo github.com/OrodruinLabs/nazgul --json state,mergedAt,mergeCommit,headRefName,baseRefName,url  # open
+#                  gh pr view 999999 --repo github.com/OrodruinLabs/nazgul --json state,mergedAt,mergeCommit,headRefName,baseRefName,url  # error (exit 1)
 #   source-repo:   OrodruinLabs/nazgul (this repo's own PRs — no third-party subject matter)
-#   sha256:        fe905b27b767c4a1d5bb062a85c7a7554aedb7daa7b64a8c37a19b74e7268fd6  merged payload
-#                  922e914161ecc04ae741ea54f5788e1dffca5f438357ecb8646805a5e43be849  open payload
+#   sha256:        ca2954997550da4adcd7a6f64b975e9924a415589b718e3e2910b0ec75d8536a  merged payload
+#                  1f9dfa91c5d8c10b0c978aef873fd4458c5b5f65cb556589dab2230a2c633ced  open payload
 #                  0cacbfff6ea53b1f26a7a3c2e79c2f85c5973ecbcd15e094611b3944a2d3476d  error stderr
 #   consumers:     scripts/close-objective.sh AND ttg_verify_merge_evidence — the gate is
 #                  reachable without the closer, so both are pinned below.
@@ -31,11 +34,14 @@ set -uo pipefail
 #                  That is not incidental — it is the captured instance of the hazard the
 #                  binding check exists for: a genuinely merged PR of a DIFFERENT
 #                  objective. It is used as such below rather than being edited away.
-#   not-captured:  the unauthenticated, unparseable-payload, and malformed-ref cases.
-#                  `gh auth status` failing, a truncated body, and a host returning a
-#                  branch name no git ref could carry cannot be captured from a healthy
-#                  authenticated host, so those three are SYNTHETIC and are named as
-#                  such rather than passed off as captured.
+#   not-captured:  the unauthenticated, unparseable-payload, malformed-ref, foreign-url and
+#                  missing-url cases. `gh auth status` failing, a truncated body, a branch
+#                  name no git ref could carry, a host answering about a repository it was
+#                  not asked about, and one omitting a field it was asked for cannot be
+#                  captured from a healthy authenticated host, so those five are SYNTHETIC
+#                  and named as such rather than passed off as captured. The foreign url
+#                  names `attacker/other-repo`, an invented repository, so no third-party
+#                  subject matter enters the fixture set through the redirection cases.
 #
 # No tests/fixtures/ subdirectory is added: TASK-009's file scope is exactly this
 # file and the library, and the manifest directs that the shape be declared in
@@ -104,10 +110,22 @@ case "$sub" in
   pr)
     action="${1:-}"; shift || true
     [ "$action" = "view" ] || exit 1
+    pinned=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in --repo) pinned="${2:-}"; shift 2 ;; *) shift ;; esac
+    done
+    merged='{"baseRefName":"main","headRefName":"feat/FEAT-030-worktree-relative-runtime-state-path-resolution-pr","mergeCommit":{"oid":"d6f7582f7d9ee8f74706ea02202d15dd5bc83146"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED","url":"https://github.com/OrodruinLabs/nazgul/pull/88"}'
+    foreign='{"baseRefName":"prototype","headRefName":"feat/FEAT-030-worktree-relative-runtime-state-path-resolution-pr","mergeCommit":{"oid":"d6f7582f7d9ee8f74706ea02202d15dd5bc83146"},"mergedAt":"2019-10-04T16:01:04Z","state":"MERGED","url":"https://github.com/attacker/other-repo/pull/88"}'
     case "${NAZGUL_TEST_GH_PR_CASE:-merged}" in
-      merged) printf '%s\n' '{"baseRefName":"main","headRefName":"feat/FEAT-030-worktree-relative-runtime-state-path-resolution-pr","mergeCommit":{"oid":"d6f7582f7d9ee8f74706ea02202d15dd5bc83146"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}'; exit 0 ;;
-      open)   printf '%s\n' '{"baseRefName":"main","headRefName":"docs/granularity-decoupling-spec","mergeCommit":null,"mergedAt":null,"state":"OPEN"}'; exit 0 ;;
-      badref) printf '%s\n' '{"baseRefName":"main","headRefName":"a branch; rm -rf /","mergeCommit":{"oid":"d6f7582f7d9ee8f74706ea02202d15dd5bc83146"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}'; exit 0 ;;
+      merged) printf '%s\n' "$merged"; exit 0 ;;
+      open)   printf '%s\n' '{"baseRefName":"main","headRefName":"docs/doc-gate-design","mergeCommit":null,"mergedAt":null,"state":"OPEN","url":"https://github.com/OrodruinLabs/nazgul/pull/87"}'; exit 0 ;;
+      badref) printf '%s\n' '{"baseRefName":"main","headRefName":"a branch; rm -rf /","mergeCommit":{"oid":"d6f7582f7d9ee8f74706ea02202d15dd5bc83146"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED","url":"https://github.com/OrodruinLabs/nazgul/pull/88"}'; exit 0 ;;
+      # Stands in for a redirection vector the seam does not enumerate: this shim answers
+      # about the pinned repo when one is pinned and about the attacker's otherwise, which
+      # is how real gh treats --repo against GH_REPO/GH_HOST/gh-resolved.
+      redirected) if [ -n "$pinned" ]; then printf '%s\n' "$merged"; else printf '%s\n' "$foreign"; fi; exit 0 ;;
+      foreignurl) printf '%s\n' "$foreign"; exit 0 ;;
+      nourl)  printf '%s\n' '{"baseRefName":"main","headRefName":"feat/FEAT-030-worktree-relative-runtime-state-path-resolution-pr","mergeCommit":{"oid":"d6f7582f7d9ee8f74706ea02202d15dd5bc83146"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}'; exit 0 ;;
       error)  printf '%s\n' 'GraphQL: Could not resolve to a PullRequest with the number of 999999. (repository.pullRequest)' >&2; exit 1 ;;
       leaky)  printf 'HTTP 401: Bad credentials (token ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA)\n' >&2; exit 1 ;;
       garbage) printf '%s\n' 'not json at all'; exit 0 ;;
@@ -170,7 +188,9 @@ assert_eq "merged PR: merge_commit is normalised from mergeCommit.oid" \
   "$(_field '.merge_commit')" "d6f7582f7d9ee8f74706ea02202d15dd5bc83146"
 assert_eq "merged PR: the provider is named in the result" "$(_field '.provider')" "github"
 assert_contains "the seam asks the host the merge-state question AND which branches, by PR" \
-  "$(cat "$GH_LOG")" "pr view 88 --json state,mergedAt,mergeCommit,headRefName,baseRefName"
+  "$(cat "$GH_LOG")" "pr view 88 --repo github.com/orodruinlabs/nazgul --json state,mergedAt,mergeCommit,headRefName,baseRefName,url"
+assert_eq "and the record names the repository the answer is ABOUT, not just the host" \
+  "$(_field '.repo')" "orodruinlabs/nazgul"
 assert_eq "merged PR: the head branch is carried, so a caller can bind the PR to an objective" \
   "$(_field '.head_ref')" "feat/FEAT-030-worktree-relative-runtime-state-path-resolution-pr"
 assert_eq "merged PR: the base branch is carried too" "$(_field '.base_ref')" "main"
@@ -190,14 +210,14 @@ assert_eq "a head branch that is not ref-shaped is dropped, not carried" "$(_fie
 assert_eq "dropping an unusable ref does not turn the answer into a failure" "$(_field '.result')" "ok"
 
 # --- ok / OPEN: "looked and found NOT merged" — merged is false, not null. ---
-NAZGUL_TEST_GH_PR_CASE=open _drive 194
+NAZGUL_TEST_GH_PR_CASE=open _drive 87
 assert_eq "open PR: the query succeeded, so the result is still 'ok'" "$(_field '.result')" "ok"
 assert_eq "open PR: state is OPEN" "$(_field '.state')" "OPEN"
 assert_eq "open PR: merged is FALSE — the host was asked and said no" "$(_field '.merged')" "false"
 assert_eq "open PR: merged_at is null" "$(_field '.merged_at')" "null"
 assert_eq "open PR: merge_commit is null" "$(_field '.merge_commit')" "null"
 assert_eq "open PR: the head branch is still carried — it is not merge state" \
-  "$(_field '.head_ref')" "docs/granularity-decoupling-spec"
+  "$(_field '.head_ref')" "docs/doc-gate-design"
 
 # --- api_failure: the single most important property. A host that did not
 # answer must NEVER read as an unmerged PR. ---
@@ -342,6 +362,110 @@ assert_not_contains "URL userinfo is stripped on the event bus" \
   "$(cat "$EVENTS" 2>/dev/null)" "hunter2-not-token-shaped"
 assert_contains "the redaction is visible where the userinfo was, not a silent truncation" \
   "$(_field '.pr')" "https://***@github.com/o/r/notapr"
+
+# lean-comments: allow-run — the finding this block exists for, and why a shape check is not it.
+# THE REDIRECTION CLASS (board 6, SEC-1). `gh pr view` resolves its target from GH_REPO, from
+# GH_HOST and from a remote's `gh-resolved` BEFORE the checkout's own remote, so a bare PR
+# number returned a genuine `ok`/`merged: true` about whatever repository the environment
+# named — in a record byte-identical to the honest one, which is the last gate before DONE
+# answering truthfully about somebody else's repository. Every case below sets the vector for
+# real and drives the real function; none of them asserts the shape of an argument.
+: > "$GH_LOG"
+: > "$EVENTS"
+GH_REPO=someone-else/their-repo _drive 88
+_observe repo_mismatch "$(_want_exit repo_mismatch)"
+assert_eq "GH_REPO redirection: no merge state at all comes back" "$(_field '.merged')" "null"
+assert_eq "GH_REPO redirection: the host is never contacted" "$(cat "$GH_LOG")" ""
+assert_contains "the refusal names the repository the environment asked for" \
+  "$(_field '.diagnostic')" "someone-else/their-repo"
+assert_contains "and the one this checkout actually names" \
+  "$(_field '.diagnostic')" "github.com/orodruinlabs/nazgul"
+assert_contains "the refusal is loud on stderr, not only on the bus" "$MP_ERR" "repo_mismatch"
+assert_file_contains "and a telemetry record names the disagreement" \
+  "$EVENTS" '"event":"merge_provider_repo_mismatch"'
+
+: > "$GH_LOG"
+GH_HOST=ghe.example.com _drive 88
+assert_eq "GH_HOST is its own vector, not a variant of GH_REPO" "$(_field '.result')" "repo_mismatch"
+assert_contains "and its refusal names the host, which is what disagreed" \
+  "$(_field '.diagnostic')" "ghe.example.com"
+assert_eq "GH_HOST redirection: the host is never contacted either" "$(cat "$GH_LOG")" ""
+
+: > "$GH_LOG"
+git -C "$TEST_DIR" config --local remote.origin.gh-resolved someone-else/their-repo
+_drive 88
+assert_eq "a gh-resolved git config is the third vector — persistent, and no env var at all" \
+  "$(_field '.result')" "repo_mismatch"
+assert_contains "and its refusal names the config key, so the operator knows what to unset" \
+  "$(_field '.diagnostic')" "remote.origin.gh-resolved"
+assert_eq "gh-resolved redirection: the host is never contacted either" "$(cat "$GH_LOG")" ""
+git -C "$TEST_DIR" config --local remote.origin.gh-resolved base
+_drive 88
+assert_eq "gh-resolved 'base' names this remote's OWN repo and is not a disagreement" \
+  "$(_field '.result')" "ok"
+git -C "$TEST_DIR" config --local --unset remote.origin.gh-resolved
+
+# The refusal is a DISAGREEMENT check, not a ban: an environment naming this very repository
+# is not redirection, and refusing it would make the seam unusable inside `gh` workflows.
+GH_REPO=OrodruinLabs/nazgul _drive 88
+assert_eq "GH_REPO naming THIS repository is not a mismatch" "$(_field '.result')" "ok"
+GH_REPO=github.com/OrodruinLabs/nazgul _drive 88
+assert_eq "nor is gh's HOST/OWNER/REPO spelling of the same repository" "$(_field '.result')" "ok"
+
+# A redirection vector is operator-writable text like --pr, so it can carry a credential in its
+# userinfo — and the refusal echoes it to stderr, onto the bus, and back as `.diagnostic`.
+: > "$EVENTS"
+GH_REPO="https://svc-account:hunter2-not-token-shaped@github.com/notarepo" _drive 88
+assert_eq "an unparseable GH_REPO is a mismatch, not a silently ignored value" \
+  "$(_field '.result')" "repo_mismatch"
+assert_not_contains "and its userinfo never reaches the result JSON" \
+  "$MP_OUT" "hunter2-not-token-shaped"
+assert_not_contains "nor stderr" "$MP_ERR" "hunter2-not-token-shaped"
+assert_not_contains "nor the event bus" "$(cat "$EVENTS" 2>/dev/null)" "hunter2-not-token-shaped"
+assert_contains "the redaction is visible where the userinfo was" "$(_field '.diagnostic')" "***@github.com"
+
+# lean-comments: allow-run — the residual this pair measures, rather than asserting the class.
+# The named refusal above covers the three vectors this seam enumerates. The `--repo` pin is
+# the layer that covers the ones it does not: it outranks GH_REPO, GH_HOST and gh-resolved
+# against real gh (measured), so the shim answers about the pinned repository when one is
+# pinned. The second case is the backstop for a host that answers about the wrong repository
+# anyway — checked from the answer's own url, not from having asked politely.
+: > "$GH_LOG"
+NAZGUL_TEST_GH_PR_CASE=redirected _drive 88
+assert_eq "an unenumerated redirection vector is still defeated by the --repo pin alone" \
+  "$(_field '.result')" "ok"
+assert_eq "and the answer is about this repository, not the redirected one" \
+  "$(_field '.merged_at')" "2026-08-14T23:16:50Z"
+assert_contains "the pin is what carried it: the repository is named in the call" \
+  "$(cat "$GH_LOG")" "--repo github.com/orodruinlabs/nazgul"
+
+NAZGUL_TEST_GH_PR_CASE=foreignurl _drive 88
+assert_eq "a host answering about a repo it was not asked about is refused by name" \
+  "$(_field '.result')" "repo_mismatch"
+assert_eq "and that refusal yields no merge state, however genuine the answer was" \
+  "$(_field '.merged')" "null"
+assert_contains "the refusal names the repository that actually answered" \
+  "$(_field '.diagnostic')" "attacker/other-repo"
+
+# A response with no url names no repository, so it cannot be shown to be about ours. That is
+# "asked and did not usefully answer", which already has a name — it is not a new one.
+NAZGUL_TEST_GH_PR_CASE=nourl _drive 88
+assert_eq "an answer carrying no url is api_failure, never a trusted ok" \
+  "$(_field '.result')" "api_failure"
+assert_eq "and it yields no merge state" "$(_field '.merged')" "null"
+assert_contains "the diagnostic says which fact was missing" "$(_field '.diagnostic')" "no PR url"
+
+# --- unbindable_repo: a remote naming no owner/repo cannot pin anything, so the query could
+# only have been aimed by ambient environment. Refused rather than asked. ---
+: > "$GH_LOG"
+git -C "$TEST_DIR" remote set-url origin "https://github.com/"
+_drive 88
+_observe unbindable_repo "$(_want_exit unbindable_repo)"
+assert_eq "unbindable remote: merged is null" "$(_field '.merged')" "null"
+assert_eq "unbindable remote: the host is never contacted" "$(cat "$GH_LOG")" ""
+assert_file_contains "unbindable remote: a telemetry record is written" \
+  "$EVENTS" '"event":"merge_provider_unbindable_repo"'
+git -C "$TEST_DIR" remote set-url origin "https://github.com/OrodruinLabs/nazgul.git"
 
 # --- Every named result is DISTINCT. This is the property the whole seam
 # exists for: six answers, six tokens, six exit codes, no collapsing. ---

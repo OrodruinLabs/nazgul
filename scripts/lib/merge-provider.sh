@@ -255,19 +255,22 @@ merge_provider_health() {
 
 # lean-comments: allow-run — the three-valued `merged` is the seam's whole point.
 # _mp_result <provider> <host> <pr> <result> <state> <merged> <merged_at> <merge_commit>
-# <diagnostic> -> the one normalised JSON object every pr_state path returns, built with
-# jq --arg only. `merged` is THREE-valued on purpose: true/false only when the host
-# answered, JSON null when it did not — a bare false would collapse "the host says not
-# merged" into "we could not find out", the exact conflation this seam prevents.
+# <diagnostic> [head_ref] [base_ref] [repo] -> the one normalised JSON object every pr_state
+# path returns, built with jq --arg only. `merged` is THREE-valued on purpose: true/false only
+# when the host answered, JSON null when it did not — a bare false would collapse "the host
+# says not merged" into "we could not find out", the exact conflation this seam prevents.
+# `repo` is the repository the answer is ABOUT, because an answer about somebody else's repo
+# used to be byte-identical to one about ours: local host, bare pr, diagnostic null.
 _mp_result() {
   jq -cn \
     --arg provider "$1" --arg host "$2" --arg pr "$3" --arg result "$4" \
     --arg state "$5" --arg merged "$6" --arg merged_at "$7" \
     --arg merge_commit "$8" --arg diagnostic "$9" \
-    --arg head_ref "${10:-}" --arg base_ref "${11:-}" \
+    --arg head_ref "${10:-}" --arg base_ref "${11:-}" --arg repo "${12:-}" \
     '{
       provider: (if $provider == "" then null else $provider end),
       host: (if $host == "" then null else $host end),
+      repo: (if $repo == "" then null else $repo end),
       pr: (if $pr == "" then null else $pr end),
       result: $result,
       state: (if $state == "" then null else $state end),
@@ -308,6 +311,97 @@ _mp_normalize_pr() {
   printf '%s\t%s\t%s' "$n" "$host" "$repo"
 }
 
+# _mp_api_host <host> -> the host as the API knows it. github.com and www.github.com are one
+# host to GitHub and two strings to a comparison, and everything below compares.
+_mp_api_host() {
+  case "$1" in
+    www.github.com) printf 'github.com' ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# _mp_repo_spec <spec> -> "<host>\t<owner/repo>" for gh's `[HOST/]OWNER/REPO` repo spec or a
+# repo URL; host empty when the spec names none, return 1 when it names no owner/repo at all.
+_mp_repo_spec() {
+  local spec="$1" host="" path owner repo
+  case "$spec" in
+    *://*) host=$(_mp_url_host "$spec"); path="${spec#*://}"; path="${path#*/}" ;;
+    *)     path="$spec" ;;
+  esac
+  path="${path%%\?*}"
+  path="${path%%#*}"
+  path="${path#/}"
+  path="${path%/}"
+  case "$path" in */*/*) host="${path%%/*}"; path="${path#*/}" ;; esac
+  owner="${path%%/*}"
+  repo="${path#*/}"
+  repo="${repo%%/*}"
+  repo="${repo%.git}"
+  { [ -n "$owner" ] && [ -n "$repo" ] && [ "$owner" != "$path" ]; } || return 1
+  printf '%s\t%s' "$(_mp_api_host "$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')")" \
+    "$(printf '%s' "$owner/$repo" | tr '[:upper:]' '[:lower:]')"
+}
+
+# lean-comments: allow-run — the three redirection vectors, and why the pin is not the answer.
+# _mp_redirect_check <root> <host> <owner/repo> -> 0 when nothing outside this checkout names a
+# different repository; otherwise the disagreement on stdout and return 1. `gh` resolves a
+# `pr view` target from GH_REPO, from GH_HOST, and from `remote.<name>.gh-resolved` BEFORE it
+# falls back to the checkout's own remote, and every one of those is writable by anything that
+# can set an environment variable or one git-config key. The `--repo` pin below already
+# outranks all three (measured, not assumed), so this check is not what makes the answer right
+# — it is what stops a DISAGREEMENT from being resolved silently in either direction: an
+# environment naming somebody else's repository is a refusal by its own name, never a
+# preference quietly overridden and then reported exactly like a query that was never aimed
+# elsewhere at all. A `gh-resolved` of `base` names this remote's own repo and is not a
+# disagreement.
+_mp_redirect_check() {
+  local root="$1" want_host="$2" want_repo="$3" cfg spec spec_host spec_repo line key val
+  if [ -n "${GH_REPO:-}" ]; then
+    spec=$(_mp_repo_spec "$GH_REPO") || {
+      printf 'GH_REPO is set to "%s", which names no owner/repo to compare against this checkout'"'"'s %s/%s' \
+        "$(_mp_oneline "$GH_REPO")" "$want_host" "$want_repo"
+      return 1
+    }
+    spec_host="${spec%%$'\t'*}"
+    spec_repo="${spec#*$'\t'}"
+    if [ "$spec_repo" != "$want_repo" ] || { [ -n "$spec_host" ] && [ "$spec_host" != "$want_host" ]; }; then
+      printf 'GH_REPO names %s/%s but this checkout'"'"'s remote is %s/%s' \
+        "$(_mp_oneline "${spec_host:-$want_host}")" "$(_mp_oneline "$spec_repo")" "$want_host" "$want_repo"
+      return 1
+    fi
+  fi
+  if [ -n "${GH_HOST:-}" ]; then
+    spec_host=$(_mp_api_host "$(printf '%s' "$GH_HOST" | tr '[:upper:]' '[:lower:]')")
+    if [ "$spec_host" != "$want_host" ]; then
+      printf 'GH_HOST names %s but this checkout'"'"'s remote is on %s' \
+        "$(_mp_oneline "$spec_host")" "$want_host"
+      return 1
+    fi
+  fi
+  cfg=$(git -C "$root" config --get-regexp '^remote\..*\.gh-resolved$' 2>/dev/null) || cfg=""
+  [ -n "$cfg" ] || return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    key="${line%% *}"
+    val="${line#* }"
+    { [ "$val" != "$line" ] && [ -n "$val" ] && [ "$val" != "base" ]; } || continue
+    if ! spec=$(_mp_repo_spec "$val"); then
+      printf 'git config %s is "%s", which names no owner/repo to compare against this checkout'"'"'s %s/%s' \
+        "$(_mp_oneline "$key")" "$(_mp_oneline "$val")" "$want_host" "$want_repo"
+      return 1
+    fi
+    spec_host="${spec%%$'\t'*}"
+    spec_repo="${spec#*$'\t'}"
+    if [ "$spec_repo" != "$want_repo" ] || { [ -n "$spec_host" ] && [ "$spec_host" != "$want_host" ]; }; then
+      printf 'git config %s resolves this repository to %s/%s, not %s/%s' \
+        "$(_mp_oneline "$key")" "$(_mp_oneline "${spec_host:-$want_host}")" "$(_mp_oneline "$spec_repo")" \
+        "$want_host" "$want_repo"
+      return 1
+    fi
+  done <<< "$cfg"
+  return 0
+}
+
 # lean-comments: allow-run — names both api_failure shapes, incl. the exit-0 one.
 # _mp_github_pr_state <project_root> <host> <pr> -> the github arm's normalised result,
 # asking what stack_reconcile asks (`state,mergedAt,mergeCommit`) plus the head and base
@@ -316,15 +410,44 @@ _mp_normalize_pr() {
 # gh exit, OR a zero exit whose payload has no parseable `state`, is `api_failure` —
 # never a quietly not-merged `ok`. The two branch names are the only remote-authored
 # strings returned; both are shape-checked and dropped when they fail.
+#
+# WHICH REPOSITORY IS ASKED IS NOT AMBIENT. The target comes from this checkout's own remote
+# and is passed as `--repo <host>/<owner>/<repo>`, which outranks GH_REPO, GH_HOST and
+# `gh-resolved`; a disagreeing environment is `repo_mismatch` before the host is contacted,
+# and a remote naming no owner/repo is `unbindable_repo` rather than a query aimed by whatever
+# happened to be exported. `url` is then requested and its repository compared against the
+# target, so the answer carries its own provenance instead of being trusted for having been
+# asked — the one check that also covers a redirection vector this file does not enumerate.
 _mp_github_pr_state() {
   local root="$1" host="$2" pr="$3" out rc state merged_at merge_commit merged why head_ref base_ref
+  local remote_url remote_host remote_repo target url url_host url_repo
+  remote_url=$(_mp_remote_url "$root") || remote_url=""
+  remote_host=$(_mp_api_host "$(_mp_url_host "$remote_url")")
+  remote_repo=$(_mp_url_repo "$remote_url") || remote_repo=""
+  if [ -z "$remote_host" ] || [ -z "$remote_repo" ]; then
+    why="this checkout's remote '$(_mp_oneline "${remote_url:-<none>}")' names no host/owner/repo, so PR $pr could only have been aimed by ambient environment rather than bound to this repository"
+    _mp_warn "unbindable_repo: $why — this is NOT 'not merged'; no closure may be inferred from it"
+    _mp_emit "$root" "merge_provider_unbindable_repo" provider "github" host "$host" pr "$pr" \
+      remote "$(_mp_oneline "${remote_url:-<none>}")"
+    _mp_result "github" "$host" "$pr" "unbindable_repo" "" "" "" "" "$why"
+    return 8
+  fi
+  target="$remote_host/$remote_repo"
+  if ! why=$(_mp_redirect_check "$root" "$remote_host" "$remote_repo"); then
+    why="$why — PR $pr would have been asked of a repository this checkout does not name, and a genuine answer about that one recorded as if it were about this one"
+    _mp_warn "repo_mismatch: $why"
+    _mp_emit "$root" "merge_provider_repo_mismatch" provider "github" host "$remote_host" pr "$pr" \
+      repo "$remote_repo" reason "$(_mp_oneline "$why")"
+    _mp_result "github" "$remote_host" "$pr" "repo_mismatch" "" "" "" "" "$why" "" "" "$remote_repo"
+    return 7
+  fi
   why=$(_mp_github_health) || {
     _mp_warn "provider_unavailable: github arm cannot run for PR $pr — $why"
     _mp_emit "$root" "merge_provider_unavailable" provider "github" host "$host" pr "$pr" reason "$why"
     _mp_result "github" "$host" "$pr" "provider_unavailable" "" "" "" "" "$why"
     return 4
   }
-  out=$( (cd "$root" 2>/dev/null && gh pr view "$pr" --json state,mergedAt,mergeCommit,headRefName,baseRefName) 2>&1 ); rc=$?
+  out=$( (cd "$root" 2>/dev/null && gh pr view "$pr" --repo "$target" --json state,mergedAt,mergeCommit,headRefName,baseRefName,url) 2>&1 ); rc=$?
   if [ "$rc" -ne 0 ]; then
     why="gh pr view $pr failed (exit $rc): $(_mp_oneline "$out")"
     _mp_warn "api_failure: $why — this is NOT 'not merged'; no closure may be inferred from it"
@@ -340,6 +463,25 @@ _mp_github_pr_state() {
     _mp_result "github" "$host" "$pr" "api_failure" "" "" "" "" "$why"
     return 5
   fi
+  url=$(printf '%s' "$out" | jq -r '.url // empty' 2>/dev/null) || url=""
+  url_host=$(_mp_api_host "$(_mp_url_host "$url")")
+  url_repo=$(_mp_url_repo "$url") || url_repo=""
+  if [ -z "$url_repo" ]; then
+    why="gh pr view $pr returned no PR url, so its answer names no repository and cannot be shown to be about $target: $(_mp_oneline "$out")"
+    _mp_warn "api_failure: $why — this is NOT 'not merged'"
+    _mp_emit "$root" "merge_provider_api_failure" provider "github" host "$host" pr "$pr" exit_code "0" \
+      reason "no url to certify which repository answered"
+    _mp_result "github" "$host" "$pr" "api_failure" "" "" "" "" "$why"
+    return 5
+  fi
+  if [ "$url_host" != "$remote_host" ] || [ "$url_repo" != "$remote_repo" ]; then
+    why="the host answered about ${url_host}/${url_repo} when it was asked about ${target} — a genuine answer about the wrong repository is not evidence about this one"
+    _mp_warn "repo_mismatch: $why"
+    _mp_emit "$root" "merge_provider_repo_mismatch" provider "github" host "$remote_host" pr "$pr" \
+      repo "$remote_repo" answered "$(_mp_oneline "$url_host/$url_repo")"
+    _mp_result "github" "$remote_host" "$pr" "repo_mismatch" "" "" "" "" "$why" "" "" "$remote_repo"
+    return 7
+  fi
   merged_at=$(printf '%s' "$out" | jq -r '.mergedAt // empty' 2>/dev/null) || merged_at=""
   merge_commit=$(printf '%s' "$out" | jq -r '.mergeCommit.oid // empty' 2>/dev/null) || merge_commit=""
   head_ref=$(printf '%s' "$out" | jq -r '.headRefName // empty' 2>/dev/null) || head_ref=""
@@ -347,7 +489,7 @@ _mp_github_pr_state() {
   _mp_ref_ok "$head_ref" || head_ref=""
   _mp_ref_ok "$base_ref" || base_ref=""
   if [ "$state" = "MERGED" ]; then merged="true"; else merged="false"; fi
-  _mp_result "github" "$host" "$pr" "ok" "$state" "$merged" "$merged_at" "$merge_commit" "" "$head_ref" "$base_ref"
+  _mp_result "github" "$host" "$pr" "ok" "$state" "$merged" "$merged_at" "$merge_commit" "" "$head_ref" "$base_ref" "$remote_repo"
   return 0
 }
 
@@ -363,6 +505,19 @@ _mp_github_pr_state() {
 #   api_failure (5)          the host was asked and did not usefully answer
 #   invalid_pr (6)           <pr> is neither a PR number nor a scheme://host/
 #                            owner/repo/pull/<n> URL naming THIS repo's remote
+#   repo_mismatch (7)        something other than this checkout named the repository:
+#                            GH_REPO, GH_HOST or a remote's gh-resolved disagrees with
+#                            it, or the host answered about a different repo than the
+#                            one it was asked about
+#   unbindable_repo (8)      this checkout's remote names no owner/repo, so nothing
+#                            could bind the query to THIS repository
+#
+# `repo_mismatch` is the newest member and the reason the others could be trusted at all:
+# `gh pr view` resolves its target from the environment before the checkout, so a bare PR
+# number used to return a genuine `ok`/`merged: true` about whatever repository an exported
+# GH_REPO named, in a record byte-identical to the honest one. It is a NAMED refusal, in
+# both directions: the seam neither prefers the environment nor silently prefers the
+# checkout, because "we looked somewhere else" must not print like "we looked here".
 #
 # On `ok` the object also carries `head_ref`/`base_ref` — the branch the PR
 # merged FROM and INTO. They exist so a caller can bind the PR to a particular

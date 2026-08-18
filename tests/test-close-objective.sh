@@ -9,8 +9,9 @@ set -uo pipefail
 # RESPONSE PROVENANCE — derived-from-captured, and named as such rather than passed
 # off as either. The gh payload SHAPE below is the one tests/test-merge-provider.sh
 # captured verbatim from the real producer (gh 2.80.0, 2025-09-23, `gh pr view <n>
-# --json state,mergedAt,mergeCommit,headRefName,baseRefName` against this repo's own
-# PRs, re-captured 2026-08-16 for the two branch-name fields); only the
+# --json state,mergedAt,mergeCommit,headRefName,baseRefName[,url]` against this repo's own
+# PRs, re-captured 2026-08-16 for the two branch-name fields and 2026-08-18 for `url`, the
+# field the seam compares against the checkout's own remote); only the
 # `mergeCommit.oid` is substituted, with this fixture's OWN commit sha. That
 # substitution is load-bearing, not cosmetic: the squash property this file exists to
 # prove — an ancestry check FAILING for the recorded sha — is only real if both shas
@@ -89,19 +90,19 @@ case "$sub" in
     [ "${1:-}" = "view" ] || exit 1
     case "${NAZGUL_TEST_GH_CASE:-merged}" in
       merged)
-        printf '{"baseRefName":"main","headRefName":"%s","mergeCommit":{"oid":"%s"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}\n' \
+        printf '{"baseRefName":"main","headRefName":"%s","mergeCommit":{"oid":"%s"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED","url":"https://github.com/OrodruinLabs/nazgul/pull/88"}\n' \
           "${NAZGUL_TEST_HEAD_REF:-}" "${NAZGUL_TEST_MERGE_SHA:-}"
         exit 0 ;;
       open)
-        printf '{"baseRefName":"main","headRefName":"%s","mergeCommit":null,"mergedAt":null,"state":"OPEN"}\n' \
+        printf '{"baseRefName":"main","headRefName":"%s","mergeCommit":null,"mergedAt":null,"state":"OPEN","url":"https://github.com/OrodruinLabs/nazgul/pull/88"}\n' \
           "${NAZGUL_TEST_HEAD_REF:-}"
         exit 0 ;;
       no_commit)
-        printf '{"baseRefName":"main","headRefName":"%s","mergeCommit":null,"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}\n' \
+        printf '{"baseRefName":"main","headRefName":"%s","mergeCommit":null,"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED","url":"https://github.com/OrodruinLabs/nazgul/pull/88"}\n' \
           "${NAZGUL_TEST_HEAD_REF:-}"
         exit 0 ;;
       no_head_ref)
-        printf '{"baseRefName":"main","mergeCommit":{"oid":"%s"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}\n' \
+        printf '{"baseRefName":"main","mergeCommit":{"oid":"%s"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED","url":"https://github.com/OrodruinLabs/nazgul/pull/88"}\n' \
           "${NAZGUL_TEST_MERGE_SHA:-}"
         exit 0 ;;
       error)
@@ -246,7 +247,7 @@ assert_eq "squash close: nothing refused" "$CO_F" "0"
 _drove already-terminal not-closable-status unreadable
 
 assert_contains "squash close: the host is asked the merge-state question, by PR" \
-  "$(cat "$GH_LOG")" "pr view 88 --json state,mergedAt,mergeCommit"
+  "$(cat "$GH_LOG")" "pr view 88 --repo github.com/orodruinlabs/nazgul --json state,mergedAt,mergeCommit"
 assert_eq "squash close: IMPLEMENTED -> DONE landed on disk" \
   "$(get_task_status "$FX/nazgul/tasks/TASK-001.md")" "DONE"
 assert_eq "squash close: IN_REVIEW -> DONE landed on disk, with no review directory anywhere" \
@@ -495,7 +496,7 @@ _reason "another objective's PR" "not-merged" 0
 _reason "another objective's PR" "merge-unverifiable" 0
 assert_eq "another objective's PR: nothing was closed" "$CO_K" "0"
 assert_contains "another objective's PR: the host really was asked, and really said merged" \
-  "$(cat "$GH_LOG")" "pr view 88 --json state,mergedAt,mergeCommit,headRefName,baseRefName"
+  "$(cat "$GH_LOG")" "pr view 88 --repo github.com/orodruinlabs/nazgul --json state,mergedAt,mergeCommit,headRefName,baseRefName,url"
 assert_eq "another objective's PR: the task is untouched at IMPLEMENTED" \
   "$(get_task_status "$FX/nazgul/tasks/TASK-081.md")" "IMPLEMENTED"
 assert_not_contains "another objective's PR: no evidence was written from a merge that is not ours" \
