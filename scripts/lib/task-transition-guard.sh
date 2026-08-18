@@ -920,6 +920,17 @@ ttg_pr_bound() {
   return 1
 }
 
+# ttg_plan_feat_id <plan_file> -> the frontmatter feat_id, empty when none is declared. THE
+# one parser: the producer writes and reads back through it, so it cannot drift from here.
+ttg_plan_feat_id() {
+  awk 'NR==1 && /^---[[:space:]]*$/ {f=1; next} f && /^---[[:space:]]*$/ {exit} f && /^feat_id:/ {sub(/^feat_id:[[:space:]]*/, ""); gsub(/[]["'"'"'[:space:]]/, ""); print; exit}' "$1" 2>/dev/null
+}
+
+# ttg_plan_feat_placeholder <value> -> 0 iff the value is an unsubstituted <...> placeholder.
+ttg_plan_feat_placeholder() {
+  case "$1" in "<"*">") return 0 ;; *) return 1 ;; esac
+}
+
 # lean-comments: allow-run — RULES.md §15's two-answers distinction, at the guard it binds.
 # ttg_objective_roster <nazgul_dir> -> the task ids this objective's own nazgul/plan.md
 # lists under `## Tasks`, one per line; non-zero with the reason on stdout when membership
@@ -936,12 +947,19 @@ ttg_objective_roster() {
     printf 'no regular non-symlink %s, so which manifests belong to %s is unknowable' "$plan" "$feat_id"
     return 1
   fi
-  plan_feat=$(awk 'NR==1 && /^---[[:space:]]*$/ {f=1; next} f && /^---[[:space:]]*$/ {exit} f && /^feat_id:/ {sub(/^feat_id:[[:space:]]*/, ""); gsub(/[]["'"'"'[:space:]]/, ""); print; exit}' "$plan")
+  plan_feat=$(ttg_plan_feat_id "$plan")
   # "declares nothing" and "declares someone else" are different facts: templates/plan.md
   # carried no frontmatter for 31 objectives, so the first is un-migrated, not foreign.
   if [ -z "$plan_feat" ]; then
-    printf '%s declares no frontmatter feat_id, so it cannot corroborate that its roster is %s'"'"'s — add a leading "---\nfeat_id: %s\n---" block to that file' \
+    printf '%s declares no frontmatter feat_id, so it cannot corroborate that its roster is %s'"'"'s — run scripts/stamp-plan-objective.sh to add a leading "---\nfeat_id: %s\n---" block to that file' \
       "$plan" "$feat_id" "$feat_id"
+    return 1
+  fi
+  # An unsubstituted templates/plan.md placeholder is not a rival claim — it is a producer
+  # that never ran, and saying "disagree" sent operators to reconcile two real objectives.
+  if ttg_plan_feat_placeholder "$plan_feat"; then
+    printf '%s still carries templates/plan.md'"'"'s unsubstituted placeholder feat_id "%s" — no producer ever bound this plan to an objective, so its roster scopes nothing; run scripts/stamp-plan-objective.sh to bind it to %s' \
+      "$plan" "$plan_feat" "$feat_id"
     return 1
   fi
   if [ "$plan_feat" != "$feat_id" ]; then
@@ -949,8 +967,18 @@ ttg_objective_roster() {
       "$plan" "$plan_feat" "$feat_id"
     return 1
   fi
-  ids=$(awk '/^## Tasks/{f=1;next} f && /^## /{exit} f' "$plan" | grep -oE '(TASK|PATCH)-[0-9]+' | LC_ALL=C sort -u)
+  # templates/plan.md documents its roster format with COMMENTED example entries, so an
+  # unplanned plan used to yield a one-id roster: TASK-001, a task nobody ever wrote.
+  local section commented
+  section=$(awk '/^## Tasks/{f=1;next} f && /^## /{exit} f' "$plan")
+  ids=$(printf '%s\n' "$section" | _ttg_strip_html_comments | grep -oE '(TASK|PATCH)-[0-9]+' | LC_ALL=C sort -u)
   if [ -z "$ids" ]; then
+    commented=$(printf '%s\n' "$section" | grep -coE '(TASK|PATCH)-[0-9]+' || true)
+    if [ "${commented:-0}" -gt 0 ]; then
+      printf '%s'"'"'s ## Tasks section names task ids ONLY inside HTML comments — those are templates/plan.md'"'"'s example entries, not a roster, so no manifest can be shown to belong to %s' \
+        "$plan" "$feat_id"
+      return 1
+    fi
     printf '%s carries no ## Tasks roster to read, so no manifest can be shown to belong to %s' "$plan" "$feat_id"
     return 1
   fi

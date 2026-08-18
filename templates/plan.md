@@ -1,8 +1,9 @@
 ---
-# Set by the Planner at objective creation, and read by the merge-evidence gate
-# (ttg_objective_roster): the `## Tasks` roster below only scopes an objective this
-# file agrees it belongs to. A plan whose feat_id is absent or names another
-# objective cannot close any task through `## Merge Evidence`.
+# INERT PLACEHOLDER — nothing in /nazgul:init can substitute it (config.feat_id is still
+# null there). The Planner MUST replace it after writing the `## Tasks` roster below, by
+# running `scripts/stamp-plan-objective.sh`, which takes the value from config.feat_id.
+# Until then the merge-evidence gate (ttg_objective_roster) refuses this plan by name:
+# the roster only scopes an objective this file agrees it belongs to.
 feat_id: <FEAT-NNN>
 ---
 # Nazgul Plan

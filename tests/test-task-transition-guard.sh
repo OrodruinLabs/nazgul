@@ -822,9 +822,15 @@ assert_not_contains "roster: absence is not reported as a contradiction" \
   "$NO_FM_STDERR" "but config names"
 assert_contains "roster: the refusal states the remedy rather than only the fault" \
   "$NO_FM_STDERR" "add a leading"
-# The shipped template must carry the key, or every new project is born unable to close.
-assert_contains "the shipped plan template declares a feat_id for the planner to fill" \
-  "$(cat "$REPO_ROOT/templates/plan.md")" "feat_id:"
+# Asserting the key's PRESENCE is what let the half-done fix pass: it ships inert. Drive the
+# template's OWN declared value; its producer is covered by tests/test-plan-objective-binding.sh.
+TPL_DECLARED=$(ttg_plan_feat_id "$REPO_ROOT/templates/plan.md")
+printf -- '---\nfeat_id: %s\n---\n# Plan\n\n## Tasks\n\n- TASK-050\n' "$TPL_DECLARED" > "$TEST_DIR/nazgul/plan.md"
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && TPL_EC=0 || TPL_EC=$?
+TPL_STDERR="$ME_STDERR"
+assert_exit_code "the shipped template's own feat_id value closes NOTHING until a producer substitutes it" "$TPL_EC" 1
+assert_contains "and an un-run producer is named as such, not reported as a rival objective" \
+  "$TPL_STDERR" "unsubstituted placeholder"
 merge_plan
 
 # A roster whose frontmatter names a DIFFERENT objective cannot scope this one either.

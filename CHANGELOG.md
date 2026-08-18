@@ -147,6 +147,38 @@ precedent as 34 → 35 (2.29.0) and 35 → 36 (2.30.0).
 
 ### Fixed
 
+- **The plan's objective binding had a gate and a template but no producer — so `IMPLEMENTED -> DONE`
+  was still unreachable everywhere except this repo.** The merge-evidence gate requires
+  `nazgul/plan.md`'s frontmatter `feat_id` to agree with `config.feat_id`; the template was given that
+  key, as `feat_id: <FEAT-NNN>`, and **nothing ever substituted it**. `/nazgul:init` copies the template
+  verbatim (`config.feat_id` is still null there) and `agents/planner.md` — the only writer of the
+  `## Tasks` roster — contained zero occurrences of `feat_id`. A project built from the shipped template
+  therefore refused at the last gate with a *different* message: `declares feat_id "<FEAT-NNN>" but
+  config names "FEAT-030"`. The lesson is the shape of the miss, not the missing line: the earlier fix
+  was verified by READING the template, and only re-running a project built from it exposed the rest.
+  `scripts/stamp-plan-objective.sh` is the producer, invoked by the Planner immediately after it writes
+  the roster; it takes the value from `config.feat_id`, never re-derives it, re-reads the file through
+  the gate's own parser (`ttg_plan_feat_id`) and fails on mismatch. **Positioning is the argument:** the
+  frontmatter is a claim ABOUT the roster, so only the roster's writer can honestly make it —
+  `/nazgul:init` structurally cannot, `create_feature_branch` sees either an empty template roster or a
+  plan the start skill has already archived away, and **no automatic path may stamp it at all**, because
+  an unconditional copy of `config.feat_id` into whatever plan is on disk would make the gate's
+  corroboration tautological. Pre-existing plans are healed by the operator running the same script,
+  which REFUSES to overwrite a plan declaring a different real objective and names the roster it is
+  binding before it binds it. `tests/test-plan-objective-binding.sh` drives the SHIPPED template — not a
+  hand-authored plan — from `cp templates/plan.md` through `scripts/task-transition.sh` to `DONE` over
+  the real merge-provider seam; that the Planner actually runs the producer is `[advisory]`.
+
+- **An unplanned plan produced a one-task roster made entirely of the template's commented examples.**
+  `ttg_objective_roster` extracted `(TASK|PATCH)-[0-9]+` from the raw `## Tasks` section, and
+  `templates/plan.md` documents its format with commented example entries — so a plan nobody had planned
+  into yielded `TASK-001`, and a task nobody ever wrote could be shown to belong to the objective. The
+  section is now passed through the file's existing `_ttg_strip_html_comments` first, and "names ids
+  ONLY inside HTML comments" is its own refusal sentence, distinct from "carries no roster at all".
+  A third roster refusal is likewise named: an unsubstituted `<...>` placeholder is a producer that
+  never ran, not a rival claim, and reporting it as a disagreement sent operators off to reconcile two
+  objectives one of which did not exist.
+
 - **A never-shipping task vetoed forward progress at five sites; the state machine now has a word for
   it.** Aggregate readiness (`stop-hook.sh`), loop completion, heartbeat auto-start, the parallel hard
   stop, and the dependency gate all treated "operator gave up on this task" as "this task is coming".

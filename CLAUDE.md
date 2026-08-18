@@ -53,6 +53,7 @@ scripts/                             # Shell scripts for hooks
 │   ├── task-transition.sh           # SOLE sanctioned status writer: transactional CAS transition + evidence-gated `repair` (ADR-020)
 │   ├── close-objective.sh           # /nazgul:complete engine: host-verified merge closure of an objective merged outside the loop
 │   ├── red-run.sh                   # Mechanized pre-change red-run capture + manifest evidence
+│   ├── stamp-plan-objective.sh      # Binds nazgul/plan.md's frontmatter feat_id to config.feat_id (Planner-invoked; never automatic)
 │   ├── pre-compact.sh               # PreCompact: checkpoint before compaction
 │   ├── post-compact.sh              # PostCompact: re-inject state after compaction
 │   ├── pre-tool-guard.sh            # PreToolUse: block destructive commands
@@ -116,7 +117,7 @@ references/                          # Shared reference docs for agents
 │   ├── fix-first-heuristic.md       # AUTO-FIX vs ASK classification rules
 │   └── self-improvement.md          # Agent self-rating protocol
 tests/                               # Plugin validation tests
-│   ├── run-tests.sh                 # Test runner (108 unit/integration files); exit 2 = nothing checked
+│   ├── run-tests.sh                 # Test runner (114 unit/integration files); exit 2 = nothing checked
 │   ├── test-*.sh                    # Unit/integration tests
 │   ├── fixtures/                    # Provenance-declared goldens (tests/fixtures/*/PROVENANCE.md); no third-party subject matter
 │   ├── lib/                         # Test assertions + setup helpers
@@ -203,7 +204,7 @@ tests/                               # Plugin validation tests
 ## Testing
 
 ```bash
-tests/run-tests.sh                    # Run all unit/integration tests (108 files)
+tests/run-tests.sh                    # Run all unit/integration tests (114 files)
 tests/run-tests.sh --filter=stop-hook # Run specific test file
 tests/e2e/run-e2e.sh                  # Run E2E skill tests (requires claude CLI, costs money)
 tests/e2e/run-stack-e2e.sh            # Two-layer gh-stack E2E (real repo/PRs; CI-only via e2e-stack.yml)
