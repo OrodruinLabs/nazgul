@@ -750,35 +750,32 @@ assert_eq "consumer-row registry: every row in THIS file was driven" "$CS_CHECKE
 if ! scs_run "$REPO_ROOT"; then
   _fail "population-scan: the shipped tree is walkable" "no scripts/ directory under $REPO_ROOT"
 else
-  # Board-3 NEW-5: a bare mention certified nothing — a comment, or another test's
-  # discovery list, passed. scs_pin_class separates reached from undecidable.
-  PS_SCANNED=0; PS_PINNED=0; PS_UNPINNED=0; PS_SKIPPED=0; PS_VANISHED=0; PS_NAMEDONLY=0
+  # Board-3 NEW-5: a bare mention certified nothing. TASK-017: `named-only` is a
+  # FINDING now — an unreached site is unpinned, and a skip would recount it as checked.
+  scs_pin_scan "$REPO_ROOT/tests" "$REPO_ROOT" "$SCS_CONSUMERS"
   while IFS= read -r rel; do
     [ -n "$rel" ] || continue
-    PS_SCANNED=$((PS_SCANNED + 1))
-    if [ ! -r "$REPO_ROOT/$rel" ]; then
-      PS_SKIPPED=$((PS_SKIPPED + 1)); PS_VANISHED=$((PS_VANISHED + 1))
-      _skip "population-scan [$rel]: unreadable between discovery and pin check — not checked"
-      continue
-    fi
-    case "$(scs_pin_class "$REPO_ROOT/tests" "$rel")" in
-      reached)
-        PS_PINNED=$((PS_PINNED + 1)) ;;
-      named-only)
-        PS_SKIPPED=$((PS_SKIPPED + 1)); PS_NAMEDONLY=$((PS_NAMEDONLY + 1))
-        _skip "population-scan [$rel]: named by a test but never through a rooted path — undecidable, not checked" ;;
-      *)
-        PS_UNPINNED=$((PS_UNPINNED + 1))
-        _fail "population-scan [$rel]: pinned by at least one test file" \
-          "this file reads task status and no tests/test-*.sh names it" \
-          "  fix: drive it with a CANCELLED fixture here, or wherever its behaviour belongs" ;;
-    esac
-  done <<< "$SCS_CONSUMERS"
-  echo "  population-scan: ${PS_SCANNED} scanned, ${PS_SKIPPED} skipped (vanished=${PS_VANISHED}, named-only=${PS_NAMEDONLY}), $((PS_PINNED + PS_UNPINNED)) checked, ${PS_UNPINNED} findings"
+    _skip "population-scan [$rel]: unreadable between discovery and pin check — not checked"
+  done <<< "$SCS_PS_VANISHED_PATHS"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    _fail "population-scan [$rel]: reached by a test through a rooted path" \
+      "named by some test file but never through a rooted reference — undecidable from text, so nothing here pins it" \
+      "  fix: drive it with a CANCELLED fixture through \"\$REPO_ROOT/$rel\", or exempt it where its behaviour belongs"
+  done <<< "$SCS_PS_UNDECIDABLE_PATHS"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    _fail "population-scan [$rel]: pinned by at least one test file" \
+      "this file reads task status and no tests/test-*.sh names it" \
+      "  fix: drive it with a CANCELLED fixture here, or wherever its behaviour belongs"
+  done <<< "$SCS_PS_UNPINNED_PATHS"
+  scs_pin_scan_line "population-scan"
   assert_eq "population-scan: coverage accounting adds up (N == M + K)" \
-    "$PS_SCANNED" "$((PS_SKIPPED + PS_PINNED + PS_UNPINNED))"
-  assert_eq "population-scan: every discovered status consumer is pinned by a test" "$PS_UNPINNED" "0"
+    "$SCS_PS_SCANNED" "$((SCS_PS_SKIPPED + SCS_PS_CHECKED))"
+  assert_eq "population-scan: every discovered status consumer is reached by a test" \
+    "$SCS_PS_FINDINGS" "0"
 
+  PS_PINNED="$SCS_PS_PINNED"
   POP_FLOOR="${NAZGUL_STATUS_CONSUMER_FLOOR:-12}"
   if [ "$PS_PINNED" -ge "$POP_FLOOR" ]; then
     _pass "population-scan: the walk actually reached the tree ($PS_PINNED consumers >= $POP_FLOOR)"
@@ -811,6 +808,36 @@ assert_eq "pin-class dogfood: another test's discovery list is not a pin (the ci
   "$(scs_pin_class "$PIN_SCRATCH/tests" scripts/listed-consumer.sh)" "named-only"
 assert_eq "pin-class dogfood: an unmentioned file is a finding, not a skip" \
   "$(scs_pin_class "$PIN_SCRATCH/tests" scripts/absent-consumer.sh)" "unnamed"
+
+# TASK-017: the DISPOSITION, dogfooded on the same tree — the shipped population is
+# all `reached`, so the two failing classes are otherwise never driven end to end.
+mkdir -p "$PIN_SCRATCH/scripts"
+for _c in reached commented listed absent; do
+  printf '#!/usr/bin/env bash\n# status: DONE\n' > "$PIN_SCRATCH/scripts/${_c}-consumer.sh"
+done
+PIN_POP='scripts/reached-consumer.sh
+scripts/commented-consumer.sh
+scripts/listed-consumer.sh
+scripts/absent-consumer.sh'
+scs_pin_scan "$PIN_SCRATCH/tests" "$PIN_SCRATCH" "$PIN_POP"
+assert_eq "pin-scan dogfood: a named-but-unreached site is a FINDING, not a skip" \
+  "$SCS_PS_UNDECIDABLE" "2"
+assert_eq "pin-scan dogfood: nothing is skipped when every file is on disk" "$SCS_PS_SKIPPED" "0"
+assert_eq "pin-scan dogfood: the undecidable sites are counted as checked" "$SCS_PS_CHECKED" "4"
+assert_eq "pin-scan dogfood: findings = undecidable + unpinned" "$SCS_PS_FINDINGS" "3"
+assert_contains "pin-scan dogfood: each undecidable site is named" \
+  "$SCS_PS_UNDECIDABLE_PATHS" "scripts/commented-consumer.sh"
+assert_eq "pin-scan dogfood: N == M + K" \
+  "$SCS_PS_SCANNED" "$((SCS_PS_SKIPPED + SCS_PS_CHECKED))"
+
+scs_pin_scan "$PIN_SCRATCH/tests" "$PIN_SCRATCH" "$PIN_POP
+scripts/vanished-consumer.sh"
+assert_eq "pin-scan dogfood: the one surviving skip is 'vanished', and it is counted" \
+  "$SCS_PS_VANISHED" "1"
+assert_eq "pin-scan dogfood: a vanished file still balances N == M + K" \
+  "$SCS_PS_SCANNED" "$((SCS_PS_SKIPPED + SCS_PS_CHECKED))"
+assert_contains "pin-scan dogfood: the coverage line names its only skip reason" \
+  "$(scs_pin_scan_line population-scan)" "1 skipped (vanished=1)"
 rm -rf "$PIN_SCRATCH"
 
 report_results

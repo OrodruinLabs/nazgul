@@ -145,9 +145,65 @@ else
   GATE_EC=$?
 fi
 GATE_REASON="${TTG_RED_RUN_REASON:-<unset>}"
-assert_exit_code "seam: the shipped gate ACCEPTS a red-run.sh-written block" "$GATE_EC" 0
-assert_eq "seam: the gate's disposition is 'verified', not a degraded allow" "$GATE_REASON" "verified"
+# TASK-017: scoped NARROWER than the change — four test files changed, `--filter=alpha`
+# reds one, so the block is evidence for one file and none at all for three.
+assert_exit_code "seam: a capture narrower than the change no longer discharges the whole task" "$GATE_EC" 1
+assert_eq "seam: the refusal is the per-file one" "$GATE_REASON" "uncovered_test_file"
+GATE_STDERR=$(cat "$GATE_ERR")
+assert_contains "seam: the uncovered vacuity case is named" "$GATE_STDERR" "tests/test-beta.sh"
+assert_contains "seam: the never-run file is named" "$GATE_STDERR" "tests/test-gamma.sh"
+assert_not_contains "seam: the file that WAS red is not blamed" \
+  "$(printf '%s\n' "$GATE_STDERR" | grep 'no red-run entry naming them')" "tests/test-alpha.sh"
+assert_contains "seam: the gate reports the population it derived from the capture's own task" \
+  "$GATE_STDERR" "red-run file coverage: 4 scanned, 0 skipped (support=0, enumerated-na=0), 4 checked, 3 findings"
 rm -f "$GATE_ERR"
+
+# The seam itself, on a task whose change IS its capture: one changed test file,
+# red at the base commit, one entry — producer and gate agree end to end.
+setup_temp_dir
+git -C "$TEST_DIR" init -q -b main
+git -C "$TEST_DIR" config user.email "test@nazgul.dev"
+git -C "$TEST_DIR" config user.name "Nazgul Test"
+mkdir -p "$TEST_DIR/tests" "$TEST_DIR/scripts" "$TEST_DIR/nazgul/tasks"
+cp "$REPO_ROOT/tests/run-tests.sh" "$TEST_DIR/tests/run-tests.sh"
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "base"
+BASE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+printf '#!/usr/bin/env bash\necho feature\n' > "$TEST_DIR/scripts/feature.sh"
+cat > "$TEST_DIR/tests/test-solo.sh" <<'SOLO'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "=== test-solo ==="
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/scripts/feature.sh" ]; then
+  echo "  PASS: feature.sh is wired in"
+  exit 0
+fi
+echo "  FAIL: feature.sh is wired in"
+exit 1
+SOLO
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "one source file, one test file"
+HEAD_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+write_manifest TASK-009 "$BASE_SHA"
+run_capture TASK-009 --filter=solo
+assert_exit_code "seam (all-red): the capture confirms RED" "$RR_EC" 0
+SOLO_MANIFEST="$TEST_DIR/nazgul/tasks/TASK-009.md"
+# shellcheck disable=SC2034  # read by the sourced guard library, not within this file
+NAZGUL_DIR="$TEST_DIR/nazgul"
+if ttg_verify_red_run_evidence "$(cat "$SOLO_MANIFEST")" "$TEST_DIR" TASK-009 2>/dev/null >/dev/null; then
+  SOLO_EC=0
+else
+  SOLO_EC=$?
+fi
+assert_exit_code "seam (all-red): the shipped gate ACCEPTS a red-run.sh-written block" "$SOLO_EC" 0
+assert_eq "seam (all-red): the gate's disposition is 'verified', not a degraded allow" \
+  "${TTG_RED_RUN_REASON:-<unset>}" "verified"
+teardown_temp_dir
+
+setup_project
+write_manifest TASK-001 "$BASE_SHA"
+MANIFEST="$TEST_DIR/nazgul/tasks/TASK-001.md"
+run_capture TASK-001 --filter=alpha
 
 # --- refresh in place: a second capture does not duplicate the entry ---------
 run_capture TASK-001 --filter=alpha

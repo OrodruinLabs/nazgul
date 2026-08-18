@@ -14,10 +14,35 @@ echo "=== $TEST_NAME ==="
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-coverage-honesty-XXXXXX")
 trap 'rm -rf "$SCRATCH"' EXIT
 
-# Every entry point named by RULES.md §15; the tally at the bottom fails if one
-# was never driven through _entry_covered.
-ENTRY_POINTS="run-tests lean-comments test-shellcheck doctor comment-verifier heartbeat-triage self-audit audit-agent-state-paths test-dispatch-brief-contract close-objective test-messaging-posture"
+# lean-comments: allow-run — the tautology this derivation replaces, kept at the derivation.
+# The denominator is DERIVED from RULES.md §15's own registry bullet by
+# tests/lib/rules-registry.sh, never authored here: an authored copy counts the list
+# it validates, so it can never disagree with itself, and a member added to the
+# registry with no driver would read as covered.
+RULES_DOC="$REPO_ROOT/RULES.md"
+# shellcheck disable=SC2034  # read by tests/lib/rules-registry.sh, not within this file
+REGISTRY_DRIVER_REL="tests/$(basename "$0")"
+source "$SCRIPT_DIR/lib/rules-registry.sh"
+
+REGISTRY_MEMBERS=$(_registry_members "$RULES_DOC")
+REGISTRY_N=$(printf '%s\n' "$REGISTRY_MEMBERS" | grep -c . || true)
+ENTRY_POINTS=""
+while IFS= read -r _rp; do
+  [ -n "$_rp" ] || continue
+  ENTRY_POINTS="${ENTRY_POINTS}$(_registry_token "$_rp")
+"
+done <<< "$REGISTRY_MEMBERS"
 COVERED=""
+
+REGISTRY_FLOOR=5
+if [ "$REGISTRY_N" -ge "$REGISTRY_FLOOR" ]; then
+  _pass "RULES.md §15: the registry bullet was actually parsed ($REGISTRY_N members >= $REGISTRY_FLOOR)"
+else
+  _fail "RULES.md §15: the registry bullet was actually parsed" \
+    "derived $REGISTRY_N member(s) from $RULES_DOC — a derivation that finds nothing is 'never looked', not an empty registry"
+fi
+assert_eq "RULES.md §15: the registry's stated size matches the members derived from it" \
+  "$REGISTRY_N" "$(_registry_declared_count "$RULES_DOC")"
 
 _entry_covered() {
   COVERED="$COVERED $1"
@@ -314,6 +339,33 @@ else
   _fail "test-messaging-posture: a full run actually checks something" "checked: $MP_CHECKED"
 fi
 
+# The derivation, dogfooded against scratch registries: the shipped RULES.md
+# yields exactly the driven set, so the failing directions never run against it.
+REG_MUT="$SCRATCH/rules-mutant.md"
+{
+  printf -- '- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Twelve entry points are bound\n'
+  printf -- '  by the contract above: `tests/run-tests.sh`, `scripts/lean-comments-guard.sh --check`,\n'
+  printf -- '  `tests/test-phantom-entry.sh`, and `tests/test-coverage-honesty.sh` drives every one of them.\n'
+  printf -- '\n'
+} > "$REG_MUT"
+MUT_MEMBERS=$(_registry_members "$REG_MUT")
+assert_contains "registry dogfood: a member added to the bullet is derived" \
+  "$MUT_MEMBERS" "tests/test-phantom-entry.sh"
+assert_not_contains "registry dogfood: the driver named in its own bullet is not a member" \
+  "$MUT_MEMBERS" "tests/test-coverage-honesty.sh"
+MUT_TOKENS=$(while IFS= read -r _rp; do [ -n "$_rp" ] || continue; _registry_token "$_rp"; done <<< "$MUT_MEMBERS")
+assert_contains "registry dogfood: a registered member nothing drives is reported missing" \
+  "$(_registry_missing "$MUT_TOKENS" "$COVERED")" "test-phantom-entry"
+assert_eq "registry dogfood: the stated size is read from the bullet, not from the list" \
+  "$(_registry_declared_count "$REG_MUT")" "12"
+assert_eq "registry dogfood: a bullet stating 12 while listing 3 is a contradiction the test can see" \
+  "$(printf '%s\n' "$MUT_MEMBERS" | grep -c .)" "3"
+
+REG_GONE="$SCRATCH/rules-no-registry.md"
+printf '## 15. Git-Level Guards\n\nno registry bullet here at all\n' > "$REG_GONE"
+assert_eq "registry dogfood: a doc with no registry bullet derives nothing (the floor's input)" \
+  "$(_registry_members "$REG_GONE" | grep -c . || true)" "0"
+
 # Enumeration completeness — the point of the whole file: an entry point with no
 # emitter must FAIL here, not silently drop out of the list.
 for entry in $ENTRY_POINTS; do
@@ -324,8 +376,17 @@ for entry in $ENTRY_POINTS; do
   esac
 done
 
+# The other direction: a driver for something §15 does not list is an unregistered
+# entry point, not extra credit — the registry and the drivers must be the same set.
+for entry in $COVERED; do
+  case " $(printf '%s' "$ENTRY_POINTS" | tr '\n' ' ') " in
+    *" $entry "*) ;;
+    *) _fail "driver '$entry' names an entry point RULES.md §15 registers" \
+         "this file drives it, the registry does not list it — enroll it there or stop counting it here" ;;
+  esac
+done
+
 COVERED_COUNT=$(printf '%s' "$COVERED" | wc -w | tr -d ' ')
-EXPECTED_COUNT=$(printf '%s' "$ENTRY_POINTS" | wc -w | tr -d ' ')
-assert_eq "every enumerated entry point was driven" "$COVERED_COUNT" "$EXPECTED_COUNT"
+assert_eq "every entry point RULES.md §15 registers was driven" "$COVERED_COUNT" "$REGISTRY_N"
 
 report_results

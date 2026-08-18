@@ -189,7 +189,7 @@ teardown_temp_dir
 
 # The refusal vocabulary is CLOSED, and read out of the source rather than narrated
 # here: a state folded into an existing bucket would leave this set unchanged.
-VOCAB_EXPECTED='absent bad_na_token commented_out corrupt exit_zero not_ancestor ref_unresolvable roots_undeterminable roots_unresolved'
+VOCAB_EXPECTED='absent absent_in_tree bad_na_token commented_out corrupt exit_zero not_ancestor ref_unresolvable roots_undeterminable roots_unresolved uncovered_test_file'
 VOCAB_ARGS=$(grep -oE '_ttg_red_run_(deny|empty_payload) "[^"]*" "[^"]*" "[^"]*"' \
   "$REPO_ROOT/scripts/lib/task-transition-guard.sh" | sed -E 's/.*"([^"]*)"$/\1/')
 VOCAB_SCANNED=$(printf '%s\n' "$VOCAB_ARGS" | grep -c '[^[:space:]]')
@@ -472,7 +472,10 @@ assert_eq "comment-only + in scope: reason is commented_out" "$RR_REASON" "comme
 rr_call "$(rr_manifest '["scripts/foo.sh","tests/test-foo.sh"]' "$(valid_entry)")" "$TEST_DIR"
 assert_exit_code "valid entry: allows" "$RR_EC" 0
 assert_eq "valid entry: reason is 'verified'" "$RR_REASON" "verified"
-assert_eq "valid entry: no diagnostic noise" "$RR_STDERR" ""
+assert_eq "valid entry: stderr is the per-file coverage record and nothing else" \
+  "$(printf '%s\n' "$RR_STDERR" | grep -cv 'red-run file coverage:')" "0"
+assert_contains "valid entry: the per-file scan reports what it enumerated" \
+  "$RR_STDERR" "red-run file coverage: 0 scanned, 0 skipped (support=0, enumerated-na=0), 0 checked, 0 findings"
 
 # --- ref unresolvable ---
 rr_call "$(rr_manifest '["scripts/foo.sh"]' '- red-run: tests/test-foo.sh :: case "x"
@@ -819,6 +822,98 @@ assert_contains "call site 2: reason falls back to the MF-022 bypass, not red-ru
   "$(grep -m1 '^\- \*\*Blocked reason\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md")" "outside the guarded"
 assert_not_contains "call site 2: red-run is not blamed when the evidence verifies" \
   "$(grep -m1 '^\- \*\*Blocked reason\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md")" "unverified red-run evidence"
+teardown_temp_dir
+
+
+# PER-FILE DENOMINATOR (TASK-017 / board-4 item 5a) — the obligation is one entry
+# per changed test file, derived from Base SHA..the task's own recorded commits.
+setup_rr_multi_repo() {
+  setup_temp_dir
+  git -C "$TEST_DIR" init -q
+  git -C "$TEST_DIR" config user.email "test@nazgul.dev"
+  git -C "$TEST_DIR" config user.name "Nazgul Test"
+  mkdir -p "$TEST_DIR/tests/lib" "$TEST_DIR/scripts"
+  printf '#!/usr/bin/env bash\n' > "$TEST_DIR/tests/test-a.sh"
+  printf '#!/usr/bin/env bash\n' > "$TEST_DIR/tests/run-tests.sh"
+  printf '#!/usr/bin/env bash\n' > "$TEST_DIR/tests/lib/helper.sh"
+  git -C "$TEST_DIR" add -A
+  git -C "$TEST_DIR" commit -q -m "base"
+  BASE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+  printf 'echo a\n' >> "$TEST_DIR/tests/test-a.sh"
+  printf '#!/usr/bin/env bash\necho b\n' > "$TEST_DIR/tests/test-b.sh"
+  printf 'echo helper\n' >> "$TEST_DIR/tests/lib/helper.sh"
+  printf 'echo harness\n' >> "$TEST_DIR/tests/run-tests.sh"
+  git -C "$TEST_DIR" add -A
+  git -C "$TEST_DIR" commit -q -m "the task's work: two test files, a helper, the harness"
+  HEAD_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+}
+
+rr_entry_for() { # <rel-path>
+  printf -- '- red-run: %s :: case "x"\n  - pre-change-ref: %s\n  - result: FAILED (exit 1)\n' \
+    "$1" "$BASE_SHA"
+}
+
+setup_rr_multi_repo
+
+rr_call "$(rr_manifest '["tests/test-a.sh","tests/test-b.sh"]' "$(rr_entry_for tests/test-a.sh)")" "$TEST_DIR"
+assert_exit_code "per-file: two changed test files with evidence for one BLOCKS" "$RR_EC" 1
+assert_eq "per-file: the refusal is named, not folded into corrupt" "$RR_REASON" "uncovered_test_file"
+assert_contains "per-file: the refusal names the uncovered file" "$RR_STDERR" "tests/test-b.sh"
+assert_not_contains "per-file: the covered file is not blamed" \
+  "$(printf '%s\n' "$RR_STDERR" | grep 'no red-run entry naming them')" "tests/test-a.sh"
+
+RR_COV_LINE=$(printf '%s\n' "$RR_STDERR" | grep -o 'red-run file coverage: [0-9].*findings' | head -1)
+assert_eq "per-file: the coverage line reports the derived population" "$RR_COV_LINE" \
+  "red-run file coverage: 4 scanned, 2 skipped (support=2, enumerated-na=0), 2 checked, 1 findings"
+RR_COV_N=$(printf '%s' "$RR_COV_LINE" | sed -E 's/^.*coverage: ([0-9]+) scanned.*/\1/')
+RR_COV_M=$(printf '%s' "$RR_COV_LINE" | sed -E 's/^.* ([0-9]+) skipped.*/\1/')
+RR_COV_K=$(printf '%s' "$RR_COV_LINE" | sed -E 's/^.*\), ([0-9]+) checked.*/\1/')
+assert_eq "per-file: N == M + K on the gate's own line" "$RR_COV_N" "$((RR_COV_M + RR_COV_K))"
+assert_contains "per-file: the two skips are named, never silent" "$RR_STDERR" \
+  "harness or non-test input, so it carries no entry of its own:"
+
+rr_call "$(rr_manifest '["tests/test-a.sh","tests/test-b.sh"]' "$(rr_entry_for tests/test-a.sh)
+$(rr_entry_for tests/test-b.sh)")" "$TEST_DIR"
+assert_exit_code "per-file: an entry for each changed test file ALLOWS" "$RR_EC" 0
+assert_eq "per-file: covered both, so the reason is 'verified'" "$RR_REASON" "verified"
+assert_contains "per-file: both files counted as checked, none as a finding" "$RR_STDERR" \
+  "red-run file coverage: 4 scanned, 2 skipped (support=2, enumerated-na=0), 2 checked, 0 findings"
+
+# The harness exclusion is READ from the producer, so the two cannot drift apart.
+assert_eq "per-file: the never-copy set is the producer's own RR_NEVER_COPY" \
+  "$(_ttg_rr_never_copy | tr '\n' ' ')" \
+  "$(sed -n '/^RR_NEVER_COPY="/,/"$/p' "$REPO_ROOT/scripts/red-run.sh" | sed 's/^RR_NEVER_COPY="//; s/"$//' | tr '\n' ' ')"
+
+# An enumerated N/A is a whole-task discharge the producer cannot emit per file:
+# still allowed, but every discharged file lands in its own reported bucket.
+rr_call "$(rr_manifest '["tests/test-a.sh","tests/test-b.sh"]' '- red-run: N/A — revert')" "$TEST_DIR"
+assert_exit_code "per-file: an enumerated N/A still allows" "$RR_EC" 0
+assert_contains "per-file: the N/A discharge is counted in its own bucket, not as checked" \
+  "$RR_STDERR" "red-run file coverage: 4 scanned, 4 skipped (support=0, enumerated-na=4), 0 checked, 0 findings"
+
+# A denominator that cannot be enumerated says so; it never reports an empty population.
+NO_BASE=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["tests/test-a.sh"]\n\n## Commits\n- %s\n\n## Red-Run Evidence\n%s\n\n## Description\nx\n' \
+  "$HEAD_SHA" "$(rr_entry_for tests/test-a.sh)")
+rr_call "$NO_BASE" "$TEST_DIR"
+assert_exit_code "per-file: an underivable denominator does not invent a block" "$RR_EC" 0
+assert_contains "per-file: an underivable denominator is announced, not counted as zero" \
+  "$RR_STDERR" "DENOMINATOR NOT ENUMERATED (the manifest records no Base SHA"
+assert_not_contains "per-file: no coverage line is emitted over a population that was never enumerated" \
+  "$RR_STDERR" "0 scanned, 0 skipped (support=0"
+
+# #198's neighbour: a well-formed entry whose file this tree does not hold is a
+# DIFFERENT refusal from a malformed one, and it names the tree it looked in.
+git -C "$TEST_DIR" rm -q --cached tests/test-b.sh >/dev/null
+rm -f "$TEST_DIR/tests/test-b.sh"
+rr_call "$(rr_manifest '["tests/test-a.sh","tests/test-b.sh"]' "$(rr_entry_for tests/test-b.sh)")" "$TEST_DIR"
+assert_exit_code "absent-in-tree: still blocks" "$RR_EC" 1
+assert_eq "absent-in-tree: the reason is not 'corrupt'" "$RR_REASON" "absent_in_tree"
+assert_contains "absent-in-tree: names the tree the gate actually read" "$RR_STDERR" \
+  "absent from the tree this gate reads ($TEST_DIR)"
+assert_contains "absent-in-tree: says the entry itself is well-formed" "$RR_STDERR" \
+  "the entry is not malformed"
+rr_call "$(rr_manifest '["tests/test-a.sh"]' "$(rr_entry_for tests/test-never-committed.sh)")" "$TEST_DIR"
+assert_eq "absent-in-tree: a path in no commit at all is still 'corrupt'" "$RR_REASON" "corrupt"
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------

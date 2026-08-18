@@ -424,6 +424,152 @@ $(printf '%s' "$manifest_text" | awk '/^## File Scope/{f=1;next} /^## /{f=0} f' 
   return 1
 }
 
+# lean-comments: allow-run — the collapse this denominator replaces, kept at the denominator.
+# Per-file red-run accounting (TASK-017). The scope predicate above asks ONE
+# question for N files, so one recorded entry used to discharge every changed test
+# file in a task. These four states are what a file can be, and each is counted.
+_TTG_RR_ENTRY_PATHS=""
+_TTG_RR_HAS_NA=0
+_TTG_RR_DENOM_SOURCE=""
+_TTG_RR_DENOM_DETAIL=""
+_TTG_RR_FOUND_IN_SHA=""
+_TTG_RR_CHANGED=""
+
+# The producer's own "not test input" set, READ from scripts/red-run.sh instead of
+# re-listed here; the fallback is announced, never silent.
+_TTG_RR_NEVER_COPY_FALLBACK="tests/run-tests.sh
+tests/lib/assertions.sh
+tests/lib/setup.sh"
+
+_ttg_rr_never_copy() {
+  local sib="$_TTG_DIR/../red-run.sh"
+  if [ -r "$sib" ] && grep -q '^RR_NEVER_COPY="' "$sib"; then
+    sed -n '/^RR_NEVER_COPY="/,/"$/p' "$sib" \
+      | sed 's/^RR_NEVER_COPY="//; s/"$//' | grep -v '^[[:space:]]*$'
+    return 0
+  fi
+  return 1
+}
+
+# A file that can carry an entry of its own is one a runner would RUN; name-shape is
+# the portable predicate, stated here rather than guessed per project.
+_TTG_RR_TEST_SHAPE='(^|/)([Tt]est[-_.][^/]*|[^/]*[-_.][Tt]ests?)\.[A-Za-z0-9]+$'
+
+_ttg_rr_listed() {
+  case $'\n'"$2" in *$'\n'"$1"$'\n'*) return 0 ;; esac
+  return 1
+}
+
+_ttg_rr_path_in_commits() {
+  local test_path="$1" project_root="$2" commits="$3" sha
+  command -v git >/dev/null 2>&1 || return 1
+  while IFS= read -r sha; do
+    [ -n "$sha" ] || continue
+    if git -C "$project_root" cat-file -e "${sha}:${test_path}" 2>/dev/null; then
+      _TTG_RR_FOUND_IN_SHA="$sha"
+      return 0
+    fi
+  done < <(printf '%s' "$commits" | grep -oE '[0-9a-f]{7,64}' || true)
+  return 1
+}
+
+# Every file THIS task's own commits changed under the tests roots — Base SHA..each
+# recorded commit, never HEAD, which in another tree is another task's work.
+_ttg_red_run_changed_tests() {
+  local manifest_text="$1" project_root="$2" commits="$3"
+  local base sha rel out="" resolved=0
+  local pathspec=()
+  _TTG_RR_DENOM_DETAIL=""
+  _TTG_RR_DENOM_SOURCE=""
+  _TTG_RR_CHANGED=""
+  if ! command -v git >/dev/null 2>&1 \
+    || ! git -C "$project_root" rev-parse --git-dir >/dev/null 2>&1; then
+    _TTG_RR_DENOM_DETAIL="git is unavailable, or ${project_root} is not a git repository"
+    return 1
+  fi
+  base=$(printf '%s' "$manifest_text" \
+    | awk '/^## Metadata/{f=1;next} /^## /{f=0} f' \
+    | grep -iE '^[[:space:]]*-[[:space:]]*\*\*Base SHA\*\*' | head -1 \
+    | grep -oE '[0-9a-f]{7,64}' | head -1 || true)
+  if [ -z "$base" ]; then
+    _TTG_RR_DENOM_DETAIL="the manifest records no Base SHA, so this task's own changed set is unknowable"
+    return 1
+  fi
+  if ! git -C "$project_root" cat-file -e "${base}^{commit}" 2>/dev/null; then
+    _TTG_RR_DENOM_DETAIL="Base SHA ${base} does not resolve in ${project_root}"
+    return 1
+  fi
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    pathspec+=("$rel")
+  done <<EOF
+$_TTG_ROOTS_REL
+EOF
+  if [ "${#pathspec[@]}" -eq 0 ]; then
+    _TTG_RR_DENOM_DETAIL="no tests root is configured, so there is no population to enumerate"
+    return 1
+  fi
+  while IFS= read -r sha; do
+    [ -n "$sha" ] || continue
+    git -C "$project_root" cat-file -e "${sha}^{commit}" 2>/dev/null || continue
+    resolved=$((resolved + 1))
+    out="${out}$(git -C "$project_root" diff --name-only "${base}..${sha}" -- "${pathspec[@]}" 2>/dev/null || true)
+"
+  done < <(printf '%s' "$commits" | grep -oE '[0-9a-f]{7,64}' || true)
+  if [ "$resolved" -eq 0 ]; then
+    _TTG_RR_DENOM_DETAIL="no SHA recorded under ## Commits resolves in ${project_root}"
+    return 1
+  fi
+  _TTG_RR_DENOM_SOURCE="${base}..${resolved} recorded commit(s)"
+  _TTG_RR_CHANGED=$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | sort -u)
+  return 0
+}
+
+# lean-comments: allow-run — the rule this enforces is the one the old trigger could not state.
+# One entry discharges ONE file. A changed test file with no entry of its own is a
+# finding named on stderr; the two skip buckets are enumerated by name, so a file
+# that cannot carry evidence is reported rather than absorbed into the checked count.
+_ttg_red_run_file_coverage() {
+  local manifest_text="$1" project_root="$2" nazgul_dir="$3" task_id="$4" commits="$5"
+  local never_list rel
+  local n=0 m=0 k=0 f=0 skip_support=0 skip_na=0 support="" uncovered=""
+
+  _ttg_red_run_roots "$project_root" "$nazgul_dir" || return 0
+  if ! _ttg_red_run_changed_tests "$manifest_text" "$project_root" "$commits"; then
+    echo "ttg_verify_red_run_evidence: ${task_id}: red-run file coverage: DENOMINATOR NOT ENUMERATED (${_TTG_RR_DENOM_DETAIL}) — the per-file obligation was not computed; the recorded entries were still checked one by one" >&2
+    return 0
+  fi
+  if ! never_list=$(_ttg_rr_never_copy); then
+    never_list="$_TTG_RR_NEVER_COPY_FALLBACK"
+    echo "ttg_verify_red_run_evidence: red-run file coverage: RR_NEVER_COPY is unreadable in scripts/red-run.sh — using the shipped harness list, which can drift from the producer's" >&2
+  fi
+
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    n=$((n + 1))
+    if [ "$_TTG_RR_HAS_NA" = "1" ]; then
+      m=$((m + 1)); skip_na=$((skip_na + 1)); continue
+    fi
+    if _ttg_rr_listed "$rel" "$never_list" || ! printf '%s' "$rel" | grep -qE "$_TTG_RR_TEST_SHAPE"; then
+      m=$((m + 1)); skip_support=$((skip_support + 1)); support="${support}${rel} "; continue
+    fi
+    k=$((k + 1))
+    _ttg_rr_listed "$rel" "$_TTG_RR_ENTRY_PATHS" && continue
+    f=$((f + 1)); uncovered="${uncovered}${rel} "
+  done <<EOF
+$_TTG_RR_CHANGED
+EOF
+
+  printf 'ttg_verify_red_run_evidence: %s: red-run file coverage: %d scanned, %d skipped (support=%d, enumerated-na=%d), %d checked, %d findings; source=%s\n' \
+    "$task_id" "$n" "$m" "$skip_support" "$skip_na" "$k" "$f" "$_TTG_RR_DENOM_SOURCE" >&2
+  [ -z "$support" ] || echo "ttg_verify_red_run_evidence: red-run file coverage: harness or non-test input, so it carries no entry of its own: ${support% }" >&2
+  if [ "$f" -gt 0 ]; then
+    _ttg_red_run_deny "$nazgul_dir" "$task_id" "uncovered_test_file" \
+      "changed test file(s) with no red-run entry naming them: ${uncovered% } — one entry discharges one file, never every file the task changed" || return 1
+  fi
+  return 0
+}
+
 # Check one entry's referential integrity; QA owns whether the recorded failure is meaningful.
 _ttg_red_run_check_entry() {
   local entry="$1" project_root="$2" nazgul_dir="$3" task_id="$4" commits="$5"
@@ -445,6 +591,7 @@ _ttg_red_run_check_entry() {
     done
     if [ "$found" = true ]; then
       TTG_RED_RUN_REASON="enumerated_na"
+      _TTG_RR_HAS_NA=1
       echo "ttg_verify_red_run_evidence: entry declares N/A — ${na_token} (enumerated exemption, recorded)" >&2
       return 0
     fi
@@ -456,6 +603,8 @@ _ttg_red_run_check_entry() {
   fi
 
   test_path=$(printf '%s' "$payload" | awk '{print $1}' | tr -d '`')
+  _TTG_RR_ENTRY_PATHS="${_TTG_RR_ENTRY_PATHS}${test_path}
+"
   if ! _ttg_red_run_roots "$project_root" "$nazgul_dir"; then
     if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "roots_undeterminable" \
       "red-run entry test path '${test_path}' cannot be judged: project.test_roots is ${_TTG_ROOTS_DETAIL}, so the tests-root set is undeterminable"; then
@@ -503,6 +652,15 @@ EOF
   esac
   abs_path="$project_root/$test_path"
   if [ ! -f "$abs_path" ] || [ -L "$abs_path" ]; then
+    # A well-formed entry naming a file this tree does not hold is a different
+    # refusal from a malformed one, and the tree it was looked for in is the fact.
+    if [ ! -e "$abs_path" ] && _ttg_rr_path_in_commits "$test_path" "$project_root" "$commits"; then
+      if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "absent_in_tree" \
+        "red-run entry names test path '${test_path}', which is well-formed and present in this task's recorded commit ${_TTG_RR_FOUND_IN_SHA}, but absent from the tree this gate reads (${project_root}) — the entry is not malformed; the file is not in that tree"; then
+        return 1
+      fi
+      return 0
+    fi
     if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "corrupt" \
       "red-run entry names test path '${test_path}', which is not an existing regular non-symlink file"; then
       return 1
@@ -624,6 +782,8 @@ ttg_verify_red_run_evidence() {
   local raw_section section commits entry="" line rc=0
 
   TTG_RED_RUN_REASON=""
+  _TTG_RR_ENTRY_PATHS=""
+  _TTG_RR_HAS_NA=0
   [ -n "$task_id" ] || task_id=$(_ttg_manifest_task_id "$manifest_text")
   [ -n "$task_id" ] || task_id="unknown"
 
@@ -678,6 +838,9 @@ ttg_verify_red_run_evidence() {
 ${line}"
     fi
   done < <(printf '%s\n__TTG_END_OF_SECTION__\n' "$section")
+  if [ "$rc" -eq 0 ]; then
+    _ttg_red_run_file_coverage "$manifest_text" "$project_root" "$nazgul_dir" "$task_id" "$commits" || rc=1
+  fi
   return "$rc"
 }
 

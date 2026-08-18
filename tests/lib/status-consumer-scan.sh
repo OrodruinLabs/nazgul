@@ -205,3 +205,45 @@ scs_pin_class() {
   fi
   echo "unnamed"
 }
+
+# lean-comments: allow-run — why a named-but-unreached site is a finding, not a skip.
+# scs_pin_scan <tests-dir> <tree-root> [<consumer-list>] — the DISPOSITION of the
+# classes above, kept beside the classifier so every caller drives one copy.
+# `named-only` is a FINDING: a site named by a test but never reached through a
+# rooted path is pinned by nothing, and skipping it is the "looked and found none"
+# collapse the §15 grammar exists to prevent. `vanished` is the one skip left, and
+# it states its reason: the file was readable at discovery and is not now.
+scs_pin_scan() {
+  local tests_dir="$1" root="$2" list="${3:-${SCS_CONSUMERS:-}}" rel
+  SCS_PS_SCANNED=0; SCS_PS_SKIPPED=0; SCS_PS_VANISHED=0
+  SCS_PS_PINNED=0; SCS_PS_UNDECIDABLE=0; SCS_PS_UNPINNED=0
+  SCS_PS_VANISHED_PATHS=""; SCS_PS_UNDECIDABLE_PATHS=""; SCS_PS_UNPINNED_PATHS=""
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    SCS_PS_SCANNED=$((SCS_PS_SCANNED + 1))
+    if [ ! -r "$root/$rel" ]; then
+      SCS_PS_SKIPPED=$((SCS_PS_SKIPPED + 1)); SCS_PS_VANISHED=$((SCS_PS_VANISHED + 1))
+      SCS_PS_VANISHED_PATHS="${SCS_PS_VANISHED_PATHS}${rel}"$'\n'
+      continue
+    fi
+    case "$(scs_pin_class "$tests_dir" "$rel")" in
+      reached)
+        SCS_PS_PINNED=$((SCS_PS_PINNED + 1)) ;;
+      named-only)
+        SCS_PS_UNDECIDABLE=$((SCS_PS_UNDECIDABLE + 1))
+        SCS_PS_UNDECIDABLE_PATHS="${SCS_PS_UNDECIDABLE_PATHS}${rel}"$'\n' ;;
+      *)
+        SCS_PS_UNPINNED=$((SCS_PS_UNPINNED + 1))
+        SCS_PS_UNPINNED_PATHS="${SCS_PS_UNPINNED_PATHS}${rel}"$'\n' ;;
+    esac
+  done <<< "$list"
+  SCS_PS_CHECKED=$((SCS_PS_PINNED + SCS_PS_UNDECIDABLE + SCS_PS_UNPINNED))
+  SCS_PS_FINDINGS=$((SCS_PS_UNDECIDABLE + SCS_PS_UNPINNED))
+  return 0
+}
+
+scs_pin_scan_line() { # <label>
+  printf '  %s: %d scanned, %d skipped (vanished=%d), %d checked, %d findings\n' \
+    "$1" "$SCS_PS_SCANNED" "$SCS_PS_SKIPPED" "$SCS_PS_VANISHED" \
+    "$SCS_PS_CHECKED" "$SCS_PS_FINDINGS"
+}
