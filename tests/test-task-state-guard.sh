@@ -2154,4 +2154,164 @@ assert_eq "config-command-screen: scanned == skipped + checked" \
 
 teardown_temp_dir
 
+# ADR-020 quarantine records are ONE record (board-5 S-5): deleting, blanking or
+# retyping any of the three is a state change, not an edit.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+Q_TASK="$TEST_DIR/nazgul/tasks/TASK-001.md"
+Q_SCANNED=0
+Q_SKIPPED=0
+Q_CHECKED=0
+Q_FINDINGS=0
+
+seed_quarantine() {
+  cat > "$Q_TASK" << 'Q_EOF'
+---
+status: BLOCKED
+---
+# TASK-001: Test task
+
+- **Depends on**: none
+- **Group**: 1
+- **Blocked kind**: reconciliation
+- **Blocked from**: IN_REVIEW
+- **Blocked observed**: DONE
+- **Blocked reason**: status changed outside a completed transition
+
+## Implementation Log
+prose
+Q_EOF
+}
+
+q_edit() {
+  run_guard "$(jq -n --arg fp "$Q_TASK" --arg o "$1" --arg n "$2" \
+    '{"tool_name":"Edit","tool_input":{"file_path":$fp,"old_string":$o,"new_string":$n}}')"
+}
+
+# Each escape route is one counted probe, so "no route fired" cannot read as "none tried".
+q_probe() {
+  local label="$1" old="$2" new="$3" want="$4" mark="$TESTS_FAILED"
+  Q_SCANNED=$((Q_SCANNED + 1))
+  Q_CHECKED=$((Q_CHECKED + 1))
+  seed_quarantine
+  q_edit "$old" "$new"
+  assert_exit_code "quarantine: $label" "$GUARD_EC" "$want"
+  [ "$TESTS_FAILED" -eq "$mark" ] || Q_FINDINGS=$((Q_FINDINGS + 1))
+}
+
+if ! command -v jq >/dev/null 2>&1; then
+  Q_SCANNED=$((Q_SCANNED + 1))
+  Q_SKIPPED=$((Q_SKIPPED + 1))
+  _skip "quarantine-record integrity (jq unavailable)"
+else
+  q_probe "deleting the 'Blocked kind' line is refused" \
+    '- **Blocked kind**: reconciliation
+' '' 2
+  assert_contains "quarantine: the refusal names the record" "$GUARD_STDERR" \
+    "deletes the quarantine record 'Blocked kind'"
+  assert_contains "quarantine: the refusal names the sanctioned exit" "$GUARD_STDERR" \
+    "task-transition.sh repair TASK-001"
+
+  q_probe "blanking the 'Blocked kind' value is refused" \
+    '- **Blocked kind**: reconciliation' '- **Blocked kind**:' 2
+  q_probe "retyping the quarantine kind is refused" \
+    '- **Blocked kind**: reconciliation' '- **Blocked kind**: review-evidence' 2
+  q_probe "deleting 'Blocked from' is refused" \
+    '- **Blocked from**: IN_REVIEW
+' '' 2
+  q_probe "deleting 'Blocked observed' is refused" \
+    '- **Blocked observed**: DONE
+' '' 2
+
+  # The false-deny cost of the narrow rule (ADR-009): prose edits still pass.
+  q_probe "an unrelated prose edit on a quarantined manifest is allowed" \
+    'prose' 'prose, revised by the operator' 0
+
+  Q_SCANNED=$((Q_SCANNED + 1))
+  Q_CHECKED=$((Q_CHECKED + 1))
+  Q_MARK="$TESTS_FAILED"
+  seed_quarantine
+  Q_WRITE=$(printf '%s\n' '---' 'status: BLOCKED' '---' '# TASK-001: Test task' '' '- **Depends on**: none')
+  run_guard "$(jq -n --arg fp "$Q_TASK" --arg c "$Q_WRITE" \
+    '{"tool_name":"Write","tool_input":{"file_path":$fp,"content":$c}}')"
+  assert_exit_code "quarantine: a Write dropping all three records is refused" "$GUARD_EC" 2
+  [ "$TESTS_FAILED" -eq "$Q_MARK" ] || Q_FINDINGS=$((Q_FINDINGS + 1))
+
+  Q_SCANNED=$((Q_SCANNED + 1))
+  Q_CHECKED=$((Q_CHECKED + 1))
+  Q_MARK="$TESTS_FAILED"
+  seed_quarantine
+  run_guard "$(jq -n --arg fp "$Q_TASK" \
+    '{"tool_name":"MultiEdit","tool_input":{"file_path":$fp,"edits":[
+       {"old_string":"prose","new_string":"prose2"},
+       {"old_string":"- **Blocked kind**: reconciliation\n","new_string":""}]}}')"
+  assert_exit_code "quarantine: a MultiEdit hiding the deletion behind a prose edit is refused" "$GUARD_EC" 2
+  [ "$TESTS_FAILED" -eq "$Q_MARK" ] || Q_FINDINGS=$((Q_FINDINGS + 1))
+
+  # "Partially erased" must not read as "never quarantined" — even when the
+  # manifest already arrived that way, which no pre-image can distinguish.
+  Q_SCANNED=$((Q_SCANNED + 1))
+  Q_CHECKED=$((Q_CHECKED + 1))
+  Q_MARK="$TESTS_FAILED"
+  seed_quarantine
+  grep -v '^\- \*\*Blocked kind\*\*:' "$Q_TASK" > "$TEST_DIR/half.md"
+  mv "$TEST_DIR/half.md" "$Q_TASK"
+  q_edit 'prose' 'prose2'
+  assert_exit_code "quarantine: a half-erased record is refused, not treated as un-quarantined" "$GUARD_EC" 2
+  assert_contains "quarantine: the refusal names the partial erasure" "$GUARD_STDERR" \
+    "partially erased"
+  [ "$TESTS_FAILED" -eq "$Q_MARK" ] || Q_FINDINGS=$((Q_FINDINGS + 1))
+
+  # Other Blocked kinds carry no from/observed pair, so they must not be trapped.
+  Q_SCANNED=$((Q_SCANNED + 1))
+  Q_CHECKED=$((Q_CHECKED + 1))
+  Q_MARK="$TESTS_FAILED"
+  seed_quarantine
+  grep -v -e '^\- \*\*Blocked from\*\*' -e '^\- \*\*Blocked observed\*\*' "$Q_TASK" > "$TEST_DIR/re.md"
+  sed -e 's/^- \*\*Blocked kind\*\*: reconciliation/- **Blocked kind**: review-evidence/' \
+    "$TEST_DIR/re.md" > "$Q_TASK"
+  q_edit 'prose' 'prose3'
+  assert_exit_code "quarantine: a review-evidence block accepts an ordinary edit" "$GUARD_EC" 0
+  [ "$TESTS_FAILED" -eq "$Q_MARK" ] || Q_FINDINGS=$((Q_FINDINGS + 1))
+
+  Q_SCANNED=$((Q_SCANNED + 1))
+  Q_CHECKED=$((Q_CHECKED + 1))
+  Q_MARK="$TESTS_FAILED"
+  seed_quarantine
+  grep -v '^\- \*\*Blocked ' "$Q_TASK" > "$TEST_DIR/untyped.md"
+  mv "$TEST_DIR/untyped.md" "$Q_TASK"
+  q_edit 'prose' 'prose4'
+  assert_exit_code "quarantine: an untyped blocker accepts an ordinary edit" "$GUARD_EC" 0
+  [ "$TESTS_FAILED" -eq "$Q_MARK" ] || Q_FINDINGS=$((Q_FINDINGS + 1))
+
+  # AC3 end to end: the blocked deletion leaves the manifest byte-identical, and the
+  # transition the deletion existed to unlock is still refused against that manifest.
+  Q_SCANNED=$((Q_SCANNED + 1))
+  Q_CHECKED=$((Q_CHECKED + 1))
+  Q_MARK="$TESTS_FAILED"
+  seed_quarantine
+  Q_BEFORE=$(shasum "$Q_TASK" | cut -d' ' -f1)
+  q_edit '- **Blocked kind**: reconciliation
+' ''
+  assert_exit_code "escape sequence: the deletion is refused" "$GUARD_EC" 2
+  assert_eq "escape sequence: the manifest is byte-identical after the refusal" \
+    "$(shasum "$Q_TASK" | cut -d' ' -f1)" "$Q_BEFORE"
+  Q_TTG_RC=0
+  bash -c '
+    source "$1/scripts/lib/task-utils.sh"
+    source "$1/scripts/lib/review-evidence.sh"
+    source "$1/scripts/lib/task-transition-guard.sh"
+    ttg_validate_transition "$2/nazgul" "$2" TASK-001 BLOCKED CANCELLED "$(cat "$3")"
+  ' _ "$REPO_ROOT" "$TEST_DIR" "$Q_TASK" >/dev/null 2>&1 || Q_TTG_RC=$?
+  assert_exit_code "escape sequence: BLOCKED -> CANCELLED is still refused" "$Q_TTG_RC" 1
+  [ "$TESTS_FAILED" -eq "$Q_MARK" ] || Q_FINDINGS=$((Q_FINDINGS + 1))
+fi
+
+echo "  quarantine-record-integrity: ${Q_SCANNED} scanned, ${Q_SKIPPED} skipped (jq-unavailable=${Q_SKIPPED}), ${Q_CHECKED} checked, ${Q_FINDINGS} findings"
+assert_eq "quarantine-record-integrity: scanned == skipped + checked" \
+  "$Q_SCANNED" "$((Q_SKIPPED + Q_CHECKED))"
+
+teardown_temp_dir
+
 report_results

@@ -389,7 +389,9 @@ case "$TOOL_NAME" in
 esac
 
 [ -z "$FILE_PATH" ] && exit 0
-FIRST_LINE=$(printf '%s' "$CONTENT" | head -1)
+# Not `printf | head -1`: $CONTENT is the whole tool payload, and past the 64 KiB
+# pipe buffer the producer's SIGPIPE aborted this always-blocking gate silently (#230).
+FIRST_LINE=${CONTENT%%$'\n'*}
 STYLE=$(comment_style_for "$FILE_PATH" "$FIRST_LINE")
 [ -z "$STYLE" ] && exit 0
 HDR=0
