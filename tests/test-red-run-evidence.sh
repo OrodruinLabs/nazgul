@@ -891,15 +891,39 @@ assert_exit_code "per-file: an enumerated N/A still allows" "$RR_EC" 0
 assert_contains "per-file: the N/A discharge is counted in its own bucket, not as checked" \
   "$RR_STDERR" "red-run file coverage: 4 scanned, 4 skipped (support=0, enumerated-na=4), 0 checked, 0 findings"
 
+# Attribution is each recorded commit's OWN diff: a manifest's planning-time Base SHA is
+# routinely merges behind the branch point, so a range charges this task with others' work.
+git -C "$TEST_DIR" checkout -q -b stale-base-probe
+printf 'echo unrelated\n' >> "$TEST_DIR/tests/test-a.sh"
+printf '#!/usr/bin/env bash\necho other\n' > "$TEST_DIR/tests/test-someone-elses.sh"
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "another task's work, merged in before this task branched"
+printf '#!/usr/bin/env bash\necho mine\n' > "$TEST_DIR/tests/test-mine.sh"
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "this task's only commit"
+MINE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+STALE_BASE=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["tests/test-mine.sh"]\n- **Base SHA**: %s\n\n## Commits\n- %s\n\n## Red-Run Evidence\n%s\n\n## Description\nx\n' \
+  "$BASE_SHA" "$MINE_SHA" "$(rr_entry_for tests/test-mine.sh)")
+rr_call "$STALE_BASE" "$TEST_DIR"
+assert_exit_code "attribution: a stale Base SHA does not charge this task with another's files" "$RR_EC" 0
+assert_contains "attribution: only the recorded commit's own diff is the population" \
+  "$RR_STDERR" "red-run file coverage: 1 scanned, 0 skipped (support=0, enumerated-na=0), 1 checked, 0 findings"
+assert_not_contains "attribution: the interloper commit's file is not in the denominator" \
+  "$RR_STDERR" "tests/test-someone-elses.sh"
+assert_contains "attribution: the source names what it enumerated" \
+  "$RR_STDERR" "source=the own-diff of 1 recorded commit(s)"
+git -C "$TEST_DIR" checkout -q -
+
 # A denominator that cannot be enumerated says so; it never reports an empty population.
-NO_BASE=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["tests/test-a.sh"]\n\n## Commits\n- %s\n\n## Red-Run Evidence\n%s\n\n## Description\nx\n' \
-  "$HEAD_SHA" "$(rr_entry_for tests/test-a.sh)")
-rr_call "$NO_BASE" "$TEST_DIR"
+NOT_A_REPO=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-rr-norepo-XXXXXX")
+mkdir -p "$NOT_A_REPO/tests"
+rr_call "$(rr_manifest '["tests/test-a.sh"]' '- red-run: N/A — revert')" "$NOT_A_REPO"
 assert_exit_code "per-file: an underivable denominator does not invent a block" "$RR_EC" 0
 assert_contains "per-file: an underivable denominator is announced, not counted as zero" \
-  "$RR_STDERR" "DENOMINATOR NOT ENUMERATED (the manifest records no Base SHA"
+  "$RR_STDERR" "DENOMINATOR NOT ENUMERATED (git is unavailable, or ${NOT_A_REPO} is not a git repository"
 assert_not_contains "per-file: no coverage line is emitted over a population that was never enumerated" \
   "$RR_STDERR" "0 scanned, 0 skipped (support=0"
+rm -rf "$NOT_A_REPO"
 
 # #198's neighbour: a well-formed entry whose file this tree does not hold is a
 # DIFFERENT refusal from a malformed one, and it names the tree it looked in.

@@ -473,11 +473,15 @@ _ttg_rr_path_in_commits() {
   return 1
 }
 
-# Every file THIS task's own commits changed under the tests roots — Base SHA..each
-# recorded commit, never HEAD, which in another tree is another task's work.
+# lean-comments: allow-run — the over-attribution this replaces was found by running it.
+# Every file THIS task's own recorded commits changed under the tests roots: each
+# commit's OWN diff, never a Base SHA..commit range and never HEAD. A manifest's Base
+# SHA is written at planning time and is routinely many merges behind the branch point,
+# so a range attributes every task merged in between to this one (36 files vs 6, measured
+# on TASK-017 itself); HEAD in another tree is another branch entirely.
 _ttg_red_run_changed_tests() {
-  local manifest_text="$1" project_root="$2" commits="$3"
-  local base sha rel out="" resolved=0
+  local project_root="$1" commits="$2"
+  local sha rel out="" resolved=0
   local pathspec=()
   _TTG_RR_DENOM_DETAIL=""
   _TTG_RR_DENOM_SOURCE=""
@@ -485,18 +489,6 @@ _ttg_red_run_changed_tests() {
   if ! command -v git >/dev/null 2>&1 \
     || ! git -C "$project_root" rev-parse --git-dir >/dev/null 2>&1; then
     _TTG_RR_DENOM_DETAIL="git is unavailable, or ${project_root} is not a git repository"
-    return 1
-  fi
-  base=$(printf '%s' "$manifest_text" \
-    | awk '/^## Metadata/{f=1;next} /^## /{f=0} f' \
-    | grep -iE '^[[:space:]]*-[[:space:]]*\*\*Base SHA\*\*' | head -1 \
-    | grep -oE '[0-9a-f]{7,64}' | head -1 || true)
-  if [ -z "$base" ]; then
-    _TTG_RR_DENOM_DETAIL="the manifest records no Base SHA, so this task's own changed set is unknowable"
-    return 1
-  fi
-  if ! git -C "$project_root" cat-file -e "${base}^{commit}" 2>/dev/null; then
-    _TTG_RR_DENOM_DETAIL="Base SHA ${base} does not resolve in ${project_root}"
     return 1
   fi
   while IFS= read -r rel; do
@@ -513,14 +505,14 @@ EOF
     [ -n "$sha" ] || continue
     git -C "$project_root" cat-file -e "${sha}^{commit}" 2>/dev/null || continue
     resolved=$((resolved + 1))
-    out="${out}$(git -C "$project_root" diff --name-only "${base}..${sha}" -- "${pathspec[@]}" 2>/dev/null || true)
+    out="${out}$(git -C "$project_root" show --pretty=format: --name-only "$sha" -- "${pathspec[@]}" 2>/dev/null || true)
 "
   done < <(printf '%s' "$commits" | grep -oE '[0-9a-f]{7,64}' || true)
   if [ "$resolved" -eq 0 ]; then
     _TTG_RR_DENOM_DETAIL="no SHA recorded under ## Commits resolves in ${project_root}"
     return 1
   fi
-  _TTG_RR_DENOM_SOURCE="${base}..${resolved} recorded commit(s)"
+  _TTG_RR_DENOM_SOURCE="the own-diff of ${resolved} recorded commit(s)"
   _TTG_RR_CHANGED=$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | sort -u)
   return 0
 }
@@ -535,7 +527,7 @@ _ttg_red_run_file_coverage() {
   local n=0 m=0 k=0 f=0 skip_support=0 skip_na=0 support="" uncovered=""
 
   _ttg_red_run_roots "$project_root" "$nazgul_dir" || return 0
-  if ! _ttg_red_run_changed_tests "$manifest_text" "$project_root" "$commits"; then
+  if ! _ttg_red_run_changed_tests "$project_root" "$commits"; then
     echo "ttg_verify_red_run_evidence: ${task_id}: red-run file coverage: DENOMINATOR NOT ENUMERATED (${_TTG_RR_DENOM_DETAIL}) — the per-file obligation was not computed; the recorded entries were still checked one by one" >&2
     return 0
   fi
