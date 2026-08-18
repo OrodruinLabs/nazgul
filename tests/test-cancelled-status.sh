@@ -321,18 +321,42 @@ scan_report() { # <label>
   done <<< "$SCS_AWARE"
   while IFS= read -r rel; do
     [ -n "$rel" ] || continue
-    _skip "consumer-scan [$rel]: exempt — $(scs_exemption "$rel")"
+    _skip "consumer-scan [$rel]: exempt — $("$SCS_EXEMPTION_FN" "$rel")"
   done <<< "$SCS_EXEMPT"
   while IFS= read -r rel; do
     [ -n "$rel" ] || continue
-    _skip "consumer-scan [$rel]: exemption retired — the file is CANCELLED-aware now"
+    _fail "consumer-scan [$rel]: no exemption outlives its defect" \
+      "the file is CANCELLED-aware now, so its exemption states a defect that no longer exists" \
+      "  fix: delete the $rel arm from scs_exemption() in tests/lib/status-consumer-scan.sh"
   done <<< "$SCS_RETIRED"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    _fail "consumer-scan [$rel]: every exemption names a discovered consumer" \
+      "an exemption arm names this path, but the walk never classified it as a consumer" \
+      "  fix: delete the $rel arm, or explain why an unreached path needs one"
+  done <<< "$SCS_ORPHANED"
   while IFS= read -r rel; do
     [ -n "$rel" ] || continue
     _fail "consumer-scan [$rel]: CANCELLED-aware or enumerated-exempt" \
       "this file reads task status, does not name CANCELLED, and is on no exemption list" \
       "  fix: make it CANCELLED-aware, or add a justified entry to scs_exemption() in tests/lib/status-consumer-scan.sh"
   done <<< "$SCS_UNCLASSIFIED"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    _skip "consumer-scan [$rel]: status token, no reach signal — $("$SCS_AMBIGUOUS_FN" "$rel")"
+  done <<< "$SCS_AMBIGUOUS"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    _fail "consumer-scan [$rel]: an undecidable file is triaged, not silently dropped" \
+      "it carries a status token but no reach signal, so this scan cannot say whether it consumes task status" \
+      "  fix: add a justified arm to scs_ambiguous() in tests/lib/status-consumer-scan.sh, or make its reach signal explicit"
+  done <<< "$SCS_UNTRIAGED"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    _fail "consumer-scan [$rel]: no triage outlives its ambiguity" \
+      "an scs_ambiguous() arm names this path, but the walk did not land it in the ambiguous bucket" \
+      "  fix: delete the $rel arm — the file is now classified, or is no longer in the tree"
+  done <<< "$SCS_AMBIG_STALE"
   scs_coverage_line "$1"
 }
 
@@ -345,6 +369,49 @@ else
   assert_eq "consumer-scan: every status consumer is CANCELLED-aware or enumerated-exempt" \
     "$SCS_F" "0"
 
+  # NEW-3: a retired exemption used to route to a silent _skip, so a counterfactual
+  # justification could sit in the list indefinitely. Both staleness modes now fail.
+  assert_eq "consumer-scan: no exemption outlives its defect" \
+    "$(printf '%s' "$SCS_RETIRED" | grep -c .)" "0"
+  assert_eq "consumer-scan: no exemption names a path the walk never reached" \
+    "$(printf '%s' "$SCS_ORPHANED" | grep -c .)" "0"
+
+  # Board-3 QA Finding B as an assertion, not prose: under the widened signal the
+  # same population is derived, and every undecidable member is triaged.
+  assert_eq "consumer-scan: no undecidable file is silently dropped" \
+    "$(printf '%s' "$SCS_UNTRIAGED" | grep -c .)" "0"
+  assert_eq "consumer-scan: no triage outlives its ambiguity" \
+    "$(printf '%s' "$SCS_AMBIG_STALE" | grep -c .)" "0"
+  assert_eq "consumer-scan: the ambiguous bucket is reported, not folded into non-consumer" \
+    "$SCS_M_AMBIGUOUS" "$(printf '%s' "$SCS_AMBIGUOUS" | grep -c .)"
+
+  AMBIGUOUS_ARMS=$(scs_ambiguous_paths | grep -c .)
+  if [ "$AMBIGUOUS_ARMS" -ge 1 ]; then
+    _pass "consumer-scan: the triage enumeration reached the oracle ($AMBIGUOUS_ARMS arms)"
+  else
+    _fail "consumer-scan: the triage enumeration reached the oracle" \
+      "scs_ambiguous_paths returned nothing, so the staleness check above examined no arm"
+  fi
+
+  # #203 stays exempt only while its justification is still true of the file.
+  NOTIFY_SRC="$REPO_ROOT/scripts/notify.sh"
+  assert_eq "consumer-scan: the #203 exemption's legacy-only DONE regex is still what ships" \
+    "$(grep -cF 'Status\*\*:[[:space:]]*DONE' "$NOTIFY_SRC")" "1"
+  assert_eq "consumer-scan: the #203 exemption's 'never calls the shared reader' claim still holds" \
+    "$(grep -cE 'task-utils\.sh|count_tasks_and_find_active|get_task_status' "$NOTIFY_SRC")" "0"
+
+  # The staleness checks read the live oracle's own case arms. An extraction that
+  # returns nothing would pass both of them by never looking (RULES.md §15).
+  EXEMPTION_ARMS=$(scs_exemption_paths | grep -c .)
+  if [ "$EXEMPTION_ARMS" -ge 1 ]; then
+    _pass "consumer-scan: the exemption enumeration reached the oracle ($EXEMPTION_ARMS arms)"
+  else
+    _fail "consumer-scan: the exemption enumeration reached the oracle" \
+      "scs_exemption_paths returned nothing, so the staleness checks above examined no arm"
+  fi
+  assert_eq "consumer-scan: every enumerated arm is exempt under the oracle" \
+    "$(scs_exemption_paths | while IFS= read -r a; do "$SCS_EXEMPTION_FN" "$a" >/dev/null || echo "$a"; done | grep -c .)" "0"
+
   # K > 0 floor: a scan that discovers no consumers is a broken predicate, not a
   # clean tree. The floor sits well under the current population.
   CONSUMER_FLOOR="${NAZGUL_STATUS_CONSUMER_FLOOR:-12}"
@@ -355,9 +422,9 @@ else
       "only $SCS_K consumer(s) discovered of $SCS_N file(s) walked — a broken predicate, not a clean tree"
   fi
 
-  # Two live cases pin the predicate against narrowing — both were invisible to
-  # the authored list this scan replaces.
-  for known in scripts/webhook-forward.sh scripts/notify.sh; do
+  # Three live pins against narrowing: the first two were invisible to the authored
+  # list this scan replaces, prompt-guard.sh only to the widened authority arm.
+  for known in scripts/webhook-forward.sh scripts/notify.sh scripts/prompt-guard.sh; do
     assert_contains "consumer-scan: discovery still reaches $known" "$SCS_CONSUMERS" "$known"
   done
 fi
@@ -371,27 +438,88 @@ cat > "$SCS_SCRATCH/scripts/blind-consumer.sh" <<'BLIND'
 st=$(get_task_status "$NAZGUL_DIR/tasks/$1.md" "")
 case "$st" in DONE|BLOCKED) exit 0 ;; esac
 BLIND
+# Board-3 QA Finding A's PoC, kept permanently: it reaches its manifest through a
+# caller-supplied path, so it spells none of the tasks-dir or helper literals.
+cat > "$SCS_SCRATCH/scripts/path-param-consumer.sh" <<'PARAM'
+#!/usr/bin/env bash
+manifest="$1"
+current=$(sed -n 's/^status: *//p' "$manifest" | head -1)
+if [ "$current" = "DONE" ]; then echo "already terminal, skipping"; exit 0; fi
+PARAM
 cat > "$SCS_SCRATCH/scripts/aware-consumer.sh" <<'AWARE'
 #!/usr/bin/env bash
 st=$(get_task_status "$NAZGUL_DIR/tasks/$1.md" "")
 case "$st" in DONE|CANCELLED) exit 0 ;; esac
 AWARE
+cat > "$SCS_SCRATCH/scripts/fixed-exempt-consumer.sh" <<'FIXED'
+#!/usr/bin/env bash
+st=$(get_task_status "$NAZGUL_DIR/tasks/$1.md" "")
+case "$st" in DONE|CANCELLED) exit 0 ;; esac
+FIXED
 printf '#!/usr/bin/env bash\necho hello\n' > "$SCS_SCRATCH/scripts/not-a-consumer.sh"
+# A status token with no reach signal: undecidable, not "not a consumer".
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" | grep -q "^BLOCKED_SIGNAL" && exit 3\n' \
+  > "$SCS_SCRATCH/scripts/token-only-untriaged.sh"
+printf '#!/usr/bin/env bash\necho "migration note: DONE"\n' \
+  > "$SCS_SCRATCH/scripts/token-only-triaged.sh"
+
+scratch_exemption() {
+  case "$1" in
+    scripts/fixed-exempt-consumer.sh) echo "scratch: exempt, and the file went on to name CANCELLED anyway" ;;
+    scripts/deleted-consumer.sh) echo "scratch: exempt, and the file is not in this tree at all" ;;
+    *) return 1 ;;
+  esac
+  return 0
+}
+scratch_ambiguous() {
+  case "$1" in
+    scripts/token-only-triaged.sh) echo "scratch: the token is a log-message literal" ;;
+    scripts/gone-ambiguous.sh) echo "scratch: triaged, and the file is not in this tree at all" ;;
+    *) return 1 ;;
+  esac
+  return 0
+}
+SCS_EXEMPTION_FN=scratch_exemption
+SCS_AMBIGUOUS_FN=scratch_ambiguous
+
+assert_eq "dogfood: the exemption enumeration follows the live oracle, not a fixed list" \
+  "$(scs_exemption_paths | tr '\n' ' ')" "scripts/fixed-exempt-consumer.sh scripts/deleted-consumer.sh "
+
+assert_eq "dogfood: the triage enumeration follows the live oracle, not a fixed list" \
+  "$(scs_ambiguous_paths | tr '\n' ' ')" "scripts/token-only-triaged.sh scripts/gone-ambiguous.sh "
+
 if scs_run "$SCS_SCRATCH"; then
-  assert_eq "dogfood: a CANCELLED-blind, unexempted consumer is a finding" "$SCS_F" "1"
+  assert_eq "dogfood: findings = blind + path-param + retired + orphaned + untriaged + stale-triage" \
+    "$SCS_F" "6"
   assert_contains "dogfood: the finding names the offending file" \
     "$SCS_UNCLASSIFIED" "scripts/blind-consumer.sh"
+  assert_contains "dogfood: a caller-supplied manifest path is still a consumer (QA Finding A PoC)" \
+    "$SCS_UNCLASSIFIED" "scripts/path-param-consumer.sh"
+  assert_contains "dogfood: an exemption whose defect was fixed is retired, not skipped" \
+    "$SCS_RETIRED" "scripts/fixed-exempt-consumer.sh"
+  assert_contains "dogfood: an exemption naming an unreached path is orphaned" \
+    "$SCS_ORPHANED" "scripts/deleted-consumer.sh"
   assert_contains "dogfood: the CANCELLED-aware sibling classifies clean" \
     "$SCS_AWARE" "scripts/aware-consumer.sh"
   assert_not_contains "dogfood: a file that reads no task status is not a consumer" \
     "$SCS_CONSUMERS" "scripts/not-a-consumer.sh"
   assert_eq "dogfood: coverage accounting adds up on the dirty tree (N == M + K)" \
     "$SCS_N" "$((SCS_M + SCS_K))"
-  assert_eq "dogfood: the non-consumer was skipped with a reason, not dropped" \
-    "$SCS_M_NONCONSUMER" "1"
+  assert_contains "dogfood: an undecidable file is a finding, not a silent non-consumer" \
+    "$SCS_UNTRIAGED" "scripts/token-only-untriaged.sh"
+  assert_contains "dogfood: a triaged undecidable file is reported in its own bucket" \
+    "$SCS_AMBIGUOUS" "scripts/token-only-triaged.sh"
+  assert_contains "dogfood: a triage naming a path the walk never made ambiguous is stale" \
+    "$SCS_AMBIG_STALE" "scripts/gone-ambiguous.sh"
+  assert_eq "dogfood: only the token-free file is skipped as a plain non-consumer" \
+    "$SCS_M_NOTOKEN" "1"
+  assert_eq "dogfood: 'could not tell' and 'looked and found none' are separate counts" \
+    "${SCS_M_AMBIGUOUS}/${SCS_M_UNTRIAGED}" "1/1"
 else
   _skip "dogfood: the scratch tree could not be built — gate predicate not exercised"
 fi
+SCS_EXEMPTION_FN=scs_exemption
+SCS_AMBIGUOUS_FN=scs_ambiguous
 rm -rf "$SCS_SCRATCH"
 
 report_results

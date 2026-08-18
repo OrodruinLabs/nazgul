@@ -750,7 +750,9 @@ assert_eq "consumer-row registry: every row in THIS file was driven" "$CS_CHECKE
 if ! scs_run "$REPO_ROOT"; then
   _fail "population-scan: the shipped tree is walkable" "no scripts/ directory under $REPO_ROOT"
 else
-  PS_SCANNED=0; PS_PINNED=0; PS_UNPINNED=0; PS_SKIPPED=0; PS_VANISHED=0
+  # Board-3 NEW-5: a bare mention certified nothing — a comment, or another test's
+  # discovery list, passed. scs_pin_class separates reached from undecidable.
+  PS_SCANNED=0; PS_PINNED=0; PS_UNPINNED=0; PS_SKIPPED=0; PS_VANISHED=0; PS_NAMEDONLY=0
   while IFS= read -r rel; do
     [ -n "$rel" ] || continue
     PS_SCANNED=$((PS_SCANNED + 1))
@@ -759,16 +761,20 @@ else
       _skip "population-scan [$rel]: unreadable between discovery and pin check — not checked"
       continue
     fi
-    if grep -rlF -e "$rel" "$REPO_ROOT"/tests/test-*.sh >/dev/null 2>&1; then
-      PS_PINNED=$((PS_PINNED + 1))
-    else
-      PS_UNPINNED=$((PS_UNPINNED + 1))
-      _fail "population-scan [$rel]: pinned by at least one test file" \
-        "this file reads task status and no tests/test-*.sh names it" \
-        "  fix: drive it with a CANCELLED fixture here, or wherever its behaviour belongs"
-    fi
+    case "$(scs_pin_class "$REPO_ROOT/tests" "$rel")" in
+      reached)
+        PS_PINNED=$((PS_PINNED + 1)) ;;
+      named-only)
+        PS_SKIPPED=$((PS_SKIPPED + 1)); PS_NAMEDONLY=$((PS_NAMEDONLY + 1))
+        _skip "population-scan [$rel]: named by a test but never through a rooted path — undecidable, not checked" ;;
+      *)
+        PS_UNPINNED=$((PS_UNPINNED + 1))
+        _fail "population-scan [$rel]: pinned by at least one test file" \
+          "this file reads task status and no tests/test-*.sh names it" \
+          "  fix: drive it with a CANCELLED fixture here, or wherever its behaviour belongs" ;;
+    esac
   done <<< "$SCS_CONSUMERS"
-  echo "  population-scan: ${PS_SCANNED} scanned, ${PS_SKIPPED} skipped (vanished=${PS_VANISHED}), $((PS_PINNED + PS_UNPINNED)) checked, ${PS_UNPINNED} findings"
+  echo "  population-scan: ${PS_SCANNED} scanned, ${PS_SKIPPED} skipped (vanished=${PS_VANISHED}, named-only=${PS_NAMEDONLY}), $((PS_PINNED + PS_UNPINNED)) checked, ${PS_UNPINNED} findings"
   assert_eq "population-scan: coverage accounting adds up (N == M + K)" \
     "$PS_SCANNED" "$((PS_SKIPPED + PS_PINNED + PS_UNPINNED))"
   assert_eq "population-scan: every discovered status consumer is pinned by a test" "$PS_UNPINNED" "0"
@@ -781,5 +787,30 @@ else
       "only $PS_PINNED consumer(s) pinned — a broken predicate, not a clean tree"
   fi
 fi
+
+# The pin classifier, dogfooded against a tests dir built to contain each class: the
+# shipped tree yields only `reached`, so two arms would otherwise never be driven.
+PIN_SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-pin-class-XXXXXX")
+mkdir -p "$PIN_SCRATCH/tests"
+cat > "$PIN_SCRATCH/tests/test-driver.sh" <<'PINDRV'
+#!/usr/bin/env bash
+bash "$REPO_ROOT/scripts/reached-consumer.sh" --check
+PINDRV
+cat > "$PIN_SCRATCH/tests/test-mentions.sh" <<'PINMEN'
+#!/usr/bin/env bash
+# see also scripts/commented-consumer.sh, which this file does not drive
+for known in scripts/listed-consumer.sh; do
+  assert_contains "discovery still reaches $known" "$SCS_CONSUMERS" "$known"
+done
+PINMEN
+assert_eq "pin-class dogfood: a rooted non-comment reference is reached" \
+  "$(scs_pin_class "$PIN_SCRATCH/tests" scripts/reached-consumer.sh)" "reached"
+assert_eq "pin-class dogfood: a mention inside a comment is undecidable, not a pin" \
+  "$(scs_pin_class "$PIN_SCRATCH/tests" scripts/commented-consumer.sh)" "named-only"
+assert_eq "pin-class dogfood: another test's discovery list is not a pin (the circular case)" \
+  "$(scs_pin_class "$PIN_SCRATCH/tests" scripts/listed-consumer.sh)" "named-only"
+assert_eq "pin-class dogfood: an unmentioned file is a finding, not a skip" \
+  "$(scs_pin_class "$PIN_SCRATCH/tests" scripts/absent-consumer.sh)" "unnamed"
+rm -rf "$PIN_SCRATCH"
 
 report_results
