@@ -736,6 +736,10 @@ mc_setup() {
     ".branch.base = \"${MC_BASE}\"" '.review_gate.require_provenance = false' \
     '.feat_id = "FEAT-031"' ".branch.feature = \"${NAZGUL_TEST_MERGE_BRANCH}\""
   create_plan
+  # The merge route binds manifest->objective through plan.md, which create_plan writes
+  # neither half of; a fixture missing them tests the refusal, not the closure.
+  { printf -- '---\nfeat_id: FEAT-031\n---\n'; cat "$TEST_DIR/nazgul/plan.md"; printf -- '- TASK-001\n- TASK-002\n'; } \
+    > "$TEST_DIR/nazgul/plan.md.new" && mv "$TEST_DIR/nazgul/plan.md.new" "$TEST_DIR/nazgul/plan.md"
   create_task_file "TASK-001" "DONE"    # deliberately NO review dir — merge route only
   create_task_file "TASK-002" "READY"   # keeps the loop alive (exit 2 path)
 }

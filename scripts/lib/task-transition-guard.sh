@@ -937,9 +937,16 @@ ttg_objective_roster() {
     return 1
   fi
   plan_feat=$(awk 'NR==1 && /^---[[:space:]]*$/ {f=1; next} f && /^---[[:space:]]*$/ {exit} f && /^feat_id:/ {sub(/^feat_id:[[:space:]]*/, ""); gsub(/[]["'"'"'[:space:]]/, ""); print; exit}' "$plan")
+  # "declares nothing" and "declares someone else" are different facts: templates/plan.md
+  # carried no frontmatter for 31 objectives, so the first is un-migrated, not foreign.
+  if [ -z "$plan_feat" ]; then
+    printf '%s declares no frontmatter feat_id, so it cannot corroborate that its roster is %s'"'"'s — add a leading "---\nfeat_id: %s\n---" block to that file' \
+      "$plan" "$feat_id" "$feat_id"
+    return 1
+  fi
   if [ "$plan_feat" != "$feat_id" ]; then
     printf '%s declares feat_id "%s" but config names "%s" — the roster and the objective disagree, so neither can scope the other' \
-      "$plan" "${plan_feat:-<none>}" "$feat_id"
+      "$plan" "$plan_feat" "$feat_id"
     return 1
   fi
   ids=$(awk '/^## Tasks/{f=1;next} f && /^## /{exit} f' "$plan" | grep -oE '(TASK|PATCH)-[0-9]+' | LC_ALL=C sort -u)

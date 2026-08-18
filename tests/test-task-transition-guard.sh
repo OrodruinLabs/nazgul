@@ -808,6 +808,25 @@ else
     "both printed: $NO_ROSTER_STDERR"
 fi
 
+# lean-comments: allow-run — the shipped-template regression this case exists to catch.
+# "declares nothing" is NOT "declares someone else": templates/plan.md shipped without any
+# frontmatter, so treating absence as a contradiction made the merge route unreachable for
+# every project using the shipped template while this repo's own hand-written plan worked.
+printf -- '# Plan\n\n## Tasks\n\n- TASK-050\n' > "$TEST_DIR/nazgul/plan.md"
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && NOFM_EC=0 || NOFM_EC=$?
+NO_FM_STDERR="$ME_STDERR"
+assert_exit_code "roster: a plan with no frontmatter refuses (fail-closed)" "$NOFM_EC" 1
+assert_contains "roster: and says the frontmatter is ABSENT, not that it names another objective" \
+  "$NO_FM_STDERR" "declares no frontmatter feat_id"
+assert_not_contains "roster: absence is not reported as a contradiction" \
+  "$NO_FM_STDERR" "but config names"
+assert_contains "roster: the refusal states the remedy rather than only the fault" \
+  "$NO_FM_STDERR" "add a leading"
+# The shipped template must carry the key, or every new project is born unable to close.
+assert_contains "the shipped plan template declares a feat_id for the planner to fill" \
+  "$(cat "$REPO_ROOT/templates/plan.md")" "feat_id:"
+merge_plan
+
 # A roster whose frontmatter names a DIFFERENT objective cannot scope this one either.
 printf -- '---\nfeat_id: FEAT-999\n---\n# Plan\n\n## Tasks\n\n- TASK-050\n' > "$TEST_DIR/nazgul/plan.md"
 me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && DRIFT_EC=0 || DRIFT_EC=$?
