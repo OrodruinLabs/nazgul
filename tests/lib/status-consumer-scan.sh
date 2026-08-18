@@ -93,21 +93,35 @@ scs_ambiguous_paths() { _scs_case_paths "$SCS_AMBIGUOUS_FN"; }
 
 scs_code() { grep -vE '^[[:space:]]*#' "$1" 2>/dev/null || true; }
 
+# lean-comments: allow-run — the race removed here, recorded at the shape that carried it.
+# `producer | grep -q` is NON-DETERMINISTIC under `set -o pipefail` (issue #230):
+# grep exits at the first match, the producer dies of SIGPIPE (141), and pipefail
+# reports 141 as the pipeline's verdict. It only bites once the body outruns the
+# 64 KiB pipe buffer, so it strikes the largest consumer and reads as a clean
+# "not a consumer" — a false pass in the other direction. A here-string has no
+# producer whose exit status can reach the answer.
+scs_grep_code() { # <file> <ere>
+  local code
+  code=$(scs_code "$1")
+  [ -n "$code" ] || return 1
+  grep -qE "$2" <<< "$code"
+}
+
 scs_has_status_token() { # <file>
-  scs_code "$1" | grep -qE "$SCS_STATUS_TOKENS"
+  scs_grep_code "$1" "$SCS_STATUS_TOKENS"
 }
 
 scs_is_consumer() { # <file>
   local code
   code=$(scs_code "$1")
   [ -n "$code" ] || return 1
-  printf '%s\n' "$code" | grep -qE "$SCS_STATUS_TOKENS" || return 1
-  printf '%s\n' "$code" | grep -qE "$SCS_STATE_SIGNAL" || return 1
+  grep -qE "$SCS_STATUS_TOKENS" <<< "$code" || return 1
+  grep -qE "$SCS_STATE_SIGNAL" <<< "$code" || return 1
   return 0
 }
 
 scs_is_cancelled_aware() { # <file>
-  scs_code "$1" | grep -q 'CANCELLED'
+  scs_grep_code "$1" 'CANCELLED'
 }
 
 _scs_listed() { # <path> <newline-list>
@@ -127,7 +141,7 @@ scs_run() {
 
   [ -d "$root/scripts" ] || return 1
 
-  while IFS= read -r f; do
+  while IFS= read -r -u 9 f; do
     rel="${f#"$root"/}"
     SCS_N=$((SCS_N + 1))
     if [ ! -r "$f" ]; then
@@ -159,22 +173,22 @@ scs_run() {
       SCS_F=$((SCS_F + 1))
       SCS_UNCLASSIFIED="${SCS_UNCLASSIFIED}${rel}"$'\n'
     fi
-  done < <(find "$root/scripts" \( -type f -o -type l \) | sort)
+  done 9< <(find "$root/scripts" \( -type f -o -type l \) | LC_ALL=C sort)
 
   # The other staleness mode: an exemption naming a path this walk never reached.
-  while IFS= read -r p; do
+  while IFS= read -r -u 9 p; do
     [ -n "$p" ] || continue
     _scs_listed "$p" "$SCS_CONSUMERS" && continue
     SCS_ORPHANED="${SCS_ORPHANED}${p}"$'\n'; SCS_F=$((SCS_F + 1))
-  done < <(scs_exemption_paths)
+  done 9< <(scs_exemption_paths)
 
   # Same discipline for the triage list: an arm naming a path that is no longer
   # ambiguous (it became a consumer, or left the tree) states a fact that expired.
-  while IFS= read -r p; do
+  while IFS= read -r -u 9 p; do
     [ -n "$p" ] || continue
     _scs_listed "$p" "$SCS_AMBIGUOUS" && continue
     SCS_AMBIG_STALE="${SCS_AMBIG_STALE}${p}"$'\n'; SCS_F=$((SCS_F + 1))
-  done < <(scs_ambiguous_paths)
+  done 9< <(scs_ambiguous_paths)
   return 0
 }
 
@@ -193,11 +207,11 @@ scs_coverage_line() { # <label>
 # non-comment line ("$REPO_ROOT/<rel>" and friends) is a test addressing the real
 # file on disk; a bare mention is undecidable from text alone and says so.
 scs_pin_class() {
-  local tests_dir="$1" rel="$2" esc
+  local tests_dir="$1" rel="$2" esc hits
   esc=$(printf '%s' "$rel" | sed 's/[][\.*^$/]/\\&/g')
-  if grep -rn -F -e "$rel" "$tests_dir"/test-*.sh 2>/dev/null \
-       | grep -vE '^[^:]*:[0-9]+:[[:space:]]*#' \
-       | grep -qE '(\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\})"?/'"$esc"; then
+  hits=$(grep -rn -F -e "$rel" "$tests_dir"/test-*.sh 2>/dev/null \
+           | grep -vE '^[^:]*:[0-9]+:[[:space:]]*#') || hits=""
+  if grep -qE '(\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\})"?/'"$esc" <<< "$hits"; then
     echo "reached"; return 0
   fi
   if grep -rlF -e "$rel" "$tests_dir"/test-*.sh >/dev/null 2>&1; then
@@ -218,7 +232,7 @@ scs_pin_scan() {
   SCS_PS_SCANNED=0; SCS_PS_SKIPPED=0; SCS_PS_VANISHED=0
   SCS_PS_PINNED=0; SCS_PS_UNDECIDABLE=0; SCS_PS_UNPINNED=0
   SCS_PS_VANISHED_PATHS=""; SCS_PS_UNDECIDABLE_PATHS=""; SCS_PS_UNPINNED_PATHS=""
-  while IFS= read -r rel; do
+  while IFS= read -r -u 9 rel; do
     [ -n "$rel" ] || continue
     SCS_PS_SCANNED=$((SCS_PS_SCANNED + 1))
     if [ ! -r "$root/$rel" ]; then
@@ -236,7 +250,7 @@ scs_pin_scan() {
         SCS_PS_UNPINNED=$((SCS_PS_UNPINNED + 1))
         SCS_PS_UNPINNED_PATHS="${SCS_PS_UNPINNED_PATHS}${rel}"$'\n' ;;
     esac
-  done <<< "$list"
+  done 9<<< "$list"
   SCS_PS_CHECKED=$((SCS_PS_PINNED + SCS_PS_UNDECIDABLE + SCS_PS_UNPINNED))
   SCS_PS_FINDINGS=$((SCS_PS_UNDECIDABLE + SCS_PS_UNPINNED))
   return 0

@@ -840,4 +840,57 @@ assert_contains "pin-scan dogfood: the coverage line names its only skip reason"
   "$(scs_pin_scan_line population-scan)" "1 skipped (vanished=1)"
 rm -rf "$PIN_SCRATCH"
 
+# lean-comments: allow-run — the shape of the defect, kept beside the pin that detects it.
+# TASK-017 / issue #230: a checking tool that cannot reproduce its own verdict is
+# evidence of nothing. `producer | grep -q` is a SIGPIPE race under `set -o pipefail`
+# — grep exits at the first match, the producer dies 141, pipefail returns 141 — and
+# it only bites once the de-commented body outruns the 64 KiB pipe buffer. The pin
+# therefore BUILDS an oversized consumer instead of trusting the shipped tree's
+# largest file to stay large, so it cannot be silently disarmed by a refactor.
+DET_SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-scs-determinism-XXXXXX")
+mkdir -p "$DET_SCRATCH/scripts"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'state="IN_PROGRESS"\n'
+  awk 'BEGIN { for (i = 0; i < 16000; i++) printf "pad_%06d=\"body wider than one pipe buffer\"\n", i }'
+  printf 'read_frontmatter_field "$manifest" status\n'
+} > "$DET_SCRATCH/scripts/oversized-consumer.sh"
+DET_BODY=$(scs_code "$DET_SCRATCH/scripts/oversized-consumer.sh")
+if [ "${#DET_BODY}" -gt 65536 ]; then
+  _pass "determinism: the pin's own subject outruns the pipe buffer (${#DET_BODY} bytes > 65536)"
+else
+  _fail "determinism: the pin's own subject outruns the pipe buffer" \
+    "body is ${#DET_BODY} bytes, at or under the 65536-byte pipe buffer — the pin is disarmed"
+fi
+
+DET_SEEN=""
+for _i in $(seq 1 12); do
+  if scs_is_consumer "$DET_SCRATCH/scripts/oversized-consumer.sh"; then _r=consumer; else _r=not-consumer; fi
+  case " $DET_SEEN " in *" $_r "*) ;; *) DET_SEEN="$DET_SEEN $_r" ;; esac
+done
+DET_SEEN="${DET_SEEN# }"
+assert_eq "determinism: scs_is_consumer returns one answer over 12 runs on one oversized file" \
+  "$DET_SEEN" "consumer"
+
+# The whole-scan property, asserted the way a caller experiences it: the same tree,
+# twice in one test, must agree on `checked` and `findings`.
+scs_run "$REPO_ROOT" && DET_N1="$SCS_N" DET_K1="$SCS_K" DET_F1="$SCS_F" DET_U1="$SCS_UNTRIAGED$SCS_UNCLASSIFIED"
+scs_run "$REPO_ROOT" && DET_K2="$SCS_K" DET_F2="$SCS_F" DET_U2="$SCS_UNTRIAGED$SCS_UNCLASSIFIED"
+assert_eq "determinism: two scs_run passes over one tree agree on checked" \
+  "${DET_K1-run1-unset}" "${DET_K2-run2-unset}"
+assert_eq "determinism: two scs_run passes over one tree agree on findings" \
+  "${DET_F1-run1-unset}" "${DET_F2-run2-unset}"
+assert_eq "determinism: and on WHICH files those findings are" \
+  "${DET_U1-run1-unset}" "${DET_U2-run2-unset}"
+
+# Equality between two runs cannot see a walk that collapses in BOTH, so this
+# denominator is derived independently of the walk it checks.
+DET_TREE_N=$(find "$REPO_ROOT/scripts" \( -type f -o -type l \) | wc -l | tr -d ' ')
+DET_STDIN_N=$(printf 'swallow-me\n%.0s' $(seq 1 200) | { scs_run "$REPO_ROOT" && printf '%s' "$SCS_N"; })
+assert_eq "determinism: the walk enumerates every file in the tree (independent count)" \
+  "${DET_N1-run1-unset}" "$DET_TREE_N"
+assert_eq "determinism: and still does so when the caller's stdin is full (dedicated fd)" \
+  "$DET_STDIN_N" "$DET_TREE_N"
+rm -rf "$DET_SCRATCH"
+
 report_results

@@ -28,7 +28,7 @@ _registry_declared_count() {
   local w
   w=$(_registry_bullet "$1" \
     | grep -oE '(Five|Six|Seven|Eight|Nine|Ten|Eleven|Twelve|Thirteen|Fourteen|Fifteen|Sixteen|Seventeen|Eighteen|Nineteen|Twenty) entry points are bound' \
-    | head -1 | awk '{print $1}')
+    | awk 'NR==1{print $1}')   # not `head -1`: it SIGPIPEs its producer (#230)
   case "$w" in
     Five) echo 5 ;; Six) echo 6 ;; Seven) echo 7 ;; Eight) echo 8 ;; Nine) echo 9 ;;
     Ten) echo 10 ;; Eleven) echo 11 ;; Twelve) echo 12 ;; Thirteen) echo 13 ;;
