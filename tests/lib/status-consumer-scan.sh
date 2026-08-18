@@ -15,6 +15,7 @@
 
 SCS_STATUS_TOKENS='(PLANNED|READY|IN_PROGRESS|IMPLEMENTED|IN_REVIEW|APPROVED|CHANGES_REQUESTED|BLOCKED|DONE|CANCELLED)'
 
+# lean-comments: allow-run — an unexplained reach-signal arm is the defect this widening closes.
 # Reach signals, OR-composed on purpose. Board-3 QA Finding A: requiring a status
 # token AND one hand-written literal set made a miss SILENT, and a PoC consumer
 # that reaches its manifest through a caller-supplied path escaped. An added arm
@@ -26,6 +27,7 @@ SCS_SIGNAL_AUTHORITY='(task_status|count_tasks_by_status|count_tasks_and_find_ac
 SCS_SIGNAL_FIELD='([Ss]tatus:|[Ss]tatus\*\*:|##[[:space:]]*Status)'
 SCS_STATE_SIGNAL="(${SCS_SIGNAL_PATH}|${SCS_SIGNAL_AUTHORITY}|${SCS_SIGNAL_FIELD})"
 
+# lean-comments: allow-run — what makes an absent entry a finding rather than a silence.
 # Enumerated exemptions, each individually justified: a discovered consumer that
 # is neither CANCELLED-aware nor listed here is a FINDING, not an absent entry.
 # An entry whose defect was fixed, or whose file is no longer discovered, is a
@@ -53,18 +55,47 @@ scs_exemption() { # <rel-path> -> prints justification, exit 0 if exempt
   return 0
 }
 
-# The oracle is indirect so the dogfood arm can substitute a scratch exemption
-# list; the shipped list is the default.
-SCS_EXEMPTION_FN="${SCS_EXEMPTION_FN:-scs_exemption}"
-
-# Derived from the live function's own case arms rather than a second authored
-# copy, so the staleness checks cannot read a list the oracle has moved past.
-scs_exemption_paths() {
-  declare -f "$SCS_EXEMPTION_FN" 2>/dev/null \
-    | grep -oE '^[[:space:]]*\(?scripts/[A-Za-z0-9._/-]+\)' | tr -d '() \t'
+# lean-comments: allow-run — why "undecidable" is a third answer, not a quiet non-consumer.
+# Board-3 QA Finding A's second half: a file carrying a status token but NO reach
+# signal is UNDECIDABLE by this predicate, not "not a consumer". Each is triaged
+# by hand here with what its token actually is; an untriaged one is a FINDING, so
+# a new arrival is a fail-closed queue entry rather than a silent omission.
+scs_ambiguous() { # <rel-path> -> prints triage, exit 0 if triaged
+  case "$1" in
+    scripts/heartbeat.sh)
+      echo "BLOCKED_TASK at :210 is a halt SIGNAL relayed from _pb_blocked_tasks in scripts/lib/parallel-batch.sh (a scanned consumer, CANCELLED-aware); heartbeat.sh does no status arithmetic of its own" ;;
+    scripts/lib/emit-event.sh)
+      echo "READY occurs only inside the identifier _EMIT_DIR_READY (:15,:70,:72) — a directory-cache flag, not the status vocabulary" ;;
+    scripts/lib/stack-utils.sh)
+      echo "CHANGES_REQUESTED at :904,:909 is a GitHub PR reviewDecision read from the gh API, a different vocabulary that happens to share a token" ;;
+    scripts/migrate-config.sh)
+      echo "DONE appears only inside log_migration message literals (:653,:744); no predicate reads a task status" ;;
+    scripts/subagent-stop.sh)
+      echo "its APPROVE|CHANGES_REQUESTED|UNVERIFIED matches (:272,:387) are the reviewer VERDICT vocabulary, correctly out of the task-status domain" ;;
+    *) return 1 ;;
+  esac
+  return 0
 }
 
+# The oracles are indirect so the dogfood arms can substitute scratch lists; the
+# shipped functions are the defaults.
+SCS_EXEMPTION_FN="${SCS_EXEMPTION_FN:-scs_exemption}"
+SCS_AMBIGUOUS_FN="${SCS_AMBIGUOUS_FN:-scs_ambiguous}"
+
+# Derived from the live functions' own case arms rather than a second authored
+# copy, so the staleness checks cannot read a list an oracle has moved past.
+_scs_case_paths() { # <function-name>
+  declare -f "$1" 2>/dev/null \
+    | grep -oE '^[[:space:]]*\(?scripts/[A-Za-z0-9._/-]+\)' | tr -d '() \t'
+}
+scs_exemption_paths() { _scs_case_paths "$SCS_EXEMPTION_FN"; }
+scs_ambiguous_paths() { _scs_case_paths "$SCS_AMBIGUOUS_FN"; }
+
 scs_code() { grep -vE '^[[:space:]]*#' "$1" 2>/dev/null || true; }
+
+scs_has_status_token() { # <file>
+  scs_code "$1" | grep -qE "$SCS_STATUS_TOKENS"
+}
 
 scs_is_consumer() { # <file>
   local code
@@ -89,9 +120,10 @@ _scs_listed() { # <path> <newline-list>
 scs_run() {
   local root="$1" f rel p
   SCS_N=0; SCS_M=0; SCS_K=0; SCS_F=0
-  SCS_M_NONCONSUMER=0; SCS_M_UNREADABLE=0
+  SCS_M_NOTOKEN=0; SCS_M_AMBIGUOUS=0; SCS_M_UNTRIAGED=0; SCS_M_UNREADABLE=0
   SCS_CONSUMERS=""; SCS_AWARE=""; SCS_EXEMPT=""; SCS_UNCLASSIFIED=""
   SCS_RETIRED=""; SCS_ORPHANED=""
+  SCS_AMBIGUOUS=""; SCS_UNTRIAGED=""; SCS_AMBIG_STALE=""
 
   [ -d "$root/scripts" ] || return 1
 
@@ -102,7 +134,17 @@ scs_run() {
       SCS_M=$((SCS_M + 1)); SCS_M_UNREADABLE=$((SCS_M_UNREADABLE + 1)); continue
     fi
     if ! scs_is_consumer "$f"; then
-      SCS_M=$((SCS_M + 1)); SCS_M_NONCONSUMER=$((SCS_M_NONCONSUMER + 1)); continue
+      SCS_M=$((SCS_M + 1))
+      if ! scs_has_status_token "$f"; then
+        SCS_M_NOTOKEN=$((SCS_M_NOTOKEN + 1))
+      elif "$SCS_AMBIGUOUS_FN" "$rel" >/dev/null; then
+        SCS_M_AMBIGUOUS=$((SCS_M_AMBIGUOUS + 1))
+        SCS_AMBIGUOUS="${SCS_AMBIGUOUS}${rel}"$'\n'
+      else
+        SCS_M_UNTRIAGED=$((SCS_M_UNTRIAGED + 1)); SCS_F=$((SCS_F + 1))
+        SCS_UNTRIAGED="${SCS_UNTRIAGED}${rel}"$'\n'
+      fi
+      continue
     fi
     SCS_K=$((SCS_K + 1))
     SCS_CONSUMERS="${SCS_CONSUMERS}${rel}"$'\n'
@@ -125,10 +167,41 @@ scs_run() {
     _scs_listed "$p" "$SCS_CONSUMERS" && continue
     SCS_ORPHANED="${SCS_ORPHANED}${p}"$'\n'; SCS_F=$((SCS_F + 1))
   done < <(scs_exemption_paths)
+
+  # Same discipline for the triage list: an arm naming a path that is no longer
+  # ambiguous (it became a consumer, or left the tree) states a fact that expired.
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    _scs_listed "$p" "$SCS_AMBIGUOUS" && continue
+    SCS_AMBIG_STALE="${SCS_AMBIG_STALE}${p}"$'\n'; SCS_F=$((SCS_F + 1))
+  done < <(scs_ambiguous_paths)
   return 0
 }
 
 scs_coverage_line() { # <label>
-  printf '  %s: %d scanned, %d skipped (non-consumer=%d, unreadable=%d), %d checked, %d findings\n' \
-    "$1" "$SCS_N" "$SCS_M" "$SCS_M_NONCONSUMER" "$SCS_M_UNREADABLE" "$SCS_K" "$SCS_F"
+  printf '  %s: %d scanned, %d skipped (no-status-token=%d, triaged-ambiguous=%d, untriaged-ambiguous=%d, unreadable=%d), %d checked, %d findings\n' \
+    "$1" "$SCS_N" "$SCS_M" "$SCS_M_NOTOKEN" "$SCS_M_AMBIGUOUS" "$SCS_M_UNTRIAGED" \
+    "$SCS_M_UNREADABLE" "$SCS_K" "$SCS_F"
+}
+
+# lean-comments: allow-run — the false-pass this predicate replaces, kept at the predicate.
+# scs_pin_class <tests-dir> <rel> -> reached | named-only | unnamed
+#
+# Board-3 NEW-5: "the path string appears anywhere in any tests/test-*.sh" counts
+# a comment, and counts a file's own name inside another test's discovery list —
+# a naming check wearing a driving check's costume. A ROOTED reference on a
+# non-comment line ("$REPO_ROOT/<rel>" and friends) is a test addressing the real
+# file on disk; a bare mention is undecidable from text alone and says so.
+scs_pin_class() {
+  local tests_dir="$1" rel="$2" esc
+  esc=$(printf '%s' "$rel" | sed 's/[][\.*^$/]/\\&/g')
+  if grep -rn -F -e "$rel" "$tests_dir"/test-*.sh 2>/dev/null \
+       | grep -vE '^[^:]*:[0-9]+:[[:space:]]*#' \
+       | grep -qE '(\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\})"?/'"$esc"; then
+    echo "reached"; return 0
+  fi
+  if grep -rlF -e "$rel" "$tests_dir"/test-*.sh >/dev/null 2>&1; then
+    echo "named-only"; return 0
+  fi
+  echo "unnamed"
 }
