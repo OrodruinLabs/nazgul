@@ -55,15 +55,17 @@ fi
 # The three counts are structural-freshness checks, NOT ceilings: bump one for a
 # genuinely new rule; never weaken a tag to keep a count unchanged (FEAT-022).
 ADVISORY_COUNT=$(awk '{ count += gsub(/\[advisory\]/, "") } END { print count + 0 }' "$RULES_FILE")  # occurrences, not lines
-if [ "$ADVISORY_COUNT" -eq 35 ]; then
-  _pass "[advisory] annotation count is exactly 35 (found: $ADVISORY_COUNT)"
+if [ "$ADVISORY_COUNT" -eq 36 ]; then
+  _pass "[advisory] annotation count is exactly 36 (found: $ADVISORY_COUNT)"
 else
-  _fail "[advisory] annotation count is exactly 35" \
-    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 35"
+  _fail "[advisory] annotation count is exactly 36" \
+    "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 36"
 fi
 
 # Bumped per objective, never weakened: 64->69 (FEAT-029), 69->71 (PATCH-002), 71->78
 # +advisory 28->31, 78->79 (FEAT-030 §21 + item 8), 79->82 +advisory 31->35 (FEAT-032 §22),
+# advisory 35->36 (FEAT-031 RW-G: the plan-binding producer is a script, but what RUNS it is a
+# prompt, so §2 states that half as advisory rather than implying the whole is enforced),
 # 82->91 (FEAT-031: §2 cancellation x2, the CANCELLED dependency gate, §2 merge evidence x3,
 # §16 seam x3). FEAT-031 and FEAT-032 landed concurrently; 91 is the counted total of both,
 # not the sum either branch asserted alone.
