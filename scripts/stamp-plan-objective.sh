@@ -36,9 +36,13 @@ set -euo pipefail
 # anything) is how a plan gets bound to an off-by-one objective.
 #
 # WRITE-THEN-READ-BACK (ADR-021). "I wrote it" and "it is there" are different claims: the
-# stamp is re-read from the same absolute path through ttg_plan_feat_id — the GATE's own
-# parser, shared so producer and predicate cannot drift on the same bytes — and a mismatch
-# is a failure, not a warning.
+# stamp is re-read from the same absolute path and a mismatch is a failure, not a warning.
+#
+# EVERY PARSER HERE IS THE GATE'S OWN, AND NONE IS RE-IMPLEMENTED. Both halves of the claim
+# are read through scripts/lib/task-transition-guard.sh — ttg_plan_feat_id for the frontmatter
+# value, ttg_objective_roster_ids for the roster that value is a claim ABOUT — so producer and
+# predicate cannot drift on either half's bytes. Board 4 found the roster half duplicated here
+# while this paragraph already claimed it was shared; a private copy is what it forbids.
 #
 # ACTIONS (closed set, one is always printed):
 #   stamped        the plan declared nothing, or an unsubstituted <...> placeholder
@@ -102,8 +106,7 @@ fi
 
 # The frontmatter is a claim about the roster, so refuse to make it before one exists.
 # This is what keeps the stamp out of create_feature_branch's empty-template moment.
-ROSTER_IDS=$(awk '/^## Tasks/{f=1;next} f && /^## /{exit} f' "$PLAN" 2>/dev/null \
-  | _ttg_strip_html_comments | grep -oE '(TASK|PATCH)-[0-9]+' | LC_ALL=C sort -u || true)
+ROSTER_IDS=$(ttg_objective_roster_ids "$PLAN")
 if [ -z "$ROSTER_IDS" ]; then
   refuse "$PLAN carries no ## Tasks roster yet (templates/plan.md's commented example entries do not count as one) — the frontmatter feat_id is a claim ABOUT that roster, so there is nothing to claim. Write the roster first, then run this."
 fi
@@ -123,6 +126,13 @@ if [ "$ACTION" = "stamped" ]; then
   echo "$ENTRY: binding this roster to $FEAT_ID: $(printf '%s' "$ROSTER_IDS" | tr '\n' ' ')" >&2
   TMP=$(mktemp "$NAZGUL_DIR/.nazgul-plan.XXXXXX") || {
     echo "$ENTRY: cannot create a temp file beside $PLAN" >&2; exit 3; }
+  trap 'rm -f "$TMP"' EXIT
+  # The GNU-only --reference form of chmod fails on BSD/macOS, so the `|| chmod 644` fallback
+  # it used to carry was the only branch ever taken here — silently re-moding the plan.
+  MODE=$(_ttg_file_mode "$PLAN") || {
+    echo "$ENTRY: cannot read $PLAN's mode, so a rewrite could only be installed under a guessed one; $PLAN is unchanged" >&2
+    exit 3
+  }
   if ! awk -v fid="$FEAT_ID" '
     NR==1 && /^---[[:space:]]*$/ { print; print "feat_id: " fid; fm=1; next }
     NR==1 { print "---"; print "feat_id: " fid; print "---"; print; next }
@@ -132,8 +142,9 @@ if [ "$ACTION" = "stamped" ]; then
   ' "$PLAN" > "$TMP"; then
     rm -f "$TMP"; echo "$ENTRY: rewrite of $PLAN failed; the file is unchanged" >&2; exit 3
   fi
-  chmod --reference="$PLAN" "$TMP" 2>/dev/null || chmod 644 "$TMP"
+  chmod "$MODE" "$TMP" || { echo "$ENTRY: cannot apply mode $MODE to the staged rewrite" >&2; exit 3; }
   mv "$TMP" "$PLAN"
+  trap - EXIT
 fi
 
 PERSISTED=$(ttg_plan_feat_id "$PLAN")

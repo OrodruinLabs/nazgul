@@ -931,6 +931,19 @@ ttg_plan_feat_placeholder() {
   case "$1" in "<"*">") return 0 ;; *) return 1 ;; esac
 }
 
+# _ttg_roster_section <plan_file> -> the raw `## Tasks` section, terminating at the next
+# `## ` heading. THE one place that decides what "the roster" is made of.
+_ttg_roster_section() {
+  awk '/^## Tasks/{f=1;next} f && /^## /{exit} f' "$1" 2>/dev/null
+}
+
+# ttg_objective_roster_ids <plan_file> -> the roster's ids, one per line, comments stripped;
+# empty and 0 when none. THE one roster parser: the gate and the producer both call it.
+ttg_objective_roster_ids() {
+  _ttg_roster_section "$1" | _ttg_strip_html_comments \
+    | grep -oE '(TASK|PATCH)-[0-9]+' | LC_ALL=C sort -u || true
+}
+
 # lean-comments: allow-run — RULES.md §15's two-answers distinction, at the guard it binds.
 # ttg_objective_roster <nazgul_dir> -> the task ids this objective's own nazgul/plan.md
 # lists under `## Tasks`, one per line; non-zero with the reason on stdout when membership
@@ -969,11 +982,10 @@ ttg_objective_roster() {
   fi
   # templates/plan.md documents its roster format with COMMENTED example entries, so an
   # unplanned plan used to yield a one-id roster: TASK-001, a task nobody ever wrote.
-  local section commented
-  section=$(awk '/^## Tasks/{f=1;next} f && /^## /{exit} f' "$plan")
-  ids=$(printf '%s\n' "$section" | _ttg_strip_html_comments | grep -oE '(TASK|PATCH)-[0-9]+' | LC_ALL=C sort -u)
+  local commented
+  ids=$(ttg_objective_roster_ids "$plan")
   if [ -z "$ids" ]; then
-    commented=$(printf '%s\n' "$section" | grep -coE '(TASK|PATCH)-[0-9]+' || true)
+    commented=$(_ttg_roster_section "$plan" | grep -coE '(TASK|PATCH)-[0-9]+' || true)
     if [ "${commented:-0}" -gt 0 ]; then
       printf '%s'"'"'s ## Tasks section names task ids ONLY inside HTML comments — those are templates/plan.md'"'"'s example entries, not a roster, so no manifest can be shown to belong to %s' \
         "$plan" "$feat_id"
@@ -1549,9 +1561,15 @@ _ttg_release_lock() {
   rmdir "$lock" 2>/dev/null
 }
 
-# Delegate: one mode probe for the whole codebase (scripts/lib/task-utils.sh).
+# Delegate: one mode probe for the whole codebase (scripts/lib/task-utils.sh). An unreadable
+# mode is named and refused, never substituted with a default (issue #204).
 _ttg_file_mode() {
-  nz_file_mode "$1"
+  local mode
+  mode=$(nz_file_mode "$1") || {
+    echo "_ttg_file_mode: no stat dialect on this host could read the mode of ${1:-<unnamed>}" >&2
+    return 1
+  }
+  printf '%s\n' "$mode"
 }
 
 # Under the per-task lock, update one ordinary task status from a staged source

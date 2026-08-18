@@ -217,4 +217,91 @@ INIT=$(cat "$REPO_ROOT/skills/init/SKILL.md")
 assert_contains "[advisory] skills/init/SKILL.md says the placeholder is inert at init time" \
   "$INIT" "verbatim, placeholder and all"
 
+# Case 8 | ONE roster parser, not two. Board 4 found the producer and the predicate each
+# carrying the same three-stage pipeline while the producer's header claimed it was shared.
+ROSTER_AWK='/^## Tasks/{f=1;next} f && /^## /{exit} f'
+ROSTER_PIPE="grep -oE '(TASK|PATCH)-[0-9]+' | LC_ALL=C sort -u"
+
+roster_parser_sites() { grep -rlF -- "$ROSTER_AWK" "$1" 2>/dev/null | LC_ALL=C sort; }
+roster_pipe_sites()   { grep -rlF -- "$ROSTER_PIPE" "$1" 2>/dev/null | LC_ALL=C sort; }
+
+SITES=$(roster_parser_sites "$REPO_ROOT/scripts")
+assert_eq "the ## Tasks section extractor exists in exactly one file under scripts/" \
+  "$(printf '%s\n' "$SITES" | grep -c . || true)" "1"
+assert_contains "and that file is the shared library, not the producer" \
+  "$SITES" "scripts/lib/task-transition-guard.sh"
+PIPE_SITES=$(roster_pipe_sites "$REPO_ROOT/scripts")
+assert_eq "the roster id pipeline likewise exists in exactly one file under scripts/" \
+  "$(printf '%s\n' "$PIPE_SITES" | grep -c . || true)" "1"
+
+# The denominator above is only worth anything if a private copy would actually raise it,
+# so make one and check the same predicate reports two rather than trusting that it would.
+MUT="$SCRATCH/mutant"; mkdir -p "$MUT/lib"
+cp "$REPO_ROOT/scripts/lib/task-transition-guard.sh" "$MUT/lib/"
+{ cat "$STAMPER"; printf '%s\n' "PRIVATE=\$(awk '$ROSTER_AWK' \"\$PLAN\" | $ROSTER_PIPE)"; } > "$MUT/stamp.sh"
+assert_eq "[mutation] a private copy in the producer makes the extractor check report 2" \
+  "$(roster_parser_sites "$MUT" | grep -c . || true)" "2"
+assert_eq "[mutation] and makes the pipeline check report 2" \
+  "$(roster_pipe_sites "$MUT" | grep -c . || true)" "2"
+
+assert_file_contains "the producer reaches the roster through the shared function" \
+  "$STAMPER" "ttg_objective_roster_ids "
+assert_file_contains "and so does the gate's own predicate" \
+  "$REPO_ROOT/scripts/lib/task-transition-guard.sh" "ids=\$(ttg_objective_roster_ids \"\$plan\")"
+
+# Case 8b | agreement on input built to separate the two parsers if they ever diverge:
+# a commented id, a duplicate, a PATCH id, and an id below the terminating heading.
+P5="$SCRATCH/tricky"
+born_project "$P5" FEAT-042
+awk '/^## Tasks/ {print; print "";
+     print "<!-- ### TASK-900: commented example, not a member -->";
+     print "### TASK-001: real"; print "### TASK-002: real"; print "### TASK-002: duplicate";
+     print "- PATCH-007 named inline"; print ""; print "## Wave Groups";
+     print "### TASK-800: below the terminating heading"; next} {print}' \
+  "$P5/nazgul/plan.md" > "$P5/nazgul/plan.new" && mv "$P5/nazgul/plan.new" "$P5/nazgul/plan.md"
+TRICKY=$(bash "$STAMPER" --project-root "$P5" 2>&1); TRICKY_EC=$?
+assert_exit_code "the producer stamps the tricky roster" "$TRICKY_EC" 0
+assert_contains "the producer counts exactly the three real ids" "$TRICKY" "roster_tasks=3"
+GATE_IDS=$(roster_of "$P5")
+assert_eq "the gate returns the identical id set, so producer and predicate agree" \
+  "$(printf '%s' "$GATE_IDS" | tr '\n' ' ')" "PATCH-007 TASK-001 TASK-002"
+assert_not_contains "neither parser admits a commented example" "$GATE_IDS" "TASK-900"
+assert_not_contains "nor an id below the terminating heading" "$GATE_IDS" "TASK-800"
+
+# Case 9 | the file mode is READ or the write is refused — never guessed. chmod --reference
+# is a GNU extension, so on this repo's stated platform its fallback was the only branch.
+assert_eq "chmod --reference appears nowhere under scripts/" \
+  "$(grep -rlF -- 'chmod --reference' "$REPO_ROOT/scripts" 2>/dev/null | grep -c . || true)" "0"
+
+P6="$SCRATCH/mode"
+born_project "$P6" FEAT-043 --roster
+chmod 600 "$P6/nazgul/plan.md"
+MODE_OUT=$(bash "$STAMPER" --project-root "$P6" 2>&1); MODE_EC=$?
+assert_exit_code "the producer stamps a plan whose mode is not the fallback literal" "$MODE_EC" 0
+assert_contains "and reports the stamp it took" "$MODE_OUT" "action=stamped"
+assert_eq "and the plan keeps its own mode rather than being normalised to 644" \
+  "$( ( source "$REPO_ROOT/scripts/lib/task-transition-guard.sh"; _ttg_file_mode "$P6/nazgul/plan.md" ) )" "600"
+
+MODE_ERR=$( ( source "$REPO_ROOT/scripts/lib/task-transition-guard.sh"
+              _ttg_file_mode "$SCRATCH/does-not-exist" ) 2>&1 >/dev/null )
+MODE_VAL=$( ( source "$REPO_ROOT/scripts/lib/task-transition-guard.sh"
+              _ttg_file_mode "$SCRATCH/does-not-exist" ) 2>/dev/null ); MODE_RC=$?
+assert_exit_code "_ttg_file_mode fails on a mode it cannot read" "$MODE_RC" 1
+assert_eq "and yields no value at all, rather than a default" "$MODE_VAL" ""
+assert_contains "and says which file it could not read" "$MODE_ERR" "does-not-exist"
+
+# Drive the producer's own failure path: a stat that answers nothing must stop the write,
+# not install a rewrite under a literal mode.
+P7="$SCRATCH/nostat"
+born_project "$P7" FEAT-044 --roster
+printf '#!/bin/sh\nexit 1\n' > "$P7/fakebin/stat"; chmod +x "$P7/fakebin/stat"
+PLAN_BEFORE=$(cat "$P7/nazgul/plan.md")
+NOSTAT=$(PATH="$P7/fakebin:$PATH" bash "$STAMPER" --project-root "$P7" 2>&1); NOSTAT_EC=$?
+assert_exit_code "an unreadable mode stops the producer at its precondition exit" "$NOSTAT_EC" 3
+assert_contains "the producer says it refused rather than guessing a mode" "$NOSTAT" "cannot read"
+assert_not_contains "and never names a substituted default" "$NOSTAT" "644"
+assert_eq "the plan is byte-identical after the refusal" "$(cat "$P7/nazgul/plan.md")" "$PLAN_BEFORE"
+assert_eq "and no staged rewrite is left beside it" \
+  "$(find "$P7/nazgul" -maxdepth 1 -name '.nazgul-plan.*' | grep -c . || true)" "0"
+
 report_results
