@@ -397,9 +397,11 @@ fi
 # task-transition.sh is the sole status authority; TASK-004 separately funnels
 # direct shell mutation, and all cooperative metadata writers must avoid a task
 # while its transition lock exists.
-LOCKED_TASK_ID=$(basename "$CANON_FILE_PATH" .md)
-if [ -d "$CANON_PROJECT_ROOT/nazgul/locks/task-transition-${LOCKED_TASK_ID}.lock" ]; then
-  echo "NAZGUL STATE GUARD: BLOCKED — ${LOCKED_TASK_ID} is locked by an in-flight transactional transition" >&2
+# Derived from the canonical path so a symlink alias cannot downgrade a task
+# manifest into the generic nazgul-file allow branch.
+TASK_ID=$(basename "$CANON_FILE_PATH" .md)
+if [ -d "$CANON_PROJECT_ROOT/nazgul/locks/task-transition-${TASK_ID}.lock" ]; then
+  echo "NAZGUL STATE GUARD: BLOCKED — ${TASK_ID} is locked by an in-flight transactional transition" >&2
   exit 2
 fi
 
@@ -448,6 +450,60 @@ if [ "$NEW_STATUS" = "INVALID" ] \
   exit 2
 fi
 
+# --- ADR-020 QUARANTINE RECORD INTEGRITY (board-5 S-5) ---
+# rc 1 = record absent; rc 0 with an empty value = present but blanked.
+_tsg_q_value() {
+  local line
+  line=$(grep -m1 -iE "^-[[:space:]]*\*\*$2\*\*:" "$1" 2>/dev/null) || return 1
+  line="${line#*:}"
+  line="${line#"${line%%[![:space:]]*}"}"
+  printf '%s' "${line%"${line##*[![:space:]]}"}"
+}
+
+_tsg_q_refuse() {
+  echo "NAZGUL STATE GUARD: BLOCKED — ${TASK_ID}: $1" >&2
+  echo "Removing a reconciliation quarantine is a state change, not an edit." >&2
+  echo "Its only sanctioned exit is: ${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}/scripts/task-transition.sh repair ${TASK_ID}" >&2
+  exit 2
+}
+
+# The three fields are ONE record, so deleting the first line silently unlocked
+# BLOCKED -> CANCELLED. Narrow by ADR-009: only a write that CHANGES one is denied.
+if [ "$OLD_STATUS" = "BLOCKED" ] && [ -f "$CANON_FILE_PATH" ]; then
+  for _q_field in "Blocked kind" "Blocked from" "Blocked observed"; do
+    _q_old_rc=0
+    _q_old=$(_tsg_q_value "$CANON_FILE_PATH" "$_q_field") || _q_old_rc=$?
+    [ "$_q_old_rc" -eq 0 ] || continue
+    _q_new_rc=0
+    _q_new=$(_tsg_q_value "$POST_IMAGE" "$_q_field") || _q_new_rc=$?
+    if [ "$_q_new_rc" -ne 0 ]; then
+      _tsg_q_refuse "this write deletes the quarantine record '${_q_field}'"
+    fi
+    if [ "$_q_new" != "$_q_old" ]; then
+      _tsg_q_refuse "this write alters the quarantine record '${_q_field}' ('${_q_old}' -> '${_q_new}')"
+    fi
+  done
+fi
+
+# `Blocked from`/`Blocked observed` are written ONLY by the reconciliation
+# quarantine, so either without a reconciliation kind is half-erased, not clean.
+if [ "$NEW_STATUS" = "BLOCKED" ]; then
+  _q_kind_rc=0; _q_kind=$(_tsg_q_value "$POST_IMAGE" "Blocked kind") || _q_kind_rc=$?
+  _q_from_rc=0; _q_from=$(_tsg_q_value "$POST_IMAGE" "Blocked from") || _q_from_rc=$?
+  _q_obs_rc=0;  _q_obs=$(_tsg_q_value "$POST_IMAGE" "Blocked observed") || _q_obs_rc=$?
+  _q_typed=0
+  case "$_q_kind" in
+    [Rr]econciliation|[Rr]econciliation[[:space:]]*) _q_typed=1 ;;
+  esac
+  if [ "$_q_typed" -eq 1 ]; then
+    if [ "$_q_from_rc" -ne 0 ] || [ -z "$_q_from" ] || [ "$_q_obs_rc" -ne 0 ] || [ -z "$_q_obs" ]; then
+      _tsg_q_refuse "a typed reconciliation quarantine is missing 'Blocked from' and/or 'Blocked observed'"
+    fi
+  elif [ "$_q_from_rc" -eq 0 ] || [ "$_q_obs_rc" -eq 0 ]; then
+    _tsg_q_refuse "'Blocked from'/'Blocked observed' are present without a reconciliation 'Blocked kind' — the quarantine record is partially erased"
+  fi
+fi
+
 # If file is new (first write), allow PLANNED or READY as initial status
 if [ -z "$OLD_STATUS" ]; then
   if [ "$NEW_STATUS" = "PLANNED" ] || [ "$NEW_STATUS" = "READY" ]; then
@@ -482,9 +538,6 @@ if ! ttg_valid_transition "$OLD_STATUS" "$NEW_STATUS"; then
   exit 2
 fi
 
-# Derive identity from the canonical path so a symlink alias cannot downgrade a
-# task manifest into the generic nazgul-file allow branch.
-TASK_ID=$(basename "$CANON_FILE_PATH" .md)
 NAZGUL_DIR=$(dirname "$(dirname "$CANON_FILE_PATH")")
 MANIFEST_TEXT=$(cat "$POST_IMAGE")
 
