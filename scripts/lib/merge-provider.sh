@@ -567,8 +567,11 @@ merge_provider_pr_state() {
   fi
   if [ -n "$url_host" ]; then
     remote_url=$(_mp_remote_url "$root") || remote_url=""
-    remote_host=$(_mp_url_host "$remote_url")
+    # Both sides as the API knows them, as _mp_github_pr_state already does: _mp_provider_for_host
+    # admits www.github.com, so a raw comparison refuses a URL naming this very repository.
+    remote_host=$(_mp_api_host "$(_mp_url_host "$remote_url")")
     remote_repo=$(_mp_url_repo "$remote_url") || remote_repo=""
+    url_host=$(_mp_api_host "$url_host")
     if [ -z "$remote_repo" ] || [ "$url_host" != "$remote_host" ] || [ "$url_repo" != "$remote_repo" ]; then
       why="the PR URL names ${url_host}/${url_repo}, but this project's remote is ${remote_host:-<none>}/${remote_repo:-<none>} — PR ${pr} would have been asked of the wrong repository, and the answer recorded as if it were about this one"
       _mp_warn "invalid_pr: $why"

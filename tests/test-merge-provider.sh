@@ -72,7 +72,10 @@ setup_git_repo
 create_config
 export NAZGUL_DIR="$TEST_DIR/nazgul"
 EVENTS="$TEST_DIR/nazgul/logs/events.jsonl"
-CONFIG_BEFORE=$(shasum -a 256 < "$TEST_DIR/nazgul/config.json" | awk '{print $1}')
+NZ_DIGEST_PROBE=$(digest_string probe || true)
+assert_eq "the seam suite: the shared digest helper returns a 64-hex digest, so the config byte-identity check is not vacuous" \
+  "${#NZ_DIGEST_PROBE}" "64"
+record_file_digest CONFIG_BEFORE "$TEST_DIR/nazgul/config.json" "the seam suite: config.json before any case runs"
 
 # shellcheck source=../scripts/lib/merge-provider.sh
 source "$LIB"
@@ -329,6 +332,86 @@ _drive "o/r/pull/9"
 assert_eq "a schemeless pseudo-URL carries no checkable host, so it is refused" \
   "$(_field '.result')" "invalid_pr"
 
+# lean-comments: allow-run — the false refusal this block measures, and why it was not a mismatch.
+# `_mp_provider_for_host` admits github.com AND www.github.com as one provider, so an alias URL
+# passes provider selection and used to be refused HERE by a raw string comparison — recorded as
+# `invalid_pr` with a diagnostic asserting the PR "would have been asked of the wrong repository",
+# a specific and false statement about a URL naming this very repository. A false refusal on the
+# merge path refuses a LEGITIMATE closure, and the operator's only remaining route is the forgery
+# route ADR-023 removed. Both sides now pass through `_mp_api_host`, as _mp_github_pr_state does.
+assert_eq "the gh on PATH is this suite's shim, so every case below drives captured bytes" \
+  "$(command -v gh)" "$FAKEBIN/gh"
+
+: > "$GH_LOG"
+_drive "https://www.github.com/OrodruinLabs/nazgul/pull/88"
+assert_eq "a www.github.com PR URL names THIS repo's host and is ADMITTED, not refused" \
+  "$(_field '.result')" "ok"
+assert_exit_code "and the admitted alias exits 0, not invalid_pr's 6" "$MP_RC" 0
+assert_eq "the admitted alias carries no diagnostic — there was no difference to report" \
+  "$(_field '.diagnostic')" "null"
+assert_not_contains "and stderr never claims the wrong repository would have been asked" \
+  "$MP_ERR" "would have been asked of the wrong repository"
+assert_contains "the alias reaches the provider arm, pinned to the API's spelling of the host" \
+  "$(cat "$GH_LOG")" "pr view 88 --repo github.com/orodruinlabs/nazgul"
+
+# A de-authenticated environment would make the REAL gh answer provider_unavailable, so an `ok`
+# here proves the shim above answered rather than a host this suite must never contact.
+mkdir -p "$FAKEBIN/empty-gh-config"
+GH_CONFIG_DIR="$FAKEBIN/empty-gh-config" _drive "https://www.github.com/OrodruinLabs/nazgul/pull/88"
+assert_eq "de-authenticated, the answer is still the shim's — no real gh is being reached" \
+  "$(_field '.result')" "ok"
+
+# The reverse pairing is the same fact: which side carries the alias must not decide the outcome.
+: > "$GH_LOG"
+git -C "$TEST_DIR" remote set-url origin "https://www.github.com/OrodruinLabs/nazgul.git"
+_drive "https://github.com/OrodruinLabs/nazgul/pull/88"
+assert_eq "the reverse pairing — alias REMOTE, canonical URL — is admitted too" \
+  "$(_field '.result')" "ok"
+assert_contains "and it is pinned to the same API host, not to the alias" \
+  "$(cat "$GH_LOG")" "pr view 88 --repo github.com/orodruinlabs/nazgul"
+git -C "$TEST_DIR" remote set-url origin "https://github.com/OrodruinLabs/nazgul.git"
+
+# Opposite-outcome fixtures: normalising is not relaxing. Exactly one alias maps; a host that
+# merely CONTAINS it is a different host, and the repository half is untouched.
+: > "$GH_LOG"
+_drive "https://www.github.com.evil.example/OrodruinLabs/nazgul/pull/88"
+assert_eq "a host that only contains the alias is still a different host, and is refused" \
+  "$(_field '.result')" "invalid_pr"
+assert_exit_code "and that refusal keeps invalid_pr's exit code" "$MP_RC" 6
+assert_contains "its diagnostic still names the host the URL actually gave" \
+  "$(_field '.diagnostic')" "www.github.com.evil.example/orodruinlabs/nazgul"
+assert_contains "and still names this project's own remote" \
+  "$(_field '.diagnostic')" "github.com/orodruinlabs/nazgul"
+assert_eq "a genuinely different host still never reaches the host CLI" "$(cat "$GH_LOG")" ""
+
+_drive "https://www.github.com/someone-else/other-repo/pull/9"
+assert_eq "the alias host with ANOTHER repo is still refused — the repo half is untouched" \
+  "$(_field '.result')" "invalid_pr"
+assert_contains "and its diagnostic names the repository that disagreed" \
+  "$(_field '.diagnostic')" "someone-else/other-repo"
+assert_eq "the alias grants nothing to a foreign repo: the host is never contacted" \
+  "$(cat "$GH_LOG")" ""
+
+# An unresolvable remote keeps its own outcome on both paths: invalid_pr when a URL was given
+# (nothing to compare it against), unbindable_repo for a bare number.
+git -C "$TEST_DIR" remote set-url origin "https://github.com/"
+_drive "https://www.github.com/OrodruinLabs/nazgul/pull/88"
+assert_eq "an unresolvable remote still refuses a URL, alias or not" "$(_field '.result')" "invalid_pr"
+assert_contains "and says the remote named none, rather than inventing one" \
+  "$(_field '.diagnostic')" "github.com/<none>"
+_drive 88
+assert_eq "and a bare number against it is still unbindable_repo, not invalid_pr" \
+  "$(_field '.result')" "unbindable_repo"
+git -C "$TEST_DIR" remote set-url origin "https://github.com/OrodruinLabs/nazgul.git"
+
+# no_remote is decided before this comparison and is unchanged by it.
+git -C "$TEST_DIR" remote remove origin
+_drive "https://www.github.com/OrodruinLabs/nazgul/pull/88"
+assert_eq "with no remote at all the answer is still no_remote, never the URL refusal" \
+  "$(_field '.result')" "no_remote"
+assert_exit_code "and no_remote keeps its own exit code" "$MP_RC" 3
+git -C "$TEST_DIR" remote add origin "https://github.com/OrodruinLabs/nazgul.git"
+
 # A credential can only realistically arrive through --pr, and that was the one path
 # that echoed its input raw into stderr and the event bus.
 : > "$EVENTS"
@@ -483,9 +566,8 @@ assert_not_contains "a token-shaped string in host stderr never reaches our stde
 assert_contains "the redaction is visible, not a silent truncation" "$(_field '.diagnostic')" "***"
 assert_not_contains "no token-shaped string is written to the event bus" \
   "$(cat "$EVENTS" 2>/dev/null)" "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-CONFIG_AFTER=$(shasum -a 256 < "$TEST_DIR/nazgul/config.json" | awk '{print $1}')
-assert_eq "the seam never writes config.json at all — no credential surface to add one to" \
-  "$CONFIG_AFTER" "$CONFIG_BEFORE"
+assert_file_unchanged "the seam never writes config.json at all — no credential surface to add one to" \
+  "$TEST_DIR/nazgul/config.json" "$CONFIG_BEFORE"
 
 # --- The seam never consults git ancestry, on any path. Post-squash, ancestry
 # reports every shipped commit as unshipped, so a fallback would be inverted. ---
