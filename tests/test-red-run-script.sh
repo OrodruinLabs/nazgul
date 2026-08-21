@@ -1225,6 +1225,294 @@ if command -v jq >/dev/null 2>&1; then
     "$RRX_CHECKED" "$RRX_SCANNED"
 fi
 
+# PR #240: the `/*` arm ran the LIVE absolute path from inside the pre-change
+# worktree, so an in-project test_command recorded a base red for the CHANGED runner.
+RRA_SCANNED=0
+RRA_CHECKED=0
+RRA_SKIPPED=0
+RRA_NOJQ=0
+RRA_FINDINGS=0
+RRA_MARK=0
+
+rra_begin() {
+  RRA_SCANNED=$((RRA_SCANNED + 1))
+  if ! command -v jq >/dev/null 2>&1; then
+    RRA_SKIPPED=$((RRA_SKIPPED + 1))
+    RRA_NOJQ=$((RRA_NOJQ + 1))
+    _skip "runner placement: $1 (jq unavailable — red-run cannot read a project config)"
+    return 1
+  fi
+  RRA_CHECKED=$((RRA_CHECKED + 1))
+  RRA_MARK="$TESTS_FAILED"
+  return 0
+}
+
+rra_end() {
+  [ "$TESTS_FAILED" -eq "$RRA_MARK" ] || RRA_FINDINGS=$((RRA_FINDINGS + 1))
+}
+
+# Two runners identical but for $2, which each one appends to $RRA_PROBE beside
+# its own $0 and cwd: the record of WHICH tree's runner actually executed.
+write_placed_runner() {
+  local dest="$1" variant="$2"
+  {
+    printf '#!/usr/bin/env bash\nset -uo pipefail\nVARIANT=%s\n' "$variant"
+    cat <<'PLACED_RUNNER'
+[ -z "${RRA_PROBE:-}" ] || printf 'variant=%s argv0=%s cwd=%s\n' "$VARIANT" "$0" "$PWD" >> "$RRA_PROBE"
+only=""
+for a in "$@"; do
+  case "$a" in --only=*) only="${a#--only=}" ;; esac
+done
+if [ -z "$only" ]; then
+  echo "run-my-tests: no --only= scope given"
+  exit 9
+fi
+matched=0
+failed=""
+for f in "$PWD"/tests/test-*.sh; do
+  [ -e "$f" ] || continue
+  base=$(basename "$f")
+  case "$base" in *"$only"*) ;; *) continue ;; esac
+  matched=1
+  bash "$f" || failed="${failed}  - ${base}
+"
+done
+if [ "$matched" -eq 0 ]; then
+  echo "run-my-tests: nothing matched --only=$only"
+  exit 2
+fi
+if [ -n "$failed" ]; then
+  printf 'Failed test files:\n%s\n' "$failed"
+  exit 1
+fi
+exit 0
+PLACED_RUNNER
+  } > "$dest"
+  chmod +x "$dest"
+}
+
+# $1 base|head — the commit that first carries the runner; $2 its subdirectory.
+# The runner scans "$PWD"/tests, so the tree it runs FROM decides what it sees.
+setup_placed_runner_project() {
+  local first="$1" subdir="${2:-}"
+  setup_temp_dir
+  git -C "$TEST_DIR" init -q -b main
+  git -C "$TEST_DIR" config user.email "test@nazgul.dev"
+  git -C "$TEST_DIR" config user.name "Nazgul Test"
+  mkdir -p "$TEST_DIR/tests" "$TEST_DIR/scripts" "$TEST_DIR/nazgul/tasks"
+  PLACED_RUNNER_REL="run-my-tests.sh"
+  if [ -n "$subdir" ]; then
+    mkdir -p "$TEST_DIR/$subdir"
+    PLACED_RUNNER_REL="$subdir/run-my-tests.sh"
+  fi
+  printf 'placeholder\n' > "$TEST_DIR/tests/.keep"
+  if [ "$first" = "base" ]; then
+    write_placed_runner "$TEST_DIR/$PLACED_RUNNER_REL" base
+  fi
+  git -C "$TEST_DIR" add -A
+  git -C "$TEST_DIR" commit -q -m "base"
+  PLACED_BASE=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  write_placed_runner "$TEST_DIR/$PLACED_RUNNER_REL" head
+  printf '#!/usr/bin/env bash\necho feature\n' > "$TEST_DIR/scripts/feature.sh"
+  cat > "$TEST_DIR/tests/test-delta.sh" <<'DELTA'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "=== test-delta ==="
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/scripts/feature.sh" ]; then
+  echo "  PASS: delta needs the feature"
+  exit 0
+fi
+echo "  FAIL: delta needs the feature"
+exit 1
+DELTA
+  git -C "$TEST_DIR" add -A
+  git -C "$TEST_DIR" commit -q -m "the task's work"
+  PLACED_HEAD=$(git -C "$TEST_DIR" rev-parse HEAD)
+  PLACED_PROBE="$TEST_DIR/runner-probe.txt"
+  : > "$PLACED_PROBE"
+  export RRA_PROBE="$PLACED_PROBE"
+}
+
+write_placed_config() {
+  write_project_config <<CFG
+{
+  "schema_version": 37,
+  "project": {
+    "test_command": "$1",
+    "test_filter_template": "--only={filter}",
+    "test_roots": ["tests"]
+  }
+}
+CFG
+}
+
+write_placed_manifest() {
+  local id="$1"
+  {
+    printf -- '---\nstatus: IN_PROGRESS\n---\n# %s: scratch task\n\n' "$id"
+    printf -- '## Metadata\n- **ID**: %s\n- **Base SHA**: %s\n\n' "$id" "$PLACED_BASE"
+    printf -- '## Commits\n%s\n\n' "$PLACED_HEAD"
+    printf -- '## Test Obligation\n- **Scoped filter**: `--only=delta`\n\n'
+    printf -- '## Implementation Log\n- nothing yet\n'
+  } > "$TEST_DIR/nazgul/tasks/${id}.md"
+}
+
+RRA_OUTSIDE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-shared-runner-XXXXXX")
+write_placed_runner "$RRA_OUTSIDE_DIR/run-shared.sh" shared
+
+setup_placed_runner_project base
+if rra_begin "an absolute in-project runner executes the PRE-CHANGE copy"; then
+  write_placed_config "$TEST_DIR/run-my-tests.sh"
+  write_placed_manifest TASK-150
+  MANIFEST150="$TEST_DIR/nazgul/tasks/TASK-150.md"
+  run_capture TASK-150 --filter=delta
+  PLACED_RAN=$(cat "$PLACED_PROBE")
+  assert_exit_code "placed absolute: captures a red" "$RR_EC" 0
+  assert_contains "placed absolute: the runner that ran is the one committed at BASE" \
+    "$PLACED_RAN" "variant=base"
+  assert_not_contains "placed absolute: the CHANGED runner never executed" \
+    "$PLACED_RAN" "variant=head"
+  assert_not_contains "placed absolute: it did not execute out of the live tree" \
+    "$PLACED_RAN" "argv0=$TEST_DIR/run-my-tests.sh"
+  assert_eq "placed absolute: the recorded command is the normalised in-tree form" \
+    "$(capture_cmd "$MANIFEST150")" "./run-my-tests.sh --only=delta"
+  assert_contains "placed absolute: the capture line says it was normalised" \
+    "$(cat "$MANIFEST150")" "absolute runner normalised into the pre-change tree as ./run-my-tests.sh"
+  assert_file_contains "placed absolute: the entry names the failing test file" \
+    "$MANIFEST150" 'red-run: tests/test-delta.sh'
+  assert_eq "placed absolute: the scratch worktree is removed" "$(worktree_count)" "1"
+  rra_end
+fi
+
+if rra_begin "the physically-resolved spelling of the same path places identically"; then
+  PLACED_REAL=$(cd "$TEST_DIR" && pwd -P)
+  write_placed_config "$PLACED_REAL/run-my-tests.sh"
+  write_placed_manifest TASK-151
+  MANIFEST151="$TEST_DIR/nazgul/tasks/TASK-151.md"
+  : > "$PLACED_PROBE"
+  run_capture TASK-151 --filter=delta
+  assert_exit_code "resolved spelling: captures a red" "$RR_EC" 0
+  assert_contains "resolved spelling: still the BASE runner" "$(cat "$PLACED_PROBE")" "variant=base"
+  assert_eq "resolved spelling: normalises to the same in-tree form" \
+    "$(capture_cmd "$MANIFEST151")" "./run-my-tests.sh --only=delta"
+  rra_end
+fi
+
+teardown_temp_dir
+setup_placed_runner_project head
+if rra_begin "an absolute in-project runner absent at the base commit is refused"; then
+  write_placed_config "$TEST_DIR/run-my-tests.sh"
+  write_placed_manifest TASK-152
+  MANIFEST152="$TEST_DIR/nazgul/tasks/TASK-152.md"
+  run_capture TASK-152 --filter=delta
+  assert_exit_code "absent absolute: exits 1 rather than fabricating a red" "$RR_EC" 1
+  assert_contains "absent absolute: reuses the absent-from-the-pre-change-tree refusal" \
+    "$RR_OUT" "is absent from the pre-change tree: $PLACED_BASE has no run-my-tests.sh"
+  assert_contains "absent absolute: says nothing ran at all" "$RR_OUT" "nothing was run at all"
+  assert_not_contains "absent absolute: is never reported as a red" "$RR_OUT" "RED confirmed"
+  assert_eq "absent absolute: no runner executed anywhere" "$(cat "$PLACED_PROBE")" ""
+  assert_file_not_contains "absent absolute: writes NO evidence block" \
+    "$MANIFEST152" 'red-run: tests/test-delta.sh'
+  rra_end
+fi
+
+teardown_temp_dir
+setup_placed_runner_project base
+if rra_begin "an absolute runner outside the repository runs, and the evidence says so"; then
+  write_placed_config "$RRA_OUTSIDE_DIR/run-shared.sh"
+  write_placed_manifest TASK-153
+  MANIFEST153="$TEST_DIR/nazgul/tasks/TASK-153.md"
+  run_capture TASK-153 --filter=delta
+  assert_exit_code "outside absolute: still captures" "$RR_EC" 0
+  assert_contains "outside absolute: the shared runner is what executed" \
+    "$(cat "$PLACED_PROBE")" "variant=shared"
+  assert_contains "outside absolute: warns on stderr that it resolved outside" \
+    "$RR_OUT" "resolves outside"
+  assert_contains "outside absolute: the evidence block records it where a reader will see it" \
+    "$(cat "$MANIFEST153")" "runner resolved OUTSIDE the pre-change tree: $RRA_OUTSIDE_DIR/run-shared.sh"
+  assert_eq "outside absolute: the recorded command is the configured path, unchanged" \
+    "$(capture_cmd "$MANIFEST153")" "$RRA_OUTSIDE_DIR/run-shared.sh --only=delta"
+  rra_end
+fi
+
+if rra_begin "an outside absolute runner that is not executable keeps its own refusal"; then
+  write_placed_config "$RRA_OUTSIDE_DIR/no-such-runner.sh"
+  write_placed_manifest TASK-154
+  run_capture TASK-154 --filter=delta
+  assert_exit_code "outside non-executable: exits 1" "$RR_EC" 1
+  assert_contains "outside non-executable: names the file it cannot execute" \
+    "$RR_OUT" "is not an executable file: $RRA_OUTSIDE_DIR/no-such-runner.sh"
+  assert_not_contains "outside non-executable: is NOT the unplaceable refusal" \
+    "$RR_OUT" "cannot be placed relative to the pre-change tree"
+  rra_end
+fi
+
+if rra_begin "an absolute runner whose directory does not resolve is its own named refusal"; then
+  write_placed_config "/nazgul-no-such-dir-xyz/run-my-tests.sh"
+  write_placed_manifest TASK-155
+  MANIFEST155="$TEST_DIR/nazgul/tasks/TASK-155.md"
+  run_capture TASK-155 --filter=delta
+  assert_exit_code "unplaceable absolute: exits 1" "$RR_EC" 1
+  assert_contains "unplaceable absolute: names the state rather than bucketing it" \
+    "$RR_OUT" "cannot be placed relative to the pre-change tree"
+  assert_contains "unplaceable absolute: says which fact could not be established" \
+    "$RR_OUT" "has no resolvable directory"
+  assert_contains "unplaceable absolute: says nothing ran at all" "$RR_OUT" "nothing was run at all"
+  assert_not_contains "unplaceable absolute: is NOT the absent-from-the-base refusal" \
+    "$RR_OUT" "is absent from the pre-change tree"
+  assert_not_contains "unplaceable absolute: is never reported as a red" "$RR_OUT" "RED confirmed"
+  assert_file_not_contains "unplaceable absolute: writes NO evidence block" \
+    "$MANIFEST155" 'red-run: tests/test-delta.sh'
+  rra_end
+fi
+
+if rra_begin "a bare runner PATH finds inside the repository is placed too"; then
+  write_placed_config "run-my-tests.sh"
+  write_placed_manifest TASK-156
+  MANIFEST156="$TEST_DIR/nazgul/tasks/TASK-156.md"
+  : > "$PLACED_PROBE"
+  RRA_PATH_SAVED="$PATH"
+  PATH="$TEST_DIR:$PATH"
+  run_capture TASK-156 --filter=delta
+  PATH="$RRA_PATH_SAVED"
+  assert_exit_code "PATH-placed: captures a red" "$RR_EC" 0
+  assert_contains "PATH-placed: the BASE runner executed, not the one PATH found live" \
+    "$(cat "$PLACED_PROBE")" "variant=base"
+  assert_eq "PATH-placed: the recorded command is the normalised in-tree form" \
+    "$(capture_cmd "$MANIFEST156")" "./run-my-tests.sh --only=delta"
+  assert_contains "PATH-placed: the capture line names the third spelling it normalised" \
+    "$(cat "$MANIFEST156")" "PATH resolved 'run-my-tests.sh' inside this repository"
+  rra_end
+fi
+
+teardown_temp_dir
+setup_placed_runner_project base tests
+if rra_begin "the copy-set warning is reachable once an absolute runner is placed"; then
+  write_placed_config "$TEST_DIR/tests/run-my-tests.sh"
+  write_placed_manifest TASK-157
+  MANIFEST157="$TEST_DIR/nazgul/tasks/TASK-157.md"
+  run_capture TASK-157 --filter=delta
+  assert_exit_code "copy-set warning: the capture still runs" "$RR_EC" 0
+  assert_contains "copy-set warning: names the resolved runner the copy set carries" \
+    "$RR_OUT" "the copy set carries tests/run-my-tests.sh, the resolved runner"
+  assert_contains "copy-set warning: the warning is true — the copied CHANGED runner ran" \
+    "$(cat "$PLACED_PROBE")" "variant=head"
+  assert_eq "copy-set warning: and it ran from the pre-change tree, not the live one" \
+    "$(capture_cmd "$MANIFEST157")" "./tests/run-my-tests.sh --only=delta"
+  rra_end
+fi
+teardown_temp_dir
+rm -rf "$RRA_OUTSIDE_DIR"
+
+echo "  runner placement: ${RRA_SCANNED} scanned, ${RRA_SKIPPED} skipped (jq-unavailable=${RRA_NOJQ}), ${RRA_CHECKED} checked, ${RRA_FINDINGS} findings"
+assert_eq "runner placement: scanned == skipped + checked" \
+  "$RRA_SCANNED" "$((RRA_SKIPPED + RRA_CHECKED))"
+if command -v jq >/dev/null 2>&1; then
+  assert_eq "runner placement: every scenario was driven where jq is available" \
+    "$RRA_CHECKED" "$RRA_SCANNED"
+fi
+
 setup_temp_dir
 
 teardown_temp_dir
