@@ -647,6 +647,52 @@ else
 fi
 teardown_temp_dir
 
+# --- Test 21b (TASK-023): a failed ledger write must not abort the block half-applied —
+# BLOCKED is written first, so aborting left a quarantine with no kind, reason or event ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "IN_PROGRESS"
+# A directory where the ledger file belongs: ttg_log_transition refuses a non-regular
+# ledger and returns 1, the same rc a lock timeout produces.
+mkdir "$TEST_DIR/nazgul/logs/guarded-transitions.jsonl"
+git -C "$TEST_DIR" checkout -q -b conflict-branch
+echo "conflict line A" > "$TEST_DIR/conflict.txt"
+git -C "$TEST_DIR" add conflict.txt
+git -C "$TEST_DIR" commit -q -m "branch A"
+git -C "$TEST_DIR" checkout -q main 2>/dev/null || git -C "$TEST_DIR" checkout -q master
+echo "conflict line B" > "$TEST_DIR/conflict.txt"
+git -C "$TEST_DIR" add conflict.txt
+git -C "$TEST_DIR" commit -q -m "branch B"
+git -C "$TEST_DIR" merge conflict-branch --no-commit 2>/dev/null || true
+porcelain=$(git -C "$TEST_DIR" status --porcelain 2>/dev/null || echo "")
+if echo "$porcelain" | grep -qE '^(U.|.U|AA|DD) '; then
+  ledger_field() { # <label>
+    grep -m1 "^- \*\*$1\*\*:" "$TEST_DIR/nazgul/tasks/TASK-001.md" \
+      | sed 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*$//'
+  }
+  run_hook
+  assert_contains "TASK-023: the ledger write really did fail (fixture is live)" \
+    "$HOOK_OUTPUT" "ledger is not a regular non-symlink file"
+  assert_eq "TASK-023: a failed ledger write still leaves BLOCKED" \
+    "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "BLOCKED"
+  assert_eq "TASK-023: the quarantine is still typed by kind" \
+    "$(ledger_field 'Blocked kind')" "git-conflict"
+  assert_eq "TASK-023: the quarantine still carries its reason" \
+    "$(ledger_field 'Blocked reason')" "git conflict — unmerged files detected"
+  assert_file_contains "TASK-023: the blocked event still fires" \
+    "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"blocked"'
+else
+  _skip "TASK-023: the ledger write really did fail (skipped — no conflict produced)"
+  _skip "TASK-023: a failed ledger write still leaves BLOCKED (skipped — no conflict produced)"
+  _skip "TASK-023: the quarantine is still typed by kind (skipped — no conflict produced)"
+  _skip "TASK-023: the quarantine still carries its reason (skipped — no conflict produced)"
+  _skip "TASK-023: the blocked event still fires (skipped — no conflict produced)"
+fi
+teardown_temp_dir
+
 # --- Test 22: Checkpoint is valid JSON ---
 setup_temp_dir
 setup_git_repo
@@ -840,6 +886,44 @@ status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "TASK-022: a second not_merged iteration still escalates to BLOCKED" "$status" "BLOCKED"
 assert_contains "TASK-022: the not_merged escalation is still named" \
   "$HOOK_OUTPUT" "escalated to BLOCKED"
+teardown_temp_dir
+
+# TASK-023 — the pre-filter matched the HEADING alone, and templates/task-manifest.md ships
+# that heading with its whole block commented out, so EVERY template-born manifest was probed.
+mc_setup
+create_review_dir TASK-001
+{ printf '\n'
+  awk '/^## Merge Evidence/{f=1;print;next} f && /^## /{exit} f{print}' \
+    "$REPO_ROOT/templates/task-manifest.md"
+} >> "$TEST_DIR/nazgul/tasks/TASK-001.md"
+assert_file_contains "TASK-023: the fixture really carries the template's heading" \
+  "$TEST_DIR/nazgul/tasks/TASK-001.md" "## Merge Evidence"
+assert_file_contains "TASK-023: and the commented block beneath it, not an empty section" \
+  "$TEST_DIR/nazgul/tasks/TASK-001.md" "\- \*\*host\*\*: example\.invalid"
+assert_file_contains "TASK-023: with the comment still closed around it" \
+  "$TEST_DIR/nazgul/tasks/TASK-001.md" "(host API, ok) -->"
+HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "TASK-023: a review-closed DONE still stands" "$status" "DONE"
+me_events=$(grep -c '"event":"merge_evidence_missing"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null || true)
+assert_eq "TASK-023: the template's commented block is probed ZERO times in two iterations" \
+  "${me_events:-0}" "0"
+assert_not_contains "TASK-023: the verifier is never consulted for it at all" \
+  "$HOOK_OUTPUT" "ttg_verify_merge_evidence:"
+teardown_temp_dir
+
+# The other half: an uncommented field line IS a closure attempt, so it still reaches the
+# verifier and still refuses with its own token — the gate is unweakened, only the probe moved.
+mc_setup
+mc_evidence TASK-001 ""
+HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+assert_file_contains "TASK-023: a half-written real block still reaches the verifier" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"merge_evidence_missing"'
+assert_file_contains "TASK-023: with its refusal token unchanged" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"reason":"truncated"'
+assert_contains "TASK-023: and its stderr refusal unchanged" \
+  "$HOOK_OUTPUT" "ttg_verify_merge_evidence:"
 teardown_temp_dir
 
 rm -rf "$MC_BIN" "$MC_BIN_DOWN" "$MC_BIN_OPEN"
@@ -1264,7 +1348,7 @@ co_close() {
   teardown_temp_dir
 }
 
-# --- 1/5: the headline defect — a task that ships nothing no longer deadlocks the unit ---
+# --- 1/6: the headline defect — a task that ships nothing no longer deadlocks the unit ---
 if co_fixture "group carve-out" group IMPLEMENTED:1 IMPLEMENTED:1 CANCELLED:1; then
   assert_exit_code "carve-out group: exit 2" "$HOOK_EC" 2
   assert_contains "carve-out group: board fires" "$HOOK_OUTPUT" "AGGREGATE REVIEW READY"
@@ -1286,7 +1370,7 @@ if co_fixture "group carve-out" group IMPLEMENTED:1 IMPLEMENTED:1 CANCELLED:1; t
 fi
 co_close
 
-# --- 2/5: one granularity up, where the unit spans every group ---
+# --- 2/6: one granularity up, where the unit spans every group ---
 if co_fixture "feature carve-out" feature IMPLEMENTED:1 IMPLEMENTED:2 CANCELLED:3; then
   assert_exit_code "carve-out feature: exit 2" "$HOOK_EC" 2
   assert_contains "carve-out feature: board fires" "$HOOK_OUTPUT" "AGGREGATE REVIEW READY"
@@ -1299,7 +1383,7 @@ if co_fixture "feature carve-out" feature IMPLEMENTED:1 IMPLEMENTED:2 CANCELLED:
 fi
 co_close
 
-# --- 3/5: the half that proves the check was not simply deleted ---
+# --- 3/6: the half that proves the check was not simply deleted ---
 if co_fixture "blocked veto" group IMPLEMENTED:1 IMPLEMENTED:1 BLOCKED:1; then
   assert_exit_code "blocked veto: exit 2" "$HOOK_EC" 2
   assert_contains "blocked veto: unit stays parked" "$HOOK_OUTPUT" "AWAITING AGGREGATE REVIEW"
@@ -1310,20 +1394,21 @@ if co_fixture "blocked veto" group IMPLEMENTED:1 IMPLEMENTED:1 BLOCKED:1; then
 fi
 co_close
 
-# --- 4/5: an empty board is not a clean one ---
+# --- 4/6: an empty board is not a clean one ---
 if co_fixture "all cancelled" feature CANCELLED:1 CANCELLED:1; then
   assert_exit_code "all cancelled: exit 0" "$HOOK_EC" 0
   assert_contains "all cancelled: the no-dispatch path is reported" \
     "$HOOK_OUTPUT" "has nothing to review"
   assert_not_contains "all cancelled: no board readiness" "$HOOK_OUTPUT" "AGGREGATE REVIEW READY"
   assert_not_contains "all cancelled: no board dispatched" "$HOOK_OUTPUT" "AGGREGATE review unit"
-  assert_file_contains "all cancelled: event records an empty board" "$EVENTS" '"implemented":0'
-  assert_file_contains "all cancelled: event carries both ids" "$EVENTS" \
-    '"cancelled_tasks":"TASK-001 TASK-002"'
+  # The carve-out event is bound to a dispatch, and this arm dispatches nothing; the named
+  # stderr line above is this case's record (RULES.md §1.15's own wording for it).
+  assert_file_not_contains "all cancelled: no board means no carve-out event" "$EVENTS" \
+    '"event":"aggregate_board_cancelled_carveout"'
 fi
 co_close
 
-# --- 5/5: which unit is "active" must not be decided by a task that ships nothing ---
+# --- 5/6: which unit is "active" must not be decided by a task that ships nothing ---
 if co_fixture "active-group scan" group CANCELLED:1 CANCELLED:1 IMPLEMENTED:2; then
   assert_exit_code "active-group scan: exit 2" "$HOOK_EC" 2
   assert_contains "active-group scan: unit resolves to group 2" "$HOOK_OUTPUT" "group 2"
@@ -1335,10 +1420,48 @@ if co_fixture "active-group scan" group CANCELLED:1 CANCELLED:1 IMPLEMENTED:2; t
 fi
 co_close
 
+# --- 6/6 (TASK-023): bound to the DISPATCH, not the iteration — the scan reaches an unready
+# unit on EVERY Stop, so "fires when it should" cannot catch an event that fires always ---
+if co_fixture "unready across two Stops" feature READY:1 IMPLEMENTED:1 CANCELLED:1; then
+  assert_exit_code "unready carve-out: exit 2" "$HOOK_EC" 2
+  assert_contains "unready carve-out: the unit is NOT ready" \
+    "$HOOK_OUTPUT" "AWAITING AGGREGATE REVIEW"
+  assert_not_contains "unready carve-out: no board is dispatched" \
+    "$HOOK_OUTPUT" "AGGREGATE review unit"
+  assert_contains "unready carve-out: the NOTE is still computed where it always was" \
+    "$HOOK_OUTPUT" "carried out CANCELLED (TASK-003)"
+  run_hook
+  assert_contains "unready carve-out: still unready on the 2nd Stop" \
+    "$HOOK_OUTPUT" "AWAITING AGGREGATE REVIEW"
+  co_events=$(grep -c '"event":"aggregate_board_cancelled_carveout"' "$EVENTS" 2>/dev/null || true)
+  assert_eq "unready carve-out: ZERO events across two no-dispatch iterations" \
+    "${co_events:-0}" "0"
+fi
+co_close
+
 echo "  carve-out scan: ${CO_SCANNED} scanned, ${CO_SKIPPED} skipped (unbuildable=${CO_UNBUILDABLE}), ${CO_CHECKED} checked, ${CO_FINDINGS} findings"
 assert_eq "carve-out scan: scanned == skipped + checked" \
   "$CO_SCANNED" "$((CO_SKIPPED + CO_CHECKED))"
-assert_eq "carve-out scan: every scenario was checked" "$CO_CHECKED" "5"
+assert_eq "carve-out scan: every scenario was checked" "$CO_CHECKED" "6"
+
+# --- TASK-023: readiness is not dispatch — the HITL hold WITHDRAWS the board, and a
+# withdrawn dispatch is one more iteration that must record no carve-out ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.review_gate.granularity = "feature"' '.mode = "hitl"' \
+  '.agents.reviewers = ["code-reviewer"]' '.learning.auto_distill_post_loop = false' \
+  '.docs.verify_comments = false' '.self_audit.enabled = false'
+create_plan
+create_task_file "TASK-001" "IMPLEMENTED"; set_task_group TASK-001 1
+create_task_file "TASK-002" "CANCELLED"; set_task_group TASK-002 1
+touch "$TEST_DIR/nazgul/.hitl-pending"
+run_hook
+assert_contains "hitl hold: the gate replaces the board dispatch" "$HOOK_OUTPUT" "GATE hitl_pending"
+assert_not_contains "hitl hold: no board goes out" "$HOOK_OUTPUT" "AGGREGATE review unit"
+assert_contains "hitl hold: the readiness marker still reports the carve-out" \
+  "$HOOK_OUTPUT" "carried out CANCELLED (TASK-002)"
+assert_file_not_contains "hitl hold: a withdrawn dispatch records no carve-out event" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"aggregate_board_cancelled_carveout"'
+teardown_temp_dir
 
 # --- Granularity feature, INCOMPLETE: park IMPLEMENTED across groups, keep building ---
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
