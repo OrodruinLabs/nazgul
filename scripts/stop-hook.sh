@@ -35,6 +35,13 @@ fi
 STOP_PAYLOAD=""
 read_hook_payload STOP_PAYLOAD
 
+# Opt-in, default unset: the raw payload carries cwd, transcript_path,
+# agent_transcript_path and last_assistant_message (ruling Q4). `>`, never `>>`.
+if [ "${NAZGUL_STOP_PAYLOAD_CAPTURE:-0}" = "1" ]; then
+  mkdir -p "$NAZGUL_DIR/logs" 2>/dev/null || true
+  printf '%s\n' "$STOP_PAYLOAD" > "$NAZGUL_DIR/logs/stop-payload-last.json" 2>/dev/null || true
+fi
+
 # OBSERVATION ONLY — no classification acts on these yet. A truncated, absent
 # or non-JSON payload degrades to `unknown`, which is today's behavior exactly.
 BG_SEEN="unknown" BG_ENTRIES=0 BG_SUBAGENTS=0 BG_LIVE=0 BG_TYPES="" BG_STATUSES=""

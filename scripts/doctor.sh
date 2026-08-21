@@ -351,6 +351,31 @@ check_stdin_hazard() {
   _doc_report note stdin-hazard "Hook scripts that read stdin via 'cat' without a bounded, non-tty-aware guard can block forever under a non-tty, never-EOF stdin. When running such scripts (or the test harness) outside a real hook context, redirect stdin: 'script < /dev/null'. Informational only; does not affect this run's exit code."
 }
 
+# (n) Stop-payload observability (#218 ruling Q4) — an unscored note, so it adds
+# no RULES §15 registry membership. Three outcomes, and never only two.
+check_stop_payload() {
+  local events="$NAZGUL_DIR/logs/events.jsonl" last="" seen why counts
+  if [ -f "$events" ]; then
+    last=$(grep '"event":"stop_payload_observed"' "$events" 2>/dev/null | tail -1 || true)
+  fi
+  if [ -z "$last" ]; then
+    _doc_report note stop-payload "NEVER OBSERVED: nazgul/logs/events.jsonl holds no stop_payload_observed record, so no Stop has been measured in this project yet. This is 'never looked' — it is NOT a report that background_tasks was missing. Run one loop iteration (any Stop emits the record) and re-run /nazgul:doctor."
+    return 0
+  fi
+  seen=$(printf '%s' "$last" | jq -r '.bg_seen // ""' 2>/dev/null || true)
+  if [ -z "$seen" ]; then
+    _doc_skip note stop-payload unreadable "UNREADABLE RECORD: a stop_payload_observed line exists but its bg_seen field could not be read (jq absent, or the line is not parseable JSON). Whether background_tasks reached the last Stop is UNDETERMINED here — which is neither 'present', 'absent', nor 'never observed'."
+    return 0
+  fi
+  if [ "$seen" = "yes" ]; then
+    counts=$(printf '%s' "$last" | jq -r '"entries=\(.entries) subagents=\(.subagents) live=\(.live) types=[\(.types)] statuses=[\(.statuses)]"' 2>/dev/null || printf 'counts unreadable')
+    _doc_report note stop-payload "FIELD PRESENT at the last recorded Stop: background_tasks was delivered and read ($counts). Dispatch class is observable on this host, so the in-flight hold can be decided from the payload instead of predicted at dispatch time."
+    return 0
+  fi
+  why=$(printf '%s' "$last" | jq -r '.why // ""' 2>/dev/null || true)
+  _doc_report note stop-payload "FIELD ABSENT at the last recorded Stop: a Stop WAS measured, but background_tasks never reached the classifier (bg_seen=$seen, why=${why:-unrecorded}). why=field_absent means the payload arrived without the field — background_tasks is undocumented, so its shape can change with no deprecation notice; any other why means the payload itself did not arrive intact. Either way this is 'looked and found none', not 'never looked'."
+}
+
 # The gh-stack release ADR-018's probe characterized, and whose exact message
 # strings scripts/lib/stack-utils.sh matches on. The pin lives in source, not in
 # nazgul/config.json, because doctor never writes state (ADR-016): the canary is
@@ -661,7 +686,7 @@ check_sessions() {
   fi
 }
 
-_DOC_CHECK_IDS="config-present plugin-version dependencies git-hooks invoking-shell nazgul-dir-env config-schema stacking stack-registry stdin-hazard messaging remote-control sessions"
+_DOC_CHECK_IDS="config-present plugin-version dependencies git-hooks invoking-shell nazgul-dir-env config-schema stacking stack-registry stdin-hazard stop-payload messaging remote-control sessions"
 _DOC_ONLY=""
 
 # _doc_run <check-id> <function> — runs the check unless --only excluded it.
@@ -743,6 +768,7 @@ main() {
   _doc_run stacking check_stacking
   _doc_run stack-registry check_stack_registry
   _doc_run stdin-hazard check_stdin_hazard
+  _doc_run stop-payload check_stop_payload
   _doc_run messaging check_messaging
   _doc_run remote-control check_remote_control
   _doc_run sessions check_sessions
