@@ -307,6 +307,56 @@ teardown_temp_dir
 
 # === Observed classification: the Stop payload decides, not the write-time class (#218) ===
 
+# P3 (C3/AC5) — a non-subagent entry is neither live nor present. It comes first because every
+# disposition below is taken on counts this filter produces.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$(date +%s)" "missing"
+run_hook '{"hook_event_name":"Stop","background_tasks":[{"id":"s1","type":"shell","status":"running"},{"id":"t1","type":"teammate","status":"running"}]}'
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+P3_OBS=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_eq "P3: a running shell and a running teammate are counted as entries" \
+  "$(printf '%s' "$P3_OBS" | jq -r '.entries' 2>/dev/null)" "2"
+assert_eq "P3: neither is a subagent, so SUBAGENT_PRESENT is 0" \
+  "$(printf '%s' "$P3_OBS" | jq -r '.subagents' 2>/dev/null)" "0"
+assert_eq "P3: and neither is live whatever its own status says, so LIVE is 0" \
+  "$(printf '%s' "$P3_OBS" | jq -r '.live' 2>/dev/null)" "0"
+# SUBSTRING TRAP: in_flight_hold is a strict prefix of in_flight_hold_budget_exhausted, so only the
+# field's closing quote makes this a negative about the hold rather than about its successor.
+assert_not_contains "P3: a captured session's 10 polling shells must never hold the loop on itself" \
+  "$EVENTS" '"reason":"in_flight_hold"'
+assert_contains "P3: zero subagents present takes the detect-only empty-array disposition" \
+  "$EVENTS" '"reason":"in_flight_orphan_candidate"'
+assert_file_exists "P3: the candidate marker stays at its original path" "$TEST_DIR/nazgul/in-flight/legacy.json"
+assert_file_not_exists "P3: a non-subagent payload quarantines nothing" "$TEST_DIR/nazgul/in-flight/quarantine/legacy.json"
+# R4 canary: a renamed type label surfaces here as changed vocabulary, not as a silently dead filter.
+assert_eq "P3: the observation names the DISTINCT types actually seen" \
+  "$(printf '%s' "$P3_OBS" | jq -r '.types' 2>/dev/null)" "shell,teammate"
+teardown_temp_dir
+
+# P3 companion — the real shape P3 is named for: 16 in-flight entries, only 6 of them subagents.
+# A count taken over entries rather than over the filtered set would report 16 here.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$(date +%s)" "missing"
+run_hook "$(cat "$FIXTURES/stop-payload-synthetic/mixed-subagent-and-shell.json")"
+# A dispatchable READY task is planted on purpose: without the hold this run blocks with exit 2, so
+# exit 0 discriminates here instead of being the no-plan default.
+assert_exit_code "P3 companion: 6 live subagents among 16 entries hold (exit 0)" "$HOOK_EC" 0
+P3M_HOLD=$(grep '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_contains "P3 companion: the hold counts the 6 subagents, not the 16 entries" "$P3M_HOLD" '"live_subagents":6'
+P3M_OBS=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_eq "P3 companion: entries / subagents / live stay three separate counts" \
+  "$(printf '%s' "$P3M_OBS" | jq -r '[.entries,.subagents,.live]|join("/")' 2>/dev/null)" "16/6/6"
+teardown_temp_dir
+
 # P1 (keystone) — the REAL capture (2 running subagents + 1 shell) holds the very marker the
 # payload-absent case above records as unverifiable. Same fixture, opposite disposition.
 setup_temp_dir
@@ -368,6 +418,129 @@ EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
 assert_contains "P2 negative: a NAMED marker keeps its proven in_flight_orphan disposition" "$EVENTS" '"reason":"in_flight_orphan"'
 assert_file_exists "P2 negative: the proven-class marker is still quarantined" "$TEST_DIR/nazgul/in-flight/quarantine/nm-legacy.json"
 assert_not_contains "P2 negative: the proven class is never downgraded to a candidate" "$EVENTS" '"reason":"in_flight_orphan_candidate"'
+teardown_temp_dir
+
+# P5 (C3/AC7) — `jq -e 'has("background_tasks")'` gates every classification, so a truncation, a
+# rename or a payload that never arrived degrades to the payload-absent arm. Asserted, not assumed.
+P5_SCANNED=0
+P5_SKIPPED=0
+P5_CHECKED=0
+P5_FINDINGS=0
+P5_CASES=(
+  'a literal non-JSON string|not_json|not json'
+  'valid JSON without the key|field_absent|{"hook_event_name":"Stop"}'
+  'a document truncated mid-read|not_json|{"hook_event_name":"Stop","background_tasks":[{"id":"a1","type":"subagent","status":"run'
+  'an empty payload|no_stdin|'
+)
+for p5_case in "${P5_CASES[@]}"; do
+  IFS='|' read -r p5_label p5_want_why p5_payload <<<"$p5_case"
+  P5_SCANNED=$((P5_SCANNED + 1))
+  setup_temp_dir
+  setup_nazgul_dir
+  create_config
+  mkdir -p "$TEST_DIR/nazgul/in-flight"
+  _write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$(date +%s)" "missing"
+  HOOK_OUTPUT=$(printf '%s' "$p5_payload" | bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+  P5_CHECKED=$((P5_CHECKED + 1))
+  EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+  P5_OBS=$(printf '%s\n' "$EVENTS" | grep '"event":"stop_payload_observed"' | tail -1)
+  # A bash fatal is neither of the hook's two documented outcomes, so it is named as itself.
+  case "$HOOK_EC" in 0|2) p5_exit="safe" ;; *) p5_exit="fatal($HOOK_EC)" ;; esac
+  p5_marker="absent"; [ -f "$TEST_DIR/nazgul/in-flight/legacy.json" ] && p5_marker="present"
+  p5_quar="present"; [ -f "$TEST_DIR/nazgul/in-flight/quarantine/legacy.json" ] || p5_quar="absent"
+  p5_unver="no"; case "$EVENTS" in *'"reason":"in_flight_unverifiable"'*) p5_unver="yes" ;; esac
+  # Both negatives carry the closing quote: in_flight_hold and in_flight_orphan are each a strict
+  # prefix of a longer reason token this suite also emits.
+  p5_hold="no"; case "$EVENTS" in *'"reason":"in_flight_hold"'*) p5_hold="yes" ;; esac
+  p5_cand="no"; case "$EVENTS" in *'"reason":"in_flight_orphan_candidate"'*) p5_cand="yes" ;; esac
+  p5_why=$(printf '%s' "$P5_OBS" | jq -r '.why // "ABSENT"' 2>/dev/null)
+  p5_seen=$(printf '%s' "$P5_OBS" | jq -r '.bg_seen // "ABSENT"' 2>/dev/null)
+  P5_GOT="exit=$p5_exit why=${p5_why:-NONE} bg_seen=${p5_seen:-NONE} marker=$p5_marker quarantine=$p5_quar unverifiable=$p5_unver hold=$p5_hold candidate=$p5_cand"
+  P5_WANT="exit=safe why=$p5_want_why bg_seen=unknown marker=present quarantine=absent unverifiable=yes hold=no candidate=no"
+  assert_eq "P5 ($p5_label): the payload-absent disposition, and the arm records WHY it got there" "$P5_GOT" "$P5_WANT"
+  [ "$P5_GOT" = "$P5_WANT" ] || P5_FINDINGS=$((P5_FINDINGS + 1))
+  teardown_temp_dir
+done
+assert_eq "P5 accounting: scanned == skipped + checked" "$P5_SCANNED" "$((P5_SKIPPED + P5_CHECKED))"
+assert_eq "P5 floor: the enumerated payload set is not empty" \
+  "$([ "$P5_CHECKED" -gt 0 ] && echo yes || echo no)" "yes"
+assert_eq "P5: $P5_SCANNED scanned, $P5_SKIPPED skipped, $P5_CHECKED checked — every malformed payload degraded to today's behavior" \
+  "$P5_FINDINGS" "0"
+
+# P8 (§8, #211 in effect) — observed liveness is consulted BEFORE the freshness cutoff, so a stale
+# bound can never decline a hold for a session that HAS a live subagent.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 5'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/stale.json" "nazgul:implementer" "TASK-001" "$(( $(date +%s) - (31 * 60) ))" "missing"
+run_hook "$(cat "$FIXTURES/stop-payload/stop-two-subagents-one-shell.json")"
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+assert_exit_code "P8: an over-age marker still holds when a live subagent is observed (exit 0)" "$HOOK_EC" 0
+assert_contains "P8: the hold is taken on the real capture" "$EVENTS" '"reason":"in_flight_hold"'
+assert_not_contains "P8: the disposition does NOT collapse to in_flight_stale" "$EVENTS" '"reason":"in_flight_stale"'
+assert_file_exists "P8: the over-age marker is left in place" "$TEST_DIR/nazgul/in-flight/stale.json"
+assert_file_not_exists "P8: the over-age marker is not quarantined" "$TEST_DIR/nazgul/in-flight/quarantine/stale.json"
+assert_eq "P8: a held iteration is not burned" \
+  "$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")" "5"
+teardown_temp_dir
+
+# P8 (AC10) — the 30-minute default is #211's call, not this objective's: READ, never written.
+assert_eq "P8: templates/config.json still carries guards.in_flight_stale_minutes 30" \
+  "$(jq -r '.guards.in_flight_stale_minutes' "$REPO_ROOT/templates/config.json")" "30"
+
+# P11 (ruling Q2) — the THIRD state: a subagent is PRESENT but its status is not one the allowlist
+# recognises, so the tick can prove neither liveness nor absence and must act on neither.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 5'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$(date +%s)" "missing"
+run_hook "$(cat "$FIXTURES/stop-payload-synthetic/unknown-status-queued.json")"
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+P11_OBS=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_not_contains "P11 (1): an unrecognised status is not proven live, so NO hold is taken" \
+  "$EVENTS" '"reason":"in_flight_hold"'
+assert_not_contains "P11 (2): a subagent IS present, so NO orphan candidate is filed either" \
+  "$EVENTS" '"reason":"in_flight_orphan_candidate"'
+assert_file_exists "P11 (3): the marker is preserved in nazgul/in-flight/" "$TEST_DIR/nazgul/in-flight/legacy.json"
+assert_file_not_exists "P11 (3): the marker is not quarantined" "$TEST_DIR/nazgul/in-flight/quarantine/legacy.json"
+assert_exit_code "P11 (4): the run degrades to an ordinary blocked iteration (exit 2)" "$HOOK_EC" 2
+assert_eq "P11 (4): ... and burns it — current_iteration increments" \
+  "$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")" "6"
+assert_eq "P11 (5): the observation records the unrecognised status verbatim" \
+  "$(printf '%s' "$P11_OBS" | jq -r '.statuses' 2>/dev/null)" "queued,running"
+assert_eq "P11: present-but-unrecognised counts as PRESENT and as NOT live — the two-count shape" \
+  "$(printf '%s' "$P11_OBS" | jq -r '[.entries,.subagents,.live]|join("/")' 2>/dev/null)" "2/1/0"
+# Collapsing the third state into the unknown arm would re-emit the unobservable-class reason here,
+# even though this payload was read and understood.
+assert_not_contains "P11: an OBSERVED payload never degrades to the unverifiable arm" \
+  "$EVENTS" '"reason":"in_flight_unverifiable"'
+teardown_temp_dir
+
+# P11 companion — the allowlist is pinned in BOTH directions, so a future narrowing to `running`
+# alone is caught by a failing hold and not only by a failing negative.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$(date +%s)" "missing"
+run_hook '{"hook_event_name":"Stop","background_tasks":[{"id":"p1","type":"subagent","status":"pending"}]}'
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+P11P_OBS=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_exit_code "P11 companion: a pending subagent counts as live (exit 0)" "$HOOK_EC" 0
+assert_contains "P11 companion: and takes the hold" "$EVENTS" '"reason":"in_flight_hold"'
+assert_eq "P11 companion: pending is counted in live, not merely present" \
+  "$(printf '%s' "$P11P_OBS" | jq -r '[.subagents,.live]|join("/")' 2>/dev/null)" "1/1"
 teardown_temp_dir
 
 # === Clear: scripts/subagent-stop.sh ===
