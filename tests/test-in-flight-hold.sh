@@ -594,6 +594,7 @@ _write_marker "$TEST_DIR/nazgul/in-flight/valve-a.json" "nazgul:implementer" "TA
 P10_PAYLOAD='{"hook_event_name":"Stop","background_tasks":[{"id":"s1","type":"subagent","status":"running"}]}'
 P10_CFG_BEFORE=$(cksum < "$TEST_DIR/nazgul/config.json")
 run_hook "$P10_PAYLOAD"
+P10_EC_A="$HOOK_EC"
 _p10_check "P10a: a FIRST hold on a fresh marker set is permitted (exit 0)" "$HOOK_EC" "0"
 _p10_check "P10a: exactly one in_flight_hold event" "$(_p10_hold_count)" "1"
 _p10_check "P10a: and no exhaustion event on a first hold" "$(_p10_exhausted_count)" "0"
@@ -611,12 +612,17 @@ _p10_check "P10a: named by a 16-char hash — the _resume_attempts_file conventi
   "${#P10_LEDGER_BASE}" "16"
 
 run_hook "$P10_PAYLOAD"
-_p10_check "P10b: a SECOND hold on an UNCHANGED marker set is refused (exit 2, never exit 0)" "$HOOK_EC" "2"
+# Asserted as the PAIR, not as a bare exit 2: a tree where no hold is ever taken exits 2 on both
+# runs, so a lone `2` would score "the valve refused it" for a run the valve never saw.
+_p10_check "P10a then P10b: the first hold taken and the unchanged repeat refused (0 then 2)" \
+  "$P10_EC_A/$HOOK_EC" "0/2"
 _p10_check "P10b: still exactly one in_flight_hold event — no second hold was taken" "$(_p10_hold_count)" "1"
 _p10_check "P10b: exactly one in_flight_hold_budget_exhausted event" "$(_p10_exhausted_count)" "1"
 P10_EX=$(_p10_exhausted_line)
-_p10_check "P10b: the event names the fingerprint that keys the ledger file" \
-  "$(printf '%s' "$P10_EX" | jq -r '.fingerprint')" "$P10_LEDGER_BASE"
+# The length rides along because two absent values compare equal: with no event and no ledger
+# file, a bare equality would score "" against "" and call it a match.
+_p10_check "P10b: the event names the fingerprint that keys the ledger file, and it is a real hash" \
+  "$(printf '%s' "$P10_EX" | jq -r '.fingerprint')/${#P10_LEDGER_BASE}" "$P10_LEDGER_BASE/16"
 _p10_check "P10b: it carries holds_taken" "$(printf '%s' "$P10_EX" | jq -r '.holds_taken')" "1"
 _p10_check "P10b: holds_taken is a JSON number, not a string" \
   "$(printf '%s' "$P10_EX" | jq -r '.holds_taken | type')" "number"
@@ -636,7 +642,10 @@ _p10_check "P10b: the spent ledger is not driven past the cap" "$(cat "$P10_LEDG
 
 _write_marker "$TEST_DIR/nazgul/in-flight/valve-b.json" "nazgul:implementer" "TASK-009" "$(date +%s)" "missing"
 run_hook "$P10_PAYLOAD"
-_p10_check "P10c: a CHANGED marker set gets its own budget and holds again (exit 0)" "$HOOK_EC" "0"
+# Exit code AND hold count together: after two prior invocations a run can reach exit 0 down
+# paths that have nothing to do with a hold, and only the second hold event distinguishes them.
+_p10_check "P10c: a CHANGED marker set gets its own budget and holds again (exit 0, second hold)" \
+  "$HOOK_EC/$(_p10_hold_count)" "0/2"
 _p10_check "P10c: a second in_flight_hold event, taken on the changed set" "$(_p10_hold_count)" "2"
 _p10_check "P10c: and no second exhaustion" "$(_p10_exhausted_count)" "1"
 _p10_check "P10c: the ledger gains a second, differently-named file — it keys on evidence, not a global counter" \
