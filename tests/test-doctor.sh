@@ -20,6 +20,10 @@ echo "=== $TEST_NAME ==="
 
 DOCTOR="$REPO_ROOT/scripts/doctor.sh"
 
+# The roster size is read from the script under test, so "every check reported"
+# is a comparison against the DECLARED roster rather than a literal that drifts.
+DR_ROSTER_COUNT=$(grep -m1 '^_DOC_CHECK_IDS=' "$DOCTOR" | sed -E 's/^_DOC_CHECK_IDS="([^"]*)"$/\1/' | wc -w | tr -d ' ')
+
 # Checks (k)/(l) read the operator's real shell env, so a host that exports a
 # feature-flag killer would flip every full-run aggregate-exit assertion below.
 unset DO_NOT_TRACK DISABLE_TELEMETRY DISABLE_GROWTHBOOK CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
@@ -105,7 +109,7 @@ assert_contains "no-config fixture: still prints stdin-hazard note" "$OUT" "$(pr
 assert_contains "no-config fixture: every check after config-present ran too" "$OUT" "$(printf '\tmessaging\t')"
 assert_contains "no-config fixture: the last check in the roster ran" "$OUT" "$(printf '\tsessions\t')"
 assert_contains "no-config fixture: the run reached the coverage line, so it was not truncated" \
-  "$(printf '%s' "$OUT" | tail -1)" "13 scanned"
+  "$(printf '%s' "$OUT" | tail -1)" "$DR_ROSTER_COUNT scanned"
 teardown_temp_dir
 
 # --- (b) dependencies: fail branch — jq entirely absent from PATH ---
@@ -843,7 +847,7 @@ OUT=$(cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR bash "$DOCTOR" 2
 assert_contains "empty-scan fixture: the sessions check still reports" "$OUT" "$(printf 'pass\tsessions')"
 # sessions is the LAST check, so a mid-check abort takes the coverage line with it.
 assert_contains "empty-scan fixture: the run reached the coverage line, so it was not truncated" \
-  "$(printf '%s' "$OUT" | tail -1)" "13 scanned"
+  "$(printf '%s' "$OUT" | tail -1)" "$DR_ROSTER_COUNT scanned"
 teardown_temp_dir
 
 # Coverage honesty (FEAT-028 TASK-015, TRD §6): a check with nothing to inspect is
@@ -863,7 +867,8 @@ else
 fi
 read -r D_SCANNED D_SKIPPED D_CHECKED <<<"$(printf '%s' "$COVERAGE" | sed -E "s/$DR_GRAMMAR/\1 \2 \7/")"
 assert_eq "coverage line adds up (N == M + K)" "$D_SCANNED" "$((D_SKIPPED + D_CHECKED))"
-assert_eq "every check reports exactly once, so N is the full check roster" "$D_SCANNED" "13"
+assert_eq "the declared roster is the fourteen checks the docs name" "$DR_ROSTER_COUNT" "14"
+assert_eq "every check reports exactly once, so N is the full check roster" "$D_SCANNED" "$DR_ROSTER_COUNT"
 if [ "$D_SKIPPED" -ge 1 ]; then
   _pass "the disabled-guard check is counted as skipped, not as a check that passed on nothing"
 else
@@ -960,5 +965,90 @@ assert_file_contains "check_remote_control consults the Linux/WSL managed-settin
   "$DOCTOR" "/etc/claude-code/managed-settings.json"
 assert_file_contains "check_remote_control consults settings.local.json" \
   "$DOCTOR" 'settings.local.json'
+
+# --- (n) stop-payload: P12c — three named outcomes, and their wordings differ ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+  '.board.enabled = false' '.guards.git_hooks = false'
+
+_dr_stop_payload_msg() { printf '%s' "$1" | grep -m1 'stop-payload' | cut -f3; }
+
+DR_NEVER=$(cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR bash "$DOCTOR" --only=stop-payload 2>/dev/null)
+assert_contains "P12c: with no events.jsonl at all the check still reports, as an unscored note" \
+  "$DR_NEVER" "$(printf 'note\tstop-payload')"
+assert_contains "P12c: the no-record outcome is named NEVER OBSERVED" "$DR_NEVER" "NEVER OBSERVED"
+
+mkdir -p "$TEST_DIR/nazgul/logs"
+jq -cn '{sv:1,event:"stop_payload_observed",bg_seen:"yes",entries:2,subagents:1,live:1,types:"subagent,shell",statuses:"running"}' \
+  > "$TEST_DIR/nazgul/logs/events.jsonl"
+DR_PRESENT=$(cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR bash "$DOCTOR" --only=stop-payload 2>/dev/null)
+assert_contains "P12c: a record carrying background_tasks is named FIELD PRESENT" "$DR_PRESENT" "FIELD PRESENT"
+assert_contains "P12c: and the present wording carries the counts the deferrals are resolved on" \
+  "$DR_PRESENT" "entries=2 subagents=1 live=1"
+
+# Appended AFTER the bg_seen:"yes" line on purpose: reporting ABSENT here is what
+# proves the check reads the LAST record rather than the first.
+jq -cn '{sv:1,event:"stop_payload_observed",bg_seen:"unknown",why:"field_absent",entries:0,subagents:0,live:0,types:"",statuses:""}' \
+  >> "$TEST_DIR/nazgul/logs/events.jsonl"
+DR_ABSENT=$(cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR bash "$DOCTOR" --only=stop-payload 2>/dev/null)
+assert_contains "P12c: a record without background_tasks is named FIELD ABSENT" "$DR_ABSENT" "FIELD ABSENT"
+# Counted in BOTH directions: a bare "does not say FIELD PRESENT" is also satisfied
+# by output that says nothing at all, which is what a missing check produces.
+assert_eq "P12c: the LAST record decides the outcome, not the first" \
+  "$(printf '%s' "$DR_ABSENT" | grep -c 'FIELD PRESENT')/$(printf '%s' "$DR_ABSENT" | grep -c 'FIELD ABSENT')" "0/1"
+assert_contains "P12c: the absent wording names the recorded why, so a shape change is distinguishable from a payload that never arrived" \
+  "$DR_ABSENT" "why=field_absent"
+
+DR_MSG_NEVER=$(_dr_stop_payload_msg "$DR_NEVER")
+DR_MSG_PRESENT=$(_dr_stop_payload_msg "$DR_PRESENT")
+DR_MSG_ABSENT=$(_dr_stop_payload_msg "$DR_ABSENT")
+# Three equal empty strings would also sort -u to one line, so the non-empty floor
+# is what stops "distinct" from being satisfiable by three captures of nothing.
+assert_eq "P12c: all three outcome messages were actually captured" \
+  "$([ -n "$DR_MSG_NEVER" ] && [ -n "$DR_MSG_PRESENT" ] && [ -n "$DR_MSG_ABSENT" ] && echo yes || echo no)" "yes"
+assert_eq "P12c: three outcomes produce three DISTINCT messages" \
+  "$(printf '%s\n%s\n%s\n' "$DR_MSG_NEVER" "$DR_MSG_PRESENT" "$DR_MSG_ABSENT" | sort -u | wc -l | tr -d ' ')" "3"
+assert_eq "P12c: never-observed does not print the same thing as field-absent (RULES §15)" \
+  "$([ "$DR_MSG_NEVER" != "$DR_MSG_ABSENT" ] && echo distinct || echo identical)" "distinct"
+
+DR_FULL=$(cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR bash "$DOCTOR" 2>/dev/null); DR_FULL_EC=$?
+# Exit 0 alone is also what a roster with no such check at all reports, so the
+# note's presence on the same run is what makes this about the note.
+assert_eq "P12c: the note rides the full roster and still never moves the aggregate exit code" \
+  "$DR_FULL_EC/$(printf '%s' "$DR_FULL" | grep -c "$(printf 'note\tstop-payload')")" "0/1"
+assert_contains "P12c: and the full run still reaches its coverage line" \
+  "$(printf '%s' "$DR_FULL" | tail -1)" "$DR_ROSTER_COUNT scanned"
+teardown_temp_dir
+
+# --- (n) stop-payload: P12d — the enrollment boundary (ruling item 7) ---
+assert_file_contains "P12d: the RULES §15 registry still names TEN bound entry points" \
+  "$REPO_ROOT/RULES.md" "Ten entry"
+DR_ENTRY_LINE=$(grep -m1 '^ENTRY_POINTS=' "$REPO_ROOT/tests/test-coverage-honesty.sh")
+DR_ENTRY_COUNT=$(printf '%s' "$DR_ENTRY_LINE" | sed -E 's/^ENTRY_POINTS="([^"]*)"$/\1/' | wc -w | tr -d ' ')
+assert_eq "P12d: test-coverage-honesty.sh's roster is still ten entry points" "$DR_ENTRY_COUNT" "10"
+assert_contains "P12d: doctor's ONE pre-existing enrollment is still there" "$DR_ENTRY_LINE" "doctor"
+assert_not_contains "P12d: the unscored note enrolled no entry point of its own" "$DR_ENTRY_LINE" "stop-payload"
+
+# The roster size is a claim two docs restate in words; a count string that drifts
+# from the live roster is the stale-claim defect, not a cosmetic one.
+_dr_count_word() {
+  case "$1" in
+    10) printf 'ten' ;; 11) printf 'eleven' ;; 12) printf 'twelve' ;;
+    13) printf 'thirteen' ;; 14) printf 'fourteen' ;; 15) printf 'fifteen' ;;
+    *) printf 'UNMAPPED-%s' "$1" ;;
+  esac
+}
+DR_COUNT_WORD=$(_dr_count_word "$DR_ROSTER_COUNT")
+assert_not_contains "P12d: the live roster size has a word form at all" "$DR_COUNT_WORD" "UNMAPPED"
+DR_COUNT_SITES=$(grep -ohE '\b(ten|eleven|twelve|thirteen|fourteen|fifteen) checks\b' \
+  "$REPO_ROOT/CLAUDE.md" "$REPO_ROOT/skills/doctor/SKILL.md" | wc -l | tr -d ' ')
+assert_eq "P12d floor: all four known count-string sites were scanned" \
+  "$([ "$DR_COUNT_SITES" -ge 4 ] && echo yes || echo no)" "yes"
+DR_COUNT_STALE=$(grep -ohE '\b(ten|eleven|twelve|thirteen|fourteen|fifteen) checks\b' \
+  "$REPO_ROOT/CLAUDE.md" "$REPO_ROOT/skills/doctor/SKILL.md" | grep -vc "^$DR_COUNT_WORD checks$")
+assert_eq "P12d: $DR_COUNT_SITES count-string site(s) scanned — every one names the live roster size" \
+  "$DR_COUNT_STALE" "0"
 
 report_results

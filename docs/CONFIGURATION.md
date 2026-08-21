@@ -337,6 +337,47 @@ Added by the additive `migrate_33_to_34` migration (schema v33→v34, chained af
 existing projects upgrade automatically — see Config Upgrades below. See RULES.md §1 (the no-bare-`exit 0`
 rule) and ADR-015.
 
+## Environment Variables (NOT `config.json` fields)
+
+The switches below are **environment variables**, not configuration keys. They are deliberately
+absent from `nazgul/config.json` and from `templates/config.json`, nothing reads them from a config
+file, and adding one does **not** move `schema_version` — they are per-invocation debugging aids an
+operator turns on for a single run, not project state worth migrating. These three are the
+debug/capture switches; other `NAZGUL_*` variables exist (notification and staging disables, for
+example) and are documented in their own script headers.
+
+| Environment variable | Default | Effect |
+|---|---|---|
+| `NAZGUL_STOP_PAYLOAD_CAPTURE` | unset | `1` makes `scripts/stop-hook.sh` write the raw Stop payload to `nazgul/logs/stop-payload-last.json` |
+| `NAZGUL_NOTIFY_DEBUG` | `0` | `1` makes `scripts/notify.sh` log its decisions to stderr |
+| `NAZGUL_STAGING_DEBUG` | `0` | `1` makes `scripts/session-staging.sh` log its decisions to stderr |
+
+### `NAZGUL_STOP_PAYLOAD_CAPTURE`
+
+The Stop payload is the one place the dispatch class of in-flight work is observable (#218), so the
+loop **always** emits a bounded, structured `stop_payload_observed` event for it: `bg_seen`, a
+closed-set `why`, `entries`/`subagents`/`live` counts, and the distinct `types`/`statuses` seen. That
+event carries no paths and no message text, and it is what `/nazgul:doctor`'s `stop-payload` note
+reads to report **field present** / **field absent** / **never observed**.
+
+Set `NAZGUL_STOP_PAYLOAD_CAPTURE=1` when the structured event is not enough to explain a
+classification and you need the payload verbatim:
+
+```bash
+NAZGUL_STOP_PAYLOAD_CAPTURE=1 claude
+cat nazgul/logs/stop-payload-last.json
+```
+
+- **A single overwritten file, never appended.** Each Stop replaces it, so it cannot grow without
+  bound and it always answers exactly one question: what the LAST Stop delivered.
+- **Never written while the variable is unset, and never written unconditionally.** The raw payload
+  carries `cwd`, `transcript_path`, `agent_transcript_path` and `last_assistant_message` — which is
+  exactly why the always-on event is bounded and structured and this capture is opt-in.
+- Written even when the payload is empty, so "capture on, nothing arrived" stays distinguishable
+  from "capture off".
+- It is a debugging artifact, not project state: if your project tracks `nazgul/`, exclude this file
+  before committing.
+
 ## Red-Run Evidence Gate
 
 `guards.red_run_evidence` (default `true`, config schema v36) is the kill switch for the red-run
