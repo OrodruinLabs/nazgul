@@ -27,11 +27,16 @@ SUITE_SIZE_RE='[0-9]+ ([A-Za-z][A-Za-z/-]* )?files'
 # and `not_merged` are separate members", which counts a different vocabulary entirely.
 RED_RUN_SIZE_RE='[A-Za-z0-9]+ red-run refusal reasons'
 RED_RUN_PIN_FILE="${NAZGUL_DOC_CONTRACT_RED_RUN_PIN:-$REPO_ROOT/tests/test-red-run-evidence.sh}"
+CLOSER="${NAZGUL_DOC_CONTRACT_CLOSER:-$REPO_ROOT/scripts/close-objective.sh}"
+CO_PIN_FILE="${NAZGUL_DOC_CONTRACT_CO_PIN:-$REPO_ROOT/tests/test-coverage-honesty.sh}"
+# "skip reasons" is ordinary English and §16 calls two of them "distinct skip reasons" while
+# counting nothing, so a size claim is read only where the closed-set framing follows the phrase.
+SKIP_SIZE_RE='[A-Za-z0-9]+ skip reasons[^.]{0,16}a closed set'
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-doc-contract-XXXXXX")
 trap 'rm -rf "$SCRATCH"' EXIT
 
-FAMILIES="field fieldcount reason reasoncount regcount ordinal tier suite mpresult mpresultcount mpevent mpeventcount redrun redruncount"
+FAMILIES="field fieldcount reason reasoncount regcount ordinal tier suite mpresult mpresultcount mpevent mpeventcount redrun redruncount skipreason skipreasoncount"
 
 _derive_fields() {
   # shellcheck disable=SC1090  # the source of truth is a parameter: that is the point
@@ -62,6 +67,13 @@ _derive_mp_events() {
 _derive_red_run() {
   grep -oE '_ttg_red_run_(deny|empty_payload) "[^"]*" "[^"]*" "[^"]*"' "$1" 2>/dev/null \
     | sed -E 's/.*"([^"]*)"$/\1/' | grep -E '^[a-z_]+$' | LC_ALL=C sort -u
+}
+
+# The objective closer's CLOSED skip vocabulary, off the one terminal coverage printf that prints
+# it: the `<reason>=%d` pairs inside its `skipped (...)` group, in the order that line prints them.
+_derive_skip_reasons() {
+  grep -oE '%d skipped \(([a-z-]+=%d, )*[a-z-]+=%d\)' "$1" 2>/dev/null \
+    | awk 'NR == 1' | grep -oE '[a-z-]+=%d' | sed -E 's/=%d$//'
 }
 
 _derive_driver() {
@@ -282,12 +294,14 @@ _scan_docs() {
   MP_RESULTS=$(_derive_mp_results "$MP_LIB")
   MP_EVENTS=$(_derive_mp_events "$MP_LIB")
   RED_RUN=$(_derive_red_run "$guard_lib")
+  SKIP_REASONS=$(_derive_skip_reasons "$CLOSER")
   MEMBERS=$(_derive_registry_members "$content_root/RULES.md" 2>/dev/null)
   FIELD_N=$(printf '%s\n' "$FIELDS" | tr ' ' '\n' | grep -c '[^[:space:]]' || true)
   REASON_N=$(printf '%s\n' "$REASONS" | grep -c '[^[:space:]]' || true)
   MP_RESULT_N=$(printf '%s\n' "$MP_RESULTS" | grep -c '[^[:space:]]' || true)
   MP_EVENT_N=$(printf '%s\n' "$MP_EVENTS" | grep -c '[^[:space:]]' || true)
   RED_RUN_N=$(printf '%s\n' "$RED_RUN" | grep -c '[^[:space:]]' || true)
+  SKIP_REASON_N=$(printf '%s\n' "$SKIP_REASONS" | grep -c '[^[:space:]]' || true)
   MEMBER_N=$(printf '%s\n' "$MEMBERS" | grep -c '[^[:space:]]' || true)
   SUITE_N=$(find "$name_root/tests" -maxdepth 1 -type f -name 'test-*.sh' 2>/dev/null | grep -c . || true)
   tiers=$(_derive_tiers "$content_root/RULES.md")
@@ -298,13 +312,14 @@ _scan_docs() {
   SCANNED=0; SKIP_UNREADABLE=0; SKIP_NO_CLAIM=0; CHECKED=0; FINDINGS=0
   for fam in $FAMILIES; do eval "CK_${fam}=0; FD_${fam}=0; FDL_${fam}=''"; done
 
-  # Population = top-level docs plus the live reference docs one level under docs/, named relative
-  # to the name root; docs/superpowers/** is DATED record, true when written, so binding it lies.
+  # Population = top-level docs, the live reference docs one level under docs/, and every shipped
+  # SKILL.md — enumerated, never authored; docs/superpowers/** is DATED record, so binding it lies.
   DOC_NAMES=$( { find "$name_root" -maxdepth 1 -type f -name '*.md'
-                 find "$name_root/docs" -maxdepth 1 -type f -name '*.md'; } 2>/dev/null \
+                 find "$name_root/docs" -maxdepth 1 -type f -name '*.md'
+                 find "$name_root/skills" -maxdepth 2 -type f -name 'SKILL.md'; } 2>/dev/null \
     | sed "s|^$name_root/||" | LC_ALL=C sort)
   DOC_N=$(printf '%s\n' "$DOC_NAMES" | grep -c '[^[:space:]]' || true)
-  per_doc=$((FIELD_N + REASON_N + MP_RESULT_N + MP_EVENT_N + RED_RUN_N + 12))
+  per_doc=$((FIELD_N + REASON_N + MP_RESULT_N + MP_EVENT_N + RED_RUN_N + SKIP_REASON_N + 13))
 
   for doc in $DOC_NAMES; do
     path="$content_root/$doc"
@@ -365,6 +380,12 @@ _scan_docs() {
     _check_count_claim redruncount "$doc" "$flat" "$RED_RUN_SIZE_RE" \
       "$RED_RUN_N" "red-run refusal reason"
 
+    _check_vocabulary skipreason "$doc" "$SKIP_REASONS" "$flat" "$(_enum_run "$SKIP_REASONS" "$region")" \
+      "$(_claim_word "$flat" "$SKIP_SIZE_RE")" \
+      "closer skip reason" "the objective closer prints"
+    _check_count_claim skipreasoncount "$doc" "$flat" "$SKIP_SIZE_RE" \
+      "$SKIP_REASON_N" "closer skip reason"
+
     if [ -z "$(_registry_bullet "$path")" ]; then
       SCANNED=$((SCANNED + 1))
       _no_claim 1
@@ -419,11 +440,16 @@ ASSIGNMENTS=$(grep -cE "^${CONST_NAME}=" "$GUARD_LIB")
 assert_eq "${CONST_NAME} has exactly one top-level assignment in $(basename "$GUARD_LIB")" \
   "$ASSIGNMENTS" "1"
 
+CO_PRINTFS=$(grep -cE '%d skipped \(([a-z-]+=%d, )*[a-z-]+=%d\)' "$CLOSER" 2>/dev/null || true)
+assert_eq "the skip vocabulary comes from exactly one coverage printf in $(basename "$CLOSER")" \
+  "$CO_PRINTFS" "1"
+
 _scan_docs "$REPO_ROOT" "$DOC_ROOT" "$GUARD_LIB"
 
-if [ -z "$FIELDS" ] || [ -z "$REASONS" ] || [ -z "$MP_RESULTS" ] || [ -z "$MP_EVENTS" ] || [ -z "$RED_RUN" ]; then
+if [ -z "$FIELDS" ] || [ -z "$REASONS" ] || [ -z "$MP_RESULTS" ] || [ -z "$MP_EVENTS" ] \
+   || [ -z "$RED_RUN" ] || [ -z "$SKIP_REASONS" ]; then
   _fail "the merge contract is derived from the gate library" \
-    "fields='$FIELDS' reasons='$(printf '%s' "$REASONS" | tr '\n' ' ')' mp_results='$(printf '%s' "$MP_RESULTS" | tr '\n' ' ')' mp_events='$(printf '%s' "$MP_EVENTS" | tr '\n' ' ')' red_run='$(printf '%s' "$RED_RUN" | tr '\n' ' ')'" \
+    "fields='$FIELDS' reasons='$(printf '%s' "$REASONS" | tr '\n' ' ')' mp_results='$(printf '%s' "$MP_RESULTS" | tr '\n' ' ')' mp_events='$(printf '%s' "$MP_EVENTS" | tr '\n' ' ')' red_run='$(printf '%s' "$RED_RUN" | tr '\n' ' ')' skip_reasons='$(printf '%s' "$SKIP_REASONS" | tr '\n' ' ')'" \
     "the contract could not be derived — this is 'never looked', not 'looked and found none'"
   echo "$TEST_NAME: NOTHING CHECKED — the gate library yielded no contract to bind" >&2
   report_results
@@ -447,6 +473,20 @@ else
     "$RED_RUN_SHIPPED" "$RED_RUN_PINNED"
 fi
 _pass "the red-run refusal vocabulary is derived from its own call sites ($RED_RUN_N reasons)"
+
+# Same principle for the closer's skip set: tests/test-coverage-honesty.sh pins it by hand to check
+# the coverage-line grammar, so a disagreement between that copy and this derivation IS the finding.
+CO_SHIPPED=$(_derive_skip_reasons "$CLOSER" | LC_ALL=C sort | tr '\n' ' ')
+CO_PINNED=$(grep -oE '^CO_REASONS="[^"]*"' "$CO_PIN_FILE" 2>/dev/null \
+  | sed -E 's/^CO_REASONS="(.*)"$/\1/' | tr ' ' '\n' | LC_ALL=C sort | tr '\n' ' ')
+if [ -z "$CO_SHIPPED" ] || [ -z "$CO_PINNED" ]; then
+  _fail "the closer's skip vocabulary has one denominator, not two" \
+    "derived='$CO_SHIPPED' pinned='$CO_PINNED' from $CO_PIN_FILE — a pin that cannot be read is 'never looked'"
+else
+  assert_eq "the skip vocabulary this test derives is the one tests/test-coverage-honesty.sh pins" \
+    "$CO_SHIPPED" "$CO_PINNED"
+fi
+_pass "the closer's skip vocabulary is derived from its own coverage printf ($SKIP_REASON_N reasons)"
 
 DOC_FLOOR=2
 if [ "$DOC_N" -ge "$DOC_FLOOR" ]; then
@@ -503,6 +543,9 @@ MUT_LIB="$SCRATCH/mutant-guard.sh"
 } > "$MUT_LIB"
 
 SHIPPED_FIELD_N="$FIELD_N"
+SHIPPED_SKIP_REASONS="$SKIP_REASONS"
+SHIPPED_MP_LIB="$MP_LIB"
+SHIPPED_CLOSER="$CLOSER"
 BIND_MODE="quiet"
 # Aimed at the shipped documents, never at the injected root: the mutation is evidence about
 # the binding itself, so a forced all-skip drive must not turn it vacuously green.
@@ -675,6 +718,73 @@ _enum_case rr-count <<'FIXTURE'
 The gate emits two red-run refusal reasons: `rr_alpha`, `rr_beta`, `rr_gamma`.
 FIXTURE
 _rr_expect "a stale count is its own finding, with every member still named" 3 0 1
+
+# CO1-CO4: the same threshold rule over the objective closer's skip set. A mutant closer IS just the
+# one line the derivation reads, so these fixtures mutate the printf and nothing else.
+_mutant_closer() {
+  local out="$1" group
+  group=$(printf '%s\n' "$2" | tr ' ' '\n' | grep -v '^$' \
+    | awk '{ printf "%s%s=%%d", (NR > 1 ? ", " : ""), $0 }')
+  printf "printf '%%s: %%d scanned, %%d skipped (%s), %%d closed, %%d refused'\n" "$group" > "$out"
+}
+
+_co_expect() {
+  local label="$1" wc="$2" wf="$3" wn="$4" acct
+  acct=$((SKIP_UNREADABLE + SKIP_NO_CLAIM + CHECKED))
+  # shellcheck disable=SC2154  # CK_*/FD_* are assigned indirectly, per family, by _check
+  if [ "$CK_skipreason" -eq "$wc" ] && [ "$FD_skipreason" -eq "$wf" ] \
+     && [ "$FD_skipreasoncount" -eq "$wn" ] && [ "$SCANNED" -eq "$acct" ]; then
+    _pass "[mutation] $label"
+  else
+    _fail "[mutation] $label" \
+      "skipreason checked=$CK_skipreason (want $wc) findings=$FD_skipreason (want $wf); skipreasoncount findings=$FD_skipreasoncount (want $wn); scanned=$SCANNED, M+K=$acct"
+  fi
+}
+
+_mutant_closer "$SCRATCH/mutant-closer.sh" "co-alpha co-beta co-gamma"
+CLOSER="$SCRATCH/mutant-closer.sh"
+
+_enum_case co-red <<'FIXTURE'
+The closer's skip vocabulary is CLOSED: `co-alpha`, `co-beta`.
+FIXTURE
+assert_eq "[mutation] the mutant closer really is a different skip vocabulary" "$SKIP_REASON_N" "3"
+_co_expect "a skip reason added to the closer's printf with no doc update goes red through a bare list, no count stated" 3 1 0
+# shellcheck disable=SC2154  # FDL_* is assigned indirectly, per family, by _check
+case "$FDL_skipreason" in
+  *co-gamma*) _pass "[mutation] the skip-reason finding names the reason the closer added" ;;
+  *) _fail "[mutation] the skip-reason finding names the reason the closer added" \
+       "detail was '$FDL_skipreason', which does not name 'co-gamma'" ;;
+esac
+
+_enum_case co-green <<'FIXTURE'
+The closer's skip vocabulary is CLOSED: `co-alpha`, `co-beta`, `co-gamma`.
+FIXTURE
+_co_expect "the same bare list completed against the mutant closer goes green" 3 0 0
+
+_enum_case co-count <<'FIXTURE'
+Its two skip reasons are a closed set: `co-alpha`, `co-beta`, `co-gamma`.
+FIXTURE
+_co_expect "a stale skip-reason count is its own finding, with every member still named" 3 0 1
+
+# CO5: the SHIPPED documents against a tenth skip reason. Only the closer's printf is mutated, so a
+# finding in any other family would be a binding reacting to a mechanism nobody touched.
+MP_LIB="$SHIPPED_MP_LIB"
+_mutant_closer "$SCRATCH/mutant-closer-tenth.sh" "$SHIPPED_SKIP_REASONS co-tenth"
+CLOSER="$SCRATCH/mutant-closer-tenth.sh"
+_scan_docs "$REPO_ROOT" "$REPO_ROOT" "$GUARD_LIB"
+if [ "$FD_skipreason" -ge 1 ] && [ "$FD_skipreasoncount" -ge 1 ] \
+   && [ "$FINDINGS" -eq $((FD_skipreason + FD_skipreasoncount)) ]; then
+  _pass "[mutation] a tenth skip reason turns every shipped document that teaches the set red, and nothing else ($FD_skipreason name, $FD_skipreasoncount count findings)"
+else
+  _fail "[mutation] a tenth skip reason turns every shipped document that teaches the set red, and nothing else" \
+    "skipreason=$FD_skipreason skipreasoncount=$FD_skipreasoncount, total findings=$FINDINGS"
+fi
+case "$FDL_skipreason" in
+  *co-tenth*) _pass "[mutation] the shipped-tree finding names the reason the closer added" ;;
+  *) _fail "[mutation] the shipped-tree finding names the reason the closer added" \
+       "detail was '$FDL_skipreason', which does not name 'co-tenth'" ;;
+esac
+CLOSER="$SHIPPED_CLOSER"
 
 BIND_MODE="report"
 RC=0
