@@ -19,6 +19,10 @@ REGION_MARKER="## Merge Evidence"
 GUARD_LIB="${NAZGUL_DOC_CONTRACT_GUARD_LIB:-$REPO_ROOT/scripts/lib/task-transition-guard.sh}"
 DOC_ROOT="${NAZGUL_DOC_CONTRACT_DOC_ROOT:-$REPO_ROOT}"
 MP_LIB="${NAZGUL_DOC_CONTRACT_MP_LIB:-$REPO_ROOT/scripts/lib/merge-provider.sh}"
+# The suite size is a claim about ONE runner, so it is read only off lines naming that runner:
+# an unrelated "16 files" elsewhere counts a different population, not this one gone stale.
+SUITE_ANCHOR='run-tests\.sh'
+SUITE_SIZE_RE='[0-9]+ ([A-Za-z][A-Za-z/-]* )?files'
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-doc-contract-XXXXXX")
 trap 'rm -rf "$SCRATCH"' EXIT
@@ -37,10 +41,8 @@ _derive_reasons() {
     | sed -E 's/.*"([a-z_]+)"$/\1/' | LC_ALL=C sort -u
 }
 
-# The merge-observation seam's two vocabularies, read off its OWN call sites the same way
-# _derive_reasons reads the gate's. TASK-020 widened both (adding repo_mismatch and
-# unbindable_repo) to close a HIGH security defect, and three documents kept the pre-widening
-# counts because nothing bound them. Deriving them is what stops that from recurring.
+# The seam's two vocabularies, read off its OWN call sites the way _derive_reasons reads the
+# gate's. TASK-020 widened both; three documents kept the pre-widening counts, nothing bound them.
 _derive_mp_results() {
   grep -oE '_mp_result ("[^"]*"|\$[A-Za-z_][A-Za-z_0-9]*) ("[^"]*"|\$[A-Za-z_][A-Za-z_0-9]*) ("[^"]*"|\$[A-Za-z_][A-Za-z_0-9]*) "[a-z_]+"' "$1" 2>/dev/null \
     | sed -E 's/.*"([a-z_]+)"$/\1/' | LC_ALL=C sort -u
@@ -113,6 +115,33 @@ _token_in() {
   grep -qE "(^|[^A-Za-z0-9_-])$1([^A-Za-z0-9_-]|$)" <<< "$2"
 }
 
+# A document naming >= ENUM_MIN members of a closed vocabulary as a LIST is teaching the set and
+# owes every member; one member is an example, and prose words like "absent" are never a list.
+ENUM_MIN=2
+ENUM_MARK=$'\001'
+
+# The longest enumeration run of $1's members in $2: code spans with nothing between consecutive
+# ones but list syntax (separator punctuation, a coordinating conjunction, or the next list item).
+_enum_run() {
+  local vocab="$1" tok bt='`' marked="$2"
+  for tok in $vocab; do marked=${marked//"$bt$tok$bt"/"$ENUM_MARK"}; done
+  printf '%s\n' "$marked" | awk -v m="$ENUM_MARK" '
+    { buf = buf $0 "\n" }
+    END {
+      sep  = "[ \t]*([/,;|]|and|or|nor)[ \t]*"
+      item = "[^\n]*\n[ \t]*([-*+]|[0-9]+\\.)[ \t]*"
+      re = m "((" sep "|" item ")" m ")+"
+      max = 0
+      while (match(buf, re)) {
+        seg = substr(buf, RSTART, RLENGTH)
+        n = gsub(m, "", seg)
+        if (n > max) max = n
+        buf = substr(buf, RSTART + RLENGTH)
+      }
+      print max + 0
+    }'
+}
+
 # Best region = the marker-bearing paragraph naming the most fields. One passage must teach
 # the whole list; a field scattered across unrelated paragraphs is not a lesson.
 _best_merge_block() {
@@ -147,6 +176,7 @@ _check() {
   fi
   FINDINGS=$((FINDINGS + 1))
   eval "FD_${family}=\$((FD_${family} + 1))"
+  eval "FDL_${family}=\"\$detail\""
   [ "$BIND_MODE" = "report" ] && _fail "$label" "$detail"
   return 0
 }
@@ -175,6 +205,50 @@ _check_count_claim() {
   fi
 }
 
+# One closed vocabulary against one document. A stated count is an ADDITIONAL obligation, never
+# the precondition for checking membership: an enumeration run binds every member on its own.
+_check_vocabulary() {
+  local family="$1" doc="$2" vocab="$3" haystack="$4" run="$5" claimed="$6" label="$7" emitter="$8"
+  local tok why=""
+  if [ -n "$claimed" ]; then
+    why="states the vocabulary's size"
+  elif [ "$run" -ge "$ENUM_MIN" ]; then
+    why="lists $run of this closed vocabulary's members"
+  fi
+  for tok in $vocab; do
+    SCANNED=$((SCANNED + 1))
+    if [ -z "$why" ]; then
+      _no_claim 1
+    elif _token_in "$tok" "$haystack"; then
+      _check "$family" 0 "$doc names $label '$tok'"
+    else
+      _check "$family" 1 "$doc names $label '$tok'" \
+        "the document $why but omits '$tok', which $emitter"
+    fi
+  done
+}
+
+# Every runner-anchored size claim is its own binding: CLAUDE.md states the suite's size twice,
+# and reading only the first would leave the second free to drift.
+_check_suite_claims() {
+  local doc="$1" region="$2" want="$3" word n=0
+  while IFS= read -r word; do
+    [ -n "$word" ] || continue
+    n=$((n + 1))
+    SCANNED=$((SCANNED + 1))
+    if [ "$word" = "$want" ]; then
+      _check suite 0 "$doc: states $want files for the suite the runner discovers"
+    else
+      _check suite 1 "$doc: states the suite size the runner discovers" \
+        "document says $word, the runner discovers $want"
+    fi
+  done <<< "$(grep -E "$SUITE_ANCHOR" <<< "$region" | grep -oiE "$SUITE_SIZE_RE" | awk '{ print $1 }')"
+  if [ "$n" -eq 0 ]; then
+    SCANNED=$((SCANNED + 1))
+    _no_claim 1
+  fi
+}
+
 _check_tier() {
   local doc="$1" claimed="$2" pos="$3" want="$4" tier="$5" got
   got=$(_num "$(awk -v p="$pos" '{ print $p }' <<< "$claimed")")
@@ -190,7 +264,7 @@ _check_tier() {
 # separately injectable doc root, contract values from the guard library and RULES.md.
 _scan_docs() {
   local name_root="$1" content_root="$2" guard_lib="$3"
-  local doc path region flat passage pflat f r fam fam_n word got idx ord tiers claimed per_doc
+  local doc path region flat passage pflat f fam fam_n word got idx ord tiers claimed per_doc
 
   FIELDS=$(_derive_fields "$guard_lib")
   REASONS=$(_derive_reasons "$guard_lib")
@@ -209,20 +283,15 @@ _scan_docs() {
   TIER_H=$(awk '{ print $3 + 0 }' <<< "$tiers")
 
   SCANNED=0; SKIP_UNREADABLE=0; SKIP_NO_CLAIM=0; CHECKED=0; FINDINGS=0
-  for fam in $FAMILIES; do eval "CK_${fam}=0; FD_${fam}=0"; done
+  for fam in $FAMILIES; do eval "CK_${fam}=0; FD_${fam}=0; FDL_${fam}=''"; done
 
-  # Population = the repo-root documents PLUS the live reference docs one level under docs/.
-  # docs/superpowers/** is deliberately excluded and the exclusion is stated rather than
-  # discovered: those are DATED plans, specs and research whose counts were true at authorship,
-  # so binding them would demand falsifying a historical record. Board 7 found the previous
-  # -maxdepth 1 population "tree-derived in form, scope-authored in effect" — it could not see
-  # docs/CONFIGURATION.md, the one file carrying the stale counts. Paths stay relative to the
-  # name root so a doc in a subdirectory addresses correctly against the content root.
+  # Population = top-level docs plus the live reference docs one level under docs/, named relative
+  # to the name root; docs/superpowers/** is DATED record, true when written, so binding it lies.
   DOC_NAMES=$( { find "$name_root" -maxdepth 1 -type f -name '*.md'
                  find "$name_root/docs" -maxdepth 1 -type f -name '*.md'; } 2>/dev/null \
     | sed "s|^$name_root/||" | LC_ALL=C sort)
   DOC_N=$(printf '%s\n' "$DOC_NAMES" | grep -c '[^[:space:]]' || true)
-  per_doc=$((FIELD_N + REASON_N + MP_RESULT_N + MP_EVENT_N + 10))
+  per_doc=$((FIELD_N + REASON_N + MP_RESULT_N + MP_EVENT_N + 11))
 
   for doc in $DOC_NAMES; do
     path="$content_root/$doc"
@@ -252,18 +321,9 @@ _scan_docs() {
       done
       _check_count_claim fieldcount "$doc" "$pflat" '[A-Za-z0-9]+ fields under that' \
         "$FIELD_N" "merge-evidence field"
-      claimed=$(_claim_word "$pflat" '[A-Za-z0-9]+ closed refusal reasons')
-      for r in $REASONS; do
-        SCANNED=$((SCANNED + 1))
-        if [ -z "$claimed" ]; then
-          _no_claim 1
-        elif _token_in "$r" "$passage"; then
-          _check reason 0 "$doc names refusal reason '$r'"
-        else
-          _check reason 1 "$doc names refusal reason '$r'" \
-            "the document states the vocabulary's size but omits '$r', which the gate emits"
-        fi
-      done
+      _check_vocabulary reason "$doc" "$REASONS" "$passage" "$(_enum_run "$REASONS" "$passage")" \
+        "$(_claim_word "$pflat" '[A-Za-z0-9]+ closed refusal reasons')" \
+        "refusal reason" "the gate emits"
       _check_count_claim reasoncount "$doc" "$pflat" '[A-Za-z0-9]+ closed refusal reasons' \
         "$REASON_N" "closed refusal reason"
     fi
@@ -272,34 +332,17 @@ _scan_docs() {
       "$MEMBER_N" "§15 registry member"
     _check_count_claim suite "$doc" "$flat" '[A-Za-z0-9]+ files, all green' \
       "$SUITE_N" "discovered root suite"
+    _check_suite_claims "$doc" "$region" "$SUITE_N"
 
-    claimed=$(_claim_word "$flat" '[A-Za-z0-9]+ named results')
-    for r in $MP_RESULTS; do
-      SCANNED=$((SCANNED + 1))
-      if [ -z "$claimed" ]; then
-        _no_claim 1
-      elif _token_in "$r" "$flat"; then
-        _check mpresult 0 "$doc names merge-provider result '$r'"
-      else
-        _check mpresult 1 "$doc names merge-provider result '$r'" \
-          "the document states the result vocabulary's size but omits '$r', which the seam returns"
-      fi
-    done
+    _check_vocabulary mpresult "$doc" "$MP_RESULTS" "$flat" "$(_enum_run "$MP_RESULTS" "$region")" \
+      "$(_claim_word "$flat" '[A-Za-z0-9]+ named results')" \
+      "merge-provider result" "the seam returns"
     _check_count_claim mpresultcount "$doc" "$flat" '[A-Za-z0-9]+ named results' \
       "$MP_RESULT_N" "merge-provider result"
 
-    claimed=$(_claim_word "$flat" '[A-Za-z0-9]+ additive event types')
-    for r in $MP_EVENTS; do
-      SCANNED=$((SCANNED + 1))
-      if [ -z "$claimed" ]; then
-        _no_claim 1
-      elif _token_in "$r" "$flat"; then
-        _check mpevent 0 "$doc names merge-provider event '$r'"
-      else
-        _check mpevent 1 "$doc names merge-provider event '$r'" \
-          "the document states the event vocabulary's size but omits '$r', which the seam emits"
-      fi
-    done
+    _check_vocabulary mpevent "$doc" "$MP_EVENTS" "$flat" "$(_enum_run "$MP_EVENTS" "$region")" \
+      "$(_claim_word "$flat" '[A-Za-z0-9]+ additive event types')" \
+      "merge-provider event" "the seam emits"
     _check_count_claim mpeventcount "$doc" "$flat" '[A-Za-z0-9]+ additive event types' \
       "$MP_EVENT_N" "merge-provider event"
 
@@ -471,6 +514,90 @@ else
   _fail "[mutation] a sixth registry member turns the stale size AND the stale ordinal red, and nothing else" \
     "regcount=$FD_regcount (want 1), ordinal=$FD_ordinal (want 1), field=$FD_field (want 0)"
 fi
+
+# C1-C6: the enumeration trigger, driven with NO count claim in any fixture, so a green here is
+# the threshold rule carrying the binding and never a count phrase carrying it for it.
+MUT_MP="$SCRATCH/mutant-seam.sh"
+{
+  printf '_mut_seam() {\n'
+  printf '  _mp_result "$1" "$2" "$3" "alpha_state"\n'
+  printf '  _mp_result "$1" "$2" "$3" "beta_state"\n'
+  printf '  _mp_result "$1" "$2" "$3" "gamma_state"\n'
+  printf '  _mp_emit "$1" "merge_provider_alpha"\n'
+  printf '  _mp_emit "$1" "merge_provider_beta"\n'
+  printf '}\n'
+} > "$MUT_MP"
+
+_enum_case() {
+  mkdir -p "$SCRATCH/$1"
+  cat > "$SCRATCH/$1/CLAUDE.md"
+  _scan_docs "$SCRATCH/$1" "$SCRATCH/$1" "$MUT_LIB"
+}
+
+# Every case also re-asserts N == M + K: a fixture that stops being checked must still be counted.
+_enum_expect() {
+  local label="$1" wc="$2" wf="$3" acct
+  acct=$((SKIP_UNREADABLE + SKIP_NO_CLAIM + CHECKED))
+  if [ "$CK_mpresult" -eq "$wc" ] && [ "$FD_mpresult" -eq "$wf" ] && [ "$SCANNED" -eq "$acct" ]; then
+    _pass "[mutation] $label"
+  else
+    _fail "[mutation] $label" \
+      "mpresult checked=$CK_mpresult (want $wc) findings=$FD_mpresult (want $wf); scanned=$SCANNED, M+K=$acct"
+  fi
+}
+
+MP_LIB="$MUT_MP"
+_enum_case enum-red <<'FIXTURE'
+Every unusable state has its own name (`alpha_state`/`beta_state`), and each one is announced
+as `merge_provider_alpha` or `merge_provider_beta`.
+FIXTURE
+assert_eq "[mutation] the mutant seam really is a different vocabulary" \
+  "$MP_RESULT_N $MP_EVENT_N" "3 2"
+_enum_expect "a widened seam with no doc update goes red through a bare list, no count stated" 3 1
+# shellcheck disable=SC2154  # FDL_* is assigned indirectly, per family, by _check
+case "$FDL_mpresult" in
+  *gamma_state*) _pass "[mutation] the bare-list finding names the member the seam added" ;;
+  *) _fail "[mutation] the bare-list finding names the member the seam added" \
+       "detail was '$FDL_mpresult', which does not name 'gamma_state'" ;;
+esac
+
+_enum_case enum-green <<'FIXTURE'
+Every unusable state has its own name (`alpha_state`/`beta_state`/`gamma_state`), and each one
+is announced as `merge_provider_alpha` or `merge_provider_beta`.
+FIXTURE
+_enum_expect "the same bare list completed against the mutant seam goes green" 3 0
+
+_enum_case enum-single <<'FIXTURE'
+A named result such as `alpha_state` is what the seam returns when it could not ask the host,
+and the tick that produced it is recorded as `merge_provider_alpha`.
+FIXTURE
+_enum_expect "one named member is an example, so it stays a counted no-claim" 0 0
+
+_enum_case enum-prose <<'FIXTURE'
+`alpha_state` (could not ask) is a named result distinct from `beta_state` (asked, and the
+answer was no) — prose naming two members a clause apart, not a list teaching the set.
+FIXTURE
+_enum_expect "two members a clause apart are two examples, so they stay a counted no-claim" 0 0
+
+MUT_MP_WORDS="$SCRATCH/mutant-seam-words.sh"
+{
+  printf '_mut_seam() {\n'
+  printf '  _mp_result "$1" "$2" "$3" "pending"\n'
+  printf '  _mp_result "$1" "$2" "$3" "stale"\n'
+  printf '}\n'
+} > "$MUT_MP_WORDS"
+MP_LIB="$MUT_MP_WORDS"
+
+_enum_case enum-words <<'FIXTURE'
+Two of this seam's names are ordinary English, so a run can be pending, stale, or both without
+the sentence being a vocabulary at all.
+FIXTURE
+_enum_expect "members that are also English words do not form a list in running prose" 0 0
+
+_enum_case enum-words-spanned <<'FIXTURE'
+The same two names written as identifiers ARE a list: `pending`, `stale`.
+FIXTURE
+_enum_expect "the identical words written as code spans do bind, so the rule reads form not luck" 2 0
 
 BIND_MODE="report"
 RC=0
