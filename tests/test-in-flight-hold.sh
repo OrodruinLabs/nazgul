@@ -766,12 +766,10 @@ P12_B='{"hook_event_name":"Stop","session_id":"p12-second","background_tasks":[{
 # `env -u` on purpose: an operator who exports the variable would otherwise turn
 # this arm into a false pass about a default it never actually observed.
 HOOK_OUTPUT=$(printf '%s' "$P12_A" | env -u NAZGUL_STOP_PAYLOAD_CAPTURE bash "$STOP_HOOK" 2>&1) || true
-_p12_check "P12b: with NAZGUL_STOP_PAYLOAD_CAPTURE unset, no raw capture file is written" \
-  "$(_p12_state "$P12_CAP")" "absent"
-# The absence must be the GATE's doing, not a hook that exited before the capture
-# site: its always-on observation event is the proof that the site was reached.
-_p12_check "P12b: the unset run really did run the hook past the capture site" \
-  "$(_p12_observed_count)" "1"
+# One pin, two facts: file absent AND the run reached the capture site. Split apart,
+# the absence half also passes on a tree where the gate does not exist at all.
+_p12_check "P12b: with NAZGUL_STOP_PAYLOAD_CAPTURE unset no raw capture is written, on a run that provably reached the capture site" \
+  "$(_p12_state "$P12_CAP")/$(_p12_observed_count)" "absent/1"
 _p12_check "P12b: nazgul/logs/ exists on that run, so the absence is specific to the capture file" \
   "$(_p12_state "$TEST_DIR/nazgul/logs")" "present"
 

@@ -994,7 +994,10 @@ jq -cn '{sv:1,event:"stop_payload_observed",bg_seen:"unknown",why:"field_absent"
   >> "$TEST_DIR/nazgul/logs/events.jsonl"
 DR_ABSENT=$(cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR bash "$DOCTOR" --only=stop-payload 2>/dev/null)
 assert_contains "P12c: a record without background_tasks is named FIELD ABSENT" "$DR_ABSENT" "FIELD ABSENT"
-assert_not_contains "P12c: the LAST record decides the outcome, not the first" "$DR_ABSENT" "FIELD PRESENT"
+# Counted in BOTH directions: a bare "does not say FIELD PRESENT" is also satisfied
+# by output that says nothing at all, which is what a missing check produces.
+assert_eq "P12c: the LAST record decides the outcome, not the first" \
+  "$(printf '%s' "$DR_ABSENT" | grep -c 'FIELD PRESENT')/$(printf '%s' "$DR_ABSENT" | grep -c 'FIELD ABSENT')" "0/1"
 assert_contains "P12c: the absent wording names the recorded why, so a shape change is distinguishable from a payload that never arrived" \
   "$DR_ABSENT" "why=field_absent"
 
@@ -1011,8 +1014,10 @@ assert_eq "P12c: never-observed does not print the same thing as field-absent (R
   "$([ "$DR_MSG_NEVER" != "$DR_MSG_ABSENT" ] && echo distinct || echo identical)" "distinct"
 
 DR_FULL=$(cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR bash "$DOCTOR" 2>/dev/null); DR_FULL_EC=$?
-assert_exit_code "P12c: an unscored note never moves the aggregate exit code" "$DR_FULL_EC" 0
-assert_contains "P12c: the note rides the full roster, not only --only" "$DR_FULL" "$(printf 'note\tstop-payload')"
+# Exit 0 alone is also what a roster with no such check at all reports, so the
+# note's presence on the same run is what makes this about the note.
+assert_eq "P12c: the note rides the full roster and still never moves the aggregate exit code" \
+  "$DR_FULL_EC/$(printf '%s' "$DR_FULL" | grep -c "$(printf 'note\tstop-payload')")" "0/1"
 assert_contains "P12c: and the full run still reaches its coverage line" \
   "$(printf '%s' "$DR_FULL" | tail -1)" "$DR_ROSTER_COUNT scanned"
 teardown_temp_dir
