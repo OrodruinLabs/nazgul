@@ -20,6 +20,12 @@ source "$SCRIPT_DIR/lib/task-utils.sh"
 
 NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
+# shellcheck source=./lib/emit-event.sh
+source "$SCRIPT_DIR/lib/emit-event.sh"
+
+# Board order for `Nazgul Status`. Field creation and the upgrade migration both
+# derive from this list, so a status added here cannot reach only one of them.
+NAZGUL_STATUS_OPTIONS="PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED CANCELLED"
 
 # --- Helpers ---
 
@@ -67,6 +73,115 @@ gh_with_retry() {
     fi
   done
   return 1
+}
+
+# One GraphQL round trip. `gh api graphql` exits nonzero on error, but a partial-data
+# response still carries `.errors`, so the payload is classified, not the exit code.
+gh_graphql() {
+  local query="$1" vars="$2" errfile
+  errfile=$(mktemp "${TMPDIR:-/tmp}/nazgul-board-gql-XXXXXX")
+  GQL_OUT=$(jq -n --arg q "$query" --argjson v "$vars" '{query: $q, variables: $v}' \
+    | gh api graphql --input - 2>"$errfile") || true
+  GQL_ERR=$(tr '\n' ' ' < "$errfile" | sed 's/[[:space:]]*$//')
+  rm -f "$errfile"
+  if [ -n "$GQL_OUT" ] \
+    && jq -e 'has("errors") | not' >/dev/null 2>&1 <<< "$GQL_OUT" \
+    && jq -e '.data != null' >/dev/null 2>&1 <<< "$GQL_OUT"; then
+    return 0
+  fi
+  if [ -z "$GQL_ERR" ]; then
+    GQL_ERR=$(jq -r '.errors[0].message // empty' 2>/dev/null <<< "$GQL_OUT") || GQL_ERR=""
+  fi
+  [ -n "$GQL_ERR" ] || GQL_ERR="no data and no error message in the GraphQL response"
+  return 1
+}
+
+status_option_color() {
+  case "$1" in
+    DONE)                              printf 'GREEN\n' ;;
+    BLOCKED)                           printf 'RED\n' ;;
+    CHANGES_REQUESTED)                 printf 'ORANGE\n' ;;
+    IN_PROGRESS|IMPLEMENTED|IN_REVIEW) printf 'YELLOW\n' ;;
+    *)                                 printf 'GRAY\n' ;;
+  esac
+}
+
+# Add every canonical option the live `Nazgul Status` field lacks — the upgrade path
+# of a board built before CANCELLED existed. Sets STATUS_OPTION_RESULT/_DETAIL.
+ensure_status_options() {
+  local field_id="$1" name read_q mut_q existing after missing still dropped add_json new_opts
+  read_q='query($fieldId: ID!) {
+  node(id: $fieldId) {
+    ... on ProjectV2SingleSelectField { id options { id name color description } }
+  }
+}'
+  if ! gh_graphql "$read_q" "$(jq -n --arg f "$field_id" '{fieldId: $f}')"; then
+    STATUS_OPTION_RESULT="read_failed"
+    STATUS_OPTION_DETAIL="$GQL_ERR"
+    return 1
+  fi
+  existing=$(jq -c '.data.node.options // empty' <<< "$GQL_OUT")
+  if [ -z "$existing" ]; then
+    STATUS_OPTION_RESULT="not_single_select"
+    STATUS_OPTION_DETAIL="field $field_id exposes no single-select options to migrate"
+    return 1
+  fi
+
+  missing=""
+  for name in $NAZGUL_STATUS_OPTIONS; do
+    if ! jq -e --arg n "$name" 'any(.[]; .name == $n)' >/dev/null 2>&1 <<< "$existing"; then
+      missing="${missing:+$missing }$name"
+    fi
+  done
+  if [ -z "$missing" ]; then
+    STATUS_OPTION_RESULT="already_current"
+    STATUS_OPTION_DETAIL="all $(wc -w <<< "$NAZGUL_STATUS_OPTIONS" | tr -d ' ') options already present"
+    return 0
+  fi
+
+  # updateProjectV2Field REPLACES the option set: an option carrying its own id survives,
+  # one omitted is a DELETE that clears that value from every item already on the board.
+  add_json="[]"
+  for name in $missing; do
+    add_json=$(jq --arg n "$name" --arg c "$(status_option_color "$name")" \
+      '. + [{name: $n, color: $c, description: ""}]' <<< "$add_json")
+  done
+  new_opts=$(jq -n --argjson e "$existing" --argjson a "$add_json" \
+    '[$e[] | {id: .id, name: .name, color: .color, description: (.description // "")}] + $a')
+
+  mut_q='mutation($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]) {
+  updateProjectV2Field(input: {fieldId: $fieldId, singleSelectOptions: $options}) {
+    projectV2Field { ... on ProjectV2SingleSelectField { options { id name } } }
+  }
+}'
+  if ! gh_graphql "$mut_q" "$(jq -n --arg f "$field_id" --argjson o "$new_opts" '{fieldId: $f, options: $o}')"; then
+    STATUS_OPTION_RESULT="mutation_failed"
+    STATUS_OPTION_DETAIL="$GQL_ERR"
+    return 1
+  fi
+
+  after=$(jq -c '.data.updateProjectV2Field.projectV2Field.options // []' <<< "$GQL_OUT")
+  still=""
+  for name in $NAZGUL_STATUS_OPTIONS; do
+    if ! jq -e --arg n "$name" 'any(.[]; .name == $n)' >/dev/null 2>&1 <<< "$after"; then
+      still="${still:+$still }$name"
+    fi
+  done
+  if [ -n "$still" ]; then
+    STATUS_OPTION_RESULT="mutation_no_effect"
+    STATUS_OPTION_DETAIL="the mutation reported success but the field still lacks: $still"
+    return 1
+  fi
+  dropped=$(jq -rn --argjson b "$existing" --argjson a "$after" \
+    '[$b[] | . as $o | select([$a[] | select(.id == $o.id and .name == $o.name)] | length == 0) | .name] | join(", ")')
+  if [ -n "$dropped" ]; then
+    STATUS_OPTION_RESULT="mutation_dropped_option"
+    STATUS_OPTION_DETAIL="pre-existing options are no longer on the field: $dropped"
+    return 1
+  fi
+  STATUS_OPTION_RESULT="added"
+  STATUS_OPTION_DETAIL="$missing"
+  return 0
 }
 
 increment_sync_failures() {
@@ -194,7 +309,7 @@ cmd_setup() {
     --owner "$owner" \
     --name "Nazgul Status" \
     --data-type "SINGLE_SELECT" \
-    --single-select-options "PLANNED,READY,IN_PROGRESS,IMPLEMENTED,IN_REVIEW,CHANGES_REQUESTED,DONE,BLOCKED,CANCELLED" \
+    --single-select-options "$(tr ' ' ',' <<< "$NAZGUL_STATUS_OPTIONS")" \
     --format json 2>/dev/null) || {
     nazgul_status_field_json=$(gh project field-list "$project_number" --owner "$owner" --format json --jq '.fields[] | select(.name == "Nazgul Status")' 2>/dev/null) || {
       log_error "Failed to create or find 'Nazgul Status' field"
@@ -225,27 +340,65 @@ cmd_setup() {
   }
 
   local nazgul_status_id task_id_field_id group_field_id
-  nazgul_status_id=$(echo "$nazgul_status_field_json" | jq -r '.id')
-  task_id_field_id=$(echo "$task_id_field_json" | jq -r '.id')
-  group_field_id=$(echo "$group_field_json" | jq -r '.id')
+  nazgul_status_id=$(echo "$nazgul_status_field_json" | jq -r '.id // empty')
+  task_id_field_id=$(echo "$task_id_field_json" | jq -r '.id // empty')
+  group_field_id=$(echo "$group_field_json" | jq -r '.id // empty')
+  if [ -z "$nazgul_status_id" ]; then
+    log_error "'Nazgul Status' field carries no id — cannot reconcile its options"
+    exit 1
+  fi
+
+  # `field-create` fails precisely when the field already exists, so the fallback above
+  # returns a PRE-EXISTING option set that predates any status added since it was made.
+  log_info "Reconciling 'Nazgul Status' options..."
+  local remedy_url="https://github.com/orgs/$owner/projects/$project_number/settings/fields"
+  if ensure_status_options "$nazgul_status_id"; then
+    case "$STATUS_OPTION_RESULT" in
+      already_current) log_info "Nazgul Status options: nothing to add — $STATUS_OPTION_DETAIL" ;;
+      *)               log_info "Nazgul Status options added: $STATUS_OPTION_DETAIL" ;;
+    esac
+  else
+    log_error "Could not add missing 'Nazgul Status' options ($STATUS_OPTION_RESULT): $STATUS_OPTION_DETAIL"
+    log_error "Remedy: add them by hand at $remedy_url, then re-run 'setup $project_number'. If this was a permission failure, run 'gh auth refresh -s project' first."
+    emit_event "board_status_option_migration" result "$STATUS_OPTION_RESULT" \
+      detail "$STATUS_OPTION_DETAIL" field_id "$nazgul_status_id" project "$project_number"
+    exit 1
+  fi
+  emit_event "board_status_option_migration" result "$STATUS_OPTION_RESULT" \
+    detail "$STATUS_OPTION_DETAIL" field_id "$nazgul_status_id" project "$project_number"
 
   # Get option IDs for Nazgul Status single-select
   log_info "Fetching status option IDs..."
   local fields_json status_options
-  fields_json=$(gh project field-list "$project_number" --owner "$owner" --format json 2>/dev/null)
+  fields_json=$(gh project field-list "$project_number" --owner "$owner" --format json 2>/dev/null) || {
+    log_error "Could not re-read project #$project_number fields to resolve status option ids"
+    log_error "Remedy: confirm 'gh project field-list $project_number --owner $owner' succeeds, then re-run 'setup $project_number'."
+    emit_event "board_status_option_migration" result "readback_failed" \
+      detail "gh project field-list failed after the option reconciliation" \
+      field_id "$nazgul_status_id" project "$project_number"
+    exit 1
+  }
   status_options=$(echo "$fields_json" | jq -r --arg fid "$nazgul_status_id" '.fields[] | select(.id == $fid) | .options // []')
 
   # Build status_option_ids map
-  local status_option_ids="{}"
-  for status_name in PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED CANCELLED; do
+  local status_option_ids="{}" unresolved=""
+  for status_name in $NAZGUL_STATUS_OPTIONS; do
     local option_id
     option_id=$(echo "$status_options" | jq -r --arg name "$status_name" '.[] | select(.name == $name) | .id // empty')
     if [ -n "$option_id" ]; then
       status_option_ids=$(echo "$status_option_ids" | jq --arg k "$status_name" --arg v "$option_id" '. + {($k): $v}')
     else
-      log_warn "Status option '$status_name' not found in field"
+      unresolved="${unresolved:+$unresolved }$status_name"
     fi
   done
+  if [ -n "$unresolved" ]; then
+    log_error "Status option ids unresolved after reconciliation: $unresolved"
+    log_error "Refusing to store a status_option_ids map that lacks them — a task reaching one of these statuses would be labelled and closed while its board column silently kept its previous value."
+    log_error "Remedy: add the option(s) by hand at $remedy_url, then re-run 'setup $project_number'."
+    emit_event "board_status_option_migration" result "map_incomplete" \
+      detail "$unresolved" field_id "$nazgul_status_id" project "$project_number"
+    exit 1
+  fi
 
   # Create labels
   log_info "Creating labels..."

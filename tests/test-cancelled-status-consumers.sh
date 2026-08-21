@@ -176,6 +176,98 @@ board_fixture() { # <status>
   GH_LOG=$(cat "$NAZGUL_TEST_GH_LOG")
 }
 
+# `setup`'s gh is a scripted board, not a logger: the option set lives in a file so a
+# mutation that lands is visible to the independent field-list re-read that follows it.
+SETUP_BIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-cancelled-setupbin-XXXXXX")
+cat > "$SETUP_BIN/gh" << 'SETUP_GH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$NAZGUL_TEST_GH_LOG"
+case "${1:-} ${2:-}" in
+  "repo view")
+    printf '{"owner":{"login":"acme"},"name":"widget"}\n' ;;
+  "project view")
+    printf 'PVT_1\n' ;;
+  "project field-create")
+    case " $* " in
+      # GitHub fails field-create when the field already exists — the upgrade path.
+      *"--name Nazgul Status"*)
+        [ "${NAZGUL_TEST_STATUS_CREATE_RC:-1}" = "0" ] || exit 1
+        printf '{"id":"F_1","name":"Nazgul Status"}\n' ;;
+      *) printf '{"id":"F_OTHER"}\n' ;;
+    esac ;;
+  "project field-list")
+    case " $* " in
+      *" --jq "*) printf '{"id":"F_1","name":"Nazgul Status"}\n' ;;
+      *) jq -cn --argjson o "$(cat "$NAZGUL_TEST_OPTIONS_FILE")" \
+           '{fields:[{id:"F_1",name:"Nazgul Status",options:$o},{id:"F_OTHER",name:"Task ID"}]}' ;;
+    esac ;;
+  "label create") ;;
+  "api graphql")
+    body=$(cat)
+    jq -c . <<< "$body" >> "$NAZGUL_TEST_GQL_LOG"
+    if jq -e '.query | test("updateProjectV2Field")' >/dev/null 2>&1 <<< "$body"; then
+      case "${NAZGUL_TEST_MUTATION_MODE:-ok}" in
+        fail)
+          printf '{"errors":[{"message":"Your token has not been granted the required scopes"}]}\n'
+          printf 'gh: Your token has not been granted the required scopes\n' >&2
+          exit 1 ;;
+        noop)
+          after=$(jq -c '[.[] | {id, name}]' < "$NAZGUL_TEST_OPTIONS_FILE") ;;
+        drop)
+          after=$(jq -c --arg d "${NAZGUL_TEST_DROP_NAME:-TRIAGE}" \
+            '[.variables.options[] | select(.name != $d) | {id: (.id // ("o_new_" + (.name | ascii_downcase))), name: .name}]' <<< "$body") ;;
+        *)
+          new_state=$(jq -c '[.variables.options[] | {id: (.id // ("o_new_" + (.name | ascii_downcase))), name: .name, color: .color, description: .description}]' <<< "$body")
+          after=$(jq -c '[.[] | {id, name}]' <<< "$new_state")
+          [ "${NAZGUL_TEST_MUTATION_MODE:-ok}" = "stale_readback" ] \
+            || printf '%s\n' "$new_state" > "$NAZGUL_TEST_OPTIONS_FILE" ;;
+      esac
+      jq -cn --argjson a "$after" '{data:{updateProjectV2Field:{projectV2Field:{options:$a}}}}'
+      exit 0
+    fi
+    case "${NAZGUL_TEST_READ_MODE:-ok}" in
+      fail)
+        printf '{"errors":[{"message":"Could not resolve to a node with the global id"}]}\n'
+        printf 'gh: Could not resolve to a node with the global id\n' >&2
+        exit 1 ;;
+      notselect) printf '{"data":{"node":{}}}\n' ;;
+      *) jq -cn --argjson o "$(cat "$NAZGUL_TEST_OPTIONS_FILE")" '{data:{node:{id:"F_1",options:$o}}}' ;;
+    esac ;;
+esac
+exit 0
+SETUP_GH
+chmod +x "$SETUP_BIN/gh"
+
+board_options_json() { # <name...> -> the option array a live board carries
+  local n out="[]"
+  for n in "$@"; do
+    out=$(jq -c --arg n "$n" \
+      '. + [{id: ("o_" + ($n | ascii_downcase)), name: $n, color: "GRAY", description: ("legend for " + $n)}]' <<< "$out")
+  done
+  printf '%s\n' "$out"
+}
+
+PRE_FEAT031_OPTIONS=$(board_options_json PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED)
+CUSTOMISED_OPTIONS=$(board_options_json PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED TRIAGE)
+CURRENT_OPTIONS=$(board_options_json PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED CANCELLED)
+
+board_setup_fixture() { # <options-json> [read-mode] [mutation-mode] [status-create-rc]
+  setup_temp_dir; setup_git_repo; setup_nazgul_dir
+  create_config
+  export NAZGUL_TEST_GH_LOG="$TEST_DIR/gh-argv.txt"
+  export NAZGUL_TEST_GQL_LOG="$TEST_DIR/gh-graphql.txt"
+  export NAZGUL_TEST_OPTIONS_FILE="$TEST_DIR/board-options.json"
+  export NAZGUL_TEST_READ_MODE="${2:-ok}"
+  export NAZGUL_TEST_MUTATION_MODE="${3:-ok}"
+  export NAZGUL_TEST_STATUS_CREATE_RC="${4:-1}"
+  : > "$NAZGUL_TEST_GH_LOG"; : > "$NAZGUL_TEST_GQL_LOG"
+  printf '%s\n' "$1" > "$NAZGUL_TEST_OPTIONS_FILE"
+  SETUP_ERR=$(PATH="$SETUP_BIN:$PATH" bash "$BOARD_SCRIPT" setup 7 2>&1 >/dev/null) && SETUP_RC=0 || SETUP_RC=$?
+  GH_LOG=$(cat "$NAZGUL_TEST_GH_LOG")
+  SETUP_MUTATION=$(grep -F 'updateProjectV2Field' "$NAZGUL_TEST_GQL_LOG" || true)
+  SETUP_CONFIG="$TEST_DIR/nazgul/config.json"
+}
+
 consumer_begin
 if [ "$(PATH="$FAKEBIN:$PATH" command -v gh)" != "$FAKEBIN/gh" ]; then
   consumer_undrivable "scripts/board-sync-github.sh"
@@ -215,6 +307,129 @@ else
   assert_contains "board-sync control: the reopen arm still fires for a live status" \
     "$GH_LOG" "issue reopen 42"
   teardown_temp_dir
+
+  # `setup`'s own `gh`: a scripted board, not a logger. `field-create` fails exactly
+  # as GitHub does when the field exists — the fallback path every upgraded board takes.
+  if [ "$(PATH="$SETUP_BIN:$PATH" command -v gh)" != "$SETUP_BIN/gh" ]; then
+    _fail "board-sync setup: the scripted gh is first on PATH" \
+      "resolved $(PATH="$SETUP_BIN:$PATH" command -v gh) — the real gh would have been driven"
+  else
+    # The upgrade path: a board whose `Nazgul Status` predates CANCELLED.
+    board_setup_fixture "$PRE_FEAT031_OPTIONS"
+    assert_eq "board-sync setup: proof the scripted gh was driven — the owner is the stub's fiction" \
+      "$(jq -r '.board.provider_config.owner' "$SETUP_CONFIG")" "acme"
+    assert_contains "board-sync setup: and every gh call was recorded by it" \
+      "$GH_LOG" "repo view --json owner,name"
+    assert_eq "board-sync setup: an eight-option board is upgraded and setup succeeds" "$SETUP_RC" "0"
+    assert_contains "board-sync setup: the reported outcome names the option it added" \
+      "$SETUP_ERR" "Nazgul Status options added: CANCELLED"
+    assert_contains "board-sync setup: a mutation was sent" "$SETUP_MUTATION" "updateProjectV2Field"
+    for _opt in PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED; do
+      assert_eq "board-sync setup: the mutation returns $_opt with its original id" \
+        "$(jq -r --arg n "$_opt" '.variables.options[] | select(.name == $n) | .id' <<< "$SETUP_MUTATION")" \
+        "o_$(tr '[:upper:]' '[:lower:]' <<< "$_opt")"
+      assert_eq "board-sync setup: and $_opt keeps its own description" \
+        "$(jq -r --arg n "$_opt" '.variables.options[] | select(.name == $n) | .description' <<< "$SETUP_MUTATION")" \
+        "legend for $_opt"
+    done
+    assert_eq "board-sync setup: all eight originals plus the ninth are sent, none dropped" \
+      "$(jq -r '.variables.options | length' <<< "$SETUP_MUTATION")" "9"
+    assert_eq "board-sync setup: the new option carries no id, so GitHub creates it" \
+      "$(jq -r '.variables.options[] | select(.name == "CANCELLED") | has("id")' <<< "$SETUP_MUTATION")" "false"
+    assert_eq "board-sync setup: the stored map resolves CANCELLED" \
+      "$(jq -r '.board.provider_config.status_option_ids.CANCELLED' "$SETUP_CONFIG")" "o_new_cancelled"
+    assert_eq "board-sync setup: and the board is enabled on success" \
+      "$(jq -r '.board.enabled' "$SETUP_CONFIG")" "true"
+    assert_contains "board-sync setup: the migration leaves a telemetry record" \
+      "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" '"result":"added"'
+    teardown_temp_dir
+
+    # An option Nazgul never heard of is the real data-loss risk: it is preserved by id.
+    board_setup_fixture "$CUSTOMISED_OPTIONS"
+    assert_eq "board-sync setup: a board-owner's own option survives the migration" \
+      "$(jq -r '.variables.options[] | select(.name == "TRIAGE") | .id' <<< "$SETUP_MUTATION")" "o_triage"
+    assert_eq "board-sync setup: with its colour and description untouched" \
+      "$(jq -r '.variables.options[] | select(.name == "TRIAGE") | .color + "/" + .description' <<< "$SETUP_MUTATION")" \
+      "GRAY/legend for TRIAGE"
+    assert_eq "board-sync setup: and the option set only ever grows" \
+      "$(jq -r '.variables.options | length' <<< "$SETUP_MUTATION")" "10"
+    teardown_temp_dir
+
+    # Idempotence: the same board a second time has nothing to add.
+    board_setup_fixture "$CURRENT_OPTIONS"
+    assert_eq "board-sync setup: a nine-option board still succeeds" "$SETUP_RC" "0"
+    assert_eq "board-sync setup: and mutates nothing" "$SETUP_MUTATION" ""
+    assert_contains "board-sync setup: 'nothing to do' says so rather than claiming an add" \
+      "$SETUP_ERR" "Nazgul Status options: nothing to add"
+    assert_not_contains "board-sync setup: an unchanged board never reports an add" \
+      "$SETUP_ERR" "options added"
+    assert_eq "board-sync setup: the pre-existing CANCELLED id is stored unchanged" \
+      "$(jq -r '.board.provider_config.status_option_ids.CANCELLED' "$SETUP_CONFIG")" "o_cancelled"
+    teardown_temp_dir
+
+    # A freshly created field arrives with all nine and is equally quiet.
+    board_setup_fixture "$CURRENT_OPTIONS" ok ok 0
+    assert_eq "board-sync setup: a freshly created field needs no migration" "$SETUP_MUTATION" ""
+    assert_eq "board-sync setup: and the fresh path still succeeds" "$SETUP_RC" "0"
+    teardown_temp_dir
+
+    # The half this defect is really about: a mechanism that could not act must not
+    # exit 0. Every refusal is named, and none of them writes a board config.
+    board_setup_fixture "$PRE_FEAT031_OPTIONS" ok fail
+    assert_eq "board-sync setup: a failed mutation exits nonzero, not 0" "$SETUP_RC" "1"
+    assert_contains "board-sync setup: the failure is named mutation_failed" \
+      "$SETUP_ERR" "Could not add missing 'Nazgul Status' options (mutation_failed)"
+    assert_contains "board-sync setup: gh's own reason is carried through" \
+      "$SETUP_ERR" "has not been granted the required scopes"
+    assert_contains "board-sync setup: the remedy names where to add it by hand" \
+      "$SETUP_ERR" "https://github.com/orgs/acme/projects/7/settings/fields"
+    assert_contains "board-sync setup: and how to fix the likely cause" \
+      "$SETUP_ERR" "gh auth refresh -s project"
+    assert_not_contains "board-sync setup: a failed setup never reports completion" \
+      "$SETUP_ERR" "Setup complete"
+    assert_eq "board-sync setup: and never enables the board" \
+      "$(jq -r '.board.enabled' "$SETUP_CONFIG")" "false"
+    assert_eq "board-sync setup: nor stores a map missing CANCELLED" \
+      "$(jq -r '.board.provider_config.status_option_ids.CANCELLED // "absent"' "$SETUP_CONFIG")" "absent"
+    assert_contains "board-sync setup: the refusal leaves its own telemetry record" \
+      "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" '"result":"mutation_failed"'
+    teardown_temp_dir
+
+    board_setup_fixture "$PRE_FEAT031_OPTIONS" ok noop
+    assert_eq "board-sync setup: a mutation that changed nothing exits nonzero" "$SETUP_RC" "1"
+    assert_contains "board-sync setup: 'reported success, changed nothing' is its own name" \
+      "$SETUP_ERR" "(mutation_no_effect)"
+    assert_contains "board-sync setup: and says which option is still absent" \
+      "$SETUP_ERR" "still lacks: CANCELLED"
+    teardown_temp_dir
+
+    board_setup_fixture "$CUSTOMISED_OPTIONS" ok drop
+    assert_eq "board-sync setup: an option lost to the mutation exits nonzero" "$SETUP_RC" "1"
+    assert_contains "board-sync setup: losing a pre-existing option is its own name" \
+      "$SETUP_ERR" "(mutation_dropped_option)"
+    assert_contains "board-sync setup: and the lost option is named" "$SETUP_ERR" "TRIAGE"
+    teardown_temp_dir
+
+    board_setup_fixture "$PRE_FEAT031_OPTIONS" ok stale_readback
+    assert_eq "board-sync setup: an independent re-read that disagrees exits nonzero" "$SETUP_RC" "1"
+    assert_contains "board-sync setup: the map gate refuses rather than storing a gap" \
+      "$SETUP_ERR" "Status option ids unresolved after reconciliation: CANCELLED"
+    assert_contains "board-sync setup: and states what an unresolved id would cost" \
+      "$SETUP_ERR" "board column silently kept its previous value"
+    teardown_temp_dir
+
+    board_setup_fixture "$PRE_FEAT031_OPTIONS" fail
+    assert_eq "board-sync setup: an unreadable field exits nonzero" "$SETUP_RC" "1"
+    assert_contains "board-sync setup: 'could not look' is named apart from 'could not write'" \
+      "$SETUP_ERR" "(read_failed)"
+    assert_eq "board-sync setup: and nothing is mutated on a failed read" "$SETUP_MUTATION" ""
+    teardown_temp_dir
+
+    board_setup_fixture "$PRE_FEAT031_OPTIONS" notselect
+    assert_eq "board-sync setup: a field that is not single-select exits nonzero" "$SETUP_RC" "1"
+    assert_contains "board-sync setup: with a name of its own" "$SETUP_ERR" "(not_single_select)"
+    teardown_temp_dir
+  fi
 fi
 consumer_end
 
@@ -736,7 +951,7 @@ else
 fi
 consumer_end
 
-rm -rf "$FAKEBIN"
+rm -rf "$FAKEBIN" "$SETUP_BIN"
 
 # `deferred-to-TASK-013` is retired, not kept at a permanent =0: TASK-013 landed, so no
 # call site can produce it, and a reason that cannot occur misreports the scan (RULES.md §15).
