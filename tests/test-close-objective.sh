@@ -88,10 +88,23 @@ case "$sub" in
     exit 1 ;;
   pr)
     [ "${1:-}" = "view" ] || exit 1
-    case "${NAZGUL_TEST_GH_CASE:-merged}" in
+    gh_case="${NAZGUL_TEST_GH_CASE:-merged}"
+    gh_sha="${NAZGUL_TEST_MERGE_SHA:-}"
+    # Optional per-call script: line N of $NAZGUL_TEST_GH_SEQ answers the Nth `pr view` as
+    # `<case>[:<merge-sha>]`. The closer asks once to plan, then once per manifest.
+    if [ -n "${NAZGUL_TEST_GH_SEQ:-}" ] && [ -f "$NAZGUL_TEST_GH_SEQ" ]; then
+      n=$(( $(cat "${NAZGUL_TEST_GH_SEQ}.n" 2>/dev/null || echo 0) + 1 ))
+      printf '%s\n' "$n" > "${NAZGUL_TEST_GH_SEQ}.n"
+      step=$(sed -n "${n}p" "$NAZGUL_TEST_GH_SEQ")
+      if [ -n "$step" ]; then
+        gh_case="${step%%:*}"
+        [ "$step" = "$gh_case" ] || gh_sha="${step#*:}"
+      fi
+    fi
+    case "$gh_case" in
       merged)
         printf '{"baseRefName":"main","headRefName":"%s","mergeCommit":{"oid":"%s"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED","url":"https://github.com/OrodruinLabs/nazgul/pull/88"}\n' \
-          "${NAZGUL_TEST_HEAD_REF:-}" "${NAZGUL_TEST_MERGE_SHA:-}"
+          "${NAZGUL_TEST_HEAD_REF:-}" "$gh_sha"
         exit 0 ;;
       open)
         printf '{"baseRefName":"main","headRefName":"%s","mergeCommit":null,"mergedAt":null,"state":"OPEN","url":"https://github.com/OrodruinLabs/nazgul/pull/88"}\n' \
@@ -103,7 +116,7 @@ case "$sub" in
         exit 0 ;;
       no_head_ref)
         printf '{"baseRefName":"main","mergeCommit":{"oid":"%s"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED","url":"https://github.com/OrodruinLabs/nazgul/pull/88"}\n' \
-          "${NAZGUL_TEST_MERGE_SHA:-}"
+          "$gh_sha"
         exit 0 ;;
       error)
         printf '%s\n' 'GraphQL: Could not resolve to a PullRequest with the number of 999999. (repository.pullRequest)' >&2
@@ -443,8 +456,7 @@ _drove transition-refused
 _fixture unwritable
 _manifest TASK-071 IMPLEMENTED
 if [ "$(id -u)" = "0" ]; then
-  CO_SKIP_UNDRIVEN=$((CO_SKIP_UNDRIVEN + 1))
-  _skip "evidence-write-failed (running as root — a read-only directory is not enforced)"
+  _skip "the unwritable-manifest path (running as root — a read-only directory is not enforced); evidence-write-failed is driven by scenario G2 regardless"
 else
   chmod 555 "$FX/nazgul/tasks"
   NAZGUL_TEST_GH_CASE=merged _run "$FX" 88
@@ -458,6 +470,80 @@ else
     "$(get_task_status "$FX/nazgul/tasks/TASK-071.md")" "IMPLEMENTED"
   _drove evidence-write-failed
 fi
+
+# lean-comments: allow-run — names the hazard and says why ONE task cannot prove it.
+# Scenario G2 — the read-back refusal must name the reason THIS task's verification
+# returned. The verifier answers in a global, so running it as `err=$(ttg_verify…)` put
+# that assignment in a subshell and the record read the parent's copy — which no
+# current-shell call ever writes, so every refusal on this arm printed an empty bracket:
+# not one of the nine closed reasons, and identical for causes that are not. One task
+# cannot distinguish "the right reason" from "a constant"; two whose read-backs fail
+# DIFFERENTLY can, because a bracket that tracks its task must differ between them.
+_fixture readback
+_manifest TASK-131 IMPLEMENTED
+_manifest TASK-132 IMPLEMENTED
+GH_SEQ="$SCRATCH/gh-seq-readback"
+printf 'merged\nerror\nmerged:%s\n' "$FEAT_SHA" > "$GH_SEQ"
+rm -f "$GH_SEQ.n"
+: > "$GH_LOG"
+NAZGUL_TEST_GH_SEQ="$GH_SEQ" NAZGUL_TEST_GH_CASE=merged _run "$FX" 88
+assert_exit_code "read-back reasons: two refusals exit nonzero, having crashed on nothing" "$CO_RC" 1
+_grammar "read-back reasons"
+_reason "read-back reasons" "evidence-write-failed" 2
+assert_eq "read-back reasons: nothing was closed on a read-back that did not verify" "$CO_K" "0"
+assert_eq "read-back reasons: both are counted as refusals, not only as skips" "$CO_F" "2"
+assert_eq "read-back reasons: the host is re-asked once per manifest — what makes the reasons differ" \
+  "$(cat "$GH_SEQ.n" 2>/dev/null)" "3"
+_drove evidence-write-failed
+
+# The recorded reason itself, read out of the refusal record — an exit code cannot see it.
+CO_BR_131=$(printf '%s\n' "$CO_ERR" \
+  | sed -n 's/.*REFUSED TASK-131 .*did not read back as verifiable \[\([^]]*\)\].*/\1/p' | head -1)
+CO_BR_132=$(printf '%s\n' "$CO_ERR" \
+  | sed -n 's/.*REFUSED TASK-132 .*did not read back as verifiable \[\([^]]*\)\].*/\1/p' | head -1)
+assert_eq "read-back reasons: TASK-131 records the reason ITS read-back returned" \
+  "$CO_BR_131" "unverifiable"
+assert_eq "read-back reasons: TASK-132 records the reason ITS read-back returned" \
+  "$CO_BR_132" "contradicted"
+if [ "$CO_BR_131" = "$CO_BR_132" ]; then
+  _fail "read-back reasons: two differently-failing read-backs record two different reasons" \
+    "both recorded [${CO_BR_131:-<empty>}] — the bracket is a constant, not this task's verdict"
+else
+  _pass "read-back reasons: two differently-failing read-backs record two different reasons"
+fi
+
+# Membership in the guard's OWN closed vocabulary, extracted from its source: an empty
+# bracket and an invented token are both reasons the operator's vocabulary does not have.
+CO_MERGE_VOCAB=$(awk '/^# Closed refusal vocabulary, never bucketed/{f=1;next} f && /^#/{sub(/^# */,""); print; next} f{exit}' \
+  "$REPO_ROOT/scripts/lib/task-transition-guard.sh" | tr '\n' ' ')
+assert_contains "read-back reasons: the guard's closed vocabulary is readable from its own source" \
+  "$CO_MERGE_VOCAB" "not_this_objectives_task"
+assert_contains "read-back reasons: TASK-131's bracket is a member of that closed vocabulary" \
+  " $CO_MERGE_VOCAB" " ${CO_BR_131:-<empty>} "
+assert_contains "read-back reasons: TASK-132's bracket is a member of that closed vocabulary" \
+  " $CO_MERGE_VOCAB" " ${CO_BR_132:-<empty>} "
+assert_file_contains "read-back reasons: the reason reaches the bus, not just stderr" \
+  "$FX/nazgul/logs/events.jsonl" 'did not read back as verifiable \[contradicted\]'
+
+# The arms either side of the repair are unchanged: rollback still runs, the task stays put.
+assert_not_contains "read-back reasons: the refused close leaves no ## Merge Evidence residue" \
+  "$(cat "$FX/nazgul/tasks/TASK-131.md")" "## Merge Evidence"
+assert_eq "read-back reasons: TASK-131 stayed where it was" \
+  "$(get_task_status "$FX/nazgul/tasks/TASK-131.md")" "IMPLEMENTED"
+assert_eq "read-back reasons: TASK-132 stayed where it was" \
+  "$(get_task_status "$FX/nazgul/tasks/TASK-132.md")" "IMPLEMENTED"
+
+# The regression pin: a command substitution here is the defect, whatever it is assigned to.
+assert_eq "the read-back runs in the current shell, so the reason it sets survives to the record" \
+  "$(printf '%s\n' "$CLOSER_SRC" | grep -cE '^[^#]*\$\([[:space:]]*ttg_verify_merge_evidence')" "0"
+
+# `unreported` is an honest name for "the mechanism did not tell us"; an empty bracket is
+# not. Run the SHIPPED expression under `set -u`, rather than a paraphrase of it.
+CO_REASON_EXPR=$(printf '%s\n' "$CLOSER_SRC" | grep -oE '\$\{TTG_MERGE_REASON[^}]*\}' | head -1)
+assert_eq "an unset reason expands to a named token, and does not trip set -u" \
+  "$(bash -u -c "unset TTG_MERGE_REASON; printf '%s' \"$CO_REASON_EXPR\"" 2>&1)" "unreported"
+assert_eq "and an EMPTY reason expands to it too — the mechanism reported nothing either way" \
+  "$(bash -u -c "TTG_MERGE_REASON=''; printf '%s' \"$CO_REASON_EXPR\"" 2>&1)" "unreported"
 
 # Scenario H — usage and precondition errors are their own exit class.
 UO=$(bash "$CLOSER" --project-root "$SCRATCH" 2>&1)
@@ -607,6 +693,7 @@ assert_not_contains "the closer keeps no second implementation of the binding" \
 assert_not_contains "the closer keeps no second implementation of the objective branch set" \
   "$CLOSER_SRC" "_co_objective_branches()"
 
+# lean-comments: allow-run — names the hazard the roster predicate closed.
 # The SAME property for the manifest binding, which the gate now enforces too: the roster
 # predicate reached only this caller, so once this objective's PR merged, the block written
 # into a roster manifest was valid evidence in any manifest on disk (FEAT-031 third board).

@@ -159,7 +159,8 @@ _refuse() {
 
 MP_ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/nazgul-close-objective.XXXXXX")
 SNAPSHOT_FILE=$(mktemp "${TMPDIR:-/tmp}/nazgul-close-objective-snap.XXXXXX")
-trap 'rm -f "$MP_ERR_FILE" "$SNAPSHOT_FILE" 2>/dev/null || true' EXIT
+VERIFY_ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/nazgul-close-objective-verify.XXXXXX")
+trap 'rm -f "$MP_ERR_FILE" "$SNAPSHOT_FILE" "$VERIFY_ERR_FILE" 2>/dev/null || true' EXIT
 MP_JSON=$(merge_provider_pr_state "$PROJECT_ROOT" "$PR_INPUT" 2>"$MP_ERR_FILE") || true
 cat "$MP_ERR_FILE" >&2 || true
 MP_RESULT=$(printf '%s' "$MP_JSON" | jq -r '.result // "api_failure"' 2>/dev/null || echo "api_failure")
@@ -208,6 +209,7 @@ _co_evidence_usable() {
   return 0
 }
 
+# lean-comments: allow-run — why each binding has exactly one home, not one per caller.
 # Both bindings are asked in ONE place each — ttg_pr_bound for the PR, ttg_objective_roster
 # for the manifest: the merge-evidence gate enforces the same two questions independently
 # through the sanctioned writer, so a copy here is a copy that can drift away from the
@@ -317,7 +319,7 @@ _co_rollback() {
 }
 
 _co_close_one() {
-  local task_id="$1" manifest="$2" from="$3" err rc=0
+  local task_id="$1" manifest="$2" from="$3" err rc=0 vrc=0
 
   if ! cat "$manifest" > "$SNAPSHOT_FILE" 2>/dev/null; then
     SKIP_EVIDENCE_WRITE=$((SKIP_EVIDENCE_WRITE + 1))
@@ -332,10 +334,15 @@ _co_close_one() {
     _refuse "$task_id" "evidence-write-failed" "could not record ## Merge Evidence in ${manifest}: $(printf '%s' "$err" | tr '\n' ' ')"
     return 0
   fi
-  if ! err=$(ttg_verify_merge_evidence "$(cat "$manifest")" "$PROJECT_ROOT" "$task_id" 2>&1); then
+  # CURRENT SHELL, never `err=$(ttg_verify_merge_evidence …)`: the reason is returned in a
+  # global, and a subshell's assignment cannot reach the record that has to name it.
+  ttg_verify_merge_evidence "$(cat "$manifest")" "$PROJECT_ROOT" "$task_id" \
+    2>"$VERIFY_ERR_FILE" || vrc=$?
+  if [ "$vrc" -ne 0 ]; then
     SKIP_EVIDENCE_WRITE=$((SKIP_EVIDENCE_WRITE + 1))
     _co_rollback "$manifest" || true
-    _refuse "$task_id" "evidence-write-failed" "the recorded ## Merge Evidence did not read back as verifiable [${TTG_MERGE_REASON}] — nothing was closed on it${CO_ROLLBACK_NOTE}"
+    err=$(tr '\n' ' ' < "$VERIFY_ERR_FILE" 2>/dev/null) || err=""
+    _refuse "$task_id" "evidence-write-failed" "the recorded ## Merge Evidence did not read back as verifiable [${TTG_MERGE_REASON:-unreported}] — nothing was closed on it${err:+; the verifier said: ${err}}${CO_ROLLBACK_NOTE}"
     return 0
   fi
 
