@@ -11,12 +11,19 @@ source "$SCRIPT_DIR/lib/setup.sh"
 
 echo "=== $TEST_NAME ==="
 
+FIXTURES="$SCRIPT_DIR/fixtures"
 WRITER="$REPO_ROOT/scripts/in-flight-marker.sh"
 CLEARER="$REPO_ROOT/scripts/subagent-stop.sh"
 STOP_HOOK="$REPO_ROOT/scripts/stop-hook.sh"
 
+# [stop-payload-json] — omitted or empty means NO payload on stdin, which is every pre-#218
+# call site's behavior and the `unknown` classification arm.
 run_hook() {
-  HOOK_OUTPUT=$(bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+  if [ -n "${1:-}" ]; then
+    HOOK_OUTPUT=$(printf '%s' "$1" | bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+  else
+    HOOK_OUTPUT=$(bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+  fi
 }
 
 # <path> <agent> <unit> <epoch> [background] [named]
@@ -296,6 +303,71 @@ run_hook
 assert_file_exists "hold: named dispatch marker quarantined (report contract owns it)" "$TEST_DIR/nazgul/in-flight/quarantine/nm.json"
 assert_contains "hold: named dispatch is a proven orphan, not unverifiable" \
   "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" '"reason":"in_flight_orphan"'
+teardown_temp_dir
+
+# === Observed classification: the Stop payload decides, not the write-time class (#218) ===
+
+# P1 (keystone) — the REAL capture (2 running subagents + 1 shell) holds the very marker the
+# payload-absent case above records as unverifiable. Same fixture, opposite disposition.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+NOW=$(date +%s)
+_write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$NOW" "missing"
+run_hook "$(cat "$FIXTURES/stop-payload/stop-two-subagents-one-shell.json")"
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+assert_exit_code "P1: an observed live subagent holds an unobservable-class marker (exit 0)" "$HOOK_EC" 0
+assert_contains "P1: stop_gate reason in_flight_hold is emitted" "$EVENTS" '"reason":"in_flight_hold"'
+assert_file_exists "P1: the held marker is STILL in nazgul/in-flight/" "$TEST_DIR/nazgul/in-flight/legacy.json"
+assert_file_not_exists "P1: the held marker is NOT quarantined" "$TEST_DIR/nazgul/in-flight/quarantine/legacy.json"
+assert_not_contains "P1: an observed liveness never degrades to in_flight_unverifiable" "$EVENTS" "in_flight_unverifiable"
+HOLD_LINE=$(grep '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_contains "P1: the hold event counts the capture's 2 live subagents, not its 3 entries" "$HOLD_LINE" '"live_subagents":2'
+assert_eq "P1: live_subagents is a JSON number, not a string" \
+  "$(printf '%s' "$HOLD_LINE" | jq -r '.live_subagents | type' 2>/dev/null)" "number"
+teardown_temp_dir
+
+# P2 (ruling Q3) — an observed-EMPTY background_tasks[] is RECORDED, never acted on.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+NOW=$(date +%s)
+_write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$NOW" "missing"
+QUAR_BEFORE=$(find "$TEST_DIR/nazgul/in-flight/quarantine" -type f 2>/dev/null | wc -l | tr -d ' ')
+run_hook "$(cat "$FIXTURES/stop-payload-synthetic/background-tasks-empty.json")"
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+QUAR_AFTER=$(find "$TEST_DIR/nazgul/in-flight/quarantine" -type f 2>/dev/null | wc -l | tr -d ' ')
+assert_contains "P2: stop_gate reason in_flight_orphan_candidate is emitted" "$EVENTS" '"reason":"in_flight_orphan_candidate"'
+assert_contains "P2: the candidate event names the evidence it rests on" "$EVENTS" '"evidence":"background_tasks_empty"'
+assert_file_exists "P2: the candidate marker is still at its original path" "$TEST_DIR/nazgul/in-flight/legacy.json"
+assert_file_not_exists "P2: the candidate marker is NOT quarantined" "$TEST_DIR/nazgul/in-flight/quarantine/legacy.json"
+assert_eq "P2: the quarantine/ file count is unchanged across the run" "$QUAR_AFTER" "$QUAR_BEFORE"
+# SUBSTRING TRAP: in_flight_orphan is a strict PREFIX of in_flight_orphan_candidate, so this
+# negative assertion must carry the compact-JSON field's closing quote or it matches the candidate.
+assert_not_contains "P2: the PROVEN reason in_flight_orphan is NOT emitted (naming pin)" "$EVENTS" '"reason":"in_flight_orphan"'
+assert_not_contains "P2: no hold is taken when no subagent is present" "$EVENTS" '"reason":"in_flight_hold"'
+CAND_LINE=$(grep '"reason":"in_flight_orphan_candidate"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_eq "P2: the candidate event carries entries" "$(printf '%s' "$CAND_LINE" | jq -r '.entries' 2>/dev/null)" "0"
+assert_eq "P2: the candidate event carries subagents_present" "$(printf '%s' "$CAND_LINE" | jq -r '.subagents_present' 2>/dev/null)" "0"
+assert_eq "P2: the candidate event carries the observed types vocabulary" \
+  "$(printf '%s' "$CAND_LINE" | jq -r '.types | type' 2>/dev/null)" "string"
+assert_contains "P2: the candidate event names the unit it belongs to" "$CAND_LINE" "TASK-002"
+teardown_temp_dir
+
+# P2 negative pin — the new reason must not swallow the PROVEN class.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+NOW=$(date +%s)
+_write_marker "$TEST_DIR/nazgul/in-flight/nm-legacy.json" "nazgul:implementer" "TASK-002" "$NOW" "missing" "true"
+run_hook "$(cat "$FIXTURES/stop-payload-synthetic/background-tasks-empty.json")"
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+assert_contains "P2 negative: a NAMED marker keeps its proven in_flight_orphan disposition" "$EVENTS" '"reason":"in_flight_orphan"'
+assert_file_exists "P2 negative: the proven-class marker is still quarantined" "$TEST_DIR/nazgul/in-flight/quarantine/nm-legacy.json"
+assert_not_contains "P2 negative: the proven class is never downgraded to a candidate" "$EVENTS" '"reason":"in_flight_orphan_candidate"'
 teardown_temp_dir
 
 # === Clear: scripts/subagent-stop.sh ===
