@@ -23,11 +23,55 @@ source "$SCRIPT_DIR/lib/task-transition-guard.sh"
 source "$SCRIPT_DIR/lib/git-utils.sh"
 source "$SCRIPT_DIR/lib/emit-event.sh"
 source "$SCRIPT_DIR/lib/parallel-batch.sh"
+source "$SCRIPT_DIR/lib/hook-stdin.sh"
 
 # If Nazgul not initialized, allow stop
 if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
+
+# --- Stop payload observation (#218 C1, ruling Q4) ---
+# Read stdin ONCE, here: the pause and AFK gates below both exit early.
+STOP_PAYLOAD=""
+read_hook_payload STOP_PAYLOAD
+
+# OBSERVATION ONLY — no classification acts on these yet. A truncated, absent
+# or non-JSON payload degrades to `unknown`, which is today's behavior exactly.
+BG_SEEN="unknown" BG_ENTRIES=0 BG_SUBAGENTS=0 BG_LIVE=0 BG_TYPES="" BG_STATUSES=""
+BG_WHY="${HOOK_STDIN_WHY:-no_stdin}"
+if [ -n "$STOP_PAYLOAD" ]; then
+  if ! command -v jq >/dev/null 2>&1; then
+    BG_WHY="no_jq"
+  elif ! printf '%s' "$STOP_PAYLOAD" | jq -e . >/dev/null 2>&1; then
+    # A read that hit the `-t` bound mid-document arrives non-empty and unparseable.
+    BG_WHY="not_json"
+  elif ! printf '%s' "$STOP_PAYLOAD" | jq -e 'has("background_tasks")' >/dev/null 2>&1; then
+    BG_WHY="field_absent"
+  else
+    BG_SEEN="yes" BG_WHY=""
+    # background_tasks[] is undocumented, so a shape change (R3) or a renamed
+    # type value (R4) must surface as vocabulary in types/statuses, not silence.
+    BG_TSV="$(printf '%s' "$STOP_PAYLOAD" | jq -r '
+      (.background_tasks // []) as $b
+      | ($b | map(select(.type == "subagent"))) as $s
+      | [ ($b | length),
+          ($s | length),
+          ($s | map(select(.status == "running" or .status == "pending")) | length),
+          ($b | map(.type // "null") | unique | join(",")),
+          ($b | map(.status // "null") | unique | join(",")) ]
+      | @tsv' 2>/dev/null || true)"
+    IFS=$'\t' read -r BG_ENTRIES BG_SUBAGENTS BG_LIVE BG_TYPES BG_STATUSES <<< "$BG_TSV" || true
+  fi
+fi
+
+# `why` is emitted ONLY on the unknown arm, so its closed set stays closed.
+BG_OBSERVED_ARGS=(bg_seen "$BG_SEEN")
+if [ "$BG_SEEN" = "unknown" ]; then BG_OBSERVED_ARGS+=(why "$BG_WHY"); fi
+BG_OBSERVED_ARGS+=(entries:n "${BG_ENTRIES:-0}" subagents:n "${BG_SUBAGENTS:-0}" live:n "${BG_LIVE:-0}")
+BG_OBSERVED_ARGS+=(types "${BG_TYPES:-}" statuses "${BG_STATUSES:-}")
+# Bounded and structured on purpose: the raw payload carries cwd,
+# transcript_path, agent_transcript_path and last_assistant_message (ruling Q4).
+emit_event "stop_payload_observed" "${BG_OBSERVED_ARGS[@]}"
 
 # Refresh the session lock every iteration — read persisted ID to match
 # session-context.sh. Lock LIFETIME is the session's, not the turn's (#195):

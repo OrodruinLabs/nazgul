@@ -424,6 +424,183 @@ assert_contains "clearer: underivable emits clear_fallback_underivable" \
   "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" "clear_fallback_underivable"
 teardown_temp_dir
 
+# === P9 (C1) / P6 (C4) / P12a (ruling Q4): the bounded read and what it records ===
+HOOK_STDIN_LIB="$REPO_ROOT/scripts/lib/hook-stdin.sh"
+
+# timeout(1) is absent from stock macOS, so reuse the formatter.sh:218-221 ladder.
+# Its bare fallback backgrounds and polls, so no pin here can hang the suite.
+_bounded_run() {
+  local _br_secs="$1"; shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$_br_secs" "$@"
+    return $?
+  fi
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$_br_secs" "$@"
+    return $?
+  fi
+  "$@" &
+  local _br_pid=$! _br_waited=0
+  while [ "$_br_waited" -lt "$_br_secs" ] && kill -0 "$_br_pid" 2>/dev/null; do
+    sleep 1
+    _br_waited=$(( _br_waited + 1 ))
+  done
+  if kill -0 "$_br_pid" 2>/dev/null; then
+    kill -9 "$_br_pid" 2>/dev/null
+    wait "$_br_pid" 2>/dev/null
+    return 124
+  fi
+  wait "$_br_pid"
+}
+
+# `tail -f /dev/null` feeding a fifo IS #155's never-EOF stdin, with a writer the
+# test can reap; the literal pipeline can never be reaped, since tail never writes.
+_never_eof_open() {
+  rm -f "$1"
+  mkfifo "$1"
+  tail -f /dev/null > "$1" &
+  NEVER_EOF_PID=$!
+}
+
+_never_eof_close() {
+  kill "$NEVER_EOF_PID" 2>/dev/null
+  wait "$NEVER_EOF_PID" 2>/dev/null
+  rm -f "$1"
+}
+
+_run_hook_payload() {
+  HOOK_OUTPUT=$(printf '%s' "$1" | bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+}
+
+# --- P9 (C1 unit, obligation AC-V1): read_hook_payload in isolation ---
+assert_file_exists "P9/AC-V1: scripts/lib/hook-stdin.sh exists" "$HOOK_STDIN_LIB"
+assert_file_contains "P9/AC-V1: it defines read_hook_payload" "$HOOK_STDIN_LIB" "read_hook_payload()"
+assert_file_contains "AC-V1: stop-hook.sh sources it by absolute \$SCRIPT_DIR path" \
+  "$STOP_HOOK" 'source "$SCRIPT_DIR/lib/hook-stdin.sh"'
+
+# A sourced lib must not alter the caller's shell options (CLAUDE.md Code Style).
+P9_SET_E=$(grep -cE '^[[:space:]]*set[[:space:]]+-[a-zA-Z]*e' "$HOOK_STDIN_LIB" || true)
+assert_eq "P9: hook-stdin.sh carries no set -e" "$P9_SET_E" "0"
+
+bash -n "$HOOK_STDIN_LIB" >/dev/null 2>&1
+assert_exit_code "AC-V1: hook-stdin.sh is bash -n clean" "$?" 0
+
+P9_READER='set -euo pipefail; source "$1"; read_hook_payload P; printf "[%s][%s]" "$P" "$HOOK_STDIN_WHY"'
+P9_START=$(date +%s)
+P9_OUT=$(_bounded_run 8 bash -c "$P9_READER" _ "$HOOK_STDIN_LIB" </dev/null 2>&1)
+P9_EC=$?
+P9_ELAPSED=$(( $(date +%s) - P9_START ))
+assert_eq "P9: a /dev/null stdin yields an empty payload" "$P9_OUT" "[][no_stdin]"
+assert_exit_code "P9: a caller under set -euo pipefail is never aborted by the read" "$P9_EC" 0
+assert_eq "P9: /dev/null returns promptly (${P9_ELAPSED}s), never waiting out the bound" \
+  "$([ "$P9_ELAPSED" -lt 2 ] && echo yes || echo no)" "yes"
+
+P9_MULTI=$(printf '{\n  "hook_event_name": "Stop",\n  "background_tasks": [],\n  "tail_marker": "P9_LAST_LINE"\n}')
+P9_OUT=$(printf '%s' "$P9_MULTI" | _bounded_run 8 bash -c 'set -euo pipefail; source "$1"; read_hook_payload P; printf "%s" "$P"' _ "$HOOK_STDIN_LIB" 2>&1)
+assert_eq "P9: a pretty-printed multi-line payload comes back whole" "$P9_OUT" "$P9_MULTI"
+assert_contains "P9: -d '' reaches the LAST line — truncation at the first newline is what this catches" \
+  "$P9_OUT" "P9_LAST_LINE"
+
+setup_temp_dir
+P9_FIFO="$TEST_DIR/p9-never-eof"
+_never_eof_open "$P9_FIFO"
+P9_START=$(date +%s)
+P9_OUT=$(_bounded_run 20 bash -c "$P9_READER" _ "$HOOK_STDIN_LIB" < "$P9_FIFO" 2>&1)
+P9_EC=$?
+P9_ELAPSED=$(( $(date +%s) - P9_START ))
+_never_eof_close "$P9_FIFO"
+assert_eq "P9: a never-EOF stdin returns at the bound, and says so — 'timed out' never collapses into 'no payload'" \
+  "$P9_OUT" "[][read_timeout]"
+assert_exit_code "P9: it returned on its own, not by the wrapper's kill" "$P9_EC" 0
+assert_eq "P9: ... within its own bound (${P9_ELAPSED}s < 5s)" \
+  "$([ "$P9_ELAPSED" -lt 5 ] && echo yes || echo no)" "yes"
+teardown_temp_dir
+
+# --- P6 (C4): the ANTI-HANG pin — #155's own reproduction inverted ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+P6_FIFO="$TEST_DIR/p6-never-eof"
+_never_eof_open "$P6_FIFO"
+P6_START=$(date +%s)
+_bounded_run 20 bash "$STOP_HOOK" < "$P6_FIFO" >/dev/null 2>&1
+P6_EC=$?
+P6_ELAPSED=$(( $(date +%s) - P6_START ))
+_never_eof_close "$P6_FIFO"
+assert_eq "P6 (C4): stop-hook returns under a never-EOF stdin instead of deadlocking" \
+  "$([ "$P6_EC" -ne 124 ] && echo returned || echo killed_by_wrapper)" "returned"
+assert_eq "P6 (C4): ... in ${P6_ELAPSED}s, under the 5 s bound" \
+  "$([ "$P6_ELAPSED" -lt 5 ] && echo yes || echo no)" "yes"
+assert_contains "P6: the bounded read is recorded as read_timeout, not as an absent payload" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" '"why":"read_timeout"'
+teardown_temp_dir
+
+# The terminal test is the WRONG PREDICATE (#155) and must never be the SOLE guard:
+# what closes the hazard is the -t bound, so pin the bound itself, not the guard.
+P6_BOUNDED=$(grep -cE 'read .*-d .. -t "\$HOOK_STDIN_TIMEOUT"' "$HOOK_STDIN_LIB" || true)
+assert_eq "P6 companion: the read carries a -t bound alongside its terminal test" "$P6_BOUNDED" "1"
+P6_CAT_DRAIN=$(grep -vE '^[[:space:]]*#' "$HOOK_STDIN_LIB" | grep -cE '\$\(cat' || true)
+assert_eq "P6 companion: no \$(cat) drain in the code — the header names that idiom only to forbid it" \
+  "$P6_CAT_DRAIN" "0"
+
+# --- P12a (ruling Q4): one observation event per invocation, on every arm ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+run_hook
+_run_hook_payload 'this is not json at all'
+_run_hook_payload '{"hook_event_name":"Stop","stop_hook_active":false}'
+P12_OBS=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null || true)
+P12_COUNT=$(printf '%s\n' "$P12_OBS" | grep -c 'stop_payload_observed' || true)
+assert_eq "P12a: exactly one event per invocation — 3 invocations, 3 events" "$P12_COUNT" "3"
+assert_eq "P12a: each unknown arm names its OWN reason" \
+  "$(printf '%s\n' "$P12_OBS" | jq -r '.why // "ABSENT"' | tr '\n' ' ')" "no_stdin not_json field_absent "
+P12_WHY_OUTSIDE=$(printf '%s\n' "$P12_OBS" | jq -r 'select(has("why")) | .why' \
+  | grep -vcE '^(no_stdin|read_timeout|not_json|field_absent|no_jq)$' || true)
+assert_eq "P12a: every why is drawn from the closed set" "$P12_WHY_OUTSIDE" "0"
+assert_eq "P12a: an absent, unparseable or key-less payload falls to unknown, never to yes" \
+  "$(printf '%s\n' "$P12_OBS" | jq -r '.bg_seen' | sort -u | tr '\n' ' ')" "unknown "
+teardown_temp_dir
+
+setup_temp_dir
+setup_nazgul_dir
+create_config
+P12_PAYLOAD=$(jq -cn '{hook_event_name:"Stop",stop_hook_active:false,
+  cwd:"/p12a/SECRET-cwd",transcript_path:"/p12a/SECRET-transcript.jsonl",
+  agent_transcript_path:"/p12a/SECRET-agent.jsonl",
+  last_assistant_message:"SECRET assistant prose",
+  background_tasks:[{id:"a1",type:"subagent",status:"running",agent_type:"nazgul:doc-generator"},
+                    {id:"b1",type:"shell",status:"running",description:"SECRET command string"}]}')
+_run_hook_payload "$P12_PAYLOAD"
+P12_OBS=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null || true)
+P12_COUNT=$(printf '%s\n' "$P12_OBS" | grep -c 'stop_payload_observed' || true)
+assert_eq "P12a: exactly one event on the yes arm too" "$P12_COUNT" "1"
+assert_eq "P12a: bg_seen is yes when background_tasks is present" \
+  "$(printf '%s' "$P12_OBS" | jq -r '.bg_seen')" "yes"
+assert_eq "P12a: entries counts every background_tasks entry" \
+  "$(printf '%s' "$P12_OBS" | jq -r '.entries')" "2"
+assert_eq "P12a: subagents counts only type==subagent" \
+  "$(printf '%s' "$P12_OBS" | jq -r '.subagents')" "1"
+assert_eq "P12a: live counts running/pending subagents" \
+  "$(printf '%s' "$P12_OBS" | jq -r '.live')" "1"
+assert_eq "P12a: the three counts land as JSON numbers, not strings" \
+  "$(printf '%s' "$P12_OBS" | jq -r '[.entries,.subagents,.live]|map(type)|unique|join(",")')" "number"
+assert_eq "P12a: types carries the DISTINCT type vocabulary — R4's canary made mechanical" \
+  "$(printf '%s' "$P12_OBS" | jq -r '.types')" "shell,subagent"
+assert_eq "P12a: statuses carries the DISTINCT status vocabulary" \
+  "$(printf '%s' "$P12_OBS" | jq -r '.statuses')" "running"
+assert_eq "P12a: why is ABSENT on the yes arm, so its closed set stays closed" \
+  "$(printf '%s' "$P12_OBS" | jq -r 'has("why")')" "false"
+assert_not_contains "P12a privacy: the event carries no cwd" "$P12_OBS" "cwd"
+assert_not_contains "P12a privacy: the event carries no transcript_path" "$P12_OBS" "transcript_path"
+assert_not_contains "P12a privacy: the event carries no agent_transcript_path" "$P12_OBS" "agent_transcript_path"
+assert_not_contains "P12a privacy: the event carries no last_assistant_message" "$P12_OBS" "last_assistant_message"
+assert_not_contains "P12a privacy: no VALUE from those four fields leaks either" "$P12_OBS" "SECRET"
+P12_BYTES=${#P12_OBS}
+assert_eq "P12a: the event stays bounded and structured (${P12_BYTES} bytes <= 300)" \
+  "$([ "$P12_BYTES" -le 300 ] && echo yes || echo no)" "yes"
+teardown_temp_dir
+
 # === P7 (C2/AC9): every stop-hook execution under tests/ binds its own stdin ===
 # Bare stdin inherits the suite's once C1 lands — the #155 never-EOF deadlock class.
 P7_ROOT="$REPO_ROOT/tests"
@@ -452,6 +629,11 @@ while IFS= read -r _p7_hit; do
   # A pipe upstream of the invocation supplies (and EOFs) stdin just as well.
   case "${_p7_text%%bash \"*}" in
     *'|'*) continue ;;
+  esac
+  # An explicit redirect binds the invocation's OWN stdin whatever it names, and
+  # P6 below deliberately binds a never-EOF fifo — that is the pin, not the leak.
+  case "$_p7_text" in
+    *'< "$'*|*'<"$'*) continue ;;
   esac
   P7_FINDINGS=$((P7_FINDINGS + 1))
   P7_BARE+=("${_p7_file#"$P7_ROOT/"}:$_p7_line")
@@ -482,6 +664,14 @@ if command -v shellcheck >/dev/null 2>&1; then
     || _fail "shellcheck clean: in-flight-marker.sh" "shellcheck warnings found"
 else
   _skip "shellcheck skipped (not installed): in-flight-marker.sh"
+fi
+
+if command -v shellcheck >/dev/null 2>&1; then
+  shellcheck -S warning "$HOOK_STDIN_LIB" 2>/dev/null \
+    && _pass "AC-V1: shellcheck clean: scripts/lib/hook-stdin.sh" \
+    || _fail "AC-V1: shellcheck clean: scripts/lib/hook-stdin.sh" "shellcheck warnings found"
+else
+  _skip "shellcheck skipped (not installed): scripts/lib/hook-stdin.sh"
 fi
 
 report_results
