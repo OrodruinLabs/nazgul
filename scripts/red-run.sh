@@ -18,7 +18,10 @@ set -euo pipefail
 #
 # The runner is the PROJECT's own, resolved in one stated order: the live project
 # root's `project.test_command`, else `tests/run-tests.sh` if the pre-change tree
-# carries one, else a named refusal. The scoped filter is interpolated through
+# carries one, else a named refusal. A runner that resolves INSIDE this repository
+# is run FROM the pre-change tree whatever spelling named it; one that resolves
+# genuinely outside still runs, and the evidence block records that it did.
+# The scoped filter is interpolated through
 # `project.test_filter_template` — a literal `{filter}` substitution, never eval —
 # because appending a flag Nazgul chose to a command the project chose is a guess
 # whose failure modes are a fabricated red (flag rejected) and an unscoped full
@@ -442,32 +445,91 @@ fi
 
 RUNNER_BIN="${RUNNER_ARGV[0]}"
 RUNNER_REL=""
+RUNNER_NOTE=""
+
+# The two rules that make a run a PRE-CHANGE run, applied to every runner that
+# resolves inside this repository whatever spelling the config named it in.
+rr_bind_pre_change_runner() {
+  local rel="$1"
+  case "/$rel/" in
+    */../*|*/./*) die \
+      "the runner named by $RUNNER_SOURCE escapes the pre-change tree: '$RUNNER_BIN' carries a '.' or '..' segment." \
+      "Resolved from the detached worktree it would run a file from another tree — possibly the changed one, which is the vacuity this script exists to detect." \
+      "This is not a red run that failed — nothing was run at all." ;;
+  esac
+  [ -f "$SCRATCH/$rel" ] || die \
+    "the runner named by $RUNNER_SOURCE is absent from the pre-change tree: $BASE_SHA has no $rel." \
+    "A runner that does not exist at the base commit cannot be run there; track it, or pin it into the copy set." \
+    "This is not a red run that failed — nothing was run at all."
+  # A tracked-but-not-executable runner is run under bash, as this script did
+  # before the runner was configurable; the recorded command says which form ran.
+  [ -x "$SCRATCH/$rel" ] || RUNNER_ARGV=(bash "${RUNNER_ARGV[@]}")
+}
+
+# Sets RUNNER_REL and returns 0 when an absolute path names a file inside this
+# repository; 1 means it is genuinely elsewhere, which is the caller's to record.
+rr_place_absolute_runner() {
+  local abs="$1" dir rel
+  case "$abs" in
+    "$PROJECT_ROOT"/*)
+      RUNNER_REL="${abs#"$PROJECT_ROOT"/}"
+      return 0
+      ;;
+  esac
+  # A prefix that does not match by string may still be the same directory
+  # through a symlink, which TMPDIR is on macOS.
+  dir=$(cd "$(dirname "$abs")" 2>/dev/null && pwd -P) || die \
+    "the runner named by $RUNNER_SOURCE cannot be placed relative to the pre-change tree: '$abs' has no resolvable directory." \
+    "Whether it names a file inside this repository, which must be run from the tree at $BASE_SHA, or a shared runner outside it cannot be decided — and guessing wrong runs the CHANGED runner while recording a pre-change red." \
+    "This is not a red run that failed — nothing was run at all."
+  case "$dir/" in
+    "$PROJECT_ROOT"/*) ;;
+    *) return 1 ;;
+  esac
+  rel="${dir#"$PROJECT_ROOT"}"
+  rel="${rel#/}"
+  if [ -n "$rel" ]; then
+    RUNNER_REL="$rel/${abs##*/}"
+  else
+    RUNNER_REL="${abs##*/}"
+  fi
+  return 0
+}
+
 case "$RUNNER_BIN" in
   /*)
-    [ -x "$RUNNER_BIN" ] || die \
-      "the runner named by $RUNNER_SOURCE is not an executable file: $RUNNER_BIN." \
-      "This is not a red run that failed — nothing was run at all."
+    if rr_place_absolute_runner "$RUNNER_BIN"; then
+      RUNNER_ARGV[0]="./$RUNNER_REL"
+      RUNNER_NOTE="; absolute runner normalised into the pre-change tree as ./$RUNNER_REL"
+      rr_bind_pre_change_runner "$RUNNER_REL"
+    else
+      [ -x "$RUNNER_BIN" ] || die \
+        "the runner named by $RUNNER_SOURCE is not an executable file: $RUNNER_BIN." \
+        "This is not a red run that failed — nothing was run at all."
+      RUNNER_NOTE="; runner resolved OUTSIDE the pre-change tree: $RUNNER_BIN — a shared runner no commit of this repository pins, run as configured"
+      echo "red-run: WARNING — the runner named by $RUNNER_SOURCE resolves outside $PROJECT_ROOT, so the pre-change run executes $RUNNER_BIN as it is now; only the tree it runs against is at $BASE_SHA. Recorded in the evidence block as such." >&2
+    fi
     ;;
   */*)
     RUNNER_REL="${RUNNER_BIN#./}"
-    case "/$RUNNER_REL/" in
-      */../*|*/./*) die \
-        "the runner named by $RUNNER_SOURCE escapes the pre-change tree: '$RUNNER_BIN' carries a '.' or '..' segment." \
-        "Resolved from the detached worktree it would run a file from another tree — possibly the changed one, which is the vacuity this script exists to detect." \
-        "This is not a red run that failed — nothing was run at all." ;;
-    esac
-    [ -f "$SCRATCH/$RUNNER_REL" ] || die \
-      "the runner named by $RUNNER_SOURCE is absent from the pre-change tree: $BASE_SHA has no $RUNNER_REL." \
-      "A runner that does not exist at the base commit cannot be run there; track it, or pin it into the copy set." \
-      "This is not a red run that failed — nothing was run at all."
-    # A tracked-but-not-executable runner is run under bash, as this script did
-    # before the runner was configurable; the recorded command says which form ran.
-    [ -x "$SCRATCH/$RUNNER_REL" ] || RUNNER_ARGV=(bash "${RUNNER_ARGV[@]}")
+    rr_bind_pre_change_runner "$RUNNER_REL"
     ;;
   *)
-    command -v "$RUNNER_BIN" >/dev/null 2>&1 || die \
+    RUNNER_ABS=$(command -v "$RUNNER_BIN" 2>/dev/null) || RUNNER_ABS=""
+    [ -n "$RUNNER_ABS" ] || die \
       "the runner named by $RUNNER_SOURCE is not on PATH: '$RUNNER_BIN' cannot be executed here." \
       "This is not a red run that failed — nothing was run at all."
+    # A bare name that PATH resolves into this repository is the same hazard in a
+    # third spelling: run the pre-change copy, not whatever PATH found live.
+    case "$RUNNER_ABS" in
+      /*)
+        if rr_place_absolute_runner "$RUNNER_ABS"; then
+          RUNNER_ARGV[0]="./$RUNNER_REL"
+          RUNNER_NOTE="; PATH resolved '$RUNNER_BIN' inside this repository — normalised into the pre-change tree as ./$RUNNER_REL"
+          rr_bind_pre_change_runner "$RUNNER_REL"
+        fi
+        ;;
+    esac
     ;;
 esac
 
@@ -632,7 +694,7 @@ CAPTURE_NOTE=""
 [ -n "$EXPLICIT_COPY" ] && CAPTURE_NOTE="; copy set pinned by --copy"
 
 BLOCK="${BEGIN_MARK}
-- capture: \`${RUN_CMD}\` in a detached worktree at \`${BASE_SHA}\`; ${COPIED} changed test file(s) copied in${CAPTURE_NOTE}; runner exit ${RUN_EC} in ${ELAPSED}s
+- capture: \`${RUN_CMD}\` in a detached worktree at \`${BASE_SHA}\`; ${COPIED} changed test file(s) copied in${CAPTURE_NOTE}${RUNNER_NOTE}; runner exit ${RUN_EC} in ${ELAPSED}s
 ${ENTRIES}${END_MARK}"
 
 # In-place file write, never `mv`/`cp` over a manifest: the bash-write
