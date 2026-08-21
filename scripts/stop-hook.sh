@@ -189,19 +189,45 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
   # emitted by this gate carries the real current iteration, not null.
   # shellcheck disable=SC2034
   CURRENT_ITERATION="$ITERATION"
-  FRESH_UNITS="" FRESH_COUNT=0
+  FRESH_UNITS="" FRESH_COUNT=0 IN_FLIGHT_LIVE_HOLD=no
+  IN_FLIGHT_HOLD_ARGS=(reason "in_flight_hold")
+  # #218 ruling Q2 — TWO independent counts, never one filter: BG_LIVE (positively live) is the HOLD
+  # gate, BG_SUBAGENTS (status-blind presence) the CANDIDATE gate; an unknown status yields neither.
+  IN_FLIGHT_OBSERVED="$BG_SEEN"
+  # A count that did not parse is "could not tell", not "found none" — RULES §15 / ADR-009.
+  case "${BG_LIVE:-}" in ''|*[!0-9]*) IN_FLIGHT_OBSERVED="unknown" ;; esac
+  case "${BG_SUBAGENTS:-}" in ''|*[!0-9]*) IN_FLIGHT_OBSERVED="unknown" ;; esac
+  if [ "$IN_FLIGHT_OBSERVED" = "yes" ] && [ "$BG_LIVE" -gt 0 ]; then
+    # #211 in effect, not just in default: consulted BEFORE the freshness cutoff below, so a stale
+    # bound can never decline a hold for a session that HAS a live subagent.
+    IN_FLIGHT_LIVE_HOLD=yes
+    IN_FLIGHT_HOLD_ARGS+=(live_subagents:n "$BG_LIVE")
+  fi
   for marker in "$NAZGUL_DIR/in-flight"/*.json; do
     [ -f "$marker" ] || continue
     m_epoch=$(jq -r '.dispatched_at_epoch // 0' "$marker" 2>/dev/null || echo 0)
     m_unit=$(jq -r '.unit // "unknown"' "$marker" 2>/dev/null || echo "unknown")
     m_agent=$(jq -r '.agent // "unknown"' "$marker" 2>/dev/null || echo "unknown")
     case "$m_epoch" in ''|*[!0-9]*) m_epoch=0 ;; esac
-    if [ "$m_epoch" -gt 0 ] && [ "$m_epoch" -ge "$IN_FLIGHT_CUTOFF" ]; then
+    if [ "$IN_FLIGHT_LIVE_HOLD" = "yes" ]; then
+      # Liveness is a property of the SESSION, not of one marker — background_tasks[] carries no
+      # join key — so a live subagent decides the whole tick: name every marker, move none, any age.
+      FRESH_COUNT=$((FRESH_COUNT + 1))
+      FRESH_UNITS="${FRESH_UNITS}${FRESH_UNITS:+ }${m_unit}"
+    elif [ "$m_epoch" -gt 0 ] && [ "$m_epoch" -ge "$IN_FLIGHT_CUTOFF" ]; then
       # "missing" = dispatch class NOT OBSERVABLE at write time, not foreground. run_in_background is omitted from the exposed Agent schema in fork mode (the interactive default since v2.1.232) and under CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
       # absence means the OPPOSITE in those two configs (background / foreground). #218: read background_tasks[] at Stop instead of predicting at dispatch time.
       m_bg=$(jq -r '.background // "missing"' "$marker" 2>/dev/null || echo "missing")
       m_named=$(jq -r '.named // "false"' "$marker" 2>/dev/null || echo "false")
-      if [ "$m_bg" = "true" ] && [ "$m_named" != "true" ]; then
+      if [ "$IN_FLIGHT_OBSERVED" = "yes" ] && [ "$m_named" != "true" ] && [ "$m_bg" != "false" ]; then
+        # Observed, and not live (the hold above already took every LIVE > 0 tick): the payload, not
+        # the write-time class, disposes of an unnamed marker.
+        if [ "$BG_SUBAGENTS" -eq 0 ]; then
+          # DETECT-ONLY: ruling Q3 defers the irreversible move until ADR-027's measurement bar.
+          echo "Nazgul: ORPHAN CANDIDATE in-flight marker for ${m_unit} (${m_agent}) — the Stop payload reports no subagent of any status for this session. NOT quarantined and NOT held on; left in nazgul/in-flight/ pending the ADR-027 Q3 measurement bar. Continuing normally." >&2
+          emit_event "stop_gate" reason "in_flight_orphan_candidate" evidence "background_tasks_empty" unit "$m_unit" agent "$m_agent" entries:n "${BG_ENTRIES:-0}" subagents_present:n "$BG_SUBAGENTS" types "${BG_TYPES:-}"
+        fi
+      elif [ "$m_bg" = "true" ] && [ "$m_named" != "true" ]; then
         # Provably-background, unnamed: the documented harness resume IS the
         # confirmed wake path (D-002; docs/CONFIGURATION.md In-Flight Hold).
         FRESH_COUNT=$((FRESH_COUNT + 1))
@@ -237,9 +263,13 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
       emit_event "stop_gate" reason "in_flight_stale" unit "$m_unit" agent "$m_agent" age_minutes:n "$m_age_min" limit:n "$IN_FLIGHT_STALE_MIN"
     fi
   done
-  if [ "$FRESH_COUNT" -gt 0 ]; then
-    echo "Nazgul: in-flight hold — waiting on ${FRESH_COUNT} BACKGROUND dispatch(es): ${FRESH_UNITS}. Allowing stop; the harness's task-notification resumes this loop when the background agent finishes." >&2
-    emit_event "stop_gate" reason "in_flight_hold" units "$FRESH_UNITS" count:n "$FRESH_COUNT"
+  if [ "$IN_FLIGHT_LIVE_HOLD" = "yes" ] || [ "$FRESH_COUNT" -gt 0 ]; then
+    if [ "$IN_FLIGHT_LIVE_HOLD" = "yes" ]; then
+      echo "Nazgul: in-flight hold — the Stop payload reports ${BG_LIVE} live subagent(s) for this session; markers held: ${FRESH_UNITS:-none}. Allowing stop; the harness's task-notification resumes this loop when the background agent finishes." >&2
+    else
+      echo "Nazgul: in-flight hold — waiting on ${FRESH_COUNT} BACKGROUND dispatch(es): ${FRESH_UNITS}. Allowing stop; the harness's task-notification resumes this loop when the background agent finishes." >&2
+    fi
+    emit_event "stop_gate" "${IN_FLIGHT_HOLD_ARGS[@]}" units "$FRESH_UNITS" count:n "$FRESH_COUNT"
     exit 0
   fi
 fi
