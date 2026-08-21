@@ -543,6 +543,183 @@ assert_eq "P11 companion: pending is counted in live, not merely present" \
   "$(printf '%s' "$P11P_OBS" | jq -r '[.subagents,.live]|join("/")' 2>/dev/null)" "1/1"
 teardown_temp_dir
 
+# === P10 (ruling Q1): the hold budget valve, bounded per marker set ===
+
+# Every pin below is an equality on an extracted value, so the coverage line at the end
+# counts checks that actually ran rather than checks that merely appeared.
+P10_SCANNED=0
+P10_SKIPPED=0
+P10_CHECKED=0
+P10_FINDINGS=0
+
+_p10_check() {
+  P10_SCANNED=$((P10_SCANNED + 1))
+  P10_CHECKED=$((P10_CHECKED + 1))
+  assert_eq "$1" "$2" "$3"
+  [ "$2" = "$3" ] || P10_FINDINGS=$((P10_FINDINGS + 1))
+}
+
+# The reason field's closing quote is load-bearing here: in_flight_hold is a strict PREFIX of
+# in_flight_hold_budget_exhausted, so a bare substring count would score the two as one.
+_p10_hold_count() {
+  local n
+  n=$(grep -c '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+  printf '%s' "${n:-0}"
+}
+
+_p10_exhausted_count() {
+  local n
+  n=$(grep -c '"reason":"in_flight_hold_budget_exhausted"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+  printf '%s' "${n:-0}"
+}
+
+_p10_ledger_count() {
+  find "$TEST_DIR/nazgul/logs/.in-flight-holds" -type f 2>/dev/null | wc -l | tr -d ' '
+}
+
+_p10_exhausted_line() {
+  grep '"reason":"in_flight_hold_budget_exhausted"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1
+}
+
+# P10a/P10b/P10c share ONE fixture on purpose: exhaustion is only reachable by a second
+# invocation against an unchanged set, and a fresh temp dir would reset the very ledger under test.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 5' '.safety.consecutive_failures = 2'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/valve-a.json" "nazgul:implementer" "TASK-001" "$(date +%s)" "missing"
+P10_PAYLOAD='{"hook_event_name":"Stop","background_tasks":[{"id":"s1","type":"subagent","status":"running"}]}'
+P10_CFG_BEFORE=$(cksum < "$TEST_DIR/nazgul/config.json")
+run_hook "$P10_PAYLOAD"
+_p10_check "P10a: a FIRST hold on a fresh marker set is permitted (exit 0)" "$HOOK_EC" "0"
+_p10_check "P10a: exactly one in_flight_hold event" "$(_p10_hold_count)" "1"
+_p10_check "P10a: and no exhaustion event on a first hold" "$(_p10_exhausted_count)" "0"
+_p10_check "P10a: current_iteration byte-identical across the held run" \
+  "$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")" "5"
+_p10_check "P10a: safety.consecutive_failures byte-identical across the held run" \
+  "$(jq -r '.safety.consecutive_failures' "$TEST_DIR/nazgul/config.json")" "2"
+_p10_check "P10a: an attempt ledger, never config state — the whole config.json is byte-identical" \
+  "$(cksum < "$TEST_DIR/nazgul/config.json")" "$P10_CFG_BEFORE"
+_p10_check "P10a: one ledger file under nazgul/logs/.in-flight-holds/" "$(_p10_ledger_count)" "1"
+P10_LEDGER=$(find "$TEST_DIR/nazgul/logs/.in-flight-holds" -type f 2>/dev/null | head -1)
+P10_LEDGER_BASE="${P10_LEDGER##*/}"
+_p10_check "P10a: the ledger records the one hold taken" "$(cat "$P10_LEDGER" 2>/dev/null)" "1"
+_p10_check "P10a: named by a 16-char hash — the _resume_attempts_file convention, not a new one" \
+  "${#P10_LEDGER_BASE}" "16"
+
+run_hook "$P10_PAYLOAD"
+_p10_check "P10b: a SECOND hold on an UNCHANGED marker set is refused (exit 2, never exit 0)" "$HOOK_EC" "2"
+_p10_check "P10b: still exactly one in_flight_hold event — no second hold was taken" "$(_p10_hold_count)" "1"
+_p10_check "P10b: exactly one in_flight_hold_budget_exhausted event" "$(_p10_exhausted_count)" "1"
+P10_EX=$(_p10_exhausted_line)
+_p10_check "P10b: the event names the fingerprint that keys the ledger file" \
+  "$(printf '%s' "$P10_EX" | jq -r '.fingerprint')" "$P10_LEDGER_BASE"
+_p10_check "P10b: it carries holds_taken" "$(printf '%s' "$P10_EX" | jq -r '.holds_taken')" "1"
+_p10_check "P10b: holds_taken is a JSON number, not a string" \
+  "$(printf '%s' "$P10_EX" | jq -r '.holds_taken | type')" "number"
+_p10_check "P10b: it carries the observed live_subagents count" \
+  "$(printf '%s' "$P10_EX" | jq -r '.live_subagents')" "1"
+_p10_check "P10b: it names the units it declined to hold on" \
+  "$(printf '%s' "$P10_EX" | jq -r '.units')" "TASK-001"
+_p10_check "P10b: a spent budget is distinguishable from an unwritable one" \
+  "$(printf '%s' "$P10_EX" | jq -r '.ledger')" "spent"
+_p10_check "P10b: current_iteration INCREMENTED — the fall-through really reached the increment" \
+  "$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")" "6"
+_p10_check "P10b: the marker is left exactly where it was" \
+  "$([ -f "$TEST_DIR/nazgul/in-flight/valve-a.json" ] && echo present || echo absent)" "present"
+_p10_check "P10b: exhaustion quarantines nothing" \
+  "$(find "$TEST_DIR/nazgul/in-flight/quarantine" -type f 2>/dev/null | wc -l | tr -d ' ')" "0"
+_p10_check "P10b: the spent ledger is not driven past the cap" "$(cat "$P10_LEDGER" 2>/dev/null)" "1"
+
+_write_marker "$TEST_DIR/nazgul/in-flight/valve-b.json" "nazgul:implementer" "TASK-009" "$(date +%s)" "missing"
+run_hook "$P10_PAYLOAD"
+_p10_check "P10c: a CHANGED marker set gets its own budget and holds again (exit 0)" "$HOOK_EC" "0"
+_p10_check "P10c: a second in_flight_hold event, taken on the changed set" "$(_p10_hold_count)" "2"
+_p10_check "P10c: and no second exhaustion" "$(_p10_exhausted_count)" "1"
+_p10_check "P10c: the ledger gains a second, differently-named file — it keys on evidence, not a global counter" \
+  "$(_p10_ledger_count)" "2"
+_p10_check "P10c: the newly permitted hold burns no iteration" \
+  "$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")" "6"
+teardown_temp_dir
+
+# P10d — the `unknown` arm exhausts through the SAME code path. A valve that fired only on the
+# payload-driven arm would be the second convention this task exists to avoid.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 5'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/valve-bg.json" "nazgul:implementer" "TASK-003" "$(date +%s)" "true"
+run_hook
+_p10_check "P10d: the unknown arm's FIRST hold is permitted (exit 0)" "$HOOK_EC" "0"
+_p10_check "P10d: it is the same hold event, through the same exit" "$(_p10_hold_count)" "1"
+_p10_check "P10d: the unknown arm writes a ledger file too" "$(_p10_ledger_count)" "1"
+_p10_check "P10d: this really is the unknown arm, not a payload-driven one" \
+  "$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1 | jq -r '.bg_seen')" "unknown"
+run_hook
+_p10_check "P10d: the second unchanged invocation exhausts exactly as P10b does (exit 2)" "$HOOK_EC" "2"
+_p10_check "P10d: no second hold on the unknown arm either" "$(_p10_hold_count)" "1"
+_p10_check "P10d: the same exhaustion reason — ONE code path, not two" "$(_p10_exhausted_count)" "1"
+P10_EX=$(_p10_exhausted_line)
+_p10_check "P10d: holds_taken on the unknown arm" "$(printf '%s' "$P10_EX" | jq -r '.holds_taken')" "1"
+_p10_check "P10d: no liveness was observed on this arm, so live_subagents is 0" \
+  "$(printf '%s' "$P10_EX" | jq -r '.live_subagents')" "0"
+_p10_check "P10d: it names the background unit it declined" \
+  "$(printf '%s' "$P10_EX" | jq -r '.units')" "TASK-003"
+_p10_check "P10d: current_iteration increments on the exhausted run" \
+  "$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")" "6"
+_p10_check "P10d: the background marker is never quarantined by exhaustion" \
+  "$([ -f "$TEST_DIR/nazgul/in-flight/valve-bg.json" ] && echo present || echo absent)" "present"
+teardown_temp_dir
+
+# Prior-art conformance: _resume_attempts_file's hash-unavailable fallback, copied rather than
+# reinvented. A failing shim reaches _rp_sha256's own failure branch without emptying PATH.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/valve-nh.json" "nazgul:implementer" "TASK-001" "$(date +%s)" "true"
+# setup_temp_dir's own TEST_DIR carries a colon, which a PATH entry cannot: putting the shims
+# there would split the entry and silently test nothing.
+P10_SHIM=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-p10-shim-XXXXXX")
+printf '#!/bin/sh\nexit 1\n' > "$P10_SHIM/sha256sum"
+printf '#!/bin/sh\nexit 1\n' > "$P10_SHIM/shasum"
+chmod +x "$P10_SHIM/sha256sum" "$P10_SHIM/shasum"
+_p10_check "prior art: the shim really is reachable — a PATH that never loaded it would prove nothing" \
+  "$(PATH="$P10_SHIM:$PATH" command -v sha256sum)" "$P10_SHIM/sha256sum"
+HOOK_OUTPUT=$(PATH="$P10_SHIM:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+rm -rf "$P10_SHIM"
+_p10_check "prior art: an unusable sha256 never aborts the hook — the hold is still taken (exit 0)" "$HOOK_EC" "0"
+_p10_check "prior art: it degrades to the named fallback ledger, as _resume_attempts_file does" \
+  "$([ -f "$TEST_DIR/nazgul/logs/.in-flight-holds/fallback" ] && echo present || echo absent)" "present"
+_p10_check "prior art: and says so on stderr rather than degrading silently" \
+  "$(printf '%s' "$HOOK_OUTPUT" | grep -c 'in-flight hold ledger hash fallback')" "1"
+teardown_temp_dir
+
+# AC12: the cap lives in code, and this objective adds no schema surface at all.
+_p10_check "config purity: _IN_FLIGHT_HOLD_CAP is a script constant in scripts/stop-hook.sh" \
+  "$([ "$(grep -c '_IN_FLIGHT_HOLD_CAP=1' "$STOP_HOOK")" -ge 1 ] && echo present || echo absent)" "present"
+_p10_check "config purity: it is NOT a config key" \
+  "$(grep -ci 'in_flight_hold_cap' "$REPO_ROOT/templates/config.json")" "0"
+_p10_check "config purity: the valve adds no guards key of its own" \
+  "$(jq -r '.guards | has("in_flight_hold_cap")' "$REPO_ROOT/templates/config.json")" "false"
+_p10_check "config purity: templates/config.json still reports schema_version 36" \
+  "$(jq -r '.schema_version' "$REPO_ROOT/templates/config.json")" "36"
+
+assert_eq "P10 accounting: scanned == skipped + checked" "$P10_SCANNED" "$((P10_SKIPPED + P10_CHECKED))"
+assert_eq "P10 floor: the valve's pin set is not empty" \
+  "$([ "$P10_CHECKED" -gt 0 ] && echo yes || echo no)" "yes"
+assert_eq "P10: $P10_SCANNED scanned, $P10_SKIPPED skipped, $P10_CHECKED checked — every first hold permitted, every unchanged repeat refused" \
+  "$P10_FINDINGS" "0"
+
 # === Clear: scripts/subagent-stop.sh ===
 
 setup_temp_dir

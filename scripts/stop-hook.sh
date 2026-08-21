@@ -175,6 +175,24 @@ fi
 # marker write/clear in in-flight-marker.sh/subagent-stop.sh keep running
 # harmlessly either way).
 IN_FLIGHT_HOLD_ENABLED=$(jq -r 'if .guards.in_flight_hold == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+
+# Ruling Q1 (ADR-027): a script constant, deliberately NOT a config key — this is an attempt
+# ledger, and a config read-modify-write here would put the hold's byte-identical config at risk.
+_IN_FLIGHT_HOLD_CAP=1
+
+# One ledger file per marker set, named by a short hash of it — the shape of subagent-stop.sh's
+# _resume_attempts_file, fallback included: a bare pipeline with no sha256 tool aborts under set -e.
+_in_flight_holds_file() {
+  local key="$1" hash
+  hash=$(printf '%s' "$key" | _rp_sha256) || hash=""
+  hash="${hash:0:16}"
+  if [ -z "$hash" ]; then
+    echo "Nazgul: in-flight hold ledger hash fallback (sha256 unavailable) — every marker set shares one budget" >&2
+    hash="fallback"
+  fi
+  printf '%s/.in-flight-holds/%s' "$NAZGUL_DIR/logs" "$hash"
+}
+
 if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; then
   IN_FLIGHT_STALE_MIN=$(jq -r '[.guards.in_flight_stale_minutes // 30, 1] | max' "$CONFIG" 2>/dev/null || echo 30)
   # A JSON string or fractional value passes jq's max unchanged (string ranks
@@ -189,7 +207,7 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
   # emitted by this gate carries the real current iteration, not null.
   # shellcheck disable=SC2034
   CURRENT_ITERATION="$ITERATION"
-  FRESH_UNITS="" FRESH_COUNT=0 IN_FLIGHT_LIVE_HOLD=no
+  FRESH_UNITS="" FRESH_COUNT=0 IN_FLIGHT_LIVE_HOLD=no FRESH_BASENAMES=""
   IN_FLIGHT_HOLD_ARGS=(reason "in_flight_hold")
   # #218 ruling Q2 — TWO independent counts, never one filter: BG_LIVE (positively live) is the HOLD
   # gate, BG_SUBAGENTS (status-blind presence) the CANDIDATE gate; an unknown status yields neither.
@@ -214,6 +232,7 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
       # join key — so a live subagent decides the whole tick: name every marker, move none, any age.
       FRESH_COUNT=$((FRESH_COUNT + 1))
       FRESH_UNITS="${FRESH_UNITS}${FRESH_UNITS:+ }${m_unit}"
+      FRESH_BASENAMES="${FRESH_BASENAMES}${marker##*/}"$'\n'
     elif [ "$m_epoch" -gt 0 ] && [ "$m_epoch" -ge "$IN_FLIGHT_CUTOFF" ]; then
       # "missing" = dispatch class NOT OBSERVABLE at write time, not foreground. run_in_background is omitted from the exposed Agent schema in fork mode (the interactive default since v2.1.232) and under CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
       # absence means the OPPOSITE in those two configs (background / foreground). #218: read background_tasks[] at Stop instead of predicting at dispatch time.
@@ -232,6 +251,7 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
         # confirmed wake path (D-002; docs/CONFIGURATION.md In-Flight Hold).
         FRESH_COUNT=$((FRESH_COUNT + 1))
         FRESH_UNITS="${FRESH_UNITS}${FRESH_UNITS:+ }${m_unit}"
+        FRESH_BASENAMES="${FRESH_BASENAMES}${marker##*/}"$'\n'
       elif [ "$m_bg" = "false" ] || [ "$m_named" = "true" ]; then
         # PROVEN class only: a synchronous dispatch cannot span a Stop, so this marker
         # is residue and quarantining it is what keeps the backlog from regrowing.
@@ -264,13 +284,51 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
     fi
   done
   if [ "$IN_FLIGHT_LIVE_HOLD" = "yes" ] || [ "$FRESH_COUNT" -gt 0 ]; then
-    if [ "$IN_FLIGHT_LIVE_HOLD" = "yes" ]; then
-      echo "Nazgul: in-flight hold — the Stop payload reports ${BG_LIVE} live subagent(s) for this session; markers held: ${FRESH_UNITS:-none}. Allowing stop; the harness's task-notification resumes this loop when the background agent finishes." >&2
-    else
-      echo "Nazgul: in-flight hold — waiting on ${FRESH_COUNT} BACKGROUND dispatch(es): ${FRESH_UNITS}. Allowing stop; the harness's task-notification resumes this loop when the background agent finishes." >&2
+    # Ruling Q1's valve sits on the ONE hold exit so it cannot diverge between the arms: the
+    # `background:"true"` hold rests on the same never-observed wake the payload-driven one does.
+    IN_FLIGHT_HOLD_KEY=$(printf '%s' "$FRESH_BASENAMES" | sort)
+    IN_FLIGHT_HOLDS_FILE=$(_in_flight_holds_file "$IN_FLIGHT_HOLD_KEY")
+    IN_FLIGHT_HOLD_FP="${IN_FLIGHT_HOLDS_FILE##*/}"
+    IN_FLIGHT_HOLDS_TAKEN=0
+    if [ -f "$IN_FLIGHT_HOLDS_FILE" ]; then
+      IN_FLIGHT_HOLDS_RAW=$(cat "$IN_FLIGHT_HOLDS_FILE" 2>/dev/null || echo "")
+      case "$IN_FLIGHT_HOLDS_RAW" in
+        ''|*[!0-9]*) IN_FLIGHT_HOLDS_TAKEN=0 ;;
+        *) IN_FLIGHT_HOLDS_TAKEN="$IN_FLIGHT_HOLDS_RAW" ;;
+      esac
     fi
-    emit_event "stop_gate" "${IN_FLIGHT_HOLD_ARGS[@]}" units "$FRESH_UNITS" count:n "$FRESH_COUNT"
-    exit 0
+    IN_FLIGHT_LEDGER=spent
+    if [ "$IN_FLIGHT_HOLDS_TAKEN" -lt "$_IN_FLIGHT_HOLD_CAP" ]; then
+      # Written BEFORE the hold: in the canonical unattended shape `exit 0` IS process exit
+      # (D-002 item 1), so an unrecorded attempt would return later as a fresh budget.
+      if mkdir -p "${IN_FLIGHT_HOLDS_FILE%/*}" 2>/dev/null \
+        && printf '%s\n' "$((IN_FLIGHT_HOLDS_TAKEN + 1))" > "$IN_FLIGHT_HOLDS_FILE" 2>/dev/null; then
+        if [ "$IN_FLIGHT_LIVE_HOLD" = "yes" ]; then
+          echo "Nazgul: in-flight hold — the Stop payload reports ${BG_LIVE} live subagent(s) for this session; markers held: ${FRESH_UNITS:-none}. Allowing stop; the harness's task-notification resumes this loop when the background agent finishes." >&2
+        else
+          echo "Nazgul: in-flight hold — waiting on ${FRESH_COUNT} BACKGROUND dispatch(es): ${FRESH_UNITS}. Allowing stop; the harness's task-notification resumes this loop when the background agent finishes." >&2
+        fi
+        emit_event "stop_gate" "${IN_FLIGHT_HOLD_ARGS[@]}" units "$FRESH_UNITS" count:n "$FRESH_COUNT"
+        exit 0
+      fi
+      IN_FLIGHT_LEDGER=unwritable
+    fi
+    # Reach, stated where the branch is: the valve cannot rescue a wake that never fires at all —
+    # `exit 0` gives up control, and this bound is only read at a Stop that never comes.
+
+    # It bounds the compound mode instead: the wake fires, the clear misses, the marker survives,
+    # and an UNCHANGED set asks for hold #2 with the wake budget already spent.
+
+    # No `exit 0` on this path, deliberately — it falls through to the iteration increment below,
+    # which is the pre-hold behavior exactly: quarantine nothing, move nothing.
+    if [ "$IN_FLIGHT_LEDGER" = "unwritable" ]; then
+      echo "Nazgul: in-flight hold NOT taken — its budget ledger under nazgul/logs/.in-flight-holds/ could not be written, so this hold cannot be bounded, and ruling Q1 refuses an unbounded hold. Continuing normally." >&2
+    else
+      echo "Nazgul: in-flight hold budget EXHAUSTED for this marker set (${IN_FLIGHT_HOLDS_TAKEN}/${_IN_FLIGHT_HOLD_CAP} already taken, fingerprint ${IN_FLIGHT_HOLD_FP}); unchanged markers: ${FRESH_UNITS:-none}. An unchanged set means no dispatch completed, so whatever woke this session was not the hold's wake path. Continuing normally." >&2
+    fi
+    emit_event "stop_gate" reason "in_flight_hold_budget_exhausted" fingerprint "$IN_FLIGHT_HOLD_FP" \
+      holds_taken:n "$IN_FLIGHT_HOLDS_TAKEN" live_subagents:n "${BG_LIVE:-0}" \
+      units "$FRESH_UNITS" ledger "$IN_FLIGHT_LEDGER"
   fi
 fi
 
