@@ -522,7 +522,7 @@ EOF
     [ -n "$sha" ] || continue
     git -C "$project_root" cat-file -e "${sha}^{commit}" 2>/dev/null || continue
     resolved=$((resolved + 1))
-    out="${out}$(git -C "$project_root" show --pretty=format: --name-only "$sha" -- "${pathspec[@]}" 2>/dev/null || true)
+    out="${out}$(git -C "$project_root" show --pretty=format: --name-only "$sha" -- ${pathspec[@]+"${pathspec[@]}"} 2>/dev/null || true)
 "
   done < <(printf '%s' "$commits" | grep -oE '[0-9a-f]{7,64}' || true)
   if [ "$resolved" -eq 0 ]; then
