@@ -88,8 +88,8 @@ configurations: background in the first, foreground in the second. In the sessio
 absence therefore means the dispatch is most likely **background**, so quarantining it is a cost-weighed
 default that is usually wrong about the dispatch it names. On such a host the class-aware hold never
 engages, `stop_gate` `reason: "in_flight_unverifiable"` fires on essentially every dispatch, and the loop
-continues concurrently with live subagents. This is a known, tracked defect (#218) — narrowed by FEAT-033, not closed. The authoritative
-signals exist one event later: `PostToolUse` `tool_response.status` (`async_launched` vs `completed`)
+continues concurrently with live subagents. This is a known, tracked defect (#218) — narrowed by
+FEAT-033, not closed. The authoritative signals exist one event later: `PostToolUse` `tool_response.status` (`async_launched` vs `completed`)
 and the `background_tasks[]` array on `Stop`/`SubagentStop`. Both are present in the shipped hook
 schema as of Claude Code 2.1.238 and were **empirically captured 2026-08-21** — real `Stop` and
 `SubagentStop` payloads from two sessions, kept as `tests/fixtures/stop-payload/` — but neither is in
