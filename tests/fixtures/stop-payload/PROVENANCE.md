@@ -102,9 +102,10 @@ whole payload rather than an excerpt chosen to suit a parser.
 
 ### What it pins
 
-That the hold arm fires on real producer output. Two live subagents plus one shell waiter is the
-only in-flight shape #218 was ever reported against, and this is that shape as the harness
-actually emitted it.
+That the hold arm fires on real producer output, and that the type filter is load-bearing while it
+does so: three entries are in flight, and only two of them are a dispatch that anything will ever
+finish. This is the shape ADR-027's decision table was written for, as the harness actually emitted
+it — not a payload assembled to suit the parser that reads it.
 
 ### Never observed, and therefore not here
 
