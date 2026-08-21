@@ -254,8 +254,8 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
           emit_event "stop_gate" reason "in_flight_orphan_candidate" evidence "background_tasks_empty" unit "$m_unit" agent "$m_agent" entries:n "${BG_ENTRIES:-0}" subagents_present:n "$BG_SUBAGENTS" types "${BG_TYPES:-}"
         fi
       elif [ "$m_bg" = "true" ] && [ "$m_named" != "true" ]; then
-        # Provably-background, unnamed: the documented harness resume IS the
-        # confirmed wake path (D-002; docs/CONFIGURATION.md In-Flight Hold).
+        # Provably-background, unnamed: the documented harness resume is the wake path this hold
+        # relies on — BELIEVED but UNOBSERVED on this host class (R2, owed probe: D-005 at docs/DECISION-LOG-2026-08-16-cross-session-messaging.md:79-80; docs/CONFIGURATION.md In-Flight Hold).
         FRESH_COUNT=$((FRESH_COUNT + 1))
         FRESH_UNITS="${FRESH_UNITS}${FRESH_UNITS:+ }${m_unit}"
         FRESH_BASENAMES="${FRESH_BASENAMES}${marker##*/}"$'\n'
