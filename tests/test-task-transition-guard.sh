@@ -361,8 +361,10 @@ teardown_temp_dir
 #   producer:      merge_provider_pr_state (scripts/lib/merge-provider.sh), driven for real
 #                  once below over the gh bytes tests/test-merge-provider.sh captured
 #                  verbatim (gh 2.80.0, `gh pr view 88 --json state,mergedAt,mergeCommit,
-#                  headRefName,baseRefName`, OrodruinLabs/nazgul PR 88, re-captured
-#                  2026-08-16). MP_CAPTURED_MERGED below is those bytes, byte-for-byte.
+#                  headRefName,baseRefName,url`, OrodruinLabs/nazgul PR 88, re-captured
+#                  2026-08-18 for `url`). MP_CAPTURED_MERGED below is those bytes,
+#                  byte-for-byte, and its url names the fixture's own remote — the seam
+#                  refuses an answer that names another repository.
 #   pinned-by:     MP_STUB_KEYS == MP_REAL_KEYS — the stub emits the producer's OWN key
 #                  set, so a producer-side rename fails HERE rather than leaving every
 #                  merge assertion in this file green over a shape nothing returns.
@@ -371,7 +373,7 @@ teardown_temp_dir
 #                  mock's shape decided the test's reach (FEAT-031 second board, QA-2).
 #   synthetic:     only the merged-at/merge-commit VALUES are fixture-controlled, so the
 #                  ancestry cases can use this repo fixture's own shas.
-MP_CAPTURED_MERGED='{"baseRefName":"main","headRefName":"feat/FEAT-030-worktree-relative-runtime-state-path-resolution-pr","mergeCommit":{"oid":"d6f7582f7d9ee8f74706ea02202d15dd5bc83146"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}'
+MP_CAPTURED_MERGED='{"baseRefName":"main","headRefName":"feat/FEAT-030-worktree-relative-runtime-state-path-resolution-pr","mergeCommit":{"oid":"d6f7582f7d9ee8f74706ea02202d15dd5bc83146"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED","url":"https://github.com/OrodruinLabs/nazgul/pull/88"}'
 
 # This objective vs. the captured OTHER one: PR 88's real head branch is FEAT-030's, the
 # captured instance of the hazard — a genuinely merged PR of a DIFFERENT objective.
@@ -442,6 +444,7 @@ merge_provider_pr_state() {
     '{result:$r,
       provider:"github",
       host:"github.com",
+      repo:"orodruinlabs/nazgul",
       pr:$p,
       state:(if $s == "" then null else $s end),
       merged:(if $m == "true" then true elif $m == "false" then false else null end),

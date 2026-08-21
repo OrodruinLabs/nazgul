@@ -700,7 +700,7 @@ case "${1:-}" in
   auth) exit 0 ;;
   pr)
     [ "${2:-}" = "view" ] || exit 1
-    printf '{"baseRefName":"main","headRefName":"%s","mergeCommit":{"oid":"%s"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}\n' \
+    printf '{"baseRefName":"main","headRefName":"%s","mergeCommit":{"oid":"%s"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED","url":"https://github.com/OrodruinLabs/nazgul/pull/91"}\n' \
       "${NAZGUL_TEST_MERGE_BRANCH:-}" "${NAZGUL_TEST_MERGE_SHA:-}"
     exit 0 ;;
 esac

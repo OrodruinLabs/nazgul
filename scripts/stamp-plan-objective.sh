@@ -100,15 +100,33 @@ fi
 if ttg_plan_feat_placeholder "$FEAT_ID"; then
   refuse "$CONFIG's feat_id is itself the placeholder \"$FEAT_ID\" — binding a plan to a placeholder records a claim about no objective at all."
 fi
-if [ ! -f "$PLAN" ] || [ -L "$PLAN" ]; then
-  refuse "no regular non-symlink $PLAN — the Planner writes the plan before it can be bound to $FEAT_ID."
+if [ -L "$PLAN" ]; then
+  refuse "$PLAN is a symlink — a stamp is a claim about the bytes the gate will read, and a link can be repointed between the two. Replace it with a regular file, then re-run."
+fi
+if [ ! -f "$PLAN" ]; then
+  refuse "no regular file at $PLAN — the Planner writes the plan before it can be bound to $FEAT_ID."
 fi
 
-# The frontmatter is a claim about the roster, so refuse to make it before one exists.
-# This is what keeps the stamp out of create_feature_branch's empty-template moment.
+# lean-comments: allow-run — which of three causes is ESTABLISHED, and why that matters here.
+# The frontmatter is a claim about the roster, so refuse to make it before one exists. This is
+# what keeps the stamp out of create_feature_branch's empty-template moment. An empty roster
+# has three causes and the refusal used to name ONE of them — the commented examples — on
+# every path, including the two where it is provably not the cause. A refusal naming a cause
+# it cannot establish is the defect class this objective exists to close, so the cause is
+# derived here, through the gate's own section reader and id patterns rather than a private
+# copy, and the three sentences say what ttg_objective_roster's three say.
 ROSTER_IDS=$(ttg_objective_roster_ids "$PLAN")
 if [ -z "$ROSTER_IDS" ]; then
-  refuse "$PLAN carries no ## Tasks roster yet (templates/plan.md's commented example entries do not count as one) — the frontmatter feat_id is a claim ABOUT that roster, so there is nothing to claim. Write the roster first, then run this."
+  COMMENTED=$(_ttg_roster_section "$PLAN" | grep -coE "$_TTG_ROSTER_ID_RE" || true)
+  PATCHES=$(_ttg_roster_section "$PLAN" | _ttg_strip_html_comments \
+    | grep -oE "$_TTG_ROSTER_PATCH_RE" | LC_ALL=C sort -u | tr '\n' ' ' || true)
+  if [ "${COMMENTED:-0}" -gt 0 ]; then
+    refuse "$PLAN's ## Tasks section names task ids ONLY inside HTML comments — a comment is not a roster entry (templates/plan.md ships its examples that way), so there is no roster for the frontmatter to be a claim ABOUT. Write the roster first, then run this."
+  fi
+  if [ -n "${PATCHES// /}" ]; then
+    refuse "$PLAN's ## Tasks section names ONLY patch ids (${PATCHES% }) — the frontmatter feat_id is a claim about the TASK-NNN manifests scripts/task-transition.sh resolves, and a patch record places none of them in $FEAT_ID's roster. Write the task roster first, then run this."
+  fi
+  refuse "$PLAN carries no ## Tasks roster yet — the frontmatter feat_id is a claim ABOUT that roster, so there is nothing to claim. Write the roster first, then run this."
 fi
 ROSTER_COUNT=$(printf '%s\n' "$ROSTER_IDS" | grep -c . || true)
 

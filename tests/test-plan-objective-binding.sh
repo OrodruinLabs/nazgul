@@ -74,8 +74,8 @@ born_project() {
     agents:{reviewers:["code-reviewer"]}, afk:{yolo:false}}' > "$dir/nazgul/config.json"
 }
 
-# Payload SHAPE captured verbatim from the real producer by tests/test-merge-provider.sh;
-# only mergedAt/mergeCommit/headRefName are fixture-controlled, so no network is contacted.
+# Payload SHAPE captured verbatim from the real producer by tests/test-merge-provider.sh; only
+# mergedAt/mergeCommit/headRefName/url are fixture-controlled, so no network is contacted.
 born_gh_shim() {
   local dir="$1" head="$2"
   cat > "$dir/fakebin/gh" <<GH
@@ -83,7 +83,7 @@ born_gh_shim() {
 case "\${1:-}" in
   auth) exit 0 ;;
   pr) [ "\${2:-}" = view ] || exit 1
-      printf '%s\n' '{"baseRefName":"main","headRefName":"$head","mergeCommit":{"oid":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},"mergedAt":"2026-08-15T12:00:00Z","state":"MERGED"}'
+      printf '%s\n' '{"baseRefName":"main","headRefName":"$head","mergeCommit":{"oid":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},"mergedAt":"2026-08-15T12:00:00Z","state":"MERGED","url":"https://github.com/OrodruinLabs/nazgul/pull/88"}'
       exit 0 ;;
 esac
 exit 1
@@ -182,8 +182,8 @@ assert_exit_code "template-born + never planned: the roster gate refuses" "$R3_E
 assert_not_contains "an unplanned plan yields NO roster member at all" "$R3" "TASK-001"
 UNPLANNED=$(bash "$STAMPER" --project-root "$P3" 2>&1); UNPLANNED_EC=$?
 assert_exit_code "the producer refuses to bind a plan with no roster" "$UNPLANNED_EC" 1
-assert_contains "and says why: the frontmatter is a claim ABOUT the roster" \
-  "$UNPLANNED" "no ## Tasks roster"
+assert_contains "and names the cause it can establish: the ids are inside HTML comments" \
+  "$UNPLANNED" "ONLY inside HTML comments"
 
 # Bind by hand so the placeholder is no longer what refuses and the roster fact is isolated:
 # "found only documentation" is its own answer, distinct from "found none".
@@ -194,6 +194,60 @@ assert_contains "a roster of only commented examples gets its own sentence" \
   "$R3B" "ONLY inside HTML comments"
 assert_not_contains "and no commented example id is returned as a roster member" \
   "$R3B" "TASK-001"
+
+# lean-comments: allow-run — the finding this block exists for, on the producer's side.
+# Case 5b | THREE causes, three sentences (board 6, architect on §14). An empty roster can mean
+# the section names ids only inside comments, that it names ONLY patch ids, or that there is no
+# roster at all — and one refusal used to name the commented-example cause on every path,
+# including the two where it is provably not the cause. A refusal naming a cause it cannot
+# establish is the same class as a gate that says "not merged" when it could not ask.
+P3B="$SCRATCH/patchonly"
+born_project "$P3B" FEAT-030
+# The template's own section ships COMMENTED example task ids, and those are a cause of their
+# own, so they are replaced rather than added to: patch-only has to be the ONLY thing true.
+awk '/^## Tasks/ {print; print ""; print "- PATCH-007 shipped without a task"; skip=1; next}
+     skip && /^## / {skip=0} !skip' \
+  "$P3B/nazgul/plan.md" > "$P3B/nazgul/plan.new" && mv "$P3B/nazgul/plan.new" "$P3B/nazgul/plan.md"
+PATCHONLY=$(bash "$STAMPER" --project-root "$P3B" 2>&1); PATCHONLY_EC=$?
+assert_exit_code "a ## Tasks section naming only patch ids still refuses" "$PATCHONLY_EC" 1
+assert_contains "and the refusal says PATCH ids, the cause it can actually establish" \
+  "$PATCHONLY" "ONLY patch ids"
+assert_contains "naming the id, so the operator can see what it read" "$PATCHONLY" "PATCH-007"
+assert_not_contains "and does not blame the commented examples it did not find" \
+  "$PATCHONLY" "HTML comments"
+
+P3C="$SCRATCH/noheading"
+born_project "$P3C" FEAT-030
+awk '/^## Tasks/ {print "## Nothing Here"; next} {print}' "$P3C/nazgul/plan.md" \
+  > "$P3C/nazgul/plan.new" && mv "$P3C/nazgul/plan.new" "$P3C/nazgul/plan.md"
+NOHEADING=$(bash "$STAMPER" --project-root "$P3C" 2>&1); NOHEADING_EC=$?
+assert_exit_code "a plan with no ## Tasks section at all still refuses" "$NOHEADING_EC" 1
+assert_contains "and that refusal is the plain one, with no cause it cannot establish" \
+  "$NOHEADING" "carries no ## Tasks roster yet"
+assert_not_contains "no commented-example claim on a plan that has no section to comment in" \
+  "$NOHEADING" "HTML comments"
+assert_not_contains "and no patch-id claim either" "$NOHEADING" "patch ids"
+
+# Producer and predicate must give the SAME cause for the same input, or one of them is
+# describing a plan the other did not read.
+sed -i.bak 's/^feat_id: <FEAT-NNN>/feat_id: FEAT-030/' "$P3B/nazgul/plan.md" && rm -f "$P3B/nazgul/plan.md.bak"
+assert_contains "the gate reaches the same cause for the patch-only roster" \
+  "$(roster_of "$P3B")" "ONLY patch ids"
+sed -i.bak 's/^feat_id: <FEAT-NNN>/feat_id: FEAT-030/' "$P3C/nazgul/plan.md" && rm -f "$P3C/nazgul/plan.md.bak"
+assert_contains "and for the plan with no section at all" \
+  "$(roster_of "$P3C")" "no ## Tasks roster"
+
+# A symlinked plan is its own refusal: a stamp is a claim about the bytes the gate will read,
+# and the link can be repointed between the write and the read.
+P3D="$SCRATCH/symlink"
+born_project "$P3D" FEAT-030 --roster
+mv "$P3D/nazgul/plan.md" "$P3D/nazgul/plan.real.md"
+ln -s "$P3D/nazgul/plan.real.md" "$P3D/nazgul/plan.md"
+SYMLINK=$(bash "$STAMPER" --project-root "$P3D" 2>&1); SYMLINK_EC=$?
+assert_exit_code "a symlinked plan is refused" "$SYMLINK_EC" 1
+assert_contains "and the refusal says symlink, not 'the Planner has not written it yet'" \
+  "$SYMLINK" "is a symlink"
+assert_not_contains "the two causes are no longer one sentence" "$SYMLINK" "Planner writes the plan"
 
 # Case 6 | the producer never invents the value.
 P4="$SCRATCH/noident"
