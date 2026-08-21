@@ -83,11 +83,17 @@ itself the evidence that nothing an existing project stores had to change.
 - **The in-flight hold is class-aware — #104 Gap 3 closed by classification, not by inversion.**
   Markers now record their dispatch class at write time (`background` as a tri-state
   `true`/`false`/`missing`, and `named`), and the hold fires ONLY for a provably-background unnamed
-  dispatch, whose harness resume is the documented wake path. A fresh marker that is foreground,
-  `missing`, or named is a proven leak — a synchronous dispatch cannot span a Stop — so it is
-  quarantined to `nazgul/in-flight/quarantine/` and announced as `stop_gate reason:in_flight_orphan`
-  while the loop continues normally. Legacy markers lacking both fields classify as foreground by
-  ADR-009 cost-weighing: a false hold costs the whole run, a false continue costs one iteration.
+  dispatch, whose harness resume is the documented wake path. Every other fresh marker declines the
+  hold and the loop continues normally — but the marker's DISPOSITION splits by how much was actually
+  known, and the split is the point. A PROVEN class (`background: "false"`, or a named dispatch whose
+  report contract owns it) is a proven leak — a synchronous dispatch cannot span a Stop — so it is
+  quarantined to `nazgul/in-flight/quarantine/` and announced as `stop_gate reason:in_flight_orphan`.
+  A class that was NOT OBSERVABLE at write time (`"missing"`) is announced as
+  `stop_gate reason:in_flight_unverifiable` and **left in place, not quarantined**: `mv` is
+  irreversible, the dispatch may still be running, and destroying the marker would foreclose #218's own
+  fix, which reconciles these markers against the Stop payload's `background_tasks[]`. Legacy markers
+  lacking both fields record `"missing"` and take that second path; the SessionStart sweep, not the
+  stop-hook, is what eventually retires them.
 - **Session locks live for the session, not the turn (#195).** They are registered at SessionStart,
   refreshed each Stop, released at SessionEnd (`session-staging.sh`), and swept by pid liveness —
   liveness outranks age, so a live session is never swept and a dead one goes immediately. The
@@ -212,9 +218,12 @@ itself the evidence that nothing an existing project stores had to change.
   inbound mechanism today, and posture is the operator's decision — Nazgul documents it and never
   writes it. Receipt IS hook-observable (P6: `UserPromptSubmit` carries the message text as its
   prompt), so an enforced inbound gate is buildable if it is ever warranted. Buildable is not built.
-- **UPGRADE NOTE — a pre-existing fresh foreground marker now quarantines at the next Stop instead of
-  holding.** This is strictly corrective in live AFK runs: that marker was never going to be cleared
-  by a completion that had already happened. No action is required.
+- **UPGRADE NOTE — a pre-existing fresh marker no longer takes the hold.** It carries no `background`
+  field, so it classifies as `"missing"`: reported as `stop_gate reason:in_flight_unverifiable`, left
+  in place (not quarantined — its class was never observed), and retired by the SessionStart sweep once
+  it ages out. Only a marker whose class is PROVEN foreground quarantines, which no pre-upgrade marker
+  can be. This is strictly corrective in live AFK runs: such a marker was never going to be cleared by
+  a completion that had already happened. No action is required.
 - **The posture scan binds shipped TEXT, not runtime conduct.** Rule 2's `[enforced]` tier covers the
   files in this repository; whether a model posts to a socket on its own turn is `[advisory]`, the
   same honest boundary §21 draws for the read-back contract.
@@ -223,9 +232,11 @@ itself the evidence that nothing an existing project stores had to change.
   `CLAUDE.md` and `README.md`.
 - **On a fork-mode host, the in-flight hold effectively never engages.** `run_in_background` is omitted
   from the exposed Agent tool schema there (the interactive default since Claude Code v2.1.232) and under
-  `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, so every marker records `background: "missing"` and quarantines
-  as `stop_gate reason:"in_flight_unverifiable"` rather than being held on — usually a healthy background
-  dispatch, not a leak. Reading the actual dispatch class from `PostToolUse` `tool_response.status` or the
+  `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, so every marker records `background: "missing"` and is reported
+  as `stop_gate reason:"in_flight_unverifiable"` rather than being held on — NOT quarantined: that reason
+  leaves the marker in place, because the class was never observed and the dispatch is usually a healthy
+  background one, not a leak (the SessionStart sweep retires it once it ages out; only the PROVEN class
+  is moved). Reading the actual dispatch class from `PostToolUse` `tool_response.status` or the
   Stop payload's `background_tasks[]`, instead of predicting it from `run_in_background` at dispatch time,
   would make the class observable rather than inferred; that is issue #218 and is deliberately NOT in this
   release.
