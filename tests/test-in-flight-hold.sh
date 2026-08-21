@@ -16,7 +16,7 @@ CLEARER="$REPO_ROOT/scripts/subagent-stop.sh"
 STOP_HOOK="$REPO_ROOT/scripts/stop-hook.sh"
 
 run_hook() {
-  HOOK_OUTPUT=$(bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+  HOOK_OUTPUT=$(bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 }
 
 # <path> <agent> <unit> <epoch> [background] [named]
@@ -423,6 +423,58 @@ assert_file_exists "clearer: underivable KEEPS the newest — a running dispatch
 assert_contains "clearer: underivable emits clear_fallback_underivable" \
   "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" "clear_fallback_underivable"
 teardown_temp_dir
+
+# === P7 (C2/AC9): every stop-hook execution under tests/ binds its own stdin ===
+# Bare stdin inherits the suite's once C1 lands — the #155 never-EOF deadlock class.
+P7_ROOT="$REPO_ROOT/tests"
+P7_PATTERN='bash "\$STOP_HOOK"|bash "\$REPO_ROOT/scripts/stop-hook\.sh"'
+P7_SCANNED=0
+P7_SKIPPED=0
+P7_CHECKED=0
+P7_FINDINGS=0
+P7_BARE=()
+
+while IFS= read -r _p7_hit; do
+  [ -n "$_p7_hit" ] || continue
+  P7_SCANNED=$((P7_SCANNED + 1))
+  _p7_file="${_p7_hit%%:*}"
+  _p7_rest="${_p7_hit#*:}"
+  _p7_line="${_p7_rest%%:*}"
+  _p7_text="${_p7_rest#*:}"
+  # A commented-out invocation is text, not an execution: excluded, and counted.
+  case "${_p7_text#"${_p7_text%%[![:space:]]*}"}" in
+    '#'*) P7_SKIPPED=$((P7_SKIPPED + 1)); continue ;;
+  esac
+  P7_CHECKED=$((P7_CHECKED + 1))
+  case "$_p7_text" in
+    *'</dev/null'*|*'< /dev/null'*) continue ;;
+  esac
+  # A pipe upstream of the invocation supplies (and EOFs) stdin just as well.
+  case "${_p7_text%%bash \"*}" in
+    *'|'*) continue ;;
+  esac
+  P7_FINDINGS=$((P7_FINDINGS + 1))
+  P7_BARE+=("${_p7_file#"$P7_ROOT/"}:$_p7_line")
+done < <(grep -rnE "$P7_PATTERN" "$P7_ROOT" 2>/dev/null || true)
+
+assert_eq "P7 accounting: scanned == skipped + checked" \
+  "$P7_SCANNED" "$((P7_SKIPPED + P7_CHECKED))"
+
+if [ "$P7_CHECKED" -gt 0 ]; then
+  _pass "P7 floor: $P7_CHECKED stop-hook execution site(s) checked under tests/"
+else
+  _fail "P7 floor: $P7_CHECKED stop-hook execution site(s) checked under tests/" \
+    "a zero-site scan is a broken scan, not a clean tree — the population cannot be empty"
+fi
+
+if [ "$P7_FINDINGS" -gt 0 ]; then
+  printf '  P7 bare-stdin site: %s\n' "${P7_BARE[@]}" >&2
+fi
+assert_eq "P7: $P7_SCANNED scanned, $P7_SKIPPED skipped, $P7_CHECKED checked — no stop-hook execution leaves stdin bare" \
+  "$P7_FINDINGS" "0"
+
+assert_file_contains "P7: tests/run-tests.sh runs every test file with stdin bound to /dev/null" \
+  "$REPO_ROOT/tests/run-tests.sh" 'bash "$test_file" < /dev/null'
 
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck -S warning "$WRITER" 2>/dev/null \
