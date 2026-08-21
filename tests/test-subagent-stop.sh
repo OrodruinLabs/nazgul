@@ -14,9 +14,13 @@ echo "=== $TEST_NAME ==="
 
 HOOK="$REPO_ROOT/scripts/subagent-stop.sh"
 
-_sha256() {
-  { command -v sha256sum >/dev/null 2>&1 && sha256sum || shasum -a 256; } | awk '{print $1}'
-}
+# Receipt hashes are computed inside $( ), where a failure cannot reach the counters.
+# An absent helper AND an absent tool both yield a non-64 probe, so neither is silent.
+NZ_DIGEST_PROBE=$(digest_string probe || true)
+assert_eq "receipt hashes: the shared digest helper returns a 64-hex digest, so no hash comparison here is vacuous" \
+  "${#NZ_DIGEST_PROBE}" "64"
+
+_sha256() { digest_stdin; }
 
 # Real subagent-transcript-shaped JSONL: tool-use turn, tool-result turn, final text-only turn.
 _write_fixture_transcript() {

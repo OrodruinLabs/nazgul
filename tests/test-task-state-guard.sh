@@ -1500,15 +1500,11 @@ teardown_temp_dir
 # not silently pass because the file merely LOOKS like an approved review.
 # ---------------------------------------------------------------------------
 
-# Helper: sha256 via the same `printf '%s' ... | sha256sum` pattern
-# scripts/lib/review-provenance.sh's _rp_sha256 uses (see that file).
-_test_sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    printf '%s' "$1" | sha256sum | awk '{print $1}'
-  else
-    printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
-  fi
-}
+# The receipt fixtures below are built inside $( ), where a failure cannot reach the
+# counters. An absent helper AND an absent tool both yield a non-64 probe.
+NZ_DIGEST_PROBE=$(digest_string probe || true)
+assert_eq "receipt fixtures: the shared digest helper returns a 64-hex digest, so no byte-identity check here is vacuous" \
+  "${#NZ_DIGEST_PROBE}" "64"
 
 # Helper: simulate one full dispatched-reviewer cycle exactly as production
 # does it (agents/review-gate.md Step 2 item 4 + scripts/subagent-stop.sh's
@@ -1531,7 +1527,7 @@ write_dispatched_review_with_receipt() {
 
   local raw hash persisted_narrative
   raw=$(printf -- '---\nverdict: %s\nconfidence: 90\n---\n%s\n' "$verdict" "$narrative")
-  hash=$(_test_sha256 "$raw")
+  hash=$(digest_string "$raw")
 
   persisted_narrative="$narrative"
   [ "$tamper" = true ] && persisted_narrative="${narrative} TAMPERED AFTER REVIEW."
@@ -1677,7 +1673,7 @@ write_resolved_review() {
 
   local raw hash
   raw=$(printf -- '---\nverdict: %s\nconfidence: %s\n---\n\n%s\n' "$orig_verdict" "$orig_confidence" "$body")
-  hash=$(_test_sha256 "$raw")
+  hash=$(digest_string "$raw")
 
   mkdir -p "$TEST_DIR/nazgul/reviews/$unit"
   local persisted_body="$body"
@@ -2291,12 +2287,12 @@ else
   Q_CHECKED=$((Q_CHECKED + 1))
   Q_MARK="$TESTS_FAILED"
   seed_quarantine
-  Q_BEFORE=$(shasum "$Q_TASK" | cut -d' ' -f1)
+  record_file_digest Q_BEFORE "$Q_TASK" "escape sequence: the manifest before the refused deletion"
   q_edit '- **Blocked kind**: reconciliation
 ' ''
   assert_exit_code "escape sequence: the deletion is refused" "$GUARD_EC" 2
-  assert_eq "escape sequence: the manifest is byte-identical after the refusal" \
-    "$(shasum "$Q_TASK" | cut -d' ' -f1)" "$Q_BEFORE"
+  assert_file_unchanged "escape sequence: the manifest is byte-identical after the refusal" \
+    "$Q_TASK" "$Q_BEFORE"
   Q_TTG_RC=0
   bash -c '
     source "$1/scripts/lib/task-utils.sh"
@@ -2313,5 +2309,61 @@ assert_eq "quarantine-record-integrity: scanned == skipped + checked" \
   "$Q_SCANNED" "$((Q_SKIPPED + Q_CHECKED))"
 
 teardown_temp_dir
+
+# PR #240 finding 15 was reported as ONE line; the sweep found three, so the gate is
+# the class: a digest computed outside the shared helper can come back empty, twice.
+setup_temp_dir
+mkdir -p "$TEST_DIR/dogfood/tests"
+nzd_dogfood_fixture "$TEST_DIR/dogfood/tests/test-prefix.sh"
+_nzd_no_exemptions() { return 1; }
+NZD_EXEMPTION_FN=_nzd_no_exemptions
+nzd_scan "$TEST_DIR/dogfood/tests"
+NZD_EXEMPTION_FN=nzd_exemption
+nzd_coverage_line "digest-safety (dogfood: a pre-fix tree)"
+assert_eq "digest-safety dogfood: all three reported shapes are found" "$NZD_F" "3"
+assert_eq "digest-safety dogfood: the prose mention is skipped, never checked" "$NZD_M_COMMENT" "1"
+assert_eq "digest-safety dogfood: the availability probe is checked and cleared" "$NZD_PROBE" "1"
+assert_eq "digest-safety dogfood: scanned == skipped + checked" "$NZD_N" "$((NZD_M + NZD_K))"
+
+# An exemption arm that expired is a claim about the tree that stopped being true, so
+# it is a finding of its own rather than a silently unused case arm.
+_nzd_stale_exemption() {
+  case "$1" in
+    tests/a-path-this-walk-never-reaches.sh) echo "stale by construction"; return 0 ;;
+  esac
+  return 1
+}
+NZD_EXEMPTION_FN=_nzd_stale_exemption
+nzd_scan "$TEST_DIR/dogfood/tests"
+NZD_EXEMPTION_FN=nzd_exemption
+assert_eq "digest-safety dogfood: an exemption naming an unreached path is a finding too" "$NZD_F" "4"
+assert_contains "digest-safety dogfood: the stale arm is named, not just counted" \
+  "$NZD_STALE" "tests/a-path-this-walk-never-reaches.sh"
+teardown_temp_dir
+
+nzd_scan "$REPO_ROOT/tests"
+nzd_coverage_line "digest-safety"
+assert_eq "digest-safety: scanned == skipped + checked" "$NZD_N" "$((NZD_M + NZD_K))"
+if [ "$NZD_K" -gt 0 ]; then
+  _pass "digest-safety: $NZD_K candidate lines were checked — a dead regex cannot read as clean"
+else
+  _fail "digest-safety: the scan checked something" \
+    "K=0: the candidate regex matched no non-comment line under tests/**"
+fi
+if [ "$NZD_HELPER_LINES" -gt 0 ]; then
+  _pass "digest-safety: the tool names live in $NZD_HELPER_FILE ($NZD_HELPER_LINES lines)"
+else
+  _fail "digest-safety: the tool names live in $NZD_HELPER_FILE" \
+    "the shared helper names no digest tool — the dispatch moved or was deleted"
+fi
+if [ "$NZD_F" -eq 0 ]; then
+  _pass "digest-safety: nothing computes a digest outside the shared helper"
+else
+  _fail "digest-safety: nothing computes a digest outside the shared helper" \
+    "$(printf '%s' "$NZD_FINDINGS" | tr '\n' '|')" \
+    "  unreadable: $(printf '%s' "$NZD_UNREADABLE_FILES" | tr '\n' ' ')" \
+    "  stale exemption arms: $(printf '%s' "$NZD_STALE" | tr '\n' ' ')"
+fi
+assert_eq "digest-safety: every test file was readable" "$NZD_UNREADABLE" "0"
 
 report_results

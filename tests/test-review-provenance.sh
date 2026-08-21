@@ -87,7 +87,10 @@ teardown_temp_dir
 # --- Test 4: diff absent -> empty-string sha256 ---
 setup_temp_dir
 setup_nazgul_dir
-EMPTY_HASH=$(printf '' | { command -v sha256sum >/dev/null 2>&1 && sha256sum || shasum -a 256; } | awk '{print $1}')
+NZ_DIGEST_PROBE=$(digest_string probe || true)
+assert_eq "expected hashes: the shared digest helper returns a 64-hex digest, so no hash comparison here is vacuous" \
+  "${#NZ_DIGEST_PROBE}" "64"
+EMPTY_HASH=$(digest_string '')
 write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-004" "$TEST_DIR/nope.patch" "FEAT-006" "1" -- code-reviewer >/dev/null
 MANIFEST="$TEST_DIR/nazgul/reviews/TASK-004/.dispatch.json"
 assert_json_field "diff absent -> empty-string sha256" "$MANIFEST" ".diff_hash" "$EMPTY_HASH"

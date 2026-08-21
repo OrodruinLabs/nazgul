@@ -72,7 +72,10 @@ setup_git_repo
 create_config
 export NAZGUL_DIR="$TEST_DIR/nazgul"
 EVENTS="$TEST_DIR/nazgul/logs/events.jsonl"
-CONFIG_BEFORE=$(shasum -a 256 < "$TEST_DIR/nazgul/config.json" | awk '{print $1}')
+NZ_DIGEST_PROBE=$(digest_string probe || true)
+assert_eq "the seam suite: the shared digest helper returns a 64-hex digest, so the config byte-identity check is not vacuous" \
+  "${#NZ_DIGEST_PROBE}" "64"
+record_file_digest CONFIG_BEFORE "$TEST_DIR/nazgul/config.json" "the seam suite: config.json before any case runs"
 
 # shellcheck source=../scripts/lib/merge-provider.sh
 source "$LIB"
@@ -563,9 +566,8 @@ assert_not_contains "a token-shaped string in host stderr never reaches our stde
 assert_contains "the redaction is visible, not a silent truncation" "$(_field '.diagnostic')" "***"
 assert_not_contains "no token-shaped string is written to the event bus" \
   "$(cat "$EVENTS" 2>/dev/null)" "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-CONFIG_AFTER=$(shasum -a 256 < "$TEST_DIR/nazgul/config.json" | awk '{print $1}')
-assert_eq "the seam never writes config.json at all — no credential surface to add one to" \
-  "$CONFIG_AFTER" "$CONFIG_BEFORE"
+assert_file_unchanged "the seam never writes config.json at all — no credential surface to add one to" \
+  "$TEST_DIR/nazgul/config.json" "$CONFIG_BEFORE"
 
 # --- The seam never consults git ancestry, on any path. Post-squash, ancestry
 # reports every shipped commit as unshipped, so a fallback would be inverted. ---

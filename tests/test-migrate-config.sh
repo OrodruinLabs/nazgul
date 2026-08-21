@@ -2381,11 +2381,14 @@ assert_eq "v37 surface scan: migration target equals the template's schema_versi
 # real file, copied — not a hand-written literal that can only agree with itself.
 # A checkout without a live config (fresh clone, CI) says so out loud instead of
 # skipping silently; the disposition is asserted either way.
+NZ_DIGEST_PROBE=$(digest_string probe || true)
+assert_eq "live config walk: the shared digest helper returns a 64-hex digest, so the byte-identity check below is not vacuous" \
+  "${#NZ_DIGEST_PROBE}" "64"
 LIVE_CONFIG="$REPO_ROOT/nazgul/config.json"
 LIVE_DISPOSITION="absent"
 if [ -f "$LIVE_CONFIG" ]; then
   LIVE_DISPOSITION="migrated-a-copy"
-  LIVE_SUM_BEFORE=$(shasum "$LIVE_CONFIG" | awk '{print $1}')
+  record_file_digest LIVE_SUM_BEFORE "$LIVE_CONFIG" "live config: the real file before a copy is migrated"
   NAZGUL_DIR=$(setup_nazgul_dir "live-config-copy")
   cp "$LIVE_CONFIG" "$NAZGUL_DIR/config.json"
   LIVE_START_VERSION=$(jq -r '.schema_version // 1' "$NAZGUL_DIR/config.json")
@@ -2406,8 +2409,8 @@ if [ -f "$LIVE_CONFIG" ]; then
     "$(jq -r '.stack.layers | type' "$CFG")" "array"
   assert_eq "live config copy: the objective this repo is running survives the walk" \
     "$(jq -r 'has("feat_id")' "$CFG")" "$(jq -r 'has("feat_id")' "$LIVE_CONFIG")"
-  assert_eq "live config copy: the REAL nazgul/config.json was never migrated in place" \
-    "$(shasum "$LIVE_CONFIG" | awk '{print $1}')" "$LIVE_SUM_BEFORE"
+  assert_file_unchanged "live config copy: the REAL nazgul/config.json was never migrated in place" \
+    "$LIVE_CONFIG" "$LIVE_SUM_BEFORE"
 else
   echo "  NOTE: no nazgul/config.json in this checkout — the live-config walk did not run here (it is binding in a working install)" >&2
 fi
