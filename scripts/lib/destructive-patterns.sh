@@ -93,7 +93,13 @@ _dp_check_sql() {
 }
 
 _dp_check_force_push() {
-  local cmd="$1" segment
+  local cmd="$1" segment split
+  # `\n` in a sed replacement is undefined by POSIX, NOT broken on BSD/macOS —
+  # this host's sed does emit a real newline. Bash's split cannot vary by PATH.
+  split="${cmd//&&/$'\n'}"
+  split="${split//||/$'\n'}"
+  split="${split//;/$'\n'}"
+  split="${split//|/$'\n'}"
   while IFS= read -r segment; do
     if _dp_ci_match "$segment" 'git\s+push' \
       && _dp_ci_match "$segment" '(^|\s)(--force|-f)(\s|$)' \
@@ -102,7 +108,7 @@ _dp_check_force_push() {
       DP_PATTERN="git push with --force/-f targeting main/master"
       return 1
     fi
-  done < <(printf '%s\n' "$cmd" | sed -E 's/(\&\&|\|\||;|\|)/\n/g')
+  done <<< "$split"
   return 0
 }
 

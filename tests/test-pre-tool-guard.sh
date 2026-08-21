@@ -242,6 +242,90 @@ for safe_cmd in \
   assert_exit_code "allowed MF-028: '$safe_cmd'" "$ec" 0
 done
 
+# --- TASK-031: every force-push separator spelling keeps the verdict it has
+# today, so replacing the splitter cannot be a silent behaviour change. ---
+for bad_cmd in \
+  "git push --force origin main; echo done" \
+  "echo start; git push --force origin main" \
+  "git push --force origin main && echo ok" \
+  "git push --force origin main || echo failed" \
+  "git status | grep ahead && git push -f origin master" \
+  "git push --force origin main | tee push.log" \
+  "git push --force main" \
+  "git push -f master"; do
+  ec=$(get_exit_code "$bad_cmd")
+  assert_exit_code "blocked TASK-031: '$bad_cmd'" "$ec" 2
+  output=$(run_guard "$bad_cmd")
+  assert_contains "reason TASK-031 for '$bad_cmd'" "$output" "Force push to main/master branch"
+done
+
+# Each of these DOES satisfy all three predicates when read as one string, so a
+# separator that stopped splitting would over-block it. Allow proves it split.
+for safe_cmd in \
+  "git push --force feature/x | grep main" \
+  "git push --force feature/x; grep main" \
+  "git push --force feature/x || echo main" \
+  "git push --force feature/x && echo main"; do
+  ec=$(get_exit_code "$safe_cmd")
+  assert_exit_code "allowed TASK-031 (separator participates): '$safe_cmd'" "$ec" 0
+done
+
+# Anchoring rather than splitting: `main` here is a path fragment or quoted
+# prose, so no segment ever names it as a branch word (LR-005).
+for safe_cmd in \
+  "git push --force feature/x" \
+  "git push origin release/main-line --force" \
+  "echo 'do not git push --force to main'"; do
+  ec=$(get_exit_code "$safe_cmd")
+  assert_exit_code "allowed TASK-031 (anchored, not substring): '$safe_cmd'" "$ec" 0
+done
+
+# The exact string CodeRabbit named. It is allowed, and correctly so: `;main` is
+# a separate command word, not a push target — blocking it would be the defect.
+ec=$(get_exit_code "git push --force;main")
+assert_exit_code "allowed TASK-031: 'git push --force;main' (;main is its own command)" "$ec" 0
+
+# TASK-031 AC3: the reported "BSD/macOS sed writes a literal n" mechanism is FALSE
+# on this host — it writes a real newline. But `\n` there is undefined by POSIX.
+FP_REAL_SED="$(command -v sed)"
+FP_STUB_DIR=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-fp-sed-XXXXXX")
+cat > "$FP_STUB_DIR/sed" <<EOF
+#!/usr/bin/env bash
+
+# A sed that does not honour the undefined \`\n\` replacement escape, and
+# substitutes the literal character \`n\` instead.
+fp_args=()
+for fp_a in "\$@"; do fp_args+=("\${fp_a//\\\\n/n}"); done
+exec "$FP_REAL_SED" "\${fp_args[@]}"
+EOF
+chmod +x "$FP_STUB_DIR/sed"
+FP_COMPOUND="git push --force origin main; echo done"
+
+# Controls first: an uninstalled stub, or a host sed that already merged, would
+# let every assertion below pass while measuring nothing (the TASK-030 class).
+FP_REAL_LINES=$(printf '%s\n' "$FP_COMPOUND" | sed -E 's/(\&\&|\|\||;|\|)/\n/g' | wc -l | tr -d ' ')
+FP_STUB_LINES=$(PATH="$FP_STUB_DIR:$PATH"; printf '%s\n' "$FP_COMPOUND" | sed -E 's/(\&\&|\|\||;|\|)/\n/g' | wc -l | tr -d ' ')
+assert_eq "control TASK-031: this host's sed DOES emit a newline (2 segments)" "$FP_REAL_LINES" "2"
+assert_eq "control TASK-031: the stub sed is in effect and merges to 1 segment" "$FP_STUB_LINES" "1"
+
+fp_guard_probe() {
+  # "<exit>\x1f<stderr>" with $1 prepended to PATH. Deliberately not
+  # _record_exercised: the differential replay runs with the ambient PATH.
+  local pathdir="$1" cmd="$2" ec=0 out
+  out=$(PATH="$pathdir:$PATH"; echo "$cmd" | bash "$GUARD" 2>&1 >/dev/null) || ec=$?
+  printf '%s\x1f%s' "$ec" "$out"
+}
+
+FP_RES=$(fp_guard_probe "$FP_STUB_DIR" "$FP_COMPOUND")
+FP_EC="${FP_RES%%$'\x1f'*}"; FP_OUT="${FP_RES#*$'\x1f'}"
+assert_exit_code "TASK-031: compound force-push still BLOCKS under a non-conforming sed" "$FP_EC" 2
+assert_contains "TASK-031: and blocks for the force-push reason, not an incidental failure" "$FP_OUT" "Force push to main/master branch"
+
+FP_RES=$(fp_guard_probe "$FP_STUB_DIR" "git push --force feature/x")
+FP_EC="${FP_RES%%$'\x1f'*}"
+assert_exit_code "TASK-031: the same stub does not turn an allowed push into a block" "$FP_EC" 0
+rm -rf "$FP_STUB_DIR"
+
 # --- Dangerous system commands (should exit 2) ---
 for bad_cmd in \
   ':(){:|:&};:' \
