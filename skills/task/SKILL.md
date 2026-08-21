@@ -88,24 +88,37 @@ and no `Depends on` line is ever edited (ADR-022).
 2. If not found, error: "Task TASK-NNN not found."
 3. Read the task's current status. If it is already `DONE` or `CANCELLED`, report that it is terminal
    and stop.
-4. Record WHY, as ordinary non-status manifest content, BEFORE the transition — set
+4. **Route by blocker class, BEFORE any manifest edit.** If the status is `BLOCKED`, read
+   `- **Blocked kind**:` from the manifest.
+   - Exactly `reconciliation` — do NOT skip, and write NOTHING to the manifest: no
+     `- **Cancelled reason**:`, no other field. `ttg_validate_transition` refuses
+     `BLOCKED -> CANCELLED` for a typed reconciliation quarantine, so a reason recorded first would
+     document a cancellation that never happened — which reads to the next human as one that merely
+     failed to save, and invites saving it by hand, which is the forgery route ADR-020 closed. Report:
+     "TASK-NNN is in a reconciliation quarantine — cancellation is refused. Its only sanctioned exit
+     is `${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh repair TASK-NNN`." Then stop.
+   - any other value (`review-evidence`, `review-provenance`, `git-conflict`), or no `Blocked kind`
+     line at all — an ordinary blocker; continue with the steps below. The guard matches the whole
+     value, anchored and case-insensitively, so only the bare word `reconciliation` is refused and
+     every other blocker class still cancels normally (RULES.md §2).
+5. Record WHY, as ordinary non-status manifest content, BEFORE the transition — set
    `- **Cancelled reason**: [one line]` under `## Metadata`. `--reason` is rejected by the transition
    command for any target but `BLOCKED`, so the reason is written here or it is not written at all.
-5. Record the skip:
+6. Record the skip:
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition TASK-NNN <CURRENT_STATUS> CANCELLED
 ```
 
-   From `BLOCKED` this is refused when the manifest carries `- **Blocked kind**: reconciliation`: that
-   quarantine's only sanctioned exit is `scripts/task-transition.sh repair`. Report the refusal
-   verbatim and stop.
-6. Do not promote anything by hand and do not edit any `- **Depends on**:` line: the plan graph is the
+   Step 4 is a precondition, not the enforcement: the same refusal is applied by the guard here, so a
+   quarantine written after Step 4 is still caught. A non-zero exit means nothing was written — report
+   the refusal verbatim and stop.
+7. Do not promote anything by hand and do not edit any `- **Depends on**:` line: the plan graph is the
    record of what the plan was. The stop-hook auto-promotes each now-unblocked `PLANNED` task to
    `READY` on its next iteration.
-7. Count the task manifests whose `- **Depends on**:` line names TASK-NNN — those are the downstream
+8. Count the task manifests whose `- **Depends on**:` line names TASK-NNN — those are the downstream
    tasks this skip releases.
-8. Output: "TASK-NNN skipped (recorded as CANCELLED). [N] downstream task(s) will auto-promote."
+9. Output: "TASK-NNN skipped (recorded as CANCELLED). [N] downstream task(s) will auto-promote."
 
 ---
 
