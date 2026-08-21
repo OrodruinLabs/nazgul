@@ -7,7 +7,7 @@ source "$SCRIPT_DIR/lib/assertions.sh"
 source "$SCRIPT_DIR/lib/setup.sh"
 echo "=== $TEST_NAME ==="
 STOP_HOOK="$REPO_ROOT/scripts/stop-hook.sh"
-run_hook() { HOOK_OUTPUT=$(bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?; }
+run_hook() { HOOK_OUTPUT=$(bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?; }
 
 make_parallel_pair() {
   create_task_file TASK-001 READY
