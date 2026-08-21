@@ -18,11 +18,12 @@ REGION_MARKER="## Merge Evidence"
 # contract it fails to find documented, and a mutated constant can be aimed at either tree.
 GUARD_LIB="${NAZGUL_DOC_CONTRACT_GUARD_LIB:-$REPO_ROOT/scripts/lib/task-transition-guard.sh}"
 DOC_ROOT="${NAZGUL_DOC_CONTRACT_DOC_ROOT:-$REPO_ROOT}"
+MP_LIB="${NAZGUL_DOC_CONTRACT_MP_LIB:-$REPO_ROOT/scripts/lib/merge-provider.sh}"
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-doc-contract-XXXXXX")
 trap 'rm -rf "$SCRATCH"' EXIT
 
-FAMILIES="field fieldcount reason reasoncount regcount ordinal tier suite"
+FAMILIES="field fieldcount reason reasoncount regcount ordinal tier suite mpresult mpresultcount mpevent mpeventcount"
 
 _derive_fields() {
   # shellcheck disable=SC1090  # the source of truth is a parameter: that is the point
@@ -34,6 +35,20 @@ _derive_fields() {
 _derive_reasons() {
   grep -oE '_ttg_merge_deny "[^"]*" "[^"]*" "[a-z_]+"' "$1" 2>/dev/null \
     | sed -E 's/.*"([a-z_]+)"$/\1/' | LC_ALL=C sort -u
+}
+
+# The merge-observation seam's two vocabularies, read off its OWN call sites the same way
+# _derive_reasons reads the gate's. TASK-020 widened both (adding repo_mismatch and
+# unbindable_repo) to close a HIGH security defect, and three documents kept the pre-widening
+# counts because nothing bound them. Deriving them is what stops that from recurring.
+_derive_mp_results() {
+  grep -oE '_mp_result ("[^"]*"|\$[A-Za-z_][A-Za-z_0-9]*) ("[^"]*"|\$[A-Za-z_][A-Za-z_0-9]*) ("[^"]*"|\$[A-Za-z_][A-Za-z_0-9]*) "[a-z_]+"' "$1" 2>/dev/null \
+    | sed -E 's/.*"([a-z_]+)"$/\1/' | LC_ALL=C sort -u
+}
+
+_derive_mp_events() {
+  grep -oE '_mp_emit "[^"]*" "merge_provider_[a-z_]+"' "$1" 2>/dev/null \
+    | sed -E 's/.*"(merge_provider_[a-z_]+)"$/\1/' | LC_ALL=C sort -u
 }
 
 _derive_driver() {
@@ -179,9 +194,13 @@ _scan_docs() {
 
   FIELDS=$(_derive_fields "$guard_lib")
   REASONS=$(_derive_reasons "$guard_lib")
+  MP_RESULTS=$(_derive_mp_results "$MP_LIB")
+  MP_EVENTS=$(_derive_mp_events "$MP_LIB")
   MEMBERS=$(_derive_registry_members "$content_root/RULES.md" 2>/dev/null)
   FIELD_N=$(printf '%s\n' "$FIELDS" | tr ' ' '\n' | grep -c '[^[:space:]]' || true)
   REASON_N=$(printf '%s\n' "$REASONS" | grep -c '[^[:space:]]' || true)
+  MP_RESULT_N=$(printf '%s\n' "$MP_RESULTS" | grep -c '[^[:space:]]' || true)
+  MP_EVENT_N=$(printf '%s\n' "$MP_EVENTS" | grep -c '[^[:space:]]' || true)
   MEMBER_N=$(printf '%s\n' "$MEMBERS" | grep -c '[^[:space:]]' || true)
   SUITE_N=$(find "$name_root/tests" -maxdepth 1 -type f -name 'test-*.sh' 2>/dev/null | grep -c . || true)
   tiers=$(_derive_tiers "$content_root/RULES.md")
@@ -192,10 +211,18 @@ _scan_docs() {
   SCANNED=0; SKIP_UNREADABLE=0; SKIP_NO_CLAIM=0; CHECKED=0; FINDINGS=0
   for fam in $FAMILIES; do eval "CK_${fam}=0; FD_${fam}=0"; done
 
-  DOC_NAMES=$(find "$name_root" -maxdepth 1 -type f -name '*.md' 2>/dev/null \
-    | sed 's|.*/||' | LC_ALL=C sort)
+  # Population = the repo-root documents PLUS the live reference docs one level under docs/.
+  # docs/superpowers/** is deliberately excluded and the exclusion is stated rather than
+  # discovered: those are DATED plans, specs and research whose counts were true at authorship,
+  # so binding them would demand falsifying a historical record. Board 7 found the previous
+  # -maxdepth 1 population "tree-derived in form, scope-authored in effect" — it could not see
+  # docs/CONFIGURATION.md, the one file carrying the stale counts. Paths stay relative to the
+  # name root so a doc in a subdirectory addresses correctly against the content root.
+  DOC_NAMES=$( { find "$name_root" -maxdepth 1 -type f -name '*.md'
+                 find "$name_root/docs" -maxdepth 1 -type f -name '*.md'; } 2>/dev/null \
+    | sed "s|^$name_root/||" | LC_ALL=C sort)
   DOC_N=$(printf '%s\n' "$DOC_NAMES" | grep -c '[^[:space:]]' || true)
-  per_doc=$((FIELD_N + REASON_N + 8))
+  per_doc=$((FIELD_N + REASON_N + MP_RESULT_N + MP_EVENT_N + 10))
 
   for doc in $DOC_NAMES; do
     path="$content_root/$doc"
@@ -245,6 +272,36 @@ _scan_docs() {
       "$MEMBER_N" "§15 registry member"
     _check_count_claim suite "$doc" "$flat" '[A-Za-z0-9]+ files, all green' \
       "$SUITE_N" "discovered root suite"
+
+    claimed=$(_claim_word "$flat" '[A-Za-z0-9]+ named results')
+    for r in $MP_RESULTS; do
+      SCANNED=$((SCANNED + 1))
+      if [ -z "$claimed" ]; then
+        _no_claim 1
+      elif _token_in "$r" "$flat"; then
+        _check mpresult 0 "$doc names merge-provider result '$r'"
+      else
+        _check mpresult 1 "$doc names merge-provider result '$r'" \
+          "the document states the result vocabulary's size but omits '$r', which the seam returns"
+      fi
+    done
+    _check_count_claim mpresultcount "$doc" "$flat" '[A-Za-z0-9]+ named results' \
+      "$MP_RESULT_N" "merge-provider result"
+
+    claimed=$(_claim_word "$flat" '[A-Za-z0-9]+ additive event types')
+    for r in $MP_EVENTS; do
+      SCANNED=$((SCANNED + 1))
+      if [ -z "$claimed" ]; then
+        _no_claim 1
+      elif _token_in "$r" "$flat"; then
+        _check mpevent 0 "$doc names merge-provider event '$r'"
+      else
+        _check mpevent 1 "$doc names merge-provider event '$r'" \
+          "the document states the event vocabulary's size but omits '$r', which the seam emits"
+      fi
+    done
+    _check_count_claim mpeventcount "$doc" "$flat" '[A-Za-z0-9]+ additive event types' \
+      "$MP_EVENT_N" "merge-provider event"
 
     if [ -z "$(_registry_bullet "$path")" ]; then
       SCANNED=$((SCANNED + 1))
@@ -302,9 +359,9 @@ assert_eq "${CONST_NAME} has exactly one top-level assignment in $(basename "$GU
 
 _scan_docs "$REPO_ROOT" "$DOC_ROOT" "$GUARD_LIB"
 
-if [ -z "$FIELDS" ] || [ -z "$REASONS" ]; then
+if [ -z "$FIELDS" ] || [ -z "$REASONS" ] || [ -z "$MP_RESULTS" ] || [ -z "$MP_EVENTS" ]; then
   _fail "the merge contract is derived from the gate library" \
-    "fields='$FIELDS' reasons='$(printf '%s' "$REASONS" | tr '\n' ' ')'" \
+    "fields='$FIELDS' reasons='$(printf '%s' "$REASONS" | tr '\n' ' ')' mp_results='$(printf '%s' "$MP_RESULTS" | tr '\n' ' ')' mp_events='$(printf '%s' "$MP_EVENTS" | tr '\n' ' ')'" \
     "the contract could not be derived — this is 'never looked', not 'looked and found none'"
   echo "$TEST_NAME: NOTHING CHECKED — the gate library yielded no contract to bind" >&2
   report_results
@@ -312,6 +369,7 @@ if [ -z "$FIELDS" ] || [ -z "$REASONS" ]; then
   exit 1
 fi
 _pass "the merge contract is derived from the gate library ($FIELD_N fields, $REASON_N refusal reasons)"
+_pass "the merge-observation seam's vocabularies are derived from its own call sites ($MP_RESULT_N results, $MP_EVENT_N events)"
 _pass "the §15 registry is derived from RULES.md's own bullet ($MEMBER_N members)"
 
 DOC_FLOOR=2

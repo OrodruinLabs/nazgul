@@ -59,15 +59,20 @@ precedent as 34 → 35 (2.29.0) and 35 → 36 (2.30.0).
 - **`scripts/lib/merge-provider.sh` — merge observation as a seam, with named degradations.** Three
   functions: detect the host from `git remote get-url`, ask that host's PR API for merge state, report
   whether the detected arm is usable now. Callers never speak `gh`. `merge_provider_pr_state` always
-  returns one JSON object whose `result` is exactly one of `ok` (exit 0), `unsupported_host` (2),
-  `no_remote` (3), `provider_unavailable` (4), `api_failure` (5), `invalid_pr` (6), and `merged` is
+  returns one JSON object whose `result` is exactly one of eight named results: `ok` (exit 0),
+  `unsupported_host` (2), `no_remote` (3), `provider_unavailable` (4), `api_failure` (5),
+  `invalid_pr` (6), `repo_mismatch` (7), `unbindable_repo` (8) — and `merged` is
   three-valued — `true`/`false` only when the host answered, JSON `null` when it did not — because a
-  bare `false` collapses "the host says not merged" into "we could not find out". Five additive event
-  types, read out of the emitter and not out of the ADR: `merge_provider_unsupported_host` (`:166`),
-  `merge_provider_no_remote` (`:171`), `merge_provider_unavailable` (`:210`),
-  `merge_provider_api_failure` (`:285`), `merge_provider_invalid_pr` (`:324`). Note the deliberate
+  bare `false` collapses "the host says not merged" into "we could not find out". Seven additive event
+  types, read out of the emitter (`_mp_emit`) and not out of the ADR:
+  `merge_provider_unsupported_host`, `merge_provider_no_remote`, `merge_provider_unavailable`,
+  `merge_provider_api_failure`, `merge_provider_invalid_pr`, `merge_provider_repo_mismatch`,
+  `merge_provider_unbindable_repo`. Note the deliberate
   asymmetry: the *event* is `merge_provider_unavailable` while the *result value* is
-  `provider_unavailable` — the event name is already namespaced by its prefix.
+  `provider_unavailable` — the event name is already namespaced by its prefix. Both closed sets are
+  read out of the seam's own `_mp_result`/`_mp_emit` call sites by `tests/test-doc-contract-fields.sh`
+  — the counts above are asserted against the source, not transcribed from it. Symbol names replace
+  the line citations this bullet used to carry: a `:NNN` goes stale on the next edit, silently.
 - **`scripts/close-objective.sh` and `/nazgul:complete` — the honest replacement for frontmatter
   surgery.** Given a merged PR it reads merge state through the seam, writes `## Merge Evidence` into
   each stranded manifest **from the host's own answer** (with a `- **recorded-by**: scripts/close-objective.sh
