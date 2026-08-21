@@ -286,10 +286,12 @@ itself the evidence that nothing an existing project stores had to change.
   configurations — so `"missing"` is not observed-foreground, it is not-observable-at-all.
   `in_flight_orphan` is now RESERVED for a PROVEN class (`background: "false"`, or a named dispatch
   whose report contract owns the marker); the unobservable case mints `in_flight_unverifiable` instead,
-  carrying the same `unit`/`agent`/`background` fields. Behaviour is byte-for-byte unchanged — same
-  `mkdir -p nazgul/in-flight/quarantine/`, same `mv`, same continue-normally — only the reason and the
-  stderr text differ, because the move is irreversible and a misclassified call can never be
-  reconsidered. Recorded across `RULES.md` §5, `docs/CONFIGURATION.md`, `docs/ARCHITECTURE.md`,
+  carrying the same `unit`/`agent`/`background` fields. The mint began as a rename with identical
+  behaviour, but that is NOT what shipped: review #11 in this same release also stopped the `mv` for
+  this class, precisely because the move is irreversible and a misclassified call can never be
+  reconsidered. As shipped, `mkdir -p nazgul/in-flight/quarantine/` and `mv` run ONLY for the PROVEN
+  `in_flight_orphan` class; an `in_flight_unverifiable` marker is announced and **left in place**,
+  and the loop continues normally either way. Recorded across `RULES.md` §5, `docs/CONFIGURATION.md`, `docs/ARCHITECTURE.md`,
   `docs/SAFETY.md`, `docs/loop-engineering.md`, `skills/status/SKILL.md`, `skills/log/SKILL.md`, and
   `agents/doc-verifier.md`. Honest boundary below. Refs #104, #205, #218.
 - **`tests/test-messaging-posture.sh`'s shipped-surface scan closed three round-2 board findings
