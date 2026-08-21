@@ -178,9 +178,8 @@ fi
 # AFK gate and BEFORE the iteration increment on purpose: a hold must never
 # increment current_iteration/consecutive_failures, and must never fire when
 # the AFK timeout should end the run instead.
-# Kill-switch: guards.in_flight_hold (explicit `false` disables the hold; the
-# marker write/clear in in-flight-marker.sh/subagent-stop.sh keep running
-# harmlessly either way).
+# Kill-switch: guards.in_flight_hold — master switch for the WHOLE subsystem, not just the hold. `false` also stops
+# the marker WRITER (in-flight-marker.sh:36-37) and the SessionStart sweep (session-context.sh:77-79); only the clear runs on.
 IN_FLIGHT_HOLD_ENABLED=$(jq -r 'if .guards.in_flight_hold == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
 
 # Ruling Q1 (ADR-027): a script constant, deliberately NOT a config key — this is an attempt
