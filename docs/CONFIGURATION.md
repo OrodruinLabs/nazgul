@@ -297,11 +297,16 @@ recorded dispatch class is provably background (`background: "true"` captured at
 emits one `stop_gate` event with `reason: "in_flight_hold"` — for that class the wake-up genuinely
 is the harness's own task-notification when the dispatched agent finishes. A fresh marker that is
 NOT provably background (`"false"`, `"missing"` — including every pre-upgrade marker — or a named
-dispatch) is not provably awaited work, so no resume can be relied on. It is moved to
-`nazgul/in-flight/quarantine/` (evidence preserved, re-fire stopped), a `stop_gate` event is emitted
-with `reason: "in_flight_orphan"` when the class was proven (`background: "false"`, or a named
-dispatch whose report contract owns it) or `reason: "in_flight_unverifiable"` when the class was not
-observable at all, and the loop continues NORMALLY —
+dispatch) is not provably awaited work, so no resume can be relied on and the loop continues NORMALLY
+instead of holding. What happens to the MARKER then splits by how much was actually known, and the
+two halves must not be collapsed. When the class was PROVEN (`background: "false"`, or a named
+dispatch whose report contract owns it) the marker is residue — a synchronous dispatch cannot span a
+Stop — so it is moved to `nazgul/in-flight/quarantine/` (evidence preserved, re-fire stopped) and a
+`stop_gate` event is emitted with `reason: "in_flight_orphan"`. When the class was NOT OBSERVABLE at
+all (`"missing"`) the event is `reason: "in_flight_unverifiable"` and the marker is **left in place,
+not quarantined**: `mv` is irreversible, the dispatch it names may still be running, and destroying it
+would foreclose the reconciliation #218 is built on — the SessionStart sweep is the bounded backstop
+that eventually retires it. Either way the iteration that follows is
 a productive iteration, not a burned one. This closes the 2026-08-04 incident class (#104 Gap 3):
 an 8-hour sleep on a foreground marker whose completion had already fired. Without this gate,
 a session could otherwise burn an iteration on every ~15-second re-invocation while dispatched work was
@@ -316,10 +321,17 @@ configurations: background in the first, foreground in the second. In the sessio
 absence therefore means the dispatch is most likely **background**, so quarantining it is a cost-weighed
 default that is usually wrong about the dispatch it names. On such a host the class-aware hold never
 engages, `stop_gate` `reason: "in_flight_unverifiable"` fires on essentially every dispatch, and the loop
-continues concurrently with live subagents. This is a known, tracked defect (#218). The authoritative
-signals exist one event later and are documented — `PostToolUse` `tool_response.status` (`async_launched`
-vs `completed`) and the `background_tasks[]` array on `Stop`/`SubagentStop` — and this mechanism does not
-yet read either. `reason: "in_flight_orphan"` is reserved for `background: "false"` or a named dispatch,
+continues concurrently with live subagents. This is a known, tracked defect (#218) — narrowed by
+FEAT-033, not closed. The authoritative signals exist one event later: `PostToolUse` `tool_response.status` (`async_launched` vs `completed`)
+and the `background_tasks[]` array on `Stop`/`SubagentStop`. Both are present in the shipped hook
+schema as of Claude Code 2.1.238 and were **empirically captured 2026-08-21** — real `Stop` and
+`SubagentStop` payloads from two sessions, kept as `tests/fixtures/stop-payload/` — but neither is in
+the PUBLIC hook reference, which lists only `last_assistant_message` and `effort` for `Stop`. The
+shipped schema is a strict SUPERSET of the published one, so this rests on observation rather than on
+documentation, and the field can change without a deprecation notice. Since FEAT-033 the stop-hook
+READS `background_tasks[]` at `Stop`: a live subagent for this session takes the hold even when every
+marker records `background: "missing"`, so the "never engages" sentence above now describes only the
+case where the payload carries no such field. `tool_response.status` is still unread. `reason: "in_flight_orphan"` is reserved for `background: "false"` or a named dispatch,
 which are genuinely proven.
 
 A marker older than `guards.in_flight_stale_minutes` (default `30`, floored to `>=1`) is NOT held on — the
@@ -328,9 +340,34 @@ stop proceeds normally (iteration increments) — but the staleness is surfaced 
 up in telemetry instead of silently vanishing. Stale markers are left on disk rather than deleted, so the
 retention itself doesn't hide the incident from the next tick's diagnostics.
 
+**Release gate — one SUPERVISED objective before any unattended run.** FEAT-033 (#218) makes the hold
+REACHABLE on a host class where it previously never engaged: the `Stop` payload's `background_tasks[]`
+can now take a hold that the write-time class alone never took here. The first release carrying that
+reachable hold must be exercised for **one supervised objective before any AFK or overnight run**. The
+reason is R2: the wake path a hold depends on — the harness's own task-notification resuming this
+session — is documented and believed, but has never been OBSERVED re-engaging a fork-mode session
+(`docs/DECISION-LOG-2026-08-16-cross-session-messaging.md` D-005, still an owed probe). A hold that is
+never woken is a stalled run, and a supervised objective is how that gets caught by a human in minutes
+rather than by an overnight silence. The bounded hold budget (`_IN_FLIGHT_HOLD_CAP = 1` in
+`scripts/stop-hook.sh`: one hold per unchanged marker set, ledgered under
+`nazgul/logs/.in-flight-holds/`, then `stop_gate reason: "in_flight_hold_budget_exhausted"`) is a valve
+that caps the compound failure at one stop — it is not a substitute for the supervised run, and it
+cannot rescue a wake that never fires at all, because `exit 0` gives up control and the bound is only
+read at a Stop that never comes.
+
+The immediate revert is `guards.in_flight_hold: false`, and it is worth being blunt about what that
+turns off: it is a **full-subsystem** switch, not a hold switch. With it `false`,
+`scripts/in-flight-marker.sh` stops WRITING markers (`:36-37`) and the SessionStart sweep stops running
+(`scripts/session-context.sh:77-79`), so there is no marker to hold on, none to quarantine, and no
+sweep to retire one. That is deliberate — a guard that disables a subsystem must disable its producer
+too, or the writer keeps producing markers with no retirement path. Note also that this repository's
+own `nazgul/config.json` currently sets `guards.in_flight_hold: false` while the template default is
+`true`, so running the supervised objective here takes a deliberate operator flip: an operator act, not
+a code change.
+
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `guards.in_flight_hold` | `true` | Master switch. Set to `false` to disable the hold entirely — the marker writer and clearer keep running harmlessly, but the stop-hook never allows a stop on their account. |
+| `guards.in_flight_hold` | `true` | Master switch for the whole subsystem, not just the hold. `false` stops the marker WRITER (`scripts/in-flight-marker.sh:36-37`) and the SessionStart sweep (`scripts/session-context.sh:77-79`) as well as the stop on a marker's account; `SubagentStop`'s clear stays live and harmless. |
 | `guards.in_flight_stale_minutes` | `30` | Age past which a marker is ignored (hold not taken) and reported as stale rather than fresh. |
 
 Added by the additive `migrate_33_to_34` migration (schema v33→v34, chained after `migrate_32_to_33` below);

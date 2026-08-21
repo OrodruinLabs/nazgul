@@ -2,6 +2,135 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.34.0] - 2026-08-22
+
+FEAT-033, ADR-027 (#218) — **The dispatch class was being PREDICTED at dispatch time; it is
+OBSERVABLE one event later, and now it is read.** The in-flight hold classified a dispatch from
+`tool_input.run_in_background` at `PreToolUse` — a field Claude Code omits from the exposed Agent
+schema in fork mode, which is the interactive default. So on this host class every marker recorded
+`background: "missing"`, the hold never engaged, and the loop kept iterating alongside live subagents:
+2.33.0 shipped that as a stated known constraint. The authoritative signal was there the whole time,
+one event later, in the `Stop` payload's `background_tasks[]`. It was probed live BEFORE any code
+changed — real `Stop` and `SubagentStop` payloads captured 2026-08-21 across two sessions — and one
+capture settled the design's load-bearing question with data instead of argument: a session carrying
+16 in-flight entries of which only **6 were subagents**, the other 10 being `sleep`-loop shell
+waiters. Without `select(.type=="subagent")` that session's loop would have held forever on its own
+polling shells. The type filter is load-bearing, not defensive.
+
+**MINOR, not PATCH:** new observable behavior — one new event type, two new `stop_gate` reasons, a new
+`/nazgul:doctor` note, and a hold that can now engage where it previously never did. **MAJOR is
+wrong:** nothing is removed or renamed, no gate changes meaning, no default is inverted. **No schema
+step — config schema stays v36 and this release adds ZERO config keys.** Neither
+`scripts/migrate-config.sh` nor `templates/config.json` appears in this objective's diff, which is
+itself the evidence that nothing an existing project stores had to change.
+
+### Added
+
+- **`scripts/lib/hook-stdin.sh` — one shared, bounded, EOF-INDEPENDENT hook-stdin read.**
+  `IFS= read -r -d '' -t 2 payload <&0`: `-t 2` is the bound that actually closes the hazard (`read`
+  is a bash builtin, so no `timeout(1)` is needed — macOS ships none), `-d ''` keeps a pretty-printed
+  multi-line payload from being truncated, and `[ -t 0 ]` is treated as necessary but NEVER sufficient.
+  It ASSIGNS rather than prints, deliberately: a `$(...)` capture is a subshell, so a stdout-only
+  reader could never report WHY a payload was empty, and `read_timeout` vs `no_stdin` would collapse
+  into one indistinguishable answer. This is a NEW idiom on purpose — the ten existing
+  `INPUT=$(cat)`-behind-`[ ! -t 0 ]` readers ARE the #155 never-EOF deadlock class (1h03m reproduced
+  on record); migrating them is #155's job, not this one's.
+- **`stop_payload_observed` — a new event TYPE, always on, one per Stop.** Carries `bg_seen`, a
+  closed-set `why`, `entries`/`subagents`/`live` counts, and the distinct `types`/`statuses` seen; no
+  paths and no message text. It is a TYPE, not a `stop_gate` reason, so a consumer keying on
+  `stop_gate` will not see it and must not read its absence there as the observation never having
+  happened.
+- **`NAZGUL_STOP_PAYLOAD_CAPTURE=1`** writes the raw Stop payload to `nazgul/logs/stop-payload-last.json`
+  — a single overwritten file, never appended, written even when the payload is empty so "capture on,
+  nothing arrived" stays distinguishable from "capture off". It is an environment variable and NOT a
+  config key: the raw payload carries `cwd`, transcript paths and `last_assistant_message`, which is
+  exactly why the always-on event is bounded and structured and this one is opt-in. `docs/CONFIGURATION.md`
+  gains an "Environment Variables (NOT `config.json` fields)" section stating that adding one does not
+  move `schema_version`.
+- **A `/nazgul:doctor` `stop-payload` note — the roster goes thirteen → fourteen.** Three-state on
+  purpose: **field present** / **field absent** / **never observed**, plus an explicit UNREADABLE skip.
+  "No `stop_payload_observed` record exists" is reported as *never looked*, never as *looked and found
+  none*. It stays a `note` rather than a scored check, so RULES §15 enrollment is unchanged.
+- **Declared Stop-payload fixtures, split by what evidence actually exists.**
+  `tests/fixtures/stop-payload/` is `captured-redacted` — a real hook invocation, machine-checked pins
+  recomputed from disk by `tests/test-repo-content-boundary.sh`. `tests/fixtures/stop-payload-synthetic/`
+  is hand-authored and says why per file: the mixed 16-entry/6-subagent shape was transcribed as COUNTS
+  only because the real capture is another project's session (§15 R3 forbids third-party subject matter
+  at any tier), while `background-tasks-empty.json` and `unknown-status-queued.json` describe states
+  **never observed** — a fixture for a state nobody has ever seen is a hypothesis, not a stand-in, and
+  the PROVENANCE says so rather than letting the distinction quietly vanish.
+
+### Changed
+
+- **The hold is decided from the payload, by TWO independent counts, never one filter.** LIVE
+  (`type == "subagent"` AND an allowlisted `running`/`pending` status) gates the HOLD;
+  SUBAGENT_PRESENT (type only, status-blind) gates the CANDIDATE; a status the filter does not
+  recognise produces NEITHER, and a count that failed to parse is recorded as "could not tell" rather
+  than "found none" — §15/ADR-009's looked-vs-never-looked distinction applied to the filter itself.
+  The payload is consulted BEFORE the freshness cutoff, so a stale bound can never decline a hold for a
+  session that HAS a live subagent (#211 in effect, not just in default). Liveness is a property of the
+  SESSION, not of one marker — `background_tasks[]` carries no join key — so a live subagent holds
+  every marker and moves none.
+- **The empty-array arm is DETECT-ONLY: it ships NO `mv`.** When the payload was observed and reports
+  no subagent of any status, the stop-hook emits
+  `stop_gate reason:"in_flight_orphan_candidate"` with `evidence:"background_tasks_empty"` and leaves
+  the marker in `nazgul/in-flight/`. The reason is deliberately NOT `in_flight_orphan`, which names a
+  PROVEN class that really was quarantined and which `/nazgul:status` tells operators exactly that
+  about; reusing it would rebuild the conflation this objective exists to remove. `LIVE == 0` has never
+  been observed live, so the arm rests on a measurement, not a proof — see the constraint below for the
+  numeric bar that unblocks the move.
+- **A hold budget valve, `N = 1`.** A second hold on an UNCHANGED marker set — fingerprinted by a short
+  hash of the marker basenames, ledgered under `nazgul/logs/.in-flight-holds/` — is refused: the loop
+  falls through to the ordinary iteration increment, quarantining nothing and moving nothing. It emits
+  `stop_gate reason:"in_flight_hold_budget_exhausted"` with `fingerprint` and a `ledger` field that says
+  whether the budget was genuinely `spent` or the ledger was `unwritable`, so a mechanism that FAILED
+  stays distinguishable from one that had nothing to do. The cap is a script constant, not a config key,
+  precisely because it is an attempt ledger: a read-modify-write of `config.json` on the hold path would
+  put the hold's own byte-identical config at risk. The counter is written BEFORE the hold, because in
+  the canonical unattended shape `exit 0` IS process exit and an unrecorded attempt would return later
+  as a fresh budget.
+- **Harness stdin sweep (`</dev/null`) so the new read cannot hang the suite.** `scripts/stop-hook.sh`
+  now reads stdin, so every bare `bash "$STOP_HOOK"` in the tests would have inherited the suite's own
+  stdin: 12 invocation sites are bound explicitly, `tests/run-tests.sh` runs EVERY test file with
+  `< /dev/null` (which protects future files too), and a new P7 static scan reports
+  scanned/skipped/checked and asserts `findings == 0` mechanically rather than by eye.
+- **Record corrections, because a false record is a defect.** `RULES.md` §5 gains the three new arms and
+  their differing dispositions; `scripts/stop-hook.sh`'s "the documented harness resume IS the
+  **confirmed** wake path" is downgraded to believed-but-unobserved (D-005 lists that exact resume as an
+  owed probe); `docs/ARCHITECTURE.md` and `docs/CONFIGURATION.md` no longer claim these signals "are
+  documented" — they are in the SHIPPED schema and were empirically captured, but the public hook
+  reference lists only `last_assistant_message` and `effort` for `Stop`, so the shipped schema is a
+  strict superset of the published one; and the 2.33.0 entries above that said a `"missing"` marker is
+  quarantined are corrected to what 2.33.0 actually shipped, which is leave-in-place. `CHANGELOG.md` was
+  the last record surface still telling readers otherwise.
+
+### Known constraints (honest notes)
+
+- **The irreversible `mv` on the empty-array arm is DEFERRED, and the bar to unblock it is numeric, not
+  editorial:** ≥ 20 `in_flight_orphan_candidate` events across ≥ 2 objectives, with **zero** cases where
+  a later `subagent_stop` in the same `events.jsonl` shows that candidate's agent + unit was still
+  running at candidate time. Until then the arm observes and reports, and the marker stays where it is.
+  Every payload captured so far shows `status:"running"` and a non-empty array, so whether a FINISHED
+  subagent has left the registry by the next Stop remains a premise.
+- **R2 remains an OWED PROBE.** Whether the harness's task-notification actually re-engages a fork-mode
+  session has still never been observed, and this release makes the branch that depends on it reachable
+  for the first time. That is precisely why the budget valve exists — it bounds the compound mode (the
+  wake fires, the clear misses, the marker survives, and an unchanged set asks for hold #2 with the
+  budget already spent). It cannot rescue a wake that never fires at all: `exit 0` gives up control and
+  the bound is only read at a Stop that never comes. The limit is stated at the branch itself, not
+  hidden.
+- **Release gate: ONE SUPERVISED objective before any AFK or overnight run** on the first release where
+  the hold is reachable, with `guards.in_flight_hold: false` as the immediate revert. Be blunt about the
+  revert: it is a full-subsystem switch — it also stops the marker WRITER
+  (`scripts/in-flight-marker.sh:36-37`) and the SessionStart sweep (`scripts/session-context.sh:77-79`),
+  not just the hold. See In-Flight Dispatch Hold in `docs/CONFIGURATION.md`.
+- **`PostToolUse` `tool_response.status` is still unread.** The Stop payload alone drives this; the
+  second signal named in the #218 analysis remains available and unused.
+- **`background_tasks[]` is undocumented.** It is present in the shipped schema and captured in the
+  wild, but absent from the public hook reference, so its shape can change with no deprecation notice.
+  The always-on `stop_payload_observed` event and doctor's three-state note exist so that such a change
+  shows up as a measurement rather than as a hold that silently stops engaging.
+
 ## [2.33.0] - 2026-08-17
 
 FEAT-032 — **Cross-session messaging adoption: the loop keeps its one engine.** Thesis: *an
@@ -83,11 +212,17 @@ itself the evidence that nothing an existing project stores had to change.
 - **The in-flight hold is class-aware — #104 Gap 3 closed by classification, not by inversion.**
   Markers now record their dispatch class at write time (`background` as a tri-state
   `true`/`false`/`missing`, and `named`), and the hold fires ONLY for a provably-background unnamed
-  dispatch, whose harness resume is the documented wake path. A fresh marker that is foreground,
-  `missing`, or named is a proven leak — a synchronous dispatch cannot span a Stop — so it is
-  quarantined to `nazgul/in-flight/quarantine/` and announced as `stop_gate reason:in_flight_orphan`
-  while the loop continues normally. Legacy markers lacking both fields classify as foreground by
-  ADR-009 cost-weighing: a false hold costs the whole run, a false continue costs one iteration.
+  dispatch, whose harness resume is the documented wake path. Every other fresh marker declines the
+  hold and the loop continues normally — but the marker's DISPOSITION splits by how much was actually
+  known, and the split is the point. A PROVEN class (`background: "false"`, or a named dispatch whose
+  report contract owns it) is a proven leak — a synchronous dispatch cannot span a Stop — so it is
+  quarantined to `nazgul/in-flight/quarantine/` and announced as `stop_gate reason:in_flight_orphan`.
+  A class that was NOT OBSERVABLE at write time (`"missing"`) is announced as
+  `stop_gate reason:in_flight_unverifiable` and **left in place, not quarantined**: `mv` is
+  irreversible, the dispatch may still be running, and destroying the marker would foreclose #218's own
+  fix, which reconciles these markers against the Stop payload's `background_tasks[]`. Legacy markers
+  lacking both fields record `"missing"` and take that second path; the SessionStart sweep, not the
+  stop-hook, is what eventually retires them.
 - **Session locks live for the session, not the turn (#195).** They are registered at SessionStart,
   refreshed each Stop, released at SessionEnd (`session-staging.sh`), and swept by pid liveness —
   liveness outranks age, so a live session is never swept and a dead one goes immediately. The
@@ -151,10 +286,12 @@ itself the evidence that nothing an existing project stores had to change.
   configurations — so `"missing"` is not observed-foreground, it is not-observable-at-all.
   `in_flight_orphan` is now RESERVED for a PROVEN class (`background: "false"`, or a named dispatch
   whose report contract owns the marker); the unobservable case mints `in_flight_unverifiable` instead,
-  carrying the same `unit`/`agent`/`background` fields. Behaviour is byte-for-byte unchanged — same
-  `mkdir -p nazgul/in-flight/quarantine/`, same `mv`, same continue-normally — only the reason and the
-  stderr text differ, because the move is irreversible and a misclassified call can never be
-  reconsidered. Recorded across `RULES.md` §5, `docs/CONFIGURATION.md`, `docs/ARCHITECTURE.md`,
+  carrying the same `unit`/`agent`/`background` fields. The mint began as a rename with identical
+  behaviour, but that is NOT what shipped: review #11 in this same release also stopped the `mv` for
+  this class, precisely because the move is irreversible and a misclassified call can never be
+  reconsidered. As shipped, `mkdir -p nazgul/in-flight/quarantine/` and `mv` run ONLY for the PROVEN
+  `in_flight_orphan` class; an `in_flight_unverifiable` marker is announced and **left in place**,
+  and the loop continues normally either way. Recorded across `RULES.md` §5, `docs/CONFIGURATION.md`, `docs/ARCHITECTURE.md`,
   `docs/SAFETY.md`, `docs/loop-engineering.md`, `skills/status/SKILL.md`, `skills/log/SKILL.md`, and
   `agents/doc-verifier.md`. Honest boundary below. Refs #104, #205, #218.
 - **`tests/test-messaging-posture.sh`'s shipped-surface scan closed three round-2 board findings
@@ -212,9 +349,12 @@ itself the evidence that nothing an existing project stores had to change.
   inbound mechanism today, and posture is the operator's decision — Nazgul documents it and never
   writes it. Receipt IS hook-observable (P6: `UserPromptSubmit` carries the message text as its
   prompt), so an enforced inbound gate is buildable if it is ever warranted. Buildable is not built.
-- **UPGRADE NOTE — a pre-existing fresh foreground marker now quarantines at the next Stop instead of
-  holding.** This is strictly corrective in live AFK runs: that marker was never going to be cleared
-  by a completion that had already happened. No action is required.
+- **UPGRADE NOTE — a pre-existing fresh marker no longer takes the hold.** It carries no `background`
+  field, so it classifies as `"missing"`: reported as `stop_gate reason:in_flight_unverifiable`, left
+  in place (not quarantined — its class was never observed), and retired by the SessionStart sweep once
+  it ages out. Only a marker whose class is PROVEN foreground quarantines, which no pre-upgrade marker
+  can be. This is strictly corrective in live AFK runs: such a marker was never going to be cleared by
+  a completion that had already happened. No action is required.
 - **The posture scan binds shipped TEXT, not runtime conduct.** Rule 2's `[enforced]` tier covers the
   files in this repository; whether a model posts to a socket on its own turn is `[advisory]`, the
   same honest boundary §21 draws for the read-back contract.
@@ -223,9 +363,11 @@ itself the evidence that nothing an existing project stores had to change.
   `CLAUDE.md` and `README.md`.
 - **On a fork-mode host, the in-flight hold effectively never engages.** `run_in_background` is omitted
   from the exposed Agent tool schema there (the interactive default since Claude Code v2.1.232) and under
-  `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, so every marker records `background: "missing"` and quarantines
-  as `stop_gate reason:"in_flight_unverifiable"` rather than being held on — usually a healthy background
-  dispatch, not a leak. Reading the actual dispatch class from `PostToolUse` `tool_response.status` or the
+  `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, so every marker records `background: "missing"` and is reported
+  as `stop_gate reason:"in_flight_unverifiable"` rather than being held on — NOT quarantined: that reason
+  leaves the marker in place, because the class was never observed and the dispatch is usually a healthy
+  background one, not a leak (the SessionStart sweep retires it once it ages out; only the PROVEN class
+  is moved). Reading the actual dispatch class from `PostToolUse` `tool_response.status` or the
   Stop payload's `background_tasks[]`, instead of predicting it from `run_in_background` at dispatch time,
   would make the class observable rather than inferred; that is issue #218 and is deliberately NOT in this
   release.
