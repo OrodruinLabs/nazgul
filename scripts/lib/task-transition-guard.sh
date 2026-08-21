@@ -161,8 +161,8 @@ _ttg_emit_event() {
   ( NAZGUL_DIR="$nazgul_dir"; EVENTS_FILE="$nazgul_dir/logs/events.jsonl"; emit_event "$@" ) || true
 }
 
-# Closed refusal vocabulary, asserted from this source in tests/test-red-run-evidence.sh:
-# absent commented_out corrupt bad_na_token ref_unresolvable not_ancestor exit_zero roots_unresolved roots_undeterminable
+# Closed refusal vocabulary, eleven members. The call sites below are the source of truth and
+# tests/test-red-run-evidence.sh derives it from them; this copy is a reading aid, not the contract: absent absent_in_tree bad_na_token commented_out corrupt exit_zero not_ancestor ref_unresolvable roots_undeterminable roots_unresolved uncovered_test_file
 
 # Emit a distinct red-run diagnostic/event; the kill switch suppresses only the block.
 _ttg_red_run_deny() {

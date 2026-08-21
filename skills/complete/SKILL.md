@@ -99,12 +99,19 @@ captured line**, in the order printed, copied character-for-character. Drop none
    why nothing closed; a report without them is a report that a merge check silently did not happen.
 4. The ancestry-corroboration line, if present. `ancestry=squash_signature` is the expected reading
    on a squash-merging host and is not a warning.
-5. The terminal coverage line, exactly as printed, including its `close-objective:` prefix, all seven
+5. The terminal coverage line, exactly as printed, including its `close-objective:` prefix, all nine
    skip reasons, and every `=0` among them:
 
 ```text
-close-objective: N scanned, M skipped (already-terminal=…, not-closable-status=…, unreadable=…, not-merged=…, merge-unverifiable=…, evidence-write-failed=…, transition-refused=…), K closed, F refused
+close-objective: N scanned, M skipped (already-terminal=…, not-closable-status=…, unreadable=…, not-this-objective=…, pr-not-this-objective=…, not-merged=…, merge-unverifiable=…, evidence-write-failed=…, transition-refused=…), K closed, F refused
 ```
+
+   All nine skip reasons are a closed set, always printed in this order: `already-terminal`,
+   `not-closable-status`, `unreadable`, `not-this-objective`, `pr-not-this-objective`, `not-merged`,
+   `merge-unverifiable`, `evidence-write-failed`, `transition-refused`. Two of them are bindings
+   rather than counters: `not-this-objective` answers whose task this manifest is and
+   `pr-not-this-objective` answers whose PR merged, so a line reported without them is a line missing
+   the two checks that make the evidence THIS objective's.
 
 6. The exit code and its meaning: `0` at least one task closed with no refusal (✦), `1` at least one
    refusal (✗ — the run completed, act on each record above), `2` NOTHING CHECKED, nothing was closed
@@ -125,8 +132,10 @@ Close with the Next Up block.
 
 - **Closure is on merge evidence only.** The script asks the host's PR API through
   `scripts/lib/merge-provider.sh` and closes nothing unless that host ANSWERS that the PR merged and
-  returns a usable `host` / `pr` / `merged-at` / `merge-commit` / `head-ref`. It never consults git ancestry: after
-  a server-side squash merge no SHA in any manifest's `## Commits` section is an ancestor of the base
+  returns a usable `host` / `pr` / `merged-at` / `merge-commit` / `head-ref`. Those five and
+  `recorded-by` are what it writes into a `## Merge Evidence` section in every manifest it closes —
+  six fields under that heading and nowhere else. It never consults git ancestry: after a
+  server-side squash merge no SHA in any manifest's `## Commits` section is an ancestor of the base
   branch, so ancestry is inverted there, not merely weak.
 - **`could not look` is never `not merged`.** `merge-unverifiable` and `not-merged` are separate
   reasons on purpose. Report whichever one came back; do not translate one into the other.
@@ -150,6 +159,8 @@ Close with the Next Up block.
 | `already-terminal` | Task is already `DONE` or `CANCELLED` | Nothing — expected on a re-run |
 | `not-closable-status` | Real status, but not `IMPLEMENTED`/`IN_REVIEW` | Finish the task normally; the closer never skips the state machine |
 | `unreadable` | No resolvable regular non-symlink manifest | Inspect that manifest by hand; do not edit a status to route around it |
+| `not-this-objective` | The manifest is not in this objective's roster in `nazgul/plan.md` — or no roster could be read at all, and the stderr record says which | Close it under the objective that owns it; if the roster itself was unreadable, repair `nazgul/plan.md` and re-run — never widen the scan |
+| `pr-not-this-objective` | The PR merged, but from a branch that is not this objective's | Re-run against this objective's own PR; another objective's merge never closes these tasks |
 | `not-merged` | The host answered: this PR is not merged | Merge the PR, then re-run |
 | `merge-unverifiable` | The host could not be asked, or answered unusably | Fix auth/remote/PR id (`/nazgul:doctor`), then re-run |
 | `evidence-write-failed` | `## Merge Evidence` could not be recorded or did not read back | Check manifest permissions and the stderr detail, then re-run |
