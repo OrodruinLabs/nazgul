@@ -23,11 +23,15 @@ MP_LIB="${NAZGUL_DOC_CONTRACT_MP_LIB:-$REPO_ROOT/scripts/lib/merge-provider.sh}"
 # an unrelated "16 files" elsewhere counts a different population, not this one gone stale.
 SUITE_ANCHOR='run-tests\.sh'
 SUITE_SIZE_RE='[0-9]+ ([A-Za-z][A-Za-z/-]* )?files'
+# The count noun NAMES the mechanism. A bare "N members" also matches RULES.md's "`unverifiable`
+# and `not_merged` are separate members", which counts a different vocabulary entirely.
+RED_RUN_SIZE_RE='[A-Za-z0-9]+ red-run refusal reasons'
+RED_RUN_PIN_FILE="${NAZGUL_DOC_CONTRACT_RED_RUN_PIN:-$REPO_ROOT/tests/test-red-run-evidence.sh}"
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-doc-contract-XXXXXX")
 trap 'rm -rf "$SCRATCH"' EXIT
 
-FAMILIES="field fieldcount reason reasoncount regcount ordinal tier suite mpresult mpresultcount mpevent mpeventcount"
+FAMILIES="field fieldcount reason reasoncount regcount ordinal tier suite mpresult mpresultcount mpevent mpeventcount redrun redruncount"
 
 _derive_fields() {
   # shellcheck disable=SC1090  # the source of truth is a parameter: that is the point
@@ -51,6 +55,13 @@ _derive_mp_results() {
 _derive_mp_events() {
   grep -oE '_mp_emit "[^"]*" "merge_provider_[a-z_]+"' "$1" 2>/dev/null \
     | sed -E 's/.*"(merge_provider_[a-z_]+)"$/\1/' | LC_ALL=C sort -u
+}
+
+# The red-run gate's refusal vocabulary, off the same two emitters' call sites that
+# tests/test-red-run-evidence.sh reads; a variable third argument is a passthrough, not a name.
+_derive_red_run() {
+  grep -oE '_ttg_red_run_(deny|empty_payload) "[^"]*" "[^"]*" "[^"]*"' "$1" 2>/dev/null \
+    | sed -E 's/.*"([^"]*)"$/\1/' | grep -E '^[a-z_]+$' | LC_ALL=C sort -u
 }
 
 _derive_driver() {
@@ -270,11 +281,13 @@ _scan_docs() {
   REASONS=$(_derive_reasons "$guard_lib")
   MP_RESULTS=$(_derive_mp_results "$MP_LIB")
   MP_EVENTS=$(_derive_mp_events "$MP_LIB")
+  RED_RUN=$(_derive_red_run "$guard_lib")
   MEMBERS=$(_derive_registry_members "$content_root/RULES.md" 2>/dev/null)
   FIELD_N=$(printf '%s\n' "$FIELDS" | tr ' ' '\n' | grep -c '[^[:space:]]' || true)
   REASON_N=$(printf '%s\n' "$REASONS" | grep -c '[^[:space:]]' || true)
   MP_RESULT_N=$(printf '%s\n' "$MP_RESULTS" | grep -c '[^[:space:]]' || true)
   MP_EVENT_N=$(printf '%s\n' "$MP_EVENTS" | grep -c '[^[:space:]]' || true)
+  RED_RUN_N=$(printf '%s\n' "$RED_RUN" | grep -c '[^[:space:]]' || true)
   MEMBER_N=$(printf '%s\n' "$MEMBERS" | grep -c '[^[:space:]]' || true)
   SUITE_N=$(find "$name_root/tests" -maxdepth 1 -type f -name 'test-*.sh' 2>/dev/null | grep -c . || true)
   tiers=$(_derive_tiers "$content_root/RULES.md")
@@ -291,7 +304,7 @@ _scan_docs() {
                  find "$name_root/docs" -maxdepth 1 -type f -name '*.md'; } 2>/dev/null \
     | sed "s|^$name_root/||" | LC_ALL=C sort)
   DOC_N=$(printf '%s\n' "$DOC_NAMES" | grep -c '[^[:space:]]' || true)
-  per_doc=$((FIELD_N + REASON_N + MP_RESULT_N + MP_EVENT_N + 11))
+  per_doc=$((FIELD_N + REASON_N + MP_RESULT_N + MP_EVENT_N + RED_RUN_N + 12))
 
   for doc in $DOC_NAMES; do
     path="$content_root/$doc"
@@ -345,6 +358,12 @@ _scan_docs() {
       "merge-provider event" "the seam emits"
     _check_count_claim mpeventcount "$doc" "$flat" '[A-Za-z0-9]+ additive event types' \
       "$MP_EVENT_N" "merge-provider event"
+
+    _check_vocabulary redrun "$doc" "$RED_RUN" "$flat" "$(_enum_run "$RED_RUN" "$region")" \
+      "$(_claim_word "$flat" "$RED_RUN_SIZE_RE")" \
+      "red-run refusal reason" "the red-run evidence gate emits"
+    _check_count_claim redruncount "$doc" "$flat" "$RED_RUN_SIZE_RE" \
+      "$RED_RUN_N" "red-run refusal reason"
 
     if [ -z "$(_registry_bullet "$path")" ]; then
       SCANNED=$((SCANNED + 1))
@@ -402,9 +421,9 @@ assert_eq "${CONST_NAME} has exactly one top-level assignment in $(basename "$GU
 
 _scan_docs "$REPO_ROOT" "$DOC_ROOT" "$GUARD_LIB"
 
-if [ -z "$FIELDS" ] || [ -z "$REASONS" ] || [ -z "$MP_RESULTS" ] || [ -z "$MP_EVENTS" ]; then
+if [ -z "$FIELDS" ] || [ -z "$REASONS" ] || [ -z "$MP_RESULTS" ] || [ -z "$MP_EVENTS" ] || [ -z "$RED_RUN" ]; then
   _fail "the merge contract is derived from the gate library" \
-    "fields='$FIELDS' reasons='$(printf '%s' "$REASONS" | tr '\n' ' ')' mp_results='$(printf '%s' "$MP_RESULTS" | tr '\n' ' ')' mp_events='$(printf '%s' "$MP_EVENTS" | tr '\n' ' ')'" \
+    "fields='$FIELDS' reasons='$(printf '%s' "$REASONS" | tr '\n' ' ')' mp_results='$(printf '%s' "$MP_RESULTS" | tr '\n' ' ')' mp_events='$(printf '%s' "$MP_EVENTS" | tr '\n' ' ')' red_run='$(printf '%s' "$RED_RUN" | tr '\n' ' ')'" \
     "the contract could not be derived — this is 'never looked', not 'looked and found none'"
   echo "$TEST_NAME: NOTHING CHECKED — the gate library yielded no contract to bind" >&2
   report_results
@@ -414,6 +433,20 @@ fi
 _pass "the merge contract is derived from the gate library ($FIELD_N fields, $REASON_N refusal reasons)"
 _pass "the merge-observation seam's vocabularies are derived from its own call sites ($MP_RESULT_N results, $MP_EVENT_N events)"
 _pass "the §15 registry is derived from RULES.md's own bullet ($MEMBER_N members)"
+
+# One denominator, two readers. tests/test-red-run-evidence.sh pins the same vocabulary against the
+# same source; if its copy and this one ever disagree, the disagreement is the finding.
+RED_RUN_SHIPPED=$(_derive_red_run "$REPO_ROOT/scripts/lib/task-transition-guard.sh" | tr '\n' ' ')
+RED_RUN_PINNED=$(grep -oE "^VOCAB_EXPECTED='[^']*'" "$RED_RUN_PIN_FILE" 2>/dev/null \
+  | sed -E "s/^VOCAB_EXPECTED='(.*)'\$/\1/" | tr ' ' '\n' | LC_ALL=C sort | tr '\n' ' ')
+if [ -z "$RED_RUN_SHIPPED" ] || [ -z "$RED_RUN_PINNED" ]; then
+  _fail "the red-run vocabulary has one denominator, not two" \
+    "derived='$RED_RUN_SHIPPED' pinned='$RED_RUN_PINNED' from $RED_RUN_PIN_FILE — a pin that cannot be read is 'never looked'"
+else
+  assert_eq "the red-run vocabulary this test derives is the one tests/test-red-run-evidence.sh pins" \
+    "$RED_RUN_SHIPPED" "$RED_RUN_PINNED"
+fi
+_pass "the red-run refusal vocabulary is derived from its own call sites ($RED_RUN_N reasons)"
 
 DOC_FLOOR=2
 if [ "$DOC_N" -ge "$DOC_FLOOR" ]; then
@@ -460,6 +493,12 @@ MUT_LIB="$SCRATCH/mutant-guard.sh"
   printf '_mut_call_sites() {\n'
   printf '  _ttg_merge_deny "$1" "$2" "absent" "d"\n'
   printf '  _ttg_merge_deny "$1" "$2" "extra_reason" "d"\n'
+  printf '}\n'
+  printf '_mut_red_run_sites() {\n'
+  printf '  _ttg_red_run_deny "$1" "$2" "rr_alpha" "d"\n'
+  printf '  _ttg_red_run_deny "$1" "$2" "rr_beta" "d"\n'
+  printf '  _ttg_red_run_empty_payload "$1" "$2" "rr_gamma" "p" "$5" "$6"\n'
+  printf '  _ttg_red_run_deny "$1" "$2" "$reason" "d"\n'
   printf '}\n'
 } > "$MUT_LIB"
 
@@ -598,6 +637,44 @@ _enum_case enum-words-spanned <<'FIXTURE'
 The same two names written as identifiers ARE a list: `pending`, `stale`.
 FIXTURE
 _enum_expect "the identical words written as code spans do bind, so the rule reads form not luck" 2 0
+
+# R1-R3: the same threshold rule over the red-run gate's vocabulary, which the mutant guard
+# reproduces through BOTH emitters plus one variable-passthrough site that is not a name.
+_rr_expect() {
+  local label="$1" wc="$2" wf="$3" wn="$4" acct
+  acct=$((SKIP_UNREADABLE + SKIP_NO_CLAIM + CHECKED))
+  # shellcheck disable=SC2154  # CK_*/FD_* are assigned indirectly, per family, by _check
+  if [ "$CK_redrun" -eq "$wc" ] && [ "$FD_redrun" -eq "$wf" ] \
+     && [ "$FD_redruncount" -eq "$wn" ] && [ "$SCANNED" -eq "$acct" ]; then
+    _pass "[mutation] $label"
+  else
+    _fail "[mutation] $label" \
+      "redrun checked=$CK_redrun (want $wc) findings=$FD_redrun (want $wf); redruncount findings=$FD_redruncount (want $wn); scanned=$SCANNED, M+K=$acct"
+  fi
+}
+
+_enum_case rr-red <<'FIXTURE'
+The red-run evidence gate's refusal vocabulary is CLOSED: `rr_alpha`, `rr_beta`.
+FIXTURE
+assert_eq "[mutation] the mutant guard's red-run vocabulary excludes its passthrough site" \
+  "$RED_RUN_N" "3"
+_rr_expect "a widened red-run vocabulary with no doc update goes red through a bare list, no count stated" 3 1 0
+# shellcheck disable=SC2154  # FDL_* is assigned indirectly, per family, by _check
+case "$FDL_redrun" in
+  *rr_gamma*) _pass "[mutation] the red-run finding names the reason the gate added" ;;
+  *) _fail "[mutation] the red-run finding names the reason the gate added" \
+       "detail was '$FDL_redrun', which does not name 'rr_gamma'" ;;
+esac
+
+_enum_case rr-green <<'FIXTURE'
+The red-run evidence gate's refusal vocabulary is CLOSED: `rr_alpha`, `rr_beta`, `rr_gamma`.
+FIXTURE
+_rr_expect "the same bare list completed against the mutant guard goes green" 3 0 0
+
+_enum_case rr-count <<'FIXTURE'
+The gate emits two red-run refusal reasons: `rr_alpha`, `rr_beta`, `rr_gamma`.
+FIXTURE
+_rr_expect "a stale count is its own finding, with every member still named" 3 0 1
 
 BIND_MODE="report"
 RC=0
