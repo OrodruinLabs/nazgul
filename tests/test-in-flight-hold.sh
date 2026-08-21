@@ -729,6 +729,89 @@ assert_eq "P10 floor: the valve's pin set is not empty" \
 assert_eq "P10: $P10_SCANNED scanned, $P10_SKIPPED skipped, $P10_CHECKED checked — every first hold permitted, every unchanged repeat refused" \
   "$P10_FINDINGS" "0"
 
+# === P12b (ruling Q4 item 2): the env-gated raw payload capture ===
+
+# Same equality-on-an-extracted-value shape as P10, so the coverage line below
+# counts pins that actually ran rather than pins that merely appeared.
+P12_SCANNED=0
+P12_SKIPPED=0
+P12_CHECKED=0
+P12_FINDINGS=0
+
+_p12_check() {
+  P12_SCANNED=$((P12_SCANNED + 1))
+  P12_CHECKED=$((P12_CHECKED + 1))
+  assert_eq "$1" "$2" "$3"
+  [ "$2" = "$3" ] || P12_FINDINGS=$((P12_FINDINGS + 1))
+}
+
+_p12_state() { [ -e "$1" ] && printf 'present' || printf 'absent'; }
+
+_p12_observed_count() {
+  local n
+  n=$(grep -c '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+  printf '%s' "${n:-0}"
+}
+
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "READY"
+P12_CAP="$TEST_DIR/nazgul/logs/stop-payload-last.json"
+P12_A='{"hook_event_name":"Stop","session_id":"p12-first","background_tasks":[]}'
+P12_B='{"hook_event_name":"Stop","session_id":"p12-second","background_tasks":[{"id":"s1","type":"subagent","status":"running"}]}'
+
+# `env -u` on purpose: an operator who exports the variable would otherwise turn
+# this arm into a false pass about a default it never actually observed.
+HOOK_OUTPUT=$(printf '%s' "$P12_A" | env -u NAZGUL_STOP_PAYLOAD_CAPTURE bash "$STOP_HOOK" 2>&1) || true
+_p12_check "P12b: with NAZGUL_STOP_PAYLOAD_CAPTURE unset, no raw capture file is written" \
+  "$(_p12_state "$P12_CAP")" "absent"
+# The absence must be the GATE's doing, not a hook that exited before the capture
+# site: its always-on observation event is the proof that the site was reached.
+_p12_check "P12b: the unset run really did run the hook past the capture site" \
+  "$(_p12_observed_count)" "1"
+_p12_check "P12b: nazgul/logs/ exists on that run, so the absence is specific to the capture file" \
+  "$(_p12_state "$TEST_DIR/nazgul/logs")" "present"
+
+HOOK_OUTPUT=$(printf '%s' "$P12_A" | NAZGUL_STOP_PAYLOAD_CAPTURE=1 bash "$STOP_HOOK" 2>&1) || true
+_p12_check "P12b: NAZGUL_STOP_PAYLOAD_CAPTURE=1 captures the raw payload" \
+  "$(_p12_state "$P12_CAP")" "present"
+_p12_check "P12b: and the file holds THIS run's payload, not a placeholder" \
+  "$(jq -r '.session_id' "$P12_CAP" 2>/dev/null)" "p12-first"
+_p12_check "P12b: one line — a single document, not an append log" \
+  "$(wc -l < "$P12_CAP" | tr -d ' ')" "1"
+
+HOOK_OUTPUT=$(printf '%s' "$P12_B" | NAZGUL_STOP_PAYLOAD_CAPTURE=1 bash "$STOP_HOOK" 2>&1) || true
+_p12_check "P12b: a second capture OVERWRITES — the file holds the SECOND payload" \
+  "$(jq -r '.session_id' "$P12_CAP" 2>/dev/null)" "p12-second"
+_p12_check "P12b: the FIRST payload is gone, so it was replaced and not appended to" \
+  "$(grep -c 'p12-first' "$P12_CAP")" "0"
+_p12_check "P12b: and the line count did not grow across the two captures" \
+  "$(wc -l < "$P12_CAP" | tr -d ' ')" "1"
+
+# A one-byte file is the newline alone: proof it was REWRITTEN empty rather than
+# left holding the previous run's payload.
+HOOK_OUTPUT=$(NAZGUL_STOP_PAYLOAD_CAPTURE=1 bash "$STOP_HOOK" </dev/null 2>&1) || true
+_p12_check "P12b: capture ON with no payload records an EMPTY capture, so 'nothing arrived' stays distinguishable from 'capture off'" \
+  "$(_p12_state "$P12_CAP")/$(wc -c < "$P12_CAP" | tr -d ' ')" "present/1"
+
+# AC12 again, for Q4: the switch is an ENV VAR, and this objective adds no schema surface.
+_p12_check "config purity: NAZGUL_STOP_PAYLOAD_CAPTURE is not a config key" \
+  "$(grep -ci 'stop_payload_capture' "$REPO_ROOT/templates/config.json")" "0"
+_p12_check "config purity: and no migration introduces one" \
+  "$(grep -ci 'stop_payload_capture' "$REPO_ROOT/scripts/migrate-config.sh")" "0"
+_p12_check "config purity: templates/config.json still reports schema_version 36" \
+  "$(jq -r '.schema_version' "$REPO_ROOT/templates/config.json")" "36"
+
+assert_eq "P12b accounting: scanned == skipped + checked" "$P12_SCANNED" "$((P12_SKIPPED + P12_CHECKED))"
+assert_eq "P12b floor: the capture's pin set is not empty" \
+  "$([ "$P12_CHECKED" -gt 0 ] && echo yes || echo no)" "yes"
+assert_eq "P12b: $P12_SCANNED scanned, $P12_SKIPPED skipped, $P12_CHECKED checked — capture is opt-in, single-file and overwritten" \
+  "$P12_FINDINGS" "0"
+teardown_temp_dir
+
 # === Clear: scripts/subagent-stop.sh ===
 
 setup_temp_dir
