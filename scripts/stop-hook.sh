@@ -379,19 +379,43 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
       # ADR-023: DONE has TWO admitting routes and this pass knew only the review one.
       # The heading is the pre-filter, so a review-closed task pays for no host call.
       MERGE_ADMITTED=false
+      MERGE_UNDECIDED=false
+      MERGE_UNDECIDED_HOST=""
       if grep -q '^## Merge Evidence' "$task_file" 2>/dev/null; then
         if ttg_verify_merge_evidence "$(cat "$task_file")" "$PROJECT_ROOT" "$TASK_ID"; then
           MERGE_ADMITTED=true
+        elif [ "$TTG_MERGE_REASON" = "unverifiable" ]; then
+          # Captured inside the branch that made the call: both globals outlive one
+          # loop pass, so a heading-less task would inherit the previous task's verdict.
+          MERGE_UNDECIDED=true
+          MERGE_UNDECIDED_HOST="$TTG_MERGE_HOST_RESULT"
         fi
       fi
       EVIDENCE_PROBLEMS=$(validate_review_evidence "$NAZGUL_DIR" "$TASK_ID") || true
+      MISSING_LIST=""
+      [ -z "$EVIDENCE_PROBLEMS" ] || MISSING_LIST=$(echo "$EVIDENCE_PROBLEMS" | awk 'NF>1 {out = out sep $2; sep = ", "} NF==1 {out = out sep $1; sep = ", "} END {print out}')
       if [ "$MERGE_ADMITTED" = "true" ]; then
         echo "NAZGUL REVIEW GATE: ${TASK_ID} DONE admitted via the merge-evidence route (${TTG_MERGE_ROUTE}) — no review board was consulted for this edge" >&2
         if [ "$EVID_RESET_COUNT" != "0" ] || [ "$PROV_RESET_COUNT" != "0" ]; then
           jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | del(.safety._provenance_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
         fi
+      elif [ -n "$EVIDENCE_PROBLEMS" ] && [ "$MERGE_UNDECIDED" = "true" ]; then
+        # lean-comments: allow-run — this arm IS the class boundary, so it states it.
+        # ADR-023's admit rule has a mirror nothing enforced: "could not look" is not
+        # "not closed" in the REVOKE direction either. ONLY `unverifiable` defers. The
+        # host ANSWERED for not_merged/contradicted/not_this_objective/
+        # not_this_objectives_task, and absent/commented_out/truncated/malformed are
+        # defects in the manifest itself — all eight are decisions and still fall through.
+        echo "NAZGUL REVIEW GATE: ${TASK_ID} DONE left in place — its merge evidence could not be verified this iteration [reason: unverifiable, host-state: ${MERGE_UNDECIDED_HOST}]; review evidence is separately incomplete (${MISSING_LIST}). This is NOT a review-evidence violation and NOT a host answer of 'not merged', so no status changed and no strike was recorded" >&2
+        emit_event "stop_gate" \
+          reason "merge_evidence_undecided" \
+          gate "review_gate_reactive" \
+          task_id "$TASK_ID" \
+          merge_reason "unverifiable" \
+          host_state "$MERGE_UNDECIDED_HOST" \
+          deferred_review_problems "$MISSING_LIST" \
+          action "deferred"
       elif [ -n "$EVIDENCE_PROBLEMS" ]; then
-        MISSING_LIST=$(echo "$EVIDENCE_PROBLEMS" | awk 'NF>1 {out = out sep $2; sep = ", "} NF==1 {out = out sep $1; sep = ", "} END {print out}')
         if [ "$EVID_RESET_COUNT" -ge 1 ]; then
           # Second consecutive violation — escalate to BLOCKED with remediation
           set_task_status "$task_file" "DONE" "BLOCKED"

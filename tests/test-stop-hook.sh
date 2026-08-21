@@ -734,7 +734,7 @@ mc_setup() {
   export NAZGUL_TEST_MERGE_BRANCH
   create_config '.agents.reviewers = ["code-reviewer"]' \
     ".branch.base = \"${MC_BASE}\"" '.review_gate.require_provenance = false' \
-    '.feat_id = "FEAT-031"' ".branch.feature = \"${NAZGUL_TEST_MERGE_BRANCH}\""
+    '.feat_id = "FEAT-031"' ".branch.feature = \"${NAZGUL_TEST_MERGE_BRANCH}\"" "$@"
   create_plan
   # The merge route binds manifest->objective through plan.md, which create_plan writes
   # neither half of; a fixture missing them tests the refusal, not the closure.
@@ -763,7 +763,86 @@ assert_eq "a forged merge block does NOT admit DONE — the review route is unwe
 assert_contains "a forged merge block still logs the review-gate violation" \
   "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
 teardown_temp_dir
-rm -rf "$MC_BIN"
+
+# TASK-022 — an unreachable host must not REVOKE a closure it was never asked to admit:
+# `unverifiable` is an absence of information, which may not move a status in EITHER direction.
+MC_BIN_DOWN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-stop-gh-down-XXXXXX")
+cat > "$MC_BIN_DOWN/gh" << 'MC_GH_DOWN_EOF'
+#!/usr/bin/env bash
+# Installed but unauthenticated, so `gh auth status` fails and the github arm reports
+# provider_unavailable — the merge verdict is `unverifiable`, never `not_merged`.
+exit 1
+MC_GH_DOWN_EOF
+chmod +x "$MC_BIN_DOWN/gh"
+
+mc_setup
+mc_evidence TASK-001 "scripts/close-objective.sh (host API, ok)"
+HOOK_OUTPUT=$(PATH="$MC_BIN_DOWN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "TASK-022: an unverifiable host does NOT demote a merge-closed DONE" "$status" "DONE"
+assert_not_contains "TASK-022: a deferral is not a review-gate violation" \
+  "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+assert_contains "TASK-022: the deferral names its reason" \
+  "$HOOK_OUTPUT" "could not be verified this iteration [reason: unverifiable"
+assert_contains "TASK-022: the deferral denies the review-evidence reading" \
+  "$HOOK_OUTPUT" "NOT a review-evidence violation"
+assert_file_contains "TASK-022: an undecided iteration is recorded, not silent" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" \
+  '"reason":"merge_evidence_undecided","gate":"review_gate_reactive","task_id":"TASK-001"'
+assert_file_contains "TASK-022: the deferral event names the host state it could not read" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"host_state":"provider_unavailable"'
+assert_file_contains "TASK-022: the deferral event says it declined to act" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"action":"deferred"'
+count=$(jq -r 'if (.safety._review_reset_counts | has("TASK-001")) then .safety._review_reset_counts["TASK-001"] else "absent" end' "$TEST_DIR/nazgul/config.json")
+assert_eq "TASK-022: a deferral moves no strike counter" "$count" "absent"
+# The second consecutive Stop is where the unfixed ladder landed on BLOCKED.
+HOOK_OUTPUT=$(PATH="$MC_BIN_DOWN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "TASK-022: a second unverifiable iteration still leaves DONE in place" "$status" "DONE"
+assert_not_contains "TASK-022: no escalation on a repeated deferral" \
+  "$HOOK_OUTPUT" "escalated to BLOCKED"
+teardown_temp_dir
+
+# The boundary: `not_merged` is the host's ANSWER, not its silence, so the review-evidence
+# ladder is untouched — widening the deferral to cover it would be the bypass, not the fix.
+MC_BIN_OPEN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-stop-gh-open-XXXXXX")
+cat > "$MC_BIN_OPEN/gh" << 'MC_GH_OPEN_EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  auth) exit 0 ;;
+  pr)
+    [ "${2:-}" = "view" ] || exit 1
+    printf '{"baseRefName":"main","headRefName":"%s","mergeCommit":null,"mergedAt":null,"state":"OPEN","url":"https://github.com/OrodruinLabs/nazgul/pull/91"}\n' \
+      "${NAZGUL_TEST_MERGE_BRANCH:-}"
+    exit 0 ;;
+esac
+exit 1
+MC_GH_OPEN_EOF
+chmod +x "$MC_BIN_OPEN/gh"
+
+mc_setup
+mc_evidence TASK-001 "scripts/close-objective.sh (host API, ok)"
+HOOK_OUTPUT=$(PATH="$MC_BIN_OPEN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "TASK-022: a host answer of not_merged still resets DONE" "$status" "IMPLEMENTED"
+assert_contains "TASK-022: not_merged is still a violation, not a deferral" \
+  "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+assert_not_contains "TASK-022: not_merged never reaches the deferral arm" \
+  "$HOOK_OUTPUT" "could not be verified this iteration"
+count=$(jq -r '.safety._review_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
+assert_eq "TASK-022: not_merged records the first strike" "$count" "1"
+teardown_temp_dir
+
+mc_setup '.safety._review_reset_counts = {"TASK-001": 1}'
+mc_evidence TASK-001 "scripts/close-objective.sh (host API, ok)"
+HOOK_OUTPUT=$(PATH="$MC_BIN_OPEN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "TASK-022: a second not_merged iteration still escalates to BLOCKED" "$status" "BLOCKED"
+assert_contains "TASK-022: the not_merged escalation is still named" \
+  "$HOOK_OUTPUT" "escalated to BLOCKED"
+teardown_temp_dir
+
+rm -rf "$MC_BIN" "$MC_BIN_DOWN" "$MC_BIN_OPEN"
 unset NAZGUL_TEST_MERGE_SHA NAZGUL_TEST_MERGE_BRANCH
 
 # --- Test: YOLO without task-pr — all APPROVED exits cleanly (MF-005 regression) ---
