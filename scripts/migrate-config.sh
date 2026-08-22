@@ -746,15 +746,15 @@ migrate_35_to_36() {
 
 migrate_36_to_37() {
   local tmp; tmp=$(mktemp)
-  # Project-declared tests roots + scoped-filter template (ADR-024). Defaults reproduce the
-  # previously hardcoded behaviour byte-for-byte; additive, explicit values preserved.
+  # Project-declared tests roots + scoped-filter template (ADR-024 D3). test_roots reproduces the
+  # hardcoded root; test_filter_template is DECLARED null, never guessed — see the log line below.
   jq '
     .project = ((if (.project | type) == "object" then .project else {} end)
       | .test_roots = (if has("test_roots") then .test_roots else ["tests"] end)
-      | .test_filter_template = (if has("test_filter_template") then .test_filter_template else "--filter={filter}" end))
+      | .test_filter_template = (if has("test_filter_template") then .test_filter_template else null end))
     | .schema_version = 37
   ' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
-  log_migration "v36→v37: added project.test_roots:[\"tests\"], project.test_filter_template:\"--filter={filter}\" (red-run runs the project's own runner against the project's own tests roots — both defaults reproduce the previously hardcoded behaviour exactly; additive, explicit values preserved)"
+  log_migration "v36→v37: added project.test_roots:[\"tests\"] (the previously hardcoded root, byte-for-byte) and project.test_filter_template:null. The template key is DECLARED, never guessed: a scoping flag belongs to whatever project.test_command names, this migration cannot know that key's future value, and a written flag never re-derives when it changes. scripts/red-run.sh reads both keys at the same instant and is the only thing that can — it re-derives --filter={filter} for the tests/run-tests.sh convention (and for a project with no runner at all) and REFUSES for any other runner rather than appending a flag the project never declared (ADR-024 D3). Behaviour is unchanged wherever the old unconditional default was correct. Additive; explicit values preserved."
 }
 
 # --- Run incremental migrations ---
