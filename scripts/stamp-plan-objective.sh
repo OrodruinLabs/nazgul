@@ -84,6 +84,10 @@ PLAN="$NAZGUL_DIR/plan.md"
 
 refuse() {
   echo "$ENTRY: refused — $1" >&2
+  # NAZGUL_DIR is set before refuse() can run; _ttg_emit_event's per-call subshell
+  # sets EVENTS_FILE too, so it never hits emit-event.sh:7's source-time freeze.
+  _ttg_emit_event "$NAZGUL_DIR" "plan_objective_stamped" \
+    action "refused" feat_id "${FEAT_ID:-<unread>}" plan "$PLAN" reason "$1"
   echo "$ENTRY: $PLAN action=refused feat_id=${FEAT_ID:-<unread>}"
   exit 1
 }
@@ -168,13 +172,15 @@ fi
 PERSISTED=$(ttg_plan_feat_id "$PLAN")
 if [ "$PERSISTED" != "$FEAT_ID" ]; then
   echo "$ENTRY: read-back FAILED — $PLAN persists feat_id \"$PERSISTED\", not \"$FEAT_ID\"; the stamp did not land" >&2
+  _ttg_emit_event "$NAZGUL_DIR" "plan_objective_stamped" \
+    action "refused" feat_id "$PERSISTED" plan "$PLAN" reason "read-back mismatch: expected $FEAT_ID"
   echo "$ENTRY: $PLAN action=refused feat_id=$PERSISTED"
   exit 1
 fi
 
-if declare -F emit_event >/dev/null 2>&1 || source "$SCRIPT_DIR/lib/emit-event.sh" 2>/dev/null; then
-  emit_event "plan_objective_stamped" action "$ACTION" feat_id "$FEAT_ID" \
-    plan "$PLAN" roster_tasks "$ROSTER_COUNT" 2>/dev/null || true
-fi
+# _ttg_emit_event sets NAZGUL_DIR+EVENTS_FILE per call in a subshell, immune to
+# emit-event.sh:7's source-time freeze — unlike sourcing emit-event.sh directly here.
+_ttg_emit_event "$NAZGUL_DIR" "plan_objective_stamped" action "$ACTION" feat_id "$FEAT_ID" \
+  plan "$PLAN" roster_tasks:n "$ROSTER_COUNT"
 
 echo "$ENTRY: $PLAN action=$ACTION feat_id=$PERSISTED roster_tasks=$ROSTER_COUNT"
