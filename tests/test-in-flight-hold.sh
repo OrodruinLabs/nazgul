@@ -421,7 +421,7 @@ assert_not_contains "P2 negative: the proven class is never downgraded to a cand
 teardown_temp_dir
 
 # P5 (C3/AC7) — `jq -e 'has("background_tasks")'` gates every classification, so a truncation, a
-# rename or a payload that never arrived degrades to the payload-absent arm. Asserted, not assumed.
+# rename, a wrong shape or a payload that never arrived degrades to the payload-absent arm.
 P5_SCANNED=0
 P5_SKIPPED=0
 P5_CHECKED=0
@@ -431,6 +431,8 @@ P5_CASES=(
   'valid JSON without the key|field_absent|{"hook_event_name":"Stop"}'
   'a document truncated mid-read|not_json|{"hook_event_name":"Stop","background_tasks":[{"id":"a1","type":"subagent","status":"run'
   'an empty payload|no_stdin|'
+  'background_tasks present but a string|not_json|{"hook_event_name":"Stop","background_tasks":"not-an-array"}'
+  'background_tasks present but an object|not_json|{"hook_event_name":"Stop","background_tasks":{"a":1}}'
 )
 for p5_case in "${P5_CASES[@]}"; do
   IFS='|' read -r p5_label p5_want_why p5_payload <<<"$p5_case"
@@ -455,8 +457,12 @@ for p5_case in "${P5_CASES[@]}"; do
   p5_cand="no"; case "$EVENTS" in *'"reason":"in_flight_orphan_candidate"'*) p5_cand="yes" ;; esac
   p5_why=$(printf '%s' "$P5_OBS" | jq -r '.why // "ABSENT"' 2>/dev/null)
   p5_seen=$(printf '%s' "$P5_OBS" | jq -r '.bg_seen // "ABSENT"' 2>/dev/null)
-  P5_GOT="exit=$p5_exit why=${p5_why:-NONE} bg_seen=${p5_seen:-NONE} marker=$p5_marker quarantine=$p5_quar unverifiable=$p5_unver hold=$p5_hold candidate=$p5_cand"
-  P5_WANT="exit=safe why=$p5_want_why bg_seen=unknown marker=present quarantine=absent unverifiable=yes hold=no candidate=no"
+  # Zero counts under bg_seen:"yes" is the collapse itself: byte-identical to an observed empty
+  # array, so a record that could not be read would read as one that was. NONE when no event at all.
+  p5_collapse=$(printf '%s' "$P5_OBS" | jq -r \
+    'if .bg_seen == "yes" and .entries == 0 and .subagents == 0 and .live == 0 then "yes" else "no" end' 2>/dev/null)
+  P5_GOT="exit=$p5_exit why=${p5_why:-NONE} bg_seen=${p5_seen:-NONE} collapse=${p5_collapse:-NONE} marker=$p5_marker quarantine=$p5_quar unverifiable=$p5_unver hold=$p5_hold candidate=$p5_cand"
+  P5_WANT="exit=safe why=$p5_want_why bg_seen=unknown collapse=no marker=present quarantine=absent unverifiable=yes hold=no candidate=no"
   assert_eq "P5 ($p5_label): the payload-absent disposition, and the arm records WHY it got there" "$P5_GOT" "$P5_WANT"
   [ "$P5_GOT" = "$P5_WANT" ] || P5_FINDINGS=$((P5_FINDINGS + 1))
   teardown_temp_dir
