@@ -74,9 +74,16 @@ holds two populations with opposite operator meanings, and the count alone canno
   outcome for a HEALTHY background dispatch that may still be running (#218)."
   Do NOT send the operator to nazgul/in-flight/quarantine/ for this class: the marker is deliberately LEFT
   IN PLACE, because the move is irreversible and the dispatch may be live.
-- Both, or a Quarantined count with no matching `stop_gate` event (the SessionStart sweep, below) — say the
-  count and say which producers could account for it. Never assert residue for a marker whose class was
-  never read.
+- Any `in_flight_orphan_candidate` — "dispatch markers were recorded as ORPHAN CANDIDATES because the Stop
+  payload reported no subagent of any status for this session (stop_gate reason
+  in_flight_orphan_candidate). These are NOT quarantined and nothing was moved or deleted — they are still
+  in nazgul/in-flight/." The disposition is DETECT-ONLY: the empty-payload state this reason rests on has
+  never been observed in the wild, so the marker is left in place until enough candidates accumulate to
+  justify acting on it (#218). Do NOT send the operator to nazgul/in-flight/quarantine/ for this class
+  either, and never count it toward Quarantined.
+- More than one of the above, or a Quarantined count with no matching `stop_gate` event (the SessionStart
+  sweep, below) — say the count and say which producers could account for it. Never assert residue for a
+  marker whose class was never read.
 
 Reporting an unverifiable marker as "diagnostic residue, not pending work" is the specific falsehood this
 wording exists to prevent: on a fork-mode host `run_in_background` is absent from the exposed Agent schema,
@@ -85,8 +92,9 @@ so EVERY marker takes that branch while its agent is still working.
 The Quarantined count and the in-flight count answer DIFFERENT questions, and only two producers write to
 quarantine/: `scripts/stop-hook.sh` for the PROVEN class only (`stop_gate` reason `in_flight_orphan`), and
 `scripts/session-context.sh`'s SessionStart sweep for over-age markers (standalone `in_flight_swept` event,
-`source: session_start_sweep` — AGE only, never a proven class). The unverifiable class writes to NEITHER:
-it stays in nazgul/in-flight/ and shows up in the in-flight count, not the quarantined one. Last stop gate
+`source: session_start_sweep` — AGE only, never a proven class). The unverifiable and orphan-candidate
+classes write to NEITHER: they stay in nazgul/in-flight/ and show up in the in-flight count, not the
+quarantined one. Last stop gate
 reads `stop_gate` events ONLY, so a sweep-quarantined marker never appears there — never present Last stop
 gate as the whole orphan story, and
 never report Quarantined > 0 with a `none`/unrelated Last stop gate as a contradiction.

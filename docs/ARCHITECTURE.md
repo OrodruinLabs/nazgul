@@ -88,11 +88,20 @@ configurations: background in the first, foreground in the second. In the sessio
 absence therefore means the dispatch is most likely **background**, so quarantining it is a cost-weighed
 default that is usually wrong about the dispatch it names. On such a host the class-aware hold never
 engages, `stop_gate` `reason: "in_flight_unverifiable"` fires on essentially every dispatch, and the loop
-continues concurrently with live subagents. This is a known, tracked defect (#218). The authoritative
-signals exist one event later and are documented — `PostToolUse` `tool_response.status` (`async_launched`
-vs `completed`) and the `background_tasks[]` array on `Stop`/`SubagentStop` — and this mechanism does not
-yet read either. Only the PROVEN class is quarantined; the unobservable class is LEFT IN PLACE (moving it is irreversible and the dispatch may still be running — it would also foreclose #218's fix, which reconciles these markers against the Stop payload's `background_tasks[]`). `reason: "in_flight_orphan"` is reserved for `background: "false"` or a named dispatch,
+continues concurrently with live subagents. This is a known, tracked defect (#218) — narrowed by
+FEAT-033, not closed. The authoritative signals exist one event later: `PostToolUse` `tool_response.status` (`async_launched` vs `completed`)
+and the `background_tasks[]` array on `Stop`/`SubagentStop`. Both are present in the shipped hook
+schema as of Claude Code 2.1.238 and were **empirically captured 2026-08-21** — real `Stop` and
+`SubagentStop` payloads from two sessions, kept as `tests/fixtures/stop-payload/` — but neither is in
+the PUBLIC hook reference, which lists only `last_assistant_message` and `effort` for `Stop`. The
+shipped schema is a strict SUPERSET of the published one, so this rests on observation rather than on
+documentation, and the field can change without a deprecation notice. Since FEAT-033 the stop-hook
+READS `background_tasks[]` at `Stop`: a live subagent for this session takes the hold even when every
+marker records `background: "missing"`, so the "never engages" sentence above now describes only the
+case where the payload carries no such field. `tool_response.status` is still unread. Only the PROVEN class is quarantined; the unobservable class is LEFT IN PLACE (moving it is irreversible and the dispatch may still be running — it would also foreclose #218's fix, which reconciles these markers against the Stop payload's `background_tasks[]`). `reason: "in_flight_orphan"` is reserved for `background: "false"` or a named dispatch,
 which are genuinely proven.
+
+Reading `background_tasks[]` splits the `yes` observation into two independent counts (ADR-027 Q2), never one filter: `LIVE` (`type=="subagent"` AND an allowlisted `running`/`pending` status) gates the HOLD described above; `SUBAGENT_PRESENT` (`type=="subagent"`, status-blind) gates a THIRD disposition. When `SUBAGENT_PRESENT == 0` — the payload was read and reports no subagent of any status for this session — the marker is DETECT-ONLY: `stop_gate` `reason: "in_flight_orphan_candidate"` (`evidence: "background_tasks_empty"`) records the observation and the marker is LEFT IN PLACE, deliberately NOT `in_flight_orphan`, which names a class that was PROVEN and really was quarantined. An unrecognised status satisfies neither count and produces NEITHER a hold nor a candidate — marker preserved, iteration proceeds, the same "looked and could not tell" treatment a stale marker gets above. The irreversible `mv` for this arm stays deferred until ADR-027's numeric bar (≥20 `in_flight_orphan_candidate` events across ≥2 objectives with zero contradicting `subagent_stop` evidence) is met. A second hold on an unchanged marker set is refused by a bounded valve (`_IN_FLIGHT_HOLD_CAP = 1`, a script constant, ledgered by marker-set fingerprint under `nazgul/logs/.in-flight-holds/`), reported as `stop_gate` `reason: "in_flight_hold_budget_exhausted"` — because in the canonical unattended shape (`claude -p`) a hold's `exit 0` IS process exit, so the wake this hold now depends on being reachable for the first time is bounded rather than unbounded. Every Stop, independent of any marker, also emits an always-on `stop_payload_observed` event (`bg_seen`/`why`/counts/`types`/`statuses`) so a change to the undocumented `background_tasks[]` field surfaces as vocabulary rather than as a hold that silently stops engaging. See `docs/CONFIGURATION.md` In-Flight Dispatch Hold for the release-gate obligation this reachable hold carries, and ADR-027 for the full four-arm decision.
 
 ### Migration: Single-Write + Dual-Read
 

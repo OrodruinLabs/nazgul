@@ -191,7 +191,7 @@ SC_OUT_SUBDIR=$(cd "$DEEP_SUBDIR" && unset CLAUDE_PROJECT_DIR && bash "$SESSION_
 assert_contains "discriminating case: session-context.sh from a nested subdir still reads the worktree's own iteration via git-toplevel" \
   "$SC_OUT_SUBDIR" "42/40"
 
-(cd "$TWO_WT_WORKTREE" && unset CLAUDE_PROJECT_DIR && bash "$STOP_HOOK" >/dev/null 2>&1) || true
+(cd "$TWO_WT_WORKTREE" && unset CLAUDE_PROJECT_DIR && bash "$STOP_HOOK" </dev/null >/dev/null 2>&1) || true
 
 assert_file_exists "stop-hook.sh wrote a checkpoint into the WORKTREE's own nazgul/" \
   "$TWO_WT_WORKTREE/nazgul/checkpoints/iteration-043.json"

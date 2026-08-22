@@ -11,12 +11,19 @@ source "$SCRIPT_DIR/lib/setup.sh"
 
 echo "=== $TEST_NAME ==="
 
+FIXTURES="$SCRIPT_DIR/fixtures"
 WRITER="$REPO_ROOT/scripts/in-flight-marker.sh"
 CLEARER="$REPO_ROOT/scripts/subagent-stop.sh"
 STOP_HOOK="$REPO_ROOT/scripts/stop-hook.sh"
 
+# [stop-payload-json] — omitted or empty means NO payload on stdin, which is every pre-#218
+# call site's behavior and the `unknown` classification arm.
 run_hook() {
-  HOOK_OUTPUT=$(bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+  if [ -n "${1:-}" ]; then
+    HOOK_OUTPUT=$(printf '%s' "$1" | bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+  else
+    HOOK_OUTPUT=$(bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+  fi
 }
 
 # <path> <agent> <unit> <epoch> [background] [named]
@@ -298,6 +305,517 @@ assert_contains "hold: named dispatch is a proven orphan, not unverifiable" \
   "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" '"reason":"in_flight_orphan"'
 teardown_temp_dir
 
+# === Observed classification: the Stop payload decides, not the write-time class (#218) ===
+
+# P3 (C3/AC5) — a non-subagent entry is neither live nor present. It comes first because every
+# disposition below is taken on counts this filter produces.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$(date +%s)" "missing"
+run_hook '{"hook_event_name":"Stop","background_tasks":[{"id":"s1","type":"shell","status":"running"},{"id":"t1","type":"teammate","status":"running"}]}'
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+P3_OBS=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_eq "P3: a running shell and a running teammate are counted as entries" \
+  "$(printf '%s' "$P3_OBS" | jq -r '.entries' 2>/dev/null)" "2"
+assert_eq "P3: neither is a subagent, so SUBAGENT_PRESENT is 0" \
+  "$(printf '%s' "$P3_OBS" | jq -r '.subagents' 2>/dev/null)" "0"
+assert_eq "P3: and neither is live whatever its own status says, so LIVE is 0" \
+  "$(printf '%s' "$P3_OBS" | jq -r '.live' 2>/dev/null)" "0"
+# SUBSTRING TRAP: in_flight_hold is a strict prefix of in_flight_hold_budget_exhausted, so only the
+# field's closing quote makes this a negative about the hold rather than about its successor.
+assert_not_contains "P3: a captured session's 10 polling shells must never hold the loop on itself" \
+  "$EVENTS" '"reason":"in_flight_hold"'
+assert_contains "P3: zero subagents present takes the detect-only empty-array disposition" \
+  "$EVENTS" '"reason":"in_flight_orphan_candidate"'
+assert_file_exists "P3: the candidate marker stays at its original path" "$TEST_DIR/nazgul/in-flight/legacy.json"
+assert_file_not_exists "P3: a non-subagent payload quarantines nothing" "$TEST_DIR/nazgul/in-flight/quarantine/legacy.json"
+# R4 canary: a renamed type label surfaces here as changed vocabulary, not as a silently dead filter.
+assert_eq "P3: the observation names the DISTINCT types actually seen" \
+  "$(printf '%s' "$P3_OBS" | jq -r '.types' 2>/dev/null)" "shell,teammate"
+teardown_temp_dir
+
+# P3 companion — the real shape P3 is named for: 16 in-flight entries, only 6 of them subagents.
+# A count taken over entries rather than over the filtered set would report 16 here.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$(date +%s)" "missing"
+run_hook "$(cat "$FIXTURES/stop-payload-synthetic/mixed-subagent-and-shell.json")"
+# A dispatchable READY task is planted on purpose: without the hold this run blocks with exit 2, so
+# exit 0 discriminates here instead of being the no-plan default.
+assert_exit_code "P3 companion: 6 live subagents among 16 entries hold (exit 0)" "$HOOK_EC" 0
+P3M_HOLD=$(grep '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_contains "P3 companion: the hold counts the 6 subagents, not the 16 entries" "$P3M_HOLD" '"live_subagents":6'
+P3M_OBS=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_eq "P3 companion: entries / subagents / live stay three separate counts" \
+  "$(printf '%s' "$P3M_OBS" | jq -r '[.entries,.subagents,.live]|join("/")' 2>/dev/null)" "16/6/6"
+teardown_temp_dir
+
+# P1 (keystone) — the REAL capture (2 running subagents + 1 shell) holds the very marker the
+# payload-absent case above records as unverifiable. Same fixture, opposite disposition.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+NOW=$(date +%s)
+_write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$NOW" "missing"
+run_hook "$(cat "$FIXTURES/stop-payload/stop-two-subagents-one-shell.json")"
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+assert_exit_code "P1: an observed live subagent holds an unobservable-class marker (exit 0)" "$HOOK_EC" 0
+assert_contains "P1: stop_gate reason in_flight_hold is emitted" "$EVENTS" '"reason":"in_flight_hold"'
+assert_file_exists "P1: the held marker is STILL in nazgul/in-flight/" "$TEST_DIR/nazgul/in-flight/legacy.json"
+assert_file_not_exists "P1: the held marker is NOT quarantined" "$TEST_DIR/nazgul/in-flight/quarantine/legacy.json"
+assert_not_contains "P1: an observed liveness never degrades to in_flight_unverifiable" "$EVENTS" "in_flight_unverifiable"
+HOLD_LINE=$(grep '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_contains "P1: the hold event counts the capture's 2 live subagents, not its 3 entries" "$HOLD_LINE" '"live_subagents":2'
+assert_eq "P1: live_subagents is a JSON number, not a string" \
+  "$(printf '%s' "$HOLD_LINE" | jq -r '.live_subagents | type' 2>/dev/null)" "number"
+teardown_temp_dir
+
+# P2 (ruling Q3) — an observed-EMPTY background_tasks[] is RECORDED, never acted on.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+NOW=$(date +%s)
+_write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$NOW" "missing"
+QUAR_BEFORE=$(find "$TEST_DIR/nazgul/in-flight/quarantine" -type f 2>/dev/null | wc -l | tr -d ' ')
+run_hook "$(cat "$FIXTURES/stop-payload-synthetic/background-tasks-empty.json")"
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+QUAR_AFTER=$(find "$TEST_DIR/nazgul/in-flight/quarantine" -type f 2>/dev/null | wc -l | tr -d ' ')
+assert_contains "P2: stop_gate reason in_flight_orphan_candidate is emitted" "$EVENTS" '"reason":"in_flight_orphan_candidate"'
+assert_contains "P2: the candidate event names the evidence it rests on" "$EVENTS" '"evidence":"background_tasks_empty"'
+assert_file_exists "P2: the candidate marker is still at its original path" "$TEST_DIR/nazgul/in-flight/legacy.json"
+assert_file_not_exists "P2: the candidate marker is NOT quarantined" "$TEST_DIR/nazgul/in-flight/quarantine/legacy.json"
+assert_eq "P2: the quarantine/ file count is unchanged across the run" "$QUAR_AFTER" "$QUAR_BEFORE"
+# SUBSTRING TRAP: in_flight_orphan is a strict PREFIX of in_flight_orphan_candidate, so this
+# negative assertion must carry the compact-JSON field's closing quote or it matches the candidate.
+assert_not_contains "P2: the PROVEN reason in_flight_orphan is NOT emitted (naming pin)" "$EVENTS" '"reason":"in_flight_orphan"'
+assert_not_contains "P2: no hold is taken when no subagent is present" "$EVENTS" '"reason":"in_flight_hold"'
+CAND_LINE=$(grep '"reason":"in_flight_orphan_candidate"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_eq "P2: the candidate event carries entries" "$(printf '%s' "$CAND_LINE" | jq -r '.entries' 2>/dev/null)" "0"
+assert_eq "P2: the candidate event carries subagents_present" "$(printf '%s' "$CAND_LINE" | jq -r '.subagents_present' 2>/dev/null)" "0"
+assert_eq "P2: the candidate event carries the observed types vocabulary" \
+  "$(printf '%s' "$CAND_LINE" | jq -r '.types | type' 2>/dev/null)" "string"
+assert_contains "P2: the candidate event names the unit it belongs to" "$CAND_LINE" "TASK-002"
+teardown_temp_dir
+
+# P2 negative pin — the new reason must not swallow the PROVEN class.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+NOW=$(date +%s)
+_write_marker "$TEST_DIR/nazgul/in-flight/nm-legacy.json" "nazgul:implementer" "TASK-002" "$NOW" "missing" "true"
+run_hook "$(cat "$FIXTURES/stop-payload-synthetic/background-tasks-empty.json")"
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+assert_contains "P2 negative: a NAMED marker keeps its proven in_flight_orphan disposition" "$EVENTS" '"reason":"in_flight_orphan"'
+assert_file_exists "P2 negative: the proven-class marker is still quarantined" "$TEST_DIR/nazgul/in-flight/quarantine/nm-legacy.json"
+assert_not_contains "P2 negative: the proven class is never downgraded to a candidate" "$EVENTS" '"reason":"in_flight_orphan_candidate"'
+teardown_temp_dir
+
+# P5 (C3/AC7) — `jq -e 'has("background_tasks")'` gates every classification, so a truncation, a
+# rename, a wrong shape or a payload that never arrived degrades to the payload-absent arm.
+P5_SCANNED=0
+P5_SKIPPED=0
+P5_CHECKED=0
+P5_FINDINGS=0
+P5_CASES=(
+  'a literal non-JSON string|not_json|not json'
+  'valid JSON without the key|field_absent|{"hook_event_name":"Stop"}'
+  'a document truncated mid-read|not_json|{"hook_event_name":"Stop","background_tasks":[{"id":"a1","type":"subagent","status":"run'
+  'an empty payload|no_stdin|'
+  'background_tasks present but a string|not_json|{"hook_event_name":"Stop","background_tasks":"not-an-array"}'
+  'background_tasks present but an object|not_json|{"hook_event_name":"Stop","background_tasks":{"a":1}}'
+)
+for p5_case in "${P5_CASES[@]}"; do
+  IFS='|' read -r p5_label p5_want_why p5_payload <<<"$p5_case"
+  P5_SCANNED=$((P5_SCANNED + 1))
+  setup_temp_dir
+  setup_nazgul_dir
+  create_config
+  mkdir -p "$TEST_DIR/nazgul/in-flight"
+  _write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$(date +%s)" "missing"
+  HOOK_OUTPUT=$(printf '%s' "$p5_payload" | bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+  P5_CHECKED=$((P5_CHECKED + 1))
+  EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+  P5_OBS=$(printf '%s\n' "$EVENTS" | grep '"event":"stop_payload_observed"' | tail -1)
+  # A bash fatal is neither of the hook's two documented outcomes, so it is named as itself.
+  case "$HOOK_EC" in 0|2) p5_exit="safe" ;; *) p5_exit="fatal($HOOK_EC)" ;; esac
+  p5_marker="absent"; [ -f "$TEST_DIR/nazgul/in-flight/legacy.json" ] && p5_marker="present"
+  p5_quar="present"; [ -f "$TEST_DIR/nazgul/in-flight/quarantine/legacy.json" ] || p5_quar="absent"
+  p5_unver="no"; case "$EVENTS" in *'"reason":"in_flight_unverifiable"'*) p5_unver="yes" ;; esac
+  # Both negatives carry the closing quote: in_flight_hold and in_flight_orphan are each a strict
+  # prefix of a longer reason token this suite also emits.
+  p5_hold="no"; case "$EVENTS" in *'"reason":"in_flight_hold"'*) p5_hold="yes" ;; esac
+  p5_cand="no"; case "$EVENTS" in *'"reason":"in_flight_orphan_candidate"'*) p5_cand="yes" ;; esac
+  p5_why=$(printf '%s' "$P5_OBS" | jq -r '.why // "ABSENT"' 2>/dev/null)
+  p5_seen=$(printf '%s' "$P5_OBS" | jq -r '.bg_seen // "ABSENT"' 2>/dev/null)
+  # Zero counts under bg_seen:"yes" is the collapse itself: byte-identical to an observed empty
+  # array, so a record that could not be read would read as one that was. NONE when no event at all.
+  p5_collapse=$(printf '%s' "$P5_OBS" | jq -r \
+    'if .bg_seen == "yes" and .entries == 0 and .subagents == 0 and .live == 0 then "yes" else "no" end' 2>/dev/null)
+  P5_GOT="exit=$p5_exit why=${p5_why:-NONE} bg_seen=${p5_seen:-NONE} collapse=${p5_collapse:-NONE} marker=$p5_marker quarantine=$p5_quar unverifiable=$p5_unver hold=$p5_hold candidate=$p5_cand"
+  P5_WANT="exit=safe why=$p5_want_why bg_seen=unknown collapse=no marker=present quarantine=absent unverifiable=yes hold=no candidate=no"
+  assert_eq "P5 ($p5_label): the payload-absent disposition, and the arm records WHY it got there" "$P5_GOT" "$P5_WANT"
+  [ "$P5_GOT" = "$P5_WANT" ] || P5_FINDINGS=$((P5_FINDINGS + 1))
+  teardown_temp_dir
+done
+assert_eq "P5 accounting: scanned == skipped + checked" "$P5_SCANNED" "$((P5_SKIPPED + P5_CHECKED))"
+assert_eq "P5 floor: the enumerated payload set is not empty" \
+  "$([ "$P5_CHECKED" -gt 0 ] && echo yes || echo no)" "yes"
+assert_eq "P5: $P5_SCANNED scanned, $P5_SKIPPED skipped, $P5_CHECKED checked — every malformed payload degraded to today's behavior" \
+  "$P5_FINDINGS" "0"
+
+# P8 (§8, #211 in effect) — observed liveness is consulted BEFORE the freshness cutoff, so a stale
+# bound can never decline a hold for a session that HAS a live subagent.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 5'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/stale.json" "nazgul:implementer" "TASK-001" "$(( $(date +%s) - (31 * 60) ))" "missing"
+run_hook "$(cat "$FIXTURES/stop-payload/stop-two-subagents-one-shell.json")"
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+assert_exit_code "P8: an over-age marker still holds when a live subagent is observed (exit 0)" "$HOOK_EC" 0
+assert_contains "P8: the hold is taken on the real capture" "$EVENTS" '"reason":"in_flight_hold"'
+assert_not_contains "P8: the disposition does NOT collapse to in_flight_stale" "$EVENTS" '"reason":"in_flight_stale"'
+assert_file_exists "P8: the over-age marker is left in place" "$TEST_DIR/nazgul/in-flight/stale.json"
+assert_file_not_exists "P8: the over-age marker is not quarantined" "$TEST_DIR/nazgul/in-flight/quarantine/stale.json"
+assert_eq "P8: a held iteration is not burned" \
+  "$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")" "5"
+teardown_temp_dir
+
+# P8 (AC10) — the 30-minute default is #211's call, not this objective's: READ, never written.
+assert_eq "P8: templates/config.json still carries guards.in_flight_stale_minutes 30" \
+  "$(jq -r '.guards.in_flight_stale_minutes' "$REPO_ROOT/templates/config.json")" "30"
+
+# P11 (ruling Q2) — the THIRD state: a subagent is PRESENT but its status is not one the allowlist
+# recognises, so the tick can prove neither liveness nor absence and must act on neither.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 5'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$(date +%s)" "missing"
+run_hook "$(cat "$FIXTURES/stop-payload-synthetic/unknown-status-queued.json")"
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+P11_OBS=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_not_contains "P11 (1): an unrecognised status is not proven live, so NO hold is taken" \
+  "$EVENTS" '"reason":"in_flight_hold"'
+assert_not_contains "P11 (2): a subagent IS present, so NO orphan candidate is filed either" \
+  "$EVENTS" '"reason":"in_flight_orphan_candidate"'
+assert_file_exists "P11 (3): the marker is preserved in nazgul/in-flight/" "$TEST_DIR/nazgul/in-flight/legacy.json"
+assert_file_not_exists "P11 (3): the marker is not quarantined" "$TEST_DIR/nazgul/in-flight/quarantine/legacy.json"
+assert_exit_code "P11 (4): the run degrades to an ordinary blocked iteration (exit 2)" "$HOOK_EC" 2
+assert_eq "P11 (4): ... and burns it — current_iteration increments" \
+  "$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")" "6"
+assert_eq "P11 (5): the observation records the unrecognised status verbatim" \
+  "$(printf '%s' "$P11_OBS" | jq -r '.statuses' 2>/dev/null)" "queued,running"
+assert_eq "P11: present-but-unrecognised counts as PRESENT and as NOT live — the two-count shape" \
+  "$(printf '%s' "$P11_OBS" | jq -r '[.entries,.subagents,.live]|join("/")' 2>/dev/null)" "2/1/0"
+# Collapsing the third state into the unknown arm would re-emit the unobservable-class reason here,
+# even though this payload was read and understood.
+assert_not_contains "P11: an OBSERVED payload never degrades to the unverifiable arm" \
+  "$EVENTS" '"reason":"in_flight_unverifiable"'
+teardown_temp_dir
+
+# P11 companion — the allowlist is pinned in BOTH directions, so a future narrowing to `running`
+# alone is caught by a failing hold and not only by a failing negative.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$(date +%s)" "missing"
+run_hook '{"hook_event_name":"Stop","background_tasks":[{"id":"p1","type":"subagent","status":"pending"}]}'
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+P11P_OBS=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_exit_code "P11 companion: a pending subagent counts as live (exit 0)" "$HOOK_EC" 0
+assert_contains "P11 companion: and takes the hold" "$EVENTS" '"reason":"in_flight_hold"'
+assert_eq "P11 companion: pending is counted in live, not merely present" \
+  "$(printf '%s' "$P11P_OBS" | jq -r '[.subagents,.live]|join("/")' 2>/dev/null)" "1/1"
+teardown_temp_dir
+
+# === P10 (ruling Q1): the hold budget valve, bounded per marker set ===
+
+# Every pin below is an equality on an extracted value, so the coverage line at the end
+# counts checks that actually ran rather than checks that merely appeared.
+P10_SCANNED=0
+P10_SKIPPED=0
+P10_CHECKED=0
+P10_FINDINGS=0
+
+_p10_check() {
+  P10_SCANNED=$((P10_SCANNED + 1))
+  P10_CHECKED=$((P10_CHECKED + 1))
+  assert_eq "$1" "$2" "$3"
+  [ "$2" = "$3" ] || P10_FINDINGS=$((P10_FINDINGS + 1))
+}
+
+# The reason field's closing quote is load-bearing here: in_flight_hold is a strict PREFIX of
+# in_flight_hold_budget_exhausted, so a bare substring count would score the two as one.
+_p10_hold_count() {
+  local n
+  n=$(grep -c '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+  printf '%s' "${n:-0}"
+}
+
+_p10_exhausted_count() {
+  local n
+  n=$(grep -c '"reason":"in_flight_hold_budget_exhausted"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+  printf '%s' "${n:-0}"
+}
+
+_p10_ledger_count() {
+  find "$TEST_DIR/nazgul/logs/.in-flight-holds" -type f 2>/dev/null | wc -l | tr -d ' '
+}
+
+_p10_exhausted_line() {
+  grep '"reason":"in_flight_hold_budget_exhausted"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1
+}
+
+# P10a/P10b/P10c share ONE fixture on purpose: exhaustion is only reachable by a second
+# invocation against an unchanged set, and a fresh temp dir would reset the very ledger under test.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 5' '.safety.consecutive_failures = 2'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/valve-a.json" "nazgul:implementer" "TASK-001" "$(date +%s)" "missing"
+P10_PAYLOAD='{"hook_event_name":"Stop","background_tasks":[{"id":"s1","type":"subagent","status":"running"}]}'
+P10_CFG_BEFORE=$(cksum < "$TEST_DIR/nazgul/config.json")
+run_hook "$P10_PAYLOAD"
+P10_EC_A="$HOOK_EC"
+_p10_check "P10a: a FIRST hold on a fresh marker set is permitted (exit 0)" "$HOOK_EC" "0"
+_p10_check "P10a: exactly one in_flight_hold event" "$(_p10_hold_count)" "1"
+_p10_check "P10a: and no exhaustion event on a first hold" "$(_p10_exhausted_count)" "0"
+_p10_check "P10a: current_iteration byte-identical across the held run" \
+  "$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")" "5"
+_p10_check "P10a: safety.consecutive_failures byte-identical across the held run" \
+  "$(jq -r '.safety.consecutive_failures' "$TEST_DIR/nazgul/config.json")" "2"
+_p10_check "P10a: an attempt ledger, never config state — the whole config.json is byte-identical" \
+  "$(cksum < "$TEST_DIR/nazgul/config.json")" "$P10_CFG_BEFORE"
+_p10_check "P10a: one ledger file under nazgul/logs/.in-flight-holds/" "$(_p10_ledger_count)" "1"
+P10_LEDGER=$(find "$TEST_DIR/nazgul/logs/.in-flight-holds" -type f 2>/dev/null | head -1)
+P10_LEDGER_BASE="${P10_LEDGER##*/}"
+_p10_check "P10a: the ledger records the one hold taken" "$(cat "$P10_LEDGER" 2>/dev/null)" "1"
+_p10_check "P10a: named by a 16-char hash — the _resume_attempts_file convention, not a new one" \
+  "${#P10_LEDGER_BASE}" "16"
+
+run_hook "$P10_PAYLOAD"
+# Asserted as the PAIR, not as a bare exit 2: a tree where no hold is ever taken exits 2 on both
+# runs, so a lone `2` would score "the valve refused it" for a run the valve never saw.
+_p10_check "P10a then P10b: the first hold taken and the unchanged repeat refused (0 then 2)" \
+  "$P10_EC_A/$HOOK_EC" "0/2"
+_p10_check "P10b: still exactly one in_flight_hold event — no second hold was taken" "$(_p10_hold_count)" "1"
+_p10_check "P10b: exactly one in_flight_hold_budget_exhausted event" "$(_p10_exhausted_count)" "1"
+P10_EX=$(_p10_exhausted_line)
+# The length rides along because two absent values compare equal: with no event and no ledger
+# file, a bare equality would score "" against "" and call it a match.
+_p10_check "P10b: the event names the fingerprint that keys the ledger file, and it is a real hash" \
+  "$(printf '%s' "$P10_EX" | jq -r '.fingerprint')/${#P10_LEDGER_BASE}" "$P10_LEDGER_BASE/16"
+_p10_check "P10b: it carries holds_taken" "$(printf '%s' "$P10_EX" | jq -r '.holds_taken')" "1"
+_p10_check "P10b: holds_taken is a JSON number, not a string" \
+  "$(printf '%s' "$P10_EX" | jq -r '.holds_taken | type')" "number"
+_p10_check "P10b: it carries the observed live_subagents count" \
+  "$(printf '%s' "$P10_EX" | jq -r '.live_subagents')" "1"
+_p10_check "P10b: it names the units it declined to hold on" \
+  "$(printf '%s' "$P10_EX" | jq -r '.units')" "TASK-001"
+_p10_check "P10b: a spent budget is distinguishable from an unwritable one" \
+  "$(printf '%s' "$P10_EX" | jq -r '.ledger')" "spent"
+_p10_check "P10b: current_iteration INCREMENTED — the fall-through really reached the increment" \
+  "$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")" "6"
+_p10_check "P10b: the marker is left exactly where it was" \
+  "$([ -f "$TEST_DIR/nazgul/in-flight/valve-a.json" ] && echo present || echo absent)" "present"
+_p10_check "P10b: exhaustion quarantines nothing" \
+  "$(find "$TEST_DIR/nazgul/in-flight/quarantine" -type f 2>/dev/null | wc -l | tr -d ' ')" "0"
+_p10_check "P10b: the spent ledger is not driven past the cap" "$(cat "$P10_LEDGER" 2>/dev/null)" "1"
+
+_write_marker "$TEST_DIR/nazgul/in-flight/valve-b.json" "nazgul:implementer" "TASK-009" "$(date +%s)" "missing"
+run_hook "$P10_PAYLOAD"
+# Exit code AND hold count together: after two prior invocations a run can reach exit 0 down
+# paths that have nothing to do with a hold, and only the second hold event distinguishes them.
+_p10_check "P10c: a CHANGED marker set gets its own budget and holds again (exit 0, second hold)" \
+  "$HOOK_EC/$(_p10_hold_count)" "0/2"
+_p10_check "P10c: a second in_flight_hold event, taken on the changed set" "$(_p10_hold_count)" "2"
+_p10_check "P10c: and no second exhaustion" "$(_p10_exhausted_count)" "1"
+_p10_check "P10c: the ledger gains a second, differently-named file — it keys on evidence, not a global counter" \
+  "$(_p10_ledger_count)" "2"
+_p10_check "P10c: the newly permitted hold burns no iteration" \
+  "$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")" "6"
+teardown_temp_dir
+
+# P10d — the `unknown` arm exhausts through the SAME code path. A valve that fired only on the
+# payload-driven arm would be the second convention this task exists to avoid.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 5'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/valve-bg.json" "nazgul:implementer" "TASK-003" "$(date +%s)" "true"
+run_hook
+_p10_check "P10d: the unknown arm's FIRST hold is permitted (exit 0)" "$HOOK_EC" "0"
+_p10_check "P10d: it is the same hold event, through the same exit" "$(_p10_hold_count)" "1"
+_p10_check "P10d: the unknown arm writes a ledger file too" "$(_p10_ledger_count)" "1"
+_p10_check "P10d: this really is the unknown arm, not a payload-driven one" \
+  "$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1 | jq -r '.bg_seen')" "unknown"
+run_hook
+_p10_check "P10d: the second unchanged invocation exhausts exactly as P10b does (exit 2)" "$HOOK_EC" "2"
+_p10_check "P10d: no second hold on the unknown arm either" "$(_p10_hold_count)" "1"
+_p10_check "P10d: the same exhaustion reason — ONE code path, not two" "$(_p10_exhausted_count)" "1"
+P10_EX=$(_p10_exhausted_line)
+_p10_check "P10d: holds_taken on the unknown arm" "$(printf '%s' "$P10_EX" | jq -r '.holds_taken')" "1"
+_p10_check "P10d: no liveness was observed on this arm, so live_subagents is 0" \
+  "$(printf '%s' "$P10_EX" | jq -r '.live_subagents')" "0"
+_p10_check "P10d: it names the background unit it declined" \
+  "$(printf '%s' "$P10_EX" | jq -r '.units')" "TASK-003"
+_p10_check "P10d: current_iteration increments on the exhausted run" \
+  "$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")" "6"
+_p10_check "P10d: the background marker is never quarantined by exhaustion" \
+  "$([ -f "$TEST_DIR/nazgul/in-flight/valve-bg.json" ] && echo present || echo absent)" "present"
+teardown_temp_dir
+
+# Prior-art conformance: _resume_attempts_file's hash-unavailable fallback, copied rather than
+# reinvented. A failing shim reaches _rp_sha256's own failure branch without emptying PATH.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/valve-nh.json" "nazgul:implementer" "TASK-001" "$(date +%s)" "true"
+# setup_temp_dir's own TEST_DIR carries a colon, which a PATH entry cannot: putting the shims
+# there would split the entry and silently test nothing.
+P10_SHIM=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-p10-shim-XXXXXX")
+printf '#!/bin/sh\nexit 1\n' > "$P10_SHIM/sha256sum"
+printf '#!/bin/sh\nexit 1\n' > "$P10_SHIM/shasum"
+chmod +x "$P10_SHIM/sha256sum" "$P10_SHIM/shasum"
+_p10_check "prior art: the shim really is reachable — a PATH that never loaded it would prove nothing" \
+  "$(PATH="$P10_SHIM:$PATH" command -v sha256sum)" "$P10_SHIM/sha256sum"
+HOOK_OUTPUT=$(PATH="$P10_SHIM:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+rm -rf "$P10_SHIM"
+_p10_check "prior art: an unusable sha256 never aborts the hook — the hold is still taken (exit 0)" "$HOOK_EC" "0"
+_p10_check "prior art: it degrades to the named fallback ledger, as _resume_attempts_file does" \
+  "$([ -f "$TEST_DIR/nazgul/logs/.in-flight-holds/fallback" ] && echo present || echo absent)" "present"
+_p10_check "prior art: and says so on stderr rather than degrading silently" \
+  "$(printf '%s' "$HOOK_OUTPUT" | grep -c 'in-flight hold ledger hash fallback')" "1"
+teardown_temp_dir
+
+# AC12: the cap lives in code, and this objective adds no schema surface at all.
+_p10_check "config purity: _IN_FLIGHT_HOLD_CAP is a script constant in scripts/stop-hook.sh" \
+  "$([ "$(grep -c '_IN_FLIGHT_HOLD_CAP=1' "$STOP_HOOK")" -ge 1 ] && echo present || echo absent)" "present"
+_p10_check "config purity: it is NOT a config key" \
+  "$(grep -ci 'in_flight_hold_cap' "$REPO_ROOT/templates/config.json")" "0"
+_p10_check "config purity: the valve adds no guards key of its own" \
+  "$(jq -r '.guards | has("in_flight_hold_cap")' "$REPO_ROOT/templates/config.json")" "false"
+_p10_check "config purity: templates/config.json still reports schema_version 36" \
+  "$(jq -r '.schema_version' "$REPO_ROOT/templates/config.json")" "36"
+
+assert_eq "P10 accounting: scanned == skipped + checked" "$P10_SCANNED" "$((P10_SKIPPED + P10_CHECKED))"
+assert_eq "P10 floor: the valve's pin set is not empty" \
+  "$([ "$P10_CHECKED" -gt 0 ] && echo yes || echo no)" "yes"
+assert_eq "P10: $P10_SCANNED scanned, $P10_SKIPPED skipped, $P10_CHECKED checked — every first hold permitted, every unchanged repeat refused" \
+  "$P10_FINDINGS" "0"
+
+# === P12b (ruling Q4 item 2): the env-gated raw payload capture ===
+
+# Same equality-on-an-extracted-value shape as P10, so the coverage line below
+# counts pins that actually ran rather than pins that merely appeared.
+P12_SCANNED=0
+P12_SKIPPED=0
+P12_CHECKED=0
+P12_FINDINGS=0
+
+_p12_check() {
+  P12_SCANNED=$((P12_SCANNED + 1))
+  P12_CHECKED=$((P12_CHECKED + 1))
+  assert_eq "$1" "$2" "$3"
+  [ "$2" = "$3" ] || P12_FINDINGS=$((P12_FINDINGS + 1))
+}
+
+_p12_state() { [ -e "$1" ] && printf 'present' || printf 'absent'; }
+
+_p12_observed_count() {
+  local n
+  n=$(grep -c '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+  printf '%s' "${n:-0}"
+}
+
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "READY"
+P12_CAP="$TEST_DIR/nazgul/logs/stop-payload-last.json"
+P12_A='{"hook_event_name":"Stop","session_id":"p12-first","background_tasks":[]}'
+P12_B='{"hook_event_name":"Stop","session_id":"p12-second","background_tasks":[{"id":"s1","type":"subagent","status":"running"}]}'
+
+# `env -u` on purpose: an operator who exports the variable would otherwise turn
+# this arm into a false pass about a default it never actually observed.
+HOOK_OUTPUT=$(printf '%s' "$P12_A" | env -u NAZGUL_STOP_PAYLOAD_CAPTURE bash "$STOP_HOOK" 2>&1) || true
+# One pin, two facts: file absent AND the run reached the capture site. Split apart,
+# the absence half also passes on a tree where the gate does not exist at all.
+_p12_check "P12b: with NAZGUL_STOP_PAYLOAD_CAPTURE unset no raw capture is written, on a run that provably reached the capture site" \
+  "$(_p12_state "$P12_CAP")/$(_p12_observed_count)" "absent/1"
+_p12_check "P12b: nazgul/logs/ exists on that run, so the absence is specific to the capture file" \
+  "$(_p12_state "$TEST_DIR/nazgul/logs")" "present"
+
+HOOK_OUTPUT=$(printf '%s' "$P12_A" | NAZGUL_STOP_PAYLOAD_CAPTURE=1 bash "$STOP_HOOK" 2>&1) || true
+_p12_check "P12b: NAZGUL_STOP_PAYLOAD_CAPTURE=1 captures the raw payload" \
+  "$(_p12_state "$P12_CAP")" "present"
+_p12_check "P12b: and the file holds THIS run's payload, not a placeholder" \
+  "$(jq -r '.session_id' "$P12_CAP" 2>/dev/null)" "p12-first"
+_p12_check "P12b: one line — a single document, not an append log" \
+  "$(wc -l < "$P12_CAP" | tr -d ' ')" "1"
+
+HOOK_OUTPUT=$(printf '%s' "$P12_B" | NAZGUL_STOP_PAYLOAD_CAPTURE=1 bash "$STOP_HOOK" 2>&1) || true
+_p12_check "P12b: a second capture OVERWRITES — the file holds the SECOND payload" \
+  "$(jq -r '.session_id' "$P12_CAP" 2>/dev/null)" "p12-second"
+_p12_check "P12b: the FIRST payload is gone, so it was replaced and not appended to" \
+  "$(grep -c 'p12-first' "$P12_CAP")" "0"
+_p12_check "P12b: and the line count did not grow across the two captures" \
+  "$(wc -l < "$P12_CAP" | tr -d ' ')" "1"
+
+# A one-byte file is the newline alone: proof it was REWRITTEN empty rather than
+# left holding the previous run's payload.
+HOOK_OUTPUT=$(NAZGUL_STOP_PAYLOAD_CAPTURE=1 bash "$STOP_HOOK" </dev/null 2>&1) || true
+_p12_check "P12b: capture ON with no payload records an EMPTY capture, so 'nothing arrived' stays distinguishable from 'capture off'" \
+  "$(_p12_state "$P12_CAP")/$(wc -c < "$P12_CAP" | tr -d ' ')" "present/1"
+
+# AC12 again, for Q4: the switch is an ENV VAR, and this objective adds no schema surface.
+_p12_check "config purity: NAZGUL_STOP_PAYLOAD_CAPTURE is not a config key" \
+  "$(grep -ci 'stop_payload_capture' "$REPO_ROOT/templates/config.json")" "0"
+_p12_check "config purity: and no migration introduces one" \
+  "$(grep -ci 'stop_payload_capture' "$REPO_ROOT/scripts/migrate-config.sh")" "0"
+_p12_check "config purity: templates/config.json still reports schema_version 36" \
+  "$(jq -r '.schema_version' "$REPO_ROOT/templates/config.json")" "36"
+
+assert_eq "P12b accounting: scanned == skipped + checked" "$P12_SCANNED" "$((P12_SKIPPED + P12_CHECKED))"
+assert_eq "P12b floor: the capture's pin set is not empty" \
+  "$([ "$P12_CHECKED" -gt 0 ] && echo yes || echo no)" "yes"
+assert_eq "P12b: $P12_SCANNED scanned, $P12_SKIPPED skipped, $P12_CHECKED checked — capture is opt-in, single-file and overwritten" \
+  "$P12_FINDINGS" "0"
+teardown_temp_dir
+
 # === Clear: scripts/subagent-stop.sh ===
 
 setup_temp_dir
@@ -424,12 +942,254 @@ assert_contains "clearer: underivable emits clear_fallback_underivable" \
   "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" "clear_fallback_underivable"
 teardown_temp_dir
 
+# === P9 (C1) / P6 (C4) / P12a (ruling Q4): the bounded read and what it records ===
+HOOK_STDIN_LIB="$REPO_ROOT/scripts/lib/hook-stdin.sh"
+
+# timeout(1) is absent from stock macOS, so reuse the formatter.sh:218-221 ladder.
+# Its bare fallback backgrounds and polls, so no pin here can hang the suite.
+_bounded_run() {
+  local _br_secs="$1"; shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$_br_secs" "$@"
+    return $?
+  fi
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$_br_secs" "$@"
+    return $?
+  fi
+  "$@" &
+  local _br_pid=$! _br_waited=0
+  while [ "$_br_waited" -lt "$_br_secs" ] && kill -0 "$_br_pid" 2>/dev/null; do
+    sleep 1
+    _br_waited=$(( _br_waited + 1 ))
+  done
+  if kill -0 "$_br_pid" 2>/dev/null; then
+    kill -9 "$_br_pid" 2>/dev/null
+    wait "$_br_pid" 2>/dev/null
+    return 124
+  fi
+  wait "$_br_pid"
+}
+
+# `tail -f /dev/null` feeding a fifo IS #155's never-EOF stdin, with a writer the
+# test can reap; the literal pipeline can never be reaped, since tail never writes.
+_never_eof_open() {
+  rm -f "$1"
+  mkfifo "$1"
+  tail -f /dev/null > "$1" &
+  NEVER_EOF_PID=$!
+}
+
+_never_eof_close() {
+  kill "$NEVER_EOF_PID" 2>/dev/null
+  wait "$NEVER_EOF_PID" 2>/dev/null
+  rm -f "$1"
+}
+
+_run_hook_payload() {
+  HOOK_OUTPUT=$(printf '%s' "$1" | bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+}
+
+# --- P9 (C1 unit, obligation AC-V1): read_hook_payload in isolation ---
+assert_file_exists "P9/AC-V1: scripts/lib/hook-stdin.sh exists" "$HOOK_STDIN_LIB"
+assert_file_contains "P9/AC-V1: it defines read_hook_payload" "$HOOK_STDIN_LIB" "read_hook_payload()"
+assert_file_contains "AC-V1: stop-hook.sh sources it by absolute \$SCRIPT_DIR path" \
+  "$STOP_HOOK" 'source "$SCRIPT_DIR/lib/hook-stdin.sh"'
+
+# A sourced lib must not alter the caller's shell options (CLAUDE.md Code Style).
+P9_SET_E=$(grep -cE '^[[:space:]]*set[[:space:]]+-[a-zA-Z]*e' "$HOOK_STDIN_LIB" || true)
+assert_eq "P9: hook-stdin.sh carries no set -e" "$P9_SET_E" "0"
+
+bash -n "$HOOK_STDIN_LIB" >/dev/null 2>&1
+assert_exit_code "AC-V1: hook-stdin.sh is bash -n clean" "$?" 0
+
+P9_READER='set -euo pipefail; source "$1"; read_hook_payload P; printf "[%s][%s]" "$P" "$HOOK_STDIN_WHY"'
+P9_START=$(date +%s)
+P9_OUT=$(_bounded_run 8 bash -c "$P9_READER" _ "$HOOK_STDIN_LIB" </dev/null 2>&1)
+P9_EC=$?
+P9_ELAPSED=$(( $(date +%s) - P9_START ))
+assert_eq "P9: a /dev/null stdin yields an empty payload" "$P9_OUT" "[][no_stdin]"
+assert_exit_code "P9: a caller under set -euo pipefail is never aborted by the read" "$P9_EC" 0
+assert_eq "P9: /dev/null returns promptly (${P9_ELAPSED}s), never waiting out the bound" \
+  "$([ "$P9_ELAPSED" -lt 2 ] && echo yes || echo no)" "yes"
+
+P9_MULTI=$(printf '{\n  "hook_event_name": "Stop",\n  "background_tasks": [],\n  "tail_marker": "P9_LAST_LINE"\n}')
+P9_OUT=$(printf '%s' "$P9_MULTI" | _bounded_run 8 bash -c 'set -euo pipefail; source "$1"; read_hook_payload P; printf "%s" "$P"' _ "$HOOK_STDIN_LIB" 2>&1)
+assert_eq "P9: a pretty-printed multi-line payload comes back whole" "$P9_OUT" "$P9_MULTI"
+assert_contains "P9: -d '' reaches the LAST line — truncation at the first newline is what this catches" \
+  "$P9_OUT" "P9_LAST_LINE"
+
+setup_temp_dir
+P9_FIFO="$TEST_DIR/p9-never-eof"
+_never_eof_open "$P9_FIFO"
+P9_START=$(date +%s)
+P9_OUT=$(_bounded_run 20 bash -c "$P9_READER" _ "$HOOK_STDIN_LIB" < "$P9_FIFO" 2>&1)
+P9_EC=$?
+P9_ELAPSED=$(( $(date +%s) - P9_START ))
+_never_eof_close "$P9_FIFO"
+assert_eq "P9: a never-EOF stdin returns at the bound, and says so — 'timed out' never collapses into 'no payload'" \
+  "$P9_OUT" "[][read_timeout]"
+assert_exit_code "P9: it returned on its own, not by the wrapper's kill" "$P9_EC" 0
+assert_eq "P9: ... within its own bound (${P9_ELAPSED}s < 5s)" \
+  "$([ "$P9_ELAPSED" -lt 5 ] && echo yes || echo no)" "yes"
+teardown_temp_dir
+
+# --- P6 (C4): the ANTI-HANG pin — #155's own reproduction inverted ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+P6_FIFO="$TEST_DIR/p6-never-eof"
+_never_eof_open "$P6_FIFO"
+P6_START=$(date +%s)
+_bounded_run 20 bash "$STOP_HOOK" < "$P6_FIFO" >/dev/null 2>&1
+P6_EC=$?
+P6_ELAPSED=$(( $(date +%s) - P6_START ))
+_never_eof_close "$P6_FIFO"
+assert_eq "P6 (C4): stop-hook returns under a never-EOF stdin instead of deadlocking" \
+  "$([ "$P6_EC" -ne 124 ] && echo returned || echo killed_by_wrapper)" "returned"
+assert_eq "P6 (C4): ... in ${P6_ELAPSED}s, under the 5 s bound" \
+  "$([ "$P6_ELAPSED" -lt 5 ] && echo yes || echo no)" "yes"
+assert_contains "P6: the bounded read is recorded as read_timeout, not as an absent payload" \
+  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" '"why":"read_timeout"'
+teardown_temp_dir
+
+# The terminal test is the WRONG PREDICATE (#155) and must never be the SOLE guard:
+# what closes the hazard is the -t bound, so pin the bound itself, not the guard.
+P6_BOUNDED=$(grep -cE 'read .*-d .. -t "\$HOOK_STDIN_TIMEOUT"' "$HOOK_STDIN_LIB" || true)
+assert_eq "P6 companion: the read carries a -t bound alongside its terminal test" "$P6_BOUNDED" "1"
+P6_CAT_DRAIN=$(grep -vE '^[[:space:]]*#' "$HOOK_STDIN_LIB" | grep -cE '\$\(cat' || true)
+assert_eq "P6 companion: no \$(cat) drain in the code — the header names that idiom only to forbid it" \
+  "$P6_CAT_DRAIN" "0"
+
+# --- P12a (ruling Q4): one observation event per invocation, on every arm ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+run_hook
+_run_hook_payload 'this is not json at all'
+_run_hook_payload '{"hook_event_name":"Stop","stop_hook_active":false}'
+P12_OBS=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null || true)
+P12_COUNT=$(printf '%s\n' "$P12_OBS" | grep -c 'stop_payload_observed' || true)
+assert_eq "P12a: exactly one event per invocation — 3 invocations, 3 events" "$P12_COUNT" "3"
+assert_eq "P12a: each unknown arm names its OWN reason" \
+  "$(printf '%s\n' "$P12_OBS" | jq -r '.why // "ABSENT"' | tr '\n' ' ')" "no_stdin not_json field_absent "
+P12_WHY_OUTSIDE=$(printf '%s\n' "$P12_OBS" | jq -r 'select(has("why")) | .why' \
+  | grep -vcE '^(no_stdin|read_timeout|not_json|field_absent|no_jq)$' || true)
+assert_eq "P12a: every why is drawn from the closed set" "$P12_WHY_OUTSIDE" "0"
+assert_eq "P12a: an absent, unparseable or key-less payload falls to unknown, never to yes" \
+  "$(printf '%s\n' "$P12_OBS" | jq -r '.bg_seen' | sort -u | tr '\n' ' ')" "unknown "
+teardown_temp_dir
+
+setup_temp_dir
+setup_nazgul_dir
+create_config
+P12_PAYLOAD=$(jq -cn '{hook_event_name:"Stop",stop_hook_active:false,
+  cwd:"/p12a/SECRET-cwd",transcript_path:"/p12a/SECRET-transcript.jsonl",
+  agent_transcript_path:"/p12a/SECRET-agent.jsonl",
+  last_assistant_message:"SECRET assistant prose",
+  background_tasks:[{id:"a1",type:"subagent",status:"running",agent_type:"nazgul:doc-generator"},
+                    {id:"b1",type:"shell",status:"running",description:"SECRET command string"}]}')
+_run_hook_payload "$P12_PAYLOAD"
+P12_OBS=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null || true)
+P12_COUNT=$(printf '%s\n' "$P12_OBS" | grep -c 'stop_payload_observed' || true)
+assert_eq "P12a: exactly one event on the yes arm too" "$P12_COUNT" "1"
+assert_eq "P12a: bg_seen is yes when background_tasks is present" \
+  "$(printf '%s' "$P12_OBS" | jq -r '.bg_seen')" "yes"
+assert_eq "P12a: entries counts every background_tasks entry" \
+  "$(printf '%s' "$P12_OBS" | jq -r '.entries')" "2"
+assert_eq "P12a: subagents counts only type==subagent" \
+  "$(printf '%s' "$P12_OBS" | jq -r '.subagents')" "1"
+assert_eq "P12a: live counts running/pending subagents" \
+  "$(printf '%s' "$P12_OBS" | jq -r '.live')" "1"
+assert_eq "P12a: the three counts land as JSON numbers, not strings" \
+  "$(printf '%s' "$P12_OBS" | jq -r '[.entries,.subagents,.live]|map(type)|unique|join(",")')" "number"
+assert_eq "P12a: types carries the DISTINCT type vocabulary — R4's canary made mechanical" \
+  "$(printf '%s' "$P12_OBS" | jq -r '.types')" "shell,subagent"
+assert_eq "P12a: statuses carries the DISTINCT status vocabulary" \
+  "$(printf '%s' "$P12_OBS" | jq -r '.statuses')" "running"
+assert_eq "P12a: why is ABSENT on the yes arm, so its closed set stays closed" \
+  "$(printf '%s' "$P12_OBS" | jq -r 'has("why")')" "false"
+assert_not_contains "P12a privacy: the event carries no cwd" "$P12_OBS" "cwd"
+assert_not_contains "P12a privacy: the event carries no transcript_path" "$P12_OBS" "transcript_path"
+assert_not_contains "P12a privacy: the event carries no agent_transcript_path" "$P12_OBS" "agent_transcript_path"
+assert_not_contains "P12a privacy: the event carries no last_assistant_message" "$P12_OBS" "last_assistant_message"
+assert_not_contains "P12a privacy: no VALUE from those four fields leaks either" "$P12_OBS" "SECRET"
+P12_BYTES=${#P12_OBS}
+assert_eq "P12a: the event stays bounded and structured (${P12_BYTES} bytes <= 300)" \
+  "$([ "$P12_BYTES" -le 300 ] && echo yes || echo no)" "yes"
+teardown_temp_dir
+
+# === P7 (C2/AC9): every stop-hook execution under tests/ binds its own stdin ===
+# Bare stdin inherits the suite's once C1 lands — the #155 never-EOF deadlock class.
+P7_ROOT="$REPO_ROOT/tests"
+P7_PATTERN='bash "\$STOP_HOOK"|bash "\$REPO_ROOT/scripts/stop-hook\.sh"'
+P7_SCANNED=0
+P7_SKIPPED=0
+P7_CHECKED=0
+P7_FINDINGS=0
+P7_BARE=()
+
+while IFS= read -r _p7_hit; do
+  [ -n "$_p7_hit" ] || continue
+  P7_SCANNED=$((P7_SCANNED + 1))
+  _p7_file="${_p7_hit%%:*}"
+  _p7_rest="${_p7_hit#*:}"
+  _p7_line="${_p7_rest%%:*}"
+  _p7_text="${_p7_rest#*:}"
+  # A commented-out invocation is text, not an execution: excluded, and counted.
+  case "${_p7_text#"${_p7_text%%[![:space:]]*}"}" in
+    '#'*) P7_SKIPPED=$((P7_SKIPPED + 1)); continue ;;
+  esac
+  P7_CHECKED=$((P7_CHECKED + 1))
+  case "$_p7_text" in
+    *'</dev/null'*|*'< /dev/null'*) continue ;;
+  esac
+  # A pipe upstream of the invocation supplies (and EOFs) stdin just as well.
+  case "${_p7_text%%bash \"*}" in
+    *'|'*) continue ;;
+  esac
+  # An explicit redirect binds the invocation's OWN stdin whatever it names, and
+  # P6 below deliberately binds a never-EOF fifo — that is the pin, not the leak.
+  case "$_p7_text" in
+    *'< "$'*|*'<"$'*) continue ;;
+  esac
+  P7_FINDINGS=$((P7_FINDINGS + 1))
+  P7_BARE+=("${_p7_file#"$P7_ROOT/"}:$_p7_line")
+done < <(grep -rnE "$P7_PATTERN" "$P7_ROOT" 2>/dev/null || true)
+
+assert_eq "P7 accounting: scanned == skipped + checked" \
+  "$P7_SCANNED" "$((P7_SKIPPED + P7_CHECKED))"
+
+if [ "$P7_CHECKED" -gt 0 ]; then
+  _pass "P7 floor: $P7_CHECKED stop-hook execution site(s) checked under tests/"
+else
+  _fail "P7 floor: $P7_CHECKED stop-hook execution site(s) checked under tests/" \
+    "a zero-site scan is a broken scan, not a clean tree — the population cannot be empty"
+fi
+
+if [ "$P7_FINDINGS" -gt 0 ]; then
+  printf '  P7 bare-stdin site: %s\n' "${P7_BARE[@]}" >&2
+fi
+assert_eq "P7: $P7_SCANNED scanned, $P7_SKIPPED skipped, $P7_CHECKED checked — no stop-hook execution leaves stdin bare" \
+  "$P7_FINDINGS" "0"
+
+assert_file_contains "P7: tests/run-tests.sh runs every test file with stdin bound to /dev/null" \
+  "$REPO_ROOT/tests/run-tests.sh" 'bash "$test_file" < /dev/null'
+
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck -S warning "$WRITER" 2>/dev/null \
     && _pass "shellcheck clean: in-flight-marker.sh" \
     || _fail "shellcheck clean: in-flight-marker.sh" "shellcheck warnings found"
 else
   _skip "shellcheck skipped (not installed): in-flight-marker.sh"
+fi
+
+if command -v shellcheck >/dev/null 2>&1; then
+  shellcheck -S warning "$HOOK_STDIN_LIB" 2>/dev/null \
+    && _pass "AC-V1: shellcheck clean: scripts/lib/hook-stdin.sh" \
+    || _fail "AC-V1: shellcheck clean: scripts/lib/hook-stdin.sh" "shellcheck warnings found"
+else
+  _skip "shellcheck skipped (not installed): scripts/lib/hook-stdin.sh"
 fi
 
 report_results

@@ -60,7 +60,7 @@ assert_json_field "v34: guards.in_flight_hold defaults true" "$TEST_DIR/nazgul/c
 teardown_temp_dir
 
 STOP_HOOK="$REPO_ROOT/scripts/stop-hook.sh"
-run_hook() { HOOK_OUTPUT=$(bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?; }
+run_hook() { HOOK_OUTPUT=$(bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?; }
 
 # Shared fixture for stop-hook gate tests: initialized nazgul + one leaked teammate
 setup_gate_fixture() {  # $1 = extra create_config jq filter (optional)
