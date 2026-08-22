@@ -135,3 +135,37 @@ review_emit_class_coverage() {
   printf '%s: unit=%s; seat-suffixes=[%s]\n' \
     "$token" "$unit" "$(printf '%s' "$suffixes" | tr '\n' ' ' | sed 's/[[:space:]]*$//')" >&2
 }
+
+# Prefix on a validator's own health diagnostic (NOTHING_CHECKED /
+# COVERAGE_ACCOUNTING_DEFECT) — distinguishes "checker broken" from "review incomplete".
+NAZGUL_VALIDATOR_DEFECT_PREFIX="VALIDATOR_DEFECT"
+
+# 0 iff <line> is a validator self-diagnostic, not a per-reviewer problem.
+# Usage: _re_is_validator_defect_line <line>
+_re_is_validator_defect_line() {
+  case "$1" in
+    "${NAZGUL_VALIDATOR_DEFECT_PREFIX} "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Genuine (non-defect) lines of <problems>, one per line; the mirror
+# _re_defect_problems keeps only the defect lines. Usage: _re_genuine_problems <problems>
+_re_genuine_problems() {
+  local line
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    _re_is_validator_defect_line "$line" || printf '%s\n' "$line"
+  done <<< "$1"
+  return 0
+}
+
+# Usage: _re_defect_problems <problems>
+_re_defect_problems() {
+  local line
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    _re_is_validator_defect_line "$line" && printf '%s\n' "$line"
+  done <<< "$1"
+  return 0
+}

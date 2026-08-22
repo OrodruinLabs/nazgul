@@ -314,6 +314,21 @@ set_manifest_field() {
   fi
 }
 
+# A validator-defect line is the CHECKER's health, not the task's (FEAT-031/TASK-043).
+# No-op when <defects> is empty. Usage: report_validator_defect <task_id> <validator> <defects>
+report_validator_defect() {
+  local task_id="$1" validator="$2" defects="$3" list
+  [ -n "$defects" ] || return 0
+  list=$(printf '%s\n' "$defects" | sed "s/^${NAZGUL_VALIDATOR_DEFECT_PREFIX} //" | tr '\n' ',' | sed 's/,$//; s/,/, /g')
+  echo "NAZGUL REVIEW GATE: ${task_id} ${validator} reported a validator defect (${list}) — this is a mechanism malfunction, not a review-evidence violation; status left unchanged pending a fix to the checker itself" >&2
+  emit_event "stop_gate" \
+    reason "review_validator_defect" \
+    gate "review_gate_reactive" \
+    task_id "$task_id" \
+    validator "$validator" \
+    defects "$list"
+}
+
 # --- BASH-WRITE RECONCILIATION (MF-022 / ADR-003 Decision 2) ---
 # Runs at the top of every iteration, before counting, so a flip to BLOCKED
 # below is already reflected in this iteration's counts. Diffs each task
@@ -423,14 +438,22 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
       MERGE_UNDECIDED=false
       MERGE_UNDECIDED_HOST=""
       MERGE_DEFERRED=false
-      EVIDENCE_PROBLEMS=$(validate_review_evidence "$NAZGUL_DIR" "$TASK_ID") || true
+      EVIDENCE_RAW=$(validate_review_evidence "$NAZGUL_DIR" "$TASK_ID") || true
+      EVIDENCE_DEFECTS=$(_re_defect_problems "$EVIDENCE_RAW")
+      EVIDENCE_PROBLEMS=$(_re_genuine_problems "$EVIDENCE_RAW")
+      report_validator_defect "$TASK_ID" "review-evidence" "$EVIDENCE_DEFECTS"
       MISSING_LIST=""
       [ -z "$EVIDENCE_PROBLEMS" ] || MISSING_LIST=$(echo "$EVIDENCE_PROBLEMS" | awk 'NF>1 {out = out sep $2; sep = ", "} NF==1 {out = out sep $1; sep = ", "} END {print out}')
       # Provenance is hoisted out of the else-arm below so BOTH review-route questions are
       # answered before the host is asked anything; it is read there, never recomputed.
       PROVENANCE_PROBLEMS=""
+      # AC2: gated on the GENUINE evidence signal — a defect-only evidence pass is not
+      # a review-evidence violation, so provenance still gets a fair, independent check.
       if [ -z "$EVIDENCE_PROBLEMS" ] && [ "$REQUIRE_PROVENANCE" = "true" ]; then
-        PROVENANCE_PROBLEMS=$(validate_review_provenance "$NAZGUL_DIR" "$TASK_ID") || true
+        PROVENANCE_RAW=$(validate_review_provenance "$NAZGUL_DIR" "$TASK_ID") || true
+        PROVENANCE_DEFECTS=$(_re_defect_problems "$PROVENANCE_RAW")
+        PROVENANCE_PROBLEMS=$(_re_genuine_problems "$PROVENANCE_RAW")
+        report_validator_defect "$TASK_ID" "review-provenance" "$PROVENANCE_DEFECTS"
       fi
       # lean-comments: allow-run — this IS the pre-filter the old comment only claimed to be.
       # The review route is two local file reads; the merge route is a process spawn and a

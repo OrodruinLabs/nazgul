@@ -169,9 +169,8 @@ write_dispatch_manifest() {
 #   TOKEN_MISMATCH <name> — subject file's review_token != manifest token
 #   TOKEN_MISSING <name>  — subject file present, carries no review_token
 #   DIFF_HASH_STALE       — diff.patch hash != manifest diff_hash
-#   NOTHING_CHECKED       — a board WAS dispatched for this unit and the classifier read
-#                           none of the dir's .md files as a subject (K>0 floor, RULES §15)
-#   COVERAGE_ACCOUNTING_DEFECT — the subject-file pass's N == M + K identity broke
+#   VALIDATOR_DEFECT NOTHING_CHECKED — a board WAS dispatched, classifier read no subject (§15)
+#   VALIDATOR_DEFECT COVERAGE_ACCOUNTING_DEFECT — the subject-file N == M + K identity broke
 # Degrades to allow: no subject files yet, or a legacy review (no manifest and
 # no subject file carries any review_token:). Reviewers listed in the manifest's
 # skipped[] are exempt from TOKEN_MISSING/TOKEN_MISMATCH.
@@ -271,12 +270,12 @@ validate_review_provenance() {
     # this validator has always allowed; WITH one, a board ran and yet not one file reads as a
     # verdict — the exact shape of a classifier that stopped matching, which must never be
     # reported as a clean review directory. So the floor blocks only in the second state.
-    echo "NOTHING_CHECKED"
+    echo "${NAZGUL_VALIDATOR_DEFECT_PREFIX} NOTHING_CHECKED"
     problems=$((problems + 1))
   fi
 
   if [ "$scanned" -ne $((skipped + checked)) ]; then
-    echo "COVERAGE_ACCOUNTING_DEFECT"
+    echo "${NAZGUL_VALIDATOR_DEFECT_PREFIX} COVERAGE_ACCOUNTING_DEFECT"
     problems=$((problems + 1))
   fi
 

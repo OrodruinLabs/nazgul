@@ -550,9 +550,8 @@ resolve_review_unit() {
 #   NO_REVIEWERS_CONFIGURED   — config.json agents.reviewers is empty
 #   MISSING <reviewer>        — no reviews/<unit>/<reviewer>.md
 #   UNAPPROVED <reviewer>     — file exists but lacks an APPROVED verdict
-#   NOTHING_CHECKED           — the unit dir held .md files and the classifier read
-#                             none of them as a verdict (K>0 floor, RULES.md §15)
-#   COVERAGE_ACCOUNTING_DEFECT — the verdict-file pass's N == M + K identity broke
+#   VALIDATOR_DEFECT NOTHING_CHECKED — classifier read no verdict (K>0 floor, §15)
+#   VALIDATOR_DEFECT COVERAGE_ACCOUNTING_DEFECT — the N == M + K identity broke
 #   RECEIPT_MISMATCH <reviewer> — review_gate.receipt_hash_enforcement is
 #                             `true` (opt-in; default `false` as of TASK-009
 #                             round-3, pending a follow-up hardening pass on
@@ -693,12 +692,12 @@ validate_review_evidence() {
   # directory; K==0 over a non-empty scan is that state and blocks with its own token.
   skipped=$((skip_artifact + skip_nonseat + skip_superseded))
   if [ "$scanned" -gt 0 ] && [ "$checked" -eq 0 ]; then
-    echo "NOTHING_CHECKED"
+    echo "${NAZGUL_VALIDATOR_DEFECT_PREFIX} NOTHING_CHECKED"
     problems=$((problems + 1))
     pass_findings=$((pass_findings + 1))
   fi
   if [ "$scanned" -ne $((skipped + checked)) ]; then
-    echo "COVERAGE_ACCOUNTING_DEFECT"
+    echo "${NAZGUL_VALIDATOR_DEFECT_PREFIX} COVERAGE_ACCOUNTING_DEFECT"
     problems=$((problems + 1))
     pass_findings=$((pass_findings + 1))
   fi

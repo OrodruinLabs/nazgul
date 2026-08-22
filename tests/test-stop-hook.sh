@@ -2194,4 +2194,76 @@ LOCKS=$(ls "$TEST_DIR"/nazgul/sessions/*.lock 2>/dev/null | wc -l | tr -d ' ')
 assert_eq "0-D: session lock persists through the allowed stop" "$LOCKS" "1"
 teardown_temp_dir
 
+# --- TASK-043 (AC2): a validator-defect-only evidence pass — every reviewer authorized-
+# skipped, only paperwork left — is a checker malfunction, not a task strike. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["qa-reviewer"]' '.review_gate.conditional_dispatch = true'
+create_plan
+create_task_file "TASK-001" "DONE"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf -- 'diff --git a/src/app.py b/src/app.py\n--- a/src/app.py\n+++ b/src/app.py\n' \
+  > "$TEST_DIR/nazgul/reviews/TASK-001/diff.patch"
+jq -n '{unit:"TASK-001", skipped:[{name:"qa-reviewer", reason:"no tests changed"}]}' \
+  > "$TEST_DIR/nazgul/reviews/TASK-001/.dispatch.json"
+printf '# summary\n' > "$TEST_DIR/nazgul/reviews/TASK-001/summary.md"
+create_task_file "TASK-002" "READY"
+run_hook
+assert_exit_code "defect-only: exit 2 (loop continues)" "$HOOK_EC" 2
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "defect-only: DONE left in place" "$status" "DONE"
+assert_not_contains "defect-only: not a review-gate violation" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+assert_not_contains "defect-only: never suggests materialize" "$HOOK_OUTPUT" "materialize"
+assert_contains "defect-only: names the mechanism, not the task" "$HOOK_OUTPUT" \
+  "review-evidence reported a validator defect (NOTHING_CHECKED)"
+assert_file_contains "defect-only: stop_gate event fires" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"reason":"review_validator_defect"'
+assert_file_contains "defect-only: event names the validator" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"validator":"review-evidence"'
+count=$(jq -r '.safety._review_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
+assert_eq "defect-only: no strike recorded" "$count" "0"
+teardown_temp_dir
+
+# --- TASK-043 (AC2 converse): a genuine MISSING problem with no validator defect present
+# still takes the ordinary two-strike ladder — the fix must not weaken the real case. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer", "qa-reviewer"]'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+create_task_file "TASK-002" "READY"
+run_hook
+assert_contains "converse: genuine problem still takes the ladder" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+assert_not_contains "converse: no validator-defect noise on a genuine-only problem" \
+  "$HOOK_OUTPUT" "validator defect"
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "converse: first violation still resets to IMPLEMENTED" "$status" "IMPLEMENTED"
+teardown_temp_dir
+
+# --- TASK-043 (defect ALONGSIDE genuine): a defect arriving next to a real MISSING problem
+# does not swallow the real problem — the ladder still runs on it. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "DONE"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf '# BOARD-2-OUTCOME\n' > "$TEST_DIR/nazgul/reviews/TASK-001/BOARD-2-OUTCOME.md"
+printf '# adversarial\n' > "$TEST_DIR/nazgul/reviews/TASK-001/adversarial-SEC-1.md"
+create_task_file "TASK-002" "READY"
+run_hook
+assert_contains "alongside: still takes the ladder" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+assert_contains "alongside: real reviewer named in the violation" "$HOOK_OUTPUT" "code-reviewer"
+assert_contains "alongside: the defect is ALSO surfaced, separately" "$HOOK_OUTPUT" \
+  "review-evidence reported a validator defect (NOTHING_CHECKED)"
+assert_file_contains "alongside: stop_gate event still fires" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"reason":"review_validator_defect"'
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "alongside: first violation still resets to IMPLEMENTED" "$status" "IMPLEMENTED"
+teardown_temp_dir
+
 report_results
