@@ -17,15 +17,22 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 # shellcheck source=./lib/task-utils.sh
 source "$SCRIPT_DIR/lib/task-utils.sh"
+# shellcheck source=./lib/structured-state.sh
+source "$SCRIPT_DIR/lib/structured-state.sh"
 
 NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
 # shellcheck source=./lib/emit-event.sh
 source "$SCRIPT_DIR/lib/emit-event.sh"
 
-# Board order for `Nazgul Status`. Field creation and the upgrade migration both
-# derive from this list, so a status added here cannot reach only one of them.
-NAZGUL_STATUS_OPTIONS="PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED CANCELLED"
+# Board order IS the authority's order (structured-state.sh): a restated copy here is how
+# APPROVED reached cmd_sync_task's label but neither the field, the migration, nor the check.
+NAZGUL_STATUS_OPTIONS=$(printf '%s' "$VALID_STATUSES" | tr -s ' \t\n' ' ' | sed 's/^ //; s/ $//')
+
+# The same vocabulary in GitHub's label spelling — one transform, one definition, so a label
+# cannot be applied by cmd_sync_task and then never created and never cleaned up.
+status_label_of() { printf 'nazgul:%s' "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"; }
+NAZGUL_STATUS_LABELS=$(for _s in $NAZGUL_STATUS_OPTIONS; do status_label_of "$_s"; printf ' '; done)
 
 # --- Helpers ---
 
@@ -402,7 +409,7 @@ cmd_setup() {
 
   # Create labels
   log_info "Creating labels..."
-  for label in "nazgul" "nazgul:planned" "nazgul:ready" "nazgul:in-progress" "nazgul:implemented" "nazgul:in-review" "nazgul:changes-requested" "nazgul:done" "nazgul:blocked" "nazgul:cancelled"; do
+  for label in "nazgul" $NAZGUL_STATUS_LABELS; do
     gh label create "$label" --repo "$owner/$repo" --force 2>/dev/null || true
   done
 
@@ -488,14 +495,14 @@ cmd_create_issue() {
 
   # Create the issue
   local status_label
-  status_label=$(echo "$status" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+  status_label=$(status_label_of "$status")
 
   local issue_url issue_number
   issue_url=$(gh_with_retry gh issue create \
     --repo "$owner/$repo" \
     --title "$title" \
     --body "$issue_body" \
-    --label "nazgul,nazgul:${status_label}") || {
+    --label "nazgul,${status_label}") || {
     log_warn "Failed to create issue for $task_id (after 3 retries)"
     increment_sync_failures
     return 1
@@ -618,13 +625,13 @@ cmd_sync_task() {
 
   # Update labels — remove old nazgul:* status labels, add new one
   local status_label
-  status_label=$(echo "$status" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+  status_label=$(status_label_of "$status")
 
-  for old_label in "nazgul:planned" "nazgul:ready" "nazgul:in-progress" "nazgul:implemented" "nazgul:in-review" "nazgul:changes-requested" "nazgul:done" "nazgul:blocked" "nazgul:cancelled"; do
+  for old_label in $NAZGUL_STATUS_LABELS; do
     gh issue edit "$issue_number" --repo "$owner/$repo" --remove-label "$old_label" 2>/dev/null || true
   done
 
-  gh issue edit "$issue_number" --repo "$owner/$repo" --add-label "nazgul:${status_label}" 2>/dev/null || true
+  gh issue edit "$issue_number" --repo "$owner/$repo" --add-label "${status_label}" 2>/dev/null || true
 
   # Handle terminal states
   if [ "$status" = "DONE" ]; then
@@ -715,7 +722,7 @@ cmd_archive_all() {
   # Clean stale nazgul labels
   local repo
   repo=$(echo "$repo_info" | jq -r '.name')
-  for label in "nazgul:planned" "nazgul:ready" "nazgul:in-progress" "nazgul:implemented" "nazgul:in-review" "nazgul:changes-requested" "nazgul:done" "nazgul:blocked" "nazgul:cancelled"; do
+  for label in $NAZGUL_STATUS_LABELS; do
     gh label delete "$label" --repo "$owner/$repo" --yes 2>/dev/null || true
   done
   log_info "Cleaned stale nazgul labels"

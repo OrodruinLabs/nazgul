@@ -50,7 +50,8 @@ scan_status_imperative() {
       leadin = "([Pp]lease|[Cc]an[[:space:]]+you|[Cc]ould[[:space:]]+you|[Jj]ust|[Nn]ow|[Oo]kay|[Oo][Kk]|[Gg]o[[:space:]]+ahead[[:space:]]+and)[[:space:],]+"
       lead   = "^[[:space:]]*(" marker ")?(" leadin ")*"
       verb   = "^([Ss]et|[Cc]hange|[Mm]ark(s|ed)?)([^[:alnum:]_]|$)"
-      taskre = "(^|[^[:alnum:]_])(TASK|PATCH)-[0-9][0-9][0-9]([^[:alnum:]_]|$)"
+      # Width matches the repo-wide ^(TASK|PATCH)-[0-9]+$; a narrower copy here reads as silence, not rigour.
+      taskre = "(^|[^[:alnum:]_])(TASK|PATCH)-[0-9]+([^[:alnum:]_]|$)"
       statre = "(^|[^[:alnum:]_])(" statuses ")([^[:alnum:]_]|$)"
     }
     function span_of(s,   pfx, rest, tend, send, last, sp) {
