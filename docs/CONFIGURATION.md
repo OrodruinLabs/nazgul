@@ -321,8 +321,9 @@ configurations: background in the first, foreground in the second. In the sessio
 absence therefore means the dispatch is most likely **background**, so quarantining it is a cost-weighed
 default that is usually wrong about the dispatch it names. On such a host the class-aware hold never
 engages, `stop_gate` `reason: "in_flight_unverifiable"` fires on essentially every dispatch, and the loop
-continues concurrently with live subagents. This is a known, tracked defect (#218) — narrowed by
-FEAT-033, not closed. The authoritative signals exist one event later: `PostToolUse` `tool_response.status` (`async_launched` vs `completed`)
+continues concurrently with live subagents. That was the whole of the defect #218 named, and
+**FEAT-033 closes it** — the Stop-payload path described below is the fix #218 asked for, and it
+ships here. The authoritative signals existed one event later: `PostToolUse` `tool_response.status` (`async_launched` vs `completed`)
 and the `background_tasks[]` array on `Stop`/`SubagentStop`. Both are present in the shipped hook
 schema as of Claude Code 2.1.238 and were **empirically captured 2026-08-21** — real `Stop` and
 `SubagentStop` payloads from two sessions, kept as `tests/fixtures/stop-payload/` — but neither is in
@@ -331,10 +332,22 @@ shipped schema is a strict SUPERSET of the published one, so this rests on obser
 documentation, and the field can change without a deprecation notice. Since FEAT-033 the stop-hook
 READS `background_tasks[]` at `Stop`: a live subagent for this session takes the hold even when every
 marker records `background: "missing"`, so the "never engages" sentence above now describes only the
-case where the payload carries no such field. `tool_response.status` is still unread. `reason: "in_flight_orphan"` is reserved for `background: "false"` or a named dispatch,
+case where the payload carries no such field.
+
+Liveness does not reach a marker whose own recorded class already disposes of it: a
+`background: "false"` marker is quarantined on a live tick exactly as on any other, because no other
+dispatch's liveness makes a synchronous one able to span a Stop. A NAMED marker on a live tick is
+held, not quarantined — its proof is contractual rather than mechanical, and a named dispatch can be
+background and running. The consequence is worth stating on its own, because it is what the hold's
+record shows an operator: the hold's `units` field never names a `background: "false"` marker.
+
+`tool_response.status` is still unread, and that is the deliberate, explicitly out-of-scope
+remainder rather than an unfixed piece of #218 — it is a second, corroborating signal for the same
+question the Stop payload now answers, so reading it would not change any disposition this hook
+takes. `reason: "in_flight_orphan"` is reserved for `background: "false"` or a named dispatch,
 which are genuinely proven.
 
-**A third disposition — `in_flight_orphan_candidate`, DETECT-ONLY.** The `yes` observation splits into two independent counts (ADR-027 Q2): `LIVE` (`type=="subagent"` with an allowlisted `running`/`pending` status) gates the HOLD above; `SUBAGENT_PRESENT` (`type=="subagent"`, status-blind) gates this arm. When `SUBAGENT_PRESENT == 0` — the payload was read and reports no subagent of any status for this session — the marker is neither held on nor quarantined: `stop_gate` `reason: "in_flight_orphan_candidate"` (`evidence: "background_tasks_empty"`) records the observation and the marker is **left in place**, deliberately NOT `in_flight_orphan`, which names a class that was PROVEN and really was moved (`skills/status/SKILL.md`). An unrecognised status (neither `running`/`pending` nor absent) satisfies neither count and produces NEITHER a hold nor a candidate — marker preserved, iteration proceeds, the same "looked and could not tell" treatment `in_flight_stale` gets below. The `mv` for this arm stays deferred until ADR-027's numeric bar — **≥20 `in_flight_orphan_candidate` events across ≥2 objectives, zero cases where a later `subagent_stop` shows the candidate's agent+unit still running** — is met.
+**A third disposition — `in_flight_orphan_candidate`, DETECT-ONLY.** The `yes` observation splits into two independent counts (ADR-027 Q2): `LIVE` (`type=="subagent"` with an allowlisted `running`/`pending` status) gates the HOLD above; `SUBAGENT_PRESENT` (`type=="subagent"`, status-blind) gates this arm. When `SUBAGENT_PRESENT == 0` — the payload was read and reports no subagent of any status for this session — the marker is neither held on nor quarantined: `stop_gate` `reason: "in_flight_orphan_candidate"` (`evidence: "background_tasks_empty"`) records the observation and the marker is **left in place**, deliberately NOT `in_flight_orphan`, which names a class that was PROVEN and really was moved (`skills/status/SKILL.md`). An unrecognised status (neither `running`/`pending` nor absent) produces **neither a hold nor a candidate** — but "neither" is a claim about the two DISPOSITIONS and never about the counts, since such an entry still increments the status-blind `SUBAGENT_PRESENT`. That is what makes present-but-not-live a third STATE rather than an absence, and it has its own record: `stop_gate` `reason: "in_flight_present_not_live"` (fields `unit`/`agent`/`subagents_present`/`live`/`statuses`) plus a stderr line, so the marker is preserved and the iteration proceeds while the arm still shows that a mechanism looked. It earns the "looked and could not tell" comparison with `in_flight_stale` below only because that reason exists; before it, the arm emitted nothing at all and the comparison was false. The `mv` for this arm stays deferred until ADR-027's numeric bar — **≥20 `in_flight_orphan_candidate` events across ≥2 objectives, zero cases where a later `subagent_stop` shows the candidate's agent+unit still running** — is met.
 
 A marker older than `guards.in_flight_stale_minutes` (default `30`, floored to `>=1`) is NOT held on — the
 stop proceeds normally (iteration increments) — but the staleness is surfaced loudly: a stderr line plus a
@@ -381,23 +394,30 @@ rule) and ADR-015.
 The switches below are **environment variables**, not configuration keys. They are deliberately
 absent from `nazgul/config.json` and from `templates/config.json`, nothing reads them from a config
 file, and adding one does **not** move `schema_version` — they are per-invocation debugging aids an
-operator turns on for a single run, not project state worth migrating. These three are the
+operator turns on for a single run, not project state worth migrating. These four are the
 debug/capture switches; other `NAZGUL_*` variables exist (notification and staging disables, for
 example) and are documented in their own script headers.
 
 | Environment variable | Default | Effect |
 |---|---|---|
 | `NAZGUL_STOP_PAYLOAD_CAPTURE` | unset | `1` makes `scripts/stop-hook.sh` write the raw Stop payload to `nazgul/logs/stop-payload-last.json` |
+| `NAZGUL_HOOK_STDIN_TIMEOUT` | `2` | Seconds bounding the shared hook-stdin read (`scripts/lib/hook-stdin.sh`). Validated at source, not trusted: a non-numeric or non-positive value prints a stderr notice and falls back to `2`, because `read -t` would otherwise abort with the payload empty and the miss would read as `why:"no_stdin"` — a misconfiguration wearing an observation's name. The unprefixed `HOOK_STDIN_TIMEOUT` is NOT honoured; there is no shim, by design |
 | `NAZGUL_NOTIFY_DEBUG` | `0` | `1` makes `scripts/notify.sh` log its decisions to stderr |
 | `NAZGUL_STAGING_DEBUG` | `0` | `1` makes `scripts/session-staging.sh` log its decisions to stderr |
 
 ### `NAZGUL_STOP_PAYLOAD_CAPTURE`
 
 The Stop payload is the one place the dispatch class of in-flight work is observable (#218), so the
-loop **always** emits a bounded, structured `stop_payload_observed` event for it: `bg_seen`, a
-closed-set `why`, `entries`/`subagents`/`live` counts, and the distinct `types`/`statuses` seen. That
-event carries no paths and no message text, and it is what `/nazgul:doctor`'s `stop-payload` note
-reads to report **field present** / **field absent** / **never observed**.
+loop emits a bounded, structured `stop_payload_observed` event for it on every Stop it processes:
+`bg_seen`, the closed seven-member `why` above, `entries`/`subagents`/`live` counts, and the distinct
+`types`/`statuses` seen. It is emitted above the `guards.in_flight_hold` kill switch — the
+measurement accumulates with the subsystem off — but BELOW the `paused` gate, which returns first, so
+a paused loop records nothing and a gap in these events is not by itself evidence about the host.
+That event carries no paths and no message text, and it is what `/nazgul:doctor`'s `stop-payload`
+note reads. The note reports **field present**, **field absent**, **field present but wrong shape**
+or **never observed**, and otherwise SKIPS with the reason it could not tell — the telemetry bus is
+off, the record is present but unselectable, or the payload itself did not arrive intact — because
+"looked and found none" and "could not look" are different answers.
 
 Set `NAZGUL_STOP_PAYLOAD_CAPTURE=1` when the structured event is not enough to explain a
 classification and you need the payload verbatim:
@@ -548,7 +568,8 @@ The stream captures:
 - **stack_api_failure** — a `gh`/`gh stack` API call failed; fields `stage`/`auth_status` (an independent `gh auth status` probe, since gh-stack can misattribute auth failures) plus the call's own identifiers
 - **stack_remote_layer_imported** / **stack_remote_layer_import_failed** — an explicit `gh stack checkout <pr>` of a remote layer that `sync` left un-imported succeeded / failed; fields `pr`/`feat_id`/`branch`, or `pr`/`exit_code`/`detail`
 - **red_run_missing** — the IMPLEMENTED red-run evidence check found no usable evidence; fields `task_id` and `reason` (`absent`, `corrupt`, `ref_unresolvable`, `not_ancestor`, `exit_zero`, `bad_na_token`). Emitted whether or not `guards.red_run_evidence` suppressed the block — see Red-Run Evidence Gate above
-- **stop_gate** — a gate ended or short-circuited an autonomous run rather than exiting silently; `reason` values include `in_flight_hold`, `in_flight_stale`, `in_flight_orphan` (a provably non-background in-flight marker found at Stop time — `background: "false"`, or a named dispatch whose report contract owns it — so the marker is moved to `nazgul/in-flight/quarantine/` and the loop continues normally; fields `unit`/`agent`/`background`), `in_flight_unverifiable` (dispatch class not observable at write time; fires on every dispatch where `run_in_background` is omitted from the exposed schema — same fields as `in_flight_orphan` but explicitly NOT the same disposition: the marker is LEFT IN PLACE, never quarantined, because the class was never observed, the dispatch may still be running, and `mv` is irreversible — it would also foreclose #218's fix, which reconciles these markers against the Stop payload's `background_tasks[]`. See In-Flight Dispatch Hold above and #218), and `stacking_unavailable` (stacking enabled but the tooling is unusable — the loop fell back to a plain PR)
+- **stop_payload_observed** — one bounded, structured record of what the `Stop` payload's `background_tasks[]` contained, emitted once per Stop the hook processes and above the `guards.in_flight_hold` kill switch, so the measurement accumulates even with the whole in-flight subsystem off. Fields: `bg_seen` (`yes`|`unknown`), `entries`/`subagents`/`live` counts, the distinct `types`/`statuses` seen, and — on the `unknown` arm only, so the set stays closed — `why`, whose seven members each assert something different about the payload: `no_stdin` (nothing arrived — stdin was a terminal, closed, or a clean empty EOF), `read_timeout` (the bounded read hit `NAZGUL_HOOK_STDIN_TIMEOUT` having read NOTHING), `read_timeout_partial` (the bound was hit with SOME bytes read, so what the classifier held was truncated by Nazgul's own bound rather than malformed by the producer), `not_json` (bytes arrived but did not parse), `field_absent` (the payload parsed and carried no `background_tasks` key), `field_wrong_type` (the key was there and is not an array — `null` and an id-keyed object both land here, deliberately NOT on `not_json`, because the payload itself arrived intact), and `no_jq` (`jq` is absent, so nothing could be inspected). It is an event TYPE and never a `stop_gate` reason, so a consumer keying on `stop_gate` will not see it and must not read that absence as the observation never having happened
+- **stop_gate** — a gate ended or short-circuited an autonomous run rather than exiting silently; `reason` values include `afk_timeout`, `in_flight_hold`, `in_flight_stale` (a marker older than `guards.in_flight_stale_minutes`; also emitted on a LIVE tick carrying `held_over_age: "true"`, where the marker IS held on — #211 forbids a stale bound from DECLINING a hold, never from reporting the possibly-crashed subagent that produced it), `in_flight_orphan_candidate` (the payload was read and reports no subagent of any status; DETECT-ONLY, the marker is left in place), `in_flight_present_not_live` (subagents are present but none positively live — records and does nothing else), `in_flight_hold_budget_exhausted` (a second hold on an UNCHANGED marker set, refused by the `_IN_FLIGHT_HOLD_CAP = 1` valve: the budget worked exactly as designed), `in_flight_hold_unbudgetable` (a mechanism FAILURE, deliberately not the reason above: the Q1 ledger could not be written or could not be keyed to an episode, so the hold could not be BOUNDED, and an unbounded hold is DECLINED rather than taken), `in_flight_orphan` (a provably non-background in-flight marker found at Stop time — `background: "false"`, or a named dispatch whose report contract owns it — so the marker is moved to `nazgul/in-flight/quarantine/` and the loop continues normally; fields `unit`/`agent`/`background`), `in_flight_unverifiable` (dispatch class not observable at write time; fires on every dispatch where `run_in_background` is omitted from the exposed schema — same fields as `in_flight_orphan` but explicitly NOT the same disposition: the marker is LEFT IN PLACE, never quarantined, because the class was never observed, the dispatch may still be running, and `mv` is irreversible — it would also foreclose #218's fix, which reconciles these markers against the Stop payload's `background_tasks[]`. See In-Flight Dispatch Hold above and #218), and `stacking_unavailable` (stacking enabled but the tooling is unusable — the loop fell back to a plain PR). Those ten are the enumeration `agents/doc-verifier.md`'s fence checks against; a reason is never an event name and must not be looked up in the list above
 - **in_flight_swept** — the SessionStart sweep quarantined an over-age in-flight marker; fields `source` (`session_start_sweep`), `unit`, and `age_minutes` (a JSON number). Named distinctly from the `stop_gate` reason `in_flight_orphan` ON PURPOSE (PR #223 review #2): `orphan` asserts a PROVEN dispatch class, whereas this sweep only ever proves AGE. Same quarantine directory, different producer, different fields, different claim — a consumer keying only on `stop_gate` misses every SessionStart sweep, and one keying on `in_flight_orphan` must not count these as leaks. Skipped entirely when `guards.in_flight_hold` is `false` or when SessionStart's `source` is `compact` (compaction is not a new session, and sweeping there destroyed a running AFK loop's crashed-subagent evidence)
 - **dispatch_guard_background_unverifiable** — `scripts/parallel-dispatch-guard.sh` allowed an unnamed reviewer dispatch whose payload carried no `run_in_background` field at all, because on schemas lacking that field it is unsupplyable (#205); fields `agent`/`caller`
 - **clear_skipped_no_match** — a completing subagent cleared no in-flight marker because none matched its unit; fields `agent`/`unit`

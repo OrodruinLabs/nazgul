@@ -17,8 +17,10 @@ capture settled the design's load-bearing question with data instead of argument
 waiters. Without `select(.type=="subagent")` that session's loop would have held forever on its own
 polling shells. The type filter is load-bearing, not defensive.
 
-**MINOR, not PATCH:** new observable behavior — one new event type, two new `stop_gate` reasons, a new
-`/nazgul:doctor` note, and a hold that can now engage where it previously never did. **MAJOR is
+**MINOR, not PATCH:** new observable behavior — one new event type, four new `stop_gate` reasons
+(`in_flight_orphan_candidate`, `in_flight_present_not_live`, `in_flight_hold_budget_exhausted`,
+`in_flight_hold_unbudgetable`), a new `/nazgul:doctor` note, and a hold that can now engage where it
+previously never did. **MAJOR is
 wrong:** nothing is removed or renamed, no gate changes meaning, no default is inverted. **No schema
 step — config schema stays v36 and this release adds ZERO config keys.** Neither
 `scripts/migrate-config.sh` nor `templates/config.json` appears in this objective's diff, which is
@@ -27,9 +29,16 @@ itself the evidence that nothing an existing project stores had to change.
 ### Added
 
 - **`scripts/lib/hook-stdin.sh` — one shared, bounded, EOF-INDEPENDENT hook-stdin read.**
-  `IFS= read -r -d '' -t 2 payload <&0`: `-t 2` is the bound that actually closes the hazard (`read`
-  is a bash builtin, so no `timeout(1)` is needed — macOS ships none), `-d ''` keeps a pretty-printed
-  multi-line payload from being truncated, and `[ -t 0 ]` is treated as necessary but NEVER sufficient.
+  `IFS= read -r -d '' -t "$NAZGUL_HOOK_STDIN_TIMEOUT" payload <&0`: the timeout is the bound that
+  actually closes the hazard (`read` is a bash builtin, so no `timeout(1)` is needed — macOS ships
+  none), `-d ''` keeps a pretty-printed multi-line payload from being truncated, and `[ -t 0 ]` is
+  treated as necessary but NEVER sufficient. The bound is an environment variable defaulting to `2`
+  seconds and is VALIDATED at source rather than trusted: a non-numeric or non-positive value prints
+  a stderr notice and falls back to `2`, because `read -t` would otherwise abort with the payload
+  empty and the miss would then read as `why:"no_stdin"` — a misconfiguration wearing an
+  observation's name. It carries the `NAZGUL_` prefix every other switch in this repo carries; the
+  unprefixed `HOOK_STDIN_TIMEOUT` it was called earlier in this same unreleased cycle is NOT
+  honoured and there is no shim, by design — no release ever shipped the short name.
   It ASSIGNS rather than prints, deliberately: a `$(...)` capture is a subshell, so a stdout-only
   reader could never report WHY a payload was empty, and `read_timeout` vs `no_stdin` would collapse
   into one indistinguishable answer. This is a NEW idiom on purpose — the ten existing
@@ -41,15 +50,26 @@ itself the evidence that nothing an existing project stores had to change.
   `stop_gate` will not see it and must not read its absence there as the observation never having
   happened.
 - **`NAZGUL_STOP_PAYLOAD_CAPTURE=1`** writes the raw Stop payload to `nazgul/logs/stop-payload-last.json`
-  — a single overwritten file, never appended, written even when the payload is empty so "capture on,
-  nothing arrived" stays distinguishable from "capture off". It is an environment variable and NOT a
+  — staged through a `0600` temp file and renamed into place, so the mode is set before any bytes are
+  written and a reader never sees a half-written file; a single overwritten file, never appended,
+  written even when the payload is empty so "capture on, nothing arrived" stays distinguishable from
+  "capture off". It is an environment variable and NOT a
   config key: the raw payload carries `cwd`, transcript paths and `last_assistant_message`, which is
   exactly why the always-on event is bounded and structured and this one is opt-in. `docs/CONFIGURATION.md`
   gains an "Environment Variables (NOT `config.json` fields)" section stating that adding one does not
   move `schema_version`.
-- **A `/nazgul:doctor` `stop-payload` note — the roster goes thirteen → fourteen.** Three-state on
-  purpose: **field present** / **field absent** / **never observed**, plus an explicit UNREADABLE skip.
-  "No `stop_payload_observed` record exists" is reported as *never looked*, never as *looked and found
+- **A `/nazgul:doctor` `stop-payload` note — the roster goes thirteen → fourteen.** Every outcome is
+  named and none stands in for another: **field present**, **field absent**, **field present but wrong
+  shape** (the R3 canary firing — `why:"field_wrong_type"`, explicitly NOT a report that the field was
+  missing) and **never observed** are reported; four further states SKIP with the reason the check
+  could not tell — the telemetry bus is off (so no Stop can ever be recorded here, and no number of
+  iterations will change that), a record is present in `events.jsonl` but unselectable (jq absent, or a
+  malformed line aborted the stream), a record was selected but carries no readable `bg_seen`, or the
+  payload itself did not arrive intact, spelled out per `why` member. Selection uses `jq` with a
+  separate `grep` presence probe, because "selected nothing" and "could not read" must not collapse;
+  the `why` cases are whole-field alternatives rather than a prefix glob, since `read_timeout` is a
+  strict prefix of `read_timeout_partial` and the two describe different payloads. "No
+  `stop_payload_observed` record exists" is reported as *never looked*, never as *looked and found
   none*. It stays a `note` rather than a scored check, so RULES §15 enrollment is unchanged.
 - **Declared Stop-payload fixtures, split by what evidence actually exists.**
   `tests/fixtures/stop-payload/` is `captured-redacted` — a real hook invocation, machine-checked pins
@@ -62,21 +82,47 @@ itself the evidence that nothing an existing project stores had to change.
 
 ### Changed
 
-- **The hold is decided from the payload, by TWO independent counts, never one filter.** LIVE
+- **There are TWO bases for the hold, and the payload added the second one.** The KNOWN-BACKGROUND
+  MARKER hold is unchanged from 2.33.0 and is NOT gated by the payload: a fresh, unnamed marker
+  recording `background: "true"` still counts toward `FRESH_COUNT` and still holds even when the
+  payload reports zero live subagents. What this release adds is the PAYLOAD-DRIVEN SESSION hold —
+  when `background_tasks[]` reports `LIVE > 0` for this session, the hold rests on the session's own
+  evidence and every marker that is not `background: "false"` is held and named, whatever class it
+  recorded. Both arms leave through one exit, and the record already tells them apart without a new
+  field: the live arm carries `live_subagents:n`, and its operator line names the payload's live count
+  where the marker arm names `N BACKGROUND dispatch(es)`.
+- **The observation splits into TWO independent counts, never one filter.** LIVE
   (`type == "subagent"` AND an allowlisted `running`/`pending` status) gates the HOLD;
-  SUBAGENT_PRESENT (type only, status-blind) gates the CANDIDATE; a status the filter does not
-  recognise produces NEITHER, and a count that failed to parse — including a `background_tasks` key
-  present but not an array, the R3 undocumented-schema-change shape this event exists to detect — is
-  recorded as `bg_seen:"unknown"` with `why:"not_json"`, never as `bg_seen:"yes"` with zeroed counts:
-  §15/ADR-009's looked-vs-never-looked distinction applied to the filter itself. (The first cut of this
-  event collapsed exactly that case to `bg_seen:"yes", entries:0` — a `|| true` on the TSV parse
-  swallowed the failure after `BG_SEEN` had already been set to `"yes"` — caught by review as the one
-  blocking finding and closed before merge; `tests/test-in-flight-hold.sh` P5 now pins a string and an
-  object under the key alongside the prior truncation/absent cases.)
+  SUBAGENT_PRESENT (type only, status-blind) gates the CANDIDATE. A status the filter does not
+  recognise produces neither DISPOSITION — but it still increments SUBAGENT_PRESENT, which is what
+  makes present-but-not-live a third STATE rather than an absence, and `stop_gate` reason
+  `in_flight_present_not_live` is its record. A count that failed to parse is `bg_seen:"unknown"` with
+  `why:"not_json"`, never `bg_seen:"yes"` with zeroed counts. A `background_tasks` key that is PRESENT
+  but not an array is a DIFFERENT answer and gets its own closed-set member, `why:"field_wrong_type"`:
+  `has()` accepts `null` and `// []` coerces it, and jq's `length`/`map` iterate an object's values, so
+  without an explicit type gate `null`, `false` and the id-keyed object of task objects — the likeliest
+  R3 deprecation shape — all counted as an observed empty registry. Calling that `not_json` would tell
+  an operator, and `/nazgul:doctor`, that the payload did not arrive intact, which is false of a
+  present, well-formed, wrongly-typed field. §15/ADR-009's looked-vs-never-looked distinction applied to
+  the filter itself. (The first cut of this event collapsed the parse failure to `bg_seen:"yes",
+  entries:0` — a `|| true` on the TSV parse swallowed it after `BG_SEEN` had already been set to
+  `"yes"` — caught by review as the one blocking finding and closed before merge; the wrongly-typed
+  shapes were caught by three reviewers on the round after that. `tests/test-in-flight-hold.sh` P5 pins
+  a string, a plain object, an explicit `null` and an object of task objects under the key, alongside
+  the prior truncation/absent/empty cases.)
   The payload is consulted BEFORE the freshness cutoff, so a stale bound can never decline a hold for a
-  session that HAS a live subagent (#211 in effect, not just in default). Liveness is a property of the
-  SESSION, not of one marker — `background_tasks[]` carries no join key — so a live subagent holds
-  every marker and moves none.
+  session that HAS a live subagent (#211 in effect, not just in default) — and the stale diagnostic
+  still fires on that tick, carrying `held_over_age: "true"`, because #211 forbids a stale bound from
+  DECLINING a hold, never from reporting the possibly-crashed subagent that produced it.
+- **Liveness is a property of the SESSION; `background: "false"` is a property of THAT MARKER.** A
+  session-level fact does not overrule a marker-level one that already disposes of it, so the PROVEN
+  class splits by strength of proof. `background: "false"` is a MECHANICAL IMPOSSIBILITY — a
+  synchronous dispatch cannot span a Stop, since the Agent call blocks the dispatching turn and Stop
+  fires after it ends — so such a marker is quarantined on a live tick exactly as on any other, and the
+  hold's `units` field therefore never names one. A NAMED dispatch's proof is only CONTRACTUAL, and a
+  named dispatch can be genuinely background and live, so on a `LIVE > 0` tick it is held and named
+  rather than quarantined: emitting `in_flight_orphan` ("proven leak") about it while the same tick
+  reports a live subagent would be a self-contradicting pair of records.
 - **The empty-array arm is DETECT-ONLY: it ships NO `mv`.** When the payload was observed and reports
   no subagent of any status, the stop-hook emits
   `stop_gate reason:"in_flight_orphan_candidate"` with `evidence:"background_tasks_empty"` and leaves
@@ -95,6 +141,16 @@ itself the evidence that nothing an existing project stores had to change.
   put the hold's own byte-identical config at risk. The counter is written BEFORE the hold, because in
   the canonical unattended shape `exit 0` IS process exit and an unrecorded attempt would return later
   as a fresh budget.
+- **The hold budget is episode-scoped and its failures are named.** Ledger entries whose recorded
+  marker basenames no longer exist under `nazgul/in-flight/` are pruned before any key is derived, so
+  the valve bounds an episode rather than a project lifetime; entries that record no marker set at all
+  are retired on a 24-hour TTL. The claim is taken under `flock` where available, through a temp file
+  and a rename. When the hold rests on live subagents alone the key is their ids, not the empty set,
+  which would otherwise hash to one lifetime constant and spend this arm's budget forever — and if
+  those ids are absent, the hold is DECLINED rather than taken unbounded. Every claim failure that is
+  not the cap is reported as `stop_gate reason:"in_flight_hold_unbudgetable"`, deliberately not
+  `in_flight_hold_budget_exhausted`: the latter names a budget that worked exactly as designed, the
+  former a mechanism that FAILED, and ADR-014 exists so those two never print the same thing.
 - **Harness stdin sweep (`</dev/null`) so the new read cannot hang the suite.** `scripts/stop-hook.sh`
   now reads stdin, so every bare `bash "$STOP_HOOK"` in the tests would have inherited the suite's own
   stdin: 12 invocation sites are bound explicitly, `tests/run-tests.sh` runs EVERY test file with
@@ -108,7 +164,18 @@ itself the evidence that nothing an existing project stores had to change.
   reference lists only `last_assistant_message` and `effort` for `Stop`, so the shipped schema is a
   strict superset of the published one; and the 2.33.0 entries above that said a `"missing"` marker is
   quarantined are corrected to what 2.33.0 actually shipped, which is leave-in-place. `CHANGELOG.md` was
-  the last record surface still telling readers otherwise.
+  the last record surface still telling readers otherwise. A second pass corrected what this entry
+  itself, `docs/CONFIGURATION.md`, `docs/ARCHITECTURE.md`, `docs/SAFETY.md` and
+  `docs/loop-engineering.md` still asserted after the code moved: #218's Stop-payload classification
+  defect is CLOSED by this release rather than merely narrowed (the unread `PostToolUse`
+  `tool_response.status` join is the deliberate, explicitly out-of-scope remainder — a second
+  corroborating signal, not an unfixed part of the defect); `docs/SAFETY.md`'s claim that any
+  not-provably-background marker "is quarantined" was already false before this cycle, since the
+  unobservable class is left in place; and `docs/loop-engineering.md`'s "on a fork-mode host the hold
+  does not engage" is precisely the sentence this release invalidates. `stop_payload_observed` is
+  emitted above the `guards.in_flight_hold` kill switch but BELOW the `paused` gate, so "always on"
+  now reads "once per Stop the hook processes" — a paused loop records nothing, and a gap in these
+  events is not by itself evidence about the host.
 
 ### Known constraints (honest notes)
 
