@@ -571,11 +571,63 @@ run_hook "$(cat "$FIXTURES/stop-payload/stop-two-subagents-one-shell.json")"
 EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
 assert_exit_code "P8: an over-age marker still holds when a live subagent is observed (exit 0)" "$HOOK_EC" 0
 assert_contains "P8: the hold is taken on the real capture" "$EVENTS" '"reason":"in_flight_hold"'
-assert_not_contains "P8: the disposition does NOT collapse to in_flight_stale" "$EVENTS" '"reason":"in_flight_stale"'
+# The hold is the DISPOSITION; the stale record is a REPORT. Round 1 asserted the absence of the
+# record as a proxy for the disposition, which is what F15 below shows was never the same claim.
+assert_contains "F15 (in the P8 cell): the over-age marker is reported, not silenced by the hold it was granted" "$EVENTS" '"reason":"in_flight_stale"'
+assert_eq "F15 (in the P8 cell): ... and that record marks itself held-over-age, so it never reads as a declined hold" \
+  "$(grep '"reason":"in_flight_stale"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1 | jq -r '.held_over_age')" "true"
 assert_file_exists "P8: the over-age marker is left in place" "$TEST_DIR/nazgul/in-flight/stale.json"
 assert_file_not_exists "P8: the over-age marker is not quarantined" "$TEST_DIR/nazgul/in-flight/quarantine/stale.json"
 assert_eq "P8: a held iteration is not burned" \
   "$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")" "5"
+teardown_temp_dir
+
+# F15 (union mo@:240, ADR-014) — #211 forbids a stale bound DECLINING a hold when a subagent is
+# observed live; it never asked for the crashed-subagent diagnostic to be silenced along with it.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 5'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/stale.json" "nazgul:implementer" "TASK-001" "$(( $(date +%s) - (31 * 60) ))" "missing"
+run_hook "$(cat "$FIXTURES/stop-payload/stop-two-subagents-one-shell.json")"
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+F15_LINE=$(grep '"reason":"in_flight_stale"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_exit_code "F15: the over-age marker is STILL held — reporting it changes no disposition (exit 0)" "$HOOK_EC" 0
+assert_contains "F15: the hold really was taken on this tick" "$EVENTS" '"reason":"in_flight_hold"'
+assert_contains "F15: and the crashed-subagent diagnostic survives the hold" "$EVENTS" '"reason":"in_flight_stale"'
+# held_over_age is what separates this emit from the ordinary decline-the-hold stale branch: a tree
+# where the marker fell through to that branch would satisfy the reason pin above but not this one.
+assert_eq "F15: the record marks itself as held over age, not as a declined hold" \
+  "$(printf '%s' "$F15_LINE" | jq -r '.held_over_age')" "true"
+assert_eq "F15: it carries the bound it exceeded" \
+  "$(printf '%s' "$F15_LINE" | jq -r '.limit')" "30"
+assert_eq "F15: and an age genuinely past that bound, read off the record" \
+  "$(printf '%s' "$F15_LINE" | jq -r 'if .age_minutes >= 31 then "over" else "under" end')" "over"
+assert_contains "F15: the stderr line says HELD ON, never the declined branch's wording" "$HOOK_OUTPUT" "HELD ON anyway"
+assert_file_exists "F15: the over-age marker is left in place" "$TEST_DIR/nazgul/in-flight/stale.json"
+assert_file_not_exists "F15: and is never quarantined by being reported" "$TEST_DIR/nazgul/in-flight/quarantine/stale.json"
+assert_eq "F15: a held iteration is still not burned" \
+  "$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")" "5"
+teardown_temp_dir
+
+# F15 companion — the age test is real and not an unconditional emit: a FRESH marker under the SAME
+# live payload takes the same hold and records no staleness at all.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 5'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/fresh.json" "nazgul:implementer" "TASK-001" "$(date +%s)" "missing"
+run_hook "$(cat "$FIXTURES/stop-payload/stop-two-subagents-one-shell.json")"
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+assert_exit_code "F15 companion: a fresh marker under a live payload holds exactly as before (exit 0)" "$HOOK_EC" 0
+assert_contains "F15 companion: the same hold, through the same arm" "$EVENTS" '"reason":"in_flight_hold"'
+assert_not_contains "F15 companion: and NO stale record — the new emit is age-gated, not unconditional" "$EVENTS" '"reason":"in_flight_stale"'
 teardown_temp_dir
 
 # P8 (AC10) — the 30-minute default is #211's call, not this objective's: READ, never written.
@@ -631,6 +683,59 @@ assert_exit_code "P11 companion: a pending subagent counts as live (exit 0)" "$H
 assert_contains "P11 companion: and takes the hold" "$EVENTS" '"reason":"in_flight_hold"'
 assert_eq "P11 companion: pending is counted in live, not merely present" \
   "$(printf '%s' "$P11P_OBS" | jq -r '[.subagents,.live]|join("/")' 2>/dev/null)" "1/1"
+teardown_temp_dir
+
+# F5 (union mo@:254, ADR-014) — ruling Q2's third state acts on nothing, and recorded nothing either.
+# Its DISPOSITION is passed by the ruling and unchanged here; only the silence is.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 5'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$(date +%s)" "missing"
+F5_QUAR_BEFORE=$(find "$TEST_DIR/nazgul/in-flight/quarantine" -type f 2>/dev/null | wc -l | tr -d ' ')
+run_hook "$(cat "$FIXTURES/stop-payload-synthetic/unknown-status-queued.json")"
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+F5_LINE=$(grep '"reason":"in_flight_present_not_live"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_contains "F5: the third state emits a stop_gate record of its own" "$EVENTS" '"reason":"in_flight_present_not_live"'
+assert_contains "F5: and a loud stderr line, the treatment in_flight_stale already gets" "$HOOK_OUTPUT" "PRESENT-NOT-LIVE in-flight marker"
+assert_contains "F5: the stderr line names the unit it could not classify" "$HOOK_OUTPUT" "TASK-002"
+assert_eq "F5: the record names that unit too" "$(printf '%s' "$F5_LINE" | jq -r '.unit')" "TASK-002"
+assert_eq "F5: ... and the agent" "$(printf '%s' "$F5_LINE" | jq -r '.agent')" "nazgul:implementer"
+# Both counts are compared against the fixture's own numbers rather than asserted present: a record
+# that carried neither, or carried a constant, would still satisfy a bare presence check.
+assert_eq "F5: it carries the two counts that produced the state — present, and not live" \
+  "$(printf '%s' "$F5_LINE" | jq -r '"\(.subagents_present)/\(.live)"')" "1/0"
+assert_eq "F5: subagents_present is a JSON number, not a string" \
+  "$(printf '%s' "$F5_LINE" | jq -r '.subagents_present | type')" "number"
+assert_eq "F5: it quotes the unrecognised statuses verbatim — the reason the tick could not tell" \
+  "$(printf '%s' "$F5_LINE" | jq -r '.statuses')" "queued,running"
+# SCOPE FENCE (ruling): a record was added, a disposition was not. Every P11 disposition still holds.
+assert_file_exists "F5: the marker is still at its original path" "$TEST_DIR/nazgul/in-flight/legacy.json"
+assert_file_not_exists "F5: the marker is NOT quarantined" "$TEST_DIR/nazgul/in-flight/quarantine/legacy.json"
+assert_eq "F5: the quarantine/ file count is unchanged across the run" \
+  "$(find "$TEST_DIR/nazgul/in-flight/quarantine" -type f 2>/dev/null | wc -l | tr -d ' ')" "$F5_QUAR_BEFORE"
+assert_not_contains "F5: still no hold — a record is not a disposition" "$EVENTS" '"reason":"in_flight_hold"'
+assert_not_contains "F5: and still no orphan candidate — a subagent IS present" "$EVENTS" '"reason":"in_flight_orphan_candidate"'
+assert_exit_code "F5: the run still degrades to an ordinary blocked iteration (exit 2)" "$HOOK_EC" 2
+teardown_temp_dir
+
+# F5 negative — the new reason is reached only by the third state. An observed-EMPTY payload keeps
+# its candidate disposition, so a collapse of the two arms is caught here and not only by review.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/legacy.json" "nazgul:implementer" "TASK-002" "$(date +%s)" "missing"
+run_hook "$(cat "$FIXTURES/stop-payload-synthetic/background-tasks-empty.json")"
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+assert_contains "F5 negative: an empty background_tasks[] still files the orphan candidate" "$EVENTS" '"reason":"in_flight_orphan_candidate"'
+assert_not_contains "F5 negative: and never the present-not-live reason — no subagent is present" "$EVENTS" '"reason":"in_flight_present_not_live"'
 teardown_temp_dir
 
 # === P10 (ruling Q1): the hold budget valve, bounded per marker set ===
@@ -818,6 +923,44 @@ assert_eq "P10 floor: the valve's pin set is not empty" \
   "$([ "$P10_CHECKED" -gt 0 ] && echo yes || echo no)" "yes"
 assert_eq "P10: $P10_SCANNED scanned, $P10_SKIPPED skipped, $P10_CHECKED checked — every first hold permitted, every unchanged repeat refused" \
   "$P10_FINDINGS" "0"
+
+# === F9 (union mo@:324, RULES §5): an unwritable ledger is a mechanism FAILURE, not a spent budget ===
+
+# `.in-flight-holds` is created as a regular FILE so `mkdir -p` cannot succeed. A chmod would be
+# ignored by a root-running CI and would silently test nothing.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 5'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight" "$TEST_DIR/nazgul/logs"
+_write_marker "$TEST_DIR/nazgul/in-flight/valve-uw.json" "nazgul:implementer" "TASK-007" "$(date +%s)" "true"
+printf 'not a directory\n' > "$TEST_DIR/nazgul/logs/.in-flight-holds"
+run_hook
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+F9_LINE=$(grep '"reason":"in_flight_hold_unbudgetable"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_eq "F9: the blocker is really in force — the ledger path is still a plain file, so mkdir -p could not have succeeded" \
+  "$([ -f "$TEST_DIR/nazgul/logs/.in-flight-holds" ] && [ ! -d "$TEST_DIR/nazgul/logs/.in-flight-holds" ] && echo file || echo other)" "file"
+assert_contains "F9: an unwritable ledger emits a reason of its own" "$EVENTS" '"reason":"in_flight_hold_unbudgetable"'
+# SUBSTRING TRAP: in_flight_hold is a strict PREFIX of both in_flight_hold_budget_exhausted and
+# in_flight_hold_unbudgetable, so every assertion here carries the compact-JSON closing quote.
+assert_not_contains "F9: it never wears the spent budget's reason" "$EVENTS" '"reason":"in_flight_hold_budget_exhausted"'
+assert_not_contains "F9: and no hold was taken" "$EVENTS" '"reason":"in_flight_hold"'
+assert_eq "F9: holds_taken is 0 — the cap was never reached, so nothing was spent" \
+  "$(printf '%s' "$F9_LINE" | jq -r '.holds_taken')" "0"
+assert_eq "F9: holds_taken is a JSON number, not a string" \
+  "$(printf '%s' "$F9_LINE" | jq -r '.holds_taken | type')" "number"
+assert_eq "F9: the ledger field is kept — it still discriminates on the exhausted arm" \
+  "$(printf '%s' "$F9_LINE" | jq -r '.ledger')" "unwritable"
+assert_eq "F9: it names the unit it declined to hold on" \
+  "$(printf '%s' "$F9_LINE" | jq -r '.units')" "TASK-007"
+assert_contains "F9: the stderr wording is unchanged — the reason moved, the prose did not" "$HOOK_OUTPUT" "in-flight hold NOT taken"
+assert_exit_code "F9: the run falls through to an ordinary blocked iteration (exit 2)" "$HOOK_EC" 2
+assert_eq "F9: ... and burns it, so the fall-through really reached the increment" \
+  "$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")" "6"
+assert_file_exists "F9: an unbudgetable hold quarantines nothing" "$TEST_DIR/nazgul/in-flight/valve-uw.json"
+teardown_temp_dir
 
 # === P12b (ruling Q4 item 2): the env-gated raw payload capture ===
 

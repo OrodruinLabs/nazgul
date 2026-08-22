@@ -249,6 +249,12 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
       FRESH_COUNT=$((FRESH_COUNT + 1))
       FRESH_UNITS="${FRESH_UNITS}${FRESH_UNITS:+ }${m_unit}"
       FRESH_BASENAMES="${FRESH_BASENAMES}${marker##*/}"$'\n'
+      if [ "$m_epoch" -le 0 ] || [ "$m_epoch" -lt "$IN_FLIGHT_CUTOFF" ]; then
+        # #211 forbids a stale bound DECLINING this hold; it never asked for the crashed-subagent diagnostic to go with it. Holding on a marker and reporting it are independent.
+        m_age_min=$(( (IN_FLIGHT_NOW - m_epoch) / 60 ))
+        echo "Nazgul: STALE in-flight marker for ${m_unit} (${m_agent}), age ${m_age_min}m >= ${IN_FLIGHT_STALE_MIN}m — HELD ON anyway because the Stop payload reports a live subagent; investigate a possibly crashed subagent ($(basename "$marker"))." >&2
+        emit_event "stop_gate" reason "in_flight_stale" unit "$m_unit" agent "$m_agent" age_minutes:n "$m_age_min" limit:n "$IN_FLIGHT_STALE_MIN" held_over_age "true"
+      fi
     elif [ "$m_epoch" -gt 0 ] && [ "$m_epoch" -ge "$IN_FLIGHT_CUTOFF" ]; then
       # "missing" = dispatch class NOT OBSERVABLE at write time, not foreground. run_in_background is omitted from the exposed Agent schema in fork mode (the interactive default since v2.1.232) and under CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
       # absence means the OPPOSITE in those two configs (background / foreground). #218: read background_tasks[] at Stop instead of predicting at dispatch time.
@@ -259,6 +265,10 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
           # DETECT-ONLY: ruling Q3 defers the irreversible move until ADR-027's measurement bar.
           echo "Nazgul: ORPHAN CANDIDATE in-flight marker for ${m_unit} (${m_agent}) — the Stop payload reports no subagent of any status for this session. NOT quarantined and NOT held on; left in nazgul/in-flight/ pending the ADR-027 Q3 measurement bar. Continuing normally." >&2
           emit_event "stop_gate" reason "in_flight_orphan_candidate" evidence "background_tasks_empty" unit "$m_unit" agent "$m_agent" entries:n "${BG_ENTRIES:-0}" subagents_present:n "$BG_SUBAGENTS" types "${BG_TYPES:-}"
+        else
+          # Ruling Q2's third state: its disposition is passed and untouched here; the silence was the defect.
+          echo "Nazgul: PRESENT-NOT-LIVE in-flight marker for ${m_unit} (${m_agent}) — the Stop payload reports ${BG_SUBAGENTS} subagent(s) present for this session but none positively live (statuses: ${BG_STATUSES:-none}), so this tick can prove neither a running dispatch nor an orphan. NOT held on and NOT quarantined; left in nazgul/in-flight/. Continuing normally." >&2
+          emit_event "stop_gate" reason "in_flight_present_not_live" unit "$m_unit" agent "$m_agent" subagents_present:n "$BG_SUBAGENTS" live:n "${BG_LIVE:-0}" statuses "${BG_STATUSES:-}"
         fi
       elif [ "$m_bg" = "true" ] && [ "$m_named" != "true" ]; then
         # Provably-background, unnamed: the documented harness resume is the wake path this hold
@@ -339,11 +349,14 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
     # No `exit 0` on this path, deliberately — it falls through to the iteration increment below,
     # which is the pre-hold behavior exactly: quarantine nothing, move nothing.
     if [ "$IN_FLIGHT_LEDGER" = "unwritable" ]; then
+      # A ledger that could not be written is a mechanism FAILURE and must not wear the policy DECISION's reason (RULES §5) — holds_taken is still 0 and the cap was never reached.
+      IN_FLIGHT_NOHOLD_REASON="in_flight_hold_unbudgetable"
       echo "Nazgul: in-flight hold NOT taken — its budget ledger under nazgul/logs/.in-flight-holds/ could not be written, so this hold cannot be bounded, and ruling Q1 refuses an unbounded hold. Continuing normally." >&2
     else
+      IN_FLIGHT_NOHOLD_REASON="in_flight_hold_budget_exhausted"
       echo "Nazgul: in-flight hold budget EXHAUSTED for this marker set (${IN_FLIGHT_HOLDS_TAKEN}/${_IN_FLIGHT_HOLD_CAP} already taken, fingerprint ${IN_FLIGHT_HOLD_FP}); unchanged markers: ${FRESH_UNITS:-none}. An unchanged set means no dispatch completed, so whatever woke this session was not the hold's wake path. Continuing normally." >&2
     fi
-    emit_event "stop_gate" reason "in_flight_hold_budget_exhausted" fingerprint "$IN_FLIGHT_HOLD_FP" \
+    emit_event "stop_gate" reason "$IN_FLIGHT_NOHOLD_REASON" fingerprint "$IN_FLIGHT_HOLD_FP" \
       holds_taken:n "$IN_FLIGHT_HOLDS_TAKEN" live_subagents:n "${BG_LIVE:-0}" \
       units "$FRESH_UNITS" ledger "$IN_FLIGHT_LEDGER"
   fi
