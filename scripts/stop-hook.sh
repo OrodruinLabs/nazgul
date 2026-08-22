@@ -35,11 +35,17 @@ fi
 STOP_PAYLOAD=""
 read_hook_payload STOP_PAYLOAD
 
-# Opt-in, default unset: the raw payload carries cwd, transcript_path,
-# agent_transcript_path and last_assistant_message (ruling Q4). `>`, never `>>`.
+# Opt-in, default unset: the raw payload carries cwd, transcript_path, agent_transcript_path
+# and last_assistant_message (ruling Q4) — staged at 0600 and renamed, replacing not appending.
 if [ "${NAZGUL_STOP_PAYLOAD_CAPTURE:-0}" = "1" ]; then
   mkdir -p "$NAZGUL_DIR/logs" 2>/dev/null || true
-  printf '%s\n' "$STOP_PAYLOAD" > "$NAZGUL_DIR/logs/stop-payload-last.json" 2>/dev/null || true
+  if STOP_CAPTURE_TMP=$(mktemp "$NAZGUL_DIR/logs/.stop-payload-last.XXXXXX" 2>/dev/null); then
+    if ! { chmod 600 "$STOP_CAPTURE_TMP" 2>/dev/null \
+      && printf '%s\n' "$STOP_PAYLOAD" > "$STOP_CAPTURE_TMP" 2>/dev/null \
+      && mv "$STOP_CAPTURE_TMP" "$NAZGUL_DIR/logs/stop-payload-last.json" 2>/dev/null; }; then
+      rm -f "$STOP_CAPTURE_TMP" 2>/dev/null || true
+    fi
+  fi
 fi
 
 # OBSERVATION ONLY — no classification acts on these yet. A truncated, absent
@@ -63,14 +69,17 @@ if [ -n "$STOP_PAYLOAD" ]; then
     BG_SEEN="yes" BG_WHY=""
     # background_tasks[] is undocumented, so a shape change (R3) or a renamed
     # type value (R4) must surface as vocabulary in types/statuses, not silence.
+
+    # Tab is IFS whitespace, so an empty 4th column collapses into the 5th; "-" also separates observed-empty from never-read.
     BG_TSV="$(printf '%s' "$STOP_PAYLOAD" | jq -r '
+      def vocab: unique | join(",") | if . == "" then "-" else . end;
       (.background_tasks // []) as $b
       | ($b | map(select(.type == "subagent"))) as $s
       | [ ($b | length),
           ($s | length),
           ($s | map(select(.status == "running" or .status == "pending")) | length),
-          ($b | map(.type // "null") | unique | join(",")),
-          ($b | map(.status // "null") | unique | join(",")) ]
+          ($b | map(.type // "null") | vocab),
+          ($b | map(.status // "null") | vocab) ]
       | @tsv' 2>/dev/null || true)"
     IFS=$'\t' read -r BG_ENTRIES BG_SUBAGENTS BG_LIVE BG_TYPES BG_STATUSES <<< "$BG_TSV" || true
     # A count that did not parse is "could not tell", not "found none" — RULES §15 / ADR-009.
@@ -79,15 +88,6 @@ if [ -n "$STOP_PAYLOAD" ]; then
     case "${BG_SUBAGENTS:-}" in ''|*[!0-9]*) BG_SEEN="unknown" BG_WHY="not_json" ;; esac
   fi
 fi
-
-# `why` is emitted ONLY on the unknown arm, so its closed set stays closed.
-BG_OBSERVED_ARGS=(bg_seen "$BG_SEEN")
-if [ "$BG_SEEN" = "unknown" ]; then BG_OBSERVED_ARGS+=(why "$BG_WHY"); fi
-BG_OBSERVED_ARGS+=(entries:n "${BG_ENTRIES:-0}" subagents:n "${BG_SUBAGENTS:-0}" live:n "${BG_LIVE:-0}")
-BG_OBSERVED_ARGS+=(types "${BG_TYPES:-}" statuses "${BG_STATUSES:-}")
-# Bounded and structured on purpose: the raw payload carries cwd,
-# transcript_path, agent_transcript_path and last_assistant_message (ruling Q4).
-emit_event "stop_payload_observed" "${BG_OBSERVED_ARGS[@]}"
 
 # Refresh the session lock every iteration — read persisted ID to match
 # session-context.sh. Lock LIFETIME is the session's, not the turn's (#195):
@@ -135,6 +135,20 @@ PAUSED=$(jq -r '.paused // false' "$CONFIG")
 if [ "$PAUSED" = "true" ]; then
   exit 0
 fi
+
+# Emitted below the pause gate, not beside the read above: a paused tick has no dispatch to
+# classify, and ITERATION is parsed by here, so the record names its own tick instead of null.
+
+# shellcheck disable=SC2034
+CURRENT_ITERATION="$ITERATION"
+# `why` is emitted ONLY on the unknown arm, so its closed set stays closed.
+BG_OBSERVED_ARGS=(bg_seen "$BG_SEEN")
+if [ "$BG_SEEN" = "unknown" ]; then BG_OBSERVED_ARGS+=(why "$BG_WHY"); fi
+BG_OBSERVED_ARGS+=(entries:n "${BG_ENTRIES:-0}" subagents:n "${BG_SUBAGENTS:-0}" live:n "${BG_LIVE:-0}")
+BG_OBSERVED_ARGS+=(types "${BG_TYPES:-}" statuses "${BG_STATUSES:-}")
+# Bounded and structured on purpose: the raw payload carries cwd,
+# transcript_path, agent_transcript_path and last_assistant_message (ruling Q4).
+emit_event "stop_payload_observed" "${BG_OBSERVED_ARGS[@]}"
 
 # --- AFK timeout enforcement (3.5) ---
 AFK_ENABLED=$(jq -r '.afk.enabled // false' "$CONFIG")

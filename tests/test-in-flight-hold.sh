@@ -1132,6 +1132,19 @@ _p12_check() {
 
 _p12_state() { [ -e "$1" ] && printf 'present' || printf 'absent'; }
 
+# GNU `stat -f` means --file-system and SUCCEEDS with unrelated output, so exit status cannot pick
+# the dialect (scripts/lib/task-utils.sh:13) — accept a candidate only if it parses as octal.
+_p12_mode() {
+  local dialect m
+  for dialect in "-f %Lp" "-c %a"; do
+    # shellcheck disable=SC2086
+    m=$(stat $dialect "$1" 2>/dev/null) || m=""
+    case "$m" in ''|*[!0-7]*) m="" ;; esac
+    [ -n "$m" ] && { printf '%s' "$m"; return 0; }
+  done
+  printf 'unreadable'
+}
+
 _p12_observed_count() {
   local n
   n=$(grep -c '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
@@ -1179,6 +1192,23 @@ _p12_check "P12b: and the line count did not grow across the two captures" \
 HOOK_OUTPUT=$(NAZGUL_STOP_PAYLOAD_CAPTURE=1 bash "$STOP_HOOK" </dev/null 2>&1) || true
 _p12_check "P12b: capture ON with no payload records an EMPTY capture, so 'nothing arrived' stays distinguishable from 'capture off'" \
   "$(_p12_state "$P12_CAP")/$(wc -c < "$P12_CAP" | tr -d ' ')" "present/1"
+
+# umask 000 on purpose: at the ambient 022 a plain `>` already yields 0644, which reads as a pass
+# for a mode nothing set. Under 000 an inherited mode is 0666, so only an explicit one survives.
+HOOK_OUTPUT=$( (umask 000; printf '%s' "$P12_A" | NAZGUL_STOP_PAYLOAD_CAPTURE=1 bash "$STOP_HOOK") 2>&1 ) || true
+_p12_check "P12b: the file that LANDS is 0600 under a permissive umask — cwd and the transcript paths are not world-readable" \
+  "$(_p12_mode "$P12_CAP")" "600"
+_p12_check "P12b: ... and it is the capture, not an empty stand-in — the payload survived the staged write" \
+  "$(jq -r '.session_id' "$P12_CAP" 2>/dev/null)" "p12-first"
+
+chmod 644 "$P12_CAP"
+HOOK_OUTPUT=$(printf '%s' "$P12_B" | NAZGUL_STOP_PAYLOAD_CAPTURE=1 bash "$STOP_HOOK" 2>&1) || true
+_p12_check "P12b: a loose pre-existing capture is REPLACED, not written through — 0644 does not survive a second run" \
+  "$(_p12_mode "$P12_CAP")" "600"
+_p12_check "P12b: the replace still overwrote rather than appended" \
+  "$(jq -r '.session_id' "$P12_CAP" 2>/dev/null)" "p12-second"
+_p12_check "P12b: and no staging file is abandoned beside it, so the temp was renamed and not leaked" \
+  "$(find "$TEST_DIR/nazgul/logs" -maxdepth 1 -name '.stop-payload-last.*' 2>/dev/null | wc -l | tr -d ' ')" "0"
 
 # AC12 again, for Q4: the switch is an ENV VAR, and this objective adds no schema surface.
 _p12_check "config purity: NAZGUL_STOP_PAYLOAD_CAPTURE is not a config key" \
@@ -1572,6 +1602,72 @@ assert_not_contains "P12a privacy: no VALUE from those four fields leaks either"
 P12_BYTES=${#P12_OBS}
 assert_eq "P12a: the event stays bounded and structured (${P12_BYTES} bytes <= 300)" \
   "$([ "$P12_BYTES" -le 300 ] && echo yes || echo no)" "yes"
+teardown_temp_dir
+
+# --- P12a attribution: the record names the tick it describes, and a paused tick has none ---
+P12_LIVE='{"hook_event_name":"Stop","background_tasks":[{"id":"s1","type":"subagent","status":"running"}]}'
+
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 7'
+create_plan
+create_task_file "TASK-001" "READY"
+_run_hook_payload "$P12_LIVE"
+P12_OBS=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_eq "P12a: the record carries the tick it describes, not null" \
+  "$(printf '%s' "$P12_OBS" | jq -r '.iteration')" "7"
+assert_eq "P12a: ... as a JSON number, so two records inside one ts second still order" \
+  "$(printf '%s' "$P12_OBS" | jq -r '.iteration | type')" "number"
+# This run BURNED the tick, so 7 is the tick observed and not merely the value config still holds —
+# an emit below the increment would have said 8, and one above the config read still null.
+assert_eq "P12a: ... on a run that moved config on to 8, so 7 is this tick and not the survivor" \
+  "$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")" "8"
+teardown_temp_dir
+
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.paused = true' '.current_iteration = 4'
+create_plan
+create_task_file "TASK-001" "READY"
+_run_hook_payload "$P12_LIVE"
+assert_exit_code "P12a: a paused tick still allows the stop" "$HOOK_EC" 0
+assert_eq "P12a: and records nothing — a paused loop has no dispatch to classify, for hours or days" \
+  "$(_p12_observed_count)" "0"
+# Positive control on the SAME fixture and the SAME payload: without it, the zero above also passes
+# on a tree where the hook died before reaching any of this.
+jq '.paused = false' "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/cfg.tmp" && mv "$TEST_DIR/cfg.tmp" "$TEST_DIR/nazgul/config.json"
+_run_hook_payload "$P12_LIVE"
+assert_eq "P12a: ... and the identical payload DOES record once paused is cleared, so the gate is the cause" \
+  "$(_p12_observed_count)" "1"
+assert_eq "P12a: the unpaused record carries iteration 4, so placement below the gate kept attribution" \
+  "$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" | tail -1 | jq -r '.iteration')" "4"
+teardown_temp_dir
+
+# --- P12a vocabulary integrity: an empty column must not slide the next one into its place ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+_run_hook_payload '{"hook_event_name":"Stop","background_tasks":[{"id":"e1","type":"","status":"running"}]}'
+P12_OBS=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_eq "P12a: an empty type does not shift the statuses vocabulary into the types field" \
+  "$(printf '%s' "$P12_OBS" | jq -r '.types')" "-"
+assert_eq "P12a: ... and statuses still reports its own vocabulary, so R4's renamed-value canary survives" \
+  "$(printf '%s' "$P12_OBS" | jq -r '.statuses')" "running"
+assert_eq "P12a: ... and the entry still counts, so the sentinel replaced a value rather than dropping one" \
+  "$(printf '%s' "$P12_OBS" | jq -r '"\(.entries)/\(.bg_seen)"')" "1/yes"
+teardown_temp_dir
+
+setup_temp_dir
+setup_nazgul_dir
+create_config
+_run_hook_payload '{"hook_event_name":"Stop","background_tasks":[]}'
+_run_hook_payload '{"hook_event_name":"Stop","stop_hook_active":false}'
+P12_VOCAB=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null \
+  | jq -r '"\(.bg_seen):\(.types)/\(.statuses)"' | tr '\n' ' ')
+assert_eq "P12a: an observed-but-empty vocabulary ('-') stays distinguishable from one no arm ever read ('')" \
+  "$P12_VOCAB" "yes:-/- unknown:/ "
 teardown_temp_dir
 
 # === P7 (C2/AC9): every stop-hook execution under tests/ binds its own stdin ===
