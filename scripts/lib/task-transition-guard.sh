@@ -879,14 +879,17 @@ TTG_MERGE_ANCESTRY=""
 # Identity of the evidence that validated, for the caller's which-route diagnostic.
 # shellcheck disable=SC2034  # read by callers, not within this file
 TTG_MERGE_ROUTE=""
-# Base-branch containment outcome: ancestor_of_base | not_ancestor | unresolved |
-# base_unresolvable | no_git. Only not_ancestor blocks.
+# Base-branch containment outcome: ancestor_of_base | base_behind_merge | not_ancestor |
+# unresolved | base_unresolvable | no_git. Only not_ancestor blocks.
 # shellcheck disable=SC2034  # read by callers, not within this file
 TTG_MERGE_BASE_ANCESTRY=""
-# The host's own answer for the last check: ok | not_merged | ok_no_head_ref |
-# <merge-provider result>.
+# The host's own answer for the last check: ok | not_merged | ok_no_host |
+# ok_no_head_ref | <merge-provider result>.
 # shellcheck disable=SC2034  # read by callers, not within this file
 TTG_MERGE_HOST_RESULT=""
+# The host the answer actually came FROM, empty when the answer named none.
+# shellcheck disable=SC2034  # read by callers, not within this file
+TTG_MERGE_HOST_HOST=""
 # The head branch the host reports for the PR, empty when it returned none usable.
 # shellcheck disable=SC2034  # read by callers, not within this file
 TTG_MERGE_HOST_HEAD_REF=""
@@ -969,6 +972,12 @@ _ttg_merge_norm_ts() {
   printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | sed -E 's/\.[0-9]+//; s/\+00:?00$/Z/'
 }
 
+# Hosts from two producers compared as the API knows them — _mp_api_host is the seam's own
+# rule — after case-folding, because the manifest's copy is operator-typed.
+_ttg_merge_norm_host() {
+  _mp_api_host "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+}
+
 # True iff two hex SHAs name the same commit — one abbreviation of the other counts,
 # since a manifest may record a short form of the host's full oid.
 _ttg_sha_agree() {
@@ -992,7 +1001,8 @@ _ttg_sha_agree() {
 # A merged PR whose head branch the host did not return lands in the third outcome, never
 # the first: the seam drops a ref it cannot vouch for, and merge-provider.sh's own contract
 # says a caller needing the binding must fail closed on null. A PR that cannot be SHOWN to
-# be this objective's is not thereby this objective's.
+# be this objective's is not thereby this objective's. An answer naming no host lands there
+# too: a required field with nothing to compare it against is not a verified field.
 _ttg_merge_host_state() {
   local project_root="$1" pr="$2" json="" result="" merged=""
   TTG_MERGE_HOST_RESULT="unavailable"
@@ -1000,6 +1010,7 @@ _ttg_merge_host_state() {
   TTG_MERGE_HOST_COMMIT=""
   TTG_MERGE_HOST_HEAD_REF=""
   TTG_MERGE_HOST_BASE_REF=""
+  TTG_MERGE_HOST_HOST=""
   declare -F merge_provider_pr_state >/dev/null 2>&1 || return 2
   command -v jq >/dev/null 2>&1 || return 2
   json=$(merge_provider_pr_state "$project_root" "$pr") || true
@@ -1015,11 +1026,16 @@ _ttg_merge_host_state() {
   _mp_ref_ok "$TTG_MERGE_HOST_HEAD_REF" || TTG_MERGE_HOST_HEAD_REF=""
   TTG_MERGE_HOST_BASE_REF=$(printf '%s' "$json" | jq -r '.base_ref // empty' 2>/dev/null) || TTG_MERGE_HOST_BASE_REF=""
   _mp_ref_ok "$TTG_MERGE_HOST_BASE_REF" || TTG_MERGE_HOST_BASE_REF=""
+  TTG_MERGE_HOST_HOST=$(printf '%s' "$json" | jq -r '.host // empty' 2>/dev/null) || TTG_MERGE_HOST_HOST=""
   case "$merged" in
     false) TTG_MERGE_HOST_RESULT="not_merged"; return 1 ;;
     true)  ;;
     *)     TTG_MERGE_HOST_RESULT="ok_merged_unknown"; return 2 ;;
   esac
+  if [ -z "$TTG_MERGE_HOST_HOST" ]; then
+    TTG_MERGE_HOST_RESULT="ok_no_host"
+    return 2
+  fi
   if [ -z "$TTG_MERGE_HOST_HEAD_REF" ]; then
     TTG_MERGE_HOST_RESULT="ok_no_head_ref"
     return 2
@@ -1216,10 +1232,18 @@ ttg_task_in_objective() {
   return 1
 }
 
-# Positive-only base containment: a merge commit that does not resolve locally stays
-# non-blocking, but one that DOES resolve must sit on the base. Only not_ancestor blocks.
+# lean-comments: allow-run — which of two states that look identical still blocks, and why.
+# Positive-only base containment, THREE-way, because `rev-parse --verify` proves a ref exists
+# and never that it is current. Only the caller's already-confirmed merge reaches here (host
+# ok + merged true), and such a merge commit sits on the base by construction — so a base ref
+# that is an ANCESTOR of it is simply behind: `base_behind_merge`, uninformed rather than
+# disagreeing, non-blocking, and a fetch would contain it. Only full divergence — no base ref
+# reaches the merge commit and none descends from it — still blocks as `not_ancestor`, since
+# no fetch produces that shape. Read-only: this is a Stop-hook path and never fetches.
+# Staleness outranks divergence across the two refs: the host is the authority for this edge,
+# so one ref proving the local base merely lags settles it whatever the other ref says.
 _ttg_merge_base_ancestry() {
-  local project_root="$1" nazgul_dir="$2" merge_commit="$3" base ref resolved=false
+  local project_root="$1" nazgul_dir="$2" merge_commit="$3" base ref outcome=""
   TTG_MERGE_BASE_ANCESTRY="no_git"
   command -v git >/dev/null 2>&1 || return 0
   git -C "$project_root" rev-parse --git-dir >/dev/null 2>&1 || return 0
@@ -1230,13 +1254,17 @@ _ttg_merge_base_ancestry() {
   TTG_MERGE_BASE_ANCESTRY="base_unresolvable"
   for ref in "$base" "origin/$base"; do
     git -C "$project_root" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null 2>&1 || continue
-    resolved=true
     if git -C "$project_root" merge-base --is-ancestor "$merge_commit" "$ref" 2>/dev/null; then
       TTG_MERGE_BASE_ANCESTRY="ancestor_of_base"
       return 0
     fi
+    if git -C "$project_root" merge-base --is-ancestor "$ref" "$merge_commit" 2>/dev/null; then
+      outcome="base_behind_merge"
+    elif [ -z "$outcome" ]; then
+      outcome="not_ancestor"
+    fi
   done
-  [ "$resolved" = "true" ] && TTG_MERGE_BASE_ANCESTRY="not_ancestor"
+  if [ -n "$outcome" ]; then TTG_MERGE_BASE_ANCESTRY="$outcome"; fi
   return 0
 }
 
@@ -1245,7 +1273,7 @@ _ttg_merge_base_ancestry() {
 ttg_verify_merge_evidence() {
   local manifest_text="$1" project_root="$2" task_id="${3:-}"
   local nazgul_dir="${NAZGUL_DIR:-$project_root/nazgul}"
-  local raw_section section key value missing="" bad="" commits phrase
+  local raw_section section key value missing="" bad="" commits phrase base_note=""
   local host pr merge_commit merged_at head_ref feat_id bind_why roster_why host_rc=0
 
   TTG_MERGE_REASON=""
@@ -1255,6 +1283,7 @@ ttg_verify_merge_evidence() {
   TTG_MERGE_HOST_RESULT=""
   TTG_MERGE_HOST_HEAD_REF=""
   TTG_MERGE_HOST_BASE_REF=""
+  TTG_MERGE_HOST_HOST=""
   [ -n "$task_id" ] || task_id=$(_ttg_manifest_task_id "$manifest_text")
   [ -n "$task_id" ] || task_id="unknown"
 
@@ -1308,6 +1337,11 @@ ttg_verify_merge_evidence() {
       "the host ANSWERED for PR ${pr} and reports it is not merged — the manifest's ## Merge Evidence says otherwise"
     return 1
   fi
+  if [ "$TTG_MERGE_HOST_RESULT" = "ok_no_host" ]; then
+    _ttg_merge_deny "$nazgul_dir" "$task_id" "unverifiable" \
+      "the host reports PR ${pr} merged but its answer names no host, so the manifest's host=${host} cannot be checked against the one actually asked — a required field nothing can contradict is not verified"
+    return 1
+  fi
   if [ "$TTG_MERGE_HOST_RESULT" = "ok_no_head_ref" ]; then
     _ttg_merge_deny "$nazgul_dir" "$task_id" "unverifiable" \
       "the host reports PR ${pr} merged but returned no usable head branch, so the PR cannot be bound to an objective — a merge nobody can attribute never admits a closure"
@@ -1321,6 +1355,11 @@ ttg_verify_merge_evidence() {
   if [ -z "$TTG_MERGE_HOST_AT" ] || [ -z "$TTG_MERGE_HOST_COMMIT" ]; then
     _ttg_merge_deny "$nazgul_dir" "$task_id" "unverifiable" \
       "the host reports PR ${pr} merged but returned no merged-at/merge-commit to compare the manifest against — nothing outside the manifest corroborates it"
+    return 1
+  fi
+  if [ "$(_ttg_merge_norm_host "$host")" != "$(_ttg_merge_norm_host "$TTG_MERGE_HOST_HOST")" ]; then
+    _ttg_merge_deny "$nazgul_dir" "$task_id" "contradicted" \
+      "## Merge Evidence records host=${host} but PR ${pr} was verified against ${TTG_MERGE_HOST_HOST} — the record names a host that was never asked"
     return 1
   fi
   if [ "$(_ttg_merge_norm_ts "$merged_at")" != "$(_ttg_merge_norm_ts "$TTG_MERGE_HOST_AT")" ]; then
@@ -1355,8 +1394,11 @@ ttg_verify_merge_evidence() {
   _ttg_merge_base_ancestry "$project_root" "$nazgul_dir" "$merge_commit"
   if [ "$TTG_MERGE_BASE_ANCESTRY" = "not_ancestor" ]; then
     _ttg_merge_deny "$nazgul_dir" "$task_id" "contradicted" \
-      "merge-commit ${merge_commit} resolves in local history but is not contained in the base branch — a merge commit that exists here must sit on the base"
+      "merge-commit ${merge_commit} resolves in local history but has diverged from the base branch — it neither reaches the local base nor descends from it, which no unfetched merge produces; run 'git fetch' and re-check, and if it still diverges the local repository is contradicting the host"
     return 1
+  fi
+  if [ "$TTG_MERGE_BASE_ANCESTRY" = "base_behind_merge" ]; then
+    base_note=" The local base branch is BEHIND merge-commit ${merge_commit} rather than missing it — the merge descends from the base, so this repository is uninformed, not disagreeing; 'git fetch' would contain it. Recorded, non-blocking: the host is the authority for this edge."
   fi
 
   commits=$(printf '%s' "$manifest_text" | awk '/^## Commits/{f=1;next} /^## /{f=0} f')
@@ -1368,8 +1410,8 @@ ttg_verify_merge_evidence() {
   esac
 
   TTG_MERGE_REASON="verified"
-  TTG_MERGE_ROUTE="host=${host} pr=${pr} merged-at=${merged_at} merge-commit=${merge_commit} head-ref=${head_ref} recorded-by=$(_ttg_merge_field recorded-by "$section") host-state=${TTG_MERGE_HOST_RESULT} base=${TTG_MERGE_BASE_ANCESTRY} ancestry=${TTG_MERGE_ANCESTRY}"
-  echo "ttg_verify_merge_evidence: verified against the host — ${TTG_MERGE_ROUTE}; ${phrase}" >&2
+  TTG_MERGE_ROUTE="host=${host} host-asked=${TTG_MERGE_HOST_HOST} pr=${pr} merged-at=${merged_at} merge-commit=${merge_commit} head-ref=${head_ref} recorded-by=$(_ttg_merge_field recorded-by "$section") host-state=${TTG_MERGE_HOST_RESULT} base=${TTG_MERGE_BASE_ANCESTRY} ancestry=${TTG_MERGE_ANCESTRY}"
+  echo "ttg_verify_merge_evidence: verified against the host — ${TTG_MERGE_ROUTE}; ${phrase}${base_note}" >&2
   return 0
 }
 
