@@ -798,6 +798,43 @@ me_verify "$(merge_manifest "- **host**: github.com
 assert_exit_code "binding: a head-ref that is not ref-shaped is refused" "$HRSHAPE_EC" 1
 assert_eq "binding: an unusable head-ref reasons 'malformed'" "$TTG_MERGE_REASON" "malformed"
 
+# lean-comments: allow-run — cites the oracle row this task's File Scope forbids adding.
+# TASK-045 AC1/AC2. A backtick is legal in a git ref — a DELIMITER for `_ttg_merge_field`, not
+# noise to `tr -d` away. `_mp_ref_ok` already agrees with `git check-ref-format --branch` on it
+# (cited here rather than added as a row to test-merge-provider.sh's table, TASK-037's file), so
+# the finding is purely in the field reader below.
+MERGE_BACKTICK_BRANCH='feat/we`ird'
+assert_eq "AC2: _mp_ref_ok already accepts a git-legal backtick" \
+  "$(_mp_ref_ok "$MERGE_BACKTICK_BRANCH" && echo accept || echo reject)" "accept"
+assert_eq "AC2: git check-ref-format --branch agrees with it" \
+  "$(git -C "$TEST_DIR" check-ref-format --branch "$MERGE_BACKTICK_BRANCH" >/dev/null 2>&1 && echo accept || echo reject)" "accept"
+
+mp_reset
+MP_HEAD_REF="$MERGE_BACKTICK_BRANCH"
+merge_config '.agents.reviewers = ["code-reviewer"]' ".branch.feature = \"$MERGE_BACKTICK_BRANCH\""
+me_verify "$(merge_manifest "- **host**: github.com
+- **pr**: 91
+- **merged-at**: 2026-08-15T12:00:00Z
+- **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+- **head-ref**: \`${MERGE_BACKTICK_BRANCH}\`
+- **recorded-by**: scripts/close-objective.sh")" "$TEST_DIR" TASK-050 && BACKTICK_EC=0 || BACKTICK_EC=$?
+assert_exit_code "AC1: a delimiting backtick pair round-trips to a value that matches the host" "$BACKTICK_EC" 0
+assert_eq "AC1: the round-tripped closure still reasons 'verified'" "$TTG_MERGE_REASON" "verified"
+assert_contains "AC1: the verified route names the unwrapped branch, not the delimiters" \
+  "$ME_STDERR" "head-ref=${MERGE_BACKTICK_BRANCH}"
+
+# The converse: a fix that stopped COMPARING would also "fix" a genuine mismatch. It must not.
+me_verify "$(merge_manifest "- **host**: github.com
+- **pr**: 91
+- **merged-at**: 2026-08-15T12:00:00Z
+- **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+- **head-ref**: \`${MERGE_BACKTICK_BRANCH}x\`
+- **recorded-by**: scripts/close-objective.sh")" "$TEST_DIR" TASK-050 && BACKTICK_MIS_EC=0 || BACKTICK_MIS_EC=$?
+assert_exit_code "AC1: a genuinely mismatched backtick-bearing head-ref still refuses" "$BACKTICK_MIS_EC" 1
+assert_eq "AC1: the mismatch still reasons 'contradicted'" "$TTG_MERGE_REASON" "contradicted"
+merge_config '.agents.reviewers = ["code-reviewer"]'
+mp_reset
+
 # Under stacking the PR is opened from the layer's branch, which need not be branch.feature
 # — the registry entry for this feat_id binds it just as well. ONE authority, both callers.
 merge_config '.branch.feature = null' \
@@ -1027,6 +1064,29 @@ assert_eq "merge-vocabulary: scanned == skipped + checked" "$MERGE_VOCAB_SCANNED
 assert_eq "merge-vocabulary: the closed set is exactly the enumerated reasons" \
   "$(printf '%s\n' "$MERGE_VOCAB_SET" | tr '\n' ' ')" \
   "$(printf '%s\n' "$MERGE_VOCAB_EXPECTED" | tr ' ' '\n' | sort | tr '\n' ' ')"
+# lean-comments: allow-run — the hand-off this AC exists to force, argued not just asserted.
+# TASK-045 AC5. tests/test-doc-contract-fields.sh (TASK-044's File Scope) derives its claim
+# families from producers the same way, but does not yet bind TTG_MERGE_BASE_ANCESTRY's or
+# TTG_MERGE_HOST_RESULT's outcome vocabularies to RULES.md §2 — so an addition to either would
+# pass there silently. Bound here instead, off the actual assignment sites, not retyped.
+ANCESTRY_DRIFT_TOKENS=$(grep -oE '(TTG_MERGE_BASE_ANCESTRY|outcome)="(base_behind_merge|not_ancestor)"' \
+  "$REPO_ROOT/scripts/lib/task-transition-guard.sh" | sed -E 's/.*="([a-z_]+)"/\1/' | sort -u)
+assert_eq "AC5: the two ancestry outcomes RULES.md §2 must distinguish are exactly these two" \
+  "$(printf '%s\n' "$ANCESTRY_DRIFT_TOKENS" | tr '\n' ' ')" "base_behind_merge not_ancestor "
+RULES_ANCESTRY_BULLET=$(grep "only one ancestry check can block" "$REPO_ROOT/RULES.md")
+for _tok in $ANCESTRY_DRIFT_TOKENS; do
+  assert_contains "AC5: RULES.md §2's ancestry bullet names $_tok" "$RULES_ANCESTRY_BULLET" "$_tok"
+done
+
+HOSTRESULT_DRIFT_TOKENS=$(grep -oE 'TTG_MERGE_HOST_RESULT="(ok_no_host|ok_no_head_ref)"' \
+  "$REPO_ROOT/scripts/lib/task-transition-guard.sh" | sed -E 's/.*="([a-z_]+)"/\1/' | sort -u)
+assert_eq "AC5: the two host-result states RULES.md §2 must enumerate are exactly these two" \
+  "$(printf '%s\n' "$HOSTRESULT_DRIFT_TOKENS" | tr '\n' ' ')" "ok_no_head_ref ok_no_host "
+RULES_UNVERIFIABLE_BULLET=$(grep -oE "\`unverifiable\` \(the host[^)]*\)" "$REPO_ROOT/RULES.md")
+for _tok in $HOSTRESULT_DRIFT_TOKENS; do
+  assert_contains "AC5: RULES.md §2's unverifiable parenthetical names $_tok" "$RULES_UNVERIFIABLE_BULLET" "$_tok"
+done
+
 assert_eq "merge-vocabulary: no refusal state is folded into another's bucket" "$MERGE_VOCAB_FINDINGS" "0"
 teardown_temp_dir
 
