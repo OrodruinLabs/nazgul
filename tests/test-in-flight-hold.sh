@@ -125,7 +125,7 @@ BEFORE_FAIL=$(jq -r '.safety.consecutive_failures' "$TEST_DIR/nazgul/config.json
 run_hook
 assert_exit_code "hold taken: exit 0 (allowed stop)" "$HOOK_EC" 0
 assert_contains "hold taken: stderr names the waited-on unit" "$HOOK_OUTPUT" "TASK-001"
-EVENT_COUNT=$(grep -c '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null); EVENT_COUNT="${EVENT_COUNT:-0}"
+EVENT_COUNT=$(grep -c '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null || true); EVENT_COUNT="${EVENT_COUNT:-0}"
 assert_eq "hold taken: exactly one in_flight_hold event" "$EVENT_COUNT" "1"
 GATE_LINE=$(grep '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" | tail -1)
 assert_contains "hold taken: event names TASK-001" "$GATE_LINE" "TASK-001"
@@ -146,7 +146,7 @@ mkdir -p "$TEST_DIR/nazgul/in-flight"
 _write_marker "$TEST_DIR/nazgul/in-flight/marker-1.json" "nazgul:implementer" "TASK-001" "$(date +%s)" "true"
 run_hook
 assert_exit_code "kill-switch off: exit 2 (normal block, hold not taken)" "$HOOK_EC" 2
-EVENT_COUNT=$(grep -c '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null); EVENT_COUNT="${EVENT_COUNT:-0}"
+EVENT_COUNT=$(grep -c '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null || true); EVENT_COUNT="${EVENT_COUNT:-0}"
 assert_eq "kill-switch off: no in_flight_hold event" "$EVENT_COUNT" "0"
 teardown_temp_dir
 
@@ -164,7 +164,7 @@ _write_marker "$TEST_DIR/nazgul/in-flight/marker-1.json" "nazgul:implementer" "T
 run_hook
 assert_exit_code "stale marker: exit 2 (hold not taken, normal iteration)" "$HOOK_EC" 2
 assert_contains "stale marker: loud stderr line" "$HOOK_OUTPUT" "STALE in-flight marker"
-STALE_EVENT_COUNT=$(grep -c '"reason":"in_flight_stale"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null); STALE_EVENT_COUNT="${STALE_EVENT_COUNT:-0}"
+STALE_EVENT_COUNT=$(grep -c '"reason":"in_flight_stale"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null || true); STALE_EVENT_COUNT="${STALE_EVENT_COUNT:-0}"
 assert_eq "stale marker: distinguishable telemetry emitted" "$STALE_EVENT_COUNT" "1"
 AFTER_ITER=$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")
 assert_eq "stale marker: current_iteration DID increment" "$AFTER_ITER" "6"
@@ -453,10 +453,10 @@ assert_exit_code "P11c: tick 1 — the post-quarantine HELD set takes its one ho
 run_hook "$(cat "$FIXTURES/stop-payload/stop-two-subagents-one-shell.json")"
 EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
 assert_exit_code "P11c: tick 2 — an unchanged HELD set is refused a second hold (exit 2)" "$HOOK_EC" 2
-P11C_HOLDS=$(grep -c '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null); P11C_HOLDS="${P11C_HOLDS:-0}"
+P11C_HOLDS=$(grep -c '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null || true); P11C_HOLDS="${P11C_HOLDS:-0}"
 assert_eq "P11c: a proven-class quarantine grants AT MOST ONE additional hold" "$P11C_HOLDS" "1"
 assert_contains "P11c: tick 2 records the exhausted budget rather than falling through silently" "$EVENTS" '"reason":"in_flight_hold_budget_exhausted"'
-P11C_ORPHANS=$(grep -c '"reason":"in_flight_orphan"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null); P11C_ORPHANS="${P11C_ORPHANS:-0}"
+P11C_ORPHANS=$(grep -c '"reason":"in_flight_orphan"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null || true); P11C_ORPHANS="${P11C_ORPHANS:-0}"
 assert_eq "P11c: the marker is quarantined once and only once across both ticks" "$P11C_ORPHANS" "1"
 teardown_temp_dir
 
@@ -758,13 +758,13 @@ _p10_check() {
 # in_flight_hold_budget_exhausted, so a bare substring count would score the two as one.
 _p10_hold_count() {
   local n
-  n=$(grep -c '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+  n=$(grep -c '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null || true)
   printf '%s' "${n:-0}"
 }
 
 _p10_exhausted_count() {
   local n
-  n=$(grep -c '"reason":"in_flight_hold_budget_exhausted"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+  n=$(grep -c '"reason":"in_flight_hold_budget_exhausted"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null || true)
   printf '%s' "${n:-0}"
 }
 
@@ -905,7 +905,7 @@ _p10_check "prior art: an unusable sha256 never aborts the hook — the hold is 
 _p10_check "prior art: it degrades to the named fallback ledger, as _resume_attempts_file does" \
   "$([ -f "$TEST_DIR/nazgul/logs/.in-flight-holds/fallback" ] && echo present || echo absent)" "present"
 _p10_check "prior art: and says so on stderr rather than degrading silently" \
-  "$(printf '%s' "$HOOK_OUTPUT" | grep -c 'in-flight hold ledger hash fallback')" "1"
+  "$(printf '%s' "$HOOK_OUTPUT" | grep -c 'in-flight hold ledger hash fallback' || true)" "1"
 teardown_temp_dir
 
 # P10e (F6) — the ZERO-marker live hold. Its key used to be sha256("") = e3b0c44298fc1c14, a
@@ -962,7 +962,7 @@ _p10_check "P10j: it is a mechanism failure, not a spent budget" \
 _p10_check "P10j: holds_taken stays 0 — nothing was spent" \
   "$(printf '%s' "$P10J_LINE" | jq -r '.holds_taken')" "0"
 _p10_check "P10j: and it says why on stderr rather than degrading silently" \
-  "$(printf '%s' "$HOOK_OUTPUT" | grep -c 'carry no id')" "1"
+  "$(printf '%s' "$HOOK_OUTPUT" | grep -c 'carry no id' || true)" "1"
 _p10_check "P10j: no ledger entry was written for an unkeyable episode" "$(_p10_ledger_count)" "0"
 teardown_temp_dir
 
@@ -1064,7 +1064,7 @@ _p10_check "P10i: the ledger is renamed into place — a crash mid-truncate read
 _p10_check "config purity: _IN_FLIGHT_HOLD_CAP is a script constant in scripts/stop-hook.sh" \
   "$([ "$(grep -c '_IN_FLIGHT_HOLD_CAP=1' "$STOP_HOOK")" -ge 1 ] && echo present || echo absent)" "present"
 _p10_check "config purity: it is NOT a config key" \
-  "$(grep -ci 'in_flight_hold_cap' "$REPO_ROOT/templates/config.json")" "0"
+  "$(grep -ci 'in_flight_hold_cap' "$REPO_ROOT/templates/config.json" || true)" "0"
 _p10_check "config purity: the valve adds no guards key of its own" \
   "$(jq -r '.guards | has("in_flight_hold_cap")' "$REPO_ROOT/templates/config.json")" "false"
 _p10_check "config purity: templates/config.json still reports schema_version 36" \
@@ -1147,7 +1147,7 @@ _p12_mode() {
 
 _p12_observed_count() {
   local n
-  n=$(grep -c '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+  n=$(grep -c '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null || true)
   printf '%s' "${n:-0}"
 }
 
@@ -1183,7 +1183,7 @@ HOOK_OUTPUT=$(printf '%s' "$P12_B" | NAZGUL_STOP_PAYLOAD_CAPTURE=1 bash "$STOP_H
 _p12_check "P12b: a second capture OVERWRITES — the file holds the SECOND payload" \
   "$(jq -r '.session_id' "$P12_CAP" 2>/dev/null)" "p12-second"
 _p12_check "P12b: the FIRST payload is gone, so it was replaced and not appended to" \
-  "$(grep -c 'p12-first' "$P12_CAP")" "0"
+  "$(grep -c 'p12-first' "$P12_CAP" || true)" "0"
 _p12_check "P12b: and the line count did not grow across the two captures" \
   "$(wc -l < "$P12_CAP" | tr -d ' ')" "1"
 
@@ -1212,9 +1212,9 @@ _p12_check "P12b: and no staging file is abandoned beside it, so the temp was re
 
 # AC12 again, for Q4: the switch is an ENV VAR, and this objective adds no schema surface.
 _p12_check "config purity: NAZGUL_STOP_PAYLOAD_CAPTURE is not a config key" \
-  "$(grep -ci 'stop_payload_capture' "$REPO_ROOT/templates/config.json")" "0"
+  "$(grep -ci 'stop_payload_capture' "$REPO_ROOT/templates/config.json" || true)" "0"
 _p12_check "config purity: and no migration introduces one" \
-  "$(grep -ci 'stop_payload_capture' "$REPO_ROOT/scripts/migrate-config.sh")" "0"
+  "$(grep -ci 'stop_payload_capture' "$REPO_ROOT/scripts/migrate-config.sh" || true)" "0"
 _p12_check "config purity: templates/config.json still reports schema_version 36" \
   "$(jq -r '.schema_version' "$REPO_ROOT/templates/config.json")" "36"
 
@@ -1411,8 +1411,8 @@ _run_hook_payload() {
 # --- P9 (C1 unit, obligation AC-V1): read_hook_payload in isolation ---
 assert_file_exists "P9/AC-V1: scripts/lib/hook-stdin.sh exists" "$HOOK_STDIN_LIB"
 assert_file_contains "P9/AC-V1: it defines read_hook_payload" "$HOOK_STDIN_LIB" "read_hook_payload()"
-assert_file_contains "AC-V1: stop-hook.sh sources it by absolute \$SCRIPT_DIR path" \
-  "$STOP_HOOK" 'source "$SCRIPT_DIR/lib/hook-stdin.sh"'
+assert_file_contains "AC-V1: stop-hook.sh sources it by absolute \$SCRIPT_DIR path" "$STOP_HOOK" \
+  'source "$SCRIPT_DIR/lib/hook-stdin.sh"'
 
 # A sourced lib must not alter the caller's shell options (CLAUDE.md Code Style).
 P9_SET_E=$(grep -cE '^[[:space:]]*set[[:space:]]+-[a-zA-Z]*e' "$HOOK_STDIN_LIB" || true)
@@ -1673,11 +1673,24 @@ teardown_temp_dir
 # === P7 (C2/AC9): every stop-hook execution under tests/ binds its own stdin ===
 # Bare stdin inherits the suite's once C1 lands — the #155 never-EOF deadlock class.
 P7_ROOT="$REPO_ROOT/tests"
-P7_PATTERN='bash "\$STOP_HOOK"|bash "\$REPO_ROOT/scripts/stop-hook\.sh"'
+# EVERY quoted shell-word reference to the hook, not just the `bash `-prefixed ones: a direct
+# `"$STOP_HOOK"` call used to be 0 scanned while the coverage line still printed 0 findings.
+P7_PATTERN='"\$STOP_HOOK"|"\$REPO_ROOT/scripts/stop-hook\.sh"'
+# Command position = a separator, or a chain of env/`bash`/runner words, immediately left of the
+# word. Anything else is a REFERENCE (grep target, assert argument, `[ -f ]`): skipped, not dropped.
+P7_CMDPOS='(^|[|;&(])[[:space:]]*((bash|env|-u|_bounded_run|[0-9]+|[A-Z_][A-Z0-9_]*|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*)[[:space:]]+)*"(\$STOP_HOOK|\$REPO_ROOT/scripts/stop-hook\.sh)"'
+P7_ASSIGN='^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="\$REPO_ROOT/scripts/stop-hook\.sh"'
+# The direct form is pinned by site count AND by the exact files carrying it: a count alone can
+# match for an unrelated reason, a count plus the file set cannot.
+P7_DIRECT_EXPECT=10
+P7_DIRECT_FILES_EXPECT="test-observability-hooks.sh test-stop-hook.sh "
+P7_CHECKED_EXPECT=42
 P7_SCANNED=0
 P7_SKIPPED=0
 P7_CHECKED=0
 P7_FINDINGS=0
+P7_DIRECT=0
+P7_DIRECT_FILES=""
 P7_BARE=()
 
 while IFS= read -r _p7_hit; do
@@ -1691,12 +1704,29 @@ while IFS= read -r _p7_hit; do
   case "${_p7_text#"${_p7_text%%[![:space:]]*}"}" in
     '#'*) P7_SKIPPED=$((P7_SKIPPED + 1)); continue ;;
   esac
+  # A continuation line whose first word IS the quoted hook reads as command position and is
+  # checked as one: a false finding costs a named site to re-read, a false pass costs the class.
+  if [[ "$_p7_text" =~ $P7_ASSIGN ]] || ! [[ "$_p7_text" =~ $P7_CMDPOS ]]; then
+    P7_SKIPPED=$((P7_SKIPPED + 1)); continue
+  fi
   P7_CHECKED=$((P7_CHECKED + 1))
+  _p7_head="$_p7_text"
+  case "$_p7_text" in
+    *'"$STOP_HOOK"'*) _p7_head="${_p7_text%%\"\$STOP_HOOK\"*}" ;;
+    *'"$REPO_ROOT/scripts/stop-hook.sh"'*) _p7_head="${_p7_text%%\"\$REPO_ROOT/scripts/stop-hook.sh\"*}" ;;
+  esac
+  case "$_p7_head" in
+    *'bash ') ;;
+    *) P7_DIRECT=$((P7_DIRECT + 1))
+       P7_DIRECT_FILES="$P7_DIRECT_FILES${_p7_file#"$P7_ROOT/"}
+" ;;
+  esac
   case "$_p7_text" in
     *'</dev/null'*|*'< /dev/null'*) continue ;;
   esac
-  # A pipe upstream of the invocation supplies (and EOFs) stdin just as well.
-  case "${_p7_text%%bash \"*}" in
+  # A pipe upstream supplies (and EOFs) stdin just as well; `||` is not one, and a direct call has
+  # no `bash "` to split at, so the split is at the invoked word.
+  case "${_p7_head//||/}" in
     *'|'*) continue ;;
   esac
   # An explicit redirect binds the invocation's OWN stdin whatever it names, and
@@ -1711,6 +1741,13 @@ done < <(grep -rnE "$P7_PATTERN" "$P7_ROOT" 2>/dev/null || true)
 assert_eq "P7 accounting: scanned == skipped + checked" \
   "$P7_SCANNED" "$((P7_SKIPPED + P7_CHECKED))"
 
+assert_eq "P7 population: the direct (non-\`bash\`-prefixed) execution form is inside the scanned population" \
+  "$P7_DIRECT" "$P7_DIRECT_EXPECT"
+assert_eq "P7 population: ... and it is exactly these files, so $P7_DIRECT_EXPECT is not a coincidence" \
+  "$(printf '%s' "$P7_DIRECT_FILES" | sort -u | tr '\n' ' ')" "$P7_DIRECT_FILES_EXPECT"
+assert_eq "P7 population: the whole execution population is pinned, so a re-narrowed pattern cannot pass quietly" \
+  "$P7_CHECKED" "$P7_CHECKED_EXPECT"
+
 if [ "$P7_CHECKED" -gt 0 ]; then
   _pass "P7 floor: $P7_CHECKED stop-hook execution site(s) checked under tests/"
 else
@@ -1721,11 +1758,23 @@ fi
 if [ "$P7_FINDINGS" -gt 0 ]; then
   printf '  P7 bare-stdin site: %s\n' "${P7_BARE[@]}" >&2
 fi
-assert_eq "P7: $P7_SCANNED scanned, $P7_SKIPPED skipped, $P7_CHECKED checked — no stop-hook execution leaves stdin bare" \
+assert_eq "P7: $P7_SCANNED scanned, $P7_SKIPPED skipped, $P7_CHECKED checked ($P7_DIRECT direct) — no stop-hook execution leaves stdin bare" \
   "$P7_FINDINGS" "0"
 
 assert_file_contains "P7: tests/run-tests.sh runs every test file with stdin bound to /dev/null" \
   "$REPO_ROOT/tests/run-tests.sh" 'bash "$test_file" < /dev/null'
+
+# === P7b: the fixture provenance this test reads declares no ACCIDENTAL ATX heading ===
+# `#155` at line start is one to every ATX-aware reader; a `#` inside a fenced block is not.
+_p7b_stray_headings() {
+  awk '/^```/ { fence = !fence; next } !fence && /^#+[^# ]/ { n++ } END { print n+0 }' "$1"
+}
+for _p7b_fx in stop-payload stop-payload-synthetic; do
+  assert_eq "P7b: tests/fixtures/$_p7b_fx/PROVENANCE.md is readable at all" \
+    "$([ -r "$FIXTURES/$_p7b_fx/PROVENANCE.md" ] && echo yes || echo no)" "yes"
+  assert_eq "P7b: tests/fixtures/$_p7b_fx/PROVENANCE.md starts no line with a bare-# reference" \
+    "$(_p7b_stray_headings "$FIXTURES/$_p7b_fx/PROVENANCE.md")" "0"
+done
 
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck -S warning "$WRITER" 2>/dev/null \

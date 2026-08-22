@@ -22,7 +22,7 @@ DOCTOR="$REPO_ROOT/scripts/doctor.sh"
 
 # The roster size is read from the script under test, so "every check reported"
 # is a comparison against the DECLARED roster rather than a literal that drifts.
-DR_ROSTER_COUNT=$(grep -m1 '^_DOC_CHECK_IDS=' "$DOCTOR" | sed -E 's/^_DOC_CHECK_IDS="([^"]*)"$/\1/' | wc -w | tr -d ' ')
+DR_ROSTER_COUNT=$(grep -m1 '^_DOC_CHECK_IDS=' "$DOCTOR" | sed -E 's/^_DOC_CHECK_IDS="([^"]*)"$/\1/' | wc -w | tr -d ' ' || true)
 
 # Checks (k)/(l) read the operator's real shell env, so a host that exports a
 # feature-flag killer would flip every full-run aggregate-exit assertion below.
@@ -973,7 +973,7 @@ setup_nazgul_dir
 create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
   '.board.enabled = false' '.guards.git_hooks = false'
 
-_dr_stop_payload_msg() { printf '%s' "$1" | grep -m1 'stop-payload' | cut -f3; }
+_dr_stop_payload_msg() { printf '%s' "$1" | grep -m1 'stop-payload' | cut -f3 || true; }
 
 DR_NEVER=$(cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR bash "$DOCTOR" --only=stop-payload 2>/dev/null)
 assert_contains "P12c: with no events.jsonl at all the check still reports, as an unscored note" \
@@ -997,7 +997,7 @@ assert_contains "P12c: a record without background_tasks is named FIELD ABSENT" 
 # Counted in BOTH directions: a bare "does not say FIELD PRESENT" is also satisfied
 # by output that says nothing at all, which is what a missing check produces.
 assert_eq "P12c: the LAST record decides the outcome, not the first" \
-  "$(printf '%s' "$DR_ABSENT" | grep -c 'FIELD PRESENT')/$(printf '%s' "$DR_ABSENT" | grep -c 'FIELD ABSENT')" "0/1"
+  "$(printf '%s' "$DR_ABSENT" | grep -c 'FIELD PRESENT' || true)/$(printf '%s' "$DR_ABSENT" | grep -c 'FIELD ABSENT' || true)" "0/1"
 assert_contains "P12c: the absent wording names the recorded why, so a shape change is distinguishable from a payload that never arrived" \
   "$DR_ABSENT" "why=field_absent"
 
@@ -1017,7 +1017,7 @@ DR_FULL=$(cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR bash "$DOCTO
 # Exit 0 alone is also what a roster with no such check at all reports, so the
 # note's presence on the same run is what makes this about the note.
 assert_eq "P12c: the note rides the full roster and still never moves the aggregate exit code" \
-  "$DR_FULL_EC/$(printf '%s' "$DR_FULL" | grep -c "$(printf 'note\tstop-payload')")" "0/1"
+  "$DR_FULL_EC/$(printf '%s' "$DR_FULL" | grep -c "$(printf 'note\tstop-payload')" || true)" "0/1"
 assert_contains "P12c: and the full run still reaches its coverage line" \
   "$(printf '%s' "$DR_FULL" | tail -1)" "$DR_ROSTER_COUNT scanned"
 teardown_temp_dir
@@ -1065,7 +1065,7 @@ _dr_sp_run() { (cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR bash "
 # compact-substring grep skipped, producing a false NEVER OBSERVED.
 printf '{\n  "bg_seen" : "yes",\n  "event" : "stop_payload_observed",\n  "entries": 3, "subagents": 2, "live": 1,\n  "types": "subagent", "statuses": "running"\n}\n' > "$DR_SP_EVENTS"
 assert_eq "P12e floor: the fixture is invisible to the old compact grep, so this case can only pass via jq" \
-  "$(grep -c '"event":"stop_payload_observed"' "$DR_SP_EVENTS")" "0"
+  "$(grep -c '"event":"stop_payload_observed"' "$DR_SP_EVENTS" || true)" "0"
 DR_SP_OUT=$(_dr_sp_run)
 assert_eq "P12e: a pretty-printed, key-reordered record is FOUND and reported present" \
   "$(_dr_sp_outcomes "$DR_SP_OUT")" "FIELD PRESENT at the last recorded Stop|"
@@ -1105,7 +1105,7 @@ _dr_sp_why_case bad_timeout 'PAYLOAD UNDETERMINED'; DR_SP_M_UNKNOWN="$DR_SP_MSG"
 DR_SP_ALL_MSGS=$(printf '%s\n' "$DR_SP_M_ABSENT" "$DR_SP_M_SHAPE" "$DR_SP_M_NOSTDIN" "$DR_SP_M_TIMEOUT" \
   "$DR_SP_M_PARTIAL" "$DR_SP_M_NOTJSON" "$DR_SP_M_NOJQ" "$DR_SP_M_UNKNOWN")
 assert_eq "P12f floor: all eight why messages were actually captured" \
-  "$(printf '%s\n' "$DR_SP_ALL_MSGS" | grep -c .)" "8"
+  "$(printf '%s\n' "$DR_SP_ALL_MSGS" | grep -c . || true)" "8"
 assert_eq "P12f: eight whys produce eight DISTINCT messages — each names its own reason" \
   "$(printf '%s\n' "$DR_SP_ALL_MSGS" | sort -u | wc -l | tr -d ' ')" "8"
 assert_eq "P12f: read_timeout_partial is matched whole, never as the read_timeout prefix" \
@@ -1179,7 +1179,7 @@ assert_eq "P12g: SKILL.md enumerates all 6 named outcomes doctor can report (6 s
 # --- (n) stop-payload: P12d — the enrollment boundary (ruling item 7) ---
 assert_file_contains "P12d: the RULES §15 registry still names TEN bound entry points" \
   "$REPO_ROOT/RULES.md" "Ten entry"
-DR_ENTRY_LINE=$(grep -m1 '^ENTRY_POINTS=' "$REPO_ROOT/tests/test-coverage-honesty.sh")
+DR_ENTRY_LINE=$(grep -m1 '^ENTRY_POINTS=' "$REPO_ROOT/tests/test-coverage-honesty.sh" || true)
 DR_ENTRY_COUNT=$(printf '%s' "$DR_ENTRY_LINE" | sed -E 's/^ENTRY_POINTS="([^"]*)"$/\1/' | wc -w | tr -d ' ')
 assert_eq "P12d: test-coverage-honesty.sh's roster is still ten entry points" "$DR_ENTRY_COUNT" "10"
 assert_contains "P12d: doctor's ONE pre-existing enrollment is still there" "$DR_ENTRY_LINE" "doctor"
@@ -1201,7 +1201,7 @@ DR_COUNT_SITES=$(grep -ohE '\b(ten|eleven|twelve|thirteen|fourteen|fifteen) chec
 assert_eq "P12d floor: all four known count-string sites were scanned" \
   "$([ "$DR_COUNT_SITES" -ge 4 ] && echo yes || echo no)" "yes"
 DR_COUNT_STALE=$(grep -ohE '\b(ten|eleven|twelve|thirteen|fourteen|fifteen) checks\b' \
-  "$REPO_ROOT/CLAUDE.md" "$REPO_ROOT/skills/doctor/SKILL.md" | grep -vc "^$DR_COUNT_WORD checks$")
+  "$REPO_ROOT/CLAUDE.md" "$REPO_ROOT/skills/doctor/SKILL.md" | grep -vc "^$DR_COUNT_WORD checks$" || true)
 assert_eq "P12d: $DR_COUNT_SITES count-string site(s) scanned — every one names the live roster size" \
   "$DR_COUNT_STALE" "0"
 

@@ -65,8 +65,8 @@ field. That is a captured fact about the event shape, not a scrub that happened 
 
 The captured file's last byte is `}`, with **no** trailing newline — that is what the harness
 writes to a hook's stdin. Any regeneration of this fixture must preserve it. A fixture that ends
-in a newline would silently forgive a reader that blocks until it sees one, which is the exact
-#155 failure class the bounded stdin idiom (ADR-027 condition C1) exists to close.
+in a newline would silently forgive a reader that blocks until it sees one, which is the
+exact #155 failure class the bounded stdin idiom (ADR-027 condition C1) exists to close.
 
 ### How it was redacted
 
