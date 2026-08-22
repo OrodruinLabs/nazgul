@@ -1483,6 +1483,42 @@ if rra_begin "a bare runner PATH finds inside the repository is placed too"; the
     "$(capture_cmd "$MANIFEST156")" "./run-my-tests.sh --only=delta"
   assert_contains "PATH-placed: the capture line names the third spelling it normalised" \
     "$(cat "$MANIFEST156")" "PATH resolved 'run-my-tests.sh' inside this repository"
+  assert_not_contains "PATH-placed: the converse — an in-repo PATH hit never claims OUTSIDE" \
+    "$(cat "$MANIFEST156")" "runner resolved OUTSIDE the pre-change tree"
+  rra_end
+fi
+
+if rra_begin "a bare runner PATH finds outside the repository runs, and the evidence says so"; then
+  write_placed_config "run-shared.sh"
+  write_placed_manifest TASK-158
+  MANIFEST158="$TEST_DIR/nazgul/tasks/TASK-158.md"
+  : > "$PLACED_PROBE"
+  RRA_PATH_SAVED="$PATH"
+  PATH="$RRA_OUTSIDE_DIR:$PATH"
+  run_capture TASK-158 --filter=delta
+  PATH="$RRA_PATH_SAVED"
+  assert_exit_code "PATH-outside: still captures" "$RR_EC" 0
+  assert_contains "PATH-outside: the shared runner is what executed" \
+    "$(cat "$PLACED_PROBE")" "variant=shared"
+  assert_contains "PATH-outside: warns on stderr that it resolved outside" \
+    "$RR_OUT" "resolves outside"
+  assert_contains "PATH-outside: the evidence block records the PATH-resolved fact, not a guessed path" \
+    "$(cat "$MANIFEST158")" \
+    "runner resolved OUTSIDE the pre-change tree: PATH resolved 'run-shared.sh' to $RRA_OUTSIDE_DIR/run-shared.sh"
+  assert_eq "PATH-outside: the recorded command is the configured bare name, unchanged" \
+    "$(capture_cmd "$MANIFEST158")" "run-shared.sh --only=delta"
+  rra_end
+fi
+
+if rra_begin "a bare runner whose PATH resolution is not a file (a shell builtin) is recorded, not silently skipped"; then
+  write_placed_config "true"
+  write_placed_manifest TASK-159
+  MANIFEST159="$TEST_DIR/nazgul/tasks/TASK-159.md"
+  run_capture TASK-159 --filter=delta
+  assert_exit_code "builtin runner: reported as a vacuous pre-change pass, not a silent no-op" "$RR_EC" 2
+  assert_contains "builtin runner: warns on stderr that it resolved outside" "$RR_OUT" "resolves outside"
+  assert_contains "builtin runner: names the resolved builtin itself, not a guessed path" \
+    "$RR_OUT" "executes true as it is now"
   rra_end
 fi
 
