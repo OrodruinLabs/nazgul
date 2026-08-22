@@ -50,8 +50,9 @@ if [ -n "$STOP_PAYLOAD" ]; then
   if ! command -v jq >/dev/null 2>&1; then
     BG_WHY="no_jq"
   elif ! printf '%s' "$STOP_PAYLOAD" | jq -e . >/dev/null 2>&1; then
-    # A read that hit the `-t` bound mid-document arrives non-empty and unparseable.
-    BG_WHY="not_json"
+    # A bound hit mid-document arrives non-empty and unparseable too, and only the reader knows the
+    # truncation was OURS — its read_timeout_partial outranks this arm's guess at a producer change.
+    BG_WHY="${HOOK_STDIN_WHY:-not_json}"
   elif ! printf '%s' "$STOP_PAYLOAD" | jq -e 'has("background_tasks")' >/dev/null 2>&1; then
     BG_WHY="field_absent"
   elif ! printf '%s' "$STOP_PAYLOAD" | jq -e '(.background_tasks | type) == "array"' >/dev/null 2>&1; then
