@@ -54,6 +54,10 @@ if [ -n "$STOP_PAYLOAD" ]; then
     BG_WHY="not_json"
   elif ! printf '%s' "$STOP_PAYLOAD" | jq -e 'has("background_tasks")' >/dev/null 2>&1; then
     BG_WHY="field_absent"
+  elif ! printf '%s' "$STOP_PAYLOAD" | jq -e '(.background_tasks | type) == "array"' >/dev/null 2>&1; then
+    # jq's length/map iterate an OBJECT's values and `// []` swallows an explicit null, so without this gate `{}` and `null` — the two likeliest deprecation shapes — count as an observed array (PR #245, three reviewers converged).
+    # A NEW closed-set member, deliberately not `not_json`: doctor.sh:376 tells the operator that any other `why` means the payload itself did not arrive intact, which is FALSE of a present, well-formed, wrongly-typed field.
+    BG_WHY="field_wrong_type"
   else
     BG_SEEN="yes" BG_WHY=""
     # background_tasks[] is undocumented, so a shape change (R3) or a renamed
@@ -69,7 +73,7 @@ if [ -n "$STOP_PAYLOAD" ]; then
       | @tsv' 2>/dev/null || true)"
     IFS=$'\t' read -r BG_ENTRIES BG_SUBAGENTS BG_LIVE BG_TYPES BG_STATUSES <<< "$BG_TSV" || true
     # A count that did not parse is "could not tell", not "found none" — RULES §15 / ADR-009.
-    # Valid JSON whose background_tasks is not an array lands on `not_json` too — the set stays closed.
+    # The type gate above already took every non-array shape; an ARRAY of non-objects still aborts jq here.
     case "${BG_LIVE:-}"      in ''|*[!0-9]*) BG_SEEN="unknown" BG_WHY="not_json" ;; esac
     case "${BG_SUBAGENTS:-}" in ''|*[!0-9]*) BG_SEEN="unknown" BG_WHY="not_json" ;; esac
   fi
@@ -237,17 +241,17 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
     m_unit=$(jq -r '.unit // "unknown"' "$marker" 2>/dev/null || echo "unknown")
     m_agent=$(jq -r '.agent // "unknown"' "$marker" 2>/dev/null || echo "unknown")
     case "$m_epoch" in ''|*[!0-9]*) m_epoch=0 ;; esac
-    if [ "$IN_FLIGHT_LIVE_HOLD" = "yes" ]; then
-      # Liveness is a property of the SESSION, not of one marker — background_tasks[] carries no
-      # join key — so a live subagent decides the whole tick: name every marker, move none, any age.
+    m_bg=$(jq -r '.background // "missing"' "$marker" 2>/dev/null || echo "missing")
+    m_named=$(jq -r '.named // "false"' "$marker" 2>/dev/null || echo "false")
+    if [ "$IN_FLIGHT_LIVE_HOLD" = "yes" ] && [ "$m_bg" != "false" ]; then
+      # Liveness is a property of the SESSION; `background:"false"` is a property of THIS MARKER, and a synchronous dispatch cannot span a Stop no matter what else is running — so a session-level fact does not overrule a marker-level one that already disposes of it (ADR-027 amendment).
+      # Every other class: name every marker, move none, any age. INVARIANT: a `background:"false"` marker is disposed identically regardless of BG_LIVE.
       FRESH_COUNT=$((FRESH_COUNT + 1))
       FRESH_UNITS="${FRESH_UNITS}${FRESH_UNITS:+ }${m_unit}"
       FRESH_BASENAMES="${FRESH_BASENAMES}${marker##*/}"$'\n'
     elif [ "$m_epoch" -gt 0 ] && [ "$m_epoch" -ge "$IN_FLIGHT_CUTOFF" ]; then
       # "missing" = dispatch class NOT OBSERVABLE at write time, not foreground. run_in_background is omitted from the exposed Agent schema in fork mode (the interactive default since v2.1.232) and under CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
       # absence means the OPPOSITE in those two configs (background / foreground). #218: read background_tasks[] at Stop instead of predicting at dispatch time.
-      m_bg=$(jq -r '.background // "missing"' "$marker" 2>/dev/null || echo "missing")
-      m_named=$(jq -r '.named // "false"' "$marker" 2>/dev/null || echo "false")
       if [ "$IN_FLIGHT_OBSERVED" = "yes" ] && [ "$m_named" != "true" ] && [ "$m_bg" != "false" ]; then
         # Observed, and not live (the hold above already took every LIVE > 0 tick): the payload, not
         # the write-time class, disposes of an unnamed marker.
@@ -296,6 +300,9 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
   if [ "$IN_FLIGHT_LIVE_HOLD" = "yes" ] || [ "$FRESH_COUNT" -gt 0 ]; then
     # Ruling Q1's valve sits on the ONE hold exit so it cannot diverge between the arms: the
     # `background:"true"` hold rests on the same never-observed wake the payload-driven one does.
+
+    # The fingerprint is over the HELD set ONLY. A proven-class quarantine therefore changes the key
+    # once and grants at most one further hold — a marker can be moved out of that set only once.
     IN_FLIGHT_HOLD_KEY=$(printf '%s' "$FRESH_BASENAMES" | sort)
     IN_FLIGHT_HOLDS_FILE=$(_in_flight_holds_file "$IN_FLIGHT_HOLD_KEY")
     IN_FLIGHT_HOLD_FP="${IN_FLIGHT_HOLDS_FILE##*/}"
