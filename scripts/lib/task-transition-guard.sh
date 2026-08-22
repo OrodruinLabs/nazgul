@@ -908,12 +908,12 @@ _ttg_merge_deny() {
 }
 
 # One `- **key**: value` / `- key: value` field out of a section; empty when absent.
+# Strips a DELIMITING backtick pair only (greedy, so an interior one — legal in a git ref — survives).
 _ttg_merge_field() {
   printf '%s\n' "$2" \
     | grep -iE "^[[:space:]]*-[[:space:]]*(\*\*)?$1(\*\*)?:" \
     | head -1 \
-    | sed -E 's/^[^:]*:[[:space:]]*//; s/[[:space:]]+$//' \
-    | tr -d '`'
+    | sed -E 's/^[^:]*:[[:space:]]*//; s/[[:space:]]+$//; s/^`(.*)`$/\1/'
 }
 
 _ttg_merge_shape_ok() {
