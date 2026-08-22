@@ -378,6 +378,88 @@ assert_eq "P1: live_subagents is a JSON number, not a string" \
   "$(printf '%s' "$HOLD_LINE" | jq -r '.live_subagents | type' 2>/dev/null)" "number"
 teardown_temp_dir
 
+# P11a (binding ruling on PR #245, finding 1) — PROVEN class x LIVE payload, the cell neither P1 nor
+# the P2 negative ever drove. A background:"false" marker is disposed identically regardless of BG_LIVE.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 5'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+NOW=$(date +%s)
+_write_marker "$TEST_DIR/nazgul/in-flight/fg.json" "nazgul:implementer" "TASK-FOREGROUND" "$NOW" "false"
+# The second, HELD marker is what makes the units-exclusion assertion below non-vacuous: it forces
+# units to be NON-EMPTY, so "TASK-FOREGROUND is absent" cannot pass by the field being empty instead.
+_write_marker "$TEST_DIR/nazgul/in-flight/held.json" "nazgul:implementer" "TASK-HELD" "$NOW" "missing"
+run_hook "$(cat "$FIXTURES/stop-payload/stop-two-subagents-one-shell.json")"
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+# A dispatchable READY task is planted on purpose: without the hold this run blocks with exit 2, so
+# exit 0 discriminates here instead of being the no-plan default.
+assert_exit_code "P11a: liveness is its own basis, so the tick still holds (exit 0)" "$HOOK_EC" 0
+# SUBSTRING TRAPS, both live: in_flight_orphan is a strict prefix of in_flight_orphan_candidate and
+# in_flight_hold of in_flight_hold_budget_exhausted, so every token below carries its closing quote.
+assert_contains "P11a: a live tick does NOT rescue a background:\"false\" marker from quarantine" "$EVENTS" '"reason":"in_flight_orphan"'
+assert_file_exists "P11a: the proven-class marker really moved to nazgul/in-flight/quarantine/" "$TEST_DIR/nazgul/in-flight/quarantine/fg.json"
+assert_file_not_exists "P11a: ... and is gone from nazgul/in-flight/" "$TEST_DIR/nazgul/in-flight/fg.json"
+assert_contains "P11a: the hold is STILL emitted on the same tick" "$EVENTS" '"reason":"in_flight_hold"'
+P11A_HOLD=$(grep '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_eq "P11a: the hold's units names the held marker — the exclusion below is not an empty-field pass" \
+  "$(printf '%s' "$P11A_HOLD" | jq -r '.units' 2>/dev/null)" "TASK-HELD"
+assert_eq "P11a (consequence 2): units NEVER accumulates the background:\"false\" unit" \
+  "$(printf '%s' "$P11A_HOLD" | jq -r 'if (.units | test("TASK-FOREGROUND")) then "named" else "absent" end' 2>/dev/null)" "absent"
+assert_eq "P11a: the hold counts only the held marker" \
+  "$(printf '%s' "$P11A_HOLD" | jq -r '.count' 2>/dev/null)" "1"
+assert_contains "P11a: the live arm's own discriminator is still present" "$P11A_HOLD" '"live_subagents":2'
+assert_file_exists "P11a: the non-false marker is left in place" "$TEST_DIR/nazgul/in-flight/held.json"
+teardown_temp_dir
+
+# P11b (binding ruling, second cell) — a NAMED marker's proof is CONTRACTUAL, and a named dispatch can
+# be genuinely background AND live, so on a live tick it is HELD rather than quarantined.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 5'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/named.json" "nazgul:implementer" "TASK-NAMED" "$(date +%s)" "missing" "true"
+run_hook "$(cat "$FIXTURES/stop-payload/stop-two-subagents-one-shell.json")"
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+assert_exit_code "P11b: a named marker on a live tick is held, not moved (exit 0)" "$HOOK_EC" 0
+assert_file_exists "P11b: the named marker is still at its original path" "$TEST_DIR/nazgul/in-flight/named.json"
+assert_file_not_exists "P11b: the named marker is NOT quarantined" "$TEST_DIR/nazgul/in-flight/quarantine/named.json"
+# SUBSTRING TRAP (same as P2 at :397-399): the closing quote is what keeps this off the candidate.
+assert_not_contains "P11b: a contractual proof is never emitted as a PROVEN leak on a live tick" "$EVENTS" '"reason":"in_flight_orphan"'
+P11B_HOLD=$(grep '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_eq "P11b: the hold names the named marker, so the negative above ran against real output" \
+  "$(printf '%s' "$P11B_HOLD" | jq -r '.units' 2>/dev/null)" "TASK-NAMED"
+teardown_temp_dir
+
+# P11c (ruling: fingerprint interaction, ACCEPT but pin) — quarantining a proven-class marker changes
+# the HELD set once, so Q1's budget is refreshed at most once: a marker can leave that set only once.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 5'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+NOW=$(date +%s)
+_write_marker "$TEST_DIR/nazgul/in-flight/fg.json" "nazgul:implementer" "TASK-FOREGROUND" "$NOW" "false"
+_write_marker "$TEST_DIR/nazgul/in-flight/held.json" "nazgul:implementer" "TASK-HELD" "$NOW" "missing"
+run_hook "$(cat "$FIXTURES/stop-payload/stop-two-subagents-one-shell.json")"
+assert_exit_code "P11c: tick 1 — the post-quarantine HELD set takes its one hold (exit 0)" "$HOOK_EC" 0
+run_hook "$(cat "$FIXTURES/stop-payload/stop-two-subagents-one-shell.json")"
+EVENTS=$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)
+assert_exit_code "P11c: tick 2 — an unchanged HELD set is refused a second hold (exit 2)" "$HOOK_EC" 2
+P11C_HOLDS=$(grep -c '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null); P11C_HOLDS="${P11C_HOLDS:-0}"
+assert_eq "P11c: a proven-class quarantine grants AT MOST ONE additional hold" "$P11C_HOLDS" "1"
+assert_contains "P11c: tick 2 records the exhausted budget rather than falling through silently" "$EVENTS" '"reason":"in_flight_hold_budget_exhausted"'
+P11C_ORPHANS=$(grep -c '"reason":"in_flight_orphan"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null); P11C_ORPHANS="${P11C_ORPHANS:-0}"
+assert_eq "P11c: the marker is quarantined once and only once across both ticks" "$P11C_ORPHANS" "1"
+teardown_temp_dir
+
 # P2 (ruling Q3) — an observed-EMPTY background_tasks[] is RECORDED, never acted on.
 setup_temp_dir
 setup_nazgul_dir
@@ -431,8 +513,10 @@ P5_CASES=(
   'valid JSON without the key|field_absent|{"hook_event_name":"Stop"}'
   'a document truncated mid-read|not_json|{"hook_event_name":"Stop","background_tasks":[{"id":"a1","type":"subagent","status":"run'
   'an empty payload|no_stdin|'
-  'background_tasks present but a string|not_json|{"hook_event_name":"Stop","background_tasks":"not-an-array"}'
-  'background_tasks present but an object|not_json|{"hook_event_name":"Stop","background_tasks":{"a":1}}'
+  'background_tasks present but a string|field_wrong_type|{"hook_event_name":"Stop","background_tasks":"not-an-array"}'
+  'background_tasks present but an object|field_wrong_type|{"hook_event_name":"Stop","background_tasks":{"a":1}}'
+  'background_tasks an explicit JSON null|field_wrong_type|{"hook_event_name":"Stop","background_tasks":null}'
+  'background_tasks an OBJECT of task objects|field_wrong_type|{"hook_event_name":"Stop","background_tasks":{"t1":{"type":"subagent","status":"running"}}}'
 )
 for p5_case in "${P5_CASES[@]}"; do
   IFS='|' read -r p5_label p5_want_why p5_payload <<<"$p5_case"
@@ -1074,7 +1158,7 @@ assert_eq "P12a: exactly one event per invocation — 3 invocations, 3 events" "
 assert_eq "P12a: each unknown arm names its OWN reason" \
   "$(printf '%s\n' "$P12_OBS" | jq -r '.why // "ABSENT"' | tr '\n' ' ')" "no_stdin not_json field_absent "
 P12_WHY_OUTSIDE=$(printf '%s\n' "$P12_OBS" | jq -r 'select(has("why")) | .why' \
-  | grep -vcE '^(no_stdin|read_timeout|not_json|field_absent|no_jq)$' || true)
+  | grep -vcE '^(no_stdin|read_timeout|not_json|field_absent|field_wrong_type|no_jq)$' || true)
 assert_eq "P12a: every why is drawn from the closed set" "$P12_WHY_OUTSIDE" "0"
 assert_eq "P12a: an absent, unparseable or key-less payload falls to unknown, never to yes" \
   "$(printf '%s\n' "$P12_OBS" | jq -r '.bg_seen' | sort -u | tr '\n' ' ')" "unknown "
