@@ -472,8 +472,9 @@ printf '## 15. Git-Level Guards\n\nno registry bullet here at all\n' > "$REG_GON
 assert_eq "registry dogfood: a doc with no registry bullet derives nothing (the floor's input)" \
   "$(_registry_members "$REG_GONE" | grep -c . || true)" "0"
 
-# review-evidence (scripts/lib/review-evidence.sh), forced all-skip: a review dir holding only
-# orchestrator artifacts, so every candidate lands in a named bucket and NOTHING is read.
+# review-file-class prints for BOTH DONE-gate passes, so — like red-run-evidence's two scans — the
+# entry is covered only when BOTH tokens conform. Forced all-skip: a dir of orchestrator artifacts.
+RFC_EVIDENCE_OK=0; RFC_PROVENANCE_OK=0
 mkdir -p "$SCRATCH/re/nazgul/reviews/TASK-001"
 source "$REPO_ROOT/scripts/lib/review-evidence.sh"
 printf '{"schema_version":1,"agents":{"reviewers":["code-reviewer"]},"review_gate":{"granularity":"task"}}\n' \
@@ -483,7 +484,7 @@ printf '# adversarial\n' > "$SCRATCH/re/nazgul/reviews/TASK-001/adversarial-SEC-
 RE_OUT=$(validate_review_evidence "$SCRATCH/re/nazgul" TASK-001 2>"$SCRATCH/re.err") || true
 RE_LINE=$(grep -E '^review-evidence/verdict-files: [0-9]+ scanned' "$SCRATCH/re.err" | tail -1)
 _grammar_check "review-evidence/verdict-files (all-skip)" "review-evidence/verdict-files" \
-  "artifact non-seat superseded" "$RE_LINE" && _entry_covered review-evidence
+  "artifact non-seat superseded" "$RE_LINE" && RFC_EVIDENCE_OK=1
 assert_contains "review-evidence: forced all-skip emits the nothing-checked signal" \
   "$(cat "$SCRATCH/re.err")" "review-evidence/verdict-files: NOTHING CHECKED — all 2 candidate(s) skipped"
 # This entry point's floor BLOCKS rather than only reporting: an all-skipped scan is the exact
@@ -499,6 +500,39 @@ _grammar_check "review-evidence/verdict-files (mixed)" "review-evidence/verdict-
   "artifact non-seat superseded" "$RE_FULL_LINE"
 assert_contains "review-evidence: a run with a real reviewer file checks something" \
   "$RE_FULL_LINE" "1 checked"
+
+# review-provenance (scripts/lib/review-provenance.sh), forced all-skip over the SAME directory:
+# it shares the fourteenth entry point's classifier, so the two partitions must be identical.
+rm -f "$SCRATCH/re/nazgul/reviews/TASK-001/code-reviewer.md"
+printf 'diff\n' > "$SCRATCH/re/nazgul/reviews/TASK-001/diff.patch"
+write_dispatch_manifest "$SCRATCH/re/nazgul" TASK-001 "$SCRATCH/re/nazgul/reviews/TASK-001/diff.patch" \
+  FEAT-000 1 -- code-reviewer >/dev/null
+RP_OUT=$(validate_review_provenance "$SCRATCH/re/nazgul" TASK-001 2>"$SCRATCH/rp.err") || true
+RP_LINE=$(grep -E '^review-provenance/subject-files: [0-9]+ scanned' "$SCRATCH/rp.err" | tail -1)
+_grammar_check "review-provenance/subject-files (all-skip)" "review-provenance/subject-files" \
+  "artifact non-seat superseded" "$RP_LINE" && RFC_PROVENANCE_OK=1
+assert_contains "review-provenance: forced all-skip emits the nothing-checked signal" \
+  "$(cat "$SCRATCH/rp.err")" "NOTHING CHECKED — all 2 candidate(s) skipped after a board was dispatched"
+# Conditional floor: a board WAS dispatched here, so nothing-read blocks. Without the manifest the
+# same directory is the ordinary pre-review state — "looked and found none", not "never looked".
+assert_contains "review-provenance: the floor reaches the caller when a board was dispatched" \
+  "$RP_OUT" "NOTHING_CHECKED"
+rm -f "$SCRATCH/re/nazgul/reviews/TASK-001/.dispatch.json"
+RP_PRE=$(validate_review_provenance "$SCRATCH/re/nazgul" TASK-001 2>"$SCRATCH/rp-pre.err") || true
+assert_eq "review-provenance: the same all-skip scan pre-review says nothing to the caller" "$RP_PRE" ""
+assert_contains "review-provenance: and still names the state on stderr" \
+  "$(cat "$SCRATCH/rp-pre.err")" "nothing to check — all 2 candidate(s) skipped, no dispatch manifest (pre-review)"
+
+# One emitter, two tokens: half a conforming entry point is not a covered one.
+if [ "$RFC_EVIDENCE_OK$RFC_PROVENANCE_OK" = "11" ]; then
+  _entry_covered review-file-class
+  _pass "review-file-class: BOTH tokens conform, so the shared emitter counts as covered"
+else
+  _fail "review-file-class: BOTH tokens conform" \
+    "verdict-files=$RFC_EVIDENCE_OK subject-files=$RFC_PROVENANCE_OK — one conforming token does not cover an emitter that prints two"
+fi
+assert_eq "review-file-class: the two passes partition the same directory identically" \
+  "$(printf '%s' "$RE_LINE" | sed 's/^[^:]*: //')" "$(printf '%s' "$RP_LINE" | sed 's/^[^:]*: //')"
 
 # Enumeration completeness — the point of the whole file: an entry point with no
 # emitter must FAIL here, not silently drop out of the list.

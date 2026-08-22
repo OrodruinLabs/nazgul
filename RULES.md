@@ -611,12 +611,22 @@ note. This is §15's looked-vs-never-looked distinction applied to tests, guards
   conform. Its disposition is NOT set by coverage: the gate's seven dispositions decide allow/deny, and a
   vacuous scan reports `NOTHING CHECKED` without re-deciding anything — the same "exit code encodes the
   worst verdict, not the coverage" rule `scripts/doctor.sh` follows). The fourteenth is
-  `scripts/lib/review-evidence.sh` (enrolled FEAT-031/TASK-034 — the DONE gate's verdict-file
-  classifier, printing under the entry token `review-evidence`. Its three skip reasons are a closed
-  set — `artifact`, `non-seat`, `superseded` — and unlike the advisory floors above, its `K > 0`
-  floor BLOCKS: a classifier that stopped matching would skip every candidate and report a clean
-  review directory, which is the exact failure the gate exists to prevent, so an all-skipped scan
-  emits `NOTHING_CHECKED` as a problem line and not merely as a stderr note).
+  `scripts/lib/review-file-class.sh` (enrolled FEAT-031/TASK-034 as the DONE gate's verdict-file
+  classifier and MOVED here by FEAT-031/TASK-035 — the registry follows the EMITTER, and the same
+  rule now answers for BOTH of the gate's passes, so the one §15 printf lives with the one
+  classifier rather than being written out once per caller. It prints under two tokens, like the
+  thirteenth: `review-evidence/verdict-files` for the pass that decides which verdicts can approve
+  a task, and `review-provenance/subject-files` for the pass that decides which files must carry a
+  matching dispatch token. Those are the SAME set by construction — a file the first pass will not
+  read as a verdict cannot approve anything, so demanding a token from it only blocks honest work —
+  and the entry is counted covered only when BOTH tokens conform. Its three skip reasons are a
+  closed set for both: `artifact`, `non-seat`, `superseded`. Unlike the advisory floors above the
+  `K > 0` floor BLOCKS, because a classifier that stopped matching would skip every candidate and
+  report a clean review directory, which is the exact failure these gates exist to prevent; on the
+  provenance pass it blocks CONDITIONALLY and the condition is the point — `.dispatch.json`
+  separates "a board ran and the classifier read nothing" from "no board has run here yet", the
+  ordinary pre-review state, so that ambiguous case is decided by evidence present in the directory
+  rather than inherited from its neighbour).
   `tests/test-coverage-honesty.sh` drives every one of them under a forced
   all-skip input and FAILS if any enumerated entry point was never driven — membership is asserted, not
   assumed, so an entry point that conforms today cannot silently stop conforming tomorrow. Add a new

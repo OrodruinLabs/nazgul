@@ -297,4 +297,285 @@ assert_contains "multi: token missing" "$VAL_OUTPUT" "TOKEN_MISSING code-reviewe
 assert_contains "multi: diff stale" "$VAL_OUTPUT" "DIFF_HASH_STALE"
 teardown_temp_dir
 
+# --- FEAT-031/TASK-035: the same authored allowlist existed twice. Everything below pins the
+# single shared classifier, both directions of the widening, and the §15 coverage line. ---
+
+source "$REPO_ROOT/scripts/lib/review-evidence.sh"
+
+setup_provenance_env() {
+  setup_temp_dir
+  setup_nazgul_dir
+  local reviewers_json
+  # shellcheck disable=SC2086 # intentional word-splitting on the space-separated seat list
+  reviewers_json=$(printf '%s\n' $1 | jq -R . | jq -s .)
+  create_config ".agents.reviewers = $reviewers_json"
+}
+
+run_validate_stderr() {
+  VAL_STDERR=$(validate_review_provenance "$TEST_DIR/nazgul" "$1" 2>&1 >/dev/null) || true
+}
+
+# Replica of the live FEATURE-FEAT-031 dir at board 9 (47 .md): 4 seats on the current dispatch
+# token, 24 archives on STALE ones — the archives produced 20 of the old classifier's 43 refusals.
+build_provenance_census() {
+  local unit="$1" dir="$TEST_DIR/nazgul/reviews/$1" b s
+  mkdir -p "$dir"
+  printf 'diff --git a b\n+live\n' > "$dir/diff.patch"
+  CENSUS_TOKEN=$(write_dispatch_manifest "$TEST_DIR/nazgul" "$unit" "$dir/diff.patch" "FEAT-031" "9" -- \
+    architect-reviewer code-reviewer security-reviewer qa-reviewer)
+  for s in architect-reviewer code-reviewer security-reviewer qa-reviewer; do
+    printf -- '---\nverdict: APPROVE\nreview_token: %s\n---\nbody\n' "$CENSUS_TOKEN" > "$dir/$s.md"
+  done
+  for b in 3 4 5 6 7 8; do
+    for s in architect code qa security; do
+      printf -- '---\nverdict: CHANGES_REQUESTED\nreview_token: %s\n---\nboard %s archive\n' \
+        "stale${b}0000000000" "$b" > "$dir/board${b}-${s}-reviewer.md"
+    done
+  done
+  for b in 2-BRIEF 2-OUTCOME 3-BRIEF 3-OUTCOME 4-EVIDENCE 4-OUTCOME 5-EVIDENCE 5-OUTCOME \
+           6-NAVIGATION 6-OUTCOME 7-NAVIGATION 7-OUTCOME 8-NAVIGATION 8-OUTCOME \
+           9-NAVIGATION 9-OUTCOME; do
+    printf '# BOARD-%s\n\nOrchestrator board document, no verdict.\n' "$b" > "$dir/BOARD-${b}.md"
+  done
+  for s in ARCH-G QA-1 SEC-1; do
+    printf '# Adversarial cross-check — %s\n\nCONFIRM\n' "$s" > "$dir/adversarial-${s}.md"
+  done
+}
+
+# --- Test 20 (AC1/AC2): the duplication is ELIMINATED, not re-copied. Derived from the tree,
+# so a third hand-written copy anywhere under scripts/ turns this red wherever it lands. ---
+CLASS_LIB_REL="scripts/lib/review-file-class.sh"
+assert_file_exists "shared classifier lib is shipped" "$REPO_ROOT/$CLASS_LIB_REL"
+FOUR_NAMES='test-failures.md|consolidated-feedback.md|simplify-report.md|summary.md'
+assert_eq "the four-name meta literal survives in exactly one shipped script, the shared lib" \
+  "$(grep -rlF "$FOUR_NAMES" "$REPO_ROOT/scripts" 2>/dev/null | sed "s|^$REPO_ROOT/||" | LC_ALL=C sort | tr '\n' ' ')" \
+  "$CLASS_LIB_REL "
+assert_eq "_rp_is_meta_file — the second copy TASK-034 could not reach — is gone entirely" \
+  "$(grep -rl '_rp_is_meta_file' "$REPO_ROOT/scripts" "$REPO_ROOT/agents" 2>/dev/null | grep -c . || true)" "0"
+CLASS_DEF_N=0
+for fn in _is_review_meta_file _re_is_orchestrator_artifact _re_seat_suffixes _re_is_seat_shaped \
+          _re_is_superseded_copy review_classify_unit_file; do
+  CLASS_DEF_N=$((CLASS_DEF_N + 1))
+  assert_eq "classifier '$fn' is defined exactly once, in the shared lib" \
+    "$(grep -rlE "^${fn}\(\) \{" "$REPO_ROOT/scripts" 2>/dev/null | sed "s|^$REPO_ROOT/||" | LC_ALL=C sort | tr '\n' ' ')" \
+    "$CLASS_LIB_REL "
+done
+assert_eq "single-authority scan: K>0 floor — the predicate list was actually walked" "$CLASS_DEF_N" "6"
+for lib in review-evidence review-provenance; do
+  assert_file_contains "$lib sources the shared classifier rather than carrying one" \
+    "$REPO_ROOT/scripts/lib/$lib.sh" "review-file-class.sh"
+done
+
+# --- Test 21 (AC2, the invariant extraction BUYS): the provenance-subject set IS the verdict set,
+# asserted on both validators' own §15 coverage lines — the finest partition either one states. ---
+setup_provenance_env "architect-reviewer code-reviewer security-reviewer qa-reviewer"
+build_provenance_census "TASK-001"
+run_validate_stderr "TASK-001"
+PROV_PARTITION=$(printf '%s\n' "$VAL_STDERR" | sed -n 's/^review-provenance\/subject-files: \([0-9].*\)$/\1/p' | head -1)
+EVID_PARTITION=$(validate_review_evidence "$TEST_DIR/nazgul" "TASK-001" 2>&1 >/dev/null \
+  | sed -n 's/^review-evidence\/verdict-files: \([0-9].*\)$/\1/p' | head -1)
+assert_eq "subject set == verdict set: both validators report the same partition" \
+  "$PROV_PARTITION" "$EVID_PARTITION"
+assert_contains "and that partition is the real census shape" "$PROV_PARTITION" \
+  "47 scanned, 43 skipped (artifact=3, non-seat=16, superseded=24), 4 checked"
+# Dogfood the SHARING itself: one override moves BOTH validators. Two hand-written copies
+# could not do that, which is what makes the assertion above a binding and not a coincidence.
+SHARED_PROV=$(
+  _re_is_orchestrator_artifact() { return 1; }
+  validate_review_provenance "$TEST_DIR/nazgul" "TASK-001" 2>&1 >/dev/null \
+    | sed -n 's/^review-provenance\/subject-files: \([0-9].*\)$/\1/p' | head -1
+)
+SHARED_EVID=$(
+  _re_is_orchestrator_artifact() { return 1; }
+  validate_review_evidence "$TEST_DIR/nazgul" "TASK-001" 2>&1 >/dev/null \
+    | sed -n 's/^review-evidence\/verdict-files: \([0-9].*\)$/\1/p' | head -1
+)
+assert_eq "[mutation] one shared predicate moves both validators in lockstep" \
+  "$SHARED_PROV" "$SHARED_EVID"
+assert_contains "[mutation] and it really moved (artifact=0, the 3 adversarial files now read)" \
+  "$SHARED_PROV" "artifact=0"
+teardown_temp_dir
+
+# --- Test 22 (AC3 direction A): an orchestrator artifact is NOT a provenance subject. This is
+# the refusal board 9 hit — 43 problem lines against a directory with nothing wrong in it. ---
+setup_provenance_env "architect-reviewer code-reviewer security-reviewer qa-reviewer"
+build_provenance_census "FEATURE-FEAT-031"
+run_validate "FEATURE-FEAT-031"
+assert_exit_code "census: exit 0 — the board-9 refusal is gone" "$VAL_EC" 0
+assert_eq "census: no output at all" "$VAL_OUTPUT" ""
+assert_not_contains "census: adversarial artifact is not a provenance subject" "$VAL_OUTPUT" "adversarial-"
+assert_not_contains "census: board document is not a provenance subject" "$VAL_OUTPUT" "BOARD-"
+assert_not_contains "census: a stale per-board archive is not a provenance subject" "$VAL_OUTPUT" "board3-"
+teardown_temp_dir
+
+# --- Test 23 (AC3 direction B): the widening must not blunt the gate. Every planted/stale shape
+# it exists to catch is still caught, by NAME, inside that same 47-file census. ---
+setup_provenance_env "architect-reviewer code-reviewer security-reviewer qa-reviewer"
+build_provenance_census "FEATURE-FEAT-031"
+printf -- '---\nverdict: APPROVE\n---\nno token at all\n' \
+  > "$TEST_DIR/nazgul/reviews/FEATURE-FEAT-031/qa-reviewer.md"
+run_validate "FEATURE-FEAT-031"
+assert_exit_code "roster seat with no token still fails" "$VAL_EC" 1
+assert_eq "roster seat with no token: exactly one problem" "$(printf '%s\n' "$VAL_OUTPUT" | grep -c .)" "1"
+assert_contains "roster seat with no token: named" "$VAL_OUTPUT" "TOKEN_MISSING qa-reviewer"
+teardown_temp_dir
+
+setup_provenance_env "architect-reviewer code-reviewer security-reviewer qa-reviewer"
+build_provenance_census "FEATURE-FEAT-031"
+printf -- '---\nverdict: APPROVE\nreview_token: 0000000000000000\n---\nplanted\n' \
+  > "$TEST_DIR/nazgul/reviews/FEATURE-FEAT-031/security-reviewer.md"
+run_validate "FEATURE-FEAT-031"
+assert_exit_code "roster seat with a stale/planted token still fails" "$VAL_EC" 1
+assert_eq "stale token: exactly one problem" "$(printf '%s\n' "$VAL_OUTPUT" | grep -c .)" "1"
+assert_contains "stale token: named" "$VAL_OUTPUT" "TOKEN_MISMATCH security-reviewer"
+teardown_temp_dir
+
+setup_provenance_env "architect-reviewer code-reviewer security-reviewer qa-reviewer"
+build_provenance_census "FEATURE-FEAT-031"
+printf -- '---\nverdict: APPROVE\n---\nplanted seat, never dispatched\n' \
+  > "$TEST_DIR/nazgul/reviews/FEATURE-FEAT-031/extra-reviewer.md"
+run_validate "FEATURE-FEAT-031"
+assert_exit_code "a planted NON-roster seat file is still a subject" "$VAL_EC" 1
+assert_contains "planted non-roster seat: named" "$VAL_OUTPUT" "TOKEN_MISSING extra-reviewer"
+teardown_temp_dir
+
+setup_provenance_env "architect-reviewer code-reviewer security-reviewer qa-reviewer"
+build_provenance_census "FEATURE-FEAT-031"
+printf 'diff --git a b\n+MOVED after the board approved\n' \
+  > "$TEST_DIR/nazgul/reviews/FEATURE-FEAT-031/diff.patch"
+run_validate "FEATURE-FEAT-031"
+assert_exit_code "diff moved under an approved census: still stale" "$VAL_EC" 1
+assert_contains "diff moved: DIFF_HASH_STALE" "$VAL_OUTPUT" "DIFF_HASH_STALE"
+teardown_temp_dir
+
+# --- Test 24 (dogfood): the direction-B assertions are load-bearing. A swallow-everything
+# classifier — the tempting "just widen the allowlist" fix — loses every one of them. ---
+setup_provenance_env "architect-reviewer code-reviewer security-reviewer qa-reviewer"
+build_provenance_census "FEATURE-FEAT-031"
+printf -- '---\nverdict: APPROVE\nreview_token: 0000000000000000\n---\nplanted\n' \
+  > "$TEST_DIR/nazgul/reviews/FEATURE-FEAT-031/extra-reviewer.md"
+PERMISSIVE_OUT=$(
+  _re_is_orchestrator_artifact() { return 0; }
+  validate_review_provenance "$TEST_DIR/nazgul" "FEATURE-FEAT-031" 2>/dev/null
+) || true
+assert_not_contains "[mutation] swallow-everything loses the planted verdict" \
+  "$PERMISSIVE_OUT" "TOKEN_MISMATCH extra-reviewer"
+NARROW_OUT=$(
+  _re_is_seat_shaped() { return 1; }
+  validate_review_provenance "$TEST_DIR/nazgul" "FEATURE-FEAT-031" 2>/dev/null
+) || true
+assert_not_contains "[mutation] a never-seat-shaped classifier loses it too" \
+  "$NARROW_OUT" "TOKEN_MISMATCH extra-reviewer"
+run_validate "FEATURE-FEAT-031"
+assert_contains "the shipped classifier keeps it" "$VAL_OUTPUT" "TOKEN_MISMATCH extra-reviewer"
+# A ROSTER seat is answered `seat` before either predicate is consulted, so neither mutant can
+# reclassify one — the archive/artifact widening can never reach a configured seat's own file.
+printf -- '---\nverdict: APPROVE\nreview_token: 0000000000000000\n---\nplanted\n' \
+  > "$TEST_DIR/nazgul/reviews/FEATURE-FEAT-031/security-reviewer.md"
+ROSTER_OUT=$(
+  _re_is_orchestrator_artifact() { return 0; }
+  _re_is_seat_shaped() { return 1; }
+  _re_is_superseded_copy() { return 0; }
+  validate_review_provenance "$TEST_DIR/nazgul" "FEATURE-FEAT-031" 2>/dev/null
+) || true
+assert_contains "[mutation] no classifier mutant can hide a configured seat's own file" \
+  "$ROSTER_OUT" "TOKEN_MISMATCH security-reviewer"
+teardown_temp_dir
+
+# --- Test 25 (fail-closed): a roster that cannot be read gives no seat vocabulary to narrow BY.
+# The derivation failing must widen what is CHECKED, never what is ignored. ---
+setup_temp_dir
+setup_nazgul_dir
+DIFF="$TEST_DIR/nazgul/reviews/TASK-060/diff.patch"
+mkdir -p "$(dirname "$DIFF")"
+printf 'diff\n' > "$DIFF"
+write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-060" "$DIFF" "FEAT-031" "1" -- code-reviewer >/dev/null
+printf -- '---\nverdict: APPROVE\nreview_token: 0000000000000000\n---\nplanted\n' \
+  > "$TEST_DIR/nazgul/reviews/TASK-060/BOARD-9-OUTCOME.md"
+run_validate "TASK-060"
+run_validate_stderr "TASK-060"
+assert_exit_code "no config.json: nothing is narrowed away, so the planted file is caught" "$VAL_EC" 1
+assert_contains "no config.json: named" "$VAL_OUTPUT" "TOKEN_MISMATCH BOARD-9-OUTCOME"
+assert_contains "no config.json: the empty seat vocabulary is reported, not hidden" \
+  "$VAL_STDERR" "seat-suffixes=[]"
+teardown_temp_dir
+
+# --- Test 26 (AC5): the §15 coverage line, and the K>0 floor whose ambiguous case .dispatch.json
+# decides — "no board has run here yet" vs "a board ran and the classifier read nothing". ---
+setup_provenance_env "code-reviewer"
+build_provenance_census "GROUP-2" >/dev/null
+run_validate_stderr "GROUP-2"
+FLOOR_LINE=$(printf '%s\n' "$VAL_STDERR" | sed -n 's/^\(review-provenance\/subject-files: [0-9].*findings\)$/\1/p' | head -1)
+assert_contains "coverage line conforms to the §15 grammar" "$FLOOR_LINE" \
+  "review-provenance/subject-files: 47 scanned, "
+COV_N=$(printf '%s' "$FLOOR_LINE" | sed -E 's/^[^:]*: ([0-9]+) scanned.*/\1/')
+COV_M=$(printf '%s' "$FLOOR_LINE" | sed -E 's/^.* ([0-9]+) skipped \(.*/\1/')
+COV_K=$(printf '%s' "$FLOOR_LINE" | sed -E 's/^.*\), ([0-9]+) checked.*/\1/')
+assert_eq "coverage line: N == M + K" "$COV_N" "$((COV_M + COV_K))"
+assert_eq "coverage line: K > 0 on a healthy directory" "$( [ "$COV_K" -gt 0 ] && echo yes || echo no )" "yes"
+teardown_temp_dir
+
+setup_provenance_env "code-reviewer"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-070"
+printf 'diff\n' > "$TEST_DIR/nazgul/reviews/TASK-070/diff.patch"
+write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-070" "$TEST_DIR/nazgul/reviews/TASK-070/diff.patch" \
+  "FEAT-031" "1" -- code-reviewer >/dev/null
+printf '# BOARD-2-OUTCOME\n' > "$TEST_DIR/nazgul/reviews/TASK-070/BOARD-2-OUTCOME.md"
+printf '# adversarial\n' > "$TEST_DIR/nazgul/reviews/TASK-070/adversarial-SEC-1.md"
+run_validate "TASK-070"
+run_validate_stderr "TASK-070"
+assert_exit_code "floor: a dispatched board that read nothing blocks" "$VAL_EC" 1
+assert_contains "floor: NOTHING_CHECKED reaches the caller, not just stderr" "$VAL_OUTPUT" "NOTHING_CHECKED"
+assert_contains "floor: stderr says which state it was" "$VAL_STDERR" \
+  "NOTHING CHECKED — all 2 candidate(s) skipped after a board was dispatched"
+teardown_temp_dir
+
+setup_provenance_env "code-reviewer"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-071"
+printf '# BOARD-2-OUTCOME\n' > "$TEST_DIR/nazgul/reviews/TASK-071/BOARD-2-OUTCOME.md"
+printf '# adversarial\n' > "$TEST_DIR/nazgul/reviews/TASK-071/adversarial-SEC-1.md"
+run_validate "TASK-071"
+run_validate_stderr "TASK-071"
+assert_exit_code "floor: the SAME directory with no dispatch manifest is pre-review, allowed" "$VAL_EC" 0
+assert_eq "floor: and says nothing to the caller" "$VAL_OUTPUT" ""
+assert_contains "floor: but names the state on stderr rather than going quiet" "$VAL_STDERR" \
+  "nothing to check — all 2 candidate(s) skipped, no dispatch manifest (pre-review)"
+teardown_temp_dir
+
+# --- Test 27 (AC4): the real review directory of this checkout, asserted on NAMES and counts and
+# on the rot-proof invariant: no orchestrator artifact is ever reported as a subject. ---
+LIVE_COMMON=$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo "")
+LIVE_NAZGUL=""
+[ -n "$LIVE_COMMON" ] && LIVE_NAZGUL="$(dirname "$LIVE_COMMON")/nazgul"
+if [ -n "$LIVE_NAZGUL" ] && [ -f "$LIVE_NAZGUL/config.json" ] && [ -d "$LIVE_NAZGUL/reviews" ]; then
+  LIVE_SCANNED=0; LIVE_SKIPPED=0; LIVE_CHECKED=0; LIVE_FINDINGS=0; LIVE_BADNAMES=""
+  for live_dir in "$LIVE_NAZGUL"/reviews/*/; do
+    [ -d "$live_dir" ] || continue
+    LIVE_SCANNED=$((LIVE_SCANNED + 1))
+    if [ ! -f "$live_dir/.dispatch.json" ]; then
+      LIVE_SKIPPED=$((LIVE_SKIPPED + 1)); continue
+    fi
+    LIVE_CHECKED=$((LIVE_CHECKED + 1))
+    live_unit=$(basename "$live_dir")
+    live_out=$(validate_review_provenance "$LIVE_NAZGUL" "$live_unit" 2>/dev/null) || true
+    live_bad=$(printf '%s\n' "$live_out" | sed -n 's/^TOKEN_[A-Z]* //p' \
+      | grep -E '^(adversarial-|BOARD-|board[0-9])' || true)
+    if [ -n "$live_bad" ]; then
+      LIVE_FINDINGS=$((LIVE_FINDINGS + 1))
+      LIVE_BADNAMES="$LIVE_BADNAMES$(printf '%s' "$live_bad" | tr '\n' ' ')"
+    fi
+    echo "  live dir $live_unit: $(printf '%s\n' "$live_out" | grep -c '[^[:space:]]' || true) problem(s): $(printf '%s\n' "$live_out" | tr '\n' ' ')"
+  done
+  assert_eq "live dirs: no orchestrator artifact is reported as a provenance subject, by name" \
+    "${LIVE_BADNAMES% }" ""
+  if [ "$LIVE_CHECKED" -gt 0 ]; then
+    _pass "live dirs: K>0 floor — $LIVE_CHECKED dispatched unit(s) actually validated"
+  else
+    _skip "live dirs: no unit carries a .dispatch.json in this checkout"
+  fi
+  echo "  live-review-dirs: ${LIVE_SCANNED} scanned, ${LIVE_SKIPPED} skipped (no-dispatch-manifest=${LIVE_SKIPPED}), ${LIVE_CHECKED} checked, ${LIVE_FINDINGS} findings"
+else
+  _skip "live dirs: no initialised nazgul/ in this checkout (task worktree or CI)"
+fi
+
 report_results
