@@ -32,11 +32,19 @@ CO_PIN_FILE="${NAZGUL_DOC_CONTRACT_CO_PIN:-$REPO_ROOT/tests/test-coverage-honest
 # "skip reasons" is ordinary English and §16 calls two of them "distinct skip reasons" while
 # counting nothing, so a size claim is read only where the closed-set framing follows the phrase.
 SKIP_SIZE_RE='[A-Za-z0-9]+ skip reasons[^.]{0,16}a closed set'
+# The event-name vocabulary's producers, each independently injectable. A DEDICATED EVENT_CO_LIB
+# (not $CLOSER) so the skipreason family's own mutation, below, cannot starve this one too.
+EVENT_CO_LIB="${NAZGUL_DOC_CONTRACT_EVENT_CLOSER:-$REPO_ROOT/scripts/close-objective.sh}"
+STOP_HOOK_LIB="${NAZGUL_DOC_CONTRACT_STOP_HOOK:-$REPO_ROOT/scripts/stop-hook.sh}"
+BOARD_SYNC_LIB="${NAZGUL_DOC_CONTRACT_BOARD_SYNC:-$REPO_ROOT/scripts/board-sync-github.sh}"
+STAMP_PLAN_LIB="${NAZGUL_DOC_CONTRACT_STAMP_PLAN:-$REPO_ROOT/scripts/stamp-plan-objective.sh}"
+REVIEW_EVIDENCE_LIB="${NAZGUL_DOC_CONTRACT_REVIEW_EVIDENCE:-$REPO_ROOT/scripts/lib/review-evidence.sh}"
+EVENT_SIZE_RE='[A-Za-z0-9]+ lifecycle event types'
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-doc-contract-XXXXXX")
 trap 'rm -rf "$SCRATCH"' EXIT
 
-FAMILIES="field fieldcount reason reasoncount regcount ordinal tier suite mpresult mpresultcount mpevent mpeventcount redrun redruncount skipreason skipreasoncount"
+FAMILIES="field fieldcount reason reasoncount regcount ordinal tier suite mpresult mpresultcount mpevent mpeventcount redrun redruncount skipreason skipreasoncount event eventcount"
 
 _derive_fields() {
   # shellcheck disable=SC1090  # the source of truth is a parameter: that is the point
@@ -74,6 +82,16 @@ _derive_red_run() {
 _derive_skip_reasons() {
   grep -oE '%d skipped \(([a-z-]+=%d, )*[a-z-]+=%d\)' "$1" 2>/dev/null \
     | awk 'NR == 1' | grep -oE '[a-z-]+=%d' | sed -E 's/=%d$//'
+}
+
+# The event NAME vocabulary these producers emit, off emit_event/_ttg_emit_event's first literal
+# argument; a variable-only call (`emit_event "$@"`) is a passthrough, excluded by the anchor.
+_derive_events() {
+  local f
+  for f in "$@"; do
+    [ -r "$f" ] || continue
+    grep -oE '_ttg_emit_event "\$[A-Za-z_][A-Za-z_0-9]*" "[a-z_]+"|emit_event "[a-z_]+"' "$f"
+  done | sed -E 's/.*"([a-z_]+)"$/\1/' | LC_ALL=C sort -u
 }
 
 _derive_driver() {
@@ -295,6 +313,7 @@ _scan_docs() {
   MP_EVENTS=$(_derive_mp_events "$MP_LIB")
   RED_RUN=$(_derive_red_run "$guard_lib")
   SKIP_REASONS=$(_derive_skip_reasons "$CLOSER")
+  EVENTS=$(_derive_events "$EVENT_CO_LIB" "$STOP_HOOK_LIB" "$BOARD_SYNC_LIB" "$STAMP_PLAN_LIB" "$REVIEW_EVIDENCE_LIB" "$guard_lib")
   MEMBERS=$(_derive_registry_members "$content_root/RULES.md" 2>/dev/null)
   FIELD_N=$(printf '%s\n' "$FIELDS" | tr ' ' '\n' | grep -c '[^[:space:]]' || true)
   REASON_N=$(printf '%s\n' "$REASONS" | grep -c '[^[:space:]]' || true)
@@ -302,6 +321,7 @@ _scan_docs() {
   MP_EVENT_N=$(printf '%s\n' "$MP_EVENTS" | grep -c '[^[:space:]]' || true)
   RED_RUN_N=$(printf '%s\n' "$RED_RUN" | grep -c '[^[:space:]]' || true)
   SKIP_REASON_N=$(printf '%s\n' "$SKIP_REASONS" | grep -c '[^[:space:]]' || true)
+  EVENT_N=$(printf '%s\n' "$EVENTS" | grep -c '[^[:space:]]' || true)
   MEMBER_N=$(printf '%s\n' "$MEMBERS" | grep -c '[^[:space:]]' || true)
   SUITE_N=$(find "$name_root/tests" -maxdepth 1 -type f -name 'test-*.sh' 2>/dev/null | grep -c . || true)
   tiers=$(_derive_tiers "$content_root/RULES.md")
@@ -319,7 +339,7 @@ _scan_docs() {
                  find "$name_root/skills" -maxdepth 2 -type f -name 'SKILL.md'; } 2>/dev/null \
     | sed "s|^$name_root/||" | LC_ALL=C sort)
   DOC_N=$(printf '%s\n' "$DOC_NAMES" | grep -c '[^[:space:]]' || true)
-  per_doc=$((FIELD_N + REASON_N + MP_RESULT_N + MP_EVENT_N + RED_RUN_N + SKIP_REASON_N + 13))
+  per_doc=$((FIELD_N + REASON_N + MP_RESULT_N + MP_EVENT_N + RED_RUN_N + SKIP_REASON_N + EVENT_N + 14))
 
   for doc in $DOC_NAMES; do
     path="$content_root/$doc"
@@ -386,6 +406,14 @@ _scan_docs() {
     _check_count_claim skipreasoncount "$doc" "$flat" "$SKIP_SIZE_RE" \
       "$SKIP_REASON_N" "closer skip reason"
 
+    # No enum-run trigger: this vocabulary spans several unrelated producers, so ONE producer's
+    # own sub-list elsewhere is not a claim about the whole cross-producer set.
+    _check_vocabulary event "$doc" "$EVENTS" "$flat" 0 \
+      "$(_claim_word "$flat" "$EVENT_SIZE_RE")" \
+      "lifecycle event type" "these producers emit"
+    _check_count_claim eventcount "$doc" "$flat" "$EVENT_SIZE_RE" \
+      "$EVENT_N" "lifecycle event type"
+
     if [ -z "$(_registry_bullet "$path")" ]; then
       SCANNED=$((SCANNED + 1))
       _no_claim 1
@@ -447,9 +475,9 @@ assert_eq "the skip vocabulary comes from exactly one coverage printf in $(basen
 _scan_docs "$REPO_ROOT" "$DOC_ROOT" "$GUARD_LIB"
 
 if [ -z "$FIELDS" ] || [ -z "$REASONS" ] || [ -z "$MP_RESULTS" ] || [ -z "$MP_EVENTS" ] \
-   || [ -z "$RED_RUN" ] || [ -z "$SKIP_REASONS" ]; then
+   || [ -z "$RED_RUN" ] || [ -z "$SKIP_REASONS" ] || [ -z "$EVENTS" ]; then
   _fail "the merge contract is derived from the gate library" \
-    "fields='$FIELDS' reasons='$(printf '%s' "$REASONS" | tr '\n' ' ')' mp_results='$(printf '%s' "$MP_RESULTS" | tr '\n' ' ')' mp_events='$(printf '%s' "$MP_EVENTS" | tr '\n' ' ')' red_run='$(printf '%s' "$RED_RUN" | tr '\n' ' ')' skip_reasons='$(printf '%s' "$SKIP_REASONS" | tr '\n' ' ')'" \
+    "fields='$FIELDS' reasons='$(printf '%s' "$REASONS" | tr '\n' ' ')' mp_results='$(printf '%s' "$MP_RESULTS" | tr '\n' ' ')' mp_events='$(printf '%s' "$MP_EVENTS" | tr '\n' ' ')' red_run='$(printf '%s' "$RED_RUN" | tr '\n' ' ')' skip_reasons='$(printf '%s' "$SKIP_REASONS" | tr '\n' ' ')' events='$(printf '%s' "$EVENTS" | tr '\n' ' ')'" \
     "the contract could not be derived — this is 'never looked', not 'looked and found none'"
   echo "$TEST_NAME: NOTHING CHECKED — the gate library yielded no contract to bind" >&2
   report_results
@@ -459,6 +487,7 @@ fi
 _pass "the merge contract is derived from the gate library ($FIELD_N fields, $REASON_N refusal reasons)"
 _pass "the merge-observation seam's vocabularies are derived from its own call sites ($MP_RESULT_N results, $MP_EVENT_N events)"
 _pass "the §15 registry is derived from RULES.md's own bullet ($MEMBER_N members)"
+_pass "the lifecycle event-name vocabulary is derived from its own producers' call sites ($EVENT_N events)"
 
 # One denominator, two readers. tests/test-red-run-evidence.sh pins the same vocabulary against the
 # same source; if its copy and this one ever disagree, the disagreement is the finding.
@@ -546,6 +575,8 @@ SHIPPED_FIELD_N="$FIELD_N"
 SHIPPED_SKIP_REASONS="$SKIP_REASONS"
 SHIPPED_MP_LIB="$MP_LIB"
 SHIPPED_CLOSER="$CLOSER"
+SHIPPED_EVENT_N="$EVENT_N"
+SHIPPED_STOP_HOOK_LIB="$STOP_HOOK_LIB"
 BIND_MODE="quiet"
 # Aimed at the shipped documents, never at the injected root: the mutation is evidence about
 # the binding itself, so a forced all-skip drive must not turn it vacuously green.
@@ -785,6 +816,34 @@ case "$FDL_skipreason" in
        "detail was '$FDL_skipreason', which does not name 'co-tenth'" ;;
 esac
 CLOSER="$SHIPPED_CLOSER"
+
+# EV1-EV3: the same threshold rule over the lifecycle event-name vocabulary, driven against a
+# stop-hook.sh grown by one more emitter — AC1's "planted twelfth" dogfood.
+MUT_STOP_HOOK="$SCRATCH/mutant-stop-hook.sh"
+{ cat "$STOP_HOOK_LIB"; printf '\nemit_event "ev_planted"\n'; } > "$MUT_STOP_HOOK"
+STOP_HOOK_LIB="$MUT_STOP_HOOK"
+_scan_docs "$REPO_ROOT" "$REPO_ROOT" "$GUARD_LIB"
+assert_eq "[mutation] the mutant stop-hook really adds one more event type" \
+  "$EVENT_N" "$((SHIPPED_EVENT_N + 1))"
+if [ "$FD_event" -ge 1 ] && [ "$FINDINGS" -eq $((FD_event + FD_eventcount)) ]; then
+  _pass "[mutation] a planted emitter with no doc update goes red through a bare list, and nothing else ($FD_event name, $FD_eventcount count findings)"
+else
+  _fail "[mutation] a planted emitter with no doc update goes red through a bare list, and nothing else" \
+    "event findings=$FD_event, eventcount findings=$FD_eventcount, total findings=$FINDINGS"
+fi
+case "$FDL_event" in
+  *ev_planted*) _pass "[mutation] the event finding names the emitter the mutant stop-hook added" ;;
+  *) _fail "[mutation] the event finding names the emitter the mutant stop-hook added" \
+       "detail was '$FDL_event', which does not name 'ev_planted'" ;;
+esac
+STOP_HOOK_LIB="$SHIPPED_STOP_HOOK_LIB"
+_scan_docs "$REPO_ROOT" "$REPO_ROOT" "$GUARD_LIB"
+if [ "$FD_event" -eq 0 ] && [ "$FD_eventcount" -eq 0 ] && [ "$EVENT_N" -eq "$SHIPPED_EVENT_N" ]; then
+  _pass "[mutation] removing the planted emitter returns zero event findings ($EVENT_N events, matching the shipped count)"
+else
+  _fail "[mutation] removing the planted emitter returns zero event findings" \
+    "event findings=$FD_event, eventcount findings=$FD_eventcount, event_n=$EVENT_N (want $SHIPPED_EVENT_N)"
+fi
 
 BIND_MODE="report"
 RC=0
