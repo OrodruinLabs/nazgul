@@ -1365,6 +1365,15 @@ _never_eof_close() {
   rm -f "$1"
 }
 
+# The same fifo, but SOME bytes land before the writer goes quiet forever — the
+# partial-timeout case. `exec` keeps $! the pid _never_eof_close can reap.
+_partial_never_eof_open() {
+  rm -f "$1"
+  mkfifo "$1"
+  ( printf '%s' "$2"; exec tail -f /dev/null ) > "$1" &
+  NEVER_EOF_PID=$!
+}
+
 _run_hook_payload() {
   HOOK_OUTPUT=$(printf '%s' "$1" | bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 }
@@ -1413,6 +1422,71 @@ assert_eq "P9: ... within its own bound (${P9_ELAPSED}s < 5s)" \
   "$([ "$P9_ELAPSED" -lt 5 ] && echo yes || echo no)" "yes"
 teardown_temp_dir
 
+# --- P9 (TASK-015): the bound's own variable — prefixed, validated, and USED ---
+P9_REAL='{"hook_event_name":"Stop","background_tasks":[]}'
+P9_OUT=$(printf '%s' "$P9_REAL" | _bounded_run 8 env NAZGUL_HOOK_STDIN_TIMEOUT=abc bash -c "$P9_READER" _ "$HOOK_STDIN_LIB" 2>&1)
+assert_contains "P9: a rejected NAZGUL_HOOK_STDIN_TIMEOUT is announced on stderr, never coerced in silence (ADR-014)" \
+  "$P9_OUT" "NAZGUL_HOOK_STDIN_TIMEOUT=abc"
+assert_contains "P9: ... and the payload that WAS on stdin still arrives — a misconfigured reader must never report no_stdin" \
+  "$P9_OUT" "[$P9_REAL][]"
+
+setup_temp_dir
+P9_FIFO="$TEST_DIR/p9-timeout-var"
+_never_eof_open "$P9_FIFO"
+P9_START=$(date +%s)
+P9_OUT=$(_bounded_run 20 env NAZGUL_HOOK_STDIN_TIMEOUT=abc bash -c "$P9_READER" _ "$HOOK_STDIN_LIB" < "$P9_FIFO" 2>/dev/null)
+P9_ELAPSED=$(( $(date +%s) - P9_START ))
+_never_eof_close "$P9_FIFO"
+assert_eq "P9: the fallback is a real 2 s BOUND — a never-EOF stdin still times out under it" "$P9_OUT" "[][read_timeout]"
+assert_eq "P9: ... and the read waited it out (${P9_ELAPSED}s), so the coerced value was USED, not merely printed" \
+  "$([ "$P9_ELAPSED" -ge 1 ] && [ "$P9_ELAPSED" -lt 5 ] && echo yes || echo no)" "yes"
+
+_never_eof_open "$P9_FIFO"
+P9_START=$(date +%s)
+P9_OUT=$(_bounded_run 20 env NAZGUL_HOOK_STDIN_TIMEOUT=5 bash -c "$P9_READER" _ "$HOOK_STDIN_LIB" < "$P9_FIFO" 2>/dev/null)
+P9_ELAPSED=$(( $(date +%s) - P9_START ))
+_never_eof_close "$P9_FIFO"
+assert_eq "P9: a VALID value is honoured under the NEW name — 5 s waited (${P9_ELAPSED}s), not a hard-coded 2" \
+  "$([ "$P9_ELAPSED" -ge 4 ] && echo yes || echo no)" "yes"
+
+_never_eof_open "$P9_FIFO"
+P9_START=$(date +%s)
+P9_OUT=$(_bounded_run 20 env HOOK_STDIN_TIMEOUT=5 bash -c "$P9_READER" _ "$HOOK_STDIN_LIB" < "$P9_FIFO" 2>/dev/null)
+P9_ELAPSED=$(( $(date +%s) - P9_START ))
+_never_eof_close "$P9_FIFO"
+assert_eq "P9: the unprefixed name is DEAD — no shim, so a stray HOOK_STDIN_TIMEOUT cannot move the bound (${P9_ELAPSED}s < 4)" \
+  "$([ "$P9_ELAPSED" -lt 4 ] && echo yes || echo no)" "yes"
+assert_eq "P9: ... and the default bound still governed that read" "$P9_OUT" "[][read_timeout]"
+teardown_temp_dir
+
+# --- P9 (TASK-015): a bound hit AFTER bytes arrived keeps its own evidence ---
+P9_PARTIAL='{"hook_event_name":"Stop","background_tasks":[{"id":"a1","type":"subagent","status":"running"'
+setup_temp_dir
+P9_FIFO="$TEST_DIR/p9-partial"
+_partial_never_eof_open "$P9_FIFO" "$P9_PARTIAL"
+P9_START=$(date +%s)
+P9_OUT=$(_bounded_run 20 bash -c "$P9_READER" _ "$HOOK_STDIN_LIB" < "$P9_FIFO" 2>/dev/null)
+P9_ELAPSED=$(( $(date +%s) - P9_START ))
+_never_eof_close "$P9_FIFO"
+assert_eq "P9: a partial timed-out read keeps the bytes AND names the bound — read_timeout_partial" \
+  "$P9_OUT" "[$P9_PARTIAL][read_timeout_partial]"
+assert_eq "P9: ... reached at the bound (${P9_ELAPSED}s), by a writer that never EOFs — not by a short clean read" \
+  "$([ "$P9_ELAPSED" -ge 1 ] && [ "$P9_ELAPSED" -lt 5 ] && echo yes || echo no)" "yes"
+teardown_temp_dir
+
+setup_temp_dir
+setup_nazgul_dir
+create_config
+P9_FIFO="$TEST_DIR/p9-partial-hook"
+_partial_never_eof_open "$P9_FIFO" "$P9_PARTIAL"
+_bounded_run 20 bash "$STOP_HOOK" < "$P9_FIFO" >/dev/null 2>&1
+_never_eof_close "$P9_FIFO"
+# jq on the field, never a substring: `read_timeout` is a strict prefix of this member.
+P9_WHY=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | jq -r '.why // "ABSENT"' | tr '\n' ' ')
+assert_eq "P9: stop-hook prefers the reader's verdict — a truncation of OUR making is never filed as not_json" \
+  "$P9_WHY" "read_timeout_partial "
+teardown_temp_dir
+
 # --- P6 (C4): the ANTI-HANG pin — #155's own reproduction inverted ---
 setup_temp_dir
 setup_nazgul_dir
@@ -1428,13 +1502,15 @@ assert_eq "P6 (C4): stop-hook returns under a never-EOF stdin instead of deadloc
   "$([ "$P6_EC" -ne 124 ] && echo returned || echo killed_by_wrapper)" "returned"
 assert_eq "P6 (C4): ... in ${P6_ELAPSED}s, under the 5 s bound" \
   "$([ "$P6_ELAPSED" -lt 5 ] && echo yes || echo no)" "yes"
-assert_contains "P6: the bounded read is recorded as read_timeout, not as an absent payload" \
-  "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" '"why":"read_timeout"'
+# jq on the field, never a substring: `read_timeout` is a strict prefix of `read_timeout_partial`.
+assert_eq "P6: the bounded read is recorded as read_timeout EXACTLY — not as an absent payload, and not as a partial one" \
+  "$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | jq -r '.why // "ABSENT"' | tr '\n' ' ')" \
+  "read_timeout "
 teardown_temp_dir
 
 # The terminal test is the WRONG PREDICATE (#155) and must never be the SOLE guard:
 # what closes the hazard is the -t bound, so pin the bound itself, not the guard.
-P6_BOUNDED=$(grep -cE 'read .*-d .. -t "\$HOOK_STDIN_TIMEOUT"' "$HOOK_STDIN_LIB" || true)
+P6_BOUNDED=$(grep -cE 'read .*-d .. -t "\$NAZGUL_HOOK_STDIN_TIMEOUT"' "$HOOK_STDIN_LIB" || true)
 assert_eq "P6 companion: the read carries a -t bound alongside its terminal test" "$P6_BOUNDED" "1"
 P6_CAT_DRAIN=$(grep -vE '^[[:space:]]*#' "$HOOK_STDIN_LIB" | grep -cE '\$\(cat' || true)
 assert_eq "P6 companion: no \$(cat) drain in the code — the header names that idiom only to forbid it" \
@@ -1453,7 +1529,7 @@ assert_eq "P12a: exactly one event per invocation — 3 invocations, 3 events" "
 assert_eq "P12a: each unknown arm names its OWN reason" \
   "$(printf '%s\n' "$P12_OBS" | jq -r '.why // "ABSENT"' | tr '\n' ' ')" "no_stdin not_json field_absent "
 P12_WHY_OUTSIDE=$(printf '%s\n' "$P12_OBS" | jq -r 'select(has("why")) | .why' \
-  | grep -vcE '^(no_stdin|read_timeout|not_json|field_absent|field_wrong_type|no_jq)$' || true)
+  | grep -vcE '^(no_stdin|read_timeout|read_timeout_partial|not_json|field_absent|field_wrong_type|no_jq)$' || true)
 assert_eq "P12a: every why is drawn from the closed set" "$P12_WHY_OUTSIDE" "0"
 assert_eq "P12a: an absent, unparseable or key-less payload falls to unknown, never to yes" \
   "$(printf '%s\n' "$P12_OBS" | jq -r '.bg_seen' | sort -u | tr '\n' ' ')" "unknown "
