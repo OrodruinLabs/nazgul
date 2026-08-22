@@ -352,9 +352,18 @@ _sg_bare_hits() {
   grep -o -e "$2[_a-z]*" "$1" 2>/dev/null | grep -cx -e "$2" || true
 }
 
+# The hook side must prove EMISSION, not occurrence: `_sg_bare_hits` was satisfied for
+# in_flight_hold by the `.guards.in_flight_hold` config read, so deleting the emitter left it green.
+_sg_emit_hits() {
+  grep -v '^[[:space:]]*#' "$1" 2>/dev/null \
+    | grep -oE "(emit_event \"|reason \"|\"reason\":\"|_REASON=\")$2[_a-z]*" \
+    | sed -E 's/^.*"//' | grep -cx -e "$2" || true
+}
+
 SG_SCANNED=0 SG_SKIPPED=0 SG_CHECKED=0 SG_FINDINGS=0
 for token in afk_timeout in_flight_hold in_flight_stale in_flight_orphan in_flight_unverifiable \
-             in_flight_orphan_candidate in_flight_hold_budget_exhausted stop_payload_observed; do
+             in_flight_orphan_candidate in_flight_hold_budget_exhausted in_flight_present_not_live \
+             in_flight_hold_unbudgetable stop_payload_observed; do
   SG_SCANNED=$((SG_SCANNED + 1))
   if [ ! -f "$RULES_FILE" ] || [ ! -f "$STOP_HOOK" ]; then
     SG_SKIPPED=$((SG_SKIPPED + 1))
@@ -363,19 +372,19 @@ for token in afk_timeout in_flight_hold in_flight_stale in_flight_orphan in_flig
   SG_CHECKED=$((SG_CHECKED + 1))
   sg_rules=no sg_hook=no
   [ "$(_sg_bare_hits "$RULES_FILE" "$token")" -eq 0 ] || sg_rules=yes
-  [ "$(_sg_bare_hits "$STOP_HOOK" "$token")" -eq 0 ] || sg_hook=yes
-  assert_eq "§5 names '$token' and scripts/stop-hook.sh still ships it" \
+  [ "$(_sg_emit_hits "$STOP_HOOK" "$token")" -eq 0 ] || sg_hook=yes
+  assert_eq "§5 names '$token' and scripts/stop-hook.sh still emits it" \
     "rules=$sg_rules hook=$sg_hook" "rules=yes hook=yes"
   [ "$sg_rules$sg_hook" = "yesyes" ] || SG_FINDINGS=$((SG_FINDINGS + 1))
 done
 
-# Presence of the STRING on both sides is all this proves; it does not prove §5's prose describes
-# what the emitting branch does. That behavioral pin lives in tests/test-in-flight-hold.sh.
+# §5 naming the token and the hook emitting it is all this proves; it does not prove §5's prose
+# describes what the emitting branch does. That behavioral pin lives in tests/test-in-flight-hold.sh.
 assert_eq "stop_gate coupling accounting: scanned == skipped + checked" \
   "$SG_SCANNED" "$((SG_SKIPPED + SG_CHECKED))"
 assert_eq "stop_gate coupling floor: the token set is not empty" \
   "$([ "$SG_CHECKED" -gt 0 ] && echo yes || echo no)" "yes"
-assert_eq "stop_gate coupling: $SG_SCANNED scanned, $SG_SKIPPED skipped, $SG_CHECKED checked — every §5 reason/event token still ships in scripts/stop-hook.sh" \
+assert_eq "stop_gate coupling: $SG_SCANNED scanned, $SG_SKIPPED skipped, $SG_CHECKED checked — every §5 reason/event token is still emitted by scripts/stop-hook.sh" \
   "$SG_FINDINGS" "0"
 
 report_results
