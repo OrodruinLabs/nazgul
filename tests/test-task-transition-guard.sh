@@ -437,13 +437,14 @@ MP_HEAD_REF="$MERGE_BRANCH"
 MP_BASE_REF="main"
 MP_STATE="MERGED"
 MP_DIAG=""
+MP_HOST="github.com"
 merge_provider_pr_state() {
   jq -cn --arg r "$MP_RESULT" --arg m "$MP_MERGED" --arg a "$MP_AT" --arg c "$MP_COMMIT" \
     --arg h "$MP_HEAD_REF" --arg b "$MP_BASE_REF" --arg s "$MP_STATE" --arg d "$MP_DIAG" \
-    --arg p "${2:-}" \
+    --arg p "${2:-}" --arg hh "$MP_HOST" \
     '{result:$r,
       provider:"github",
-      host:"github.com",
+      host:(if $hh == "" then null else $hh end),
       repo:"orodruinlabs/nazgul",
       pr:$p,
       state:(if $s == "" then null else $s end),
@@ -460,6 +461,7 @@ mp_reset() {
   MP_AT="2026-08-15T12:00:00Z"
   MP_COMMIT="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
   MP_HEAD_REF="$MERGE_BRANCH"; MP_BASE_REF="main"; MP_STATE="MERGED"; MP_DIAG=""
+  MP_HOST="github.com"
 }
 
 MP_STUB_KEYS=$(merge_provider_pr_state "" 91 | jq -r 'keys | sort | join(",")')
@@ -667,6 +669,59 @@ me_verify "$(merge_manifest "- **host**: github.com
 - **head-ref**: ${MERGE_BRANCH}
 - **recorded-by**: scripts/close-objective.sh")" "$TEST_DIR" TASK-050 && ABBR_EC=0 || ABBR_EC=$?
 assert_exit_code "host: an abbreviated merge-commit and a fractional timestamp still verify" "$ABBR_EC" 0
+mp_reset
+
+# TASK-042 / PR #240 finding #7. `host` was the ONE required field that reached diagnostics
+# only, so a manifest could durably record a host nothing ever contacted.
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && HOSTOK_EC=0 || HOSTOK_EC=$?
+assert_exit_code "host identity: a manifest naming the host actually asked still verifies" "$HOSTOK_EC" 0
+assert_contains "host identity: the route records the host that ANSWERED, not only the claim" \
+  "$ME_STDERR" "host-asked=github.com"
+
+me_verify "$(merge_manifest "- **host**: gitlab.example.com
+- **pr**: 91
+- **merged-at**: 2026-08-15T12:00:00Z
+- **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+- **head-ref**: ${MERGE_BRANCH}
+- **recorded-by**: scripts/close-objective.sh")" "$TEST_DIR" TASK-050 && HOSTMIS_EC=0 || HOSTMIS_EC=$?
+HOST_MISMATCH_STDERR="$ME_STDERR"
+assert_exit_code "host identity: a manifest naming a host that was never asked is REFUSED" "$HOSTMIS_EC" 1
+assert_eq "host identity: a contradicted host reasons 'contradicted', as its three siblings do" \
+  "$TTG_MERGE_REASON" "contradicted"
+assert_contains "host identity: the refusal quotes the value the manifest recorded" \
+  "$HOST_MISMATCH_STDERR" "host=gitlab.example.com"
+assert_contains "host identity: and the host the answer actually came from" \
+  "$HOST_MISMATCH_STDERR" "verified against github.com"
+assert_contains "host identity: the refusal says outright that host was never asked" \
+  "$HOST_MISMATCH_STDERR" "names a host that was never asked"
+
+# The seam normalises www.github.com to github.com and everything below compares; the
+# manifest's copy is operator-typed, so case must not fabricate a contradiction either.
+MP_HOST="www.github.com"
+me_verify "$(merge_manifest "- **host**: GitHub.com
+- **pr**: 91
+- **merged-at**: 2026-08-15T12:00:00Z
+- **merge-commit**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+- **head-ref**: ${MERGE_BRANCH}
+- **recorded-by**: scripts/close-objective.sh")" "$TEST_DIR" TASK-050 && HOSTNORM_EC=0 || HOSTNORM_EC=$?
+assert_exit_code "host identity: www. and case differences are one host, not a contradiction" \
+  "$HOSTNORM_EC" 0
+mp_reset
+
+# An answer carrying no host at all is UNCOMPARABLE, and silently passing an uncomparable
+# required field is the defect being fixed — so it fails closed, beside ok_no_head_ref.
+MP_HOST=""
+me_verify "$(merge_manifest "$MERGE_VALID_BODY")" "$TEST_DIR" TASK-050 && NOHOST_EC=0 || NOHOST_EC=$?
+NO_HOST_STDERR="$ME_STDERR"
+assert_exit_code "host identity: a merged answer naming no host does NOT admit a closure" "$NOHOST_EC" 1
+assert_eq "host identity: an uncomparable host reasons 'unverifiable', not 'verified'" \
+  "$TTG_MERGE_REASON" "unverifiable"
+assert_eq "host identity: the host state names the missing fact rather than a generic failure" \
+  "$TTG_MERGE_HOST_RESULT" "ok_no_host"
+assert_contains "host identity: the refusal says the answer named no host" \
+  "$NO_HOST_STDERR" "answer names no host"
+assert_contains "host identity: and that an uncontradictable field is not a verified one" \
+  "$NO_HOST_STDERR" "not verified"
 mp_reset
 
 # THE OBJECTIVE BINDING (FEAT-031 second board). "Is PR N merged?" is not the question: another
@@ -951,11 +1006,12 @@ merge_config '.agents.reviewers = ["code-reviewer"]'
 
 # Every refusal state must be its own token AND its own sentence — a state folded into
 # a neighbour's bucket would leave both censuses unchanged.
-MERGE_DISTINCT=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$ABSENT_STDERR" "$COMMENTED_STDERR" \
+MERGE_DISTINCT=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$ABSENT_STDERR" "$COMMENTED_STDERR" \
   "$TRUNCATED_STDERR" "$MALFORMED_STDERR" "$UNVERIFIABLE_STDERR" "$NOT_MERGED_STDERR" \
-  "$NOT_THIS_OBJ_STDERR" "$NO_HEAD_REF_STDERR" "$NOT_OUR_TASK_STDERR" \
+  "$NOT_THIS_OBJ_STDERR" "$NO_HEAD_REF_STDERR" "$NOT_OUR_TASK_STDERR" "$NO_HOST_STDERR" \
+  "$HOST_MISMATCH_STDERR" \
   | sort -u | grep -c '[^[:space:]]')
-assert_eq "ttg_verify_merge_evidence: nine refusal diagnostics, nine distinct sentences" "$MERGE_DISTINCT" "9"
+assert_eq "ttg_verify_merge_evidence: eleven refusal diagnostics, eleven distinct sentences" "$MERGE_DISTINCT" "11"
 
 MERGE_VOCAB_EXPECTED='absent commented_out contradicted malformed not_merged not_this_objective not_this_objectives_task truncated unverifiable'
 MERGE_VOCAB_ARGS=$(grep -oE '_ttg_merge_deny "[^"]*" "[^"]*" "[^"]*"' \
@@ -1023,27 +1079,72 @@ assert_eq "ancestry: an unresolvable merge commit is the squash signature, not '
 assert_eq "base ancestry: an unresolvable merge commit is 'unresolved', the post-squash norm" \
   "$TTG_MERGE_BASE_ANCESTRY" "unresolved"
 
-# Positive-only base containment: unresolvable stays non-blocking (above), but a SHA that
-# resolves here to an unrelated commit is the fabrication this check exists to stop.
-git -C "$TEST_DIR" checkout -q -b anc-side-branch
-echo "side" > "$TEST_DIR/side.txt"
-git -C "$TEST_DIR" add side.txt
-git -C "$TEST_DIR" commit -q -m "off-base commit"
-ANC_OFFBASE=$(git -C "$TEST_DIR" rev-parse HEAD)
+# lean-comments: allow-run — two states that look identical, so both directions are pinned.
+# TASK-042 / PR #240 finding #8. `resolved but not an ancestor` was ONE bucket holding two
+# states, and only one of them is the local repository disagreeing with the host.
+# Direction 1 — the local base is merely BEHIND. This is the shape a real merge leaves in a
+# checkout that has not fetched since: the merge commit descends from the base tip. It used
+# to be refused as 'contradicted', overriding the host's own confirmation.
+git -C "$TEST_DIR" checkout -q -b anc-merged-on-host
+echo "shipped" > "$TEST_DIR/shipped.txt"
+git -C "$TEST_DIR" add shipped.txt
+git -C "$TEST_DIR" commit -q -m "merged on the host; nothing has fetched here since"
+ANC_AHEAD=$(git -C "$TEST_DIR" rev-parse HEAD)
 git -C "$TEST_DIR" checkout -q "$ANC_BASE"
-MP_COMMIT="$ANC_OFFBASE"
+MP_COMMIT="$ANC_AHEAD"
 me_verify "$(merge_manifest "- **host**: github.com
 - **pr**: 91
 - **merged-at**: 2026-08-15T12:00:00Z
-- **merge-commit**: ${ANC_OFFBASE}
+- **merge-commit**: ${ANC_AHEAD}
+- **head-ref**: ${MERGE_BRANCH}
+- **recorded-by**: scripts/close-objective.sh" "- ${ANC_HEAD}")" "$TEST_DIR" TASK-050 && STALE_EC=0 || STALE_EC=$?
+STALE_STDERR="$ME_STDERR"
+assert_exit_code "base ancestry: a host-CONFIRMED merge whose local base is merely stale is NOT refused" \
+  "$STALE_EC" 0
+assert_eq "base ancestry: a stale base leaves the verdict 'verified'" "$TTG_MERGE_REASON" "verified"
+assert_eq "base ancestry: staleness is its OWN outcome, not folded into not_ancestor" \
+  "$TTG_MERGE_BASE_ANCESTRY" "base_behind_merge"
+assert_contains "base ancestry: the outcome still reaches TTG_MERGE_ROUTE" \
+  "$STALE_STDERR" "base=base_behind_merge"
+assert_contains "base ancestry: stderr states the distinction rather than erasing it" \
+  "$STALE_STDERR" "uninformed, not disagreeing"
+assert_contains "base ancestry: and names the fetch the gate itself must not run" \
+  "$STALE_STDERR" "git fetch"
+
+# Direction 2 — genuine divergence, which no unfetched merge produces. A fix that stopped
+# refusing here would be worse than the defect, so it is pinned as hard as the pass above.
+git -C "$TEST_DIR" checkout -q -b anc-diverged "$ANC_PARENT"
+echo "elsewhere" > "$TEST_DIR/elsewhere.txt"
+git -C "$TEST_DIR" add elsewhere.txt
+git -C "$TEST_DIR" commit -q -m "forked before the base tip and never rejoined"
+ANC_DIVERGED=$(git -C "$TEST_DIR" rev-parse HEAD)
+git -C "$TEST_DIR" checkout -q "$ANC_BASE"
+assert_exit_code "base ancestry fixture: the diverged commit really is off both directions" \
+  "$(git -C "$TEST_DIR" merge-base --is-ancestor "$ANC_BASE" "$ANC_DIVERGED" 2>/dev/null && echo 0 || echo 1)" 1
+MP_COMMIT="$ANC_DIVERGED"
+me_verify "$(merge_manifest "- **host**: github.com
+- **pr**: 91
+- **merged-at**: 2026-08-15T12:00:00Z
+- **merge-commit**: ${ANC_DIVERGED}
 - **head-ref**: ${MERGE_BRANCH}
 - **recorded-by**: scripts/close-objective.sh" "- ${ANC_HEAD}")" "$TEST_DIR" TASK-050 && OFFBASE_EC=0 || OFFBASE_EC=$?
 OFFBASE_STDERR="$ME_STDERR"
-assert_exit_code "base ancestry: a resolvable merge commit off the base branch is REFUSED" "$OFFBASE_EC" 1
-assert_eq "base ancestry: an off-base merge commit reasons 'contradicted'" "$TTG_MERGE_REASON" "contradicted"
-assert_eq "base ancestry: the outcome is named 'not_ancestor'" "$TTG_MERGE_BASE_ANCESTRY" "not_ancestor"
-assert_contains "base ancestry: the refusal says the commit resolves but is off-base" \
-  "$OFFBASE_STDERR" "not contained in the base branch"
+assert_exit_code "base ancestry: a merge commit genuinely diverged from the base is still REFUSED" \
+  "$OFFBASE_EC" 1
+assert_eq "base ancestry: a diverged merge commit still reasons 'contradicted'" \
+  "$TTG_MERGE_REASON" "contradicted"
+assert_eq "base ancestry: the blocking outcome is still named 'not_ancestor'" \
+  "$TTG_MERGE_BASE_ANCESTRY" "not_ancestor"
+assert_contains "base ancestry: the refusal says diverged, not merely off-base" \
+  "$OFFBASE_STDERR" "diverged from the base branch"
+assert_contains "base ancestry: and names the remedy the operator could not previously guess" \
+  "$OFFBASE_STDERR" "git fetch"
+if [ "$OFFBASE_STDERR" != "$STALE_STDERR" ]; then
+  _pass "base ancestry: stale and diverged are different sentences, not one bucket"
+else
+  _fail "base ancestry: stale and diverged are different sentences, not one bucket" \
+    "expected: different stderr text" "  actual: byte-identical"
+fi
 mp_reset
 teardown_temp_dir
 
