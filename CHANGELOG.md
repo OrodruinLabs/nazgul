@@ -65,8 +65,14 @@ itself the evidence that nothing an existing project stores had to change.
 - **The hold is decided from the payload, by TWO independent counts, never one filter.** LIVE
   (`type == "subagent"` AND an allowlisted `running`/`pending` status) gates the HOLD;
   SUBAGENT_PRESENT (type only, status-blind) gates the CANDIDATE; a status the filter does not
-  recognise produces NEITHER, and a count that failed to parse is recorded as "could not tell" rather
-  than "found none" — §15/ADR-009's looked-vs-never-looked distinction applied to the filter itself.
+  recognise produces NEITHER, and a count that failed to parse — including a `background_tasks` key
+  present but not an array, the R3 undocumented-schema-change shape this event exists to detect — is
+  recorded as `bg_seen:"unknown"` with `why:"not_json"`, never as `bg_seen:"yes"` with zeroed counts:
+  §15/ADR-009's looked-vs-never-looked distinction applied to the filter itself. (The first cut of this
+  event collapsed exactly that case to `bg_seen:"yes", entries:0` — a `|| true` on the TSV parse
+  swallowed the failure after `BG_SEEN` had already been set to `"yes"` — caught by review as the one
+  blocking finding and closed before merge; `tests/test-in-flight-hold.sh` P5 now pins a string and an
+  object under the key alongside the prior truncation/absent cases.)
   The payload is consulted BEFORE the freshness cutoff, so a stale bound can never decline a hold for a
   session that HAS a live subagent (#211 in effect, not just in default). Liveness is a property of the
   SESSION, not of one marker — `background_tasks[]` carries no join key — so a live subagent holds
