@@ -542,6 +542,33 @@ assert_contains "floor: but names the state on stderr rather than going quiet" "
   "nothing to check — all 2 candidate(s) skipped, no dispatch manifest (pre-review)"
 teardown_temp_dir
 
+# --- Test 28 (TASK-043, AC1): the shared prefix reaches the provenance validator's own
+# output too — "one shape, not two" applies across both files, not just review-evidence.sh. ---
+setup_provenance_env "code-reviewer"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-070"
+printf 'diff\n' > "$TEST_DIR/nazgul/reviews/TASK-070/diff.patch"
+write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-070" "$TEST_DIR/nazgul/reviews/TASK-070/diff.patch" \
+  "FEAT-031" "1" -- code-reviewer >/dev/null
+printf '# BOARD-2-OUTCOME\n' > "$TEST_DIR/nazgul/reviews/TASK-070/BOARD-2-OUTCOME.md"
+printf '# adversarial\n' > "$TEST_DIR/nazgul/reviews/TASK-070/adversarial-SEC-1.md"
+run_validate "TASK-070"
+assert_eq "prefix: output is EXACTLY the shared prefixed token" \
+  "$VAL_OUTPUT" "VALIDATOR_DEFECT NOTHING_CHECKED"
+teardown_temp_dir
+
+# --- Test 29 (TASK-043, AC3): task-transition.sh's repair_provenance_valid (line 150) checks
+# `[ -z "$problems" ]` on this exact call — pin that a defect-only unit still refuses it. ---
+setup_provenance_env "code-reviewer"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-072"
+printf 'diff\n' > "$TEST_DIR/nazgul/reviews/TASK-072/diff.patch"
+write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-072" "$TEST_DIR/nazgul/reviews/TASK-072/diff.patch" \
+  "FEAT-031" "1" -- code-reviewer >/dev/null
+printf '# BOARD-2-OUTCOME\n' > "$TEST_DIR/nazgul/reviews/TASK-072/BOARD-2-OUTCOME.md"
+run_validate "TASK-072"
+assert_eq "AC3: repair_provenance_valid's own guard clause still trips" \
+  "$( [ -z "$VAL_OUTPUT" ] && echo allowed || echo refused )" "refused"
+teardown_temp_dir
+
 # --- Test 27 (AC4): the real review directory of this checkout, asserted on NAMES and counts and
 # on the rot-proof invariant: no orchestrator artifact is ever reported as a subject. ---
 LIVE_COMMON=$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo "")

@@ -1522,4 +1522,54 @@ run_validate "TASK-001"
 assert_contains "dogfood: shipped classifier keeps it" "$VAL_OUTPUT" "UNAPPROVED extra-reviewer"
 teardown_temp_dir
 
+# --- Test 75 (TASK-043, AC1): the validator's own health diagnostics carry a shared
+# prefix a consumer can key on, distinct from a per-reviewer problem line. ---
+assert_eq "helper: recognizes a NOTHING_CHECKED defect line" \
+  "$(_re_is_validator_defect_line 'VALIDATOR_DEFECT NOTHING_CHECKED' && echo yes || echo no)" "yes"
+assert_eq "helper: recognizes a COVERAGE_ACCOUNTING_DEFECT defect line" \
+  "$(_re_is_validator_defect_line 'VALIDATOR_DEFECT COVERAGE_ACCOUNTING_DEFECT' && echo yes || echo no)" "yes"
+assert_eq "helper: a genuine problem line is not a defect line" \
+  "$(_re_is_validator_defect_line 'UNAPPROVED code-reviewer' && echo yes || echo no)" "no"
+MIXED=$'MISSING qa-reviewer\nVALIDATOR_DEFECT NOTHING_CHECKED'
+assert_eq "helper: genuine/defect split keeps the genuine line" \
+  "$(_re_genuine_problems "$MIXED")" "MISSING qa-reviewer"
+assert_eq "helper: genuine/defect split keeps the defect line" \
+  "$(_re_defect_problems "$MIXED")" "VALIDATOR_DEFECT NOTHING_CHECKED"
+
+setup_evidence_env "code-reviewer"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf '# BOARD-2-OUTCOME\n' > "$TEST_DIR/nazgul/reviews/TASK-001/BOARD-2-OUTCOME.md"
+printf '# adversarial\n' > "$TEST_DIR/nazgul/reviews/TASK-001/adversarial-SEC-1.md"
+run_validate "TASK-001"
+assert_contains "nothing checked: carries the shared VALIDATOR_DEFECT prefix" \
+  "$VAL_OUTPUT" "VALIDATOR_DEFECT NOTHING_CHECKED"
+teardown_temp_dir
+
+# --- Test 76 (TASK-043, AC1): a validator-defect-only directory (every reviewer authorized
+# skipped, only orchestrator paperwork left) produces the defect token and NO genuine problem. ---
+setup_evidence_env "qa-reviewer" '.review_gate.conditional_dispatch = true'
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf -- 'diff --git a/src/app.py b/src/app.py\n--- a/src/app.py\n+++ b/src/app.py\n' \
+  > "$TEST_DIR/nazgul/reviews/TASK-001/diff.patch"
+jq -n '{unit:"TASK-001", skipped:[{name:"qa-reviewer", reason:"no tests changed"}]}' \
+  > "$TEST_DIR/nazgul/reviews/TASK-001/.dispatch.json"
+printf '# summary\n' > "$TEST_DIR/nazgul/reviews/TASK-001/summary.md"
+run_validate "TASK-001"
+assert_exit_code "defect-only: exit 1 (still fails closed)" "$VAL_EC" 1
+assert_eq "defect-only: output is EXACTLY the prefixed token, no MISSING/UNAPPROVED" \
+  "$VAL_OUTPUT" "VALIDATOR_DEFECT NOTHING_CHECKED"
+teardown_temp_dir
+
+# --- Test 77 (TASK-043, AC3): the transition consumer at task-transition-guard.sh:1418
+# still fails closed on a validator-defect-only directory, not made non-fatal everywhere. ---
+source "$REPO_ROOT/scripts/lib/task-transition-guard.sh"
+setup_evidence_env "code-reviewer"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf '# BOARD-2-OUTCOME\n' > "$TEST_DIR/nazgul/reviews/TASK-001/BOARD-2-OUTCOME.md"
+printf '# adversarial\n' > "$TEST_DIR/nazgul/reviews/TASK-001/adversarial-SEC-1.md"
+TTG_OUT=$(ttg_verify_review_evidence "$TEST_DIR/nazgul" "TASK-001") && TTG_EC=0 || TTG_EC=$?
+assert_exit_code "AC3: ttg_verify_review_evidence still refuses (exit 1)" "$TTG_EC" 1
+assert_contains "AC3: refusal still carries the defect token" "$TTG_OUT" "VALIDATOR_DEFECT NOTHING_CHECKED"
+teardown_temp_dir
+
 report_results
