@@ -33,6 +33,17 @@
 # Idempotent source guard; NOT `set -euo pipefail` — sourced into caller shells
 # that own their own shell options. Nothing but path resolution runs at source
 # time; the telemetry lib is sourced lazily, per call, inside a subshell.
+#
+# BECAUSE the caller owns those options, every assignment below whose command
+# substitution can exit non-zero is written `x=$(...) || rc=$?` with `rc`
+# pre-initialised — never `x=$(...); rc=$?`, which is a FAILING SIMPLE COMMAND
+# under the caller's `set -e`. The substitutions that exit non-zero are exactly
+# the named degradations (`no_remote`, `unsupported_host`, `api_failure`), so
+# that form aborted the caller before `_mp_warn`, before `_mp_emit` and before
+# the token reached stdout. A degradation that kills its caller before naming
+# itself is not a named degradation — it is the silence this file was written
+# against. The caller may still exit on the non-zero RETURN below (that is the
+# documented contract, like `grep`'s), but it exits having been told why.
 
 [ -n "${_NAZGUL_MERGE_PROVIDER_SOURCED:-}" ] && return 0
 _NAZGUL_MERGE_PROVIDER_SOURCED=1
@@ -145,10 +156,35 @@ _mp_url_repo() {
   printf '%s' "$owner/$repo" | tr '[:upper:]' '[:lower:]'
 }
 
-# _mp_ref_ok <ref> -> 0 iff <ref> is shaped like a git ref name. Branch names are the only
-# remote-authored strings this seam carries; one that fails this is dropped, never passed on.
+# lean-comments: allow-run — where the line is drawn, and why a narrower one is a false refusal.
+# _mp_ref_ok <ref> -> 0 iff <ref> is a name git itself would accept for a branch. Branch names are
+# the only remote-authored strings this seam carries; one that fails this is DROPPED, never passed
+# on. The line is git's own refname rule (check_refname_format with one level allowed), pinned in
+# both directions against `git check-ref-format --branch` by the suite — NOT a narrower ASCII
+# allowlist. A legal name refused here has its head_ref blanked, which the merge-evidence gate reads
+# as `ok_no_head_ref` and refuses as `unverifiable`; that gate has no kill switch (RULES.md §2), so a
+# false refusal leaves a genuinely merged objective with NO route to DONE, blaming the host for an
+# answer it got right. `_hotfix/x`, `feat/a+b` and a UTF-8 name are branches git accepts and this
+# seam now carries. What it still rejects: whitespace and control characters (which no one-line
+# record could carry anyway), git's forbidden metacharacters `~ ^ : ? * [ \`, the forbidden sequences
+# (`..`, `@{`, `//`, leading/trailing `/`, a leading dot on any component, a trailing `.` or
+# `.lock`), and a bare `@`. Two rules are ours rather than git's, and both are about carrying the
+# value rather than about git: the 255-byte ceiling, and a leading `-`, which any CLI it reaches
+# could read as a flag — `git check-ref-format --branch` refuses that one too, so it is not a
+# divergence.
 _mp_ref_ok() {
-  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$ ]]
+  local ref="$1"
+  [ -n "$ref" ] || return 1
+  [ "${#ref}" -le 255 ] || return 1
+  case "$ref" in
+    -*|/*|*/|@) return 1 ;;
+    .*|*/.*) return 1 ;;
+    *.|*.lock|*.lock/*) return 1 ;;
+    *..*|*//*|*@\{*) return 1 ;;
+    *[~^:?*'['\\]*) return 1 ;;
+    *[[:cntrl:][:space:]]*) return 1 ;;
+  esac
+  return 0
 }
 
 # lean-comments: allow-run — the NAZGUL_MERGE_PROVIDER escape hatch is the one thing
@@ -187,8 +223,8 @@ _mp_detect_raw() {
 # so "found github" and "could not find a provider" are never the same answer. Each
 # degradation is loud on stderr and on the bus, and never falls back to git ancestry.
 merge_provider_detect() {
-  local root="${1:-}" raw rc name host
-  raw=$(_mp_detect_raw "$root"); rc=$?
+  local root="${1:-}" raw name host rc=0
+  raw=$(_mp_detect_raw "$root") || rc=$?
   name="${raw%%$'\t'*}"
   host="${raw#*$'\t'}"
   case "$rc" in
@@ -220,8 +256,8 @@ _mp_github_health() {
 # EXISTS but cannot run now (tool missing, unauthenticated) — deliberately distinct
 # from having no arm at all, because the operator's remedy differs for each.
 merge_provider_health() {
-  local root="${1:-}" raw rc provider host why
-  raw=$(_mp_detect_raw "$root"); rc=$?
+  local root="${1:-}" raw provider host why rc=0
+  raw=$(_mp_detect_raw "$root") || rc=$?
   provider="${raw%%$'\t'*}"
   host="${raw#*$'\t'}"
   if [ "$rc" -eq 3 ]; then
@@ -419,7 +455,7 @@ _mp_redirect_check() {
 # target, so the answer carries its own provenance instead of being trusted for having been
 # asked — the one check that also covers a redirection vector this file does not enumerate.
 _mp_github_pr_state() {
-  local root="$1" host="$2" pr="$3" out rc state merged_at merge_commit merged why head_ref base_ref
+  local root="$1" host="$2" pr="$3" out state merged_at merge_commit merged why head_ref base_ref rc=0
   local remote_url remote_host remote_repo target url url_host url_repo
   remote_url=$(_mp_remote_url "$root") || remote_url=""
   remote_host=$(_mp_api_host "$(_mp_url_host "$remote_url")")
@@ -447,7 +483,7 @@ _mp_github_pr_state() {
     _mp_result "github" "$host" "$pr" "provider_unavailable" "" "" "" "" "$why"
     return 4
   }
-  out=$( (cd "$root" 2>/dev/null && gh pr view "$pr" --repo "$target" --json state,mergedAt,mergeCommit,headRefName,baseRefName,url) 2>&1 ); rc=$?
+  out=$( (cd "$root" 2>/dev/null && gh pr view "$pr" --repo "$target" --json state,mergedAt,mergeCommit,headRefName,baseRefName,url) 2>&1 ) || rc=$?
   if [ "$rc" -ne 0 ]; then
     why="gh pr view $pr failed (exit $rc): $(_mp_oneline "$out")"
     _mp_warn "api_failure: $why — this is NOT 'not merged'; no closure may be inferred from it"
@@ -534,7 +570,7 @@ _mp_github_pr_state() {
 # credentials in its userinfo, so it is redacted before it is warned, emitted,
 # or returned, and once normalisation succeeds only the bare number is used.
 merge_provider_pr_state() {
-  local root="${1:-}" pr_in="${2:-}" raw rc provider host pr why pr_shown rest
+  local root="${1:-}" pr_in="${2:-}" raw provider host pr why pr_shown rest rc=0
   local url_host url_repo remote_url remote_host remote_repo
   pr_shown=$(_mp_oneline "$pr_in")
   raw=$(_mp_normalize_pr "$pr_in") || {
@@ -548,7 +584,8 @@ merge_provider_pr_state() {
   rest="${raw#*$'\t'}"
   url_host="${rest%%$'\t'*}"
   url_repo="${rest#*$'\t'}"
-  raw=$(_mp_detect_raw "$root"); rc=$?
+  rc=0
+  raw=$(_mp_detect_raw "$root") || rc=$?
   provider="${raw%%$'\t'*}"
   host="${raw#*$'\t'}"
   if [ "$rc" -eq 3 ]; then

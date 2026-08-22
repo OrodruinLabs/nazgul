@@ -34,14 +34,17 @@ set -uo pipefail
 #                  That is not incidental — it is the captured instance of the hazard the
 #                  binding check exists for: a genuinely merged PR of a DIFFERENT
 #                  objective. It is used as such below rather than being edited away.
-#   not-captured:  the unauthenticated, unparseable-payload, malformed-ref, foreign-url and
-#                  missing-url cases. `gh auth status` failing, a truncated body, a branch
-#                  name no git ref could carry, a host answering about a repository it was
-#                  not asked about, and one omitting a field it was asked for cannot be
-#                  captured from a healthy authenticated host, so those five are SYNTHETIC
-#                  and named as such rather than passed off as captured. The foreign url
-#                  names `attacker/other-repo`, an invented repository, so no third-party
-#                  subject matter enters the fixture set through the redirection cases.
+#   not-captured:  the unauthenticated, unparseable-payload, malformed-ref, foreign-url,
+#                  missing-url and leading-underscore-branch cases. `gh auth status` failing,
+#                  a truncated body, a branch name no git ref could carry, a host answering
+#                  about a repository it was not asked about, one omitting a field it was
+#                  asked for, and a merged PR on `_wip/FEAT-042-thing` (a branch this repo
+#                  never had) cannot be captured from a healthy authenticated host, so those
+#                  six are SYNTHETIC and named as such rather than passed off as captured.
+#                  The foreign url names `attacker/other-repo`, an invented repository, so no
+#                  third-party subject matter enters the fixture set through the redirection
+#                  cases; `_wip/FEAT-042-thing` is the false refusal PR #240 review finding
+#                  #13 reported, held as data so the widened predicate has a subject.
 #
 # No tests/fixtures/ subdirectory is added: TASK-009's file scope is exactly this
 # file and the library, and the manifest directs that the shape be declared in
@@ -129,6 +132,8 @@ case "$sub" in
       redirected) if [ -n "$pinned" ]; then printf '%s\n' "$merged"; else printf '%s\n' "$foreign"; fi; exit 0 ;;
       foreignurl) printf '%s\n' "$foreign"; exit 0 ;;
       nourl)  printf '%s\n' '{"baseRefName":"main","headRefName":"feat/FEAT-030-worktree-relative-runtime-state-path-resolution-pr","mergeCommit":{"oid":"d6f7582f7d9ee8f74706ea02202d15dd5bc83146"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED"}'; exit 0 ;;
+      # SYNTHETIC: a leading underscore is a branch name git accepts and the old predicate did not.
+      wipref) printf '%s\n' '{"baseRefName":"main","headRefName":"_wip/FEAT-042-thing","mergeCommit":{"oid":"d6f7582f7d9ee8f74706ea02202d15dd5bc83146"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED","url":"https://github.com/OrodruinLabs/nazgul/pull/88"}'; exit 0 ;;
       error)  printf '%s\n' 'GraphQL: Could not resolve to a PullRequest with the number of 999999. (repository.pullRequest)' >&2; exit 1 ;;
       leaky)  printf 'HTTP 401: Bad credentials (token ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA)\n' >&2; exit 1 ;;
       garbage) printf '%s\n' 'not json at all'; exit 0 ;;
@@ -568,6 +573,206 @@ assert_not_contains "no token-shaped string is written to the event bus" \
   "$(cat "$EVENTS" 2>/dev/null)" "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 assert_file_unchanged "the seam never writes config.json at all — no credential surface to add one to" \
   "$TEST_DIR/nazgul/config.json" "$CONFIG_BEFORE"
+
+# lean-comments: allow-run — why every existing caller was accidentally safe, and why an exit code cannot see this.
+# THE ERREXIT-CALLER CLASS (PR #240 review, finding #3). `raw=$(_mp_detect_raw "$root"); rc=$?` is a
+# FAILING SIMPLE COMMAND under the caller's own `set -e`, on exactly the two paths this seam exists to
+# NAME: `_mp_detect_raw` returns 2 and 3 by design. The caller therefore died at the assignment —
+# before `_mp_warn`, before `_mp_emit`, before the token reached stdout — which is the silence
+# RULES.md §16 was written against, produced by the file written against it. Both live callers wrap
+# the seam in `$( ) || true`, which puts its whole body in bash's errexit-IGNORED context and is why
+# the defect was latent rather than visible; the caller below consumes the seam's stdout through a
+# PROCESS SUBSTITUTION, which does not inherit that context, so the seam runs with errexit armed
+# exactly as it would inside /nazgul:doctor (`set -euo pipefail`, and the seam's next consumer).
+# An exit-code assertion cannot discharge this: the caller exited 3 before the fix and the seam
+# returns 3 after it. What changed is that the name, the stderr line and the event now EXIST.
+_errexit_drive() {
+  ERRX_OUT=$(bash -c '
+    set -euo pipefail
+    source "$1"; shift
+    while IFS= read -r line; do printf "TOKEN:%s\n" "$line"; done < <("$@")
+    printf "SURVIVED\n"
+  ' _ "$LIB" "$@" 2>"$FAKEBIN/errx"); ERRX_RC=$?
+  ERRX_ERR=$(cat "$FAKEBIN/errx")
+}
+
+# _errexit_case <label> <stdout-substring> <stderr-name> <event> <fn> <args...>. The answer owed to
+# stdout and the name owed to stderr differ in shape (a JSON object vs a token), so both are given.
+_errexit_case() {
+  local label="$1" want_out="$2" want_err="$3" event="$4"
+  shift 4
+  : > "$EVENTS"
+  _errexit_drive "$@"
+  assert_exit_code "errexit caller: $label — the caller survives to its next command" "$ERRX_RC" 0
+  assert_contains "errexit caller: $label — and actually reaches it" "$ERRX_OUT" "SURVIVED"
+  assert_contains "errexit caller: $label — having read the seam's answer through the substitution" \
+    "$ERRX_OUT" "TOKEN:"
+  assert_contains "errexit caller: $label — and that answer names the degradation" "$ERRX_OUT" "$want_out"
+  assert_contains "errexit caller: $label — the _mp_warn line reached stderr too" "$ERRX_ERR" "$want_err"
+  assert_file_contains "errexit caller: $label — and the telemetry record reached the bus" "$EVENTS" "\"event\":\"$event\""
+}
+
+git -C "$TEST_DIR" remote remove origin
+_errexit_case "detect / no_remote" "TOKEN:no_remote" "no_remote:" "merge_provider_no_remote" merge_provider_detect "$TEST_DIR"
+_errexit_case "health / no_remote" "TOKEN:no_remote" "no_remote:" "merge_provider_no_remote" merge_provider_health "$TEST_DIR"
+_errexit_case "pr_state / no_remote" '"result":"no_remote"' "no_remote:" "merge_provider_no_remote" merge_provider_pr_state "$TEST_DIR" 88
+
+git -C "$TEST_DIR" remote add origin "https://dev.azure.com/org/proj/_git/repo"
+_errexit_case "detect / unsupported_host" "TOKEN:unsupported_host" "unsupported_host:" "merge_provider_unsupported_host" merge_provider_detect "$TEST_DIR"
+_errexit_case "health / unsupported_host" "TOKEN:unsupported_host" "unsupported_host:" "merge_provider_unsupported_host" merge_provider_health "$TEST_DIR"
+_errexit_case "pr_state / unsupported_host" '"result":"unsupported_host"' "unsupported_host:" "merge_provider_unsupported_host" merge_provider_pr_state "$TEST_DIR" 88
+
+# The gh-invocation assignment inside _mp_github_pr_state is the SAME class, included deliberately:
+# once the detect sites are immune an errexit caller REACHES it and dies before `api_failure` is said.
+git -C "$TEST_DIR" remote set-url origin "https://github.com/OrodruinLabs/nazgul.git"
+: > "$GH_LOG"
+NAZGUL_TEST_GH_PR_CASE=error _errexit_case "pr_state / api_failure" '"result":"api_failure"' \
+  "api_failure:" "merge_provider_api_failure" merge_provider_pr_state "$TEST_DIR" 999999
+assert_contains "errexit caller: the sub-shell drove THIS suite's gh shim, never a real host" \
+  "$(cat "$GH_LOG")" "pr view 999999 --repo github.com/orodruinlabs/nazgul"
+
+# The same caller on the path that SUCCEEDS: the fix must not have turned a good answer into a
+# degradation, so the shape that used to abort is driven once more with nothing to degrade about.
+NAZGUL_TEST_GH_PR_CASE=merged _errexit_drive merge_provider_pr_state "$TEST_DIR" 88
+assert_exit_code "errexit caller: the ok path still exits 0 for the caller" "$ERRX_RC" 0
+assert_contains "errexit caller: the ok path still returns the host's answer" "$ERRX_OUT" '"result":"ok"'
+assert_eq "errexit caller: an ok answer stays silent on stderr — only degradations are loud" "$ERRX_ERR" ""
+
+# lean-comments: allow-run — where the line is drawn, why it is git's, and what it still refuses.
+# THE FALSE-REFUSAL CLASS (PR #240 review, finding #13). `_mp_ref_ok` was a narrow ASCII allowlist
+# that merely OVERLAPPED git's rules: it refused a leading `_`, any `+` and every non-ASCII byte —
+# all names git itself accepts. Each refusal blanks `head_ref`, which `_ttg_merge_host_state` reads
+# as `ok_no_head_ref` and the merge-evidence gate refuses as `unverifiable`; that gate has no kill
+# switch (RULES.md §2), so a genuinely merged objective on such a branch had NO route to DONE, and
+# the diagnostic blamed the host for an answer it got right. The line is now git's own refname rule,
+# pinned in BOTH directions against `git check-ref-format --branch` below — accept-only would be a
+# worse validator than the false refusal it replaces, so every row asserts the oracle's answer too.
+_ref_oracle() { git -C "$TEST_DIR" check-ref-format --branch "$1" >/dev/null 2>&1; }
+REF_ROWS=0
+_ref_row() {
+  local want="$1" ref="$2" oracle mine shown
+  shown=$(printf '%q' "$ref")
+  REF_ROWS=$((REF_ROWS + 1))
+  if _ref_oracle "$ref"; then oracle="accept"; else oracle="reject"; fi
+  if _mp_ref_ok "$ref"; then mine="accept"; else mine="reject"; fi
+  assert_eq "oracle: git itself ${want}s $shown" "$oracle" "$want"
+  assert_eq "_mp_ref_ok ${want}s $shown, exactly as git does" "$mine" "$want"
+}
+
+_ref_row accept "_hotfix/x"
+_ref_row accept "feat/a+b"
+_ref_row accept "feat/ünïcode"
+_ref_row accept "main"
+_ref_row accept "feat/a.b"
+_ref_row accept "release/1.0.0"
+_ref_row accept "+plus"
+_ref_row accept "a_b"
+_ref_row reject "feat/a..b"
+_ref_row reject "feat/a b"
+_ref_row reject "-dash"
+_ref_row reject "x.lock"
+_ref_row reject ".leading"
+_ref_row reject "feat/x/"
+_ref_row reject "/lead"
+_ref_row reject "a//b"
+_ref_row reject "trail."
+_ref_row reject 'a@{b'
+_ref_row reject "a~b"
+_ref_row reject "a^b"
+_ref_row reject "a:b"
+_ref_row reject "a?b"
+_ref_row reject "a*b"
+_ref_row reject "a[b"
+_ref_row reject 'a\b'
+_ref_row reject "a.lock/b"
+_ref_row reject "a/.b"
+_ref_row reject "a/b.lock"
+if [ "$REF_ROWS" -lt 9 ]; then
+  _fail "the ref-shape table is actually populated" "only $REF_ROWS rows — a table nothing drives pins nothing"
+fi
+
+# What it still refuses, each with the reason it is refused FOR — asserted against the rule, not the
+# oracle: `--branch` expands shorthands (it reads `@` as HEAD) and takes no view on a byte ceiling.
+_ref_refuses() {
+  if _mp_ref_ok "$2"; then
+    _fail "_mp_ref_ok still refuses $1" "accepted $(printf '%q' "$2")"
+  else
+    _pass "_mp_ref_ok still refuses $1"
+  fi
+}
+_ref_admits() {
+  if _mp_ref_ok "$2"; then _pass "_mp_ref_ok admits $1"; else _fail "_mp_ref_ok admits $1" "rejected $(printf '%q' "$2")"; fi
+}
+_ref_refuses "the empty string — the host returned no name to bind a PR to" ""
+_ref_refuses "a bare @, which is HEAD's shorthand and not a branch git would create" "@"
+_ref_refuses "an embedded newline, which no one-line ## Merge Evidence record could carry" $'a\nb'
+_ref_refuses "a DEL control character" $'a\177b'
+_ref_refuses "256 bytes — one past the ceiling this seam keeps" "$(printf 'a%.0s' $(seq 1 256))"
+_ref_admits "255 bytes — the ceiling itself, so the bound is not the false refusal" "$(printf 'a%.0s' $(seq 1 255))"
+
+# The predicate is what the seam actually uses: the same branch name now survives the round trip.
+: > "$GH_LOG"
+NAZGUL_TEST_GH_PR_CASE=wipref _drive 88
+assert_eq "a merged PR on a leading-underscore branch keeps its head_ref instead of being blanked" \
+  "$(_field '.head_ref')" "_wip/FEAT-042-thing"
+assert_eq "and that answer is still the host's own ok/merged" "$(_field '.merged')" "true"
+assert_contains "and it really was the shim that answered, not a real host" \
+  "$(cat "$GH_LOG")" "pr view 88 --repo github.com/orodruinlabs/nazgul"
+
+# lean-comments: allow-run — why the predicate alone is not evidence, and what this drives instead.
+# THE CONSEQUENCE CHAIN (AC3). A widened predicate with no downstream drive is a unit-test change
+# with no evidence it reached the refusal it exists to close, so the merge-evidence gate itself is
+# driven here — READ-ONLY; task-transition-guard.sh is TASK-042's file and is sourced, never edited.
+# Its fixture is a tree of its own so this suite's config.json stays byte-identical, and the host
+# answer comes from the same PATH shim above rather than from a stubbed seam function.
+AC3_DIR=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-mp-ac3-XXXXXX")
+git -C "$AC3_DIR" init -q >/dev/null 2>&1
+git -C "$AC3_DIR" remote add origin "https://github.com/OrodruinLabs/nazgul.git"
+mkdir -p "$AC3_DIR/nazgul/logs"
+jq -n '{feat_id:"FEAT-042", branch:{feature:"_wip/FEAT-042-thing", base:"main"}}' > "$AC3_DIR/nazgul/config.json"
+printf -- '---\nfeat_id: FEAT-042\n---\n# Plan — FEAT-042\n\n## Tasks\n\n- TASK-050\n' > "$AC3_DIR/nazgul/plan.md"
+cat > "$AC3_DIR/manifest.md" <<'AC3_MANIFEST'
+---
+status: IMPLEMENTED
+---
+# TASK-050
+
+## Commits
+
+## Merge Evidence
+- **host**: github.com
+- **pr**: 88
+- **merged-at**: 2026-08-14T23:16:50Z
+- **merge-commit**: d6f7582f7d9ee8f74706ea02202d15dd5bc83146
+- **head-ref**: _wip/FEAT-042-thing
+- **recorded-by**: scripts/close-objective.sh (host API, ok)
+
+## Description
+closure fixture
+AC3_MANIFEST
+AC3_ERR="$FAKEBIN/ac3-err"
+AC3_OUT=$(NAZGUL_TEST_GH_PR_CASE=wipref NAZGUL_DIR="$AC3_DIR/nazgul" bash -c '
+  set -uo pipefail
+  source "$1" || exit 90
+  source "$2" || exit 91
+  ec=0
+  ttg_verify_merge_evidence "$(cat "$3")" "$4" TASK-050 >/dev/null 2>"$5" || ec=$?
+  printf "%s|%s|%s\n" "$ec" "$TTG_MERGE_REASON" "$TTG_MERGE_HOST_RESULT"
+' _ "$LIB" "$REPO_ROOT/scripts/lib/task-transition-guard.sh" "$AC3_DIR/manifest.md" "$AC3_DIR" "$AC3_ERR")
+AC3_EC="${AC3_OUT%%|*}"
+AC3_REST="${AC3_OUT#*|}"
+AC3_REASON="${AC3_REST%%|*}"
+AC3_HOST_RESULT="${AC3_REST##*|}"
+AC3_STDERR=$(cat "$AC3_ERR" 2>/dev/null || true)
+assert_eq "the gate no longer answers 'unverifiable' for a merged PR on a git-legal _-prefixed branch" \
+  "$AC3_REASON" "verified"
+assert_exit_code "and it admits the closure it used to refuse" "$AC3_EC" 0
+assert_eq "the seam handed the gate a usable head branch, not ok_no_head_ref" "$AC3_HOST_RESULT" "ok"
+assert_not_contains "and the gate never claims the host returned no usable head branch" \
+  "$AC3_STDERR" "no usable head branch"
+assert_contains "the verified route names the branch that used to be dropped" \
+  "$AC3_STDERR" "head-ref=_wip/FEAT-042-thing"
+rm -rf "$AC3_DIR"
 
 # --- The seam never consults git ancestry, on any path. Post-squash, ancestry
 # reports every shipped commit as unshipped, so a fallback would be inverted. ---
