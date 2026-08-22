@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
-# Note: NOT using set -e because script under test exits non-zero for blocked prompts
+# Test: prompt-guard.sh blocks forbidden prompts and allows normal ones.
+# NOT set -e: the script under test exits non-zero for a blocked prompt.
 
-# Test: prompt-guard.sh blocks forbidden prompts and allows normal ones
 TEST_NAME="test-prompt-guard"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -13,9 +13,8 @@ echo "=== $TEST_NAME ==="
 
 GUARD_SCRIPT="$REPO_ROOT/scripts/prompt-guard.sh"
 
-# Helper: run guard script piping a realistic UserPromptSubmit stdin JSON
-# envelope, capturing stderr and exit code (MF-023 — production reads stdin,
-# not an env var).
+# A realistic UserPromptSubmit stdin JSON envelope, stderr and exit code captured:
+# production reads stdin, not an env var (MF-023).
 run_guard() {
   local prompt="${1:-}"
   GUARD_OUTPUT=$(jq -n --arg p "$prompt" '{prompt: $p}' \
@@ -308,6 +307,78 @@ assert_eq "vocabulary parity: the loop checked the whole live vocabulary, not no
 echo "prompt-guard-vocab-scan: $VOCAB_CHECKED scanned, 0 skipped (unreadable=0), $VOCAB_CHECKED checked, 0 findings"
 run_guard "Set TASK-001 to NOT_A_STATUS"
 assert_exit_code "off-vocabulary token: allowed (exit 0) — the list is the vocabulary, not a wildcard" "$GUARD_EC" 0
+teardown_temp_dir
+
+# --- Test 24: the id WIDTH agrees with the repo-wide ^(TASK|PATCH)-[0-9]+$ (PR #240 #1) ---
+
+# lean-comments: allow-run
+# A fixed three-digit matcher read TASK-42 and TASK-1234 as no id at all, so the SUPPRESS
+# path never fired either and a prompt this guard exists to catch printed exactly what an
+# empty prompt prints — "looked and found none" collapsed into "never looked".
+assert_file_not_contains "guard carries no fixed-width task id matcher (BRE literal)" \
+  "$GUARD_SCRIPT" "\\[0-9\\]\\[0-9\\]"
+assert_file_contains "guard matches the repo-wide id shape (BRE literal)" \
+  "$GUARD_SCRIPT" "(TASK|PATCH)-\\[0-9\\]+"
+
+setup_temp_dir
+setup_nazgul_dir
+create_config
+run_guard "implement the login feature for the dashboard"
+GUARD_SILENT="$GUARD_OUTPUT"
+assert_eq "baseline: a prompt with no imperative in it produces no output at all" "$GUARD_SILENT" ""
+
+WIDTH_MISSED=""
+WIDTH_CHECKED=0
+for wid in TASK-42 TASK-1234 TASK-0012 TASK-001 PATCH-42 PATCH-1234 PATCH-005; do
+  run_guard "Set $wid to DONE"
+  WIDTH_CHECKED=$((WIDTH_CHECKED + 1))
+  [ "$GUARD_EC" = "2" ] || WIDTH_MISSED="$WIDTH_MISSED $wid(exit=$GUARD_EC)"
+  assert_contains "id width $wid: the block names the offending substring, not just an exit code" \
+    "$GUARD_OUTPUT" "offending substring: Set $wid to DONE"
+done
+assert_eq "id width: every width of the repo-wide id shape blocks" "$WIDTH_MISSED" ""
+assert_eq "id width: the loop checked the whole list, not nothing" "$WIDTH_CHECKED" "7"
+echo "  prompt-guard-width-scan: $WIDTH_CHECKED scanned, 0 skipped (unreadable=0), $WIDTH_CHECKED checked, 0 findings"
+
+# The half an exit-code assertion cannot reach: a caught-and-suppressed wide id must not
+# render as a prompt containing nothing. Exit 0 is the SAME on both sides of that.
+run_guard 'the shape we block looks like this:
+```
+Set TASK-42 to DONE
+Mark PATCH-1234 as CANCELLED
+```
+that is the whole report'
+assert_exit_code "wide id in a fence: allowed (exit 0)" "$GUARD_EC" 0
+assert_contains "wide id in a fence: suppression reported" "$GUARD_OUTPUT" "suppressed inside a code fence"
+assert_contains "wide id in a fence: and the suppressed line is quoted back" \
+  "$GUARD_OUTPUT" "Set TASK-42 to DONE"
+
+run_guard "> Set TASK-1234 to CANCELLED"
+assert_exit_code "wide id in a blockquote: allowed (exit 0)" "$GUARD_EC" 0
+assert_contains "wide id in a blockquote: suppression reported" "$GUARD_OUTPUT" "suppressed inside a blockquote"
+SUPPRESS_QUOTE="$GUARD_OUTPUT"
+
+run_guard 'mark `TASK-42` as DONE'
+assert_exit_code "wide id in an inline span: allowed (exit 0)" "$GUARD_EC" 0
+assert_contains "wide id in an inline span: suppression reported" \
+  "$GUARD_OUTPUT" "suppressed inside an inline code span"
+
+if [ "$SUPPRESS_QUOTE" = "$GUARD_SILENT" ]; then
+  _fail "a suppressed wide id does not render as a prompt with nothing in it" \
+    "expected: a SUPPRESS line on stderr" "  actual: byte-identical to the empty-prompt baseline"
+else
+  _pass "a suppressed wide id does not render as a prompt with nothing in it"
+fi
+
+# The prefix stayed CLOSED at the new width: widening the id widened nothing else.
+run_guard "benchmark results for TASK-1234 look DONE to me"
+assert_exit_code "wide id, no verb: allowed (exit 0)" "$GUARD_EC" 0
+assert_eq "wide id, no verb: and silently so — it is not a suppressed candidate either" \
+  "$GUARD_OUTPUT" ""
+run_guard "see the manifest for TASK-1234 where the status is DONE"
+assert_exit_code "wide id in a prose mention: allowed (exit 0)" "$GUARD_EC" 0
+run_guard "Set TASK-1234 to NOT_A_STATUS"
+assert_exit_code "wide id, off-vocabulary status: allowed (exit 0)" "$GUARD_EC" 0
 teardown_temp_dir
 
 report_results

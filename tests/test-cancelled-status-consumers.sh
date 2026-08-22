@@ -166,7 +166,7 @@ board_fixture() { # <status>
     '.board.provider_config = {"owner":"acme","repo":"widget","project_id":"PVT_1",
       "field_ids":{"nazgul_status":"F_1"},
       "status_option_ids":{"DONE":"o_done","BLOCKED":"o_blocked","CANCELLED":"o_cancelled",
-      "IMPLEMENTED":"o_impl"}}' \
+      "IMPLEMENTED":"o_impl","APPROVED":"o_approved"}}' \
     '.board.task_map = {"TASK-001":{"issue_number":42,"item_id":"IT_1"}}'
   create_task_file "TASK-001" "$1"
   export NAZGUL_TEST_GH_LOG="$TEST_DIR/gh-argv.txt"
@@ -247,9 +247,14 @@ board_options_json() { # <name...> -> the option array a live board carries
   printf '%s\n' "$out"
 }
 
+# The two historical boards are frozen fixtures of the past and stay authored. The
+# up-to-date one is DERIVED, so it cannot fall behind the vocabulary the way :28 did.
 PRE_FEAT031_OPTIONS=$(board_options_json PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED)
 CUSTOMISED_OPTIONS=$(board_options_json PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED TRIAGE)
-CURRENT_OPTIONS=$(board_options_json PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED CANCELLED)
+# shellcheck disable=SC2086
+CURRENT_OPTIONS=$(board_options_json $VALID_STATUSES)
+# The exact board :28 produced: everything but APPROVED, the member it silently dropped.
+APPROVED_GAP_OPTIONS=$(board_options_json PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED CANCELLED)
 
 board_setup_fixture() { # <options-json> [read-mode] [mutation-mode] [status-create-rc]
   setup_temp_dir; setup_git_repo; setup_nazgul_dir
@@ -308,6 +313,30 @@ else
     "$GH_LOG" "issue reopen 42"
   teardown_temp_dir
 
+  # TASK-036 / PR #240 finding #9: APPROVED is the tenth member :28 never carried, so it
+  # was labelled by cmd_sync_task and then neither created nor cleaned up nor column-set.
+  board_fixture APPROVED
+  assert_contains "board-sync: an approved task carries the nazgul:approved label" \
+    "$GH_LOG" "--add-label nazgul:approved"
+  assert_contains "board-sync: and the cleanup loop knows that label exists" \
+    "$GH_LOG" "--remove-label nazgul:approved"
+  assert_contains "board-sync: and its board column is set from a known option id" \
+    "$GH_LOG" "--single-select-option-id o_approved"
+  teardown_temp_dir
+
+  # Derivation, not a corrected copy: every live status reaches the label vocabulary.
+  board_fixture DONE
+  LABEL_MISSED=""; LABEL_CHECKED=0
+  for _st in $VALID_STATUSES; do
+    LABEL_CHECKED=$((LABEL_CHECKED + 1))
+    _lbl="nazgul:$(printf '%s' "$_st" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+    case "$GH_LOG" in *"--remove-label $_lbl"*) ;; *) LABEL_MISSED="$LABEL_MISSED $_lbl" ;; esac
+  done
+  assert_eq "board-sync: the label cleanup loop covers the WHOLE status vocabulary" "$LABEL_MISSED" ""
+  assert_eq "board-sync: and that loop checked every member, not nothing" \
+    "$LABEL_CHECKED" "$(printf '%s\n' $VALID_STATUSES | grep -c .)"
+  teardown_temp_dir
+
   # `setup`'s own `gh`: a scripted board, not a logger. `field-create` fails exactly
   # as GitHub does when the field exists — the fallback path every upgraded board takes.
   if [ "$(PATH="$SETUP_BIN:$PATH" command -v gh)" != "$SETUP_BIN/gh" ]; then
@@ -321,8 +350,8 @@ else
     assert_contains "board-sync setup: and every gh call was recorded by it" \
       "$GH_LOG" "repo view --json owner,name"
     assert_eq "board-sync setup: an eight-option board is upgraded and setup succeeds" "$SETUP_RC" "0"
-    assert_contains "board-sync setup: the reported outcome names the option it added" \
-      "$SETUP_ERR" "Nazgul Status options added: CANCELLED"
+    assert_contains "board-sync setup: the reported outcome names the options it added" \
+      "$SETUP_ERR" "Nazgul Status options added: APPROVED CANCELLED"
     assert_contains "board-sync setup: a mutation was sent" "$SETUP_MUTATION" "updateProjectV2Field"
     for _opt in PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED; do
       assert_eq "board-sync setup: the mutation returns $_opt with its original id" \
@@ -332,12 +361,15 @@ else
         "$(jq -r --arg n "$_opt" '.variables.options[] | select(.name == $n) | .description' <<< "$SETUP_MUTATION")" \
         "legend for $_opt"
     done
-    assert_eq "board-sync setup: all eight originals plus the ninth are sent, none dropped" \
-      "$(jq -r '.variables.options | length' <<< "$SETUP_MUTATION")" "9"
-    assert_eq "board-sync setup: the new option carries no id, so GitHub creates it" \
-      "$(jq -r '.variables.options[] | select(.name == "CANCELLED") | has("id")' <<< "$SETUP_MUTATION")" "false"
-    assert_eq "board-sync setup: the stored map resolves CANCELLED" \
-      "$(jq -r '.board.provider_config.status_option_ids.CANCELLED' "$SETUP_CONFIG")" "o_new_cancelled"
+    assert_eq "board-sync setup: all eight originals plus BOTH missing members are sent, none dropped" \
+      "$(jq -r '.variables.options | length' <<< "$SETUP_MUTATION")" "10"
+    for _new in APPROVED CANCELLED; do
+      assert_eq "board-sync setup: the new option $_new carries no id, so GitHub creates it" \
+        "$(jq -r --arg n "$_new" '.variables.options[] | select(.name == $n) | has("id")' <<< "$SETUP_MUTATION")" "false"
+      assert_eq "board-sync setup: the stored map resolves $_new" \
+        "$(jq -r --arg n "$_new" '.board.provider_config.status_option_ids[$n]' "$SETUP_CONFIG")" \
+        "o_new_$(tr '[:upper:]' '[:lower:]' <<< "$_new")"
+    done
     assert_eq "board-sync setup: and the board is enabled on success" \
       "$(jq -r '.board.enabled' "$SETUP_CONFIG")" "true"
     assert_contains "board-sync setup: the migration leaves a telemetry record" \
@@ -352,12 +384,12 @@ else
       "$(jq -r '.variables.options[] | select(.name == "TRIAGE") | .color + "/" + .description' <<< "$SETUP_MUTATION")" \
       "GRAY/legend for TRIAGE"
     assert_eq "board-sync setup: and the option set only ever grows" \
-      "$(jq -r '.variables.options | length' <<< "$SETUP_MUTATION")" "10"
+      "$(jq -r '.variables.options | length' <<< "$SETUP_MUTATION")" "11"
     teardown_temp_dir
 
     # Idempotence: the same board a second time has nothing to add.
     board_setup_fixture "$CURRENT_OPTIONS"
-    assert_eq "board-sync setup: a nine-option board still succeeds" "$SETUP_RC" "0"
+    assert_eq "board-sync setup: a board carrying the whole live vocabulary still succeeds" "$SETUP_RC" "0"
     assert_eq "board-sync setup: and mutates nothing" "$SETUP_MUTATION" ""
     assert_contains "board-sync setup: 'nothing to do' says so rather than claiming an add" \
       "$SETUP_ERR" "Nazgul Status options: nothing to add"
@@ -367,7 +399,7 @@ else
       "$(jq -r '.board.provider_config.status_option_ids.CANCELLED' "$SETUP_CONFIG")" "o_cancelled"
     teardown_temp_dir
 
-    # A freshly created field arrives with all nine and is equally quiet.
+    # A freshly created field arrives with the whole vocabulary and is equally quiet.
     board_setup_fixture "$CURRENT_OPTIONS" ok ok 0
     assert_eq "board-sync setup: a freshly created field needs no migration" "$SETUP_MUTATION" ""
     assert_eq "board-sync setup: and the fresh path still succeeds" "$SETUP_RC" "0"
@@ -399,8 +431,8 @@ else
     assert_eq "board-sync setup: a mutation that changed nothing exits nonzero" "$SETUP_RC" "1"
     assert_contains "board-sync setup: 'reported success, changed nothing' is its own name" \
       "$SETUP_ERR" "(mutation_no_effect)"
-    assert_contains "board-sync setup: and says which option is still absent" \
-      "$SETUP_ERR" "still lacks: CANCELLED"
+    assert_contains "board-sync setup: and says which options are still absent" \
+      "$SETUP_ERR" "still lacks: APPROVED CANCELLED"
     teardown_temp_dir
 
     board_setup_fixture "$CUSTOMISED_OPTIONS" ok drop
@@ -413,7 +445,7 @@ else
     board_setup_fixture "$PRE_FEAT031_OPTIONS" ok stale_readback
     assert_eq "board-sync setup: an independent re-read that disagrees exits nonzero" "$SETUP_RC" "1"
     assert_contains "board-sync setup: the map gate refuses rather than storing a gap" \
-      "$SETUP_ERR" "Status option ids unresolved after reconciliation: CANCELLED"
+      "$SETUP_ERR" "Status option ids unresolved after reconciliation: APPROVED CANCELLED"
     assert_contains "board-sync setup: and states what an unresolved id would cost" \
       "$SETUP_ERR" "board column silently kept its previous value"
     teardown_temp_dir
@@ -428,6 +460,27 @@ else
     board_setup_fixture "$PRE_FEAT031_OPTIONS" notselect
     assert_eq "board-sync setup: a field that is not single-select exits nonzero" "$SETUP_RC" "1"
     assert_contains "board-sync setup: with a name of its own" "$SETUP_ERR" "(not_single_select)"
+    teardown_temp_dir
+
+    # lean-comments: allow-run
+    # AC2, the third consumer named specifically: the `unresolved` completeness check.
+    # A board missing only APPROVED used to pass it — not because it was asked and
+    # answered, but because APPROVED was outside the denominator entirely. These two
+    # arms are the same board seen by the migration and then by the map gate.
+    board_setup_fixture "$APPROVED_GAP_OPTIONS" ok noop
+    assert_eq "board-sync setup: a board missing only APPROVED is refused, not stored" "$SETUP_RC" "1"
+    assert_contains "board-sync setup: and APPROVED is the member it names" \
+      "$SETUP_ERR" "still lacks: APPROVED"
+    assert_eq "board-sync setup: no map is stored with an APPROVED-shaped hole" \
+      "$(jq -r '.board.provider_config.status_option_ids.APPROVED // "absent"' "$SETUP_CONFIG")" "absent"
+    teardown_temp_dir
+
+    board_setup_fixture "$APPROVED_GAP_OPTIONS" ok stale_readback
+    assert_eq "board-sync setup: an APPROVED id the re-read cannot resolve exits nonzero" "$SETUP_RC" "1"
+    assert_contains "board-sync setup: the unresolved check now asks about APPROVED at all" \
+      "$SETUP_ERR" "Status option ids unresolved after reconciliation: APPROVED"
+    assert_contains "board-sync setup: and states what an unresolved APPROVED would cost" \
+      "$SETUP_ERR" "board column silently kept its previous value"
     teardown_temp_dir
   fi
 fi
@@ -1107,5 +1160,156 @@ assert_eq "determinism: the walk enumerates every file in the tree (independent 
 assert_eq "determinism: and still does so when the caller's stdin is full (dedicated fd)" \
   "$DET_STDIN_N" "$DET_TREE_N"
 rm -rf "$DET_SCRATCH"
+
+# --- Single-authority scan (TASK-036 / AC3) ---
+
+# lean-comments: allow-run
+# The two vocabularies PR #240 hand-copied, pinned by a WALK rather than a file list, so a
+# THIRD copy is caught wherever it lands. Two finding kinds, both derived from the authority
+# (scripts/lib/structured-state.sh), which is skipped by DEFINING VALID_STATUSES, not by name:
+#   restated-vocabulary — a separator-only run of >= SAS_FLOOR DISTINCT status tokens whose set
+#     is not the whole vocabulary. A run carrying ALL of them is BOUND rather than drifted: it
+#     turns red the instant the authority gains a member, which is what a copy must do.
+#   narrow-id — a (TASK|PATCH) id matcher whose digit spec is not +/*-quantified, i.e. one that
+#     reads a legal id as no id at all (prompt-guard.sh:53 read TASK-42 as absent, not as prose).
+# Boundary, stated rather than implied: the population is scripts/** (executable code). The one
+# copy known outside it, SCS_STATUS_TOKENS in tests/lib/status-consumer-scan.sh, is driven as a
+# named extra subject below rather than left unmentioned.
+SAS_FLOOR=7
+
+sas_file_findings() { # <file> -> "F|<kind>|<line>|<detail>" per finding, then one "MAXSUB|<n>"
+  awk -v vocab="$VALID_STATUSES" -v floor="$SAS_FLOOR" '
+    BEGIN { nv = split(vocab, V, " "); for (i = 1; i <= nv; i++) IS[V[i]] = 1; maxsub = 0 }
+    /^[[:space:]]*#/ { next }
+    {
+      s = $0
+      gsub(/[^A-Za-z0-9_]+/, " ", s)
+      n = split(s, W, " ")
+      run = 0; best = 0
+      split("", seen)
+      for (i = 1; i <= n; i++) {
+        if (W[i] in IS) {
+          if (!(W[i] in seen)) { seen[W[i]] = 1; run++ }
+          if (run > best) best = run
+        } else { run = 0; split("", seen) }
+      }
+      if (best >= floor && best != nv)
+        printf "F|restated-vocabulary|%d|%d of %d status tokens in one separator-only run\n", FNR, best, nv
+      else if (best < floor && best > maxsub) maxsub = best
+      if ($0 ~ /TASK|PATCH/) {
+        u = $0
+        gsub(/\[\[:digit:\]\]/, "@D@", u)
+        gsub(/\[0-9\]/, "@D@", u)
+        while (match(u, /-@D@/)) {
+          after = substr(u, RSTART + RLENGTH, 1)
+          if (after != "+" && after != "*") {
+            snip = $0; sub(/^[ \t]+/, "", snip)
+            printf "F|narrow-id|%d|digit spec not +/*-quantified: %.90s\n", FNR, snip
+          }
+          u = substr(u, RSTART + RLENGTH)
+        }
+      }
+    }
+    END { printf "MAXSUB|%d\n", maxsub }
+  ' "$1"
+}
+
+sas_scan() { # <root> -> SAS_N/SAS_M/SAS_K/SAS_F + SAS_FINDINGS/SAS_MAXSUB; 1 if unwalkable
+  local root="$1" f rel rec out
+  SAS_N=0; SAS_M=0; SAS_K=0; SAS_F=0; SAS_UNREADABLE=0; SAS_AUTHORITY=0
+  SAS_FINDINGS=""; SAS_MAXSUB=0
+  [ -d "$root/scripts" ] || return 1
+  while IFS= read -r f; do
+    SAS_N=$((SAS_N + 1))
+    rel="${f#"$root"/}"
+    if [ ! -r "$f" ]; then
+      SAS_M=$((SAS_M + 1)); SAS_UNREADABLE=$((SAS_UNREADABLE + 1)); continue
+    fi
+    # The authority cannot be a copy of itself, and it is identified by what it DOES.
+    if grep -qE '^[[:space:]]*VALID_STATUSES=' "$f" 2>/dev/null; then
+      SAS_M=$((SAS_M + 1)); SAS_AUTHORITY=$((SAS_AUTHORITY + 1)); continue
+    fi
+    SAS_K=$((SAS_K + 1))
+    out=$(sas_file_findings "$f")
+    while IFS= read -r rec; do
+      case "$rec" in
+        "MAXSUB|"*) [ "${rec#MAXSUB|}" -gt "$SAS_MAXSUB" ] && SAS_MAXSUB="${rec#MAXSUB|}" ;;
+        "F|"*) SAS_F=$((SAS_F + 1)); SAS_FINDINGS="${SAS_FINDINGS}${rel}:${rec#F|}"$'\n' ;;
+      esac
+    done <<< "$out"
+  done < <(find "$root/scripts" \( -type f -o -type l \) | LC_ALL=C sort)
+  return 0
+}
+
+if ! sas_scan "$REPO_ROOT"; then
+  _fail "single-authority scan: the shipped tree is walkable" "no scripts/ directory under $REPO_ROOT"
+else
+  while IFS= read -r sas_hit; do
+    [ -n "$sas_hit" ] || continue
+    _fail "single-authority scan [${sas_hit%%:*}]: derives its vocabulary rather than restating it" \
+      "${sas_hit#*:}" \
+      "  fix: read it from scripts/lib/structured-state.sh, or widen the id matcher to (TASK|PATCH)-[0-9]+"
+  done <<< "$SAS_FINDINGS"
+  echo "  single-authority-scan: ${SAS_N} scanned, ${SAS_M} skipped (authority=${SAS_AUTHORITY}, unreadable=${SAS_UNREADABLE}), ${SAS_K} checked, ${SAS_F} findings"
+  assert_eq "single-authority scan: coverage accounting adds up (N == M + K)" \
+    "$SAS_N" "$((SAS_M + SAS_K))"
+  assert_eq "single-authority scan: no shipped script carries a second copy of either vocabulary" \
+    "$SAS_F" "0"
+  if [ "$SAS_K" -ge "${NAZGUL_SINGLE_AUTHORITY_FLOOR:-40}" ]; then
+    _pass "single-authority scan: the walk actually reached the tree ($SAS_K checked)"
+  else
+    _fail "single-authority scan: the walk actually reached the tree" \
+      "only $SAS_K file(s) checked — a broken walk, not a clean tree"
+  fi
+  assert_eq "single-authority scan: the authority itself was found and skipped, exactly once" \
+    "$SAS_AUTHORITY" "1"
+  # The floor is measured, not asserted: the largest PURPOSEFUL subset shipped today is the
+  # six OPEN statuses in scrub-stale-review-artifacts.sh, so SAS_FLOOR sits one above it.
+  assert_eq "single-authority scan: the floor sits exactly one above the real distribution" \
+    "$SAS_MAXSUB" "$((SAS_FLOOR - 1))"
+fi
+
+# The one copy outside the stated population, asked the same question rather than mentioned.
+SAS_EXTRA="$SCRIPT_DIR/lib/status-consumer-scan.sh"
+SAS_EXTRA_F=$(sas_file_findings "$SAS_EXTRA" | grep -c '^F|' || true)
+assert_eq "single-authority scan [tests/lib/status-consumer-scan.sh]: its copy carries the WHOLE vocabulary, so it is bound" \
+  "$SAS_EXTRA_F" "0"
+
+# lean-comments: allow-run
+# Dogfood, on a tree built to contain each class: the shipped population is all-clean, so
+# every finding arm would otherwise never run. `bound` is the arm that matters most — a copy
+# equal to the authority must NOT be a finding, or the scan would demand the impossible of
+# scripts/task-transition.sh, which restates all ten as a case arm.
+SAS_SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-single-authority-XXXXXX")
+mkdir -p "$SAS_SCRATCH/scripts/lib"
+printf '#!/usr/bin/env bash\nVALID_STATUSES="%s"\n' "$VALID_STATUSES" > "$SAS_SCRATCH/scripts/lib/structured-state.sh"
+printf '#!/usr/bin/env bash\necho hello\n' > "$SAS_SCRATCH/scripts/clean-consumer.sh"
+# shellcheck disable=SC2086
+printf '#!/usr/bin/env bash\ncase "$1" in %s) ;; esac\n' "$(printf '%s' "$VALID_STATUSES" | tr ' ' '|')" \
+  > "$SAS_SCRATCH/scripts/bound-consumer.sh"
+sas_scan "$SAS_SCRATCH"
+assert_eq "dogfood: a clean planted tree yields no findings" "$SAS_F" "0"
+assert_eq "dogfood: and the authority is skipped by defining the vocabulary, not by its name" \
+  "$SAS_AUTHORITY" "1"
+assert_eq "dogfood: a copy EQUAL to the authority is bound, not a finding" "$SAS_F" "0"
+
+printf '#!/usr/bin/env bash\nOPTIONS="PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW CHANGES_REQUESTED DONE BLOCKED CANCELLED"\n' \
+  > "$SAS_SCRATCH/scripts/restated-consumer.sh"
+printf '#!/usr/bin/env bash\ngrep -oE "(TASK|PATCH)-[0-9][0-9][0-9]" "$1"\n' \
+  > "$SAS_SCRATCH/scripts/narrow-id-consumer.sh"
+sas_scan "$SAS_SCRATCH"
+assert_eq "dogfood: both planted copies are found, and only those two" "$SAS_F" "2"
+assert_contains "dogfood: the restated vocabulary is named by file and kind" \
+  "$SAS_FINDINGS" "scripts/restated-consumer.sh:restated-vocabulary"
+assert_contains "dogfood: and by how far it drifted" "$SAS_FINDINGS" "9 of 10 status tokens"
+assert_contains "dogfood: the narrow id matcher is named by file and kind" \
+  "$SAS_FINDINGS" "scripts/narrow-id-consumer.sh:narrow-id"
+assert_eq "dogfood: N == M + K holds on the planted tree too" "$SAS_N" "$((SAS_M + SAS_K))"
+
+rm -f "$SAS_SCRATCH/scripts/restated-consumer.sh" "$SAS_SCRATCH/scripts/narrow-id-consumer.sh"
+sas_scan "$SAS_SCRATCH"
+assert_eq "dogfood: removing the planted copies returns the scan to zero findings" "$SAS_F" "0"
+assert_eq "dogfood: and it is a smaller tree that was walked, not the same one" "$SAS_N" "3"
+rm -rf "$SAS_SCRATCH"
 
 report_results
