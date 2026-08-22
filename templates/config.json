@@ -16,7 +16,7 @@
     "framework": null,
     "test_command": null,
     "test_roots": ["tests"],
-    "test_filter_template": "--filter={filter}",
+    "test_filter_template": null,
     "build_command": null,
     "smoke_command": null,
     "lint_command": null,

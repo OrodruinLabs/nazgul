@@ -2261,8 +2261,8 @@ CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" >/dev/null 2>/dev/null
 SECOND=$(jq -c '.' "$NAZGUL_DIR/config.json")
 assert_eq "red-run kill switch: full idempotency (run twice = run once)" "$FIRST" "$SECOND"
 
-# --- v36 -> v37: project.test_roots + project.test_filter_template (ADR-024). Both defaults
-# reproduce today's hardcoded red-run behaviour — asserted below, not assumed. ---
+# --- v36 -> v37: project.test_roots + project.test_filter_template (ADR-024). test_roots
+# defaults to the hardcoded root; test_filter_template is declared null and NEVER guessed. ---
 NAZGUL_DIR=$(setup_nazgul_dir "tests-root-and-filter-template-defaults")
 cat > "$NAZGUL_DIR/config.json" << 'EOF'
 {"schema_version": 36, "project": {"test_command": "dotnet test", "language": "csharp"}}
@@ -2272,18 +2272,15 @@ CFG="$NAZGUL_DIR/config.json"
 assert_json_field "v36→v37: chain reaches terminal $EXPECTED_TERMINAL" "$CFG" ".schema_version" "$EXPECTED_TERMINAL"
 assert_eq "v36→v37: absent project.test_roots defaults to the single legacy root" \
   "$(jq -c '.project.test_roots' "$CFG")" '["tests"]'
-assert_eq "v36→v37: absent project.test_filter_template defaults to the legacy harness flag" \
-  "$(jq -r '.project.test_filter_template' "$CFG")" '--filter={filter}'
+assert_eq "v36→v37: absent project.test_filter_template is DECLARED null, not guessed, for a non-legacy runner" \
+  "$(jq -r '.project.test_filter_template' "$CFG")" 'null'
+assert_eq "v36→v37: the key is present (declared) rather than merely omitted, so the config states that it exists" \
+  "$(jq -r '.project | has("test_filter_template")' "$CFG")" 'true'
 assert_eq "v36→v37: unrelated project.test_command untouched (5 consumers read it unfiltered)" \
   "$(jq -r '.project.test_command' "$CFG")" "dotnet test"
 assert_eq "v36→v37: adds nothing outside .project (strictly additive step)" \
   "$(jq -r 'keys | join(",")' "$CFG")" "project,schema_version"
 
-# The behaviour-identity claim that makes this step MINOR rather than MAJOR: rendering the
-# default template yields the exact scoped-run flag red-run.sh emits today.
-RENDERED_DEFAULT=$(jq -r '.project.test_filter_template' "$CFG")
-assert_eq "v36→v37: default template renders byte-identically to today's hardcoded flag" \
-  "${RENDERED_DEFAULT//\{filter\}/migrate-config}" "--filter=migrate-config"
 assert_eq "v36→v37: default test_roots is exactly the one legacy root" \
   "$(jq -r '.project.test_roots | length' "$CFG")/$(jq -r '.project.test_roots[0]' "$CFG")" "1/tests"
 
@@ -2310,8 +2307,8 @@ OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) |
 CFG="$NAZGUL_DIR/config.json"
 assert_eq "v36→v37: partial config keeps its operator test_roots" \
   "$(jq -c '.project.test_roots' "$CFG")" '["test"]'
-assert_eq "v36→v37: partial config backfills the absent test_filter_template" \
-  "$(jq -r '.project.test_filter_template' "$CFG")" '--filter={filter}'
+assert_eq "v36→v37: partial config declares the absent test_filter_template null" \
+  "$(jq -r '.project.test_filter_template' "$CFG")" 'null'
 
 # --- v36 -> v37: a non-object project parent clamps instead of erroring ---
 NAZGUL_DIR=$(setup_nazgul_dir "tests-root-and-filter-template-garbage-project")
@@ -2323,8 +2320,8 @@ CFG="$NAZGUL_DIR/config.json"
 assert_exit_code "v36→v37, garbage project: migrator exits 0" "$MIG_EC" 0
 assert_eq "v36→v37, garbage project: test_roots defaults" \
   "$(jq -c '.project.test_roots' "$CFG")" '["tests"]'
-assert_eq "v36→v37, garbage project: test_filter_template defaults" \
-  "$(jq -r '.project.test_filter_template' "$CFG")" '--filter={filter}'
+assert_eq "v36→v37, garbage project: test_filter_template is declared null" \
+  "$(jq -r '.project.test_filter_template' "$CFG")" 'null'
 
 # --- migrate_36_to_37: full idempotency — run twice yields same output ---
 NAZGUL_DIR=$(setup_nazgul_dir "tests-root-and-filter-template-idempotent")
@@ -2336,6 +2333,131 @@ FIRST=$(jq -c '.' "$NAZGUL_DIR/config.json")
 CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" >/dev/null 2>/dev/null
 SECOND=$(jq -c '.' "$NAZGUL_DIR/config.json")
 assert_eq "v36→v37 full idempotency (run twice = run once)" "$FIRST" "$SECOND"
+
+# --- v37 already-migrated population: the shipped v37's own write is indistinguishable from an
+# operator's, so it is deliberately preserved, never repaired (rationale in TASK-040's log). ---
+NAZGUL_DIR=$(setup_nazgul_dir "filter-template-already-migrated-v37")
+cat > "$NAZGUL_DIR/config.json" << 'EOF'
+{"schema_version": 37, "project": {"test_command": "pytest", "test_roots": ["tests"], "test_filter_template": "--filter={filter}"}}
+EOF
+BEFORE_V37=$(jq -S -c '.' "$NAZGUL_DIR/config.json")
+OUTPUT=$(CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$NAZGUL_DIR" 2>/dev/null) || true
+assert_eq "already-migrated v37: the shipped v37's own test_filter_template write is left exactly as found" \
+  "$(jq -S -c '.' "$NAZGUL_DIR/config.json")" "$BEFORE_V37"
+assert_eq "already-migrated v37: no repair migration ran, so schema_version does not move" \
+  "$(jq -r '.schema_version' "$NAZGUL_DIR/config.json")" "$EXPECTED_TERMINAL"
+
+# --- The arm this migration must not disable, proven by reaching it: drive the REAL
+# scripts/red-run.sh against a config the REAL migration produced (PR #240 finding #4, ADR-024 D3). ---
+RRARM_SCANNED=0; RRARM_CHECKED=0; RRARM_SKIPPED=0; RRARM_NODEP=0; RRARM_FINDINGS=0
+RED_RUN="$REPO_ROOT/scripts/red-run.sh"
+
+# Scratch git project: BASE carries the harness only, HEAD adds scripts/feature.sh and the test
+# file that needs it, so the pre-change run is genuinely red. $2 is project.test_command's JSON.
+rrarm_project() {
+  local root="$1" cmd_json="$2"
+  mkdir -p "$root/tests" "$root/scripts" "$root/nazgul/tasks"
+  git -C "$root" init -q -b main
+  git -C "$root" config user.email "test@nazgul.dev"
+  git -C "$root" config user.name "Nazgul Test"
+  cp "$REPO_ROOT/tests/run-tests.sh" "$root/tests/run-tests.sh"
+  git -C "$root" add -A
+  git -C "$root" commit -q -m "base"
+  RRARM_BASE=$(git -C "$root" rev-parse HEAD)
+  printf '#!/usr/bin/env bash\necho feature\n' > "$root/scripts/feature.sh"
+  cat > "$root/tests/test-armproof.sh" <<'ARMPROOF'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "=== test-armproof ==="
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/scripts/feature.sh" ]; then
+  echo "  PASS: armproof needs the feature"
+  exit 0
+fi
+echo "  FAIL: armproof needs the feature"
+exit 1
+ARMPROOF
+  git -C "$root" add -A
+  git -C "$root" commit -q -m "the task's work"
+  RRARM_HEAD=$(git -C "$root" rev-parse HEAD)
+  printf '{"schema_version": 36, "project": {"test_command": %s}}\n' "$cmd_json" > "$root/nazgul/config.json"
+  CLAUDE_PLUGIN_ROOT="$REPO_ROOT" "$MIGRATE" "$root/nazgul" >/dev/null 2>&1 || true
+  {
+    printf -- '---\nstatus: IN_PROGRESS\n---\n# TASK-901: scratch task\n\n'
+    printf -- '## Metadata\n- **ID**: TASK-901\n- **Base SHA**: %s\n\n' "$RRARM_BASE"
+    printf -- '## Commits\n%s\n\n' "$RRARM_HEAD"
+    printf -- '## Implementation Log\n- nothing yet\n'
+  } > "$root/nazgul/tasks/TASK-901.md"
+}
+
+# `< /dev/null` because a runner that reads stdin would otherwise consume this harness's.
+rrarm_run() {
+  RRARM_OUT=$(bash "$RED_RUN" TASK-901 --filter=armproof --project-root="$1" < /dev/null 2>&1) \
+    && RRARM_EC=0 || RRARM_EC=$?
+}
+
+rrarm_begin() {
+  RRARM_SCANNED=$((RRARM_SCANNED + 1))
+  if ! command -v jq >/dev/null 2>&1 || ! command -v git >/dev/null 2>&1; then
+    RRARM_SKIPPED=$((RRARM_SKIPPED + 1)); RRARM_NODEP=$((RRARM_NODEP + 1))
+    _skip "red-run arm: $1 (jq or git unavailable — the migration and red-run both need them)"
+    return 1
+  fi
+  RRARM_CHECKED=$((RRARM_CHECKED + 1))
+  RRARM_MARK="$TESTS_FAILED"
+  return 0
+}
+rrarm_end() { [ "$TESTS_FAILED" -eq "$RRARM_MARK" ] || RRARM_FINDINGS=$((RRARM_FINDINGS + 1)); }
+
+if rrarm_begin "a pytest project migrated from v36 REACHES the absent-template refusal"; then
+  RRARM_ROOT="$TMPDIR_BASE/red-run-arm-pytest"
+  mkdir -p "$RRARM_ROOT"
+  rrarm_project "$RRARM_ROOT" '"pytest"'
+  assert_eq "red-run arm: the migration left test_filter_template null for a pytest runner" \
+    "$(jq -r '.project.test_filter_template' "$RRARM_ROOT/nazgul/config.json")" "null"
+  rrarm_run "$RRARM_ROOT"
+  assert_exit_code "red-run arm: refuses rather than guessing a scoping flag" "$RRARM_EC" 1
+  assert_contains "red-run arm: names the key that is not configured" "$RRARM_OUT" \
+    "project.test_filter_template is not configured"
+  assert_contains "red-run arm: names the runner it refused to scope" "$RRARM_OUT" "'pytest'"
+  assert_contains "red-run arm: says the runner is not the convention the shipped default describes" \
+    "$RRARM_OUT" "is not the tests/run-tests.sh convention the shipped default describes"
+  assert_contains "red-run arm: gives the rejected-flag half of the reason" "$RRARM_OUT" \
+    "would exit non-zero and be read as RED confirmed"
+  assert_contains "red-run arm: gives the ignored-flag half of the reason" "$RRARM_OUT" \
+    "would run the whole suite as if it were scoped"
+  assert_contains "red-run arm: carries the remediation, with the runner's own forms as examples" \
+    "$RRARM_OUT" "Set project.test_filter_template to the runner's own scoping form"
+  assert_not_contains "red-run arm: is not the placeholderless-template refusal" "$RRARM_OUT" \
+    "carries no {filter} placeholder"
+  assert_not_contains "red-run arm: never composed a --filter= flag for pytest" "$RRARM_OUT" \
+    "pytest --filter="
+  assert_file_not_contains "red-run arm: writes NO evidence block when it refuses" \
+    "$RRARM_ROOT/nazgul/tasks/TASK-901.md" '## Red-Run Evidence'
+  rrarm_end
+fi
+
+if rrarm_begin "the converse: a tests/run-tests.sh project migrated from v36 still runs scoped"; then
+  RRARM_ROOT="$TMPDIR_BASE/red-run-arm-legacy"
+  mkdir -p "$RRARM_ROOT"
+  rrarm_project "$RRARM_ROOT" '"tests/run-tests.sh"'
+  assert_eq "red-run converse: the migration left test_filter_template null here too" \
+    "$(jq -r '.project.test_filter_template' "$RRARM_ROOT/nazgul/config.json")" "null"
+  rrarm_run "$RRARM_ROOT"
+  assert_exit_code "red-run converse: captures the pre-change red instead of refusing" "$RRARM_EC" 0
+  assert_contains "red-run converse: reports RED confirmed" "$RRARM_OUT" "RED confirmed for TASK-901"
+  assert_not_contains "red-run converse: the absent-template refusal does NOT fire for the convention" \
+    "$RRARM_OUT" "project.test_filter_template is not configured"
+  assert_file_contains "red-run converse: writes the evidence block" \
+    "$RRARM_ROOT/nazgul/tasks/TASK-901.md" '^## Red-Run Evidence'
+  assert_file_contains "red-run converse: red-run re-derived --filter={filter} from the runner, with no config value to read" \
+    "$RRARM_ROOT/nazgul/tasks/TASK-901.md" 'run-tests.sh --filter=armproof'
+  assert_file_contains "red-run converse: provenance is the capturer" \
+    "$RRARM_ROOT/nazgul/tasks/TASK-901.md" 'captured-by: scripts/red-run.sh'
+  rrarm_end
+fi
+
+echo "  red-run-arm: ${RRARM_SCANNED} scanned, ${RRARM_SKIPPED} skipped (missing-dep=${RRARM_NODEP}), ${RRARM_CHECKED} checked, ${RRARM_FINDINGS} findings"
+assert_eq "red-run arm scan: scanned == skipped + checked" "$RRARM_SCANNED" "$((RRARM_SKIPPED + RRARM_CHECKED))"
 
 # --- v37 key-surface scan: a freshly MIGRATED config and templates/config.json must agree on
 # both keys, so an initialised project and a migrated one are indistinguishable (RULES.md §15). ---
@@ -2354,7 +2476,7 @@ for surface in "$NAZGUL_DIR/config.json" "$REPO_ROOT/templates/config.json"; do
     fi
     V37_CHECKED=$((V37_CHECKED + 1))
     expected='["tests"]'
-    [ "$key" = "test_filter_template" ] && expected='"--filter={filter}"'
+    [ "$key" = "test_filter_template" ] && expected='null'
     actual=$(jq -c --arg k "$key" '.project[$k]' "$surface")
     if [ "$actual" = "$expected" ]; then
       _pass "v37 surface scan: $(basename "$(dirname "$surface")")/$(basename "$surface") project.$key is the documented default"
@@ -2427,8 +2549,8 @@ assert_json_field "template: guards.red_run_evidence is true (default-on enforce
   "$TEMPLATE_FILE" ".guards.red_run_evidence" "true"
 assert_eq "template: project.test_roots is the legacy single root (ADR-024, behaviour-identical default)" \
   "$(jq -c '.project.test_roots' "$TEMPLATE_FILE")" '["tests"]'
-assert_json_field "template: project.test_filter_template renders the legacy harness flag" \
-  "$TEMPLATE_FILE" ".project.test_filter_template" "--filter={filter}"
+assert_json_field "template: project.test_filter_template ships null — test_command ships null too, so any flag written here is a guess discovery later invalidates" \
+  "$TEMPLATE_FILE" ".project.test_filter_template" "null"
 assert_json_field "template: execution.stacking.enabled is false (opt-in, FEAT-027)" \
   "$TEMPLATE_FILE" ".execution.stacking.enabled" "false"
 assert_json_field "template: execution.stacking.max_unmerged is 3" \
