@@ -496,6 +496,14 @@ rr_place_absolute_runner() {
   return 0
 }
 
+# The one record every spelling shares for a runner that is genuinely outside the
+# pre-change tree: $1 is what will execute, $2 is how the spelling found it.
+rr_record_external_runner() {
+  local ran="$1" found="$2"
+  RUNNER_NOTE="; runner resolved OUTSIDE the pre-change tree: $found — a shared runner no commit of this repository pins, run as configured"
+  echo "red-run: WARNING — the runner named by $RUNNER_SOURCE resolves outside $PROJECT_ROOT, so the pre-change run executes $ran as it is now; only the tree it runs against is at $BASE_SHA. Recorded in the evidence block as such." >&2
+}
+
 case "$RUNNER_BIN" in
   /*)
     if rr_place_absolute_runner "$RUNNER_BIN"; then
@@ -506,8 +514,7 @@ case "$RUNNER_BIN" in
       [ -x "$RUNNER_BIN" ] || die \
         "the runner named by $RUNNER_SOURCE is not an executable file: $RUNNER_BIN." \
         "This is not a red run that failed — nothing was run at all."
-      RUNNER_NOTE="; runner resolved OUTSIDE the pre-change tree: $RUNNER_BIN — a shared runner no commit of this repository pins, run as configured"
-      echo "red-run: WARNING — the runner named by $RUNNER_SOURCE resolves outside $PROJECT_ROOT, so the pre-change run executes $RUNNER_BIN as it is now; only the tree it runs against is at $BASE_SHA. Recorded in the evidence block as such." >&2
+      rr_record_external_runner "$RUNNER_BIN" "$RUNNER_BIN"
     fi
     ;;
   */*)
@@ -527,7 +534,12 @@ case "$RUNNER_BIN" in
           RUNNER_ARGV[0]="./$RUNNER_REL"
           RUNNER_NOTE="; PATH resolved '$RUNNER_BIN' inside this repository — normalised into the pre-change tree as ./$RUNNER_REL"
           rr_bind_pre_change_runner "$RUNNER_REL"
+        else
+          rr_record_external_runner "$RUNNER_ABS" "PATH resolved '$RUNNER_BIN' to $RUNNER_ABS"
         fi
+        ;;
+      *)
+        rr_record_external_runner "$RUNNER_ABS" "'$RUNNER_BIN' resolved to the shell builtin '$RUNNER_ABS', not to any file"
         ;;
     esac
     ;;
