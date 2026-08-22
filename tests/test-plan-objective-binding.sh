@@ -149,6 +149,16 @@ assert_file_contains "the placeholder is gone from the plan on disk" \
 assert_file_not_contains "and no placeholder line survives beside it" \
   "$P1/nazgul/plan.md" "feat_id: <FEAT-NNN>"
 
+# The stamp is a terminal action of the closed ACTIONS set (stamped/already-bound/
+# refused), so it must reach the bus the same way every other producer in this diff does.
+assert_file_exists "the stamp reaches nazgul/logs/events.jsonl, not just the terminal" \
+  "$P1/nazgul/logs/events.jsonl"
+STAMP_EVT=$(jq -c 'select(.event=="plan_objective_stamped")' "$P1/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_contains "the bus event names the action taken" "$STAMP_EVT" '"action":"stamped"'
+assert_contains "and the objective it bound the plan to" "$STAMP_EVT" '"feat_id":"FEAT-030"'
+assert_contains "and the plan path it wrote" "$STAMP_EVT" '"plan":"'
+assert_contains "and the roster size the write claims" "$STAMP_EVT" '"roster_tasks":1'
+
 TRANS_OUT=$(PATH="$P1/fakebin:$PATH" CLAUDE_PROJECT_DIR="$P1" \
   bash "$REPO_ROOT/scripts/task-transition.sh" transition TASK-001 IMPLEMENTED DONE 2>&1); TRANS_EC=$?
 assert_exit_code "a template-born project reaches DONE through the merge-evidence route" "$TRANS_EC" 0
@@ -172,6 +182,15 @@ FOREIGN=$(bash "$STAMPER" --project-root "$P2" 2>&1); FOREIGN_EC=$?
 assert_exit_code "the producer REFUSES a plan bound to a different real objective" "$FOREIGN_EC" 1
 assert_contains "and names both ids rather than silently picking one" "$FOREIGN" "FEAT-030"
 assert_eq "a refused stamp leaves the plan byte-identical" "$(cat "$P2/nazgul/plan.md")" "$BEFORE"
+
+# A refusal is a terminal action too — a producer whose success is logged and whose
+# refusals are silent is the same defect one level up.
+assert_file_exists "a refusal also reaches the bus, not only the happy path" \
+  "$P2/nazgul/logs/events.jsonl"
+REFUSE_EVT=$(jq -c 'select(.event=="plan_objective_stamped")' "$P2/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+assert_contains "the bus event reports the refusal" "$REFUSE_EVT" '"action":"refused"'
+assert_contains "naming the reason a human would otherwise only see on stderr" \
+  "$REFUSE_EVT" '"reason":'
 
 # Case 5 | an unplanned plan has no roster to claim. The template documents its format with
 # COMMENTED examples, so this used to yield a one-id roster: a task nobody ever wrote.
