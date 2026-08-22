@@ -24,6 +24,41 @@ source "$SCRIPT_DIR/lib/git-utils.sh"
 source "$SCRIPT_DIR/lib/emit-event.sh"
 source "$SCRIPT_DIR/lib/parallel-batch.sh"
 
+# lean-comments: allow-run — names the seam, why it is THIS one, and how long the memo lives.
+# The host state for a PR is a pure function of (project_root, pr), and an objective closed by
+# /nazgul:complete gives every one of its manifests the SAME pr — so this pass asked one
+# question N times. Memoised at _ttg_merge_host_state and NOT at merge_provider_pr_state
+# because the latter is called inside a command substitution, where a memo dies with the
+# subshell that wrote it. Everything downstream still runs per task, so verdicts stay
+# independent; the memo lives for exactly one process, which is exactly one iteration.
+if declare -F _ttg_merge_host_state >/dev/null 2>&1; then
+  _NZ_HOST_STATE_KEYS=""
+  _nz_host_state_src=$(declare -f _ttg_merge_host_state)
+  eval "_nz_host_state_uncached${_nz_host_state_src#_ttg_merge_host_state}"
+  unset _nz_host_state_src
+  _ttg_merge_host_state() {
+    local slot snap v rc=0
+    slot="_NZ_HOST_STATE_$(printf '%s_%s' "${1:-}" "${2:-}" | tr -c 'A-Za-z0-9' '_')"
+    case "$_NZ_HOST_STATE_KEYS" in
+      *"|${slot}|"*)
+        eval "snap=\${${slot}_SNAP}; rc=\${${slot}_RC}"
+        eval "$snap"
+        return "$rc"
+        ;;
+    esac
+    _nz_host_state_uncached "$@" || rc=$?
+    # Snapshot by PREFIX, not by an enumerated list, so a new TTG_MERGE_HOST_* output
+    # is carried across a cache hit instead of silently reading as the previous task's.
+    snap=""
+    for v in ${!TTG_MERGE_HOST_@}; do
+      snap="${snap}${v}=$(printf '%q' "${!v}")"$'\n'
+    done
+    eval "${slot}_SNAP=\$snap; ${slot}_RC=\$rc"
+    _NZ_HOST_STATE_KEYS="${_NZ_HOST_STATE_KEYS}|${slot}|"
+    return "$rc"
+  }
+fi
+
 # If Nazgul not initialized, allow stop
 if [ ! -f "$CONFIG" ]; then
   exit 0
@@ -346,6 +381,9 @@ count_tasks_and_find_active "$NAZGUL_DIR/tasks"
 # violation for the same task: escalate to BLOCKED with remediation (no livelock).
 # In YOLO mode, APPROVED tasks have been locally reviewed; DONE only happens via PR merge
 REQUIRE_PROVENANCE=$(jq -r 'if .review_gate.require_provenance == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+# The REVOKE-side deferral's ceiling, deliberately NOT a config key: the ADMIT gate ships with
+# no kill switch, so an operator-settable ceiling on its mirror would be that switch renamed.
+MERGE_DEFER_MAX=3
 REVIEW_VIOLATIONS=""
 if [ "$YOLO_MODE" = "true" ] && [ "$TASK_PR_MODE" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
   # Skipped by design here (YOLO+PR reaches DONE by merge), but a skipped enforcement
@@ -370,35 +408,73 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
     # counter, so a genuinely-first provenance violation right after an
     # evidence violation gets its own grace reset instead of escalating
     # straight to BLOCKED.
-    EVID_RESET_COUNT=$(jq -r --arg t "$TASK_ID" '.safety._review_reset_counts[$t] // 0' "$CONFIG" 2>/dev/null || echo "0")
-    case "$EVID_RESET_COUNT" in (*[!0-9]*|'') EVID_RESET_COUNT=0 ;; esac
-    PROV_RESET_COUNT=$(jq -r --arg t "$TASK_ID" '.safety._provenance_reset_counts[$t] // 0' "$CONFIG" 2>/dev/null || echo "0")
-    case "$PROV_RESET_COUNT" in (*[!0-9]*|'') PROV_RESET_COUNT=0 ;; esac
+    # _merge_undecided_counts is a third INDEPENDENT key, per the FEAT-016 lesson: consecutive
+    # merge-evidence deferrals are not review strikes, and one counter would conflate them.
+    # All three in ONE jq, since this loop runs per task per iteration and used to spawn two.
+    RESET_COUNTS=$(jq -r --arg t "$TASK_ID" '[(.safety._review_reset_counts[$t] // 0), (.safety._provenance_reset_counts[$t] // 0), (.safety._merge_undecided_counts[$t] // 0)] | @tsv' "$CONFIG" 2>/dev/null) || RESET_COUNTS=""
+    IFS=$'\t' read -r EVID_RESET_COUNT PROV_RESET_COUNT MERGE_DEFER_COUNT <<< "$RESET_COUNTS" || true
+    case "${EVID_RESET_COUNT:-}" in (*[!0-9]*|'') EVID_RESET_COUNT=0 ;; esac
+    case "${PROV_RESET_COUNT:-}" in (*[!0-9]*|'') PROV_RESET_COUNT=0 ;; esac
+    case "${MERGE_DEFER_COUNT:-}" in (*[!0-9]*|'') MERGE_DEFER_COUNT=0 ;; esac
 
     if [ "$STATUS" = "DONE" ]; then
       # ADR-023: DONE has TWO admitting routes and this pass knew only the review one.
-      # A RECORDED closure is the pre-filter, so a review-closed task pays for no host call.
       MERGE_ADMITTED=false
       MERGE_UNDECIDED=false
       MERGE_UNDECIDED_HOST=""
-      # The heading alone used to be the filter, and templates/task-manifest.md ships that
-      # heading with its whole block commented out — so every template-born manifest matched.
-      MERGE_RAW=$(awk '/^## Merge Evidence/{f=1;next} /^## /{f=0} f' "$task_file" 2>/dev/null || true)
-      # The verifier's OWN stripper classifies, so this cannot drift from it: it skips exactly
-      # `absent` and `commented_out`, the two answers it would have refused with anyway.
-      if [ "$(_ttg_section_emptiness "$MERGE_RAW" "$(printf '%s\n' "$MERGE_RAW" | _ttg_strip_html_comments)")" = "content" ]; then
-        if ttg_verify_merge_evidence "$(cat "$task_file")" "$PROJECT_ROOT" "$TASK_ID"; then
-          MERGE_ADMITTED=true
-        elif [ "$TTG_MERGE_REASON" = "unverifiable" ]; then
-          # Captured inside the branch that made the call: both globals outlive one
-          # loop pass, so a heading-less task would inherit the previous task's verdict.
-          MERGE_UNDECIDED=true
-          MERGE_UNDECIDED_HOST="$TTG_MERGE_HOST_RESULT"
-        fi
-      fi
+      MERGE_DEFERRED=false
       EVIDENCE_PROBLEMS=$(validate_review_evidence "$NAZGUL_DIR" "$TASK_ID") || true
       MISSING_LIST=""
       [ -z "$EVIDENCE_PROBLEMS" ] || MISSING_LIST=$(echo "$EVIDENCE_PROBLEMS" | awk 'NF>1 {out = out sep $2; sep = ", "} NF==1 {out = out sep $1; sep = ", "} END {print out}')
+      # Provenance is hoisted out of the else-arm below so BOTH review-route questions are
+      # answered before the host is asked anything; it is read there, never recomputed.
+      PROVENANCE_PROBLEMS=""
+      if [ -z "$EVIDENCE_PROBLEMS" ] && [ "$REQUIRE_PROVENANCE" = "true" ]; then
+        PROVENANCE_PROBLEMS=$(validate_review_provenance "$NAZGUL_DIR" "$TASK_ID") || true
+      fi
+      # lean-comments: allow-run — this IS the pre-filter the old comment only claimed to be.
+      # The review route is two local file reads; the merge route is a process spawn and a
+      # network round trip. Asking the cheap pair first makes "a review-closed task pays for no
+      # host call" true of the closure ROUTE, where the old filter tested only whether a section
+      # was present — and /nazgul:complete writes that section into EVERY task it closes.
+      if [ -n "$EVIDENCE_PROBLEMS" ] || [ -n "$PROVENANCE_PROBLEMS" ]; then
+        # The heading alone used to be the filter, and templates/task-manifest.md ships that
+        # heading with its whole block commented out — so every template-born manifest matched.
+        MERGE_RAW=$(awk '/^## Merge Evidence/{f=1;next} /^## /{f=0} f' "$task_file" 2>/dev/null || true)
+        # The verifier's OWN stripper classifies, so this cannot drift from it: it skips exactly
+        # `absent` and `commented_out`, the two answers it would have refused with anyway.
+        if [ "$(_ttg_section_emptiness "$MERGE_RAW" "$(printf '%s\n' "$MERGE_RAW" | _ttg_strip_html_comments)")" = "content" ]; then
+          if ttg_verify_merge_evidence "$(cat "$task_file")" "$PROJECT_ROOT" "$TASK_ID"; then
+            MERGE_ADMITTED=true
+          elif [ "$TTG_MERGE_REASON" = "unverifiable" ]; then
+            # Captured inside the branch that made the call: both globals outlive one
+            # loop pass, so a heading-less task would inherit the previous task's verdict.
+            MERGE_UNDECIDED=true
+            MERGE_UNDECIDED_HOST="$TTG_MERGE_HOST_RESULT"
+          fi
+        fi
+      fi
+      # lean-comments: allow-run — the bound, and the asymmetry it is measured against.
+      # TASK-022's arm is right that "could not look" may not revoke a closure, but its trigger
+      # is operator-writable manifest text: a `pr` naming nothing answers api_failure forever, so
+      # an unbounded defer is a kill switch on the REVOKE side of an edge whose ADMIT side
+      # deliberately has none. Past the ceiling the deferral ENDS and says so; it never revokes
+      # by itself — the ordinary two-strike ladder below does, from its own first strike.
+      if [ "$MERGE_UNDECIDED" = "true" ] && [ -n "$EVIDENCE_PROBLEMS" ] \
+         && [ "$MERGE_DEFER_COUNT" -ge "$MERGE_DEFER_MAX" ]; then
+        echo "NAZGUL REVIEW GATE: ${TASK_ID} merge-evidence deferral EXHAUSTED — ${MERGE_DEFER_COUNT} consecutive unverifiable iteration(s) reached the limit of ${MERGE_DEFER_MAX} [host-state: ${MERGE_UNDECIDED_HOST}]. A host that cannot be asked this many times running is not a transient failure, and this deferral suppresses the review-evidence ladder on operator-writable input — the ordinary ladder now runs on ${MISSING_LIST}" >&2
+        emit_event "stop_gate" \
+          reason "merge_evidence_undecided" \
+          gate "review_gate_reactive" \
+          task_id "$TASK_ID" \
+          merge_reason "unverifiable" \
+          host_state "$MERGE_UNDECIDED_HOST" \
+          deferred_review_problems "$MISSING_LIST" \
+          deferrals:n "$MERGE_DEFER_COUNT" \
+          limit:n "$MERGE_DEFER_MAX" \
+          action "deferral_exhausted"
+        MERGE_UNDECIDED=false
+      fi
       if [ "$MERGE_ADMITTED" = "true" ]; then
         echo "NAZGUL REVIEW GATE: ${TASK_ID} DONE admitted via the merge-evidence route (${TTG_MERGE_ROUTE}) — no review board was consulted for this edge" >&2
         if [ "$EVID_RESET_COUNT" != "0" ] || [ "$PROV_RESET_COUNT" != "0" ]; then
@@ -411,7 +487,10 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
         # host ANSWERED for not_merged/contradicted/not_this_objective/
         # not_this_objectives_task, and absent/commented_out/truncated/malformed are
         # defects in the manifest itself — all eight are decisions and still fall through.
-        echo "NAZGUL REVIEW GATE: ${TASK_ID} DONE left in place — its merge evidence could not be verified this iteration [reason: unverifiable, host-state: ${MERGE_UNDECIDED_HOST}]; review evidence is separately incomplete (${MISSING_LIST}). This is NOT a review-evidence violation and NOT a host answer of 'not merged', so no status changed and no strike was recorded" >&2
+        MERGE_DEFERRED=true
+        MERGE_DEFER_COUNT=$((MERGE_DEFER_COUNT + 1))
+        jq --arg t "$TASK_ID" --argjson n "$MERGE_DEFER_COUNT" '.safety._merge_undecided_counts[$t] = $n' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+        echo "NAZGUL REVIEW GATE: ${TASK_ID} DONE left in place — its merge evidence could not be verified this iteration [reason: unverifiable, host-state: ${MERGE_UNDECIDED_HOST}]; review evidence is separately incomplete (${MISSING_LIST}). This is NOT a review-evidence violation and NOT a host answer of 'not merged', so no status changed and no strike was recorded (deferral ${MERGE_DEFER_COUNT} of ${MERGE_DEFER_MAX})" >&2
         emit_event "stop_gate" \
           reason "merge_evidence_undecided" \
           gate "review_gate_reactive" \
@@ -419,6 +498,8 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
           merge_reason "unverifiable" \
           host_state "$MERGE_UNDECIDED_HOST" \
           deferred_review_problems "$MISSING_LIST" \
+          deferrals:n "$MERGE_DEFER_COUNT" \
+          limit:n "$MERGE_DEFER_MAX" \
           action "deferred"
       elif [ -n "$EVIDENCE_PROBLEMS" ]; then
         if [ "$EVID_RESET_COUNT" -ge 1 ]; then
@@ -446,12 +527,7 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
         fi
       else
         # Evidence passed — gate on tamper/staleness provenance next (own bounded
-        # reset→IMPLEMENTED→BLOCKED counter; require_provenance=false or a valid/legacy
-        # manifest is a no-op).
-        PROVENANCE_PROBLEMS=""
-        if [ "$REQUIRE_PROVENANCE" = "true" ]; then
-          PROVENANCE_PROBLEMS=$(validate_review_provenance "$NAZGUL_DIR" "$TASK_ID") || true
-        fi
+        # reset→IMPLEMENTED→BLOCKED counter, computed above so the host could be skipped).
         if [ -n "$PROVENANCE_PROBLEMS" ]; then
           PROVENANCE_LIST=$(echo "$PROVENANCE_PROBLEMS" | tr '\n' ',' | sed 's/,$//; s/,/, /g')
           if [ "$PROV_RESET_COUNT" -ge 1 ]; then
@@ -485,12 +561,17 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
           jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | del(.safety._provenance_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
         fi
       fi
-    elif { [ "$EVID_RESET_COUNT" != "0" ] || [ "$PROV_RESET_COUNT" != "0" ]; } && [ "$STATUS" != "IMPLEMENTED" ] && [ "$STATUS" != "IN_REVIEW" ]; then
-      # Task left DONE for a non-repair state — clear both stale counters.
+      # The ceiling counts CONSECUTIVE deferrals, so any DONE iteration that did not defer ends
+      # the run — including the exhausting one, whose fall-through the ladder above just handled.
+      if [ "$MERGE_DEFERRED" != "true" ] && [ "$MERGE_DEFER_COUNT" != "0" ]; then
+        jq --arg t "$TASK_ID" 'del(.safety._merge_undecided_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+      fi
+    elif { [ "$EVID_RESET_COUNT" != "0" ] || [ "$PROV_RESET_COUNT" != "0" ] || [ "$MERGE_DEFER_COUNT" != "0" ]; } && [ "$STATUS" != "IMPLEMENTED" ] && [ "$STATUS" != "IN_REVIEW" ]; then
+      # Task left DONE for a non-repair state — clear the stale counters.
       # IMPLEMENTED/IN_REVIEW are the repair path the reset itself creates: the
       # counter must survive them, or a later bad DONE restarts at zero and
       # never escalates. Valid evidence (branch above) still clears it.
-      jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | del(.safety._provenance_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+      jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | del(.safety._provenance_reset_counts[$t]) | del(.safety._merge_undecided_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
     fi
   done
   # Emitted here (in addition to CONTINUE_MSG) so violations are visible even on
@@ -569,6 +650,8 @@ AGGREGATE_REVIEW_READY="false"
 AGGREGATE_REVIEW_SCOPE=""
 AGGREGATE_REVIEW_TASKS=""
 AGGREGATE_CARVEOUT_NOTE=""
+AGGREGATE_BLOCKED_NOTE=""
+AGGREGATE_BLOCKED_UNIT=""
 # Set only where the aggregate dispatch is decided, and cleared by anything that withdraws
 # it — the readiness scan below runs every iteration, dispatch or not.
 AGGREGATE_BOARD_DISPATCHED="false"
@@ -594,12 +677,18 @@ if [ "$GRANULARITY" != "task" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
     break
   done
 
+  # lean-comments: allow-run — the predicate and the two things that are NOT the same.
   # Walk the review unit: group mode takes only ACTIVE_GROUP's tasks, feature mode every
-  # non-DONE one. Ready when >=1 task and all are IMPLEMENTED; BLOCKED still vetoes.
+  # non-DONE one. Ready when >=1 task and all are IMPLEMENTED. CANCELLED is carried OUT of the
+  # unit (UNIT_EXCLUDED); BLOCKED is counted but stays IN, so it still vetoes — the count exists
+  # only so the veto can be named, because a deadlock under a "keep implementing" marker is an
+  # unfollowable instruction (RULES.md §3.15: "needs human help" is not "will never ship").
   UNIT_TOTAL=0
   UNIT_IMPLEMENTED=0
   UNIT_EXCLUDED=0
   UNIT_EXCLUDED_TASKS=""
+  UNIT_BLOCKED=0
+  UNIT_BLOCKED_TASKS=""
   for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     STATUS=$(get_task_status "$task_file")
@@ -622,10 +711,17 @@ if [ "$GRANULARITY" != "task" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
         UNIT_IMPLEMENTED=$((UNIT_IMPLEMENTED + 1))
         AGGREGATE_REVIEW_TASKS="${AGGREGATE_REVIEW_TASKS}$(basename "$task_file" .md) "
         ;;
+      BLOCKED)
+        # Counted only. It already incremented UNIT_TOTAL above and never increments
+        # UNIT_IMPLEMENTED, so the veto is unchanged — this records WHICH task is holding.
+        UNIT_BLOCKED=$((UNIT_BLOCKED + 1))
+        UNIT_BLOCKED_TASKS="${UNIT_BLOCKED_TASKS}$(basename "$task_file" .md) "
+        ;;
     esac
   done
   AGGREGATE_REVIEW_TASKS=$(printf '%s' "$AGGREGATE_REVIEW_TASKS" | sed 's/[[:space:]]*$//')
   UNIT_EXCLUDED_TASKS=$(printf '%s' "$UNIT_EXCLUDED_TASKS" | sed 's/[[:space:]]*$//')
+  UNIT_BLOCKED_TASKS=$(printf '%s' "$UNIT_BLOCKED_TASKS" | sed 's/[[:space:]]*$//')
   UNIT_MEMBERS=$((UNIT_TOTAL + UNIT_EXCLUDED))
   if [ "$GRANULARITY" = "group" ]; then
     UNIT_SCOPE_LABEL="group ${ACTIVE_GROUP}"
@@ -636,6 +732,12 @@ if [ "$GRANULARITY" != "task" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
   # at the dispatch site, since this scan reaches here on iterations that dispatch nothing.
   if [ "$UNIT_EXCLUDED" -gt 0 ]; then
     AGGREGATE_CARVEOUT_NOTE=" CARVE-OUT: ${UNIT_IMPLEMENTED} of ${UNIT_MEMBERS} unit tasks reviewed — ${UNIT_EXCLUDED} carried out CANCELLED (${UNIT_EXCLUDED_TASKS}); a cancelled task is removed from the unit, never approved by it."
+  fi
+  # Same computed-here/emitted-there split, for the opposite disposition: this one is not a
+  # carve-out, it is the record of a veto that would otherwise be indistinguishable from work.
+  if [ "$UNIT_BLOCKED" -gt 0 ]; then
+    AGGREGATE_BLOCKED_UNIT="$UNIT_SCOPE_LABEL"
+    AGGREGATE_BLOCKED_NOTE=" HELD: ${UNIT_BLOCKED} of ${UNIT_MEMBERS} unit task(s) BLOCKED (${UNIT_BLOCKED_TASKS}) — this unit CANNOT reach review readiness until each is unblocked or cancelled. BLOCKED is NOT carried out of the unit, so implementing the rest will not release the board."
   fi
 
   # The -gt 0 floor subsumes the old UNIT_TOTAL -gt 0: an all-cancelled unit has
@@ -649,6 +751,10 @@ if [ "$GRANULARITY" != "task" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
     AWAITING_AGGREGATE_REVIEW="true"
   elif [ "$UNIT_EXCLUDED" -gt 0 ] && [ "$UNIT_TOTAL" -eq 0 ]; then
     echo "Nazgul: review unit [${UNIT_SCOPE_LABEL}] has nothing to review — ${UNIT_EXCLUDED} task(s) carried out CANCELLED (${UNIT_EXCLUDED_TASKS}), 0 implemented; no aggregate board dispatched." >&2
+  elif [ "$UNIT_BLOCKED" -gt 0 ]; then
+    # Nothing parked and nothing cancelled: the CONTINUE_MSG marker below may never print on
+    # this path, so the held unit says so here too rather than ending as a silent no-op.
+    echo "Nazgul: review unit [${UNIT_SCOPE_LABEL}] cannot reach review readiness — ${UNIT_BLOCKED} of ${UNIT_MEMBERS} task(s) BLOCKED (${UNIT_BLOCKED_TASKS}), 0 implemented; unblock or cancel them, or no aggregate board will ever fire." >&2
   fi
 
   # If the active task is IMPLEMENTED (or a stale IN_REVIEW left over from a
@@ -871,7 +977,9 @@ if [ -f "$PLAN" ]; then
   if [ "$GRANULARITY" != "task" ] && [ "$AGGREGATE_REVIEW_READY" = "true" ]; then
     NEXT_ACTION_TEXT="AGGREGATE REVIEW (${GRANULARITY}) ready for [${AGGREGATE_REVIEW_SCOPE}] — spawn review-gate with <main_worktree_path> = ${PROJECT_ROOT} over the combined diff for tasks: ${AGGREGATE_REVIEW_TASKS}${AGGREGATE_CARVEOUT_NOTE}"
   elif [ "$GRANULARITY" != "task" ] && [ "$AWAITING_AGGREGATE_REVIEW" = "true" ]; then
-    NEXT_ACTION_TEXT="AWAITING AGGREGATE REVIEW (${GRANULARITY}) — parked IMPLEMENTED tasks (${AGGREGATE_REVIEW_TASKS}); keep implementing the rest of the review unit, do NOT review/re-implement parked tasks"
+    NEXT_ACTION_TEXT="AWAITING AGGREGATE REVIEW (${GRANULARITY}) — parked IMPLEMENTED tasks (${AGGREGATE_REVIEW_TASKS}); keep implementing the rest of the review unit, do NOT review/re-implement parked tasks${AGGREGATE_BLOCKED_NOTE}"
+  elif [ "$GRANULARITY" != "task" ] && [ -n "$AGGREGATE_BLOCKED_NOTE" ]; then
+    NEXT_ACTION_TEXT="AGGREGATE REVIEW HELD (${GRANULARITY}) — review unit [${AGGREGATE_BLOCKED_UNIT}] has no task awaiting review and cannot reach readiness.${AGGREGATE_BLOCKED_NOTE}"
   fi
 
   # Update Recovery Pointer fields using awk (safe with arbitrary text in GIT_MSG)
@@ -1532,9 +1640,11 @@ fi
 # or re-implement parked tasks.
 AGGREGATE_MARKER=""
 if [ "$GRANULARITY" != "task" ] && [ "$AWAITING_AGGREGATE_REVIEW" = "true" ] && [ "$AGGREGATE_REVIEW_READY" != "true" ]; then
-  AGGREGATE_MARKER="AWAITING AGGREGATE REVIEW (${GRANULARITY}): tasks already IMPLEMENTED and PARKED — do NOT re-review or re-implement them: ${AGGREGATE_REVIEW_TASKS}. Keep implementing the rest of the review unit; the review board fires once the whole ${GRANULARITY} is IMPLEMENTED.${AGGREGATE_CARVEOUT_NOTE}"
+  AGGREGATE_MARKER="AWAITING AGGREGATE REVIEW (${GRANULARITY}): tasks already IMPLEMENTED and PARKED — do NOT re-review or re-implement them: ${AGGREGATE_REVIEW_TASKS}. Keep implementing the rest of the review unit; the review board fires once the whole ${GRANULARITY} is IMPLEMENTED.${AGGREGATE_CARVEOUT_NOTE}${AGGREGATE_BLOCKED_NOTE}"
 elif [ "$GRANULARITY" != "task" ] && [ "$AGGREGATE_REVIEW_READY" = "true" ]; then
   AGGREGATE_MARKER="AGGREGATE REVIEW READY (${GRANULARITY}): review unit [${AGGREGATE_REVIEW_SCOPE}] fully IMPLEMENTED — tasks: ${AGGREGATE_REVIEW_TASKS}.${AGGREGATE_CARVEOUT_NOTE}"
+elif [ "$GRANULARITY" != "task" ] && [ -n "$AGGREGATE_BLOCKED_NOTE" ]; then
+  AGGREGATE_MARKER="AGGREGATE REVIEW HELD (${GRANULARITY}): review unit [${AGGREGATE_BLOCKED_UNIT}] has NO task awaiting review — there is nothing to keep implementing that will release it.${AGGREGATE_BLOCKED_NOTE}"
 fi
 
 # --- MF-006: mechanical HITL pending-approval gate ---------------------------
@@ -1565,6 +1675,17 @@ if [ "$AGGREGATE_BOARD_DISPATCHED" = "true" ] && [ -n "$AGGREGATE_CARVEOUT_NOTE"
   emit_event "aggregate_board_cancelled_carveout" \
     unit "$UNIT_SCOPE_LABEL" \
     cancelled_tasks "$UNIT_EXCLUDED_TASKS" \
+    implemented:n "$UNIT_IMPLEMENTED" \
+    total:n "$UNIT_MEMBERS"
+fi
+
+# The sibling record, bound to the SCAN rather than a dispatch: a held unit dispatches nothing
+# by construction, so gating this on a dispatch would make the deadlock permanently unrecorded.
+if [ -n "$AGGREGATE_BLOCKED_NOTE" ]; then
+  emit_event "aggregate_unit_blocked_hold" \
+    unit "$AGGREGATE_BLOCKED_UNIT" \
+    blocked_tasks "$UNIT_BLOCKED_TASKS" \
+    blocked:n "$UNIT_BLOCKED" \
     implemented:n "$UNIT_IMPLEMENTED" \
     total:n "$UNIT_MEMBERS"
 fi
