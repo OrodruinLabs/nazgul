@@ -68,6 +68,10 @@ if [ -n "$STOP_PAYLOAD" ]; then
           ($b | map(.status // "null") | unique | join(",")) ]
       | @tsv' 2>/dev/null || true)"
     IFS=$'\t' read -r BG_ENTRIES BG_SUBAGENTS BG_LIVE BG_TYPES BG_STATUSES <<< "$BG_TSV" || true
+    # A count that did not parse is "could not tell", not "found none" — RULES §15 / ADR-009.
+    # Valid JSON whose background_tasks is not an array lands on `not_json` too — the set stays closed.
+    case "${BG_LIVE:-}"      in ''|*[!0-9]*) BG_SEEN="unknown" BG_WHY="not_json" ;; esac
+    case "${BG_SUBAGENTS:-}" in ''|*[!0-9]*) BG_SEEN="unknown" BG_WHY="not_json" ;; esac
   fi
 fi
 
