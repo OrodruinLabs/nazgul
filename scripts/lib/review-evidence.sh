@@ -28,6 +28,53 @@ _is_review_meta_file() {
   esac
 }
 
+# lean-comments: allow-run — this IS the derivation boundary the task was opened to state.
+# agents/review-gate.md is the source of truth for what the orchestrator writes into a unit
+# dir, and two of its classes are .md yet are NOT reviewer verdicts: the four names above,
+# and adversarial-<finding-ref>.md (required at :602, already skipped as a non-verdict by
+# the spec's own self-check at :355). adversarial-*.md is NOT folded into
+# _is_review_meta_file because review-gate.md documents that function's contract as exactly
+# those four names and calls it by name; this task may not edit that file, so the two copies
+# are bound by test instead — tests/test-review-evidence.sh re-extracts every
+# reviews/[UNIT-ID]/*.md write target and every self-check case arm out of review-gate.md and
+# fails if this predicate does not recognise one. Non-.md artifacts (diff.patch,
+# .dispatch.json) never reach here: the caller globs *.md.
+# Usage: _re_is_orchestrator_artifact <basename>
+_re_is_orchestrator_artifact() {
+  _is_review_meta_file "$1" && return 0
+  case "$1" in
+    adversarial-*.md) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Trailing '-'-delimited segment of each configured reviewer name, lowercased: the roster's
+# own statement of what a seat name looks like. Usage: _re_seat_suffixes <reviewers>
+_re_seat_suffixes() {
+  printf '%s\n' "$1" | sed -e 's/.*-//' -e '/^$/d' | tr '[:upper:]' '[:lower:]' | sort -u
+}
+
+# 0 iff <stem> ends in a segment some configured seat also ends in — BOARD-2-OUTCOME does not,
+# extra-reviewer does. Usage: _re_is_seat_shaped <stem> <seat-suffixes>
+_re_is_seat_shaped() {
+  local last
+  last=$(printf '%s' "$1" | sed 's/.*-//' | tr '[:upper:]' '[:lower:]')
+  [ -n "$last" ] || return 1
+  grep -qxF "$last" <<< "$2"
+}
+
+# 0 iff <stem> is a qualifier-prefixed archive (board7-code-reviewer) of a seat this run
+# already reads. Usage: _re_is_superseded_copy <stem> <reviewers> <review_dir>
+_re_is_superseded_copy() {
+  local rest="$1"
+  while [ "${rest#*-}" != "$rest" ]; do
+    rest="${rest#*-}"
+    grep -qxF "$rest" <<< "$2" && return 0
+    [ -f "$3/$rest.md" ] && return 0
+  done
+  return 1
+}
+
 # A file counts as APPROVED via the canonical structured verdict block first:
 # a leading YAML frontmatter `verdict: APPROVE` reads deterministically as
 # approved; `verdict: CHANGES_REQUESTED` as not approved; a malformed/off-enum
@@ -557,6 +604,9 @@ resolve_review_unit() {
 #   NO_REVIEWERS_CONFIGURED   — config.json agents.reviewers is empty
 #   MISSING <reviewer>        — no reviews/<unit>/<reviewer>.md
 #   UNAPPROVED <reviewer>     — file exists but lacks an APPROVED verdict
+#   NOTHING_CHECKED           — the unit dir held .md files and the classifier read
+#                             none of them as a verdict (K>0 floor, RULES.md §15)
+#   COVERAGE_ACCOUNTING_DEFECT — the verdict-file pass's N == M + K identity broke
 #   RECEIPT_MISMATCH <reviewer> — review_gate.receipt_hash_enforcement is
 #                             `true` (opt-in; default `false` as of TASK-009
 #                             round-3, pending a follow-up hardening pass on
@@ -660,23 +710,68 @@ validate_review_evidence() {
     fi
   done <<< "$configured_reviewers"
 
-  # Any extra (non-roster, non-meta) reviewer file must also be APPROVED
-  local rf base name
+  # lean-comments: allow-run — the widening this loop carries is the one that could make the
+  # gate pass by ignoring reviewers, so the rule it applies is stated where it is applied.
+  # A .md here is a reviewer VERDICT only if it names a seat, and the seat vocabulary comes
+  # from the configured roster itself (_re_seat_suffixes), never from a list of filenames:
+  # a roster of *-reviewer seats makes extra-reviewer.md a verdict and BOARD-2-OUTCOME.md not
+  # one. This loop is a BACKSTOP for a seat dropped from the roster to escape its own
+  # CHANGES_REQUESTED — every configured seat was already read unconditionally above — so an
+  # archived copy of a seat that pass already read (board7-code-reviewer.md) is not counted a
+  # second time; the seat's own file is the authoritative verdict.
+  local rf base name seat_suffixes skipped
+  local scanned=0 checked=0 skip_artifact=0 skip_nonseat=0 skip_superseded=0 pass_findings=0
+  seat_suffixes=$(_re_seat_suffixes "$configured_reviewers")
   for rf in "$review_dir"/*.md; do
     [ -f "$rf" ] || continue
+    scanned=$((scanned + 1))
     base=$(basename "$rf")
-    if _is_review_meta_file "$base"; then
+    name="${base%.md}"
+    if grep -qxF "$name" <<< "$configured_reviewers"; then
+      checked=$((checked + 1))
       continue
     fi
-    name="${base%.md}"
-    if ! grep -qxF "$name" <<< "$configured_reviewers"; then
-      if ! _has_approved_verdict "$rf"; then
-        _re_is_authorized_unverified "$nazgul_dir" "$review_dir" "$name" && continue
-        echo "UNAPPROVED $name"
-        problems=$((problems + 1))
-      fi
+    if _re_is_orchestrator_artifact "$base"; then
+      skip_artifact=$((skip_artifact + 1))
+      continue
+    fi
+    if ! _re_is_seat_shaped "$name" "$seat_suffixes"; then
+      skip_nonseat=$((skip_nonseat + 1))
+      continue
+    fi
+    if _re_is_superseded_copy "$name" "$configured_reviewers" "$review_dir"; then
+      skip_superseded=$((skip_superseded + 1))
+      continue
+    fi
+    checked=$((checked + 1))
+    if ! _has_approved_verdict "$rf"; then
+      _re_is_authorized_unverified "$nazgul_dir" "$review_dir" "$name" && continue
+      echo "UNAPPROVED $name"
+      problems=$((problems + 1))
+      pass_findings=$((pass_findings + 1))
     fi
   done
+
+  # A classifier that stopped matching would skip every candidate and read as a clean
+  # directory; K==0 over a non-empty scan is that state and blocks with its own token.
+  skipped=$((skip_artifact + skip_nonseat + skip_superseded))
+  if [ "$scanned" -gt 0 ] && [ "$checked" -eq 0 ]; then
+    echo "NOTHING_CHECKED"
+    problems=$((problems + 1))
+    pass_findings=$((pass_findings + 1))
+  fi
+  if [ "$scanned" -ne $((skipped + checked)) ]; then
+    echo "COVERAGE_ACCOUNTING_DEFECT"
+    problems=$((problems + 1))
+    pass_findings=$((pass_findings + 1))
+  fi
+  printf 'review-evidence/verdict-files: %d scanned, %d skipped (artifact=%d, non-seat=%d, superseded=%d), %d checked, %d findings\n' \
+    "$scanned" "$skipped" "$skip_artifact" "$skip_nonseat" "$skip_superseded" "$checked" "$pass_findings" >&2
+  if [ "$scanned" -gt 0 ] && [ "$checked" -eq 0 ]; then
+    printf 'review-evidence/verdict-files: NOTHING CHECKED — all %d candidate(s) skipped\n' "$scanned" >&2
+  fi
+  printf 'review-evidence/verdict-files: unit=%s; seat-suffixes=[%s]\n' \
+    "$unit" "$(printf '%s' "$seat_suffixes" | tr '\n' ' ' | sed 's/[[:space:]]*$//')" >&2
 
   [ "$problems" -eq 0 ]
 }

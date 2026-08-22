@@ -472,6 +472,34 @@ printf '## 15. Git-Level Guards\n\nno registry bullet here at all\n' > "$REG_GON
 assert_eq "registry dogfood: a doc with no registry bullet derives nothing (the floor's input)" \
   "$(_registry_members "$REG_GONE" | grep -c . || true)" "0"
 
+# review-evidence (scripts/lib/review-evidence.sh), forced all-skip: a review dir holding only
+# orchestrator artifacts, so every candidate lands in a named bucket and NOTHING is read.
+mkdir -p "$SCRATCH/re/nazgul/reviews/TASK-001"
+source "$REPO_ROOT/scripts/lib/review-evidence.sh"
+printf '{"schema_version":1,"agents":{"reviewers":["code-reviewer"]},"review_gate":{"granularity":"task"}}\n' \
+  > "$SCRATCH/re/nazgul/config.json"
+printf '# BOARD-2-OUTCOME\n' > "$SCRATCH/re/nazgul/reviews/TASK-001/BOARD-2-OUTCOME.md"
+printf '# adversarial\n' > "$SCRATCH/re/nazgul/reviews/TASK-001/adversarial-SEC-1.md"
+RE_OUT=$(validate_review_evidence "$SCRATCH/re/nazgul" TASK-001 2>"$SCRATCH/re.err") || true
+RE_LINE=$(grep -E '^review-evidence/verdict-files: [0-9]+ scanned' "$SCRATCH/re.err" | tail -1)
+_grammar_check "review-evidence/verdict-files (all-skip)" "review-evidence/verdict-files" \
+  "artifact non-seat superseded" "$RE_LINE" && _entry_covered review-evidence
+assert_contains "review-evidence: forced all-skip emits the nothing-checked signal" \
+  "$(cat "$SCRATCH/re.err")" "review-evidence/verdict-files: NOTHING CHECKED — all 2 candidate(s) skipped"
+# This entry point's floor BLOCKS rather than only reporting: an all-skipped scan is the exact
+# shape of a classifier that stopped matching, which must never read as a clean review directory.
+assert_contains "review-evidence: the blocking floor reaches the caller, not just stderr" \
+  "$RE_OUT" "NOTHING_CHECKED"
+
+# And a run with a real reviewer file must actually check something.
+printf -- '---\nverdict: APPROVE\n---\nbody\n' > "$SCRATCH/re/nazgul/reviews/TASK-001/code-reviewer.md"
+validate_review_evidence "$SCRATCH/re/nazgul" TASK-001 >/dev/null 2>"$SCRATCH/re-full.err" || true
+RE_FULL_LINE=$(grep -E '^review-evidence/verdict-files: [0-9]+ scanned' "$SCRATCH/re-full.err" | tail -1)
+_grammar_check "review-evidence/verdict-files (mixed)" "review-evidence/verdict-files" \
+  "artifact non-seat superseded" "$RE_FULL_LINE"
+assert_contains "review-evidence: a run with a real reviewer file checks something" \
+  "$RE_FULL_LINE" "1 checked"
+
 # Enumeration completeness — the point of the whole file: an entry point with no
 # emitter must FAIL here, not silently drop out of the list.
 for entry in $ENTRY_POINTS; do

@@ -571,7 +571,7 @@ policy but emit `coverage_vacuous`. A filter that matches no file is also NOTHIN
 run. A new skip reason must be named and counted — it cannot disappear into `passed` or a free-form
 note. This is §15's looked-vs-never-looked distinction applied to tests, guards, smoke, and audits.
 
-- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Thirteen entry points are bound
+- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Fourteen entry points are bound
   by the contract above: `tests/run-tests.sh`, `scripts/lean-comments-guard.sh --check`,
   `tests/test-shellcheck.sh`, `scripts/doctor.sh`, `agents/comment-verifier.md`,
   `scripts/lib/heartbeat-triage.sh`, `scripts/self-audit.sh` (enrolled FEAT-029/TASK-012, which also
@@ -610,7 +610,13 @@ note. This is §15's looked-vs-never-looked distinction applied to tests, guards
   name. Both are driven under forced all-skip, and the entry is counted as covered only when BOTH
   conform. Its disposition is NOT set by coverage: the gate's seven dispositions decide allow/deny, and a
   vacuous scan reports `NOTHING CHECKED` without re-deciding anything — the same "exit code encodes the
-  worst verdict, not the coverage" rule `scripts/doctor.sh` follows).
+  worst verdict, not the coverage" rule `scripts/doctor.sh` follows). The fourteenth is
+  `scripts/lib/review-evidence.sh` (enrolled FEAT-031/TASK-034 — the DONE gate's verdict-file
+  classifier, printing under the entry token `review-evidence`. Its three skip reasons are a closed
+  set — `artifact`, `non-seat`, `superseded` — and unlike the advisory floors above, its `K > 0`
+  floor BLOCKS: a classifier that stopped matching would skip every candidate and report a clean
+  review directory, which is the exact failure the gate exists to prevent, so an all-skipped scan
+  emits `NOTHING_CHECKED` as a problem line and not merely as a stderr note).
   `tests/test-coverage-honesty.sh` drives every one of them under a forced
   all-skip input and FAILS if any enumerated entry point was never driven — membership is asserted, not
   assumed, so an entry point that conforms today cannot silently stop conforming tomorrow. Add a new
