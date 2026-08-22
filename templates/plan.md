@@ -1,3 +1,11 @@
+---
+# INERT PLACEHOLDER — nothing in /nazgul:init can substitute it (config.feat_id is still
+# null there). The Planner MUST replace it after writing the `## Tasks` roster below, by
+# running `scripts/stamp-plan-objective.sh`, which takes the value from config.feat_id.
+# Until then the merge-evidence gate (ttg_objective_roster) refuses this plan by name:
+# the roster only scopes an objective this file agrees it belongs to.
+feat_id: <FEAT-NNN>
+---
 # Nazgul Plan
 
 ## Objective

@@ -111,6 +111,7 @@ Ready:             [N]
 In Review:         [N]
 Changes Requested: [N]
 Blocked:           [N]
+Cancelled:         [N]
 Planned:           [N]
 
 Active Task
@@ -181,7 +182,9 @@ Wave  Units
 ```
 
 1. Parse the config JSON for mode, iteration count, max iterations
-2. Parse plan.md to count tasks by status
+2. Parse plan.md to count tasks by status. `CANCELLED` is its own row — a task that
+   will never ship is neither blocked nor done, and folding it into either row makes
+   a run that dropped work read exactly like one that shipped everything (ADR-022)
 3. Check nazgul/reviews/ for any active review feedback
 4. Check nazgul/checkpoints/ for the latest checkpoint
 5. When Parallel execution is `enabled`, parse the Dispatch batch and Wave layout JSON for the Parallel Batch

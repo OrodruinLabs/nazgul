@@ -6,7 +6,12 @@
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 setup_temp_dir() {
-  TEST_DIR=$(mktemp -d "${TMPDIR:-/tmp}/nazgul:test-XXXXXX")
+  # The template carries NO colon. PATH is colon-separated, so a ":" anywhere in TEST_DIR
+  # silently splits every `PATH="$TEST_DIR/fakebin:$PATH"` prepend into two nonexistent
+  # entries — the stub is never found and the test exercises the REAL binary while
+  # reporting a stub-driven pass. Two tests had already worked around this locally
+  # (test-git-hooks-premerge.sh, test-heartbeat-start-injection.sh); this fixes the source.
+  TEST_DIR=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-test-XXXXXX")
   export TEST_DIR
   export CLAUDE_PROJECT_DIR="$TEST_DIR"
 }

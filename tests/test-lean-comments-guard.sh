@@ -433,4 +433,45 @@ empty_cov=$(NAZGUL_CONFIG="$ENABLED_CONFIG" bash "$GUARD" --check 2>/dev/null | 
 assert_eq "empty candidate set reports zeroes, not a vacuity claim" "$empty_cov" \
   "lean-comments: 0 scanned, 0 skipped (unsupported-extension=0, unreadable=0), 0 checked, 0 findings"
 
+# board-5 CR-1: the hook read the payload's first line through `printf | head -1`,
+# so past the pipe buffer SIGPIPE aborted this always-blocking gate silently (#230).
+SMALL_SUBJ="$TMP/sigpipe-small.sh"
+LARGE_SUBJ="$TMP/sigpipe-large.sh"
+{
+  printf '%s\n' '#!/usr/bin/env bash' '# ============================================' \
+    '# Helpers' '# ============================================' 'x=1'
+} > "$SMALL_SUBJ"
+cp "$SMALL_SUBJ" "$LARGE_SUBJ"
+i=0
+while [ "$i" -lt 6000 ]; do
+  printf 'echo padding line %s\n' "$i" >> "$LARGE_SUBJ"
+  i=$((i + 1))
+done
+
+LARGE_BYTES=$(wc -c < "$LARGE_SUBJ" | tr -d ' ')
+assert_eq "the large subject really outruns the 64 KiB pipe buffer" \
+  "$([ "$LARGE_BYTES" -gt 65536 ] && echo yes || echo no)" "yes"
+
+SMALL_EC=$(hook_ec "$(write_envelope "$SMALL_SUBJ")")
+LARGE_EC=$(hook_ec "$(write_envelope "$LARGE_SUBJ")")
+assert_exit_code "hook blocks the small payload" "$SMALL_EC" 2
+assert_exit_code "hook reaches the same verdict on the >64 KiB payload" "$LARGE_EC" 2
+assert_eq "identical bloat reaches an identical verdict at both sizes" "$LARGE_EC" "$SMALL_EC"
+assert_not_contains "no path exits 141 (SIGPIPE under pipefail)" "$SMALL_EC $LARGE_EC" "141"
+
+# A gate that aborts leaves no message, so the diagnostic is the other half of the pin.
+LARGE_ERR=$(printf '%s' "$(write_envelope "$LARGE_SUBJ")" \
+  | CLAUDE_PROJECT_DIR="$TMP/proj" bash "$GUARD" 2>&1 >/dev/null || true)
+assert_contains "the large payload still produces the finding" "$LARGE_ERR" "banner/separator"
+
+CLEAN_LARGE="$TMP/sigpipe-large-clean.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' > "$CLEAN_LARGE"
+i=0
+while [ "$i" -lt 6000 ]; do
+  printf 'echo clean line %s\n' "$i" >> "$CLEAN_LARGE"
+  i=$((i + 1))
+done
+assert_exit_code "a clean >64 KiB payload is allowed, not aborted" \
+  "$(hook_ec "$(write_envelope "$CLEAN_LARGE")")" 0
+
 report_results

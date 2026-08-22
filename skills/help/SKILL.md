@@ -41,7 +41,7 @@ metadata:
 | Command | Description |
 |---------|-------------|
 | `/nazgul:task add "desc"` | Add a new task |
-| `/nazgul:task skip <id>` | Skip a blocked task |
+| `/nazgul:task skip <id>` | Cancel a task that will never be built (records `CANCELLED`) |
 | `/nazgul:task unblock <id>` | Unblock a task |
 | `/nazgul:task info <id>` | Show task details |
 | `/nazgul:task prioritize <id>` | Move task to top of queue |
@@ -53,6 +53,7 @@ metadata:
 | `/nazgul:pause` | Pause loop at next iteration boundary |
 | `/nazgul:reset` | Archive state and start fresh |
 | `/nazgul:review` | Manually trigger review for a task |
+| `/nazgul:complete` | Close an objective whose PR merged — closes tasks on host merge evidence only |
 | `/nazgul:clean` | Fully remove Nazgul from this project |
 
 ## Advanced

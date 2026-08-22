@@ -50,8 +50,8 @@ GRANULARITY=$(jq -r '.review_gate.granularity // "task"' "$CONFIG" 2>/dev/null |
 case "$GRANULARITY" in task|group|feature) ;; *) GRANULARITY="task" ;; esac
 
 # Count tasks + find active task, shared helper (MF-009) — sets DONE_COUNT,
-# READY_COUNT, IN_PROGRESS_COUNT, IN_REVIEW_COUNT, APPROVED_COUNT,
-# CHANGES_COUNT, BLOCKED_COUNT, PLANNED_COUNT, INVALID_COUNT, TOTAL_COUNT,
+# READY_COUNT, IN_PROGRESS_COUNT, IN_REVIEW_COUNT, APPROVED_COUNT, CHANGES_COUNT,
+# BLOCKED_COUNT, PLANNED_COUNT, CANCELLED_COUNT, INVALID_COUNT, TOTAL_COUNT,
 # ACTIVE_TASK, ACTIVE_STATUS, ACTIVE_RETRY (PLANNED_COUNT/ACTIVE_RETRY unused
 # here, same as before the repoint)
 count_tasks_and_find_active "$NAZGUL_DIR/tasks"
@@ -98,7 +98,7 @@ GIT_LAST=$(git -C "$PROJECT_ROOT" log --oneline -1 2>/dev/null || echo "unknown"
 # Output recovery context
 cat << CONTEXT_EOF
 Nazgul loop state — iteration ${ITERATION}/${MAX_ITER} | Mode: ${MODE} | Objective: ${OBJECTIVE}
-Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked | Total: ${TOTAL_COUNT}
+Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked, ${CANCELLED_COUNT} cancelled | Total: ${TOTAL_COUNT}
 Compactions: ${NEW_COUNT}
 CONTEXT_EOF
 

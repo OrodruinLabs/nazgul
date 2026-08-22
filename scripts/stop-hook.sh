@@ -334,7 +334,7 @@ fi
 
 # Count tasks by status (shared helper, MF-009 — sets DONE_COUNT, READY_COUNT,
 # IN_PROGRESS_COUNT, IN_REVIEW_COUNT, APPROVED_COUNT, CHANGES_COUNT,
-# BLOCKED_COUNT, PLANNED_COUNT, INVALID_COUNT, TOTAL_COUNT, plus
+# BLOCKED_COUNT, PLANNED_COUNT, CANCELLED_COUNT, INVALID_COUNT, TOTAL_COUNT, plus
 # ACTIVE_TASK/ACTIVE_STATUS/ACTIVE_RETRY as a side effect; the active-task scan
 # below re-runs the helper after the review-gate loop may mutate task files, so
 # those three are recomputed and superseded there)
@@ -347,6 +347,19 @@ count_tasks_and_find_active "$NAZGUL_DIR/tasks"
 # In YOLO mode, APPROVED tasks have been locally reviewed; DONE only happens via PR merge
 REQUIRE_PROVENANCE=$(jq -r 'if .review_gate.require_provenance == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
 REVIEW_VIOLATIONS=""
+if [ "$YOLO_MODE" = "true" ] && [ "$TASK_PR_MODE" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
+  # Skipped by design here (YOLO+PR reaches DONE by merge), but a skipped enforcement
+  # pass and one that found nothing must not print the same thing — so say how many.
+  YOLO_UNCHECKED=0
+  for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
+    [ -f "$task_file" ] || continue
+    [ "$(get_task_status "$task_file")" = "DONE" ] || continue
+    YOLO_UNCHECKED=$((YOLO_UNCHECKED + 1))
+  done
+  echo "NAZGUL REVIEW GATE: reactive enforcement skipped in YOLO+task_pr mode — ${YOLO_UNCHECKED} DONE task(s) unchecked; DONE is reached by PR merge here, so no local review board is expected" >&2
+  emit_event "review_gate_enforcement_skipped" \
+    reason "yolo_task_pr_mode" unchecked:n "$YOLO_UNCHECKED"
+fi
 if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NAZGUL_DIR/tasks" ]; then
   for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
@@ -363,12 +376,55 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
     case "$PROV_RESET_COUNT" in (*[!0-9]*|'') PROV_RESET_COUNT=0 ;; esac
 
     if [ "$STATUS" = "DONE" ]; then
+      # ADR-023: DONE has TWO admitting routes and this pass knew only the review one.
+      # A RECORDED closure is the pre-filter, so a review-closed task pays for no host call.
+      MERGE_ADMITTED=false
+      MERGE_UNDECIDED=false
+      MERGE_UNDECIDED_HOST=""
+      # The heading alone used to be the filter, and templates/task-manifest.md ships that
+      # heading with its whole block commented out — so every template-born manifest matched.
+      MERGE_RAW=$(awk '/^## Merge Evidence/{f=1;next} /^## /{f=0} f' "$task_file" 2>/dev/null || true)
+      # The verifier's OWN stripper classifies, so this cannot drift from it: it skips exactly
+      # `absent` and `commented_out`, the two answers it would have refused with anyway.
+      if [ "$(_ttg_section_emptiness "$MERGE_RAW" "$(printf '%s\n' "$MERGE_RAW" | _ttg_strip_html_comments)")" = "content" ]; then
+        if ttg_verify_merge_evidence "$(cat "$task_file")" "$PROJECT_ROOT" "$TASK_ID"; then
+          MERGE_ADMITTED=true
+        elif [ "$TTG_MERGE_REASON" = "unverifiable" ]; then
+          # Captured inside the branch that made the call: both globals outlive one
+          # loop pass, so a heading-less task would inherit the previous task's verdict.
+          MERGE_UNDECIDED=true
+          MERGE_UNDECIDED_HOST="$TTG_MERGE_HOST_RESULT"
+        fi
+      fi
       EVIDENCE_PROBLEMS=$(validate_review_evidence "$NAZGUL_DIR" "$TASK_ID") || true
-      if [ -n "$EVIDENCE_PROBLEMS" ]; then
-        MISSING_LIST=$(echo "$EVIDENCE_PROBLEMS" | awk 'NF>1 {out = out sep $2; sep = ", "} NF==1 {out = out sep $1; sep = ", "} END {print out}')
+      MISSING_LIST=""
+      [ -z "$EVIDENCE_PROBLEMS" ] || MISSING_LIST=$(echo "$EVIDENCE_PROBLEMS" | awk 'NF>1 {out = out sep $2; sep = ", "} NF==1 {out = out sep $1; sep = ", "} END {print out}')
+      if [ "$MERGE_ADMITTED" = "true" ]; then
+        echo "NAZGUL REVIEW GATE: ${TASK_ID} DONE admitted via the merge-evidence route (${TTG_MERGE_ROUTE}) — no review board was consulted for this edge" >&2
+        if [ "$EVID_RESET_COUNT" != "0" ] || [ "$PROV_RESET_COUNT" != "0" ]; then
+          jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | del(.safety._provenance_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+        fi
+      elif [ -n "$EVIDENCE_PROBLEMS" ] && [ "$MERGE_UNDECIDED" = "true" ]; then
+        # lean-comments: allow-run — this arm IS the class boundary, so it states it.
+        # ADR-023's admit rule has a mirror nothing enforced: "could not look" is not
+        # "not closed" in the REVOKE direction either. ONLY `unverifiable` defers. The
+        # host ANSWERED for not_merged/contradicted/not_this_objective/
+        # not_this_objectives_task, and absent/commented_out/truncated/malformed are
+        # defects in the manifest itself — all eight are decisions and still fall through.
+        echo "NAZGUL REVIEW GATE: ${TASK_ID} DONE left in place — its merge evidence could not be verified this iteration [reason: unverifiable, host-state: ${MERGE_UNDECIDED_HOST}]; review evidence is separately incomplete (${MISSING_LIST}). This is NOT a review-evidence violation and NOT a host answer of 'not merged', so no status changed and no strike was recorded" >&2
+        emit_event "stop_gate" \
+          reason "merge_evidence_undecided" \
+          gate "review_gate_reactive" \
+          task_id "$TASK_ID" \
+          merge_reason "unverifiable" \
+          host_state "$MERGE_UNDECIDED_HOST" \
+          deferred_review_problems "$MISSING_LIST" \
+          action "deferred"
+      elif [ -n "$EVIDENCE_PROBLEMS" ]; then
         if [ "$EVID_RESET_COUNT" -ge 1 ]; then
           # Second consecutive violation — escalate to BLOCKED with remediation
           set_task_status "$task_file" "DONE" "BLOCKED"
+          ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "BLOCKED" "" "" "stop-hook" || true
           BLOCKED_REASON_TEXT="review evidence missing (${MISSING_LIST}) — run /nazgul:review --materialize ${TASK_ID}"
           set_manifest_field "$task_file" "Blocked kind" "review-evidence"
           set_manifest_field "$task_file" "Blocked reason" "$BLOCKED_REASON_TEXT"
@@ -378,8 +434,10 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
           REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} escalated to BLOCKED — review evidence missing: ${MISSING_LIST}. Run /nazgul:review --materialize ${TASK_ID}
 "
         else
-          # First violation — reset to IMPLEMENTED with diagnostics
+          # First violation — reset to IMPLEMENTED. Ledger-logged with a writer, or the
+          # ledger says DONE while the manifest says IMPLEMENTED: unreadable as tampering.
           set_task_status "$task_file" "DONE" "IMPLEMENTED"
+          ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "IMPLEMENTED" "" "" "stop-hook" || true
           jq --arg t "$TASK_ID" '.safety._review_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
           DONE_COUNT=$((DONE_COUNT - 1))
           IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
@@ -399,6 +457,7 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
           if [ "$PROV_RESET_COUNT" -ge 1 ]; then
             # Second consecutive violation — escalate to BLOCKED with remediation
             set_task_status "$task_file" "DONE" "BLOCKED"
+            ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "BLOCKED" "" "" "stop-hook" || true
             BLOCKED_REASON_TEXT="review provenance invalid (${PROVENANCE_LIST}) — re-run review-gate so a fresh diff-bound dispatch manifest is written"
             set_manifest_field "$task_file" "Blocked kind" "review-provenance"
             set_manifest_field "$task_file" "Blocked reason" "$BLOCKED_REASON_TEXT"
@@ -414,6 +473,7 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
             # Evidence passed to reach this branch — clear its (now-stale) counter so
             # the two gates' ladders stay independent (evidence is currently valid).
             set_task_status "$task_file" "DONE" "IMPLEMENTED"
+            ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "IMPLEMENTED" "" "" "stop-hook" || true
             jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | .safety._provenance_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
             DONE_COUNT=$((DONE_COUNT - 1))
             IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
@@ -508,6 +568,10 @@ fi
 AGGREGATE_REVIEW_READY="false"
 AGGREGATE_REVIEW_SCOPE=""
 AGGREGATE_REVIEW_TASKS=""
+AGGREGATE_CARVEOUT_NOTE=""
+# Set only where the aggregate dispatch is decided, and cleared by anything that withdraws
+# it — the readiness scan below runs every iteration, dispatch or not.
+AGGREGATE_BOARD_DISPATCHED="false"
 AWAITING_AGGREGATE_REVIEW="false"
 if [ "$GRANULARITY" != "task" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
   # The "active group" is the group of the lowest-numbered task that is not yet
@@ -523,18 +587,19 @@ if [ "$GRANULARITY" != "task" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
     [ -f "$task_file" ] || continue
     STATUS=$(get_task_status "$task_file")
     [ "$STATUS" = "DONE" ] && continue
+    # A CANCELLED task ships nothing, so it must not be the one that names the unit.
+    [ "$STATUS" = "CANCELLED" ] && continue
     ACTIVE_GROUP=$(resolve_review_unit "$NAZGUL_DIR" "$(basename "$task_file" .md)")
     ACTIVE_GROUP="${ACTIVE_GROUP#GROUP-}"
     break
   done
 
-  # Walk the review unit: in group mode, only tasks whose Group matches ACTIVE_GROUP;
-  # in feature mode, every non-DONE task. The unit is "review-ready" when it has at
-  # least one task and every task in it is IMPLEMENTED (none still READY/IN_PROGRESS/
-  # CHANGES_REQUESTED/BLOCKED). A BLOCKED task holds the whole unit back.
+  # Walk the review unit: group mode takes only ACTIVE_GROUP's tasks, feature mode every
+  # non-DONE one. Ready when >=1 task and all are IMPLEMENTED; BLOCKED still vetoes.
   UNIT_TOTAL=0
   UNIT_IMPLEMENTED=0
-  UNIT_BLOCKED=0
+  UNIT_EXCLUDED=0
+  UNIT_EXCLUDED_TASKS=""
   for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
     [ -f "$task_file" ] || continue
     STATUS=$(get_task_status "$task_file")
@@ -544,28 +609,46 @@ if [ "$GRANULARITY" != "task" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
       TGROUP="${TGROUP#GROUP-}"
       [ "$TGROUP" = "$ACTIVE_GROUP" ] || continue
     fi
+    # CANCELLED leaves the unit exactly as DONE does, but its id is recorded first —
+    # readiness reached by exclusion is not readiness where every task shipped.
+    if [ "$STATUS" = "CANCELLED" ]; then
+      UNIT_EXCLUDED=$((UNIT_EXCLUDED + 1))
+      UNIT_EXCLUDED_TASKS="${UNIT_EXCLUDED_TASKS}$(basename "$task_file" .md) "
+      continue
+    fi
     UNIT_TOTAL=$((UNIT_TOTAL + 1))
     case "$STATUS" in
       IMPLEMENTED|IN_REVIEW)
         UNIT_IMPLEMENTED=$((UNIT_IMPLEMENTED + 1))
         AGGREGATE_REVIEW_TASKS="${AGGREGATE_REVIEW_TASKS}$(basename "$task_file" .md) "
         ;;
-      BLOCKED) UNIT_BLOCKED=$((UNIT_BLOCKED + 1)) ;;
     esac
   done
   AGGREGATE_REVIEW_TASKS=$(printf '%s' "$AGGREGATE_REVIEW_TASKS" | sed 's/[[:space:]]*$//')
+  UNIT_EXCLUDED_TASKS=$(printf '%s' "$UNIT_EXCLUDED_TASKS" | sed 's/[[:space:]]*$//')
+  UNIT_MEMBERS=$((UNIT_TOTAL + UNIT_EXCLUDED))
+  if [ "$GRANULARITY" = "group" ]; then
+    UNIT_SCOPE_LABEL="group ${ACTIVE_GROUP}"
+  else
+    UNIT_SCOPE_LABEL="feature"
+  fi
+  # The note is computed here because the ready arm needs it; the matching event is emitted
+  # at the dispatch site, since this scan reaches here on iterations that dispatch nothing.
+  if [ "$UNIT_EXCLUDED" -gt 0 ]; then
+    AGGREGATE_CARVEOUT_NOTE=" CARVE-OUT: ${UNIT_IMPLEMENTED} of ${UNIT_MEMBERS} unit tasks reviewed — ${UNIT_EXCLUDED} carried out CANCELLED (${UNIT_EXCLUDED_TASKS}); a cancelled task is removed from the unit, never approved by it."
+  fi
 
-  if [ "$UNIT_TOTAL" -gt 0 ] && [ "$UNIT_IMPLEMENTED" -eq "$UNIT_TOTAL" ]; then
+  # The -gt 0 floor subsumes the old UNIT_TOTAL -gt 0: an all-cancelled unit has
+  # nothing to review, and an empty board is not a clean one.
+  if [ "$UNIT_IMPLEMENTED" -gt 0 ] && [ "$UNIT_IMPLEMENTED" -eq "$UNIT_TOTAL" ]; then
     AGGREGATE_REVIEW_READY="true"
-    if [ "$GRANULARITY" = "group" ]; then
-      AGGREGATE_REVIEW_SCOPE="group ${ACTIVE_GROUP}"
-    else
-      AGGREGATE_REVIEW_SCOPE="feature"
-    fi
+    AGGREGATE_REVIEW_SCOPE="$UNIT_SCOPE_LABEL"
   elif [ "$UNIT_IMPLEMENTED" -gt 0 ]; then
     # Some tasks in the unit are IMPLEMENTED-but-parked, but the unit is not yet
     # complete — record the "awaiting aggregate review" condition for recovery.
     AWAITING_AGGREGATE_REVIEW="true"
+  elif [ "$UNIT_EXCLUDED" -gt 0 ] && [ "$UNIT_TOTAL" -eq 0 ]; then
+    echo "Nazgul: review unit [${UNIT_SCOPE_LABEL}] has nothing to review — ${UNIT_EXCLUDED} task(s) carried out CANCELLED (${UNIT_EXCLUDED_TASKS}), 0 implemented; no aggregate board dispatched." >&2
   fi
 
   # If the active task is IMPLEMENTED (or a stale IN_REVIEW left over from a
@@ -786,7 +869,7 @@ if [ -f "$PLAN" ]; then
   fi
   # Granularity-aware recovery hints (survive compaction via plan.md Next Action).
   if [ "$GRANULARITY" != "task" ] && [ "$AGGREGATE_REVIEW_READY" = "true" ]; then
-    NEXT_ACTION_TEXT="AGGREGATE REVIEW (${GRANULARITY}) ready for [${AGGREGATE_REVIEW_SCOPE}] — spawn review-gate with <main_worktree_path> = ${PROJECT_ROOT} over the combined diff for tasks: ${AGGREGATE_REVIEW_TASKS}"
+    NEXT_ACTION_TEXT="AGGREGATE REVIEW (${GRANULARITY}) ready for [${AGGREGATE_REVIEW_SCOPE}] — spawn review-gate with <main_worktree_path> = ${PROJECT_ROOT} over the combined diff for tasks: ${AGGREGATE_REVIEW_TASKS}${AGGREGATE_CARVEOUT_NOTE}"
   elif [ "$GRANULARITY" != "task" ] && [ "$AWAITING_AGGREGATE_REVIEW" = "true" ]; then
     NEXT_ACTION_TEXT="AWAITING AGGREGATE REVIEW (${GRANULARITY}) — parked IMPLEMENTED tasks (${AGGREGATE_REVIEW_TASKS}); keep implementing the rest of the review unit, do NOT review/re-implement parked tasks"
   fi
@@ -954,9 +1037,9 @@ if echo "$GIT_PORCELAIN" | grep -qE '^(U.|.U|AA|DD) '; then
     # (frontmatter) manifest never actually reached BLOCKED on a git conflict.
     _active_task_status=$(get_task_status "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md")
     set_task_status "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" "$_active_task_status" "BLOCKED"
-    # Post-checkpoint hook write — ledger-log it or next iteration's
-    # reconciliation flags this legitimate conflict-block as a forgery.
-    ttg_log_transition "$NAZGUL_DIR" "$ACTIVE_TASK" "$_active_task_status" "BLOCKED"
+    # Ledger-log it or reconciliation flags this legitimate conflict-block as a forgery.
+    # `|| true` as at all four siblings: aborting after BLOCKED is written strands it typeless.
+    ttg_log_transition "$NAZGUL_DIR" "$ACTIVE_TASK" "$_active_task_status" "BLOCKED" "" "" "stop-hook" || true
     # Kind and reason are upserted together: the prior grep-guarded sed had no else
     # branch, so a first-time block landed a typed quarantine with no reason at all.
     set_manifest_field "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" "Blocked kind" "git-conflict"
@@ -992,12 +1075,21 @@ fi
 if [ "$TOTAL_COUNT" -gt 0 ]; then
   IS_COMPLETE=false
   if [ "$YOLO_MODE" = "true" ]; then
-    [ "$((APPROVED_COUNT + DONE_COUNT))" -eq "$TOTAL_COUNT" ] && IS_COMPLETE=true
-  elif [ "$DONE_COUNT" -eq "$TOTAL_COUNT" ]; then
+    [ "$((APPROVED_COUNT + DONE_COUNT + CANCELLED_COUNT))" -eq "$TOTAL_COUNT" ] && IS_COMPLETE=true
+  elif [ "$((DONE_COUNT + CANCELLED_COUNT))" -eq "$TOTAL_COUNT" ]; then
     IS_COMPLETE=true
   fi
 
+  # A run that shipped nothing must not report the same line as one that shipped
+  # everything (RULES.md §15) — so a cancelled task is named, never absorbed.
+  COMPLETION_SUMMARY="all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete"
+  if [ "$CANCELLED_COUNT" -gt 0 ]; then
+    COMPLETION_SUMMARY="${DONE_COUNT}/${TOTAL_COUNT} done, ${CANCELLED_COUNT} cancelled"
+    [ "$DONE_COUNT" -eq 0 ] && COMPLETION_SUMMARY="${COMPLETION_SUMMARY} — no task shipped"
+  fi
+
   if [ "$IS_COMPLETE" = "true" ]; then
+    [ "$CANCELLED_COUNT" -gt 0 ] && echo "Nazgul: ${COMPLETION_SUMMARY}." >&2
     # --- Post-loop learning gate (mandatory; honors opt-out) ------------------
     # Distilling candidate Learned Rules is otherwise advisory — only the start
     # skill's OBJECTIVE_COMPLETE prose asks for it, so it silently gets skipped.
@@ -1028,7 +1120,7 @@ if [ "$TOTAL_COUNT" -gt 0 ]; then
           mkdir -p "$LEARN_DIR"
           printf '%s %s\n' "$OBJ_ID" "$((ATTEMPTS + 1))" > "$ATTEMPTS_FILE"
           cat >&2 << LEARN_MSG
-Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP LEARNING GATE (mandatory).
+Nazgul: ${COMPLETION_SUMMARY} — POST-LOOP LEARNING GATE (mandatory).
 Candidate Learned Rules have NOT been distilled for this objective (${OBJ_ID}) yet.
 ${DISPATCH_BRIEF}
 DELEGATE: Spawn the learner agent (Agent tool, subagent_type "nazgul:learner") to mine this
@@ -1134,7 +1226,7 @@ GRAN_BLOCK_MSG
             mkdir -p "$NAZGUL_DIR/logs"
             printf '%s %s\n' "$DV_OBJ_ID" "$((DV_ATTEMPTS + 1))" > "$DV_ATTEMPTS_FILE"
             cat >&2 << DV_MSG
-Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP DOC-VERIFIER GATE (mandatory).
+Nazgul: ${COMPLETION_SUMMARY} — POST-LOOP DOC-VERIFIER GATE (mandatory).
 Generated docs have NOT been verified for this objective (${DV_OBJ_ID}) yet.
 ${DISPATCH_BRIEF}
 DELEGATE: Spawn the doc-verifier agent (nazgul:doc-verifier) to cross-check ${DOCS_DIR}/*.md
@@ -1222,7 +1314,7 @@ DV_MSG
             mkdir -p "$NAZGUL_DIR/logs"
             printf '%s %s\n' "$CV_OBJ_ID" "$((CV_ATTEMPTS + 1))" > "$CV_ATTEMPTS_FILE"
             cat >&2 << CV_MSG
-Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP COMMENT-VERIFIER GATE (mandatory).
+Nazgul: ${COMPLETION_SUMMARY} — POST-LOOP COMMENT-VERIFIER GATE (mandatory).
 Inline doc-comments have NOT been verified for this objective (${CV_OBJ_ID}) yet.
 ${DISPATCH_BRIEF}
 DELEGATE: Spawn the comment-verifier agent (nazgul:comment-verifier) to cross-check inline
@@ -1282,7 +1374,7 @@ CV_MSG
           mkdir -p "$NAZGUL_DIR/logs"
           printf '%s %s\n' "$SA_OBJ_ID" "$((SA_ATTEMPTS + 1))" > "$SA_ATTEMPTS_FILE"
           cat >&2 << SA_MSG
-Nazgul: all ${DONE_COUNT}/${TOTAL_COUNT} tasks complete — POST-LOOP SELF-AUDIT GATE (mandatory).
+Nazgul: ${COMPLETION_SUMMARY} — POST-LOOP SELF-AUDIT GATE (mandatory).
 Self-audit findings have NOT been recorded for this objective (${SA_OBJ_ID}) yet.
 ${DISPATCH_BRIEF}
 DELEGATE: Spawn the self-audit agent (nazgul:self-audit) to mine cost/perf/correctness
@@ -1307,6 +1399,7 @@ SA_MSG
     emit_event "objective_complete" \
       total_tasks:n "$TOTAL_COUNT" \
       done_count:n "$DONE_COUNT" \
+      cancelled_count:n "$CANCELLED_COUNT" \
       iterations_used:n "$NEW_ITER"
     exit 0
   fi
@@ -1376,8 +1469,9 @@ if [ "$GRANULARITY" != "task" ] && [ "$AGGREGATE_REVIEW_READY" = "true" ]; then
   else
     REVIEW_DIFF_HINT="the combined diff for ${AGGREGATE_REVIEW_SCOPE} (its tasks' commits)"
   fi
+  AGGREGATE_BOARD_DISPATCHED="true"
   DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for the AGGREGATE review unit [${AGGREGATE_REVIEW_SCOPE}]. ${DISPATCH_BRIEF}
-Review SCOPE is ${REVIEW_DIFF_HINT}, covering tasks: ${AGGREGATE_REVIEW_TASKS}. Pass granularity=${GRANULARITY} and the task list so feedback-aggregator can attribute findings back to the owning task by file scope. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition. Dispatch review-gate at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context."
+Review SCOPE is ${REVIEW_DIFF_HINT}, covering tasks: ${AGGREGATE_REVIEW_TASKS}.${AGGREGATE_CARVEOUT_NOTE} Pass granularity=${GRANULARITY} and the task list so feedback-aggregator can attribute findings back to the owning task by file scope. MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition. Dispatch review-gate at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context."
 elif [ "$GRANULARITY" = "task" ] && [ "$ACTIVE_STATUS" = "IMPLEMENTED" ]; then
   DISPATCH_INSTR="DELEGATE: Spawn review-gate agent (nazgul:review-gate) for ${ACTIVE_TASK}. ${DISPATCH_BRIEF}
 MANDATORY: review-gate must run Step 0 (simplify pass) before pre-checks — read its agent definition. Dispatch review-gate at models.review_orchestrator (default sonnet) — never inherit a lower tier from the calling context."
@@ -1438,9 +1532,9 @@ fi
 # or re-implement parked tasks.
 AGGREGATE_MARKER=""
 if [ "$GRANULARITY" != "task" ] && [ "$AWAITING_AGGREGATE_REVIEW" = "true" ] && [ "$AGGREGATE_REVIEW_READY" != "true" ]; then
-  AGGREGATE_MARKER="AWAITING AGGREGATE REVIEW (${GRANULARITY}): tasks already IMPLEMENTED and PARKED — do NOT re-review or re-implement them: ${AGGREGATE_REVIEW_TASKS}. Keep implementing the rest of the review unit; the review board fires once the whole ${GRANULARITY} is IMPLEMENTED."
+  AGGREGATE_MARKER="AWAITING AGGREGATE REVIEW (${GRANULARITY}): tasks already IMPLEMENTED and PARKED — do NOT re-review or re-implement them: ${AGGREGATE_REVIEW_TASKS}. Keep implementing the rest of the review unit; the review board fires once the whole ${GRANULARITY} is IMPLEMENTED.${AGGREGATE_CARVEOUT_NOTE}"
 elif [ "$GRANULARITY" != "task" ] && [ "$AGGREGATE_REVIEW_READY" = "true" ]; then
-  AGGREGATE_MARKER="AGGREGATE REVIEW READY (${GRANULARITY}): review unit [${AGGREGATE_REVIEW_SCOPE}] fully IMPLEMENTED — tasks: ${AGGREGATE_REVIEW_TASKS}."
+  AGGREGATE_MARKER="AGGREGATE REVIEW READY (${GRANULARITY}): review unit [${AGGREGATE_REVIEW_SCOPE}] fully IMPLEMENTED — tasks: ${AGGREGATE_REVIEW_TASKS}.${AGGREGATE_CARVEOUT_NOTE}"
 fi
 
 # --- MF-006: mechanical HITL pending-approval gate ---------------------------
@@ -1462,11 +1556,22 @@ fi
 HITL_PENDING_MARKER="$NAZGUL_DIR/.hitl-pending"
 if [ "$MODE" = "hitl" ] && [ -f "$HITL_PENDING_MARKER" ] && [ -n "$DISPATCH_INSTR" ]; then
   DISPATCH_INSTR="GATE hitl_pending: a human approval is still pending (nazgul/.hitl-pending exists) — WAIT for explicit human approval before dispatching anything. Do not proceed autonomously."
+  AGGREGATE_BOARD_DISPATCHED="false"
+fi
+
+# RULES.md §1.15: produced where the dispatch is decided — and this is the last site that
+# can withdraw one, so an iteration dispatching no board records no carve-out.
+if [ "$AGGREGATE_BOARD_DISPATCHED" = "true" ] && [ -n "$AGGREGATE_CARVEOUT_NOTE" ]; then
+  emit_event "aggregate_board_cancelled_carveout" \
+    unit "$UNIT_SCOPE_LABEL" \
+    cancelled_tasks "$UNIT_EXCLUDED_TASKS" \
+    implemented:n "$UNIT_IMPLEMENTED" \
+    total:n "$UNIT_MEMBERS"
 fi
 
 cat >&2 << CONTINUE_MSG
 Nazgul loop — iteration ${NEW_ITER}/${MAX_ITER} | Mode: ${MODE} | Review granularity: ${GRANULARITY}
-Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked, ${PLANNED_COUNT} planned
+Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked, ${PLANNED_COUNT} planned, ${CANCELLED_COUNT} cancelled | Total: ${TOTAL_COUNT}
 $([ -n "$REVIEW_VIOLATIONS" ] && printf '%s' "$REVIEW_VIOLATIONS" || true)
 $([ -n "$FEATURE_BRANCH" ] && echo "Branch: ${FEATURE_BRANCH} → ${BASE_BRANCH} | Worktrees: ${WORKTREE_COUNT}" || true)
 

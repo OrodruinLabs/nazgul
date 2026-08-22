@@ -356,6 +356,10 @@ boundary, and "looked and found none" is kept distinct from "never looked":
 | Section absent, scope touches `scripts/**` or `tests/**` | **BLOCK** (`absent`) |
 | Section absent, scope touches neither | ALLOW, and the skipped check is announced on stderr (`not_applicable`) |
 | Section present with no parseable `red-run:` entry | **BLOCK** as corrupt (`corrupt`) — present-but-unreadable is a stronger trouble signal than absent |
+| Section present but its whole payload sits inside an HTML comment, scope in | **BLOCK** (`commented_out`) — deliberately not `absent`: a comment is present-but-not-a-record, and the two are different trouble signals |
+| Section present but its whole payload sits inside an HTML comment, scope out | ALLOW, announced on stderr (`not_applicable`) — same disposition as an absent section out of scope |
+| `project.test_roots` is unusable (see below), so the roots set cannot be derived | **BLOCK** (`roots_undeterminable`) — the scope predicate fails CLOSED and treats the task as in scope |
+| Every configured tests root was skipped, so none resolves under the project root | **BLOCK** (`roots_unresolved`) — kept distinct from `roots_undeterminable`: "the config could not be read" is not "the config read fine and nothing it names exists" |
 | Entry present but its test path or `pre-change-ref` is unresolvable, not an ancestor, or records exit 0 | **BLOCK** (`ref_unresolvable` / `not_ancestor` / `exit_zero`) — the evidence claims something git can refute |
 | `red-run: N/A — <token>` with `<token>` in the closed list `docs-only`, `comment-only`, `revert`, `fixture-capture-only` | ALLOW, recorded (`enumerated_na`) |
 | `red-run: N/A — <free text>` | **BLOCK** (`bad_na_token`) — an open-ended excuse field is an allow-everything field |
@@ -363,6 +367,51 @@ boundary, and "looked and found none" is kept distinct from "never looked":
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `guards.red_run_evidence` | `true` | Set to `false` to suppress the **block only**. Detection still runs: the stderr diagnostic still names the reason, the `red_run_missing` event is still emitted, and a second stderr line records that the block was suppressed. There is no setting that makes the gate stop looking. |
+| `project.test_roots` | absent (⇒ `["tests"]`) | Repository-relative directories that hold this project's tests. All THREE readers share it: which file scopes TRIGGER the requirement, where a recorded entry's test path must live, and — since FEAT-031 — where `scripts/red-run.sh` derives its copy set, validates `--copy=` paths, contains the scratch destination and writes the entry's path. A project whose tests are in `spec/` and `src/__tests__/` sets `["spec","src/__tests__"]`. |
+
+**How `project.test_roots` degrades, and why the two failures are named separately.** Absent, or
+unreadable because `jq` is missing or `config.json` cannot be read/parsed, falls back to the historical
+default `["tests"]` — a project that never configured it behaves exactly as before. But an array that is
+*present and unusable* (empty, not an array, or containing a non-string or empty-string entry) is a
+different state: the set is **undeterminable**, so the scope predicate fails CLOSED and treats the task as
+in scope (`roots_undeterminable`). A usable array none of whose entries resolves to a real directory
+inside the project root is a third state again (`roots_unresolved`). Configuration that could not be read
+is never silently equated with configuration that says nothing is a test.
+
+**The producer reads the same value, through the same reader.** `scripts/red-run.sh` resolves the root
+set with `_ttg_red_run_roots`, the function the gate itself uses — not a second reader. That matters
+because it was single-root `tests/` while the gate was already multi-root, so the gate accepted evidence
+the only sanctioned producer could not generate, and the operator's only remaining route was to
+hand-author a block carrying no `captured-by:` provenance. red-run refuses by name on the same
+undeterminable set the gate blocks on, rather than falling back to `tests/` behind the operator's back.
+
+**How `scripts/red-run.sh` reads YOUR runner's exit code — declared, not inferred.** Only exit `0` is
+universal: a pre-change run that passes is vacuous whatever produced it. Exit `2` and `3` are
+`tests/run-tests.sh`'s own contract and are read as its two "did not really run" states; another
+runner's `2`/`3` is misreported but still fails **closed**, writing nothing. Every other non-zero code is
+only a *candidate* red and has to earn it — the output must name a failing test file, a failing case, or
+at least mention a copied test file by name. Failing all three is red-run's exit `6`
+(`INDETERMINATE RESULT`), never a red. The code that makes this load-bearing is **pytest's 5**
+("no tests were collected"): under the previous reading it fell straight through to RED confirmed and an
+evidence block was written for a run in which nothing executed. ADR-024 decision 3 closed exactly this
+hazard for the filter flag; the identical hazard in the exit-code reading was not carried across then.
+
+| red-run exit | Meaning |
+|---|---|
+| `0` | RED confirmed — the evidence block was written |
+| `1` | usage or environment error — nothing written |
+| `2` | VACUOUS — the pre-change run PASSED |
+| `3` | NOTHING MATCHED — the runner reported that the scoped filter matched no test file |
+| `4` | the pre-change harness reported an internal coverage-accounting defect |
+| `5` | REFUSED TO EXECUTE — the configured command is on the destructive-command denylist; nothing was run |
+| `6` | INDETERMINATE — the runner exited non-zero but no failing test file could be identified |
+
+`5` exists because red-run executes `project.test_command` itself rather than through the Bash tool, so
+`scripts/pre-tool-guard.sh` never sees it. Both `scripts/red-run.sh` and `scripts/task-state-guard.sh`
+(which stops a denylisted value from being written into `project.test_command` /
+`project.test_filter_template` in the first place) screen against the one authority,
+`scripts/lib/destructive-patterns.sh`. A runner is executed code, so a non-denylisted command in that
+key still runs — what is closed is the denylist becoming bypassable by relocating a command into config.
 
 It ships default-on deliberately. This is an enforcement mechanism, and a default-off enforcement
 mechanism reproduces the problem it exists to fix — the objective's whole premise is that a test suite
@@ -467,7 +516,10 @@ The stream captures:
 - **stack_sync_conflict** — `gh stack sync` hit a conflict or a divergence it cannot auto-resolve; stacking is halted and a p1 inbox item filed. Fields `reason`/`exit_code`/`detail`
 - **stack_api_failure** — a `gh`/`gh stack` API call failed; fields `stage`/`auth_status` (an independent `gh auth status` probe, since gh-stack can misattribute auth failures) plus the call's own identifiers
 - **stack_remote_layer_imported** / **stack_remote_layer_import_failed** — an explicit `gh stack checkout <pr>` of a remote layer that `sync` left un-imported succeeded / failed; fields `pr`/`feat_id`/`branch`, or `pr`/`exit_code`/`detail`
-- **red_run_missing** — the IMPLEMENTED red-run evidence check found no usable evidence; fields `task_id` and `reason` (`absent`, `corrupt`, `ref_unresolvable`, `not_ancestor`, `exit_zero`, `bad_na_token`). Emitted whether or not `guards.red_run_evidence` suppressed the block — see Red-Run Evidence Gate above
+- **red_run_missing** — the IMPLEMENTED red-run evidence check found no usable evidence; fields `task_id` and `reason`, from eleven red-run refusal reasons: `absent`, `absent_in_tree`, `bad_na_token`, `commented_out`, `corrupt`, `exit_zero`, `not_ancestor`, `ref_unresolvable`, `roots_undeterminable`, `roots_unresolved`, `uncovered_test_file`. The vocabulary is CLOSED — a new state must become a named member, never a bucket. `tests/test-red-run-evidence.sh` asserts that set against the shipped source, and `tests/test-doc-contract-fields.sh` binds THIS list and THIS count to the same `_ttg_red_run_deny`/`_ttg_red_run_empty_payload` call sites, so the list is checkable here rather than narrated. Emitted whether or not `guards.red_run_evidence` suppressed the block — see Red-Run Evidence Gate above
+- **merge_evidence_missing** — the `## Merge Evidence` check that admits `IMPLEMENTED -> DONE` (and the alternative route to `IN_REVIEW -> DONE`) found nothing usable; fields `task_id` and `reason`, from nine closed refusal reasons: `absent`, `commented_out`, `truncated` (a required field of `host`/`pr`/`merged-at`/`merge-commit`/`head-ref`/`recorded-by` is missing), `malformed` (a field is present but fails its shape check, including a `recorded-by` naming something outside the closed producer set), `not_merged` (the host answered and says the PR is not merged), `unverifiable` (the host could not be asked, or answered unusably, or reported merged without returning a `merged_at`/`merge_commit`/`head_ref` to compare against), `contradicted` (the host answered and its `merged_at`, its `merge_commit`, its head branch, or the merge commit's containment in the base disagrees with the manifest), `not_this_objective` (the host confirms the merge, but of a PR whose head branch is neither `branch.feature` nor a `stack.layers[]` branch for this `feat_id` — genuine evidence about a DIFFERENT objective), `not_this_objectives_task` (the PR *is* this objective's genuinely merged PR, but the task being closed is not in this objective's roster — a different question from the one before it: `not_this_objective` asks whose PR, this asks whose task, and collapsing them lets one objective's merge close another's task). The last five exist because the gate does not stop at the shape: it calls `merge_provider_pr_state` and admits the edge only on `result: "ok"` AND `merged: true`, and only for a PR it can bind to this objective. `unverifiable` is deliberately NOT `not_merged` — an unreachable host never admits a closure. This gate has **no kill switch** — a switch on the last gate before DONE would be the bypass — see RULES.md §2
+- **merge_provider_unsupported_host** / **merge_provider_no_remote** / **merge_provider_unavailable** / **merge_provider_api_failure** / **merge_provider_invalid_pr** / **merge_provider_repo_mismatch** / **merge_provider_unbindable_repo** — seven additive event types from the merge-observation seam (`scripts/lib/merge-provider.sh`), which could not be asked, or was asked and did not usefully answer. Every one of these means "could not look" and none of them may be read as "not merged"; the seam never falls back to git ancestry (RULES.md §16). The seam returns eight named results — `ok`, `unsupported_host`, `no_remote`, `provider_unavailable`, `api_failure`, `invalid_pr`, `repo_mismatch`, `unbindable_repo` — one more than the event count because `ok` needs no degradation event. `repo_mismatch` and `unbindable_repo` fire the redirection refusals: the first when `GH_REPO`/`GH_HOST`/`remote.*.gh-resolved` disagree with the checkout's own repository or the answer's `url` names a different one, the second when the remote names no owner/repo to aim at. Both vocabularies and both counts are derived from `_mp_result`/`_mp_emit` call sites by `tests/test-doc-contract-fields.sh`
+- **aggregate_board_cancelled_carveout** — a `group`/`feature` review unit reached readiness only because tasks were carried out of it as `CANCELLED`; fields `unit`, `cancelled_tasks` (the carried-out task ids), `implemented`, `total`. The event and the field are both named for `CANCELLED` because that is the only status the carve-out acts on — a `BLOCKED` task is never carried out. Readiness reached by exclusion and readiness where every task shipped must not read identically
 - **stop_gate** — a gate ended or short-circuited an autonomous run rather than exiting silently; `reason` values include `in_flight_hold`, `in_flight_stale`, `in_flight_orphan` (a provably non-background in-flight marker found at Stop time — `background: "false"`, or a named dispatch whose report contract owns it — so the marker is moved to `nazgul/in-flight/quarantine/` and the loop continues normally; fields `unit`/`agent`/`background`), `in_flight_unverifiable` (dispatch class not observable at write time; fires on every dispatch where `run_in_background` is omitted from the exposed schema — same fields as `in_flight_orphan` but explicitly NOT the same disposition: the marker is LEFT IN PLACE, never quarantined, because the class was never observed, the dispatch may still be running, and `mv` is irreversible — it would also foreclose #218's fix, which reconciles these markers against the Stop payload's `background_tasks[]`. See In-Flight Dispatch Hold above and #218), and `stacking_unavailable` (stacking enabled but the tooling is unusable — the loop fell back to a plain PR)
 - **in_flight_swept** — the SessionStart sweep quarantined an over-age in-flight marker; fields `source` (`session_start_sweep`), `unit`, and `age_minutes` (a JSON number). Named distinctly from the `stop_gate` reason `in_flight_orphan` ON PURPOSE (PR #223 review #2): `orphan` asserts a PROVEN dispatch class, whereas this sweep only ever proves AGE. Same quarantine directory, different producer, different fields, different claim — a consumer keying only on `stop_gate` misses every SessionStart sweep, and one keying on `in_flight_orphan` must not count these as leaks. Skipped entirely when `guards.in_flight_hold` is `false` or when SessionStart's `source` is `compact` (compaction is not a new session, and sweeping there destroyed a running AFK loop's crashed-subagent evidence)
 - **dispatch_guard_background_unverifiable** — `scripts/parallel-dispatch-guard.sh` allowed an unnamed reviewer dispatch whose payload carried no `run_in_background` field at all, because on schemas lacking that field it is unsupplyable (#205); fields `agent`/`caller`

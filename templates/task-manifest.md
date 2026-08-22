@@ -10,7 +10,7 @@ status: PLANNED
 - **ID**: TASK-000
 - **Group**: 0
 - **Status**: (see `status:` in the frontmatter block at the top — that is canonical, read by scripts/lib/structured-state.sh; not duplicated here to avoid drift)
-<!-- Valid states: PLANNED | READY | IN_PROGRESS | IMPLEMENTED | IN_REVIEW | APPROVED | CHANGES_REQUESTED | DONE | BLOCKED
+<!-- Valid states: PLANNED | READY | IN_PROGRESS | IMPLEMENTED | IN_REVIEW | APPROVED | CHANGES_REQUESTED | DONE | BLOCKED | CANCELLED
      State machine rules — NO skipping states:
        PLANNED -> READY (when all depends_on tasks are DONE, or APPROVED in YOLO)
        READY -> IN_PROGRESS (when implementer claims the task)
@@ -21,10 +21,20 @@ status: PLANNED
        IN_REVIEW -> CHANGES_REQUESTED (when ANY reviewer rejects)
        APPROVED -> DONE (when the Task-PR merges, YOLO + task-pr only)
        CHANGES_REQUESTED -> IN_PROGRESS (when implementer addresses feedback)
-       IN_PROGRESS/CHANGES_REQUESTED -> BLOCKED (when max retries hit or unresolvable) -->
+       IN_PROGRESS/CHANGES_REQUESTED -> BLOCKED (when max retries hit or unresolvable)
+       IMPLEMENTED -> DONE (ONLY with verified `## Merge Evidence` below — never unconditional)
+       <any non-terminal state> -> CANCELLED (operator declares the task will never ship, via
+         /nazgul:task skip; refused out of a `Blocked kind: reconciliation` quarantine)
+     DONE and CANCELLED are both terminal — neither has an out-edge. -->
 - **Depends on**: none
 <!-- Comma-separated task IDs, e.g. TASK-001, TASK-002
-     Task cannot move to READY until ALL dependencies are DONE.
+     Task cannot move to READY until every dependency SATISFIES the gate, which is not the same as
+     being DONE (`ttg_dependency_satisfied`, scripts/lib/task-transition-guard.sh):
+       review_gate.granularity = task     -> DONE (or APPROVED in YOLO)
+       review_gate.granularity = group|feature -> IMPLEMENTED, IN_REVIEW, APPROVED, or DONE, because
+         every task parks at IMPLEMENTED until ONE aggregate board and DONE is unsatisfiable there
+       any granularity                    -> CANCELLED also satisfies: a task that will never ship is
+         a dependency that will never be met, so the id STAYS on this line rather than being deleted
      The stop hook auto-promotes PLANNED -> READY when deps are met. -->
 - **Delegates to**: none
 <!-- Specialist agents this task delegates to, e.g. designer, frontend-dev
@@ -92,6 +102,68 @@ status: PLANNED
        - result: FAILED (exit 1) — "FAIL: guard blocks a 6-line run in a .sh file"
        - captured-by: scripts/red-run.sh at 2026-08-04T11:02:31Z
      - red-run: N/A — docs-only -->
+
+## Merge Evidence
+<!-- Populated by scripts/close-objective.sh (/nazgul:complete), the SOLE writer of this section.
+     No agent hand-writes it. The closer asks the host about the PR through the merge-provider seam
+     (scripts/lib/merge-provider.sh) and writes these fields only when the host answered `ok` AND
+     reported the PR merged; every other seam outcome is a named skip and nothing is written.
+
+     This is what makes IMPLEMENTED -> DONE reachable at all — work that merged outside the loop can
+     be closed on the host's answer instead of on a hand-edited `status:` field. For IN_REVIEW -> DONE
+     it is an ALTERNATIVE to the review route, never a bypass: the review route is evaluated first and
+     the accepted route is always named on stderr.
+
+     The `## Merge Evidence` heading IS the enforcement boundary — `ttg_verify_merge_evidence`
+     (scripts/lib/task-transition-guard.sh) reads only what falls under it, exactly as
+     `ttg_verify_commit_evidence` reads only what falls under `## Commits`. A `host:` or `pr:` line
+     anywhere else in this manifest is invisible to the gate.
+
+     THE SHAPE CHECK IS ONLY THE FIRST HALF. The gate does not stop at counting fields: it calls
+     `merge_provider_pr_state` and admits the edge ONLY when the host answered `result: "ok"` AND
+     `merged: true`, and when the host's own `merged-at`, `merge-commit` and head branch match what
+     is recorded here. A gate that stopped at the shape would certify whoever typed the lines, which
+     is the forgery route this section exists to remove.
+
+     AND IT ASKS WHOSE PR IT IS, AND WHOSE TASK. "Is PR N merged?" is not the question — "did THIS
+     objective ship as PR N, and is this one of its tasks?" is. `head-ref` must equal the head branch
+     the host reports, and that branch must be this objective's `branch.feature` or the branch of the
+     `stack.layers[]` entry registered for its `feat_id`; and this manifest must be listed in the
+     `## Tasks` roster of the objective's own nazgul/plan.md, whose frontmatter `feat_id` must agree
+     with config's. Without the first binding a genuinely merged PR of ANY other objective would be
+     real, host-verified evidence for closing any task on disk; without the second, this objective's
+     own genuine merge would close every other objective's stranded manifests too.
+
+     Six required fields, each shape-checked — `host`, `pr`, `merged-at`, `merge-commit`, `head-ref`,
+     `recorded-by` — and nine closed refusal reasons: `absent` (no section, or one with nothing in
+     it), `commented_out` (content present but only inside an HTML comment: a comment is not a record,
+     and this template's own block reads as exactly that), `truncated` (a required field is missing),
+     `malformed` (a field is present but fails its shape check, including a `recorded-by` naming
+     something outside the closed producer set), `not_merged` (the host ANSWERED and says this PR is
+     not merged), `unverifiable` (the host could not be asked, or answered unusably, or reported
+     merged without returning the fields to compare against), `contradicted` (the host answered and
+     its `merged-at`, its `merge-commit`, its head branch, or the merge commit's containment in the
+     base disagrees with this section), `not_this_objective` (the host confirms the merge, but of a
+     PR that is not this objective's), and `not_this_objectives_task` (it IS this objective's merged
+     PR, but this manifest is not in this objective's roster — or no roster could be read at all).
+     Each emits `merge_evidence_missing`. `unverifiable` and `not_merged` are separate on purpose:
+     "could not look" is not "not merged". There is NO kill switch: a switch on the last gate
+     before DONE would be the bypass.
+
+     Git ancestry is corroboration and never a predicate — after a server-side squash no SHA recorded
+     under `## Commits` reaches the merge commit, so `squash_signature` is the expected reading there
+     and is recorded, not blocked on.
+
+     Example (all six fields — a block missing any one of them is refused as `truncated`). Every
+     value below is deliberately unresolvable against any real host: an example that names a real
+     merged PR and its real merge commit is a working forgery skeleton shipped inside the artifact
+     this gate polices.
+     - **host**: example.invalid
+     - **pr**: 999999
+     - **merged-at**: 2026-01-01T00:00:00Z
+     - **merge-commit**: 0000000000000000000000000000000000000000
+     - **head-ref**: feat/EXAMPLE-000-example-objective
+     - **recorded-by**: scripts/close-objective.sh (host API, ok) -->
 
 ## Description
 <!-- Clear, specific description of what this task accomplishes.

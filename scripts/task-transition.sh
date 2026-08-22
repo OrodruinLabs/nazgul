@@ -121,7 +121,7 @@ QUARANTINE_FROM=$(repair_field "Blocked from")
 QUARANTINE_OBSERVED=$(repair_field "Blocked observed")
 for _field_pair in "Blocked from:$QUARANTINE_FROM" "Blocked observed:$QUARANTINE_OBSERVED"; do
   case "${_field_pair##*:}" in
-    PLANNED|READY|IN_PROGRESS|IMPLEMENTED|IN_REVIEW|APPROVED|CHANGES_REQUESTED|DONE|BLOCKED) ;;
+    PLANNED|READY|IN_PROGRESS|IMPLEMENTED|IN_REVIEW|APPROVED|CHANGES_REQUESTED|DONE|BLOCKED|CANCELLED) ;;
     *) repair_deny "quarantine metadata is incomplete: '${_field_pair%%:*}' is '${_field_pair##*:}', not a canonical status" "corrupt_quarantine_metadata" ;;
   esac
 done

@@ -242,6 +242,90 @@ for safe_cmd in \
   assert_exit_code "allowed MF-028: '$safe_cmd'" "$ec" 0
 done
 
+# --- TASK-031: every force-push separator spelling keeps the verdict it has
+# today, so replacing the splitter cannot be a silent behaviour change. ---
+for bad_cmd in \
+  "git push --force origin main; echo done" \
+  "echo start; git push --force origin main" \
+  "git push --force origin main && echo ok" \
+  "git push --force origin main || echo failed" \
+  "git status | grep ahead && git push -f origin master" \
+  "git push --force origin main | tee push.log" \
+  "git push --force main" \
+  "git push -f master"; do
+  ec=$(get_exit_code "$bad_cmd")
+  assert_exit_code "blocked TASK-031: '$bad_cmd'" "$ec" 2
+  output=$(run_guard "$bad_cmd")
+  assert_contains "reason TASK-031 for '$bad_cmd'" "$output" "Force push to main/master branch"
+done
+
+# Each of these DOES satisfy all three predicates when read as one string, so a
+# separator that stopped splitting would over-block it. Allow proves it split.
+for safe_cmd in \
+  "git push --force feature/x | grep main" \
+  "git push --force feature/x; grep main" \
+  "git push --force feature/x || echo main" \
+  "git push --force feature/x && echo main"; do
+  ec=$(get_exit_code "$safe_cmd")
+  assert_exit_code "allowed TASK-031 (separator participates): '$safe_cmd'" "$ec" 0
+done
+
+# Anchoring rather than splitting: `main` here is a path fragment or quoted
+# prose, so no segment ever names it as a branch word (LR-005).
+for safe_cmd in \
+  "git push --force feature/x" \
+  "git push origin release/main-line --force" \
+  "echo 'do not git push --force to main'"; do
+  ec=$(get_exit_code "$safe_cmd")
+  assert_exit_code "allowed TASK-031 (anchored, not substring): '$safe_cmd'" "$ec" 0
+done
+
+# The exact string CodeRabbit named. It is allowed, and correctly so: `;main` is
+# a separate command word, not a push target — blocking it would be the defect.
+ec=$(get_exit_code "git push --force;main")
+assert_exit_code "allowed TASK-031: 'git push --force;main' (;main is its own command)" "$ec" 0
+
+# TASK-031 AC3: the reported "BSD/macOS sed writes a literal n" mechanism is FALSE
+# on this host — it writes a real newline. But `\n` there is undefined by POSIX.
+FP_REAL_SED="$(command -v sed)"
+FP_STUB_DIR=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-fp-sed-XXXXXX")
+cat > "$FP_STUB_DIR/sed" <<EOF
+#!/usr/bin/env bash
+
+# A sed that does not honour the undefined \`\n\` replacement escape, and
+# substitutes the literal character \`n\` instead.
+fp_args=()
+for fp_a in "\$@"; do fp_args+=("\${fp_a//\\\\n/n}"); done
+exec "$FP_REAL_SED" "\${fp_args[@]}"
+EOF
+chmod +x "$FP_STUB_DIR/sed"
+FP_COMPOUND="git push --force origin main; echo done"
+
+# Controls first: an uninstalled stub, or a host sed that already merged, would
+# let every assertion below pass while measuring nothing (the TASK-030 class).
+FP_REAL_LINES=$(printf '%s\n' "$FP_COMPOUND" | sed -E 's/(\&\&|\|\||;|\|)/\n/g' | wc -l | tr -d ' ')
+FP_STUB_LINES=$(PATH="$FP_STUB_DIR:$PATH"; printf '%s\n' "$FP_COMPOUND" | sed -E 's/(\&\&|\|\||;|\|)/\n/g' | wc -l | tr -d ' ')
+assert_eq "control TASK-031: this host's sed DOES emit a newline (2 segments)" "$FP_REAL_LINES" "2"
+assert_eq "control TASK-031: the stub sed is in effect and merges to 1 segment" "$FP_STUB_LINES" "1"
+
+fp_guard_probe() {
+  # "<exit>\x1f<stderr>" with $1 prepended to PATH. Deliberately not
+  # _record_exercised: the differential replay runs with the ambient PATH.
+  local pathdir="$1" cmd="$2" ec=0 out
+  out=$(PATH="$pathdir:$PATH"; echo "$cmd" | bash "$GUARD" 2>&1 >/dev/null) || ec=$?
+  printf '%s\x1f%s' "$ec" "$out"
+}
+
+FP_RES=$(fp_guard_probe "$FP_STUB_DIR" "$FP_COMPOUND")
+FP_EC="${FP_RES%%$'\x1f'*}"; FP_OUT="${FP_RES#*$'\x1f'}"
+assert_exit_code "TASK-031: compound force-push still BLOCKS under a non-conforming sed" "$FP_EC" 2
+assert_contains "TASK-031: and blocks for the force-push reason, not an incidental failure" "$FP_OUT" "Force push to main/master branch"
+
+FP_RES=$(fp_guard_probe "$FP_STUB_DIR" "git push --force feature/x")
+FP_EC="${FP_RES%%$'\x1f'*}"
+assert_exit_code "TASK-031: the same stub does not turn an allowed push into a block" "$FP_EC" 0
+rm -rf "$FP_STUB_DIR"
+
 # --- Dangerous system commands (should exit 2) ---
 for bad_cmd in \
   ':(){:|:&};:' \
@@ -735,6 +819,89 @@ ec=$(get_exit_code "$(printf 'psql\nDROP TABLE users;')")
 assert_exit_code "blocked C1-sql: DB-CLI token and DROP TABLE on separate lines" "$ec" 2
 output=$(run_guard "$(printf 'psql\nDROP TABLE users;')")
 assert_contains "reason C1-sql" "$output" "NAZGUL SAFETY"
+
+# --- RW-B (security Finding 3): the extracted denylist must fail CLOSED — a
+# PreToolUse hook blocks only on exit 2, so an unloadable library allowed all. ---
+DP_ABSENT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-dp-absent-XXXXXX")
+mkdir -p "$DP_ABSENT_DIR/lib"
+cp "$GUARD" "$DP_ABSENT_DIR/pre-tool-guard.sh"
+DESTRUCTIVE_CMD="rm -rf /"
+
+dp_probe() {
+  # Echoes "<exit_code>\x1f<combined output>" for the COPIED guard. Deliberately
+  # not _record_exercised: this probes the load path, not a verdict.
+  local ec=0 out
+  out=$(echo "$DESTRUCTIVE_CMD" | bash "$DP_ABSENT_DIR/pre-tool-guard.sh" 2>&1) || ec=$?
+  printf '%s\x1f%s' "$ec" "$out"
+}
+
+# Case 1: library missing entirely (partial install / scripts/lib not synced).
+rm -f "$DP_ABSENT_DIR/lib/destructive-patterns.sh"
+DP_RES=$(dp_probe)
+DP_EC="${DP_RES%%$'\x1f'*}"; DP_OUT="${DP_RES#*$'\x1f'}"
+assert_exit_code "denylist missing: guard fails CLOSED (exit 2), never allows" "$DP_EC" 2
+assert_contains "denylist missing: diagnostic names the missing authority" "$DP_OUT" "lib/destructive-patterns.sh"
+assert_contains "denylist missing: diagnostic is a NAZGUL SAFETY block" "$DP_OUT" "NAZGUL SAFETY"
+assert_contains "denylist missing: diagnostic states which failure occurred" "$DP_OUT" "file is missing"
+
+# Case 2: library present but unreadable (mode 000). Skipped under a uid that
+# ignores the permission bits, since the probe would then be vacuous.
+cp "$REPO_ROOT/scripts/lib/destructive-patterns.sh" "$DP_ABSENT_DIR/lib/destructive-patterns.sh"
+chmod 000 "$DP_ABSENT_DIR/lib/destructive-patterns.sh"
+if [ -r "$DP_ABSENT_DIR/lib/destructive-patterns.sh" ]; then
+  _skip "denylist unreadable: guard fails CLOSED (running as a uid that bypasses mode 000)"
+else
+  DP_RES=$(dp_probe)
+  DP_EC="${DP_RES%%$'\x1f'*}"; DP_OUT="${DP_RES#*$'\x1f'}"
+  assert_exit_code "denylist unreadable: guard fails CLOSED (exit 2)" "$DP_EC" 2
+  assert_contains "denylist unreadable: diagnostic names the authority" "$DP_OUT" "lib/destructive-patterns.sh"
+fi
+chmod 644 "$DP_ABSENT_DIR/lib/destructive-patterns.sh"
+
+# Case 3: library loads but defines nothing (truncated/renamed API). Sourcing
+# succeeds, so only a post-source definition check catches this.
+printf '#!/usr/bin/env bash\n# truncated\n' > "$DP_ABSENT_DIR/lib/destructive-patterns.sh"
+DP_RES=$(dp_probe)
+DP_EC="${DP_RES%%$'\x1f'*}"; DP_OUT="${DP_RES#*$'\x1f'}"
+assert_exit_code "denylist defines no screen: guard fails CLOSED (exit 2)" "$DP_EC" 2
+assert_contains "denylist defines no screen: diagnostic names dp_scan_command" "$DP_OUT" "dp_scan_command"
+
+# Case 4 (S-4): a library that does not PARSE. `bash -n` establishes this as its
+# own fact, so the diagnostic names the real cause instead of "could not be sourced".
+printf '#!/usr/bin/env bash\ndp_scan_command() {\n  if [ 1\n}\n' > "$DP_ABSENT_DIR/lib/destructive-patterns.sh"
+DP_RES=$(dp_probe)
+DP_EC="${DP_RES%%$'\x1f'*}"; DP_OUT="${DP_RES#*$'\x1f'}"
+assert_exit_code "denylist syntax error: guard fails CLOSED (exit 2)" "$DP_EC" 2
+assert_contains "denylist syntax error: diagnostic is a NAZGUL SAFETY block" "$DP_OUT" "NAZGUL SAFETY"
+# bash prints its own "syntax error near..." to the same stream, so the guard's
+# OWN sentence is what is asserted — the bare token would pass either way.
+assert_contains "denylist syntax error: the guard's own diagnostic names the parse failure" "$DP_OUT" "screen unavailable: file has a syntax error"
+
+# Case 5 (S-4): a library that parses, defines both screens, and whose LAST top-level
+# statement returns non-zero. `source` reports that status; the library is not broken.
+cp "$REPO_ROOT/scripts/lib/destructive-patterns.sh" "$DP_ABSENT_DIR/lib/destructive-patterns.sh"
+printf '\nfalse\n' >> "$DP_ABSENT_DIR/lib/destructive-patterns.sh"
+DP_RES=$(dp_probe)
+DP_EC="${DP_RES%%$'\x1f'*}"; DP_OUT="${DP_RES#*$'\x1f'}"
+assert_exit_code "denylist returns non-zero on load: still blocks the destructive control (exit 2)" "$DP_EC" 2
+assert_not_contains "denylist returns non-zero on load: block is the pattern verdict, not a load failure" "$DP_OUT" "screen unavailable"
+assert_contains "denylist returns non-zero on load: the benign non-zero is reported, not silent" "$DP_OUT" "returned 1 on load"
+DP_NZ_EC=0
+echo "ls -la" | bash "$DP_ABSENT_DIR/pre-tool-guard.sh" >/dev/null 2>&1 || DP_NZ_EC=$?
+assert_exit_code "denylist returns non-zero on load: a benign command is still allowed" "$DP_NZ_EC" 0
+
+# Control: with the real library restored, the SAME copied guard blocks for the
+# ordinary reason and allows a benign command — proving the three cases above
+# measure the load path, not a permanently-broken copy.
+cp "$REPO_ROOT/scripts/lib/destructive-patterns.sh" "$DP_ABSENT_DIR/lib/destructive-patterns.sh"
+DP_RES=$(dp_probe)
+DP_EC="${DP_RES%%$'\x1f'*}"; DP_OUT="${DP_RES#*$'\x1f'}"
+assert_exit_code "control: restored library still blocks rm -rf /" "$DP_EC" 2
+assert_not_contains "control: block is the pattern verdict, not a load failure" "$DP_OUT" "screen unavailable"
+DP_CTRL_EC=0
+echo "ls -la" | bash "$DP_ABSENT_DIR/pre-tool-guard.sh" >/dev/null 2>&1 || DP_CTRL_EC=$?
+assert_exit_code "control: restored library allows a benign command" "$DP_CTRL_EC" 0
+rm -rf "$DP_ABSENT_DIR"
 
 # --- AC1: differential verdict harness. Every command string this suite has
 # exercised the guard with (recorded above via _record_exercised, including
