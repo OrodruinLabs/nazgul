@@ -1022,6 +1022,160 @@ assert_contains "P12c: and the full run still reaches its coverage line" \
   "$(printf '%s' "$DR_FULL" | tail -1)" "$DR_ROSTER_COUNT scanned"
 teardown_temp_dir
 
+# --- (n) stop-payload: P12e/f/g/h — jq selection, why routing, bus-off (PR #245) ---
+# Spelled out in full: bare "FIELD PRESENT" is a substring of the wrong-shape outcome.
+_DR_SP_TOKENS=(
+  'FIELD PRESENT BUT WRONG SHAPE'
+  'FIELD PRESENT at the last recorded Stop'
+  'FIELD ABSENT at the last recorded Stop'
+  'PAYLOAD UNDETERMINED'
+  'NEVER OBSERVED'
+  'TELEMETRY BUS DISABLED'
+  'UNSELECTABLE RECORD'
+  'UNREADABLE RECORD'
+)
+# Every outcome token present in one run, joined with "|" — so a single assert_eq
+# pins the expected outcome AND the absence of all seven others.
+_dr_sp_outcomes() {
+  local out="$1" tok acc=""
+  for tok in "${_DR_SP_TOKENS[@]}"; do
+    case "$out" in *"$tok"*) acc="$acc$tok|" ;; esac
+  done
+  printf '%s' "$acc"
+}
+_dr_sp_msg() { printf '%s' "$1" | awk -F'\t' '$2 == "stop-payload" { print $3; exit }'; }
+
+DR_SP_TOK_MISSING=0
+for tok in "${_DR_SP_TOKENS[@]}"; do
+  grep -qF "$tok" "$DOCTOR" || DR_SP_TOK_MISSING=$((DR_SP_TOK_MISSING + 1))
+done
+assert_eq "P12e floor: every enumerated outcome token is a real string in doctor.sh" \
+  "${#_DR_SP_TOKENS[@]}/$DR_SP_TOK_MISSING" "8/0"
+
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+  '.board.enabled = false' '.guards.git_hooks = false'
+mkdir -p "$TEST_DIR/nazgul/logs"
+DR_SP_EVENTS="$TEST_DIR/nazgul/logs/events.jsonl"
+_dr_sp_run() { (cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR bash "$DOCTOR" --only=stop-payload 2>/dev/null); }
+
+# P12e: a pretty-printed record with reordered keys — the exact shape the old
+# compact-substring grep skipped, producing a false NEVER OBSERVED.
+printf '{\n  "bg_seen" : "yes",\n  "event" : "stop_payload_observed",\n  "entries": 3, "subagents": 2, "live": 1,\n  "types": "subagent", "statuses": "running"\n}\n' > "$DR_SP_EVENTS"
+assert_eq "P12e floor: the fixture is invisible to the old compact grep, so this case can only pass via jq" \
+  "$(grep -c '"event":"stop_payload_observed"' "$DR_SP_EVENTS")" "0"
+DR_SP_OUT=$(_dr_sp_run)
+assert_eq "P12e: a pretty-printed, key-reordered record is FOUND and reported present" \
+  "$(_dr_sp_outcomes "$DR_SP_OUT")" "FIELD PRESENT at the last recorded Stop|"
+assert_contains "P12e: and its counts are read off the same record" "$DR_SP_OUT" "entries=3 subagents=2 live=1"
+assert_file_contains "P12e: doctor selects records with a jq predicate" \
+  "$DOCTOR" "jq -c 'select(.event == \"stop_payload_observed\")'"
+assert_file_not_contains "P12e: and no longer with a compact-format grep" \
+  "$DOCTOR" "grep '\"event\":\"stop_payload_observed\"'"
+
+# Appended AFTER: last-record-wins must survive the switch from grep to jq.
+printf '{\n  "why" : "field_absent",\n  "event" : "stop_payload_observed",\n  "bg_seen" : "unknown"\n}\n' >> "$DR_SP_EVENTS"
+assert_eq "P12e: with jq selection the LAST matching record still decides, across pretty-printed lines" \
+  "$(_dr_sp_outcomes "$(_dr_sp_run)")" "FIELD ABSENT at the last recorded Stop|"
+
+# P12f: one outcome per why; read_timeout is a strict PREFIX of read_timeout_partial, so both run.
+# DR_SP_MSG is assigned, not printed: a $(...) capture would discard the assertions' PASS/FAIL tally.
+_dr_sp_why_case() {
+  local why="$1" expected="$2"
+  jq -cn --arg w "$why" '{sv:1,event:"stop_payload_observed",bg_seen:"unknown",why:$w}' > "$DR_SP_EVENTS"
+  DR_SP_OUT=$(_dr_sp_run)
+  assert_eq "P12f: why=$why routes to exactly one outcome and no other" \
+    "$(_dr_sp_outcomes "$DR_SP_OUT")" "$expected|"
+  assert_contains "P12f: why=$why is named literally in the message" "$DR_SP_OUT" "why=$why"
+  DR_SP_MSG=$(_dr_sp_msg "$DR_SP_OUT")
+}
+_dr_sp_why_case field_absent 'FIELD ABSENT at the last recorded Stop'; DR_SP_M_ABSENT="$DR_SP_MSG"
+_dr_sp_why_case field_wrong_type 'FIELD PRESENT BUT WRONG SHAPE'; DR_SP_M_SHAPE="$DR_SP_MSG"
+_dr_sp_why_case no_stdin 'PAYLOAD UNDETERMINED'; DR_SP_M_NOSTDIN="$DR_SP_MSG"
+_dr_sp_why_case read_timeout 'PAYLOAD UNDETERMINED'; DR_SP_M_TIMEOUT="$DR_SP_MSG"
+_dr_sp_why_case read_timeout_partial 'PAYLOAD UNDETERMINED'; DR_SP_M_PARTIAL="$DR_SP_MSG"
+_dr_sp_why_case not_json 'PAYLOAD UNDETERMINED'; DR_SP_M_NOTJSON="$DR_SP_MSG"
+_dr_sp_why_case no_jq 'PAYLOAD UNDETERMINED'; DR_SP_M_NOJQ="$DR_SP_MSG"
+_dr_sp_why_case bad_timeout 'PAYLOAD UNDETERMINED'; DR_SP_M_UNKNOWN="$DR_SP_MSG"
+
+# Eight equal empty strings also sort -u to one line, so the non-empty floor is
+# what stops "eight distinct" from being satisfiable by eight captures of nothing.
+DR_SP_ALL_MSGS=$(printf '%s\n' "$DR_SP_M_ABSENT" "$DR_SP_M_SHAPE" "$DR_SP_M_NOSTDIN" "$DR_SP_M_TIMEOUT" \
+  "$DR_SP_M_PARTIAL" "$DR_SP_M_NOTJSON" "$DR_SP_M_NOJQ" "$DR_SP_M_UNKNOWN")
+assert_eq "P12f floor: all eight why messages were actually captured" \
+  "$(printf '%s\n' "$DR_SP_ALL_MSGS" | grep -c .)" "8"
+assert_eq "P12f: eight whys produce eight DISTINCT messages — each names its own reason" \
+  "$(printf '%s\n' "$DR_SP_ALL_MSGS" | sort -u | wc -l | tr -d ' ')" "8"
+assert_eq "P12f: read_timeout_partial is matched whole, never as the read_timeout prefix" \
+  "$([ "$DR_SP_M_PARTIAL" != "$DR_SP_M_TIMEOUT" ] && echo distinct || echo identical)" "distinct"
+assert_contains "P12f: the partial payload is described as truncated by Nazgul's own bound" \
+  "$DR_SP_M_PARTIAL" "truncated by Nazgul's own bound"
+assert_contains "P12f: an unrecognised why is surfaced against the known set, not absorbed" \
+  "$DR_SP_M_UNKNOWN" "not a member of this check's known set"
+# The defect being fixed, stated as a negative: none of the five undetermined
+# whys may claim background_tasks was absent.
+DR_SP_FALSE_ABSENT=0
+for msg in "$DR_SP_M_NOSTDIN" "$DR_SP_M_TIMEOUT" "$DR_SP_M_PARTIAL" "$DR_SP_M_NOTJSON" "$DR_SP_M_NOJQ"; do
+  case "$msg" in *'FIELD ABSENT'*) DR_SP_FALSE_ABSENT=$((DR_SP_FALSE_ABSENT + 1)) ;; esac
+done
+assert_eq "P12f: no unreadable/undetermined why is reported as FIELD ABSENT (5 scanned)" \
+  "$DR_SP_FALSE_ABSENT" "0"
+
+# P12h: jq aborts a JSONL stream at the first malformed line where grep did not,
+# so "selected nothing" must not silently become "never observed".
+printf '{"event":"stop_payload_observed", TRUNCATED\n' > "$DR_SP_EVENTS"
+DR_SP_OUT=$(_dr_sp_run)
+assert_eq "P12h: a file whose only stop_payload_observed line is unparseable is UNSELECTABLE, not never-observed" \
+  "$(_dr_sp_outcomes "$DR_SP_OUT")" "UNSELECTABLE RECORD|"
+assert_contains "P12h: and the unselectable skip is counted as unreadable, not as a checked answer" \
+  "$(cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR bash "$DOCTOR" --only=stop-payload 2>/dev/null | tail -1)" \
+  "unreadable=1), 0 checked"
+teardown_temp_dir
+
+# P12g: telemetry.bus_enabled=false — emit_event writes nothing, so "run one loop
+# iteration and re-run doctor" is advice that can never come true.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+  '.board.enabled = false' '.guards.git_hooks = false' '.telemetry.bus_enabled = false'
+DR_SP_EVENTS="$TEST_DIR/nazgul/logs/events.jsonl"
+DR_SP_OUT=$(_dr_sp_run)
+assert_eq "P12g: with the bus off and no log, the outcome is bus-disabled — never NEVER OBSERVED" \
+  "$(_dr_sp_outcomes "$DR_SP_OUT")" "TELEMETRY BUS DISABLED|"
+assert_contains "P12g: the message names the config key that made the check unanswerable" \
+  "$DR_SP_OUT" "telemetry.bus_enabled is false"
+assert_not_contains "P12g: and never repeats the impossible remediation" \
+  "$DR_SP_OUT" "Run one loop iteration (any Stop emits the record)"
+assert_contains "P12g: the bus-off skip is counted as not-applicable-config" \
+  "$(cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR bash "$DOCTOR" --only=stop-payload 2>/dev/null | tail -1)" \
+  "not-applicable-config=1"
+
+# Same fixture, bus back on: proves the branch keys on the config, not on the log.
+mkdir -p "$TEST_DIR/nazgul/logs"
+jq -cn '{sv:1,event:"stop_payload_observed",bg_seen:"yes",entries:1,subagents:0,live:0,types:"shell",statuses:"completed"}' > "$DR_SP_EVENTS"
+assert_eq "P12g: a stale record cannot be refreshed while the bus is off, so it is still bus-disabled" \
+  "$(_dr_sp_outcomes "$(_dr_sp_run)")" "TELEMETRY BUS DISABLED|"
+assert_contains "P12g: and the stale-record wording differs from the no-record wording" \
+  "$(_dr_sp_msg "$(_dr_sp_run)")" "can never be refreshed"
+create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+  '.board.enabled = false' '.guards.git_hooks = false' '.telemetry.bus_enabled = true'
+assert_eq "P12g: flipping the bus back on returns the same record to FIELD PRESENT" \
+  "$(_dr_sp_outcomes "$(_dr_sp_run)")" "FIELD PRESENT at the last recorded Stop|"
+teardown_temp_dir
+
+assert_file_not_contains "P12g: SKILL.md no longer claims the three-outcome set" \
+  "$REPO_ROOT/skills/doctor/SKILL.md" "present, absent, or never observed"
+DR_SP_SKILL_MISSING=0
+for tok in 'field present but wrong shape' 'field absent' 'payload undetermined' \
+           'record unselectable' 'never observed' 'telemetry bus disabled'; do
+  grep -qF "$tok" "$REPO_ROOT/skills/doctor/SKILL.md" || DR_SP_SKILL_MISSING=$((DR_SP_SKILL_MISSING + 1))
+done
+assert_eq "P12g: SKILL.md enumerates all 6 named outcomes doctor can report (6 scanned)" \
+  "$DR_SP_SKILL_MISSING" "0"
+
 # --- (n) stop-payload: P12d — the enrollment boundary (ruling item 7) ---
 assert_file_contains "P12d: the RULES §15 registry still names TEN bound entry points" \
   "$REPO_ROOT/RULES.md" "Ten entry"
