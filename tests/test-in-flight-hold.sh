@@ -802,7 +802,7 @@ _p10_check "P10a: an attempt ledger, never config state — the whole config.jso
 _p10_check "P10a: one ledger file under nazgul/logs/.in-flight-holds/" "$(_p10_ledger_count)" "1"
 P10_LEDGER=$(find "$TEST_DIR/nazgul/logs/.in-flight-holds" -type f 2>/dev/null | head -1)
 P10_LEDGER_BASE="${P10_LEDGER##*/}"
-_p10_check "P10a: the ledger records the one hold taken" "$(cat "$P10_LEDGER" 2>/dev/null)" "1"
+_p10_check "P10a: the ledger records the one hold taken on its count line" "$(head -n 1 "$P10_LEDGER" 2>/dev/null)" "1"
 _p10_check "P10a: named by a 16-char hash — the _resume_attempts_file convention, not a new one" \
   "${#P10_LEDGER_BASE}" "16"
 
@@ -833,7 +833,7 @@ _p10_check "P10b: the marker is left exactly where it was" \
   "$([ -f "$TEST_DIR/nazgul/in-flight/valve-a.json" ] && echo present || echo absent)" "present"
 _p10_check "P10b: exhaustion quarantines nothing" \
   "$(find "$TEST_DIR/nazgul/in-flight/quarantine" -type f 2>/dev/null | wc -l | tr -d ' ')" "0"
-_p10_check "P10b: the spent ledger is not driven past the cap" "$(cat "$P10_LEDGER" 2>/dev/null)" "1"
+_p10_check "P10b: the spent ledger is not driven past the cap" "$(head -n 1 "$P10_LEDGER" 2>/dev/null)" "1"
 
 _write_marker "$TEST_DIR/nazgul/in-flight/valve-b.json" "nazgul:implementer" "TASK-009" "$(date +%s)" "missing"
 run_hook "$P10_PAYLOAD"
@@ -907,6 +907,158 @@ _p10_check "prior art: it degrades to the named fallback ledger, as _resume_atte
 _p10_check "prior art: and says so on stderr rather than degrading silently" \
   "$(printf '%s' "$HOOK_OUTPUT" | grep -c 'in-flight hold ledger hash fallback')" "1"
 teardown_temp_dir
+
+# P10e (F6) — the ZERO-marker live hold. Its key used to be sha256("") = e3b0c44298fc1c14, a
+# lifetime constant, so this arm got exactly one hold per project and then degraded silently.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 5'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+P10E_A='{"hook_event_name":"Stop","background_tasks":[{"id":"sub-alpha","type":"subagent","status":"running"}]}'
+P10E_B='{"hook_event_name":"Stop","background_tasks":[{"id":"sub-bravo","type":"subagent","status":"running"}]}'
+P10E_C='{"hook_event_name":"Stop","background_tasks":[{"id":"sub-charlie","type":"subagent","status":"running"}]}'
+run_hook "$P10E_A"; P10E_EC1="$HOOK_EC"
+run_hook "$P10E_A"; P10E_EC2="$HOOK_EC"
+run_hook "$P10E_B"; P10E_EC3="$HOOK_EC"
+run_hook "$P10E_C"; P10E_EC4="$HOOK_EC"
+# The four exit codes as ONE value: a tree that never holds exits 2 four times and a tree that
+# never bounds exits 0 four times, and only the 0/2/0/0 shape distinguishes the fix from both.
+_p10_check "P10e: the zero-marker hold is bounded per EPISODE — taken, refused on the repeat, taken again on each changed one" \
+  "$P10E_EC1/$P10E_EC2/$P10E_EC3/$P10E_EC4" "0/2/0/0"
+_p10_check "P10e: no marker was ever present, so this really is the zero-marker arm the constant key broke" \
+  "$(find "$TEST_DIR/nazgul/in-flight" -maxdepth 1 -type f -name '*.json' 2>/dev/null | wc -l | tr -d ' ')" "0"
+_p10_check "P10e: three holds across three distinct live-subagent sets" "$(_p10_hold_count)" "3"
+_p10_check "P10e: exactly one exhaustion — the repeat of the SAME episode" "$(_p10_exhausted_count)" "1"
+_p10_check "P10e: and the key still binds, so the fix did not simply unbound the arm" \
+  "$(printf '%s' "$(_p10_exhausted_line)" | jq -r '.holds_taken')" "1"
+# Three files with three DISTINCT names: "a ledger file exists" is satisfied by the constant key too.
+_p10_check "P10e: three ledger entries, one per episode" "$(_p10_ledger_count)" "3"
+_p10_check "P10e: ... under three different names — the key is a property of the episode, not a constant" \
+  "$(find "$TEST_DIR/nazgul/logs/.in-flight-holds" -type f 2>/dev/null | sed 's|.*/||' | sort -u | wc -l | tr -d ' ')" "3"
+_p10_check "P10e: none of them is sha256(\"\"), the lifetime constant the empty key hashed to" \
+  "$([ -e "$TEST_DIR/nazgul/logs/.in-flight-holds/e3b0c44298fc1c14" ] && echo present || echo absent)" "absent"
+teardown_temp_dir
+
+# P10j (F6, the other half) — an episode with nothing to key on. The zero-marker key rests on
+# background_tasks[].id, and an undocumented field can go away; a constant key is what it replaced.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 5'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+run_hook '{"hook_event_name":"Stop","background_tasks":[{"type":"subagent","status":"running"}]}'
+P10J_LINE=$(grep '"reason":"in_flight_hold_unbudgetable"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+_p10_check "P10j: the payload really is live, so the hold arm was reached and not skipped upstream" \
+  "$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1 | jq -r '.live')" "1"
+_p10_check "P10j: an episode that cannot be keyed is refused, not held on a constant (exit 2)" "$HOOK_EC" "2"
+_p10_check "P10j: no hold was taken" "$(_p10_hold_count)" "0"
+_p10_check "P10j: it is a mechanism failure, not a spent budget" \
+  "$(printf '%s' "$P10J_LINE" | jq -r '.reason')" "in_flight_hold_unbudgetable"
+_p10_check "P10j: holds_taken stays 0 — nothing was spent" \
+  "$(printf '%s' "$P10J_LINE" | jq -r '.holds_taken')" "0"
+_p10_check "P10j: and it says why on stderr rather than degrading silently" \
+  "$(printf '%s' "$HOOK_OUTPUT" | grep -c 'carry no id')" "1"
+_p10_check "P10j: no ledger entry was written for an unkeyable episode" "$(_p10_ledger_count)" "0"
+teardown_temp_dir
+
+# P10f (F6) — the ledger directory is not write-only. Entries name the marker set they were keyed
+# on, so an episode whose markers were cleared takes its entry with it.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+P10F_PAYLOAD='{"hook_event_name":"Stop","background_tasks":[{"id":"s1","type":"subagent","status":"running"}]}'
+_write_marker "$TEST_DIR/nazgul/in-flight/prune-a.json" "nazgul:implementer" "TASK-001" "$(date +%s)" "missing"
+run_hook "$P10F_PAYLOAD"
+P10F_FIRST=$(find "$TEST_DIR/nazgul/logs/.in-flight-holds" -type f 2>/dev/null | head -1)
+_p10_check "P10f: the first episode leaves exactly one ledger entry" "$(_p10_ledger_count)" "1"
+_p10_check "P10f: line 1 is still the count, so the ledger the cap reads is unchanged" \
+  "$(head -n 1 "$P10F_FIRST" 2>/dev/null)" "1"
+_p10_check "P10f: lines 2+ record the marker set it was keyed on — the evidence the prune reads" \
+  "$(tail -n +2 "$P10F_FIRST" 2>/dev/null)" "prune-a.json"
+# subagent-stop.sh's clear, by hand: the set this entry names no longer exists anywhere.
+rm -f "$TEST_DIR/nazgul/in-flight/prune-a.json"
+_write_marker "$TEST_DIR/nazgul/in-flight/prune-b.json" "nazgul:implementer" "TASK-002" "$(date +%s)" "missing"
+run_hook "$P10F_PAYLOAD"
+_p10_check "P10f: a cleared marker set does not leave its entry behind — the directory does not grow" \
+  "$(_p10_ledger_count)" "1"
+_p10_check "P10f: ... and the entry that went is the OLD one, so this is a prune and not a no-op" \
+  "$([ -e "$P10F_FIRST" ] && echo present || echo absent)" "absent"
+_p10_check "P10f: the second episode took its own hold, so the surviving entry was really written" \
+  "$(_p10_hold_count)" "2"
+_write_marker "$TEST_DIR/nazgul/in-flight/prune-c.json" "nazgul:implementer" "TASK-003" "$(date +%s)" "missing"
+run_hook "$P10F_PAYLOAD"
+# The trap this closes: a prune that deleted everything would also satisfy "does not grow".
+_p10_check "P10f: an entry whose markers still exist SURVIVES — the prune is evidence-driven, not a truncate" \
+  "$(_p10_ledger_count)" "2"
+_p10_check "P10f: the changed set holds again, so the surviving entry did not refuse it" "$(_p10_hold_count)" "3"
+teardown_temp_dir
+
+# P10g (F8) — the fingerprint's collation is pinned in source. The behavioural half below cannot
+# discriminate on a host whose UTF-8 locale collates like C, which is why the grep carries it.
+_p10_check "P10g: the key's sort runs under LC_ALL=C — a key that varies by locale is not a fingerprint" \
+  "$([ "$(grep -c 'LC_ALL=C sort' "$STOP_HOOK")" -ge 1 ] && echo present || echo absent)" "present"
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+# `-` vs `b` is exactly the ordering that differs between C and a UTF-8 collation.
+_write_marker "$TEST_DIR/nazgul/in-flight/a-b.json" "nazgul:implementer" "TASK-001" "$(date +%s)" "true"
+_write_marker "$TEST_DIR/nazgul/in-flight/ab.json" "nazgul:implementer" "TASK-002" "$(date +%s)" "true"
+HOOK_OUTPUT=$(LC_ALL=C bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+P10G_EC1="$HOOK_EC"
+HOOK_OUTPUT=$(LC_ALL=en_US.UTF-8 bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+_p10_check "P10g: the same marker set under two collations is ONE budget, not two (0 then 2)" \
+  "$P10G_EC1/$HOOK_EC" "0/2"
+_p10_check "P10g: ... keyed to a single ledger entry" "$(_p10_ledger_count)" "1"
+teardown_temp_dir
+
+# P10h (F7) — the budget claim is a read/cap-check/write under one lock. A lock that cannot be
+# acquired means the hold cannot be bounded, and ruling Q1 refuses an unbounded hold.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.current_iteration = 5'
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight" "$TEST_DIR/nazgul/logs/.in-flight-holds.lock"
+_write_marker "$TEST_DIR/nazgul/in-flight/lock-a.json" "nazgul:implementer" "TASK-005" "$(date +%s)" "true"
+run_hook
+P10H_LINE=$(grep '"reason":"in_flight_hold_unbudgetable"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
+_p10_check "P10h: the blocker is really in force — the lock path is a directory, so it cannot be opened for writing" \
+  "$([ -d "$TEST_DIR/nazgul/logs/.in-flight-holds.lock" ] && echo dir || echo other)" "dir"
+_p10_check "P10h: a claim that cannot take the lock skips the hold and continues (exit 2)" "$HOOK_EC" "2"
+_p10_check "P10h: no hold was taken unbounded" "$(_p10_hold_count)" "0"
+# SUBSTRING TRAP: in_flight_hold prefixes both no-hold reasons, so every count carries the closing quote.
+_p10_check "P10h: it wears the mechanism-failure reason, never the spent budget's" \
+  "$(printf '%s' "$P10H_LINE" | jq -r '.reason')" "in_flight_hold_unbudgetable"
+_p10_check "P10h: nothing was spent — holds_taken stays 0 and the cap was never reached" \
+  "$(printf '%s' "$P10H_LINE" | jq -r '.holds_taken')" "0"
+_p10_check "P10h: and no exhaustion was claimed" "$(_p10_exhausted_count)" "0"
+_p10_check "P10h: no ledger entry was written" "$(_p10_ledger_count)" "0"
+_p10_check "P10h: the marker is left exactly where it was" \
+  "$([ -f "$TEST_DIR/nazgul/in-flight/lock-a.json" ] && echo present || echo absent)" "present"
+_p10_check "P10h: the run falls through to an ordinary blocked iteration" \
+  "$(jq -r '.current_iteration' "$TEST_DIR/nazgul/config.json")" "6"
+teardown_temp_dir
+
+# P10i (F7) — the two mechanics the cell above cannot observe from outside: the serialisation
+# emit_event already uses in this process, and a rename rather than a truncate-then-write.
+_p10_check "P10i: the read/cap-check/write is serialised with flock where available" \
+  "$([ "$(grep -c 'flock -w 5 -x 200' "$STOP_HOOK")" -ge 1 ] && echo present || echo absent)" "present"
+_p10_check "P10i: the ledger is renamed into place — a crash mid-truncate reads back as a refreshed budget" \
+  "$([ "$(grep -c 'mv "$tmp" "$file"' "$STOP_HOOK")" -ge 1 ] && echo present || echo absent)" "present"
 
 # AC12: the cap lives in code, and this objective adds no schema surface at all.
 _p10_check "config purity: _IN_FLIGHT_HOLD_CAP is a script constant in scripts/stop-hook.sh" \

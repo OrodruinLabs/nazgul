@@ -194,6 +194,12 @@ IN_FLIGHT_HOLD_ENABLED=$(jq -r 'if .guards.in_flight_hold == false then "false" 
 # ledger, and a config read-modify-write here would put the hold's byte-identical config at risk.
 _IN_FLIGHT_HOLD_CAP=1
 
+# Deliberately NOT guards.in_flight_stale_minutes: an operator's small stale bound must never hand
+# an entry that records no marker set a fresh budget every few minutes.
+_IN_FLIGHT_HOLD_TTL_MIN=1440
+
+if command -v flock >/dev/null 2>&1; then _IN_FLIGHT_HAS_FLOCK=1; else _IN_FLIGHT_HAS_FLOCK=0; fi
+
 # One ledger file per marker set, named by a short hash of it — the shape of subagent-stop.sh's
 # _resume_attempts_file, fallback included: a bare pipeline with no sha256 tool aborts under set -e.
 _in_flight_holds_file() {
@@ -205,6 +211,52 @@ _in_flight_holds_file() {
     hash="fallback"
   fi
   printf '%s/.in-flight-holds/%s' "$NAZGUL_DIR/logs" "$hash"
+}
+
+# Line 1 of a ledger entry is the count; lines 2+ are the marker basenames it was keyed on, which
+# is what lets an entry be retired on evidence — its set is gone — rather than on age alone.
+_in_flight_holds_prune() {
+  local dir="$1" markers="$2" f recorded alive line
+  [ -d "$dir" ] || return 0
+  for f in "$dir"/*; do
+    [ -f "$f" ] || continue
+    recorded=0 alive=no
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      recorded=1
+      if [ -e "$markers/$line" ]; then alive=yes; break; fi
+    done < <(tail -n +2 "$f" 2>/dev/null || true)
+    if [ "$alive" = "yes" ]; then continue; fi
+    if [ "$recorded" = "1" ]; then
+      rm -f "$f" 2>/dev/null || true
+    elif [ -n "$(find "$f" -mmin "+${_IN_FLIGHT_HOLD_TTL_MIN}" 2>/dev/null)" ]; then
+      rm -f "$f" 2>/dev/null || true
+    fi
+  done
+}
+
+# Read, cap-check and increment under ONE lock, then rename into place: two sessions sharing a
+# working tree (#195) can otherwise both read 0 and both take the single capped hold.
+_in_flight_hold_claim() {
+  # Echoes the pre-existing count; 0 = granted, 3 = cap reached, anything else = ledger unusable.
+  local file="$1" body="$2"
+  local dir="${file%/*}"
+  mkdir -p "$dir" 2>/dev/null || { printf '0'; return 2; }
+  (
+    if [ "$_IN_FLIGHT_HAS_FLOCK" = "1" ]; then flock -w 5 -x 200 || exit 2; fi
+    taken=0
+    if [ -f "$file" ]; then
+      raw=$(head -n 1 "$file" 2>/dev/null || echo "")
+      case "$raw" in ''|*[!0-9]*) taken=0 ;; *) taken="$raw" ;; esac
+    fi
+    printf '%s' "$taken"
+    [ "$taken" -lt "$_IN_FLIGHT_HOLD_CAP" ] || exit 3
+    tmp=$(mktemp "$dir/.tmp.XXXXXX" 2>/dev/null) || exit 2
+    if [ -n "$body" ]; then content="$((taken + 1))"$'\n'"$body"; else content="$((taken + 1))"; fi
+    if printf '%s\n' "$content" > "$tmp" 2>/dev/null && mv "$tmp" "$file" 2>/dev/null; then exit 0; fi
+    rm -f "$tmp" 2>/dev/null || true
+    exit 2
+  ) 2>/dev/null 200>"${dir}.lock"
 }
 
 if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; then
@@ -311,25 +363,34 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
     # Ruling Q1's valve sits on the ONE hold exit so it cannot diverge between the arms: the
     # `background:"true"` hold rests on the same never-observed wake the payload-driven one does.
 
+    # Entries whose recorded marker set is gone are retired here, before any key is derived: the
+    # valve is scoped to an episode, and a write-only directory outlives every episode it bounded.
+    _in_flight_holds_prune "$NAZGUL_DIR/logs/.in-flight-holds" "$NAZGUL_DIR/in-flight"
+
     # The fingerprint is over the HELD set ONLY. A proven-class quarantine therefore changes the key
     # once and grants at most one further hold — a marker can be moved out of that set only once.
-    IN_FLIGHT_HOLD_KEY=$(printf '%s' "$FRESH_BASENAMES" | sort)
+    IN_FLIGHT_HOLD_SET=$(printf '%s' "$FRESH_BASENAMES" | LC_ALL=C sort)
+    # `-`, `.` and `_` are exactly the basename characters whose order differs between C and a
+    # UTF-8 locale, so an unpinned collation makes the key a property of the environment.
+    IN_FLIGHT_HOLD_KEY="$IN_FLIGHT_HOLD_SET"
+    IN_FLIGHT_LEDGER=spent
+    if [ -z "$IN_FLIGHT_HOLD_KEY" ]; then
+      # Nothing is held, so this hold rests on the payload's live subagents alone — key on THEIR
+      # ids, or the empty set hashes to one lifetime constant and spends this arm's budget forever.
+      IN_FLIGHT_LIVE_IDS=$(printf '%s' "$STOP_PAYLOAD" | jq -r '[.background_tasks[]? | select(.type == "subagent" and (.status == "running" or .status == "pending")) | .id? // empty | tostring | select(. != "")] | sort | join(",")' 2>/dev/null || echo "")
+      IN_FLIGHT_HOLD_KEY="live-subagents:${IN_FLIGHT_LIVE_IDS}"
+      [ -n "$IN_FLIGHT_LIVE_IDS" ] || IN_FLIGHT_LEDGER=unkeyable
+    fi
     IN_FLIGHT_HOLDS_FILE=$(_in_flight_holds_file "$IN_FLIGHT_HOLD_KEY")
     IN_FLIGHT_HOLD_FP="${IN_FLIGHT_HOLDS_FILE##*/}"
     IN_FLIGHT_HOLDS_TAKEN=0
-    if [ -f "$IN_FLIGHT_HOLDS_FILE" ]; then
-      IN_FLIGHT_HOLDS_RAW=$(cat "$IN_FLIGHT_HOLDS_FILE" 2>/dev/null || echo "")
-      case "$IN_FLIGHT_HOLDS_RAW" in
-        ''|*[!0-9]*) IN_FLIGHT_HOLDS_TAKEN=0 ;;
-        *) IN_FLIGHT_HOLDS_TAKEN="$IN_FLIGHT_HOLDS_RAW" ;;
-      esac
-    fi
-    IN_FLIGHT_LEDGER=spent
-    if [ "$IN_FLIGHT_HOLDS_TAKEN" -lt "$_IN_FLIGHT_HOLD_CAP" ]; then
-      # Written BEFORE the hold: in the canonical unattended shape `exit 0` IS process exit
+    if [ "$IN_FLIGHT_LEDGER" = "spent" ]; then
+      # Claimed BEFORE the hold: in the canonical unattended shape `exit 0` IS process exit
       # (D-002 item 1), so an unrecorded attempt would return later as a fresh budget.
-      if mkdir -p "${IN_FLIGHT_HOLDS_FILE%/*}" 2>/dev/null \
-        && printf '%s\n' "$((IN_FLIGHT_HOLDS_TAKEN + 1))" > "$IN_FLIGHT_HOLDS_FILE" 2>/dev/null; then
+      IN_FLIGHT_HOLDS_TAKEN=$(_in_flight_hold_claim "$IN_FLIGHT_HOLDS_FILE" "$IN_FLIGHT_HOLD_SET") \
+        && IN_FLIGHT_CLAIM=0 || IN_FLIGHT_CLAIM=$?
+      case "$IN_FLIGHT_HOLDS_TAKEN" in ''|*[!0-9]*) IN_FLIGHT_HOLDS_TAKEN=0 ;; esac
+      if [ "$IN_FLIGHT_CLAIM" = "0" ]; then
         if [ "$IN_FLIGHT_LIVE_HOLD" = "yes" ]; then
           echo "Nazgul: in-flight hold — the Stop payload reports ${BG_LIVE} live subagent(s) for this session; markers held: ${FRESH_UNITS:-none}. Allowing stop; the harness's task-notification resumes this loop when the background agent finishes." >&2
         else
@@ -338,7 +399,9 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
         emit_event "stop_gate" "${IN_FLIGHT_HOLD_ARGS[@]}" units "$FRESH_UNITS" count:n "$FRESH_COUNT"
         exit 0
       fi
-      IN_FLIGHT_LEDGER=unwritable
+      # A cap reached is the policy DECISION; every other claim failure — no lock, no temp file, no
+      # rename — is a mechanism FAILURE, and ruling Q1 refuses the unbounded hold either way.
+      [ "$IN_FLIGHT_CLAIM" = "3" ] || IN_FLIGHT_LEDGER=unwritable
     fi
     # Reach, stated where the branch is: the valve cannot rescue a wake that never fires at all —
     # `exit 0` gives up control, and this bound is only read at a Stop that never comes.
@@ -352,6 +415,10 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
       # A ledger that could not be written is a mechanism FAILURE and must not wear the policy DECISION's reason (RULES §5) — holds_taken is still 0 and the cap was never reached.
       IN_FLIGHT_NOHOLD_REASON="in_flight_hold_unbudgetable"
       echo "Nazgul: in-flight hold NOT taken — its budget ledger under nazgul/logs/.in-flight-holds/ could not be written, so this hold cannot be bounded, and ruling Q1 refuses an unbounded hold. Continuing normally." >&2
+    elif [ "$IN_FLIGHT_LEDGER" = "unkeyable" ]; then
+      # Same class, different cause: no marker is held and the live subagents carry no id, so there is nothing episode-specific to key a budget on and the alternative is the lifetime constant this arm was fixed to stop keying on.
+      IN_FLIGHT_NOHOLD_REASON="in_flight_hold_unbudgetable"
+      echo "Nazgul: in-flight hold NOT taken — no in-flight marker is held and the Stop payload's live subagents carry no id, so this hold cannot be keyed to an episode or bounded, and ruling Q1 refuses an unbounded hold. Continuing normally." >&2
     else
       IN_FLIGHT_NOHOLD_REASON="in_flight_hold_budget_exhausted"
       echo "Nazgul: in-flight hold budget EXHAUSTED for this marker set (${IN_FLIGHT_HOLDS_TAKEN}/${_IN_FLIGHT_HOLD_CAP} already taken, fingerprint ${IN_FLIGHT_HOLD_FP}); unchanged markers: ${FRESH_UNITS:-none}. An unchanged set means no dispatch completed, so whatever woke this session was not the hold's wake path. Continuing normally." >&2
