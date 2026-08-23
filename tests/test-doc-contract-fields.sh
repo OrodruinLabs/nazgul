@@ -97,8 +97,12 @@ _derive_events() {
   done | sed -E 's/.*"([a-z_]+)"$/\1/' | LC_ALL=C sort -u
 }
 
-# The stop_gate reason vocabulary off the three producers' call sites; a backslash
-# continuation is joined first, since four call sites put `reason` on the next line.
+# lean-comments: allow-run — the regex's two silent exclusions, stated where they are made.
+# The stop_gate reason vocabulary off the three producers' call sites; a backslash continuation
+# is joined first, since four call sites put `reason` on the next line. `reason` must sit
+# IMMEDIATELY after `"stop_gate"` — ` +` admits whitespace only, so an intervening k/v pair hides
+# the site — and its value must match `[a-z_]+`, so an interpolated or mixed-case value is a
+# passthrough, not a name. SR4 plants one of each and measures that neither is derived.
 _derive_stop_reasons() {
   local f
   for f in "$@"; do
@@ -898,6 +902,31 @@ else
   _fail "[mutation] removing the planted stop_gate reason returns zero findings" \
     "stopreason findings=$FD_stopreason, stopreasoncount findings=$FD_stopreasoncount, stop_reason_n=$STOP_REASON_N (want $SHIPPED_STOP_REASON_N)"
 fi
+
+# lean-comments: allow-run — SR4 asserts a NON-change, so what it measures has to be stated.
+# SR4 (INVERTED): the two shape boundaries `_derive_stop_reasons` states. A `reason` in second
+# position and an interpolated value are both outside its regex, so a mutant carrying one of each
+# must move STOP_REASON_N by ZERO — SR1 asserts +1, this asserts +0 with a plant present. The
+# first literal stays `stop_gate` deliberately: any other token would add an event name, move
+# EVENT_N and per_doc, and raise event-family findings that would destroy the isolation below.
+MUT_STOP_HOOK_SR4="$SCRATCH/mutant-stop-hook-sr4.sh"
+{ cat "$SHIPPED_STOP_HOOK_LIB"
+  printf '\nemit_event "stop_gate" gate "g" reason "sr_second_position"\n'
+  printf 'emit_event "stop_gate" reason "$sr_interpolated"\n'
+} > "$MUT_STOP_HOOK_SR4"
+STOP_HOOK_LIB="$MUT_STOP_HOOK_SR4"
+_scan_docs "$REPO_ROOT" "$REPO_ROOT" "$GUARD_LIB"
+assert_eq "[mutation] a second-position reason and an interpolated value are both outside the derivation" \
+  "$STOP_REASON_N" "$SHIPPED_STOP_REASON_N"
+if [ "$FD_stopreason" -eq 0 ] && [ "$FD_stopreasoncount" -eq 0 ] && [ "$FINDINGS" -eq 0 ]; then
+  _pass "[mutation] a stop_gate plant outside the stated shape leaves every family clean ($STOP_REASON_N reasons, $FINDINGS total findings)"
+else
+  _fail "[mutation] a stop_gate plant outside the stated shape leaves every family clean" \
+    "stopreason findings=$FD_stopreason, stopreasoncount findings=$FD_stopreasoncount, total findings=$FINDINGS"
+fi
+# No trailing rescan: nothing past here reads a scan, SHIPPED_LINE/SHIPPED_FINDINGS were captured
+# before any mutation, and this scan is shipped-equivalent by its own assertion above.
+STOP_HOOK_LIB="$SHIPPED_STOP_HOOK_LIB"
 
 BIND_MODE="report"
 RC=0
