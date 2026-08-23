@@ -1622,6 +1622,19 @@ rrw_capture() {
 if rrw_begin "the documented invocation completes from a task worktree"; then
   rrw_setup repo
   write_manifest TASK-201 "$BASE_SHA"
+  # Present in the CODE tree only, so a capture deriving its copy set from the
+  # state tree cannot see it — the wholesale-repoint trap on a second mechanism.
+  cat > "$RRW_WT/tests/test-alpha-codetree-only.sh" <<'CODETREE'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "=== test-alpha-codetree-only ==="
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/scripts/feature.sh" ]; then
+  echo "  PASS: feature.sh reached the pre-change tree"
+  exit 0
+fi
+echo "  FAIL: feature.sh reached the pre-change tree"
+exit 1
+CODETREE
   rrw_capture TASK-201 --filter=alpha --project-root="$RRW_WT"
   assert_exit_code "two roots: --project-root=<task worktree> completes" "$RR_EC" 0
   assert_contains "two roots: RED confirmed" "$RR_OUT" "RED confirmed for TASK-201"
@@ -1631,6 +1644,8 @@ if rrw_begin "the documented invocation completes from a task worktree"; then
     "$RR_OUT" "runtime state read from its main working tree"
   assert_file_contains "two roots: the block lands in the MAIN tree's manifest" \
     "$RRW_MAIN/nazgul/tasks/TASK-201.md" 'red-run: tests/test-alpha.sh'
+  assert_file_contains "two roots: the copy set is derived from the CODE tree's working tree" \
+    "$RRW_MAIN/nazgul/tasks/TASK-201.md" 'red-run: tests/test-alpha-codetree-only.sh'
   assert_dir_not_exists "two roots: no nazgul/ is created in the task worktree" "$RRW_WT/nazgul"
   rrw_end
   rrw_teardown
