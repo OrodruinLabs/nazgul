@@ -24,40 +24,9 @@ source "$SCRIPT_DIR/lib/git-utils.sh"
 source "$SCRIPT_DIR/lib/emit-event.sh"
 source "$SCRIPT_DIR/lib/parallel-batch.sh"
 
-# lean-comments: allow-run — names the seam, why it is THIS one, and how long the memo lives.
-# The host state for a PR is a pure function of (project_root, pr), and an objective closed by
-# /nazgul:complete gives every one of its manifests the SAME pr — so this pass asked one
-# question N times. Memoised at _ttg_merge_host_state and NOT at merge_provider_pr_state
-# because the latter is called inside a command substitution, where a memo dies with the
-# subshell that wrote it. Everything downstream still runs per task, so verdicts stay
-# independent; the memo lives for exactly one process, which is exactly one iteration.
-if declare -F _ttg_merge_host_state >/dev/null 2>&1; then
-  _NZ_HOST_STATE_KEYS=""
-  _nz_host_state_src=$(declare -f _ttg_merge_host_state)
-  eval "_nz_host_state_uncached${_nz_host_state_src#_ttg_merge_host_state}"
-  unset _nz_host_state_src
-  _ttg_merge_host_state() {
-    local slot snap v rc=0
-    slot="_NZ_HOST_STATE_$(printf '%s_%s' "${1:-}" "${2:-}" | tr -c 'A-Za-z0-9' '_')"
-    case "$_NZ_HOST_STATE_KEYS" in
-      *"|${slot}|"*)
-        eval "snap=\${${slot}_SNAP}; rc=\${${slot}_RC}"
-        eval "$snap"
-        return "$rc"
-        ;;
-    esac
-    _nz_host_state_uncached "$@" || rc=$?
-    # Snapshot by PREFIX, not by an enumerated list, so a new TTG_MERGE_HOST_* output
-    # is carried across a cache hit instead of silently reading as the previous task's.
-    snap=""
-    for v in ${!TTG_MERGE_HOST_@}; do
-      snap="${snap}${v}=$(printf '%q' "${!v}")"$'\n'
-    done
-    eval "${slot}_SNAP=\$snap; ${slot}_RC=\$rc"
-    _NZ_HOST_STATE_KEYS="${_NZ_HOST_STATE_KEYS}|${slot}|"
-    return "$rc"
-  }
-fi
+# The memo lives in task-transition-guard.sh next to the function it wraps: /nazgul:complete is
+# the feature's PRIMARY entry point and was the one asking the host once per task.
+ttg_install_merge_host_state_memo || true
 
 # If Nazgul not initialized, allow stop
 if [ ! -f "$CONFIG" ]; then

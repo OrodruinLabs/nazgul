@@ -483,7 +483,7 @@ _fixture readback
 _manifest TASK-131 IMPLEMENTED
 _manifest TASK-132 IMPLEMENTED
 GH_SEQ="$SCRATCH/gh-seq-readback"
-printf 'merged\nerror\nmerged:%s\n' "$FEAT_SHA" > "$GH_SEQ"
+printf 'merged\nerror\n' > "$GH_SEQ"
 rm -f "$GH_SEQ.n"
 : > "$GH_LOG"
 NAZGUL_TEST_GH_SEQ="$GH_SEQ" NAZGUL_TEST_GH_CASE=merged _run "$FX" 88
@@ -492,8 +492,10 @@ _grammar "read-back reasons"
 _reason "read-back reasons" "evidence-write-failed" 2
 assert_eq "read-back reasons: nothing was closed on a read-back that did not verify" "$CO_K" "0"
 assert_eq "read-back reasons: both are counted as refusals, not only as skips" "$CO_F" "2"
-assert_eq "read-back reasons: the host is re-asked once per manifest — what makes the reasons differ" \
-  "$(cat "$GH_SEQ.n" 2>/dev/null)" "3"
+# PATCH-007 item 4: one PR, one question. The plan asks once and the FIRST read-back asks once;
+# every later manifest reads the memo, where it used to add one bounded round trip apiece.
+assert_eq "read-back reasons: the host is asked twice for the whole run, not once per manifest" \
+  "$(cat "$GH_SEQ.n" 2>/dev/null)" "2"
 _drove evidence-write-failed
 
 # The recorded reason itself, read out of the refusal record — an exit code cannot see it.
@@ -503,14 +505,38 @@ CO_BR_132=$(printf '%s\n' "$CO_ERR" \
   | sed -n 's/.*REFUSED TASK-132 .*did not read back as verifiable \[\([^]]*\)\].*/\1/p' | head -1)
 assert_eq "read-back reasons: TASK-131 records the reason ITS read-back returned" \
   "$CO_BR_131" "unverifiable"
-assert_eq "read-back reasons: TASK-132 records the reason ITS read-back returned" \
-  "$CO_BR_132" "contradicted"
-if [ "$CO_BR_131" = "$CO_BR_132" ]; then
+assert_eq "read-back reasons: TASK-132 records its own bracket, not an empty one" \
+  "$CO_BR_132" "unverifiable"
+
+# lean-comments: allow-run — says why the "not a constant" proof takes two runs rather than one.
+# A SECOND run, refused for a DIFFERENT cause. One task cannot distinguish "the right reason"
+# from "a constant"; two runs whose read-backs fail differently can. This used to be one run with
+# a host answering differently on consecutive calls — which no real host does, and which the memo
+# above (correctly) collapses. Cause, not call ordering, is what the bracket has to track.
+FX_READBACK="$FX"
+_fixture readback2
+_manifest TASK-133 IMPLEMENTED
+GH_SEQ2="$SCRATCH/gh-seq-readback2"
+printf 'merged\nmerged:%s\n' "$FEAT_SHA" > "$GH_SEQ2"
+rm -f "$GH_SEQ2.n"
+: > "$GH_LOG"
+NAZGUL_TEST_GH_SEQ="$GH_SEQ2" NAZGUL_TEST_GH_CASE=merged _run "$FX" 88
+assert_exit_code "read-back reasons (contradiction): the refusal exits nonzero" "$CO_RC" 1
+CO_BR_133=$(printf '%s\n' "$CO_ERR" \
+  | sed -n 's/.*REFUSED TASK-133 .*did not read back as verifiable \[\([^]]*\)\].*/\1/p' | head -1)
+assert_eq "read-back reasons: a host answer contradicting the recorded evidence is named as such" \
+  "$CO_BR_133" "contradicted"
+if [ "$CO_BR_131" = "$CO_BR_133" ]; then
   _fail "read-back reasons: two differently-failing read-backs record two different reasons" \
-    "both recorded [${CO_BR_131:-<empty>}] — the bracket is a constant, not this task's verdict"
+    "both recorded [${CO_BR_131:-<empty>}] — the bracket is a constant, not this run's verdict"
 else
   _pass "read-back reasons: two differently-failing read-backs record two different reasons"
 fi
+assert_file_contains "read-back reasons: the contradiction reaches the bus, not just stderr" \
+  "$FX/nazgul/logs/events.jsonl" 'did not read back as verifiable \[contradicted\]'
+assert_eq "read-back reasons: TASK-133 stayed where it was" \
+  "$(get_task_status "$FX/nazgul/tasks/TASK-133.md")" "IMPLEMENTED"
+FX="$FX_READBACK"
 
 # Membership in the guard's OWN closed vocabulary, extracted from its source: an empty
 # bracket and an invented token are both reasons the operator's vocabulary does not have.
@@ -522,8 +548,8 @@ assert_contains "read-back reasons: TASK-131's bracket is a member of that close
   " $CO_MERGE_VOCAB" " ${CO_BR_131:-<empty>} "
 assert_contains "read-back reasons: TASK-132's bracket is a member of that closed vocabulary" \
   " $CO_MERGE_VOCAB" " ${CO_BR_132:-<empty>} "
-assert_file_contains "read-back reasons: the reason reaches the bus, not just stderr" \
-  "$FX/nazgul/logs/events.jsonl" 'did not read back as verifiable \[contradicted\]'
+assert_contains "read-back reasons: TASK-133's bracket is a member of that closed vocabulary" \
+  " $CO_MERGE_VOCAB" " ${CO_BR_133:-<empty>} "
 
 # The arms either side of the repair are unchanged: rollback still runs, the task stays put.
 assert_not_contains "read-back reasons: the refused close leaves no ## Merge Evidence residue" \

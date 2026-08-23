@@ -59,6 +59,64 @@ ttg_valid_transition() {
   esac
 }
 
+# Every status the machine knows, enumerated once next to the table it enumerates;
+# tests/test-task-state-guard.sh binds the two so neither can narrow the other silently.
+TTG_STATUSES="PLANNED READY IN_PROGRESS IMPLEMENTED IN_REVIEW APPROVED CHANGES_REQUESTED BLOCKED DONE CANCELLED"
+
+# ttg_allowed_next <from> -> <from>'s legal successors, comma-separated, DERIVED by asking
+# ttg_valid_transition. Returns 1 for a non-status: "terminal" and "never was one" differ.
+ttg_allowed_next() {
+  local from="$1" to out=""
+  case " $TTG_STATUSES " in *" $from "*) ;; *) return 1 ;; esac
+  for to in $TTG_STATUSES; do
+    ttg_valid_transition "$from" "$to" || continue
+    out="${out:+$out, }$to"
+  done
+  printf '%s' "$out"
+}
+
+# lean-comments: allow-run — names the seam, why it is THIS one, and how long the memo lives.
+# ttg_install_merge_host_state_memo -> memoise _ttg_merge_host_state for THIS PROCESS. The host
+# state for a PR is a pure function of (project_root, pr) and every manifest in one objective
+# carries the SAME pr, so a per-task caller asked one question N times at the net tier's 60s
+# bound. Memoised HERE and not at merge_provider_pr_state because that one is called inside a
+# command substitution, where a memo dies with the subshell that wrote it. Everything downstream
+# still runs per task, so verdicts stay independent. It does NOT reach across processes: a caller
+# that shells out to task-transition.sh per task still pays one round trip there, which is a
+# boundary this cannot cross rather than one it forgot.
+ttg_install_merge_host_state_memo() {
+  local src
+  declare -F _ttg_merge_host_state >/dev/null 2>&1 || return 1
+  src=$(declare -f _ttg_merge_host_state)
+  # A second install would capture the WRAPPER as the uncached function and recurse forever, so
+  # the live body is asked rather than a sentinel variable anyone could set.
+  case "$src" in *_ttg_host_state_uncached*) return 0 ;; esac
+  eval "_ttg_host_state_uncached${src#_ttg_merge_host_state}"
+  _TTG_HOST_STATE_KEYS=""
+  _ttg_merge_host_state() {
+    local slot snap v rc=0
+    slot="_TTG_HOST_STATE_$(printf '%s_%s' "${1:-}" "${2:-}" | tr -c 'A-Za-z0-9' '_')"
+    case "$_TTG_HOST_STATE_KEYS" in
+      *"|${slot}|"*)
+        eval "snap=\${${slot}_SNAP}; rc=\${${slot}_RC}"
+        eval "$snap"
+        return "$rc"
+        ;;
+    esac
+    _ttg_host_state_uncached "$@" || rc=$?
+    # Snapshot by PREFIX, not by an enumerated list, so a new TTG_MERGE_HOST_* output is carried
+    # across a cache hit instead of silently reading as the previous task's.
+    snap=""
+    for v in ${!TTG_MERGE_HOST_@}; do
+      snap="${snap}${v}=$(printf '%q' "${!v}")"$'\n'
+    done
+    eval "${slot}_SNAP=\$snap; ${slot}_RC=\$rc"
+    _TTG_HOST_STATE_KEYS="${_TTG_HOST_STATE_KEYS}|${slot}|"
+    return "$rc"
+  }
+  return 0
+}
+
 # Last dependency requirement in words, for the caller's diagnostic.
 # shellcheck disable=SC2034  # read by callers, not within this file
 TTG_DEP_EXPECTED=""

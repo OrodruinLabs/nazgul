@@ -425,6 +425,65 @@ OVER="$SCRATCH/over.json"
 assert_eq "a payload over the cap reads as 'timeout/oversize' with no content — never 'payload', never 'empty'" \
   "$(bash "$SCRATCH/outcome.sh" "$CAPPED" < "$OVER")" "timeout oversize 0"
 
+# lean-comments: allow-run — the two guards take OPPOSITE dispositions and the reason is the point.
+# PATCH-007 item 3 — `oversize` is mapped onto the `timeout` OUTCOME (deliberately, see the
+# reader's header), and both fail-closed guards used to inherit the stall disposition by
+# proximity. A stall is transient, so a deny costs a retry; the cap is deterministic, so a deny
+# costs the operation forever. Each guard now asks separately and answers by what a false allow
+# costs IT: pre-tool-guard still denies, because it is the last thing before the shell and an
+# allow would make a cap-sized pad a screening bypass; task-state-guard allows, because it is
+# preflight and cannot create authority, and reconciliation is the backstop for the one write it
+# could miss. Driven against a copy whose cap is rewritten down, so the ceiling costs the suite
+# nothing.
+OVERTREE="$SCRATCH/overtree"
+mkdir -p "$OVERTREE"
+cp -R "$REPO_ROOT/scripts" "$OVERTREE/scripts"
+sed -i.bak 's/^HOOK_PAYLOAD_MAX_CHARS=.*/HOOK_PAYLOAD_MAX_CHARS=4096/' "$OVERTREE/$READER_LIB"
+rm -f "$OVERTREE/$READER_LIB.bak"
+OVER_PROJ="$SCRATCH/overproj"
+mkdir -p "$OVER_PROJ/nazgul/tasks" "$OVER_PROJ/nazgul/logs"
+printf '%s\n' '{"feat_id":"T","mode":"hitl","install_mode":"local"}' > "$OVER_PROJ/nazgul/config.json"
+OVER_PAYLOAD="$SCRATCH/over-envelope.json"
+{ printf '{"tool_name":"Write","tool_input":{"file_path":"%s/src/big.txt","content":"' "$OVER_PROJ"
+  head -c 16384 /dev/zero | tr '\0' 'x'
+  printf '"}}'; } > "$OVER_PAYLOAD"
+
+_run_oversize() {
+  local script="$1" ec=0
+  CLAUDE_PROJECT_DIR="$OVER_PROJ" NAZGUL_STAGING_DISABLE=1 \
+    bash "$script" >/dev/null 2>"$SCRATCH/over.err" < "$OVER_PAYLOAD" || ec=$?
+  printf '%s' "$ec"
+}
+
+if grep -q '^HOOK_PAYLOAD_MAX_CHARS=4096$' "$OVERTREE/$READER_LIB"; then
+  _pass "[fixture] the oversize tree's cap came down to 4096 chars"
+  OVER_TSG_RC="$(_run_oversize "$OVERTREE/scripts/task-state-guard.sh")"
+  OVER_TSG_ERR="$(cat "$SCRATCH/over.err" 2>/dev/null)"
+  assert_eq "task-state-guard: a payload over the cap allows the write, it does not refuse every large Write in the project" \
+    "$OVER_TSG_RC" "0"
+  assert_contains "task-state-guard: and the allow is LOUD, naming the cap it could not read past" \
+    "$OVER_TSG_ERR" "over the 4096-char cap"
+  assert_contains "task-state-guard: the disposition is reported as fail-open, not left to be inferred" \
+    "$OVER_TSG_ERR" "fail-open"
+
+  OVER_PTG_RC="$(_run_oversize "$OVERTREE/scripts/pre-tool-guard.sh")"
+  OVER_PTG_ERR="$(cat "$SCRATCH/over.err" 2>/dev/null)"
+  assert_eq "pre-tool-guard: a payload over the cap still DENIES — an allow makes a pad a screening bypass" \
+    "$OVER_PTG_RC" "$DENY_RC"
+  assert_contains "pre-tool-guard: and the refusal names the cap rather than reporting a stall it did not have" \
+    "$OVER_PTG_ERR" "over the 4096-char cap"
+  assert_contains "pre-tool-guard: the refusal says what to do instead, since the cap will refuse identically forever" \
+    "$OVER_PTG_ERR" "shorter command"
+else
+  _fail "[fixture] the oversize tree's cap came down to 4096 chars" \
+    "no HOOK_PAYLOAD_MAX_CHARS assignment to rewrite — nothing below was driven over the cap"
+fi
+
+# A stall is transient, so BOTH still fail closed on one: the split is per-reason, not a blanket
+# relaxation of the guard that now allows an oversize payload.
+assert_eq "task-state-guard still fails closed on a STALL inside a Nazgul project" \
+  "$(_run_held_open "$OVERTREE/scripts/task-state-guard.sh" "$OVER_PROJ")" "$DENY_RC"
+
 # Never stalls (each chunk lands inside the stall bound) and never stops, while
 # staying under the cap: only a total deadline ends this one.
 TRICKLE="$SCRATCH/trickle"

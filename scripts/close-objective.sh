@@ -98,6 +98,10 @@ source "$SCRIPT_DIR/lib/task-transition-guard.sh"
 # shellcheck source=./lib/merge-provider.sh
 source "$SCRIPT_DIR/lib/merge-provider.sh"
 
+# One PR, one host question. Without it this pass asked per manifest, at the net tier's 60s
+# bound, on the path merge-provider's own header calls the worst place for an unbounded wait.
+ttg_install_merge_host_state_memo || true
+
 PR_INPUT=""
 PROJECT_ROOT_ARG=""
 while [ "$#" -gt 0 ]; do

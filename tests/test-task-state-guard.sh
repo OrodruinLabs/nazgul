@@ -2366,4 +2366,71 @@ else
 fi
 assert_eq "digest-safety: every test file was readable" "$NZD_UNREADABLE" "0"
 
+# lean-comments: allow-run — names what the hint used to get wrong and why a second table caused it.
+# PATCH-007 item 5 — the allowed-next hint is DERIVED from ttg_valid_transition, not restated.
+# The hand-kept copy had gone stale for this objective's own edges: no IMPLEMENTED -> DONE and no
+# CANCELLED arm at all, so an operator refused here was told there was no legal route where two
+# existed — the "every in-tool path refused, so the operator forged" condition ADR-022 and ADR-023
+# were opened against.
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "IMPLEMENTED"
+HINT_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+run_guard "$(make_write_input "$HINT_PATH" "APPROVED")"
+assert_exit_code "IMPLEMENTED->APPROVED blocked" "$GUARD_EC" 2
+assert_contains "IMPLEMENTED hint names the merge-closure edge ADR-023 added" "$GUARD_STDERR" "DONE"
+assert_contains "IMPLEMENTED hint names the cancellation edge ADR-022 added" "$GUARD_STDERR" "CANCELLED"
+teardown_temp_dir
+
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "APPROVED"
+HINT_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+run_guard "$(make_write_input "$HINT_PATH" "IN_PROGRESS")"
+assert_exit_code "APPROVED->IN_PROGRESS blocked" "$GUARD_EC" 2
+assert_contains "APPROVED hint names CANCELLED, which the stale table omitted" "$GUARD_STDERR" "CANCELLED"
+teardown_temp_dir
+
+setup_temp_dir
+setup_nazgul_dir
+create_task_file "TASK-001" "CANCELLED"
+HINT_PATH="$TEST_DIR/nazgul/tasks/TASK-001.md"
+run_guard "$(make_write_input "$HINT_PATH" "READY")"
+assert_exit_code "CANCELLED->READY blocked" "$GUARD_EC" 2
+assert_contains "CANCELLED is reported as terminal, not as an unrecognised status" \
+  "$GUARD_STDERR" "CANCELLED is a terminal state"
+teardown_temp_dir
+
+# shellcheck source=../scripts/lib/task-transition-guard.sh
+source "$REPO_ROOT/scripts/lib/task-transition-guard.sh" 2>/dev/null
+# TTG_STATUSES is a SECOND enumeration of the same machine, so every FROM_TO label in the shipped
+# case body must decompose into a TTG_STATUSES pair that ttg_allowed_next actually reports.
+TTG_LABELS=$(declare -f ttg_valid_transition | sed -n 's/^[[:space:]]*\([A-Z][A-Z_]*\)).*/\1/p')
+TTG_LABEL_N=0; TTG_LABEL_BAD=""
+while IFS= read -r label; do
+  [ -n "$label" ] || continue
+  TTG_LABEL_N=$((TTG_LABEL_N + 1))
+  ttg_matched=""
+  for f in $TTG_STATUSES; do
+    case "$label" in
+      "${f}_"*) ;;
+      *) continue ;;
+    esac
+    t="${label#${f}_}"
+    case " $TTG_STATUSES " in *" $t "*) ;; *) continue ;; esac
+    case ", $(ttg_allowed_next "$f"), " in *", $t, "*) ttg_matched="$f -> $t" ;; esac
+  done
+  [ -n "$ttg_matched" ] || TTG_LABEL_BAD="${TTG_LABEL_BAD}${label} "
+done <<< "$TTG_LABELS"
+if [ "$TTG_LABEL_N" -gt 0 ]; then
+  _pass "allowed-next derivation: the shipped transition table has $TTG_LABEL_N edges to bind"
+else
+  _fail "allowed-next derivation: the shipped transition table has edges to bind" \
+    "K=0: no FROM_TO label was extracted, so nothing was checked"
+fi
+assert_eq "allowed-next derivation: every table edge decomposes into TTG_STATUSES and is reported" \
+  "$TTG_LABEL_BAD" ""
+assert_eq "allowed-next: a string that is not a status returns 1, never 'terminal'" \
+  "$(ttg_allowed_next "NOT_A_STATUS" >/dev/null 2>&1; echo $?)" "1"
+
 report_results

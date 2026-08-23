@@ -121,7 +121,7 @@ _bnet_degrade() {
 # override of 0 is REFUSED and named: GNU `timeout 0` means no limit at all, so honouring
 # it would turn an explicit bound into a silent unbounded call.
 _bnet_secs() {
-  local tier="$1" raw def
+  local tier="$1" raw def norm trimmed
   case "$tier" in
     quick) def=20;  raw="${NAZGUL_NET_TIMEOUT_QUICK:-}" ;;
     long)  def=300; raw="${NAZGUL_NET_TIMEOUT_LONG:-}" ;;
@@ -129,8 +129,21 @@ _bnet_secs() {
   esac
   if [ -n "$raw" ]; then
     case "$raw" in
-      0|*[!0-9]*) _bnet_warn "unusable_timeout_override: '$raw' is not a positive whole number of seconds for tier '$tier' — using the ${def}s default instead" ;;
-      *) def="$raw" ;;
+      *[!0-9]*) _bnet_warn "unusable_timeout_override: '$raw' is not a positive whole number of seconds for tier '$tier' — using the ${def}s default instead" ;;
+      *)
+        # `00` is all-digits and is not the string "0", so a literal match let it reach
+        # `timeout 00`, which GNU reads as no limit at all — the zero refusal defeated by a spelling.
+        norm=$((10#$raw))
+        trimmed="$raw"
+        while [ "${#trimmed}" -gt 1 ] && [ "${trimmed:0:1}" = "0" ]; do trimmed="${trimmed:1}"; done
+        # A digit run past bash's 64-bit arithmetic WRAPS rather than erroring, so an override
+        # that does not survive the round trip is refused rather than honoured as some other bound.
+        if [ "$norm" -le 0 ] || [ "$norm" != "$trimmed" ]; then
+          _bnet_warn "unusable_timeout_override: '$raw' is not a positive whole number of seconds for tier '$tier' — using the ${def}s default instead"
+        else
+          def="$norm"
+        fi
+        ;;
     esac
   fi
   printf '%s' "$def"

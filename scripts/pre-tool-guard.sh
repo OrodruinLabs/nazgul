@@ -36,10 +36,19 @@ fi
 INPUT="${1:-}"
 if [ -z "$INPUT" ]; then
   read_hook_payload
-  # Nothing scopes this guard to a project, so the only alternative to denying
-  # is an unscreened command — the stance dp_unavailable already takes below.
+  # lean-comments: allow-run — the two reasons share a disposition for DIFFERENT reasons.
+  # Nothing scopes this guard to a project, so the only alternative to denying is an
+  # unscreened command — the stance dp_unavailable already takes below. `oversize` is asked
+  # SEPARATELY rather than inheriting the stall answer by proximity: it is deterministic
+  # where a stall is transient, so it costs the operation rather than a retry. It still
+  # denies, because allowing it would make a cap-sized pad a screening bypass, and unlike
+  # the guards with a backstop this one is the last thing between the command and the shell.
   if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
-    hook_payload_timeout_report "pre-tool-guard" "fail-closed" "blocking the unscreened command"
+    PTG_ACTION="blocking the unscreened command"
+    if [ "${HOOK_PAYLOAD_REASON:-}" = "oversize" ]; then
+      PTG_ACTION="$PTG_ACTION — allowing it would make a ${HOOK_PAYLOAD_MAX_CHARS}-char pad a screening bypass; send a shorter command, or write large content with the Write tool"
+    fi
+    hook_payload_timeout_report "pre-tool-guard" "fail-closed" "$PTG_ACTION"
     exit 2
   fi
   INPUT="$HOOK_PAYLOAD"

@@ -33,6 +33,18 @@ declare -F read_hook_payload >/dev/null && declare -F hook_payload_timeout_repor
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
 read_hook_payload
 if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+  # lean-comments: allow-run — why one of the three reader bounds decides differently here.
+  # `oversize` is asked SEPARATELY rather than inheriting the stall answer by proximity. A
+  # stall or a deadline is transient, so failing closed costs a retry; the cap is
+  # DETERMINISTIC, so failing closed refuses every large Write in the project forever, with
+  # no path around it. This guard is preflight and cannot create authority (ADR-020): the one
+  # write it might miss is a padded status edit, which the stop-hook's reconciliation pass
+  # quarantines at the next iteration. pre-tool-guard has no such backstop and denies both.
+  if [ "${HOOK_PAYLOAD_REASON:-}" = "oversize" ]; then
+    hook_payload_timeout_report "task-state-guard" "fail-open" \
+      "allowing the edit unscreened — a cap-sized payload is not a state change this guard can read, and reconciliation is the backstop for one that is"
+    exit 0
+  fi
   # With no payload there is no file path to bound, so the deny is decided here
   # — but an unrelated repo's edits were never this guard's to refuse.
   if [ -f "$(resolve_project_root)/nazgul/config.json" ]; then
@@ -551,18 +563,18 @@ fi
 # source of truth, shared with stop-hook.sh's reconciliation pass (MF-022).
 if ! ttg_valid_transition "$OLD_STATUS" "$NEW_STATUS"; then
   echo "NAZGUL STATE GUARD: BLOCKED — Invalid state transition: ${OLD_STATUS} → ${NEW_STATUS}" >&2
-  case "$OLD_STATUS" in
-    PLANNED)           echo "  PLANNED allowed next: READY, BLOCKED" >&2 ;;
-    READY)             echo "  READY allowed next: IN_PROGRESS, BLOCKED" >&2 ;;
-    IN_PROGRESS)       echo "  IN_PROGRESS allowed next: IMPLEMENTED, BLOCKED" >&2 ;;
-    IMPLEMENTED)       echo "  IMPLEMENTED allowed next: IN_REVIEW, BLOCKED" >&2 ;;
-    IN_REVIEW)         echo "  IN_REVIEW allowed next: DONE, APPROVED (YOLO), CHANGES_REQUESTED, BLOCKED" >&2 ;;
-    APPROVED)          echo "  APPROVED allowed next: DONE" >&2 ;;
-    CHANGES_REQUESTED) echo "  CHANGES_REQUESTED allowed next: IN_PROGRESS, BLOCKED" >&2 ;;
-    BLOCKED)           echo "  BLOCKED allowed next: READY (unblock), IN_REVIEW (materialize)" >&2 ;;
-    DONE)              echo "  DONE is a terminal state — no further transitions allowed" >&2 ;;
-    *)                 echo "  See RULES.md §2 for the permitted transition table" >&2 ;;
-  esac
+  # Derived from ttg_valid_transition, never restated: the hand-kept copy that used to live here
+  # had gone stale for IMPLEMENTED -> DONE and all eight -> CANCELLED edges.
+  if ALLOWED_NEXT=$(ttg_allowed_next "$OLD_STATUS"); then
+    if [ -n "$ALLOWED_NEXT" ]; then
+      echo "  ${OLD_STATUS} allowed next: ${ALLOWED_NEXT}" >&2
+      echo "  Some of those edges carry evidence conditions — see RULES.md §2 for the permitted transition table" >&2
+    else
+      echo "  ${OLD_STATUS} is a terminal state — no further transitions allowed" >&2
+    fi
+  else
+    echo "  See RULES.md §2 for the permitted transition table" >&2
+  fi
   exit 2
 fi
 

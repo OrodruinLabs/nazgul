@@ -147,6 +147,18 @@ assert_contains "http.lowSpeedTime is actually handed to git" "$TRACE_OUT" "lowS
 ZERO_OUT=$(NAZGUL_NET_TIMEOUT=0 nz_bounded_run net "suite-zero" true 2>&1)
 assert_contains "a 0 timeout override is refused by name, not honoured into an unbounded call" \
   "$ZERO_OUT" "unusable_timeout_override"
+# PATCH-007 item 6: the refusal must cover zero's SPELLINGS. `00` is all-digits and is not the
+# string "0", so a literal match let it through — and GNU `timeout 00` is the same no-limit.
+assert_eq "a padded-zero override does not become the bound" \
+  "$(NAZGUL_NET_TIMEOUT=00 _bnet_secs net)" "60"
+assert_contains "and it is refused by the same name, not silently" \
+  "$(NAZGUL_NET_TIMEOUT=00 _bnet_secs net 2>&1 >/dev/null)" "unusable_timeout_override"
+assert_eq "a padded-zero long-tier override falls back to that tier's own default" \
+  "$(NAZGUL_NET_TIMEOUT_LONG=000 _bnet_secs long)" "300"
+assert_eq "a legitimately padded positive value is normalised, not refused" \
+  "$(NAZGUL_NET_TIMEOUT=030 _bnet_secs net)" "30"
+assert_eq "a digit run that overflows bash arithmetic is refused rather than wrapped into a bound" \
+  "$(NAZGUL_NET_TIMEOUT=99999999999999999999 _bnet_secs net)" "60"
 
 # A degradation repeated on every probe is noise; once per label is the contract.
 DUP_OUT=$(NAZGUL_TIMEOUT_CMD= bash -c ". '$LIB'; nz_bounded_run net dup-label true; nz_bounded_run net dup-label true" 2>&1)
