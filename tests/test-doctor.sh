@@ -1031,6 +1031,7 @@ _DR_SP_TOKENS=(
   'PAYLOAD UNDETERMINED'
   'NEVER OBSERVED'
   'TELEMETRY BUS DISABLED'
+  'LOOP PAUSED'
   'UNSELECTABLE RECORD'
   'UNREADABLE RECORD'
 )
@@ -1050,7 +1051,7 @@ for tok in "${_DR_SP_TOKENS[@]}"; do
   grep -qF "$tok" "$DOCTOR" || DR_SP_TOK_MISSING=$((DR_SP_TOK_MISSING + 1))
 done
 assert_eq "P12e floor: every enumerated outcome token is a real string in doctor.sh" \
-  "${#_DR_SP_TOKENS[@]}/$DR_SP_TOK_MISSING" "8/0"
+  "${#_DR_SP_TOKENS[@]}/$DR_SP_TOK_MISSING" "9/0"
 
 setup_temp_dir
 setup_git_repo
@@ -1170,11 +1171,76 @@ assert_file_not_contains "P12g: SKILL.md no longer claims the three-outcome set"
   "$REPO_ROOT/skills/doctor/SKILL.md" "present, absent, or never observed"
 DR_SP_SKILL_MISSING=0
 for tok in 'field present but wrong shape' 'field absent' 'payload undetermined' \
-           'record unselectable' 'never observed' 'telemetry bus disabled'; do
+           'record unselectable' 'never observed' 'telemetry bus disabled' 'loop paused'; do
   grep -qF "$tok" "$REPO_ROOT/skills/doctor/SKILL.md" || DR_SP_SKILL_MISSING=$((DR_SP_SKILL_MISSING + 1))
 done
-assert_eq "P12g: SKILL.md enumerates all 6 named outcomes doctor can report (6 scanned)" \
+assert_eq "P12g: SKILL.md enumerates all 7 named outcomes doctor can report (7 scanned)" \
   "$DR_SP_SKILL_MISSING" "0"
+
+# --- (n) stop-payload: P12i — paused=true, the second unreachable remediation ---
+# stop-hook.sh returns above the emit and pause is sticky, so no number of iterations makes a record.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+  '.board.enabled = false' '.guards.git_hooks = false' '.paused = true'
+DR_SP_EVENTS="$TEST_DIR/nazgul/logs/events.jsonl"
+DR_SP_OUT=$(_dr_sp_run)
+DR_SP_M_PAUSED=$(_dr_sp_msg "$DR_SP_OUT")
+assert_eq "P12i: paused with no record is LOOP PAUSED — never NEVER OBSERVED" \
+  "$(_dr_sp_outcomes "$DR_SP_OUT")" "LOOP PAUSED|"
+assert_contains "P12i: the message names the pause as the reason no Stop can be recorded" \
+  "$DR_SP_OUT" "paused=true"
+assert_contains "P12i: and says why more iterations cannot clear it" "$DR_SP_OUT" "pause is STICKY"
+assert_contains "P12i: the remediation is the one command that clears a pause" \
+  "$DR_SP_OUT" "Run /nazgul:start to resume"
+assert_not_contains "P12i: and never repeats the unreachable remediation" \
+  "$DR_SP_OUT" "Run one loop iteration (any Stop emits the record)"
+assert_contains "P12i: the paused skip is counted as not-applicable-config, not as a checked answer" \
+  "$(cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR bash "$DOCTOR" --only=stop-payload 2>/dev/null | tail -1)" \
+  "not-applicable-config=1"
+
+# The has-a-record control: unlike bus-off, a pause is operator-clearable, so a record that
+# predates it is still valid evidence and the new arm must not swallow it.
+mkdir -p "$TEST_DIR/nazgul/logs"
+jq -cn '{sv:1,event:"stop_payload_observed",bg_seen:"yes",entries:1,subagents:1,live:1,types:"subagent",statuses:"running"}' > "$DR_SP_EVENTS"
+assert_eq "P12i: paused WITH a record still reports that record normally" \
+  "$(_dr_sp_outcomes "$(_dr_sp_run)")" "FIELD PRESENT at the last recorded Stop|"
+
+# The NEGATIVE control: same empty log, pause flipped off. Without it an arm that fired
+# unconditionally would leave every cell above green.
+rm -f "$DR_SP_EVENTS"
+create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+  '.board.enabled = false' '.guards.git_hooks = false' '.paused = false'
+DR_SP_OUT=$(_dr_sp_run)
+DR_SP_M_NEVER2=$(_dr_sp_msg "$DR_SP_OUT")
+assert_eq "P12i negative control: NOT paused with no record is still NEVER OBSERVED" \
+  "$(_dr_sp_outcomes "$DR_SP_OUT")" "NEVER OBSERVED|"
+assert_contains "P12i negative control: and that arm keeps its own reachable remediation" \
+  "$DR_SP_OUT" "Run one loop iteration (any Stop emits the record)"
+
+# Two empty strings are also "different from nothing else", so the non-empty floor is what
+# stops the distinctness pair below from being satisfiable by two captures of nothing.
+assert_eq "P12i floor: both arms' messages were actually captured" \
+  "$([ -n "$DR_SP_M_PAUSED" ] && [ -n "$DR_SP_M_NEVER2" ] && echo yes || echo no)" "yes"
+assert_eq "P12i: the paused arm does not print the same thing as never-observed (RULES §15)" \
+  "$([ "$DR_SP_M_PAUSED" != "$DR_SP_M_NEVER2" ] && echo distinct || echo identical)" "distinct"
+
+# Precedence, pinned both ways: bus-off wins because it is the stronger claim — no record can
+# EVER be written — where a pause clears with one operator command.
+create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+  '.board.enabled = false' '.guards.git_hooks = false' '.paused = true' '.telemetry.bus_enabled = false'
+assert_eq "P12i: paused AND bus off reports bus-disabled — one arm wins, never both" \
+  "$(_dr_sp_outcomes "$(_dr_sp_run)")" "TELEMETRY BUS DISABLED|"
+
+# "Could not look" outranks "cannot look yet": a record may already exist, and reporting the
+# pause instead would hide that a Stop was in fact measured here.
+create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+  '.board.enabled = false' '.guards.git_hooks = false' '.paused = true'
+printf '{"event":"stop_payload_observed", TRUNCATED\n' > "$DR_SP_EVENTS"
+assert_eq "P12i: paused with an unselectable record is UNSELECTABLE RECORD, not LOOP PAUSED" \
+  "$(_dr_sp_outcomes "$(_dr_sp_run)")" "UNSELECTABLE RECORD|"
+teardown_temp_dir
 
 # --- (n) stop-payload: P12d — the enrollment boundary (ruling item 7) ---
 assert_file_contains "P12d: the RULES §15 registry still names TEN bound entry points" \
