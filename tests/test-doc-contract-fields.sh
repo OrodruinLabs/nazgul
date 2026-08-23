@@ -49,8 +49,10 @@ STOP_REASON_SIZE_RE='[A-Za-z0-9]+ stop_gate reasons'
 # the lists still do is not what a reader would assume from their contents.
 # The population is DERIVED below, so a producer file elsewhere is a finding rather than an
 # omission. These two lists are ONLY the injection seam's shipped stand-ins, excluded from the
-# tree scan so a mutation test's mutant is never masked by the shipped file it replaces — and a
-# stale name here is self-announcing, because that file's own mutation test goes red.
+# tree scan so a mutation test's mutant is never masked by the shipped file it replaces. A stale
+# name here is caught by `_check_injection_seam` below, NOT by the mutation tests: every shipped
+# mutation is an ADDITIVE plant of a new name, so its assertions hold whether or not the shipped
+# original was read, and none of them can observe an exclusion.
 EVENT_INJECTED="scripts/close-objective.sh scripts/stop-hook.sh scripts/board-sync-github.sh scripts/stamp-plan-objective.sh scripts/lib/review-evidence.sh scripts/lib/bounded-net.sh scripts/lib/read-hook-payload.sh scripts/lib/task-transition-guard.sh"
 STOP_INJECTED="scripts/stop-hook.sh scripts/worktree-utils.sh scripts/lib/stack-utils.sh"
 # Discovery is a deliberate SUPERSET of extraction: a file matching loosely but carrying no
@@ -367,6 +369,12 @@ _scan_docs() {
     < <(_tree_producers "$STOP_PRODUCER_RE" "$STOP_INJECTED")
   EVENT_PRODUCER_N=${#ev_producers[@]}
   STOP_PRODUCER_N=${#sr_producers[@]}
+  EV_PRODUCERS_USED="${ev_producers[*]}"
+  SR_PRODUCERS_USED="${sr_producers[*]}"
+  EVENT_SILENT_N=0
+  for p in "${ev_producers[@]}"; do
+    [ -n "$(_derive_events "$p")" ] || EVENT_SILENT_N=$((EVENT_SILENT_N + 1))
+  done
 
   FIELDS=$(_derive_fields "$guard_lib")
   REASONS=$(_derive_reasons "$guard_lib")
@@ -559,7 +567,7 @@ _pass "the merge contract is derived from the gate library ($FIELD_N fields, $RE
 _pass "the merge-observation seam's vocabularies are derived from its own call sites ($MP_RESULT_N results, $MP_EVENT_N events)"
 _pass "the stop_gate reason vocabulary is derived from the tree's own producers' call sites ($STOP_REASON_N reasons over $STOP_PRODUCER_N producers)"
 _pass "the §15 registry is derived from RULES.md's own bullet ($MEMBER_N members)"
-_pass "the lifecycle event-name vocabulary is derived from the tree's own producers' call sites ($EVENT_N events over $EVENT_PRODUCER_N producers)"
+_pass "the lifecycle event-name vocabulary is derived from the tree's own producers' call sites ($EVENT_N events over $EVENT_PRODUCER_N discovered producers, $EVENT_SILENT_N of which contributed no literal name)"
 
 # One denominator, two readers. tests/test-red-run-evidence.sh pins the same vocabulary against the
 # same source; if its copy and this one ever disagree, the disagreement is the finding.
@@ -588,6 +596,32 @@ else
     "$CO_SHIPPED" "$CO_PINNED"
 fi
 _pass "the closer's skip vocabulary is derived from its own coverage printf ($SKIP_REASON_N reasons)"
+
+# lean-comments: allow-run — coverage is the finding and discovery is only reported, and the
+# reason they are not the same thing is the whole point of the split.
+# These paths are EXCLUDED from the tree scan, so one whose stand-in variable left
+# ev_producers/sr_producers is contributed by nothing and its names vanish with no plant able to
+# see it — that is the finding. Carrying no matching call site is NOT: a stand-in kept purely as
+# its family's injection target (scripts/lib/review-evidence.sh emits nothing of its own any more)
+# is excluded from a scan that would not have found it either way. Reported, never collapsed.
+_check_injection_seam() {
+  local label="$1" injected="$2" re="$3" used="$4" rel abs bad="" n=0 silent=0
+  for rel in $injected; do
+    abs="$REPO_ROOT/$rel"
+    [ -r "$abs" ] || continue
+    n=$((n + 1))
+    grep -qE "$re" "$abs" || silent=$((silent + 1))
+    case " $used " in *" $abs "*) ;; *) bad="$bad$rel " ;; esac
+  done
+  if [ -z "$bad" ]; then
+    _pass "every readable $label path is covered by a stand-in variable ($n readable, $silent carrying no matching call site)"
+  else
+    _fail "every readable $label path is covered by a stand-in variable" \
+      "${bad% } — excluded from the tree scan and contributed by nothing, so its names go missing silently"
+  fi
+}
+_check_injection_seam EVENT_INJECTED "$EVENT_INJECTED" "$EVENT_PRODUCER_RE" "$EV_PRODUCERS_USED"
+_check_injection_seam STOP_INJECTED "$STOP_INJECTED" "$STOP_PRODUCER_RE" "$SR_PRODUCERS_USED"
 
 DOC_FLOOR=2
 if [ "$DOC_N" -ge "$DOC_FLOOR" ]; then
