@@ -44,9 +44,11 @@ itself the evidence that nothing an existing project stores had to change.
   into one indistinguishable answer. This is a NEW idiom on purpose — the ten existing
   `INPUT=$(cat)`-behind-`[ ! -t 0 ]` readers ARE the #155 never-EOF deadlock class (1h03m reproduced
   on record); migrating them is #155's job, not this one's.
-- **`stop_payload_observed` — a new event TYPE, always on, one per Stop.** Carries `bg_seen`, a
+- **`stop_payload_observed` — a new event TYPE, once per Stop the hook processes.** Carries `bg_seen`, a
   closed-set `why`, `entries`/`subagents`/`live` counts, and the distinct `types`/`statuses` seen; no
-  paths and no message text. It is a TYPE, not a `stop_gate` reason, so a consumer keying on
+  paths and no message text. It is emitted above the `guards.in_flight_hold` kill switch but BELOW
+  the `paused` gate, so a paused loop records nothing and a gap in these events is not by itself
+  evidence about the host. It is a TYPE, not a `stop_gate` reason, so a consumer keying on
   `stop_gate` will not see it and must not read its absence there as the observation never having
   happened.
 - **`NAZGUL_STOP_PAYLOAD_CAPTURE=1`** writes the raw Stop payload to `nazgul/logs/stop-payload-last.json`
