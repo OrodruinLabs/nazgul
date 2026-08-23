@@ -100,7 +100,7 @@ precedent as 34 → 35 (2.29.0) and 35 → 36 (2.30.0).
   same facts as a `CARVE-OUT:` note: `N of M unit tasks reviewed — K carried out CANCELLED (ids); a
   cancelled task is removed from the unit, never approved by it.` Readiness where every task shipped and
   readiness reached by exclusion must not read identically.
-- **New test files — the discovered root suite ships 116 files, all green.**
+- **New test files — the discovered root suite ships 117 files, all green.**
   `tests/test-cancelled-status.sh` (the status itself: edges, the quarantine refusal, the dependency
   gate, the counters), `tests/test-cancelled-status-consumers.sh` (the vocabulary's whole consumer set,
   every member DRIVEN with a `CANCELLED` fixture — including the recorded NON-consumers, which are
@@ -133,8 +133,9 @@ precedent as 34 → 35 (2.29.0) and 35 → 36 (2.30.0).
   produced rather than above the block:
   `  - capture: \`<cmd>\` in a detached worktree at \`<base>\`; N changed test file(s) copied in…; runner exit E in Ts`.
 - **The red-run gate reports "present but commented" distinctly from "absent".** `commented_out` joins
-  the closed refusal vocabulary — `absent absent_in_tree bad_na_token commented_out corrupt exit_zero
-  not_ancestor ref_unresolvable roots_undeterminable roots_unresolved uncovered_test_file`, eleven
+  the closed refusal vocabulary — `absent absent_in_tree bad_na_token commented_out corrupt
+  discoverable_test_file exit_zero not_ancestor ref_unresolvable roots_undeterminable roots_unresolved
+  unbound_file_scoped_na uncovered_test_file undiscoverable_unverifiable`, fourteen
   members, derived from the `_ttg_red_run_deny`/`_ttg_red_run_empty_payload` call sites in
   `scripts/lib/task-transition-guard.sh` and asserted **against that source** by
   `tests/test-red-run-evidence.sh`, so the list is checkable rather than narrated. The prose comment

@@ -92,16 +92,21 @@ status: PLANNED
      failure was meaningful is the qa-reviewer's blocking question.
 
      When no meaningful pre-change red run exists, record one specifically applicable enumerated
-     exemption. The list is CLOSED — docs-only, comment-only, revert, fixture-capture-only — and free
-     text is rejected. The gate validates exact list membership; the qa-reviewer judges whether the
-     selected exemption is truthful.
+     exemption. The list is CLOSED — docs-only, comment-only, revert, fixture-capture-only,
+     harness-undiscoverable — and free text is rejected. The gate validates exact list membership;
+     the qa-reviewer judges whether the selected exemption is truthful.
+
+     The first four are task-wide declarations. The fifth is FILE-SCOPED and CHECKED: it names one
+     file the test runner's own discovery glob cannot reach, discharges only that file, and is
+     refused by name if that file turns out to be discoverable after all.
 
      Example:
      - red-run: tests/test-foo.sh :: case "guard blocks a 6-line run in a .sh file"
        - pre-change-ref: 8f2c1ad3c0be1f5e2a9d47bb0c1e6d3a51f7b902
        - result: FAILED (exit 1) — "FAIL: guard blocks a 6-line run in a .sh file"
        - captured-by: scripts/red-run.sh at 2026-08-04T11:02:31Z
-     - red-run: N/A — docs-only -->
+     - red-run: N/A — docs-only
+     - red-run: tests/e2e/test-thing.sh :: N/A — harness-undiscoverable -->
 
 ## Merge Evidence
 <!-- Populated by scripts/close-objective.sh (/nazgul:complete), the SOLE writer of this section.
