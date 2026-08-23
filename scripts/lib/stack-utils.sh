@@ -310,11 +310,17 @@ _su_push_branch() {
 # `gh pr create` against the recorded base, non-interactive (all flags
 # explicit). Prints the created PR URL.
 _su_plain_pr() {
-  local base="$1" branch="$2" title="$3" body="$4" out rc
-  out=$(nz_bounded_run net "gh pr create" gh pr create --base "$base" --head "$branch" --title "$title" --body "$body" 2>&1)
-  rc=$?
+  local base="$1" branch="$2" title="$3" body="$4" out err errfile rc=0
+  # stdout alone: the last line here becomes the PERSISTED `pr` field, so a stderr line landing
+  # after gh's URL would register a diagnostic as the PR. stderr is kept for the failure text.
+  errfile=$(mktemp "${TMPDIR:-/tmp}/nazgul-su-prcreate-XXXXXX" 2>/dev/null) || errfile="/dev/null"
+  { out=$(NZ_BOUNDED_WARN_FD=9 nz_bounded_run net "gh pr create" \
+      gh pr create --base "$base" --head "$branch" --title "$title" --body "$body" 2>"$errfile") || rc=$?
+  } 9>&2
+  err=$(cat "$errfile" 2>/dev/null) || err=""
+  [ "$errfile" = "/dev/null" ] || rm -f "$errfile"
   if [ "$rc" -ne 0 ]; then
-    printf 'stack-utils: gh pr create failed for %s -> %s: %s\n' "$branch" "$base" "$out" >&2
+    printf 'stack-utils: gh pr create failed for %s -> %s: %s\n' "$branch" "$base" "${err:-$out}" >&2
     return 1
   fi
   printf '%s\n' "$out" | tail -1
@@ -556,6 +562,30 @@ _su_oneline() {
   printf '%s' "$1" | tr '\n' ' ' | cut -c "1-${2:-500}"
 }
 
+# lean-comments: allow-run — names the host class this defends and why a plain capture was wrong.
+# _su_gh_pr_view_json <label> <pr> <fields> -> `gh pr view --json <fields>`, bounded, with the
+# command's stdout captured ALONE. A `2>&1` capture folded bounded-net's own degradation line into
+# the payload, so on a host with no GNU `timeout` — stock macOS, the default — every `jq` parse
+# below came back empty on an OTHERWISE SUCCESSFUL call: a MERGED layer read as unmerged and a
+# CHANGES_REQUESTED review became invisible. Same fix shape merge-provider.sh already carries:
+# NZ_BOUNDED_WARN_FD keeps that diagnostic on the caller's real stderr instead of silencing it.
+# Prints the payload on success and the HOST's stderr on failure, because every caller quotes this
+# in its own failure diagnostic and uses jq only on the success path.
+_su_gh_pr_view_json() {
+  local label="$1" pr="$2" fields="$3" out err errfile rc=0
+  errfile=$(mktemp "${TMPDIR:-/tmp}/nazgul-su-prview-XXXXXX" 2>/dev/null) || errfile="/dev/null"
+  { out=$(NZ_BOUNDED_WARN_FD=9 nz_bounded_run net "$label" \
+      gh pr view "$pr" --json "$fields" 2>"$errfile") || rc=$?
+  } 9>&2
+  err=$(cat "$errfile" 2>/dev/null) || err=""
+  [ "$errfile" = "/dev/null" ] || rm -f "$errfile"
+  if [ "$rc" -ne 0 ]; then
+    printf '%s' "${err:-$out}"
+    return "$rc"
+  fi
+  printf '%s' "$out"
+}
+
 # _su_write_inbox_item <inbox_dir> <filename> <title> <priority> <type>
 # <extra_frontmatter_lines> <body> [dedup_scope] -> atomically (tmp+mv) write a
 # new inbox candidate; frontmatter is `title`/`priority`/`type` (the only keys
@@ -707,7 +737,7 @@ _su_import_remote_layer() {
     _su_emit "stack_remote_layer_import_failed" pr "$pr" exit_code:n "$rc" detail "$(_su_oneline "$out")"
     return 1
   fi
-  pr_json=$(nz_bounded_run net "gh pr view (remote layer import)" gh pr view "$pr" --json headRefName,baseRefName,url 2>&1); rc=$?
+  pr_json=$(_su_gh_pr_view_json "gh pr view (remote layer import)" "$pr" "headRefName,baseRefName,url"); rc=$?
   if [ "$rc" -ne 0 ]; then
     printf 'stack-utils: gh pr view %s failed while importing a remote-ahead layer (exit %s): %s\n' "$pr" "$rc" "$(_su_oneline "$pr_json")" >&2
     _su_emit "stack_api_failure" stage "remote_import_pr_view" pr "$pr" auth_status "$(_su_auth_status_tag)"
@@ -779,7 +809,7 @@ stack_reconcile() {
     pr=$(printf '%s' "$layer" | jq -r '.pr // empty' 2>/dev/null) || pr=""
     { [ -n "$feat_id" ] && [ -n "$pr" ] && [ "$pr" != "null" ]; } || continue
 
-    pr_json=$(nz_bounded_run net "gh pr view (merge sweep)" gh pr view "$pr" --json state,mergedAt 2>&1); rc=$?
+    pr_json=$(_su_gh_pr_view_json "gh pr view (merge sweep)" "$pr" "state,mergedAt"); rc=$?
     if [ "$rc" -ne 0 ]; then
       api_failure=1
       pr_view_failed=1
@@ -806,6 +836,8 @@ stack_reconcile() {
     if [ "$any_merged" -eq 0 ]; then
       printf 'stack-utils: stack_reconcile: retrying the rebase cascade deferred by an earlier tick (execution.stacking.needs_sync)\n' >&2
     fi
+    # `2>&1` is REQUIRED here, not an oversight: ADR-018's classifier reads gh-stack's STDERR text,
+    # because a real divergence aborts with exit 0.
     sync_out=$(nz_bounded_run long "gh stack sync" gh stack sync 2>&1); sync_rc=$?
     class=$(_su_classify_sync_result "$sync_rc" "$sync_out")
     case "$class" in
@@ -902,7 +934,7 @@ stack_detect_changes_requested() {
     pr=$(printf '%s' "$layer" | jq -r '.pr // empty' 2>/dev/null) || pr=""
     { [ -n "$pr" ] && [ "$pr" != "null" ]; } || continue
 
-    pr_json=$(nz_bounded_run net "gh pr view (review state)" gh pr view "$pr" --json number,reviewDecision,reviews 2>&1); rc=$?
+    pr_json=$(_su_gh_pr_view_json "gh pr view (review state)" "$pr" "number,reviewDecision,reviews"); rc=$?
     if [ "$rc" -ne 0 ]; then
       api_failure=1
       printf 'stack-utils: stack_detect_changes_requested: gh pr view %s failed (exit %s): %s — review state for %s is unknown this tick\n' \
