@@ -1743,6 +1743,22 @@ rrw_setup() {
   RRW_WT="$RRW_PARENT/task-worktree"
   git -C "$RRW_MAIN" worktree add -q --detach "$RRW_WT" HEAD
   RRW_WT=$(cd "$RRW_WT" && pwd -P)
+
+  # A real task worktree carries commits main does not. Detached at main's own HEAD,
+  # BASE..HEAD reads identically from either root and so discriminates nothing.
+  cat > "$RRW_WT/tests/test-alpha-wt-tracked.sh" <<'WTTRACKED'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "=== test-alpha-wt-tracked ==="
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/scripts/feature.sh" ]; then
+  echo "  PASS: feature.sh reached the pre-change tree"
+  exit 0
+fi
+echo "  FAIL: feature.sh reached the pre-change tree"
+exit 1
+WTTRACKED
+  git -C "$RRW_WT" add tests/test-alpha-wt-tracked.sh
+  git -C "$RRW_WT" commit -q -m "a commit the main working tree does not carry"
 }
 
 rrw_teardown() {
@@ -1788,8 +1804,12 @@ CODETREE
     "$RR_OUT" "runtime state read from its main working tree"
   assert_file_contains "two roots: the block lands in the MAIN tree's manifest" \
     "$RRW_MAIN/nazgul/tasks/TASK-201.md" 'red-run: tests/test-alpha.sh'
-  assert_file_contains "two roots: the copy set is derived from the CODE tree's working tree" \
+  assert_file_contains "two roots: the copy set sees the CODE tree's untracked files" \
     "$RRW_MAIN/nazgul/tasks/TASK-201.md" 'red-run: tests/test-alpha-codetree-only.sh'
+  assert_file_not_exists "two roots: the tracked-only file is in the code tree and nowhere else" \
+    "$RRW_MAIN/tests/test-alpha-wt-tracked.sh"
+  assert_file_contains "two roots: the copy set is derived from the CODE tree's OWN BASE..HEAD" \
+    "$RRW_MAIN/nazgul/tasks/TASK-201.md" 'red-run: tests/test-alpha-wt-tracked.sh'
   assert_dir_not_exists "two roots: no nazgul/ is created in the task worktree" "$RRW_WT/nazgul"
   rrw_end
   rrw_teardown
