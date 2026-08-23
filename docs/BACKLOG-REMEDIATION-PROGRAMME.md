@@ -290,6 +290,26 @@ Dead on merge of PR #240 (15, all currently OPEN): #89 #90 #91 #92 #116 #142 #16
 
 ---
 
+## How this is linked on the board
+
+Board item **#248** (`priority:0`, `type:feature`, `nazgul`) is the programme. **89 issues are linked as
+GitHub sub-issues** — these are the class work, and they burn down visibly on the project board's
+`Sub-issues progress` field.
+
+The **20 residue items are deliberately NOT sub-issues**: C12's eight, C13's seven, and the five genuine
+one-offs. They route through `/nazgul:patch` individually, not through any objective, so parenting them
+under the programme would misrepresent them as class work with a mechanism behind them. They are listed
+here instead:
+
+- **C12 (dissolved):** #102 #128 #132 #153 #200 #212 #215 #217
+- **C13 (dissolved, 5-of-7 p0/p1 — schedule between objectives):** #96 #97 #98 #100 #103 #224 #236
+- **Genuine one-offs:** #110 #147 #175 #179 #190
+
+One mechanical constraint found while linking, recorded so it is not rediscovered: **GitHub caps a parent
+at 100 sub-issues** (`Parent cannot have more than 100 sub-issues`). At 109 the link silently spilled the
+last nine. The 89/20 split above is under the cap by construction, but any future umbrella near 100
+children needs a per-objective parent instead of one flat list.
+
 ## Two facts not on the board
 
 - **23 of 144 issues are invisible to the connector.** 121 carry the `nazgul` label it queries; 23 do not.
