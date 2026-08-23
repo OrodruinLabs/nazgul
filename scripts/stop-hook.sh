@@ -23,12 +23,104 @@ source "$SCRIPT_DIR/lib/task-transition-guard.sh"
 source "$SCRIPT_DIR/lib/git-utils.sh"
 source "$SCRIPT_DIR/lib/emit-event.sh"
 source "$SCRIPT_DIR/lib/parallel-batch.sh"
+source "$SCRIPT_DIR/lib/hook-stdin.sh"
 
 # If Nazgul not initialized, allow stop
 if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
+# --- Stop payload observation (#218 C1, ruling Q4) ---
+# Read stdin ONCE, here: the pause and AFK gates below both exit early.
+STOP_PAYLOAD=""
+read_hook_payload STOP_PAYLOAD
+
+# Opt-in, default unset: the raw payload carries cwd, transcript_path, agent_transcript_path
+# and last_assistant_message (ruling Q4) — staged at 0600 and renamed, replacing not appending.
+if [ "${NAZGUL_STOP_PAYLOAD_CAPTURE:-0}" = "1" ]; then
+  # ADR-014: every step below used to end in `2>/dev/null || true`, so a capture an operator
+  # REQUESTED and that FAILED was byte-identical to capture-off. Each failure now names itself.
+  STOP_CAPTURE_TMP="" STOP_CAPTURE_ERR=""
+  if ! mkdir -p "$NAZGUL_DIR/logs" 2>/dev/null; then
+    STOP_CAPTURE_ERR="nazgul/logs/ could not be created"
+  elif ! STOP_CAPTURE_TMP=$(mktemp "$NAZGUL_DIR/logs/.stop-payload-last.XXXXXX" 2>/dev/null); then
+    STOP_CAPTURE_TMP="" STOP_CAPTURE_ERR="no staging file could be created in nazgul/logs/"
+  elif ! chmod 600 "$STOP_CAPTURE_TMP" 2>/dev/null; then
+    STOP_CAPTURE_ERR="the staging file could not be restricted to 0600, and the payload carries cwd and transcript paths"
+  elif ! printf '%s\n' "$STOP_PAYLOAD" > "$STOP_CAPTURE_TMP" 2>/dev/null; then
+    STOP_CAPTURE_ERR="the payload could not be written to the staging file"
+  elif ! mv "$STOP_CAPTURE_TMP" "$NAZGUL_DIR/logs/stop-payload-last.json" 2>/dev/null; then
+    STOP_CAPTURE_ERR="the staging file could not be renamed into place"
+  fi
+  if [ -n "$STOP_CAPTURE_ERR" ]; then
+    if [ -n "$STOP_CAPTURE_TMP" ]; then rm -f "$STOP_CAPTURE_TMP" 2>/dev/null || true; fi
+    echo "Nazgul: NAZGUL_STOP_PAYLOAD_CAPTURE=1 was honoured but the capture FAILED — ${STOP_CAPTURE_ERR}. nazgul/logs/stop-payload-last.json was NOT refreshed and may still hold an earlier Stop's payload. Continuing normally." >&2
+  fi
+fi
+
+# OBSERVATION ONLY — no classification acts on these yet. A truncated, absent
+# or non-JSON payload degrades to `unknown`, which is today's behavior exactly.
+BG_SEEN="unknown" BG_ENTRIES=0 BG_SUBAGENTS=0 BG_LIVE=0 BG_TYPES="" BG_STATUSES="" BG_LIVE_IDS=""
+BG_WHY="${HOOK_STDIN_WHY:-no_stdin}"
+if [ -n "$STOP_PAYLOAD" ]; then
+  if ! command -v jq >/dev/null 2>&1; then
+    BG_WHY="no_jq"
+  else
+    # ONE parse per Stop, not five (PR #245 finding 12): shape verdict, both counts, both
+    # vocabularies and the live ids the Q1 hold key needs, out of a single jq invocation.
+
+    # background_tasks[] is undocumented, so a shape change (R3) or a renamed
+    # type value (R4) must surface as vocabulary in types/statuses, not silence.
+
+    # jq's length/map iterate an OBJECT's values and `// []` swallows an explicit null, so without the array gate `{}` and `null` — the two likeliest deprecation shapes — count as an observed array (PR #245, three reviewers converged).
+
+    # A non-`ok` verdict carries its token ALONE: tab is IFS whitespace, so an empty column collapses into the next, and "" vs "-" is what separates never-read from observed-empty.
+    BG_TSV="$(printf '%s' "$STOP_PAYLOAD" | jq -r '
+      def vocab: unique | join(",") | if . == "" then "-" else . end;
+      def sentinel: if . == "" then "-" else . end;
+      def live: map(select(.status == "running" or .status == "pending"));
+      if . == null or . == false then ["not_json"]
+      elif (type != "object") or (has("background_tasks") | not) then ["field_absent"]
+      elif (.background_tasks | type) != "array" then ["field_wrong_type"]
+      else (.background_tasks) as $b
+      | ($b | map(select(.type == "subagent"))) as $s
+      | [ "ok",
+          ($b | length | tostring),
+          ($s | length | tostring),
+          ($s | live | length | tostring),
+          ($b | map(.type // "null") | vocab),
+          ($b | map(.status // "null") | vocab),
+          ($s | live | map(.id? // empty | tostring | select(. != "")) | sort | join(",") | sentinel) ]
+      end | @tsv' 2>/dev/null || true)"
+    BG_SHAPE=""
+    IFS=$'\t' read -r BG_SHAPE BG_ENTRIES BG_SUBAGENTS BG_LIVE BG_TYPES BG_STATUSES BG_LIVE_IDS <<< "$BG_TSV" || true
+    if [ -n "${HOOK_STDIN_WHY:-}" ]; then
+      # A prefix OUR bound cut short can still parse when the cut lands on a token boundary, and
+      # every count would then undercount a registry never fully received.
+
+      # Only the reader knows the truncation was OURS, so its verdict outranks
+      # this arm's guess at a producer-side change.
+      BG_SEEN="unknown" BG_WHY="$HOOK_STDIN_WHY"
+    else
+      case "$BG_SHAPE" in
+        ok)
+          BG_SEEN="yes" BG_WHY=""
+          # A count that did not parse is "could not tell", not "found none" — RULES §15 / ADR-009.
+          case "${BG_LIVE:-}"      in ''|*[!0-9]*) BG_SEEN="unknown" BG_WHY="not_json" ;; esac
+          case "${BG_SUBAGENTS:-}" in ''|*[!0-9]*) BG_SEEN="unknown" BG_WHY="not_json" ;; esac
+          ;;
+        # field_wrong_type is deliberately NOT not_json: doctor.sh's check_stop_payload reports every `why` with no arm of its own as PAYLOAD UNDETERMINED — the payload did not arrive intact — which is false of a present, well-formed, wrongly-typed field.
+        field_absent|field_wrong_type) BG_WHY="$BG_SHAPE" ;;
+        *) BG_WHY="not_json" ;;
+      esac
+    fi
+    # Restored, never carried over: every arm but `ok` leaves those columns UNSET, and an unknown
+    # arm must publish no count rather than an initialisation constant (PR #245 finding 9).
+    if [ "$BG_SEEN" != "yes" ]; then
+      BG_ENTRIES=0 BG_SUBAGENTS=0 BG_LIVE=0 BG_TYPES="" BG_STATUSES="" BG_LIVE_IDS=""
+    fi
+  fi
+fi
 # Refresh the session lock every iteration — read persisted ID to match
 # session-context.sh. Lock LIFETIME is the session's, not the turn's (#195):
 # removal happens at SessionEnd (session-staging.sh) or via the pid-liveness
@@ -75,6 +167,26 @@ PAUSED=$(jq -r '.paused // false' "$CONFIG")
 if [ "$PAUSED" = "true" ]; then
   exit 0
 fi
+
+# Emitted below the pause gate, not beside the read above: a paused tick has no dispatch to
+# classify, and ITERATION is parsed by here, so the record names its own tick instead of null.
+
+# shellcheck disable=SC2034
+CURRENT_ITERATION="$ITERATION"
+# `why` is emitted ONLY on the unknown arm and the three counts ONLY on the yes arm, so FIELD
+# PRESENCE carries the meaning and a tally can never absorb a fabricated zero (PR #245 finding 9).
+BG_OBSERVED_ARGS=(bg_seen "$BG_SEEN")
+if [ "$BG_SEEN" = "unknown" ]; then
+  BG_OBSERVED_ARGS+=(why "$BG_WHY")
+else
+  BG_OBSERVED_ARGS+=(entries:n "$BG_ENTRIES" subagents:n "$BG_SUBAGENTS" live:n "$BG_LIVE")
+fi
+
+# types/statuses ride BOTH arms: "" (never read) and "-" (observed empty) already tell those apart.
+BG_OBSERVED_ARGS+=(types "${BG_TYPES:-}" statuses "${BG_STATUSES:-}")
+# Bounded and structured on purpose: the raw payload carries cwd,
+# transcript_path, agent_transcript_path and last_assistant_message (ruling Q4).
+emit_event "stop_payload_observed" "${BG_OBSERVED_ARGS[@]}"
 
 # --- AFK timeout enforcement (3.5) ---
 AFK_ENABLED=$(jq -r '.afk.enabled // false' "$CONFIG")
@@ -127,10 +239,125 @@ fi
 # AFK gate and BEFORE the iteration increment on purpose: a hold must never
 # increment current_iteration/consecutive_failures, and must never fire when
 # the AFK timeout should end the run instead.
-# Kill-switch: guards.in_flight_hold (explicit `false` disables the hold; the
-# marker write/clear in in-flight-marker.sh/subagent-stop.sh keep running
-# harmlessly either way).
+# Kill-switch: guards.in_flight_hold — master switch for the WHOLE subsystem, not just the hold. `false` also stops
+# the marker WRITER (in-flight-marker.sh:36-37) and the SessionStart sweep (session-context.sh:77-79); only the clear runs on.
 IN_FLIGHT_HOLD_ENABLED=$(jq -r 'if .guards.in_flight_hold == false then "false" else "true" end' "$CONFIG" 2>/dev/null || echo "true")
+
+# Ruling Q1 (ADR-027): a script constant, deliberately NOT a config key — this is an attempt
+# ledger, and a config read-modify-write here would put the hold's byte-identical config at risk.
+_IN_FLIGHT_HOLD_CAP=1
+
+# Deliberately NOT guards.in_flight_stale_minutes: an operator's small stale bound must never hand
+# an entry that records no marker set a fresh budget every few minutes.
+_IN_FLIGHT_HOLD_TTL_MIN=1440
+
+# The ABANDONED ceiling (PR #245 finding 7). guards.in_flight_stale_minutes decides FRESHNESS; this
+# decides when a marker nothing will ever clear stops counting as awaited work, on any tick at all.
+_IN_FLIGHT_MARKER_MAX_MIN=1440
+
+# macOS ships no flock(1), so the claim below really is unlocked there; telemetry carries which it
+# was (ADR-014) — a mechanism that degraded must not look like one that had nothing to do.
+if command -v flock >/dev/null 2>&1; then _IN_FLIGHT_HAS_FLOCK=1 _IN_FLIGHT_LOCKED=true; else _IN_FLIGHT_HAS_FLOCK=0 _IN_FLIGHT_LOCKED=false; fi
+
+# One ledger file per marker set, named by a short hash of it — the shape of subagent-stop.sh's
+# _resume_attempts_file, fallback included: a bare pipeline with no sha256 tool aborts under set -e.
+_in_flight_holds_file() {
+  local key="$1" hash
+  hash=$(printf '%s' "$key" | _rp_sha256) || hash=""
+  hash="${hash:0:16}"
+  if [ -z "$hash" ]; then
+    echo "Nazgul: in-flight hold ledger hash fallback (sha256 unavailable) — every marker set shares one budget" >&2
+    hash="fallback"
+  fi
+  printf '%s/.in-flight-holds/%s' "$NAZGUL_DIR/logs" "$hash"
+}
+
+# Line 1 of a ledger entry is the count; lines 2+ are the marker basenames it was keyed on, which
+# is what lets an entry be retired on evidence — its set is gone — rather than on age alone.
+_in_flight_holds_prune() {
+  local dir="$1" markers="$2" f recorded alive line
+  [ -d "$dir" ] || return 0
+  for f in "$dir"/*; do
+    [ -f "$f" ] || continue
+    recorded=0 alive=no
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      recorded=1
+      [ -e "$markers/$line" ] || continue
+      # An ABANDONED marker stops anchoring its entry: it is exactly the never-cleared file that
+      # used to pin one against pruning for the whole process lifetime (finding 7).
+      [ -z "$(find "$markers/$line" -mmin "+${_IN_FLIGHT_MARKER_MAX_MIN}" 2>/dev/null)" ] || continue
+      alive=yes; break
+    done < <(tail -n +2 "$f" 2>/dev/null || true)
+    if [ "$alive" = "yes" ]; then continue; fi
+    if [ "$recorded" = "1" ]; then
+      rm -f "$f" 2>/dev/null || true
+    elif [ -n "$(find "$f" -mmin "+${_IN_FLIGHT_HOLD_TTL_MIN}" 2>/dev/null)" ]; then
+      rm -f "$f" 2>/dev/null || true
+    fi
+  done
+}
+
+# Read, cap-check and increment under ONE lock WHERE flock(1) EXISTS, then rename into place: two
+# sessions sharing a working tree (#195) can otherwise both read 0 and both take the single capped hold.
+
+# Without flock that read-modify-write is genuinely unlocked and the race is OPEN — unlike
+# emit-event.sh:75-82, whose lockless fallback is safe by construction (one O_APPEND write).
+
+# The event's `locked` field says which it was, so a degraded claim is reported, never inferred.
+_in_flight_hold_claim() {
+  # Echoes the pre-existing count; 0 = granted, 3 = cap reached, anything else = ledger unusable.
+  local file="$1" body="$2"
+  local dir="${file%/*}"
+  mkdir -p "$dir" 2>/dev/null || { printf '0'; return 2; }
+  (
+    if [ "$_IN_FLIGHT_HAS_FLOCK" = "1" ]; then flock -w 5 -x 200 || exit 2; fi
+    taken=0
+    if [ -f "$file" ]; then
+      raw=$(head -n 1 "$file" 2>/dev/null || echo "")
+      case "$raw" in ''|*[!0-9]*) taken=0 ;; *) taken="$raw" ;; esac
+    fi
+    printf '%s' "$taken"
+    [ "$taken" -lt "$_IN_FLIGHT_HOLD_CAP" ] || exit 3
+    tmp=$(mktemp "$dir/.tmp.XXXXXX" 2>/dev/null) || exit 2
+    if [ -n "$body" ]; then content="$((taken + 1))"$'\n'"$body"; else content="$((taken + 1))"; fi
+    if printf '%s\n' "$content" > "$tmp" 2>/dev/null && mv "$tmp" "$file" 2>/dev/null; then exit 0; fi
+    rm -f "$tmp" 2>/dev/null || true
+    exit 2
+  ) 2>/dev/null 200>"${dir}.lock"
+}
+
+# The two DETECT-ONLY arms. Reachable at ANY marker age (finding 6): a real orphan is by definition
+# a marker that has been sitting there, so running this only inside the FRESH branch excluded
+
+# exactly the population ADR-027's Q3 bar exists to count.
+# `m_bg` rides along because these arms no longer measure ONE class: fresh admits only `missing`, stale also `background:"true"` — and a class the record never carried cannot be recovered when the Q3 bar is evaluated.
+_in_flight_detect_only() {
+  local unit="$1" agent="$2" age="$3" m_bg="${4:-}"
+  if [ "$BG_SUBAGENTS" -ne 0 ]; then
+    # Ruling Q2's third state: its disposition is passed and untouched here; the silence was the defect.
+    echo "Nazgul: PRESENT-NOT-LIVE in-flight marker for ${unit} (${agent}) — the Stop payload reports ${BG_SUBAGENTS} subagent(s) present for this session but none positively live (statuses: ${BG_STATUSES:-none}), so this tick can prove neither a running dispatch nor an orphan. NOT held on and NOT quarantined; left in nazgul/in-flight/. Continuing normally." >&2
+    emit_event "stop_gate" reason "in_flight_present_not_live" unit "$unit" agent "$agent" \
+      subagents_present:n "$BG_SUBAGENTS" live_subagents:n "$BG_LIVE" statuses "${BG_STATUSES:-}" age "$age" \
+      background "$m_bg"
+    return 0
+  fi
+  if [ "$IN_FLIGHT_SESSIONS" -gt 1 ]; then
+    # A DISTINCT reason and not a flag on the candidate: a tally keyed on the reason must not be
+    # able to absorb an observation it was never entitled to count. #248 owns the missing session id.
+    echo "Nazgul: UNATTRIBUTABLE in-flight marker for ${unit} (${agent}) — the Stop payload reports no subagent for THIS session, but ${IN_FLIGHT_SESSIONS} live sessions share this nazgul/ and markers carry no session id (#248), so this tick cannot say the dispatch is not running under another one. NOT counted toward the ADR-027 Q3 bar, NOT held on and NOT quarantined. Continuing normally." >&2
+    emit_event "stop_gate" reason "in_flight_orphan_unattributable" evidence "shared_nazgul_dir" \
+      unit "$unit" agent "$agent" sessions:n "$IN_FLIGHT_SESSIONS" entries:n "$BG_ENTRIES" \
+      subagents_present:n "$BG_SUBAGENTS" types "${BG_TYPES:-}" age "$age" background "$m_bg"
+    return 0
+  fi
+  # DETECT-ONLY: ruling Q3 defers the irreversible move until ADR-027's measurement bar.
+  echo "Nazgul: ORPHAN CANDIDATE in-flight marker for ${unit} (${agent}) — the Stop payload reports no subagent of any status for this session. NOT quarantined and NOT held on; left in nazgul/in-flight/ pending the ADR-027 Q3 measurement bar. Continuing normally." >&2
+  emit_event "stop_gate" reason "in_flight_orphan_candidate" evidence "background_tasks_empty" \
+    unit "$unit" agent "$agent" entries:n "$BG_ENTRIES" subagents_present:n "$BG_SUBAGENTS" \
+    types "${BG_TYPES:-}" age "$age" background "$m_bg"
+}
+
 if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; then
   IN_FLIGHT_STALE_MIN=$(jq -r '[.guards.in_flight_stale_minutes // 30, 1] | max' "$CONFIG" 2>/dev/null || echo 30)
   # A JSON string or fractional value passes jq's max unchanged (string ranks
@@ -139,29 +366,88 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
   case "$IN_FLIGHT_STALE_MIN" in ''|*[!0-9]*) IN_FLIGHT_STALE_MIN=30 ;; esac
   IN_FLIGHT_NOW=$(date +%s)
   IN_FLIGHT_CUTOFF=$(( IN_FLIGHT_NOW - IN_FLIGHT_STALE_MIN * 60 ))
+  IN_FLIGHT_ABANDON_CUTOFF=$(( IN_FLIGHT_NOW - _IN_FLIGHT_MARKER_MAX_MIN * 60 ))
+
+  # Fail-CLOSED at 2 (finding 5): a count this cannot read is "cannot attribute", and the Q3 bar
+  # must never count an observation that could belong to another session sharing this nazgul/.
+  IN_FLIGHT_SESSIONS=$(count_active_sessions "$NAZGUL_DIR/sessions" 2>/dev/null) || IN_FLIGHT_SESSIONS=2
+  case "$IN_FLIGHT_SESSIONS" in ''|*[!0-9]*) IN_FLIGHT_SESSIONS=2 ;; esac
   # CURRENT_ITERATION is normally only set by the iteration increment further
   # down (NEW_ITER=$((ITERATION + 1)) ... CURRENT_ITERATION="$NEW_ITER", after
   # this gate); set it here from the un-incremented ITERATION so an event
   # emitted by this gate carries the real current iteration, not null.
   # shellcheck disable=SC2034
   CURRENT_ITERATION="$ITERATION"
-  FRESH_UNITS="" FRESH_COUNT=0
+  FRESH_UNITS="" FRESH_COUNT=0 IN_FLIGHT_LIVE_HOLD=no FRESH_BASENAMES=""
+  IN_FLIGHT_HOLD_ARGS=(reason "in_flight_hold")
+  # #218 ruling Q2 — TWO independent counts, never one filter: BG_LIVE (positively live) is the HOLD
+  # gate, BG_SUBAGENTS (status-blind presence) the CANDIDATE gate; an unknown status yields neither.
+  IN_FLIGHT_OBSERVED="$BG_SEEN"
+  # A count that did not parse is "could not tell", not "found none" — RULES §15 / ADR-009.
+  case "${BG_LIVE:-}" in ''|*[!0-9]*) IN_FLIGHT_OBSERVED="unknown" ;; esac
+  case "${BG_SUBAGENTS:-}" in ''|*[!0-9]*) IN_FLIGHT_OBSERVED="unknown" ;; esac
+  if [ "$IN_FLIGHT_OBSERVED" = "yes" ] && [ "$BG_LIVE" -gt 0 ]; then
+    # #211 in effect, not just in default: consulted BEFORE the freshness cutoff below, so a stale
+    # bound can never decline a hold for a session that HAS a live subagent.
+    IN_FLIGHT_LIVE_HOLD=yes
+    IN_FLIGHT_HOLD_ARGS+=(live_subagents:n "$BG_LIVE")
+  fi
   for marker in "$NAZGUL_DIR/in-flight"/*.json; do
     [ -f "$marker" ] || continue
     m_epoch=$(jq -r '.dispatched_at_epoch // 0' "$marker" 2>/dev/null || echo 0)
     m_unit=$(jq -r '.unit // "unknown"' "$marker" 2>/dev/null || echo "unknown")
     m_agent=$(jq -r '.agent // "unknown"' "$marker" 2>/dev/null || echo "unknown")
     case "$m_epoch" in ''|*[!0-9]*) m_epoch=0 ;; esac
-    if [ "$m_epoch" -gt 0 ] && [ "$m_epoch" -ge "$IN_FLIGHT_CUTOFF" ]; then
-      # "missing" = dispatch class NOT OBSERVABLE at write time, not foreground. run_in_background is omitted from the exposed Agent schema in fork mode (the interactive default since v2.1.232) and under CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
-      # absence means the OPPOSITE in those two configs (background / foreground). #218: read background_tasks[] at Stop instead of predicting at dispatch time.
-      m_bg=$(jq -r '.background // "missing"' "$marker" 2>/dev/null || echo "missing")
-      m_named=$(jq -r '.named // "false"' "$marker" 2>/dev/null || echo "false")
-      if [ "$m_bg" = "true" ] && [ "$m_named" != "true" ]; then
-        # Provably-background, unnamed: the documented harness resume IS the
-        # confirmed wake path (D-002; docs/CONFIGURATION.md In-Flight Hold).
+    m_bg=$(jq -r '.background // "missing"' "$marker" 2>/dev/null || echo "missing")
+    m_named=$(jq -r '.named // "false"' "$marker" 2>/dev/null || echo "false")
+    if [ "$IN_FLIGHT_LIVE_HOLD" = "yes" ] && [ "$m_bg" != "false" ]; then
+      # Liveness is a property of the SESSION; `background:"false"` is a property of THIS MARKER, and a synchronous dispatch cannot span a Stop no matter what else is running — so a session-level fact does not overrule a marker-level one that already disposes of it (ADR-027 amendment).
+      # Every other class: name every marker, move none, any age. INVARIANT: a `background:"false"` marker is disposed identically regardless of BG_LIVE.
+      m_age_min=$(( (IN_FLIGHT_NOW - m_epoch) / 60 ))
+      if [ "$m_epoch" -gt 0 ] && [ "$m_epoch" -lt "$IN_FLIGHT_ABANDON_CUTOFF" ]; then
+        # (finding 7) Bounded WITHOUT reopening #211, because the hold and this marker are separable:
+        # the hold rests on BG_LIVE and is STILL TAKEN — only the marker stops being awaited work.
+
+        # An unknown age (epoch 0) is not proof of abandonment and keeps holding, deliberately.
+        echo "Nazgul: ABANDONED in-flight marker for ${m_unit} (${m_agent}), age ${m_age_min}m >= ${_IN_FLIGHT_MARKER_MAX_MIN}m — no longer counted as awaited work or keying the hold budget, because nothing will ever clear it. The live-subagent hold is UNAFFECTED and the marker is NOT quarantined ($(basename "$marker"))." >&2
+        emit_event "stop_gate" reason "in_flight_stale" unit "$m_unit" agent "$m_agent" \
+          age_minutes:n "$m_age_min" limit:n "$IN_FLIGHT_STALE_MIN" held_over_age "false" \
+          abandoned_after:n "$_IN_FLIGHT_MARKER_MAX_MIN"
+      else
         FRESH_COUNT=$((FRESH_COUNT + 1))
         FRESH_UNITS="${FRESH_UNITS}${FRESH_UNITS:+ }${m_unit}"
+        FRESH_BASENAMES="${FRESH_BASENAMES}${marker##*/}"$'\n'
+        if [ "$m_epoch" -le 0 ] || [ "$m_epoch" -lt "$IN_FLIGHT_CUTOFF" ]; then
+          # #211 forbids a stale bound from DECLINING this hold, never from reporting what produced it: holding on a marker and reporting it are independent decisions.
+          echo "Nazgul: STALE in-flight marker for ${m_unit} (${m_agent}), age ${m_age_min}m >= ${IN_FLIGHT_STALE_MIN}m — HELD ON anyway because the Stop payload reports a live subagent; investigate a possibly crashed subagent ($(basename "$marker"))." >&2
+          emit_event "stop_gate" reason "in_flight_stale" unit "$m_unit" agent "$m_agent" age_minutes:n "$m_age_min" limit:n "$IN_FLIGHT_STALE_MIN" held_over_age "true"
+        fi
+      fi
+    elif [ "$m_epoch" -gt 0 ] && [ "$m_epoch" -ge "$IN_FLIGHT_CUTOFF" ]; then
+      # "missing" = dispatch class NOT OBSERVABLE at write time, not foreground. run_in_background is omitted from the exposed Agent schema in fork mode (the interactive default since v2.1.232) and under CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
+      # absence means the OPPOSITE in those two configs (background / foreground). #218: read background_tasks[] at Stop instead of predicting at dispatch time.
+      if [ "$m_bg" = "true" ] && [ "$m_named" != "true" ]; then
+        # ORDER IS THE FIX (PR #245 finding 1, architect ruling): this arm sits ABOVE the observed
+        # branch, so a session-level "nothing live" can never withdraw a marker-level proof.
+
+        # marker class         | proof kind  | vs LIVE > 0 | vs observed SUBAGENT_PRESENT == 0
+        # background:"false"   | mechanical  | QUARANTINE  | QUARANTINE
+        # named:"true"         | contractual | HOLD        | quarantine
+        # background:"true"    | contractual | HOLD        | HOLD  <- the cell the prior ruling missed
+        # background:"missing" | none        | HOLD        | detect-only, left in place
+
+        # ADR-027 Q3 called the empty-registry observation not trustworthy enough to ACT on, and
+        # withdrawing a hold IS an action: reading a new signal must never leave us worse off.
+
+        # Provably-background, unnamed: the documented harness resume is the wake path this hold
+        # relies on — BELIEVED but UNOBSERVED on this host class (R2, owed probe: D-005 at docs/DECISION-LOG-2026-08-16-cross-session-messaging.md:79-80; docs/CONFIGURATION.md In-Flight Hold).
+        FRESH_COUNT=$((FRESH_COUNT + 1))
+        FRESH_UNITS="${FRESH_UNITS}${FRESH_UNITS:+ }${m_unit}"
+        FRESH_BASENAMES="${FRESH_BASENAMES}${marker##*/}"$'\n'
+      elif [ "$IN_FLIGHT_OBSERVED" = "yes" ] && [ "$m_named" != "true" ] && [ "$m_bg" != "false" ]; then
+        # Only the `missing` class reaches here now — the one with NO marker-level fact to outrank
+        # the payload: "true" held above, "false" and named quarantine below.
+        _in_flight_detect_only "$m_unit" "$m_agent" "fresh" "$m_bg"
       elif [ "$m_bg" = "false" ] || [ "$m_named" = "true" ]; then
         # PROVEN class only: a synchronous dispatch cannot span a Stop, so this marker
         # is residue and quarantining it is what keeps the backlog from regrowing.
@@ -191,12 +477,87 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
       m_age_min=$(( (IN_FLIGHT_NOW - m_epoch) / 60 ))
       echo "Nazgul: STALE in-flight marker for ${m_unit} (${m_agent}), age ${m_age_min}m >= ${IN_FLIGHT_STALE_MIN}m — hold NOT taken; investigate a possibly crashed subagent ($(basename "$marker"))." >&2
       emit_event "stop_gate" reason "in_flight_stale" unit "$m_unit" agent "$m_agent" age_minutes:n "$m_age_min" limit:n "$IN_FLIGHT_STALE_MIN"
+      if [ "$IN_FLIGHT_OBSERVED" = "yes" ] && [ "$m_named" != "true" ] && [ "$m_bg" != "false" ]; then
+        # Age decides the HOLD, never the MEASUREMENT (finding 6). Reporting a marker and measuring
+        # it are independent, exactly as #211 already separated holding from reporting.
+        _in_flight_detect_only "$m_unit" "$m_agent" "stale" "$m_bg"
+      fi
     fi
   done
-  if [ "$FRESH_COUNT" -gt 0 ]; then
-    echo "Nazgul: in-flight hold — waiting on ${FRESH_COUNT} BACKGROUND dispatch(es): ${FRESH_UNITS}. Allowing stop; the harness's task-notification resumes this loop when the background agent finishes." >&2
-    emit_event "stop_gate" reason "in_flight_hold" units "$FRESH_UNITS" count:n "$FRESH_COUNT"
-    exit 0
+  if [ "$IN_FLIGHT_LIVE_HOLD" = "yes" ] || [ "$FRESH_COUNT" -gt 0 ]; then
+    # Ruling Q1's valve sits on the ONE hold exit so it cannot diverge between the arms: the
+    # `background:"true"` hold rests on the same never-observed wake the payload-driven one does.
+
+    # Entries whose recorded marker set is gone are retired here, before any key is derived: the
+    # valve is scoped to an episode, and a write-only directory outlives every episode it bounded.
+    _in_flight_holds_prune "$NAZGUL_DIR/logs/.in-flight-holds" "$NAZGUL_DIR/in-flight"
+
+    # The fingerprint is over the HELD set ONLY. A proven-class quarantine therefore changes the key
+    # once and grants at most one further hold — a marker can be moved out of that set only once.
+    IN_FLIGHT_HOLD_SET=$(printf '%s' "$FRESH_BASENAMES" | LC_ALL=C sort)
+    # `-`, `.` and `_` are exactly the basename characters whose order differs between C and a
+    # UTF-8 locale, so an unpinned collation makes the key a property of the environment.
+    IN_FLIGHT_HOLD_KEY="$IN_FLIGHT_HOLD_SET"
+    IN_FLIGHT_LEDGER=spent
+    if [ -z "$IN_FLIGHT_HOLD_KEY" ]; then
+      # Nothing is held, so this hold rests on the payload's live subagents alone — key on THEIR
+      # ids, or the empty set hashes to one lifetime constant and spends this arm's budget forever.
+
+      # Taken from the single parse above rather than re-parsing the payload (finding 12);
+      # "-" is that parse's observed-empty sentinel and is never a real id.
+      IN_FLIGHT_LIVE_IDS="$BG_LIVE_IDS"
+      [ "$IN_FLIGHT_LIVE_IDS" != "-" ] || IN_FLIGHT_LIVE_IDS=""
+      IN_FLIGHT_HOLD_KEY="live-subagents:${IN_FLIGHT_LIVE_IDS}"
+      # Reachable since the ABANDONED bound: every marker abandoned (so none is held) plus live subagents carrying no id leaves nothing episode-specific to key on, where a marker basename used to.
+      [ -n "$IN_FLIGHT_LIVE_IDS" ] || IN_FLIGHT_LEDGER=unkeyable
+    fi
+    IN_FLIGHT_HOLDS_FILE=$(_in_flight_holds_file "$IN_FLIGHT_HOLD_KEY")
+    IN_FLIGHT_HOLD_FP="${IN_FLIGHT_HOLDS_FILE##*/}"
+    IN_FLIGHT_HOLDS_TAKEN=0
+    if [ "$IN_FLIGHT_LEDGER" = "spent" ]; then
+      # Claimed BEFORE the hold: in the canonical unattended shape `exit 0` IS process exit
+      # (D-002 item 1), so an unrecorded attempt would return later as a fresh budget.
+      IN_FLIGHT_HOLDS_TAKEN=$(_in_flight_hold_claim "$IN_FLIGHT_HOLDS_FILE" "$IN_FLIGHT_HOLD_SET") \
+        && IN_FLIGHT_CLAIM=0 || IN_FLIGHT_CLAIM=$?
+      case "$IN_FLIGHT_HOLDS_TAKEN" in ''|*[!0-9]*) IN_FLIGHT_HOLDS_TAKEN=0 ;; esac
+      if [ "$IN_FLIGHT_CLAIM" = "0" ]; then
+        if [ "$IN_FLIGHT_LIVE_HOLD" = "yes" ]; then
+          echo "Nazgul: in-flight hold — the Stop payload reports ${BG_LIVE} live subagent(s) for this session; markers held: ${FRESH_UNITS:-none}. Allowing stop; the harness's task-notification resumes this loop when the background agent finishes." >&2
+        else
+          echo "Nazgul: in-flight hold — waiting on ${FRESH_COUNT} BACKGROUND dispatch(es): ${FRESH_UNITS}. Allowing stop; the harness's task-notification resumes this loop when the background agent finishes." >&2
+        fi
+        # `-` for an observed-empty unit list, the sentinel `def vocab` already uses above: the
+        # zero-marker live hold rests on the payload, so "" would read as a list nothing populated.
+        emit_event "stop_gate" "${IN_FLIGHT_HOLD_ARGS[@]}" units "${FRESH_UNITS:--}" count:n "$FRESH_COUNT" locked "$_IN_FLIGHT_LOCKED"
+        exit 0
+      fi
+      # A cap reached is the policy DECISION; every other claim failure — no lock, no temp file, no
+      # rename — is a mechanism FAILURE, and ruling Q1 refuses the unbounded hold either way.
+      [ "$IN_FLIGHT_CLAIM" = "3" ] || IN_FLIGHT_LEDGER=unwritable
+    fi
+    # Reach, stated where the branch is: the valve cannot rescue a wake that never fires at all —
+    # `exit 0` gives up control, and this bound is only read at a Stop that never comes.
+
+    # It bounds the compound mode instead: the wake fires, the clear misses, the marker survives,
+    # and an UNCHANGED set asks for hold #2 with the wake budget already spent.
+
+    # No `exit 0` on this path, deliberately — it falls through to the iteration increment below,
+    # which is the pre-hold behavior exactly: quarantine nothing, move nothing.
+    if [ "$IN_FLIGHT_LEDGER" = "unwritable" ]; then
+      # A ledger that could not be written is a mechanism FAILURE and must not wear the policy DECISION's reason (RULES §5) — holds_taken is still 0 and the cap was never reached.
+      IN_FLIGHT_NOHOLD_REASON="in_flight_hold_unbudgetable"
+      echo "Nazgul: in-flight hold NOT taken — its budget ledger under nazgul/logs/.in-flight-holds/ could not be written, so this hold cannot be bounded, and ruling Q1 refuses an unbounded hold. Continuing normally." >&2
+    elif [ "$IN_FLIGHT_LEDGER" = "unkeyable" ]; then
+      # Same class, different cause: no marker is held and the live subagents carry no id, so there is nothing episode-specific to key a budget on and the alternative is the lifetime constant this arm was fixed to stop keying on.
+      IN_FLIGHT_NOHOLD_REASON="in_flight_hold_unbudgetable"
+      echo "Nazgul: in-flight hold NOT taken — no in-flight marker is held and the Stop payload's live subagents carry no id, so this hold cannot be keyed to an episode or bounded, and ruling Q1 refuses an unbounded hold. Continuing normally." >&2
+    else
+      IN_FLIGHT_NOHOLD_REASON="in_flight_hold_budget_exhausted"
+      echo "Nazgul: in-flight hold budget EXHAUSTED for this marker set (${IN_FLIGHT_HOLDS_TAKEN}/${_IN_FLIGHT_HOLD_CAP} already taken, fingerprint ${IN_FLIGHT_HOLD_FP}); unchanged markers: ${FRESH_UNITS:-none}. An unchanged set means no dispatch completed, so whatever woke this session was not the hold's wake path. Continuing normally." >&2
+    fi
+    emit_event "stop_gate" reason "$IN_FLIGHT_NOHOLD_REASON" fingerprint "$IN_FLIGHT_HOLD_FP" \
+      holds_taken:n "$IN_FLIGHT_HOLDS_TAKEN" live_subagents:n "${BG_LIVE:-0}" \
+      units "${FRESH_UNITS:--}" ledger "$IN_FLIGHT_LEDGER" locked "$_IN_FLIGHT_LOCKED"
   fi
 fi
 

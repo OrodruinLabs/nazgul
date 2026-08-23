@@ -9,7 +9,7 @@ metadata:
 # Nazgul Doctor
 
 ## Examples
-- `/nazgul:doctor` — Run all thirteen checks (a config-present engine check plus the twelve environment checks (a)-(i) and (k)-(m), where (h)/(i) cover stacking tooling readiness and registry-vs-GitHub drift and (k)/(l)/(m) cover messaging eligibility, Remote Control eligibility, and shared-working-tree session collisions) and report pass/warn/fail with remediation
+- `/nazgul:doctor` — Run all fourteen checks (a config-present engine check plus the thirteen environment checks (a)-(i) and (k)-(n), where (h)/(i) cover stacking tooling readiness and registry-vs-GitHub drift, (k)/(l)/(m) cover messaging eligibility, Remote Control eligibility, and shared-working-tree session collisions, and (n) reports the last Stop payload's `background_tasks` state — field present, field present but wrong shape, field absent, payload undetermined, record unselectable, never observed, telemetry bus disabled, or loop paused) and report pass/warn/fail with remediation
 
 ## Instructions
 
@@ -22,7 +22,7 @@ Format all output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md` — stage b
 ```
 
 Capture both stdout and the exit code. This is the entire implementation — `scripts/doctor.sh` runs
-all thirteen checks read-only. It never writes to `nazgul/`, git config, or anywhere else; this skill only
+all fourteen checks read-only. It never writes to `nazgul/`, git config, or anywhere else; this skill only
 formats what it reports. Every stdout line has the shape `<verdict>\t<check-id>\t<message>`, verdict one
 of `pass`/`warn`/`fail`/`note`. The exit code is the aggregate: 0 = all pass, 1 = worst is warn, 2 = worst
 is fail.

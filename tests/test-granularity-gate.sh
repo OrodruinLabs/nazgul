@@ -12,7 +12,7 @@ echo "=== $TEST_NAME ==="
 STOP_HOOK="$REPO_ROOT/scripts/stop-hook.sh"
 
 run_hook() {
-  HOOK_OUTPUT=$(bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+  HOOK_OUTPUT=$(bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 }
 
 # --- BLOCK mode: violation blocks completion ---

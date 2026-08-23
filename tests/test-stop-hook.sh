@@ -19,7 +19,7 @@ STOP_HOOK="$REPO_ROOT/scripts/stop-hook.sh"
 # Helper: run hook capturing output and exit code
 # Sets: HOOK_OUTPUT, HOOK_EC
 run_hook() {
-  HOOK_OUTPUT=$(bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+  HOOK_OUTPUT=$(bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 }
 
 # Probe that does NOT call the code under test, so a base-tree replay measures
