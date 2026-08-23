@@ -109,9 +109,21 @@
 # case where the leftover would change `-z`. A payload with content and 512+
 # trailing newlines keeps the surplus, which differs from `$(cat)` in bytes no
 # caller reads: `jq` is indifferent and `-z` is already decided by the content.
+#
+# NO SENTINEL. This file deliberately carries no `_NAZGUL_..._SOURCED` re-source
+# guard. A scalar sentinel is settable by anyone who can set an environment
+# variable, and it sat above every definition here, so one exported variable made
+# `source` return 0 having defined nothing: the caller's `read_hook_payload` was
+# then command-not-found and, under `set -euo pipefail`, exited 127 — which a hook
+# that blocks only on exit 2 reads as ALLOW. Measured on the shipped guard with
+# `{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}`: sentinel exported ->
+# 127 -> allowed; intact library, clean environment -> 2 -> blocked. Namespacing
+# the name relocates that hole, because any name is settable. Defining
+# unconditionally also OVERWRITES a hostile `export -f read_hook_payload`, which a
+# sentinel would instead have preserved. Re-sourcing costs only the assignments
+# below, and every caller additionally asserts this API is defined after loading.
 
-[ -n "${_NAZGUL_READ_HOOK_PAYLOAD_SOURCED:-}" ] && return 0
-_NAZGUL_READ_HOOK_PAYLOAD_SOURCED=1
+# No re-source sentinel, deliberately — see NO SENTINEL in the header above.
 
 HOOK_PAYLOAD_TIMEOUT_SECONDS=2
 # Half the smallest timeout hooks.json grants any hook (10s), so a hook that

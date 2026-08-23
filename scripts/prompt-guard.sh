@@ -8,7 +8,7 @@ set -euo pipefail
 # Returns exit 2 to block the prompt, exit 0 to allow.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/lib/read-hook-payload.sh"
+RHP_LIB="$SCRIPT_DIR/lib/read-hook-payload.sh"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 source "$SCRIPT_DIR/lib/structured-state.sh"
 
@@ -18,6 +18,23 @@ STATUS_ALT=$(printf '%s' "$VALID_STATUSES" | tr -s ' \t\n' '|' | sed 's/^|//; s/
 
 NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
+
+# Loaded here rather than beside its siblings above so this posture can read $CONFIG
+# and scope itself exactly like the timeout branch below.
+rhp_unavailable() {
+  if [ -f "$CONFIG" ]; then
+    printf 'prompt-guard: stdin reader unavailable: %s — fail-closed, blocking the prompt\n' "$1" >&2
+    exit 2
+  fi
+  printf 'prompt-guard: stdin reader unavailable: %s — fail-open, Nazgul is not initialised here\n' "$1" >&2
+  exit 0
+}
+[ -r "$RHP_LIB" ] || rhp_unavailable "$RHP_LIB is missing or unreadable"
+rhp_rc=0
+# shellcheck source=./lib/read-hook-payload.sh
+source "$RHP_LIB" || rhp_rc=$?
+declare -F read_hook_payload >/dev/null && declare -F hook_payload_timeout_report >/dev/null \
+  || rhp_unavailable "$RHP_LIB defines no reader API after sourcing (source returned $rhp_rc)"
 
 # Prompt comes from the UserPromptSubmit stdin envelope ({"prompt":"..."}), like pre-tool-guard.sh.
 # Read BEFORE any early exit: quitting mid-read EPIPEs the harness, turning the hook nonzero under pipefail.

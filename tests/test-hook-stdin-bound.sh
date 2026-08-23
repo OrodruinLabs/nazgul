@@ -502,6 +502,168 @@ else
     "label count=$LIAR_LABEL, or sed left the copy byte-identical — nothing was mutated, so the check below proves nothing"
 fi
 
+# --- The reader's LOAD, asserted rather than assumed: a file that loads and defines
+# nothing exits 127, which is nobody's declared posture. Both routes to it are driven. ---
+
+# A FRESH root, because the runs above leave state in $PROJ (one rewrites config.json).
+LOAD_PROJ="$SCRATCH/loadproj"
+mkdir -p "$LOAD_PROJ/nazgul/tasks" "$LOAD_PROJ/nazgul/logs"
+# Rewritten before EVERY measurement: some of these hooks update config.json as part
+# of doing their job, and a differential is only a differential over the same inputs.
+_reset_load_proj() {
+  printf '%s\n' '{"feat_id":"T","mode":"hitl","install_mode":"local","execution":{"parallel":true}}' \
+    > "$LOAD_PROJ/nazgul/config.json"
+}
+_reset_load_proj
+LOAD_TREE="$SCRATCH/nolib"
+mkdir -p "$LOAD_TREE"
+cp -R "$REPO_ROOT/scripts" "$LOAD_TREE/scripts"
+printf '%s\n%s\n' '# truncated on purpose: this file loads and defines nothing' ':' \
+  > "$LOAD_TREE/$READER_LIB"
+SPOOF="_NAZGUL_READ_HOOK_PAYLOAD_SOURCED=1"
+# Every `_NAZGUL_*_SOURCED` name any scripts/lib file still carries, DERIVED, plus the one
+# this reader used to carry — so the sweep can never empty out as those guards are retired.
+SENTINELS="$(
+  { grep -hoE '_NAZGUL_[A-Z0-9_]+_SOURCED' "$REPO_ROOT"/scripts/lib/*.sh 2>/dev/null
+    printf '%s\n' '_NAZGUL_READ_HOOK_PAYLOAD_SOURCED'; } | LC_ALL=C sort -u | tr '\n' ' ')"
+SENTINEL_N=$(printf '%s\n' "$SENTINELS" | tr ' ' '\n' | grep -c '[^[:space:]]')
+
+# _run_payload <script-abs> <root> [env-assignment] -> "<exit>\x1f<stderr>". The payload
+# is delivered and the pipe closed, so nothing here can hang: what is measured is the load.
+_run_payload() {
+  local script="$1" root="$2" envassign="${3:-}" ec=0 err
+  if [ -n "$envassign" ]; then
+    err=$(CLAUDE_PROJECT_DIR="$root" NAZGUL_FORMATTER_ENABLED=1 \
+      env "$envassign" bash "$script" 2>&1 >/dev/null <<< "$PAYLOAD") || ec=$?
+  else
+    err=$(CLAUDE_PROJECT_DIR="$root" NAZGUL_FORMATTER_ENABLED=1 \
+      bash "$script" 2>&1 >/dev/null <<< "$PAYLOAD") || ec=$?
+  fi
+  printf '%s\x1f%s' "$ec" "$err"
+}
+
+LOAD_SCANNED=0; LOAD_SKIPPED=0; LOAD_CHECKED=0; LOAD_FINDINGS=0; SENT_CHECKED=0
+UNGUARDED=""; UNNAMED=""; SPOOFABLE=""
+for h in $HOOKS; do
+  LOAD_SCANNED=$((LOAD_SCANNED + 1))
+  case " $CLOSED_HOOKS " in
+    *" $h "*) want="$DENY_RC" ;;
+    *) case " $OPEN_HOOKS " in
+         *" $h "*) want=0 ;;
+         *) LOAD_SKIPPED=$((LOAD_SKIPPED + 1))
+            _skip "$h declares no disposition, so no posture was asserted for an unloadable reader"
+            continue ;;
+       esac ;;
+  esac
+  LOAD_CHECKED=$((LOAD_CHECKED + 1))
+  _reset_load_proj
+  res="$(_run_payload "$LOAD_TREE/scripts/$h" "$LOAD_PROJ")"
+  rc="${res%%$'\x1f'*}"; err="${res#*$'\x1f'}"
+  if [ "$rc" = "$want" ]; then
+    _pass "$h takes its declared posture when the reader loads but defines nothing (exit $rc)"
+  else
+    LOAD_FINDINGS=$((LOAD_FINDINGS + 1)); UNGUARDED="$UNGUARDED$h:$rc "
+    _fail "$h takes its declared posture when the reader loads but defines nothing" \
+      "exited $rc, wanted $want — 127 here is the shell aborting on a command-not-found reader, which is not this hook's posture"
+  fi
+  case "$err" in
+    *"stdin reader unavailable"*) ;;
+    *) LOAD_FINDINGS=$((LOAD_FINDINGS + 1)); UNNAMED="$UNNAMED$h " ;;
+  esac
+  # Every library re-source sentinel, against the SHIPPED tree: one exported variable used
+  # to make a load a no-op, so each is a differential against a clean environment.
+  _reset_load_proj
+  clean="$(_run_payload "$REPO_ROOT/scripts/$h" "$LOAD_PROJ")"
+  crc="${clean%%$'\x1f'*}"
+  moved=""
+  for v in $SENTINELS; do
+    SENT_CHECKED=$((SENT_CHECKED + 1))
+    _reset_load_proj
+    spoofed="$(_run_payload "$REPO_ROOT/scripts/$h" "$LOAD_PROJ" "$v=1")"
+    src="${spoofed%%$'\x1f'*}"
+    [ "$crc" = "$src" ] || moved="$moved$v($crc->$src) "
+  done
+  if [ -z "$moved" ]; then
+    _pass "$h is unchanged by all $SENTINEL_N exported library sentinels (exit $crc)"
+  else
+    LOAD_FINDINGS=$((LOAD_FINDINGS + 1)); SPOOFABLE="$SPOOFABLE$h:{${moved% }} "
+    _fail "$h is unchanged by all $SENTINEL_N exported library sentinels" \
+      "$moved— an environment variable changed what this hook did"
+  fi
+done
+assert_eq "no hook answers an unloadable reader with anything but its declared posture" "${UNGUARDED% }" ""
+assert_eq "every hook NAMES the unloadable reader on stderr rather than exiting mute" "${UNNAMED% }" ""
+assert_eq "no hook's behaviour is settable from the environment through any lib sentinel" "${SPOOFABLE% }" ""
+if [ "$SENT_CHECKED" -ge "$FLOOR" ]; then
+  _pass "the sentinel sweep actually looked ($SENT_CHECKED hook-by-sentinel pairs over $SENTINEL_N names)"
+else
+  _fail "the sentinel sweep actually looked" \
+    "$SENT_CHECKED pairs from $SENTINEL_N derived names — a sweep that drove almost nothing cannot report zero"
+fi
+
+# The sharp case behind the differential: the repo's primary safety control, the
+# destructive command it exists to stop, and the one variable that used to disable it.
+PTG_SPOOF_EC=0
+_reset_load_proj
+CLAUDE_PROJECT_DIR="$LOAD_PROJ" env "$SPOOF" bash "$REPO_ROOT/scripts/pre-tool-guard.sh" \
+  >/dev/null 2>&1 <<< 'rm -rf /' || PTG_SPOOF_EC=$?
+assert_eq "an exported sentinel does not unscreen 'rm -rf /' at pre-tool-guard" "$PTG_SPOOF_EC" "$DENY_RC"
+
+# Static counterpart: the reader must carry no re-source guard keyed on a variable,
+# because any such name is settable by whoever can set an environment variable.
+if grep -qE '^\[ -n "\$\{_[A-Za-z_]+SOURCED' "$REPO_ROOT/$READER_LIB"; then
+  _fail "the reader carries no environment-settable re-source sentinel" \
+    "$READER_LIB opens with a scalar sentinel again — one exported variable makes the load a no-op and every caller's reader command-not-found"
+else
+  _pass "the reader carries no environment-settable re-source sentinel"
+fi
+
+NO_ASSERT=""
+for h in $HOOKS; do
+  f="$REPO_ROOT/scripts/$h"
+  grep -q 'read-hook-payload.sh' "$f" || continue
+  grep -q 'declare -F read_hook_payload' "$f" || NO_ASSERT="$NO_ASSERT$h "
+  grep -q 'declare -F hook_payload_timeout_report' "$f" || NO_ASSERT="$NO_ASSERT$h "
+done
+assert_eq "every hook asserts BOTH reader functions exist after sourcing" "${NO_ASSERT% }" ""
+
+# The assertion is worth what it can catch. Same truncated tree, one copy of the primary
+# guard with its post-source check defanged: it must go back to the 127 measured above.
+NOASSERT_TREE="$SCRATCH/noassert"
+mkdir -p "$NOASSERT_TREE"
+cp -R "$LOAD_TREE/scripts" "$NOASSERT_TREE/scripts"
+sed -i.bak -e 's/|| rhp_unavailable "read_hook_payload is not defined/|| : "read_hook_payload is not defined/' \
+           -e 's/|| rhp_unavailable "hook_payload_timeout_report is not defined/|| : "hook_payload_timeout_report is not defined/' \
+  "$NOASSERT_TREE/scripts/pre-tool-guard.sh"
+rm -f "$NOASSERT_TREE/scripts/pre-tool-guard.sh.bak"
+if grep -q 'rhp_unavailable "read_hook_payload is not defined' "$NOASSERT_TREE/scripts/pre-tool-guard.sh" \
+   || cmp -s "$LOAD_TREE/scripts/pre-tool-guard.sh" "$NOASSERT_TREE/scripts/pre-tool-guard.sh"; then
+  _fail "[mutation] the post-source check was actually removed from the copy" \
+    "sed matched nothing, or left the copy byte-identical — the assertion above proves nothing"
+else
+  _pass "[mutation] the post-source check was actually removed from the copy"
+  _reset_load_proj
+  NOASSERT_RES="$(_run_payload "$NOASSERT_TREE/scripts/pre-tool-guard.sh" "$LOAD_PROJ")"
+  assert_eq "[mutation] and the guard then exits 127 on the reader it never checked" \
+    "${NOASSERT_RES%%$'\x1f'*}" "127"
+fi
+
+printf 'load-guard: %d scanned, %d skipped (declares-no-disposition=%d), %d checked, %d findings\n' \
+  "$LOAD_SCANNED" "$LOAD_SKIPPED" "$LOAD_SKIPPED" "$LOAD_CHECKED" "$LOAD_FINDINGS"
+printf 'sentinel-sweep: %d scanned, 0 skipped (none=0), %d checked, %d findings\n' \
+  "$SENT_CHECKED" "$SENT_CHECKED" "$(printf '%s\n' "$SPOOFABLE" | grep -c '[^[:space:]]')"
+if [ "$LOAD_SCANNED" -ne $((LOAD_SKIPPED + LOAD_CHECKED)) ]; then
+  printf '%s: INTERNAL — load-guard accounting mismatch: %d != %d + %d\n' \
+    "$TEST_NAME" "$LOAD_SCANNED" "$LOAD_SKIPPED" "$LOAD_CHECKED" >&2
+  exit 3
+fi
+if [ "$LOAD_CHECKED" -lt "$FLOOR" ]; then
+  _fail "the load-guard pass actually looked" \
+    "checked $LOAD_CHECKED of $LOAD_SCANNED derived hooks, under the floor of $FLOOR — a pass that checked almost nothing cannot report zero findings"
+else
+  _pass "the load-guard pass actually looked ($LOAD_CHECKED checked >= $FLOOR)"
+fi
+
 SKIPPED=$((SKIP_NO_STDIN + SKIP_UNREADABLE))
 if [ "$SCANNED" -ne $((SKIPPED + CHECKED)) ]; then
   printf '%s: INTERNAL — coverage accounting mismatch: %d != %d + %d\n' \

@@ -12,8 +12,23 @@ source "$SCRIPT_DIR/lib/task-transition-guard.sh"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 # shellcheck source=./lib/destructive-patterns.sh
 source "$SCRIPT_DIR/lib/destructive-patterns.sh"
+RHP_LIB="$SCRIPT_DIR/lib/read-hook-payload.sh"
+# A load that returns 0 having defined nothing is still no payload, and it is
+# scoped like the timeout branch below rather than denying every repo.
+rhp_unavailable() {
+  if [ -f "$(resolve_project_root)/nazgul/config.json" ]; then
+    printf 'task-state-guard: stdin reader unavailable: %s — fail-closed, blocking the edit\n' "$1" >&2
+    exit 2
+  fi
+  printf 'task-state-guard: stdin reader unavailable: %s — fail-open, not a Nazgul project\n' "$1" >&2
+  exit 0
+}
+[ -r "$RHP_LIB" ] || rhp_unavailable "$RHP_LIB is missing or unreadable"
+rhp_rc=0
 # shellcheck source=./lib/read-hook-payload.sh
-source "$SCRIPT_DIR/lib/read-hook-payload.sh"
+source "$RHP_LIB" || rhp_rc=$?
+declare -F read_hook_payload >/dev/null && declare -F hook_payload_timeout_report >/dev/null \
+  || rhp_unavailable "$RHP_LIB defines no reader API after sourcing (source returned $rhp_rc)"
 
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
 read_hook_payload

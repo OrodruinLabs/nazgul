@@ -906,6 +906,95 @@ echo "ls -la" | bash "$DP_ABSENT_DIR/pre-tool-guard.sh" >/dev/null 2>&1 || DP_CT
 assert_exit_code "control: restored library allows a benign command" "$DP_CTRL_EC" 0
 rm -rf "$DP_ABSENT_DIR"
 
+# --- RHP (board-13 security Finding 1): same five facts as the denylist above for the
+# stdin reader, plus the route the denylist cannot have — an exported re-source sentinel. ---
+RHP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-rhp-XXXXXX")
+mkdir -p "$RHP_DIR/lib"
+cp "$GUARD" "$RHP_DIR/pre-tool-guard.sh"
+for _lib in read-hook-payload nazgul-root emit-event destructive-patterns; do
+  cp "$REPO_ROOT/scripts/lib/$_lib.sh" "$RHP_DIR/lib/"
+done
+RHP_REAL="$REPO_ROOT/scripts/lib/read-hook-payload.sh"
+
+rhp_probe() {
+  # Echoes "<exit>\x1f<combined output>"; $1, when set, is exported into the guard's
+  # environment, which is the whole point of the sentinel case.
+  local ec=0 out
+  if [ -n "${1:-}" ]; then
+    out=$(echo "$DESTRUCTIVE_CMD" | env "$1" bash "$RHP_DIR/pre-tool-guard.sh" 2>&1) || ec=$?
+  else
+    out=$(echo "$DESTRUCTIVE_CMD" | bash "$RHP_DIR/pre-tool-guard.sh" 2>&1) || ec=$?
+  fi
+  printf '%s\x1f%s' "$ec" "$out"
+}
+
+# Case 1: reader missing entirely.
+rm -f "$RHP_DIR/lib/read-hook-payload.sh"
+RHP_RES=$(rhp_probe); RHP_EC="${RHP_RES%%$'\x1f'*}"; RHP_OUT="${RHP_RES#*$'\x1f'}"
+assert_exit_code "reader missing: guard fails CLOSED (exit 2), never allows" "$RHP_EC" 2
+assert_contains "reader missing: diagnostic names the missing authority" "$RHP_OUT" "lib/read-hook-payload.sh"
+assert_contains "reader missing: diagnostic states which failure occurred" "$RHP_OUT" "file is missing"
+
+# Case 2: reader present but unreadable (mode 000).
+cp "$RHP_REAL" "$RHP_DIR/lib/read-hook-payload.sh"
+chmod 000 "$RHP_DIR/lib/read-hook-payload.sh"
+if [ -r "$RHP_DIR/lib/read-hook-payload.sh" ]; then
+  _skip "reader unreadable: guard fails CLOSED (running as a uid that bypasses mode 000)"
+else
+  RHP_RES=$(rhp_probe); RHP_EC="${RHP_RES%%$'\x1f'*}"; RHP_OUT="${RHP_RES#*$'\x1f'}"
+  assert_exit_code "reader unreadable: guard fails CLOSED (exit 2)" "$RHP_EC" 2
+  assert_contains "reader unreadable: diagnostic names the authority" "$RHP_OUT" "lib/read-hook-payload.sh"
+fi
+chmod 644 "$RHP_DIR/lib/read-hook-payload.sh"
+
+# Case 3: reader loads but defines nothing. Sourcing succeeds, so only a
+# post-source definition check catches this — the measured 127-as-ALLOW route.
+printf '#!/usr/bin/env bash\n# truncated\n' > "$RHP_DIR/lib/read-hook-payload.sh"
+RHP_RES=$(rhp_probe); RHP_EC="${RHP_RES%%$'\x1f'*}"; RHP_OUT="${RHP_RES#*$'\x1f'}"
+assert_exit_code "reader defines nothing: guard fails CLOSED (exit 2), not 127" "$RHP_EC" 2
+assert_contains "reader defines nothing: diagnostic names read_hook_payload" "$RHP_OUT" "read_hook_payload"
+
+# Case 3b: the reporter alone missing. Both API members are asked as separate facts,
+# because a hook that reads a payload it cannot then REPORT on is still half-loaded.
+{ cat "$RHP_REAL"; printf '\nunset -f hook_payload_timeout_report\n'; } > "$RHP_DIR/lib/read-hook-payload.sh"
+RHP_RES=$(rhp_probe); RHP_EC="${RHP_RES%%$'\x1f'*}"; RHP_OUT="${RHP_RES#*$'\x1f'}"
+assert_exit_code "reader without its reporter: guard fails CLOSED (exit 2)" "$RHP_EC" 2
+assert_contains "reader without its reporter: diagnostic names hook_payload_timeout_report" "$RHP_OUT" "hook_payload_timeout_report"
+
+# Case 4 (THE sharp one): the reader used to open with an env-settable re-source
+# sentinel above every definition, so one exported variable made the load a no-op.
+printf '%s\n%s\n' '[ -n "${_NAZGUL_READ_HOOK_PAYLOAD_SOURCED:-}" ] && return 0' '_NAZGUL_READ_HOOK_PAYLOAD_SOURCED=1' \
+  > "$RHP_DIR/lib/read-hook-payload.sh"
+RHP_RES=$(rhp_probe "_NAZGUL_READ_HOOK_PAYLOAD_SOURCED=1"); RHP_EC="${RHP_RES%%$'\x1f'*}"; RHP_OUT="${RHP_RES#*$'\x1f'}"
+assert_exit_code "sentinel-shaped reader + exported sentinel: guard fails CLOSED (exit 2), not 127" "$RHP_EC" 2
+assert_contains "sentinel-shaped reader + exported sentinel: diagnostic names the undefined API" "$RHP_OUT" "read_hook_payload"
+
+# Case 5: a reader that does not PARSE, established as its own fact by `bash -n`.
+printf '#!/usr/bin/env bash\nread_hook_payload() {\n  if [ 1\n}\n' > "$RHP_DIR/lib/read-hook-payload.sh"
+RHP_RES=$(rhp_probe); RHP_EC="${RHP_RES%%$'\x1f'*}"; RHP_OUT="${RHP_RES#*$'\x1f'}"
+assert_exit_code "reader syntax error: guard fails CLOSED (exit 2)" "$RHP_EC" 2
+assert_contains "reader syntax error: the guard's own diagnostic names the parse failure" "$RHP_OUT" "reader unavailable: file has a syntax error"
+
+# Control: the SHIPPED reader restored. The block is the pattern verdict, and a
+# benign command is still allowed — so the five cases measure the load path.
+cp "$RHP_REAL" "$RHP_DIR/lib/read-hook-payload.sh"
+RHP_RES=$(rhp_probe); RHP_EC="${RHP_RES%%$'\x1f'*}"; RHP_OUT="${RHP_RES#*$'\x1f'}"
+assert_exit_code "control: shipped reader still blocks rm -rf /" "$RHP_EC" 2
+assert_not_contains "control: block is the pattern verdict, not a load failure" "$RHP_OUT" "reader unavailable"
+RHP_CTRL_EC=0
+echo "ls -la" | bash "$RHP_DIR/pre-tool-guard.sh" >/dev/null 2>&1 || RHP_CTRL_EC=$?
+assert_exit_code "control: shipped reader allows a benign command" "$RHP_CTRL_EC" 0
+
+# Control 2: the SHIPPED reader with the old sentinel name exported. It must be inert
+# — the guard screens exactly as it does with a clean environment, on both verdicts.
+RHP_RES=$(rhp_probe "_NAZGUL_READ_HOOK_PAYLOAD_SOURCED=1"); RHP_EC="${RHP_RES%%$'\x1f'*}"; RHP_OUT="${RHP_RES#*$'\x1f'}"
+assert_exit_code "exported sentinel against the shipped reader: still blocks rm -rf /" "$RHP_EC" 2
+assert_not_contains "exported sentinel against the shipped reader: block is the pattern verdict" "$RHP_OUT" "reader unavailable"
+RHP_SPOOF_EC=0
+echo "ls -la" | env _NAZGUL_READ_HOOK_PAYLOAD_SOURCED=1 bash "$RHP_DIR/pre-tool-guard.sh" >/dev/null 2>&1 || RHP_SPOOF_EC=$?
+assert_exit_code "exported sentinel against the shipped reader: a benign command is still allowed" "$RHP_SPOOF_EC" 0
+rm -rf "$RHP_DIR"
+
 # --- AC1: differential verdict harness. Every command string this suite has
 # exercised the guard with (recorded above via _record_exercised, including
 # the six pins just above) is replayed against BOTH the pre-fix guard, pinned

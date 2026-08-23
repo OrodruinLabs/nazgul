@@ -46,8 +46,28 @@ set -euo pipefail
 
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+RHP_LIB="$SCRIPT_DIR/lib/read-hook-payload.sh"
+# A load that returns 0 having defined nothing is still no payload, and it is
+# scoped like the timeout branch below rather than denying every repo.
+rhp_unavailable() {
+  local cfg
+  # shellcheck source=./lib/nazgul-root.sh
+  source "$SCRIPT_DIR/lib/nazgul-root.sh"
+  cfg="$(resolve_project_root)/nazgul/config.json"
+  if [ -f "$cfg" ] \
+    && [ "$(jq -r '.install_mode // ""' "$cfg" 2>/dev/null || echo "")" = "local" ]; then
+    printf 'local-mode-tracking-guard: stdin reader unavailable: %s — fail-closed, blocking the command\n' "$1" >&2
+    exit 2
+  fi
+  printf 'local-mode-tracking-guard: stdin reader unavailable: %s — fail-open, guard is out of scope here\n' "$1" >&2
+  exit 0
+}
+[ -r "$RHP_LIB" ] || rhp_unavailable "$RHP_LIB is missing or unreadable"
+rhp_rc=0
 # shellcheck source=./lib/read-hook-payload.sh
-source "$SCRIPT_DIR/lib/read-hook-payload.sh"
+source "$RHP_LIB" || rhp_rc=$?
+declare -F read_hook_payload >/dev/null && declare -F hook_payload_timeout_report >/dev/null \
+  || rhp_unavailable "$RHP_LIB defines no reader API after sourcing (source returned $rhp_rc)"
 read_hook_payload
 if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
   # With no command text every pre-filter below would allow, so the deny is

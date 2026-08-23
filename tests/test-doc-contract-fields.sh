@@ -41,6 +41,8 @@ STACK_UTILS_LIB="${NAZGUL_DOC_CONTRACT_STACK_UTILS:-$REPO_ROOT/scripts/lib/stack
 BOARD_SYNC_LIB="${NAZGUL_DOC_CONTRACT_BOARD_SYNC:-$REPO_ROOT/scripts/board-sync-github.sh}"
 STAMP_PLAN_LIB="${NAZGUL_DOC_CONTRACT_STAMP_PLAN:-$REPO_ROOT/scripts/stamp-plan-objective.sh}"
 REVIEW_EVIDENCE_LIB="${NAZGUL_DOC_CONTRACT_REVIEW_EVIDENCE:-$REPO_ROOT/scripts/lib/review-evidence.sh}"
+BOUNDED_NET_LIB="${NAZGUL_DOC_CONTRACT_BOUNDED_NET:-$REPO_ROOT/scripts/lib/bounded-net.sh}"
+READ_PAYLOAD_LIB="${NAZGUL_DOC_CONTRACT_READ_PAYLOAD:-$REPO_ROOT/scripts/lib/read-hook-payload.sh}"
 EVENT_SIZE_RE='[A-Za-z0-9]+ lifecycle event types'
 STOP_REASON_SIZE_RE='[A-Za-z0-9]+ stop_gate reasons'
 
@@ -87,13 +89,18 @@ _derive_skip_reasons() {
     | awk 'NR == 1' | grep -oE '[a-z-]+=%d' | sed -E 's/=%d$//'
 }
 
-# The event NAME vocabulary these producers emit, off emit_event/_ttg_emit_event's first literal
-# argument; a variable-only call (`emit_event "$@"`) is a passthrough, excluded by the anchor.
+# lean-comments: allow-run — the anchor's inclusion and its exclusion are both silent, so
+# both are stated where they are made.
+# The event NAME vocabulary these producers emit, off the first LITERAL argument of
+# emit_event/_ttg_emit_event/_bnet_emit; a variable-only call (`emit_event "$event"`) is a
+# passthrough, excluded by the anchor. `_bnet_emit` is named here because it is exactly that
+# passthrough — bounded-net.sh's own names are literal only at its wrapper's call sites, so a
+# producer set that stops at `emit_event` reads that library as emitting nothing.
 _derive_events() {
   local f
   for f in "$@"; do
     [ -r "$f" ] || continue
-    grep -oE '_ttg_emit_event "\$[A-Za-z_][A-Za-z_0-9]*" "[a-z_]+"|emit_event "[a-z_]+"' "$f"
+    grep -oE '_ttg_emit_event "\$[A-Za-z_][A-Za-z_0-9]*" "[a-z_]+"|_bnet_emit "[a-z_]+"|emit_event "[a-z_]+"' "$f"
   done | sed -E 's/.*"([a-z_]+)"$/\1/' | LC_ALL=C sort -u
 }
 
@@ -331,7 +338,8 @@ _scan_docs() {
   MP_EVENTS=$(_derive_mp_events "$MP_LIB")
   RED_RUN=$(_derive_red_run "$guard_lib")
   SKIP_REASONS=$(_derive_skip_reasons "$CLOSER")
-  EVENTS=$(_derive_events "$EVENT_CO_LIB" "$STOP_HOOK_LIB" "$BOARD_SYNC_LIB" "$STAMP_PLAN_LIB" "$REVIEW_EVIDENCE_LIB" "$guard_lib")
+  EVENTS=$(_derive_events "$EVENT_CO_LIB" "$STOP_HOOK_LIB" "$BOARD_SYNC_LIB" "$STAMP_PLAN_LIB" \
+    "$REVIEW_EVIDENCE_LIB" "$BOUNDED_NET_LIB" "$READ_PAYLOAD_LIB" "$guard_lib")
   STOP_REASONS=$(_derive_stop_reasons "$STOP_HOOK_LIB" "$WORKTREE_UTILS_LIB" "$STACK_UTILS_LIB")
   MEMBERS=$(_derive_registry_members "$content_root/RULES.md" 2>/dev/null)
   FIELD_N=$(printf '%s\n' "$FIELDS" | tr ' ' '\n' | grep -c '[^[:space:]]' || true)
@@ -873,6 +881,29 @@ if [ "$FD_event" -eq 0 ] && [ "$FD_eventcount" -eq 0 ] && [ "$EVENT_N" -eq "$SHI
 else
   _fail "[mutation] removing the planted emitter returns zero event findings" \
     "event findings=$FD_event, eventcount findings=$FD_eventcount, event_n=$EVENT_N (want $SHIPPED_EVENT_N)"
+fi
+
+# EV4: the same rule through the WIDENED half of the anchor — bounded-net.sh reaches the bus
+# only through `_bnet_emit`, which `emit_event` alone would read as emitting nothing.
+MUT_BNET="$SCRATCH/mutant-bounded-net.sh"
+{ cat "$BOUNDED_NET_LIB"; printf '\n_bnet_emit "ev_bnet_planted"\n'; } > "$MUT_BNET"
+SHIPPED_BOUNDED_NET_LIB="$BOUNDED_NET_LIB"
+BOUNDED_NET_LIB="$MUT_BNET"
+_scan_docs "$REPO_ROOT" "$REPO_ROOT" "$GUARD_LIB"
+assert_eq "[mutation] a plant at the _bnet_emit wrapper really adds one more event type" \
+  "$EVENT_N" "$((SHIPPED_EVENT_N + 1))"
+case "$FDL_event" in
+  *ev_bnet_planted*) _pass "[mutation] the event finding names the emitter the mutant wrapper added" ;;
+  *) _fail "[mutation] the event finding names the emitter the mutant wrapper added" \
+       "detail was '$FDL_event', which does not name 'ev_bnet_planted'" ;;
+esac
+BOUNDED_NET_LIB="$SHIPPED_BOUNDED_NET_LIB"
+_scan_docs "$REPO_ROOT" "$REPO_ROOT" "$GUARD_LIB"
+if [ "$FD_event" -eq 0 ] && [ "$EVENT_N" -eq "$SHIPPED_EVENT_N" ]; then
+  _pass "[mutation] removing the wrapper plant returns zero event findings ($EVENT_N events, matching the shipped count)"
+else
+  _fail "[mutation] removing the wrapper plant returns zero event findings" \
+    "event findings=$FD_event, event_n=$EVENT_N (want $SHIPPED_EVENT_N)"
 fi
 
 # SR1-SR3: the same threshold rule over the stop_gate reason vocabulary, mirroring EV1-EV3
