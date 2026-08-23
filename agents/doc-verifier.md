@@ -74,10 +74,13 @@ The last five were live emitters absent from this fence (PR #223 re-review) —
 this list; a name that is here but not in source, or in source but not here, is a finding
 either way.
 
-This list is EVENT names only. A `stop_gate` `reason` is not an event and must never be added here —
-`in_flight_hold`, `in_flight_stale`, `in_flight_orphan`, `in_flight_unverifiable`, `afk_timeout`, and
-`stacking_unavailable` are reasons carried by the single `stop_gate` event, and the reason enumeration
-lives in `docs/CONFIGURATION.md` Event Types plus `RULES.md` §5.
+This list is EVENT names only. A `stop_gate` `reason` is not an event and must never be added here.
+`in_flight_hold`, `in_flight_stale`, `in_flight_orphan`, `in_flight_unverifiable`, `afk_timeout` and
+`stacking_unavailable` are reasons carried by the single `stop_gate` event — named here as an
+EXCLUSION AID so you can decide locally, not as the enumeration; there are more than these six.
+The reason enumeration is the closed, derived set in `docs/CONFIGURATION.md` → Telemetry Bus →
+Event Types, and only that. `RULES.md` §5 is a see-also for the announcement rule: it names a
+subset and disclaims exhaustiveness itself, so it is never the list to check a doc against.
 
 `in_flight_orphan` is NOT in the list above and must not be re-added (PR #223 review #2). It is a
 `stop_gate` reason ONLY. It used to be dual-role — also a standalone event from the SessionStart sweep
