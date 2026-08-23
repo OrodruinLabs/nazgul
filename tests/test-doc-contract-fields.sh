@@ -36,15 +36,18 @@ SKIP_SIZE_RE='[A-Za-z0-9]+ skip reasons[^.]{0,16}a closed set'
 # (not $CLOSER) so the skipreason family's own mutation, below, cannot starve this one too.
 EVENT_CO_LIB="${NAZGUL_DOC_CONTRACT_EVENT_CLOSER:-$REPO_ROOT/scripts/close-objective.sh}"
 STOP_HOOK_LIB="${NAZGUL_DOC_CONTRACT_STOP_HOOK:-$REPO_ROOT/scripts/stop-hook.sh}"
+WORKTREE_UTILS_LIB="${NAZGUL_DOC_CONTRACT_WORKTREE_UTILS:-$REPO_ROOT/scripts/worktree-utils.sh}"
+STACK_UTILS_LIB="${NAZGUL_DOC_CONTRACT_STACK_UTILS:-$REPO_ROOT/scripts/lib/stack-utils.sh}"
 BOARD_SYNC_LIB="${NAZGUL_DOC_CONTRACT_BOARD_SYNC:-$REPO_ROOT/scripts/board-sync-github.sh}"
 STAMP_PLAN_LIB="${NAZGUL_DOC_CONTRACT_STAMP_PLAN:-$REPO_ROOT/scripts/stamp-plan-objective.sh}"
 REVIEW_EVIDENCE_LIB="${NAZGUL_DOC_CONTRACT_REVIEW_EVIDENCE:-$REPO_ROOT/scripts/lib/review-evidence.sh}"
 EVENT_SIZE_RE='[A-Za-z0-9]+ lifecycle event types'
+STOP_REASON_SIZE_RE='[A-Za-z0-9]+ stop_gate reasons'
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-doc-contract-XXXXXX")
 trap 'rm -rf "$SCRATCH"' EXIT
 
-FAMILIES="field fieldcount reason reasoncount regcount ordinal tier suite mpresult mpresultcount mpevent mpeventcount redrun redruncount skipreason skipreasoncount event eventcount"
+FAMILIES="field fieldcount reason reasoncount regcount ordinal tier suite mpresult mpresultcount mpevent mpeventcount redrun redruncount skipreason skipreasoncount event eventcount stopreason stopreasoncount"
 
 _derive_fields() {
   # shellcheck disable=SC1090  # the source of truth is a parameter: that is the point
@@ -92,6 +95,17 @@ _derive_events() {
     [ -r "$f" ] || continue
     grep -oE '_ttg_emit_event "\$[A-Za-z_][A-Za-z_0-9]*" "[a-z_]+"|emit_event "[a-z_]+"' "$f"
   done | sed -E 's/.*"([a-z_]+)"$/\1/' | LC_ALL=C sort -u
+}
+
+# The stop_gate reason vocabulary off the three producers' call sites; a backslash
+# continuation is joined first, since four call sites put `reason` on the next line.
+_derive_stop_reasons() {
+  local f
+  for f in "$@"; do
+    [ -r "$f" ] || continue
+    sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*/ /;ba' -e '}' "$f"
+  done | grep -oE '(emit_event|_su_emit) "stop_gate" +reason "[a-z_]+"' \
+    | sed -E 's/.*reason "([a-z_]+)"$/\1/' | LC_ALL=C sort -u
 }
 
 _derive_driver() {
@@ -314,6 +328,7 @@ _scan_docs() {
   RED_RUN=$(_derive_red_run "$guard_lib")
   SKIP_REASONS=$(_derive_skip_reasons "$CLOSER")
   EVENTS=$(_derive_events "$EVENT_CO_LIB" "$STOP_HOOK_LIB" "$BOARD_SYNC_LIB" "$STAMP_PLAN_LIB" "$REVIEW_EVIDENCE_LIB" "$guard_lib")
+  STOP_REASONS=$(_derive_stop_reasons "$STOP_HOOK_LIB" "$WORKTREE_UTILS_LIB" "$STACK_UTILS_LIB")
   MEMBERS=$(_derive_registry_members "$content_root/RULES.md" 2>/dev/null)
   FIELD_N=$(printf '%s\n' "$FIELDS" | tr ' ' '\n' | grep -c '[^[:space:]]' || true)
   REASON_N=$(printf '%s\n' "$REASONS" | grep -c '[^[:space:]]' || true)
@@ -322,6 +337,7 @@ _scan_docs() {
   RED_RUN_N=$(printf '%s\n' "$RED_RUN" | grep -c '[^[:space:]]' || true)
   SKIP_REASON_N=$(printf '%s\n' "$SKIP_REASONS" | grep -c '[^[:space:]]' || true)
   EVENT_N=$(printf '%s\n' "$EVENTS" | grep -c '[^[:space:]]' || true)
+  STOP_REASON_N=$(printf '%s\n' "$STOP_REASONS" | grep -c '[^[:space:]]' || true)
   MEMBER_N=$(printf '%s\n' "$MEMBERS" | grep -c '[^[:space:]]' || true)
   SUITE_N=$(find "$name_root/tests" -maxdepth 1 -type f -name 'test-*.sh' 2>/dev/null | grep -c . || true)
   tiers=$(_derive_tiers "$content_root/RULES.md")
@@ -339,7 +355,7 @@ _scan_docs() {
                  find "$name_root/skills" -maxdepth 2 -type f -name 'SKILL.md'; } 2>/dev/null \
     | sed "s|^$name_root/||" | LC_ALL=C sort)
   DOC_N=$(printf '%s\n' "$DOC_NAMES" | grep -c '[^[:space:]]' || true)
-  per_doc=$((FIELD_N + REASON_N + MP_RESULT_N + MP_EVENT_N + RED_RUN_N + SKIP_REASON_N + EVENT_N + 14))
+  per_doc=$((FIELD_N + REASON_N + MP_RESULT_N + MP_EVENT_N + RED_RUN_N + SKIP_REASON_N + EVENT_N + STOP_REASON_N + 15))
 
   for doc in $DOC_NAMES; do
     path="$content_root/$doc"
@@ -414,6 +430,14 @@ _scan_docs() {
     _check_count_claim eventcount "$doc" "$flat" "$EVENT_SIZE_RE" \
       "$EVENT_N" "lifecycle event type"
 
+    # Same "no enum-run trigger" reasoning as `event`: this vocabulary spans three
+    # unrelated producer scripts, so one producer's own sub-list is not a whole-set claim.
+    _check_vocabulary stopreason "$doc" "$STOP_REASONS" "$flat" 0 \
+      "$(_claim_word "$flat" "$STOP_REASON_SIZE_RE")" \
+      "stop_gate reason" "these three producers emit"
+    _check_count_claim stopreasoncount "$doc" "$flat" "$STOP_REASON_SIZE_RE" \
+      "$STOP_REASON_N" "stop_gate reason"
+
     if [ -z "$(_registry_bullet "$path")" ]; then
       SCANNED=$((SCANNED + 1))
       _no_claim 1
@@ -475,9 +499,9 @@ assert_eq "the skip vocabulary comes from exactly one coverage printf in $(basen
 _scan_docs "$REPO_ROOT" "$DOC_ROOT" "$GUARD_LIB"
 
 if [ -z "$FIELDS" ] || [ -z "$REASONS" ] || [ -z "$MP_RESULTS" ] || [ -z "$MP_EVENTS" ] \
-   || [ -z "$RED_RUN" ] || [ -z "$SKIP_REASONS" ] || [ -z "$EVENTS" ]; then
+   || [ -z "$RED_RUN" ] || [ -z "$SKIP_REASONS" ] || [ -z "$EVENTS" ] || [ -z "$STOP_REASONS" ]; then
   _fail "the merge contract is derived from the gate library" \
-    "fields='$FIELDS' reasons='$(printf '%s' "$REASONS" | tr '\n' ' ')' mp_results='$(printf '%s' "$MP_RESULTS" | tr '\n' ' ')' mp_events='$(printf '%s' "$MP_EVENTS" | tr '\n' ' ')' red_run='$(printf '%s' "$RED_RUN" | tr '\n' ' ')' skip_reasons='$(printf '%s' "$SKIP_REASONS" | tr '\n' ' ')' events='$(printf '%s' "$EVENTS" | tr '\n' ' ')'" \
+    "fields='$FIELDS' reasons='$(printf '%s' "$REASONS" | tr '\n' ' ')' mp_results='$(printf '%s' "$MP_RESULTS" | tr '\n' ' ')' mp_events='$(printf '%s' "$MP_EVENTS" | tr '\n' ' ')' red_run='$(printf '%s' "$RED_RUN" | tr '\n' ' ')' skip_reasons='$(printf '%s' "$SKIP_REASONS" | tr '\n' ' ')' events='$(printf '%s' "$EVENTS" | tr '\n' ' ')' stop_reasons='$(printf '%s' "$STOP_REASONS" | tr '\n' ' ')'" \
     "the contract could not be derived — this is 'never looked', not 'looked and found none'"
   echo "$TEST_NAME: NOTHING CHECKED — the gate library yielded no contract to bind" >&2
   report_results
@@ -486,6 +510,7 @@ if [ -z "$FIELDS" ] || [ -z "$REASONS" ] || [ -z "$MP_RESULTS" ] || [ -z "$MP_EV
 fi
 _pass "the merge contract is derived from the gate library ($FIELD_N fields, $REASON_N refusal reasons)"
 _pass "the merge-observation seam's vocabularies are derived from its own call sites ($MP_RESULT_N results, $MP_EVENT_N events)"
+_pass "the stop_gate reason vocabulary is derived from its three producers' call sites ($STOP_REASON_N reasons)"
 _pass "the §15 registry is derived from RULES.md's own bullet ($MEMBER_N members)"
 _pass "the lifecycle event-name vocabulary is derived from its own producers' call sites ($EVENT_N events)"
 
@@ -577,6 +602,7 @@ SHIPPED_MP_LIB="$MP_LIB"
 SHIPPED_CLOSER="$CLOSER"
 SHIPPED_EVENT_N="$EVENT_N"
 SHIPPED_STOP_HOOK_LIB="$STOP_HOOK_LIB"
+SHIPPED_STOP_REASON_N="$STOP_REASON_N"
 BIND_MODE="quiet"
 # Aimed at the shipped documents, never at the injected root: the mutation is evidence about
 # the binding itself, so a forced all-skip drive must not turn it vacuously green.
@@ -843,6 +869,34 @@ if [ "$FD_event" -eq 0 ] && [ "$FD_eventcount" -eq 0 ] && [ "$EVENT_N" -eq "$SHI
 else
   _fail "[mutation] removing the planted emitter returns zero event findings" \
     "event findings=$FD_event, eventcount findings=$FD_eventcount, event_n=$EVENT_N (want $SHIPPED_EVENT_N)"
+fi
+
+# SR1-SR3: the same threshold rule over the stop_gate reason vocabulary, mirroring EV1-EV3
+# exactly, driven against a stop-hook.sh grown by one more `stop_gate` reason value.
+MUT_STOP_HOOK_SR="$SCRATCH/mutant-stop-hook-sr.sh"
+{ cat "$SHIPPED_STOP_HOOK_LIB"; printf '\nemit_event "stop_gate" reason "sr_planted"\n'; } > "$MUT_STOP_HOOK_SR"
+STOP_HOOK_LIB="$MUT_STOP_HOOK_SR"
+_scan_docs "$REPO_ROOT" "$REPO_ROOT" "$GUARD_LIB"
+assert_eq "[mutation] the mutant stop-hook really adds one more stop_gate reason" \
+  "$STOP_REASON_N" "$((SHIPPED_STOP_REASON_N + 1))"
+if [ "$FD_stopreason" -ge 1 ] && [ "$FINDINGS" -eq $((FD_stopreason + FD_stopreasoncount)) ]; then
+  _pass "[mutation] a planted stop_gate reason with no doc update goes red through a bare list, and nothing else ($FD_stopreason name, $FD_stopreasoncount count findings)"
+else
+  _fail "[mutation] a planted stop_gate reason with no doc update goes red through a bare list, and nothing else" \
+    "stopreason findings=$FD_stopreason, stopreasoncount findings=$FD_stopreasoncount, total findings=$FINDINGS"
+fi
+case "$FDL_stopreason" in
+  *sr_planted*) _pass "[mutation] the stop_gate finding names the reason the mutant stop-hook added" ;;
+  *) _fail "[mutation] the stop_gate finding names the reason the mutant stop-hook added" \
+       "detail was '$FDL_stopreason', which does not name 'sr_planted'" ;;
+esac
+STOP_HOOK_LIB="$SHIPPED_STOP_HOOK_LIB"
+_scan_docs "$REPO_ROOT" "$REPO_ROOT" "$GUARD_LIB"
+if [ "$FD_stopreason" -eq 0 ] && [ "$FD_stopreasoncount" -eq 0 ] && [ "$STOP_REASON_N" -eq "$SHIPPED_STOP_REASON_N" ]; then
+  _pass "[mutation] removing the planted stop_gate reason returns zero findings ($STOP_REASON_N reasons, matching the shipped count)"
+else
+  _fail "[mutation] removing the planted stop_gate reason returns zero findings" \
+    "stopreason findings=$FD_stopreason, stopreasoncount findings=$FD_stopreasoncount, stop_reason_n=$STOP_REASON_N (want $SHIPPED_STOP_REASON_N)"
 fi
 
 BIND_MODE="report"
