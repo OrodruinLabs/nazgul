@@ -456,13 +456,9 @@ if [ "$HAS_NAZGUL_PATH" != "1" ]; then
   exit 0
 fi
 
-# Resolution deferred to here (past the pre-filters and the tokenizer) so the
-# overwhelming majority of Bash calls — which never carry a nazgul/ pathspec —
-# never pay for it.
-source "$SCRIPT_DIR/lib/nazgul-root.sh"
-
-PROJECT_ROOT="$(resolve_project_root)"
-CONFIG="$PROJECT_ROOT/nazgul/config.json"
+# Deferred past the pre-filters so calls carrying no nazgul/ pathspec never pay for it, and via
+# the same helper as the unavailable branches: an unconditional `source` here exits 1 = hook ALLOW.
+CONFIG="$(_lmtg_config_path)"
 
 # Degrade gracefully: config absent → allow
 if [ ! -f "$CONFIG" ]; then

@@ -1258,6 +1258,13 @@ selfdep_probe() {
 printf '%s\n' '{"install_mode":"local"}' > "$SELFDEP_DIR/proj/nazgul/config.json"
 assert_eq "self-dep control: an intact copy still blocks a tracked nazgul/ path" "$(selfdep_probe)" "2"
 
+# The PRIMARY deny path resolves the root itself, and is reached only when a reader IS
+# present — so removing the reader first never drives it.
+rm -f "$SELFDEP_DIR/scripts/lib/nazgul-root.sh"
+assert_eq "resolver missing, reader PRESENT: primary deny path still blocks, never the exit-1 a hook reads as allow" \
+  "$(selfdep_probe)" "2"
+cp "$REPO_ROOT/scripts/lib/nazgul-root.sh" "$SELFDEP_DIR/scripts/lib/"
+
 rm -f "$SELFDEP_DIR/scripts/lib/read-hook-payload.sh"
 assert_eq "reader missing, resolver present: fails CLOSED in a local-mode project" "$(selfdep_probe)" "2"
 
