@@ -8,7 +8,7 @@
 # the #155 deadlock class — do NOT copy it here, and do NOT "simplify" the read
 # below back to `cat`. Migrating those ten is #155's job, not this file's.
 #
-# Every element of `IFS= read -r -d '' -t 2 payload <&0` is load-bearing:
+# Every element of `IFS= read -r -d '' -t <bound> payload <&0` is load-bearing:
 #
 #   [ -t 0 ]    Necessary, NEVER sufficient. #155 records the terminal test as
 #               the WRONG PREDICATE, with a live 1h03m deadlock reproduced by
@@ -16,10 +16,12 @@
 #               condition is stdin that never reaches EOF, not stdin that is a
 #               terminal. #229 is the same class through session-context.sh.
 #               Both still OPEN.
-#   -t 2        The bound that actually closes that hazard, and the only reason
+#   -t N        The bound that actually closes that hazard, and the only reason
 #               a never-EOF stdin returns at all. `read` is a bash BUILTIN, so
 #               this needs no timeout(1) — macOS ships none, which is why
-#               scripts/formatter.sh:218-221 carries a gtimeout ladder.
+#               scripts/formatter.sh:218-221 carries a gtimeout ladder. It is a
+#               wall-clock bound but ALSO, unavoidably, a SIZE bound: see the
+#               size paragraph below the interface.
 #   -d ''       Consume to NUL/EOF rather than to the first newline, so a
 #               pretty-printed multi-line JSON payload is not truncated.
 #   IFS= -r     No word splitting, no backslash interpretation — a payload is
@@ -42,25 +44,39 @@
 #                               no_stdin              terminal, closed, or a clean empty EOF
 #                               read_timeout          the bound was hit with NOTHING read
 #                               read_timeout_partial  the bound was hit with SOME bytes read
-#     reads NAZGUL_HOOK_STDIN_TIMEOUT   seconds; default 2, validated at source
+#     reads NAZGUL_HOOK_STDIN_TIMEOUT   seconds; default 10, validated at source
 #     returns 0 UNCONDITIONALLY — never aborts a caller under `set -euo
 #     pipefail`, and needs no `|| true` at the call site.
 #
-# NAZGUL_HOOK_STDIN_TIMEOUT is VALIDATED at source rather than trusted, in three
+# NAZGUL_HOOK_STDIN_TIMEOUT is VALIDATED at source rather than trusted, in four
 # parts, because SHAPE ALONE IS NOT ENOUGH — the claim this header used to make.
 # A well-shaped spec can still be one this bash REFUSES (`0.5` under the bash 3.2
 # macOS ships as /bin/bash; fractional `read -t` arrived in 4.0) or one it honours
 # far too literally (a 20-digit integer, which disarms the bound entirely). So the
-# check is: shape, then a ceiling on the integer part, then the RUNNING bash's own
-# verdict via __hs_read_spec_accepted, which asks it instead of encoding a version
-# table. All three matter because a spec `read` REJECTS returns 1 having consumed
+# check is: shape, then a ceiling on the integer part, then a FLOOR (0.0001 clears
+# every other check — its integer part is 0 — and disarms observation permanently),
+# then the RUNNING bash's own verdict via __hs_read_spec_accepted, which asks it
+# instead of encoding a version table. All four matter because a spec `read` REJECTS
+# returns 1 having consumed
 # nothing — the SAME status a clean EOF returns — so the miss reads as `no_stdin`,
 # a misconfiguration wearing the label of an absent payload with the whole of #218
 # silently inert behind it. Validating hard enough that a rejected spec never
 # reaches the read is the deliberate choice: it keeps the `why` set CLOSED AT
 # SEVEN rather than minting an eighth member for a case that can no longer arise.
-# A rejected value falls back to 2 seconds and says so on stderr (ADR-014). The
+# A rejected value falls back to __HS_DEFAULT_TIMEOUT and says so on stderr (ADR-014). The
 # unprefixed `HOOK_STDIN_TIMEOUT` is NOT honoured: no shim, by design.
+#
+# THE BOUND IS ALSO A SIZE CEILING, and that is not incidental. `-d ''` makes bash
+# consume ONE BYTE AT A TIME (it must not over-read a non-seekable fd), so throughput
+# is ~1 MB/s and the wall-clock bound converts directly into a maximum payload: the
+# 2 s this file shipped with truncated a 4 MB payload at ~1.81 MB. A truncated read is
+# `read_timeout_partial`, which every consumer degrades to its unknown arm — i.e. the
+# PRE-#218 behaviour, restored by a size limit nobody chose. The default is therefore
+# sized against the 30 s `hooks.json` budget (10 s, ~10 MB) rather than kept minimal,
+# and an operator whose payload is larger still raises NAZGUL_HOOK_STDIN_TIMEOUT. What
+# makes this honest rather than merely bigger is that a truncation is ATTRIBUTABLE:
+# read_timeout_partial names this reader's own bound as the cause, so a payload cut
+# short here never reads as a producer-side schema change.
 #
 # The remaining four members of #218's `why` set — `not_json`, `field_absent`,
 # `field_wrong_type`, `no_jq` — are the CONSUMER's, decided after the payload is
@@ -82,6 +98,14 @@
 # spec either overflows `read`'s own parse or is honoured so literally that the bound is no bound.
 __HS_MAX_TIMEOUT=60
 
+# The FLOOR. `read -d ''` consumes byte-at-a-time on a non-seekable fd, so this wall-clock bound
+# is in practice a SIZE bound (~1 MB/s here) — below a tenth of a second it admits no payload at all.
+__HS_MIN_TIMEOUT=0.1
+
+# Default, in seconds. Sized against the 30 s `hooks.json` budget rather than kept small: at ~1 MB/s
+# a 2 s bound truncated a 4 MB payload at 1.81 MB, and truncation degrades to the pre-#218 arm.
+__HS_DEFAULT_TIMEOUT=10
+
 # Asks the RUNNING bash whether it will honour this -t spec, instead of encoding a version table.
 # The here-string already has a byte ready, so an accepted spec returns 0 at once and never waits.
 __hs_read_spec_accepted() {
@@ -93,7 +117,7 @@ __hs_read_spec_accepted() {
 # Shape (a positive integer or simple decimal — a bare `.`, `0` and `0.0` fail the second case,
 # since stripping every dot and zero leaves nothing), then range, then this bash's own verdict.
 __hs_valid_timeout() {
-  local __hs_int
+  local __hs_int __hs_frac
   case "$1" in ''|*[!0-9.]*|*.*.*) return 1 ;; esac
   case "${1//[.0]/}" in '') return 1 ;; esac
   # `.5` has an EMPTY integer part, and `[` refuses a value past intmax outright rather than
@@ -102,16 +126,22 @@ __hs_valid_timeout() {
   [ -n "$__hs_int" ] || __hs_int=0
   [ "${#__hs_int}" -le 3 ] || return 1
   [ "$__hs_int" -le "$__HS_MAX_TIMEOUT" ] || return 1
+  # A whole integer part is already above the floor; only a `0.x` spec can fall under it, and its
+  # first fractional digit decides, since __HS_MIN_TIMEOUT is one tenth.
+  if [ "$__hs_int" -eq 0 ]; then
+    __hs_frac="${1#*.}"
+    case "${__hs_frac:0:1}" in ''|0) return 1 ;; esac
+  fi
   __hs_read_spec_accepted "$1"
 }
 
 # Seconds the bounded read waits before giving up on a stdin that never EOFs.
 # NAZGUL_-prefixed like every other operator switch here; validated, see header.
-NAZGUL_HOOK_STDIN_TIMEOUT="${NAZGUL_HOOK_STDIN_TIMEOUT:-2}"
+NAZGUL_HOOK_STDIN_TIMEOUT="${NAZGUL_HOOK_STDIN_TIMEOUT:-$__HS_DEFAULT_TIMEOUT}"
 if ! __hs_valid_timeout "$NAZGUL_HOOK_STDIN_TIMEOUT"; then
-  printf 'nazgul: NAZGUL_HOOK_STDIN_TIMEOUT=%s is not a number of seconds this bash will honour (positive, at most %s, and accepted by its own read -t); falling back to 2\n' \
-    "$NAZGUL_HOOK_STDIN_TIMEOUT" "$__HS_MAX_TIMEOUT" >&2
-  NAZGUL_HOOK_STDIN_TIMEOUT=2
+  printf 'nazgul: NAZGUL_HOOK_STDIN_TIMEOUT=%s is not a number of seconds this bash will honour (at least %s, at most %s, and accepted by its own read -t); falling back to %s\n' \
+    "$NAZGUL_HOOK_STDIN_TIMEOUT" "$__HS_MIN_TIMEOUT" "$__HS_MAX_TIMEOUT" "$__HS_DEFAULT_TIMEOUT" >&2
+  NAZGUL_HOOK_STDIN_TIMEOUT="$__HS_DEFAULT_TIMEOUT"
 fi
 
 # Why the last read_hook_payload produced nothing; "" when it produced a payload.

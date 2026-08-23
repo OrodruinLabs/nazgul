@@ -17,10 +17,10 @@ capture settled the design's load-bearing question with data instead of argument
 waiters. Without `select(.type=="subagent")` that session's loop would have held forever on its own
 polling shells. The type filter is load-bearing, not defensive.
 
-**MINOR, not PATCH:** new observable behavior — one new event type, four new `stop_gate` reasons
-(`in_flight_orphan_candidate`, `in_flight_present_not_live`, `in_flight_hold_budget_exhausted`,
-`in_flight_hold_unbudgetable`), a new `/nazgul:doctor` note, and a hold that can now engage where it
-previously never did. **MAJOR is
+**MINOR, not PATCH:** new observable behavior — one new event type, five new `stop_gate` reasons
+(`in_flight_orphan_candidate`, `in_flight_orphan_unattributable`, `in_flight_present_not_live`,
+`in_flight_hold_budget_exhausted`, `in_flight_hold_unbudgetable`), a new `/nazgul:doctor` note, and a
+hold that can now engage where it previously never did. **MAJOR is
 wrong:** nothing is removed or renamed, no gate changes meaning, no default is inverted. **No schema
 step — config schema stays v36 and this release adds ZERO config keys.** Neither
 `scripts/migrate-config.sh` nor `templates/config.json` appears in this objective's diff, which is
@@ -32,11 +32,17 @@ itself the evidence that nothing an existing project stores had to change.
   `IFS= read -r -d '' -t "$NAZGUL_HOOK_STDIN_TIMEOUT" payload <&0`: the timeout is the bound that
   actually closes the hazard (`read` is a bash builtin, so no `timeout(1)` is needed — macOS ships
   none), `-d ''` keeps a pretty-printed multi-line payload from being truncated, and `[ -t 0 ]` is
-  treated as necessary but NEVER sufficient. The bound is an environment variable defaulting to `2`
-  seconds and is VALIDATED at source rather than trusted: a non-numeric or non-positive value prints
-  a stderr notice and falls back to `2`, because `read -t` would otherwise abort with the payload
-  empty and the miss would then read as `why:"no_stdin"` — a misconfiguration wearing an
-  observation's name. It carries the `NAZGUL_` prefix every other switch in this repo carries; the
+  treated as necessary but NEVER sufficient. The bound is an environment variable defaulting to `10`
+  seconds and is VALIDATED at source rather than trusted, against FOUR checks — shape, a ceiling on
+  the integer part (`__HS_MAX_TIMEOUT`, 60), a floor (`__HS_MIN_TIMEOUT`, `0.1`), and the running
+  bash's own `read -t` verdict. A rejected value prints a stderr notice and falls back to `10`,
+  because `read -t` would otherwise abort with the payload empty and the miss would then read as
+  `why:"no_stdin"` — a misconfiguration wearing an observation's name. The floor matters as much as
+  the ceiling: `0.0001` clears every other check, since its integer part is `0`, and would disarm the
+  observation permanently and in silence. The default is sized against the 30 s `hooks.json` budget
+  rather than kept minimal because `read -d ''` consumes one byte at a time, which makes this
+  wall-clock bound ALSO a size ceiling of roughly 1 MB per second — at `2` a 4 MB payload truncated
+  at about 1.81 MB and degraded, silently, to the pre-#218 arm. It carries the `NAZGUL_` prefix every other switch in this repo carries; the
   unprefixed `HOOK_STDIN_TIMEOUT` it was called earlier in this same unreleased cycle is NOT
   honoured and there is no shim, by design — no release ever shipped the short name.
   It ASSIGNS rather than prints, deliberately: a `$(...)` capture is a subshell, so a stdout-only
@@ -44,8 +50,11 @@ itself the evidence that nothing an existing project stores had to change.
   into one indistinguishable answer. This is a NEW idiom on purpose — the ten existing
   `INPUT=$(cat)`-behind-`[ ! -t 0 ]` readers ARE the #155 never-EOF deadlock class (1h03m reproduced
   on record); migrating them is #155's job, not this one's.
-- **`stop_payload_observed` — a new event TYPE, once per Stop the hook processes.** Carries `bg_seen`, a
-  closed-set `why`, `entries`/`subagents`/`live` counts, and the distinct `types`/`statuses` seen; no
+- **`stop_payload_observed` — a new event TYPE, once per Stop the hook processes.** Carries `bg_seen`,
+  the distinct `types`/`statuses` seen, and then two MUTUALLY EXCLUSIVE halves — the
+  `entries`/`subagents`/`live` counts on the `yes` arm ONLY, and the closed-set `why` on the `unknown`
+  arm ONLY, so field PRESENCE carries the meaning and an `unknown` record publishes no count at all
+  rather than an initialisation constant a tally could mistake for an observation; no
   paths and no message text. It is emitted above the `guards.in_flight_hold` kill switch but BELOW
   the `paused` gate, so a paused loop records nothing and a gap in these events is not by itself
   evidence about the host. It is a TYPE, not a `stop_gate` reason, so a consumer keying on
@@ -128,7 +137,11 @@ itself the evidence that nothing an existing project stores had to change.
 - **The empty-array arm is DETECT-ONLY: it ships NO `mv`.** When the payload was observed and reports
   no subagent of any status, the stop-hook emits
   `stop_gate reason:"in_flight_orphan_candidate"` with `evidence:"background_tasks_empty"` and leaves
-  the marker in `nazgul/in-flight/`. The reason is deliberately NOT `in_flight_orphan`, which names a
+  the marker in `nazgul/in-flight/`. The arm is ATTRIBUTION-GATED: `background_tasks[]` is THIS
+  session's registry and markers carry no session id, so when more than one live session shares the
+  `nazgul/` directory it emits `in_flight_orphan_unattributable` instead, and the Q3 bar counts only
+  the candidate. It also runs at ANY marker age, carrying `age` (`fresh`|`stale`) — confining it to
+  fresh markers excluded the aged ones a real orphan almost always is. The reason is deliberately NOT `in_flight_orphan`, which names a
   PROVEN class that really was quarantined and which `/nazgul:status` tells operators exactly that
   about; reusing it would rebuild the conflation this objective exists to remove. `LIVE == 0` has never
   been observed live, so the arm rests on a measurement, not a proof — see the constraint below for the

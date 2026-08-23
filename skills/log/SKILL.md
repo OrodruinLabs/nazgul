@@ -14,7 +14,7 @@ metadata:
 
 ## Current State
 - Events bus: !`if [ -s nazgul/logs/events.jsonl ]; then echo "present"; else echo "absent"; fi`
-- Events (last 20, bookkeeping filtered): !`if [ -s nazgul/logs/events.jsonl ]; then E=$(grep -v -e '"event":"subagent_stop"' -e '"event":"stop_payload_observed"' nazgul/logs/events.jsonl | tail -20); if [ -n "$E" ]; then echo "$E"; else echo "Bus non-empty, but its last lines are ALL subagent_stop/stop_payload_observed bookkeeping — read nazgul/logs/events.jsonl unfiltered"; fi; else echo "No events"; fi`
+- Events (last 20 of the last 200 lines, bookkeeping filtered): !`if [ -s nazgul/logs/events.jsonl ]; then E=$(tail -200 nazgul/logs/events.jsonl | grep -v -e '"event":"subagent_stop"' -e '"event":"stop_payload_observed"' | tail -20); if [ -n "$E" ]; then echo "$E"; else echo "The last 200 lines of the bus are ALL subagent_stop/stop_payload_observed bookkeeping — this WINDOW held no other event, which is not the same as the bus holding none; read nazgul/logs/events.jsonl unfiltered"; fi; else echo "No events"; fi`
 - Legacy iterations (last 20): !`tail -20 nazgul/logs/iterations.jsonl 2>/dev/null || echo "No legacy iteration logs"`
 - Recent commits: !`git log --oneline --grep="$(jq -r '.afk.commit_prefix // "feat("' nazgul/config.json 2>/dev/null)" -20 2>/dev/null || echo "No commits found"`
 - Checkpoints: !`ls -1t nazgul/checkpoints/iteration-*.json 2>/dev/null | head -2 || echo "No checkpoints"`
@@ -40,9 +40,18 @@ routinely make up most of the raw tail and a 20-line window of it shows minutes 
 the run. The preview therefore excludes exactly those two types by design. Both are still written to
 `events.jsonl`, both still have display rows in Step 4, and the Step-1 command above reads the file
 unfiltered — so a `stop_payload_observed` record IS available to the timeline and to `/nazgul:doctor`, it
-is only kept out of the pre-injected preview. If the preview prints its "last lines are ALL … bookkeeping"
-fallback, that means the tail was entirely bookkeeping, NOT that the bus is empty; the "Events bus" line
-above is what distinguishes those two.
+is only kept out of the pre-injected preview. If the preview prints its "last 200 lines are ALL …
+bookkeeping" fallback, that means the window was entirely bookkeeping, NOT that the bus is empty; the
+"Events bus" line above is what distinguishes those two.
+
+**The preview is also BOUNDED, and the bound comes BEFORE the filter.** It reads `tail -200` and filters
+that window, rather than filtering the whole bus and keeping the last 20 — `events.jsonl` grows every
+Stop and is already thousands of lines here, so the unbounded form scanned the entire file to display 20
+rows. Say what the bound costs rather than hiding it: **the filter can now miss.** If all 200 lines of
+the window are `subagent_stop`/`stop_payload_observed`, the preview reports exactly that and shows no
+rows, even when an older non-bookkeeping event exists further back in the file. That is a property of the
+PREVIEW alone — the Step-1 timeline command below reads `events.jsonl` unfiltered AND unbounded, so the
+timeline never inherits this window, and "not in the preview" is never evidence of "not in the bus".
 
 **V1 gaps (events source):** When `TIMELINE_SOURCE=events`, note these known gaps in the event stream:
 - `task_completed` events carry `task_id:"unknown"` — the TaskCompleted hook payload does not expose reliable task identity (CONCERN 2). Display the event but note the missing task ID.

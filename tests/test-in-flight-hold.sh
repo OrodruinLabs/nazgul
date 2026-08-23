@@ -707,7 +707,7 @@ assert_eq "F5: ... and the agent" "$(printf '%s' "$F5_LINE" | jq -r '.agent')" "
 # Both counts are compared against the fixture's own numbers rather than asserted present: a record
 # that carried neither, or carried a constant, would still satisfy a bare presence check.
 assert_eq "F5: it carries the two counts that produced the state — present, and not live" \
-  "$(printf '%s' "$F5_LINE" | jq -r '"\(.subagents_present)/\(.live)"')" "1/0"
+  "$(printf '%s' "$F5_LINE" | jq -r '"\(.subagents_present)/\(.live_subagents)"')" "1/0"
 assert_eq "F5: subagents_present is a JSON number, not a string" \
   "$(printf '%s' "$F5_LINE" | jq -r '.subagents_present | type')" "number"
 assert_eq "F5: it quotes the unrecognised statuses verbatim — the reason the tick could not tell" \
@@ -1448,8 +1448,10 @@ _never_eof_close "$P9_FIFO"
 assert_eq "P9: a never-EOF stdin returns at the bound, and says so — 'timed out' never collapses into 'no payload'" \
   "$P9_OUT" "[][read_timeout]"
 assert_exit_code "P9: it returned on its own, not by the wrapper's kill" "$P9_EC" 0
-assert_eq "P9: ... within its own bound (${P9_ELAPSED}s < 5s)" \
-  "$([ "$P9_ELAPSED" -lt 5 ] && echo yes || echo no)" "yes"
+# Two-sided on purpose: under the wrapper's 20 s kill, "returned" alone would also pass for a
+# bound that never fired, so the floor pins that the 10 s default really was waited out.
+assert_eq "P9: ... within its own 10 s bound (${P9_ELAPSED}s), not by the wrapper's 20 s kill" \
+  "$([ "$P9_ELAPSED" -ge 8 ] && [ "$P9_ELAPSED" -lt 16 ] && echo yes || echo no)" "yes"
 teardown_temp_dir
 
 # --- P9 (TASK-015): the bound's own variable — prefixed, validated, and USED ---
@@ -1467,25 +1469,29 @@ P9_START=$(date +%s)
 P9_OUT=$(_bounded_run 20 env NAZGUL_HOOK_STDIN_TIMEOUT=abc bash -c "$P9_READER" _ "$HOOK_STDIN_LIB" < "$P9_FIFO" 2>/dev/null)
 P9_ELAPSED=$(( $(date +%s) - P9_START ))
 _never_eof_close "$P9_FIFO"
-assert_eq "P9: the fallback is a real 2 s BOUND — a never-EOF stdin still times out under it" "$P9_OUT" "[][read_timeout]"
+assert_eq "P9: the fallback is a real 10 s BOUND — a never-EOF stdin still times out under it" "$P9_OUT" "[][read_timeout]"
 assert_eq "P9: ... and the read waited it out (${P9_ELAPSED}s), so the coerced value was USED, not merely printed" \
-  "$([ "$P9_ELAPSED" -ge 1 ] && [ "$P9_ELAPSED" -lt 5 ] && echo yes || echo no)" "yes"
+  "$([ "$P9_ELAPSED" -ge 8 ] && [ "$P9_ELAPSED" -lt 16 ] && echo yes || echo no)" "yes"
 
 _never_eof_open "$P9_FIFO"
 P9_START=$(date +%s)
 P9_OUT=$(_bounded_run 20 env NAZGUL_HOOK_STDIN_TIMEOUT=5 bash -c "$P9_READER" _ "$HOOK_STDIN_LIB" < "$P9_FIFO" 2>/dev/null)
 P9_ELAPSED=$(( $(date +%s) - P9_START ))
 _never_eof_close "$P9_FIFO"
-assert_eq "P9: a VALID value is honoured under the NEW name — 5 s waited (${P9_ELAPSED}s), not a hard-coded 2" \
-  "$([ "$P9_ELAPSED" -ge 4 ] && echo yes || echo no)" "yes"
+# 5 now sits BELOW the default, so this pin discriminates in both directions at once: too short
+# means the value was ignored, too long means the default overrode it.
+assert_eq "P9: a VALID value is honoured under the NEW name — 5 s waited (${P9_ELAPSED}s), neither a hard-coded 2 nor the 10 s default" \
+  "$([ "$P9_ELAPSED" -ge 4 ] && [ "$P9_ELAPSED" -lt 8 ] && echo yes || echo no)" "yes"
 
 _never_eof_open "$P9_FIFO"
 P9_START=$(date +%s)
 P9_OUT=$(_bounded_run 20 env HOOK_STDIN_TIMEOUT=5 bash -c "$P9_READER" _ "$HOOK_STDIN_LIB" < "$P9_FIFO" 2>/dev/null)
 P9_ELAPSED=$(( $(date +%s) - P9_START ))
 _never_eof_close "$P9_FIFO"
-assert_eq "P9: the unprefixed name is DEAD — no shim, so a stray HOOK_STDIN_TIMEOUT cannot move the bound (${P9_ELAPSED}s < 4)" \
-  "$([ "$P9_ELAPSED" -lt 4 ] && echo yes || echo no)" "yes"
+# The unprefixed 5 is DISTINGUISHABLE from the 10 s default, which is the whole discriminator:
+# waiting ~10 s proves the stray name moved nothing, where waiting ~5 s would prove it did.
+assert_eq "P9: the unprefixed name is DEAD — no shim, so a stray HOOK_STDIN_TIMEOUT=5 cannot move the bound (${P9_ELAPSED}s, the 10 s default)" \
+  "$([ "$P9_ELAPSED" -ge 8 ] && echo yes || echo no)" "yes"
 assert_eq "P9: ... and the default bound still governed that read" "$P9_OUT" "[][read_timeout]"
 teardown_temp_dir
 
@@ -1501,7 +1507,7 @@ _never_eof_close "$P9_FIFO"
 assert_eq "P9: a partial timed-out read keeps the bytes AND names the bound — read_timeout_partial" \
   "$P9_OUT" "[$P9_PARTIAL][read_timeout_partial]"
 assert_eq "P9: ... reached at the bound (${P9_ELAPSED}s), by a writer that never EOFs — not by a short clean read" \
-  "$([ "$P9_ELAPSED" -ge 1 ] && [ "$P9_ELAPSED" -lt 5 ] && echo yes || echo no)" "yes"
+  "$([ "$P9_ELAPSED" -ge 8 ] && [ "$P9_ELAPSED" -lt 16 ] && echo yes || echo no)" "yes"
 teardown_temp_dir
 
 setup_temp_dir
@@ -1530,8 +1536,8 @@ P6_ELAPSED=$(( $(date +%s) - P6_START ))
 _never_eof_close "$P6_FIFO"
 assert_eq "P6 (C4): stop-hook returns under a never-EOF stdin instead of deadlocking" \
   "$([ "$P6_EC" -ne 124 ] && echo returned || echo killed_by_wrapper)" "returned"
-assert_eq "P6 (C4): ... in ${P6_ELAPSED}s, under the 5 s bound" \
-  "$([ "$P6_ELAPSED" -lt 5 ] && echo yes || echo no)" "yes"
+assert_eq "P6 (C4): ... in ${P6_ELAPSED}s, under the wrapper's 20 s kill and at the 10 s default bound" \
+  "$([ "$P6_ELAPSED" -lt 16 ] && echo yes || echo no)" "yes"
 # jq on the field, never a substring: `read_timeout` is a strict prefix of `read_timeout_partial`.
 assert_eq "P6: the bounded read is recorded as read_timeout EXACTLY — not as an absent payload, and not as a partial one" \
   "$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | jq -r '.why // "ABSENT"' | tr '\n' ' ')" \
@@ -1715,12 +1721,12 @@ _p13_spec_out() {
 _p13_check "P13a: a 20-digit timeout is rejected and announced, never accepted as shape-valid" \
   "$(_p13_spec_out 99999999999999999999 | grep -c 'NAZGUL_HOOK_STDIN_TIMEOUT=99999999999999999999' || true)" "1"
 _p13_check "P13a: 61 is over the ceiling and rejected too" \
-  "$(_p13_spec_out 61 | grep -c 'falling back to 2' || true)" "1"
+  "$(_p13_spec_out 61 | grep -c 'falling back to 10' || true)" "1"
 # Controls: a ceiling that rejected everything would satisfy both pins above on its own.
 _p13_check "P13a control: 60 is AT the ceiling and stands — this is a bound, not a blanket refusal" \
-  "$(_p13_spec_out 60 | grep -c 'falling back to 2' || true)" "0"
+  "$(_p13_spec_out 60 | grep -c 'falling back to' || true)" "0"
 _p13_check "P13a control: an ordinary 5 is still accepted" \
-  "$(_p13_spec_out 5 | grep -c 'falling back to 2' || true)" "0"
+  "$(_p13_spec_out 5 | grep -c 'falling back to' || true)" "0"
 _p13_check "P13a: the payload on stdin still arrives under a rejected spec, so no_stdin is never the answer" \
   "$(printf '%s' "$P13_DOC" | _bounded_run 8 env NAZGUL_HOOK_STDIN_TIMEOUT=99999999999999999999 bash -c "$P13_READER" _ "$HOOK_STDIN_LIB" 2>/dev/null)" \
   "[$P13_DOC][]"
@@ -1735,10 +1741,10 @@ P13_OUT=$(_bounded_run 20 env NAZGUL_HOOK_STDIN_TIMEOUT=99999999999999999999 \
 P13_EC=$?
 P13_ELAPSED=$(( $(date +%s) - P13_START ))
 _never_eof_close "$P13_FIFO"
-_p13_check "P13b: a 20-digit spec falls back to the real 2 s bound and still returns read_timeout" \
+_p13_check "P13b: a 20-digit spec falls back to the real 10 s bound and still returns read_timeout" \
   "$P13_OUT" "[][read_timeout]"
 _p13_check "P13b: ... on its own in ${P13_ELAPSED}s, not killed by the wrapper after waiting out 3e12 seconds" \
-  "$([ "$P13_EC" -ne 124 ] && [ "$P13_ELAPSED" -lt 5 ] && echo returned || echo hung)" "returned"
+  "$([ "$P13_EC" -ne 124 ] && [ "$P13_ELAPSED" -lt 16 ] && echo returned || echo hung)" "returned"
 teardown_temp_dir
 
 setup_temp_dir
@@ -1776,8 +1782,8 @@ fi
 # The control in BOTH directions: the validator asks the running bash rather than encoding a version
 # table, so it must accept 0.5 exactly where that bash does and reject it exactly where it does not.
 if read -r -t 0.5 _p13_probe <<< "p" 2>/dev/null; then P13_SELF=yes; else P13_SELF=no; fi
-P13_SELF_REJECTED=$([ "$(_p13_spec_out 0.5 | grep -c 'falling back to 2' || true)" -gt 0 ] && echo yes || echo no)
-_p13_check "P13c control: the verdict on 0.5 TRACKS this bash's own, in both directions" \
+P13_SELF_REJECTED=$([ "$(_p13_spec_out 0.5 | grep -c 'falling back to' || true)" -gt 0 ] && echo yes || echo no)
+_p13_check "P13c control: the verdict on 0.5 TRACKS this bash's own, in both directions — the 0.1 floor sits BELOW 0.5 precisely so it cannot pre-empt that verdict" \
   "accepts=$P13_SELF rejected=$P13_SELF_REJECTED" \
   "accepts=$P13_SELF rejected=$([ "$P13_SELF" = "yes" ] && echo no || echo yes)"
 
@@ -1804,8 +1810,10 @@ _p13_check "P13d: a read_timeout_partial payload is recorded unknown, never as a
   "$(printf '%s' "$P13_OBS" | jq -r '.bg_seen')" "unknown"
 _p13_check "P13d: ... under the reader's own verdict, because only the reader knows the truncation was ours" \
   "$(printf '%s' "$P13_OBS" | jq -r '.why // "ABSENT"')" "read_timeout_partial"
+# Was "0/0/0" — three fabricated zeros a Q3 tally could read as an observation (PR #245 finding 9).
+# Field PRESENCE now carries the meaning, exactly as `why` already does on this same arm.
 _p13_check "P13d: ... and no count is published off a document that was never fully received" \
-  "$(printf '%s' "$P13_OBS" | jq -r '"\(.entries)/\(.subagents)/\(.live)"')" "0/0/0"
+  "$(printf '%s' "$P13_OBS" | jq -r '"\(has("entries"))/\(has("subagents"))/\(has("live"))"')" "false/false/false"
 teardown_temp_dir
 
 setup_temp_dir
@@ -1817,7 +1825,7 @@ create_task_file "TASK-001" "READY"
 _run_hook_payload "$P13_WHOLE"
 P13_OBS=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1)
 _p13_check "P13d control: the SAME bytes delivered whole still record yes with their counts — the arm keys on truncation, not on content" \
-  "$(printf '%s' "$P13_OBS" | jq -r '"\(.bg_seen)/\(has("why"))/\(.live)"')" "yes/false/1"
+  "$(printf '%s' "$P13_OBS" | jq -r '"\(.bg_seen)/\(has("why"))/\(has("live"))/\(.live)"')" "yes/false/true/1"
 teardown_temp_dir
 
 setup_temp_dir
@@ -1961,6 +1969,450 @@ assert_eq "P13 floor: the defect set is not empty" \
 assert_eq "P13: $P13_SCANNED scanned, $P13_SKIPPED skipped, $P13_CHECKED checked — every defect this PR introduced is fixed, and each fix is paired with a control that would catch it over-firing" \
   "$P13_FINDINGS" "0"
 
+# === P14 (TASK-028): the thirteen findings of the PR #245 peer re-review, each with a control ===
+
+# Same accounting shape as P10/P12b/P13: every pin is an equality on an extracted value, so the
+# coverage line counts pins that actually RAN rather than pins that merely appear in the file.
+P14_SCANNED=0
+P14_SKIPPED=0
+P14_CHECKED=0
+P14_FINDINGS=0
+
+_p14_check() {
+  P14_SCANNED=$((P14_SCANNED + 1))
+  P14_CHECKED=$((P14_CHECKED + 1))
+  assert_eq "$1" "$2" "$3"
+  [ "$2" = "$3" ] || P14_FINDINGS=$((P14_FINDINGS + 1))
+}
+
+_p14_skip() {
+  P14_SCANNED=$((P14_SCANNED + 1))
+  P14_SKIPPED=$((P14_SKIPPED + 1))
+  _skip "$1"
+}
+
+# ONE new stop-hook invocation site for every env-gated cell below (P7 counts sites, and its own
+# stdin is bound by the pipe). <env-assignment> [payload].
+_run_hook_env() {
+  HOOK_OUTPUT=$(printf '%s' "${2:-}" | env "$1" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+}
+
+# The observed-but-EMPTY registry: read, well-formed, and reporting no subagent of any status.
+# It is the exact payload that used to withdraw a background:"true" marker's hold.
+P14_EMPTY='{"hook_event_name":"Stop","background_tasks":[]}'
+P14_LIVE="$(cat "$FIXTURES/stop-payload/stop-two-subagents-one-shell.json")"
+P14_REASON() { grep -c "\"reason\":\"$1\"" "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null || true; }
+
+# --- P14a (finding 1, architect ruling): the marker-level proof OUTRANKS the session-level absence ---
+
+# The ruling's table, driven cell by cell against ONE payload. Only the class differs between the
+# four fixtures below, so a disposition that changed is attributable to the class and nothing else.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/bg.json" "nazgul:implementer" "TASK-BG" "$(date +%s)" "true"
+_run_hook_payload "$P14_EMPTY"
+# A dispatchable READY task is planted on purpose: without the hold this run blocks with exit 2, so
+# exit 0 discriminates here instead of being the no-plan default.
+_p14_check "P14a: background:\"true\" HOLDS against an observed-empty registry (exit 0)" "$HOOK_EC" "0"
+# SUBSTRING TRAP: in_flight_hold is a strict prefix of in_flight_hold_budget_exhausted, and
+# in_flight_orphan of both in_flight_orphan_candidate and in_flight_orphan_unattributable.
+_p14_check "P14a: ... and the hold is the recorded disposition" "$(P14_REASON in_flight_hold)" "1"
+_p14_check "P14a: ... naming the marker it held" \
+  "$(grep '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" | tail -1 | jq -r '.units')" "TASK-BG"
+_p14_check "P14a: ... and the empty registry never files it as a candidate instead" \
+  "$(P14_REASON in_flight_orphan_candidate)" "0"
+_p14_check "P14a: ... nor as present-not-live" "$(P14_REASON in_flight_present_not_live)" "0"
+_p14_check "P14a: the held marker is still on disk, unmoved" \
+  "$([ -f "$TEST_DIR/nazgul/in-flight/bg.json" ] && echo present || echo gone)" "present"
+teardown_temp_dir
+
+# Control row 1 — background:"false" against the SAME payload must still QUARANTINE. Without it,
+# "the arm holds" also passes for a chain that started holding every class it sees.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/fg.json" "nazgul:implementer" "TASK-FG" "$(date +%s)" "false"
+_run_hook_payload "$P14_EMPTY"
+_p14_check "P14a control: background:\"false\" is still QUARANTINED on the same payload" \
+  "$(P14_REASON in_flight_orphan)" "1"
+_p14_check "P14a control: ... and never holds" "$(P14_REASON in_flight_hold)" "0"
+_p14_check "P14a control: ... the marker really moved to quarantine/" \
+  "$([ -f "$TEST_DIR/nazgul/in-flight/quarantine/fg.json" ] && echo moved || echo left)" "moved"
+teardown_temp_dir
+
+# Control row 2 — named:"true" (even with background:"true") against an observed-empty registry is
+# the table's `quarantine` cell: the report contract owns the marker.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/named.json" "nazgul:implementer" "TASK-NAMED" "$(date +%s)" "true" "true"
+_run_hook_payload "$P14_EMPTY"
+_p14_check "P14a control: a NAMED background dispatch does not take the reordered hold" \
+  "$(P14_REASON in_flight_hold)" "0"
+_p14_check "P14a control: ... it quarantines, exactly as the ruling's table says" \
+  "$(P14_REASON in_flight_orphan)" "1"
+teardown_temp_dir
+
+# Control row 3 — background:"missing" keeps the DETECT-ONLY disposition. This is the row that
+# proves the reorder moved one class and not the whole observed branch.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/miss.json" "nazgul:implementer" "TASK-MISS" "$(date +%s)" "missing"
+_run_hook_payload "$P14_EMPTY"
+_p14_check "P14a control: background:\"missing\" is still detect-only, never swept into the hold" \
+  "$(P14_REASON in_flight_hold)" "0"
+_p14_check "P14a control: ... and is recorded as an orphan candidate" \
+  "$(P14_REASON in_flight_orphan_candidate)" "1"
+_p14_check "P14a control: ... with the marker left in place" \
+  "$([ -f "$TEST_DIR/nazgul/in-flight/miss.json" ] && echo present || echo gone)" "present"
+teardown_temp_dir
+
+# --- P14b (finding 6): the instrument reaches the population it exists to measure ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/old.json" "nazgul:implementer" "TASK-STALE" "$(( $(date +%s) - 7200 ))" "missing"
+_run_hook_payload "$P14_EMPTY"
+_p14_check "P14b: a STALE marker still produces the Q3-countable candidate event" \
+  "$(P14_REASON in_flight_orphan_candidate)" "1"
+_p14_check "P14b: ... labelled with the age band it was taken on" \
+  "$(grep '"reason":"in_flight_orphan_candidate"' "$TEST_DIR/nazgul/logs/events.jsonl" | tail -1 | jq -r '.age')" "stale"
+_p14_check "P14b: ... alongside, not instead of, its staleness record" "$(P14_REASON in_flight_stale)" "1"
+_p14_check "P14b: ... and a stale marker is still never held on" "$(P14_REASON in_flight_hold)" "0"
+teardown_temp_dir
+
+# Control: the age label is COMPUTED, not a constant. A fresh marker on the same payload must say
+# `fresh` — otherwise "it says stale" would pass for a field hard-coded to one value.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/new.json" "nazgul:implementer" "TASK-FRESH" "$(date +%s)" "missing"
+_run_hook_payload "$P14_EMPTY"
+_p14_check "P14b control: a FRESH marker's candidate is labelled fresh, so age is measured" \
+  "$(grep '"reason":"in_flight_orphan_candidate"' "$TEST_DIR/nazgul/logs/events.jsonl" | tail -1 | jq -r '.age')" "fresh"
+_p14_check "P14b control: ... and it files no staleness record" "$(P14_REASON in_flight_stale)" "0"
+teardown_temp_dir
+
+# Control: age widened the MEASUREMENT, never the requirement for an observation. With no payload
+# at all a stale marker must still produce no candidate — `unknown` is not `found none`.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/old.json" "nazgul:implementer" "TASK-STALE" "$(( $(date +%s) - 7200 ))" "missing"
+run_hook
+_p14_check "P14b control: with NO payload observed a stale marker files no candidate — could-not-tell is not found-none" \
+  "$(P14_REASON in_flight_orphan_candidate)" "0"
+_p14_check "P14b control: ... only its staleness, which is what an unobserved tick can honestly say" \
+  "$(P14_REASON in_flight_stale)" "1"
+teardown_temp_dir
+
+# --- P14c (finding 5, ruling): an unattributable observation is never counted as a candidate ---
+_p14_plant_session() {
+  mkdir -p "$TEST_DIR/nazgul/sessions"
+  jq -cn --arg s "$1" '{pid:"",session:$s,started:"2026-08-01T00:00:00Z",cwd:"/x",toplevel:"/x",branch:"main"}' \
+    > "$TEST_DIR/nazgul/sessions/$1.lock"
+}
+
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/shared.json" "nazgul:implementer" "TASK-SHARED" "$(date +%s)" "missing"
+_p14_plant_session "sess-a"
+_p14_plant_session "sess-b"
+_run_hook_payload "$P14_EMPTY"
+_p14_check "P14c: with two live sessions on one nazgul/, the empty registry is UNATTRIBUTABLE" \
+  "$(P14_REASON in_flight_orphan_unattributable)" "1"
+_p14_check "P14c: ... and the ADR-027 Q3 bar counts nothing from this tick" \
+  "$(P14_REASON in_flight_orphan_candidate)" "0"
+P14_UNATTR=$(grep '"reason":"in_flight_orphan_unattributable"' "$TEST_DIR/nazgul/logs/events.jsonl" | tail -1)
+_p14_check "P14c: ... the record names WHY it could not attribute" \
+  "$(printf '%s' "$P14_UNATTR" | jq -r '.evidence')" "shared_nazgul_dir"
+_p14_check "P14c: ... and how many sessions it saw, as a JSON number" \
+  "$(printf '%s' "$P14_UNATTR" | jq -r '"\(.sessions)/\(.sessions|type)"')" "2/number"
+_p14_check "P14c: an unattributable marker is still LEFT IN PLACE — this arm quarantines nothing" \
+  "$([ -f "$TEST_DIR/nazgul/in-flight/shared.json" ] && echo present || echo gone)" "present"
+teardown_temp_dir
+
+# Control: the SAME marker and the SAME payload, with no second session, must still be a candidate.
+# Without this, the fix also passes for one that silenced the candidate arm outright.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/shared.json" "nazgul:implementer" "TASK-SHARED" "$(date +%s)" "missing"
+_run_hook_payload "$P14_EMPTY"
+_p14_check "P14c control: sole session, same marker, same payload — the candidate arm still fires" \
+  "$(P14_REASON in_flight_orphan_candidate)" "1"
+_p14_check "P14c control: ... and nothing is filed as unattributable" \
+  "$(P14_REASON in_flight_orphan_unattributable)" "0"
+teardown_temp_dir
+
+# Control: attribution gates the EMPTY-registry claim only. A present-but-not-live payload is a
+# statement about this session's own registry either way, so two sessions must not suppress it.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/pnl.json" "nazgul:implementer" "TASK-PNL" "$(date +%s)" "missing"
+_p14_plant_session "sess-a"
+_p14_plant_session "sess-b"
+_run_hook_payload '{"hook_event_name":"Stop","background_tasks":[{"id":"s1","type":"subagent","status":"finished"}]}'
+_p14_check "P14c control: two sessions do NOT suppress present-not-live — only the empty-registry claim is gated" \
+  "$(P14_REASON in_flight_present_not_live)" "1"
+_p14_check "P14c control: ... and it is not misfiled as unattributable" \
+  "$(P14_REASON in_flight_orphan_unattributable)" "0"
+teardown_temp_dir
+
+# --- P14d (finding 7): a never-cleared marker is bounded WITHOUT declining a live tick's hold ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/dead.json" "nazgul:implementer" "TASK-DEAD" "$(( $(date +%s) - 200000 ))" "missing"
+_run_hook_payload "$P14_LIVE"
+# THE #211 PIN. The hold still happens — it rests on the payload's live subagents, not on the
+# marker — so the bound withdraws an awaited-work CLAIM and never a hold.
+_p14_check "P14d: an abandoned marker does NOT decline the live tick's hold (exit 0)" "$HOOK_EC" "0"
+_p14_check "P14d: ... the hold is still recorded" "$(P14_REASON in_flight_hold)" "1"
+P14_HOLD=$(grep '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" | tail -1)
+_p14_check "P14d: ... resting on the observed live subagents" \
+  "$(printf '%s' "$P14_HOLD" | jq -r '.live_subagents')" "2"
+_p14_check "P14d: ... and the abandoned marker is no longer NAMED as awaited work" \
+  "$(printf '%s' "$P14_HOLD" | jq -r '.units')" "-"
+P14_ABND=$(grep '"reason":"in_flight_stale"' "$TEST_DIR/nazgul/logs/events.jsonl" | tail -1)
+_p14_check "P14d: the abandonment is announced, not silent" \
+  "$(printf '%s' "$P14_ABND" | jq -r '"\(.held_over_age)/\(.abandoned_after)"')" "false/1440"
+_p14_check "P14d: an abandoned marker is still never moved or deleted" \
+  "$([ -f "$TEST_DIR/nazgul/in-flight/dead.json" ] && echo present || echo gone)" "present"
+teardown_temp_dir
+
+# Control: merely STALE is not abandoned. An hour-old marker on the same live payload must still be
+# held over its age and NAMED, or the new bound would just be the stale bound #211 forbids.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "READY"
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/stale.json" "nazgul:implementer" "TASK-HELD" "$(( $(date +%s) - 3600 ))" "missing"
+_run_hook_payload "$P14_LIVE"
+P14_HOLD=$(grep '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" | tail -1)
+_p14_check "P14d control: a merely-stale marker is STILL held over its age and named (#211 intact)" \
+  "$(printf '%s' "$P14_HOLD" | jq -r '.units')" "TASK-HELD"
+_p14_check "P14d control: ... and its record says held, not abandoned" \
+  "$(grep '"reason":"in_flight_stale"' "$TEST_DIR/nazgul/logs/events.jsonl" | tail -1 | jq -r '"\(.held_over_age)/\(has("abandoned_after"))"')" "true/false"
+teardown_temp_dir
+
+# --- P14e (finding 8, ADR-014): a requested-and-FAILED capture is not silence ---
+if [ "$(id -u)" = "0" ]; then
+  _p14_skip "P14e: running as root, so an unwritable logs/ cannot be constructed — UNOBSERVABLE here, not clean"
+else
+  setup_temp_dir
+  setup_nazgul_dir
+  create_config
+  mkdir -p "$TEST_DIR/nazgul/logs"
+  chmod 500 "$TEST_DIR/nazgul/logs"
+  _run_hook_env NAZGUL_STOP_PAYLOAD_CAPTURE=1 "$P14_EMPTY"
+  chmod 700 "$TEST_DIR/nazgul/logs"
+  _p14_check "P14e: a capture that was requested and FAILED says so on stderr" \
+    "$(printf '%s' "$HOOK_OUTPUT" | grep -c 'capture FAILED' || true)" "1"
+  _p14_check "P14e: ... naming the step that failed, not just that something did" \
+    "$(printf '%s' "$HOOK_OUTPUT" | grep -c 'no staging file could be created' || true)" "1"
+  _p14_check "P14e: ... and it never leaves a half-written capture behind" \
+    "$([ -f "$TEST_DIR/nazgul/logs/stop-payload-last.json" ] && echo present || echo absent)" "absent"
+  _p14_check "P14e: the failure is announced, never fatal — the hook still completes" \
+    "$([ "$HOOK_EC" -le 2 ] && echo completed || echo aborted)" "completed"
+  teardown_temp_dir
+
+  # Control 1: a capture that SUCCEEDS must stay silent, or "it announces" passes unconditionally.
+  setup_temp_dir
+  setup_nazgul_dir
+  create_config
+  _run_hook_env NAZGUL_STOP_PAYLOAD_CAPTURE=1 "$P14_EMPTY"
+  _p14_check "P14e control: a capture that SUCCEEDS announces nothing" \
+    "$(printf '%s' "$HOOK_OUTPUT" | grep -c 'capture FAILED' || true)" "0"
+  _p14_check "P14e control: ... and really did write the payload" \
+    "$(jq -r '.hook_event_name' "$TEST_DIR/nazgul/logs/stop-payload-last.json" 2>/dev/null)" "Stop"
+  teardown_temp_dir
+
+  # Control 2: the same unwritable directory with capture OFF must stay silent. This is what
+  # separates "the capture failed" from "the logs dir is unwritable" — only one was REQUESTED.
+  setup_temp_dir
+  setup_nazgul_dir
+  create_config
+  mkdir -p "$TEST_DIR/nazgul/logs"
+  chmod 500 "$TEST_DIR/nazgul/logs"
+  HOOK_OUTPUT=$(printf '%s' "$P14_EMPTY" | env -u NAZGUL_STOP_PAYLOAD_CAPTURE bash "$STOP_HOOK" 2>&1) || true
+  chmod 700 "$TEST_DIR/nazgul/logs"
+  _p14_check "P14e control: capture OFF over the same unwritable logs/ announces nothing — only a REQUESTED capture reports" \
+    "$(printf '%s' "$HOOK_OUTPUT" | grep -c 'capture FAILED' || true)" "0"
+  teardown_temp_dir
+fi
+
+# --- P14f (findings 3 and 4): the bound has a floor, a ceiling, and a budgeted default ---
+_p14_check "P14f: the below-floor spec that used to pass silently is REJECTED and announced" \
+  "$(_p13_spec_out 0.0001 | grep -c 'NAZGUL_HOOK_STDIN_TIMEOUT=0.0001' || true)" "1"
+_p14_check "P14f: ... and falls back to the real default rather than disarming the bound" \
+  "$(_p13_spec_out 0.0001 | grep -c 'falling back to 10' || true)" "1"
+_p14_check "P14f: 0.05 is under the floor too" \
+  "$(_p13_spec_out 0.05 | grep -c 'falling back to' || true)" "1"
+# Controls: a floor that rejected every fractional spec would satisfy both pins above on its own,
+# and would also silently override the per-host `read -t` verdict P13c pins.
+_p14_check "P14f control: 0.1 is AT the floor and STANDS — this is a floor, not a ban on fractions" \
+  "$(_p13_spec_out 0.1 | grep -c 'falling back to' || true)" "0"
+_p14_check "P14f control: an ordinary 2 is still accepted, so the new default clamps nothing" \
+  "$(_p13_spec_out 2 | grep -c 'falling back to' || true)" "0"
+_p14_check "P14f: the notice states the floor it enforced, so a rejection is diagnosable" \
+  "$(_p13_spec_out 0.0001 | grep -c 'at least 0.1' || true)" "1"
+_p14_check "P14f: ... and the ceiling alongside it" \
+  "$(_p13_spec_out 0.0001 | grep -c 'at most 60' || true)" "1"
+_p14_check "P14f: the default is the source constant, not a literal repeated at the use site" \
+  "$(grep -c '^__HS_DEFAULT_TIMEOUT=10$' "$HOOK_STDIN_LIB" || true)" "1"
+_p14_check "P14f: ... and no bare 2-second fallback survives it" \
+  "$(grep -c 'NAZGUL_HOOK_STDIN_TIMEOUT=2$' "$HOOK_STDIN_LIB" || true)" "0"
+
+# The bound is a SIZE ceiling, so it must fit the budget hooks.json actually grants this hook —
+# a default above it would be a bound the harness kills before it can ever be reached.
+P14_HOOK_BUDGET=$(jq -r '[.hooks.Stop[].hooks[] | select(.command | contains("stop-hook.sh")) | .timeout] | first' \
+  "$REPO_ROOT/hooks/hooks.json" 2>/dev/null || echo "")
+if [ -n "$P14_HOOK_BUDGET" ] && [ "$P14_HOOK_BUDGET" != "null" ]; then
+  _p14_check "P14f: the ${P14_HOOK_BUDGET}s hooks.json budget for stop-hook.sh still dominates the 10 s default" \
+    "$([ "$P14_HOOK_BUDGET" -gt 10 ] && echo fits || echo overruns)" "fits"
+else
+  _p14_skip "P14f: hooks.json declares no readable Stop timeout here — the budget claim is UNCHECKED, not satisfied"
+fi
+
+# --- P14g (finding 12): the payload is parsed ONCE ---
+_p14_check "P14g: exactly one jq parse of the Stop payload per Stop, down from five" \
+  "$(grep -c 'STOP_PAYLOAD" | jq' "$STOP_HOOK" || true)" "1"
+# Control: parsing once is trivially satisfiable by parsing nothing. These pin that the single
+# parse still yields every quantity the five used to, INCLUDING the ids the hold key needs.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "READY"
+# The dir WITHOUT a marker in it is the one shape that reaches the live-subagents hold key: nothing
+# is held, so the fingerprint can only come from the ids that same single parse produced.
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_run_hook_payload "$P14_LIVE"
+P14_OBS=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" | tail -1)
+_p14_check "P14g control: the one parse still produces all five observed quantities" \
+  "$(printf '%s' "$P14_OBS" | jq -r '"\(.entries)/\(.subagents)/\(.live)/\(.types)/\(.statuses)"')" \
+  "3/2/2/shell,subagent/running"
+P14_HOLD=$(grep '"reason":"in_flight_hold"' "$TEST_DIR/nazgul/logs/events.jsonl" | tail -1)
+_p14_check "P14g control: ... the hold rests on the payload alone, so its key came from the ids" \
+  "$(printf '%s' "$P14_HOLD" | jq -r '"\(.units)/\(.count)/\(.live_subagents)"')" "-/0/2"
+_p14_check "P14g control: ... and the ledger was KEYABLE, so the ids survived the single parse" \
+  "$(P14_REASON in_flight_hold_unbudgetable)" "0"
+_p14_check "P14g control: ... the hold was actually granted" "$(P14_REASON in_flight_hold)" "1"
+teardown_temp_dir
+
+# --- P14h (finding 10): one quantity, one name, within stop_gate ---
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/pnl.json" "nazgul:implementer" "TASK-PNL" "$(date +%s)" "missing"
+_run_hook_payload '{"hook_event_name":"Stop","background_tasks":[{"id":"s1","type":"subagent","status":"finished"}]}'
+P14_PNL=$(grep '"reason":"in_flight_present_not_live"' "$TEST_DIR/nazgul/logs/events.jsonl" | tail -1)
+# "live_subagents" CONTAINS "live", so only a field-level has() can tell the two apart here.
+_p14_check "P14h: the live count wears ONE name across stop_gate — live_subagents, never live" \
+  "$(printf '%s' "$P14_PNL" | jq -r '"\(has("live"))/\(has("live_subagents"))"')" "false/true"
+_p14_check "P14h: ... and the status-blind count keeps its own distinct name" \
+  "$(printf '%s' "$P14_PNL" | jq -r '"\(.subagents_present)/\(.live_subagents)"')" "1/0"
+# Control: the rename is scoped to stop_gate. stop_payload_observed is the RAW observation and
+# deliberately keeps entries/subagents/live — a global search-and-replace would break this.
+P14_OBS=$(grep '"event":"stop_payload_observed"' "$TEST_DIR/nazgul/logs/events.jsonl" | tail -1)
+_p14_check "P14h control: stop_payload_observed still carries its own live/subagents names" \
+  "$(printf '%s' "$P14_OBS" | jq -r '"\(has("live"))/\(has("subagents"))/\(has("live_subagents"))"')" "true/true/false"
+teardown_temp_dir
+
+# --- P14i (finding 11 + 10): the documented rule matches the enforced one ---
+
+# Before this block NO test under tests/ opened docs/CONFIGURATION.md, so a green run elsewhere
+# never said anything about it. These pins are the first that actually read it.
+P14_CFGDOC="$REPO_ROOT/docs/CONFIGURATION.md"
+_p14_check "P14i: docs/CONFIGURATION.md is readable, so the pins below are not vacuous" \
+  "$([ -r "$P14_CFGDOC" ] && echo yes || echo no)" "yes"
+_p14_check "P14i: the timeout row states the new default" \
+  "$(grep -c '| `NAZGUL_HOOK_STDIN_TIMEOUT` | `10` |' "$P14_CFGDOC" || true)" "1"
+_p14_check "P14i: ... and the doc names the ceiling constant the code enforces" \
+  "$(grep -c '__HS_MAX_TIMEOUT' "$P14_CFGDOC" || true)" "1"
+_p14_check "P14i: ... and the floor constant" \
+  "$(grep -c '__HS_MIN_TIMEOUT' "$P14_CFGDOC" || true)" "1"
+_p14_check "P14i: ... and states the SIZE consequence, which was the whole finding" \
+  "$([ "$(grep -c 'SIZE ceiling' "$P14_CFGDOC" || true)" -ge 1 ] && echo stated || echo silent)" "stated"
+_p14_check "P14i: the two previously-undocumented candidate fields are documented" \
+  "$([ "$(grep -c 'an empty subagent set stays distinguishable from an empty registry' "$P14_CFGDOC" || true)" -ge 1 ] && echo yes || echo no)" "yes"
+_p14_check "P14i: the eleventh stop_gate reason is in the enumeration doc-verifier fences against" \
+  "$(grep -c 'in_flight_orphan_unattributable' "$REPO_ROOT/agents/doc-verifier.md" || true)" "1"
+# Control: the doc constants must be the ones the code really uses, or the doc is merely internally
+# consistent. Both directions, so a doc updated without the code fails too.
+_p14_check "P14i control: the ceiling the doc names is the ceiling the source sets" \
+  "$(grep -c '^__HS_MAX_TIMEOUT=60$' "$HOOK_STDIN_LIB" || true)" "1"
+_p14_check "P14i control: ... likewise the floor" \
+  "$(grep -c '^__HS_MIN_TIMEOUT=0.1$' "$HOOK_STDIN_LIB" || true)" "1"
+
+# --- P14j (finding 13): the log preview is bounded again, and only the preview ---
+P14_LOGSKILL="$REPO_ROOT/skills/log/SKILL.md"
+_p14_check "P14j: the preview bounds its input BEFORE filtering, so it no longer scans the whole bus" \
+  "$(grep -c 'tail -200 nazgul/logs/events.jsonl | grep -v' "$P14_LOGSKILL" || true)" "1"
+_p14_check "P14j: no unbounded whole-file filter survives in the preview" \
+  "$(grep -c "grep -v -e '\"event\":\"subagent_stop\"' -e '\"event\":\"stop_payload_observed\"' nazgul/logs/events.jsonl" "$P14_LOGSKILL" || true)" "0"
+_p14_check "P14j: and the bound's cost is STATED, per the skill's own honesty convention" \
+  "$([ "$(grep -c 'the filter can now miss' "$P14_LOGSKILL" || true)" -ge 1 ] && echo stated || echo hidden)" "stated"
+# Control: the TIMELINE must stay unbounded. Bounding it too would "fix" the preview by making the
+# skill's central claim — that the timeline reads the bus unfiltered and whole — false.
+_p14_check "P14j control: the Step-1 timeline still reads events.jsonl unbounded" \
+  "$(grep -cF "grep -E '^\\{' nazgul/logs/events.jsonl" "$P14_LOGSKILL" || true)" "1"
+
+# --- P14k (finding 14): doctor keeps BOTH probes, and stops paying for the second ---
+P14_DOCTOR="$REPO_ROOT/scripts/doctor.sh"
+P14_GREP_LN=$(grep -n "grep -q 'stop_payload_observed'" "$P14_DOCTOR" | head -1 | cut -d: -f1)
+P14_JQ_LN=$(grep -n "jq -c 'select(.event == \"stop_payload_observed\")'" "$P14_DOCTOR" | head -1 | cut -d: -f1)
+_p14_check "P14k: both probes still exist — the distinction is not collapsed into one scan" \
+  "$([ -n "$P14_GREP_LN" ] && [ -n "$P14_JQ_LN" ] && echo both || echo collapsed)" "both"
+_p14_check "P14k: the cheap presence probe runs FIRST, so a bus with no record costs one scan not two" \
+  "$([ -n "$P14_GREP_LN" ] && [ -n "$P14_JQ_LN" ] && [ "$P14_GREP_LN" -lt "$P14_JQ_LN" ] && echo grep-first || echo jq-first)" "grep-first"
+# Control: the selection must be GUARDED by the probe, not merely printed after it — otherwise
+# reordering saves nothing and the two lines just changed places.
+_p14_check "P14k control: the selection is nested inside the presence branch" \
+  "$(awk -v g="$P14_GREP_LN" -v j="$P14_JQ_LN" 'NR==g && /if grep -q/ {a=1} NR==j && /^      last=/ {b=1} END {print (a && b) ? "guarded" : "unguarded"}' "$P14_DOCTOR")" "guarded"
+
+assert_eq "P14 accounting: scanned == skipped + checked" "$P14_SCANNED" "$((P14_SKIPPED + P14_CHECKED))"
+assert_eq "P14 floor: the finding set is not empty" \
+  "$([ "$P14_CHECKED" -gt 0 ] && echo yes || echo no)" "yes"
+assert_eq "P14: $P14_SCANNED scanned, $P14_SKIPPED skipped, $P14_CHECKED checked — every finding this PR introduced is fixed, and each fix is paired with a control that would catch it over-firing" \
+  "$P14_FINDINGS" "0"
+
 # === P7 (C2/AC9): every stop-hook execution under tests/ binds its own stdin ===
 # Bare stdin inherits the suite's once C1 lands — the #155 never-EOF deadlock class.
 P7_ROOT="$REPO_ROOT/tests"
@@ -1975,7 +2427,7 @@ P7_ASSIGN='^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="\$REPO_ROOT/scripts/stop-hook\.s
 # match for an unrelated reason, a count plus the file set cannot.
 P7_DIRECT_EXPECT=10
 P7_DIRECT_FILES_EXPECT="test-observability-hooks.sh test-stop-hook.sh "
-P7_CHECKED_EXPECT=43
+P7_CHECKED_EXPECT=44
 P7_SCANNED=0
 P7_SKIPPED=0
 P7_CHECKED=0

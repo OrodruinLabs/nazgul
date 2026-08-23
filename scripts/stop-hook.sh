@@ -38,61 +38,89 @@ read_hook_payload STOP_PAYLOAD
 # Opt-in, default unset: the raw payload carries cwd, transcript_path, agent_transcript_path
 # and last_assistant_message (ruling Q4) — staged at 0600 and renamed, replacing not appending.
 if [ "${NAZGUL_STOP_PAYLOAD_CAPTURE:-0}" = "1" ]; then
-  mkdir -p "$NAZGUL_DIR/logs" 2>/dev/null || true
-  if STOP_CAPTURE_TMP=$(mktemp "$NAZGUL_DIR/logs/.stop-payload-last.XXXXXX" 2>/dev/null); then
-    if ! { chmod 600 "$STOP_CAPTURE_TMP" 2>/dev/null \
-      && printf '%s\n' "$STOP_PAYLOAD" > "$STOP_CAPTURE_TMP" 2>/dev/null \
-      && mv "$STOP_CAPTURE_TMP" "$NAZGUL_DIR/logs/stop-payload-last.json" 2>/dev/null; }; then
-      rm -f "$STOP_CAPTURE_TMP" 2>/dev/null || true
-    fi
+  # ADR-014: every step below used to end in `2>/dev/null || true`, so a capture an operator
+  # REQUESTED and that FAILED was byte-identical to capture-off. Each failure now names itself.
+  STOP_CAPTURE_TMP="" STOP_CAPTURE_ERR=""
+  if ! mkdir -p "$NAZGUL_DIR/logs" 2>/dev/null; then
+    STOP_CAPTURE_ERR="nazgul/logs/ could not be created"
+  elif ! STOP_CAPTURE_TMP=$(mktemp "$NAZGUL_DIR/logs/.stop-payload-last.XXXXXX" 2>/dev/null); then
+    STOP_CAPTURE_TMP="" STOP_CAPTURE_ERR="no staging file could be created in nazgul/logs/"
+  elif ! chmod 600 "$STOP_CAPTURE_TMP" 2>/dev/null; then
+    STOP_CAPTURE_ERR="the staging file could not be restricted to 0600, and the payload carries cwd and transcript paths"
+  elif ! printf '%s\n' "$STOP_PAYLOAD" > "$STOP_CAPTURE_TMP" 2>/dev/null; then
+    STOP_CAPTURE_ERR="the payload could not be written to the staging file"
+  elif ! mv "$STOP_CAPTURE_TMP" "$NAZGUL_DIR/logs/stop-payload-last.json" 2>/dev/null; then
+    STOP_CAPTURE_ERR="the staging file could not be renamed into place"
+  fi
+  if [ -n "$STOP_CAPTURE_ERR" ]; then
+    if [ -n "$STOP_CAPTURE_TMP" ]; then rm -f "$STOP_CAPTURE_TMP" 2>/dev/null || true; fi
+    echo "Nazgul: NAZGUL_STOP_PAYLOAD_CAPTURE=1 was honoured but the capture FAILED — ${STOP_CAPTURE_ERR}. nazgul/logs/stop-payload-last.json was NOT refreshed and may still hold an earlier Stop's payload. Continuing normally." >&2
   fi
 fi
 
 # OBSERVATION ONLY — no classification acts on these yet. A truncated, absent
 # or non-JSON payload degrades to `unknown`, which is today's behavior exactly.
-BG_SEEN="unknown" BG_ENTRIES=0 BG_SUBAGENTS=0 BG_LIVE=0 BG_TYPES="" BG_STATUSES=""
+BG_SEEN="unknown" BG_ENTRIES=0 BG_SUBAGENTS=0 BG_LIVE=0 BG_TYPES="" BG_STATUSES="" BG_LIVE_IDS=""
 BG_WHY="${HOOK_STDIN_WHY:-no_stdin}"
 if [ -n "$STOP_PAYLOAD" ]; then
   if ! command -v jq >/dev/null 2>&1; then
     BG_WHY="no_jq"
-  elif ! printf '%s' "$STOP_PAYLOAD" | jq -e . >/dev/null 2>&1; then
-    # A bound hit mid-document arrives non-empty and unparseable too, and only the reader knows the
-    # truncation was OURS — its read_timeout_partial outranks this arm's guess at a producer change.
-    BG_WHY="${HOOK_STDIN_WHY:-not_json}"
-  elif [ "${HOOK_STDIN_WHY:-}" = "read_timeout_partial" ]; then
-    # A prefix OUR bound cut short can still parse when the cut lands on a token boundary, and every
-    # count below would then undercount a registry never fully received — same precedence as above.
-    BG_WHY="read_timeout_partial"
-  elif ! printf '%s' "$STOP_PAYLOAD" | jq -e 'has("background_tasks")' >/dev/null 2>&1; then
-    BG_WHY="field_absent"
-  elif ! printf '%s' "$STOP_PAYLOAD" | jq -e '(.background_tasks | type) == "array"' >/dev/null 2>&1; then
-    # jq's length/map iterate an OBJECT's values and `// []` swallows an explicit null, so without this gate `{}` and `null` — the two likeliest deprecation shapes — count as an observed array (PR #245, three reviewers converged).
-    # A NEW closed-set member, deliberately not `not_json`: doctor.sh's check_stop_payload reports every `why` without an arm of its own as PAYLOAD UNDETERMINED — the payload itself did not arrive intact — which is FALSE of a present, well-formed, wrongly-typed field.
-    BG_WHY="field_wrong_type"
   else
-    BG_SEEN="yes" BG_WHY=""
+    # ONE parse per Stop, not five (PR #245 finding 12): shape verdict, both counts, both
+    # vocabularies and the live ids the Q1 hold key needs, out of a single jq invocation.
+
     # background_tasks[] is undocumented, so a shape change (R3) or a renamed
     # type value (R4) must surface as vocabulary in types/statuses, not silence.
 
-    # Tab is IFS whitespace, so an empty 4th column collapses into the 5th; "-" also separates observed-empty from never-read.
+    # jq's length/map iterate an OBJECT's values and `// []` swallows an explicit null, so without the array gate `{}` and `null` — the two likeliest deprecation shapes — count as an observed array (PR #245, three reviewers converged).
+
+    # A non-`ok` verdict carries its token ALONE: tab is IFS whitespace, so an empty column collapses into the next, and "" vs "-" is what separates never-read from observed-empty.
     BG_TSV="$(printf '%s' "$STOP_PAYLOAD" | jq -r '
       def vocab: unique | join(",") | if . == "" then "-" else . end;
-      (.background_tasks // []) as $b
+      def sentinel: if . == "" then "-" else . end;
+      def live: map(select(.status == "running" or .status == "pending"));
+      if . == null or . == false then ["not_json"]
+      elif (type != "object") or (has("background_tasks") | not) then ["field_absent"]
+      elif (.background_tasks | type) != "array" then ["field_wrong_type"]
+      else (.background_tasks) as $b
       | ($b | map(select(.type == "subagent"))) as $s
-      | [ ($b | length),
-          ($s | length),
-          ($s | map(select(.status == "running" or .status == "pending")) | length),
+      | [ "ok",
+          ($b | length | tostring),
+          ($s | length | tostring),
+          ($s | live | length | tostring),
           ($b | map(.type // "null") | vocab),
-          ($b | map(.status // "null") | vocab) ]
-      | @tsv' 2>/dev/null || true)"
-    IFS=$'\t' read -r BG_ENTRIES BG_SUBAGENTS BG_LIVE BG_TYPES BG_STATUSES <<< "$BG_TSV" || true
-    # A count that did not parse is "could not tell", not "found none" — RULES §15 / ADR-009.
-    # The type gate above already took every non-array shape; an ARRAY of non-objects still aborts jq here.
-    case "${BG_LIVE:-}"      in ''|*[!0-9]*) BG_SEEN="unknown" BG_WHY="not_json" ;; esac
-    case "${BG_SUBAGENTS:-}" in ''|*[!0-9]*) BG_SEEN="unknown" BG_WHY="not_json" ;; esac
+          ($b | map(.status // "null") | vocab),
+          ($s | live | map(.id? // empty | tostring | select(. != "")) | sort | join(",") | sentinel) ]
+      end | @tsv' 2>/dev/null || true)"
+    BG_SHAPE=""
+    IFS=$'\t' read -r BG_SHAPE BG_ENTRIES BG_SUBAGENTS BG_LIVE BG_TYPES BG_STATUSES BG_LIVE_IDS <<< "$BG_TSV" || true
+    if [ -n "${HOOK_STDIN_WHY:-}" ]; then
+      # A prefix OUR bound cut short can still parse when the cut lands on a token boundary, and
+      # every count would then undercount a registry never fully received.
+
+      # Only the reader knows the truncation was OURS, so its verdict outranks
+      # this arm's guess at a producer-side change.
+      BG_SEEN="unknown" BG_WHY="$HOOK_STDIN_WHY"
+    else
+      case "$BG_SHAPE" in
+        ok)
+          BG_SEEN="yes" BG_WHY=""
+          # A count that did not parse is "could not tell", not "found none" — RULES §15 / ADR-009.
+          case "${BG_LIVE:-}"      in ''|*[!0-9]*) BG_SEEN="unknown" BG_WHY="not_json" ;; esac
+          case "${BG_SUBAGENTS:-}" in ''|*[!0-9]*) BG_SEEN="unknown" BG_WHY="not_json" ;; esac
+          ;;
+        # field_wrong_type is deliberately NOT not_json: doctor.sh's check_stop_payload reports every `why` with no arm of its own as PAYLOAD UNDETERMINED — the payload did not arrive intact — which is false of a present, well-formed, wrongly-typed field.
+        field_absent|field_wrong_type) BG_WHY="$BG_SHAPE" ;;
+        *) BG_WHY="not_json" ;;
+      esac
+    fi
+    # Restored, never carried over: every arm but `ok` leaves those columns UNSET, and an unknown
+    # arm must publish no count rather than an initialisation constant (PR #245 finding 9).
+    if [ "$BG_SEEN" != "yes" ]; then
+      BG_ENTRIES=0 BG_SUBAGENTS=0 BG_LIVE=0 BG_TYPES="" BG_STATUSES="" BG_LIVE_IDS=""
+    fi
   fi
 fi
-
 # Refresh the session lock every iteration — read persisted ID to match
 # session-context.sh. Lock LIFETIME is the session's, not the turn's (#195):
 # removal happens at SessionEnd (session-staging.sh) or via the pid-liveness
@@ -145,10 +173,16 @@ fi
 
 # shellcheck disable=SC2034
 CURRENT_ITERATION="$ITERATION"
-# `why` is emitted ONLY on the unknown arm, so its closed set stays closed.
+# `why` is emitted ONLY on the unknown arm and the three counts ONLY on the yes arm, so FIELD
+# PRESENCE carries the meaning and a tally can never absorb a fabricated zero (PR #245 finding 9).
 BG_OBSERVED_ARGS=(bg_seen "$BG_SEEN")
-if [ "$BG_SEEN" = "unknown" ]; then BG_OBSERVED_ARGS+=(why "$BG_WHY"); fi
-BG_OBSERVED_ARGS+=(entries:n "${BG_ENTRIES:-0}" subagents:n "${BG_SUBAGENTS:-0}" live:n "${BG_LIVE:-0}")
+if [ "$BG_SEEN" = "unknown" ]; then
+  BG_OBSERVED_ARGS+=(why "$BG_WHY")
+else
+  BG_OBSERVED_ARGS+=(entries:n "$BG_ENTRIES" subagents:n "$BG_SUBAGENTS" live:n "$BG_LIVE")
+fi
+
+# types/statuses ride BOTH arms: "" (never read) and "-" (observed empty) already tell those apart.
 BG_OBSERVED_ARGS+=(types "${BG_TYPES:-}" statuses "${BG_STATUSES:-}")
 # Bounded and structured on purpose: the raw payload carries cwd,
 # transcript_path, agent_transcript_path and last_assistant_message (ruling Q4).
@@ -217,6 +251,10 @@ _IN_FLIGHT_HOLD_CAP=1
 # an entry that records no marker set a fresh budget every few minutes.
 _IN_FLIGHT_HOLD_TTL_MIN=1440
 
+# The ABANDONED ceiling (PR #245 finding 7). guards.in_flight_stale_minutes decides FRESHNESS; this
+# decides when a marker nothing will ever clear stops counting as awaited work, on any tick at all.
+_IN_FLIGHT_MARKER_MAX_MIN=1440
+
 # macOS ships no flock(1), so the claim below really is unlocked there; telemetry carries which it
 # was (ADR-014) — a mechanism that degraded must not look like one that had nothing to do.
 if command -v flock >/dev/null 2>&1; then _IN_FLIGHT_HAS_FLOCK=1 _IN_FLIGHT_LOCKED=true; else _IN_FLIGHT_HAS_FLOCK=0 _IN_FLIGHT_LOCKED=false; fi
@@ -245,7 +283,11 @@ _in_flight_holds_prune() {
     while IFS= read -r line; do
       [ -n "$line" ] || continue
       recorded=1
-      if [ -e "$markers/$line" ]; then alive=yes; break; fi
+      [ -e "$markers/$line" ] || continue
+      # An ABANDONED marker stops anchoring its entry: it is exactly the never-cleared file that
+      # used to pin one against pruning for the whole process lifetime (finding 7).
+      [ -z "$(find "$markers/$line" -mmin "+${_IN_FLIGHT_MARKER_MAX_MIN}" 2>/dev/null)" ] || continue
+      alive=yes; break
     done < <(tail -n +2 "$f" 2>/dev/null || true)
     if [ "$alive" = "yes" ]; then continue; fi
     if [ "$recorded" = "1" ]; then
@@ -285,6 +327,35 @@ _in_flight_hold_claim() {
   ) 2>/dev/null 200>"${dir}.lock"
 }
 
+# The two DETECT-ONLY arms. Reachable at ANY marker age (finding 6): a real orphan is by definition
+# a marker that has been sitting there, so running this only inside the FRESH branch excluded
+
+# exactly the population ADR-027's Q3 bar exists to count.
+_in_flight_detect_only() {
+  local unit="$1" agent="$2" age="$3"
+  if [ "$BG_SUBAGENTS" -ne 0 ]; then
+    # Ruling Q2's third state: its disposition is passed and untouched here; the silence was the defect.
+    echo "Nazgul: PRESENT-NOT-LIVE in-flight marker for ${unit} (${agent}) — the Stop payload reports ${BG_SUBAGENTS} subagent(s) present for this session but none positively live (statuses: ${BG_STATUSES:-none}), so this tick can prove neither a running dispatch nor an orphan. NOT held on and NOT quarantined; left in nazgul/in-flight/. Continuing normally." >&2
+    emit_event "stop_gate" reason "in_flight_present_not_live" unit "$unit" agent "$agent" \
+      subagents_present:n "$BG_SUBAGENTS" live_subagents:n "$BG_LIVE" statuses "${BG_STATUSES:-}" age "$age"
+    return 0
+  fi
+  if [ "$IN_FLIGHT_SESSIONS" -gt 1 ]; then
+    # A DISTINCT reason and not a flag on the candidate: a tally keyed on the reason must not be
+    # able to absorb an observation it was never entitled to count. #248 owns the missing session id.
+    echo "Nazgul: UNATTRIBUTABLE in-flight marker for ${unit} (${agent}) — the Stop payload reports no subagent for THIS session, but ${IN_FLIGHT_SESSIONS} live sessions share this nazgul/ and markers carry no session id (#248), so this tick cannot say the dispatch is not running under another one. NOT counted toward the ADR-027 Q3 bar, NOT held on and NOT quarantined. Continuing normally." >&2
+    emit_event "stop_gate" reason "in_flight_orphan_unattributable" evidence "shared_nazgul_dir" \
+      unit "$unit" agent "$agent" sessions:n "$IN_FLIGHT_SESSIONS" entries:n "$BG_ENTRIES" \
+      subagents_present:n "$BG_SUBAGENTS" types "${BG_TYPES:-}" age "$age"
+    return 0
+  fi
+  # DETECT-ONLY: ruling Q3 defers the irreversible move until ADR-027's measurement bar.
+  echo "Nazgul: ORPHAN CANDIDATE in-flight marker for ${unit} (${agent}) — the Stop payload reports no subagent of any status for this session. NOT quarantined and NOT held on; left in nazgul/in-flight/ pending the ADR-027 Q3 measurement bar. Continuing normally." >&2
+  emit_event "stop_gate" reason "in_flight_orphan_candidate" evidence "background_tasks_empty" \
+    unit "$unit" agent "$agent" entries:n "$BG_ENTRIES" subagents_present:n "$BG_SUBAGENTS" \
+    types "${BG_TYPES:-}" age "$age"
+}
+
 if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; then
   IN_FLIGHT_STALE_MIN=$(jq -r '[.guards.in_flight_stale_minutes // 30, 1] | max' "$CONFIG" 2>/dev/null || echo 30)
   # A JSON string or fractional value passes jq's max unchanged (string ranks
@@ -293,6 +364,12 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
   case "$IN_FLIGHT_STALE_MIN" in ''|*[!0-9]*) IN_FLIGHT_STALE_MIN=30 ;; esac
   IN_FLIGHT_NOW=$(date +%s)
   IN_FLIGHT_CUTOFF=$(( IN_FLIGHT_NOW - IN_FLIGHT_STALE_MIN * 60 ))
+  IN_FLIGHT_ABANDON_CUTOFF=$(( IN_FLIGHT_NOW - _IN_FLIGHT_MARKER_MAX_MIN * 60 ))
+
+  # Fail-CLOSED at 2 (finding 5): a count this cannot read is "cannot attribute", and the Q3 bar
+  # must never count an observation that could belong to another session sharing this nazgul/.
+  IN_FLIGHT_SESSIONS=$(count_active_sessions "$NAZGUL_DIR/sessions" 2>/dev/null) || IN_FLIGHT_SESSIONS=2
+  case "$IN_FLIGHT_SESSIONS" in ''|*[!0-9]*) IN_FLIGHT_SESSIONS=2 ;; esac
   # CURRENT_ITERATION is normally only set by the iteration increment further
   # down (NEW_ITER=$((ITERATION + 1)) ... CURRENT_ITERATION="$NEW_ITER", after
   # this gate); set it here from the un-incremented ITERATION so an event
@@ -324,36 +401,51 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
     if [ "$IN_FLIGHT_LIVE_HOLD" = "yes" ] && [ "$m_bg" != "false" ]; then
       # Liveness is a property of the SESSION; `background:"false"` is a property of THIS MARKER, and a synchronous dispatch cannot span a Stop no matter what else is running — so a session-level fact does not overrule a marker-level one that already disposes of it (ADR-027 amendment).
       # Every other class: name every marker, move none, any age. INVARIANT: a `background:"false"` marker is disposed identically regardless of BG_LIVE.
-      FRESH_COUNT=$((FRESH_COUNT + 1))
-      FRESH_UNITS="${FRESH_UNITS}${FRESH_UNITS:+ }${m_unit}"
-      FRESH_BASENAMES="${FRESH_BASENAMES}${marker##*/}"$'\n'
-      if [ "$m_epoch" -le 0 ] || [ "$m_epoch" -lt "$IN_FLIGHT_CUTOFF" ]; then
-        # #211 forbids a stale bound DECLINING this hold; it never asked for the crashed-subagent diagnostic to go with it. Holding on a marker and reporting it are independent.
-        m_age_min=$(( (IN_FLIGHT_NOW - m_epoch) / 60 ))
-        echo "Nazgul: STALE in-flight marker for ${m_unit} (${m_agent}), age ${m_age_min}m >= ${IN_FLIGHT_STALE_MIN}m — HELD ON anyway because the Stop payload reports a live subagent; investigate a possibly crashed subagent ($(basename "$marker"))." >&2
-        emit_event "stop_gate" reason "in_flight_stale" unit "$m_unit" agent "$m_agent" age_minutes:n "$m_age_min" limit:n "$IN_FLIGHT_STALE_MIN" held_over_age "true"
+      m_age_min=$(( (IN_FLIGHT_NOW - m_epoch) / 60 ))
+      if [ "$m_epoch" -gt 0 ] && [ "$m_epoch" -lt "$IN_FLIGHT_ABANDON_CUTOFF" ]; then
+        # (finding 7) Bounded WITHOUT reopening #211, because the hold and this marker are separable:
+        # the hold rests on BG_LIVE and is STILL TAKEN — only the marker stops being awaited work.
+
+        # An unknown age (epoch 0) is not proof of abandonment and keeps holding, deliberately.
+        echo "Nazgul: ABANDONED in-flight marker for ${m_unit} (${m_agent}), age ${m_age_min}m >= ${_IN_FLIGHT_MARKER_MAX_MIN}m — no longer counted as awaited work or keying the hold budget, because nothing will ever clear it. The live-subagent hold is UNAFFECTED and the marker is NOT quarantined ($(basename "$marker"))." >&2
+        emit_event "stop_gate" reason "in_flight_stale" unit "$m_unit" agent "$m_agent" \
+          age_minutes:n "$m_age_min" limit:n "$IN_FLIGHT_STALE_MIN" held_over_age "false" \
+          abandoned_after:n "$_IN_FLIGHT_MARKER_MAX_MIN"
+      else
+        FRESH_COUNT=$((FRESH_COUNT + 1))
+        FRESH_UNITS="${FRESH_UNITS}${FRESH_UNITS:+ }${m_unit}"
+        FRESH_BASENAMES="${FRESH_BASENAMES}${marker##*/}"$'\n'
+        if [ "$m_epoch" -le 0 ] || [ "$m_epoch" -lt "$IN_FLIGHT_CUTOFF" ]; then
+          # #211 forbids a stale bound from DECLINING this hold, never from reporting what produced it: holding on a marker and reporting it are independent decisions.
+          echo "Nazgul: STALE in-flight marker for ${m_unit} (${m_agent}), age ${m_age_min}m >= ${IN_FLIGHT_STALE_MIN}m — HELD ON anyway because the Stop payload reports a live subagent; investigate a possibly crashed subagent ($(basename "$marker"))." >&2
+          emit_event "stop_gate" reason "in_flight_stale" unit "$m_unit" agent "$m_agent" age_minutes:n "$m_age_min" limit:n "$IN_FLIGHT_STALE_MIN" held_over_age "true"
+        fi
       fi
     elif [ "$m_epoch" -gt 0 ] && [ "$m_epoch" -ge "$IN_FLIGHT_CUTOFF" ]; then
       # "missing" = dispatch class NOT OBSERVABLE at write time, not foreground. run_in_background is omitted from the exposed Agent schema in fork mode (the interactive default since v2.1.232) and under CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
       # absence means the OPPOSITE in those two configs (background / foreground). #218: read background_tasks[] at Stop instead of predicting at dispatch time.
-      if [ "$IN_FLIGHT_OBSERVED" = "yes" ] && [ "$m_named" != "true" ] && [ "$m_bg" != "false" ]; then
-        # Observed, and not live (the hold above already took every LIVE > 0 tick): the payload, not
-        # the write-time class, disposes of an unnamed marker.
-        if [ "$BG_SUBAGENTS" -eq 0 ]; then
-          # DETECT-ONLY: ruling Q3 defers the irreversible move until ADR-027's measurement bar.
-          echo "Nazgul: ORPHAN CANDIDATE in-flight marker for ${m_unit} (${m_agent}) — the Stop payload reports no subagent of any status for this session. NOT quarantined and NOT held on; left in nazgul/in-flight/ pending the ADR-027 Q3 measurement bar. Continuing normally." >&2
-          emit_event "stop_gate" reason "in_flight_orphan_candidate" evidence "background_tasks_empty" unit "$m_unit" agent "$m_agent" entries:n "${BG_ENTRIES:-0}" subagents_present:n "$BG_SUBAGENTS" types "${BG_TYPES:-}"
-        else
-          # Ruling Q2's third state: its disposition is passed and untouched here; the silence was the defect.
-          echo "Nazgul: PRESENT-NOT-LIVE in-flight marker for ${m_unit} (${m_agent}) — the Stop payload reports ${BG_SUBAGENTS} subagent(s) present for this session but none positively live (statuses: ${BG_STATUSES:-none}), so this tick can prove neither a running dispatch nor an orphan. NOT held on and NOT quarantined; left in nazgul/in-flight/. Continuing normally." >&2
-          emit_event "stop_gate" reason "in_flight_present_not_live" unit "$m_unit" agent "$m_agent" subagents_present:n "$BG_SUBAGENTS" live:n "${BG_LIVE:-0}" statuses "${BG_STATUSES:-}"
-        fi
-      elif [ "$m_bg" = "true" ] && [ "$m_named" != "true" ]; then
+      if [ "$m_bg" = "true" ] && [ "$m_named" != "true" ]; then
+        # ORDER IS THE FIX (PR #245 finding 1, architect ruling): this arm sits ABOVE the observed
+        # branch, so a session-level "nothing live" can never withdraw a marker-level proof.
+
+        # marker class         | proof kind  | vs LIVE > 0 | vs observed SUBAGENT_PRESENT == 0
+        # background:"false"   | mechanical  | QUARANTINE  | QUARANTINE
+        # named:"true"         | contractual | HOLD        | quarantine
+        # background:"true"    | contractual | HOLD        | HOLD  <- the cell the prior ruling missed
+        # background:"missing" | none        | HOLD        | detect-only, left in place
+
+        # ADR-027 Q3 called the empty-registry observation not trustworthy enough to ACT on, and
+        # withdrawing a hold IS an action: reading a new signal must never leave us worse off.
+
         # Provably-background, unnamed: the documented harness resume is the wake path this hold
         # relies on — BELIEVED but UNOBSERVED on this host class (R2, owed probe: D-005 at docs/DECISION-LOG-2026-08-16-cross-session-messaging.md:79-80; docs/CONFIGURATION.md In-Flight Hold).
         FRESH_COUNT=$((FRESH_COUNT + 1))
         FRESH_UNITS="${FRESH_UNITS}${FRESH_UNITS:+ }${m_unit}"
         FRESH_BASENAMES="${FRESH_BASENAMES}${marker##*/}"$'\n'
+      elif [ "$IN_FLIGHT_OBSERVED" = "yes" ] && [ "$m_named" != "true" ] && [ "$m_bg" != "false" ]; then
+        # Only the `missing` class reaches here now — the one with NO marker-level fact to outrank
+        # the payload: "true" held above, "false" and named quarantine below.
+        _in_flight_detect_only "$m_unit" "$m_agent" "fresh"
       elif [ "$m_bg" = "false" ] || [ "$m_named" = "true" ]; then
         # PROVEN class only: a synchronous dispatch cannot span a Stop, so this marker
         # is residue and quarantining it is what keeps the backlog from regrowing.
@@ -383,6 +475,11 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
       m_age_min=$(( (IN_FLIGHT_NOW - m_epoch) / 60 ))
       echo "Nazgul: STALE in-flight marker for ${m_unit} (${m_agent}), age ${m_age_min}m >= ${IN_FLIGHT_STALE_MIN}m — hold NOT taken; investigate a possibly crashed subagent ($(basename "$marker"))." >&2
       emit_event "stop_gate" reason "in_flight_stale" unit "$m_unit" agent "$m_agent" age_minutes:n "$m_age_min" limit:n "$IN_FLIGHT_STALE_MIN"
+      if [ "$IN_FLIGHT_OBSERVED" = "yes" ] && [ "$m_named" != "true" ] && [ "$m_bg" != "false" ]; then
+        # Age decides the HOLD, never the MEASUREMENT (finding 6). Reporting a marker and measuring
+        # it are independent, exactly as #211 already separated holding from reporting.
+        _in_flight_detect_only "$m_unit" "$m_agent" "stale"
+      fi
     fi
   done
   if [ "$IN_FLIGHT_LIVE_HOLD" = "yes" ] || [ "$FRESH_COUNT" -gt 0 ]; then
@@ -403,7 +500,11 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
     if [ -z "$IN_FLIGHT_HOLD_KEY" ]; then
       # Nothing is held, so this hold rests on the payload's live subagents alone — key on THEIR
       # ids, or the empty set hashes to one lifetime constant and spends this arm's budget forever.
-      IN_FLIGHT_LIVE_IDS=$(printf '%s' "$STOP_PAYLOAD" | jq -r '[.background_tasks[]? | select(.type == "subagent" and (.status == "running" or .status == "pending")) | .id? // empty | tostring | select(. != "")] | sort | join(",")' 2>/dev/null || echo "")
+
+      # Taken from the single parse above rather than re-parsing the payload (finding 12);
+      # "-" is that parse's observed-empty sentinel and is never a real id.
+      IN_FLIGHT_LIVE_IDS="$BG_LIVE_IDS"
+      [ "$IN_FLIGHT_LIVE_IDS" != "-" ] || IN_FLIGHT_LIVE_IDS=""
       IN_FLIGHT_HOLD_KEY="live-subagents:${IN_FLIGHT_LIVE_IDS}"
       [ -n "$IN_FLIGHT_LIVE_IDS" ] || IN_FLIGHT_LEDGER=unkeyable
     fi
