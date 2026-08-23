@@ -560,6 +560,31 @@ an objective anchor on the dispatch token, cut as scope item 4). It is narrower 
 relax, MF-053's fail-CLOSED-on-corrupt-config rule above: MF-053 covers an unparseable `config.json`;
 this covers only a valid config whose `tasks/` path resolves outside its own `nazgul/` tree.
 
+- **The hook layer's stdin read is one shared library, and a timeout is its own outcome.** `[enforced]`
+  `scripts/lib/read-hook-payload.sh` replaces the `INPUT=$(cat)` idiom all sixteen hook entry points
+  hand-rolled, each of which parked forever on a pipe nobody closed (measured: exit 124 on a held-open
+  pipe, 16 of 16 — the six carrying a `[ ! -t 0 ]` check hung too, because that test is TRUE exactly in
+  the hazard case and excludes only the terminal). `read_hook_payload` reports THREE outcomes —
+  `payload`, `empty`, `timeout` — and no caller may let `timeout` fall into `empty`'s branch: a bounded
+  read that reports a stalled pipe as an absent one converts "slow payload" into "guard bypassed" while
+  naming a cause that is not the cause, which is this section's looked-vs-never-looked distinction
+  rebuilt one layer down inside its own fix. Each caller chooses `fail-open` or `fail-closed` for
+  `timeout` explicitly — a closed two-value set — and one shared reporter records that choice on stderr
+  and as a `hook_stdin_timeout` event; a fail-closed guard defers its deny past its OWN scope gates, so
+  a timeout refuses only work that guard had authority over and never an unrelated repo's. Classifying
+  the outcome cannot read `read`'s exit status alone: on bash 3.2.57 all three return 1 and partial data
+  is discarded, while on 5.3.15 a timeout returns 142 and hands the partial read back — so two signals
+  are used (`rc > 128`, or `SECONDS` elapsed at the bound) and the payload is cleared on timeout, which
+  is what stops a truncated envelope reaching `jq` on either build. **Boundary:** the bound is a payload
+  ceiling as well as a wait ceiling — the byte-at-a-time primitive runs at ~2.8 MB/s against `$(cat)`'s
+  ~90 MB/s, so a payload above roughly that size reports `timeout`; a hook envelope carries one
+  `tool_input` and sits far below it. **Not claimed:** that the host ever leaves a hook's stdin open
+  without EOF. The hang is a latent hazard in guards whose whole job is to be fast and predictable,
+  proven under a detached runner — not an observed production stall.
+  `tests/test-hook-stdin-bound.sh` DERIVES the hook population from `scripts/*.sh` instead of listing
+  it, runs each against a held-open pipe asserting completion, and is driven red against a copy of the
+  tree whose bound has been removed.
+
 ### Tests-facing application: coverage honesty (FEAT-028, ADR-019)
 
 `[enforced]` Every checking entry point reports the work it did not perform as well as the findings it

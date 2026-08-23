@@ -6,12 +6,24 @@ set -euo pipefail
 # re-executed"). No-op unless execution.parallel is on.
 # Exit 0 = allow. Exit 2 = deny (reason on stderr).
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/read-hook-payload.sh"
+
+# A timeout denies, but only once this guard is known to apply; the parallel and
+# kill-switch gates below decide that, so the deny waits for them.
 INPUT="${1:-}"
-[ -z "$INPUT" ] && INPUT=$(cat 2>/dev/null || echo "")
-[ -z "$INPUT" ] && exit 0
+STDIN_TIMEOUT=0
+if [ -z "$INPUT" ]; then
+  read_hook_payload
+  if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+    STDIN_TIMEOUT=1
+  fi
+  INPUT="$HOOK_PAYLOAD"
+fi
+if [ "$STDIN_TIMEOUT" = "0" ] && [ -z "$INPUT" ]; then exit 0; fi
 command -v jq >/dev/null 2>&1 || exit 0
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 
@@ -30,6 +42,11 @@ PARALLEL=$(jq -r '.execution.parallel // false' "$CONFIG")
 # Kill-switch (explicit false disables; absent/true enabled).
 ENFORCE=$(jq -r 'if .execution.enforce.rework_guard == null then "true" else (.execution.enforce.rework_guard|tostring) end' "$CONFIG" 2>/dev/null || echo "true")
 [ "$ENFORCE" = "false" ] && exit 0
+
+if [ "$STDIN_TIMEOUT" = "1" ]; then
+  hook_payload_timeout_report "parallel-rework-guard" "fail-closed" "denying the edit"
+  exit 2
+fi
 
 FILE_PATH=$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null || echo "")
 [ -n "$FILE_PATH" ] || exit 0

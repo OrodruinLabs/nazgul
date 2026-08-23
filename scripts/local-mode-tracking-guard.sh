@@ -45,7 +45,25 @@ set -euo pipefail
 # is `cat`/`tee`, so `echo $((1<<2))` is a shift operator, not a heredoc open.
 
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
-INPUT=$(cat 2>/dev/null || echo "")
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=./lib/read-hook-payload.sh
+source "$SCRIPT_DIR/lib/read-hook-payload.sh"
+read_hook_payload
+if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+  # With no command text every pre-filter below would allow, so the deny is
+  # decided here — and only for the local-mode project this guard is scoped to.
+  # shellcheck source=./lib/nazgul-root.sh
+  source "$SCRIPT_DIR/lib/nazgul-root.sh"
+  TIMEOUT_CONFIG="$(resolve_project_root)/nazgul/config.json"
+  if [ -f "$TIMEOUT_CONFIG" ] \
+    && [ "$(jq -r '.install_mode // ""' "$TIMEOUT_CONFIG" 2>/dev/null || echo "")" = "local" ]; then
+    hook_payload_timeout_report "local-mode-tracking-guard" "fail-closed" "blocking the command"
+    exit 2
+  fi
+  hook_payload_timeout_report "local-mode-tracking-guard" "fail-open" "guard is out of scope here"
+  exit 0
+fi
+INPUT="$HOOK_PAYLOAD"
 
 # No input — allow
 if [ -z "$INPUT" ]; then
@@ -400,7 +418,6 @@ fi
 # Resolution deferred to here (past the pre-filters and the tokenizer) so the
 # overwhelming majority of Bash calls — which never carry a nazgul/ pathspec —
 # never pay for it.
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 
 PROJECT_ROOT="$(resolve_project_root)"

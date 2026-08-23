@@ -118,7 +118,7 @@ references/                          # Shared reference docs for agents
 │   ├── fix-first-heuristic.md       # AUTO-FIX vs ASK classification rules
 │   └── self-improvement.md          # Agent self-rating protocol
 tests/                               # Plugin validation tests
-│   ├── run-tests.sh                 # Test runner (115 unit/integration files); exit 2 = nothing checked
+│   ├── run-tests.sh                 # Test runner (116 unit/integration files); exit 2 = nothing checked
 │   ├── test-*.sh                    # Unit/integration tests
 │   ├── fixtures/                    # Provenance-declared goldens (tests/fixtures/*/PROVENANCE.md); no third-party subject matter
 │   ├── lib/                         # Test assertions + setup helpers
@@ -205,7 +205,7 @@ tests/                               # Plugin validation tests
 ## Testing
 
 ```bash
-tests/run-tests.sh                    # Run all unit/integration tests (115 files)
+tests/run-tests.sh                    # Run all unit/integration tests (116 files)
 tests/run-tests.sh --filter=stop-hook # Run specific test file
 tests/e2e/run-e2e.sh                  # Run E2E skill tests (requires claude CLI, costs money)
 tests/e2e/run-stack-e2e.sh            # Two-layer gh-stack E2E (real repo/PRs; CI-only via e2e-stack.yml)

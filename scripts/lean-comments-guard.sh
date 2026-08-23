@@ -35,6 +35,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
+# shellcheck source=./lib/read-hook-payload.sh
+source "$SCRIPT_DIR/lib/read-hook-payload.sh"
 
 # Shell-ness by extension, or by shebang when the path carries no usable one
 # (githooks(5) names are extensionless). $2 is the content's first line, if known.
@@ -360,7 +362,12 @@ if [ "${1:-}" = "--check" ]; then
 fi
 
 # Mode 2: PreToolUse hook (stdin JSON)
-INPUT=$(cat 2>/dev/null || echo "")
+read_hook_payload
+if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+  hook_payload_timeout_report "lean-comments-guard" "fail-open" "allowing the write unchecked"
+  exit 0
+fi
+INPUT="$HOOK_PAYLOAD"
 [ -z "$INPUT" ] && exit 0
 
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")

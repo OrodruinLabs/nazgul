@@ -4,12 +4,16 @@ set -euo pipefail
 # Nazgul TaskCompleted — fires when a Task-spawned agent finishes
 # Logs completion and fires webhook event for real-time monitoring.
 
-INPUT=""
-if [ ! -t 0 ]; then
-  INPUT=$(cat 2>/dev/null || true)
-fi
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=./lib/read-hook-payload.sh
+source "$SCRIPT_DIR/lib/read-hook-payload.sh"
+
+read_hook_payload
+if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+  hook_payload_timeout_report "task-completed" "fail-open" "recording with an unknown task id"
+fi
+INPUT="$HOOK_PAYLOAD"
+
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 
 NAZGUL_DIR="$(resolve_nazgul_dir)"

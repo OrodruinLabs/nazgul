@@ -8,10 +8,16 @@ set -euo pipefail
 #
 # Input: hook JSON on stdin (ignored — we only need to know the turn errored).
 
-# Drain stdin so the producer never blocks on a full pipe.
-cat >/dev/null 2>&1 || true
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/read-hook-payload.sh"
+
+# Content unused: the read exists so the producer is not left writing into a
+# pipe with no reader. A timeout must not stop the record — it is the point.
+read_hook_payload
+if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+  hook_payload_timeout_report "stop-failure" "fail-open" "recording the failure anyway"
+fi
+
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 
 NAZGUL_DIR="$(resolve_nazgul_dir)"
@@ -34,9 +40,8 @@ printf '{"last_stop_failure":"%s"}\n' "$TS" > "$NAZGUL_DIR/.stop_failure"
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
-# Alert the operator — a silently stalled AFK run is the failure mode we guard
-# against. notify.sh only fires on loop *completion*, so run the configured
-# notification command directly here (on_failure, falling back to on_complete).
+# notify.sh only fires on loop *completion*, so a silently stalled AFK run needs
+# the configured command run directly here (on_failure, falling back to on_complete).
 if command -v jq >/dev/null 2>&1; then
   NOTIFY_CMD=$(jq -r '.notifications.on_failure // .notifications.on_complete // empty' "$CONFIG" 2>/dev/null || true)
   if [ -n "${NOTIFY_CMD:-}" ]; then

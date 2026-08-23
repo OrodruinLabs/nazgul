@@ -5,10 +5,29 @@ set -euo pipefail
 # Exit 0 = allow command
 # Exit 2 = block command (reason on stderr)
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+RHP_LIB="$SCRIPT_DIR/lib/read-hook-payload.sh"
+# Same stance as dp_unavailable below, and for the same reason: this hook blocks
+# only on exit 2, so a `source` that aborts reads as allow-everything-unscreened.
+if [ ! -r "$RHP_LIB" ]; then
+  echo "NAZGUL SAFETY: Blocked — stdin reader unavailable: $RHP_LIB" >&2
+  echo "Repair the Nazgul install (scripts/lib/ must ship alongside scripts/) — no command is screened until it loads." >&2
+  exit 2
+fi
+# shellcheck source=./lib/read-hook-payload.sh
+source "$RHP_LIB"
+
 # The command being executed is passed via stdin or $ARGUMENTS
 INPUT="${1:-}"
 if [ -z "$INPUT" ]; then
-  INPUT=$(cat 2>/dev/null || echo "")
+  read_hook_payload
+  # Nothing scopes this guard to a project, so the only alternative to denying
+  # is an unscreened command — the stance dp_unavailable already takes below.
+  if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+    hook_payload_timeout_report "pre-tool-guard" "fail-closed" "blocking the unscreened command"
+    exit 2
+  fi
+  INPUT="$HOOK_PAYLOAD"
 fi
 
 # If no input, allow
@@ -23,7 +42,6 @@ if [ -z "$CMD" ]; then
   CMD="$INPUT"
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DP_LIB="$SCRIPT_DIR/lib/destructive-patterns.sh"
 
 # A PreToolUse hook blocks ONLY on exit 2, so an unloadable authority would let
