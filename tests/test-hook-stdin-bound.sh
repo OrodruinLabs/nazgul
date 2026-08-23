@@ -121,12 +121,12 @@ cat > "$SCRATCH/outcome.sh" <<'EOS'
 set -euo pipefail
 . "$1/scripts/lib/read-hook-payload.sh"
 read_hook_payload
-printf '%s %s\n' "$HOOK_PAYLOAD_OUTCOME" "${#HOOK_PAYLOAD}"
+printf '%s %s %s\n' "$HOOK_PAYLOAD_OUTCOME" "${HOOK_PAYLOAD_REASON:-none}" "${#HOOK_PAYLOAD}"
 EOS
 assert_eq "outcome 1 of 3: a delivered payload reads as 'payload'" \
-  "$(printf '{"a":1}\n' | bash "$SCRATCH/outcome.sh" "$REPO_ROOT")" "payload 7"
+  "$(printf '{"a":1}\n' | bash "$SCRATCH/outcome.sh" "$REPO_ROOT")" "payload none 7"
 assert_eq "outcome 2 of 3: a clean EOF with nothing on it reads as 'empty'" \
-  "$(bash "$SCRATCH/outcome.sh" "$REPO_ROOT" </dev/null)" "empty 0"
+  "$(bash "$SCRATCH/outcome.sh" "$REPO_ROOT" </dev/null)" "empty none 0"
 
 TFIFO="$SCRATCH/tf"; mkfifo "$TFIFO"
 ( exec 3> "$TFIFO"; printf '{"a":1}' >&3; sleep 30; exec 3>&- ) >/dev/null 2>&1 &
@@ -136,7 +136,7 @@ kill -9 "$TWPID" 2>/dev/null; wait "$TWPID" 2>/dev/null
 # Bytes must be 0: bash 5 hands back the partial read, and a truncated envelope
 # parsed as a payload is the exact bypass this outcome exists to prevent.
 assert_eq "outcome 3 of 3: a stalled pipe reads as 'timeout', with no partial content" \
-  "$TOUT" "timeout 0"
+  "$TOUT" "timeout stall 0"
 
 HP_BOUND="$(sed -n 's/^HOOK_PAYLOAD_TIMEOUT_SECONDS=\([0-9][0-9]*\).*/\1/p' "$REPO_ROOT/$READER_LIB")"
 [ -n "$HP_BOUND" ] || HP_BOUND=2
@@ -245,6 +245,144 @@ else
   MUT_RC="$(_run_held_open "$MUT/scripts/teammate-idle-guard.sh" "$PROJ")"
   assert_eq "[mutation] and the same predicate then reports the hang it is meant to catch" \
     "$MUT_RC" "124"
+fi
+
+# `read -t` bounds the wait for input to BECOME available, so a producer that
+# already wrote everything can never reach it. Size and total time, below.
+
+HP_DEADLINE="$(sed -n 's/^HOOK_PAYLOAD_DEADLINE_SECONDS=\([0-9][0-9]*\).*/\1/p' "$REPO_ROOT/$READER_LIB")"
+if [ -n "$HP_DEADLINE" ]; then
+  HP_DEADLINE_DECLARED=1
+  HP_DEADLINE_SRC="the reader's own"
+  _pass "the reader declares a total wall-clock deadline (${HP_DEADLINE}s)"
+else
+  HP_DEADLINE_DECLARED=0
+  HP_DEADLINE=5
+  HP_DEADLINE_SRC="this test's fallback"
+  _fail "the reader declares a total wall-clock deadline" \
+    "no HOOK_PAYLOAD_DEADLINE_SECONDS in $READER_LIB — with only \`read -t\`, a payload already sitting in the pipe is read with no bound at all"
+fi
+HP_CAP="$(sed -n 's/^HOOK_PAYLOAD_MAX_CHARS=\([0-9][0-9]*\).*/\1/p' "$REPO_ROOT/$READER_LIB")"
+if [ -n "$HP_CAP" ]; then
+  _pass "the reader declares a content cap (${HP_CAP} chars)"
+else
+  _fail "the reader declares a content cap" \
+    "no HOOK_PAYLOAD_MAX_CHARS in $READER_LIB — an arbitrarily large payload is accepted whole"
+fi
+
+# The deadline is only meaningful against the budget the harness actually grants.
+MIN_HOOK_TIMEOUT="$(jq -r '[.hooks | to_entries[] | .value[] | .hooks[]? | .timeout // empty] | min // empty' \
+  "$REPO_ROOT/hooks/hooks.json" 2>/dev/null || echo "")"
+if [ "$HP_DEADLINE_DECLARED" = "0" ]; then
+  _fail "the read deadline fits inside the smallest budget hooks.json grants a hook" \
+    "the reader declares no deadline, so there was no value to compare — this check did not run, which is not the same as passing"
+elif [ -n "$MIN_HOOK_TIMEOUT" ] && [ "$MIN_HOOK_TIMEOUT" != "null" ]; then
+  if [ "$HP_DEADLINE" -lt "$MIN_HOOK_TIMEOUT" ]; then
+    _pass "the read deadline (${HP_DEADLINE}s) fits inside the smallest budget hooks.json grants a hook (${MIN_HOOK_TIMEOUT}s)"
+  else
+    _fail "the read deadline fits inside the smallest budget hooks.json grants a hook" \
+      "deadline ${HP_DEADLINE}s >= ${MIN_HOOK_TIMEOUT}s — the harness kills the hook mid-read and the guard never decides"
+  fi
+else
+  _fail "the read deadline fits inside the smallest budget hooks.json grants a hook" \
+    "could not read any timeout out of hooks/hooks.json — the comparison was never made"
+fi
+
+# 256 KB is under this repo's own CHANGELOG.md (241 KB) and over RULES.md (163 KB),
+# either of which reaches a guard whole as a Write `content` field.
+BIG="$SCRATCH/big.json"
+{ printf '{"tool_name":"Write","tool_input":{"content":"'
+  head -c 262144 /dev/zero | tr '\0' 'x'
+  printf '"}}'; } > "$BIG"
+BIG_CHARS="$(wc -c < "$BIG" | tr -d ' ')"
+BIG_T0=$SECONDS
+BIG_OUT="$(bash "$SCRATCH/outcome.sh" "$REPO_ROOT" < "$BIG")"
+BIG_SECS=$((SECONDS - BIG_T0))
+assert_eq "a 256 KB payload already in the pipe still reads back whole" \
+  "$BIG_OUT" "payload none $BIG_CHARS"
+if [ "$BIG_SECS" -le "$HP_DEADLINE" ]; then
+  _pass "and reads it inside ${HP_DEADLINE_SRC} ${HP_DEADLINE}s deadline (${BIG_SECS}s)"
+else
+  _fail "and reads it inside ${HP_DEADLINE_SRC} ${HP_DEADLINE}s deadline" \
+    "took ${BIG_SECS}s for ${BIG_CHARS} chars — nothing bounded it, and hooks.json gives the PreToolUse guards ${MIN_HOOK_TIMEOUT:-10}s total"
+fi
+
+# Same reader, cap rewritten down, so the ceiling is proven at a size that costs
+# the suite nothing. A copy that cannot be rewritten has no ceiling to prove.
+CAPPED="$SCRATCH/capped"
+mkdir -p "$CAPPED/scripts"
+cp -R "$REPO_ROOT/scripts/lib" "$CAPPED/scripts/lib"
+sed -i.bak 's/^HOOK_PAYLOAD_MAX_CHARS=.*/HOOK_PAYLOAD_MAX_CHARS=4096/' "$CAPPED/$READER_LIB"
+rm -f "$CAPPED/$READER_LIB.bak"
+if grep -q '^HOOK_PAYLOAD_MAX_CHARS=4096$' "$CAPPED/$READER_LIB"; then
+  _pass "[fixture] the cap came down to 4096 chars in the copy"
+else
+  _fail "[fixture] the cap came down to 4096 chars in the copy" \
+    "no HOOK_PAYLOAD_MAX_CHARS assignment to rewrite — this reader has no cap, so the probe below reads the full payload"
+fi
+OVER="$SCRATCH/over.json"
+{ printf '{"c":"'; head -c 16384 /dev/zero | tr '\0' 'x'; printf '"}'; } > "$OVER"
+assert_eq "a payload over the cap reads as 'timeout/oversize' with no content — never 'payload', never 'empty'" \
+  "$(bash "$SCRATCH/outcome.sh" "$CAPPED" < "$OVER")" "timeout oversize 0"
+
+# Never stalls (each chunk lands inside the stall bound) and never stops, while
+# staying under the cap: only a total deadline ends this one.
+TRICKLE="$SCRATCH/trickle"
+mkdir -p "$TRICKLE/scripts"
+cp -R "$REPO_ROOT/scripts/lib" "$TRICKLE/scripts/lib"
+sed -i.bak 's/^HOOK_PAYLOAD_DEADLINE_SECONDS=.*/HOOK_PAYLOAD_DEADLINE_SECONDS=2/' "$TRICKLE/$READER_LIB"
+rm -f "$TRICKLE/$READER_LIB.bak"
+if grep -q '^HOOK_PAYLOAD_DEADLINE_SECONDS=2$' "$TRICKLE/$READER_LIB"; then
+  _pass "[fixture] the deadline came down to 2s in the copy"
+else
+  _fail "[fixture] the deadline came down to 2s in the copy" \
+    "no HOOK_PAYLOAD_DEADLINE_SECONDS assignment to rewrite — this reader has no total bound to shorten"
+fi
+TRICKLE_CHUNK="$(head -c 9000 /dev/zero | tr '\0' 'y')"
+DFIFO="$SCRATCH/df"; mkfifo "$DFIFO"
+( exec 3> "$DFIFO"
+  i=0
+  while [ "$i" -lt 20 ]; do printf '%s' "$TRICKLE_CHUNK" >&3; sleep 0.5; i=$((i + 1)); done
+  exec 3>&- ) >/dev/null 2>&1 &
+DPID=$!
+DOUT="$(bash "$SCRATCH/outcome.sh" "$TRICKLE" < "$DFIFO")"
+kill -9 "$DPID" 2>/dev/null; wait "$DPID" 2>/dev/null
+assert_eq "a producer that never stalls and never stops is ended by the total deadline" \
+  "$DOUT" "timeout deadline 0"
+
+# Termination alone proves nothing about its cause; the same producer against the
+# same reader with the deadline moved out of reach must NOT end inside the probe.
+LONG="$SCRATCH/longdeadline"
+mkdir -p "$LONG/scripts"
+cp -R "$REPO_ROOT/scripts/lib" "$LONG/scripts/lib"
+sed -i.bak 's/^HOOK_PAYLOAD_DEADLINE_SECONDS=.*/HOOK_PAYLOAD_DEADLINE_SECONDS=600/' "$LONG/$READER_LIB"
+rm -f "$LONG/$READER_LIB.bak"
+if grep -q '^HOOK_PAYLOAD_DEADLINE_SECONDS=600$' "$LONG/$READER_LIB"; then
+  _pass "[mutation] the deadline went out of reach (600s) in the copy"
+  DFIFO2="$SCRATCH/df2"; mkfifo "$DFIFO2"
+  ( exec 3> "$DFIFO2"
+    i=0
+    while [ "$i" -lt 40 ]; do printf '%s' "$TRICKLE_CHUNK" >&3; sleep 0.5; i=$((i + 1)); done
+    exec 3>&- ) >/dev/null 2>&1 &
+  DPID2=$!
+  ( bash "$SCRATCH/outcome.sh" "$LONG" < "$DFIFO2" >/dev/null 2>&1 ) &
+  RPID=$!
+  MWAIT=0
+  while [ "$MWAIT" -lt 4 ]; do
+    kill -0 "$RPID" 2>/dev/null || break
+    sleep 1; MWAIT=$((MWAIT + 1))
+  done
+  if kill -0 "$RPID" 2>/dev/null; then
+    _pass "[mutation] and the same producer then runs past ${MWAIT}s — the 2s end above was the deadline, not the producer"
+  else
+    _fail "[mutation] and the same producer then runs past 4s" \
+      "it ended anyway with the deadline at 600s, so the assertion above cannot tell a deadline from a producer that simply stopped"
+  fi
+  kill -9 "$RPID" 2>/dev/null; wait "$RPID" 2>/dev/null
+  kill -9 "$DPID2" 2>/dev/null; wait "$DPID2" 2>/dev/null
+else
+  _fail "[mutation] the deadline went out of reach (600s) in the copy" \
+    "no HOOK_PAYLOAD_DEADLINE_SECONDS assignment to rewrite"
 fi
 
 SKIPPED=$((SKIP_NO_STDIN + SKIP_UNREADABLE))
