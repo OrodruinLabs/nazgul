@@ -1133,7 +1133,11 @@ NA_TRIGGER_MIN=2
 
 _na_names() { grep -qE "(^|[^A-Za-z0-9_-])$1([^A-Za-z0-9_-]|\$)" <<< "$2"; }
 
-# lean-comments: allow-run — the population's two deliberate boundaries.
+# lean-comments: allow-run — the population's boundaries, and why -mindepth 1 is load-bearing.
+# -mindepth 1 keeps the prune list from matching the STARTING POINT: CI checks this repo out
+# at /home/runner/work/nazgul/nazgul, whose basename is `nazgul`, so without it find prunes
+# the whole tree and the scan reports 0 scanned / 0 findings — clean-looking and vacuous.
+# Invisible locally, where the working copy is named ai-hydra-framework (cf. #89).
 # _na_surfaces <root> <tokens> -> one `<rel>|<claiming-paragraphs>|<missing members>` record
 # per candidate. docs/superpowers/** is DATED record, so binding it would rewrite history;
 # the generated reviewer seats are per-project gitignored artifacts, checked where they
@@ -1157,7 +1161,7 @@ _na_surfaces() {
     done <<< "$(awk 'BEGIN{RS=""} {gsub(/\n/,"\002"); print NR "|" $0}' "$f")"
     printf '%s|%d|%s\n' "$rel" "$claims" \
       "$(printf '%s\n' "$miss" | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ' | sed 's/ $//')"
-  done <<< "$( { find "$root" \( -name .git -o -name nazgul -o -name node_modules \
+  done <<< "$( { find "$root" -mindepth 1 \( -name .git -o -name nazgul -o -name node_modules \
                       -o -path "$root/docs/superpowers" -o -name .claude \) -prune \
                     -o -type f -name '*.md' -print
                   find "$root/.claude/agents/generated" -type f -name '*.md' -print; } 2>/dev/null )"
@@ -1217,5 +1221,23 @@ case "$NA_BAD" in
   *) _fail "[mutation] and the finding names the member the vocabulary added" \
        "detail was '${NA_BAD% }', which does not name '$NA_PLANT'" ;;
 esac
+
+# The prune list names `nazgul`, and `find` applies its expression to the STARTING POINT
+# too — so a checkout whose own basename is a prune token prunes the entire tree. CI hits
+# this exactly (/home/runner/work/nazgul/nazgul) and a local clone never does.
+NA_SELFPRUNE_ROOT="$(mktemp -d)/nazgul"
+mkdir -p "$NA_SELFPRUNE_ROOT"
+{
+  printf 'A paragraph that calls this a closed list and names %s and %s.\n' \
+    "${NA_TOKENS%% *}" "$(printf '%s' "$NA_TOKENS" | awk '{print $2}')"
+} > "$NA_SELFPRUNE_ROOT/claim.md"
+_na_tally "$NA_SELFPRUNE_ROOT" "$NA_TOKENS"
+if [ "$NA_SCANNED" -ge 1 ]; then
+  _pass "na-token-surfaces: a root whose basename is itself a prune token is still walked ($NA_SCANNED scanned)"
+else
+  _fail "na-token-surfaces: a root whose basename is itself a prune token is still walked" \
+    "0 scanned under $NA_SELFPRUNE_ROOT — the prune list matched the starting point, so the whole tree vanished and the scan would report a clean 0 findings having examined nothing"
+fi
+rm -rf "$(dirname "$NA_SELFPRUNE_ROOT")"
 
 report_results
