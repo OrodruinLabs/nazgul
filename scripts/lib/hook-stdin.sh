@@ -46,11 +46,20 @@
 #     returns 0 UNCONDITIONALLY — never aborts a caller under `set -euo
 #     pipefail`, and needs no `|| true` at the call site.
 #
-# NAZGUL_HOOK_STDIN_TIMEOUT is VALIDATED at source rather than trusted: `read -t`
-# rejects a bad spec BEFORE consuming anything, so an unvalidated one leaves the
-# payload empty and it then reads as `no_stdin` — a misconfiguration wearing the
-# label of an absent payload, with the whole of #218 silently inert behind it. A
-# rejected value falls back to 2 seconds and says so on stderr (ADR-014). The
+# NAZGUL_HOOK_STDIN_TIMEOUT is VALIDATED at source rather than trusted, in three
+# parts, because SHAPE ALONE IS NOT ENOUGH — the claim this header used to make.
+# A well-shaped spec can still be one this bash REFUSES (`0.5` under the bash 3.2
+# macOS ships as /bin/bash; fractional `read -t` arrived in 4.0) or one it honours
+# far too literally (a 20-digit integer, which disarms the bound entirely). So the
+# check is: shape, then a ceiling on the integer part, then the RUNNING bash's own
+# verdict via __hs_read_spec_accepted, which asks it instead of encoding a version
+# table. All three matter because a spec `read` REJECTS returns 1 having consumed
+# nothing — the SAME status a clean EOF returns — so the miss reads as `no_stdin`,
+# a misconfiguration wearing the label of an absent payload with the whole of #218
+# silently inert behind it. Validating hard enough that a rejected spec never
+# reaches the read is the deliberate choice: it keeps the `why` set CLOSED AT
+# SEVEN rather than minting an eighth member for a case that can no longer arise.
+# A rejected value falls back to 2 seconds and says so on stderr (ADR-014). The
 # unprefixed `HOOK_STDIN_TIMEOUT` is NOT honoured: no shim, by design.
 #
 # The remaining four members of #218's `why` set — `not_json`, `field_absent`,
@@ -69,20 +78,39 @@
 # Sourced, never executed. Per CLAUDE.md Code Style's sourced-lib exception this
 # file carries no `set -e` and must not alter the caller's shell options.
 
-# Accepts only what `read -t` does: a positive integer or simple decimal. A bare `.`,
-# `0` and `0.0` fail the second case — strip every dot and zero and nothing is left.
+# The ceiling on the integer part. A hook that waits a minute has already failed, and a larger
+# spec either overflows `read`'s own parse or is honoured so literally that the bound is no bound.
+__HS_MAX_TIMEOUT=60
+
+# Asks the RUNNING bash whether it will honour this -t spec, instead of encoding a version table.
+# The here-string already has a byte ready, so an accepted spec returns 0 at once and never waits.
+__hs_read_spec_accepted() {
+  local __hs_probe __hs_prc=0
+  read -r -t "$1" __hs_probe <<< "nazgul" 2>/dev/null || __hs_prc=$?
+  [ "$__hs_prc" -eq 0 ]
+}
+
+# Shape (a positive integer or simple decimal — a bare `.`, `0` and `0.0` fail the second case,
+# since stripping every dot and zero leaves nothing), then range, then this bash's own verdict.
 __hs_valid_timeout() {
+  local __hs_int
   case "$1" in ''|*[!0-9.]*|*.*.*) return 1 ;; esac
   case "${1//[.0]/}" in '') return 1 ;; esac
-  return 0
+  # `.5` has an EMPTY integer part, and `[` refuses a value past intmax outright rather than
+  # saturating, so the digit count is bounded before the numeric comparison below.
+  __hs_int="${1%%.*}"
+  [ -n "$__hs_int" ] || __hs_int=0
+  [ "${#__hs_int}" -le 3 ] || return 1
+  [ "$__hs_int" -le "$__HS_MAX_TIMEOUT" ] || return 1
+  __hs_read_spec_accepted "$1"
 }
 
 # Seconds the bounded read waits before giving up on a stdin that never EOFs.
 # NAZGUL_-prefixed like every other operator switch here; validated, see header.
 NAZGUL_HOOK_STDIN_TIMEOUT="${NAZGUL_HOOK_STDIN_TIMEOUT:-2}"
 if ! __hs_valid_timeout "$NAZGUL_HOOK_STDIN_TIMEOUT"; then
-  printf 'nazgul: NAZGUL_HOOK_STDIN_TIMEOUT=%s is not a positive number of seconds; falling back to 2\n' \
-    "$NAZGUL_HOOK_STDIN_TIMEOUT" >&2
+  printf 'nazgul: NAZGUL_HOOK_STDIN_TIMEOUT=%s is not a number of seconds this bash will honour (positive, at most %s, and accepted by its own read -t); falling back to 2\n' \
+    "$NAZGUL_HOOK_STDIN_TIMEOUT" "$__HS_MAX_TIMEOUT" >&2
   NAZGUL_HOOK_STDIN_TIMEOUT=2
 fi
 
@@ -93,6 +121,14 @@ HOOK_STDIN_WHY=""
 # shellcheck disable=SC2034  # HOOK_STDIN_WHY is written for the caller, not read here
 read_hook_payload() {
   local __hs_out="${1:-HOOK_PAYLOAD}"
+  # `printf -v` evaluates an array subscript ARITHMETICALLY, and arithmetic evaluation performs
+  # command substitution — so an unvalidated [VARNAME] is an execution sink (in-flight-marker.sh:61-65).
+  case "$__hs_out" in ''|*[!A-Za-z0-9_]*|[0-9]*)
+    # Announced, never silent: a redirected write looks to the caller exactly like an absent payload.
+    printf 'nazgul: read_hook_payload: %s is not a shell variable name; reading into HOOK_PAYLOAD instead\n' "$__hs_out" >&2
+    __hs_out=HOOK_PAYLOAD
+    ;;
+  esac
   local __hs_payload="" __hs_rc=0
   HOOK_STDIN_WHY=""
   if [ -t 0 ]; then

@@ -203,7 +203,7 @@ itself the evidence that nothing an existing project stores had to change.
   second signal named in the #218 analysis remains available and unused.
 - **`background_tasks[]` is undocumented.** It is present in the shipped schema and captured in the
   wild, but absent from the public hook reference, so its shape can change with no deprecation notice.
-  The always-on `stop_payload_observed` event and doctor's three-state note exist so that such a change
+  The `stop_payload_observed` event and doctor's stop-payload note exist so that such a change
   shows up as a measurement rather than as a hold that silently stops engaging.
 
 ## [2.33.0] - 2026-08-17
