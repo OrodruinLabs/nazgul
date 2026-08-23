@@ -83,8 +83,12 @@ set -euo pipefail
 # reads as RED confirmed — a fabricated red"); the same hazard in the exit-code
 # reading was not carried across at the time.
 
-BEGIN_MARK="<!-- red-run.sh:begin — generated block, refreshed in place on re-capture -->"
+BEGIN_MARK="<!-- red-run.sh:begin — generated block; a capture MERGES by test file: it replaces the entry for every file it names and leaves every other file's entry standing -->"
 END_MARK="<!-- red-run.sh:end -->"
+
+# The region is LOCATED by this prefix, never by the full marker text, so a block an
+# older marker wording wrote is merged into rather than duplicated beside.
+BEGIN_PREFIX="<!-- red-run.sh:begin"
 
 die() {
   printf 'red-run: %s\n' "$@" >&2
@@ -740,7 +744,144 @@ fi
   "INDETERMINATE RESULT — the pre-change run exited $RUN_EC but no failing test file could be identified." \
   "Refusing to write an entry naming nothing. No evidence block was written."
 
-ENTRIES=""
+# One entry is one test file's complete record, so the merge key is the path it names,
+# parsed exactly as the gate parses it; an exemption entry keys as `N/A`.
+rr_entry_path() {
+  printf '%s' "$1" | head -1 \
+    | sed -E 's/^[[:space:]]*-[[:space:]]*(\*\*)?red-run(\*\*)?:[[:space:]]*//' \
+    | awk '{print $1}' | tr -d '`'
+}
+
+rr_entry_ref() {
+  printf '%s\n' "$1" \
+    | grep -iE '^[[:space:]]*-?[[:space:]]*(\*\*)?pre-change-ref(\*\*)?:' | head -1 \
+    | grep -oE '[0-9a-f]{7,64}' | head -1 || true
+}
+
+rr_resolve_sha() {
+  git -C "$PROJECT_ROOT" rev-parse --verify --quiet "${1}^{commit}" 2>/dev/null || true
+}
+
+RR_OLD_PATHS=()
+RR_OLD_TEXTS=()
+RR_OLD_PREAMBLE=0
+
+rr_read_existing_entries() {
+  local line cur=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    if printf '%s' "$line" | grep -qE '^[[:space:]]*-[[:space:]]*(\*\*)?red-run(\*\*)?:'; then
+      if [ -n "$cur" ]; then
+        RR_OLD_TEXTS+=("$cur")
+        RR_OLD_PATHS+=("$(rr_entry_path "$cur")")
+      fi
+      cur="${line}
+"
+    elif [ -n "$cur" ]; then
+      cur="${cur}${line}
+"
+    else
+      case "$line" in *[![:space:]]*) RR_OLD_PREAMBLE=$((RR_OLD_PREAMBLE + 1)) ;; esac
+    fi
+  done < <(awk -v b="$BEGIN_PREFIX" -v e="$END_MARK" '
+      index($0, b) == 1 { f = 1; next }
+      f && $0 == e { f = 0; next }
+      f { print }' "$MANIFEST")
+  if [ -n "$cur" ]; then
+    RR_OLD_TEXTS+=("$cur")
+    RR_OLD_PATHS+=("$(rr_entry_path "$cur")")
+  fi
+}
+
+# lean-comments: allow-run — the choice this task had to make and state; a reader must not
+# shorten it back to "stale entries are dropped".
+# Accumulation is only honest if it cannot preserve evidence a later change invalidated, so
+# a retained entry must still be ABOUT this manifest's Base SHA. One captured against another
+# tree is DROPPED, never retained-and-marked: the gate keys coverage on entry PATHS, so a stale
+# entry left in place discharges its file's obligation whatever label it carries — which would
+# make accumulation a wider forgery route than the overwrite bug it replaces.
+rr_merge_entries() {
+  local i=0 j hit old_path old_text ref resolved base_resolved emitted="" merged=""
+  local retained=0 replaced=0 stale=0 unresolved=0 noref=0 superseded=0
+
+  rr_read_existing_entries
+  base_resolved=$(rr_resolve_sha "$BASE_SHA")
+
+  while [ "$i" -lt "${#RR_OLD_TEXTS[@]}" ]; do
+    old_path="${RR_OLD_PATHS[$i]}"
+    old_text="${RR_OLD_TEXTS[$i]}"
+    i=$((i + 1))
+
+    case "$old_path" in
+      [Nn]/[Aa])
+        superseded=$((superseded + 1))
+        echo "red-run: dropped the 'N/A' exemption entry the block carried — this capture is a real red run, and an N/A entry left beside it exempts EVERY changed test file from the gate's per-file coverage check" >&2
+        continue
+        ;;
+    esac
+
+    hit=""
+    j=0
+    while [ "$j" -lt "${#NEW_PATHS[@]}" ]; do
+      if [ "${NEW_PATHS[$j]}" = "$old_path" ]; then hit="$j"; break; fi
+      j=$((j + 1))
+    done
+    if [ -n "$hit" ]; then
+      merged="${merged}${NEW_TEXTS[$hit]}"
+      emitted="${emitted}${hit} "
+      replaced=$((replaced + 1))
+      echo "red-run: replaced the existing entry for $old_path — a re-capture of the same file is a correction, not an accumulation" >&2
+      continue
+    fi
+
+    ref=$(rr_entry_ref "$old_text")
+    if [ -z "$ref" ]; then
+      noref=$((noref + 1))
+      echo "red-run: dropped the entry for $old_path — it records no pre-change-ref, so the tree it was captured against cannot be established" >&2
+      continue
+    fi
+    resolved=$(rr_resolve_sha "$ref")
+    if [ -z "$resolved" ]; then
+      unresolved=$((unresolved + 1))
+      echo "red-run: dropped the entry for $old_path — its pre-change-ref $ref does not resolve to a commit in $PROJECT_ROOT" >&2
+      continue
+    fi
+    if [ "$resolved" != "$base_resolved" ]; then
+      stale=$((stale + 1))
+      echo "red-run: dropped the STALE entry for $old_path — its pre-change-ref $ref is not this manifest's Base SHA $BASE_SHA, so it was captured against a different tree and must not count toward coverage" >&2
+      continue
+    fi
+    merged="${merged}${old_text}"
+    retained=$((retained + 1))
+  done
+
+  j=0
+  while [ "$j" -lt "${#NEW_PATHS[@]}" ]; do
+    case " $emitted" in
+      *" $j "*) ;;
+      *) merged="${merged}${NEW_TEXTS[$j]}" ;;
+    esac
+    j=$((j + 1))
+  done
+
+  [ "$RR_OLD_PREAMBLE" -eq 0 ] || echo "red-run: dropped $RR_OLD_PREAMBLE line(s) of the previous block that were not entries — capture context is now recorded inside the entry it belongs to" >&2
+  printf 'red-run: evidence merge: %d existing entry(ies) scanned, %d retained, %d replaced, %d dropped (stale=%d, unresolved-ref=%d, no-ref=%d, superseded-na=%d); %d entry(ies) from this capture\n' \
+    "${#RR_OLD_TEXTS[@]}" "$retained" "$replaced" \
+    "$((stale + unresolved + noref + superseded))" "$stale" "$unresolved" "$noref" "$superseded" \
+    "${#NEW_PATHS[@]}" >&2
+
+  printf '%s' "$merged"
+}
+
+CAPTURE_NOTE=""
+[ -n "$EXCLUDED" ] && CAPTURE_NOTE="; NOT copied (harness, not test input): ${EXCLUDED% }"
+[ -n "$EXPLICIT_COPY" ] && CAPTURE_NOTE="; copy set pinned by --copy"
+
+# Capture context belongs to the ENTRY, not the block: entries now outlive one another's
+# captures, so one block-level line would describe only the newest of the runs below it.
+CAPTURE_LINE="  - capture: \`${RUN_CMD}\` in a detached worktree at \`${BASE_SHA}\`; ${COPIED} changed test file(s) copied in${CAPTURE_NOTE}${RUNNER_NOTE}; runner exit ${RUN_EC} in ${ELAPSED}s"
+
+NEW_PATHS=()
+NEW_TEXTS=()
 while IFS= read -r name; do
   [ -n "$name" ] || continue
   stem="${name%.sh}"
@@ -758,39 +899,41 @@ while IFS= read -r name; do
   if [ ! -f "$PROJECT_ROOT/$rel_path" ]; then
     echo "red-run: WARNING — $rel_path does not exist in the live tree; the evidence gate will reject this entry" >&2
   fi
-  ENTRIES="${ENTRIES}- red-run: ${rel_path} :: case \"${case_name}\"
+  NEW_PATHS+=("$rel_path")
+  NEW_TEXTS+=("- red-run: ${rel_path} :: case \"${case_name}\"
   - pre-change-ref: ${BASE_SHA}
   - result: FAILED (exit ${RUN_EC}) — ${result_detail}
+${CAPTURE_LINE}
   - captured-by: scripts/red-run.sh at $(date -u +%Y-%m-%dT%H:%M:%SZ)
-"
+")
 done <<EOF
 $FAILED_NAMES
 EOF
 
-CAPTURE_NOTE=""
-[ -n "$EXCLUDED" ] && CAPTURE_NOTE="; NOT copied (harness, not test input): ${EXCLUDED% }"
-[ -n "$EXPLICIT_COPY" ] && CAPTURE_NOTE="; copy set pinned by --copy"
+ENTRIES=$(rr_merge_entries)
 
 BLOCK="${BEGIN_MARK}
-- capture: \`${RUN_CMD}\` in a detached worktree at \`${BASE_SHA}\`; ${COPIED} changed test file(s) copied in${CAPTURE_NOTE}${RUNNER_NOTE}; runner exit ${RUN_EC} in ${ELAPSED}s
-${ENTRIES}${END_MARK}"
+${ENTRIES}
+${END_MARK}"
 
 # In-place file write, never `mv`/`cp` over a manifest: the bash-write
 # reconciliation pass reads manifests as state, and rightly flags a swap.
 rr_write_block() {
   local has_section=0 has_marker=0 skipping=0 inserted=0 out="" line
   if grep -q '^## Red-Run Evidence' "$MANIFEST"; then has_section=1; fi
-  if grep -qF "$BEGIN_MARK" "$MANIFEST"; then has_marker=1; fi
+  if grep -qF "$BEGIN_PREFIX" "$MANIFEST"; then has_marker=1; fi
 
   while IFS= read -r line || [ -n "$line" ]; do
     if [ "$has_marker" -eq 1 ]; then
-      if [ "$line" = "$BEGIN_MARK" ]; then
-        out="${out}${BLOCK}
+      case "$line" in
+        "$BEGIN_PREFIX"*)
+          out="${out}${BLOCK}
 "
-        skipping=1
-        inserted=1
-        continue
-      fi
+          skipping=1
+          inserted=1
+          continue
+          ;;
+      esac
       if [ "$skipping" -eq 1 ]; then
         [ "$line" = "$END_MARK" ] && skipping=0
         continue
