@@ -354,8 +354,9 @@ check_stdin_hazard() {
 # (n) Stop-payload observability (#218 ruling Q4) — an unscored note, so it adds no
 # RULES §15 registry membership. Every outcome is named; none stands in for another.
 check_stop_payload() {
-  local events="$NAZGUL_DIR/logs/events.jsonl" last="" seen why counts bus candidate="no" detail frozen
+  local events="$NAZGUL_DIR/logs/events.jsonl" last="" seen why counts bus paused candidate="no" detail frozen
   bus=$(_doc_cfg '.telemetry.bus_enabled' true)
+  paused=$(_doc_cfg '.paused' false)
   if [ -f "$events" ]; then
     last=$(jq -c 'select(.event == "stop_payload_observed")' "$events" 2>/dev/null | tail -1 || true)
     # Presence probe, NOT selection: jq aborts the whole stream at the first malformed
@@ -374,6 +375,12 @@ check_stop_payload() {
   if [ -z "$last" ]; then
     if [ "$candidate" = "yes" ]; then
       _doc_skip note stop-payload unreadable "UNSELECTABLE RECORD: nazgul/logs/events.jsonl carries the token stop_payload_observed but no record could be selected out of it — jq is absent, or a malformed line aborted the stream before the record was reached. This is 'could not look', not 'looked and found none': whether a Stop has been measured here is UNDETERMINED."
+      return 0
+    fi
+    # Bus-off returned above on purpose: it says no record can EVER be written, while a pause clears
+    # with one /nazgul:start. Only no-record lands here — a record predating the pause is still evidence.
+    if [ "$paused" = "true" ]; then
+      _doc_skip note stop-payload not-applicable-config "LOOP PAUSED: nazgul/config.json has paused=true, so scripts/stop-hook.sh returns at the pause gate BEFORE the stop_payload_observed emit and no Stop can be recorded here. This check CANNOT ANSWER whether background_tasks reaches this host, and running more iterations will not change that: pause is STICKY, cleared only by /nazgul:start, so every further Stop exits at the same gate. Run /nazgul:start to resume the loop, let one Stop complete, then re-run /nazgul:doctor."
       return 0
     fi
     _doc_report note stop-payload "NEVER OBSERVED: nazgul/logs/events.jsonl holds no stop_payload_observed record, so no Stop has been measured in this project yet. This is 'never looked' — it is NOT a report that background_tasks was missing. Run one loop iteration (any Stop emits the record) and re-run /nazgul:doctor."

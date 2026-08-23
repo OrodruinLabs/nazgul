@@ -9,7 +9,7 @@ metadata:
 # Nazgul Doctor
 
 ## Examples
-- `/nazgul:doctor` — Run all fourteen checks (a config-present engine check plus the thirteen environment checks (a)-(i) and (k)-(n), where (h)/(i) cover stacking tooling readiness and registry-vs-GitHub drift, (k)/(l)/(m) cover messaging eligibility, Remote Control eligibility, and shared-working-tree session collisions, and (n) reports the last Stop payload's `background_tasks` state — field present, field present but wrong shape, field absent, payload undetermined, record unselectable, never observed, or telemetry bus disabled) and report pass/warn/fail with remediation
+- `/nazgul:doctor` — Run all fourteen checks (a config-present engine check plus the thirteen environment checks (a)-(i) and (k)-(n), where (h)/(i) cover stacking tooling readiness and registry-vs-GitHub drift, (k)/(l)/(m) cover messaging eligibility, Remote Control eligibility, and shared-working-tree session collisions, and (n) reports the last Stop payload's `background_tasks` state — field present, field present but wrong shape, field absent, payload undetermined, record unselectable, never observed, telemetry bus disabled, or loop paused) and report pass/warn/fail with remediation
 
 ## Instructions
 
