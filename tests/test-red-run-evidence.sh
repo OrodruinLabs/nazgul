@@ -205,6 +205,19 @@ assert_eq "reason-vocabulary: the closed set is exactly the enumerated reasons" 
   "$(printf '%s\n' "$VOCAB_EXPECTED" | tr ' ' '\n' | sort | tr '\n' ' ')"
 assert_eq "reason-vocabulary: the new state is a named member, not a bucket" "$VOCAB_FINDINGS" "0"
 
+# The EXEMPTION vocabulary, read out of the shipped constant rather than restated here, so
+# a sixth token cannot be added without this file and every surface below noticing.
+NA_TOKENS="${_TTG_RED_RUN_NA_TOKENS:-}"
+NA_FILE_SCOPED="${_TTG_RED_RUN_FILE_SCOPED_NA:-}"
+NA_TASK_WIDE=$(printf '%s\n' "$NA_TOKENS" | tr ' ' '\n' | grep -vxF "$NA_FILE_SCOPED" | tr '\n' ' ')
+NA_TOKEN_N=$(printf '%s\n' "$NA_TOKENS" | tr ' ' '\n' | grep -c '[^[:space:]]')
+if [ "$NA_TOKEN_N" -ge 2 ] && [ -n "$NA_FILE_SCOPED" ]; then
+  _pass "na-token-vocabulary: derived $NA_TOKEN_N members from the shipped constant (file-scoped: $NA_FILE_SCOPED)"
+else
+  _fail "na-token-vocabulary: derived from the shipped constant" \
+    "_TTG_RED_RUN_NA_TOKENS='$NA_TOKENS' file-scoped='$NA_FILE_SCOPED' — a vocabulary that cannot be read is 'never looked', and every case below would run on an empty set"
+fi
+
 # ADR-024 decision 4: both halves read project.test_roots. No repo-root tests/
 # here ON PURPOSE — the defect is invisible where the hardcode is right.
 setup_monorepo_repo() {
@@ -540,7 +553,7 @@ assert_eq "entry with no result line: reason is 'corrupt'" "$RR_REASON" "corrupt
 # ---------------------------------------------------------------------------
 # STATE 5/6 — the CLOSED N/A list, and free text rejected
 # ---------------------------------------------------------------------------
-for tok in docs-only comment-only revert fixture-capture-only; do
+for tok in $NA_TASK_WIDE; do
   rr_call "$(rr_manifest '["scripts/foo.sh"]' "- red-run: N/A — ${tok}")" "$TEST_DIR"
   assert_exit_code "N/A — ${tok}: allowed (enumerated)" "$RR_EC" 0
   assert_eq "N/A — ${tok}: reason is 'enumerated_na'" "$RR_REASON" "enumerated_na"
@@ -948,8 +961,9 @@ assert_file_contains "template declares a ## Red-Run Evidence section" \
   "$MANIFEST_TEMPLATE" '^## Red-Run Evidence'
 assert_file_contains "template states the heading IS the enforcement boundary" \
   "$MANIFEST_TEMPLATE" 'heading IS the enforcement boundary'
-assert_file_contains "template names the closed exemption list" \
-  "$MANIFEST_TEMPLATE" 'docs-only, comment-only, revert, fixture-capture-only'
+for tok in $NA_TOKENS; do
+  assert_file_contains "template names closed-exemption member '${tok}'" "$MANIFEST_TEMPLATE" "$tok"
+done
 
 TEMPLATE_HEADINGS=$(grep -n '^## ' "$MANIFEST_TEMPLATE" | grep -E 'Commits|Red-Run Evidence|Description' | awk -F: '{print $2}' | tr '\n' '|')
 assert_eq "## Red-Run Evidence sits immediately after ## Commits" \
@@ -1058,11 +1072,150 @@ assert_eq "changed glob: reason is 'enumerated_na'" "$RR_REASON" "enumerated_na"
 assert_contains "and the diagnostic quotes the CHANGED glob, proving it was read not assumed" \
   "$RR_STDERR" "'tests/check-*.sh'"
 
-# The four task-wide tokens are untouched by the fifth's arrival.
-for tok in docs-only comment-only revert fixture-capture-only; do
+# The task-wide tokens are untouched by the file-scoped one's arrival.
+for tok in $NA_TASK_WIDE; do
   rr_call "$(rr_manifest '["scripts/foo.sh"]' "- red-run: N/A — ${tok}")" "$TEST_DIR"
   assert_eq "task-wide '${tok}' still exempts the whole task" "$RR_REASON" "enumerated_na"
 done
 teardown_temp_dir
+
+# lean-comments: allow-run — names the false ADMIT this fixture exists to close.
+# TWO ROOTS, TWO RUNNERS, TWO DIFFERENT GLOBS. Asking only the FIRST root reported a file
+# the SECOND root's own runner discovers as undiscoverable, and ADMITTED it — a false
+# exemption produced by the checker, not the operator. The globs differ on purpose, so a
+# pass cannot come from the two roots happening to agree.
+setup_monorepo_repo
+create_config '.project.test_roots = ["src/App/tests", "src/Worker/tests"]'
+cp "$REPO_ROOT/tests/run-tests.sh" "$TEST_DIR/src/App/tests/run-tests.sh"
+cp "$REPO_ROOT/tests/run-tests.sh" "$TEST_DIR/src/Worker/tests/run-tests.sh"
+sed -i.bak 's|"\$SCRIPT_DIR"/test-\*\.sh|"$SCRIPT_DIR"/check-*.sh|' "$TEST_DIR/src/Worker/tests/run-tests.sh"
+rm -f "$TEST_DIR/src/Worker/tests/run-tests.sh.bak"
+printf '#!/usr/bin/env bash\n' > "$TEST_DIR/src/Worker/tests/check-worker.sh"
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "a runner per root, with different globs"
+assert_eq "[fixture] the second root's runner really carries the OTHER glob" \
+  "$(grep -c 'check-\*\.sh' "$TEST_DIR/src/Worker/tests/run-tests.sh")" "1"
+
+rr_call "$(rr_manifest '["scripts/foo.sh"]' '- red-run: src/Worker/tests/check-worker.sh :: N/A — harness-undiscoverable')" "$TEST_DIR"
+assert_exit_code "two roots: a file the SECOND root's own runner discovers is REFUSED, not admitted" "$RR_EC" 1
+assert_eq "two roots: reason is 'discoverable_test_file'" "$RR_REASON" "discoverable_test_file"
+assert_contains "two roots: the refusal names the runner that contradicts the claim, not the first one" \
+  "$RR_STDERR" "IS discovered by src/Worker/tests/run-tests.sh's own glob 'src/Worker/tests/check-*.sh'"
+
+# Same directory, same file-name shape the FIRST root globs — and still undiscoverable,
+# because discoverability is each root's OWN glob over its OWN directory.
+rr_call "$(rr_manifest '["scripts/foo.sh"]' '- red-run: src/Worker/tests/test-worker.sh :: N/A — harness-undiscoverable')" "$TEST_DIR"
+assert_exit_code "two roots: a file NO root's runner reaches is still ALLOWED" "$RR_EC" 0
+assert_eq "two roots: reason is 'enumerated_na'" "$RR_REASON" "enumerated_na"
+assert_contains "two roots: the admit names EVERY root it was checked against, not just one" \
+  "$RR_STDERR" "CHECKED against src/App/tests/run-tests.sh's own glob 'src/App/tests/test-*.sh', src/Worker/tests/run-tests.sh's own glob 'src/Worker/tests/check-*.sh'"
+
+# "One root could not be read" is not "no root reaches this file": an unparseable runner
+# under ANY configured root refuses the whole claim rather than being skipped past.
+printf '#!/usr/bin/env bash\necho no discovery loop here\n' > "$TEST_DIR/src/Worker/tests/run-tests.sh"
+rr_call "$(rr_manifest '["scripts/foo.sh"]' '- red-run: src/Worker/tests/test-worker.sh :: N/A — harness-undiscoverable')" "$TEST_DIR"
+assert_exit_code "two roots: an unparseable runner under the SECOND root refuses the claim" "$RR_EC" 1
+assert_eq "two roots: an unreadable root is 'undiscoverable_unverifiable', never a skip" \
+  "$RR_REASON" "undiscoverable_unverifiable"
+assert_contains "two roots: the refusal names WHICH root could not be read" \
+  "$RR_STDERR" "src/Worker/tests/run-tests.sh is readable but no 'for <var> in"
+teardown_temp_dir
+
+# lean-comments: allow-run — the trigger rule and its scope are the whole argument here.
+# THE VOCABULARY'S CONSUMERS. Members from the constant above; the surfaces that owe them
+# from the TREE. The trigger is the claim itself, never punctuation: a paragraph that says
+# the list is closed AND names two or more members is teaching the set and owes every one.
+# Paragraph-scoped ON PURPOSE — naming the fifth token elsewhere in the same file is how
+# docs/CONFIGURATION.md carried a four-member "closed list" row and a five-member event
+# line at once, each true on its own line and contradictory as a file.
+NA_CLOSURE_RE='closed list|list is closed|closed set'
+NA_TRIGGER_MIN=2
+
+_na_names() { grep -qE "(^|[^A-Za-z0-9_-])$1([^A-Za-z0-9_-]|\$)" <<< "$2"; }
+
+# lean-comments: allow-run — the population's two deliberate boundaries.
+# _na_surfaces <root> <tokens> -> one `<rel>|<claiming-paragraphs>|<missing members>` record
+# per candidate. docs/superpowers/** is DATED record, so binding it would rewrite history;
+# the generated reviewer seats are per-project gitignored artifacts, checked where they
+# exist and named as a skip where they do not.
+_na_surfaces() {
+  local root="$1" tokens="$2" f rel body rec hits miss tok claims
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    rel="${f#"$root"/}"
+    if [ ! -r "$f" ]; then printf '%s|unreadable|\n' "$rel"; continue; fi
+    claims=0; miss=""
+    while IFS= read -r rec; do
+      [ -n "$rec" ] || continue
+      body="${rec#*|}"; body="${body//$'\002'/$'\n'}"
+      grep -qiE "$NA_CLOSURE_RE" <<< "$body" || continue
+      hits=0
+      for tok in $tokens; do _na_names "$tok" "$body" && hits=$((hits + 1)); done
+      [ "$hits" -ge "$NA_TRIGGER_MIN" ] || continue
+      claims=$((claims + 1))
+      for tok in $tokens; do _na_names "$tok" "$body" || miss="$miss $tok"; done
+    done <<< "$(awk 'BEGIN{RS=""} {gsub(/\n/,"\002"); print NR "|" $0}' "$f")"
+    printf '%s|%d|%s\n' "$rel" "$claims" \
+      "$(printf '%s\n' "$miss" | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+  done <<< "$( { find "$root" \( -name .git -o -name nazgul -o -name node_modules \
+                      -o -path "$root/docs/superpowers" -o -name .claude \) -prune \
+                    -o -type f -name '*.md' -print
+                  find "$root/.claude/agents/generated" -type f -name '*.md' -print; } 2>/dev/null )"
+}
+
+# _na_tally <root> <tokens> — sets NA_SCANNED/NA_SKIP_*/NA_CHECKED/NA_FINDINGS/NA_BAD.
+_na_tally() {
+  local rel claims miss
+  NA_SCANNED=0; NA_SKIP_NOCLAIM=0; NA_SKIP_UNREADABLE=0; NA_CHECKED=0; NA_FINDINGS=0; NA_BAD=""
+  while IFS='|' read -r rel claims miss; do
+    [ -n "$rel" ] || continue
+    NA_SCANNED=$((NA_SCANNED + 1))
+    if [ "$claims" = "unreadable" ]; then
+      NA_SKIP_UNREADABLE=$((NA_SKIP_UNREADABLE + 1))
+    elif [ "$claims" -eq 0 ]; then
+      NA_SKIP_NOCLAIM=$((NA_SKIP_NOCLAIM + 1))
+    else
+      NA_CHECKED=$((NA_CHECKED + 1))
+      [ -n "$miss" ] && { NA_FINDINGS=$((NA_FINDINGS + 1)); NA_BAD="$NA_BAD$rel(${miss// /,}) "; }
+    fi
+  done <<< "$(_na_surfaces "$1" "$2")"
+}
+
+_na_tally "$REPO_ROOT" "$NA_TOKENS"
+NA_SEATS_DIR="$REPO_ROOT/.claude/agents/generated"
+if [ -d "$NA_SEATS_DIR" ]; then
+  _pass "na-token-surfaces: the live generated reviewer seats are in the population ($(find "$NA_SEATS_DIR" -type f -name '*.md' | grep -c . ) seat file(s))"
+else
+  _skip "na-token-surfaces: no .claude/agents/generated here, so the live reviewer seats were NOT examined — present in an initialised project, absent in a fresh clone"
+fi
+assert_eq "na-token-surfaces: every surface that calls this list CLOSED names all $NA_TOKEN_N members" \
+  "${NA_BAD% }" ""
+NA_SURFACE_FLOOR=2
+if [ "$NA_CHECKED" -ge "$NA_SURFACE_FLOOR" ]; then
+  _pass "na-token-surfaces: the enumerator actually looked ($NA_CHECKED claiming surfaces >= $NA_SURFACE_FLOOR)"
+else
+  _fail "na-token-surfaces: the enumerator actually looked" \
+    "only $NA_CHECKED claiming surface(s) under $REPO_ROOT — a trigger that stopped matching reports a clean tree with nothing checked"
+fi
+echo "  na-token-surfaces: ${NA_SCANNED} scanned, $((NA_SKIP_NOCLAIM + NA_SKIP_UNREADABLE)) skipped (no-closure-claim=${NA_SKIP_NOCLAIM}, unreadable=${NA_SKIP_UNREADABLE}), ${NA_CHECKED} checked, ${NA_FINDINGS} findings"
+assert_eq "na-token-surfaces: scanned == skipped + checked" \
+  "$NA_SCANNED" "$((NA_SKIP_NOCLAIM + NA_SKIP_UNREADABLE + NA_CHECKED))"
+
+# The pass is worth only its ability to fail. Same tree, same trigger, one planted
+# member: every surface that teaches the set must now owe the token none of them names.
+NA_SHIPPED_CHECKED="$NA_CHECKED"
+NA_PLANT="na-planted-sixth"
+_na_tally "$REPO_ROOT" "$NA_TOKENS $NA_PLANT"
+if [ "$NA_CHECKED" -eq "$NA_SHIPPED_CHECKED" ] && [ "$NA_FINDINGS" -eq "$NA_SHIPPED_CHECKED" ]; then
+  _pass "[mutation] a sixth member with no surface update turns every one of the $NA_CHECKED claiming surfaces red"
+else
+  _fail "[mutation] a sixth member with no surface update turns every claiming surface red" \
+    "checked=$NA_CHECKED (want $NA_SHIPPED_CHECKED), findings=$NA_FINDINGS (want $NA_SHIPPED_CHECKED) — the pass cannot fail, so its zero above proves nothing"
+fi
+case "$NA_BAD" in
+  *"$NA_PLANT"*) _pass "[mutation] and the finding names the member the vocabulary added" ;;
+  *) _fail "[mutation] and the finding names the member the vocabulary added" \
+       "detail was '${NA_BAD% }', which does not name '$NA_PLANT'" ;;
+esac
 
 report_results

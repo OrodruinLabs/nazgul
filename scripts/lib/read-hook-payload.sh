@@ -157,7 +157,7 @@ read_hook_payload() {
   # on a human. The six hooks that already had this check keep their behaviour.
   [ -t 0 ] && return 0
 
-  local started chunk_started rc want got total elapsed reason outcome
+  local started chunk_started rc want got total elapsed reason outcome chunk
   started=$SECONDS
   total=0
   reason=""

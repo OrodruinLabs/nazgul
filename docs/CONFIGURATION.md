@@ -361,7 +361,11 @@ boundary, and "looked and found none" is kept distinct from "never looked":
 | `project.test_roots` is unusable (see below), so the roots set cannot be derived | **BLOCK** (`roots_undeterminable`) — the scope predicate fails CLOSED and treats the task as in scope |
 | Every configured tests root was skipped, so none resolves under the project root | **BLOCK** (`roots_unresolved`) — kept distinct from `roots_undeterminable`: "the config could not be read" is not "the config read fine and nothing it names exists" |
 | Entry present but its test path or `pre-change-ref` is unresolvable, not an ancestor, or records exit 0 | **BLOCK** (`ref_unresolvable` / `not_ancestor` / `exit_zero`) — the evidence claims something git can refute |
-| `red-run: N/A — <token>` with `<token>` in the closed list `docs-only`, `comment-only`, `revert`, `fixture-capture-only` | ALLOW, recorded (`enumerated_na`) |
+| `red-run: N/A — <token>` with `<token>` in the closed list `docs-only`, `comment-only`, `revert`, `fixture-capture-only` — the four TASK-WIDE declarations | ALLOW for the whole task, recorded (`enumerated_na`) |
+| `red-run: <path> :: N/A — harness-undiscoverable` — the fifth member of that same closed list, FILE-SCOPED and CHECKED rather than declared: the gate reads the test runner's own discovery glob out of `run-tests.sh` and asks whether it reaches `<path>` | ALLOW for that ONE file, recorded (`enumerated_na`) — the per-file coverage pass still runs over every other changed test file, so it exempts nothing else |
+| `harness-undiscoverable` naming a file the runner's own glob DOES reach | **BLOCK** (`discoverable_test_file`) — the claim is checked against the producer's glob, not believed |
+| `harness-undiscoverable` with no path in front of it | **BLOCK** (`unbound_file_scoped_na`) — kept distinct from `bad_na_token`: the token is a real member, but a claim naming no file can be checked against nothing, and task-wide it would exempt every file |
+| `harness-undiscoverable` where no runner could be read, or none carried a parseable discovery line | **BLOCK** (`undiscoverable_unverifiable`) — "could not ask" is its own answer and it is a REFUSAL; admitting an unverifiable claim turns the checked token straight back into the declaration it replaced |
 | `red-run: N/A — <free text>` | **BLOCK** (`bad_na_token`) — an open-ended excuse field is an allow-everything field |
 
 | Key | Default | Meaning |
