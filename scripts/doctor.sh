@@ -358,10 +358,15 @@ check_stop_payload() {
   bus=$(_doc_cfg '.telemetry.bus_enabled' true)
   paused=$(_doc_cfg '.paused' false)
   if [ -f "$events" ]; then
-    last=$(jq -c 'select(.event == "stop_payload_observed")' "$events" 2>/dev/null | tail -1 || true)
     # Presence probe, NOT selection: jq aborts the whole stream at the first malformed
     # line, so "selected nothing" and "could not read" have to stay distinguishable.
-    grep -q 'stop_payload_observed' "$events" 2>/dev/null && candidate="yes"
+
+    # BOTH probes survive, only their ORDER changed (PR #245 finding 14): grep short-circuits at the
+    # first hit, so a bus with no record at all now costs one scan instead of two.
+    if grep -q 'stop_payload_observed' "$events" 2>/dev/null; then
+      candidate="yes"
+      last=$(jq -c 'select(.event == "stop_payload_observed")' "$events" 2>/dev/null | tail -1 || true)
+    fi
   fi
   if [ "$bus" = "false" ]; then
     if [ -n "$last" ] || [ "$candidate" = "yes" ]; then

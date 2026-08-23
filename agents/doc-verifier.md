@@ -84,8 +84,9 @@ inventory exists to prevent.
 
 This list is EVENT names only. A `stop_gate` `reason` is not an event and must never be added here —
 `in_flight_hold`, `in_flight_stale`, `in_flight_orphan`, `in_flight_unverifiable`,
-`in_flight_orphan_candidate`, `in_flight_hold_budget_exhausted`, `in_flight_present_not_live`,
-`in_flight_hold_unbudgetable`, `afk_timeout`, and `stacking_unavailable` are reasons carried by the
+`in_flight_orphan_candidate`, `in_flight_orphan_unattributable`, `in_flight_hold_budget_exhausted`,
+`in_flight_present_not_live`, `in_flight_hold_unbudgetable`, `afk_timeout`, and
+`stacking_unavailable` are reasons carried by the
 single `stop_gate` event, and the reason enumeration lives in `docs/CONFIGURATION.md` Event Types
 plus `RULES.md` §5.
 
