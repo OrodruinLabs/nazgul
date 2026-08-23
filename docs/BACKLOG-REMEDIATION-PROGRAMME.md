@@ -124,7 +124,7 @@ seam (`detect` / `submit` / `health`, every unusable state its own token).
 
 **Scope correction — this is the one that matters for TaxGuardian.** `_mp_provider_for_host` claims
 `github.com` only, so on Azure DevOps `merge_provider_detect` returns `unsupported_host`, the
-`## Merge Evidence` route refuses with `merge-unverifiable`, and that gate carries **no kill switch by
+merge-evidence route refuses with `merge-unverifiable`, and that gate carries **no kill switch by
 design**. Un-hardwiring *submit* while *close* still refuses leaves ADO unable to reach DONE. Scope this
 objective to both ends, or state in the release notes that ADO remains blocked at DONE.
 
