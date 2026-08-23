@@ -50,6 +50,8 @@ scs_exemption() { # <rel-path> -> prints justification, exit 0 if exempt
       echo "surfaced by the widened reach signal: it spells no status vocabulary of its own — STATUS_ALT is derived at runtime from structured-state.sh's VALID_STATUSES, the single authority, which already carries CANCELLED; a restated status name here would be the defect (driven by tests/test-prompt-guard.sh)" ;;
     scripts/git-hooks/pre-merge-commit)
       echo "gates on review APPROVAL evidence rather than the status vocabulary; a cancelled unit carries no approval and is correctly blocked (driven as row 17 of tests/test-cancelled-status-consumers.sh)" ;;
+    scripts/lib/review-provenance.sh)
+      echo "gates on review PROVENANCE evidence (token match, diff hash, subject-file classification) rather than the status vocabulary; its read_frontmatter_field reach reads a REVIEW file's review_token, and every DONE occurrence is prose naming the gate that consumes its output — no predicate here reads a task status, so a cancelled unit's provenance validates identically" ;;
     *) return 1 ;;
   esac
   return 0

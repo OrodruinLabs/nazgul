@@ -400,6 +400,12 @@ else
   assert_eq "consumer-scan: the #203 exemption's 'never calls the shared reader' claim still holds" \
     "$(grep -cE 'task-utils\.sh|count_tasks_and_find_active|get_task_status' "$NOTIFY_SRC")" "0"
 
+  # The review-provenance arm stays exempt only while "no predicate reads a task status" holds:
+  # a status token outside a comment or a message literal would be exactly that predicate.
+  RP_SRC="$REPO_ROOT/scripts/lib/review-provenance.sh"
+  assert_eq "consumer-scan: the review-provenance exemption's 'no predicate reads a task status' claim still holds" \
+    "$(grep -E "$SCS_STATUS_TOKENS" "$RP_SRC" | grep -vE '^[[:space:]]*#' | grep -cvE 'printf|echo')" "0"
+
   # The staleness checks read the live oracle's own case arms. An extraction that
   # returns nothing would pass both of them by never looking (RULES.md §15).
   EXEMPTION_ARMS=$(scs_exemption_paths | grep -c .)
