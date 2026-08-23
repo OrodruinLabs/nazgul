@@ -75,8 +75,8 @@ them apart. Read the `reason` on the corresponding `stop_gate` events and render
   marker whose class was never read.
 
 **In-flight markers — the classes LEFT IN PLACE**: evaluate this rule whenever In-flight markers > 0 or a
-matching `stop_gate` event is present, INDEPENDENTLY of the Quarantined count. Both classes below leave
-their marker in `nazgul/in-flight/` and are never counted toward Quarantined, so a session that produced
+matching `stop_gate` event is present, INDEPENDENTLY of the Quarantined count. All three classes below
+leave their marker in `nazgul/in-flight/` and are never counted toward Quarantined, so a session that produced
 only these has a Quarantined count of zero — gating them on Quarantined > 0 would make them unreachable
 exactly when they are the whole story.
 
@@ -94,6 +94,18 @@ exactly when they are the whole story.
   is a measurement instrument, and its bar is counted in `in_flight_orphan_candidate` events themselves.
   Do NOT send the operator to nazgul/in-flight/quarantine/ for this class either, and never count it
   toward Quarantined.
+- Any `in_flight_orphan_unattributable` — "dispatch markers could NOT be attributed: the Stop payload
+  reported no subagent for THIS session, but more than one live session shares this nazgul/ and markers
+  carry no session id (#248), so this tick cannot say the dispatch is not still running under another
+  session (stop_gate reason in_flight_orphan_unattributable). Nothing was moved, held or deleted — the
+  markers are still in nazgul/in-flight/." Answer the question the word "unattributable" raises, because
+  an operator will otherwise read it as one of two things it is not: it is NOT a leaked marker and NOT
+  Nazgul failing to understand its own state — it is the shared-`nazgul/` case (#195), and the plain
+  operator-facing answer is usually "you have more than one session on this nazgul/". Read `sessions`
+  off the event for the count it saw, and `background` for the marker class it was. This reason is
+  deliberately NOT counted toward the ADR-027 Q3 bar that `in_flight_orphan_candidate` feeds — a tally
+  keyed on the reason must never absorb an observation it was not entitled to count. Do NOT send the
+  operator to nazgul/in-flight/quarantine/ for this class, and never count it toward Quarantined.
 
 Reporting an unverifiable marker as "diagnostic residue, not pending work" is the specific falsehood this
 wording exists to prevent: on a fork-mode host `run_in_background` is absent from the exposed Agent schema,
@@ -102,9 +114,9 @@ so EVERY marker takes that branch while its agent is still working.
 The Quarantined count and the in-flight count answer DIFFERENT questions, and only two producers write to
 quarantine/: `scripts/stop-hook.sh` for the PROVEN class only (`stop_gate` reason `in_flight_orphan`), and
 `scripts/session-context.sh`'s SessionStart sweep for over-age markers (standalone `in_flight_swept` event,
-`source: session_start_sweep` — AGE only, never a proven class). The unverifiable and orphan-candidate
-classes write to NEITHER: they stay in nazgul/in-flight/ and show up in the in-flight count, not the
-quarantined one. Last stop gate
+`source: session_start_sweep` — AGE only, never a proven class). The unverifiable, orphan-candidate and
+unattributable classes write to NEITHER: they stay in nazgul/in-flight/ and show up in the in-flight
+count, not the quarantined one. Last stop gate
 reads `stop_gate` events ONLY, so a sweep-quarantined marker never appears there — never present Last stop
 gate as the whole orphan story, and
 never report Quarantined > 0 with a `none`/unrelated Last stop gate as a contradiction.

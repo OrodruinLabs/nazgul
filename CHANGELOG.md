@@ -141,7 +141,12 @@ itself the evidence that nothing an existing project stores had to change.
   session's registry and markers carry no session id, so when more than one live session shares the
   `nazgul/` directory it emits `in_flight_orphan_unattributable` instead, and the Q3 bar counts only
   the candidate. It also runs at ANY marker age, carrying `age` (`fresh`|`stale`) — confining it to
-  fresh markers excluded the aged ones a real orphan almost always is. The reason is deliberately NOT `in_flight_orphan`, which names a
+  fresh markers excluded the aged ones a real orphan almost always is. All three detect-only records
+  additionally carry `background`, the marker CLASS, because the arms no longer measure one: the fresh
+  path admits only `missing` while the stale path admits `missing` and `background:"true"` alike. Whether
+  a stale `background:"true"` observation belongs in the Q3 tally is for whoever evaluates the bar to
+  decide — the field exists so that the decision is still available to them, since evidence is written
+  now and analysed later, and a class the record never carried cannot be recovered. The reason is deliberately NOT `in_flight_orphan`, which names a
   PROVEN class that really was quarantined and which `/nazgul:status` tells operators exactly that
   about; reusing it would rebuild the conflation this objective exists to remove. `LIVE == 0` has never
   been observed live, so the arm rests on a measurement, not a proof — see the constraint below for the
@@ -212,6 +217,16 @@ itself the evidence that nothing an existing project stores had to change.
   revert: it is a full-subsystem switch — it also stops the marker WRITER
   (`scripts/in-flight-marker.sh:36-37`) and the SessionStart sweep (`scripts/session-context.sh:77-79`),
   not just the hold. See In-Flight Dispatch Hold in `docs/CONFIGURATION.md`.
+- **The Q1 valve has a corner where it declines a hold the previous release would have taken.** If EVERY
+  in-flight marker is past the ABANDONED ceiling (so none is held and none keys the budget) *and* the
+  Stop payload's live subagents carry no `id`, nothing episode-specific is left to key a budget on, so
+  the hold is DECLINED as `in_flight_hold_unbudgetable` (`ledger: "unkeyable"`) where a marker basename
+  used to supply the key. That degrades to the previous release's behaviour, loudly, and takes no false
+  action — no marker is moved and none is quarantined — so it ships as ruling Q1 operating as designed in
+  a new cell rather than as a new judgment quietly made. The supporting claim is stated as what it is: no
+  captured payload in `tests/fixtures/stop-payload/` exhibits a live subagent without an `id`. That is an
+  OBSERVATION over the fixtures this repo holds, not a property of a schema — `background_tasks[]` is
+  undocumented (below), so nothing entitles anyone to claim ids are guaranteed.
 - **`PostToolUse` `tool_response.status` is still unread.** The Stop payload alone drives this; the
   second signal named in the #218 analysis remains available and unused.
 - **`background_tasks[]` is undocumented.** It is present in the shipped schema and captured in the
