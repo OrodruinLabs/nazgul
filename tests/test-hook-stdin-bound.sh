@@ -46,7 +46,7 @@ _run_held_open() {
   rm -f "$fifo" "$rcfile"; mkfifo "$fifo" || { echo 125; return 0; }
   ( exec 3> "$fifo"; printf '%s' "$PAYLOAD" >&3; sleep 60; exec 3>&- ) >/dev/null 2>&1 &
   local wpid=$!
-  ( CLAUDE_PROJECT_DIR="$root" NAZGUL_FORMATTER_ENABLED=1 \
+  ( CLAUDE_PROJECT_DIR="$root" NAZGUL_FORMATTER_ENABLED=1 NAZGUL_STAGING_DISABLE=1 \
       bash "$script" >/dev/null 2>&1 < "$fifo"; echo $? > "$rcfile" ) &
   local pid=$! waited=0
   while [ "$waited" -lt "$DEADLINE" ]; do
@@ -150,12 +150,14 @@ else
     "checked $CHECKED under $REPO_ROOT/scripts — a derivation finding fewer than $FLOOR is 'never looked', not a clean tree"
 fi
 
+# Anchored to a CALL SITE, same shape as the disposition derivation above: every hook
+# carries `declare -F hook_payload_timeout_report`, which satisfies a bare-name grep alone.
 NO_BRANCH=""
 for h in $HOOKS; do
   f="$REPO_ROOT/scripts/$h"
   grep -q 'read_hook_payload' "$f" || continue
   grep -q 'HOOK_PAYLOAD_OUTCOME' "$f" || NO_BRANCH="$NO_BRANCH$h "
-  grep -q 'hook_payload_timeout_report' "$f" || NO_BRANCH="$NO_BRANCH$h "
+  grep -qE 'hook_payload_timeout_report "[^"]+" "[^"]+"' "$f" || NO_BRANCH="$NO_BRANCH$h "
 done
 assert_eq "every caller of the reader branches on the timeout outcome by name" "${NO_BRANCH% }" ""
 
@@ -521,29 +523,51 @@ cp -R "$REPO_ROOT/scripts" "$LOAD_TREE/scripts"
 printf '%s\n%s\n' '# truncated on purpose: this file loads and defines nothing' ':' \
   > "$LOAD_TREE/$READER_LIB"
 SPOOF="_NAZGUL_READ_HOOK_PAYLOAD_SOURCED=1"
-# Every `_NAZGUL_*_SOURCED` name any scripts/lib file still carries, DERIVED, plus the one
-# this reader used to carry — so the sweep can never empty out as those guards are retired.
+# Every `_NAZGUL_*_SOURCED` name DERIVED from anywhere under scripts/ — a scripts/lib/*.sh
+# glob missed the live one in scripts/git-hooks/_dispatch.sh — plus the reader's retired name.
 SENTINELS="$(
-  { grep -hoE '_NAZGUL_[A-Z0-9_]+_SOURCED' "$REPO_ROOT"/scripts/lib/*.sh 2>/dev/null
+  { grep -rhoE '_NAZGUL_[A-Z0-9_]+_SOURCED' "$REPO_ROOT"/scripts 2>/dev/null
     printf '%s\n' '_NAZGUL_READ_HOOK_PAYLOAD_SOURCED'; } | LC_ALL=C sort -u | tr '\n' ' ')"
 SENTINEL_N=$(printf '%s\n' "$SENTINELS" | tr ' ' '\n' | grep -c '[^[:space:]]')
+# Floors the DERIVED POPULATION, not the pair count below: 16 pairs is reachable from ONE
+# surviving name, so a derivation collapsed to a straggler would still clear that bar.
+SENTINEL_FLOOR=10
+if [ "$SENTINEL_N" -ge "$SENTINEL_FLOOR" ]; then
+  _pass "the sentinel population was derived from the tree's own names ($SENTINEL_N >= $SENTINEL_FLOOR)"
+else
+  _fail "the sentinel population was derived from the tree's own names" \
+    "derived $SENTINEL_N names under $REPO_ROOT/scripts — a derivation that stopped matching sweeps almost nothing and still reports zero"
+fi
 
-# _run_payload <script-abs> <root> [env-assignment] -> "<exit>\x1f<stderr>". The payload
-# is delivered and the pipe closed, so nothing here can hang: what is measured is the load.
-_run_payload() {
-  local script="$1" root="$2" envassign="${3:-}" ec=0 err
-  if [ -n "$envassign" ]; then
-    err=$(CLAUDE_PROJECT_DIR="$root" NAZGUL_FORMATTER_ENABLED=1 \
-      env "$envassign" bash "$script" 2>&1 >/dev/null <<< "$PAYLOAD") || ec=$?
-  else
-    err=$(CLAUDE_PROJECT_DIR="$root" NAZGUL_FORMATTER_ENABLED=1 \
-      bash "$script" 2>&1 >/dev/null <<< "$PAYLOAD") || ec=$?
-  fi
-  printf '%s\x1f%s' "$ec" "$err"
+# The DECISION a hook returned, normalised. Raw stdout is not comparable run to run
+# (formatter stamps a timestamp), so parseable JSON is canonicalised and the stamp dropped.
+_payload_decision() {
+  local out="$1"
+  [ -n "$out" ] || { printf 'no-output'; return 0; }
+  printf '%s' "$out" | jq -Sc 'walk(if type == "object" then del(.timestamp) else . end)' 2>/dev/null && return 0
+  printf '%s' "$out" | tr -d '\037' | tr '\n' ' '
 }
 
-LOAD_SCANNED=0; LOAD_SKIPPED=0; LOAD_CHECKED=0; LOAD_FINDINGS=0; SENT_CHECKED=0
+# _run_payload <script-abs> <root> [env-assignment] -> "<exit>\x1f<decision>\x1f<stderr>". The
+# payload is delivered and the pipe closed, so nothing here can hang: what is measured is the load.
+_run_payload() {
+  local script="$1" root="$2" envassign="${3:-}" ec=0 err out tmp="$SCRATCH/rp.$$.$RANDOM"
+  # session-staging gates on a CWD-RELATIVE nazgul/config.json, so an unset
+  # NAZGUL_STAGING_DISABLE reaches `git add` over this repo's own working tree.
+  if [ -n "$envassign" ]; then
+    err=$(CLAUDE_PROJECT_DIR="$root" NAZGUL_FORMATTER_ENABLED=1 NAZGUL_STAGING_DISABLE=1 \
+      env "$envassign" bash "$script" 2>&1 >"$tmp" <<< "$PAYLOAD") || ec=$?
+  else
+    err=$(CLAUDE_PROJECT_DIR="$root" NAZGUL_FORMATTER_ENABLED=1 NAZGUL_STAGING_DISABLE=1 \
+      bash "$script" 2>&1 >"$tmp" <<< "$PAYLOAD") || ec=$?
+  fi
+  out="$(cat "$tmp" 2>/dev/null)"; rm -f "$tmp"
+  printf '%s\x1f%s\x1f%s' "$ec" "$(_payload_decision "$out")" "$err"
+}
+
+LOAD_SCANNED=0; LOAD_SKIPPED=0; LOAD_CHECKED=0; LOAD_FINDINGS=0; SENT_CHECKED=0; SPOOF_FINDINGS=0
 UNGUARDED=""; UNNAMED=""; SPOOFABLE=""
+DEC_JSON=""; DEC_SILENT=""; DEC_OPAQUE=""
 for h in $HOOKS; do
   LOAD_SCANNED=$((LOAD_SCANNED + 1))
   case " $CLOSED_HOOKS " in
@@ -558,7 +582,7 @@ for h in $HOOKS; do
   LOAD_CHECKED=$((LOAD_CHECKED + 1))
   _reset_load_proj
   res="$(_run_payload "$LOAD_TREE/scripts/$h" "$LOAD_PROJ")"
-  rc="${res%%$'\x1f'*}"; err="${res#*$'\x1f'}"
+  rc="${res%%$'\x1f'*}"; rrest="${res#*$'\x1f'}"; err="${rrest#*$'\x1f'}"
   if [ "$rc" = "$want" ]; then
     _pass "$h takes its declared posture when the reader loads but defines nothing (exit $rc)"
   else
@@ -574,26 +598,41 @@ for h in $HOOKS; do
   # to make a load a no-op, so each is a differential against a clean environment.
   _reset_load_proj
   clean="$(_run_payload "$REPO_ROOT/scripts/$h" "$LOAD_PROJ")"
-  crc="${clean%%$'\x1f'*}"
+  crc="${clean%%$'\x1f'*}"; crest="${clean#*$'\x1f'}"; cdec="${crest%%$'\x1f'*}"
+  case "$cdec" in
+    no-output) DEC_SILENT="$DEC_SILENT$h " ;;
+    '{'*|'['*) DEC_JSON="$DEC_JSON$h " ;;
+    *)         DEC_OPAQUE="$DEC_OPAQUE$h " ;;
+  esac
   moved=""
   for v in $SENTINELS; do
     SENT_CHECKED=$((SENT_CHECKED + 1))
     _reset_load_proj
     spoofed="$(_run_payload "$REPO_ROOT/scripts/$h" "$LOAD_PROJ" "$v=1")"
-    src="${spoofed%%$'\x1f'*}"
-    [ "$crc" = "$src" ] || moved="$moved$v($crc->$src) "
+    src="${spoofed%%$'\x1f'*}"; srest="${spoofed#*$'\x1f'}"; sdec="${srest%%$'\x1f'*}"
+    [ "$crc" = "$src" ] || moved="$moved$v(exit $crc->$src) "
+    [ "$cdec" = "$sdec" ] || moved="$moved$v(decision $cdec->$sdec) "
   done
   if [ -z "$moved" ]; then
-    _pass "$h is unchanged by all $SENTINEL_N exported library sentinels (exit $crc)"
+    _pass "$h returns the same exit AND the same decision under all $SENTINEL_N exported library sentinels (exit $crc, decision $cdec)"
   else
-    LOAD_FINDINGS=$((LOAD_FINDINGS + 1)); SPOOFABLE="$SPOOFABLE$h:{${moved% }} "
-    _fail "$h is unchanged by all $SENTINEL_N exported library sentinels" \
+    LOAD_FINDINGS=$((LOAD_FINDINGS + 1)); SPOOF_FINDINGS=$((SPOOF_FINDINGS + 1))
+    SPOOFABLE="$SPOOFABLE$h:{${moved% }} "
+    _fail "$h returns the same exit AND the same decision under all $SENTINEL_N exported library sentinels" \
       "$moved— an environment variable changed what this hook did"
   fi
 done
 assert_eq "no hook answers an unloadable reader with anything but its declared posture" "${UNGUARDED% }" ""
 assert_eq "every hook NAMES the unloadable reader on stderr rather than exiting mute" "${UNNAMED% }" ""
-assert_eq "no hook's behaviour is settable from the environment through any lib sentinel" "${SPOOFABLE% }" ""
+assert_eq "no hook's exit code OR decision is settable from the environment through any lib sentinel" \
+  "${SPOOFABLE% }" ""
+DEC_JSON_N=$(printf '%s\n' "$DEC_JSON" | tr ' ' '\n' | grep -c '[^[:space:]]')
+DEC_SILENT_N=$(printf '%s\n' "$DEC_SILENT" | tr ' ' '\n' | grep -c '[^[:space:]]')
+DEC_OPAQUE_N=$(printf '%s\n' "$DEC_OPAQUE" | tr ' ' '\n' | grep -c '[^[:space:]]')
+# The DECISION bound here is stdout plus exit code, and nothing else: a hook that decided
+# by writing a file rather than answering the harness is bound by neither of them.
+printf 'decision surface: %d parseable-JSON, %d silent (the silence IS the bound value), %d non-JSON stdout compared verbatim [%s]\n' \
+  "$DEC_JSON_N" "$DEC_SILENT_N" "$DEC_OPAQUE_N" "${DEC_OPAQUE% }"
 if [ "$SENT_CHECKED" -ge "$FLOOR" ]; then
   _pass "the sentinel sweep actually looked ($SENT_CHECKED hook-by-sentinel pairs over $SENTINEL_N names)"
 else
@@ -650,8 +689,16 @@ fi
 
 printf 'load-guard: %d scanned, %d skipped (declares-no-disposition=%d), %d checked, %d findings\n' \
   "$LOAD_SCANNED" "$LOAD_SKIPPED" "$LOAD_SKIPPED" "$LOAD_CHECKED" "$LOAD_FINDINGS"
-printf 'sentinel-sweep: %d scanned, 0 skipped (none=0), %d checked, %d findings\n' \
-  "$SENT_CHECKED" "$SENT_CHECKED" "$(printf '%s\n' "$SPOOFABLE" | grep -c '[^[:space:]]')"
+# Counted in hook-by-sentinel PAIRS: a hook the load pass skipped never had its sentinels
+# driven, and reporting a hard-coded 0 skipped said otherwise.
+SENT_SCANNED=$((LOAD_SCANNED * SENTINEL_N)); SENT_SKIPPED=$((LOAD_SKIPPED * SENTINEL_N))
+printf 'sentinel-sweep: %d scanned, %d skipped (declares-no-disposition=%d), %d checked, %d findings\n' \
+  "$SENT_SCANNED" "$SENT_SKIPPED" "$SENT_SKIPPED" "$SENT_CHECKED" "$SPOOF_FINDINGS"
+if [ "$SENT_SCANNED" -ne $((SENT_SKIPPED + SENT_CHECKED)) ]; then
+  printf '%s: INTERNAL — sentinel-sweep accounting mismatch: %d != %d + %d\n' \
+    "$TEST_NAME" "$SENT_SCANNED" "$SENT_SKIPPED" "$SENT_CHECKED" >&2
+  exit 3
+fi
 if [ "$LOAD_SCANNED" -ne $((LOAD_SKIPPED + LOAD_CHECKED)) ]; then
   printf '%s: INTERNAL — load-guard accounting mismatch: %d != %d + %d\n' \
     "$TEST_NAME" "$LOAD_SCANNED" "$LOAD_SKIPPED" "$LOAD_CHECKED" >&2
