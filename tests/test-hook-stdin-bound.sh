@@ -510,9 +510,16 @@ fi
 # A FRESH root, because the runs above leave state in $PROJ (one rewrites config.json).
 LOAD_PROJ="$SCRATCH/loadproj"
 mkdir -p "$LOAD_PROJ/nazgul/tasks" "$LOAD_PROJ/nazgul/logs"
+# lean-comments: allow-run — the reset does two jobs and only the first is obvious.
 # Rewritten before EVERY measurement: some of these hooks update config.json as part
 # of doing their job, and a differential is only a differential over the same inputs.
+# CLEARED as well, because session-context.sh is the one DEC_OPAQUE hook: its stdout is compared
+# VERBATIM across the clean run and every spoofed one, and session locks, logs and the migration
+# .bak that suppresses the migration notice all ACCUMULATE between runs. Measured stable over 18
+# runs before this change; measurement is not enforcement, and the reset is what enforces it.
 _reset_load_proj() {
+  rm -rf "$LOAD_PROJ/nazgul"
+  mkdir -p "$LOAD_PROJ/nazgul/tasks" "$LOAD_PROJ/nazgul/logs"
   printf '%s\n' '{"feat_id":"T","mode":"hitl","install_mode":"local","execution":{"parallel":true}}' \
     > "$LOAD_PROJ/nazgul/config.json"
 }
