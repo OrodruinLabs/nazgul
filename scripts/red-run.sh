@@ -10,7 +10,20 @@ set -euo pipefail
 # script's core job — not a warning.
 #
 # Usage: scripts/red-run.sh <TASK-ID> [--filter=<name>] [--project-root=<path>]
-#                           [--copy=<path> ...]
+#                           [--state-root=<path>] [--copy=<path> ...]
+#
+# TWO roots, deliberately not one. `--project-root` is the CODE tree: the tree
+# whose HEAD, diff and test files this capture runs against, which for a task
+# dispatched into a worktree is that worktree. `--state-root` is the STATE tree:
+# where `nazgul/` lives. They coincide in an ordinary checkout and diverge in a
+# linked worktree, because `nazgul/` is gitignored and therefore exists in no
+# linked worktree at all. Collapsing them picks one defect or the other: reading
+# state from the code tree finds no manifest, and running the code-tree checks
+# from the state tree compares this task's Base SHA against the WRONG HEAD and
+# derives the copy set from the wrong diff — which surfaces as exit 2 VACUOUS on
+# a test that is in fact correct. The state root resolves explicit -> derived
+# (git's own main working tree, marker-validated) -> named refusal; it never
+# falls back to the code tree in silence.
 #
 # The filter defaults to the first `--filter=<name>` named in the manifest's
 # `## Test Obligation` section. There is no full-suite mode: the ~300s per-task
@@ -87,7 +100,7 @@ die_code() {
 }
 
 usage() {
-  echo "Usage: scripts/red-run.sh <TASK-ID> [--filter=<name>] [--project-root=<path>] [--copy=<path> ...]"
+  echo "Usage: scripts/red-run.sh <TASK-ID> [--filter=<name>] [--project-root=<path>] [--state-root=<path>] [--copy=<path> ...]"
 }
 
 # The value IS the argv, so correct argv handling is exactly why it does not
@@ -129,11 +142,13 @@ RR_DEFAULT_FILTER_TEMPLATE="--filter={filter}"
 TASK_ID=""
 FILTER=""
 PROJECT_ROOT=""
+STATE_ROOT_ARG=""
 EXPLICIT_COPY=""
 for arg in "$@"; do
   case "$arg" in
     --filter=*) FILTER="${arg#--filter=}" ;;
     --project-root=*) PROJECT_ROOT="${arg#--project-root=}" ;;
+    --state-root=*) STATE_ROOT_ARG="${arg#--state-root=}" ;;
     --copy=*) EXPLICIT_COPY="${EXPLICIT_COPY}${arg#--copy=}
 " ;;
     -h|--help) usage; exit 0 ;;
@@ -153,11 +168,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=./lib/destructive-patterns.sh
 source "$SCRIPT_DIR/lib/destructive-patterns.sh"
 
+_RR_ROOT_LIB="$SCRIPT_DIR/lib/nazgul-root.sh"
+if [ -f "$_RR_ROOT_LIB" ]; then
+  # shellcheck source=./lib/nazgul-root.sh
+  source "$_RR_ROOT_LIB"
+fi
+
 if [ -z "$PROJECT_ROOT" ]; then
-  _RR_ROOT_LIB="$SCRIPT_DIR/lib/nazgul-root.sh"
-  if [ -f "$_RR_ROOT_LIB" ]; then
-    # shellcheck source=./lib/nazgul-root.sh
-    source "$_RR_ROOT_LIB"
+  if declare -F resolve_project_root >/dev/null 2>&1; then
     PROJECT_ROOT="$(resolve_project_root)"
   else
     PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -165,6 +183,52 @@ if [ -z "$PROJECT_ROOT" ]; then
 fi
 [ -d "$PROJECT_ROOT" ] || die "project root does not exist: $PROJECT_ROOT"
 PROJECT_ROOT="$(cd "$PROJECT_ROOT" && pwd -P)"
+
+# The marker rule is nazgul-root.sh's, borrowed rather than restated; an install
+# missing that library cannot validate a derived root and says so instead.
+rr_has_state_marker() {
+  declare -F _nr_has_marker >/dev/null 2>&1 || return 1
+  _nr_has_marker "$1"
+}
+
+# git's own answer for "the main working tree of this checkout". Read with sed,
+# not `awk '{print $2}'`: a porcelain path is unquoted and may contain spaces.
+rr_main_worktree() {
+  local out
+  out=$(git -C "$PROJECT_ROOT" worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p') || return 0
+  [ -n "$out" ] || return 0
+  (cd "$out" 2>/dev/null && pwd -P) || true
+}
+
+STATE_ROOT=""
+STATE_ROOT_SOURCE=""
+if [ -n "$STATE_ROOT_ARG" ]; then
+  [ -d "$STATE_ROOT_ARG" ] || die "state root does not exist: $STATE_ROOT_ARG"
+  STATE_ROOT="$(cd "$STATE_ROOT_ARG" && pwd -P)"
+  STATE_ROOT_SOURCE="--state-root"
+else
+  RR_MAIN_WORKTREE="$(rr_main_worktree)"
+  if [ -z "$RR_MAIN_WORKTREE" ] || [ "$RR_MAIN_WORKTREE" = "$PROJECT_ROOT" ]; then
+    # Not a linked worktree (or git cannot say), so there are no two trees to tell
+    # apart and this is exactly the pre-split behaviour.
+    STATE_ROOT="$PROJECT_ROOT"
+    STATE_ROOT_SOURCE="the project root, which is not a linked worktree"
+  elif rr_has_state_marker "$RR_MAIN_WORKTREE"; then
+    STATE_ROOT="$RR_MAIN_WORKTREE"
+    STATE_ROOT_SOURCE="derived from git: the main working tree of $PROJECT_ROOT"
+    echo "red-run: $PROJECT_ROOT is a linked worktree; runtime state read from its main working tree $STATE_ROOT" >&2
+  elif rr_has_state_marker "$PROJECT_ROOT"; then
+    STATE_ROOT="$PROJECT_ROOT"
+    STATE_ROOT_SOURCE="the linked worktree's own initialised nazgul/"
+  else
+    die \
+      "cannot determine which tree holds this project's runtime state." \
+      "$PROJECT_ROOT is a linked worktree, and neither it nor its main working tree ($RR_MAIN_WORKTREE) holds a readable nazgul/config.json." \
+      "nazgul/ is gitignored, so a linked worktree carries no copy of the manifest this capture must read and write." \
+      "Name it with --state-root=<main_worktree_path>. Refusing to fall back to the code tree: that read finds no manifest, and the same wrong tree would supply project.test_roots." \
+      "This is not a red run that failed — nothing was run at all."
+  fi
+fi
 
 validate_copy_path() {
   local rel="$1" source parent
@@ -182,8 +246,10 @@ validate_copy_path() {
     "copy path resolves outside this project's test roots [$RR_ROOTS_LIST]: $rel"
 }
 
-MANIFEST="$PROJECT_ROOT/nazgul/tasks/$TASK_ID.md"
-[ -f "$MANIFEST" ] || die "no manifest at $MANIFEST"
+MANIFEST="$STATE_ROOT/nazgul/tasks/$TASK_ID.md"
+[ -f "$MANIFEST" ] || die \
+  "no manifest at $MANIFEST" \
+  "State tree resolved from $STATE_ROOT_SOURCE; code tree is $PROJECT_ROOT."
 
 command -v git >/dev/null 2>&1 || die "git is not available — a red run cannot be captured without it"
 git -C "$PROJECT_ROOT" rev-parse --git-dir >/dev/null 2>&1 \
@@ -209,13 +275,13 @@ fi
   "no scoped filter given and none found in $TASK_ID's ## Test Obligation section." \
   "Pass --filter=<name>; a full-suite red run is out of the per-task time budget."
 
-# Config lives under the gitignored `nazgul/`, so it is read from the LIVE project
-# root and never from the detached pre-change worktree, which has no copy of it.
-RR_CONFIG="$PROJECT_ROOT/nazgul/config.json"
+# `nazgul/` is gitignored, so config is read from the STATE tree — never from the
+# detached pre-change worktree, and never from a linked worktree that has no copy.
+RR_CONFIG="$STATE_ROOT/nazgul/config.json"
 
 # shellcheck source=./lib/task-transition-guard.sh
 source "$SCRIPT_DIR/lib/task-transition-guard.sh"
-if ! _ttg_red_run_roots "$PROJECT_ROOT" "$PROJECT_ROOT/nazgul"; then
+if ! _ttg_red_run_roots "$PROJECT_ROOT" "$STATE_ROOT/nazgul"; then
   die \
     "project.test_roots in $RR_CONFIG is $_TTG_ROOTS_DETAIL, so this project's test roots cannot be determined." \
     "The evidence gate fails closed on the same value, so a capture against a guessed root would write evidence that gate then rejects." \

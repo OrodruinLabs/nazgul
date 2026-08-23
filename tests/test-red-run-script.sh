@@ -1549,6 +1549,176 @@ if command -v jq >/dev/null 2>&1; then
     "$RRA_CHECKED" "$RRA_SCANNED"
 fi
 
+# FEAT-031/TASK-046: two roots. `nazgul/` is gitignored, so a linked worktree holds
+# no copy of it, and the state tree has to be resolved apart from the code tree.
+RRW_SCANNED=0
+RRW_SKIPPED=0
+RRW_NOJQ=0
+RRW_CHECKED=0
+RRW_FINDINGS=0
+RRW_MARK=0
+RRW_PARENT=""
+RRW_MAIN=""
+RRW_WT=""
+
+rrw_begin() {
+  RRW_SCANNED=$((RRW_SCANNED + 1))
+  if ! command -v jq >/dev/null 2>&1; then
+    RRW_SKIPPED=$((RRW_SKIPPED + 1))
+    RRW_NOJQ=$((RRW_NOJQ + 1))
+    _skip "two roots: $1 (jq unavailable — red-run cannot read a project config)"
+    return 1
+  fi
+  RRW_CHECKED=$((RRW_CHECKED + 1))
+  RRW_MARK="$TESTS_FAILED"
+  return 0
+}
+rrw_end() {
+  [ "$TESTS_FAILED" -eq "$RRW_MARK" ] || RRW_FINDINGS=$((RRW_FINDINGS + 1))
+}
+
+# $1 names the directory the main tree is created under, so a caller can put a
+# space in the path git's porcelain output has to survive.
+rrw_setup() {
+  local host="$1" saved="${TMPDIR-}"
+  RRW_PARENT=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-rrw-XXXXXX")
+  RRW_PARENT=$(cd "$RRW_PARENT" && pwd -P)
+  mkdir -p "$RRW_PARENT/$host"
+  TMPDIR="$RRW_PARENT/$host"
+  setup_project
+  if [ -n "$saved" ]; then TMPDIR="$saved"; else unset TMPDIR; fi
+
+  printf 'nazgul/\n' > "$TEST_DIR/.gitignore"
+  git -C "$TEST_DIR" add .gitignore
+  git -C "$TEST_DIR" commit -q -m "gitignore runtime state"
+  HEAD_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+  printf '{"project":{}}\n' > "$TEST_DIR/nazgul/config.json"
+
+  TEST_DIR=$(cd "$TEST_DIR" && pwd -P)
+  RRW_MAIN="$TEST_DIR"
+  RRW_WT="$RRW_PARENT/task-worktree"
+  git -C "$RRW_MAIN" worktree add -q --detach "$RRW_WT" HEAD
+  RRW_WT=$(cd "$RRW_WT" && pwd -P)
+}
+
+rrw_teardown() {
+  if [ -n "$RRW_MAIN" ] && [ -d "$RRW_MAIN" ]; then
+    git -C "$RRW_MAIN" worktree list --porcelain 2>/dev/null \
+      | sed -n 's/^worktree //p' | while IFS= read -r _wt; do
+        [ "$_wt" = "$RRW_MAIN" ] && continue
+        git -C "$RRW_MAIN" worktree remove --force "$_wt" >/dev/null 2>&1 || true
+      done
+    git -C "$RRW_MAIN" worktree prune >/dev/null 2>&1 || true
+  fi
+  [ -n "$RRW_PARENT" ] && rm -rf "$RRW_PARENT"
+  RRW_PARENT=""; RRW_MAIN=""; RRW_WT=""
+}
+
+rrw_capture() {
+  RR_OUT=$(bash "$RED_RUN" "$@" 2>&1)
+  RR_EC=$?
+}
+
+if rrw_begin "the documented invocation completes from a task worktree"; then
+  rrw_setup repo
+  write_manifest TASK-201 "$BASE_SHA"
+  # Present in the CODE tree only, so a capture deriving its copy set from the
+  # state tree cannot see it — the wholesale-repoint trap on a second mechanism.
+  cat > "$RRW_WT/tests/test-alpha-codetree-only.sh" <<'CODETREE'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "=== test-alpha-codetree-only ==="
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/scripts/feature.sh" ]; then
+  echo "  PASS: feature.sh reached the pre-change tree"
+  exit 0
+fi
+echo "  FAIL: feature.sh reached the pre-change tree"
+exit 1
+CODETREE
+  rrw_capture TASK-201 --filter=alpha --project-root="$RRW_WT"
+  assert_exit_code "two roots: --project-root=<task worktree> completes" "$RR_EC" 0
+  assert_contains "two roots: RED confirmed" "$RR_OUT" "RED confirmed for TASK-201"
+  assert_not_contains "two roots: no longer refuses on a manifest the code tree cannot hold" \
+    "$RR_OUT" "no manifest at"
+  assert_contains "two roots: names the tree the state came from" \
+    "$RR_OUT" "runtime state read from its main working tree"
+  assert_file_contains "two roots: the block lands in the MAIN tree's manifest" \
+    "$RRW_MAIN/nazgul/tasks/TASK-201.md" 'red-run: tests/test-alpha.sh'
+  assert_file_contains "two roots: the copy set is derived from the CODE tree's working tree" \
+    "$RRW_MAIN/nazgul/tasks/TASK-201.md" 'red-run: tests/test-alpha-codetree-only.sh'
+  assert_dir_not_exists "two roots: no nazgul/ is created in the task worktree" "$RRW_WT/nazgul"
+  rrw_end
+  rrw_teardown
+fi
+
+if rrw_begin "the ancestry check still reads the CODE tree's HEAD"; then
+  rrw_setup repo
+  RRW_STALE="$RRW_PARENT/stale-worktree"
+  git -C "$RRW_MAIN" worktree add -q --detach "$RRW_STALE" "$BASE_SHA"
+  write_manifest TASK-202 "$HEAD_SHA"
+  rrw_capture TASK-202 --filter=alpha --project-root="$RRW_STALE"
+  assert_exit_code "two roots: a code tree behind the Base SHA is still refused" "$RR_EC" 1
+  assert_contains "two roots: the refusal is the ancestry rule, unchanged" \
+    "$RR_OUT" "is not an ancestor of HEAD"
+  rrw_end
+  rrw_teardown
+fi
+
+if rrw_begin "--state-root names the state tree explicitly"; then
+  rrw_setup repo
+  write_manifest TASK-203 "$BASE_SHA"
+  rrw_capture TASK-203 --filter=alpha --project-root="$RRW_WT" --state-root="$RRW_MAIN"
+  assert_exit_code "two roots: an explicit state root completes" "$RR_EC" 0
+  assert_file_contains "two roots: the explicit state root receives the block" \
+    "$RRW_MAIN/nazgul/tasks/TASK-203.md" 'red-run: tests/test-alpha.sh'
+  rrw_capture TASK-203 --filter=alpha --project-root="$RRW_WT" --state-root="$RRW_WT"
+  assert_exit_code "two roots: a wrong explicit state root is not silently corrected" "$RR_EC" 1
+  assert_contains "two roots: and the refusal names the tree it was told to read" \
+    "$RR_OUT" "no manifest at $RRW_WT/nazgul/tasks/TASK-203.md"
+  rrw_end
+  rrw_teardown
+fi
+
+if rrw_begin "an unresolvable state tree is a named refusal, not a silent fallback"; then
+  rrw_setup repo
+  rm -f "$RRW_MAIN/nazgul/config.json"
+  write_manifest TASK-204 "$BASE_SHA"
+  rrw_capture TASK-204 --filter=alpha --project-root="$RRW_WT"
+  assert_exit_code "two roots: refuses when no candidate tree validates" "$RR_EC" 1
+  assert_contains "two roots: the refusal names the remedy" "$RR_OUT" "--state-root=<main_worktree_path>"
+  assert_contains "two roots: and says nothing was run" "$RR_OUT" "nothing was run at all"
+  assert_not_contains "two roots: never quietly reads state from the code tree" \
+    "$RR_OUT" "no manifest at"
+  rrw_end
+  rrw_teardown
+fi
+
+if rrw_begin "the derivation survives a main worktree path containing a space"; then
+  rrw_setup "Software Development"
+  write_manifest TASK-205 "$BASE_SHA"
+  rrw_capture TASK-205 --filter=alpha --project-root="$RRW_WT"
+  assert_exit_code "two roots: a space in the main worktree path still resolves" "$RR_EC" 0
+  assert_contains "two roots: the derived root is the whole path, not its first word" \
+    "$RR_OUT" "main working tree $RRW_MAIN"
+  rrw_end
+  rrw_teardown
+fi
+
+if rrw_begin "project.test_roots is read from the state tree"; then
+  rrw_setup repo
+  printf '{"project":{"test_roots":[]}}\n' > "$RRW_MAIN/nazgul/config.json"
+  write_manifest TASK-206 "$BASE_SHA"
+  rrw_capture TASK-206 --filter=alpha --project-root="$RRW_WT"
+  assert_exit_code "two roots: an unusable test_roots refuses" "$RR_EC" 1
+  assert_contains "two roots: the config it read is the state tree's" \
+    "$RR_OUT" "project.test_roots in $RRW_MAIN/nazgul/config.json"
+  rrw_end
+  rrw_teardown
+fi
+
+echo "  two roots: ${RRW_SCANNED} scanned, ${RRW_SKIPPED} skipped (jq-unavailable=${RRW_NOJQ}), ${RRW_CHECKED} checked, ${RRW_FINDINGS} findings"
+assert_eq "two roots: scanned == skipped + checked" "$RRW_SCANNED" "$((RRW_SKIPPED + RRW_CHECKED))"
+
 setup_temp_dir
 
 teardown_temp_dir

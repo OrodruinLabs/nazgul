@@ -386,6 +386,18 @@ the only sanctioned producer could not generate, and the operator's only remaini
 hand-author a block carrying no `captured-by:` provenance. red-run refuses by name on the same
 undeterminable set the gate blocks on, rather than falling back to `tests/` behind the operator's back.
 
+**Two roots, not one.** `--project-root` is the CODE tree — the tree whose `HEAD`, diff and test files
+the capture runs against, which for a task dispatched into a worktree is that worktree. `--state-root`
+is the STATE tree, where `nazgul/` lives. They coincide in an ordinary checkout and diverge in a linked
+worktree, because `nazgul/` is gitignored and so exists in no linked worktree at all. Collapsing them
+picks one defect or the other: reading state from the code tree finds no manifest, and running the
+code-tree checks from the state tree compares this task's Base SHA against the WRONG `HEAD` and derives
+the copy set from the wrong diff — which surfaces as exit `2` VACUOUS on a test that is in fact correct,
+whose documented remedy is to rewrite the correct test. Omit `--state-root` and red-run derives it from
+git's own main working tree, validated by the same `nazgul/config.json` marker `scripts/lib/nazgul-root.sh`
+uses; if neither tree carries that marker it refuses by name and runs nothing, rather than silently
+falling back to the code tree.
+
 **How `scripts/red-run.sh` reads YOUR runner's exit code — declared, not inferred.** Only exit `0` is
 universal: a pre-change run that passes is vacuous whatever produced it. Exit `2` and `3` are
 `tests/run-tests.sh`'s own contract and are read as its two "did not really run" states; another

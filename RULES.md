@@ -1027,7 +1027,8 @@ FEAT-030/ADR-021 states the rule; this section records what enforces each clause
 2. **The resolver stays, and it is not interchangeable with this rule.** `[advisory]`
    `CLAUDE_PROJECT_DIR` is the bridge between the two populations. `scripts/lib/nazgul-root.sh` is
    unchanged and ADR-008 stands; agents invoking a Nazgul script pass `CLAUDE_PROJECT_DIR="<main_worktree_path>"` (or
-   `--project-root=<main_worktree_path>` for `scripts/red-run.sh`), which lands on the resolver's
+   `--state-root=<main_worktree_path>` for `scripts/red-run.sh`, whose `--project-root` is the CODE tree
+   and is the TASK worktree), which lands on the resolver's
    unconditional first branch. A third mechanism was deliberately NOT invented, and the reason is
    specific: from a task worktree with `nazgul/` gitignored — this install's own configuration —
    `resolve_project_root()` returns the TASK WORKTREE, because no `<candidate>/nazgul/config.json`
