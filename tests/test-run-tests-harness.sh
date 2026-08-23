@@ -156,5 +156,44 @@ else
   _fail "self-assertion: mutation applied to the runner copy" "sed matched nothing — the test would be vacuous"
 fi
 
+# FEAT-031/TASK-046: a test file that drains stdin must not inherit the harness's
+# own — measured by elapsed drain against a pipe deliberately held open.
+STDIN_HOLD_SECONDS=3
+SB_STDIN="$TMP_ROOT/stdin"
+mkdir -p "$SB_STDIN/tests"
+cp "$RUNNER" "$SB_STDIN/tests/run-tests.sh"
+chmod +x "$SB_STDIN/tests/run-tests.sh"
+cat > "$SB_STDIN/tests/test-stdin-drain.sh" <<'DRAIN'
+#!/usr/bin/env bash
+echo "=== test-stdin-drain ==="
+_started=$(date +%s)
+cat >/dev/null 2>&1 || true
+echo "  drain-seconds=$(( $(date +%s) - _started ))"
+echo "  PASS: stdin drained"
+exit 0
+DRAIN
+chmod +x "$SB_STDIN/tests/test-stdin-drain.sh"
+
+_drain_seconds() { printf '%s\n' "$1" | sed -n 's/.*drain-seconds=//p' | head -1; }
+
+# Control first: the probe can turn red. Handed the same open pipe with no
+# redirect in front of it, the very same file blocks for the whole hold.
+CTL_OUT=$( { sleep "$STDIN_HOLD_SECONDS"; } | bash "$SB_STDIN/tests/test-stdin-drain.sh" 2>&1 )
+CTL_DRAIN=$(_drain_seconds "$CTL_OUT")
+if [ -n "$CTL_DRAIN" ] && [ "$CTL_DRAIN" -ge 2 ]; then
+  _pass "stdin: the probe detects an inherited open pipe (control drained ${CTL_DRAIN}s)"
+else
+  _fail "stdin: the probe detects an inherited open pipe" "control drain-seconds='${CTL_DRAIN}' — the probe cannot turn red, so the assertion below is vacuous"
+fi
+
+RUN_OUT=$( { sleep "$STDIN_HOLD_SECONDS"; } | bash "$SB_STDIN/tests/run-tests.sh" --filter=stdin-drain 2>&1 )
+RUN_DRAIN=$(_drain_seconds "$RUN_OUT")
+if [ -n "$RUN_DRAIN" ] && [ "$RUN_DRAIN" -le 1 ]; then
+  _pass "stdin: the runner hands each test file a stdin already at EOF (drained ${RUN_DRAIN}s)"
+else
+  _fail "stdin: the runner hands each test file a stdin already at EOF" "drain-seconds='${RUN_DRAIN}' — the test file inherited the harness's open stdin"
+fi
+assert_contains "stdin: the drain probe still ran" "$RUN_OUT" "PASS: stdin drained"
+
 report_results
 exit $?

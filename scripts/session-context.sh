@@ -24,14 +24,11 @@ if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
-# Session identity resolution (TASK-006/FEAT-026). CLAUDE_SESSION_ID is not
-# set in the SessionStart hook env, so the fallback chain reads the real id
-# out of the hook's own JSON payload on stdin first: payload .session_id ->
-# CLAUDE_SESSION_ID -> persisted nazgul/.session_id -> synthetic epoch-pid
-# (last resort, matched by the digits-hyphen-digits shape below). Read
-# guarded by a TTY check + tolerant cat, mirroring
-# teammate-idle-guard.sh/subagent-stop.sh so this never hangs the hook.
+# CLAUDE_SESSION_ID is unset in the SessionStart hook env, so the real id is read
+# from the hook's own JSON payload first; the rest of the chain is the code below.
 STDIN_PAYLOAD=""
+# The TTY check prevents a hand-invocation hang only. A pipe that never closes
+# still blocks here — measured, exit 124, as in all 13 such hooks (#229).
 if [ ! -t 0 ]; then
   STDIN_PAYLOAD=$(cat 2>/dev/null || echo "")
 fi

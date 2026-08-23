@@ -58,7 +58,7 @@ for test_file in "$SCRIPT_DIR"/test-*.sh; do
   CHECKED=$((CHECKED + 1))
   echo ""
 
-  if bash "$test_file"; then
+  if bash "$test_file" </dev/null; then
     PASSED_FILES=$((PASSED_FILES + 1))
   else
     FAILED_FILES=$((FAILED_FILES + 1))
