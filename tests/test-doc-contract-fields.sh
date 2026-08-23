@@ -45,6 +45,18 @@ BOUNDED_NET_LIB="${NAZGUL_DOC_CONTRACT_BOUNDED_NET:-$REPO_ROOT/scripts/lib/bound
 READ_PAYLOAD_LIB="${NAZGUL_DOC_CONTRACT_READ_PAYLOAD:-$REPO_ROOT/scripts/lib/read-hook-payload.sh}"
 EVENT_SIZE_RE='[A-Za-z0-9]+ lifecycle event types'
 STOP_REASON_SIZE_RE='[A-Za-z0-9]+ stop_gate reasons'
+# lean-comments: allow-run — the producer POPULATION moved from these lists to the tree, and what
+# the lists still do is not what a reader would assume from their contents.
+# The population is DERIVED below, so a producer file elsewhere is a finding rather than an
+# omission. These two lists are ONLY the injection seam's shipped stand-ins, excluded from the
+# tree scan so a mutation test's mutant is never masked by the shipped file it replaces — and a
+# stale name here is self-announcing, because that file's own mutation test goes red.
+EVENT_INJECTED="scripts/close-objective.sh scripts/stop-hook.sh scripts/board-sync-github.sh scripts/stamp-plan-objective.sh scripts/lib/review-evidence.sh scripts/lib/bounded-net.sh scripts/lib/read-hook-payload.sh scripts/lib/task-transition-guard.sh"
+STOP_INJECTED="scripts/stop-hook.sh scripts/worktree-utils.sh scripts/lib/stack-utils.sh"
+# Discovery is a deliberate SUPERSET of extraction: a file matching loosely but carrying no
+# literal name contributes nothing, whereas a strict discovery regex would hide a whole file.
+EVENT_PRODUCER_RE='(_ttg_emit_event|_bnet_emit|_su_emit|emit_event) "'
+STOP_PRODUCER_RE='(emit_event|_su_emit) "stop_gate"'
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-doc-contract-XXXXXX")
 trap 'rm -rf "$SCRATCH"' EXIT
@@ -89,19 +101,32 @@ _derive_skip_reasons() {
     | awk 'NR == 1' | grep -oE '[a-z-]+=%d' | sed -E 's/=%d$//'
 }
 
-# lean-comments: allow-run — the anchor's inclusion and its exclusion are both silent, so
-# both are stated where they are made.
+# lean-comments: allow-run — the anchor's inclusions and its one exclusion are all silent, so
+# each is stated where it is made.
 # The event NAME vocabulary these producers emit, off the first LITERAL argument of
-# emit_event/_ttg_emit_event/_bnet_emit; a variable-only call (`emit_event "$event"`) is a
-# passthrough, excluded by the anchor. `_bnet_emit` is named here because it is exactly that
-# passthrough — bounded-net.sh's own names are literal only at its wrapper's call sites, so a
-# producer set that stops at `emit_event` reads that library as emitting nothing.
+# emit_event/_ttg_emit_event/_bnet_emit/_su_emit; a variable-only call (`emit_event "$event"`) is
+# a passthrough, excluded by the anchor. `_bnet_emit` and `_su_emit` are named because they ARE
+# that passthrough — their libraries' names are literal only at those wrappers' call sites, so an
+# anchor stopping at `emit_event` reads a library with ten event types as emitting none.
+# `_mp_emit` is a fourth such wrapper and is deliberately NOT here: its names are their own
+# derived, separately documented family, and folding them in would count the same names twice.
 _derive_events() {
   local f
   for f in "$@"; do
     [ -r "$f" ] || continue
-    grep -oE '_ttg_emit_event "\$[A-Za-z_][A-Za-z_0-9]*" "[a-z_]+"|_bnet_emit "[a-z_]+"|emit_event "[a-z_]+"' "$f"
+    grep -oE '_ttg_emit_event "\$[A-Za-z_][A-Za-z_0-9]*" "[a-z_]+"|_bnet_emit "[a-z_]+"|_su_emit "[a-z_]+"|emit_event "[a-z_]+"' "$f"
   done | sed -E 's/.*"([a-z_]+)"$/\1/' | LC_ALL=C sort -u
+}
+
+# _tree_producers <discovery-re> <excluded-rel-paths> — every file under scripts/ carrying the
+# shape, minus the injection seam's stand-ins, as absolute paths.
+_tree_producers() {
+  local re="$1" exclude=" $2 " rel
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    case "$exclude" in *" $rel "*) continue ;; esac
+    printf '%s\n' "$REPO_ROOT/$rel"
+  done <<< "$(cd "$REPO_ROOT" && grep -rlE "$re" scripts 2>/dev/null | LC_ALL=C sort)"
 }
 
 # lean-comments: allow-run — the regex's two silent exclusions, stated where they are made.
@@ -331,6 +356,17 @@ _check_tier() {
 _scan_docs() {
   local name_root="$1" content_root="$2" guard_lib="$3"
   local doc path region flat passage pflat f fam fam_n word got idx ord tiers claimed per_doc
+  local p; local -a ev_producers sr_producers
+
+  ev_producers=("$EVENT_CO_LIB" "$STOP_HOOK_LIB" "$BOARD_SYNC_LIB" "$STAMP_PLAN_LIB" \
+    "$REVIEW_EVIDENCE_LIB" "$BOUNDED_NET_LIB" "$READ_PAYLOAD_LIB" "$guard_lib")
+  sr_producers=("$STOP_HOOK_LIB" "$WORKTREE_UTILS_LIB" "$STACK_UTILS_LIB")
+  while IFS= read -r p; do [ -n "$p" ] && ev_producers+=("$p"); done \
+    < <(_tree_producers "$EVENT_PRODUCER_RE" "$EVENT_INJECTED")
+  while IFS= read -r p; do [ -n "$p" ] && sr_producers+=("$p"); done \
+    < <(_tree_producers "$STOP_PRODUCER_RE" "$STOP_INJECTED")
+  EVENT_PRODUCER_N=${#ev_producers[@]}
+  STOP_PRODUCER_N=${#sr_producers[@]}
 
   FIELDS=$(_derive_fields "$guard_lib")
   REASONS=$(_derive_reasons "$guard_lib")
@@ -338,9 +374,8 @@ _scan_docs() {
   MP_EVENTS=$(_derive_mp_events "$MP_LIB")
   RED_RUN=$(_derive_red_run "$guard_lib")
   SKIP_REASONS=$(_derive_skip_reasons "$CLOSER")
-  EVENTS=$(_derive_events "$EVENT_CO_LIB" "$STOP_HOOK_LIB" "$BOARD_SYNC_LIB" "$STAMP_PLAN_LIB" \
-    "$REVIEW_EVIDENCE_LIB" "$BOUNDED_NET_LIB" "$READ_PAYLOAD_LIB" "$guard_lib")
-  STOP_REASONS=$(_derive_stop_reasons "$STOP_HOOK_LIB" "$WORKTREE_UTILS_LIB" "$STACK_UTILS_LIB")
+  EVENTS=$(_derive_events "${ev_producers[@]}")
+  STOP_REASONS=$(_derive_stop_reasons "${sr_producers[@]}")
   MEMBERS=$(_derive_registry_members "$content_root/RULES.md" 2>/dev/null)
   FIELD_N=$(printf '%s\n' "$FIELDS" | tr ' ' '\n' | grep -c '[^[:space:]]' || true)
   REASON_N=$(printf '%s\n' "$REASONS" | grep -c '[^[:space:]]' || true)
@@ -522,9 +557,9 @@ if [ -z "$FIELDS" ] || [ -z "$REASONS" ] || [ -z "$MP_RESULTS" ] || [ -z "$MP_EV
 fi
 _pass "the merge contract is derived from the gate library ($FIELD_N fields, $REASON_N refusal reasons)"
 _pass "the merge-observation seam's vocabularies are derived from its own call sites ($MP_RESULT_N results, $MP_EVENT_N events)"
-_pass "the stop_gate reason vocabulary is derived from its three producers' call sites ($STOP_REASON_N reasons)"
+_pass "the stop_gate reason vocabulary is derived from the tree's own producers' call sites ($STOP_REASON_N reasons over $STOP_PRODUCER_N producers)"
 _pass "the §15 registry is derived from RULES.md's own bullet ($MEMBER_N members)"
-_pass "the lifecycle event-name vocabulary is derived from its own producers' call sites ($EVENT_N events)"
+_pass "the lifecycle event-name vocabulary is derived from the tree's own producers' call sites ($EVENT_N events over $EVENT_PRODUCER_N producers)"
 
 # One denominator, two readers. tests/test-red-run-evidence.sh pins the same vocabulary against the
 # same source; if its copy and this one ever disagree, the disagreement is the finding.
@@ -892,6 +927,12 @@ BOUNDED_NET_LIB="$MUT_BNET"
 _scan_docs "$REPO_ROOT" "$REPO_ROOT" "$GUARD_LIB"
 assert_eq "[mutation] a plant at the _bnet_emit wrapper really adds one more event type" \
   "$EVENT_N" "$((SHIPPED_EVENT_N + 1))"
+if [ "$FD_event" -ge 1 ] && [ "$FINDINGS" -eq $((FD_event + FD_eventcount)) ]; then
+  _pass "[mutation] a wrapper plant with no doc update goes red through a bare list, and nothing else ($FD_event name, $FD_eventcount count findings)"
+else
+  _fail "[mutation] a wrapper plant with no doc update goes red through a bare list, and nothing else" \
+    "event findings=$FD_event, eventcount findings=$FD_eventcount, total findings=$FINDINGS"
+fi
 case "$FDL_event" in
   *ev_bnet_planted*) _pass "[mutation] the event finding names the emitter the mutant wrapper added" ;;
   *) _fail "[mutation] the event finding names the emitter the mutant wrapper added" \
@@ -899,11 +940,11 @@ case "$FDL_event" in
 esac
 BOUNDED_NET_LIB="$SHIPPED_BOUNDED_NET_LIB"
 _scan_docs "$REPO_ROOT" "$REPO_ROOT" "$GUARD_LIB"
-if [ "$FD_event" -eq 0 ] && [ "$EVENT_N" -eq "$SHIPPED_EVENT_N" ]; then
+if [ "$FD_event" -eq 0 ] && [ "$FD_eventcount" -eq 0 ] && [ "$EVENT_N" -eq "$SHIPPED_EVENT_N" ]; then
   _pass "[mutation] removing the wrapper plant returns zero event findings ($EVENT_N events, matching the shipped count)"
 else
   _fail "[mutation] removing the wrapper plant returns zero event findings" \
-    "event findings=$FD_event, event_n=$EVENT_N (want $SHIPPED_EVENT_N)"
+    "event findings=$FD_event, eventcount findings=$FD_eventcount, event_n=$EVENT_N (want $SHIPPED_EVENT_N)"
 fi
 
 # SR1-SR3: the same threshold rule over the stop_gate reason vocabulary, mirroring EV1-EV3
