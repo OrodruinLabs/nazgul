@@ -24,6 +24,29 @@ NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
 # shellcheck source=./lib/emit-event.sh
 source "$SCRIPT_DIR/lib/emit-event.sh"
+# shellcheck source=./lib/bounded-net.sh
+source "$SCRIPT_DIR/lib/bounded-net.sh"
+
+# lean-comments: allow-run — why this is a wrapper and not 25 edited call sites.
+# Every `gh` in this file routes through here, so no site can be added later that is
+# unbounded by omission (TASK-048). The resolved PATH is what gets executed: a bare
+# `gh` would re-enter this function, and `command gh` is a shell builtin `timeout`
+# cannot exec. An absent binary is named rather than reported as a failed API call.
+# `type -P`, never `command -v`: once the function below exists, `command -v gh`
+# answers "gh" (itself) on a host with no binary, and _GH_BIN would never be empty.
+# fd 9 is this script's REAL stderr, duped once: nearly every call site below silences gh
+# with its own 2>/dev/null, which would silence a fired bound along with it.
+exec 9>&2
+# shellcheck disable=SC2034  # read by _bnet_warn in the sourced scripts/lib/bounded-net.sh
+NZ_BOUNDED_WARN_FD=9
+_GH_BIN="$(type -P gh 2>/dev/null || true)"
+gh() {
+  if [ -z "$_GH_BIN" ]; then
+    _GH_BIN="$(type -P gh 2>/dev/null || true)"
+    [ -n "$_GH_BIN" ] || { log_error "gh is not on PATH — this is 'could not ask GitHub', not an answer from it"; return 127; }
+  fi
+  nz_bounded_run net "gh ${1:-} ${2:-} (board-sync)" "$_GH_BIN" "$@"
+}
 
 # Board order IS the authority's order (structured-state.sh): a restated copy here is how
 # APPROVED reached cmd_sync_task's label but neither the field, the migration, nor the check.
@@ -45,7 +68,9 @@ check_prereqs() {
     log_error "Nazgul not initialized (nazgul/config.json not found)"
     exit 1
   fi
-  if ! command -v gh >/dev/null 2>&1; then
+  # $_GH_BIN, not `command -v gh`: the bounding wrapper above IS a function named gh,
+  # so `command -v` reports it present on a host that has no binary at all.
+  if [ -z "$_GH_BIN" ]; then
     log_error "gh CLI not installed. Install: https://cli.github.com/"
     exit 1
   fi
@@ -68,6 +93,8 @@ update_config() {
   jq "$jq_filter" "$@" "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
 }
 
+# The COUNT was already capped at 3; the ATTEMPT is what TASK-048 bounded. Three
+# unbounded attempts is unbounded — each `gh` here goes through the wrapper above.
 gh_with_retry() {
   local attempts=3 delay=1
   for i in $(seq 1 "$attempts"); do
