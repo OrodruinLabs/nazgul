@@ -145,7 +145,18 @@ ttg_verify_commit_evidence() {
 
 # Closed, enumerated exemption list (FEAT-023/TASK-004 precedent: never a
 # pattern guess — an open-ended excuse field is an allow-everything field).
-_TTG_RED_RUN_NA_TOKENS="docs-only comment-only revert fixture-capture-only"
+_TTG_RED_RUN_NA_TOKENS="docs-only comment-only revert fixture-capture-only harness-undiscoverable"
+
+# lean-comments: allow-run — the fifth token's grammar differs from the other four's, and
+# the difference is the whole reason it is safe to add.
+# The one member that is FILE-SCOPED and CHECKED (TASK-048). The other four are operator
+# declarations about the task as a whole and exempt every changed test file; this one names
+# ONE file, discharges only that file, and is refused unless the gate can confirm the claim
+# against the runner's own discovery glob. Without that verification a fifth token would be
+# a general-purpose red-run bypass — strictly worse than the gap it closes, and the forgery
+# route ADR-020 shut. `red-run: <path> :: N/A — harness-undiscoverable`; the bare task-wide
+# form of this token is refused, because a claim naming no file can be checked against nothing.
+_TTG_RED_RUN_FILE_SCOPED_NA="harness-undiscoverable"
 
 # Last red-run verdict: one of the closed block-reason vocabulary below, or
 # verified/enumerated_na/not_applicable.
@@ -162,7 +173,7 @@ _ttg_emit_event() {
 }
 
 # Closed refusal vocabulary, eleven members. The call sites below are the source of truth and
-# tests/test-red-run-evidence.sh derives it from them; this copy is a reading aid, not the contract: absent absent_in_tree bad_na_token commented_out corrupt exit_zero not_ancestor ref_unresolvable roots_undeterminable roots_unresolved uncovered_test_file
+# tests/test-red-run-evidence.sh derives it from them; this copy is a reading aid, not the contract: absent absent_in_tree bad_na_token commented_out corrupt discoverable_test_file exit_zero not_ancestor ref_unresolvable roots_undeterminable roots_unresolved unbound_file_scoped_na uncovered_test_file undiscoverable_unverifiable
 
 # Emit a distinct red-run diagnostic/event; the kill switch suppresses only the block.
 _ttg_red_run_deny() {
@@ -176,8 +187,13 @@ _ttg_red_run_deny() {
     echo "ttg_verify_red_run_evidence: block suppressed by guards.red_run_evidence: false — the diagnostic and the red_run_missing event still fired" >&2
     return 0
   fi
-  # Remediation is derived from the token list, never a second copy of it.
-  echo "ttg_verify_red_run_evidence: capture it with scripts/red-run.sh, or declare an enumerated exemption: red-run: N/A — ${_TTG_RED_RUN_NA_TOKENS// /|}" >&2
+  # Both remediation forms are DERIVED from the one token list, never a second copy.
+  local wide="" t
+  for t in $_TTG_RED_RUN_NA_TOKENS; do
+    [ "$t" = "$_TTG_RED_RUN_FILE_SCOPED_NA" ] && continue
+    wide="${wide}${wide:+|}${t}"
+  done
+  echo "ttg_verify_red_run_evidence: capture it with scripts/red-run.sh, or declare an enumerated exemption: task-wide 'red-run: N/A — ${wide}', or per-file 'red-run: <path> :: N/A — ${_TTG_RED_RUN_FILE_SCOPED_NA}' (checked against the runner's own discovery glob)" >&2
   return 1
 }
 
@@ -468,6 +484,58 @@ _ttg_rr_never_copy() {
   return 1
 }
 
+_TTG_RR_GLOB=""
+_TTG_RR_GLOB_DIR=""
+_TTG_RR_GLOB_DETAIL=""
+
+# lean-comments: allow-run — why the glob is READ, and why there is no cross-tree fallback.
+# _ttg_rr_discovery_glob <project_root> -> the runner's OWN discovery glob and the directory
+# it globs, read from `run-tests.sh` in the tree under judgment. A second copy of
+# `tests/test-*.sh` here would drift silently the first time the runner's glob changed, and
+# this predicate exists precisely to make an operator's claim checkable rather than believed.
+# Deliberately NO fallback to the shipped runner beside this library: a project whose harness
+# is pytest would then have its paths judged against Nazgul's glob, and the file-scoped token
+# would admit exactly what it exists to refuse. Unreadable or unparseable is a REFUSAL upstream
+# (undiscoverable_unverifiable), never an admit — an unverifiable claim is a declaration again.
+_ttg_rr_discovery_glob() {
+  local project_root="$1" rel runner glob
+  _TTG_RR_GLOB=""; _TTG_RR_GLOB_DIR=""; _TTG_RR_GLOB_DETAIL=""
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    runner="$project_root/$rel/run-tests.sh"
+    [ -r "$runner" ] || continue
+    glob=$(sed -n 's|^[[:space:]]*for [A-Za-z_][A-Za-z0-9_]*[[:space:]][[:space:]]*in[[:space:]][[:space:]]*"\$[A-Za-z_][A-Za-z0-9_]*"/\([^[:space:];]*\)[[:space:]]*;[[:space:]]*do.*$|\1|p' "$runner" 2>/dev/null | head -1)
+    if [ -z "$glob" ]; then
+      _TTG_RR_GLOB_DETAIL="${rel}/run-tests.sh is readable but no 'for <var> in \"\$DIR\"/<glob>; do' discovery line could be parsed from it"
+      return 1
+    fi
+    case "$glob" in
+      */*|*'$'*|*'`'*|*'"'*|*"'"*)
+        _TTG_RR_GLOB_DETAIL="${rel}/run-tests.sh yields '${glob}', which is not a single-segment filename pattern"
+        return 1 ;;
+    esac
+    _TTG_RR_GLOB="$glob"; _TTG_RR_GLOB_DIR="$rel"
+    return 0
+  done <<EOF
+$_TTG_ROOTS_REL
+EOF
+  _TTG_RR_GLOB_DETAIL="no readable run-tests.sh under any configured tests root"
+  return 1
+}
+
+# _ttg_rr_discoverable <test_path> -> 0 iff the runner's glob would pick this path up: it must
+# sit DIRECTLY in the globbed directory (a subdirectory is not globbed) and match the pattern.
+_ttg_rr_discoverable() {
+  local test_path="$1" dir base
+  dir="${test_path%/*}"
+  [ "$dir" = "$test_path" ] && dir=""
+  [ "$dir" = "$_TTG_RR_GLOB_DIR" ] || return 1
+  base="${test_path##*/}"
+  # shellcheck disable=SC2254  # a PATTERN read from the runner; quoting it would match literally
+  case "$base" in $_TTG_RR_GLOB) return 0 ;; esac
+  return 1
+}
+
 # A file that can carry an entry of its own is one a runner would RUN; name-shape is
 # the portable predicate, stated here rather than guessed per project.
 _TTG_RR_TEST_SHAPE='(^|/)([Tt]est[-_.][^/]*|[^/]*[-_.][Tt]ests?)\.[A-Za-z0-9]+$'
@@ -584,7 +652,7 @@ EOF
 # Check one entry's referential integrity; QA owns whether the recorded failure is meaningful.
 _ttg_red_run_check_entry() {
   local entry="$1" project_root="$2" nazgul_dir="$3" task_id="$4" commits="$5"
-  local payload test_path abs_path resolved_parent ref result_line exit_code na_token tok found
+  local payload test_path abs_path resolved_parent ref result_line exit_code na_token tok found rest
   local rel abs roots_list shaped contained
 
   payload=$(printf '%s\n' "$entry" | head -1 \
@@ -600,6 +668,15 @@ _ttg_red_run_check_entry() {
         break
       fi
     done
+    if [ "$found" = true ] && [ "$na_token" = "$_TTG_RED_RUN_FILE_SCOPED_NA" ]; then
+      # Valid token, uncheckable position — NOT bad_na_token, which would report a real
+      # token as a typo, and NOT an admit, which would make it a task-wide bypass.
+      if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "unbound_file_scoped_na" \
+        "red-run: N/A — ${na_token} names no file, so there is no path whose discoverability could be checked; write it per-file as 'red-run: <path> :: N/A — ${na_token}'"; then
+        return 1
+      fi
+      return 0
+    fi
     if [ "$found" = true ]; then
       TTG_RED_RUN_REASON="enumerated_na"
       _TTG_RR_HAS_NA=1
@@ -705,6 +782,38 @@ EOF
       "red-run entry test path '${test_path}' resolves outside every configured tests root (${roots_list})"; then
       return 1
     fi
+    return 0
+  fi
+
+  rest=$(printf '%s' "$payload" | sed -E 's%^[^[:space:]]+[[:space:]]*%%')
+  if printf '%s' "$rest" | grep -qE '^(::[[:space:]]*)?N/A([[:space:]]|$)'; then
+    na_token=$(printf '%s' "$rest" \
+      | sed -E 's%^(::[[:space:]]*)?N/A[[:space:]]*(—|--|-|:)?[[:space:]]*%%; s%[[:space:]]+$%%' | tr -d '`')
+    if [ "$na_token" != "$_TTG_RED_RUN_FILE_SCOPED_NA" ]; then
+      if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "bad_na_token" \
+        "per-file 'red-run: ${test_path} :: N/A — ${na_token}' is not the file-scoped exemption; only '${_TTG_RED_RUN_FILE_SCOPED_NA}' may name a file, and the task-wide tokens carry no path"; then
+        return 1
+      fi
+      return 0
+    fi
+    if ! _ttg_rr_discovery_glob "$project_root"; then
+      # Could not ask is its own answer, and it is a refusal: admitting an unverifiable
+      # claim turns the checked token straight back into the declaration it replaced.
+      if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "undiscoverable_unverifiable" \
+        "'${test_path} :: N/A — ${na_token}' cannot be checked: ${_TTG_RR_GLOB_DETAIL} — the claim is refused, not believed"; then
+        return 1
+      fi
+      return 0
+    fi
+    if _ttg_rr_discoverable "$test_path"; then
+      if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "discoverable_test_file" \
+        "'${test_path}' IS discovered by ${_TTG_RR_GLOB_DIR}/run-tests.sh's own glob '${_TTG_RR_GLOB_DIR}/${_TTG_RR_GLOB}', so '${na_token}' is false for it — capture a real red run with scripts/red-run.sh"; then
+        return 1
+      fi
+      return 0
+    fi
+    TTG_RED_RUN_REASON="enumerated_na"
+    echo "ttg_verify_red_run_evidence: entry declares per-file N/A — ${na_token} for ${test_path}; CHECKED against ${_TTG_RR_GLOB_DIR}/run-tests.sh's own glob '${_TTG_RR_GLOB_DIR}/${_TTG_RR_GLOB}', which does not reach it (enumerated exemption, recorded)" >&2
     return 0
   fi
 

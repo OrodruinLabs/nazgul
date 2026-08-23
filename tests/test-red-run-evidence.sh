@@ -189,7 +189,7 @@ teardown_temp_dir
 
 # The refusal vocabulary is CLOSED, and read out of the source rather than narrated
 # here: a state folded into an existing bucket would leave this set unchanged.
-VOCAB_EXPECTED='absent absent_in_tree bad_na_token commented_out corrupt exit_zero not_ancestor ref_unresolvable roots_undeterminable roots_unresolved uncovered_test_file'
+VOCAB_EXPECTED='absent absent_in_tree bad_na_token commented_out corrupt discoverable_test_file exit_zero not_ancestor ref_unresolvable roots_undeterminable roots_unresolved unbound_file_scoped_na uncovered_test_file undiscoverable_unverifiable'
 VOCAB_ARGS=$(grep -oE '_ttg_red_run_(deny|empty_payload) "[^"]*" "[^"]*" "[^"]*"' \
   "$REPO_ROOT/scripts/lib/task-transition-guard.sh" | sed -E 's/.*"([^"]*)"$/\1/')
 VOCAB_SCANNED=$(printf '%s\n' "$VOCAB_ARGS" | grep -c '[^[:space:]]')
@@ -971,6 +971,98 @@ rr_call "$TEMPLATE_FILLED" "$TEST_DIR"
 assert_exit_code "template's untouched Red-Run section fails this gate" "$RR_EC" 1
 assert_eq "template's untouched Red-Run section is named as commented, not as absent" \
   "$RR_REASON" "commented_out"
+teardown_temp_dir
+
+# THE FIFTH TOKEN — file-scoped, CHECKED rather than declared (TASK-048). Both
+# directions below: a token that only ADMITS is a general-purpose red-run bypass.
+setup_rr_repo
+mkdir -p "$TEST_DIR/tests/e2e"
+# The REAL runner, so the glob under test is the shipped producer's own and not a
+# fixture restating it — a restated glob agrees with itself and proves nothing.
+cp "$REPO_ROOT/tests/run-tests.sh" "$TEST_DIR/tests/run-tests.sh"
+printf '#!/usr/bin/env bash\n' > "$TEST_DIR/tests/e2e/test-bar.sh"
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "the runner and a test it cannot discover"
+HEAD_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+GLOB_LINE=$(grep -cE '^[[:space:]]*for [A-Za-z_][A-Za-z0-9_]*[[:space:]]+in[[:space:]]+"\$[A-Za-z_]+"/' "$TEST_DIR/tests/run-tests.sh")
+assert_eq "the fixture runner really carries a parseable discovery line (else every case below is vacuous)" \
+  "$GLOB_LINE" "1"
+
+rr_call "$(rr_manifest '["scripts/foo.sh"]' '- red-run: tests/e2e/test-bar.sh :: N/A — harness-undiscoverable')" "$TEST_DIR"
+assert_exit_code "undiscoverable file + the file-scoped token: ALLOWED" "$RR_EC" 0
+assert_eq "undiscoverable file: reason is 'enumerated_na'" "$RR_REASON" "enumerated_na"
+assert_contains "the admit says it CHECKED, and against which glob — not that it was told" \
+  "$RR_STDERR" "CHECKED against tests/run-tests.sh's own glob 'tests/test-*.sh'"
+
+# The half without which the token proves nothing.
+rr_call "$(rr_manifest '["scripts/foo.sh"]' '- red-run: tests/test-foo.sh :: N/A — harness-undiscoverable')" "$TEST_DIR"
+assert_exit_code "a DISCOVERABLE file declaring the same token: REFUSED" "$RR_EC" 1
+assert_eq "discoverable file: reason is 'discoverable_test_file'" "$RR_REASON" "discoverable_test_file"
+assert_contains "discoverable file: the refusal names the glob that reaches it" \
+  "$RR_STDERR" "IS discovered by tests/run-tests.sh's own glob"
+
+# A subdirectory is not globbed, but a matching NAME alone must not admit either:
+# tests/e2e/test-bar.sh and tests/test-foo.sh differ only in directory.
+rr_call "$(rr_manifest '["scripts/foo.sh"]' '- red-run: tests/test-foo.sh :: N/A — harness-undiscoverable')" "$TEST_DIR"
+assert_eq "discoverability is directory AND pattern, not pattern alone" "$RR_REASON" "discoverable_test_file"
+
+rr_call "$(rr_manifest '["scripts/foo.sh"]' '- red-run: N/A — harness-undiscoverable')" "$TEST_DIR"
+assert_exit_code "the file-scoped token used task-wide: REFUSED (it would exempt every file)" "$RR_EC" 1
+assert_eq "bare file-scoped token: reason is 'unbound_file_scoped_na', not 'bad_na_token'" \
+  "$RR_REASON" "unbound_file_scoped_na"
+assert_contains "bare file-scoped token: says a claim naming no file can be checked against nothing" \
+  "$RR_STDERR" "names no file"
+
+rr_call "$(rr_manifest '["scripts/foo.sh"]' '- red-run: tests/e2e/test-bar.sh :: N/A — docs-only')" "$TEST_DIR"
+assert_exit_code "a task-wide token in the file-scoped slot: REFUSED" "$RR_EC" 1
+assert_eq "task-wide token given a path: reason is 'bad_na_token'" "$RR_REASON" "bad_na_token"
+
+# A path the token names must still be a real file under a tests root: the fifth
+# token cannot launder a path the other checks would refuse.
+rr_call "$(rr_manifest '["scripts/foo.sh"]' '- red-run: tests/e2e/test-nonexistent.sh :: N/A — harness-undiscoverable')" "$TEST_DIR"
+assert_eq "the token does not bypass the path checks it sits behind" "$RR_REASON" "corrupt"
+
+# "Could not ask" is its own answer, and it is a REFUSAL — admitting an unverifiable
+# claim turns the checked token straight back into the declaration it replaced.
+rm -f "$TEST_DIR/tests/run-tests.sh"
+rr_call "$(rr_manifest '["scripts/foo.sh"]' '- red-run: tests/e2e/test-bar.sh :: N/A — harness-undiscoverable')" "$TEST_DIR"
+assert_exit_code "no runner to read the glob from: REFUSED, not admitted" "$RR_EC" 1
+assert_eq "unreadable runner: reason is 'undiscoverable_unverifiable'" "$RR_REASON" "undiscoverable_unverifiable"
+assert_contains "unverifiable: says the claim is refused rather than believed" \
+  "$RR_STDERR" "refused, not believed"
+
+# A runner present but carrying no parseable discovery line is the same refusal for
+# a different reason, and the reason is named.
+printf '#!/usr/bin/env bash\necho no discovery loop here\n' > "$TEST_DIR/tests/run-tests.sh"
+rr_call "$(rr_manifest '["scripts/foo.sh"]' '- red-run: tests/e2e/test-bar.sh :: N/A — harness-undiscoverable')" "$TEST_DIR"
+assert_eq "unparseable runner: also 'undiscoverable_unverifiable'" "$RR_REASON" "undiscoverable_unverifiable"
+assert_contains "unparseable runner: the diagnostic distinguishes it from an absent one" \
+  "$RR_STDERR" "no 'for <var> in"
+
+# The glob is READ from the runner, never restated in the guard: change the runner's
+# glob and the verdict must follow it. A hard-coded copy would ignore this.
+cp "$REPO_ROOT/tests/run-tests.sh" "$TEST_DIR/tests/run-tests.sh"
+sed -i.bak 's|"\$SCRIPT_DIR"/test-\*\.sh|"$SCRIPT_DIR"/check-*.sh|' "$TEST_DIR/tests/run-tests.sh"
+rm -f "$TEST_DIR/tests/run-tests.sh.bak"
+# Under 'check-*.sh' both files are undiscoverable, yet one entry discharges exactly
+# ONE — the per-file coverage pass still runs after a file-scoped N/A.
+rr_call "$(rr_manifest '["scripts/foo.sh"]' '- red-run: tests/test-foo.sh :: N/A — harness-undiscoverable')" "$TEST_DIR"
+assert_exit_code "one file-scoped N/A does NOT discharge the task's other changed test file" "$RR_EC" 1
+assert_eq "the still-uncovered file is named 'uncovered_test_file'" "$RR_REASON" "uncovered_test_file"
+
+rr_call "$(rr_manifest '["scripts/foo.sh"]' '- red-run: tests/test-foo.sh :: N/A — harness-undiscoverable
+- red-run: tests/e2e/test-bar.sh :: N/A — harness-undiscoverable')" "$TEST_DIR"
+assert_exit_code "the verdict follows the runner's glob: under 'check-*.sh' both files are undiscoverable" "$RR_EC" 0
+assert_eq "changed glob: reason is 'enumerated_na'" "$RR_REASON" "enumerated_na"
+assert_contains "and the diagnostic quotes the CHANGED glob, proving it was read not assumed" \
+  "$RR_STDERR" "'tests/check-*.sh'"
+
+# The four task-wide tokens are untouched by the fifth's arrival.
+for tok in docs-only comment-only revert fixture-capture-only; do
+  rr_call "$(rr_manifest '["scripts/foo.sh"]' "- red-run: N/A — ${tok}")" "$TEST_DIR"
+  assert_eq "task-wide '${tok}' still exempts the whole task" "$RR_REASON" "enumerated_na"
+done
 teardown_temp_dir
 
 report_results
