@@ -322,6 +322,22 @@ assert_eq "legacy: the older block's entry is carried across" \
 assert_eq "legacy: the new entry joins it" \
   "$(grep -c '^- red-run: tests/test-alpha.sh' "$MANIFEST22")" "1"
 
+# TASK-049: PROSE quoting the marker is not a region. An unanchored search for it reads
+# as "block present", finds no line to replace, and appends a SECOND evidence section.
+write_manifest TASK-024 "$BASE_SHA" \
+  'This task rewrites the `<!-- red-run.sh:begin -->…<!-- red-run.sh:end -->` region.'
+MANIFEST24="$TEST_DIR/nazgul/tasks/TASK-024.md"
+run_capture TASK-024 --filter=alpha
+assert_exit_code "quoted marker: the capture exits 0" "$RR_EC" 0
+assert_eq "quoted marker: exactly one ## Red-Run Evidence heading" \
+  "$(grep -c '^## Red-Run Evidence' "$MANIFEST24")" "1"
+assert_eq "quoted marker: exactly one generated block" \
+  "$(grep -c '^<!-- red-run\.sh:begin' "$MANIFEST24")" "1"
+assert_file_contains "quoted marker: the prose that mentions it survives" \
+  "$MANIFEST24" 'This task rewrites the'
+assert_contains "quoted marker: the block goes under the heading already there" \
+  "$(awk '/^## Red-Run Evidence/{getline; print; exit}' "$MANIFEST24")" "red-run.sh:begin"
+
 # TASK-049: a real capture supersedes an N/A exemption in the same block, which would
 # otherwise make the gate skip EVERY changed file — a broader hole than the bug it fixes.
 write_manifest TASK-023 "$BASE_SHA" \

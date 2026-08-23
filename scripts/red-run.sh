@@ -921,7 +921,11 @@ ${END_MARK}"
 rr_write_block() {
   local has_section=0 has_marker=0 skipping=0 inserted=0 out="" line
   if grep -q '^## Red-Run Evidence' "$MANIFEST"; then has_section=1; fi
-  if grep -qF "$BEGIN_PREFIX" "$MANIFEST"; then has_marker=1; fi
+  # Same line-start predicate the extractor uses. An unanchored search matches PROSE
+  # quoting the marker, which reads as "region present" and appends a second section.
+  if awk -v b="$BEGIN_PREFIX" 'index($0, b) == 1 { f = 1; exit } END { exit !f }' "$MANIFEST"; then
+    has_marker=1
+  fi
 
   while IFS= read -r line || [ -n "$line" ]; do
     if [ "$has_marker" -eq 1 ]; then
