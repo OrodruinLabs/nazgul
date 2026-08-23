@@ -136,12 +136,32 @@ _bnet_secs() {
   printf '%s' "$def"
 }
 
-# nz_bounded_timeout_cmd -> `timeout` / `gtimeout` / empty. NAZGUL_TIMEOUT_CMD overrides,
-# including to the empty string, which is how the degradation path is driven under test.
+# lean-comments: allow-run — the accepted set is a security boundary, and the vector it does
+# NOT close has to be named or the next reader will over-trust it.
+# nz_bounded_timeout_cmd -> `timeout` / `gtimeout` / empty. NAZGUL_TIMEOUT_CMD overrides, but
+# ONLY to a value auto-detection could have chosen by itself: the empty string (the documented
+# hook that drives the degradation path under test) or a resolvable `timeout`/`gtimeout`.
+# Anything else is refused by name and the detected binary used instead, because nz_bounded_run
+# EXECUTES this value as `"$tcmd" -k 5 "$secs" "$@"` — so an ambient variable naming an arbitrary
+# executable substitutes the process whose stdout becomes the sole admitting evidence for the
+# merge gate, which by design has no kill switch. merge-provider's `--repo` pinning and its url
+# self-certification are both DOWNSTREAM of that process and never see the substitution. This
+# does NOT close PATH poisoning: `command -v` reads PATH, and whoever controls PATH already owns
+# `gh`, `git` and `jq` alike. It closes the Nazgul-specific variable nobody audits.
 nz_bounded_timeout_cmd() {
+  local want
   if [ -n "${NAZGUL_TIMEOUT_CMD+set}" ]; then
-    printf '%s' "$NAZGUL_TIMEOUT_CMD"
-  elif command -v timeout >/dev/null 2>&1; then
+    want="$NAZGUL_TIMEOUT_CMD"
+    case "$want" in
+      "") return 0 ;;
+      timeout|gtimeout)
+        if command -v "$want" >/dev/null 2>&1; then printf '%s' "$want"; return 0; fi ;;
+      *)
+        _bnet_degrade "timeout-cmd" "refused_timeout_cmd_override" \
+          "NAZGUL_TIMEOUT_CMD='$want' is neither the empty string nor timeout/gtimeout, and this value is EXECUTED around every bounded call — the override is REFUSED and the detected binary used instead" ;;
+    esac
+  fi
+  if command -v timeout >/dev/null 2>&1; then
     printf 'timeout'
   elif command -v gtimeout >/dev/null 2>&1; then
     printf 'gtimeout'

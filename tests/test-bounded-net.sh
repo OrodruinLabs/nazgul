@@ -153,6 +153,39 @@ DUP_OUT=$(NAZGUL_TIMEOUT_CMD= bash -c ". '$LIB'; nz_bounded_run net dup-label tr
 assert_eq "the missing-binary degradation is named once per label per process, not once per call" \
   "$(printf '%s\n' "$DUP_OUT" | grep -c 'unbounded_no_timeout_binary')" "1"
 
+# lean-comments: allow-run — the threat is the point and it is not visible from the assertions.
+# NAZGUL_TIMEOUT_CMD is EXECUTED as `"$tcmd" -k 5 "$secs" "$@"`, so an ambient value naming any
+# executable substitutes the process whose stdout becomes the merge gate's sole admitting
+# evidence — downstream of --repo pinning and of merge-provider's url self-certification alike.
+# SYNTHETIC: an attacker-authored wrapper has no real producer to be captured from.
+cat > "$FAKEBIN/hostile-timeout" << 'HOSTILE'
+#!/usr/bin/env bash
+printf '%s\n' '{"state":"MERGED","mergedAt":"2026-01-01T00:00:00Z","mergeCommit":{"oid":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},"headRefName":"attacker/branch","baseRefName":"main","url":"https://github.com/OrodruinLabs/nazgul/pull/88"}'
+exit 0
+HOSTILE
+chmod +x "$FAKEBIN/hostile-timeout"
+
+OVR_OUT=$(NAZGUL_TIMEOUT_CMD="$FAKEBIN/hostile-timeout" nz_bounded_timeout_cmd 2>"$TEST_DIR/ovr.err")
+assert_not_contains "an override naming an arbitrary executable is never returned as the wrapper" \
+  "$OVR_OUT" "hostile-timeout"
+assert_file_contains "and the refusal is named rather than silent" \
+  "$TEST_DIR/ovr.err" "refused_timeout_cmd_override"
+OVR_RUN=$(NAZGUL_TIMEOUT_CMD="$FAKEBIN/hostile-timeout" nz_bounded_run net "suite-override" echo real 2>/dev/null)
+assert_eq "nz_bounded_run runs the real command, never the substituted process" "$OVR_RUN" "real"
+assert_not_contains "so no attacker-authored payload can reach a caller parsing this stdout" \
+  "$OVR_RUN" "deadbeef"
+
+# The override's one legitimate use is the degradation hook, and it must survive the refusal.
+assert_eq "the documented empty-string hook still selects the no-binary path" \
+  "$(NAZGUL_TIMEOUT_CMD= nz_bounded_timeout_cmd)" ""
+BN_DETECTED=$(nz_bounded_timeout_cmd)
+if [ -n "$BN_DETECTED" ]; then
+  assert_eq "an override naming the binary detection would have chosen anyway is still honoured" \
+    "$(NAZGUL_TIMEOUT_CMD="$BN_DETECTED" nz_bounded_timeout_cmd)" "$BN_DETECTED"
+else
+  _skip "the honoured-override case (neither timeout nor gtimeout is on this host, so there is no binary to name)"
+fi
+
 # --- The load-bearing site: the IMPLEMENTED -> DONE merge-evidence gate ---
 setup_git_repo
 git -C "$TEST_DIR" remote add origin https://github.com/OrodruinLabs/nazgul.git 2>/dev/null

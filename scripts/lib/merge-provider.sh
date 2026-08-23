@@ -468,7 +468,7 @@ _mp_redirect_check() {
 # target, so the answer carries its own provenance instead of being trusted for having been
 # asked — the one check that also covers a redirection vector this file does not enumerate.
 _mp_github_pr_state() {
-  local root="$1" host="$2" pr="$3" out state merged_at merge_commit merged why head_ref base_ref rc=0
+  local root="$1" host="$2" pr="$3" out err errfile state merged_at merge_commit merged why head_ref base_ref rc=0
   local remote_url remote_host remote_repo target url url_host url_repo
   remote_url=$(_mp_remote_url "$root") || remote_url=""
   remote_host=$(_mp_api_host "$(_mp_url_host "$remote_url")")
@@ -496,18 +496,25 @@ _mp_github_pr_state() {
     _mp_result "github" "$host" "$pr" "provider_unavailable" "" "" "" "" "$why"
     return 4
   }
-  out=$( (cd "$root" 2>/dev/null && NZ_BOUNDED_ROOT="$root" nz_bounded_run net "gh pr view (merge state)" \
-    gh pr view "$pr" --repo "$target" --json state,mergedAt,mergeCommit,headRefName,baseRefName,url) 2>&1 ) || rc=$?
+  # stdout ONLY: `2>&1` folded bounded-net's degradation line into the payload, so on a host with
+  # no GNU timeout a genuinely MERGED PR parsed as api_failure. fd 9 keeps that line on real stderr.
+  errfile=$(mktemp "${TMPDIR:-/tmp}/nazgul-mp-stderr-XXXXXX" 2>/dev/null) || errfile="/dev/null"
+  { out=$( (cd "$root" 2>/dev/null && NZ_BOUNDED_ROOT="$root" NZ_BOUNDED_WARN_FD=9 \
+    nz_bounded_run net "gh pr view (merge state)" \
+    gh pr view "$pr" --repo "$target" --json state,mergedAt,mergeCommit,headRefName,baseRefName,url) 2>"$errfile" ) || rc=$?
+  } 9>&2
+  err=$(cat "$errfile" 2>/dev/null) || err=""
+  [ "$errfile" = "/dev/null" ] || rm -f "$errfile"
   if [ "$rc" -ne 0 ]; then
-    why="gh pr view $pr failed (exit $rc): $(_mp_oneline "$out")"
+    why="gh pr view $pr failed (exit $rc): $(_mp_oneline "${err:-$out}")"
     _mp_warn "api_failure: $why — this is NOT 'not merged'; no closure may be inferred from it"
-    _mp_emit "$root" "merge_provider_api_failure" provider "github" host "$host" pr "$pr" exit_code "$rc" reason "$(_mp_oneline "$out")"
+    _mp_emit "$root" "merge_provider_api_failure" provider "github" host "$host" pr "$pr" exit_code "$rc" reason "$(_mp_oneline "${err:-$out}")"
     _mp_result "github" "$host" "$pr" "api_failure" "" "" "" "" "$why"
     return 5
   fi
   state=$(printf '%s' "$out" | jq -r '.state // empty' 2>/dev/null) || state=""
   if [ -z "$state" ]; then
-    why="gh pr view $pr returned no parseable state: $(_mp_oneline "$out")"
+    why="gh pr view $pr returned no parseable state: $(_mp_oneline "${out:-$err}")"
     _mp_warn "api_failure: $why — this is NOT 'not merged'"
     _mp_emit "$root" "merge_provider_api_failure" provider "github" host "$host" pr "$pr" exit_code "0" reason "unparseable response"
     _mp_result "github" "$host" "$pr" "api_failure" "" "" "" "" "$why"
