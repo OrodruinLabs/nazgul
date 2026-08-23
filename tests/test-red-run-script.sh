@@ -35,6 +35,10 @@ exit 1
 UNRELATED
   git -C "$TEST_DIR" add -A
   git -C "$TEST_DIR" commit -q -m "base"
+  # Two pre-change commits over one identical tree, so a manifest's Base SHA can move
+  # between trees that are both genuinely pre-change (the stale-entry case needs this).
+  BASE_SHA_ALT=$(git -C "$TEST_DIR" rev-parse HEAD)
+  git -C "$TEST_DIR" commit -q --allow-empty -m "second base, same tree"
   BASE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
 
   printf '#!/usr/bin/env bash\necho feature\n' > "$TEST_DIR/scripts/feature.sh"
@@ -205,7 +209,7 @@ write_manifest TASK-001 "$BASE_SHA"
 MANIFEST="$TEST_DIR/nazgul/tasks/TASK-001.md"
 run_capture TASK-001 --filter=alpha
 
-# --- refresh in place: a second capture does not duplicate the entry ---------
+# --- re-capture of the SAME file: replaced in place, never duplicated --------
 run_capture TASK-001 --filter=alpha
 assert_exit_code "refresh: a second capture still exits 0" "$RR_EC" 0
 assert_eq "refresh: exactly one red-run entry after re-capture" \
@@ -215,6 +219,146 @@ assert_eq "refresh: exactly one generated block after re-capture" \
 assert_eq "refresh: exactly one ## Red-Run Evidence heading" \
   "$(grep -c '^## Red-Run Evidence' "$MANIFEST")" "1"
 assert_file_contains "refresh: the rest of the manifest survives" "$MANIFEST" '^## Implementation Log'
+assert_contains "refresh: the replacement is announced, not silent" "$RR_OUT" \
+  "replaced the existing entry for tests/test-alpha.sh"
+
+# TASK-049: a capture MERGES by test file. One `--filter` value, no full-suite mode, so a
+# two-test-file task needs two captures — and the overwrite this replaces left only the last.
+teardown_temp_dir
+setup_project
+write_manifest TASK-020 "$BASE_SHA"
+MANIFEST20="$TEST_DIR/nazgul/tasks/TASK-020.md"
+run_capture TASK-020 --filter=alpha
+assert_exit_code "accumulate: the first capture exits 0" "$RR_EC" 0
+assert_eq "accumulate: one entry after the first capture" \
+  "$(grep -c '^- red-run:' "$MANIFEST20")" "1"
+run_capture TASK-020 --filter=gamma
+assert_exit_code "accumulate: the second capture exits 0" "$RR_EC" 0
+assert_eq "accumulate: BOTH files carry an entry after two captures" \
+  "$(grep -c '^- red-run:' "$MANIFEST20")" "2"
+assert_file_contains "accumulate: the first capture's entry survives the second" \
+  "$MANIFEST20" '^- red-run: tests/test-alpha.sh'
+assert_file_contains "accumulate: the second capture's entry is recorded" \
+  "$MANIFEST20" '^- red-run: tests/test-gamma.sh'
+assert_eq "accumulate: still exactly one generated block" \
+  "$(grep -c 'red-run.sh:begin' "$MANIFEST20")" "1"
+assert_eq "accumulate: still exactly one ## Red-Run Evidence heading" \
+  "$(grep -c '^## Red-Run Evidence' "$MANIFEST20")" "1"
+assert_contains "accumulate: the merge reports what it scanned, kept and dropped" "$RR_OUT" \
+  "evidence merge: 1 existing entry(ies) scanned, 1 retained, 0 replaced, 0 dropped"
+
+# Provenance is per ENTRY, so a retained entry still names the run that produced it —
+# one block-level capture line would describe only the newest of the two.
+assert_eq "accumulate: each entry carries its own capture provenance" \
+  "$(grep -c '^  - capture: ' "$MANIFEST20")" "2"
+assert_file_contains "accumulate: the retained entry still names its own run" \
+  "$MANIFEST20" 'run-tests.sh --filter=alpha'
+assert_file_contains "accumulate: the new entry names its own run" \
+  "$MANIFEST20" 'run-tests.sh --filter=gamma'
+
+# The gate is the consumer this exists for: accumulation has to MOVE its arithmetic.
+GATE_ERR20=$(mktemp "${TMPDIR:-/tmp}/nazgul-rr-gate20-XXXXXX")
+NAZGUL_DIR="$TEST_DIR/nazgul"
+ttg_verify_red_run_evidence "$(cat "$MANIFEST20")" "$TEST_DIR" TASK-020 2>"$GATE_ERR20" >/dev/null || true
+assert_contains "accumulate: two entries discharge two of the four changed test files" \
+  "$(cat "$GATE_ERR20")" \
+  "red-run-evidence/files: 4 scanned, 0 skipped (support=0, enumerated-na=0), 4 checked, 2 findings"
+rm -f "$GATE_ERR20"
+
+# The same file again is a CORRECTION: it replaces its own entry and no other.
+run_capture TASK-020 --filter=alpha
+assert_exit_code "replace: a same-file re-capture exits 0" "$RR_EC" 0
+assert_eq "replace: the re-captured file has exactly one entry" \
+  "$(grep -c '^- red-run: tests/test-alpha.sh' "$MANIFEST20")" "1"
+assert_eq "replace: the other file's entry is untouched" \
+  "$(grep -c '^- red-run: tests/test-gamma.sh' "$MANIFEST20")" "1"
+assert_eq "replace: two entries, not three" \
+  "$(grep -c '^- red-run:' "$MANIFEST20")" "2"
+assert_eq "replace: the replaced entry keeps its position" \
+  "$(grep '^- red-run:' "$MANIFEST20" | head -1 | sed 's/^- red-run: //')" \
+  "tests/test-alpha.sh :: case \"feature.sh is wired in\""
+
+# TASK-049 AC2: an entry captured against another tree is DROPPED, never marked stale.
+# The gate keys coverage on entry PATHS, so a retained one discharges its file regardless.
+write_manifest TASK-021 "$BASE_SHA_ALT"
+MANIFEST21="$TEST_DIR/nazgul/tasks/TASK-021.md"
+run_capture TASK-021 --filter=alpha
+assert_exit_code "stale: the capture at the first base exits 0" "$RR_EC" 0
+assert_file_contains "stale: the entry records the base it was captured at" \
+  "$MANIFEST21" "pre-change-ref: $BASE_SHA_ALT"
+REBASED=$(sed "s/Base SHA\*\*: $BASE_SHA_ALT/Base SHA**: $BASE_SHA/" "$MANIFEST21")
+printf '%s\n' "$REBASED" > "$MANIFEST21"
+assert_file_contains "stale: the manifest now declares the second base" \
+  "$MANIFEST21" "Base SHA\*\*: $BASE_SHA\$"
+run_capture TASK-021 --filter=gamma
+assert_exit_code "stale: the capture at the new base exits 0" "$RR_EC" 0
+assert_eq "stale: the entry captured against the old tree does not survive" \
+  "$(grep -c '^- red-run: tests/test-alpha.sh' "$MANIFEST21")" "0"
+assert_eq "stale: only the current-base entry remains" \
+  "$(grep -c '^- red-run:' "$MANIFEST21")" "1"
+assert_contains "stale: the drop names the file it dropped" "$RR_OUT" \
+  "dropped the STALE entry for tests/test-alpha.sh"
+assert_contains "stale: the drop names the ref it was captured against" "$RR_OUT" "$BASE_SHA_ALT"
+assert_contains "stale: the drop is counted, not just narrated" "$RR_OUT" \
+  "1 dropped (stale=1, unresolved-ref=0, no-ref=0, superseded-na=0)"
+
+# TASK-049: an older marker wording is merged into, not duplicated beside.
+write_manifest TASK-022 "$BASE_SHA" \
+  "<!-- red-run.sh:begin — generated block, refreshed in place on re-capture -->
+- red-run: tests/test-gamma.sh :: case \"feature.sh is readable\"
+  - pre-change-ref: $BASE_SHA
+  - result: FAILED (exit 1) — \"FAIL: feature.sh is readable\"
+  - captured-by: scripts/red-run.sh at 2026-08-01T00:00:00Z
+<!-- red-run.sh:end -->"
+MANIFEST22="$TEST_DIR/nazgul/tasks/TASK-022.md"
+run_capture TASK-022 --filter=alpha
+assert_exit_code "legacy: capturing over an older marker exits 0" "$RR_EC" 0
+assert_eq "legacy: exactly one generated block, not two" \
+  "$(grep -c 'red-run.sh:begin' "$MANIFEST22")" "1"
+assert_file_not_contains "legacy: the older marker wording is gone" \
+  "$MANIFEST22" 'refreshed in place on re-capture'
+assert_eq "legacy: the older block's entry is carried across" \
+  "$(grep -c '^- red-run: tests/test-gamma.sh' "$MANIFEST22")" "1"
+assert_eq "legacy: the new entry joins it" \
+  "$(grep -c '^- red-run: tests/test-alpha.sh' "$MANIFEST22")" "1"
+
+# TASK-049: PROSE quoting the marker is not a region. An unanchored search for it reads
+# as "block present", finds no line to replace, and appends a SECOND evidence section.
+write_manifest TASK-024 "$BASE_SHA" \
+  'This task rewrites the `<!-- red-run.sh:begin -->…<!-- red-run.sh:end -->` region.'
+MANIFEST24="$TEST_DIR/nazgul/tasks/TASK-024.md"
+run_capture TASK-024 --filter=alpha
+assert_exit_code "quoted marker: the capture exits 0" "$RR_EC" 0
+assert_eq "quoted marker: exactly one ## Red-Run Evidence heading" \
+  "$(grep -c '^## Red-Run Evidence' "$MANIFEST24")" "1"
+assert_eq "quoted marker: exactly one generated block" \
+  "$(grep -c '^<!-- red-run\.sh:begin' "$MANIFEST24")" "1"
+assert_file_contains "quoted marker: the prose that mentions it survives" \
+  "$MANIFEST24" 'This task rewrites the'
+assert_contains "quoted marker: the block goes under the heading already there" \
+  "$(awk '/^## Red-Run Evidence/{getline; print; exit}' "$MANIFEST24")" "red-run.sh:begin"
+
+# TASK-049: a real capture supersedes an N/A exemption in the same block, which would
+# otherwise make the gate skip EVERY changed file — a broader hole than the bug it fixes.
+write_manifest TASK-023 "$BASE_SHA" \
+  "<!-- red-run.sh:begin — generated block -->
+- red-run: N/A — docs-only
+<!-- red-run.sh:end -->"
+MANIFEST23="$TEST_DIR/nazgul/tasks/TASK-023.md"
+run_capture TASK-023 --filter=alpha
+assert_exit_code "supersede: capturing over an N/A entry exits 0" "$RR_EC" 0
+assert_eq "supersede: the exemption does not survive a real red run" \
+  "$(grep -c 'N/A' "$MANIFEST23")" "0"
+assert_eq "supersede: the real entry is the only one" \
+  "$(grep -c '^- red-run:' "$MANIFEST23")" "1"
+assert_contains "supersede: the drop is announced" "$RR_OUT" \
+  "dropped the 'N/A' exemption entry"
+teardown_temp_dir
+
+setup_project
+write_manifest TASK-001 "$BASE_SHA"
+MANIFEST="$TEST_DIR/nazgul/tasks/TASK-001.md"
+run_capture TASK-001 --filter=alpha
 
 # --- pre-existing section body is preserved, generated block goes first ------
 write_manifest TASK-002 "$BASE_SHA" \
@@ -455,9 +599,9 @@ write_project_config() {
 }
 
 # The capture line's command, between the backticks — the provenance string a
-# reviewer reads as "this is what ran".
+# reviewer reads as "this is what ran". Unanchored: the line is indented under its entry.
 capture_cmd() {
-  grep -o '^- capture: `[^`]*`' "$1" | head -1 | sed -e 's/^- capture: `//' -e 's/`$//'
+  grep -o -- '- capture: `[^`]*`' "$1" | head -1 | sed -e 's/^- capture: `//' -e 's/`$//'
 }
 
 # Scratch project whose ONLY runner is ./run-my-tests.sh, scoped with --only=.

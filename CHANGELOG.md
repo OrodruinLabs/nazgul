@@ -129,8 +129,9 @@ precedent as 34 → 35 (2.29.0) and 35 → 36 (2.30.0).
   no template and a non-legacy runner is refused rather than guessed at (`:224-225`), because appending
   a flag Nazgul chose to a command the project chose has two failure modes that both look like success:
   a rejected flag exits non-zero and reads as RED confirmed, an ignored one runs the whole suite as if
-  it were scoped. Every capture line now names the command (`:488`):
-  `- capture: \`<cmd>\` in a detached worktree at \`<base>\`; N changed test file(s) copied in…; runner exit E in Ts`.
+  it were scoped. Every capture names the command it ran, on a line that now sits INSIDE the entry it
+  produced rather than above the block:
+  `  - capture: \`<cmd>\` in a detached worktree at \`<base>\`; N changed test file(s) copied in…; runner exit E in Ts`.
 - **The red-run gate reports "present but commented" distinctly from "absent".** `commented_out` joins
   the closed refusal vocabulary — `absent absent_in_tree bad_na_token commented_out corrupt exit_zero
   not_ancestor ref_unresolvable roots_undeterminable roots_unresolved uncovered_test_file`, eleven
@@ -165,6 +166,31 @@ precedent as 34 → 35 (2.29.0) and 35 → 36 (2.30.0).
   candidates were scanned exits non-zero.
 
 ### Fixed
+
+- **The red-run writer and the red-run gate were mutually unsatisfiable for any task changing more
+  than one test file.** `rr_write_block` regenerated the whole `<!-- red-run.sh:begin -->…<!-- end -->`
+  region from the current run, so N captures left only the Nth — measured on the live `TASK-047`
+  manifest: one entry before (`tests/test-hook-stdin-bound.sh`), a RED-confirmed capture at
+  `--filter=pre-tool-guard`, one entry after (`tests/test-pre-tool-guard.sh`), the first gone. Meanwhile
+  `ttg_verify_red_run_evidence` correctly refuses IMPLEMENTED with `uncovered_test_file` — one entry
+  discharges one file — while `--filter` takes exactly one value and a full-suite run is refused by
+  design. The only route through a correct gate was to hand-write the block, which is the forgery route
+  this objective exists to close. **The gate was right; the writer was the defect**, so neither
+  `--filter` nor the per-file rule was widened. A capture now MERGES on the test file path: it replaces
+  the entry for every file it names, leaves every other file's entry standing, and reports
+  `evidence merge: N scanned, R retained, P replaced, D dropped (stale=…, unresolved-ref=…, no-ref=…,
+  superseded-na=…)` on stderr, so "kept everything" and "found nothing to keep" cannot print alike.
+  Three entries are refused rather than accumulated, each named on stderr: one whose `pre-change-ref`
+  is not this manifest's current Base SHA (**dropped, never retained-and-marked** — the gate keys
+  coverage on entry PATHS, so a stale entry left in place discharges its file's obligation whatever
+  label it carries, which would make accumulation a wider forgery route than the overwrite it
+  replaces), one with no resolvable ref at all, and an `N/A` exemption sitting beside a real red run,
+  which would otherwise exempt EVERY changed file from the per-file check. Capture context moved from
+  one block-level line into the entry it belongs to, because entries now outlive one another's
+  captures; the region is located by the `<!-- red-run.sh:begin` prefix rather than the full marker
+  text, so a block an older wording wrote is merged into rather than duplicated beside. The marker's
+  own sentence said "refreshed in place on re-capture" — accurate about the behaviour, and the reason
+  the behaviour looked intended.
 
 - **The plan's objective binding had a gate and a template but no producer — so `IMPLEMENTED -> DONE`
   was still unreachable everywhere except this repo.** The merge-evidence gate requires
