@@ -576,14 +576,26 @@ this covers only a valid config whose `tasks/` path resolves outside its own `na
   is discarded, while on 5.3.15 a timeout returns 142 and hands the partial read back — so two signals
   are used (`rc > 128`, or `SECONDS` elapsed at the bound) and the payload is cleared on timeout, which
   is what stops a truncated envelope reaching `jq` on either build. **Boundary:** the bound is a payload
-  ceiling as well as a wait ceiling — the byte-at-a-time primitive runs at ~2.8 MB/s against `$(cat)`'s
-  ~90 MB/s, so a payload above roughly that size reports `timeout`; a hook envelope carries one
-  `tool_input` and sits far below it. **Not claimed:** that the host ever leaves a hook's stdin open
+  ceiling as well as a wait ceiling, and it is THREE bounds rather than one, each naming itself in
+  `HOOK_PAYLOAD_REASON` because each fires on a producer the other two structurally cannot reach:
+  `stall` (`read -t`, the wait for input to BECOME available — the only one that fires on a pipe
+  nobody writes to, and the one that can never fire on a producer that already wrote everything),
+  `deadline` (`$SECONDS` across chunks — the bound chunking itself made necessary, since `read -t`
+  bounds ONE call and a payload arriving chunk by chunk never makes any single call wait), and
+  `oversize` (the declared `HOOK_PAYLOAD_MAX_CHARS` constant, 1 MiB — a ceiling stated in the source,
+  never an emergent throughput artifact to be estimated). A hook envelope carries one `tool_input` and
+  sits far below it. `scripts/lib/read-hook-payload.sh`'s own header is the measurement of record and
+  the only place the numbers live; the first draft of this rule quoted a throughput figure taken from
+  the read alone, missing the trailing-newline strip that dominated it, and stated a ceiling nothing in
+  the source declared. **Not claimed:** that the host ever leaves a hook's stdin open
   without EOF. The hang is a latent hazard in guards whose whole job is to be fast and predictable,
   proven under a detached runner — not an observed production stall.
   `tests/test-hook-stdin-bound.sh` DERIVES the hook population from `scripts/*.sh` instead of listing
-  it, runs each against a held-open pipe asserting completion, and is driven red against a copy of the
-  tree whose bound has been removed.
+  it, and asserts each hook's OBSERVED exit code against the disposition that hook's own
+  `hook_payload_timeout_report` call declares — 2 for the fail-closed set, 0 for the fail-open one, so
+  a guard that prints `fail-closed` and exits 0 is a finding rather than a pass — drives every
+  scope-gated guard from BOTH sides of its gate, and is driven red against a copy of the tree whose
+  bound has been removed.
 
 ### Tests-facing application: coverage honesty (FEAT-028, ADR-019)
 

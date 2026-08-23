@@ -484,22 +484,28 @@ _ttg_rr_never_copy() {
   return 1
 }
 
-_TTG_RR_GLOB=""
-_TTG_RR_GLOB_DIR=""
+_TTG_RR_GLOBS=""
 _TTG_RR_GLOB_DETAIL=""
+_TTG_RR_MATCH_DIR=""
+_TTG_RR_MATCH_GLOB=""
 
-# lean-comments: allow-run — why the glob is READ, and why there is no cross-tree fallback.
-# _ttg_rr_discovery_glob <project_root> -> the runner's OWN discovery glob and the directory
-# it globs, read from `run-tests.sh` in the tree under judgment. A second copy of
-# `tests/test-*.sh` here would drift silently the first time the runner's glob changed, and
-# this predicate exists precisely to make an operator's claim checkable rather than believed.
-# Deliberately NO fallback to the shipped runner beside this library: a project whose harness
-# is pytest would then have its paths judged against Nazgul's glob, and the file-scoped token
-# would admit exactly what it exists to refuse. Unreadable or unparseable is a REFUSAL upstream
-# (undiscoverable_unverifiable), never an admit — an unverifiable claim is a declaration again.
+# lean-comments: allow-run — why the glob is READ, why there is no cross-tree fallback, and why
+# every root is asked rather than the first.
+# _ttg_rr_discovery_glob <project_root> -> `<dir> <glob>` for EVERY configured tests root that
+# ships a run-tests.sh, read from the tree under judgment. A second copy of `tests/test-*.sh`
+# here would drift silently the first time the runner's glob changed, and this predicate exists
+# precisely to make an operator's claim checkable rather than believed. Deliberately NO fallback
+# to the shipped runner beside this library: a project whose harness is pytest would then have
+# its paths judged against Nazgul's glob, and the file-scoped token would admit exactly what it
+# exists to refuse. Every root, not the first: stopping at one made a file under a SECOND root
+# undiscoverable-and-admitted even where that root's own runner discovers it — a false ADMIT in
+# the single direction this token's safety argument rests on. A runner that is present but
+# unparseable still refuses the whole claim (undiscoverable_unverifiable) rather than being
+# skipped past, because "one root could not be read" is not "no root reaches this file".
 _ttg_rr_discovery_glob() {
-  local project_root="$1" rel runner glob
-  _TTG_RR_GLOB=""; _TTG_RR_GLOB_DIR=""; _TTG_RR_GLOB_DETAIL=""
+  local project_root="$1" rel runner glob found=0
+  _TTG_RR_GLOBS=""; _TTG_RR_GLOB_DETAIL=""
+  _TTG_RR_MATCH_DIR=""; _TTG_RR_MATCH_GLOB=""
   while IFS= read -r rel; do
     [ -n "$rel" ] || continue
     runner="$project_root/$rel/run-tests.sh"
@@ -514,26 +520,48 @@ _ttg_rr_discovery_glob() {
         _TTG_RR_GLOB_DETAIL="${rel}/run-tests.sh yields '${glob}', which is not a single-segment filename pattern"
         return 1 ;;
     esac
-    _TTG_RR_GLOB="$glob"; _TTG_RR_GLOB_DIR="$rel"
-    return 0
+    _TTG_RR_GLOBS="${_TTG_RR_GLOBS}${rel} ${glob}
+"
+    found=1
   done <<EOF
 $_TTG_ROOTS_REL
 EOF
+  [ "$found" -eq 1 ] && return 0
   _TTG_RR_GLOB_DETAIL="no readable run-tests.sh under any configured tests root"
   return 1
 }
 
-# _ttg_rr_discoverable <test_path> -> 0 iff the runner's glob would pick this path up: it must
-# sit DIRECTLY in the globbed directory (a subdirectory is not globbed) and match the pattern.
+# _ttg_rr_discoverable <test_path> -> 0 iff ANY root's runner reaches it: DIRECTLY in that
+# root's globbed dir and matching its pattern. _TTG_RR_MATCH_* name the root that reached it.
 _ttg_rr_discoverable() {
-  local test_path="$1" dir base
+  local test_path="$1" dir base pdir pglob
   dir="${test_path%/*}"
   [ "$dir" = "$test_path" ] && dir=""
-  [ "$dir" = "$_TTG_RR_GLOB_DIR" ] || return 1
   base="${test_path##*/}"
-  # shellcheck disable=SC2254  # a PATTERN read from the runner; quoting it would match literally
-  case "$base" in $_TTG_RR_GLOB) return 0 ;; esac
+  _TTG_RR_MATCH_DIR=""; _TTG_RR_MATCH_GLOB=""
+  while IFS=' ' read -r pdir pglob; do
+    [ -n "$pdir" ] || continue
+    [ "$dir" = "$pdir" ] || continue
+    # shellcheck disable=SC2254  # a PATTERN read from the runner; quoting it would match literally
+    case "$base" in
+      $pglob) _TTG_RR_MATCH_DIR="$pdir"; _TTG_RR_MATCH_GLOB="$pglob"; return 0 ;;
+    esac
+  done <<EOF
+$_TTG_RR_GLOBS
+EOF
   return 1
+}
+
+# Every root the admit was checked against, so the recorded exemption names its whole denominator.
+_ttg_rr_globs_list() {
+  local pdir pglob out=""
+  while IFS=' ' read -r pdir pglob; do
+    [ -n "$pdir" ] || continue
+    out="${out}${out:+, }${pdir}/run-tests.sh's own glob '${pdir}/${pglob}'"
+  done <<EOF
+$_TTG_RR_GLOBS
+EOF
+  printf '%s' "$out"
 }
 
 # A file that can carry an entry of its own is one a runner would RUN; name-shape is
@@ -807,13 +835,13 @@ EOF
     fi
     if _ttg_rr_discoverable "$test_path"; then
       if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "discoverable_test_file" \
-        "'${test_path}' IS discovered by ${_TTG_RR_GLOB_DIR}/run-tests.sh's own glob '${_TTG_RR_GLOB_DIR}/${_TTG_RR_GLOB}', so '${na_token}' is false for it — capture a real red run with scripts/red-run.sh"; then
+        "'${test_path}' IS discovered by ${_TTG_RR_MATCH_DIR}/run-tests.sh's own glob '${_TTG_RR_MATCH_DIR}/${_TTG_RR_MATCH_GLOB}', so '${na_token}' is false for it — capture a real red run with scripts/red-run.sh"; then
         return 1
       fi
       return 0
     fi
     TTG_RED_RUN_REASON="enumerated_na"
-    echo "ttg_verify_red_run_evidence: entry declares per-file N/A — ${na_token} for ${test_path}; CHECKED against ${_TTG_RR_GLOB_DIR}/run-tests.sh's own glob '${_TTG_RR_GLOB_DIR}/${_TTG_RR_GLOB}', which does not reach it (enumerated exemption, recorded)" >&2
+    echo "ttg_verify_red_run_evidence: entry declares per-file N/A — ${na_token} for ${test_path}; CHECKED against $(_ttg_rr_globs_list), which does not reach it (enumerated exemption, recorded)" >&2
     return 0
   fi
 

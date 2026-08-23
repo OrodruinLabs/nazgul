@@ -25,11 +25,18 @@ DISPOSITIONS="fail-open fail-closed"
 DEADLINE=6
 FLOOR=16
 
-# The scratch project every probe runs against.
+# Three roots: $PROJ puts all six fail-closed guards inside their authority, and the other
+# two put each scope-gated guard on the far side of the gate it actually reads.
 PROJ="$SCRATCH/proj"
 mkdir -p "$PROJ/nazgul/tasks" "$PROJ/nazgul/logs"
 printf '%s\n' '{"feat_id":"T","mode":"hitl","install_mode":"local","execution":{"parallel":true}}' \
   > "$PROJ/nazgul/config.json"
+OUT="$SCRATCH/outscope"
+mkdir -p "$OUT/nazgul/tasks" "$OUT/nazgul/logs"
+printf '%s\n' '{"feat_id":"T","mode":"hitl","install_mode":"plugin","execution":{"parallel":false,"enforce":{"dispatch_guard":false}}}' \
+  > "$OUT/nazgul/config.json"
+NOPROJ="$SCRATCH/noproj"
+mkdir -p "$NOPROJ"
 PAYLOAD='{"tool_name":"Bash","tool_input":{"command":"echo hi","file_path":"/tmp/x"},"session_id":"t","prompt":"hi"}'
 
 # _run_held_open <script-abs> <root> -> the exit code, or 124 if it never ended. A bg
@@ -72,19 +79,69 @@ for f in "$REPO_ROOT"/scripts/*.sh; do
   fi
 done
 
-HUNG=""
+# The disposition each hook DECLARES, off its own reporter call — matching that string
+# proves the string, and the exit code below is the behaviour it claims.
+DENY_RC=2
+CLOSED_HOOKS=""; OPEN_HOOKS=""; UNDECLARED=""; BAD_DISPOSITION=""
+for h in $HOOKS; do
+  f="$REPO_ROOT/scripts/$h"
+  ds="$(grep -oE 'hook_payload_timeout_report "[^"]+" "[^"]+"' "$f" 2>/dev/null \
+        | sed -E 's/.*" "([^"]+)"$/\1/' | LC_ALL=C sort -u | tr '\n' ' ')"
+  for d in $ds; do
+    case " $DISPOSITIONS " in *" $d "*) ;; *) BAD_DISPOSITION="$BAD_DISPOSITION$h:$d " ;; esac
+  done
+  case " $ds " in
+    *" fail-closed "*) CLOSED_HOOKS="$CLOSED_HOOKS$h " ;;
+    *" fail-open "*)   OPEN_HOOKS="$OPEN_HOOKS$h " ;;
+    *)                 UNDECLARED="$UNDECLARED$h " ;;
+  esac
+done
+assert_eq "every timeout disposition is in the closed set {$DISPOSITIONS}" "${BAD_DISPOSITION% }" ""
+CLOSED_FLOOR=6
+CLOSED_N=$(printf '%s\n' "$CLOSED_HOOKS" | tr ' ' '\n' | grep -c '[^[:space:]]')
+if [ "$CLOSED_N" -ge "$CLOSED_FLOOR" ]; then
+  _pass "the fail-closed set was derived from the hooks' own reporter calls ($CLOSED_N >= $CLOSED_FLOOR)"
+else
+  _fail "the fail-closed set was derived from the hooks' own reporter calls" \
+    "derived $CLOSED_N — a derivation that stopped matching would assert nothing about any deny"
+fi
+
+HUNG=""; WRONG_RC=""; IN_SCOPE_RC=""
 for h in $HOOKS; do
   CHECKED=$((CHECKED + 1))
   rc="$(_run_held_open "$REPO_ROOT/scripts/$h" "$PROJ")"
+  IN_SCOPE_RC="$IN_SCOPE_RC$h=$rc "
   if [ "$rc" = "124" ]; then
     FINDINGS=$((FINDINGS + 1)); HUNG="$HUNG$h "
     _fail "$h completes on a held-open pipe" "still running after ${DEADLINE}s — unbounded stdin read"
-  else
-    _pass "$h completes on a held-open pipe (exit $rc)"
+    continue
   fi
+  case " $CLOSED_HOOKS " in
+    *" $h "*)
+      if [ "$rc" = "$DENY_RC" ]; then
+        _pass "$h declares fail-closed and DENIES on a held-open pipe in scope (exit $rc)"
+      else
+        FINDINGS=$((FINDINGS + 1)); WRONG_RC="$WRONG_RC$h:$rc "
+        _fail "$h declares fail-closed and DENIES on a held-open pipe in scope" \
+          "exited $rc, not $DENY_RC — the label says deny and the process allowed"
+      fi ;;
+    *)
+      case " $OPEN_HOOKS " in
+        *" $h "*)
+          if [ "$rc" = "0" ]; then
+            _pass "$h declares fail-open and ALLOWS on a held-open pipe (exit $rc)"
+          else
+            FINDINGS=$((FINDINGS + 1)); WRONG_RC="$WRONG_RC$h:$rc "
+            _fail "$h declares fail-open and ALLOWS on a held-open pipe" \
+              "exited $rc, not 0 — the label says allow and the process blocked"
+          fi ;;
+        *) _pass "$h completes on a held-open pipe (exit $rc; declares no disposition)" ;;
+      esac ;;
+  esac
 done
 
 assert_eq "no derived hook parks on a held-open pipe" "${HUNG% }" ""
+assert_eq "every declared disposition is the exit code the hook actually produced" "${WRONG_RC% }" ""
 
 if [ "$CHECKED" -ge "$FLOOR" ]; then
   _pass "the hook derivation actually looked ($CHECKED checked >= $FLOOR)"
@@ -93,19 +150,55 @@ else
     "checked $CHECKED under $REPO_ROOT/scripts — a derivation finding fewer than $FLOOR is 'never looked', not a clean tree"
 fi
 
-NO_BRANCH=""; BAD_DISPOSITION=""
+NO_BRANCH=""
 for h in $HOOKS; do
   f="$REPO_ROOT/scripts/$h"
   grep -q 'read_hook_payload' "$f" || continue
   grep -q 'HOOK_PAYLOAD_OUTCOME' "$f" || NO_BRANCH="$NO_BRANCH$h "
   grep -q 'hook_payload_timeout_report' "$f" || NO_BRANCH="$NO_BRANCH$h "
-  while IFS= read -r d; do
-    [ -n "$d" ] || continue
-    case " $DISPOSITIONS " in *" $d "*) ;; *) BAD_DISPOSITION="$BAD_DISPOSITION$h:$d " ;; esac
-  done <<< "$(grep -oE 'hook_payload_timeout_report "[^"]+" "[^"]+"' "$f" | sed -E 's/.*" "([^"]+)"$/\1/')"
 done
 assert_eq "every caller of the reader branches on the timeout outcome by name" "${NO_BRANCH% }" ""
-assert_eq "every timeout disposition is in the closed set {$DISPOSITIONS}" "${BAD_DISPOSITION% }" ""
+
+# Each scope-gated guard driven from the far side of its own gate, where it must ALLOW.
+# The last row is the counterpart: pre-tool-guard has no scope to defer past, and says so.
+DEFERRALS="task-state-guard.sh|NOPROJ|0|no nazgul/config.json, so an unrelated repo's edits were never this guard's to refuse
+prompt-guard.sh|NOPROJ|0|no nazgul/config.json, so the prompt sits outside this guard's authority
+local-mode-tracking-guard.sh|OUT|0|install_mode is 'plugin', and this guard screens only local-mode projects
+parallel-rework-guard.sh|OUT|0|execution.parallel is off, and completed-unit enforcement applies only when it is on
+parallel-dispatch-guard.sh|OUT|0|the execution.enforce.dispatch_guard kill switch is off
+pre-tool-guard.sh|NOPROJ|2|nothing scopes this guard to a project, so it denies everywhere"
+DEF_SCANNED=0; DEF_SKIPPED=0; DEF_CHECKED=0; DEF_FINDINGS=0; UNDISCRIMINATING=""
+while IFS='|' read -r dh droot dwant dwhy; do
+  [ -n "$dh" ] || continue
+  DEF_SCANNED=$((DEF_SCANNED + 1))
+  case " $HOOKS " in
+    *" $dh "*) ;;
+    *) DEF_SKIPPED=$((DEF_SKIPPED + 1))
+       _skip "$dh is not in the derived hook population, so its scope gate was not driven"
+       continue ;;
+  esac
+  eval "droot_abs=\$$droot"
+  DEF_CHECKED=$((DEF_CHECKED + 1))
+  drc="$(_run_held_open "$REPO_ROOT/scripts/$dh" "$droot_abs")"
+  if [ "$drc" = "$dwant" ]; then
+    _pass "$dh on a held-open pipe in $droot: exit $drc — $dwhy"
+  else
+    DEF_FINDINGS=$((DEF_FINDINGS + 1))
+    _fail "$dh on a held-open pipe in $droot: exit $dwant — $dwhy" \
+      "exited $drc"
+  fi
+  # A row expecting an ALLOW is a deferral only if the SAME guard denied in $PROJ; a guard
+  # answering 0 on both sides has no gate, it just never denies.
+  if [ "$dwant" = "0" ]; then
+    inrc=""
+    for kv in $IN_SCOPE_RC; do [ "${kv%%=*}" = "$dh" ] && inrc="${kv#*=}"; done
+    [ "$inrc" = "$DENY_RC" ] || UNDISCRIMINATING="$UNDISCRIMINATING$dh(in=$inrc,out=$drc) "
+  fi
+done <<< "$DEFERRALS"
+assert_eq "every scope-gated guard answered BOTH ways — denying in scope, allowing outside it" \
+  "${UNDISCRIMINATING% }" ""
+echo "  scope-deferral: ${DEF_SCANNED} scanned, ${DEF_SKIPPED} skipped (not-in-derived-population=${DEF_SKIPPED}), ${DEF_CHECKED} checked, ${DEF_FINDINGS} findings"
+assert_eq "scope-deferral: scanned == skipped + checked" "$DEF_SCANNED" "$((DEF_SKIPPED + DEF_CHECKED))"
 
 RESIDUAL=""
 while IFS= read -r rel; do
@@ -137,6 +230,11 @@ kill -9 "$TWPID" 2>/dev/null; wait "$TWPID" 2>/dev/null
 # parsed as a payload is the exact bypass this outcome exists to prevent.
 assert_eq "outcome 3 of 3: a stalled pipe reads as 'timeout', with no partial content" \
   "$TOUT" "timeout stall 0"
+
+# The reader's documented interface is three globals. A fourth, holding up to one chunk
+# of payload, would ride into all sixteen sourcing hooks unannounced.
+CHUNK_LEAK="$(printf '{"a":1}' | bash -c '. "$1/scripts/lib/read-hook-payload.sh"; read_hook_payload; printf "%s" "${chunk-<unset>}"' _ "$REPO_ROOT")"
+assert_eq "the reader leaks no chunk buffer past its three documented globals" "$CHUNK_LEAK" "<unset>"
 
 HP_BOUND="$(sed -n 's/^HOOK_PAYLOAD_TIMEOUT_SECONDS=\([0-9][0-9]*\).*/\1/p' "$REPO_ROOT/$READER_LIB")"
 [ -n "$HP_BOUND" ] || HP_BOUND=2
@@ -383,6 +481,25 @@ if grep -q '^HOOK_PAYLOAD_DEADLINE_SECONDS=600$' "$LONG/$READER_LIB"; then
 else
   _fail "[mutation] the deadline went out of reach (600s) in the copy" \
     "no HOOK_PAYLOAD_DEADLINE_SECONDS assignment to rewrite"
+fi
+
+# The failure this assertion exists to catch: a guard that reports fail-closed and then
+# allows anyway, which the old label-matching form passed unchanged.
+LIAR="$SCRATCH/liar"
+mkdir -p "$LIAR"
+cp -R "$REPO_ROOT/scripts" "$LIAR/scripts"
+sed -i.bak -e '/hook_payload_timeout_report "pre-tool-guard" "fail-closed"/{n;s/exit 2/exit 0/;}' \
+  "$LIAR/scripts/pre-tool-guard.sh"
+rm -f "$LIAR/scripts/pre-tool-guard.sh.bak"
+LIAR_LABEL="$(grep -c 'hook_payload_timeout_report "pre-tool-guard" "fail-closed"' "$LIAR/scripts/pre-tool-guard.sh")"
+if [ "$LIAR_LABEL" = "1" ] && ! cmp -s "$REPO_ROOT/scripts/pre-tool-guard.sh" "$LIAR/scripts/pre-tool-guard.sh"; then
+  _pass "[mutation] the copy still DECLARES fail-closed and no longer exits $DENY_RC"
+  LIAR_RC="$(_run_held_open "$LIAR/scripts/pre-tool-guard.sh" "$PROJ")"
+  assert_eq "[mutation] and the exit-code assertion then sees the allow the label hides" \
+    "$LIAR_RC" "0"
+else
+  _fail "[mutation] the copy still DECLARES fail-closed and no longer exits $DENY_RC" \
+    "label count=$LIAR_LABEL, or sed left the copy byte-identical — nothing was mutated, so the check below proves nothing"
 fi
 
 SKIPPED=$((SKIP_NO_STDIN + SKIP_UNREADABLE))
