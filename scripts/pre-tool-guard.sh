@@ -18,6 +18,8 @@ rhp_unavailable() {
 }
 [ -f "$RHP_LIB" ] || rhp_unavailable "file is missing"
 [ -r "$RHP_LIB" ] || rhp_unavailable "file is not readable"
+# `source` returns the sourced file's LAST statement's status, so a non-zero there
+# is not evidence of a broken library — parse and API are asked as separate facts.
 bash -n "$RHP_LIB" 2>/dev/null || rhp_unavailable "file has a syntax error (bash -n rejected it)"
 rhp_src_rc=0
 # shellcheck source=./lib/read-hook-payload.sh
@@ -26,6 +28,9 @@ declare -F read_hook_payload >/dev/null \
   || rhp_unavailable "read_hook_payload is not defined after sourcing (source returned $rhp_src_rc)"
 declare -F hook_payload_timeout_report >/dev/null \
   || rhp_unavailable "hook_payload_timeout_report is not defined after sourcing (source returned $rhp_src_rc)"
+if [ "$rhp_src_rc" -ne 0 ]; then
+  echo "NAZGUL SAFETY: note — $RHP_LIB returned $rhp_src_rc on load, but both reader functions are defined; the read proceeds." >&2
+fi
 
 # The command being executed is passed via stdin or $ARGUMENTS
 INPUT="${1:-}"

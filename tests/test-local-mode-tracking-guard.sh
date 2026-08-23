@@ -1238,4 +1238,40 @@ assert_eq "perf: pre-filter-exit path is faster than the resolve_project_root pa
 fi
 teardown_temp_dir
 
+# The fail-closed reader-unavailable path exists for "scripts/lib/ did not ship", so an
+# unconditional `source lib/nazgul-root.sh` in it exited 1 — a PreToolUse ALLOW — on its own cause.
+SELFDEP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-lmtg-selfdep-XXXXXX")
+mkdir -p "$SELFDEP_DIR/scripts/lib" "$SELFDEP_DIR/proj/nazgul"
+cp "$GUARD" "$SELFDEP_DIR/scripts/"
+for _l in read-hook-payload nazgul-root emit-event; do
+  cp "$REPO_ROOT/scripts/lib/$_l.sh" "$SELFDEP_DIR/scripts/lib/"
+done
+SELFDEP_GUARD="$SELFDEP_DIR/scripts/local-mode-tracking-guard.sh"
+
+selfdep_probe() {
+  local ec=0
+  printf '%s' '{"tool_name":"Bash","tool_input":{"command":"git add nazgul/x"}}' \
+    | CLAUDE_PROJECT_DIR="$SELFDEP_DIR/proj" bash "$SELFDEP_GUARD" >/dev/null 2>&1 || ec=$?
+  printf '%s' "$ec"
+}
+
+printf '%s\n' '{"install_mode":"local"}' > "$SELFDEP_DIR/proj/nazgul/config.json"
+assert_eq "self-dep control: an intact copy still blocks a tracked nazgul/ path" "$(selfdep_probe)" "2"
+
+rm -f "$SELFDEP_DIR/scripts/lib/read-hook-payload.sh"
+assert_eq "reader missing, resolver present: fails CLOSED in a local-mode project" "$(selfdep_probe)" "2"
+
+rm -f "$SELFDEP_DIR/scripts/lib/nazgul-root.sh"
+assert_eq "reader AND resolver missing: still fails CLOSED, never the exit-1 a hook reads as allow" \
+  "$(selfdep_probe)" "2"
+
+# The deny must stay SCOPED with the resolver gone: same broken tree, out-of-scope project.
+printf '%s\n' '{"install_mode":"plugin"}' > "$SELFDEP_DIR/proj/nazgul/config.json"
+assert_eq "reader AND resolver missing, install_mode plugin: fails OPEN, this guard's scope holds" \
+  "$(selfdep_probe)" "0"
+rm -f "$SELFDEP_DIR/proj/nazgul/config.json"
+assert_eq "reader AND resolver missing, no config at all: fails OPEN rather than denying every repo" \
+  "$(selfdep_probe)" "0"
+rm -rf "$SELFDEP_DIR"
+
 report_results

@@ -47,13 +47,36 @@ set -euo pipefail
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RHP_LIB="$SCRIPT_DIR/lib/read-hook-payload.sh"
+# lean-comments: allow-run — the fallback exists for a failure this file cannot observe.
+# This guard's scope question, answered WITHOUT depending on a second library loading.
+# nazgul-root.sh stays primary (ADR-008), but the reader-unavailable path below exists
+# precisely BECAUSE scripts/lib/ may be unusable, and an unconditional `source` there was
+# defeated by its own cause: the missing file aborted under `set -e` with exit 1, which a
+# PreToolUse hook reads as ALLOW. The fallback reproduces the resolver's own order for this
+# one question, so the two agree wherever the resolver can answer at all.
+_lmtg_config_path() {
+  local root=""
+  if [ -r "$SCRIPT_DIR/lib/nazgul-root.sh" ] \
+     && source "$SCRIPT_DIR/lib/nazgul-root.sh" 2>/dev/null \
+     && declare -F resolve_project_root >/dev/null; then
+    root="$(resolve_project_root 2>/dev/null || true)"
+  fi
+  if [ -z "$root" ]; then
+    if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+      root="$CLAUDE_PROJECT_DIR"
+    else
+      root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+      [ -n "$root" ] && [ -r "$root/nazgul/config.json" ] || root="$(pwd)"
+    fi
+  fi
+  printf '%s\n' "$root/nazgul/config.json"
+}
+
 # A load that returns 0 having defined nothing is still no payload, and it is
 # scoped like the timeout branch below rather than denying every repo.
 rhp_unavailable() {
   local cfg
-  # shellcheck source=./lib/nazgul-root.sh
-  source "$SCRIPT_DIR/lib/nazgul-root.sh"
-  cfg="$(resolve_project_root)/nazgul/config.json"
+  cfg="$(_lmtg_config_path)"
   if [ -f "$cfg" ] \
     && [ "$(jq -r '.install_mode // ""' "$cfg" 2>/dev/null || echo "")" = "local" ]; then
     printf 'local-mode-tracking-guard: stdin reader unavailable: %s — fail-closed, blocking the command\n' "$1" >&2
@@ -72,9 +95,7 @@ read_hook_payload
 if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
   # With no command text every pre-filter below would allow, so the deny is
   # decided here — and only for the local-mode project this guard is scoped to.
-  # shellcheck source=./lib/nazgul-root.sh
-  source "$SCRIPT_DIR/lib/nazgul-root.sh"
-  TIMEOUT_CONFIG="$(resolve_project_root)/nazgul/config.json"
+  TIMEOUT_CONFIG="$(_lmtg_config_path)"
   if [ -f "$TIMEOUT_CONFIG" ] \
     && [ "$(jq -r '.install_mode // ""' "$TIMEOUT_CONFIG" 2>/dev/null || echo "")" = "local" ]; then
     hook_payload_timeout_report "local-mode-tracking-guard" "fail-closed" "blocking the command"

@@ -251,8 +251,11 @@ validate_copy_path() {
 }
 
 MANIFEST="$STATE_ROOT/nazgul/tasks/$TASK_ID.md"
+# A PATCH-NNN id is accepted above but /nazgul:patch writes to nazgul/tasks/patches/,
+# so the second location is tried too — the same fallback task-state-guard.sh uses.
+[ -f "$MANIFEST" ] || MANIFEST="$STATE_ROOT/nazgul/tasks/patches/$TASK_ID.md"
 [ -f "$MANIFEST" ] || die \
-  "no manifest at $MANIFEST" \
+  "no manifest for $TASK_ID under $STATE_ROOT/nazgul/tasks/ or $STATE_ROOT/nazgul/tasks/patches/" \
   "State tree resolved from $STATE_ROOT_SOURCE; code tree is $PROJECT_ROOT."
 
 command -v git >/dev/null 2>&1 || die "git is not available — a red run cannot be captured without it"
