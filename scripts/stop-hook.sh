@@ -356,6 +356,22 @@ if [ "$RECON_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
         if [ -n "$RECON_LIVE_STATUS" ] && [ "$RECON_LIVE_STATUS" != "$RECON_PREV_STATUS" ] \
           && ! ttg_transition_chain_is_guarded "$NAZGUL_DIR" "$RECON_TASK_ID" \
             "$RECON_PREV_STATUS" "$RECON_LIVE_STATUS" "$RECON_PREV_TS"; then
+          # Re-entry: this arm writes BLOCKED an iteration before its checkpoint, so a
+          # crash between them replays it and would rewrite `Blocked observed` to BLOCKED.
+          if [ "$RECON_LIVE_STATUS" = "BLOCKED" ] \
+            && grep -qiE '^\- \*\*Blocked kind\*\*:[[:space:]]*reconciliation[[:space:]]*$' "$recon_task_file"; then
+            # The first observation is the true one, so the record is read, never rewritten.
+            RECON_RECORDED_FROM=$(grep -m1 '^\- \*\*Blocked from\*\*:' "$recon_task_file" 2>/dev/null | sed 's/.*: //' || echo "")
+            RECON_RECORDED_OBSERVED=$(grep -m1 '^\- \*\*Blocked observed\*\*:' "$recon_task_file" 2>/dev/null | sed 's/.*: //' || echo "")
+            echo "NAZGUL BASH-WRITE RECONCILIATION: ${RECON_TASK_ID} is already quarantined (kind=reconciliation, from=${RECON_RECORDED_FROM:-unrecorded}, observed=${RECON_RECORDED_OBSERVED:-unrecorded}) — re-observed, record left intact; revalidate evidence with: \${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh repair ${RECON_TASK_ID}" >&2
+            emit_event "reconciliation_quarantine" \
+              task_id "$RECON_TASK_ID" kind "reconciliation" \
+              checkpoint_status "$RECON_PREV_STATUS" observed_status "$RECON_LIVE_STATUS" \
+              since "$RECON_PREV_TS" action "reentry_skipped" \
+              recorded_from "${RECON_RECORDED_FROM:-unrecorded}" \
+              recorded_observed "${RECON_RECORDED_OBSERVED:-unrecorded}"
+            continue
+          fi
           echo "NAZGUL BASH-WRITE RECONCILIATION: BLOCKED — ${RECON_TASK_ID} status changed ${RECON_PREV_STATUS} → ${RECON_LIVE_STATUS} outside the guarded Write/Edit/MultiEdit path, with no completed transition recorded by \${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" >&2
           RECON_REASON="status changed ${RECON_PREV_STATUS} → ${RECON_LIVE_STATUS} outside the guarded Write/Edit/MultiEdit path, with no completed transition recorded by scripts/task-transition.sh (stop-hook reconciliation, MF-022)"
           # Recheck red evidence when an untraceable IMPLEMENTED landing bypassed PreToolUse.
@@ -365,6 +381,9 @@ if [ "$RECON_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
             RECON_REASON="unverified red-run evidence (${TTG_RED_RUN_REASON}) on a status changed ${RECON_PREV_STATUS} → IMPLEMENTED outside the guarded Write/Edit/MultiEdit path (stop-hook reconciliation, FEAT-028)"
           fi
           set_task_status "$recon_task_file" "$RECON_LIVE_STATUS" "BLOCKED"
+          # Ledger-log it or the next pass reads this quarantine as a forgery; `|| true`
+          # as at the five siblings: aborting after BLOCKED is written strands it typeless.
+          ttg_log_transition "$NAZGUL_DIR" "$RECON_TASK_ID" "$RECON_LIVE_STATUS" "BLOCKED" "" "" "stop-hook" || true
           # Typed integrity annotation (ADR-020): the quarantine is NOT an
           # ordinary graph edge, so it records machine-readable endpoints.
           set_manifest_field "$recon_task_file" "Blocked kind" "reconciliation"

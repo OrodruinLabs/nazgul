@@ -2138,6 +2138,52 @@ assert_eq "cycle: a multi-edge window is chained by the ledger, not quarantined"
   "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "DONE"
 teardown_temp_dir
 
+# --- RECON-6: the quarantine must authorize its own BLOCKED in the ledger as its
+# five siblings do; unlogged, the arm's own write reads as a forgery next pass. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "IN_PROGRESS"
+run_hook
+sed -i.bak 's/^status: IN_PROGRESS/status: DONE/' "$TEST_DIR/nazgul/tasks/TASK-001.md" && rm -f "$TEST_DIR/nazgul/tasks/TASK-001.md.bak"
+run_hook
+assert_eq "recon-ledger: forged status quarantined" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "BLOCKED"
+assert_eq "recon-ledger: quarantine edge recorded with stop-hook attribution" \
+  "$(jq -r 'select(.task_id == "TASK-001" and .from == "DONE" and .to == "BLOCKED" and .writer == "stop-hook") | .to' \
+     "$TEST_DIR/nazgul/logs/guarded-transitions.jsonl" 2>/dev/null | head -1)" "BLOCKED"
+teardown_temp_dir
+
+# --- RECON-7: re-entry (a crash between the status write and the checkpoint that
+# records it) must not overwrite the first observation, which is what repair reads. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "IN_PROGRESS"
+run_hook
+sed -i.bak 's/^status: IN_PROGRESS/status: DONE/' "$TEST_DIR/nazgul/tasks/TASK-001.md" && rm -f "$TEST_DIR/nazgul/tasks/TASK-001.md.bak"
+run_hook
+recon_blocked_field() { grep -m1 "^\- \*\*$1\*\*:" "$TEST_DIR/nazgul/tasks/TASK-001.md" 2>/dev/null | sed 's/.*: //'; }
+assert_eq "recon-reentry: first pass records the observed status" \
+  "$(recon_blocked_field 'Blocked observed')" "DONE"
+# Drop only the checkpoint that recorded the quarantine, leaving the stale one newest.
+for recon_cp in "$TEST_DIR"/nazgul/checkpoints/iteration-*.json; do
+  [ -f "$recon_cp" ] || continue
+  if [ "$(jq -r '.task_statuses["TASK-001"] // ""' "$recon_cp" 2>/dev/null)" = "BLOCKED" ]; then rm -f "$recon_cp"; fi
+done
+run_hook
+assert_eq "recon-reentry: the original observed status survives re-quarantine" \
+  "$(recon_blocked_field 'Blocked observed')" "DONE"
+assert_eq "recon-reentry: the original checkpoint status survives re-quarantine" \
+  "$(recon_blocked_field 'Blocked from')" "IN_PROGRESS"
+assert_contains "recon-reentry: re-entry is recorded, not silently skipped" \
+  "$HOOK_OUTPUT" "is already quarantined"
+teardown_temp_dir
+
 # === MF-006: HITL pending-approval marker gates the DEFAULT sequential path ===
 # nazgul/.hitl-pending, when present in mode=hitl, must suppress the DELEGATE
 # line the default sequential DISPATCH_INSTR would otherwise emit — mirroring
