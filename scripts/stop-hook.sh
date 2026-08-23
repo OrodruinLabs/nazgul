@@ -59,11 +59,15 @@ if [ -n "$STOP_PAYLOAD" ]; then
     # A bound hit mid-document arrives non-empty and unparseable too, and only the reader knows the
     # truncation was OURS — its read_timeout_partial outranks this arm's guess at a producer change.
     BG_WHY="${HOOK_STDIN_WHY:-not_json}"
+  elif [ "${HOOK_STDIN_WHY:-}" = "read_timeout_partial" ]; then
+    # A prefix OUR bound cut short can still parse when the cut lands on a token boundary, and every
+    # count below would then undercount a registry never fully received — same precedence as above.
+    BG_WHY="read_timeout_partial"
   elif ! printf '%s' "$STOP_PAYLOAD" | jq -e 'has("background_tasks")' >/dev/null 2>&1; then
     BG_WHY="field_absent"
   elif ! printf '%s' "$STOP_PAYLOAD" | jq -e '(.background_tasks | type) == "array"' >/dev/null 2>&1; then
     # jq's length/map iterate an OBJECT's values and `// []` swallows an explicit null, so without this gate `{}` and `null` — the two likeliest deprecation shapes — count as an observed array (PR #245, three reviewers converged).
-    # A NEW closed-set member, deliberately not `not_json`: doctor.sh:376 tells the operator that any other `why` means the payload itself did not arrive intact, which is FALSE of a present, well-formed, wrongly-typed field.
+    # A NEW closed-set member, deliberately not `not_json`: doctor.sh's check_stop_payload reports every `why` without an arm of its own as PAYLOAD UNDETERMINED — the payload itself did not arrive intact — which is FALSE of a present, well-formed, wrongly-typed field.
     BG_WHY="field_wrong_type"
   else
     BG_SEEN="yes" BG_WHY=""
@@ -213,7 +217,9 @@ _IN_FLIGHT_HOLD_CAP=1
 # an entry that records no marker set a fresh budget every few minutes.
 _IN_FLIGHT_HOLD_TTL_MIN=1440
 
-if command -v flock >/dev/null 2>&1; then _IN_FLIGHT_HAS_FLOCK=1; else _IN_FLIGHT_HAS_FLOCK=0; fi
+# macOS ships no flock(1), so the claim below really is unlocked there; telemetry carries which it
+# was (ADR-014) — a mechanism that degraded must not look like one that had nothing to do.
+if command -v flock >/dev/null 2>&1; then _IN_FLIGHT_HAS_FLOCK=1 _IN_FLIGHT_LOCKED=true; else _IN_FLIGHT_HAS_FLOCK=0 _IN_FLIGHT_LOCKED=false; fi
 
 # One ledger file per marker set, named by a short hash of it — the shape of subagent-stop.sh's
 # _resume_attempts_file, fallback included: a bare pipeline with no sha256 tool aborts under set -e.
@@ -250,8 +256,13 @@ _in_flight_holds_prune() {
   done
 }
 
-# Read, cap-check and increment under ONE lock, then rename into place: two sessions sharing a
-# working tree (#195) can otherwise both read 0 and both take the single capped hold.
+# Read, cap-check and increment under ONE lock WHERE flock(1) EXISTS, then rename into place: two
+# sessions sharing a working tree (#195) can otherwise both read 0 and both take the single capped hold.
+
+# Without flock that read-modify-write is genuinely unlocked and the race is OPEN — unlike
+# emit-event.sh:75-82, whose lockless fallback is safe by construction (one O_APPEND write).
+
+# The event's `locked` field says which it was, so a degraded claim is reported, never inferred.
 _in_flight_hold_claim() {
   # Echoes the pre-existing count; 0 = granted, 3 = cap reached, anything else = ledger unusable.
   local file="$1" body="$2"
@@ -411,7 +422,9 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
         else
           echo "Nazgul: in-flight hold — waiting on ${FRESH_COUNT} BACKGROUND dispatch(es): ${FRESH_UNITS}. Allowing stop; the harness's task-notification resumes this loop when the background agent finishes." >&2
         fi
-        emit_event "stop_gate" "${IN_FLIGHT_HOLD_ARGS[@]}" units "$FRESH_UNITS" count:n "$FRESH_COUNT"
+        # `-` for an observed-empty unit list, the sentinel `def vocab` already uses above: the
+        # zero-marker live hold rests on the payload, so "" would read as a list nothing populated.
+        emit_event "stop_gate" "${IN_FLIGHT_HOLD_ARGS[@]}" units "${FRESH_UNITS:--}" count:n "$FRESH_COUNT" locked "$_IN_FLIGHT_LOCKED"
         exit 0
       fi
       # A cap reached is the policy DECISION; every other claim failure — no lock, no temp file, no
@@ -440,7 +453,7 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
     fi
     emit_event "stop_gate" reason "$IN_FLIGHT_NOHOLD_REASON" fingerprint "$IN_FLIGHT_HOLD_FP" \
       holds_taken:n "$IN_FLIGHT_HOLDS_TAKEN" live_subagents:n "${BG_LIVE:-0}" \
-      units "$FRESH_UNITS" ledger "$IN_FLIGHT_LEDGER"
+      units "${FRESH_UNITS:--}" ledger "$IN_FLIGHT_LEDGER" locked "$_IN_FLIGHT_LOCKED"
   fi
 fi
 
