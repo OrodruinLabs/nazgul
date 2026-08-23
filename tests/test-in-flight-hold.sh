@@ -2407,6 +2407,165 @@ _p14_check "P14k: the cheap presence probe runs FIRST, so a bus with no record c
 _p14_check "P14k control: the selection is nested inside the presence branch" \
   "$(awk -v g="$P14_GREP_LN" -v j="$P14_JQ_LN" 'NR==g && /if grep -q/ {a=1} NR==j && /^      last=/ {b=1} END {print (a && b) ? "guarded" : "unguarded"}' "$P14_DOCTOR")" "guarded"
 
+# --- P14l (TASK-029 a): the detect-only record says WHICH marker class it measured ---
+# Fresh admits only `missing`, stale also `background:"true"` — the Q3 population mixes classes by age, and a class never recorded cannot be recovered later.
+P14_PNL='{"hook_event_name":"Stop","background_tasks":[{"id":"s1","type":"subagent","status":"finished"}]}'
+_p14l_field() {
+  grep "\"reason\":\"$1\"" "$TEST_DIR/nazgul/logs/events.jsonl" | tail -1 | jq -r ".$2 // \"ABSENT\""
+}
+
+# Cell 1 — candidate arm, `missing` (the only class the FRESH path admits).
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/m.json" "nazgul:implementer" "TASK-CLS" "$(date +%s)" "missing"
+_run_hook_payload "$P14_EMPTY"
+_p14_check "P14l: the orphan-candidate record carries the marker CLASS it measured" \
+  "$(_p14l_field in_flight_orphan_candidate background)" "missing"
+_p14_check "P14l: ... as a JSON string, not a number or null" \
+  "$(_p14l_field in_flight_orphan_candidate 'background|type')" "string"
+teardown_temp_dir
+
+# Cell 2 — THE control that makes cell 1 evidence: the SAME arm on the SAME payload, reached by the
+# stale path with the other admitted class, must report `true`. A hard-coded field fails exactly here.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/m.json" "nazgul:implementer" "TASK-CLS" "$(( $(date +%s) - 7200 ))" "true"
+_run_hook_payload "$P14_EMPTY"
+_p14_check "P14l control: the STALE path's other admitted class is reported as itself, so the field is READ not hard-coded" \
+  "$(_p14l_field in_flight_orphan_candidate background)" "true"
+_p14_check "P14l control: ... and it really is the same arm, mixing two classes into one tally" \
+  "$(_p14l_field in_flight_orphan_candidate age)" "stale"
+teardown_temp_dir
+
+# Cell 3 — the unattributable arm, and cell 4 its class control.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/m.json" "nazgul:implementer" "TASK-CLS" "$(date +%s)" "missing"
+_p14_plant_session "sess-a"
+_p14_plant_session "sess-b"
+_run_hook_payload "$P14_EMPTY"
+_p14_check "P14l: the unattributable record carries the marker class too" \
+  "$(_p14l_field in_flight_orphan_unattributable background)" "missing"
+teardown_temp_dir
+
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/m.json" "nazgul:implementer" "TASK-CLS" "$(( $(date +%s) - 7200 ))" "true"
+_p14_plant_session "sess-a"
+_p14_plant_session "sess-b"
+_run_hook_payload "$P14_EMPTY"
+_p14_check "P14l control: ... reporting the class it actually saw on that arm as well" \
+  "$(_p14l_field in_flight_orphan_unattributable background)" "true"
+teardown_temp_dir
+
+# Cell 5 — the present-not-live arm, and cell 6 its class control.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/m.json" "nazgul:implementer" "TASK-CLS" "$(date +%s)" "missing"
+_run_hook_payload "$P14_PNL"
+_p14_check "P14l: the present-not-live record carries the marker class too" \
+  "$(_p14l_field in_flight_present_not_live background)" "missing"
+teardown_temp_dir
+
+setup_temp_dir
+setup_nazgul_dir
+create_config
+mkdir -p "$TEST_DIR/nazgul/in-flight"
+_write_marker "$TEST_DIR/nazgul/in-flight/m.json" "nazgul:implementer" "TASK-CLS" "$(( $(date +%s) - 7200 ))" "true"
+_run_hook_payload "$P14_PNL"
+_p14_check "P14l control: ... reporting the class it actually saw on that arm as well" \
+  "$(_p14l_field in_flight_present_not_live background)" "true"
+teardown_temp_dir
+
+# Source pin: all three detect-only arms, not two of them.
+_p14l_fn_body() { awk '/^_in_flight_detect_only\(\) \{/{f=1} f{print} f && /^\}$/{exit}' "$STOP_HOOK"; }
+_p14_check "P14l: every detect-only arm inside _in_flight_detect_only emits the class discriminator" \
+  "$(_p14l_fn_body | grep -cF 'background "$m_bg"')" "3"
+# Control: the class must be a PARAMETER of the function, not the loop global captured by luck — a
+# global read would keep passing if a future caller ran the arms outside the marker loop.
+_p14_check "P14l control: the class arrives as a parameter both call sites pass" \
+  "$(grep -cE '_in_flight_detect_only "\$m_unit" "\$m_agent" "(fresh|stale)" "\$m_bg"' "$STOP_HOOK")" "2"
+_p14_check "P14l control: ... and the function binds it from its own argument list" \
+  "$(grep -cF 'local unit="$1" agent="$2" age="$3" m_bg="${4:-}"' "$STOP_HOOK")" "1"
+
+# --- P14m (TASK-029 b): the `unkeyable` arm records how it becomes reachable ---
+_p14_check "P14m: the reachability path is named at the arm — every marker abandoned, plus ids-less live subagents" \
+  "$(grep -A2 'IN_FLIGHT_HOLD_KEY="live-subagents:' "$STOP_HOOK" | grep -c 'ABANDONED bound.*every marker abandoned.*no id')" "1"
+# Control: a comment is only worth pinning while the arm it explains is still there — both halves,
+# the assignment that produces `unkeyable` and the branch that consumes it.
+_p14_check "P14m control: the arm the comment explains still exists (producer)" \
+  "$(grep -cF 'IN_FLIGHT_LEDGER=unkeyable' "$STOP_HOOK")" "1"
+_p14_check "P14m control: ... and consumer" \
+  "$(grep -cF 'elif [ "$IN_FLIGHT_LEDGER" = "unkeyable" ]; then' "$STOP_HOOK")" "1"
+
+# --- P14n (TASK-029 c): the CHANGELOG corner, with its claim scoped to what was actually observed ---
+P14_CHANGELOG="$REPO_ROOT/CHANGELOG.md"
+_p14_check "P14n: the Q1 valve's unkeyable corner is recorded as a known constraint" \
+  "$([ "$(grep -c 'declines a hold the previous release would have taken' "$P14_CHANGELOG" || true)" -ge 1 ] && echo recorded || echo silent)" "recorded"
+_p14_check "P14n: the supporting claim is scoped to the fixtures, not asserted of the schema" \
+  "$(grep -cF 'captured payload in `tests/fixtures/stop-payload/` exhibits a live subagent without an `id`' "$P14_CHANGELOG" || true)" "1"
+_p14_check "P14n: ... and the release adds no new version heading" \
+  "$(grep -m1 '^## \[' "$P14_CHANGELOG")" "## [2.34.0] - 2026-08-22"
+# THE control that makes the claim evidence rather than assertion: read the fixtures and check it.
+# If a future capture lands with an id-less live subagent, the CHANGELOG sentence becomes false here.
+_p14l_idless() {
+  local f n total=0
+  for f in "$FIXTURES"/stop-payload/*.json; do
+    [ -f "$f" ] || continue
+    n=$(jq '[.background_tasks[]? | select(.type=="subagent") | select((.id // "") == "")] | length' "$f" 2>/dev/null || echo 99)
+    total=$((total + n))
+  done
+  printf '%s' "$total"
+}
+_p14_check "P14n control: the fixture claim is TRUE of the fixtures — no captured live subagent lacks an id" \
+  "$(_p14l_idless)" "0"
+_p14_check "P14n control: ... and the scan was not vacuous — there are subagent entries to have checked" \
+  "$([ "$(jq '[.background_tasks[]? | select(.type=="subagent")] | length' "$FIXTURES/stop-payload/stop-two-subagents-one-shell.json")" -gt 0 ] && echo yes || echo no)" "yes"
+
+# --- P14o (TASK-029 d): both fan-out surfaces know the reason ---
+P14_STATUSSKILL="$REPO_ROOT/skills/status/SKILL.md"
+_p14_check "P14o: /nazgul:status gives the operator guidance for in_flight_orphan_unattributable" \
+  "$([ "$(grep -c 'in_flight_orphan_unattributable' "$P14_STATUSSKILL" || true)" -ge 1 ] && echo yes || echo no)" "yes"
+_p14_check "P14o: ... saying it is NOT counted toward the ADR-027 Q3 bar" \
+  "$([ "$(grep -c 'NOT counted toward the ADR-027 Q3 bar' "$P14_STATUSSKILL" || true)" -ge 1 ] && echo stated || echo silent)" "stated"
+_p14_check "P14o: ... and answering the misreading, that this is the shared-nazgul/ case and not a leak" \
+  "$([ "$(grep -c 'more than one session on this nazgul/' "$P14_STATUSSKILL" || true)" -ge 1 ] && echo answered || echo unanswered)" "answered"
+# Control: the new class was ADDED to the left-in-place section, not swapped for one already there,
+# and the section's own count of itself was corrected with it.
+_p14_check "P14o control: the orphan-candidate guidance it sits beside survives" \
+  "$([ "$(grep -c 'in_flight_orphan_candidate' "$P14_STATUSSKILL" || true)" -ge 1 ] && echo yes || echo no)" "yes"
+_p14_check "P14o control: ... and the section no longer claims to cover only two classes" \
+  "$(grep -c 'All three classes below' "$P14_STATUSSKILL")" "1"
+# tests/test-rules-tiers.sh's §5 coupling list is HAND-MAINTAINED, not derived from RULES.md, so a
+# reason RULES §5 names is unchecked until the list is told about it.
+P14_TIERS="$REPO_ROOT/tests/test-rules-tiers.sh"
+# Membership in the LIST, not presence in the file: both tokens also appear in that block's own
+# substring-trap comment, which checks nothing.
+_p14o_tiers_list() {
+  awk '/^for token in afk_timeout/{f=1} f{print} f && /; do$/{exit}' "$P14_TIERS" \
+    | sed -e 's/^for token in //' -e 's/\\$//' -e 's/; do$//' | tr -s ' ' '\n' | grep -c "^$1$"
+}
+_p14_check "P14o: the §5 stop_gate coupling list covers the reason RULES.md already names" \
+  "$(_p14o_tiers_list in_flight_orphan_unattributable)" "1"
+_p14_check "P14o control: ... alongside the tokens it already carried, not instead of them" \
+  "$(_p14o_tiers_list in_flight_orphan_candidate)" "1"
+_p14_check "P14o control: ... including the prefix sibling the maximal-extension match keeps distinct" \
+  "$(_p14o_tiers_list in_flight_orphan)" "1"
+_p14_check "P14o control: the list was actually located — a failed extraction reads as found-none otherwise" \
+  "$(_p14o_tiers_list afk_timeout)" "1"
+_p14_check "P14o control: RULES.md §5 does name it, which is what makes the list's silence a hole" \
+  "$([ "$(grep -c 'in_flight_orphan_unattributable' "$REPO_ROOT/RULES.md" || true)" -ge 1 ] && echo named || echo absent)" "named"
+
 assert_eq "P14 accounting: scanned == skipped + checked" "$P14_SCANNED" "$((P14_SKIPPED + P14_CHECKED))"
 assert_eq "P14 floor: the finding set is not empty" \
   "$([ "$P14_CHECKED" -gt 0 ] && echo yes || echo no)" "yes"

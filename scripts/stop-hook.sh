@@ -331,13 +331,15 @@ _in_flight_hold_claim() {
 # a marker that has been sitting there, so running this only inside the FRESH branch excluded
 
 # exactly the population ADR-027's Q3 bar exists to count.
+# `m_bg` rides along because these arms no longer measure ONE class: fresh admits only `missing`, stale also `background:"true"` — and a class the record never carried cannot be recovered when the Q3 bar is evaluated.
 _in_flight_detect_only() {
-  local unit="$1" agent="$2" age="$3"
+  local unit="$1" agent="$2" age="$3" m_bg="${4:-}"
   if [ "$BG_SUBAGENTS" -ne 0 ]; then
     # Ruling Q2's third state: its disposition is passed and untouched here; the silence was the defect.
     echo "Nazgul: PRESENT-NOT-LIVE in-flight marker for ${unit} (${agent}) — the Stop payload reports ${BG_SUBAGENTS} subagent(s) present for this session but none positively live (statuses: ${BG_STATUSES:-none}), so this tick can prove neither a running dispatch nor an orphan. NOT held on and NOT quarantined; left in nazgul/in-flight/. Continuing normally." >&2
     emit_event "stop_gate" reason "in_flight_present_not_live" unit "$unit" agent "$agent" \
-      subagents_present:n "$BG_SUBAGENTS" live_subagents:n "$BG_LIVE" statuses "${BG_STATUSES:-}" age "$age"
+      subagents_present:n "$BG_SUBAGENTS" live_subagents:n "$BG_LIVE" statuses "${BG_STATUSES:-}" age "$age" \
+      background "$m_bg"
     return 0
   fi
   if [ "$IN_FLIGHT_SESSIONS" -gt 1 ]; then
@@ -346,14 +348,14 @@ _in_flight_detect_only() {
     echo "Nazgul: UNATTRIBUTABLE in-flight marker for ${unit} (${agent}) — the Stop payload reports no subagent for THIS session, but ${IN_FLIGHT_SESSIONS} live sessions share this nazgul/ and markers carry no session id (#248), so this tick cannot say the dispatch is not running under another one. NOT counted toward the ADR-027 Q3 bar, NOT held on and NOT quarantined. Continuing normally." >&2
     emit_event "stop_gate" reason "in_flight_orphan_unattributable" evidence "shared_nazgul_dir" \
       unit "$unit" agent "$agent" sessions:n "$IN_FLIGHT_SESSIONS" entries:n "$BG_ENTRIES" \
-      subagents_present:n "$BG_SUBAGENTS" types "${BG_TYPES:-}" age "$age"
+      subagents_present:n "$BG_SUBAGENTS" types "${BG_TYPES:-}" age "$age" background "$m_bg"
     return 0
   fi
   # DETECT-ONLY: ruling Q3 defers the irreversible move until ADR-027's measurement bar.
   echo "Nazgul: ORPHAN CANDIDATE in-flight marker for ${unit} (${agent}) — the Stop payload reports no subagent of any status for this session. NOT quarantined and NOT held on; left in nazgul/in-flight/ pending the ADR-027 Q3 measurement bar. Continuing normally." >&2
   emit_event "stop_gate" reason "in_flight_orphan_candidate" evidence "background_tasks_empty" \
     unit "$unit" agent "$agent" entries:n "$BG_ENTRIES" subagents_present:n "$BG_SUBAGENTS" \
-    types "${BG_TYPES:-}" age "$age"
+    types "${BG_TYPES:-}" age "$age" background "$m_bg"
 }
 
 if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; then
@@ -445,7 +447,7 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
       elif [ "$IN_FLIGHT_OBSERVED" = "yes" ] && [ "$m_named" != "true" ] && [ "$m_bg" != "false" ]; then
         # Only the `missing` class reaches here now — the one with NO marker-level fact to outrank
         # the payload: "true" held above, "false" and named quarantine below.
-        _in_flight_detect_only "$m_unit" "$m_agent" "fresh"
+        _in_flight_detect_only "$m_unit" "$m_agent" "fresh" "$m_bg"
       elif [ "$m_bg" = "false" ] || [ "$m_named" = "true" ]; then
         # PROVEN class only: a synchronous dispatch cannot span a Stop, so this marker
         # is residue and quarantining it is what keeps the backlog from regrowing.
@@ -478,7 +480,7 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
       if [ "$IN_FLIGHT_OBSERVED" = "yes" ] && [ "$m_named" != "true" ] && [ "$m_bg" != "false" ]; then
         # Age decides the HOLD, never the MEASUREMENT (finding 6). Reporting a marker and measuring
         # it are independent, exactly as #211 already separated holding from reporting.
-        _in_flight_detect_only "$m_unit" "$m_agent" "stale"
+        _in_flight_detect_only "$m_unit" "$m_agent" "stale" "$m_bg"
       fi
     fi
   done
@@ -506,6 +508,7 @@ if [ "$IN_FLIGHT_HOLD_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/in-flight" ]; the
       IN_FLIGHT_LIVE_IDS="$BG_LIVE_IDS"
       [ "$IN_FLIGHT_LIVE_IDS" != "-" ] || IN_FLIGHT_LIVE_IDS=""
       IN_FLIGHT_HOLD_KEY="live-subagents:${IN_FLIGHT_LIVE_IDS}"
+      # Reachable since the ABANDONED bound: every marker abandoned (so none is held) plus live subagents carrying no id leaves nothing episode-specific to key on, where a marker basename used to.
       [ -n "$IN_FLIGHT_LIVE_IDS" ] || IN_FLIGHT_LEDGER=unkeyable
     fi
     IN_FLIGHT_HOLDS_FILE=$(_in_flight_holds_file "$IN_FLIGHT_HOLD_KEY")

@@ -363,7 +363,7 @@ _sg_emit_hits() {
 SG_SCANNED=0 SG_SKIPPED=0 SG_CHECKED=0 SG_FINDINGS=0
 for token in afk_timeout in_flight_hold in_flight_stale in_flight_orphan in_flight_unverifiable \
              in_flight_orphan_candidate in_flight_hold_budget_exhausted in_flight_present_not_live \
-             in_flight_hold_unbudgetable stop_payload_observed; do
+             in_flight_hold_unbudgetable in_flight_orphan_unattributable stop_payload_observed; do
   SG_SCANNED=$((SG_SCANNED + 1))
   if [ ! -f "$RULES_FILE" ] || [ ! -f "$STOP_HOOK" ]; then
     SG_SKIPPED=$((SG_SKIPPED + 1))
