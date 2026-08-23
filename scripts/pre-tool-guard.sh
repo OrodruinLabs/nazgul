@@ -7,15 +7,25 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RHP_LIB="$SCRIPT_DIR/lib/read-hook-payload.sh"
-# Same stance as dp_unavailable below, and for the same reason: this hook blocks
-# only on exit 2, so a `source` that aborts reads as allow-everything-unscreened.
-if [ ! -r "$RHP_LIB" ]; then
-  echo "NAZGUL SAFETY: Blocked — stdin reader unavailable: $RHP_LIB" >&2
-  echo "Repair the Nazgul install (scripts/lib/ must ship alongside scripts/) — no command is screened until it loads." >&2
+# The same four facts dp_unavailable asks below, and for the same reason: this hook
+# blocks only on exit 2, so a load that returns 0 having DEFINED NOTHING leaves the
+# call command-not-found, exits 127 under `set -e`, and reads as allow-unscreened.
+rhp_unavailable() {
+  echo "NAZGUL SAFETY: Blocked — stdin reader unavailable: $1" >&2
+  echo "Expected authority: $RHP_LIB" >&2
+  echo "Repair the Nazgul install (scripts/lib/ must ship alongside scripts/) — fail-closed, blocking the unscreened command." >&2
   exit 2
-fi
+}
+[ -f "$RHP_LIB" ] || rhp_unavailable "file is missing"
+[ -r "$RHP_LIB" ] || rhp_unavailable "file is not readable"
+bash -n "$RHP_LIB" 2>/dev/null || rhp_unavailable "file has a syntax error (bash -n rejected it)"
+rhp_src_rc=0
 # shellcheck source=./lib/read-hook-payload.sh
-source "$RHP_LIB"
+source "$RHP_LIB" || rhp_src_rc=$?
+declare -F read_hook_payload >/dev/null \
+  || rhp_unavailable "read_hook_payload is not defined after sourcing (source returned $rhp_src_rc)"
+declare -F hook_payload_timeout_report >/dev/null \
+  || rhp_unavailable "hook_payload_timeout_report is not defined after sourcing (source returned $rhp_src_rc)"
 
 # The command being executed is passed via stdin or $ARGUMENTS
 INPUT="${1:-}"

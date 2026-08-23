@@ -12,7 +12,19 @@ set -euo pipefail
 # Exit 0 = allow idle. Exit 2 = block (reason on stderr).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/lib/read-hook-payload.sh"
+RHP_LIB="$SCRIPT_DIR/lib/read-hook-payload.sh"
+# A load that returns 0 having defined nothing is still no payload, so it takes
+# this hook's own posture rather than exiting 127 into whatever that means here.
+rhp_unavailable() {
+  printf 'teammate-idle-guard: stdin reader unavailable: %s — fail-open, allowing idle\n' "$1" >&2
+  exit 0
+}
+[ -r "$RHP_LIB" ] || rhp_unavailable "$RHP_LIB is missing or unreadable"
+rhp_rc=0
+# shellcheck source=./lib/read-hook-payload.sh
+source "$RHP_LIB" || rhp_rc=$?
+declare -F read_hook_payload >/dev/null && declare -F hook_payload_timeout_report >/dev/null \
+  || rhp_unavailable "$RHP_LIB defines no reader API after sourcing (source returned $rhp_rc)"
 
 INPUT="${1:-}"
 if [ -z "$INPUT" ]; then

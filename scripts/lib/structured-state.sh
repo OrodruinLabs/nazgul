@@ -3,10 +3,8 @@
 # (review verdicts, task status) from a canonical leading YAML frontmatter block.
 # Sourced by review-evidence.sh and task-utils.sh.
 
-# Idempotent source guard — this lib is sourced by both review-evidence.sh and
-# task-utils.sh, which can both be loaded into the same hook shell.
-[ -n "${_NAZGUL_STRUCTURED_STATE_SOURCED:-}" ] && return 0
-_NAZGUL_STRUCTURED_STATE_SOURCED=1
+# No re-source sentinel, though this lib IS loaded twice into one hook shell: a name any
+# environment can set measurably changed prompt-guard's exit code (see nazgul-root.sh).
 
 # MF-063: APPROVED is a documented alias of the canonical APPROVE verdict token —
 # the review-gate/reviewers have been observed emitting the past-participle form.
