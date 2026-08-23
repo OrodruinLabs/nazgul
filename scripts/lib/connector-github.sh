@@ -13,6 +13,10 @@
 [ -n "${_NAZGUL_CONNECTOR_GITHUB_SOURCED:-}" ] && return 0
 _NAZGUL_CONNECTOR_GITHUB_SOURCED=1
 
+_CGH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./bounded-net.sh
+. "$_CGH_DIR/bounded-net.sh"
+
 # _cgh_cfg <config> <jq_path> <default> -> scalar config value, or <default> when
 # the config is missing/unreadable or the key is null/absent. Fixed literal paths
 # only; the returned value is treated purely as data by callers.
@@ -23,13 +27,19 @@ _cgh_cfg() {
   if [ -n "$val" ]; then printf '%s' "$val"; else printf '%s' "$default"; fi
 }
 
+# lean-comments: allow-run — the attempt-vs-count distinction is the whole point.
 # _cgh_gh_retry <cmd...> -> run a gh invocation with bounded retry; stdout passes
 # through, every failure is swallowed. Returns non-zero after the last attempt so
 # callers degrade instead of crashing. Delay is overridable to 0 to keep tests fast.
+#
+# THE ATTEMPT IS BOUNDED, NOT MERELY THE COUNT (TASK-048). Capping attempts at 3 while
+# each attempt can wait forever is not a bound — three times unbounded is unbounded, and
+# this loop's shape read as already-solved for exactly that reason. Each attempt now runs
+# under nz_bounded_run, so the worst case is 3 x the tier's bound and not infinity.
 _cgh_gh_retry() {
   local attempts="${NAZGUL_CGH_RETRY_ATTEMPTS:-3}" delay="${NAZGUL_CGH_RETRY_DELAY:-1}" i
   for i in $(seq 1 "$attempts"); do
-    if "$@" 2>/dev/null; then
+    if nz_bounded_run_q net "connector-github attempt" "$@"; then
       return 0
     fi
     if [ "$i" -lt "$attempts" ] && [ "$delay" -gt 0 ] 2>/dev/null; then
@@ -296,7 +306,7 @@ connector_github_pull_archive() {
 # for contract symmetry; the probe is gh-only (no config read).
 connector_github_health() {
   command -v gh >/dev/null 2>&1 || return 1
-  gh auth status >/dev/null 2>&1 || return 1
+  nz_bounded_run_q quick "gh auth status (connector health)" gh auth status >/dev/null || return 1
   _cgh_gh_retry gh repo view --json name >/dev/null 2>&1 || return 1
   return 0
 }

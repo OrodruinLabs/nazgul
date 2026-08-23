@@ -80,9 +80,13 @@ emit_event() {
   # flock and fallback branches end in `|| true` so the caller's exit status is
   # unaffected — the flock branch needs it too (a failing redirect inside the
   # subshell propagates out otherwise).
+  # -w, not a bare -x: an exclusive lock with no wait bound parks the hook forever on a
+  # stale lockfile. On timeout the record is still appended, unserialised, and SAYS so.
   local lockfile="${EVENTS_FILE}.lock"
   if [ "$_EMIT_HAS_FLOCK" = "1" ]; then
-    ( flock -x 200; jq -cn "${jq_args[@]}" "$jq_expr" >> "$EVENTS_FILE" ) 200>"$lockfile" || true
+    ( flock -w "${NAZGUL_EMIT_LOCK_WAIT:-5}" -x 200 \
+        || printf 'emit_event: lock_wait_exceeded: %ss on %s — appending unserialised (O_APPEND), the record is NOT lost\n' "${NAZGUL_EMIT_LOCK_WAIT:-5}" "$lockfile" >&2
+      jq -cn "${jq_args[@]}" "$jq_expr" >> "$EVENTS_FILE" ) 200>"$lockfile" || true
   else
     jq -cn "${jq_args[@]}" "$jq_expr" >> "$EVENTS_FILE" || true
   fi

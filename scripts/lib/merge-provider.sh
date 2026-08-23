@@ -30,9 +30,19 @@
 # only via --arg. Host stderr is redacted for token-shaped substrings before it
 # is echoed or emitted.
 #
+# EVERY `gh` CALL HERE IS BOUNDED (TASK-048). This library is reached from the
+# `IMPLEMENTED -> DONE` merge-evidence gate, which is the worst place in the state
+# machine for an unbounded wait: the loop stops with no verdict, no event and no
+# diagnostic, indistinguishable from a slow network. `scripts/lib/bounded-net.sh`
+# supplies both halves — a duration bound and the prompt suppression `</dev/null`
+# cannot do, since a credential helper reads /dev/tty and not stdin. A bound that
+# fires is `api_failure` by the rule already stated above: it is emphatically NOT a
+# quietly not-merged `ok`.
+#
 # Idempotent source guard; NOT `set -euo pipefail` — sourced into caller shells
-# that own their own shell options. Nothing but path resolution runs at source
-# time; the telemetry lib is sourced lazily, per call, inside a subshell.
+# that own their own shell options. Path resolution and bounded-net's
+# non-interactive exports run at source time; the telemetry lib is sourced
+# lazily, per call, inside a subshell.
 #
 # BECAUSE the caller owns those options, every assignment below whose command
 # substitution can exit non-zero is written `x=$(...) || rc=$?` with `rc`
@@ -49,6 +59,8 @@
 _NAZGUL_MERGE_PROVIDER_SOURCED=1
 
 _MERGE_PROVIDER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./bounded-net.sh
+. "$_MERGE_PROVIDER_LIB_DIR/bounded-net.sh"
 
 # _mp_warn <message...> -> one `merge-provider: ` stderr line. This is the PRIMARY
 # signal; telemetry no-ops on an uninitialised tree, so it can never be the only one.
@@ -246,7 +258,8 @@ merge_provider_detect() {
 # authenticated. Auth is `gh auth` only; no credential is read from config.
 _mp_github_health() {
   command -v gh >/dev/null 2>&1 || { printf '%s' "gh is not installed"; return 1; }
-  gh auth status >/dev/null 2>&1 || { printf '%s' "gh is not authenticated (run: gh auth login)"; return 1; }
+  nz_bounded_run_q quick "gh auth status (merge-provider health)" gh auth status >/dev/null \
+    || { printf '%s' "gh is not authenticated, or the check exceeded its bound (run: gh auth login)"; return 1; }
   return 0
 }
 
@@ -483,7 +496,8 @@ _mp_github_pr_state() {
     _mp_result "github" "$host" "$pr" "provider_unavailable" "" "" "" "" "$why"
     return 4
   }
-  out=$( (cd "$root" 2>/dev/null && gh pr view "$pr" --repo "$target" --json state,mergedAt,mergeCommit,headRefName,baseRefName,url) 2>&1 ) || rc=$?
+  out=$( (cd "$root" 2>/dev/null && NZ_BOUNDED_ROOT="$root" nz_bounded_run net "gh pr view (merge state)" \
+    gh pr view "$pr" --repo "$target" --json state,mergedAt,mergeCommit,headRefName,baseRefName,url) 2>&1 ) || rc=$?
   if [ "$rc" -ne 0 ]; then
     why="gh pr view $pr failed (exit $rc): $(_mp_oneline "$out")"
     _mp_warn "api_failure: $why — this is NOT 'not merged'; no closure may be inferred from it"
