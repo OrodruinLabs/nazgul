@@ -49,6 +49,16 @@ _rp_nonce() {
   fi
 }
 
+# Two paths naming one file. Compared through the resolved parent, so a different
+# spelling of the canonical path is accepted and a genuinely different file is not.
+_rp_same_path() {
+  local a="$1" b="$2" da db
+  [ "$a" = "$b" ] && return 0
+  da="$(cd "$(dirname -- "$a")" 2>/dev/null && pwd -P)" || return 1
+  db="$(cd "$(dirname -- "$b")" 2>/dev/null && pwd -P)" || return 1
+  [ -n "$da" ] && [ -n "$db" ] && [ "$da/$(basename -- "$a")" = "$db/$(basename -- "$b")" ]
+}
+
 # compute_review_token <nonce> <diff_hash> <unit_id> -> prints the first 16
 # hex chars of sha256(nonce \0 diff_hash \0 unit_id); 0 on success. Degrades
 # to allow (prints nothing, returns 1) if no sha256 tool is available.
@@ -59,12 +69,22 @@ compute_review_token() {
   printf '%s\n' "${full:0:16}"
 }
 
+# lean-comments: allow-run — the argument is now constrained, and a constraint nobody
+# can see from the signature is the trap it replaces.
 # write_dispatch_manifest <nazgul_dir> <unit_id> <diff_path> <feat_id> <iteration>
 #   [--selected "<space-list>"] [--skipped "<name:reason;...>"] [--] <reviewer...>
 # Writes nazgul/reviews/<unit_id>/.dispatch.json (see header for schema) and
 # prints the derived token on success. `selected` defaults to the full
-# roster, `skipped` to []. Returns 1 (no output, no file written) if no
+# roster, `skipped` to []. Returns 1 (no output, no manifest written) if no
 # sha256 tool is available.
+#
+# <diff_path> is NOT a free choice. validate_review_provenance always hashes
+# <review_dir>/diff.patch, so a manifest bound to any other file is born STALE and
+# its unit can never pass the DONE gate. Two rules keep the two ends agreeing by
+# construction rather than by caller discipline: a non-empty diff_path that is not
+# the canonical file is REFUSED with a named reason on stderr, and the hash is taken
+# from the canonical file itself — because passing "" while diff.patch exists on disk
+# produced the identical born-stale manifest by the other route.
 write_dispatch_manifest() {
   local nazgul_dir="$1" unit_id="$2" diff_path="$3" feat_id="$4" iteration="$5"
   shift 5
@@ -85,11 +105,21 @@ write_dispatch_manifest() {
   review_dir="$nazgul_dir/reviews/$unit_id"
   mkdir -p "$review_dir" || return 1
 
+  local canonical_diff="$review_dir/diff.patch"
+  if [ -n "$diff_path" ] && ! _rp_same_path "$diff_path" "$canonical_diff"; then
+    printf 'review-provenance: REFUSED to write %s/.dispatch.json\n' "$review_dir" >&2
+    printf 'review-provenance: reason: NON_CANONICAL_DIFF_PATH — handed "%s", but validate_review_provenance always hashes "%s".\n' \
+      "$diff_path" "$canonical_diff" >&2
+    printf 'review-provenance: a manifest bound to any other file is born stale, so this unit could never pass the DONE gate. Write the review diff to the canonical path first.\n' >&2
+    return 1
+  fi
+
   local nonce; nonce=$(_rp_nonce) || return 1
 
+  # The SAME expression the validator evaluates, so the two cannot disagree.
   local diff_hash
-  if [ -n "$diff_path" ] && [ -f "$diff_path" ]; then
-    diff_hash=$(_rp_sha256 < "$diff_path") || return 1
+  if [ -f "$canonical_diff" ]; then
+    diff_hash=$(_rp_sha256 < "$canonical_diff") || return 1
   else
     diff_hash=$(printf '' | _rp_sha256) || return 1
   fi

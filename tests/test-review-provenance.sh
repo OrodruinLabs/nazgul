@@ -33,7 +33,8 @@ run_validate() {
 # --- Test 1: write_dispatch_manifest — schema round-trip, defaults ---
 setup_temp_dir
 setup_nazgul_dir
-DIFF="$TEST_DIR/diff.patch"
+DIFF="$TEST_DIR/nazgul/reviews/TASK-001/diff.patch"
+mkdir -p "$(dirname "$DIFF")"
 printf 'diff --git a b\n+hi\n' > "$DIFF"
 TOKEN_OUT=$(write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-001" "$DIFF" "FEAT-006" "3" -- code-reviewer qa-reviewer)
 WRITE_EC=$?
@@ -59,7 +60,8 @@ setup_temp_dir
 setup_nazgul_dir
 mkdir -p "$TEST_DIR/.claude/agents/generated"
 touch "$TEST_DIR/.claude/agents/generated/code-reviewer.md"
-DIFF="$TEST_DIR/diff.patch"; printf 'x\n' > "$DIFF"
+DIFF="$TEST_DIR/nazgul/reviews/TASK-002/diff.patch"
+mkdir -p "$(dirname "$DIFF")"; printf 'x\n' > "$DIFF"
 write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-002" "$DIFF" "FEAT-006" "1" -- code-reviewer qa-reviewer >/dev/null
 MANIFEST="$TEST_DIR/nazgul/reviews/TASK-002/.dispatch.json"
 assert_json_field "resolved true for generated agent" "$MANIFEST" ".reviewers[0].resolved" "true"
@@ -69,7 +71,8 @@ teardown_temp_dir
 # --- Test 3: --selected/--skipped round-trip; full roster kept in reviewers[] ---
 setup_temp_dir
 setup_nazgul_dir
-DIFF="$TEST_DIR/diff.patch"; printf 'x\n' > "$DIFF"
+DIFF="$TEST_DIR/nazgul/reviews/TASK-003/diff.patch"
+mkdir -p "$(dirname "$DIFF")"; printf 'x\n' > "$DIFF"
 write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-003" "$DIFF" "FEAT-006" "2" \
   --selected "code-reviewer" \
   --skipped "qa-reviewer:no tests changed;architect-reviewer:no config touched" \
@@ -91,7 +94,10 @@ NZ_DIGEST_PROBE=$(digest_string probe || true)
 assert_eq "expected hashes: the shared digest helper returns a 64-hex digest, so no hash comparison here is vacuous" \
   "${#NZ_DIGEST_PROBE}" "64"
 EMPTY_HASH=$(digest_string '')
-write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-004" "$TEST_DIR/nope.patch" "FEAT-006" "1" -- code-reviewer >/dev/null
+# The canonical path, deliberately not created: "absent" is the condition under test, and
+# a non-canonical name is now its own refusal rather than another way to reach this branch.
+write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-004" "$TEST_DIR/nazgul/reviews/TASK-004/diff.patch" \
+  "FEAT-006" "1" -- code-reviewer >/dev/null
 MANIFEST="$TEST_DIR/nazgul/reviews/TASK-004/.dispatch.json"
 assert_json_field "diff absent -> empty-string sha256" "$MANIFEST" ".diff_hash" "$EMPTY_HASH"
 teardown_temp_dir
@@ -144,7 +150,8 @@ assert_eq "compute_review_token degrades to allow: no output" "$DEGRADE_OUT" ""
 # WITHOUT sha256sum/shasum/openssl, so the failure is isolated to the hash step.
 setup_temp_dir
 setup_nazgul_dir
-DIFF="$TEST_DIR/diff.patch"; printf 'x\n' > "$DIFF"
+DIFF="$TEST_DIR/nazgul/reviews/TASK-005/diff.patch"
+mkdir -p "$(dirname "$DIFF")"; printf 'x\n' > "$DIFF"
 FAKEBIN="$TEST_DIR/fakebin"
 mkdir -p "$FAKEBIN"
 for tool in mkdir dirname mktemp mv rm date jq head od tr; do
@@ -604,5 +611,51 @@ if [ -n "$LIVE_NAZGUL" ] && [ -f "$LIVE_NAZGUL/config.json" ] && [ -d "$LIVE_NAZ
 else
   _skip "live dirs: no initialised nazgul/ in this checkout (task worktree or CI)"
 fi
+
+# --- The writer's diff_path took an arbitrary file and hashed it, while the validator
+# always hashes <review_dir>/diff.patch. Nothing bound them, so the manifest was born STALE. ---
+setup_temp_dir
+setup_nazgul_dir
+BS_DIR="$TEST_DIR/nazgul/reviews/TASK-060"
+mkdir -p "$BS_DIR"
+printf 'board 13 content\n' > "$BS_DIR/diff.patch"
+printf 'board 14 delta\n'   > "$BS_DIR/diff-delta.patch"
+
+BS_EC=0
+BS_ERR=$(write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-060" "$BS_DIR/diff-delta.patch" \
+  "FEAT-031" "1" -- code-reviewer 2>&1 >/dev/null) || BS_EC=$?
+assert_exit_code "non-canonical diff_path: refused (exit 1), never a born-stale manifest" "$BS_EC" 1
+assert_contains "non-canonical diff_path: the refusal is NAMED, not a bare non-zero" \
+  "$BS_ERR" "NON_CANONICAL_DIFF_PATH"
+assert_contains "non-canonical diff_path: the refusal names the canonical file the validator hashes" \
+  "$BS_ERR" "$BS_DIR/diff.patch"
+assert_file_not_exists "non-canonical diff_path: no manifest is written at all" \
+  "$BS_DIR/.dispatch.json"
+
+BS_TOKEN=$(write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-060" "$BS_DIR/diff.patch" \
+  "FEAT-031" "1" -- code-reviewer)
+write_reviewer "TASK-060" "code-reviewer" "APPROVE" "$BS_TOKEN"
+run_validate "TASK-060"
+assert_exit_code "canonical diff_path: the unit its own writer produced validates clean" "$VAL_EC" 0
+
+# A different SPELLING of the canonical path is the same file, so refusing it would be
+# a false deny rather than the trap this refusal exists to close.
+BS_ALT_EC=0
+write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-060" \
+  "$TEST_DIR/nazgul/reviews/../reviews/TASK-060/diff.patch" "FEAT-031" "1" -- code-reviewer \
+  >/dev/null 2>&1 || BS_ALT_EC=$?
+assert_exit_code "an equivalent spelling of the canonical path is accepted, not refused" "$BS_ALT_EC" 0
+
+# The OTHER route to the same born-stale manifest: "" means "no diff" to the writer and
+# meant "hash whatever diff.patch holds" to the validator, so the two disagreed on disk.
+BS_EMPTY_TOKEN=$(write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-061" "" "FEAT-031" "1" -- code-reviewer)
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-061"
+printf 'real diff content\n' > "$TEST_DIR/nazgul/reviews/TASK-061/diff.patch"
+BS_EMPTY_TOKEN=$(write_dispatch_manifest "$TEST_DIR/nazgul" "TASK-061" "" "FEAT-031" "1" -- code-reviewer)
+write_reviewer "TASK-061" "code-reviewer" "APPROVE" "$BS_EMPTY_TOKEN"
+run_validate "TASK-061"
+assert_exit_code "empty diff_path with a diff.patch on disk: hashes the file the validator reads" \
+  "$VAL_EC" 0
+teardown_temp_dir
 
 report_results
