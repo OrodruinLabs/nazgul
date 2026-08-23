@@ -138,6 +138,81 @@ kill -9 "$TWPID" 2>/dev/null; wait "$TWPID" 2>/dev/null
 assert_eq "outcome 3 of 3: a stalled pipe reads as 'timeout', with no partial content" \
   "$TOUT" "timeout 0"
 
+HP_BOUND="$(sed -n 's/^HOOK_PAYLOAD_TIMEOUT_SECONDS=\([0-9][0-9]*\).*/\1/p' "$REPO_ROOT/$READER_LIB")"
+[ -n "$HP_BOUND" ] || HP_BOUND=2
+# A read completing INSIDE the bound must never read as `timeout`. $SECONDS counts
+# wall-second boundaries crossed, not seconds spent, so the defect is phase-dependent.
+SENTINEL="$((HP_BOUND - 1)).9"
+STRADDLE_FLOOR=48
+
+# _straddle <root> <trials> <hold-seconds> <stagger-ms> -> "<timeouts> <conclusive> <trials>"
+# Trials run concurrently, staggered to SWEEP the starting phase rather than sample it.
+_straddle() {
+  local root="$1" n="$2" hold="$3" ms="$4" d="$SCRATCH/st.$RANDOM" i off
+  mkdir -p "$d"
+  for i in $(seq 1 "$n"); do
+    off="$(printf '%d.%03d' "$(( (i * ms) / 1000 ))" "$(( (i * ms) % 1000 ))")"
+    (
+      sleep "$off"
+      f="$d/f$i"
+      mkfifo "$f" 2>/dev/null || { echo "skip 1" > "$d/o$i"; exit 0; }
+      ( exec 3> "$f"; printf '%s' "$PAYLOAD" >&3; sleep "$hold"; exec 3>&- ) >/dev/null 2>&1 &
+      w=$!
+      # Clock-free over-bound detector: a marker this trial outran cannot have fired.
+      ( sleep "$SENTINEL"; : > "$d/late$i" ) >/dev/null 2>&1 &
+      s=$!
+      o="$(bash "$SCRATCH/outcome.sh" "$root" < "$f")"
+      late=0; [ -e "$d/late$i" ] && late=1
+      kill -9 "$s" "$w" 2>/dev/null; wait "$s" "$w" 2>/dev/null
+      printf '%s %s\n' "${o%% *}" "$late" > "$d/o$i"
+    ) &
+  done
+  wait
+  awk '{ t++; if ($1 == "skip" || $2 == 1) next; c++; if ($1 == "timeout") to++ }
+       END { printf "%d %d %d", to+0, c+0, t+0 }' "$d"/o*
+  rm -rf "$d"
+}
+
+read -r NARROW_TO NARROW_C NARROW_N <<< "$(_straddle "$REPO_ROOT" 40 1.05 25)"
+assert_eq "40 swept phases: a payload delivered at ~1.05s never reads as 'timeout'" \
+  "$NARROW_TO" "0"
+read -r WIDE_TO WIDE_C WIDE_N <<< "$(_straddle "$REPO_ROOT" 24 1.5 40)"
+assert_eq "24 swept phases: nor one delivered at ~1.5s, three quarters of the way to the bound" \
+  "$WIDE_TO" "0"
+
+CONCLUSIVE=$((NARROW_C + WIDE_C))
+if [ "$CONCLUSIVE" -ge "$STRADDLE_FLOOR" ]; then
+  _pass "the straddle sweep actually swept ($CONCLUSIVE of $((NARROW_N + WIDE_N)) trials conclusive)"
+else
+  _fail "the straddle sweep actually swept" \
+    "only $CONCLUSIVE of $((NARROW_N + WIDE_N)) trials finished inside ${SENTINEL}s — a sweep that measured almost nothing cannot report zero timeouts"
+fi
+
+# Same sweep, same predicate, against a copy whose classifier consults the clock FIRST:
+# the ordering this file shipped before, restored by putting elapsed back in branch one.
+CLOCKFIRST="$SCRATCH/clockfirst"
+mkdir -p "$CLOCKFIRST/scripts"
+cp -R "$REPO_ROOT/scripts/lib" "$CLOCKFIRST/scripts/lib"
+sed -i.bak 's/if \[ "\$rc" -gt 128 \]; then/if [ "$rc" -gt 128 ] || [ "$elapsed" -ge "$HOOK_PAYLOAD_TIMEOUT_SECONDS" ]; then/' \
+  "$CLOCKFIRST/$READER_LIB"
+rm -f "$CLOCKFIRST/$READER_LIB.bak"
+# Both halves matter: a pattern PRESENT is not a pattern sed applied, and the
+# copy sharing the original's bytes would make the sweep below prove nothing.
+if ! cmp -s "$REPO_ROOT/$READER_LIB" "$CLOCKFIRST/$READER_LIB" \
+   && grep -qF -- '-gt 128 ] || [ "$elapsed"' "$CLOCKFIRST/$READER_LIB"; then
+  _pass "[mutation] the clock went back ahead of the payload in the copy"
+  read -r MUT_TO MUT_C MUT_N <<< "$(_straddle "$CLOCKFIRST" 24 1.5 40)"
+  if [ "$MUT_TO" -ge 1 ]; then
+    _pass "[mutation] and the sweep then reports the complete payloads it discards ($MUT_TO of $MUT_C conclusive, $MUT_N run)"
+  else
+    _fail "[mutation] and the sweep then reports the complete payloads it discards" \
+      "0 of $MUT_C conclusive trials misclassified — the sweep cannot fail, so its zero above proves nothing"
+  fi
+else
+  _fail "[mutation] the clock went back ahead of the payload in the copy" \
+    "sed matched nothing in the classifier's first branch, or left the copy byte-identical"
+fi
+
 TFIFO2="$SCRATCH/tf2"; mkfifo "$TFIFO2"
 ( exec 3> "$TFIFO2"; printf '{"teammate_name":"x"}' >&3; sleep 30; exec 3>&- ) >/dev/null 2>&1 &
 TW2=$!
