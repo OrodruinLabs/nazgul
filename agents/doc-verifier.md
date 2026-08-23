@@ -75,7 +75,9 @@ this list; a name that is here but not in source, or in source but not here, is 
 either way.
 
 `stop_payload_observed` is a FEAT-033 (#218) event TYPE, not a `stop_gate` reason — `stop-hook.sh`
-emits it once per Stop, always-on, above the `guards.in_flight_hold` kill switch. It was absent from
+emits it once per Stop the hook processes, above the `guards.in_flight_hold` kill switch, and BELOW
+the `paused` gate — a paused loop emits nothing, so an absent record is not evidence the Stop did
+not occur. It was absent from
 this fence while the docs describing it shipped, so a fence that cannot see an event cannot validate
 it: an omission here reads downstream as "no such event," which is the same false negative this
 inventory exists to prevent.
