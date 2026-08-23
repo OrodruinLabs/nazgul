@@ -80,7 +80,7 @@ _re_is_superseded_copy() {
 # where it is applied. Both DONE-gate validators call this and nothing else; a caller that
 # re-implements the order re-opens the divergence TASK-035 closed.
 #
-# Prints exactly one class for <basename>, and every caller must handle all five:
+# Prints exactly one class for <basename>, and every caller must handle all six:
 #   seat        — a configured roster member's own file
 #   extra-seat  — seat-shaped, not on the roster, not an archive of a seat already read
 #                 (the backstop for a seat dropped from the roster mid-review)
