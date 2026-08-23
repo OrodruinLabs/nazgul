@@ -62,10 +62,14 @@ fi
 
 # --- Parse file path from stdin ---
 
-INPUT=""
-if [[ ! -t 0 ]]; then
-    INPUT=$(cat)
+# shellcheck source=./lib/read-hook-payload.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/read-hook-payload.sh"
+read_hook_payload
+if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+    hook_payload_timeout_report "formatter" "fail-open" "skipping the format pass"
+    output_result "stdin_timeout" "Bounded stdin read timed out"
 fi
+INPUT="$HOOK_PAYLOAD"
 
 debug_log "Received input: ${INPUT:0:300}..."
 

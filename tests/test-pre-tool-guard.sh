@@ -825,6 +825,9 @@ assert_contains "reason C1-sql" "$output" "NAZGUL SAFETY"
 DP_ABSENT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-dp-absent-XXXXXX")
 mkdir -p "$DP_ABSENT_DIR/lib"
 cp "$GUARD" "$DP_ABSENT_DIR/pre-tool-guard.sh"
+cp "$(dirname "$GUARD")/lib/read-hook-payload.sh" "$DP_ABSENT_DIR/lib/"
+cp "$(dirname "$GUARD")/lib/nazgul-root.sh" "$DP_ABSENT_DIR/lib/"
+cp "$(dirname "$GUARD")/lib/emit-event.sh" "$DP_ABSENT_DIR/lib/"
 DESTRUCTIVE_CMD="rm -rf /"
 
 dp_probe() {

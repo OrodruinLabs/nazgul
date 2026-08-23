@@ -42,6 +42,8 @@ set -euo pipefail
 COMMAND_TIMEOUT=30
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=./lib/read-hook-payload.sh
+source "$SCRIPT_DIR/lib/read-hook-payload.sh"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 
 # MF-031: resolve nazgul/ paths against the project root like every sibling
@@ -67,10 +69,11 @@ if [[ "${NAZGUL_NOTIFY_DISABLE:-0}" == "1" ]]; then
 fi
 
 # --- Read input from stdin ---
-INPUT=""
-if [[ ! -t 0 ]]; then
-    INPUT=$(cat)
+read_hook_payload
+if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+    hook_payload_timeout_report "notify" "fail-open" "continuing with no session context"
 fi
+INPUT="$HOOK_PAYLOAD"
 debug_log "Input: ${INPUT:0:200}..."
 
 # --- Extract session context ---

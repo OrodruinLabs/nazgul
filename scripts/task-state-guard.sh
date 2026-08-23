@@ -12,9 +12,22 @@ source "$SCRIPT_DIR/lib/task-transition-guard.sh"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 # shellcheck source=./lib/destructive-patterns.sh
 source "$SCRIPT_DIR/lib/destructive-patterns.sh"
+# shellcheck source=./lib/read-hook-payload.sh
+source "$SCRIPT_DIR/lib/read-hook-payload.sh"
 
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
-INPUT=$(cat 2>/dev/null || echo "")
+read_hook_payload
+if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+  # With no payload there is no file path to bound, so the deny is decided here
+  # — but an unrelated repo's edits were never this guard's to refuse.
+  if [ -f "$(resolve_project_root)/nazgul/config.json" ]; then
+    hook_payload_timeout_report "task-state-guard" "fail-closed" "blocking the edit"
+    exit 2
+  fi
+  hook_payload_timeout_report "task-state-guard" "fail-open" "not a Nazgul project"
+  exit 0
+fi
+INPUT="$HOOK_PAYLOAD"
 if [ -z "$INPUT" ]; then
   exit 0
 fi

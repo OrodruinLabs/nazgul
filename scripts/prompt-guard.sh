@@ -8,6 +8,7 @@ set -euo pipefail
 # Returns exit 2 to block the prompt, exit 0 to allow.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/read-hook-payload.sh"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 source "$SCRIPT_DIR/lib/structured-state.sh"
 
@@ -19,12 +20,20 @@ NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
 
 # Prompt comes from the UserPromptSubmit stdin envelope ({"prompt":"..."}), like pre-tool-guard.sh.
-# Drained BEFORE any early exit: quitting mid-write EPIPEs the harness, turning the hook nonzero under pipefail.
-STDIN_JSON=$(cat 2>/dev/null || echo "")
+# Read BEFORE any early exit: quitting mid-read EPIPEs the harness, turning the hook nonzero under pipefail.
+read_hook_payload
+STDIN_JSON="$HOOK_PAYLOAD"
 
 # If Nazgul not initialized, allow all prompts
 if [ ! -f "$CONFIG" ]; then
   exit 0
+fi
+
+# Deferred past the gate above so a timeout blocks only where this guard has
+# authority; an unscreened prompt inside a Nazgul project is what it exists to stop.
+if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+  hook_payload_timeout_report "prompt-guard" "fail-closed" "blocking the prompt"
+  exit 2
 fi
 USER_PROMPT=$(printf '%s' "$STDIN_JSON" | jq -r '.prompt // empty' 2>/dev/null || echo "")
 

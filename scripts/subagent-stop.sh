@@ -23,12 +23,16 @@ set -euo pipefail
 # subagent's own transcript path — recorded/inspected if present, but
 # nothing here is required for the telemetry-only path to still run).
 
-INPUT=""
-if [ ! -t 0 ]; then
-  INPUT=$(cat 2>/dev/null || true)
-fi
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=./lib/read-hook-payload.sh
+source "$SCRIPT_DIR/lib/read-hook-payload.sh"
+
+read_hook_payload
+if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+  hook_payload_timeout_report "subagent-stop" "fail-open" "continuing on the telemetry-only path"
+fi
+INPUT="$HOOK_PAYLOAD"
+
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 
 NAZGUL_DIR="$(resolve_nazgul_dir)"

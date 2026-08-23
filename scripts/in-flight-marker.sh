@@ -10,12 +10,22 @@
 # bottom, not abort the script on a nonzero status.
 set -uo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/read-hook-payload.sh
+source "$SCRIPT_DIR/lib/read-hook-payload.sh"
+
 INPUT="${1:-}"
-[ -z "$INPUT" ] && INPUT=$(cat 2>/dev/null || echo "")
+if [ -z "$INPUT" ]; then
+  read_hook_payload
+  if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+    hook_payload_timeout_report "in-flight-marker" "fail-open" "skipping the marker write"
+    exit 0
+  fi
+  INPUT="$HOOK_PAYLOAD"
+fi
 [ -z "$INPUT" ] && exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/nazgul-root.sh
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 

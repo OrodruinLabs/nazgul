@@ -7,14 +7,25 @@ set -euo pipefail
 # then fails open with an escalation log line — never deadlocks a team.
 # Deliberately fails OPEN on unparseable payloads / unknown teammates (the
 # TeammateIdle payload schema is not fully documented; blocking on garbage
-# would strand teammates). Exit 0 = allow idle. Exit 2 = block (reason on stderr).
+# would strand teammates), and on a stdin timeout for the same reason — but
+# said as `timeout`, never as `unparseable payload`, which is a different cause.
+# Exit 0 = allow idle. Exit 2 = block (reason on stderr).
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/read-hook-payload.sh"
 
 INPUT="${1:-}"
-[ -z "$INPUT" ] && INPUT=$(cat 2>/dev/null || echo "")
+if [ -z "$INPUT" ]; then
+  read_hook_payload
+  if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+    hook_payload_timeout_report "teammate-idle-guard" "fail-open" "allowing idle"
+    exit 0
+  fi
+  INPUT="$HOOK_PAYLOAD"
+fi
 [ -z "$INPUT" ] && exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 
 PROJECT_DIR="$(resolve_project_root)"

@@ -100,7 +100,7 @@ precedent as 34 → 35 (2.29.0) and 35 → 36 (2.30.0).
   same facts as a `CARVE-OUT:` note: `N of M unit tasks reviewed — K carried out CANCELLED (ids); a
   cancelled task is removed from the unit, never approved by it.` Readiness where every task shipped and
   readiness reached by exclusion must not read identically.
-- **New test files — the discovered root suite ships 115 files, all green.**
+- **New test files — the discovered root suite ships 116 files, all green.**
   `tests/test-cancelled-status.sh` (the status itself: edges, the quarantine refusal, the dependency
   gate, the counters), `tests/test-cancelled-status-consumers.sh` (the vocabulary's whole consumer set,
   every member DRIVEN with a `CANCELLED` fixture — including the recorded NON-consumers, which are
@@ -153,7 +153,7 @@ precedent as 34 → 35 (2.29.0) and 35 → 36 (2.30.0).
   every mode, not only HITL, and it is not what makes an illegitimate status change ineffective.
 - **`RULES.md` gains four rule clusters and the tier counts they force.** §2 Cancellation (2 rules) and
   Merge Evidence (3), §2's Dependency Gate (1), §3 item 15 the carve-out record, and §16's
-  Merge-State Provider Seam (3). Tier counts move to **92 enforced / 36 advisory / 23 hook-driven only**
+  Merge-State Provider Seam (3). Tier counts move to **93 enforced / 36 advisory / 23 hook-driven only**
   (pinned by `tests/test-rules-tiers.sh`, and read back out of `RULES.md`'s own tags by
   `tests/test-doc-contract-fields.sh`) — bumped for genuinely new rules, never re-tagged to fit. §3.15 is
   `[hook-driven only]` and says why in its own boundary: the note and the event are produced where the

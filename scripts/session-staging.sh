@@ -66,8 +66,13 @@ release_session_lock() {
     unregister_session "$sid" "$nd/sessions" 2>/dev/null || true
 }
 
-STAGING_STDIN=""
-if [ ! -t 0 ]; then STAGING_STDIN=$(cat 2>/dev/null || echo ""); fi
+# shellcheck source=./lib/read-hook-payload.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/read-hook-payload.sh"
+read_hook_payload
+if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+  hook_payload_timeout_report "session-staging" "fail-open" "continuing without a session id"
+fi
+STAGING_STDIN="$HOOK_PAYLOAD"
 
 # Lock lifetime is the SESSION's, not staging's: released on every SessionEnd path,
 # including the four staging gates below and any `set -e` abort (board R2).
