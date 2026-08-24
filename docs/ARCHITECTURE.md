@@ -81,7 +81,8 @@ The value grammar is closed, and its three states are distinguishable by inspect
 | `e3b0c44298fc1c14` | `0` | **computed**, over an empty prompt — not a failure |
 | `unavailable` | still populated | could not compute; also one stderr line |
 
-`unavailable` is alphabet-disjoint from hex, so one anchored regex separates "could not compute" from
+`unavailable` carries non-hex letters (`u`, `n`, `v`, `i`, `l`) and is 11 characters rather than 16, so
+it can never parse as a digest — one anchored regex separates "could not compute" from
 "computed and got this" — a degradation can never be misread as a digest. `prompt_bytes` is `wc -c`
 over the same byte stream that is hashed, never `${#PROMPT}`, which counts characters under a UTF-8
 locale and would disagree with the digest invisibly.

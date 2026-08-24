@@ -76,8 +76,8 @@ nazgul/reviews|ephemeral|nazgul/reviews/post-loop-simplify-report.md|Post-loop w
 nazgul/learning|ephemeral|nazgul/learning/proposed-rules.md|Transient autolearning working file
 nazgul/learning|ephemeral|nazgul/learning/.last-run|Transient autolearning working file'
 
-# EVERY _fail below increments `findings` first: a run that failed while printing
-# "0 findings" would be this sweep committing the defect it exists to catch.
+# A1-A4 increment `findings` directly; P1/P2/P3 and copy-sync fold in a
+# TESTS_FAILED delta after the region; the dogfood arms are exit-code-only.
 scanned=0; skipped_no_path=0; skipped_unreadable=0; checked=0; findings=0
 unresolvable=0; block_excluded=0
 KEY_HITS=""

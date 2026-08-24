@@ -291,7 +291,7 @@ of the prompt — per-line, so 200 characters of *every* line, in practice tens 
 characters per marker. The rename is deliberate: `prompt_head` named content the field no longer
 carries. Three states, distinguishable by inspection: `^[0-9a-f]{16}$` with a byte count is a normal
 computation; `e3b0c44298fc1c14` with `prompt_bytes: 0` is a **successful** hash of an empty prompt;
-`unavailable` (alphabet-disjoint from hex, so no digest can collide with it) plus one stderr line
+`unavailable` (it carries non-hex letters and is 11 chars, not 16, so no digest can collide with it) plus one stderr line
 means the digest could not be computed, and `prompt_bytes` stays populated. Nothing needs configuring
 — there is no key for this and `schema_version` is unchanged. Accepted residuals: the digest is
 unsalted, so a held candidate prompt can be CONFIRMED though an unknown one cannot be recovered, and

@@ -79,7 +79,7 @@ mkdir -p "$MARKER_DIR" 2>/dev/null || exit 0
 
 MARKER_FILE="$MARKER_DIR/${SAFE_AGENT}__${SAFE_UNIT}__${EPOCH}-${NONCE}.json"
 # Identify the dispatch by digest, never by prompt text (ADR-028). `unavailable`
-# is alphabet-disjoint from hex, so "could not compute" never reads as a digest.
+# has non-hex letters and is 11 chars, not 16, so it never reads as a digest.
 PROMPT_HASH="unavailable"
 PROMPT_BYTES="null"
 if declare -F _rp_sha256 >/dev/null 2>&1; then
@@ -98,8 +98,8 @@ fi
 _ifm_bytes=$(printf '%s' "$PROMPT" | wc -c 2>/dev/null | tr -d ' ') || _ifm_bytes=""
 case "$_ifm_bytes" in ''|*[!0-9]*) _ifm_bytes="null" ;; esac
 PROMPT_BYTES="$_ifm_bytes"
-# --argjson with invalid JSON fails the whole write, and a missing marker is
-# worse than a missing field (TRD R2). `null` is the literal, never 0.
+# Redundant belt for TRD R2 — the case above already leaves all-digits or `null`,
+# so this cannot change the value.
 case "$PROMPT_BYTES" in
   ''|*[!0-9]*) [ "$PROMPT_BYTES" = "null" ] || PROMPT_BYTES="null" ;;
 esac

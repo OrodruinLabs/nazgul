@@ -2796,7 +2796,7 @@ assert_eq "P7a: a marker is still written when the digest cannot be computed" "$
 P7A_HASH=$(jq -r '.prompt_hash' "${P7A_MARKER:-/dev/null}")
 assert_eq "P7a: prompt_hash records the STATE as the literal 'unavailable'" "$P7A_HASH" "unavailable"
 P7A_NOTHEX=$(printf '%s' "$P7A_HASH" | grep -Eq '^[0-9a-f]{16}$' && echo no || echo yes)
-assert_eq "P7a: 'unavailable' is alphabet-disjoint from hex, so one anchored regex settles it" "$P7A_HASH/$P7A_NOTHEX" "unavailable/yes"
+assert_eq "P7a: 'unavailable' carries non-hex letters and is not 16 chars, so one anchored regex settles it" "$P7A_HASH/$P7A_NOTHEX" "unavailable/yes"
 assert_eq "P7a: prompt_bytes stays populated — the degradation was confined to the hash step" "$(jq -r '.prompt_bytes' "${P7A_MARKER:-/dev/null}")" "$P7_EXPECT_BYTES"
 assert_eq "P7a: the five read fields survive degradation" "$(jq -r '[.agent,.unit,(.dispatched_at_epoch>0|tostring),.background,.named]|join("|")' "${P7A_MARKER:-/dev/null}")" "nazgul:implementer|TASK-001|true|true|false"
 assert_eq "P7a: degradation announces itself on exactly one stderr line (never silent)" "$(grep -c . "$TEST_DIR/p7a.err" | tr -d ' ')" "1"
