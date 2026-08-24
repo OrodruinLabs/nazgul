@@ -496,13 +496,15 @@ _mp_github_pr_state() {
     _mp_result "github" "$host" "$pr" "provider_unavailable" "" "" "" "" "$why"
     return 4
   }
+  # lean-comments: allow-run — the split and the wrapper close two OPPOSITE failures.
   # stdout ONLY: `2>&1` folded bounded-net's degradation line into the payload, so on a host with
-  # no GNU timeout a genuinely MERGED PR parsed as api_failure. fd 9 keeps that line on real stderr.
+  # no GNU timeout a genuinely MERGED PR parsed as api_failure. The split keeps the payload clean;
+  # nz_bounded_run_split keeps the diagnostic reachable, because a bound that fired kills gh before
+  # it says anything and the exit code alone is not a reason.
   errfile=$(mktemp "${TMPDIR:-/tmp}/nazgul-mp-stderr-XXXXXX" 2>/dev/null) || errfile="/dev/null"
-  { out=$( (cd "$root" 2>/dev/null && NZ_BOUNDED_ROOT="$root" NZ_BOUNDED_WARN_FD=9 \
-    nz_bounded_run net "gh pr view (merge state)" \
-    gh pr view "$pr" --repo "$target" --json state,mergedAt,mergeCommit,headRefName,baseRefName,url) 2>"$errfile" ) || rc=$?
-  } 9>&2
+  out=$( (cd "$root" 2>/dev/null && NZ_BOUNDED_ROOT="$root" \
+    nz_bounded_run_split net "gh pr view (merge state)" "$errfile" \
+    gh pr view "$pr" --repo "$target" --json state,mergedAt,mergeCommit,headRefName,baseRefName,url) ) || rc=$?
   err=$(cat "$errfile" 2>/dev/null) || err=""
   [ "$errfile" = "/dev/null" ] || rm -f "$errfile"
   if [ "$rc" -ne 0 ]; then

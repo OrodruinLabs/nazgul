@@ -41,6 +41,7 @@
 
 _BNET_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _BNET_WARNED=""
+_BNET_TCMD=""
 
 # lean-comments: allow-run — the fd indirection exists for one reason and it is not obvious.
 # A call site that silences its command's noise with `2>/dev/null` silences THIS too, and a
@@ -166,24 +167,43 @@ _bnet_secs() {
 # self-certification are both DOWNSTREAM of that process and never see the substitution. This
 # does NOT close PATH poisoning: `command -v` reads PATH, and whoever controls PATH already owns
 # `gh`, `git` and `jq` alike. It closes the Nazgul-specific variable nobody audits.
-nz_bounded_timeout_cmd() {
+# lean-comments: allow-run — why the resolution sets a global instead of printing, and
+# why an accepted-but-absent name is its own refusal.
+# _bnet_resolve_timeout_cmd -> set _BNET_TCMD in the CALLER's shell. The degradations below
+# dedup through _BNET_WARNED, and `tcmd=$(nz_bounded_timeout_cmd)` wrote that key into a
+# subshell that then exited: three calls printed three lines and forked three emit-event
+# subshells apiece, while the one reason the suite pinned deduped fine because nz_bounded_run
+# emits it directly. An ACCEPTED name that does not resolve is a THIRD state, distinct from
+# both the refused arbitrary value and the honoured one: on a gtimeout-only host
+# NAZGUL_TIMEOUT_CMD=timeout silently became gtimeout, neither honoured nor refused by name.
+_bnet_resolve_timeout_cmd() {
   local want
+  _BNET_TCMD=""
   if [ -n "${NAZGUL_TIMEOUT_CMD+set}" ]; then
     want="$NAZGUL_TIMEOUT_CMD"
     case "$want" in
       "") return 0 ;;
       timeout|gtimeout)
-        if command -v "$want" >/dev/null 2>&1; then printf '%s' "$want"; return 0; fi ;;
+        if command -v "$want" >/dev/null 2>&1; then _BNET_TCMD="$want"; return 0; fi
+        _bnet_degrade "timeout-cmd" "unresolvable_timeout_cmd_override" \
+          "NAZGUL_TIMEOUT_CMD='$want' is an accepted name but is not on PATH — the override is NOT honoured and auto-detection is used instead, which may select the OTHER binary" ;;
       *)
         _bnet_degrade "timeout-cmd" "refused_timeout_cmd_override" \
           "NAZGUL_TIMEOUT_CMD='$want' is neither the empty string nor timeout/gtimeout, and this value is EXECUTED around every bounded call — the override is REFUSED and the detected binary used instead" ;;
     esac
   fi
   if command -v timeout >/dev/null 2>&1; then
-    printf 'timeout'
+    _BNET_TCMD="timeout"
   elif command -v gtimeout >/dev/null 2>&1; then
-    printf 'gtimeout'
+    _BNET_TCMD="gtimeout"
   fi
+  return 0
+}
+
+# nz_bounded_timeout_cmd -> the resolved wrapper on stdout, for callers outside this file.
+nz_bounded_timeout_cmd() {
+  _bnet_resolve_timeout_cmd
+  printf '%s' "$_BNET_TCMD"
 }
 
 # lean-comments: allow-run — the two exit codes and the SIGKILL escalation are contract.
@@ -198,7 +218,10 @@ nz_bounded_run() {
   local tier="$1" label="$2" secs tcmd rc=0
   shift 2
   secs=$(_bnet_secs "$tier")
-  tcmd=$(nz_bounded_timeout_cmd)
+  # Resolved in THIS shell, never `$(nz_bounded_timeout_cmd)`: the resolution can degrade,
+  # and a dedup key written in a subshell is a dedup that never happened.
+  _bnet_resolve_timeout_cmd
+  tcmd="$_BNET_TCMD"
   if [ -z "$tcmd" ]; then
     _bnet_degrade "$label" "unbounded_no_timeout_binary" \
       "neither timeout nor gtimeout is on PATH (GNU coreutils is not installed by default on macOS), so '$label' runs with NO duration bound and can wait indefinitely — install coreutils to bound it"
@@ -223,6 +246,32 @@ nz_bounded_run_q() {
   return "$rc"
 }
 
+# lean-comments: allow-run — the fd split is what made a fired bound unrecordable, and the
+# re-emit is why nothing that used to be visible stops being visible.
+# nz_bounded_run_split <tier> <label> <errfile> <cmd...> -> as nz_bounded_run, with the COMMAND's
+# stdout alone on stdout and BOTH its stderr and this library's own diagnostics in <errfile>. A
+# caller that splits stderr to keep the payload clean used to send those diagnostics to fd 9
+# instead, so when the bound actually fired (124/137) the command's own stderr was empty and the
+# caller's failure record named the exit code and nothing else — `bound_exceeded` reached the
+# terminal and never the record a later refusal is read back from. The diagnostics are still
+# re-emitted on the caller's real stderr; they are added to <errfile>, never moved there.
+nz_bounded_run_split() {
+  local tier="$1" label="$2" errfile="$3" bnetfile rc=0
+  shift 3
+  bnetfile=$(mktemp "${TMPDIR:-/tmp}/nazgul-bnet-diag-XXXXXX" 2>/dev/null) || bnetfile=""
+  if [ -z "$bnetfile" ]; then
+    { NZ_BOUNDED_WARN_FD=9 nz_bounded_run "$tier" "$label" "$@" 2>"$errfile"; rc=$?; } 9>&2
+    return "$rc"
+  fi
+  { NZ_BOUNDED_WARN_FD=9 nz_bounded_run "$tier" "$label" "$@" 2>"$errfile"; rc=$?; } 9>"$bnetfile"
+  if [ -s "$bnetfile" ]; then
+    cat "$bnetfile" >&2
+    cat "$bnetfile" >> "$errfile" 2>/dev/null || true
+  fi
+  rm -f "$bnetfile"
+  return "$rc"
+}
+
 # lean-comments: allow-run — why git gets its own wrapper rather than nz_bounded_run.
 # nz_bounded_git <tier> <label> <git-args...> -> git under BOTH bounds. The
 # http.lowSpeed* pair is git's own and needs no coreutils, so a stalled transfer aborts
@@ -235,7 +284,8 @@ nz_bounded_git() {
   shift 2
   secs=$(_bnet_secs "$tier")
   limit="${NAZGUL_GIT_LOW_SPEED_LIMIT:-1000}"
-  if [ -z "$(nz_bounded_timeout_cmd)" ]; then
+  _bnet_resolve_timeout_cmd
+  if [ -z "$_BNET_TCMD" ]; then
     _bnet_degrade "$label" "wallclock_unbounded_transfer_bounded" \
       "neither timeout nor gtimeout is on PATH, so '$label' has no wall-clock bound; git's own http.lowSpeedLimit=${limit}/http.lowSpeedTime=${secs} still aborts a stalled transfer, but a non-transfer stall is NOT covered"
     git -c "http.lowSpeedLimit=$limit" -c "http.lowSpeedTime=$secs" "$@"

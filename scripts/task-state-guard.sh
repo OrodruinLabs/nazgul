@@ -523,12 +523,33 @@ if [ "$NEW_STATUS" = "INVALID" ] \
   exit 2
 fi
 
+# lean-comments: allow-run — the shared anchor and the read budget are both load-bearing.
 # --- ADR-020 QUARANTINE RECORD INTEGRITY (board-5 S-5) ---
-# rc 1 = record absent; rc 0 with an empty value = present but blanked.
+# rc 1 = record absent; rc 0 with an empty value = present but blanked. Takes the manifest TEXT,
+# not a path: `ttg_manifest_field "$(cat "$1")" "$2"` slurped a whole file per field question, up
+# to nine times over on a guard that runs before every Write and Edit in the project. The two
+# texts below are read once each, lazily, so a write that asks no quarantine question pays
+# nothing. The SHARED anchor is unchanged: a second spelling here let a two-space manifest be a
+# live quarantine to this checker and invisible to the transition gate, which laundered the
+# block into CANCELLED.
 _tsg_q_value() {
-  # The SHARED anchor: a second spelling here let a two-space manifest be a live quarantine to
-  # this checker and invisible to the transition gate, which laundered the block into CANCELLED.
-  ttg_manifest_field "$(cat "$1" 2>/dev/null || echo "")" "$2"
+  ttg_manifest_field "$1" "$2"
+}
+
+_TSG_POST_TEXT=""
+_TSG_POST_READ=""
+_tsg_load_post_text() {
+  [ -z "$_TSG_POST_READ" ] || return 0
+  _TSG_POST_TEXT=$(cat "$POST_IMAGE" 2>/dev/null || echo "")
+  _TSG_POST_READ=1
+}
+
+_TSG_OLD_TEXT=""
+_TSG_OLD_READ=""
+_tsg_load_old_text() {
+  [ -z "$_TSG_OLD_READ" ] || return 0
+  _TSG_OLD_TEXT=$(cat "$CANON_FILE_PATH" 2>/dev/null || echo "")
+  _TSG_OLD_READ=1
 }
 
 _tsg_q_refuse() {
@@ -541,12 +562,14 @@ _tsg_q_refuse() {
 # The three fields are ONE record, so deleting the first line silently unlocked
 # BLOCKED -> CANCELLED. Narrow by ADR-009: only a write that CHANGES one is denied.
 if [ "$OLD_STATUS" = "BLOCKED" ] && [ -f "$CANON_FILE_PATH" ]; then
+  _tsg_load_old_text
+  _tsg_load_post_text
   for _q_field in "Blocked kind" "Blocked from" "Blocked observed"; do
     _q_old_rc=0
-    _q_old=$(_tsg_q_value "$CANON_FILE_PATH" "$_q_field") || _q_old_rc=$?
+    _q_old=$(_tsg_q_value "$_TSG_OLD_TEXT" "$_q_field") || _q_old_rc=$?
     [ "$_q_old_rc" -eq 0 ] || continue
     _q_new_rc=0
-    _q_new=$(_tsg_q_value "$POST_IMAGE" "$_q_field") || _q_new_rc=$?
+    _q_new=$(_tsg_q_value "$_TSG_POST_TEXT" "$_q_field") || _q_new_rc=$?
     if [ "$_q_new_rc" -ne 0 ]; then
       _tsg_q_refuse "this write deletes the quarantine record '${_q_field}'"
     fi
@@ -559,9 +582,10 @@ fi
 # `Blocked from`/`Blocked observed` are written ONLY by the reconciliation
 # quarantine, so either without a reconciliation kind is half-erased, not clean.
 if [ "$NEW_STATUS" = "BLOCKED" ]; then
-  _q_kind_rc=0; _q_kind=$(_tsg_q_value "$POST_IMAGE" "Blocked kind") || _q_kind_rc=$?
-  _q_from_rc=0; _q_from=$(_tsg_q_value "$POST_IMAGE" "Blocked from") || _q_from_rc=$?
-  _q_obs_rc=0;  _q_obs=$(_tsg_q_value "$POST_IMAGE" "Blocked observed") || _q_obs_rc=$?
+  _tsg_load_post_text
+  _q_kind_rc=0; _q_kind=$(_tsg_q_value "$_TSG_POST_TEXT" "Blocked kind") || _q_kind_rc=$?
+  _q_from_rc=0; _q_from=$(_tsg_q_value "$_TSG_POST_TEXT" "Blocked from") || _q_from_rc=$?
+  _q_obs_rc=0;  _q_obs=$(_tsg_q_value "$_TSG_POST_TEXT" "Blocked observed") || _q_obs_rc=$?
   _q_typed=0
   case "$_q_kind" in
     [Rr]econciliation|[Rr]econciliation[[:space:]]*) _q_typed=1 ;;
@@ -610,7 +634,8 @@ if ! ttg_valid_transition "$OLD_STATUS" "$NEW_STATUS"; then
 fi
 
 NAZGUL_DIR=$(dirname "$(dirname "$CANON_FILE_PATH")")
-MANIFEST_TEXT=$(cat "$POST_IMAGE")
+_tsg_load_post_text
+MANIFEST_TEXT="$_TSG_POST_TEXT"
 
 if ! ttg_validate_transition "$NAZGUL_DIR" "$PROJECT_ROOT" "$TASK_ID" \
   "$OLD_STATUS" "$NEW_STATUS" "$MANIFEST_TEXT"; then

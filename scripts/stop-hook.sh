@@ -707,7 +707,7 @@ if [ "$RECON_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
           RECON_REASON="status changed ${RECON_PREV_STATUS} → ${RECON_LIVE_STATUS} outside the guarded Write/Edit/MultiEdit path, with no completed transition recorded by scripts/task-transition.sh (stop-hook reconciliation, MF-022)"
           # Recheck red evidence when an untraceable IMPLEMENTED landing bypassed PreToolUse.
           if [ "$RECON_LIVE_STATUS" = "IMPLEMENTED" ] \
-            && ! ttg_verify_red_run_evidence "$(cat "$recon_task_file")" "$PROJECT_ROOT" "$RECON_TASK_ID"; then
+            && ! ttg_verify_red_run_evidence "$(cat "$recon_task_file")" "$PROJECT_ROOT" "$RECON_TASK_ID" "$NAZGUL_DIR"; then
             echo "NAZGUL BASH-WRITE RECONCILIATION: BLOCKED — ${RECON_TASK_ID} carries no verified red-run evidence (${TTG_RED_RUN_REASON}) for its IMPLEMENTED status" >&2
             RECON_REASON="unverified red-run evidence (${TTG_RED_RUN_REASON}) on a status changed ${RECON_PREV_STATUS} → IMPLEMENTED outside the guarded Write/Edit/MultiEdit path (stop-hook reconciliation, FEAT-028)"
           fi

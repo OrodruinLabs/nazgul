@@ -116,15 +116,22 @@ ttg_allowed_next() {
   printf '%s' "$out"
 }
 
-# lean-comments: allow-run — names the seam, why it is THIS one, and how long the memo lives.
-# ttg_install_merge_host_state_memo -> memoise _ttg_merge_host_state for THIS PROCESS. The host
-# state for a PR is a pure function of (project_root, pr) and every manifest in one objective
+# lean-comments: allow-run — names the seam, why it is THIS one, what is cacheable, and how
+# long the memo lives.
+# ttg_install_merge_host_state_memo -> memoise _ttg_merge_host_state for THIS PROCESS. The host's
+# ANSWER about a PR is a pure function of (project_root, pr) and every manifest in one objective
 # carries the SAME pr, so a per-task caller asked one question N times at the net tier's 60s
 # bound. Memoised HERE and not at merge_provider_pr_state because that one is called inside a
 # command substitution, where a memo dies with the subshell that wrote it. Everything downstream
 # still runs per task, so verdicts stay independent. It does NOT reach across processes: a caller
 # that shells out to task-transition.sh per task still pays one round trip there, which is a
 # boundary this cannot cross rather than one it forgot.
+#
+# ONLY AN ANSWER IS CACHED — rc 0 (merged) and rc 1 (not merged) are what the host SAID about the
+# PR; rc 2 is what happened to the ATTEMPT (could not ask, or an answer this seam cannot use), and
+# it is a property of that one call, not of the PR. Caching it replayed one 60s timeout on the
+# first manifest onto all eleven behind it: twelve refused on a read-back eleven of them never
+# made. The three-valued contract _ttg_merge_host_state documents is the same line drawn here.
 ttg_install_merge_host_state_memo() {
   local src
   declare -F _ttg_merge_host_state >/dev/null 2>&1 || return 1
@@ -145,6 +152,9 @@ ttg_install_merge_host_state_memo() {
         ;;
     esac
     _ttg_host_state_uncached "$@" || rc=$?
+    # rc 2 is "the host was not usefully asked" — the next manifest asks again rather than
+    # inheriting a refusal it never earned.
+    [ "$rc" -ne 2 ] || return 2
     # Snapshot by PREFIX, not by an enumerated list, so a new TTG_MERGE_HOST_* output is carried
     # across a cache hit instead of silently reading as the previous task's.
     snap=""
@@ -1022,11 +1032,15 @@ EOF
 # an entry whose ref, ancestry, or recorded exit code git can refute BLOCKs
 # naming which check failed; an enumerated `N/A` token ALLOWs; a free-text
 # `N/A` BLOCKs.
-# Usage: ttg_verify_red_run_evidence <manifest_text> <project_root> [task_id]
+# Usage: ttg_verify_red_run_evidence <manifest_text> <project_root> [task_id] [nazgul_dir]
 ttg_verify_red_run_evidence() {
   local manifest_text="$1" project_root="$2" task_id="${3:-}"
+  # lean-comments: allow-run — the default is a fallback, and mistaking it for the normal path
+  # is what split the two evidence gates across two trees.
   # PARAMETER, never ambient — ttg_verify_merge_evidence's rule, applied to the IMPLEMENTED
-  # gate. Lower stakes (this block is kill-switchable), but one sibling reading it is drift.
+  # gate. Every caller in scripts/** passes the dir it resolved, because a caller whose project
+  # root and nazgul dir differ otherwise reads a different kill switch and writes
+  # red_run_missing to a bus nobody reads.
   local nazgul_dir="${4:-$project_root/nazgul}"
   local raw_section section commits entry="" line rc=0
 
@@ -1739,7 +1753,7 @@ ttg_validate_transition() {
       echo "ttg_validate_transition: IMPLEMENTED requires a verified commit SHA" >&2
       return 1
     fi
-    if ! ttg_verify_red_run_evidence "$manifest_text" "$project_root" "$task_id"; then
+    if ! ttg_verify_red_run_evidence "$manifest_text" "$project_root" "$task_id" "$nazgul_dir"; then
       echo "ttg_validate_transition: IMPLEMENTED requires verified red-run evidence" >&2
       return 1
     fi

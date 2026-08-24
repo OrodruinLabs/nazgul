@@ -2455,6 +2455,45 @@ echo "  quarantine-record-integrity: ${Q_SCANNED} scanned, ${Q_SKIPPED} skipped 
 assert_eq "quarantine-record-integrity: scanned == skipped + checked" \
   "$Q_SCANNED" "$((Q_SKIPPED + Q_CHECKED))"
 
+# lean-comments: allow-run — the cost is per PreToolUse invocation on a hot path and only a
+# count can see it; every behavioural assertion above passes either way.
+# PATCH-008 item 11 — `_tsg_q_value` was `ttg_manifest_field "$(cat "$1")" "$2"`, so each of the
+# up-to-nine quarantine questions slurped a whole file of its own: a cat subshell plus a
+# printf|grep pipeline per field, before every Write and Edit in the project. The shim counts
+# whole-file reads of the two files that matter, so the budget is measured rather than reasoned.
+FORK_BIN="$TEST_DIR/forkbin"
+FORK_LOG="$TEST_DIR/cat-argv.log"
+mkdir -p "$FORK_BIN"
+FORK_REAL_CAT=$(command -v cat)
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'printf "%%s\\n" "$*" >> %s\n' "$FORK_LOG"
+  printf 'exec %s "$@"\n' "$FORK_REAL_CAT"
+} > "$FORK_BIN/cat"
+chmod +x "$FORK_BIN/cat"
+seed_quarantine
+: > "$FORK_LOG"
+FORK_EC=0
+jq -n --arg fp "$Q_TASK" --arg o 'prose' --arg n 'prose, revised by the operator' \
+  '{"tool_name":"Edit","tool_input":{"file_path":$fp,"old_string":$o,"new_string":$n}}' \
+  | PATH="$FORK_BIN:$PATH" bash "$GUARD" >/dev/null 2>&1 || FORK_EC=$?
+# The guard canonicalises the target, so the LOGGED path is the realpath — matching on the
+# id is what makes this count the manifest reads rather than silently counting none of them.
+FORK_MANIFEST_READS=$(grep -c 'TASK-001\.md$' "$FORK_LOG" 2>/dev/null || true)
+FORK_POST_READS=$(grep -c 'nazgul-task-state\.' "$FORK_LOG" 2>/dev/null || true)
+FORK_READS=$(( ${FORK_MANIFEST_READS:-0} + ${FORK_POST_READS:-0} ))
+assert_exit_code "fork budget: the probe drives the quarantine checks through an ALLOWED edit" "$FORK_EC" 0
+if [ "$FORK_READS" -lt 2 ]; then
+  _fail "fork budget: the shim observed the guard's reads at all" \
+    "${FORK_READS} whole-file reads — the count proves nothing, because a guard that read nothing and a shim that never ran report the same number"
+else
+  _pass "fork budget: the shim observed the guard's reads (${FORK_MANIFEST_READS} manifest, ${FORK_POST_READS} post-image)"
+  assert_eq "fork budget: the quarantined manifest is read ONCE, not once per field question" \
+    "$FORK_MANIFEST_READS" "1"
+  assert_eq "fork budget: and so is the post-image the same questions are asked of" \
+    "$FORK_POST_READS" "1"
+fi
+
 teardown_temp_dir
 
 

@@ -165,6 +165,110 @@ DUP_OUT=$(NAZGUL_TIMEOUT_CMD= bash -c ". '$LIB'; nz_bounded_run net dup-label tr
 assert_eq "the missing-binary degradation is named once per label per process, not once per call" \
   "$(printf '%s\n' "$DUP_OUT" | grep -c 'unbounded_no_timeout_binary')" "1"
 
+# lean-comments: allow-run — the population is the point; pinning ONE reason is how the
+# subshell defect survived a suite that already had a dedup test.
+# Every `_bnet_degrade` reason must dedup, and the one pinned above deduped only because
+# nz_bounded_run emits it from the CALLER's shell. A sibling emitted inside
+# `tcmd=$(nz_bounded_timeout_cmd)` wrote its dedup key into a subshell that then exited, so
+# three calls printed three lines and forked three emit-event subshells. The reason set is
+# DERIVED from the call sites, so a reason added later is covered where it lands rather
+# than where a hand-kept list happens to name it; a reason with no driver is REPORTED as
+# undriven, never counted as passing.
+BN_ONLY_GTIMEOUT=""
+if command -v gtimeout >/dev/null 2>&1; then
+  BN_ONLY_GTIMEOUT="$TEST_DIR/only-gtimeout"
+  mkdir -p "$BN_ONLY_GTIMEOUT"
+  ln -sf "$(command -v gtimeout)" "$BN_ONLY_GTIMEOUT/gtimeout"
+  # `timeout` is deliberately absent; the library's own source-time needs are not.
+  for _bn_tool in dirname mkdir date; do
+    _bn_path=$(command -v "$_bn_tool" 2>/dev/null) || continue
+    ln -sf "$_bn_path" "$BN_ONLY_GTIMEOUT/$_bn_tool"
+  done
+fi
+BN_TRUE_BIN=/usr/bin/true
+[ -x "$BN_TRUE_BIN" ] || BN_TRUE_BIN=/bin/true
+
+# bn_dedup_run <reason> -> stderr of three consecutive calls in ONE process that all reach
+# <reason>, using ONE label throughout because the contract is once per label per process.
+bn_dedup_run() {
+  local reason="$1" body=""
+  case "$reason" in
+    unbounded_no_timeout_binary)
+      body='NAZGUL_TIMEOUT_CMD= nz_bounded_run net dedup-probe true' ;;
+    wallclock_unbounded_transfer_bounded)
+      body='NAZGUL_TIMEOUT_CMD= nz_bounded_git net dedup-probe --version >/dev/null' ;;
+    refused_timeout_cmd_override)
+      body='NAZGUL_TIMEOUT_CMD=/nonexistent/hostile-timeout nz_bounded_run net dedup-probe true' ;;
+    unresolvable_timeout_cmd_override)
+      [ -n "$BN_ONLY_GTIMEOUT" ] || return 3
+      body="NAZGUL_TIMEOUT_CMD=timeout nz_bounded_run net dedup-probe $BN_TRUE_BIN" ;;
+    *) return 3 ;;
+  esac
+  case "$reason" in
+    unresolvable_timeout_cmd_override)
+      PATH="$BN_ONLY_GTIMEOUT" "$BASH" -c ". '$LIB'; $body; $body; $body" 2>&1 >/dev/null ;;
+    *)
+      "$BASH" -c ". '$LIB'; $body; $body; $body" 2>&1 >/dev/null ;;
+  esac
+}
+
+BN_DEDUP_REASONS=$(grep -oE '_bnet_degrade "[^"]*" "[a-z_]+"' "$LIB" | sed 's/.*"\([a-z_]*\)"$/\1/' | sort -u)
+BN_DD_N=0; BN_DD_M=0; BN_DD_K=0; BN_DD_F=0; BN_DD_UNDRIVEN=""
+for _bn_reason in $BN_DEDUP_REASONS; do
+  BN_DD_N=$((BN_DD_N + 1))
+  BN_DD_RC=0
+  BN_DD_OUT=$(bn_dedup_run "$_bn_reason") || BN_DD_RC=$?
+  if [ "$BN_DD_RC" = "3" ]; then
+    BN_DD_M=$((BN_DD_M + 1))
+    BN_DD_UNDRIVEN="${BN_DD_UNDRIVEN}${BN_DD_UNDRIVEN:+ }${_bn_reason}"
+    continue
+  fi
+  BN_DD_K=$((BN_DD_K + 1))
+  BN_DD_COUNT=$(printf '%s\n' "$BN_DD_OUT" | grep -c "$_bn_reason")
+  if [ "$BN_DD_COUNT" = "1" ]; then
+    _pass "bounded-net degradation '${_bn_reason}' is named once per label per process, not once per call"
+  else
+    BN_DD_F=$((BN_DD_F + 1))
+    _fail "bounded-net degradation '${_bn_reason}' is named once per label per process" \
+      "three calls printed it ${BN_DD_COUNT} time(s) — the dedup key was written into a subshell that exited, so every call also forked an emit-event subshell"
+  fi
+done
+printf '  bnet-dedup: %d scanned, %d skipped (no-driver=%d%s), %d checked, %d findings\n' \
+  "$BN_DD_N" "$BN_DD_M" "$BN_DD_M" "${BN_DD_UNDRIVEN:+: $BN_DD_UNDRIVEN}" "$BN_DD_K" "$BN_DD_F"
+assert_eq "bnet-dedup: scanned == skipped + checked" "$BN_DD_N" "$((BN_DD_M + BN_DD_K))"
+if [ "$BN_DD_K" -ge 3 ]; then
+  _pass "bnet-dedup: the walk examined the reason population, not a sample"
+else
+  _fail "bnet-dedup: the walk examined the reason population" \
+    "only ${BN_DD_K} reason(s) driven — a dedup contract proven on one reason is how the subshell defect survived"
+fi
+
+# lean-comments: allow-run — the silent-substitution hazard is the point and it is invisible
+# from the assertion text.
+# An ACCEPTED but unresolvable NAZGUL_TIMEOUT_CMD fell through to auto-detect saying nothing:
+# on a gtimeout-only host `NAZGUL_TIMEOUT_CMD=timeout` silently became gtimeout — neither
+# honoured nor refused by name, in the one function whose stated rationale is that every
+# unusable input is refused by name.
+if [ -n "$BN_ONLY_GTIMEOUT" ]; then
+  BN_UNRES_ERR="$TEST_DIR/unresolvable.err"
+  BN_UNRES_OUT=$(PATH="$BN_ONLY_GTIMEOUT" NAZGUL_TIMEOUT_CMD=timeout \
+    "$BASH" -c ". '$LIB'; nz_bounded_timeout_cmd" 2>"$BN_UNRES_ERR")
+  assert_eq "an accepted-but-unresolvable override still falls back to the detected binary" \
+    "$BN_UNRES_OUT" "gtimeout"
+  assert_file_contains "and the substitution is named, not silent — the operator asked for a binary that is not here" \
+    "$BN_UNRES_ERR" "unresolvable_timeout_cmd_override"
+  assert_file_contains "the diagnostic names the value that was not honoured" \
+    "$BN_UNRES_ERR" "timeout"
+  BN_RES_ERR="$TEST_DIR/resolvable.err"
+  BN_RES_OUT=$(PATH="$BN_ONLY_GTIMEOUT" NAZGUL_TIMEOUT_CMD=gtimeout \
+    "$BASH" -c ". '$LIB'; nz_bounded_timeout_cmd" 2>"$BN_RES_ERR")
+  assert_eq "an override that DOES resolve is still honoured silently" "$BN_RES_OUT" "gtimeout"
+  assert_eq "and an honoured override says nothing — the two states stay distinguishable" \
+    "$(wc -c < "$BN_RES_ERR" | tr -d ' ')" "0"
+else
+  _skip "the accepted-but-unresolvable override (gtimeout is not on this host, so a PATH holding only it cannot be built)"
+fi
+
 # lean-comments: allow-run — the threat is the point and it is not visible from the assertions.
 # NAZGUL_TIMEOUT_CMD is EXECUTED as `"$tcmd" -k 5 "$secs" "$@"`, so an ambient value naming any
 # executable substitutes the process whose stdout becomes the merge gate's sole admitting

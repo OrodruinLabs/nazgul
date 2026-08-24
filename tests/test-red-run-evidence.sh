@@ -630,6 +630,67 @@ rr_call "$NO_SECTION" "$TEST_DIR"
 assert_exit_code "kill switch on (explicit true): blocks" "$RR_EC" 1
 teardown_temp_dir
 
+# lean-comments: allow-run — the split is the finding and no assertion below states it.
+# WHICH TREE THE GATE READS (PATCH-008 item 6). ttg_validate_transition threads its own
+# $nazgul_dir into ttg_verify_merge_evidence but not into this gate, which then re-derived
+# $project_root/nazgul: a caller naming a different runtime tree — exactly what the 4th
+# parameter exists to allow — split the two evidence gates across two trees, reading a
+# different kill switch and writing red_run_missing to a different bus.
+setup_rr_repo
+setup_nazgul_dir
+create_config
+RR_ALT="$TEST_DIR/alt-runtime/nazgul"
+mkdir -p "$RR_ALT/logs" "$RR_ALT/tasks"
+jq '.guards.red_run_evidence = false' "$TEST_DIR/nazgul/config.json" > "$RR_ALT/config.json"
+rm -f "$TEST_DIR/nazgul/logs/events.jsonl" "$RR_ALT/logs/events.jsonl"
+RR_TREE_MANIFEST=$(printf -- '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["scripts/foo.sh"]\n- **Base SHA**: %s\n\n## Commits\n- %s\n' \
+  "$BASE_SHA" "$HEAD_SHA")
+RR_TREE_EC=0
+ttg_validate_transition "$RR_ALT" "$TEST_DIR" TASK-001 IN_PROGRESS IMPLEMENTED "$RR_TREE_MANIFEST" \
+  2>"$RR_ERR_FILE" >/dev/null || RR_TREE_EC=$?
+RR_TREE_ERR=$(cat "$RR_ERR_FILE")
+assert_exit_code "which tree: the kill switch read is the CALLER's nazgul_dir, not \$project_root/nazgul" \
+  "$RR_TREE_EC" 0
+assert_contains "which tree: and the suppression is announced from that tree's config" \
+  "$RR_TREE_ERR" "block suppressed by guards.red_run_evidence: false"
+assert_file_contains "which tree: red_run_missing lands on the named tree's bus" \
+  "$RR_ALT/logs/events.jsonl" '"event":"red_run_missing"'
+assert_file_not_exists "which tree: and nothing was written to the tree the gate used to re-derive" \
+  "$TEST_DIR/nazgul/logs/events.jsonl"
+
+# lean-comments: allow-run — derivation is the method and the reason it is the method.
+# The sibling call sites, DERIVED from the tree rather than named: each must hand the
+# gate the runtime dir it resolved, or it re-derives one and the same split reopens
+# wherever a caller's project root and nazgul dir differ (a task worktree, notably).
+RR_CS_N=0; RR_CS_M=0; RR_CS_K=0; RR_CS_F=0; RR_CS_BAD=""
+while IFS= read -r _rr_site; do
+  [ -n "$_rr_site" ] || continue
+  RR_CS_N=$((RR_CS_N + 1))
+  case "$_rr_site" in
+    *"#"*ttg_verify_red_run_evidence*) RR_CS_M=$((RR_CS_M + 1)); continue ;;
+  esac
+  RR_CS_K=$((RR_CS_K + 1))
+  case "$_rr_site" in
+    *NAZGUL_DIR*|*nazgul_dir*) ;;
+    *) RR_CS_F=$((RR_CS_F + 1)); RR_CS_BAD="${RR_CS_BAD}${RR_CS_BAD:+; }${_rr_site}" ;;
+  esac
+done <<< "$(grep -rn 'ttg_verify_red_run_evidence "' "$REPO_ROOT/scripts" --include='*.sh' | sed "s|^$REPO_ROOT/||")"
+echo "  rr-callsites: ${RR_CS_N} scanned, ${RR_CS_M} skipped (commentary=${RR_CS_M}), ${RR_CS_K} checked, ${RR_CS_F} findings"
+assert_eq "rr-callsites: scanned == skipped + checked" "$RR_CS_N" "$((RR_CS_M + RR_CS_K))"
+if [ "$RR_CS_K" -ge 3 ]; then
+  _pass "rr-callsites: the scan examined the call-site population ($RR_CS_K sites)"
+else
+  _fail "rr-callsites: the scan examined the call-site population" \
+    "only $RR_CS_K site(s) found — a clean report from a dead extractor reads identically"
+fi
+if [ "$RR_CS_F" -eq 0 ]; then
+  _pass "rr-callsites: every call site hands the gate the runtime dir it resolved"
+else
+  _fail "rr-callsites: every call site hands the gate the runtime dir it resolved" \
+    "these re-derive \$project_root/nazgul instead: $RR_CS_BAD"
+fi
+teardown_temp_dir
+
 # ---------------------------------------------------------------------------
 # D-3 SCOPE PREDICATE — UNION of the manifest field and the Base SHA..HEAD diff
 # ---------------------------------------------------------------------------

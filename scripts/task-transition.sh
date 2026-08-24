@@ -160,7 +160,7 @@ REQUIRE_PROVENANCE=$(jq -r 'if .review_gate.require_provenance == false then "fa
 REVIEW_UNIT=$(resolve_review_unit "$NAZGUL_DIR" "$TASK_ID")
 
 repair_check "commit-evidence" ttg_verify_commit_evidence "$MANIFEST_TEXT" "$PROJECT_ROOT"
-repair_check "red-run-evidence" ttg_verify_red_run_evidence "$MANIFEST_TEXT" "$PROJECT_ROOT" "$TASK_ID"
+repair_check "red-run-evidence" ttg_verify_red_run_evidence "$MANIFEST_TEXT" "$PROJECT_ROOT" "$TASK_ID" "$NAZGUL_DIR"
 repair_check "review-directory" repair_review_dir_safe
 repair_check "review-verdicts" repair_review_evidence_complete
 repair_check "review-provenance" repair_provenance_valid

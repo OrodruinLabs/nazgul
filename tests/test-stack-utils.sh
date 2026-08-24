@@ -40,6 +40,8 @@ cat > "$FAKEBIN/gh" << 'EOF'
 # Mock gh for stack-utils tests. Env switches inject extension/auth/failure
 # states; NAZGUL_TEST_GH_*_LOG paths record what was invoked.
 sub="${1:-}"; shift || true
+# A host that never answers: the bound, not the host, is what ends the call.
+[ "${NAZGUL_TEST_GH_STALL:-0}" = "1" ] && sleep 30
 case "$sub" in
   extension)
     action="${1:-}"; shift || true
@@ -1273,6 +1275,30 @@ assert_contains "no timeout binary: an API failure still quotes the host's own e
   "$NOBIN_FAIL_ERR" "simulated API failure"
 unset NAZGUL_TEST_GH_PR_VIEW_JSON_FAIL
 unset NAZGUL_TIMEOUT_CMD
+
+# lean-comments: allow-run — the sibling of the case above, and its exact inverse.
+# THE FIRED-BOUND RECORD (PATCH-008 item 8). The block above proves the HOST's error text
+# survives the stderr split. When the BOUND fires instead, gh is killed before it says anything,
+# so the split left both halves empty and each wrapper's failure text ended at the exit code —
+# `bound_exceeded` reaching the terminal and never the diagnostic a caller quotes. Same shape as
+# merge-provider.sh's, and fixed by the same shared wrapper rather than a third hand-rolled split.
+if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
+  SU_BOUND_RC=0
+  SU_BOUND_OUT=$(NAZGUL_TEST_GH_STALL=1 NAZGUL_NET_TIMEOUT=1 \
+    _su_gh_pr_view_json "gh pr view (bound probe)" 901 "state,mergedAt" 2>/dev/null) || SU_BOUND_RC=$?
+  assert_exit_code "fired bound: _su_gh_pr_view_json returns the bound's own exit, not a parse error" \
+    "$SU_BOUND_RC" 124
+  assert_contains "fired bound: and what it hands its caller to quote NAMES the bound" \
+    "$SU_BOUND_OUT" "bound_exceeded"
+  # The RECORD line only: this wrapper's diagnostic and bounded-net's both land on stderr, so a
+  # whole-stream assertion here would pass on the terminal copy and see nothing.
+  SU_PR_ERR=$(NAZGUL_TEST_GH_STALL=1 NAZGUL_NET_TIMEOUT=1 \
+    _su_plain_pr main feat/bound-probe "t" "b" 2>&1 >/dev/null) || true
+  assert_contains "fired bound: the pr-create failure record NAMES the bound rather than only its exit code" \
+    "$(printf '%s\n' "$SU_PR_ERR" | grep 'gh pr create failed')" "bound_exceeded"
+else
+  _skip "the fired-bound record at stack-utils' two gh wrappers (neither timeout nor gtimeout is on this host)"
+fi
 
 teardown_temp_dir
 rm -rf "$FAKEBIN" "$NOGH_DIR"

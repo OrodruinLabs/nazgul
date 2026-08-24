@@ -266,11 +266,14 @@ _co_evidence_block() {
   printf '\n'
 }
 
+# lean-comments: allow-run — the skip arm's missing blank is deliberate and invisible from awk.
 # Replace an existing `## Merge Evidence` section in place, or append one — a manifest
 # written before FEAT-031 has no such section, and that is the ordinary AC20 case.
+# The skip arm does NOT emit the separating blank: the block carries its own trailing one
+# (below), and printing a second here gave the mid-file replace two where append got one.
 _CO_AWK_PROG='
 BEGIN { emitted = 0; skip = 0; n = split(ENVIRON["NAZGUL_CO_EVIDENCE"], ev, "\n"); lastblank = 1 }
-skip == 1 { if ($0 ~ /^## /) { skip = 0; print "" } else { next } }
+skip == 1 { if ($0 ~ /^## /) { skip = 0 } else { next } }
 /^## Merge Evidence[ \t]*$/ {
   if (!emitted) { for (i = 1; i <= n; i++) print ev[i]; emitted = 1 }
   skip = 1
@@ -286,8 +289,8 @@ END {
 
 _co_write_evidence() {
   local file="$1" rc=0
-  # `$(...)` strips the block's trailing newline, so the append branch wrote `recorded-by` flush
-  # against EOF while the replace branch got its blank line from the skip arm — two shapes.
+  # `$(...)` strips the block's trailing newline, so the trailing one is re-added HERE and is
+  # the section's ONLY separating blank — every branch then writes the same bytes.
   NAZGUL_CO_EVIDENCE="$(_co_evidence_block)
 "
   export NAZGUL_CO_EVIDENCE

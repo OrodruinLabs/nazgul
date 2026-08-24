@@ -311,12 +311,13 @@ _su_push_branch() {
 # explicit). Prints the created PR URL.
 _su_plain_pr() {
   local base="$1" branch="$2" title="$3" body="$4" out err errfile rc=0
+  # lean-comments: allow-run — same two opposite failures as merge-provider's site.
   # stdout alone: the last line here becomes the PERSISTED `pr` field, so a stderr line landing
-  # after gh's URL would register a diagnostic as the PR. stderr is kept for the failure text.
+  # after gh's URL would register a diagnostic as the PR. The failure text keeps BOTH halves —
+  # a fired bound kills gh before it says anything, and the exit code alone is not a reason.
   errfile=$(mktemp "${TMPDIR:-/tmp}/nazgul-su-prcreate-XXXXXX" 2>/dev/null) || errfile="/dev/null"
-  { out=$(NZ_BOUNDED_WARN_FD=9 nz_bounded_run net "gh pr create" \
-      gh pr create --base "$base" --head "$branch" --title "$title" --body "$body" 2>"$errfile") || rc=$?
-  } 9>&2
+  out=$(nz_bounded_run_split net "gh pr create" "$errfile" \
+    gh pr create --base "$base" --head "$branch" --title "$title" --body "$body") || rc=$?
   err=$(cat "$errfile" 2>/dev/null) || err=""
   [ "$errfile" = "/dev/null" ] || rm -f "$errfile"
   if [ "$rc" -ne 0 ]; then
@@ -567,16 +568,15 @@ _su_oneline() {
 # command's stdout captured ALONE. A `2>&1` capture folded bounded-net's own degradation line into
 # the payload, so on a host with no GNU `timeout` — stock macOS, the default — every `jq` parse
 # below came back empty on an OTHERWISE SUCCESSFUL call: a MERGED layer read as unmerged and a
-# CHANGES_REQUESTED review became invisible. Same fix shape merge-provider.sh already carries:
-# NZ_BOUNDED_WARN_FD keeps that diagnostic on the caller's real stderr instead of silencing it.
+# CHANGES_REQUESTED review became invisible. Same fix shape merge-provider.sh already carries,
+# through the one shared wrapper: the diagnostic stays on the caller's real stderr AND reaches
+# the failure text, because on a fired bound gh is killed before it says anything at all.
 # Prints the payload on success and the HOST's stderr on failure, because every caller quotes this
 # in its own failure diagnostic and uses jq only on the success path.
 _su_gh_pr_view_json() {
   local label="$1" pr="$2" fields="$3" out err errfile rc=0
   errfile=$(mktemp "${TMPDIR:-/tmp}/nazgul-su-prview-XXXXXX" 2>/dev/null) || errfile="/dev/null"
-  { out=$(NZ_BOUNDED_WARN_FD=9 nz_bounded_run net "$label" \
-      gh pr view "$pr" --json "$fields" 2>"$errfile") || rc=$?
-  } 9>&2
+  out=$(nz_bounded_run_split net "$label" "$errfile" gh pr view "$pr" --json "$fields") || rc=$?
   err=$(cat "$errfile" 2>/dev/null) || err=""
   [ "$errfile" = "/dev/null" ] || rm -f "$errfile"
   if [ "$rc" -ne 0 ]; then

@@ -138,6 +138,8 @@ case "$sub" in
       # SYNTHETIC: a leading underscore is a branch name git accepts and the old predicate did not.
       wipref) printf '%s\n' '{"baseRefName":"main","headRefName":"_wip/FEAT-042-thing","mergeCommit":{"oid":"d6f7582f7d9ee8f74706ea02202d15dd5bc83146"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED","url":"https://github.com/OrodruinLabs/nazgul/pull/88"}'; exit 0 ;;
       error)  printf '%s\n' 'GraphQL: Could not resolve to a PullRequest with the number of 999999. (repository.pullRequest)' >&2; exit 1 ;;
+      # A host that never answers: the bound, not the host, is what ends this call.
+      stall)  sleep 30; exit 0 ;;
       leaky)  printf 'HTTP 401: Bad credentials (token ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA)\n' >&2; exit 1 ;;
       garbage) printf '%s\n' 'not json at all'; exit 0 ;;
     esac
@@ -295,6 +297,35 @@ assert_not_contains "nor an attacker-authored head branch, which is what binds a
 assert_contains "the refused override is named on stderr rather than ignored quietly" \
   "$MP_ERR" "refused_timeout_cmd_override"
 unset NAZGUL_TIMEOUT_CMD
+
+# lean-comments: allow-run — a named degradation whose name never reaches the record is the
+# doctrine this file's own header states, turned against it.
+# THE FIRED-BOUND RECORD (PATCH-008 item 8). Splitting the COMMAND's stderr into $errfile sent
+# bounded-net's own diagnostics to fd 9, so on 124/137 neither $err nor $out carried the
+# `bound_exceeded` line: the diagnostic ended at "gh pr view 88 failed (exit 124): " and the
+# merge_provider_api_failure event carried an EMPTY reason. The operator's stderr had it; the
+# record a later refusal is read back from did not.
+if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
+  : > "$EVENTS"
+  MP_T0=$(date +%s)
+  NAZGUL_TEST_GH_PR_CASE=stall NAZGUL_NET_TIMEOUT=1 _drive 88
+  MP_BOUND_ELAPSED=$(( $(date +%s) - MP_T0 ))
+  assert_eq "a fired bound is api_failure — a timeout is never an answer about a PR" \
+    "$(_field '.result')" "api_failure"
+  if [ "$MP_BOUND_ELAPSED" -le 15 ]; then
+    _pass "the bound genuinely fired rather than the stub returning (${MP_BOUND_ELAPSED}s against a 30s stall)"
+  else
+    _fail "the bound genuinely fired" "took ${MP_BOUND_ELAPSED}s — nothing below is about a fired bound"
+  fi
+  assert_contains "the fired bound NAMES itself in the diagnostic the caller records and prints" \
+    "$(_field '.diagnostic')" "bound_exceeded"
+  assert_contains "and on the bus, where an empty reason is indistinguishable from a silent host" \
+    "$(jq -r 'select(.event == "merge_provider_api_failure") | .reason' "$EVENTS" | tail -1)" "bound_exceeded"
+  assert_contains "while still reaching the operator's real stderr, which is where it always went" \
+    "$MP_ERR" "bound_exceeded"
+else
+  _skip "the fired-bound record (neither timeout nor gtimeout is on this host, so no bound can fire)"
+fi
 
 # --- provider_unavailable: an arm exists but cannot run. Distinct from both
 # api_failure (it ran and failed) and unsupported_host (there is no arm). ---

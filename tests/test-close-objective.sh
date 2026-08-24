@@ -261,6 +261,13 @@ _drove already-terminal not-closable-status unreadable
 
 assert_contains "squash close: the host is asked the merge-state question, by PR" \
   "$(cat "$GH_LOG")" "pr view 88 --repo github.com/orodruinlabs/nazgul --json state,mergedAt,mergeCommit"
+# lean-comments: allow-run — the arithmetic is the assertion, and neither term is obvious.
+# One PR, one question: the plan asks once, the FIRST read-back asks once and every later
+# manifest reads the memo, and each walk to DONE shells out to task-transition.sh, which is a
+# fresh process the memo cannot reach. So `1 + 1 + K`, not `1 + 2K` — an ANSWER is cacheable,
+# which is exactly what the failure-side policy above declines to claim about a non-answer.
+assert_eq "squash close: K closures share ONE in-process read-back answer, not one apiece" \
+  "$(grep -c '^pr view ' "$GH_LOG")" "$((2 + CO_K))"
 assert_eq "squash close: IMPLEMENTED -> DONE landed on disk" \
   "$(get_task_status "$FX/nazgul/tasks/TASK-001.md")" "DONE"
 assert_eq "squash close: IN_REVIEW -> DONE landed on disk, with no review directory anywhere" \
@@ -483,7 +490,11 @@ _fixture readback
 _manifest TASK-131 IMPLEMENTED
 _manifest TASK-132 IMPLEMENTED
 GH_SEQ="$SCRATCH/gh-seq-readback"
-printf 'merged\nerror\n' > "$GH_SEQ"
+# lean-comments: allow-run — the script's three lines each drive a different arm.
+# Plan, then a read-back per manifest, each failing for a DIFFERENT reason: an unanswerable
+# call, then an answer that contradicts what was recorded. A host that fails transiently and
+# then answers is the ordinary case, and it is exactly the one a cached FAILURE erases.
+printf 'merged\nerror\nmerged:%s\n' "$FEAT_SHA" > "$GH_SEQ"
 rm -f "$GH_SEQ.n"
 : > "$GH_LOG"
 NAZGUL_TEST_GH_SEQ="$GH_SEQ" NAZGUL_TEST_GH_CASE=merged _run "$FX" 88
@@ -492,10 +503,12 @@ _grammar "read-back reasons"
 _reason "read-back reasons" "evidence-write-failed" 2
 assert_eq "read-back reasons: nothing was closed on a read-back that did not verify" "$CO_K" "0"
 assert_eq "read-back reasons: both are counted as refusals, not only as skips" "$CO_F" "2"
-# PATCH-007 item 4: one PR, one question. The plan asks once and the FIRST read-back asks once;
-# every later manifest reads the memo, where it used to add one bounded round trip apiece.
-assert_eq "read-back reasons: the host is asked twice for the whole run, not once per manifest" \
-  "$(cat "$GH_SEQ.n" 2>/dev/null)" "2"
+# lean-comments: allow-run — the count IS the policy, and the policy is not visible from it.
+# PATCH-008 item 9: the memo caches the host's ANSWER, never a failure to obtain one. A cached
+# rc=2 replayed the first manifest's 60s timeout onto every later one — with 12 stranded
+# manifests, twelve refusals and eleven read-backs that never happened.
+assert_eq "read-back reasons: a read-back the host could not answer is RE-ASKED for the next manifest, not replayed" \
+  "$(cat "$GH_SEQ.n" 2>/dev/null)" "3"
 _drove evidence-write-failed
 
 # The recorded reason itself, read out of the refusal record — an exit code cannot see it.
@@ -505,14 +518,20 @@ CO_BR_132=$(printf '%s\n' "$CO_ERR" \
   | sed -n 's/.*REFUSED TASK-132 .*did not read back as verifiable \[\([^]]*\)\].*/\1/p' | head -1)
 assert_eq "read-back reasons: TASK-131 records the reason ITS read-back returned" \
   "$CO_BR_131" "unverifiable"
-assert_eq "read-back reasons: TASK-132 records its own bracket, not an empty one" \
-  "$CO_BR_132" "unverifiable"
+assert_eq "read-back reasons: TASK-132 records the reason ITS OWN read-back returned, not its predecessor's" \
+  "$CO_BR_132" "contradicted"
+if [ -n "$CO_BR_131" ] && [ "$CO_BR_131" != "$CO_BR_132" ]; then
+  _pass "read-back reasons: two manifests failing differently in ONE run record two different reasons"
+else
+  _fail "read-back reasons: two manifests failing differently in ONE run record two different reasons" \
+    "both recorded [${CO_BR_131:-<empty>}] — the bracket tracks the run, not the task"
+fi
 
-# lean-comments: allow-run — says why the "not a constant" proof takes two runs rather than one.
-# A SECOND run, refused for a DIFFERENT cause. One task cannot distinguish "the right reason"
-# from "a constant"; two runs whose read-backs fail differently can. This used to be one run with
-# a host answering differently on consecutive calls — which no real host does, and which the memo
-# above (correctly) collapses. Cause, not call ordering, is what the bracket has to track.
+# lean-comments: allow-run — says why the "not a constant" proof is driven from two directions.
+# A SECOND run, refused for a DIFFERENT cause, reached without a per-call script: cause and call
+# ordering are separable, and the bracket has to track the cause. The one-run form above became
+# possible again once the memo stopped caching failures; before that a cached rc=2 answered every
+# later manifest and no second cause could be reached within a run at all.
 FX_READBACK="$FX"
 _fixture readback2
 _manifest TASK-133 IMPLEMENTED
@@ -551,22 +570,64 @@ assert_contains "read-back reasons: TASK-132's bracket is a member of that close
 assert_contains "read-back reasons: TASK-133's bracket is a member of that closed vocabulary" \
   " $CO_MERGE_VOCAB" " ${CO_BR_133:-<empty>} "
 
-# PATCH-007 item 13 — `$(_co_evidence_block)` stripped the block's trailing newline, so the APPEND
-# branch wrote `recorded-by` flush against EOF while REPLACE got a blank line from the skip arm.
+# lean-comments: allow-run — the writer bug and the test bug are one item, and the second is
+# the reason the first shipped.
+# PATCH-007 item 13 — `$(_co_evidence_block)` stripped the block's trailing newline, so the
+# APPEND branch wrote `recorded-by` flush against EOF while REPLACE got a blank line from the
+# skip arm. Appending the newline fixed append and gave the MID-FILE replace TWO blank lines,
+# which the fix's own test could not see (PATCH-008 item 7): the only replaced section it
+# planted was appended at EOF, so the skip arm's `## `-heading branch never ran, and both sides
+# of the comparison went through `$( )`, which strips the very trailing newlines being compared.
+# Three shapes are planted here — append, replace-at-EOF, replace-mid-file — and the sections
+# are compared as BYTES on disk.
+_insert_stale_evidence() {
+  awk '/^## Implementation Log$/ && !d { print "## Merge Evidence"; print "- **host**: stalevalue"; print ""; d=1 } { print }' \
+    "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+}
+# The section as BYTES up to but excluding the next `## ` heading — trailing blank lines
+# included, which is the whole difference a `$( )` comparison cannot express.
+_co_ev_section() {
+  awk '/^## Merge Evidence$/{f=1;print;next} f && /^## /{exit} f{print}' "$1"
+}
+_co_ev_trailing_blanks() {
+  awk '/^- \*\*recorded-by\*\*/{f=1;n=0;next} f && /^[ \t]*$/{n++;next} f{print n;f=0;exit} END{if(f)print n+0}' "$1"
+}
 FX_EVSHAPE_PREV="$FX"
 _fixture evshape
 _manifest TASK-141 IMPLEMENTED
 _manifest TASK-142 IMPLEMENTED
-printf '\n## Merge Evidence\n- **host**: stalevalue\n' >> "$FX/nazgul/tasks/TASK-142.md"
+_manifest TASK-143 IMPLEMENTED
+_insert_stale_evidence "$FX/nazgul/tasks/TASK-142.md"
+printf '\n## Merge Evidence\n- **host**: stalevalue\n' >> "$FX/nazgul/tasks/TASK-143.md"
 : > "$GH_LOG"
 NAZGUL_TEST_GH_CASE=merged NAZGUL_TEST_MERGE_SHA="$MERGE_SHA" _run "$FX" 88
 assert_eq "evidence shape: the APPEND branch ends the section with a blank line, like replace does" \
   "$(tail -1 "$FX/nazgul/tasks/TASK-141.md")" ""
-assert_eq "evidence shape: appended and replaced sections are identical" \
-  "$(awk '/^## Merge Evidence$/{f=1} f' "$FX/nazgul/tasks/TASK-141.md")" \
-  "$(awk '/^## Merge Evidence$/{f=1} f' "$FX/nazgul/tasks/TASK-142.md")"
+for _ev_id in TASK-141 TASK-142 TASK-143; do
+  assert_eq "evidence shape: ${_ev_id}'s section is followed by exactly one blank line" \
+    "$(_co_ev_trailing_blanks "$FX/nazgul/tasks/${_ev_id}.md")" "1"
+done
+_co_ev_section "$FX/nazgul/tasks/TASK-141.md" > "$SCRATCH/ev-append"
+_co_ev_section "$FX/nazgul/tasks/TASK-142.md" > "$SCRATCH/ev-midfile"
+_co_ev_section "$FX/nazgul/tasks/TASK-143.md" > "$SCRATCH/ev-eof"
+if cmp -s "$SCRATCH/ev-append" "$SCRATCH/ev-midfile"; then
+  _pass "evidence shape: append and MID-FILE replace write byte-identical sections"
+else
+  _fail "evidence shape: append and MID-FILE replace write byte-identical sections" \
+    "$(diff "$SCRATCH/ev-append" "$SCRATCH/ev-midfile" | tr '\n' ' ')"
+fi
+if cmp -s "$SCRATCH/ev-append" "$SCRATCH/ev-eof"; then
+  _pass "evidence shape: append and replace-at-EOF write byte-identical sections"
+else
+  _fail "evidence shape: append and replace-at-EOF write byte-identical sections" \
+    "$(diff "$SCRATCH/ev-append" "$SCRATCH/ev-eof" | tr '\n' ' ')"
+fi
+assert_eq "evidence shape: the mid-file replace did not swallow the heading that followed it" \
+  "$(grep -c '^## Implementation Log$' "$FX/nazgul/tasks/TASK-142.md")" "1"
 assert_not_contains "evidence shape: the replaced section leaves no stale field behind" \
   "$(cat "$FX/nazgul/tasks/TASK-142.md")" "stalevalue"
+assert_not_contains "evidence shape: nor does the replace-at-EOF one" \
+  "$(cat "$FX/nazgul/tasks/TASK-143.md")" "stalevalue"
 FX="$FX_EVSHAPE_PREV"
 
 # The arms either side of the repair are unchanged: rollback still runs, the task stays put.
