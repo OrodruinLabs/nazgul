@@ -673,14 +673,16 @@ assert_eq "P0 prose CONTROL: with that sentence struck out the same search repor
 
 # B3: the removal rule that stopped at the first comment orphaned everything after it.
 S_B3='up to the next blank line / comment'
-assert_eq "P0 B3: $INIT_SKILL no longer terminates block removal '$S_B3'" \
-  "$(grep -cF -- "$S_B3" "$SWEEP_ROOT/$INIT_SKILL" || true)" "0"
+S_B3_N=$(grep -cF -- "$S_B3" "$SWEEP_ROOT/$INIT_SKILL" || true)
+assert_eq "P0 B3: $INIT_SKILL no longer terminates block removal '$S_B3'" "$S_B3_N" "0"
 assert_eq "P0 B3: and the region rule that replaced it names the blank-line/EOF terminator, exactly once" \
   "$(grep -cF -- 'terminating at the first BLANK line or EOF' "$SWEEP_ROOT/$INIT_SKILL" || true)" "1"
+# Measured against the file's own count, not against 1: the control has to prove this search can
+# SEE the phrasing, and a fixed expectation would instead re-assert the absence above.
 S_B3_CTRL="$SCRATCH/init-b3.md"
 { cat "$SWEEP_ROOT/$INIT_SKILL"; printf 'Removing a block means deleting its marker line and the lines under it %s.\n' "$S_B3"; } > "$S_B3_CTRL"
-assert_eq "P0 B3 CONTROL: the same search finds the phrasing when it is present, so the zero above is a measured zero" \
-  "$(grep -cF -- "$S_B3" "$S_B3_CTRL" || true)" "1"
+assert_eq "P0 B3 CONTROL: appending one occurrence moves the same count by exactly one, so the zero above is a measured zero" \
+  "$(grep -cF -- "$S_B3" "$S_B3_CTRL" || true)" "$((S_B3_N + 1))"
 
 findings=$((findings + TESTS_FAILED - S_FAILED_BEFORE))
 fi
