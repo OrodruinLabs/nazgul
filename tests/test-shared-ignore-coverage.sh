@@ -454,6 +454,205 @@ assert_contains "P12: the finding names nazgul/in-flight/" "$D_OUT" \
   "A2 unignored: 'nazgul/in-flight/' is absent from the shared-mode block"
 fi
 
+# P1/P2/P3 prove the block changes GIT'S BEHAVIOUR, not the skill's text alone, and
+# run in a scratch `git init` tree: this checkout is local-mode, so there is no in-tree repro.
+if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
+  _skip "P1/P2/P3 git-behaviour arms (inner run under an injected sweep root)"
+else
+R_FAILED_BEFORE=$TESTS_FAILED
+ROUTES=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-ignore-routes-XXXXXX")
+# Supersedes the dogfood trap and must keep removing BOTH trees; the two sections
+# share one guard condition, so $SCRATCH is always set by the time this runs.
+trap 'rm -rf "$SCRATCH" "$ROUTES"' EXIT
+mkdir -p "$ROUTES/home"
+
+LOCAL_MARKER="# Nazgul Framework (local mode)"
+# The local-mode fence's sha256 at 0738a1a, this objective's Base SHA. Pinned rather
+# than read back from git, which a shallow CI clone cannot resolve.
+LOCAL_FENCE_SHA_BASE="a6dae5f0e33e2fd6c237ce75d77dddb302267e52e7d15ffe0dccf03e0bbc80a6"
+
+# Raw fence lines for the ```gitignore fence CONTAINING a marker. P1 must see WHICH
+# line comes first, so this cannot start AT the marker the way _extract_block does.
+_fenced_lines() {
+  awk -v marker="$1" '
+    { t = $0; sub(/^[[:space:]]+/, "", t) }
+    !inf && t == "```gitignore" { inf = 1; n = 0; hit = 0; split("", buf); next }
+    inf && t == "```" { if (hit) { for (i = 1; i <= n; i++) print buf[i]; exit } inf = 0; next }
+    inf { buf[++n] = $0; if (t == marker) hit = 1 }
+  ' "$SWEEP_ROOT/$INIT_SKILL"
+}
+
+_sha256() { { command -v sha256sum >/dev/null 2>&1 && sha256sum || shasum -a 256; } | awk '{print $1}'; }
+
+# Whitespace-delimited membership, so nazgul/in-flight cannot be satisfied by a
+# substring of a longer pathspec such as nazgul/in-flight-other.
+_names_token() { printf '%s' "$1" | tr ' \t' '\n\n' | grep -Fxq -- "$2"; }
+
+# Either slash form counts for a literal directory: the P2 F5 arm below MEASURES
+# that both match, unlike the wildcard entries F5 records.
+_names_dir_token() { _names_token "$1" "$2" || _names_token "$1" "$2/"; }
+
+# The `git rm` one-shots are joined across their `\` continuations: a truncated join
+# would make the glob invocation's NON-membership result an artifact, not an absence.
+_join_cmd() {
+  awk -v pat="$1" '
+    !s { if (index($0, pat)) s = 1; else next }
+    s { print; if ($0 !~ /\\[[:space:]]*$/) exit }
+  ' "$SWEEP_ROOT/$INIT_SKILL"
+}
+
+_fenced_lines "$BLOCK_MARKER" > "$ROUTES/shared.raw"
+routes_usable=1
+if [ ! -s "$ROUTES/shared.raw" ]; then
+  routes_usable=0
+  _fail "P1 fence: the shared-mode gitignore fence is extractable from $INIT_SKILL" \
+    "no fence under $SWEEP_ROOT contains the marker '$BLOCK_MARKER' — P1 structure and P2 had nothing to run against"
+fi
+
+if [ "$routes_usable" -eq 1 ]; then
+  R_FENCE_N=$(wc -l < "$ROUTES/shared.raw" | tr -d ' ')
+  R_BLOCK_N=$(printf '%s\n' "$BLOCK" | wc -l | tr -d ' ')
+  assert_eq "P1 extractors agree: the fence is the marker plus _extract_block's $R_BLOCK_N line(s)" \
+    "$R_FENCE_N" "$((R_BLOCK_N + 1))"
+
+  R_L1=$(sed -n '1p' "$ROUTES/shared.raw" | sed 's/^[[:space:]]*//')
+  R_L2=$(sed -n '2p' "$ROUTES/shared.raw" | sed 's/^[[:space:]]*//')
+  assert_eq "P1 marker: the block's exact first line is still the detection marker ($INIT_SKILL:78-83 matches it alone)" \
+    "$R_L1" "$BLOCK_MARKER"
+  R_L2_CLASS="other"
+  case "$R_L2" in
+    "$BLOCK_MARKER") R_L2_CLASS="marker-repeated" ;;
+    "#"*) R_L2_CLASS="comment" ;;
+  esac
+  assert_eq "P1 comment: the block's second line is the descriptive comment, not an entry" "$R_L2_CLASS" "comment"
+
+  R_BLANKS=$(grep -c '^[[:space:]]*$' "$ROUTES/shared.raw" || true)
+  assert_eq "P1 structure: no blank line inside the block (one would truncate what --force removal sees)" \
+    "$R_BLANKS" "0"
+
+  sed 's/^[[:space:]]*//' "$ROUTES/shared.raw" > "$ROUTES/green.gitignore"
+  grep -vxF 'nazgul/in-flight/' "$ROUTES/green.gitignore" > "$ROUTES/red.gitignore" || true
+  R_GREEN_N=$(wc -l < "$ROUTES/green.gitignore" | tr -d ' ')
+  R_RED_N=$(wc -l < "$ROUTES/red.gitignore" | tr -d ' ')
+  assert_eq "P2 control built: dropping nazgul/in-flight/ removes exactly one line of the block" \
+    "$((R_GREEN_N - R_RED_N))" "1"
+  assert_eq "P2 control built: and no nazgul/in-flight/ line survives in the RED variant" \
+    "$(grep -cxF 'nazgul/in-flight/' "$ROUTES/red.gitignore" || true)" "0"
+
+  _rgit() { local d="$1"; shift; env HOME="$ROUTES/home" XDG_CONFIG_HOME="$ROUTES/home/.config" GIT_CONFIG_NOSYSTEM=1 git -C "$d" "$@"; }
+
+  # HOME/XDG/system config are neutralised so a host's core.excludesFile or
+  # core.hooksPath cannot decide the verdict; a fresh git init inherits neither.
+  _routes_repo() {
+    local d="$1" ign="$2"
+    mkdir -p "$d/nazgul/in-flight/quarantine"
+    cp "$ign" "$d/.gitignore"
+    printf '{}\n' > "$d/nazgul/in-flight/m.json"
+    printf '{}\n' > "$d/nazgul/in-flight/quarantine/q.json"
+    _rgit "$d" -c init.defaultBranch=main init -q
+  }
+
+  # Filtered by output PREFIX, never by pathspec — scripts/session-staging.sh:135
+  # passes no pathspec either, and F5's trailing-slash hazard lives in pathspecs.
+  _route_staging() { _rgit "$1" ls-files --others --exclude-standard 2>/dev/null | grep -c '^nazgul/in-flight/' || true; }
+  _route_add() { _rgit "$1" add -A >/dev/null 2>&1; _rgit "$1" diff --cached --name-only 2>/dev/null | grep -c '^nazgul/in-flight/' || true; }
+  _route_ignored() { _rgit "$1" check-ignore -v -- "$2" >/dev/null 2>&1; printf '%s' "$?"; }
+  _route_pattern() { _rgit "$1" check-ignore -v -- "$2" 2>/dev/null | awk -F'\t' '{print $1}' | cut -d: -f3-; }
+
+  # Staging is probed BEFORE add: `git add -A` moves the markers out of --others.
+  R_GREEN_REPO="$ROUTES/green-repo"; _routes_repo "$R_GREEN_REPO" "$ROUTES/green.gitignore"
+  R_G_IGN=$(_route_ignored "$R_GREEN_REPO" nazgul/in-flight/m.json)
+  R_G_CHILD=$(_route_ignored "$R_GREEN_REPO" nazgul/in-flight/quarantine/q.json)
+  R_G_CHILD_PAT=$(_route_pattern "$R_GREEN_REPO" nazgul/in-flight/quarantine/q.json)
+  R_G_STAGE=$(_route_staging "$R_GREEN_REPO")
+  R_G_ADD=$(_route_add "$R_GREEN_REPO")
+  assert_eq "P2 route 3/3 the rule itself: git check-ignore -v nazgul/in-flight/m.json exits 0" "$R_G_IGN" "0"
+  assert_eq "P2 child path: git check-ignore -v nazgul/in-flight/quarantine/q.json exits 0" "$R_G_CHILD" "0"
+  assert_eq "P2 child path: cited by the DIRECTORY line, so the swept-over quarantine markers need no entry of their own" \
+    "$R_G_CHILD_PAT" "nazgul/in-flight/"
+  assert_eq "P2 route 2/3 AFK SessionEnd staging (scripts/session-staging.sh:135's exact command): lists nothing under nazgul/in-flight/" \
+    "$R_G_STAGE" "0"
+  assert_eq "P2 route 1/3 blanket add: git add -A stages nothing under nazgul/in-flight/" "$R_G_ADD" "0"
+
+  # The permanent RED control. Its 2s are what make the three 0s above a real zero
+  # rather than a filter that could never have matched anything.
+  R_RED_REPO="$ROUTES/red-repo"; _routes_repo "$R_RED_REPO" "$ROUTES/red.gitignore"
+  R_R_IGN=$(_route_ignored "$R_RED_REPO" nazgul/in-flight/m.json)
+  R_R_CHILD=$(_route_ignored "$R_RED_REPO" nazgul/in-flight/quarantine/q.json)
+  R_R_STAGE=$(_route_staging "$R_RED_REPO")
+  R_R_PATHSPEC=$(_rgit "$R_RED_REPO" ls-files --others --exclude-standard -- 'nazgul/in-flight/' 2>/dev/null | grep -c . || true)
+  R_R_ADD=$(_route_add "$R_RED_REPO")
+  assert_eq "P2 CONTROL 3/3: against a block missing nazgul/in-flight/, check-ignore exits 1" "$R_R_IGN" "1"
+  assert_eq "P2 CONTROL child path: and the quarantine child is exposed with it" "$R_R_CHILD" "1"
+  assert_eq "P2 CONTROL 2/3: the staging route then lists both markers" "$R_R_STAGE" "2"
+  assert_eq "P2 CONTROL 1/3: and git add -A then stages both" "$R_R_ADD" "2"
+  # F5 measured in place: the trailing slash empties a WILDCARD pathspec, but not a
+  # literal directory one — which is what licenses _names_dir_token's either-form check.
+  assert_eq "P2 F5: on a literal directory the trailing-slash pathspec still matches both markers" \
+    "$R_R_PATHSPEC" "2"
+else
+  _skip "P1 structure and P2 routes (the shared-mode fence could not be extracted — reported as a finding above)"
+fi
+
+if _block_has_line "nazgul/in-flight/"; then
+  _pass "P1 subject: 'nazgul/in-flight/' is an exact line of the shared-mode block"
+else
+  _fail "P1 subject: 'nazgul/in-flight/' is an exact line of the shared-mode block" \
+    "the block no longer contains its own #251 subject"
+fi
+
+R_OUTSIDE=0
+while IFS= read -r r_ln; do
+  [ -n "$r_ln" ] || continue
+  _in_block_region "$r_ln" || R_OUTSIDE=$((R_OUTSIDE + 1))
+done < <(grep -n 'nazgul/in-flight' "$SWEEP_ROOT/$INIT_SKILL" | cut -d: -f1)
+if [ "$R_OUTSIDE" -ge 1 ]; then
+  _pass "P1 scope: $R_OUTSIDE mention(s) of nazgul/in-flight sit outside every gitignore fence, so the block-scoped check above cannot be satisfied by them"
+else
+  _fail "P1 scope: at least one mention of nazgul/in-flight sits outside the fences" \
+    "found $R_OUTSIDE — with none, a file-wide grep and the block-scoped check are the same assertion and P3's Step 4 halves cannot hold"
+fi
+
+R_DETECT_N=$(grep -c 'git ls-files nazgul/' "$SWEEP_ROOT/$INIT_SKILL" || true)
+assert_eq "P3 anchor: Step 4's detection command is found by content, exactly once" "$R_DETECT_N" "1"
+R_DETECT=$(grep -m1 'git ls-files nazgul/' "$SWEEP_ROOT/$INIT_SKILL" || true)
+R_RM_R=$(_join_cmd 'git rm -r --cached')
+R_RM_GLOB=$(_join_cmd 'git rm --cached --ignore-unmatch --')
+assert_contains "P3 anchor: the detection command reaches its last entry" "$R_DETECT" "nazgul/learning/.last-run"
+assert_contains "P3 join: the -r remedy is joined across its continuations to its last entry" \
+  "$R_RM_R" "nazgul/learning/.last-run"
+assert_contains "P3 join: the pathspec-glob remedy is joined to its last entry, so the absence below is a real absence" \
+  "$R_RM_GLOB" "nazgul/reviews/post-loop-simplify-report.md"
+
+_assert_named() {
+  local label="$1" hay="$2" tok="$3" want="$4" got="no"
+  _names_dir_token "$hay" "$tok" && got="yes"
+  assert_eq "$label" "$got" "$want"
+}
+_assert_named "P3 detection: Step 4's git ls-files probe names nazgul/in-flight" "$R_DETECT" "nazgul/in-flight" "yes"
+_assert_named "P3 remedy: the git rm -r one-shot names nazgul/in-flight, where a directory belongs" \
+  "$R_RM_R" "nazgul/in-flight" "yes"
+_assert_named "P3 remedy: and the pathspec-glob one-shot does NOT — a detector with no remedy and a remedy no detector triggers are separate defects" \
+  "$R_RM_GLOB" "nazgul/in-flight" "no"
+
+_fenced_lines "$LOCAL_MARKER" > "$ROUTES/local.raw"
+assert_eq "P3 local block: the local-mode fence is its marker plus three entries" \
+  "$(wc -l < "$ROUTES/local.raw" | tr -d ' ')" "4"
+R_SHA_TOOL="none"
+command -v sha256sum >/dev/null 2>&1 && R_SHA_TOOL="sha256sum"
+[ "$R_SHA_TOOL" = "none" ] && command -v shasum >/dev/null 2>&1 && R_SHA_TOOL="shasum"
+if [ "$R_SHA_TOOL" = "none" ]; then
+  _fail "P3 local block: a sha256 tool (sha256sum or shasum) is on PATH" \
+    "neither resolves — an empty digest must not be able to read as agreement"
+else
+  _pass "P3 local block: hashed with $R_SHA_TOOL"
+fi
+assert_eq "P3 local block: byte-identical to 0738a1a, whitespace included" \
+  "$(_sha256 < "$ROUTES/local.raw")" "$LOCAL_FENCE_SHA_BASE"
+
+findings=$((findings + TESTS_FAILED - R_FAILED_BEFORE))
+fi
+
 # The unresolvable and block-region tallies are path-level, not file-level: one
 # file can hold both kinds, so neither can live in M without breaking N == M + K.
 RC=0
