@@ -24,6 +24,8 @@ source "$SCRIPT_DIR/lib/assertions.sh"
 echo "=== $TEST_NAME ==="
 export LC_ALL=C
 
+# NOT normalized, on purpose: `find "$SWEEP_ROOT/$s"` and `${f#"$SWEEP_ROOT"/}` are one
+# expression, so `.`, `./` and a trailing slash cancel (#254 C5, refuted on all four forms).
 SWEEP_ROOT="${NAZGUL_IGNORE_SWEEP_ROOT:-$REPO_ROOT}"
 SOURCE_DIRS="scripts skills agents templates"
 INIT_SKILL="skills/init/SKILL.md"
@@ -76,8 +78,8 @@ nazgul/reviews|ephemeral|nazgul/reviews/post-loop-simplify-report.md|Post-loop w
 nazgul/learning|ephemeral|nazgul/learning/proposed-rules.md|Transient autolearning working file
 nazgul/learning|ephemeral|nazgul/learning/.last-run|Transient autolearning working file'
 
-# A1-A4 increment `findings` directly; P1/P2/P3 and copy-sync fold in a
-# TESTS_FAILED delta after the region; the dogfood arms are exit-code-only.
+# A1-A4 increment `findings` directly; the dogfood, P1/P2/P3 and copy-sync regions raise
+# TESTS_FAILED instead, and each folds its own delta in as it closes, before the next baseline.
 scanned=0; skipped_no_path=0; skipped_unreadable=0; checked=0; findings=0
 unresolvable=0; block_excluded=0
 KEY_HITS=""
@@ -273,12 +275,44 @@ if [ "$scanned" -ne $((skipped_no_path + skipped_unreadable + checked)) ]; then
     "$scanned != $skipped_no_path + $skipped_unreadable + $checked"
 fi
 
+# One predicate for both mktemp -d sites and for C7's control below: a second, independently
+# written test would be the divergence the SWEEP_ROOT disposition above says to avoid.
+_scratch_usable() { [ -n "${1:-}" ] && [ -d "$1" ]; }
+
+# Removal is guarded on a non-empty value, so a trap installed before a failed mktemp -d
+# cannot degrade to `rm -rf ""`.
+_rm_scratch() { local d; for d in "$@"; do [ -n "$d" ] && rm -rf "$d"; done; return 0; }
+
 # Dogfood — a detector that can only ever pass is evidence of nothing (RULES §15).
 # Skipped under an injected sweep root: the fixtures re-enter this file and recurse.
-if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
+D_FAILED_BEFORE=$TESTS_FAILED
+if [ -n "${NAZGUL_IGNORE_SWEEP_FOLD_PROBE:-}" ]; then
+  # C3's control, driven by _dog_fold_run below: one deliberate failure inside this region
+  # and nothing else, so a child's findings delta measures the fold and only the fold.
+  _fail "fold probe: a deliberate dogfood-region failure" \
+    "raised by NAZGUL_IGNORE_SWEEP_FOLD_PROBE — it must reach the findings tally, not TESTS_FAILED alone"
+elif [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
   _skip "dogfood fixtures (inner run under an injected sweep root)"
 else
-SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-ignore-sweep-XXXXXX"); trap 'rm -rf "$SCRATCH"' EXIT
+SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-ignore-sweep-XXXXXX" 2>/dev/null) || SCRATCH=""
+if ! _scratch_usable "$SCRATCH"; then
+  _fail "dogfood scratch: mktemp -d under ${TMPDIR:-/tmp} yields a directory" \
+    "got '$SCRATCH' — an empty value makes \$DOG the root-relative /tree that _dog_reset would remove and recreate outside any temp dir (#254 C7); the dogfood arms did not run"
+  exit 1
+fi
+trap '_rm_scratch "$SCRATCH"' EXIT
+
+# C7 control: the same predicate the two mktemp sites use, driven both ways — a guard that
+# refused everything and one that refused nothing would otherwise read identically.
+C7_EMPTY_SCRATCH=""
+if _scratch_usable "$C7_EMPTY_SCRATCH"; then C7_EMPTY_VERDICT="use"; else C7_EMPTY_VERDICT="refuse"; fi
+if _scratch_usable "$SCRATCH"; then C7_REAL_VERDICT="use"; else C7_REAL_VERDICT="refuse"; fi
+assert_eq "C7: an empty mktemp -d result is refused" "$C7_EMPTY_VERDICT" "refuse"
+assert_eq "C7: and a real one is used, so the guard is not refusing everything" "$C7_REAL_VERDICT" "use"
+C7_EMPTY_DOG="$C7_EMPTY_SCRATCH/tree"
+assert_eq "C7: the refused value computes the root-relative path — shown here, never passed to rm" \
+  "$C7_EMPTY_DOG" "/tree"
+
 DOG="$SCRATCH/tree"
 DOG_CLASSES=("A1 undeclared" "A2 unignored" "A3 over-ignored" "A4 stale-declaration")
 
@@ -299,6 +333,7 @@ INNER
 }
 
 _dog_run() { NAZGUL_IGNORE_SWEEP_ROOT="$DOG" bash "$SCRIPT_DIR/$TEST_NAME.sh" 2>&1; }
+_dog_fold_run() { env NAZGUL_IGNORE_SWEEP_FOLD_PROBE=1 NAZGUL_IGNORE_SWEEP_ROOT="$DOG" bash "$SCRIPT_DIR/$TEST_NAME.sh" 2>&1; }
 
 # Block variations are made on the fixture's COPY, never on the shipped skill, and
 # by the same trimmed-line predicate _extract_block uses.
@@ -322,8 +357,12 @@ _dog_unproduce() {
 
 _dog_n() { local n; n=$(printf '%s\n' "$1" | grep -cF "FAIL: $2"); printf '%s' "$n"; }
 
-# MISSING, never an empty string: a field this cannot find must fail an assertion
+# MISSING, never an empty string: a field these cannot find must fail an assertion
 # rather than silently compare equal to another absent field.
+_dog_findings() {
+  printf '%s\n' "$1" | awk '/, [0-9]+ findings$/ { f = $(NF - 1) } END { print (f == "" ? "MISSING" : f) }'
+}
+
 _dog_paths_field() {
   printf '%s\n' "$1" | awk -v want="$2" '
     /^paths: / { sub(/^paths: /, ""); n = split($0, p, ", ")
@@ -371,6 +410,40 @@ else
   _pass "D0: the paths line exposes the enumerated ($BASE_ENUM) and unresolvable ($BASE_UNRES) tallies"
 fi
 assert_eq "D0: every declared key is produced by the fixture" "$BASE_ENUM" "$declared_count"
+
+# C3: this region raises TESTS_FAILED, not `findings`, so a dogfood failure reaches the §15
+# line only through the delta folded in when the region closes. Differenced against D0's run.
+D_FOLD_CLEAN=$(_dog_findings "$D_OUT")
+D_FOLD_OUT=$(_dog_fold_run); D_FOLD_RC=$?
+D_FOLD_PROBE=$(_dog_findings "$D_FOLD_OUT")
+if [ "$D_FOLD_CLEAN" = "MISSING" ] || [ "$D_FOLD_PROBE" = "MISSING" ]; then
+  _fail "C3 fold: both runs expose a findings tally for the delta to be taken from" \
+    "clean='$D_FOLD_CLEAN' probe='$D_FOLD_PROBE' — two absent counts must not read as a delta of zero"
+else
+  assert_eq "C3 fold: one failure raised inside the dogfood region raises the findings tally by exactly one" \
+    "$((D_FOLD_PROBE - D_FOLD_CLEAN))" "1"
+fi
+assert_exit_code "C3 fold: and a dogfood-region failure is blocking" "$D_FOLD_RC" 1
+
+# The fold assertion's own control: a copy of this file with the fold line mechanically removed
+# is the pre-change accounting, and a delta of 1 above would otherwise also fit a constant 1.
+D_FOLD_LINE='findings=$((findings + TESTS_FAILED - D_FAILED_BEFORE))'
+D_MUT="$SCRATCH/foldless"
+mkdir -p "$D_MUT" && ln -sfn "$SCRIPT_DIR/lib" "$D_MUT/lib"
+grep -vxF -- "$D_FOLD_LINE" "$SCRIPT_DIR/$TEST_NAME.sh" > "$D_MUT/$TEST_NAME.sh"
+assert_eq "C3 fold CONTROL: the mutant differs from this file by exactly the fold line" \
+  "$(( $(wc -l < "$SCRIPT_DIR/$TEST_NAME.sh") - $(wc -l < "$D_MUT/$TEST_NAME.sh") ))" "1"
+D_MUT_OUT=$(env NAZGUL_IGNORE_SWEEP_FOLD_PROBE=1 NAZGUL_IGNORE_SWEEP_ROOT="$DOG" bash "$D_MUT/$TEST_NAME.sh" 2>&1)
+D_MUT_RC=$?
+D_FOLD_MUT=$(_dog_findings "$D_MUT_OUT")
+if [ "$D_FOLD_MUT" = "MISSING" ] || [ "$D_FOLD_CLEAN" = "MISSING" ]; then
+  _fail "C3 fold CONTROL: the mutant run exposes a findings tally to difference" \
+    "mutant='$D_FOLD_MUT' clean='$D_FOLD_CLEAN' — an absent count must not read as the under-count being looked for"
+else
+  assert_eq "C3 fold CONTROL: without the fold the same probe leaves the findings tally unmoved" \
+    "$((D_FOLD_MUT - D_FOLD_CLEAN))" "0"
+fi
+assert_exit_code "C3 fold CONTROL: and the mutant still exits 1, so a 0 tally sits on a failing run" "$D_MUT_RC" 1
 
 _dog_reset
 printf '#!/usr/bin/env bash\nmkdir -p "$NAZGUL_DIR/novel-dir"\n' > "$DOG/scripts/novel.sh"
@@ -454,6 +527,7 @@ _dog_only "P12 #251: a block that no longer contains its own subject" "$D_OUT" "
 assert_contains "P12: the finding names nazgul/in-flight/" "$D_OUT" \
   "A2 unignored: 'nazgul/in-flight/' is absent from the shared-mode block"
 fi
+findings=$((findings + TESTS_FAILED - D_FAILED_BEFORE))
 
 # P1/P2/P3 prove the block changes GIT'S BEHAVIOUR, not the skill's text alone, and
 # run in a scratch `git init` tree: this checkout is local-mode, so there is no in-tree repro.
@@ -461,10 +535,15 @@ if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
   _skip "P1/P2/P3 git-behaviour arms (inner run under an injected sweep root)"
 else
 R_FAILED_BEFORE=$TESTS_FAILED
-ROUTES=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-ignore-routes-XXXXXX")
+ROUTES=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-ignore-routes-XXXXXX" 2>/dev/null) || ROUTES=""
+if ! _scratch_usable "$ROUTES"; then
+  _fail "routes scratch: mktemp -d under ${TMPDIR:-/tmp} yields a directory" \
+    "got '$ROUTES' — the P1/P2/P3 arms write their fences and their two git repos under it; refusing an empty path (#254 C7)"
+  exit 1
+fi
 # Supersedes the dogfood trap and must keep removing BOTH trees; the two sections
 # share one guard condition, so $SCRATCH is always set by the time this runs.
-trap 'rm -rf "$SCRATCH" "$ROUTES"' EXIT
+trap '_rm_scratch "$SCRATCH" "$ROUTES"' EXIT
 mkdir -p "$ROUTES/home"
 
 LOCAL_MARKER="# Nazgul Framework (local mode)"
@@ -657,7 +736,7 @@ fi
 # A sibling region to the P1/P2/P3 arms, reusing their extractions ($R_DETECT, $R_RM_R,
 # $R_RM_GLOB) under the same guard: one comparison per copy, never two rival ones.
 if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
-  _skip "P3 copy-sync arms (inner run under an injected sweep root, whose fixture tree carries no $CLEAN_SKILL)"
+  _skip 'P3 copy-sync arms (inner run under an injected sweep root: the $R_DETECT/$R_RM_R/$R_RM_GLOB these arms compare against are assigned only inside the P1/P2/P3 region above, which the same guard skipped)'
 else
 C_FAILED_BEFORE=$TESTS_FAILED
 CLEAN_ANCHOR='Remove the \*\*shared-mode ephemeral\*\* block'
