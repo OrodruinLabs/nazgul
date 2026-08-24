@@ -2517,8 +2517,27 @@ _p14_check "P14n: the Q1 valve's unkeyable corner is recorded as a known constra
   "$([ "$(grep -c 'declines a hold the previous release would have taken' "$P14_CHANGELOG" || true)" -ge 1 ] && echo recorded || echo silent)" "recorded"
 _p14_check "P14n: the supporting claim is scoped to the fixtures, not asserted of the schema" \
   "$(grep -cF 'captured payload in `tests/fixtures/stop-payload/` exhibits a live subagent without an `id`' "$P14_CHANGELOG" || true)" "1"
-_p14_check "P14n: ... and the release adds no new version heading" \
-  "$(grep -m1 '^## \[' "$P14_CHANGELOG")" "## [2.34.0] - 2026-08-22"
+# Which `## ` entry owns a sentence. Substring match, not regex — the search strings carry `[`,
+# backtick and `/` — and ANY heading form counts, including an unbracketed `## Unreleased`.
+_p14n_entry_of() {
+  awk -v pat="$2" '
+    /^## / { h = $0 }
+    index($0, pat) { print (h == "" ? "(preamble)" : h); found = 1; exit }
+    END { if (!found) print "(absent)" }
+  ' "$1"
+}
+# same / split / missing: the third state stops an unfindable sentence passing as empty-equals-empty.
+_p14n_colocated() {
+  local a b
+  a="$(_p14n_entry_of "$1" "$2")"
+  b="$(_p14n_entry_of "$1" "$3")"
+  if [ "$a" = "(absent)" ] || [ "$b" = "(absent)" ]; then printf 'missing'
+  elif [ "$a" = "$b" ]; then printf 'same'
+  else printf 'split'
+  fi
+}
+_p14_check "P14n: ... and the two sentences above belong to one entry, so no release can ship half the record" \
+  "$(_p14n_colocated "$P14_CHANGELOG" 'declines a hold the previous release would have taken' 'captured payload in `tests/fixtures/stop-payload/` exhibits a live subagent without an `id`')" "same"
 # THE control that makes the claim evidence rather than assertion: read the fixtures and check it.
 # If a future capture lands with an id-less live subagent, the CHANGELOG sentence becomes false here.
 _p14l_idless() {
