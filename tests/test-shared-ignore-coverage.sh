@@ -27,6 +27,7 @@ export LC_ALL=C
 SWEEP_ROOT="${NAZGUL_IGNORE_SWEEP_ROOT:-$REPO_ROOT}"
 SOURCE_DIRS="scripts skills agents templates"
 INIT_SKILL="skills/init/SKILL.md"
+CLEAN_SKILL="skills/clean/SKILL.md"
 BLOCK_MARKER="# Nazgul Framework — ephemeral runtime"
 
 # Family 1 is the literal `nazgul/<seg>`; family 2 is the variable-rooted shape
@@ -651,6 +652,109 @@ assert_eq "P3 local block: byte-identical to 0738a1a, whitespace included" \
   "$(_sha256 < "$ROUTES/local.raw")" "$LOCAL_FENCE_SHA_BASE"
 
 findings=$((findings + TESTS_FAILED - R_FAILED_BEFORE))
+fi
+
+# A sibling region to the P1/P2/P3 arms, reusing their extractions ($R_DETECT, $R_RM_R,
+# $R_RM_GLOB) under the same guard: one comparison per copy, never two rival ones.
+if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
+  _skip "P3 copy-sync arms (inner run under an injected sweep root, whose fixture tree carries no $CLEAN_SKILL)"
+else
+C_FAILED_BEFORE=$TESTS_FAILED
+CLEAN_ANCHOR='Remove the \*\*shared-mode ephemeral\*\* block'
+
+# Members of $1 absent from $2, space-joined; "" is agreement. Each disagreement
+# names itself, so a failure says which entry drifted rather than only that one did.
+_only_in() {
+  local t out=""
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    printf '%s\n' "$2" | grep -Fxq -- "$t" || out="$out $t"
+  done <<INNER
+$1
+INNER
+  printf '%s' "${out# }"
+}
+
+# Copies 1 and 2 are pathspec lists, so both sides drop a trailing slash: that is F5
+# for the wildcard entries, and either-form tolerance for the literal directory ones.
+_norm_pathspec() { printf '%s\n' "$1" | sed 's:/$::' | sort -u; }
+
+# Whitespace-split, shell quotes and the `\` continuation dropped, then narrowed to
+# nazgul/ paths — the flags and the git subcommand are not part of any copy.
+_cmd_paths() { printf '%s' "$1" | tr ' \t' '\n\n' | sed "s/^['\"]//; s/['\"]\$//" | grep '^nazgul/' | sort -u; }
+
+# The detection bullet ALSO quotes nazgul/context.backup.*/ in prose as the form that
+# matches nothing, so the command is read from its own code span, never from the line.
+_code_span() {
+  awk -v pat="$1" '{ n = split($0, p, "`"); for (i = 2; i <= n; i += 2) if (index(p[i], pat) == 1) { print p[i]; exit } }' <<< "$2"
+}
+
+C_ENTRIES=$(printf '%s\n' "$BLOCK" | grep -v '^#' | grep -v '^[[:space:]]*$' | sort -u)
+C_ENTRY_N=$(printf '%s\n' "$C_ENTRIES" | grep -c . || true)
+if [ "$C_ENTRY_N" -gt 0 ]; then
+  _pass "P3 copies: the block yields $C_ENTRY_N entr(ies) for the three copies to be compared against"
+else
+  _fail "P3 copies: the block yields at least one entry to compare the copies against" \
+    "no non-comment line follows the marker — all six comparisons below would report agreement on an empty set"
+fi
+
+# The comparator's own control: without it, six "" results are equally consistent with
+# three synced copies and with a comparator that can only ever return "".
+assert_eq "P3 copies CONTROL: the comparator names a member the other side lacks" \
+  "$(_only_in "alpha
+beta" "alpha")" "beta"
+assert_eq "P3 copies CONTROL: and returns empty only when every member is present" \
+  "$(_only_in "alpha" "alpha
+beta")" ""
+
+C_WANT_PS=$(_norm_pathspec "$C_ENTRIES")
+C_P1_RAW=$(_cmd_paths "$(_code_span 'git ls-files nazgul/' "$R_DETECT")")
+C_P2_RAW=$(_cmd_paths "$R_RM_R
+$R_RM_GLOB")
+C_P1=$(_norm_pathspec "$C_P1_RAW")
+C_P2=$(_norm_pathspec "$C_P2_RAW")
+
+assert_eq "P3 copy 1 (init Step 4 git ls-files detection): every block entry is named" \
+  "$(_only_in "$C_WANT_PS" "$C_P1")" ""
+assert_eq "P3 copy 1 (init Step 4 git ls-files detection): and it names nothing the block lacks" \
+  "$(_only_in "$C_P1" "$C_WANT_PS")" ""
+assert_eq "P3 copy 2 (init Step 4 git rm remedy, both one-shots): every block entry is named" \
+  "$(_only_in "$C_WANT_PS" "$C_P2")" ""
+assert_eq "P3 copy 2 (init Step 4 git rm remedy, both one-shots): and they name nothing the block lacks" \
+  "$(_only_in "$C_P2" "$C_WANT_PS")" ""
+
+# F5 as TASK-009 measured it, not as it was first recorded: `*/` empties a WILDCARD
+# pathspec, while a literal directory pathspec matches either way and stays untouched.
+C_WILD_N=$(printf '%s\n%s\n' "$C_P1_RAW" "$C_P2_RAW" | grep -c '\*' || true)
+if [ "$C_WILD_N" -gt 0 ]; then
+  _pass "P3 copies F5: $C_WILD_N wildcard pathspec(s) across copies 1 and 2 for the slash rule to bind on"
+else
+  _fail "P3 copies F5: at least one wildcard pathspec exists across copies 1 and 2" \
+    "none found — the trailing-slash rule below would pass on an empty match"
+fi
+C_WILD_SLASH=$(printf '%s\n%s\n' "$C_P1_RAW" "$C_P2_RAW" | grep '\*' | grep '/$' | sort -u | tr '\n' ' ' || true)
+assert_eq "P3 copies F5: no wildcard pathspec in copies 1 or 2 carries the block's trailing slash" \
+  "${C_WILD_SLASH% }" ""
+
+if [ -r "$SWEEP_ROOT/$CLEAN_SKILL" ]; then
+  _pass "P3 copy 3 anchor: $CLEAN_SKILL is readable"
+else
+  _fail "P3 copy 3 anchor: $CLEAN_SKILL is readable" \
+    "absent or unreadable under $SWEEP_ROOT — a third copy that was never read must not report as one that agreed"
+fi
+C_CLEAN_N=$(grep -c "$CLEAN_ANCHOR" "$SWEEP_ROOT/$CLEAN_SKILL" 2>/dev/null || true)
+assert_eq "P3 copy 3 anchor: Step 8's shared-mode item is found by content, exactly once" "$C_CLEAN_N" "1"
+C_CLEAN_LINE=$(grep -m1 "$CLEAN_ANCHOR" "$SWEEP_ROOT/$CLEAN_SKILL" 2>/dev/null || true)
+C_P3=$(printf '%s\n' "$C_CLEAN_LINE" | grep -oE '`[^`]+`' | tr -d '`' | grep '^nazgul/' | sort -u || true)
+
+# Copy 3 quotes the .gitignore LINES rather than pathspecs, so it is compared verbatim:
+# the trailing slash is part of the line it tells /nazgul:clean to delete.
+assert_eq "P3 copy 3 (clean Step 8 item 3): every block entry is listed, verbatim" \
+  "$(_only_in "$C_ENTRIES" "$C_P3")" ""
+assert_eq "P3 copy 3 (clean Step 8 item 3): and it lists nothing the block lacks" \
+  "$(_only_in "$C_P3" "$C_ENTRIES")" ""
+
+findings=$((findings + TESTS_FAILED - C_FAILED_BEFORE))
 fi
 
 # The unresolvable and block-region tallies are path-level, not file-level: one
