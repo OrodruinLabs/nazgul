@@ -1019,7 +1019,9 @@ EOF
 # Usage: ttg_verify_red_run_evidence <manifest_text> <project_root> [task_id]
 ttg_verify_red_run_evidence() {
   local manifest_text="$1" project_root="$2" task_id="${3:-}"
-  local nazgul_dir="${NAZGUL_DIR:-$project_root/nazgul}"
+  # PARAMETER, never ambient — ttg_verify_merge_evidence's rule, applied to the IMPLEMENTED
+  # gate. Lower stakes (this block is kill-switchable), but one sibling reading it is drift.
+  local nazgul_dir="${4:-$project_root/nazgul}"
   local raw_section section commits entry="" line rc=0
 
   TTG_RED_RUN_REASON=""
