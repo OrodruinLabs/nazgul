@@ -7,8 +7,8 @@
 #
 # Idempotent source guard; NOT `set -euo pipefail` (sourced into hook shells).
 
-[ -n "${_NAZGUL_PARALLEL_BATCH_SOURCED:-}" ] && return 0
-_NAZGUL_PARALLEL_BATCH_SOURCED=1
+# NO SENTINEL: the scalar `_NAZGUL_PARALLEL_BATCH_SOURCED` that sat here made one exported variable
+# enough to leave compute_dispatch_batch undefined in the stop-hook's dispatch pass — the 127-exit hazard nazgul-root.sh:40-49 measured.
 
 _PB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null

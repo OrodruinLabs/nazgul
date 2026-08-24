@@ -14,8 +14,8 @@ if [ "${BASH_SOURCE[0]:-$0}" = "${0}" ]; then
   set -euo pipefail
 fi
 
-[ -n "${_NAZGUL_DISPATCH_SOURCED:-}" ] && return 0
-_NAZGUL_DISPATCH_SOURCED=1
+# NO SENTINEL: the scalar `_NAZGUL_DISPATCH_SOURCED` that sat here made one exported variable
+# enough to leave the chain-dispatcher undefined in a git hook — the 127-exit hazard nazgul-root.sh:40-49 measured.
 
 _NAZGUL_DISPATCH_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 _NAZGUL_DISPATCH_CONFIG="$_NAZGUL_DISPATCH_ROOT/nazgul/config.json"

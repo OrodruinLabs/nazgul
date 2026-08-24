@@ -11,6 +11,19 @@
 #   HOOK_PAYLOAD          the content; empty unless the outcome is `payload`
 #   HOOK_PAYLOAD_OUTCOME  payload | empty | timeout
 #   HOOK_PAYLOAD_REASON   stall | deadline | oversize, set only with `timeout`
+#   HOOK_PAYLOAD_PREFIX   a bounded, UNTRUSTED head of whatever arrived, kept on
+#                         every outcome including the ones that clear
+#                         HOOK_PAYLOAD. It exists for ONE purpose: identifying
+#                         WHICH file a bounded-out write targets, because
+#                         `file_path` sits near the front of a tool envelope and
+#                         a guard that cannot name the target cannot decide
+#                         about it. It is never parsed for content and never
+#                         decides anything about the write's body — a truncated
+#                         envelope is not a document. It is a separate variable
+#                         precisely because HOOK_PAYLOAD is contractually empty
+#                         on a non-`payload` outcome and sixteen callers rely on
+#                         that; widening HOOK_PAYLOAD would be the fourth-outcome
+#                         mistake argued against below, in a second spelling.
 #
 # THREE outcomes, never two. `timeout` means a bound fired and whatever arrived
 # is untrustworthy. It must never share a branch with `empty`, or a slow payload
@@ -133,6 +146,9 @@ HOOK_PAYLOAD_DEADLINE_SECONDS=5
 # ASCII JSON envelope. 1 MiB is 4x this repo's largest text file.
 HOOK_PAYLOAD_MAX_CHARS=1048576
 HOOK_PAYLOAD_CHUNK_CHARS=8192
+# Two chunks: a tool envelope names its file_path well inside this, and nothing
+# downstream is allowed to read the prefix for anything else.
+HOOK_PAYLOAD_PREFIX_CHARS=16384
 # Trailing newlines are stripped exactly through a window this wide.
 HOOK_PAYLOAD_STRIP_WINDOW=512
 _HP_LIB_DIR="${BASH_SOURCE[0]%/*}"
@@ -164,6 +180,7 @@ read_hook_payload() {
   HOOK_PAYLOAD=""
   HOOK_PAYLOAD_OUTCOME="empty"
   HOOK_PAYLOAD_REASON=""
+  HOOK_PAYLOAD_PREFIX=""
 
   # A terminal has no payload to deliver and no EOF coming; reading would block
   # on a human. The six hooks that already had this check keep their behaviour.
@@ -213,6 +230,9 @@ read_hook_payload() {
     outcome="payload"
   fi
 
+  # Taken BEFORE the clear below, which is the only moment the bytes exist.
+  # shellcheck disable=SC2034  # read by task-state-guard's oversize arm, not within this file
+  HOOK_PAYLOAD_PREFIX="${HOOK_PAYLOAD:0:$HOOK_PAYLOAD_PREFIX_CHARS}"
   # Cleared on every bound so no caller can parse a truncated envelope, on
   # either build and whichever of the three fired.
   [ "$outcome" = "timeout" ] && HOOK_PAYLOAD=""

@@ -14,8 +14,8 @@
 # Idempotent source guard; NOT `set -euo pipefail` — sourced into caller
 # shells that own their own shell options (mirrors scripts/lib/raise-finding.sh).
 
-[ -n "${_NAZGUL_TEAM_TEARDOWN_SOURCED:-}" ] && return 0
-_NAZGUL_TEAM_TEARDOWN_SOURCED=1
+# NO SENTINEL: the scalar `_NAZGUL_TEAM_TEARDOWN_SOURCED` that sat here made one exported variable
+# enough to leave the dead-session sweep undefined — the 127-exit hazard nazgul-root.sh:40-49 measured.
 
 NAZGUL_TEAMS_DIR="${NAZGUL_TEAMS_DIR:-$HOME/.claude/teams}"
 NAZGUL_TEAM_TASKS_DIR="${NAZGUL_TEAM_TASKS_DIR:-$HOME/.claude/tasks}"

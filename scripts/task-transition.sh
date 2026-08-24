@@ -110,10 +110,11 @@ BLOCKED_KIND=$(repair_field "Blocked kind")
 if [ -z "$BLOCKED_KIND" ]; then
   repair_deny "the manifest records no 'Blocked kind' — an untyped blocker is not a reconciliation quarantine; use /nazgul:task unblock" "untyped_blocker"
 fi
-case "$(printf '%s' "$BLOCKED_KIND" | tr '[:upper:]' '[:lower:]')" in
-  reconciliation) ;;
-  *) repair_deny "blocker kind is '${BLOCKED_KIND}', not 'reconciliation'; repair is closed to other blocker classes — use /nazgul:task unblock" "wrong_blocker_kind" ;;
-esac
+# The SHARED predicate, never a second reading: a manifest the gate holds and repair refuses is one
+# the Write/Edit checker will not let an operator edit either — frozen, with no exit at all.
+if ! ttg_is_reconciliation_quarantine "$MANIFEST_TEXT"; then
+  repair_deny "blocker kind is '${BLOCKED_KIND}', not 'reconciliation'; repair is closed to other blocker classes — use /nazgul:task unblock" "wrong_blocker_kind"
+fi
 
 QUARANTINE_FROM=$(repair_field "Blocked from")
 QUARANTINE_OBSERVED=$(repair_field "Blocked observed")

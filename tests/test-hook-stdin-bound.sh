@@ -441,9 +441,11 @@ assert_eq "a payload over the cap reads as 'timeout/oversize' with no content â€
 # costs the operation forever. Each guard now asks separately and answers by what a false allow
 # costs IT: pre-tool-guard still denies, because it is the last thing before the shell and an
 # allow would make a cap-sized pad a screening bypass; task-state-guard allows, because it is
-# preflight and cannot create authority, and reconciliation is the backstop for the one write it
-# could miss. Driven against a copy whose cap is rewritten down, so the ceiling costs the suite
-# nothing.
+# preflight and a deterministic cap must not refuse every large Write forever. That allow used to
+# cite reconciliation as its backstop; PATCH-008 item 2 measured that false (reconciliation fires
+# only on a status CHANGE), so it is now scoped by the target read from HOOK_PAYLOAD_PREFIX â€” a task
+# manifest and an unreadable target both fail closed, which is what test-task-state-guard.sh drives.
+# Driven against a copy whose cap is rewritten down, so the ceiling costs the suite nothing.
 OVERTREE="$SCRATCH/overtree"
 mkdir -p "$OVERTREE"
 cp -R "$REPO_ROOT/scripts" "$OVERTREE/scripts"

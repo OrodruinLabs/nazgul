@@ -12,6 +12,13 @@ source "$SCRIPT_DIR/lib/task-transition-guard.sh"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 # shellcheck source=./lib/destructive-patterns.sh
 source "$SCRIPT_DIR/lib/destructive-patterns.sh"
+# nazgul/tasks/TASK-<digits>.md, digits only. Defined up here, away from its is_dispatch_manifest
+# /is_review_diff siblings, because the oversize arm names a target before any envelope is parsed.
+is_task_manifest() {
+  local p="$1"
+  [[ "$p" =~ (^|/)nazgul/tasks/TASK-[0-9]+\.md$ ]]
+}
+
 RHP_LIB="$SCRIPT_DIR/lib/read-hook-payload.sh"
 # A load that returns 0 having defined nothing is still no payload, and it is
 # scoped like the timeout branch below rather than denying every repo.
@@ -23,6 +30,24 @@ rhp_unavailable() {
   printf 'task-state-guard: stdin reader unavailable: %s — fail-open, not a Nazgul project\n' "$1" >&2
   exit 0
 }
+# The target of a bounded-out write, from read-hook-payload's untrusted prefix — not jq, a truncated
+# envelope is not JSON. Returns 1 unless the WHOLE quoted value fits, so a cut path reads as unknown.
+_tsg_prefix_file_path() {
+  local p="${HOOK_PAYLOAD_PREFIX:-}"
+  case "$p" in *'"file_path"'*) ;; *) return 1 ;; esac
+  # A body key already open means this `file_path` may be a string the write itself supplied, so
+  # the target is unknown rather than found — the attacker picks it otherwise.
+  case "${p%%\"file_path\"*}" in
+    *'"content"'*|*'"new_string"'*|*'"old_string"'*|*'"edits"'*) return 1 ;;
+  esac
+  p="${p#*\"file_path\"}"
+  p="${p#*:}"
+  p="${p#"${p%%[![:space:]]*}"}"
+  case "$p" in \"*) p="${p#\"}" ;; *) return 1 ;; esac
+  case "$p" in *\"*) ;; *) return 1 ;; esac
+  printf '%s' "${p%%\"*}"
+}
+
 [ -r "$RHP_LIB" ] || rhp_unavailable "$RHP_LIB is missing or unreadable"
 rhp_rc=0
 # shellcheck source=./lib/read-hook-payload.sh
@@ -33,17 +58,32 @@ declare -F read_hook_payload >/dev/null && declare -F hook_payload_timeout_repor
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
 read_hook_payload
 if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
-  # lean-comments: allow-run — why one of the three reader bounds decides differently here.
-  # `oversize` is asked SEPARATELY rather than inheriting the stall answer by proximity. A
-  # stall or a deadline is transient, so failing closed costs a retry; the cap is
-  # DETERMINISTIC, so failing closed refuses every large Write in the project forever, with
-  # no path around it. This guard is preflight and cannot create authority (ADR-020): the one
-  # write it might miss is a padded status edit, which the stop-hook's reconciliation pass
-  # quarantines at the next iteration. pre-tool-guard has no such backstop and denies both.
+  # lean-comments: allow-run — the disposition, the claim that was false, and what is still open.
+  # `oversize` is asked SEPARATELY rather than inheriting the stall answer by proximity. A stall or
+  # a deadline is transient, so failing closed costs a retry; the cap is DETERMINISTIC, so a blanket
+  # fail-closed refuses every large Write in the project forever. The previous arm therefore allowed
+  # the write and said reconciliation would catch a padded status edit. It does not: stop-hook.sh's
+  # pass fires only when a task's status CHANGED since the checkpoint, and a padded write that
+  # deletes an ADR-020 quarantine record leaves BLOCKED as BLOCKED — invisible, and then
+  # `BLOCKED -> CANCELLED` is admitted (PATCH-008 item 2). So the target is named instead, from the
+  # reader's bounded UNTRUSTED prefix: a task manifest fails closed, an envelope whose file_path
+  # cannot be read fails closed (an unknown target is not a known-safe one), everything else keeps
+  # the fail-open. STILL NOT COVERED on this path, stated rather than left to be discovered: the
+  # "source edits require an IN_PROGRESS task" rule, which applies to targets this arm allows.
   if [ "${HOOK_PAYLOAD_REASON:-}" = "oversize" ]; then
-    hook_payload_timeout_report "task-state-guard" "fail-open" \
-      "allowing the edit unscreened — a cap-sized payload is not a state change this guard can read, and reconciliation is the backstop for one that is"
-    exit 0
+    if OVERSIZE_TARGET=$(_tsg_prefix_file_path); then
+      if is_task_manifest "$OVERSIZE_TARGET"; then
+        hook_payload_timeout_report "task-state-guard" "fail-closed" \
+          "refusing the edit: ${OVERSIZE_TARGET} is a task manifest, and an unscreened write to one can delete a quarantine record no later pass would see"
+        exit 2
+      fi
+      hook_payload_timeout_report "task-state-guard" "fail-open" \
+        "allowing the edit unscreened: ${OVERSIZE_TARGET} is not a task manifest, and a deterministic cap must not refuse every large Write forever"
+      exit 0
+    fi
+    hook_payload_timeout_report "task-state-guard" "fail-closed" \
+      "refusing the edit: the truncated envelope yields no file_path, so the target is unknown — which is not the same as known-safe"
+    exit 2
   fi
   # With no payload there is no file path to bound, so the deny is decided here
   # — but an unrelated repo's edits were never this guard's to refuse.
@@ -190,13 +230,6 @@ is_nazgul_path() {
     "${CANON_PROJECT_ROOT}"/nazgul|"${CANON_PROJECT_ROOT}"/nazgul/*) return 0 ;;
   esac
   return 1
-}
-
-# Helper: check if path is a task manifest in the project's nazgul/ dir
-is_task_manifest() {
-  local p="$1"
-  # Must match nazgul/tasks/TASK-<digits>.md (strict: digits only before .md)
-  [[ "$p" =~ (^|/)nazgul/tasks/TASK-[0-9]+\.md$ ]]
 }
 
 # Helper: check if path is a review-unit dispatch manifest

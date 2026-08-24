@@ -14,8 +14,8 @@
 # Idempotent source guard; NOT `set -euo pipefail` — sourced into caller
 # shells that own their own shell options (mirrors scripts/lib/inbox-provider.sh).
 
-[ -n "${_NAZGUL_RAISE_FINDING_SOURCED:-}" ] && return 0
-_NAZGUL_RAISE_FINDING_SOURCED=1
+# NO SENTINEL: the scalar `_NAZGUL_RAISE_FINDING_SOURCED` that sat here made one exported variable
+# enough to leave raise_finding undefined — the 127-exit hazard nazgul-root.sh:40-49 measured.
 
 _RF_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null

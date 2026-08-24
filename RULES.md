@@ -587,7 +587,20 @@ this covers only a valid config whose `tasks/` path resolves outside its own `na
   sits far below it. `scripts/lib/read-hook-payload.sh`'s own header is the measurement of record and
   the only place the numbers live; the first draft of this rule quoted a throughput figure taken from
   the read alone, missing the trailing-newline strip that dominated it, and stated a ceiling nothing in
-  the source declared. **Not claimed:** that the host ever leaves a hook's stdin open
+  the source declared. A bounded, explicitly UNTRUSTED `HOOK_PAYLOAD_PREFIX` survives the clear for ONE
+  purpose — naming WHICH file a bounded-out write targets — and is never parsed for content;
+  `HOOK_PAYLOAD` stays contractually empty on a non-`payload` outcome, because widening IT would be the
+  fourth-outcome mistake in a second spelling. It exists because `task-state-guard`'s `oversize`
+  fail-open cited reconciliation as its backstop and PATCH-008 measured that false: `stop-hook.sh`'s
+  pass fires only when a task's status CHANGED since the checkpoint, so a padded write that deletes an
+  ADR-020 quarantine record from a manifest which stays `BLOCKED` is invisible to it, and
+  `BLOCKED -> CANCELLED` is then admitted. That guard now fails CLOSED on a task-manifest target and on
+  an envelope whose `file_path` the prefix cannot yield — an unknown target is not a known-safe one, and
+  a body key opened before the name means the write itself may have supplied it — and keeps the
+  fail-open otherwise, a deterministic cap being one that would otherwise refuse every large Write
+  forever. **Still not covered on that path,** stated rather than left to be discovered: the "source
+  edits require an IN_PROGRESS task" rule, which applies to the targets that arm allows.
+  **Not claimed:** that the host ever leaves a hook's stdin open
   without EOF. The hang is a latent hazard in guards whose whole job is to be fast and predictable,
   proven under a detached runner — not an observed production stall.
   `tests/test-hook-stdin-bound.sh` DERIVES the hook population from `scripts/*.sh` instead of listing

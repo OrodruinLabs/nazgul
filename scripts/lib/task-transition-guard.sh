@@ -63,18 +63,21 @@ ttg_valid_transition() {
   esac
 }
 
-# lean-comments: allow-run — one anchor, and what a second spelling of it cost.
+# lean-comments: allow-run — one anchor, and what each narrowing of it cost.
 # TTG_MANIFEST_FIELD_ANCHOR is THE anchor for a `- **Field**: value` manifest line. It existed in
 # two spellings — `^-[[:space:]]*\*\*` here and in task-state-guard, `^\- \*\*` in the transition
 # gate and the stop-hook — so a manifest written with two spaces after the dash was a LIVE
 # quarantine to the Write/Edit checker and invisible to the gate, and `BLOCKED -> CANCELLED`
-# laundered an integrity block into a terminal status (#232 residual, PATCH-007 item 9). The
-# tolerant form is the one kept, deliberately: a record seen and refused costs an operator one
-# retry, a record NOT seen costs the block itself.
-TTG_MANIFEST_FIELD_ANCHOR='^-[[:space:]]*\*\*'
+# laundered an integrity block into a terminal status (#232 residual, PATCH-007 item 9). Both
+# spellings then pinned the dash to column 0, so an INDENTED record was seen by neither
+# (PATCH-008 item 4). The tolerant form is the one kept, deliberately: a record seen and refused
+# costs an operator one retry, a record NOT seen costs the block itself. Its one cost in the other
+# direction is priced and accepted: :1754's BLOCKED -> IN_REVIEW review-evidence class also widens,
+# onto an edge that still has to produce review evidence to reach DONE.
+TTG_MANIFEST_FIELD_ANCHOR='^[[:space:]]*-[[:space:]]*\*\*'
 
-# ttg_manifest_field <text> <field> -> the field's trimmed value. Returns 1 when the line is
-# absent; rc 0 with empty output means present-but-blanked, which is a different fact.
+# ttg_manifest_field <text> <field> -> the FIRST matching line's trimmed value. Returns 1 when the
+# line is absent; rc 0 with empty output means present-but-blanked, which is a different fact.
 ttg_manifest_field() {
   local line
   line=$(printf '%s\n' "$1" | grep -m1 -iE "${TTG_MANIFEST_FIELD_ANCHOR}$2\*\*:") || return 1
@@ -83,15 +86,18 @@ ttg_manifest_field() {
   printf '%s' "${line%"${line##*[![:space:]]}"}"
 }
 
-# ttg_is_reconciliation_quarantine <manifest-text> -> 0 for a LIVE typed quarantine. Exactly
-# `reconciliation`, so an already-repaired `reconciliation (repaired …)` cannot re-qualify.
+# lean-comments: allow-run — this predicate is a security boundary and reads DIFFERENTLY on purpose.
+# ttg_is_reconciliation_quarantine <manifest-text> -> 0 for a LIVE typed quarantine. It does NOT go
+# through ttg_manifest_field, whose `grep -m1` answers "what does this field say" — correct for a
+# single-valued field, and wrong here: routing this predicate through it (PATCH-007 item 9) narrowed
+# the test from ANY line to the FIRST, so a manifest carrying `review-evidence` above
+# `reconciliation` stopped being a quarantine and BLOCKED -> CANCELLED was admitted (PATCH-008
+# item 1). The question here is "does this manifest carry a live reconciliation record ANYWHERE",
+# so it asks every line, off the SHARED anchor rather than a second spelling of it. The end-of-value
+# anchor is what stops an already-repaired `reconciliation (repaired …)` re-qualifying.
 ttg_is_reconciliation_quarantine() {
-  local kind
-  kind=$(ttg_manifest_field "$1" "Blocked kind") || return 1
-  case "$(printf '%s' "$kind" | tr '[:upper:]' '[:lower:]')" in
-    reconciliation) return 0 ;;
-    *) return 1 ;;
-  esac
+  printf '%s\n' "$1" \
+    | grep -qiE "${TTG_MANIFEST_FIELD_ANCHOR}Blocked kind\*\*:[[:space:]]*reconciliation[[:space:]]*$"
 }
 
 # Every status the machine knows, enumerated once next to the table it enumerates;

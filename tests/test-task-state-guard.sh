@@ -2340,12 +2340,208 @@ else
   ' _ "$REPO_ROOT" >/dev/null 2>&1 || Q_TTG4_RC=$?
   assert_exit_code "two-space anchor: an ALREADY-REPAIRED kind still does not re-qualify" "$Q_TTG4_RC" 1
   [ "$TESTS_FAILED" -eq "$Q_MARK" ] || Q_FINDINGS=$((Q_FINDINGS + 1))
+
+  # lean-comments: allow-run — the input is the finding, so it is written down beside the assertion.
+  # PATCH-008 items 1 and 4. Item 1 is a REGRESSION: routing the recogniser through
+  # ttg_manifest_field put it behind `grep -m1`, narrowing the test from ANY line to the FIRST,
+  # so `review-evidence` on line 1 hid `reconciliation` on line 2 and BLOCKED -> CANCELLED was
+  # admitted. Item 4 is the anchor pinning the dash to column 0. Both are spellings of #232.
+  q_predicate_rc() {
+    local rc=0
+    bash -c '
+      source "$1/scripts/lib/task-utils.sh"
+      source "$1/scripts/lib/review-evidence.sh"
+      source "$1/scripts/lib/task-transition-guard.sh"
+      ttg_is_reconciliation_quarantine "$2"
+    ' _ "$REPO_ROOT" "$1" >/dev/null 2>&1 || rc=$?
+    printf '%s' "$rc"
+  }
+  q_cancel_rc() {
+    local rc=0
+    bash -c '
+      source "$1/scripts/lib/task-utils.sh"
+      source "$1/scripts/lib/review-evidence.sh"
+      source "$1/scripts/lib/task-transition-guard.sh"
+      ttg_validate_transition "$2/nazgul" "$2" TASK-001 BLOCKED CANCELLED "$(cat "$3")"
+    ' _ "$REPO_ROOT" "$TEST_DIR" "$1" >/dev/null 2>&1 || rc=$?
+    printf '%s' "$rc"
+  }
+  seed_two_kinds() {
+    cat > "$Q_TASK" << 'Q2_EOF'
+---
+status: BLOCKED
+---
+# TASK-001: Test task
+
+- **Depends on**: none
+- **Blocked kind**: review-evidence
+- **Blocked kind**: reconciliation
+- **Blocked from**: IN_REVIEW
+- **Blocked observed**: DONE
+- **Blocked reason**: status changed outside a completed transition
+
+## Implementation Log
+prose
+Q2_EOF
+  }
+
+  Q_SCANNED=$((Q_SCANNED + 1))
+  Q_CHECKED=$((Q_CHECKED + 1))
+  Q_MARK="$TESTS_FAILED"
+  assert_eq "second Blocked kind line: the shared predicate reads EVERY line, not just the first" \
+    "$(q_predicate_rc '- **Blocked kind**: review-evidence
+- **Blocked kind**: reconciliation')" "0"
+  seed_two_kinds
+  assert_eq "second Blocked kind line: BLOCKED -> CANCELLED is refused, not laundered" \
+    "$(q_cancel_rc "$Q_TASK")" "1"
+  q_edit '- **Blocked kind**: reconciliation
+' ''
+  assert_exit_code "second Blocked kind line: the Write/Edit checker refuses the deletion hidden behind the decoy" \
+    "$GUARD_EC" 2
+  assert_eq "second Blocked kind line: two ALREADY-REPAIRED kinds still do not re-qualify" \
+    "$(q_predicate_rc '- **Blocked kind**: review-evidence
+- **Blocked kind**: reconciliation (repaired 2026-01-01T00:00:00Z)')" "1"
+  [ "$TESTS_FAILED" -eq "$Q_MARK" ] || Q_FINDINGS=$((Q_FINDINGS + 1))
+
+  Q_SCANNED=$((Q_SCANNED + 1))
+  Q_CHECKED=$((Q_CHECKED + 1))
+  Q_MARK="$TESTS_FAILED"
+  assert_eq "indented record: the shared anchor tolerates leading whitespace like its three siblings" \
+    "$(q_predicate_rc '  - **Blocked kind**: reconciliation')" "0"
+  seed_quarantine
+  sed 's/^- \*\*Blocked /  - **Blocked /' "$Q_TASK" > "$TEST_DIR/indented.md"
+  mv "$TEST_DIR/indented.md" "$Q_TASK"
+  assert_eq "indented record: BLOCKED -> CANCELLED is refused for a two-space-indented quarantine" \
+    "$(q_cancel_rc "$Q_TASK")" "1"
+  q_edit '  - **Blocked kind**: reconciliation
+' ''
+  assert_exit_code "indented record: the Write/Edit checker refuses the deletion too" "$GUARD_EC" 2
+  [ "$TESTS_FAILED" -eq "$Q_MARK" ] || Q_FINDINGS=$((Q_FINDINGS + 1))
+
+  # lean-comments: allow-run — a FIFTH spelling, found while fixing the fourth, so it is named here.
+  # `_tsg_q_value` compares FIRST lines. With an already-repaired kind on line 1 the deletion of the
+  # live `reconciliation` on line 2 leaves line 1 unchanged, and the half-erased check clears it too
+  # (a repaired kind is still typed), so the composition of the two checks admits the write while the
+  # gate stops seeing a quarantine. The record is a LIST, so the comparison is over the list.
+  Q_SCANNED=$((Q_SCANNED + 1))
+  Q_CHECKED=$((Q_CHECKED + 1))
+  Q_MARK="$TESTS_FAILED"
+  cat > "$Q_TASK" << 'Q3_EOF'
+---
+status: BLOCKED
+---
+# TASK-001: Test task
+
+- **Depends on**: none
+- **Blocked kind**: reconciliation (repaired 2026-01-01T00:00:00Z)
+- **Blocked kind**: reconciliation
+- **Blocked from**: IN_REVIEW
+- **Blocked observed**: DONE
+- **Blocked reason**: status changed outside a completed transition
+
+## Implementation Log
+prose
+Q3_EOF
+  assert_eq "repaired-kind decoy: the manifest IS a live quarantine before the write" \
+    "$(q_predicate_rc "$(cat "$Q_TASK")")" "0"
+  q_edit '- **Blocked kind**: reconciliation
+' ''
+  assert_exit_code "repaired-kind decoy: deleting the live line behind a repaired one is refused" \
+    "$GUARD_EC" 2
+  [ "$TESTS_FAILED" -eq "$Q_MARK" ] || Q_FINDINGS=$((Q_FINDINGS + 1))
 fi
 
 echo "  quarantine-record-integrity: ${Q_SCANNED} scanned, ${Q_SKIPPED} skipped (jq-unavailable=${Q_SKIPPED}), ${Q_CHECKED} checked, ${Q_FINDINGS} findings"
 assert_eq "quarantine-record-integrity: scanned == skipped + checked" \
   "$Q_SCANNED" "$((Q_SKIPPED + Q_CHECKED))"
 
+teardown_temp_dir
+
+
+# lean-comments: allow-run — the disposition is a judgement call and the measurement that settles it.
+# PATCH-008 item 2 — REGRESSION. The `oversize` fail-open exits at the top of the guard, ~455 lines
+# above the quarantine-record check, so a cap-sized Write that deletes the record was allowed while
+# the stderr claimed reconciliation would catch it. It does not: stop-hook.sh's pass fires only when
+# a task's status CHANGED since the checkpoint, and this write leaves BLOCKED as BLOCKED. The cap is
+# deterministic, so a blanket fail-closed refuses every large Write forever; the target is therefore
+# read from the reader's bounded untrusted prefix, and only a task-manifest target fails closed.
+setup_temp_dir
+OVR_TREE="$TEST_DIR/overtree"
+mkdir -p "$OVR_TREE"
+cp -R "$REPO_ROOT/scripts" "$OVR_TREE/scripts"
+OVR_READER="$OVR_TREE/scripts/lib/read-hook-payload.sh"
+sed -i.bak 's/^HOOK_PAYLOAD_MAX_CHARS=.*/HOOK_PAYLOAD_MAX_CHARS=4096/' "$OVR_READER"
+rm -f "$OVR_READER.bak"
+OVR_PROJ="$TEST_DIR/overproj"
+mkdir -p "$OVR_PROJ/nazgul/tasks" "$OVR_PROJ/nazgul/logs" "$OVR_PROJ/src"
+printf '%s\n' '{"feat_id":"T","mode":"hitl","install_mode":"local"}' > "$OVR_PROJ/nazgul/config.json"
+cat > "$OVR_PROJ/nazgul/tasks/TASK-077.md" << 'OVR_EOF'
+---
+status: BLOCKED
+---
+# TASK-077: Quarantined
+
+- **Blocked kind**: reconciliation
+- **Blocked from**: IN_REVIEW
+- **Blocked observed**: DONE
+- **Blocked reason**: status changed outside a completed transition
+OVR_EOF
+
+# `content` first puts file_path past the retained prefix: an envelope whose target cannot be read.
+ovr_run() {
+  local target="$1" order="${2:-path-first}" ec=0
+  {
+    printf '{"tool_name":"Write","tool_input":{'
+    if [ "$order" = "path-first" ]; then
+      printf '"file_path":"%s","content":"' "$target"
+      head -c 16384 /dev/zero | tr '\0' 'x'
+      printf '"}}'
+    elif [ "$order" = "planted" ]; then
+      printf '"content":"BROKEN "file_path":"%s/src/decoy.txt" ' "$OVR_PROJ"
+      head -c 32768 /dev/zero | tr '\0' 'x'
+      printf '","file_path":"%s"}}' "$target"
+    else
+      printf '"content":"'
+      head -c 16384 /dev/zero | tr '\0' 'x'
+      printf '","file_path":"%s"}}' "$target"
+    fi
+  } > "$TEST_DIR/over.json"
+  CLAUDE_PROJECT_DIR="$OVR_PROJ" NAZGUL_STAGING_DISABLE=1 \
+    bash "$OVR_TREE/scripts/task-state-guard.sh" >/dev/null 2>"$TEST_DIR/over.err" \
+    < "$TEST_DIR/over.json" || ec=$?
+  printf '%s' "$ec"
+}
+
+if grep -q '^HOOK_PAYLOAD_MAX_CHARS=4096$' "$OVR_READER"; then
+  _pass "[fixture] the oversize tree's cap came down to 4096 chars"
+
+  assert_eq "oversize: an ordinary source target is still allowed — the cap is deterministic, so a blanket deny is forever" \
+    "$(ovr_run "$OVR_PROJ/src/big.txt")" "0"
+  assert_contains "oversize: the allow is loud and names the cap" "$(cat "$TEST_DIR/over.err" 2>/dev/null)" "over the 4096-char cap"
+  assert_contains "oversize: and it names the target it identified rather than leaving it inferred" \
+    "$(cat "$TEST_DIR/over.err" 2>/dev/null)" "$OVR_PROJ/src/big.txt"
+  assert_not_contains "oversize: it no longer claims a backstop that only fires on a status change" \
+    "$(cat "$TEST_DIR/over.err" 2>/dev/null)" "reconciliation is the backstop"
+
+  assert_eq "oversize: a task-manifest target fails CLOSED — the write it would let through deletes a quarantine record" \
+    "$(ovr_run "$OVR_PROJ/nazgul/tasks/TASK-077.md")" "2"
+  assert_contains "oversize: the refusal is reported as fail-closed" "$(cat "$TEST_DIR/over.err" 2>/dev/null)" "fail-closed"
+  assert_contains "oversize: and it names the manifest it refused to let through unscreened" \
+    "$(cat "$TEST_DIR/over.err" 2>/dev/null)" "TASK-077.md"
+
+  assert_eq "oversize: an envelope whose file_path falls past the prefix fails CLOSED — unknown target is not known-safe" \
+    "$(ovr_run "$OVR_PROJ/src/big.txt" content-first)" "2"
+  assert_contains "oversize: and it says the target could not be identified, not that it was screened" \
+    "$(cat "$TEST_DIR/over.err" 2>/dev/null)" "no file_path"
+
+  assert_eq "oversize: a file_path planted in an unparsed body does not get to name the target as safe" \
+    "$(ovr_run "$OVR_PROJ/nazgul/tasks/TASK-077.md" planted)" "2"
+  assert_contains "oversize: the planted decoy reads as unknown, never as the safe target it names" \
+    "$(cat "$TEST_DIR/over.err" 2>/dev/null)" "no file_path"
+else
+  _fail "[fixture] the oversize tree's cap came down to 4096 chars" \
+    "no HOOK_PAYLOAD_MAX_CHARS assignment to rewrite — nothing below was driven over the cap"
+fi
 teardown_temp_dir
 
 # PR #240 finding 15 was reported as ONE line; the sweep found three, so the gate is

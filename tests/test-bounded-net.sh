@@ -216,6 +216,79 @@ SENT_RFC_RC=0
 _NAZGUL_REVIEW_FILE_CLASS_SOURCED=1 bash -c ". '$BN_LIBDIR/review-file-class.sh'; declare -F review_classify_unit_file >/dev/null" \
   >/dev/null 2>&1 || SENT_RFC_RC=$?
 assert_eq "review-file-class: an exported sentinel no longer leaves the shared classifier undefined" "$SENT_RFC_RC" "0"
+SENT_RP_RC=0
+_NAZGUL_REVIEW_PROVENANCE_SOURCED=1 bash -c ". '$BN_LIBDIR/review-provenance.sh'; declare -F validate_review_provenance >/dev/null" \
+  >/dev/null 2>&1 || SENT_RP_RC=$?
+assert_eq "review-provenance: an exported sentinel no longer leaves the DONE gate's provenance validator undefined" \
+  "$SENT_RP_RC" "0"
+SENT_PB_RC=0
+_NAZGUL_PARALLEL_BATCH_SOURCED=1 bash -c ". '$BN_LIBDIR/parallel-batch.sh'; declare -F compute_dispatch_batch >/dev/null" \
+  >/dev/null 2>&1 || SENT_PB_RC=$?
+assert_eq "parallel-batch: an exported sentinel no longer leaves the batch selector undefined" \
+  "$SENT_PB_RC" "0"
+
+# lean-comments: allow-run — the population is derived, because pinning three names is how the
+# fourth and fifth survived PATCH-007 item 7.
+# A sentinel nothing READS is a pure 127-exit hazard: one exported variable makes `source` a no-op
+# and every call into that library is command-not-found. A sentinel something reads is a load probe
+# (inbox-provider.sh consults connector-github's to decide whether to source it), so removing it
+# would break a caller — that one is named and left. The walk decides per file rather than by list.
+bn_sentinel_of() {
+  sed -n 's/^\[ -n "\${\(_NAZGUL_[A-Z_]*_SOURCED\):-}" \][[:space:]]*&&[[:space:]]*return 0$/\1/p' "$1" | head -1
+}
+bn_sentinel_readers() {
+  grep -rlF "$3" "$1" 2>/dev/null | grep -vF "$2" | sed "s|^$1/||" | tr "\n" " "
+}
+SENT_N=0; SENT_M=0; SENT_K=0; SENT_F=0; SENT_HELD=""
+bn_sentinel_walk() {
+  local root="$1" f name readers
+  SENT_N=0; SENT_M=0; SENT_K=0; SENT_F=0; SENT_HELD=""
+  for f in "$root"/lib/*.sh "$root"/git-hooks/_dispatch.sh; do
+    [ -f "$f" ] || continue
+    SENT_N=$((SENT_N + 1))
+    name=$(bn_sentinel_of "$f")
+    if [ -z "$name" ]; then
+      SENT_M=$((SENT_M + 1))
+      continue
+    fi
+    SENT_K=$((SENT_K + 1))
+    readers=$(bn_sentinel_readers "$root" "$f" "$name")
+    if [ -n "$readers" ]; then
+      SENT_HELD="${SENT_HELD}${SENT_HELD:+, }${f##*/}:${name} (read by ${readers% })"
+    else
+      SENT_F=$((SENT_F + 1))
+      SENT_FOUND="${SENT_FOUND:-}${SENT_FOUND:+, }${f##*/}:${name}"
+    fi
+  done
+}
+
+SENT_FOUND=""
+bn_sentinel_walk "$REPO_ROOT/scripts"
+echo "  sentinel-hazard: ${SENT_N} scanned, ${SENT_M} skipped (no-sentinel=${SENT_M}), ${SENT_K} checked, ${SENT_F} findings"
+assert_eq "sentinel-hazard: scanned == skipped + checked" "$SENT_N" "$((SENT_M + SENT_K))"
+if [ "$SENT_F" -eq 0 ]; then
+  _pass "sentinel-hazard: every remaining re-source sentinel is read by something${SENT_HELD:+ — $SENT_HELD}"
+else
+  _fail "sentinel-hazard: every remaining re-source sentinel is read by something" \
+    "unread sentinels (one exported variable defines nothing and the caller exits 127): $SENT_FOUND"
+fi
+
+# The walk's own allow path is "no unread sentinel found", so it is driven against a tree that
+# has one: a clean report from a dead extractor would read identically.
+BN_DOG="$TEST_DIR/sentinel-dogfood"
+mkdir -p "$BN_DOG/lib" "$BN_DOG/git-hooks"
+printf '%s\n' '#!/usr/bin/env bash' '[ -n "${_NAZGUL_DOGFOOD_ONE_SOURCED:-}" ] && return 0' \
+  '_NAZGUL_DOGFOOD_ONE_SOURCED=1' 'dogfood_one() { :; }' > "$BN_DOG/lib/dogfood-one.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'dogfood_two() { :; }' > "$BN_DOG/lib/dogfood-two.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'dispatch_stub() { :; }' > "$BN_DOG/git-hooks/_dispatch.sh"
+SENT_FOUND=""
+bn_sentinel_walk "$BN_DOG"
+assert_eq "sentinel-hazard dogfood: the extractor finds an unread sentinel in a tree that has one" "$SENT_F" "1"
+assert_contains "sentinel-hazard dogfood: and names it rather than only counting it" "$SENT_FOUND" "_NAZGUL_DOGFOOD_ONE_SOURCED"
+assert_eq "sentinel-hazard dogfood: a file with no sentinel is skipped, never counted as checked" "$SENT_M" "2"
+assert_eq "sentinel-hazard dogfood: scanned == skipped + checked" "$SENT_N" "$((SENT_M + SENT_K))"
+SENT_FOUND=""
+bn_sentinel_walk "$REPO_ROOT/scripts"
 
 # --- The load-bearing site: the IMPLEMENTED -> DONE merge-evidence gate ---
 setup_git_repo

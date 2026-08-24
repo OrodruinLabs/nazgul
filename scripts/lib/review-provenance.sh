@@ -22,8 +22,8 @@
 # effects. NOT `set -euo pipefail` — this file is SOURCED into hook shells
 # (task-state-guard.sh, stop-hook.sh) and must not alter their options.
 
-[ -n "${_NAZGUL_REVIEW_PROVENANCE_SOURCED:-}" ] && return 0
-_NAZGUL_REVIEW_PROVENANCE_SOURCED=1
+# NO SENTINEL: the scalar `_NAZGUL_REVIEW_PROVENANCE_SOURCED` that sat here made one exported variable
+# enough to leave validate_review_provenance undefined on the DONE gate — the 127-exit hazard nazgul-root.sh:40-49 measured.
 
 _NAZGUL_RP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null

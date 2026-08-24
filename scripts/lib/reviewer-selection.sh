@@ -30,8 +30,8 @@
 # definitions when sourced; safe to `source` from another lib or hook shell.
 # NOT `set -euo pipefail` for the same reason as review-provenance.sh.
 
-[ -n "${_NAZGUL_REVIEWER_SELECTION_SOURCED:-}" ] && return 0
-_NAZGUL_REVIEWER_SELECTION_SOURCED=1
+# NO SENTINEL: the scalar `_NAZGUL_REVIEWER_SELECTION_SOURCED` that sat here made one exported variable
+# enough to leave the reviewer selector undefined — the 127-exit hazard nazgul-root.sh:40-49 measured.
 
 _nrs_is_doc_file() {
   case "$1" in

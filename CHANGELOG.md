@@ -100,7 +100,7 @@ precedent as 34 → 35 (2.29.0) and 35 → 36 (2.30.0).
   same facts as a `CARVE-OUT:` note: `N of M unit tasks reviewed — K carried out CANCELLED (ids); a
   cancelled task is removed from the unit, never approved by it.` Readiness where every task shipped and
   readiness reached by exclusion must not read identically.
-- **New test files — the discovered root suite ships 117 files, all green.**
+- **New test files — the discovered root suite ships 118 files, all green.**
   `tests/test-cancelled-status.sh` (the status itself: edges, the quarantine refusal, the dependency
   gate, the counters), `tests/test-cancelled-status-consumers.sh` (the vocabulary's whole consumer set,
   every member DRIVEN with a `CANCELLED` fixture — including the recorded NON-consumers, which are

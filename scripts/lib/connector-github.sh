@@ -9,6 +9,10 @@
 #
 # Idempotent source guard; NOT `set -euo pipefail` — sourced into caller shells
 # (heartbeat hook / inbox-provider seam) that own their own shell options.
+#
+# SENTINEL KEPT, alone among these libraries: inbox-provider.sh's _inbox_require_connector reads it
+# as a load probe to decide whether to source this file at all, so deleting it breaks that caller.
+# Everywhere else the same scalar was a pure 127-exit hazard and is gone (PATCH-008 item 3).
 
 [ -n "${_NAZGUL_CONNECTOR_GITHUB_SOURCED:-}" ] && return 0
 _NAZGUL_CONNECTOR_GITHUB_SOURCED=1

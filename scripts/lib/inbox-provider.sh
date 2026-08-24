@@ -12,8 +12,8 @@
 # Idempotent source guard; NOT `set -euo pipefail` — sourced into caller shells
 # (heartbeat hook / start skill) that own their own shell options.
 
-[ -n "${_NAZGUL_INBOX_PROVIDER_SOURCED:-}" ] && return 0
-_NAZGUL_INBOX_PROVIDER_SOURCED=1
+# NO SENTINEL: the scalar `_NAZGUL_INBOX_PROVIDER_SOURCED` that sat here made one exported variable
+# enough to leave the inbox seam undefined — the 127-exit hazard nazgul-root.sh:40-49 measured.
 
 _INBOX_PROVIDER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

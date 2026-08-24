@@ -47,8 +47,8 @@
 # Idempotent source guard; NOT `set -euo pipefail` (sourced into caller shells
 # that own their own shell options).
 
-[ -n "${_NAZGUL_STACK_UTILS_SOURCED:-}" ] && return 0
-_NAZGUL_STACK_UTILS_SOURCED=1
+# NO SENTINEL: the scalar `_NAZGUL_STACK_UTILS_SOURCED` that sat here made one exported variable
+# enough to leave the sole stack.layers[] writer undefined — the 127-exit hazard nazgul-root.sh:40-49 measured.
 
 _SU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./emit-event.sh
