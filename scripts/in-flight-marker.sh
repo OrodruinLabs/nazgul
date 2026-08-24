@@ -18,6 +18,10 @@ command -v jq >/dev/null 2>&1 || exit 0
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/nazgul-root.sh
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
+# Supplies _rp_sha256; every use is `declare -F`-guarded so an absent or broken
+# library degrades this hook rather than aborting it (fail-open contract above).
+# shellcheck source=lib/review-provenance.sh
+source "$SCRIPT_DIR/lib/review-provenance.sh" 2>/dev/null || true
 
 NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
@@ -74,13 +78,36 @@ MARKER_DIR="$NAZGUL_DIR/in-flight"
 mkdir -p "$MARKER_DIR" 2>/dev/null || exit 0
 
 MARKER_FILE="$MARKER_DIR/${SAFE_AGENT}__${SAFE_UNIT}__${EPOCH}-${NONCE}.json"
-# prompt_head is stored as inert data (first ~200 chars), never eval'd.
-PROMPT_HEAD=$(printf '%s' "$PROMPT" | cut -c1-200)
+# Identify the dispatch by digest, never by prompt text (ADR-028). `unavailable`
+# is alphabet-disjoint from hex, so "could not compute" never reads as a digest.
+PROMPT_HASH="unavailable"
+PROMPT_BYTES="null"
+if declare -F _rp_sha256 >/dev/null 2>&1; then
+  _ifm_full=$(printf '%s' "$PROMPT" | _rp_sha256 2>/dev/null) || _ifm_full=""
+  if [ -n "$_ifm_full" ]; then
+    PROMPT_HASH="${_ifm_full:0:16}"
+  else
+    echo "in-flight-marker: sha256 unavailable — prompt_hash recorded as 'unavailable'" >&2
+  fi
+else
+  echo "in-flight-marker: _rp_sha256 not loaded — prompt_hash recorded as 'unavailable'" >&2
+fi
+
+# Bytes over the SAME stream that is hashed — `${#PROMPT}` counts characters
+# under a UTF-8 locale, so it would disagree with the digest, invisibly.
+_ifm_bytes=$(printf '%s' "$PROMPT" | wc -c 2>/dev/null | tr -d ' ') || _ifm_bytes=""
+case "$_ifm_bytes" in ''|*[!0-9]*) _ifm_bytes="null" ;; esac
+PROMPT_BYTES="$_ifm_bytes"
+# --argjson with invalid JSON fails the whole write, and a missing marker is
+# worse than a missing field (TRD R2). `null` is the literal, never 0.
+case "$PROMPT_BYTES" in
+  ''|*[!0-9]*) [ "$PROMPT_BYTES" = "null" ] || PROMPT_BYTES="null" ;;
+esac
 
 jq -cn --arg agent "$SUBAGENT" --arg unit "$UNIT" --arg ts "$TS" \
-  --argjson epoch "$EPOCH" --arg head "$PROMPT_HEAD" \
+  --argjson epoch "$EPOCH" --arg hash "$PROMPT_HASH" --argjson bytes "$PROMPT_BYTES" \
   --arg bg "$BACKGROUND" --arg named "$NAMED" \
-  '{agent:$agent, unit:$unit, dispatched_at:$ts, dispatched_at_epoch:$epoch, prompt_head:$head, background:$bg, named:$named}' \
+  '{agent:$agent, unit:$unit, dispatched_at:$ts, dispatched_at_epoch:$epoch, prompt_hash:$hash, prompt_bytes:$bytes, background:$bg, named:$named}' \
   > "$MARKER_FILE" 2>/dev/null || true
 
 exit 0
