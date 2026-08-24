@@ -628,12 +628,16 @@ set_manifest_field() {
     echo "set_manifest_field: refusing to write ${file}: not a regular non-symlink file" >&2
     return 1
   fi
-  if grep -q "^- \*\*${label}\*\*:" "$file" 2>/dev/null; then
+  # Both spellings come from the reader's own anchor: hand-spelled `^- ` sent every shape the
+  # READER accepts down the APPEND branch, and `grep -m1` then kept returning the stale record.
+  local field_pat
+  field_pat=$(nz_manifest_field_pattern_ere "$label")
+  if grep -qiE "$field_pat" "$file" 2>/dev/null; then
     # Exported explicitly: an assignment PREFIX reaches an external command, but
     # nz_rewrite_file is a shell function, and awk runs one level below it.
     export NAZGUL_FIELD_LINE="- **${label}**: ${value}"
-    nz_rewrite_file "$file" awk -v pat="^- [*][*]${label}[*][*]:" \
-      '$0 ~ pat { print ENVIRON["NAZGUL_FIELD_LINE"]; next } { print }' \
+    nz_rewrite_file "$file" awk -v pat="$field_pat" \
+      '{ if (tolower($0) ~ pat) print ENVIRON["NAZGUL_FIELD_LINE"]; else print }' \
       "$file" || { unset NAZGUL_FIELD_LINE; return 1; }
     unset NAZGUL_FIELD_LINE
   else
@@ -986,7 +990,7 @@ if [ -d "$NAZGUL_DIR/tasks" ]; then
     [ -f "$task_file" ] || continue
     STATUS=$(get_task_status "$task_file")
     if [ "$STATUS" = "BLOCKED" ]; then
-      ACTIVE_BLOCKED_REASON=$(grep -m1 '^\- \*\*Blocked reason\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "")
+      ACTIVE_BLOCKED_REASON=$(get_task_field "$task_file" "Blocked reason" "")
       break
     fi
   done

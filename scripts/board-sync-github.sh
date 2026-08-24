@@ -671,7 +671,7 @@ cmd_sync_task() {
     log_info "$task_id -> CANCELLED (issue #$issue_number closed as not planned)"
   elif [ "$status" = "BLOCKED" ]; then
     local blocked_reason
-    blocked_reason=$(grep -m1 '^\- \*\*Blocked reason\*\*:' "$task_file" 2>/dev/null | sed 's/.*: //' || echo "Unknown reason")
+    blocked_reason=$(get_task_field "$task_file" "Blocked reason" "Unknown reason")
     gh issue comment "$issue_number" --repo "$owner/$repo" \
       --body "**BLOCKED**: $blocked_reason" 2>/dev/null || true
     log_info "$task_id -> BLOCKED (issue #$issue_number commented)"

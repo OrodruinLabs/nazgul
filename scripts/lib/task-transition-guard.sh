@@ -63,24 +63,14 @@ ttg_valid_transition() {
   esac
 }
 
-# lean-comments: allow-run — one anchor, and what each narrowing of it cost.
-# TTG_MANIFEST_FIELD_ANCHOR is THE anchor for a `- **Field**: value` manifest line. It existed in
-# two spellings — `^-[[:space:]]*\*\*` here and in task-state-guard, `^\- \*\*` in the transition
-# gate and the stop-hook — so a manifest written with two spaces after the dash was a LIVE
-# quarantine to the Write/Edit checker and invisible to the gate, and `BLOCKED -> CANCELLED`
-# laundered an integrity block into a terminal status (#232 residual, PATCH-007 item 9). Both
-# spellings then pinned the dash to column 0, so an INDENTED record was seen by neither
-# (PATCH-008 item 4). The tolerant form is the one kept, deliberately: a record seen and refused
-# costs an operator one retry, a record NOT seen costs the block itself. Its one cost in the other
-# direction is priced and accepted: :1754's BLOCKED -> IN_REVIEW review-evidence class also widens,
-# onto an edge that still has to produce review evidence to reach DONE.
-TTG_MANIFEST_FIELD_ANCHOR='^[[:space:]]*-[[:space:]]*\*\*'
+# The anchor and its writer-side pattern builder live in task-utils.sh (sourced above): a
+# reader that hand-spells its own is how the two dialects drifted apart in the first place.
 
 # ttg_manifest_field <text> <field> -> the FIRST matching line's trimmed value. Returns 1 when the
 # line is absent; rc 0 with empty output means present-but-blanked, which is a different fact.
 ttg_manifest_field() {
   local line
-  line=$(printf '%s\n' "$1" | grep -m1 -iE "${TTG_MANIFEST_FIELD_ANCHOR}$2\*\*:") || return 1
+  line=$(printf '%s\n' "$1" | grep -m1 -iE "${NZ_MANIFEST_FIELD_ANCHOR}$2\*\*:") || return 1
   line="${line#*:}"
   line="${line#"${line%%[![:space:]]*}"}"
   printf '%s' "${line%"${line##*[![:space:]]}"}"
@@ -97,7 +87,7 @@ ttg_manifest_field() {
 # anchor is what stops an already-repaired `reconciliation (repaired …)` re-qualifying.
 ttg_is_reconciliation_quarantine() {
   printf '%s\n' "$1" \
-    | grep -qiE "${TTG_MANIFEST_FIELD_ANCHOR}Blocked kind\*\*:[[:space:]]*reconciliation[[:space:]]*$"
+    | grep -qiE "${NZ_MANIFEST_FIELD_ANCHOR}Blocked kind\*\*:[[:space:]]*reconciliation[[:space:]]*$"
 }
 
 # Every status the machine knows, enumerated once next to the table it enumerates;
@@ -1771,7 +1761,7 @@ ttg_validate_transition() {
   # materialization and the ADR-020 typed reconciliation quarantine.
   if [ "$from" = "BLOCKED" ] && [ "$to" = "IN_REVIEW" ]; then
     # Anchored, so an already-repaired `reconciliation (repaired …)` cannot re-qualify.
-    if ! printf '%s\n' "$manifest_text" | grep -qiE "${TTG_MANIFEST_FIELD_ANCHOR}Blocked reason\*\*:.*review evidence" \
+    if ! printf '%s\n' "$manifest_text" | grep -qiE "${NZ_MANIFEST_FIELD_ANCHOR}Blocked reason\*\*:.*review evidence" \
       && ! ttg_is_reconciliation_quarantine "$manifest_text"; then
       echo "ttg_validate_transition: BLOCKED -> IN_REVIEW is reserved for review-evidence repair and typed reconciliation repair" >&2
       return 1
@@ -2069,7 +2059,7 @@ _ttg_file_mode() {
 # Usage: ttg_apply_transition <nazgul_dir> <project_root> <task_id> <from> <to> [blocked_reason]
 _ttg_apply_transition_locked() {
   local nazgul_dir="$1" project_root="$2" task_id="$3" from="$4" to="$5" reason="${6:-}"
-  local file live manifest tmp reason_tmp before_hash current_hash after_hash original_mode
+  local file live manifest tmp reason_tmp reason_pat before_hash current_hash after_hash original_mode
 
   file=$(ttg_task_manifest_path "$nazgul_dir" "$task_id") || {
     echo "ttg_apply_transition: no regular task manifest for ${task_id} under ${nazgul_dir}/tasks" >&2
@@ -2124,9 +2114,12 @@ _ttg_apply_transition_locked() {
 
   if [ "$to" = "BLOCKED" ] && [ -n "$reason" ]; then
     reason_tmp="${tmp}.reason"
-    if grep -q '^\- \*\*Blocked reason\*\*:' "$tmp" 2>/dev/null; then
-      TTG_BLOCK_REASON="$reason" awk \
-        '/^\- \*\*Blocked reason\*\*:/ { print "- **Blocked reason**: " ENVIRON["TTG_BLOCK_REASON"]; next } { print }' \
+    # The third writer of this field, and the one re-review #4 did not name: hand-spelled `^\- \*\*`
+    # sent an indented or two-space record down the append branch, leaving the reader on the stale one.
+    reason_pat=$(nz_manifest_field_pattern_ere "Blocked reason")
+    if grep -qiE "$reason_pat" "$tmp" 2>/dev/null; then
+      TTG_BLOCK_REASON="$reason" awk -v pat="$reason_pat" \
+        '{ if (tolower($0) ~ pat) print "- **Blocked reason**: " ENVIRON["TTG_BLOCK_REASON"]; else print }' \
         "$tmp" > "$reason_tmp" || { rm -f "$tmp" "$reason_tmp"; return 1; }
     else
       { cat "$tmp"; printf '\n- **Blocked reason**: %s\n' "$reason"; } > "$reason_tmp" \

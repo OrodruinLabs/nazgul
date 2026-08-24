@@ -221,14 +221,24 @@ REPAIRED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # Staged through nz_rewrite_file: it picks an unpredictable colocated name and
 # carries the manifest mode over, so no pre-created `.repair.tmp` can be aimed.
 export NAZGUL_REPAIR_LINE="- **Blocked kind**: reconciliation (repaired ${REPAIRED_AT})"
-if ! nz_rewrite_file "$MANIFEST_FILE" awk \
-  '$0 ~ /^-[[:space:]]*[*][*]Blocked kind[*][*]:/ { print ENVIRON["NAZGUL_REPAIR_LINE"]; next } { print }' \
+if ! nz_rewrite_file "$MANIFEST_FILE" awk -v pat="$(nz_manifest_field_pattern_ere "Blocked kind")" \
+  '{ if (tolower($0) ~ pat) print ENVIRON["NAZGUL_REPAIR_LINE"]; else print }' \
   "$MANIFEST_FILE"; then
   unset NAZGUL_REPAIR_LINE
   echo "task-transition: repair ${TASK_ID} completed its walk but could not mark the quarantine repaired; rerun repair after fixing the manifest" >&2
   exit 1
 fi
 unset NAZGUL_REPAIR_LINE
+# nz_rewrite_file exits 0 on a NO-OP, so a pattern that matched nothing reported success over a
+# record that never changed (item 3). A write is not written until it is read back (ADR-021).
+if ttg_is_reconciliation_quarantine "$(cat "$MANIFEST_FILE" 2>/dev/null || echo "")"; then
+  REPAIR_LIVE=$(get_task_status "$MANIFEST_FILE" "")
+  echo "task-transition: repair ${TASK_ID} completed its walk but the manifest STILL reads as a live reconciliation quarantine after the rewrite; refusing to report a repair that did not land. The walk is not reversible from ${REPAIR_LIVE:-missing} — the manifest needs human repair" >&2
+  _ttg_emit_event "$NAZGUL_DIR" "reconciliation_repair" \
+    task_id "$TASK_ID" action "halted" reason "repair_marker_not_persisted" \
+    quarantine "live" live_status "${REPAIR_LIVE:-missing}"
+  exit 1
+fi
 
 _ttg_emit_event "$NAZGUL_DIR" "reconciliation_repair" \
   task_id "$TASK_ID" action "repaired" review_unit "$REVIEW_UNIT" \
