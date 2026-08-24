@@ -106,8 +106,20 @@ The decision record (`config.json`, `plan.md`, `tasks/`, `reviews/`, `docs/`, `c
    nazgul/logs/
    nazgul/sessions/
    nazgul/.session_id
+   # Per-session record of the last turn that ended via an API error (scripts/stop-failure.sh:33); sibling of .session_id above
+   nazgul/.stop_failure
    nazgul/.compaction_count
+   # The mkdir mutual-exclusion lock guarding the counter above (claimed at scripts/post-compact.sh:69 and scripts/session-context.sh:228, reset at scripts/pre-compact.sh:33)
+   # The nazgul/.compaction_count entry above does NOT cover it: a gitignore pattern matches a whole path component, and .compaction_count.lock is a different component
+   nazgul/.compaction_count.lock
+   # Consecutive-tool-failure counter (scripts/task-completed.sh:37); per-session, meaningless off its own machine
+   nazgul/.tool_failures
    nazgul/archive/
+   # The conductor runtime dir removed by migrate_25_to_26 (scripts/migrate-config.sh:583); nothing writes it any more, so a copy surviving in an upgraded project is residue
+   # The one arguable member of this block, included deliberately rather than by oversight: declaring it a record would be false, and teaching the enumerator to skip it is TRD 4.7 course (C), rejected
+   nazgul/conductor/
+   # Timestamped local snapshot of the tracked nazgul/context/, made on re-run by /nazgul:discover (skills/discover/SKILL.md:43); the tracked original is the shared copy
+   nazgul/context.backup.*/
    # Per-dispatch markers, written at PreToolUse(Agent) and cleared at SubagentStop; the trailing slash also covers in-flight/quarantine/
    nazgul/in-flight/
    # Transient mkdir mutual-exclusion dirs; meaningless off their own machine
