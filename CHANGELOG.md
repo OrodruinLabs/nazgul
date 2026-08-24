@@ -148,14 +148,14 @@ entry's to assign, which is why the heading above carries none yet.
   climbs monotonically through a **healthy** run. This objective hit it live at 262 consecutive
   "no progress" iterations with every task advancing correctly, and survived only because this
   project's `max_consecutive_failures` is 250 rather than the documented 5. (5)
-  `tests/test-in-flight-hold.sh:2521` asserts that the topmost `## [` heading in this file equals
-  `## [2.34.0] - 2026-08-22`. Its label reads "the release adds no new version heading", which was
-  true of the objective that wrote it, but as written it is a hand-maintained pin on the newest
-  version **forever** — the same defect class this entry is about, one level up. It was measured, not
-  predicted: a draft of this entry carrying a `## [2.35.0]` heading turned it red. **This entry
-  therefore ships with no version heading at all, so the pin is still green — which means the release
-  step trips it instead.** Fix the assertion to a presence check of the 2.34.0 heading before bumping
-  `.claude-plugin/plugin.json`, or the release commit fails CI.
+  `tests/test-in-flight-hold.sh` asserted that the topmost bracketed heading in this file equalled a
+  frozen version literal. Its label read "the release adds no new version heading", which was true of
+  the objective that wrote it, but as written it was a hand-maintained pin on the newest version
+  **forever** — the same defect class this entry is about, one level up. It was measured, not
+  predicted: a draft of this entry carrying a bracketed heading turned it red, and the release step
+  would have tripped it next. PATCH-001 has since rescoped the assertion to the version-agnostic
+  claim it was proxying — the two sentences it guards belong to one entry and must travel together —
+  so no release instruction is owed here, and no version literal survives in that file to maintain.
 
 ## [2.34.0] - 2026-08-22
 
