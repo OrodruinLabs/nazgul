@@ -2538,6 +2538,19 @@ _p14n_colocated() {
 }
 _p14_check "P14n: ... and the two sentences above belong to one entry, so no release can ship half the record" \
   "$(_p14n_colocated "$P14_CHANGELOG" 'declines a hold the previous release would have taken' 'captured payload in `tests/fixtures/stop-payload/` exhibits a live subagent without an `id`')" "same"
+# `same` is evidence only if this comparator can also produce `split`: a sentence unique to the
+# previous entry must NOT be colocated with the pinned one.
+_p14_check "P14n control: the comparator does tell entries apart, so a 'same' verdict is a finding and not a default" \
+  "$(_p14n_colocated "$P14_CHANGELOG" 'unguaranteed channel may shorten a wait, but may never authorize one' 'declines a hold the previous release would have taken')" "split"
+# The release step rewrites `## Unreleased` into a bracketed version heading — the exact edit the old
+# literal pin went red on. Simulate it on a scratch copy, never the repo file.
+P14N_SIM=$(mktemp "${TMPDIR:-/tmp}/nazgul-p14n-changelog-XXXXXX")
+sed 's/^## Unreleased$/## [99.0.0] - 2099-12-31/' "$P14_CHANGELOG" > "$P14N_SIM"
+_p14_check "P14n control: the simulated release really did land a new topmost version heading" \
+  "$(grep -m1 '^## ' "$P14N_SIM")" "## [99.0.0] - 2099-12-31"
+_p14_check "P14n control: ... and the colocation check is unmoved by it, which is what the version pin was not" \
+  "$(_p14n_colocated "$P14N_SIM" 'declines a hold the previous release would have taken' 'captured payload in `tests/fixtures/stop-payload/` exhibits a live subagent without an `id`')" "same"
+rm -f "$P14N_SIM"
 # THE control that makes the claim evidence rather than assertion: read the fixtures and check it.
 # If a future capture lands with an id-less live subagent, the CHANGELOG sentence becomes false here.
 _p14l_idless() {
