@@ -54,7 +54,22 @@ chmod +x "$FAKEBIN/gh"
 # shellcheck source=../scripts/lib/bounded-net.sh
 source "$LIB"
 
-for fn in nz_bounded_run nz_bounded_run_q nz_bounded_git nz_bounded_timeout_cmd; do
+# lean-comments: allow-run — a deleted function needs a pin or it comes back; this one's only
+# shape was the one whose dedup key cannot survive the call.
+# ITEM 10 — nz_bounded_timeout_cmd was retained "for callers outside this file" and had none. Its
+# only form is `tcmd=$(nz_bounded_timeout_cmd)`, which resolves in a subshell, so every
+# degradation the resolution names was written into a shell that then exited. Deleted, and pinned
+# deleted: the resolution is _bnet_resolve_timeout_cmd, which sets _BNET_TCMD in the CALLER.
+assert_eq "the printing wrapper whose only shape loses its own dedup key is gone" \
+  "$(declare -F nz_bounded_timeout_cmd >/dev/null 2>&1 && echo defined || echo deleted)" "deleted"
+BN_DEAD_CALLS=$(grep -rn 'nz_bounded_timeout_cmd' "$REPO_ROOT/scripts" 2>/dev/null \
+  | grep -vE ':[0-9]+:[[:space:]]*#' | grep -c '[^[:space:]]')
+assert_eq "and no shipped script defines or calls it — a name with no definition is a 127 waiting for a caller" \
+  "$BN_DEAD_CALLS" "0"
+assert_eq "the resolution it wrapped is still reachable, so the deletion removed a shape and not a capability" \
+  "$(declare -F _bnet_resolve_timeout_cmd >/dev/null 2>&1 && echo present || echo missing)" "present"
+
+for fn in nz_bounded_run nz_bounded_run_q nz_bounded_git nz_bounded_run_split; do
   if declare -F "$fn" >/dev/null 2>&1; then
     _pass "the seam exposes $fn"
   else
@@ -170,7 +185,8 @@ assert_eq "the missing-binary degradation is named once per label per process, n
 # Every `_bnet_degrade` reason must dedup, and the one pinned above deduped only because
 # nz_bounded_run emits it from the CALLER's shell. A sibling emitted inside
 # `tcmd=$(nz_bounded_timeout_cmd)` wrote its dedup key into a subshell that then exited, so
-# three calls printed three lines and forked three emit-event subshells. The reason set is
+# three calls printed three lines and forked three emit-event subshells; that printing wrapper
+# has since been DELETED, because its only shape was the losing one. The reason set is
 # DERIVED from the call sites, so a reason added later is covered where it lands rather
 # than where a hand-kept list happens to name it; a reason with no driver is REPORTED as
 # undriven, never counted as passing.
@@ -202,6 +218,8 @@ bn_dedup_run() {
     unresolvable_timeout_cmd_override)
       [ -n "$BN_ONLY_GTIMEOUT" ] || return 3
       body="NAZGUL_TIMEOUT_CMD=timeout nz_bounded_run net dedup-probe $BN_TRUE_BIN" ;;
+    diagnostic_not_captured)
+      body="TMPDIR=$TEST_DIR/no-such-tmpdir nz_bounded_run_split net dedup-probe '$TEST_DIR/split-dedup.err' true" ;;
     *) return 3 ;;
   esac
   case "$reason" in
@@ -252,7 +270,7 @@ fi
 if [ -n "$BN_ONLY_GTIMEOUT" ]; then
   BN_UNRES_ERR="$TEST_DIR/unresolvable.err"
   BN_UNRES_OUT=$(PATH="$BN_ONLY_GTIMEOUT" NAZGUL_TIMEOUT_CMD=timeout \
-    "$BASH" -c ". '$LIB'; nz_bounded_timeout_cmd" 2>"$BN_UNRES_ERR")
+    "$BASH" -c ". '$LIB'; _bnet_resolve_timeout_cmd; printf '%s' \"\$_BNET_TCMD\"" 2>"$BN_UNRES_ERR")
   assert_eq "an accepted-but-unresolvable override still falls back to the detected binary" \
     "$BN_UNRES_OUT" "gtimeout"
   assert_file_contains "and the substitution is named, not silent — the operator asked for a binary that is not here" \
@@ -261,7 +279,7 @@ if [ -n "$BN_ONLY_GTIMEOUT" ]; then
     "$BN_UNRES_ERR" "timeout"
   BN_RES_ERR="$TEST_DIR/resolvable.err"
   BN_RES_OUT=$(PATH="$BN_ONLY_GTIMEOUT" NAZGUL_TIMEOUT_CMD=gtimeout \
-    "$BASH" -c ". '$LIB'; nz_bounded_timeout_cmd" 2>"$BN_RES_ERR")
+    "$BASH" -c ". '$LIB'; _bnet_resolve_timeout_cmd; printf '%s' \"\$_BNET_TCMD\"" 2>"$BN_RES_ERR")
   assert_eq "an override that DOES resolve is still honoured silently" "$BN_RES_OUT" "gtimeout"
   assert_eq "and an honoured override says nothing — the two states stay distinguishable" \
     "$(wc -c < "$BN_RES_ERR" | tr -d ' ')" "0"
@@ -281,7 +299,8 @@ exit 0
 HOSTILE
 chmod +x "$FAKEBIN/hostile-timeout"
 
-OVR_OUT=$(NAZGUL_TIMEOUT_CMD="$FAKEBIN/hostile-timeout" nz_bounded_timeout_cmd 2>"$TEST_DIR/ovr.err")
+NAZGUL_TIMEOUT_CMD="$FAKEBIN/hostile-timeout" _bnet_resolve_timeout_cmd 2>"$TEST_DIR/ovr.err"
+OVR_OUT="$_BNET_TCMD"
 assert_not_contains "an override naming an arbitrary executable is never returned as the wrapper" \
   "$OVR_OUT" "hostile-timeout"
 assert_file_contains "and the refusal is named rather than silent" \
@@ -292,12 +311,14 @@ assert_not_contains "so no attacker-authored payload can reach a caller parsing 
   "$OVR_RUN" "deadbeef"
 
 # The override's one legitimate use is the degradation hook, and it must survive the refusal.
-assert_eq "the documented empty-string hook still selects the no-binary path" \
-  "$(NAZGUL_TIMEOUT_CMD= nz_bounded_timeout_cmd)" ""
-BN_DETECTED=$(nz_bounded_timeout_cmd)
+NAZGUL_TIMEOUT_CMD= _bnet_resolve_timeout_cmd
+assert_eq "the documented empty-string hook still selects the no-binary path" "$_BNET_TCMD" ""
+_bnet_resolve_timeout_cmd
+BN_DETECTED="$_BNET_TCMD"
 if [ -n "$BN_DETECTED" ]; then
+  NAZGUL_TIMEOUT_CMD="$BN_DETECTED" _bnet_resolve_timeout_cmd
   assert_eq "an override naming the binary detection would have chosen anyway is still honoured" \
-    "$(NAZGUL_TIMEOUT_CMD="$BN_DETECTED" nz_bounded_timeout_cmd)" "$BN_DETECTED"
+    "$_BNET_TCMD" "$BN_DETECTED"
 else
   _skip "the honoured-override case (neither timeout nor gtimeout is on this host, so there is no binary to name)"
 fi
@@ -333,66 +354,308 @@ assert_eq "parallel-batch: an exported sentinel no longer leaves the batch selec
 
 # lean-comments: allow-run — the population is derived, because pinning three names is how the
 # fourth and fifth survived PATCH-007 item 7.
-# A sentinel nothing READS is a pure 127-exit hazard: one exported variable makes `source` a no-op
-# and every call into that library is command-not-found. A sentinel something reads is a load probe
-# (inbox-provider.sh consults connector-github's to decide whether to source it), so removing it
-# would break a caller — that one is named and left. The walk decides per file rather than by list.
-bn_sentinel_of() {
-  sed -n 's/^\[ -n "\${\(_NAZGUL_[A-Z_]*_SOURCED\):-}" \][[:space:]]*&&[[:space:]]*return 0$/\1/p' "$1" | head -1
+# A re-source guard decides whether a library body runs at all, so its SHAPE is the whole
+# question. A forgeable one (a `_..._SOURCED` scalar, or a `declare -F` probe) is settable from
+# the environment: the scalar makes `source` a no-op defining nothing and every call into that
+# library is command-not-found, and `declare -F` is WORSE, because `export -f` survives into a
+# child bash and leaves a HOSTILE implementation standing where the scalar merely left a hole.
+# The walk therefore classifies rather than counts, and it keeps THREE outcomes apart: a guard it
+# recognised, a guard-shaped line it could NOT classify, and a file with no guard at all. The
+# middle one is the state item 11 measured as missing — an alternate spelling used to yield an
+# empty name and land in the same skip bucket as a file that has no guard, so "looked and could
+# not read it" printed exactly what "looked and found none" prints.
+bn_guard_region() {
+  awk '
+    /^[A-Za-z_][A-Za-z0-9_]*\(\)/ { exit }
+    /^[[:space:]]*#/ { next }
+    { print }
+  ' "$1"
 }
-bn_sentinel_readers() {
-  grep -rlF "$3" "$1" 2>/dev/null | grep -vF "$2" | sed "s|^$1/||" | tr "\n" " "
+bn_guard_class() {
+  local region name
+  region=$(bn_guard_region "$1")
+  # lean-comments: allow-run — the widened match is the fix, so its reason travels with it.
+  # BROAD first, and across the whole region rather than one line: an `if ... then / return 0 /
+  # fi` spelling puts the test and the return on different lines, which is exactly the shape the
+  # single-line extractor turned into an empty name and a skip.
+  printf '%s' "$region" | grep -q 'return' || { printf 'none|'; return 0; }
+  printf '%s' "$region" | grep -qE '_[A-Za-z0-9_]*(_SOURCED|_LOADED)|declare -F' || { printf 'none|'; return 0; }
+  name=$(printf '%s' "$region" | grep -oE '_[A-Za-z0-9_]*(_SOURCED|_LOADED)' | head -1)
+  if printf '%s' "$region" \
+    | grep -qE '^\[[[:space:]]+"\$\{_NZ_[A-Z0-9_]+_LOADED\[[1-9][0-9]*\]:-\}"[[:space:]]+=[[:space:]]+"loaded"[[:space:]]+\][[:space:]]*&&[[:space:]]*return 0$'; then
+    printf 'env-proof|%s' "$name"
+  elif printf '%s' "$region" | grep -qE '_[A-Za-z0-9_]*_SOURCED|declare -F'; then
+    printf 'forgeable|%s' "${name:-$(printf '%s' "$region" | grep -oE 'declare -F [A-Za-z0-9_"$]+' | head -1)}"
+  else
+    printf 'unparsed|%s' "${name:-<unnameable>}"
+  fi
 }
-SENT_N=0; SENT_M=0; SENT_K=0; SENT_F=0; SENT_HELD=""
+
+SENT_N=0; SENT_M=0; SENT_K=0; SENT_F=0; SENT_OK=0; SENT_FOUND=""; SENT_UNPARSED=0; SENT_HELD=""
 bn_sentinel_walk() {
-  local root="$1" f name readers
-  SENT_N=0; SENT_M=0; SENT_K=0; SENT_F=0; SENT_HELD=""
-  for f in "$root"/lib/*.sh "$root"/git-hooks/_dispatch.sh; do
+  local root="$1" f cls name
+  SENT_N=0; SENT_M=0; SENT_K=0; SENT_F=0; SENT_OK=0; SENT_FOUND=""; SENT_UNPARSED=0; SENT_HELD=""
+  # The denominator is every shipped shell file, not lib/*.sh alone: `scripts/*.sh` and the two
+  # git-hook TEMPLATES were outside it, so a guard planted there was never even looked at.
+  for f in "$root"/lib/*.sh "$root"/*.sh "$root"/git-hooks/*; do
     [ -f "$f" ] || continue
+    case "$f" in *.md|*.json) continue ;; esac
     SENT_N=$((SENT_N + 1))
-    name=$(bn_sentinel_of "$f")
-    if [ -z "$name" ]; then
+    cls=$(bn_guard_class "$f")
+    name="${cls#*|}"; cls="${cls%%|*}"
+    if [ "$cls" = "none" ]; then
       SENT_M=$((SENT_M + 1))
       continue
     fi
     SENT_K=$((SENT_K + 1))
-    readers=$(bn_sentinel_readers "$root" "$f" "$name")
-    if [ -n "$readers" ]; then
-      SENT_HELD="${SENT_HELD}${SENT_HELD:+, }${f##*/}:${name} (read by ${readers% })"
-    else
-      SENT_F=$((SENT_F + 1))
-      SENT_FOUND="${SENT_FOUND:-}${SENT_FOUND:+, }${f##*/}:${name}"
-    fi
+    case "$cls" in
+      env-proof)
+        SENT_OK=$((SENT_OK + 1))
+        SENT_HELD="${SENT_HELD}${SENT_HELD:+, }${f##*/}:${name}" ;;
+      unparsed)
+        SENT_UNPARSED=$((SENT_UNPARSED + 1))
+        SENT_F=$((SENT_F + 1))
+        SENT_FOUND="${SENT_FOUND}${SENT_FOUND:+, }${f##*/}:${name}(unparsed)" ;;
+      *)
+        SENT_F=$((SENT_F + 1))
+        SENT_FOUND="${SENT_FOUND}${SENT_FOUND:+, }${f##*/}:${name}(forgeable)" ;;
+    esac
   done
 }
 
-SENT_FOUND=""
 bn_sentinel_walk "$REPO_ROOT/scripts"
-echo "  sentinel-hazard: ${SENT_N} scanned, ${SENT_M} skipped (no-sentinel=${SENT_M}), ${SENT_K} checked, ${SENT_F} findings"
-assert_eq "sentinel-hazard: scanned == skipped + checked" "$SENT_N" "$((SENT_M + SENT_K))"
+echo "  source-guard: ${SENT_N} scanned, ${SENT_M} skipped (no-guard=${SENT_M}), ${SENT_K} checked, ${SENT_F} findings (forgeable=$((SENT_F - SENT_UNPARSED)), unparsed=${SENT_UNPARSED})"
+assert_eq "source-guard: scanned == skipped + checked" "$SENT_N" "$((SENT_M + SENT_K))"
 if [ "$SENT_F" -eq 0 ]; then
-  _pass "sentinel-hazard: every remaining re-source sentinel is read by something${SENT_HELD:+ — $SENT_HELD}"
+  _pass "source-guard: every re-source guard in the tree is one the environment cannot supply${SENT_HELD:+ — $SENT_HELD}"
 else
-  _fail "sentinel-hazard: every remaining re-source sentinel is read by something" \
-    "unread sentinels (one exported variable defines nothing and the caller exits 127): $SENT_FOUND"
+  _fail "source-guard: every re-source guard in the tree is one the environment cannot supply" \
+    "$SENT_FOUND"
+fi
+if [ "$SENT_OK" -ge 5 ]; then
+  _pass "source-guard: the walk recognised the shared marker across the tree (${SENT_OK} files)"
+else
+  _fail "source-guard: the walk recognised the shared marker across the tree" \
+    "only ${SENT_OK} env-proof guard(s) found — an extractor that stopped matching reports a clean tree"
 fi
 
-# The walk's own allow path is "no unread sentinel found", so it is driven against a tree that
-# has one: a clean report from a dead extractor would read identically.
-BN_DOG="$TEST_DIR/sentinel-dogfood"
+# lean-comments: allow-run — the dogfood is the walk's own allow path, and item 11's finding was
+# that the previous one proved only that the extractor RAN.
+# Every planted guard below is spelled a way the precise extractor does NOT match verbatim, so a
+# pass means the walk DISCRIMINATED. The old dogfood planted the single spelling its own `sed`
+# already matched, which is why an alternate spelling silently landing in the skip bucket was
+# invisible to it. The denominator's two new arms are planted too: a `scripts/*.sh` file and a
+# git-hook template that is not `_dispatch.sh`.
+BN_DOG="$TEST_DIR/source-guard-dogfood"
+rm -rf "$BN_DOG"
 mkdir -p "$BN_DOG/lib" "$BN_DOG/git-hooks"
-printf '%s\n' '#!/usr/bin/env bash' '[ -n "${_NAZGUL_DOGFOOD_ONE_SOURCED:-}" ] && return 0' \
-  '_NAZGUL_DOGFOOD_ONE_SOURCED=1' 'dogfood_one() { :; }' > "$BN_DOG/lib/dogfood-one.sh"
-printf '%s\n' '#!/usr/bin/env bash' 'dogfood_two() { :; }' > "$BN_DOG/lib/dogfood-two.sh"
-printf '%s\n' '#!/usr/bin/env bash' 'dispatch_stub() { :; }' > "$BN_DOG/git-hooks/_dispatch.sh"
-SENT_FOUND=""
+printf '%s\n' '#!/usr/bin/env bash' \
+  '[ "${_NZ_DOGFOOD_MARK_LOADED[1]:-}" = "loaded" ] && return 0' \
+  '_NZ_DOGFOOD_MARK_LOADED=(0 loaded)' 'dogfood_mark() { :; }' > "$BN_DOG/lib/dogfood-mark.sh"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'if [ -n "${_NAZGUL_DOGFOOD_ALT_SOURCED:-}" ]; then' '  return 0' 'fi' \
+  '_NAZGUL_DOGFOOD_ALT_SOURCED=1' 'dogfood_alt() { :; }' > "$BN_DOG/lib/dogfood-alt.sh"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'declare -F dogfood_df >/dev/null 2>&1 && return 0' 'dogfood_df() { :; }' > "$BN_DOG/lib/dogfood-df.sh"
+printf '%s\n' '#!/usr/bin/env bash' \
+  '[[ -n ${_NAZGUL_DOGFOOD_WEIRD_LOADED:-} || -n ${BN_OTHER:-} ]] && return 0' \
+  'dogfood_weird() { :; }' > "$BN_DOG/lib/dogfood-weird.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'dogfood_clean() { :; }' > "$BN_DOG/lib/dogfood-clean.sh"
+printf '%s\n' '#!/usr/bin/env bash' \
+  '[ -n "${_NAZGUL_DOGFOOD_TOP_SOURCED:-}" ] && return 0' 'dogfood_top() { :; }' > "$BN_DOG/dogfood-top.sh"
+printf '%s\n' '#!/usr/bin/env bash' \
+  '[ -n "${_NAZGUL_DOGFOOD_HOOK_SOURCED-}" ] && return 0' 'dogfood_hook() { :; }' > "$BN_DOG/git-hooks/pre-commit"
+
 bn_sentinel_walk "$BN_DOG"
-assert_eq "sentinel-hazard dogfood: the extractor finds an unread sentinel in a tree that has one" "$SENT_F" "1"
-assert_contains "sentinel-hazard dogfood: and names it rather than only counting it" "$SENT_FOUND" "_NAZGUL_DOGFOOD_ONE_SOURCED"
-assert_eq "sentinel-hazard dogfood: a file with no sentinel is skipped, never counted as checked" "$SENT_M" "2"
-assert_eq "sentinel-hazard dogfood: scanned == skipped + checked" "$SENT_N" "$((SENT_M + SENT_K))"
-SENT_FOUND=""
+assert_eq "source-guard dogfood: every planted file is scanned, including the two arms the old walk never looked at" \
+  "$SENT_N" "7"
+assert_eq "source-guard dogfood: only the guard-less file is skipped" "$SENT_M" "1"
+assert_eq "source-guard dogfood: scanned == skipped + checked" "$SENT_N" "$((SENT_M + SENT_K))"
+assert_eq "source-guard dogfood: the shared array marker is recognised as env-proof" "$SENT_OK" "1"
+assert_eq "source-guard dogfood: all five defeatable/unreadable guards are found, none of them in the skip bucket" \
+  "$SENT_F" "5"
+assert_eq "source-guard dogfood: four of them are forgeable, in four different spellings" \
+  "$((SENT_F - SENT_UNPARSED))" "4"
+assert_eq "source-guard dogfood: a guard-shaped line it cannot classify is its OWN state, not a skip" \
+  "$SENT_UNPARSED" "1"
+assert_contains "source-guard dogfood: an if/then spelling is classified, not silently skipped" \
+  "$SENT_FOUND" "_NAZGUL_DOGFOOD_ALT_SOURCED"
+assert_contains "source-guard dogfood: a declare -F probe is classified forgeable, for the export -f reason measured below" \
+  "$SENT_FOUND" "dogfood-df.sh"
+assert_contains "source-guard dogfood: a scripts/*.sh file is inside the denominator" \
+  "$SENT_FOUND" "dogfood-top.sh"
+assert_contains "source-guard dogfood: a git-hook template other than _dispatch.sh is inside the denominator" \
+  "$SENT_FOUND" "pre-commit"
+assert_contains "source-guard dogfood: the unparsed one is NAMED as unparsed, not folded in with the forgeable ones" \
+  "$SENT_FOUND" "(unparsed)"
 bn_sentinel_walk "$REPO_ROOT/scripts"
+
+# lean-comments: allow-run — the classification above rests on this measurement, so it is
+# EXECUTED here rather than asserted in a comment.
+# `export -f` puts a function in the child's environment as a BASH_FUNC_ entry, so a `declare -F`
+# re-source skip returns 0 for a function this process never defined and the library body — the
+# thing that would have OVERWRITTEN it — never runs. An imported ARRAY has no such route: bash
+# does not export arrays at all, and an imported SCALAR carries element 0 only, in every spelling.
+BN_EXPF=$("$BASH" -c 'bn_victim() { echo HOSTILE; }; export -f bn_victim; "$BASH" -c "declare -F bn_victim >/dev/null 2>&1 && echo defeated || echo intact"')
+assert_eq "declare -F as a re-source skip is defeated by an exported FUNCTION, not merely by a scalar" \
+  "$BN_EXPF" "defeated"
+for _bn_spell in '1' 'loaded' '(0 loaded)' ''; do
+  BN_MARK=$(_NZ_BOUNDED_NET_LOADED="$_bn_spell" "$BASH" -c 'printf "%s" "${_NZ_BOUNDED_NET_LOADED[1]:-empty}"')
+  assert_eq "the array marker cannot be supplied by an exported scalar spelled '${_bn_spell:-<empty>}'" \
+    "$BN_MARK" "empty"
+done
+BN_MARK_REAL=$("$BASH" -c '_NZ_X_LOADED=(0 loaded); printf "%s" "${_NZ_X_LOADED[1]:-empty}"')
+assert_eq "and the marker IS satisfiable in-process, so the guard is not vacuously false" \
+  "$BN_MARK_REAL" "loaded"
+
+# lean-comments: allow-run — the two halves are opposite failures and a test that drives one
+# reads identically to a test that drives both.
+# A re-source guard has to do BOTH: skip the body on a re-source (item 12's measured cost — the
+# eleven guards PATCH-008 removed added whole library body executions to the PreToolUse hot path)
+# and never skip the FIRST load (the 127 hazard, and read-hook-payload.sh:126's `export -f`
+# overwrite). The population is DERIVED from the tree's own markers, so a library that adopts one
+# later is covered where it lands.
+BN_MARKED="$TEST_DIR/marked-libs"
+grep -lE '^_NZ_[A-Z0-9_]+_LOADED=\(0 loaded\)$' "$REPO_ROOT"/scripts/lib/*.sh 2>/dev/null | sort > "$BN_MARKED"
+BN_RS_N=0; BN_RS_M=0; BN_RS_K=0; BN_RS_F=0; BN_RS_SKIPPED=""
+while IFS= read -r _bn_lib; do
+  [ -n "$_bn_lib" ] || continue
+  BN_RS_N=$((BN_RS_N + 1))
+  _bn_fn=$(grep -oE '^[a-z_][a-zA-Z0-9_]*\(\)' "$_bn_lib" | head -1 | tr -d '()')
+  if [ -z "$_bn_fn" ]; then
+    BN_RS_M=$((BN_RS_M + 1))
+    BN_RS_SKIPPED="${BN_RS_SKIPPED}${BN_RS_SKIPPED:+ }${_bn_lib##*/}"
+    continue
+  fi
+  BN_RS_K=$((BN_RS_K + 1))
+  _bn_mark=$(grep -oE '^_NZ_[A-Z0-9_]+_LOADED' "$_bn_lib" | head -1)
+  BN_RS_FIRST=$(env "${_bn_mark}=1" "$BASH" -c ". '$_bn_lib' >/dev/null 2>&1; declare -F $_bn_fn >/dev/null 2>&1 && echo defined || echo missing")
+  BN_RS_AGAIN=$("$BASH" -c ". '$_bn_lib' >/dev/null 2>&1; unset -f $_bn_fn; . '$_bn_lib' >/dev/null 2>&1; declare -F $_bn_fn >/dev/null 2>&1 && echo ran-again || echo skipped")
+  if [ "$BN_RS_FIRST" = "defined" ] && [ "$BN_RS_AGAIN" = "skipped" ]; then
+    _pass "re-source: ${_bn_lib##*/} loads even with its marker name exported, and skips its body on a genuine re-source"
+  else
+    BN_RS_F=$((BN_RS_F + 1))
+    _fail "re-source: ${_bn_lib##*/} loads even with its marker name exported, and skips its body on a genuine re-source" \
+      "first source: $BN_RS_FIRST; second source: $BN_RS_AGAIN"
+  fi
+done < "$BN_MARKED"
+printf '  re-source: %d scanned, %d skipped (no-function=%d%s), %d checked, %d findings\n' \
+  "$BN_RS_N" "$BN_RS_M" "$BN_RS_M" "${BN_RS_SKIPPED:+: $BN_RS_SKIPPED}" "$BN_RS_K" "$BN_RS_F"
+assert_eq "re-source: scanned == skipped + checked" "$BN_RS_N" "$((BN_RS_M + BN_RS_K))"
+if [ "$BN_RS_K" -ge 5 ]; then
+  _pass "re-source: the marker population was derived from the tree, not from a list ($BN_RS_K libraries)"
+else
+  _fail "re-source: the marker population was derived from the tree" \
+    "$BN_RS_K marked librar(ies) found under scripts/lib — a derivation that stopped matching checks almost nothing"
+fi
+
+# lean-comments: allow-run — the residual is measured and PINNED because the fix is partial by
+# choice, and an unstated partial fix reads as a complete one.
+# A library sourced by two or more OTHER files under scripts/ can have its whole body executed
+# more than once per process. These carry no marker and are NOT fixed here: nazgul-root.sh and
+# read-hook-payload.sh each record a deliberate refusal that deserves its own cost argument, and
+# the rest (task-utils, structured-state, review-evidence, emit-event, session-tracker,
+# destructive-patterns, task-transition-guard) are the widest blast radius in the repo — the
+# measured PreToolUse hot path runs task-utils' body 4 times and structured-state's 7, which no
+# filter this subtask is allowed to run would cover. The COUNT is pinned so the residual cannot
+# grow quietly; shrinking it is a deliberate edit to this number.
+BN_RESID=""
+for _bn_lib in "$REPO_ROOT"/scripts/lib/*.sh; do
+  _bn_n=$(basename "$_bn_lib")
+  grep -qE '^_NZ_[A-Z0-9_]+_LOADED=\(0 loaded\)$' "$_bn_lib" && continue
+  _bn_cnt=$(grep -rl -- "/$_bn_n" "$REPO_ROOT"/scripts --include='*.sh' 2>/dev/null \
+    | grep -v "scripts/lib/$_bn_n" \
+    | while read -r _bn_f; do grep -qE "^[[:space:]]*[^#]*/$_bn_n" "$_bn_f" && echo x; done | wc -l | tr -d ' ')
+  [ "${_bn_cnt:-0}" -ge 2 ] && BN_RESID="${BN_RESID}${BN_RESID:+ }${_bn_n}"
+done
+BN_RESID_N=$(printf '%s\n' "$BN_RESID" | tr ' ' '\n' | grep -c '[^[:space:]]')
+echo "  re-source residual: ${BN_RESID_N} unguarded librar(ies) reachable from 2+ sourcing files: ${BN_RESID}"
+assert_eq "re-source residual: the unfixed population is exactly the one this subtask measured and named" \
+  "$BN_RESID_N" "13"
+
+# lean-comments: allow-run — the SHAPE of the call is the defect, so the test has to use the
+# shape production uses; driving the direct form is how the previous fix passed while reaching
+# nothing.
+# ITEM 7 — every production call site of nz_bounded_run_split wraps it in `$( )` to keep the
+# payload clean, and a `$( )` subshell can write no variable back to its caller. `_BNET_WARNED`
+# was therefore re-created empty on every call: three calls printed three identical degradation
+# lines and forked three emit-event subshells. The call-site shape is DERIVED from the shipped
+# sources, so this test cannot keep passing against a shape production no longer uses.
+BN_SPLIT_TOTAL=0; BN_SPLIT_SUBST=0
+while IFS= read -r _bn_site; do
+  [ -n "$_bn_site" ] || continue
+  BN_SPLIT_TOTAL=$((BN_SPLIT_TOTAL + 1))
+  _bn_sf="${_bn_site%%:*}"; _bn_sl="${_bn_site#*:}"; _bn_sl="${_bn_sl%%:*}"
+  # A call spanning a line continuation puts `out=$(` two lines above the wrapper's own name, so
+  # the window is the statement, not the matched line.
+  if sed -n "$(( _bn_sl > 2 ? _bn_sl - 2 : 1 )),${_bn_sl}p" "$_bn_sf" | grep -q '=\$('; then
+    BN_SPLIT_SUBST=$((BN_SPLIT_SUBST + 1))
+  fi
+done <<< "$(grep -rn 'nz_bounded_run_split ' "$REPO_ROOT"/scripts/lib/*.sh \
+  | grep -v 'bounded-net\.sh:' | grep -v ':[0-9]*:[[:space:]]*#' | grep -vF 'nz_bounded_run_split <')"
+
+echo "  split-call-sites: ${BN_SPLIT_TOTAL} scanned, 0 skipped, ${BN_SPLIT_TOTAL} checked, $((BN_SPLIT_TOTAL - BN_SPLIT_SUBST)) findings"
+if [ "$BN_SPLIT_TOTAL" -ge 3 ]; then
+  _pass "split-call-sites: the production population was derived from the tree (${BN_SPLIT_TOTAL} sites)"
+else
+  _fail "split-call-sites: the production population was derived from the tree" \
+    "found ${BN_SPLIT_TOTAL} call site(s) — a derivation that stopped matching drives nothing"
+fi
+assert_eq "split-call-sites: every one of them captures stdout in a command substitution, which is the shape under test" \
+  "$BN_SPLIT_SUBST" "$BN_SPLIT_TOTAL"
+
+BN_SUB_ERR="$TEST_DIR/subshell-dedup.err"
+BN_SUB_OUT=$(NAZGUL_TIMEOUT_CMD= "$BASH" -c "
+  . '$LIB'
+  for _i in 1 2 3; do
+    out=\$(nz_bounded_run_split net subshell-probe '$BN_SUB_ERR' echo payload)
+  done
+  printf '%s' \"\$out\"" 2>"$TEST_DIR/subshell-dedup.stderr")
+assert_eq "the command-substituted form still returns the command's stdout alone" "$BN_SUB_OUT" "payload"
+assert_eq "a degradation raised inside \$( ) is named ONCE per process, not once per call" \
+  "$(grep -c 'unbounded_no_timeout_binary' "$TEST_DIR/subshell-dedup.stderr")" "1"
+
+# The same three calls in the DIRECT form must still dedup: the ledger is an addition to the
+# in-shell key, never a replacement for it.
+BN_DIR_ERR="$TEST_DIR/direct-dedup.err"
+NAZGUL_TIMEOUT_CMD= "$BASH" -c "
+  . '$LIB'
+  for _i in 1 2 3; do
+    nz_bounded_run_split net direct-probe '$BN_DIR_ERR' echo payload >/dev/null
+  done" 2>"$TEST_DIR/direct-dedup.stderr"
+assert_eq "and the direct form, which already deduped, still does" \
+  "$(grep -c 'unbounded_no_timeout_binary' "$TEST_DIR/direct-dedup.stderr")" "1"
+
+# Two DIFFERENT processes must each say it once: the ledger is per process, and a dedup that
+# leaked across processes would silence the second operator's only warning.
+BN_P1=$(NAZGUL_TIMEOUT_CMD= "$BASH" -c ". '$LIB'; out=\$(nz_bounded_run_split net cross-proc '$TEST_DIR/x1.err' echo p)" 2>&1)
+BN_P2=$(NAZGUL_TIMEOUT_CMD= "$BASH" -c ". '$LIB'; out=\$(nz_bounded_run_split net cross-proc '$TEST_DIR/x2.err' echo p)" 2>&1)
+assert_contains "a second, unrelated process still gets the degradation named to it" \
+  "$BN_P1$BN_P2" "unbounded_no_timeout_binary"
+assert_eq "and each of the two processes named it exactly once" \
+  "$(printf '%s\n%s\n' "$BN_P1" "$BN_P2" | grep -c 'unbounded_no_timeout_binary')" "2"
+
+# lean-comments: allow-run — the two directions of this failure are opposite and only one of
+# them is safe, which is the whole reason it gets a name.
+# ITEM 8 — when mktemp cannot produce the diagnostic file, nz_bounded_run_split falls back to
+# sending this library's own diagnostics to the terminal and NOT to the caller's errfile. That is
+# the pre-fix behaviour restored silently: a bound that fires kills the command before it says
+# anything, so the caller's failure record then names an exit code and no reason at all. It is the
+# opposite direction from the dedup ledger's own failure, which merely duplicates a line.
+BN_MK_ERR="$TEST_DIR/mktemp-fail.err"
+: > "$BN_MK_ERR"
+BN_MK_STDERR="$TEST_DIR/mktemp-fail.stderr"
+BN_MK_OUT=$(NAZGUL_TIMEOUT_CMD= TMPDIR="$TEST_DIR/no-such-tmpdir" "$BASH" -c "
+  . '$LIB'
+  nz_bounded_run_split net mktemp-probe '$BN_MK_ERR' echo payload" 2>"$BN_MK_STDERR")
+assert_eq "an unusable TMPDIR does not stop the call from running" "$BN_MK_OUT" "payload"
+assert_file_contains "the lost-diagnostic path is NAMED, like every other unusable state in this file" \
+  "$BN_MK_STDERR" "diagnostic_not_captured"
+assert_file_contains "and the name says what was lost, not merely that something happened" \
+  "$BN_MK_STDERR" "NOT the caller's stderr file"
+BN_MK_REASONS=$(grep -oE '_bnet_degrade "[^"]*" "[a-z_]+"' "$LIB" | sed 's/.*"\([a-z_]*\)"$/\1/' | sort -u | tr '\n' ' ')
+assert_contains "and it joins the derived reason population, so the dedup walk above covers it too" \
+  "$BN_MK_REASONS" "diagnostic_not_captured"
 
 # --- The load-bearing site: the IMPLEMENTED -> DONE merge-evidence gate ---
 setup_git_repo

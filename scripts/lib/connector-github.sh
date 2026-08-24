@@ -10,12 +10,15 @@
 # Idempotent source guard; NOT `set -euo pipefail` — sourced into caller shells
 # (heartbeat hook / inbox-provider seam) that own their own shell options.
 #
-# SENTINEL KEPT, alone among these libraries: inbox-provider.sh's _inbox_require_connector reads it
-# as a load probe to decide whether to source this file at all, so deleting it breaks that caller.
-# Everywhere else the same scalar was a pure 127-exit hazard and is gone (PATCH-008 item 3).
-
-[ -n "${_NAZGUL_CONNECTOR_GITHUB_SOURCED:-}" ] && return 0
-_NAZGUL_CONNECTOR_GITHUB_SOURCED=1
+# lean-comments: allow-run — the kept scalar was the load-bearing one, and its reader was the hazard.
+# THE SENTINEL THAT WAS KEPT IS GONE. `_NAZGUL_CONNECTOR_GITHUB_SOURCED` survived PATCH-008 on the
+# argument that inbox-provider.sh read it as a load probe — but that reader WAS the hazard: one
+# exported scalar made _inbox_require_connector return 0 having loaded nothing, and the very next
+# line called connector_github_health -> 127, which `|| return 1` reported as "not ready". The
+# probe now asks whether the API is DEFINED (inbox-provider.sh), and the re-source guard here is an
+# ARRAY marker no environment can supply — bounded-net.sh's header carries the measurement.
+[ "${_NZ_CONNECTOR_GITHUB_LOADED[1]:-}" = "loaded" ] && return 0
+_NZ_CONNECTOR_GITHUB_LOADED=(0 loaded)
 
 _CGH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./bounded-net.sh

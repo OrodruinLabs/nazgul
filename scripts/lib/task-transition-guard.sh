@@ -122,6 +122,20 @@ ttg_allowed_next() {
 # it is a property of that one call, not of the PR. Caching it replayed one 60s timeout on the
 # first manifest onto all eleven behind it: twelve refused on a read-back eleven of them never
 # made. The three-valued contract _ttg_merge_host_state documents is the same line drawn here.
+#
+# BUT NOT CACHING IT IS UNBOUNDED IN THE OTHER DIRECTION, so the re-ask is CAPPED. A host that is
+# down answers nothing at the net tier's full 60s per manifest — twelve stranded manifests is
+# twelve minutes inside the DONE gate, and the twelfth learns exactly what the third did. After
+# _TTG_HOST_STATE_FAIL_CAP CONSECUTIVE non-answers the wrapper stops asking and returns 2 at once;
+# one answer of any kind resets the count, because the cap is a claim about the HOST being
+# unreachable right now and not about any PR. It can only make a refusal FASTER: rc 2 is
+# `unverifiable`, which never admits a closure, so the capped path denies exactly what the
+# uncapped path would have denied 57 seconds later. stack-utils.sh ships the same three-strikes
+# shape for gh; unlike that one this count is PER PROCESS and is never persisted, because a
+# persisted "host unreachable" on the one gate with no kill switch would outlive the outage and
+# refuse closures after the host came back, with nothing but a hand edit to clear it.
+_TTG_HOST_STATE_FAIL_CAP=3
+
 ttg_install_merge_host_state_memo() {
   local src
   declare -F _ttg_merge_host_state >/dev/null 2>&1 || return 1
@@ -131,6 +145,7 @@ ttg_install_merge_host_state_memo() {
   case "$src" in *_ttg_host_state_uncached*) return 0 ;; esac
   eval "_ttg_host_state_uncached${src#_ttg_merge_host_state}"
   _TTG_HOST_STATE_KEYS=""
+  _TTG_HOST_STATE_FAILS=0
   _ttg_merge_host_state() {
     local slot snap v rc=0
     slot="_TTG_HOST_STATE_$(printf '%s_%s' "${1:-}" "${2:-}" | tr -c 'A-Za-z0-9' '_')"
@@ -141,10 +156,27 @@ ttg_install_merge_host_state_memo() {
         return "$rc"
         ;;
     esac
+    if [ "$_TTG_HOST_STATE_FAILS" -ge "$_TTG_HOST_STATE_FAIL_CAP" ]; then
+      TTG_MERGE_HOST_RESULT="unavailable_ask_capped"
+      TTG_MERGE_HOST_AT=""; TTG_MERGE_HOST_COMMIT=""; TTG_MERGE_HOST_HEAD_REF=""
+      TTG_MERGE_HOST_BASE_REF=""; TTG_MERGE_HOST_HOST=""
+      return 2
+    fi
     _ttg_host_state_uncached "$@" || rc=$?
     # rc 2 is "the host was not usefully asked" — the next manifest asks again rather than
-    # inheriting a refusal it never earned.
-    [ "$rc" -ne 2 ] || return 2
+    # inheriting a refusal it never earned, until the consecutive cap above says the asking
+    # itself has stopped being informative.
+    if [ "$rc" -eq 2 ]; then
+      _TTG_HOST_STATE_FAILS=$((_TTG_HOST_STATE_FAILS + 1))
+      if [ "$_TTG_HOST_STATE_FAILS" -eq "$_TTG_HOST_STATE_FAIL_CAP" ]; then
+        printf 'task-transition-guard: merge_host_ask_capped: %s consecutive non-answers about PR %s — no further host call will be made in this process, and every remaining manifest is refused as unverifiable WITHOUT being re-asked\n' \
+          "$_TTG_HOST_STATE_FAILS" "${2:-}" >&2
+        _ttg_emit_event "${1:-}/nazgul" "merge_host_ask_capped" pr "${2:-}" \
+          consecutive_failures:n "$_TTG_HOST_STATE_FAILS" last_state "$TTG_MERGE_HOST_RESULT"
+      fi
+      return 2
+    fi
+    _TTG_HOST_STATE_FAILS=0
     # Snapshot by PREFIX, not by an enumerated list, so a new TTG_MERGE_HOST_* output is carried
     # across a cache hit instead of silently reading as the previous task's.
     snap=""

@@ -31,17 +31,45 @@
 # exports are the one deliberate source-time side effect: a prompt suppressed per call site is a
 # prompt the next call site forgets.
 #
-# NO SENTINEL, for the reason nazgul-root.sh:40-49 measured and read-hook-payload.sh:113-124
-# refused to re-introduce: a scalar `_NAZGUL_BOUNDED_NET_SOURCED` sat above every definition
-# here, so one exported variable made this source a no-op defining nothing, and every
-# nz_bounded_run call site in stack-utils/connector-github/board-sync/doctor then exited 127
-# mid-operation under `set -e`. Any name is settable, so the guard is REMOVED rather than
-# renamed. Re-sourcing costs the assignments below and RESETS _BNET_WARNED, which duplicates a
-# degradation line rather than suppressing one — the safe direction of that trade.
+# lean-comments: allow-run — the re-source guard's SHAPE is the whole argument; a reader who
+# swaps it for a scalar or a `declare -F` probe reopens a measured hole in one line.
+# RE-SOURCE GUARD, AND WHY IT IS AN ARRAY. A scalar `_NAZGUL_BOUNDED_NET_SOURCED` sat above every
+# definition here, so one exported variable made this source a no-op defining nothing and every
+# nz_bounded_run call site in stack-utils/connector-github/board-sync/doctor exited 127
+# mid-operation under `set -e` (nazgul-root.sh:40-49 measured the same shape). Removing it
+# outright then ADDED whole library body executions to the PreToolUse hot path. `declare -F` is
+# NOT the answer either, and this was MEASURED, not assumed: `export -f nz_bounded_run` from a
+# parent shell survives into `bash scripts/<hook>.sh` as a BASH_FUNC_ environment entry, so
+# `declare -F` returns 0 for it and the skip leaves a HOSTILE implementation standing — strictly
+# worse than the scalar, which merely left it undefined. Bash cannot import an ARRAY from the
+# environment at all (a child sees nothing, not even element 0), and an imported SCALAR has only
+# element 0 in every spelling, so element 1 of an array is a marker no environment can supply.
+# The first source in a process therefore ALWAYS runs, which preserves read-hook-payload.sh:126's
+# defence: defining unconditionally OVERWRITES a hostile `export -f`.
+[ "${_NZ_BOUNDED_NET_LOADED[1]:-}" = "loaded" ] && return 0
+_NZ_BOUNDED_NET_LOADED=(0 loaded)
 
 _BNET_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _BNET_WARNED=""
 _BNET_TCMD=""
+
+# lean-comments: allow-run — the ledger exists because the in-shell dedup key provably cannot
+# reach the call sites that need it, and its failure direction is the safe one.
+# _BNET_WARN_LEDGER — the dedup key's process-wide half. `_BNET_WARNED` is a shell variable, and
+# ALL THREE production call sites of nz_bounded_run_split (merge-provider._mp_github_pr_state,
+# stack-utils._su_plain_pr, stack-utils._su_gh_pr_view_json) run the call inside `$( )`, so the
+# key was written into a subshell that then exited and the next call repeated the same
+# degradation line and forked another emit-event subshell. A subshell can only report upward
+# through the filesystem, so the key is also appended here, under a path every subshell inherits.
+# An inherited value is honoured only if it carries this basename prefix: the variable is not
+# exported, but an operator who exported one would otherwise choose an arbitrary append target.
+# When the ledger cannot be written the dedup falls back to per-shell, which DUPLICATES a
+# degradation line rather than suppressing one — the safe direction, and the opposite of the
+# mktemp fallback below, which used to lose the line entirely.
+case "${_BNET_WARN_LEDGER:-}" in
+  */nazgul-bnet-warned-*) ;;
+  *) _BNET_WARN_LEDGER="${TMPDIR:-/tmp}/nazgul-bnet-warned-$$-${RANDOM}${RANDOM}" ;;
+esac
 
 # lean-comments: allow-run — the fd indirection exists for one reason and it is not obvious.
 # A call site that silences its command's noise with `2>/dev/null` silences THIS too, and a
@@ -109,14 +137,32 @@ _bnet_emit() {
 }
 
 # _bnet_degrade <label> <reason> <detail> -> name a bound that could NOT be applied,
-# once per label per process: repeated on every doctor probe it would be noise to skim.
+# once per label per PROCESS — see _BNET_WARN_LEDGER above for why "per process" needs a file.
 _bnet_degrade() {
   local label="$1" reason="$2" detail="$3" key
   key=" ${label}:${reason} "
   case "$_BNET_WARNED" in *"$key"*) return 0 ;; esac
+  if [ -n "$_BNET_WARN_LEDGER" ] && [ -s "$_BNET_WARN_LEDGER" ] \
+    && grep -qF -- "$key" "$_BNET_WARN_LEDGER" 2>/dev/null; then
+    _BNET_WARNED="${_BNET_WARNED}${key}"
+    return 0
+  fi
   _BNET_WARNED="${_BNET_WARNED}${key}"
+  _bnet_ledger_append "$key"
   _bnet_warn "$reason: $detail"
   _bnet_emit "bounded_call_degraded" label "$label" reason "$reason" detail "$detail"
+}
+
+# _bnet_ledger_append <key> -> record <key> where the caller's shell can see it after this
+# subshell exits. The first append also reaps ledgers a day older than any live process.
+_bnet_ledger_append() {
+  [ -n "$_BNET_WARN_LEDGER" ] || return 0
+  if [ ! -e "$_BNET_WARN_LEDGER" ]; then
+    find "${_BNET_WARN_LEDGER%/*}" -maxdepth 1 -name 'nazgul-bnet-warned-*' -mmin +1440 \
+      -delete >/dev/null 2>&1 || true
+  fi
+  printf '%s\n' "$1" >> "$_BNET_WARN_LEDGER" 2>/dev/null || true
+  return 0
 }
 
 # lean-comments: allow-run — the tier table and the `0` refusal are the two facts a
@@ -157,9 +203,9 @@ _bnet_secs() {
 
 # lean-comments: allow-run — the accepted set is a security boundary, and the vector it does
 # NOT close has to be named or the next reader will over-trust it.
-# nz_bounded_timeout_cmd -> `timeout` / `gtimeout` / empty. NAZGUL_TIMEOUT_CMD overrides, but
-# ONLY to a value auto-detection could have chosen by itself: the empty string (the documented
-# hook that drives the degradation path under test) or a resolvable `timeout`/`gtimeout`.
+# _bnet_resolve_timeout_cmd -> `timeout` / `gtimeout` / empty in _BNET_TCMD. NAZGUL_TIMEOUT_CMD
+# overrides, but ONLY to a value auto-detection could have chosen by itself: the empty string (the
+# documented hook that drives the degradation path under test) or a resolvable `timeout`/`gtimeout`.
 # Anything else is refused by name and the detected binary used instead, because nz_bounded_run
 # EXECUTES this value as `"$tcmd" -k 5 "$secs" "$@"` — so an ambient variable naming an arbitrary
 # executable substitutes the process whose stdout becomes the sole admitting evidence for the
@@ -169,13 +215,14 @@ _bnet_secs() {
 # `gh`, `git` and `jq` alike. It closes the Nazgul-specific variable nobody audits.
 # lean-comments: allow-run — why the resolution sets a global instead of printing, and
 # why an accepted-but-absent name is its own refusal.
-# _bnet_resolve_timeout_cmd -> set _BNET_TCMD in the CALLER's shell. The degradations below
-# dedup through _BNET_WARNED, and `tcmd=$(nz_bounded_timeout_cmd)` wrote that key into a
-# subshell that then exited: three calls printed three lines and forked three emit-event
-# subshells apiece, while the one reason the suite pinned deduped fine because nz_bounded_run
-# emits it directly. An ACCEPTED name that does not resolve is a THIRD state, distinct from
-# both the refused arbitrary value and the honoured one: on a gtimeout-only host
-# NAZGUL_TIMEOUT_CMD=timeout silently became gtimeout, neither honoured nor refused by name.
+# It sets _BNET_TCMD in the CALLER's shell and prints nothing, and there is no printing wrapper
+# around it any more: `tcmd=$(nz_bounded_timeout_cmd)` wrote the dedup key into a subshell that
+# then exited, so three calls printed three lines and forked three emit-event subshells apiece.
+# A wrapper whose only shape is the losing one is not kept for hypothetical external callers —
+# it had none, and its existence invited the very call form the dedup cannot survive.
+# An ACCEPTED name that does not resolve is a THIRD state, distinct from both the refused
+# arbitrary value and the honoured one: on a gtimeout-only host NAZGUL_TIMEOUT_CMD=timeout
+# silently became gtimeout, neither honoured nor refused by name.
 _bnet_resolve_timeout_cmd() {
   local want
   _BNET_TCMD=""
@@ -200,12 +247,6 @@ _bnet_resolve_timeout_cmd() {
   return 0
 }
 
-# nz_bounded_timeout_cmd -> the resolved wrapper on stdout, for callers outside this file.
-nz_bounded_timeout_cmd() {
-  _bnet_resolve_timeout_cmd
-  printf '%s' "$_BNET_TCMD"
-}
-
 # lean-comments: allow-run — the two exit codes and the SIGKILL escalation are contract.
 # nz_bounded_run <tier> <label> <cmd...> -> <cmd> under a wall-clock bound, returning its
 # exit status unchanged. A bound that fired is 124 (SIGTERM) or 137 (SIGKILL, after the
@@ -218,8 +259,8 @@ nz_bounded_run() {
   local tier="$1" label="$2" secs tcmd rc=0
   shift 2
   secs=$(_bnet_secs "$tier")
-  # Resolved in THIS shell, never `$(nz_bounded_timeout_cmd)`: the resolution can degrade,
-  # and a dedup key written in a subshell is a dedup that never happened.
+  # Resolved in THIS shell, never through a `$( )` printing wrapper: the resolution can
+  # degrade, and a dedup key written in a subshell is a dedup that never happened.
   _bnet_resolve_timeout_cmd
   tcmd="$_BNET_TCMD"
   if [ -z "$tcmd" ]; then
@@ -260,6 +301,8 @@ nz_bounded_run_split() {
   shift 3
   bnetfile=$(mktemp "${TMPDIR:-/tmp}/nazgul-bnet-diag-XXXXXX" 2>/dev/null) || bnetfile=""
   if [ -z "$bnetfile" ]; then
+    _bnet_degrade "$label" "diagnostic_not_captured" \
+      "mktemp under ${TMPDIR:-/tmp} failed, so this library's own diagnostics for '$label' reach the terminal but NOT the caller's stderr file — a bound that fires leaves the caller's failure record naming an exit code and no reason, which is the pre-fix behaviour and not an absence of one"
     { NZ_BOUNDED_WARN_FD=9 nz_bounded_run "$tier" "$label" "$@" 2>"$errfile"; rc=$?; } 9>&2
     return "$rc"
   fi

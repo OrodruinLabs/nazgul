@@ -17,9 +17,10 @@
 # already sources review-provenance.sh). NOT `set -euo pipefail` — sourced into hook shells that
 # must keep their own options.
 #
-# NO SENTINEL: the scalar `_NAZGUL_REVIEW_FILE_CLASS_SOURCED` that sat here made one exported
-# variable enough to leave this classifier undefined in both DONE-gate validators — the 127-exit
-# hazard nazgul-root.sh:40-49 measured. Re-sourcing costs these definitions.
+# RE-SOURCE GUARD: an ARRAY marker, not a scalar and not `declare -F` — bounded-net.sh's header
+# carries the measurement, including the `export -f` shape that defeats `declare -F`.
+[ "${_NZ_REVIEW_FILE_CLASS_LOADED[1]:-}" = "loaded" ] && return 0
+_NZ_REVIEW_FILE_CLASS_LOADED=(0 loaded)
 
 # Meta-files in a review dir that are NOT reviewer verdicts.
 # Usage: _is_review_meta_file <basename>

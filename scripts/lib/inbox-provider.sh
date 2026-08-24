@@ -12,8 +12,10 @@
 # Idempotent source guard; NOT `set -euo pipefail` — sourced into caller shells
 # (heartbeat hook / start skill) that own their own shell options.
 
-# NO SENTINEL: the scalar `_NAZGUL_INBOX_PROVIDER_SOURCED` that sat here made one exported variable
-# enough to leave the inbox seam undefined — the 127-exit hazard nazgul-root.sh:40-49 measured.
+# RE-SOURCE GUARD: an ARRAY marker, not a scalar and not `declare -F` — bounded-net.sh's header
+# carries the measurement, including the `export -f` shape that defeats `declare -F`.
+[ "${_NZ_INBOX_PROVIDER_LOADED[1]:-}" = "loaded" ] && return 0
+_NZ_INBOX_PROVIDER_LOADED=(0 loaded)
 
 _INBOX_PROVIDER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -41,15 +43,29 @@ _inbox_resolve_config() {
   return 1
 }
 
-# _inbox_require_connector -> lazily source the GitHub connector (only ever called
-# on the github branch, so the file provider never touches it). Return 1 when the
-# connector lib is absent so the caller degrades instead of crashing.
+# Every connector function this seam calls. Derived from the call sites below, so a new
+# call cannot outrun the readiness probe that is supposed to cover it.
+_INBOX_CONNECTOR_API="connector_github_health connector_github_pull_list connector_github_pull_get connector_github_pull_archive"
+
+# lean-comments: allow-run — the probe's subject changed, and that IS the fix.
+# _inbox_require_connector -> lazily source the GitHub connector (only ever called on the github
+# branch, so the file provider never touches it) and answer whether its API is USABLE. It used to
+# answer a different question — "has an ambient scalar been set?" — so one exported
+# _NAZGUL_CONNECTOR_GITHUB_SOURCED returned 0 having loaded nothing and the next line's
+# connector_github_health exited 127, which `|| return 1` reported as "not ready". Sourcing is
+# attempted FIRST and unconditionally, because a source both loads the file and overwrites a
+# hostile `export -f`; the probe then names every function this file calls, so a single exported
+# function cannot answer for the rest of the API.
 _inbox_require_connector() {
-  [ -n "${_NAZGUL_CONNECTOR_GITHUB_SOURCED:-}" ] && return 0
-  local lib="$_INBOX_PROVIDER_LIB_DIR/connector-github.sh"
-  [ -f "$lib" ] || return 1
-  # shellcheck source=connector-github.sh
-  . "$lib"
+  local lib="$_INBOX_PROVIDER_LIB_DIR/connector-github.sh" fn
+  if [ -f "$lib" ]; then
+    # shellcheck source=connector-github.sh
+    . "$lib" || true
+  fi
+  for fn in $_INBOX_CONNECTOR_API; do
+    declare -F "$fn" >/dev/null 2>&1 || return 1
+  done
+  return 0
 }
 
 # _inbox_github_ready <config> -> 0 iff the github connector is usable: config

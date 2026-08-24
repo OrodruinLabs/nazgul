@@ -55,8 +55,10 @@
 # against. The caller may still exit on the non-zero RETURN below (that is the
 # documented contract, like `grep`'s), but it exits having been told why.
 
-# NO SENTINEL: a scalar `_NAZGUL_MERGE_PROVIDER_SOURCED` above these definitions made one exported
-# variable enough to leave merge_provider_pr_state undefined at the DONE gate (nazgul-root.sh:40-49).
+# RE-SOURCE GUARD: an ARRAY marker, not a scalar and not `declare -F` — bounded-net.sh's header
+# carries the measurement, including the `export -f` shape that defeats `declare -F`.
+[ "${_NZ_MERGE_PROVIDER_LOADED[1]:-}" = "loaded" ] && return 0
+_NZ_MERGE_PROVIDER_LOADED=(0 loaded)
 
 _MERGE_PROVIDER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./bounded-net.sh

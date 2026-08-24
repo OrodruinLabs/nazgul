@@ -527,6 +527,7 @@ else
     "both recorded [${CO_BR_131:-<empty>}] — the bracket tracks the run, not the task"
 fi
 
+
 # lean-comments: allow-run — says why the "not a constant" proof is driven from two directions.
 # A SECOND run, refused for a DIFFERENT cause, reached without a per-call script: cause and call
 # ordering are separable, and the bracket has to track the cause. The one-run form above became
@@ -556,6 +557,89 @@ assert_file_contains "read-back reasons: the contradiction reaches the bus, not 
 assert_eq "read-back reasons: TASK-133 stayed where it was" \
   "$(get_task_status "$FX/nazgul/tasks/TASK-133.md")" "IMPLEMENTED"
 FX="$FX_READBACK"
+
+CO_SAVE_FX="$FX"
+# lean-comments: allow-run — the cost is the assertion, and the cost of the fix's own mirror is
+# the part the previous round did not price.
+# ITEM 9 — refusing to cache rc 2 removed a poisoned refusal and opened an unbounded mirror: a host
+# that is down answers nothing at the net tier's full 60s, PER MANIFEST, so twelve stranded
+# manifests cost twelve minutes inside the DONE gate and the twelfth learns exactly what the third
+# did. The re-ask is now capped at three CONSECUTIVE non-answers per process. It can only make a
+# refusal faster — every manifest here is still refused, and the count of refusals is asserted
+# alongside the count of asks so a cap that silently SKIPPED a manifest could not read as a pass.
+_fixture askcap
+_manifest TASK-141 IMPLEMENTED
+_manifest TASK-142 IMPLEMENTED
+_manifest TASK-143 IMPLEMENTED
+_manifest TASK-144 IMPLEMENTED
+_manifest TASK-145 IMPLEMENTED
+GH_SEQ_CAP="$SCRATCH/gh-seq-askcap"
+printf 'merged\nerror\nerror\nerror\nerror\nerror\nerror\nerror\n' > "$GH_SEQ_CAP"
+rm -f "$GH_SEQ_CAP.n"
+: > "$GH_LOG"
+NAZGUL_TEST_GH_SEQ="$GH_SEQ_CAP" NAZGUL_TEST_GH_CASE=merged _run "$FX" 88
+assert_exit_code "ask cap: an unreachable host refuses every manifest and exits nonzero" "$CO_RC" 1
+_grammar "ask cap"
+assert_eq "ask cap: nothing was closed against a host that answered nothing" "$CO_K" "0"
+assert_eq "ask cap: all five manifests are REFUSED, not silently skipped by the cap" "$CO_F" "5"
+assert_eq "ask cap: the host is asked once to plan and three times before the cap closes, not once per manifest" \
+  "$(grep -c '^pr view ' "$GH_LOG")" "4"
+assert_contains "ask cap: the cap names itself rather than going quiet" \
+  "$CO_ERR" "merge_host_ask_capped"
+assert_contains "ask cap: and says the remaining manifests were refused WITHOUT being re-asked" \
+  "$CO_ERR" "WITHOUT being re-asked"
+assert_file_contains "ask cap: the cap reaches the bus, not only stderr" \
+  "$FX/nazgul/logs/events.jsonl" "merge_host_ask_capped"
+assert_eq "ask cap: a manifest refused past the cap stayed where it was" \
+  "$(get_task_status "$FX/nazgul/tasks/TASK-145.md")" "IMPLEMENTED"
+CO_CAP_CONST=$(grep -oE '^_TTG_HOST_STATE_FAIL_CAP=[0-9]+' "$REPO_ROOT/scripts/lib/task-transition-guard.sh" | head -1)
+assert_eq "ask cap: the cap is a script constant, not an environment knob a caller could raise" \
+  "$CO_CAP_CONST" "_TTG_HOST_STATE_FAIL_CAP=3"
+assert_eq "ask cap: and it is never persisted — a stored 'host unreachable' would outlive the outage" \
+  "$(grep -c 'ask_capped' "$FX/nazgul/config.json")" "0"
+
+# lean-comments: allow-run — the reset is unobservable through the closer, and saying so is the
+# reason this half is a unit probe rather than another fixture.
+# One ANSWER of any kind resets the count, because the cap is a claim about the host being
+# unreachable RIGHT NOW and not about any PR. That cannot be driven through close-objective: every
+# manifest asks about the SAME pr, so the first answer is memoised and no later manifest asks at
+# all. The wrapper is therefore driven directly, with a scripted stub and a DIFFERENT pr per call
+# so the memo never hits and each call is a real ask — the cap is isolated from the cache it
+# shares a function with.
+_co_memo_calls() {
+  "$BASH" -c '
+    set -uo pipefail
+    . "'"$REPO_ROOT"'/scripts/lib/task-transition-guard.sh" >/dev/null 2>&1
+    _TTG_SEQ="'"$1"' "
+    _TTG_CALLS=0
+    _TTG_LAST=""
+    _ttg_merge_host_state() {
+      local rc="${_TTG_SEQ%% *}"
+      _TTG_SEQ="${_TTG_SEQ#* }"
+      [ -n "$rc" ] || rc=2
+      _TTG_CALLS=$((_TTG_CALLS + 1))
+      TTG_MERGE_HOST_RESULT="stub-$rc"
+      return "$rc"
+    }
+    ttg_install_merge_host_state_memo || { printf "install-failed"; exit 0; }
+    for _i in 1 2 3 4 5 6 7 8; do
+      _ttg_merge_host_state /p "pr$_i" || true
+      _TTG_LAST="$TTG_MERGE_HOST_RESULT"
+    done
+    printf "%s|%s" "$_TTG_CALLS" "$_TTG_LAST"
+  ' 2>/dev/null
+}
+CO_CAP_ALL=$(_co_memo_calls "2 2 2 2 2 2 2 2")
+assert_eq "ask cap (unit): eight manifests against a dead host cost three asks, not eight" \
+  "${CO_CAP_ALL%%|*}" "3"
+assert_eq "ask cap (unit): and the capped calls say WHY they never asked" \
+  "${CO_CAP_ALL##*|}" "unavailable_ask_capped"
+CO_CAP_RESET=$(_co_memo_calls "2 2 1 2 2 2 2 2")
+assert_eq "ask cap (unit): one answer resets the count, so the cap fires three non-answers LATER, not at the third overall" \
+  "${CO_CAP_RESET%%|*}" "6"
+CO_CAP_NONE=$(_co_memo_calls "1 1 1 1 1 1 1 1")
+assert_eq "ask cap (unit): a host that answers is never capped" "${CO_CAP_NONE%%|*}" "8"
+FX="$CO_SAVE_FX"
 
 # Membership in the guard's OWN closed vocabulary, extracted from its source: an empty
 # bracket and an invented token are both reasons the operator's vocabulary does not have.
