@@ -2,6 +2,161 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+FEAT-034, ADR-028 (#251) — **Shared install mode staged dispatch prompt text into git, and the
+number the issue sized the leak with was wrong by ~50x.** `skills/init/SKILL.md`'s shared-mode
+`# Nazgul Framework — ephemeral runtime` gitignore block omitted `nazgul/in-flight/`, so in a shared
+install the per-dispatch markers were untracked but not ignored — and a marker carried `prompt_head`,
+which the source comment at `scripts/in-flight-marker.sh:77` called "inert data (first ~200 chars)".
+It was not. `cut -c1-200` is a **per-line** operation: it keeps the first 200 characters of **every
+line** and rejoins them, so the field held a line-truncated transcript of the whole prompt.
+
+**The corrected measurement, taken over the 17 markers present in this checkout:** **71,330
+characters total**, largest single marker **10,062 characters** (143 lines, `nazgul:implementer`),
+mean **4,195**, and **0 of 17** within the documented 200-character bound. A `cut` that had actually
+been total would have kept at most 3,400 characters across the whole set. The worst marker is 50x the
+stated bound and the average one is 21x. In bytes rather than characters the same set measures 71,751
+total and 10,120 at the largest; the scope record's 71,768 / 10,121 is that same byte measurement with
+`jq -r`'s trailing newline counted once per marker, so the two figure sets agree and differ only by
+unit and by that `+1`. **The 200-character claim was wrong in the issue AND in the source comment**,
+and the comment was therefore itself a defect — deleting it is part of the fix, not a tidy-up. Issue
+#251 was deliberately left unmodified, so this entry is where the correction is recorded.
+
+The fix does not shorten the field, it removes it: a marker now carries `prompt_hash` (the leading 16
+lowercase hex of sha256 over the whole prompt) and `prompt_bytes`, and **zero prompt characters reach
+disk under any prompt shape**. And because the same defect class — a hand-maintained enumeration with
+nothing checking it — is what produced the omission in the first place, the block is no longer
+maintained by hand alone: a new blocking contract test enumerates every ephemeral `nazgul/` path
+**from source** and requires each one to carry a declared disposition.
+
+**MINOR, not PATCH:** a marker field is renamed and its value changes shape, the shared-mode ignore
+block grows from 12 entries to 29, and a new blocking test enters CI. **MAJOR is wrong:** no gate
+changes meaning, no default is inverted, and no production code read the removed field. **No schema
+step — config schema stays v36 and this release adds ZERO config keys.** Neither
+`scripts/migrate-config.sh` nor `templates/config.json` appears in this objective's diff, which is
+itself the evidence that nothing an existing project stores had to change. The version number, its
+date, and the matching `.claude-plugin/plugin.json` bump belong to the release step and are not this
+entry's to assign, which is why the heading above carries none yet.
+
+### Added
+
+- **`tests/test-shared-ignore-coverage.sh` — the `RULES.md` §15 registry of bound entry points goes
+  from TEN to ELEVEN, and the eleventh is this.**
+  It sweeps the shared-mode block against every ephemeral `nazgul/` path the codebase actually writes,
+  and its anti-drift property is the one #251 lacked: the candidate set is **enumerated from source**
+  across `scripts/`, `skills/`, `agents/` and `templates/` rather than read from a list someone
+  maintains, and **every enumerated path must carry a declared disposition** — a path that has a
+  writer but no decision is a finding. Four finding classes, each dogfooded against a synthetic
+  violator so a detector that can only ever pass is never mistaken for evidence: `undeclared` (a path
+  no row claims), `unignored` (declared ephemeral, absent from the block), `over-ignored` (declared a
+  record, ignored anyway) and `stale-declaration` (a row no writer still produces). The table is
+  pinned in **both** directions, and block membership is asserted **per declaration rather than per
+  declared key**, because the block's existing `nazgul/reviews/*/…` globs ignore particular children
+  of a record directory without ignoring the directory itself. Blocking, with a `K > 0` floor, and it
+  reports the §15 `scanned / skipped / checked / findings` grammar with `N == M + K` asserted, so
+  "looked and found none" cannot collapse into "never looked".
+- **Proof that the block changes git's behaviour, not just the skill's text.** This repository is a
+  local-mode install, so the defect cannot be reproduced in-tree; the three exposure routes are
+  therefore driven in a scratch `git init` repo with `HOME`, XDG and system git config neutralised.
+  All three now stage nothing under `nazgul/in-flight/`: a blanket `git add -A`, the AFK `SessionEnd`
+  staging pass (`scripts/session-staging.sh`'s exact command, filtered by output prefix rather than by
+  pathspec because that pass passes none either), and `git check-ignore` on the rule itself — which is
+  the probe that also settles a pathspec-scoped manual `git add nazgul/`, since one rule decides both.
+  The swept-over `in-flight/quarantine/` child is checked too, and is cited by the directory line, so
+  it needs no entry of its own. A **permanent RED control** runs the identical probes against the same
+  block minus that one line and gets `2`, `2`, `1`: what makes the three zeros above a real zero
+  rather than a filter that could never have matched anything.
+- **`prompt_bytes` on every in-flight marker**, the byte length of the same stream that is hashed.
+  Bytes rather than `${#PROMPT}` characters: the builtin counts characters under a UTF-8 locale and
+  would disagree with the digest invisibly, on exactly the non-ASCII prompt where it matters.
+
+### Changed
+
+- **`scripts/in-flight-marker.sh` writes `prompt_hash` in place of `prompt_head`.** RENAMED rather
+  than redefined, because `prompt_head` names content the field no longer has and that name is what
+  generated the now-moot redaction requirements in the mission-control documents. `prompt_hash` has a
+  **closed two-state grammar** decided by one anchored regex: either `^[0-9a-f]{16}$` or the literal
+  token `unavailable`. `unavailable` contains `u`, `n`, `v`, `i` and `l`, none of which is a hex
+  digit, so no digest can ever equal it and a degradation can never be misread as a computed value.
+  `e3b0c44298fc1c14` with `prompt_bytes: 0` is a *successful* hash of an empty prompt, not a third
+  failure mode. The hook's fail-open contract is unchanged: the digest helper is `declare -F`-guarded,
+  every path still reaches the unconditional `exit 0`, and stderr names the cause when the digest
+  could not be computed — the marker records the state, stderr records why.
+- **The shared-mode ephemeral block grew from 12 entries to 29, each with its own justification line.**
+  Twelve came from the operator ruling. **Five more were surfaced by the new sweep's own source
+  enumeration rather than by the ruling, and were added rather than filtered** —
+  `nazgul/.stop_failure`, `nazgul/.compaction_count.lock`, `nazgul/.tool_failures`,
+  `nazgul/conductor/` and `nazgul/context.backup.*/`. Two of them are worth stating outright.
+  `nazgul/.compaction_count` did **not** cover `.compaction_count.lock`: a gitignore pattern matches a
+  whole path component, and `.compaction_count.lock` is a different component. And `nazgul/conductor/`
+  is the one arguable member — nothing writes it since `migrate_25_to_26` removed it, so it is
+  included deliberately, because a copy surviving in an upgraded project is residue, rather than by
+  teaching the enumerator to skip migration prose, which would be a suppression list under another
+  name.
+- **The block had THREE hand-maintained copies and nothing checked any of them against it.** That is
+  the same defect class as #251 itself, found while fixing #251. `skills/init/SKILL.md` Step 4 holds
+  two independent enumerations — the `git ls-files` detection and the `git rm --cached` remedy — and
+  `skills/clean/SKILL.md` Step 8 item 3 holds a third, which was **already stale before this objective
+  touched anything**, omitting three entries at the base commit. All three are now synced to 29 and
+  compared against the block **mechanically and in both directions**, with a failure naming the
+  drifted entry. Detection and remedy are asserted **separately**, because a remedy the detector never
+  triggers is not a remedy. Comparison drops the trailing slash on both sides for pathspec copies and
+  compares copy 3 verbatim, since it quotes `.gitignore` lines rather than pathspecs.
+- **The 2026-08-03 mission-control collector's `prompt_head` redaction requirement is annotated MOOT**
+  at all three sites that stated it. The field it acted on no longer exists, so the obligation is
+  retired in writing rather than left to rot; the accompanying HTTPS requirement stands unchanged.
+
+### Fixed
+
+- **`nazgul/in-flight/` is ignored in shared mode** (#251). The three routes by which markers reached
+  a shared repository's index — `git add -A`, the AFK `SessionEnd` staging pass, and a manual
+  `git add nazgul/` — go from three to zero. One honest note on the mechanism: `session-staging.sh`
+  **stages only**; the commit itself arrives from the loop's own AFK commit step. Two mechanisms, one
+  exposure, and the issue's description of the staging pass as the thing that commits is not quite
+  right.
+- **`CLAUDE.md`'s hand-maintained test-file count** said 108 and the harness runs 109. The same defect
+  class as the block, at the smallest possible scale, corrected while the neighbouring §15 registry
+  moved from ten to eleven.
+
+### Known constraints (honest notes)
+
+- **The residual inference channel is not zero, and an unsalted digest is why.** It converts
+  *disclosure* into *confirmation of a guess*: anyone holding a candidate prompt can hash it and test
+  the match. Salting was considered and rejected as worse than the residual. The honest statement is
+  that this closes the exposure #251 describes — prompt text at rest in a git index — and does **not**
+  make a dispatch unlinkable to someone who already has its text.
+- **`prompt_bytes` discloses prompt size.** Accepted deliberately, and named here so it is a decision
+  rather than an oversight: size is already inferable from the agent type, and the field is what makes
+  the empty-prompt and degraded states distinguishable from each other.
+- **In shared mode the self-audit backlog does not reach teammates.** `nazgul/improvements.md` is
+  ignored by operator ruling. It is ~420 KB, append-only across objectives, and **not regenerable**;
+  it was argued the other way during escalation and the operator was told that before choosing. The
+  consequence is recorded in the block itself rather than discovered later.
+- **Five defects in the machinery AROUND this fix were surfaced by this objective and are NOT fixed by
+  it.** They are listed because a release note carrying only the wins is the failure mode this
+  repository refuses. (1) The red-run scope predicate checks the manifest's declared scope and then
+  falls back to `git diff <Base SHA>..HEAD` **in the project root**, so under merge-as-you-go every
+  later docs-only task in an objective is falsely gated. (2) A task that CREATES a new `tests/**` file
+  cannot satisfy the red-run gate from the main worktree, because the gate resolves the entry's path
+  on disk instead of through git against the SHA already recorded under `## Commits`. (3)
+  `scripts/red-run.sh` records the **first** `FAIL:` in the runner output, so when several tasks
+  extend one test file the evidence names an assertion belonging to a different task — observed here,
+  and measured separately rather than hand-authored to look attributable. (4) Under
+  `review_gate.granularity: "feature"` the stop-hook's no-progress detector measures the DONE count
+  alone, while every task parks at IMPLEMENTED until the single aggregate board fires — so the counter
+  climbs monotonically through a **healthy** run. This objective hit it live at 262 consecutive
+  "no progress" iterations with every task advancing correctly, and survived only because this
+  project's `max_consecutive_failures` is 250 rather than the documented 5. (5)
+  `tests/test-in-flight-hold.sh:2521` asserts that the topmost `## [` heading in this file equals
+  `## [2.34.0] - 2026-08-22`. Its label reads "the release adds no new version heading", which was
+  true of the objective that wrote it, but as written it is a hand-maintained pin on the newest
+  version **forever** — the same defect class this entry is about, one level up. It was measured, not
+  predicted: a draft of this entry carrying a `## [2.35.0]` heading turned it red. **This entry
+  therefore ships with no version heading at all, so the pin is still green — which means the release
+  step trips it instead.** Fix the assertion to a presence check of the 2.34.0 heading before bumping
+  `.claude-plugin/plugin.json`, or the release commit fails CI.
+
 ## [2.34.0] - 2026-08-22
 
 FEAT-033, ADR-027 (#218) — **The dispatch class was being PREDICTED at dispatch time; it is
