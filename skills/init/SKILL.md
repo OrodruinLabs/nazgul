@@ -108,6 +108,31 @@ The decision record (`config.json`, `plan.md`, `tasks/`, `reviews/`, `docs/`, `c
    nazgul/.session_id
    nazgul/.compaction_count
    nazgul/archive/
+   # Per-dispatch markers, written at PreToolUse(Agent) and cleared at SubagentStop; the trailing slash also covers in-flight/quarantine/
+   nazgul/in-flight/
+   # Transient mkdir mutual-exclusion dirs; meaningless off their own machine
+   nazgul/locks/
+   # The heartbeat tick lock (scripts/heartbeat.sh:40,63); likewise meaningless off its own machine
+   nazgul/.heartbeat.lock
+   # Generated from scripts/git-hooks/ at install (scripts/lib/git-hooks.sh:16,128); committing it commits a stale copy of shipped code
+   nazgul/.githooks/
+   # Per-dispatch report manifests; per-session
+   nazgul/dispatch/
+   # Per-run self-rating JSON (scripts/file-improvement-report.sh:11)
+   nazgul/improvement-reports/
+   # A per-machine log-offset cursor (scripts/self-audit.sh:169)
+   nazgul/self-audit-window.json
+   # A transient approval marker (scripts/stop-hook.sh:1823)
+   nazgul/.hitl-pending
+   # Exists only between a jq ... > rewrite of config.json and its mv
+   nazgul/config.json.tmp
+   # Local-only work queue; the GitHub board is the durable, shareable copy (CLAUDE.md Backlog Rule, whose --check enforcement is what makes that safe)
+   nazgul/inbox/
+   # Per-session pause note, written only by skills/pause/SKILL.md; machine-local
+   nazgul/HANDOFF.md
+   # Operator-ruled ephemeral: ~420 KB, append-only across objectives, and NOT regenerable
+   # The recorded consequence, not an oversight: in shared mode the self-audit backlog does not reach teammates
+   nazgul/improvements.md
    nazgul/reviews/*/test-failures.md
    nazgul/reviews/*/simplify-report.md
    nazgul/reviews/*/diff.patch
