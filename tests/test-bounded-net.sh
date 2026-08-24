@@ -198,6 +198,25 @@ else
   _skip "the honoured-override case (neither timeout nor gtimeout is on this host, so there is no binary to name)"
 fi
 
+# lean-comments: allow-run — the sentinel is a 127-exit hazard, not a style preference.
+# PATCH-007 item 7 — bounded-net carried `_NAZGUL_BOUNDED_NET_SOURCED` above every definition, so
+# ONE exported variable made `source` a no-op defining nothing, and every nz_bounded_run call site
+# in stack-utils/connector-github/board-sync/doctor then exited 127 mid-operation under `set -e`.
+# The same shape nazgul-root.sh:40-49 measured and read-hook-payload.sh:113-124 refused to re-add.
+BN_LIBDIR="$(dirname "$LIB")"
+SENT_RC=0
+SENT_OUT=$(_NAZGUL_BOUNDED_NET_SOURCED=1 bash -c ". '$LIB'; nz_bounded_run net sentinel-probe echo ran" 2>&1) || SENT_RC=$?
+assert_eq "an exported source sentinel no longer leaves nz_bounded_run undefined" "$SENT_RC" "0"
+assert_contains "and the command still runs" "$SENT_OUT" "ran"
+SENT_MP_RC=0
+_NAZGUL_MERGE_PROVIDER_SOURCED=1 bash -c ". '$BN_LIBDIR/merge-provider.sh'; declare -F merge_provider_pr_state >/dev/null" \
+  >/dev/null 2>&1 || SENT_MP_RC=$?
+assert_eq "merge-provider: an exported sentinel no longer leaves the DONE gate's seam undefined" "$SENT_MP_RC" "0"
+SENT_RFC_RC=0
+_NAZGUL_REVIEW_FILE_CLASS_SOURCED=1 bash -c ". '$BN_LIBDIR/review-file-class.sh'; declare -F review_classify_unit_file >/dev/null" \
+  >/dev/null 2>&1 || SENT_RFC_RC=$?
+assert_eq "review-file-class: an exported sentinel no longer leaves the shared classifier undefined" "$SENT_RFC_RC" "0"
+
 # --- The load-bearing site: the IMPLEMENTED -> DONE merge-evidence gate ---
 setup_git_repo
 git -C "$TEST_DIR" remote add origin https://github.com/OrodruinLabs/nazgul.git 2>/dev/null

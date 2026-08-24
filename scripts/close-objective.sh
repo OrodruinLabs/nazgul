@@ -286,7 +286,10 @@ END {
 
 _co_write_evidence() {
   local file="$1" rc=0
-  NAZGUL_CO_EVIDENCE="$(_co_evidence_block)"
+  # `$(...)` strips the block's trailing newline, so the append branch wrote `recorded-by` flush
+  # against EOF while the replace branch got its blank line from the skip arm — two shapes.
+  NAZGUL_CO_EVIDENCE="$(_co_evidence_block)
+"
   export NAZGUL_CO_EVIDENCE
   nz_rewrite_file "$file" awk "$_CO_AWK_PROG" "$file" || rc=$?
   unset NAZGUL_CO_EVIDENCE
@@ -340,7 +343,7 @@ _co_close_one() {
   fi
   # CURRENT SHELL, never `err=$(ttg_verify_merge_evidence …)`: the reason is returned in a
   # global, and a subshell's assignment cannot reach the record that has to name it.
-  ttg_verify_merge_evidence "$(cat "$manifest")" "$PROJECT_ROOT" "$task_id" \
+  ttg_verify_merge_evidence "$(cat "$manifest")" "$PROJECT_ROOT" "$task_id" "$NAZGUL_DIR" \
     2>"$VERIFY_ERR_FILE" || vrc=$?
   if [ "$vrc" -ne 0 ]; then
     SKIP_EVIDENCE_WRITE=$((SKIP_EVIDENCE_WRITE + 1))

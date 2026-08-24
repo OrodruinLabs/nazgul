@@ -13,12 +13,13 @@
 # file approves a task. One classifier makes those two sets the same set by construction
 # rather than by two authors agreeing.
 #
-# Idempotent source guard; no top-level side effects; sources nothing (both callers
-# source THIS, and review-evidence.sh already sources review-provenance.sh). NOT
-# `set -euo pipefail` — sourced into hook shells that must keep their own options.
-
-[ -n "${_NAZGUL_REVIEW_FILE_CLASS_SOURCED:-}" ] && return 0
-_NAZGUL_REVIEW_FILE_CLASS_SOURCED=1
+# No top-level side effects; sources nothing (both callers source THIS, and review-evidence.sh
+# already sources review-provenance.sh). NOT `set -euo pipefail` — sourced into hook shells that
+# must keep their own options.
+#
+# NO SENTINEL: the scalar `_NAZGUL_REVIEW_FILE_CLASS_SOURCED` that sat here made one exported
+# variable enough to leave this classifier undefined in both DONE-gate validators — the 127-exit
+# hazard nazgul-root.sh:40-49 measured. Re-sourcing costs these definitions.
 
 # Meta-files in a review dir that are NOT reviewer verdicts.
 # Usage: _is_review_meta_file <basename>

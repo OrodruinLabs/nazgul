@@ -551,6 +551,24 @@ assert_contains "read-back reasons: TASK-132's bracket is a member of that close
 assert_contains "read-back reasons: TASK-133's bracket is a member of that closed vocabulary" \
   " $CO_MERGE_VOCAB" " ${CO_BR_133:-<empty>} "
 
+# PATCH-007 item 13 — `$(_co_evidence_block)` stripped the block's trailing newline, so the APPEND
+# branch wrote `recorded-by` flush against EOF while REPLACE got a blank line from the skip arm.
+FX_EVSHAPE_PREV="$FX"
+_fixture evshape
+_manifest TASK-141 IMPLEMENTED
+_manifest TASK-142 IMPLEMENTED
+printf '\n## Merge Evidence\n- **host**: stalevalue\n' >> "$FX/nazgul/tasks/TASK-142.md"
+: > "$GH_LOG"
+NAZGUL_TEST_GH_CASE=merged NAZGUL_TEST_MERGE_SHA="$MERGE_SHA" _run "$FX" 88
+assert_eq "evidence shape: the APPEND branch ends the section with a blank line, like replace does" \
+  "$(tail -1 "$FX/nazgul/tasks/TASK-141.md")" ""
+assert_eq "evidence shape: appended and replaced sections are identical" \
+  "$(awk '/^## Merge Evidence$/{f=1} f' "$FX/nazgul/tasks/TASK-141.md")" \
+  "$(awk '/^## Merge Evidence$/{f=1} f' "$FX/nazgul/tasks/TASK-142.md")"
+assert_not_contains "evidence shape: the replaced section leaves no stale field behind" \
+  "$(cat "$FX/nazgul/tasks/TASK-142.md")" "stalevalue"
+FX="$FX_EVSHAPE_PREV"
+
 # The arms either side of the repair are unchanged: rollback still runs, the task stays put.
 assert_not_contains "read-back reasons: the refused close leaves no ## Merge Evidence residue" \
   "$(cat "$FX/nazgul/tasks/TASK-131.md")" "## Merge Evidence"

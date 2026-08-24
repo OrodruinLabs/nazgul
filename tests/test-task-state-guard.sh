@@ -2302,6 +2302,44 @@ else
   ' _ "$REPO_ROOT" "$TEST_DIR" "$Q_TASK" >/dev/null 2>&1 || Q_TTG_RC=$?
   assert_exit_code "escape sequence: BLOCKED -> CANCELLED is still refused" "$Q_TTG_RC" 1
   [ "$TESTS_FAILED" -eq "$Q_MARK" ] || Q_FINDINGS=$((Q_FINDINGS + 1))
+
+  # PATCH-007 item 9: the same record spelled with two spaces after the dash. It was a LIVE
+  # quarantine to this guard and INVISIBLE to the transition gate, which is the laundering.
+  Q_SCANNED=$((Q_SCANNED + 1))
+  Q_CHECKED=$((Q_CHECKED + 1))
+  Q_MARK="$TESTS_FAILED"
+  seed_quarantine
+  sed 's/^- \*\*Blocked /-  **Blocked /' "$Q_TASK" > "$TEST_DIR/twospace.md"
+  mv "$TEST_DIR/twospace.md" "$Q_TASK"
+  q_edit '-  **Blocked kind**: reconciliation
+' ''
+  assert_exit_code "two-space anchor: the Write/Edit checker still refuses the deletion" "$GUARD_EC" 2
+  Q_TTG2_RC=0
+  bash -c '
+    source "$1/scripts/lib/task-utils.sh"
+    source "$1/scripts/lib/review-evidence.sh"
+    source "$1/scripts/lib/task-transition-guard.sh"
+    ttg_validate_transition "$2/nazgul" "$2" TASK-001 BLOCKED CANCELLED "$(cat "$3")"
+  ' _ "$REPO_ROOT" "$TEST_DIR" "$Q_TASK" >/dev/null 2>&1 || Q_TTG2_RC=$?
+  assert_exit_code "two-space anchor: the transition gate sees the SAME record, so CANCELLED is refused" \
+    "$Q_TTG2_RC" 1
+  Q_TTG3_RC=0
+  bash -c '
+    source "$1/scripts/lib/task-utils.sh"
+    source "$1/scripts/lib/review-evidence.sh"
+    source "$1/scripts/lib/task-transition-guard.sh"
+    ttg_is_reconciliation_quarantine "$(cat "$2")"
+  ' _ "$REPO_ROOT" "$Q_TASK" >/dev/null 2>&1 || Q_TTG3_RC=$?
+  assert_exit_code "two-space anchor: the shared predicate reports a live quarantine" "$Q_TTG3_RC" 0
+  Q_TTG4_RC=0
+  bash -c '
+    source "$1/scripts/lib/task-utils.sh"
+    source "$1/scripts/lib/review-evidence.sh"
+    source "$1/scripts/lib/task-transition-guard.sh"
+    ttg_is_reconciliation_quarantine "- **Blocked kind**: reconciliation (repaired 2026-01-01T00:00:00Z)"
+  ' _ "$REPO_ROOT" >/dev/null 2>&1 || Q_TTG4_RC=$?
+  assert_exit_code "two-space anchor: an ALREADY-REPAIRED kind still does not re-qualify" "$Q_TTG4_RC" 1
+  [ "$TESTS_FAILED" -eq "$Q_MARK" ] || Q_FINDINGS=$((Q_FINDINGS + 1))
 fi
 
 echo "  quarantine-record-integrity: ${Q_SCANNED} scanned, ${Q_SKIPPED} skipped (jq-unavailable=${Q_SKIPPED}), ${Q_CHECKED} checked, ${Q_FINDINGS} findings"

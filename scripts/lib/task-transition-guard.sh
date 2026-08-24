@@ -15,6 +15,10 @@ source "$_TTG_DIR/emit-event.sh"
 # shellcheck source=/dev/null
 source "$_TTG_DIR/merge-provider.sh"
 
+# The ONE spelling of a SHA scanned out of a manifest section: lowercase-only while the shape
+# check took [0-9a-fA-F] meant an uppercase SHA scanned as no candidate at all (PATCH-007 item 10).
+TTG_SHA_SCAN_RE='[0-9a-fA-F]{7,64}'
+
 # Constitution Article III state machine — single source of truth for both
 # call sites (was previously duplicated as a local function in
 # task-state-guard.sh only).
@@ -55,6 +59,37 @@ ttg_valid_transition() {
     APPROVED_CANCELLED)            return 0 ;;
     CHANGES_REQUESTED_CANCELLED)   return 0 ;;
     BLOCKED_CANCELLED)             return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# lean-comments: allow-run — one anchor, and what a second spelling of it cost.
+# TTG_MANIFEST_FIELD_ANCHOR is THE anchor for a `- **Field**: value` manifest line. It existed in
+# two spellings — `^-[[:space:]]*\*\*` here and in task-state-guard, `^\- \*\*` in the transition
+# gate and the stop-hook — so a manifest written with two spaces after the dash was a LIVE
+# quarantine to the Write/Edit checker and invisible to the gate, and `BLOCKED -> CANCELLED`
+# laundered an integrity block into a terminal status (#232 residual, PATCH-007 item 9). The
+# tolerant form is the one kept, deliberately: a record seen and refused costs an operator one
+# retry, a record NOT seen costs the block itself.
+TTG_MANIFEST_FIELD_ANCHOR='^-[[:space:]]*\*\*'
+
+# ttg_manifest_field <text> <field> -> the field's trimmed value. Returns 1 when the line is
+# absent; rc 0 with empty output means present-but-blanked, which is a different fact.
+ttg_manifest_field() {
+  local line
+  line=$(printf '%s\n' "$1" | grep -m1 -iE "${TTG_MANIFEST_FIELD_ANCHOR}$2\*\*:") || return 1
+  line="${line#*:}"
+  line="${line#"${line%%[![:space:]]*}"}"
+  printf '%s' "${line%"${line##*[![:space:]]}"}"
+}
+
+# ttg_is_reconciliation_quarantine <manifest-text> -> 0 for a LIVE typed quarantine. Exactly
+# `reconciliation`, so an already-repaired `reconciliation (repaired …)` cannot re-qualify.
+ttg_is_reconciliation_quarantine() {
+  local kind
+  kind=$(ttg_manifest_field "$1" "Blocked kind") || return 1
+  case "$(printf '%s' "$kind" | tr '[:upper:]' '[:lower:]')" in
+    reconciliation) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -179,7 +214,7 @@ ttg_verify_commit_evidence() {
   base_sha_line=$(printf '%s' "$manifest_text" \
     | awk '/^## Metadata/{f=1;next} /^## /{f=0} f' \
     | grep -iE '^[[:space:]]*-[[:space:]]*\*\*Base SHA\*\*' | head -1 || true)
-  base_sha=$(printf '%s' "$base_sha_line" | grep -oE '[0-9a-f]{7,64}' | head -1 || true)
+  base_sha=$(printf '%s' "$base_sha_line" | grep -oE "$TTG_SHA_SCAN_RE" | head -1 || true)
   if [ -n "$base_sha" ] && ! git -C "$project_root" cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
     base_sha=""
   fi
@@ -197,7 +232,7 @@ ttg_verify_commit_evidence() {
     [ -n "$base_sha" ] || return 0
     [ "$(git -C "$project_root" rev-parse "$sha")" = "$(git -C "$project_root" rev-parse "$base_sha")" ] && continue
     git -C "$project_root" merge-base --is-ancestor "$base_sha" "$sha" 2>/dev/null && return 0
-  done < <(printf '%s' "$commits_section" | grep -oE '[0-9a-f]{7,64}' || true)
+  done < <(printf '%s' "$commits_section" | grep -oE "$TTG_SHA_SCAN_RE" || true)
   return 1
 }
 
@@ -497,7 +532,7 @@ $(printf '%s' "$manifest_text" | awk '/^## File Scope/{f=1;next} /^## /{f=0} f' 
     base_sha=$(printf '%s' "$manifest_text" \
       | awk '/^## Metadata/{f=1;next} /^## /{f=0} f' \
       | grep -iE '^[[:space:]]*-[[:space:]]*\*\*Base SHA\*\*' | head -1 \
-      | grep -oE '[0-9a-f]{7,64}' | head -1 || true)
+      | grep -oE "$TTG_SHA_SCAN_RE" | head -1 || true)
     if [ -z "$base_sha" ]; then
       degrade="no Base SHA in the manifest"
     elif ! git -C "$project_root" cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
@@ -640,7 +675,7 @@ _ttg_rr_path_in_commits() {
       _TTG_RR_FOUND_IN_SHA="$sha"
       return 0
     fi
-  done < <(printf '%s' "$commits" | grep -oE '[0-9a-f]{7,64}' || true)
+  done < <(printf '%s' "$commits" | grep -oE "$TTG_SHA_SCAN_RE" || true)
   return 1
 }
 
@@ -678,7 +713,7 @@ EOF
     resolved=$((resolved + 1))
     out="${out}$(git -C "$project_root" show --pretty=format: --name-only "$sha" -- ${pathspec[@]+"${pathspec[@]}"} 2>/dev/null || true)
 "
-  done < <(printf '%s' "$commits" | grep -oE '[0-9a-f]{7,64}' || true)
+  done < <(printf '%s' "$commits" | grep -oE "$TTG_SHA_SCAN_RE" || true)
   if [ "$resolved" -eq 0 ]; then
     _TTG_RR_DENOM_DETAIL="no SHA recorded under ## Commits resolves in ${project_root}"
     return 1
@@ -905,7 +940,7 @@ EOF
 
   ref=$(printf '%s\n' "$entry" \
     | grep -iE '^[[:space:]]*-?[[:space:]]*(\*\*)?pre-change-ref(\*\*)?:' | head -1 \
-    | grep -oE '[0-9a-f]{7,64}' | head -1 || true)
+    | grep -oE "$TTG_SHA_SCAN_RE" | head -1 || true)
   if [ -z "$ref" ]; then
     if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "corrupt" \
       "red-run entry for ${test_path} carries no pre-change-ref"; then
@@ -931,7 +966,7 @@ EOF
       found=true
       break
     fi
-  done < <(printf '%s' "$commits" | grep -oE '[0-9a-f]{7,64}' || true)
+  done < <(printf '%s' "$commits" | grep -oE "$TTG_SHA_SCAN_RE" || true)
   if [ "$found" != true ]; then
     if ! _ttg_red_run_deny "$nazgul_dir" "$task_id" "not_ancestor" \
       "red-run pre-change-ref '${ref}' is not an ancestor of any SHA recorded under ## Commits"; then
@@ -1157,7 +1192,7 @@ _ttg_merge_ancestry() {
       TTG_MERGE_ANCESTRY="corroborated"
       return 0
     fi
-  done < <(printf '%s' "$commits" | grep -oE '[0-9a-f]{7,64}' || true)
+  done < <(printf '%s' "$commits" | grep -oE "$TTG_SHA_SCAN_RE" || true)
   return 0
 }
 
@@ -1464,10 +1499,12 @@ _ttg_merge_base_ancestry() {
 }
 
 # Merge-evidence verification (ADR-023 decision 3), third verifier in the established shape.
-# Usage: ttg_verify_merge_evidence <manifest_text> <project_root> [task_id]
+# Usage: ttg_verify_merge_evidence <manifest_text> <project_root> [task_id] [nazgul_dir]
 ttg_verify_merge_evidence() {
   local manifest_text="$1" project_root="$2" task_id="${3:-}"
-  local nazgul_dir="${NAZGUL_DIR:-$project_root/nazgul}"
+  # PARAMETER, never ambient: NAZGUL_DIR let an attacker-authored tree satisfy the bindings
+  # while the host was asked about the real merged PR.
+  local nazgul_dir="${4:-$project_root/nazgul}"
   local raw_section section key value missing="" bad="" commits phrase base_note=""
   local host pr merge_commit merged_at head_ref feat_id bind_why roster_why host_rc=0
 
@@ -1712,8 +1749,8 @@ ttg_validate_transition() {
   # materialization and the ADR-020 typed reconciliation quarantine.
   if [ "$from" = "BLOCKED" ] && [ "$to" = "IN_REVIEW" ]; then
     # Anchored, so an already-repaired `reconciliation (repaired …)` cannot re-qualify.
-    if ! printf '%s\n' "$manifest_text" | grep -qi '^\- \*\*Blocked reason\*\*:.*review evidence' \
-      && ! printf '%s\n' "$manifest_text" | grep -qiE '^\- \*\*Blocked kind\*\*:[[:space:]]*reconciliation[[:space:]]*$'; then
+    if ! printf '%s\n' "$manifest_text" | grep -qiE "${TTG_MANIFEST_FIELD_ANCHOR}Blocked reason\*\*:.*review evidence" \
+      && ! ttg_is_reconciliation_quarantine "$manifest_text"; then
       echo "ttg_validate_transition: BLOCKED -> IN_REVIEW is reserved for review-evidence repair and typed reconciliation repair" >&2
       return 1
     fi
@@ -1722,7 +1759,7 @@ ttg_validate_transition() {
   # ADR-022: CANCELLED must not become a second exit from the ADR-020 quarantine.
   # Anchored like the check above, so an already-repaired kind cannot be caught by it.
   if [ "$from" = "BLOCKED" ] && [ "$to" = "CANCELLED" ]; then
-    if printf '%s\n' "$manifest_text" | grep -qiE '^\- \*\*Blocked kind\*\*:[[:space:]]*reconciliation[[:space:]]*$'; then
+    if ttg_is_reconciliation_quarantine "$manifest_text"; then
       echo "ttg_validate_transition: BLOCKED -> CANCELLED is refused for a typed reconciliation quarantine — its only sanctioned exit is scripts/task-transition.sh repair" >&2
       return 1
     fi
@@ -1731,7 +1768,7 @@ ttg_validate_transition() {
   # ADR-023 decision 3: the merge-closure route. The edge is in the graph, but the
   # evidence is what admits it — an unconditional edge here would be a second forgery route.
   if [ "$from" = "IMPLEMENTED" ] && [ "$to" = "DONE" ]; then
-    if ! ttg_verify_merge_evidence "$manifest_text" "$project_root" "$task_id"; then
+    if ! ttg_verify_merge_evidence "$manifest_text" "$project_root" "$task_id" "$nazgul_dir"; then
       echo "ttg_validate_transition: IMPLEMENTED -> DONE requires verified merge evidence under ## Merge Evidence (${_TTG_MERGE_REQUIRED_FIELDS// /, }); none validated [reason: ${TTG_MERGE_REASON}]" >&2
       return 1
     fi
@@ -1789,7 +1826,7 @@ ttg_validate_transition() {
     # ADR-023: merge evidence is an ALTERNATIVE to the review route for DONE, never a
     # bypass of it — one of the two must validate, and the accepted one is always named.
     if [ "$to" = "DONE" ]; then
-      if ttg_verify_merge_evidence "$manifest_text" "$project_root" "$task_id"; then
+      if ttg_verify_merge_evidence "$manifest_text" "$project_root" "$task_id" "$nazgul_dir"; then
         echo "ttg_validate_transition: DONE via the merge-evidence route (${TTG_MERGE_ROUTE}); the review-evidence route did not validate" >&2
         return 0
       fi

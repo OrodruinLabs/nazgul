@@ -27,12 +27,17 @@
 # stalled transfer — a git call without `timeout` is partly bounded, not unbounded,
 # and collapsing the two would misreport which one the operator is running.
 #
-# Idempotent source guard; NOT `set -euo pipefail` — sourced into caller shells that own
-# their own shell options. The exports are the one deliberate source-time side effect:
-# a prompt suppressed per call site is a prompt the next call site forgets.
-
-[ -n "${_NAZGUL_BOUNDED_NET_SOURCED:-}" ] && return 0
-_NAZGUL_BOUNDED_NET_SOURCED=1
+# NOT `set -euo pipefail` — sourced into caller shells that own their own shell options. The
+# exports are the one deliberate source-time side effect: a prompt suppressed per call site is a
+# prompt the next call site forgets.
+#
+# NO SENTINEL, for the reason nazgul-root.sh:40-49 measured and read-hook-payload.sh:113-124
+# refused to re-introduce: a scalar `_NAZGUL_BOUNDED_NET_SOURCED` sat above every definition
+# here, so one exported variable made this source a no-op defining nothing, and every
+# nz_bounded_run call site in stack-utils/connector-github/board-sync/doctor then exited 127
+# mid-operation under `set -e`. Any name is settable, so the guard is REMOVED rather than
+# renamed. Re-sourcing costs the assignments below and RESETS _BNET_WARNED, which duplicates a
+# degradation line rather than suppressing one — the safe direction of that trade.
 
 _BNET_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _BNET_WARNED=""

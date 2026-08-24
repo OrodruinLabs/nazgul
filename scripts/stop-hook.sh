@@ -327,11 +327,12 @@ if [ "$RECON_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
             "$RECON_PREV_STATUS" "$RECON_LIVE_STATUS" "$RECON_PREV_TS"; then
           # Re-entry: this arm writes BLOCKED an iteration before its checkpoint, so a
           # crash between them replays it and would rewrite `Blocked observed` to BLOCKED.
+          RECON_MANIFEST_TEXT=$(cat "$recon_task_file" 2>/dev/null || echo "")
           if [ "$RECON_LIVE_STATUS" = "BLOCKED" ] \
-            && grep -qiE '^\- \*\*Blocked kind\*\*:[[:space:]]*reconciliation[[:space:]]*$' "$recon_task_file"; then
+            && ttg_is_reconciliation_quarantine "$RECON_MANIFEST_TEXT"; then
             # The first observation is the true one, so the record is read, never rewritten.
-            RECON_RECORDED_FROM=$(grep -m1 '^\- \*\*Blocked from\*\*:' "$recon_task_file" 2>/dev/null | sed 's/.*: //' || echo "")
-            RECON_RECORDED_OBSERVED=$(grep -m1 '^\- \*\*Blocked observed\*\*:' "$recon_task_file" 2>/dev/null | sed 's/.*: //' || echo "")
+            RECON_RECORDED_FROM=$(ttg_manifest_field "$RECON_MANIFEST_TEXT" "Blocked from" || echo "")
+            RECON_RECORDED_OBSERVED=$(ttg_manifest_field "$RECON_MANIFEST_TEXT" "Blocked observed" || echo "")
             echo "NAZGUL BASH-WRITE RECONCILIATION: ${RECON_TASK_ID} is already quarantined (kind=reconciliation, from=${RECON_RECORDED_FROM:-unrecorded}, observed=${RECON_RECORDED_OBSERVED:-unrecorded}) — re-observed, record left intact; revalidate evidence with: \${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh repair ${RECON_TASK_ID}" >&2
             emit_event "reconciliation_quarantine" \
               task_id "$RECON_TASK_ID" kind "reconciliation" \
@@ -455,7 +456,7 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
         # The verifier's OWN stripper classifies, so this cannot drift from it: it skips exactly
         # `absent` and `commented_out`, the two answers it would have refused with anyway.
         if [ "$(_ttg_section_emptiness "$MERGE_RAW" "$(printf '%s\n' "$MERGE_RAW" | _ttg_strip_html_comments)")" = "content" ]; then
-          if ttg_verify_merge_evidence "$(cat "$task_file")" "$PROJECT_ROOT" "$TASK_ID"; then
+          if ttg_verify_merge_evidence "$(cat "$task_file")" "$PROJECT_ROOT" "$TASK_ID" "$NAZGUL_DIR"; then
             MERGE_ADMITTED=true
           elif [ "$TTG_MERGE_REASON" = "unverifiable" ]; then
             # Captured inside the branch that made the call: both globals outlive one
@@ -592,13 +593,13 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
   fi
 fi
 
-# Track progress for consecutive failure detection
-# In YOLO mode, APPROVED counts as progress alongside DONE
+# Progress for consecutive-failure detection. CANCELLED counts because the completion condition
+# is DONE + CANCELLED == TOTAL — /nazgul:task skip drew a strike per iteration for converging.
 PREV_DONE=$(jq -r '.safety._prev_done_count // 0' "$CONFIG")
 if [ "$YOLO_MODE" = "true" ]; then
-  PROGRESS_COUNT=$((DONE_COUNT + APPROVED_COUNT))
+  PROGRESS_COUNT=$((DONE_COUNT + APPROVED_COUNT + CANCELLED_COUNT))
 else
-  PROGRESS_COUNT=$DONE_COUNT
+  PROGRESS_COUNT=$((DONE_COUNT + CANCELLED_COUNT))
 fi
 if [ "$PROGRESS_COUNT" -gt "$PREV_DONE" ]; then
   # Progress made — reset consecutive failures

@@ -386,6 +386,26 @@ val=$(jq -r '.safety.consecutive_failures' "$TEST_DIR/nazgul/config.json")
 assert_eq "failures incremented to 3" "$val" "3"
 teardown_temp_dir
 
+# lean-comments: allow-run — the two counters disagreed about what finishing a task means.
+# PATCH-007 item 14 — progress was DONE (+APPROVED in YOLO) while the completion condition is
+# DONE + CANCELLED == TOTAL. An operator clearing backlog with /nazgul:task skip therefore shrank
+# the outstanding set every iteration AND accrued a failure strike for it, stopping the run at
+# max 5 with "no progress" on a loop measurably converging on its own completion condition.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.safety.consecutive_failures = 2' '.safety._prev_done_count = 0'
+create_plan
+create_task_file "TASK-001" "CANCELLED"
+create_task_file "TASK-002" "READY"
+run_hook
+val=$(jq -r '.safety.consecutive_failures' "$TEST_DIR/nazgul/config.json")
+assert_eq "a newly CANCELLED task is progress, not a consecutive-failure strike" "$val" "0"
+val=$(jq -r '.safety._prev_done_count' "$TEST_DIR/nazgul/config.json")
+assert_eq "and the recorded count includes it, so the next iteration compares like with like" \
+  "$val" "1"
+teardown_temp_dir
+
 # --- Test 13: Checkpoint created ---
 setup_temp_dir
 setup_git_repo

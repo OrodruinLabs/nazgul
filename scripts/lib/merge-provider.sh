@@ -55,8 +55,8 @@
 # against. The caller may still exit on the non-zero RETURN below (that is the
 # documented contract, like `grep`'s), but it exits having been told why.
 
-[ -n "${_NAZGUL_MERGE_PROVIDER_SOURCED:-}" ] && return 0
-_NAZGUL_MERGE_PROVIDER_SOURCED=1
+# NO SENTINEL: a scalar `_NAZGUL_MERGE_PROVIDER_SOURCED` above these definitions made one exported
+# variable enough to leave merge_provider_pr_state undefined at the DONE gate (nazgul-root.sh:40-49).
 
 _MERGE_PROVIDER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./bounded-net.sh

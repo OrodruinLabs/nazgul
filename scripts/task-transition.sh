@@ -84,11 +84,9 @@ if [ "$SUBCOMMAND" = "transition" ]; then
   exit 0
 fi
 
-# Read one `- **<Label>**: <value>` manifest field, trimmed; empty when absent.
+# The shared anchor, so this reader cannot disagree with the gate that refuses the same record.
 repair_field() {
-  printf '%s\n' "$MANIFEST_TEXT" \
-    | grep -m1 -iE "^- \*\*$1\*\*:" \
-    | sed 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*$//' || true
+  ttg_manifest_field "$MANIFEST_TEXT" "$1" || true
 }
 
 repair_deny() {
@@ -223,7 +221,7 @@ REPAIRED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # carries the manifest mode over, so no pre-created `.repair.tmp` can be aimed.
 export NAZGUL_REPAIR_LINE="- **Blocked kind**: reconciliation (repaired ${REPAIRED_AT})"
 if ! nz_rewrite_file "$MANIFEST_FILE" awk \
-  '$0 ~ /^- [*][*]Blocked kind[*][*]:/ { print ENVIRON["NAZGUL_REPAIR_LINE"]; next } { print }' \
+  '$0 ~ /^-[[:space:]]*[*][*]Blocked kind[*][*]:/ { print ENVIRON["NAZGUL_REPAIR_LINE"]; next } { print }' \
   "$MANIFEST_FILE"; then
   unset NAZGUL_REPAIR_LINE
   echo "task-transition: repair ${TASK_ID} completed its walk but could not mark the quarantine repaired; rerun repair after fixing the manifest" >&2

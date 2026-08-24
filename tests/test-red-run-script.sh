@@ -821,6 +821,27 @@ CFG
   rrs_end
 fi
 
+if rrs_begin "an all-whitespace filter template refuses instead of aborting" jq; then
+  write_project_config <<'CFG'
+{
+  "schema_version": 37,
+  "project": {
+    "test_command": "./run-my-tests.sh",
+    "test_filter_template": " "
+  }
+}
+CFG
+  write_custom_manifest TASK-106
+  run_capture TASK-106 --filter=delta
+  assert_exit_code "whitespace template: exits 1" "$RR_EC" 1
+  # `"${arr[@]}"` on an EMPTY array aborts under set -u on bash 3.2 — the floor this repo codes
+  # against — so the refusal the next line was written for never printed.
+  assert_contains "whitespace template: prints the refusal, not a bash unbound-variable abort" \
+    "$RR_OUT" "test_filter_template"
+  assert_not_contains "whitespace template: never an unbound-variable abort" "$RR_OUT" "unbound variable"
+  rrs_end
+fi
+
 if rrs_begin "an unusable config value is refused as unusable, not as a failed run" jq; then
   write_project_config <<'CFG'
 {

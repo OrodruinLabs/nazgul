@@ -1141,4 +1141,12 @@ else
     "the $EXERCISED_COUNT-command differential replay was SKIPPED; all other assertions in this file still ran"
 fi
 
+# PATCH-007 item 12 — `_dp_ci_match` cleared `nocasematch` unconditionally instead of restoring
+# the caller's, contradicting its own header, in a lib sourced into three entry points.
+DP_LIB="$REPO_ROOT/scripts/lib/destructive-patterns.sh"
+DP_KEPT=$(bash -c ". '$DP_LIB'; shopt -s nocasematch; _dp_ci_match 'rm -rf /' 'rm\s+-rf\s+/' >/dev/null 2>&1; shopt -q nocasematch && echo on || echo off")
+assert_eq "destructive-patterns: a caller that had nocasematch ON keeps it" "$DP_KEPT" "on"
+DP_OFF=$(bash -c ". '$DP_LIB'; shopt -u nocasematch; _dp_ci_match 'rm -rf /' 'rm\s+-rf\s+/' >/dev/null 2>&1; shopt -q nocasematch && echo on || echo off")
+assert_eq "destructive-patterns: a caller that had it OFF still gets it back off" "$DP_OFF" "off"
+
 report_results

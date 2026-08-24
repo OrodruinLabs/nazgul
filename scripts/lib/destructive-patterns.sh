@@ -50,10 +50,13 @@ DP_PATTERN=""
 _dp_ci_match() {
   local str="$1" pattern="$2"
   local mpattern="${pattern//\\s/[[:space:]]}"
-  local rc
+  local rc had
+  # Restored, not cleared: this lib is sourced into pre-tool-guard, task-state-guard and
+  # red-run, and "scoped to the one match, never left ambient" is this file's own header.
+  shopt -q nocasematch && had=1 || had=0
   shopt -s nocasematch
   if [[ "$str" =~ $mpattern ]]; then rc=0; else rc=1; fi
-  shopt -u nocasematch
+  [ "$had" -eq 1 ] || shopt -u nocasematch
   return $rc
 }
 

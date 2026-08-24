@@ -417,7 +417,7 @@ esac
 
 FILTER_ARGV=()
 read -r -a RR_TPL_TOKENS <<<"$FILTER_TEMPLATE"
-for tok in "${RR_TPL_TOKENS[@]}"; do
+for tok in ${RR_TPL_TOKENS[@]+"${RR_TPL_TOKENS[@]}"}; do
   FILTER_ARGV+=("${tok//\{filter\}/$FILTER}")
 done
 [ "${#FILTER_ARGV[@]}" -gt 0 ] || die \

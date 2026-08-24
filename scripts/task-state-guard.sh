@@ -493,11 +493,9 @@ fi
 # --- ADR-020 QUARANTINE RECORD INTEGRITY (board-5 S-5) ---
 # rc 1 = record absent; rc 0 with an empty value = present but blanked.
 _tsg_q_value() {
-  local line
-  line=$(grep -m1 -iE "^-[[:space:]]*\*\*$2\*\*:" "$1" 2>/dev/null) || return 1
-  line="${line#*:}"
-  line="${line#"${line%%[![:space:]]*}"}"
-  printf '%s' "${line%"${line##*[![:space:]]}"}"
+  # The SHARED anchor: a second spelling here let a two-space manifest be a live quarantine to
+  # this checker and invisible to the transition gate, which laundered the block into CANCELLED.
+  ttg_manifest_field "$(cat "$1" 2>/dev/null || echo "")" "$2"
 }
 
 _tsg_q_refuse() {

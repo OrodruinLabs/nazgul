@@ -1116,6 +1116,38 @@ assert_exit_code "ancestry: a reachable merge commit verifies" "$CORROB_EC" 0
 assert_eq "ancestry: a recorded commit reaching the merge commit is corroborated" "$TTG_MERGE_ANCESTRY" "corroborated"
 assert_contains "ancestry: corroboration is named in the diagnostic" "$CORROB_STDERR" "corroborates"
 
+
+# lean-comments: allow-run — the two spellings and what disagreeing about them cost.
+# PATCH-007 item 10 — the SHA scan was [0-9a-f] while the merge-commit SHAPE check accepted
+# [0-9a-fA-F]. `git cat-file -e` resolves an uppercase SHA fine, so an uppercase `## Commits`
+# entry simply yielded no candidates: corroboration stayed `squash_signature` and the closure
+# report told the operator the repo squash-merged when it had not.
+ANC_PARENT_UPPER=$(printf '%s' "$ANC_PARENT" | tr 'a-f' 'A-F')
+MP_COMMIT="$ANC_HEAD"
+me_verify "$(merge_manifest "$ANC_BODY" "- ${ANC_PARENT_UPPER}")" "$TEST_DIR" TASK-050 && UPPER_EC=0 || UPPER_EC=$?
+assert_exit_code "ancestry: an UPPERCASE recorded commit still verifies" "$UPPER_EC" 0
+assert_eq "ancestry: an UPPERCASE recorded commit corroborates, it is not read as a squash" \
+  "$TTG_MERGE_ANCESTRY" "corroborated"
+
+# lean-comments: allow-run — the ambient read is a whole-tree substitution, not a path detail.
+# PATCH-007 item 8 — nazgul_dir came from ambient NAZGUL_DIR, so an attacker-authored tree
+# satisfied feat_id, ttg_pr_bound and ttg_task_in_objective while the host was asked about the
+# real merged PR. It is a PARAMETER now, defaulting to <project_root>/nazgul and never to the
+# environment; ttg_validate_transition passes the nazgul_dir it was itself handed.
+FAKE_NZ="$TEST_DIR/fake-nazgul"
+mkdir -p "$FAKE_NZ/tasks"
+printf '%s\n' '{"feat_id":"FEAT-999","branch":{"feature":"attacker/branch","base":"main"}}' \
+  > "$FAKE_NZ/config.json"
+printf -- '---\nfeat_id: FEAT-999\n---\n\n## Tasks\n- TASK-050\n' > "$FAKE_NZ/plan.md"
+MP_COMMIT="$ANC_HEAD"
+NAZGUL_DIR="$FAKE_NZ" me_verify "$(merge_manifest "$ANC_BODY" "- ${ANC_PARENT}")" "$TEST_DIR" TASK-050 \
+  && AMB_EC=0 || AMB_EC=$?
+assert_exit_code "ambient NAZGUL_DIR no longer chooses the tree the bindings are read from" "$AMB_EC" 0
+AMB2_EC=0
+ttg_verify_merge_evidence "$(merge_manifest "$ANC_BODY" "- ${ANC_PARENT}")" "$TEST_DIR" TASK-050 "$FAKE_NZ" \
+  >/dev/null 2>&1 || AMB2_EC=$?
+assert_exit_code "an explicitly-named foreign nazgul_dir is refused on its own merits" "$AMB2_EC" 1
+
 INV_BODY="- **host**: github.com
 - **pr**: 91
 - **merged-at**: 2026-08-15T12:00:00Z
