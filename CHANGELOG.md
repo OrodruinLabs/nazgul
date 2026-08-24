@@ -20,8 +20,8 @@ stated bound and the average one is 21x. In bytes rather than characters the sam
 total and 10,120 at the largest; the scope record's 71,768 / 10,121 is that same byte measurement with
 `jq -r`'s trailing newline counted once per marker, so the two figure sets agree and differ only by
 unit and by that `+1`. **The 200-character claim was wrong in the issue AND in the source comment**,
-and the comment was therefore itself a defect — deleting it is part of the fix, not a tidy-up. Issue
-#251 was deliberately left unmodified, so this entry is where the correction is recorded.
+and the comment was therefore itself a defect — deleting it is part of the fix, not a tidy-up.
+Issue #251 was deliberately left unmodified, so this entry is where the correction is recorded.
 
 The fix does not shorten the field, it removes it: a marker now carries `prompt_hash` (the leading 16
 lowercase hex of sha256 over the whole prompt) and `prompt_bytes`, and **zero prompt characters reach
