@@ -30,7 +30,12 @@ SWEEP_ROOT="${NAZGUL_IGNORE_SWEEP_ROOT:-$REPO_ROOT}"
 SOURCE_DIRS="scripts skills agents templates"
 INIT_SKILL="skills/init/SKILL.md"
 CLEAN_SKILL="skills/clean/SKILL.md"
+# Sentinels are matched by PREFIX, never as an exact line: the shipped start line carries a
+# ` (vN)` stamp and a pre-stamp install carries none, so exact matching reads a v1 block as absent.
 BLOCK_MARKER="# Nazgul Framework — ephemeral runtime"
+BLOCK_END="# Nazgul Framework — end ephemeral runtime"
+LOCAL_MARKER="# Nazgul Framework (local mode)"
+LOCAL_END="# Nazgul Framework — end local mode"
 
 # Family 1 is the literal `nazgul/<seg>`; family 2 is the variable-rooted shape
 # ($NAZGUL_DIR/<seg>), which is dominant and carries no literal for family 1.
@@ -110,6 +115,8 @@ _resolve_segment() {
 _compute_block_regions() {
   local f="$SWEEP_ROOT/$INIT_SKILL"
   [ -r "$f" ] || return 0
+  # Leading whitespace is stripped before matching here and in both extractors below on purpose:
+  # every block installed before the de-indent is indented on disk, and removal must still read it.
   BLOCK_REGIONS=$(awk '
     { line = $0; sub(/^[[:space:]]+/, "", line) }
     !o && line == "```gitignore" { o = 1; s = NR; next }
@@ -127,14 +134,28 @@ _in_block_region() {
   return 1
 }
 
+# Region = start sentinel through end sentinel. The closing fence stays as the v1 legacy
+# terminator, and _block_terminator below names which one was hit rather than degrading silently.
 _extract_block() {
   local f="$SWEEP_ROOT/$INIT_SKILL"
   [ -r "$f" ] || return 0
-  awk -v marker="$BLOCK_MARKER" '
+  awk -v marker="$BLOCK_MARKER" -v endm="$BLOCK_END" '
     { line = $0; sub(/^[[:space:]]+/, "", line) }
-    !inb && line == marker { inb = 1; next }
-    inb && line == "```" { exit }
+    !inb && index(line, marker) == 1 { inb = 1; next }
+    inb && (line == endm || line == "```") { exit }
     inb { print line }
+  ' "$f"
+}
+
+_block_terminator() {
+  local f="$SWEEP_ROOT/$INIT_SKILL"
+  [ -r "$f" ] || { printf 'unreadable'; return 0; }
+  awk -v marker="$BLOCK_MARKER" -v endm="$BLOCK_END" '
+    { line = $0; sub(/^[[:space:]]+/, "", line) }
+    !inb && index(line, marker) == 1 { inb = 1; next }
+    inb && line == endm { print "end-sentinel"; hit = 1; exit }
+    inb && line == "```" { print "closing-fence"; hit = 1; exit }
+    END { if (!hit) print (inb ? "eof" : "no-marker") }
   ' "$f"
 }
 
@@ -346,7 +367,7 @@ _dog_block_add() {
   local f="$DOG/$INIT_SKILL"
   awk -v e="$1" -v m="$BLOCK_MARKER" '
     { print; t = $0; sub(/^[[:space:]]+/, "", t) }
-    t == m { print "   " e }
+    index(t, m) == 1 { print "   " e }
   ' "$f" > "$f.new" && mv "$f.new" "$f"
 }
 
@@ -546,6 +567,124 @@ fi
 fi
 findings=$((findings + TESTS_FAILED - M_FAILED_BEFORE))
 
+# P0 pins the SOURCE's flush-left property and its region contract, which P2's git arms can only
+# observe indirectly. Skipped on an inner run: _dog_block_add indents its insert on purpose.
+if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
+  _skip "P0 source-structure pins (inner run under an injected sweep root: the dogfood fixtures indent an inserted entry deliberately, so an indented line there is a fixture, not drift)"
+else
+S_FAILED_BEFORE=$TESTS_FAILED
+
+# Entries and comments are tallied apart: an indented comment is inert but harmless, while an
+# indented ENTRY is #251 itself — one combined number could not say which of the two was found.
+_fence_indent_counts() {
+  awk -v regions="$2" '
+    BEGIN { cnt = split(regions, r, /[[:space:]]+/)
+      for (i = 1; i <= cnt; i++) { if (r[i] == "") continue; split(r[i], b, "-"); lo[i] = b[1]; hi[i] = b[2] } }
+    {
+      inr = 0
+      for (i = 1; i <= cnt; i++) if (r[i] != "" && NR >= lo[i] && NR <= hi[i]) inr = 1
+      if (!inr) next
+      t = $0; sub(/^[[:space:]]+/, "", t)
+      if (t == "") { blank++; next }
+      ind = ($0 ~ /^[[:space:]]/)
+      if (t ~ /^#/) { if (ind) ci++; else cu++ } else { if (ind) ei++; else eu++ }
+    }
+    END { printf "%d %d %d %d %d\n", ei + 0, eu + 0, ci + 0, cu + 0, blank + 0 }
+  ' "$1"
+}
+
+# One occurrence must precede EACH fence: a bare file-wide count of two is equally consistent
+# with both sentences sitting in the shared branch and neither in the local one.
+_flush_per_fence() {
+  awk -v phrase="$1" -v regions="$2" '
+    BEGIN { cnt = split(regions, r, /[[:space:]]+/)
+      for (i = 1; i <= cnt; i++) { if (r[i] == "") continue; split(r[i], b, "-"); open[i] = b[1] - 1 } }
+    index($0, phrase) { hits[++h] = NR }
+    END {
+      for (k = 1; k <= h; k++) {
+        best = 0
+        for (i = 1; i <= cnt; i++) if (r[i] != "" && open[i] > hits[k] && (best == 0 || open[i] < open[best])) best = i
+        if (best) n[best]++
+      }
+      for (i = 1; i <= cnt; i++) if (r[i] != "") out = out (out == "" ? "" : " ") (n[i] + 0)
+      print out
+    }
+  ' "$3"
+}
+
+S_REGIONS=$(printf '%s' "$BLOCK_REGIONS" | tr '\n' ' ')
+S_REGION_N=$(printf '%s\n' "$BLOCK_REGIONS" | grep -c . || true)
+assert_eq "P0 regions: both \`\`\`gitignore fences of $INIT_SKILL are located" "$S_REGION_N" "2"
+read -r S_ENT_IND S_ENT_UN S_COM_IND S_COM_UN S_BLANK <<< "$(_fence_indent_counts "$SWEEP_ROOT/$INIT_SKILL" "$S_REGIONS")"
+assert_eq "P0 flush-left: no entry line inside either fence carries leading whitespace (#254 C2)" "$S_ENT_IND" "0"
+assert_eq "P0 flush-left: nor does any of the $S_COM_UN interleaved justification comment(s)" "$S_COM_IND" "0"
+if [ "$S_ENT_UN" -gt 0 ] && [ "$S_COM_UN" -gt 0 ]; then
+  _pass "P0 flush-left floor: the two fences hold $S_ENT_UN entry and $S_COM_UN comment line(s) ($S_BLANK blank), so the two zeros above are measured zeros"
+else
+  _fail "P0 flush-left floor: the two fences hold at least one entry line and one comment line" \
+    "entries=$S_ENT_UN comments=$S_COM_UN — an empty region satisfies an indented==0 assertion vacuously"
+fi
+
+# The counter's own control: re-indent the very same lines and it must SEE what it reports zero
+# of above, or "indented == 0" is equally consistent with a counter that cannot count.
+S_IND_FILE="$SCRATCH/init-indented.md"
+awk -v regions="$S_REGIONS" '
+  BEGIN { cnt = split(regions, r, /[[:space:]]+/)
+    for (i = 1; i <= cnt; i++) { if (r[i] == "") continue; split(r[i], b, "-"); lo[i] = b[1]; hi[i] = b[2] } }
+  { inr = 0
+    for (i = 1; i <= cnt; i++) if (r[i] != "" && NR >= lo[i] && NR <= hi[i]) inr = 1
+    print (inr ? "   " $0 : $0) }
+' "$SWEEP_ROOT/$INIT_SKILL" > "$S_IND_FILE"
+read -r S_C_ENT_IND S_C_ENT_UN S_C_COM_IND S_C_COM_UN _ <<< "$(_fence_indent_counts "$S_IND_FILE" "$S_REGIONS")"
+assert_eq "P0 flush-left CONTROL: re-indenting the same lines moves every entry into the indented tally" \
+  "$S_C_ENT_IND/$S_C_ENT_UN" "$S_ENT_UN/0"
+assert_eq "P0 flush-left CONTROL: and every comment with them, so neither tally is hard-wired to zero" \
+  "$S_C_COM_IND/$S_C_COM_UN" "$S_COM_UN/0"
+
+assert_eq "P0 region: _extract_block terminates at the end sentinel, not at the closing fence" \
+  "$(_block_terminator)" "end-sentinel"
+S_END_LN=$(awk -v e="$BLOCK_END" '{ t = $0; sub(/^[[:space:]]+/, "", t) } t == e { print NR; exit }' "$SWEEP_ROOT/$INIT_SKILL")
+if [ -z "$S_END_LN" ]; then
+  _fail "P0 region: the shared-mode block carries its end sentinel" \
+    "no line of $INIT_SKILL reads '$BLOCK_END' — without it the region degrades to the v1 legacy fallback"
+  S_END_LN=0
+else
+  _pass "P0 region: the shared-mode end sentinel is present at $INIT_SKILL:$S_END_LN"
+fi
+S_END_IN="no"; _in_block_region "$S_END_LN" && S_END_IN="yes"
+assert_eq "P0 region: and it sits inside a fence, not in the prose that describes the region" "$S_END_IN" "yes"
+S_AFTER_END=$(awk -v n="$S_END_LN" 'NR == n + 1 { t = $0; sub(/^[[:space:]]+/, "", t); print t }' "$SWEEP_ROOT/$INIT_SKILL")
+assert_eq "P0 region: the closing fence immediately follows it, so the sentinel is the block's last line" \
+  "$S_AFTER_END" '```'
+
+S_LOC_START=$(awk -v e="$LOCAL_MARKER" '{ t = $0; sub(/^[[:space:]]+/, "", t) } t == e { n++ } END { print n + 0 }' "$SWEEP_ROOT/$INIT_SKILL")
+S_LOC_END=$(awk -v e="$LOCAL_END" '{ t = $0; sub(/^[[:space:]]+/, "", t) } t == e { n++ } END { print n + 0 }' "$SWEEP_ROOT/$INIT_SKILL")
+assert_eq "P0 local region: the local-mode block carries its own sentinel pair, once each" \
+  "$S_LOC_START/$S_LOC_END" "1/1"
+
+S_FLUSH='Write every line flush-left, exactly as shown'
+assert_eq "P0 prose: both Step 2.5 branches state the flush-left requirement, exactly once each" \
+  "$(_flush_per_fence "$S_FLUSH" "$S_REGIONS" "$SWEEP_ROOT/$INIT_SKILL")" "1 1"
+# Absent-sentinel control, struck out rather than deleted so the pinned line numbers still hold.
+S_PROSE_MUT="$SCRATCH/init-no-flush.md"
+sed "s/$S_FLUSH//" "$SWEEP_ROOT/$INIT_SKILL" > "$S_PROSE_MUT"
+assert_eq "P0 prose CONTROL: with that sentence struck out the same search reports it missing from both branches" \
+  "$(_flush_per_fence "$S_FLUSH" "$S_REGIONS" "$S_PROSE_MUT")" "0 0"
+
+# B3: the removal rule that stopped at the first comment orphaned everything after it.
+S_B3='up to the next blank line / comment'
+assert_eq "P0 B3: $INIT_SKILL no longer terminates block removal '$S_B3'" \
+  "$(grep -cF -- "$S_B3" "$SWEEP_ROOT/$INIT_SKILL" || true)" "0"
+assert_eq "P0 B3: and the region rule that replaced it names the blank-line/EOF terminator, exactly once" \
+  "$(grep -cF -- 'terminating at the first BLANK line or EOF' "$SWEEP_ROOT/$INIT_SKILL" || true)" "1"
+S_B3_CTRL="$SCRATCH/init-b3.md"
+{ cat "$SWEEP_ROOT/$INIT_SKILL"; printf 'Removing a block means deleting its marker line and the lines under it %s.\n' "$S_B3"; } > "$S_B3_CTRL"
+assert_eq "P0 B3 CONTROL: the same search finds the phrasing when it is present, so the zero above is a measured zero" \
+  "$(grep -cF -- "$S_B3" "$S_B3_CTRL" || true)" "1"
+
+findings=$((findings + TESTS_FAILED - S_FAILED_BEFORE))
+fi
+
 # P1/P2/P3 prove the block changes GIT'S BEHAVIOUR, not the skill's text alone, and
 # run in a scratch `git init` tree: this checkout is local-mode, so there is no in-tree repro.
 if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
@@ -563,19 +702,20 @@ fi
 trap '_rm_scratch "$SCRATCH" "$ROUTES"' EXIT
 mkdir -p "$ROUTES/home"
 
-LOCAL_MARKER="# Nazgul Framework (local mode)"
-# The local-mode fence's sha256 at 0738a1a, this objective's Base SHA. Pinned rather
-# than read back from git, which a shallow CI clone cannot resolve.
-LOCAL_FENCE_SHA_BASE="a6dae5f0e33e2fd6c237ce75d77dddb302267e52e7d15ffe0dccf03e0bbc80a6"
+# The local-mode fence's sha256 at ff64f76, the commit that de-indented it and gave it an end
+# sentinel. A content baseline, pinned rather than read back from a shallow CI clone's git.
+LOCAL_FENCE_SHA_BASE="25f78f95c85600ea86bdfdc3e73ee844d338e3cb6820999e4cab04bda38bb1dd"
 
 # Raw fence lines for the ```gitignore fence CONTAINING a marker. P1 must see WHICH
 # line comes first, so this cannot start AT the marker the way _extract_block does.
 _fenced_lines() {
+  # Prefix, for the same reason detection is: an exact-line match against a ` (vN)`-stamped start
+  # line returns the fence when asked for the stamp and zero lines when asked for the prefix.
   awk -v marker="$1" '
     { t = $0; sub(/^[[:space:]]+/, "", t) }
     !inf && t == "```gitignore" { inf = 1; n = 0; hit = 0; split("", buf); next }
     inf && t == "```" { if (hit) { for (i = 1; i <= n; i++) print buf[i]; exit } inf = 0; next }
-    inf { buf[++n] = $0; if (t == marker) hit = 1 }
+    inf { buf[++n] = $0; if (index(t, marker) == 1) hit = 1 }
   ' "$SWEEP_ROOT/$INIT_SKILL"
 }
 
@@ -609,13 +749,27 @@ fi
 if [ "$routes_usable" -eq 1 ]; then
   R_FENCE_N=$(wc -l < "$ROUTES/shared.raw" | tr -d ' ')
   R_BLOCK_N=$(printf '%s\n' "$BLOCK" | wc -l | tr -d ' ')
-  assert_eq "P1 extractors agree: the fence is the marker plus _extract_block's $R_BLOCK_N line(s)" \
-    "$R_FENCE_N" "$((R_BLOCK_N + 1))"
+  assert_eq "P1 extractors agree: the fence is the marker, _extract_block's $R_BLOCK_N line(s) and the end sentinel" \
+    "$R_FENCE_N" "$((R_BLOCK_N + 2))"
 
-  R_L1=$(sed -n '1p' "$ROUTES/shared.raw" | sed 's/^[[:space:]]*//')
+  R_L1=$(head -n 1 "$ROUTES/shared.raw" | sed 's/^[[:space:]]*//')
   R_L2=$(sed -n '2p' "$ROUTES/shared.raw" | sed 's/^[[:space:]]*//')
-  assert_eq "P1 marker: the block's exact first line is still the detection marker ($INIT_SKILL:78-83 matches it alone)" \
-    "$R_L1" "$BLOCK_MARKER"
+  R_LN=$(tail -n 1 "$ROUTES/shared.raw" | sed 's/^[[:space:]]*//')
+  R_L1_CLASS="other"
+  [ "${R_L1#"$BLOCK_MARKER"}" != "$R_L1" ] && R_L1_CLASS="marker-prefix"
+  assert_eq "P1 marker: the block's first line begins with the detection prefix ($INIT_SKILL:82 matches that alone)" \
+    "$R_L1_CLASS" "marker-prefix"
+  # Three-way, so a bare v1 line and an unrelated line cannot both read as "not stamped".
+  R_L1_STAMP="other"
+  if [ "$R_L1" = "$BLOCK_MARKER" ]; then
+    R_L1_STAMP="bare-v1"
+  elif printf '%s\n' "$R_L1" | grep -qE '^# Nazgul Framework — ephemeral runtime \(v[0-9]+\)$'; then
+    R_L1_STAMP="stamped"
+  fi
+  assert_eq "P1 stamp: and it carries a (vN) version stamp, which detection above deliberately does not require" \
+    "$R_L1_STAMP" "stamped"
+  assert_eq "P1 sentinel: the block's LAST line is the end sentinel, so the region has a closed boundary" \
+    "$R_LN" "$BLOCK_END"
   R_L2_CLASS="other"
   case "$R_L2" in
     "$BLOCK_MARKER") R_L2_CLASS="marker-repeated" ;;
@@ -627,14 +781,24 @@ if [ "$routes_usable" -eq 1 ]; then
   assert_eq "P1 structure: no blank line inside the block (one would truncate what --force removal sees)" \
     "$R_BLANKS" "0"
 
-  sed 's/^[[:space:]]*//' "$ROUTES/shared.raw" > "$ROUTES/green.gitignore"
+  # RAW, never a de-indented copy: normalising the fence before git reads it is what let a fully
+  # inert block report green (#254 C2). The shipped bytes are the thing under test.
+  cp "$ROUTES/shared.raw" "$ROUTES/green.gitignore"
+  sed 's/^/   /' "$ROUTES/shared.raw" > "$ROUTES/indented.gitignore"
   grep -vxF 'nazgul/in-flight/' "$ROUTES/green.gitignore" > "$ROUTES/red.gitignore" || true
   R_GREEN_N=$(wc -l < "$ROUTES/green.gitignore" | tr -d ' ')
   R_RED_N=$(wc -l < "$ROUTES/red.gitignore" | tr -d ' ')
+  R_IND_N=$(wc -l < "$ROUTES/indented.gitignore" | tr -d ' ')
   assert_eq "P2 control built: dropping nazgul/in-flight/ removes exactly one line of the block" \
     "$((R_GREEN_N - R_RED_N))" "1"
   assert_eq "P2 control built: and no nazgul/in-flight/ line survives in the RED variant" \
     "$(grep -cxF 'nazgul/in-flight/' "$ROUTES/red.gitignore" || true)" "0"
+  R_IND_SAME="differs"
+  sed 's/^[[:space:]]*//' "$ROUTES/indented.gitignore" | cmp -s - "$ROUTES/green.gitignore" && R_IND_SAME="same"
+  assert_eq "P2 control built: the INDENTED variant is the RAW fence plus three leading spaces, nothing else" \
+    "$R_IND_N/$R_IND_SAME" "$R_GREEN_N/same"
+  assert_eq "P2 control built: and RAW carries no indented line of its own, so that prefix is the only difference" \
+    "$(grep -c '^[[:space:]]' "$ROUTES/green.gitignore" || true)" "0"
 
   _rgit() { local d="$1"; shift; env HOME="$ROUTES/home" XDG_CONFIG_HOME="$ROUTES/home/.config" GIT_CONFIG_NOSYSTEM=1 git -C "$d" "$@"; }
 
@@ -687,6 +851,21 @@ if [ "$routes_usable" -eq 1 ]; then
   # literal directory one — which is what licenses _names_dir_token's either-form check.
   assert_eq "P2 F5: on a literal directory the trailing-slash pathspec still matches both markers" \
     "$R_R_PATHSPEC" "2"
+
+  # The INDENTED control: the same 29 entries, three spaces to the left. Its 1 and its 2s are
+  # what make the RAW zeros above a statement about the shipped bytes rather than about a copy.
+  R_IND_REPO="$ROUTES/indented-repo"; _routes_repo "$R_IND_REPO" "$ROUTES/indented.gitignore"
+  R_I_IGN=$(_route_ignored "$R_IND_REPO" nazgul/in-flight/m.json)
+  R_I_PAT=$(_route_pattern "$R_IND_REPO" nazgul/in-flight/m.json)
+  R_I_STAGE=$(_route_staging "$R_IND_REPO")
+  R_I_ADD=$(_route_add "$R_IND_REPO")
+  assert_eq "P2 INDENTED CONTROL 3/3: an indented copy of the very same block leaves check-ignore at 1" \
+    "$R_I_IGN" "1"
+  assert_eq "P2 INDENTED CONTROL: for the stated reason — check-ignore -v names no matching pattern at all" \
+    "$R_I_PAT" ""
+  assert_eq "P2 INDENTED CONTROL 2/3: the staging route then lists both markers" "$R_I_STAGE" "2"
+  assert_eq "P2 INDENTED CONTROL 1/3: and git add -A stages both — #251's reported symptom, fully restored" \
+    "$R_I_ADD" "2"
 else
   _skip "P1 structure and P2 routes (the shared-mode fence could not be extracted — reported as a finding above)"
 fi
@@ -733,8 +912,12 @@ _assert_named "P3 remedy: and the pathspec-glob one-shot does NOT — a detector
   "$R_RM_GLOB" "nazgul/in-flight" "no"
 
 _fenced_lines "$LOCAL_MARKER" > "$ROUTES/local.raw"
-assert_eq "P3 local block: the local-mode fence is its marker plus three entries" \
-  "$(wc -l < "$ROUTES/local.raw" | tr -d ' ')" "4"
+R_LOCAL_N=$(wc -l < "$ROUTES/local.raw" | tr -d ' ')
+assert_eq "P3 local block: the local-mode fence is its marker, three entries and its end sentinel" \
+  "$R_LOCAL_N" "5"
+assert_eq "P3 local block: opened and closed by its own sentinel pair, so it is a region like the shared one" \
+  "$(head -n 1 "$ROUTES/local.raw" | sed 's/^[[:space:]]*//')/$(tail -n 1 "$ROUTES/local.raw" | sed 's/^[[:space:]]*//')" \
+  "$LOCAL_MARKER/$LOCAL_END"
 R_SHA_TOOL="none"
 command -v sha256sum >/dev/null 2>&1 && R_SHA_TOOL="sha256sum"
 [ "$R_SHA_TOOL" = "none" ] && command -v shasum >/dev/null 2>&1 && R_SHA_TOOL="shasum"
@@ -744,7 +927,7 @@ if [ "$R_SHA_TOOL" = "none" ]; then
 else
   _pass "P3 local block: hashed with $R_SHA_TOOL"
 fi
-assert_eq "P3 local block: byte-identical to 0738a1a, whitespace included" \
+assert_eq "P3 local block: byte-identical to ff64f76, whitespace included" \
   "$(_sha256 < "$ROUTES/local.raw")" "$LOCAL_FENCE_SHA_BASE"
 
 findings=$((findings + TESTS_FAILED - R_FAILED_BEFORE))
@@ -849,6 +1032,14 @@ assert_eq "P3 copy 3 (clean Step 8 item 3): every block entry is listed, verbati
   "$(_only_in "$C_ENTRIES" "$C_P3")" ""
 assert_eq "P3 copy 3 (clean Step 8 item 3): and it lists nothing the block lacks" \
   "$(_only_in "$C_P3" "$C_ENTRIES")" ""
+
+# Removal keys on the REGION, so Step 8 must name both sentinels: reverting it to the entry list
+# alone would still satisfy the two comparisons above, which read only that list.
+assert_contains "P3 copy 3 region: Step 8's shared-mode item names the start sentinel as the removal boundary" \
+  "$C_CLEAN_LINE" "$BLOCK_MARKER"
+assert_contains "P3 copy 3 region: and the end sentinel that closes it" "$C_CLEAN_LINE" "$BLOCK_END"
+assert_not_contains "P3 copy 3 region CONTROL: and not the local-mode end sentinel, which is item 2's boundary" \
+  "$C_CLEAN_LINE" "$LOCAL_END"
 
 findings=$((findings + TESTS_FAILED - C_FAILED_BEFORE))
 fi
