@@ -182,7 +182,8 @@ If the project's `CLAUDE.md` contains a Nazgul-injected section:
 
 1. Read `.gitignore`
 2. Remove the **local-mode** block if present: the marker `# Nazgul Framework (local mode)` and its lines (`nazgul/`, `.claude/agents/generated/`, `.mcp.json`)
-3. Remove the **shared-mode ephemeral** block if present: the marker `# Nazgul Framework — ephemeral runtime` and its lines (`nazgul/checkpoints/`, `nazgul/logs/`, `nazgul/sessions/`, `nazgul/.session_id`, `nazgul/.compaction_count`, `nazgul/archive/`, `nazgul/reviews/*/test-failures.md`, `nazgul/reviews/*/simplify-report.md`, `nazgul/reviews/post-loop-simplify-report.md`)
+3. Remove the **shared-mode ephemeral** block if present: the marker `# Nazgul Framework — ephemeral runtime` and its lines (`nazgul/checkpoints/`, `nazgul/logs/`, `nazgul/sessions/`, `nazgul/.session_id`, `nazgul/.stop_failure`, `nazgul/.compaction_count`, `nazgul/.compaction_count.lock`, `nazgul/.tool_failures`, `nazgul/archive/`, `nazgul/conductor/`, `nazgul/context.backup.*/`, `nazgul/in-flight/`, `nazgul/locks/`, `nazgul/.heartbeat.lock`, `nazgul/.githooks/`, `nazgul/dispatch/`, `nazgul/improvement-reports/`, `nazgul/self-audit-window.json`, `nazgul/.hitl-pending`, `nazgul/config.json.tmp`, `nazgul/inbox/`, `nazgul/HANDOFF.md`, `nazgul/improvements.md`, `nazgul/reviews/*/test-failures.md`, `nazgul/reviews/*/simplify-report.md`, `nazgul/reviews/*/diff.patch`, `nazgul/reviews/post-loop-simplify-report.md`, `nazgul/learning/proposed-rules.md`, `nazgul/learning/.last-run`).
+   This enumeration is checked against the block in `skills/init/SKILL.md` by `tests/test-shared-ignore-coverage.sh`; add a block entry here when you add one there, verbatim including the trailing slash.
 4. Trim any extra blank lines left behind
 5. If `.gitignore` is now empty, delete it
 6. Otherwise write it back
