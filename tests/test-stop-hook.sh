@@ -1536,12 +1536,47 @@ create_config
 printf 'sess-hold' > "$TEST_DIR/nazgul/.session_id"
 mkdir -p "$TEST_DIR/nazgul/in-flight"
 NOW=$(date +%s)
-jq -cn --argjson e "$NOW" '{agent:"nazgul:implementer",unit:"TASK-001",dispatched_at:"x",dispatched_at_epoch:$e,prompt_head:"x",background:"true",named:"false"}' \
+jq -cn --argjson e "$NOW" '{agent:"nazgul:implementer",unit:"TASK-001",dispatched_at:"x",dispatched_at_epoch:$e,prompt_hash:"0123456789abcdef",prompt_bytes:1,background:"true",named:"false"}' \
   > "$TEST_DIR/nazgul/in-flight/bg.json"
 (cd "$TEST_DIR" && bash "$REPO_ROOT/scripts/stop-hook.sh" </dev/null >/dev/null 2>&1); EC=$?
 assert_exit_code "0-D: hold path exits 0" "$EC" 0
 LOCKS=$(ls "$TEST_DIR"/nazgul/sessions/*.lock 2>/dev/null | wc -l | tr -d ' ')
 assert_eq "0-D: session lock persists through the allowed stop" "$LOCKS" "1"
 teardown_temp_dir
+
+# --- P8c (FEAT-034 TASK-005, ADR-028 D5.5): a mixed-version marker is consumed exactly like its
+# new-shape twin. CONTROL, not a red pin — it passes at the Base SHA too, where old is the only shape.
+_p8c_arm() {
+  setup_temp_dir
+  setup_nazgul_dir
+  create_config
+  printf 'sess-p8c' > "$TEST_DIR/nazgul/.session_id"
+  mkdir -p "$TEST_DIR/nazgul/in-flight"
+  jq -cn --argjson e "$(date +%s)" --arg bg "$1" --argjson digest "$2" \
+    '{agent:"nazgul:implementer",unit:"TASK-901",dispatched_at:"x",dispatched_at_epoch:$e,background:$bg,named:"false"} * $digest' \
+    > "$TEST_DIR/nazgul/in-flight/mv.json"
+  (cd "$TEST_DIR" && bash "$STOP_HOOK" </dev/null >/dev/null 2>"$TEST_DIR/mv.err"); P8C_EC=$?
+  P8C_WHERE=$([ -f "$TEST_DIR/nazgul/in-flight/quarantine/mv.json" ] && echo quarantine || echo in-flight)
+  P8C_ERR=$(cat "$TEST_DIR/mv.err")
+  teardown_temp_dir
+}
+P8C_OLD_SHAPE='{"prompt_head":"legacy prompt text that used to reach disk"}'
+P8C_NEW_SHAPE='{"prompt_hash":"0123456789abcdef","prompt_bytes":42}'
+
+_p8c_arm "false" "$P8C_OLD_SHAPE"
+P8C_A_EC="$P8C_EC"; P8C_A_WHERE="$P8C_WHERE"; P8C_A_ERR="$P8C_ERR"
+_p8c_arm "false" "$P8C_NEW_SHAPE"
+P8C_B_EC="$P8C_EC"; P8C_B_WHERE="$P8C_WHERE"; P8C_B_ERR="$P8C_ERR"
+assert_eq "P8c: an old-shape foreground marker is still quarantined by the consumer" "$P8C_A_WHERE" "quarantine"
+assert_contains "P8c: and the consumer still reads the unit out of it" "$P8C_A_ERR" "ORPHAN in-flight marker for TASK-901"
+assert_eq "P8c: old and new shapes get a byte-identical quarantine disposition" "$P8C_A_EC|$P8C_A_WHERE|$P8C_A_ERR" "$P8C_B_EC|$P8C_B_WHERE|$P8C_B_ERR"
+
+_p8c_arm "true" "$P8C_OLD_SHAPE"
+P8C_C_EC="$P8C_EC"; P8C_C_WHERE="$P8C_WHERE"; P8C_C_ERR="$P8C_ERR"
+_p8c_arm "true" "$P8C_NEW_SHAPE"
+P8C_D_EC="$P8C_EC"; P8C_D_WHERE="$P8C_WHERE"; P8C_D_ERR="$P8C_ERR"
+assert_eq "P8c: an old-shape background marker is still held on, not quarantined" "$P8C_C_WHERE" "in-flight"
+assert_contains "P8c: and the hold still names the unit it read from the old shape" "$P8C_C_ERR" "in-flight hold — waiting on 1 BACKGROUND dispatch(es): TASK-901"
+assert_eq "P8c: old and new shapes get a byte-identical hold disposition" "$P8C_C_EC|$P8C_C_WHERE|$P8C_C_ERR" "$P8C_D_EC|$P8C_D_WHERE|$P8C_D_ERR"
 
 report_results
