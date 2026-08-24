@@ -18,10 +18,6 @@ command -v jq >/dev/null 2>&1 || exit 0
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/nazgul-root.sh
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
-# Supplies _rp_sha256; every use is `declare -F`-guarded so an absent or broken
-# library degrades this hook rather than aborting it (fail-open contract above).
-# shellcheck source=lib/review-provenance.sh
-source "$SCRIPT_DIR/lib/review-provenance.sh" 2>/dev/null || true
 
 NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
@@ -67,6 +63,18 @@ _sanitize() {
   s="${s//../_}"
   [ -n "$s" ] && printf '%s' "$s" || printf 'unknown'
 }
+# Duplicated from `_rp_sha256` rather than sourcing the review-gate provenance lib: a hook that
+# runs on every Agent dispatch stays decoupled from it, as that lib does for `_rp_is_meta_file`.
+_ifm_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{print $1}'
+  else
+    return 1
+  fi
+}
+
 SAFE_AGENT=$(_sanitize "${SUBAGENT:-unknown}")
 SAFE_UNIT=$(_sanitize "$UNIT")
 
@@ -81,27 +89,30 @@ MARKER_FILE="$MARKER_DIR/${SAFE_AGENT}__${SAFE_UNIT}__${EPOCH}-${NONCE}.json"
 # Identify the dispatch by digest, never by prompt text (ADR-028). `unavailable`
 # has non-hex letters and is 11 chars, not 16, so it never reads as a digest.
 PROMPT_HASH="unavailable"
-PROMPT_BYTES="null"
-if declare -F _rp_sha256 >/dev/null 2>&1; then
-  _ifm_full=$(printf '%s' "$PROMPT" | _rp_sha256 2>/dev/null) || _ifm_full=""
-  if [ -n "$_ifm_full" ]; then
-    PROMPT_HASH="${_ifm_full:0:16}"
-  else
-    echo "in-flight-marker: sha256 unavailable — prompt_hash recorded as 'unavailable'" >&2
-  fi
+_ifm_full=$(printf '%s' "$PROMPT" | _ifm_sha256 2>/dev/null) || _ifm_full=""
+_ifm_short="${_ifm_full:0:16}"
+# The two-state grammar is enforced HERE, not merely published: a wrapper that prefixes a
+# deprecation line, an uppercase-hex build, or a short digest all reach this point (#254 A2).
+_ifm_reject=""
+[ "${#_ifm_short}" -eq 16 ] || _ifm_reject="length=${#_ifm_short}"
+case "$_ifm_short" in *[!0-9a-f]*) _ifm_reject="${_ifm_reject:+$_ifm_reject,}non-hex-character" ;; esac
+if [ -z "$_ifm_reject" ]; then
+  PROMPT_HASH="$_ifm_short"
+elif [ -z "$_ifm_full" ]; then
+  echo "in-flight-marker: sha256 unavailable — prompt_hash recorded as 'unavailable'" >&2
 else
-  echo "in-flight-marker: _rp_sha256 not loaded — prompt_hash recorded as 'unavailable'" >&2
+  # Names the cause class, never the rejected value — that value is prompt-derived (ADR-028 D4).
+  echo "in-flight-marker: sha256 helper returned a non-conforming digest ($_ifm_reject) — prompt_hash recorded as 'unavailable'" >&2
 fi
 
-# Bytes over the SAME stream that is hashed — `${#PROMPT}` counts characters
-# under a UTF-8 locale, so it would disagree with the digest, invisibly.
-_ifm_bytes=$(printf '%s' "$PROMPT" | wc -c 2>/dev/null | tr -d ' ') || _ifm_bytes=""
-case "$_ifm_bytes" in ''|*[!0-9]*) _ifm_bytes="null" ;; esac
-PROMPT_BYTES="$_ifm_bytes"
-# Redundant belt for TRD R2 — the case above already leaves all-digits or `null`,
-# so this cannot change the value.
+# Bytes over the SAME stream that is hashed. `${#PROMPT}` counts characters under a UTF-8
+# locale, so the fallback re-counts under LC_ALL=C, where it counts bytes and agrees with wc.
+PROMPT_BYTES=$(printf '%s' "$PROMPT" | wc -c 2>/dev/null | tr -d ' ') || PROMPT_BYTES=""
 case "$PROMPT_BYTES" in
-  ''|*[!0-9]*) [ "$PROMPT_BYTES" = "null" ] || PROMPT_BYTES="null" ;;
+  ''|*[!0-9]*)
+    PROMPT_BYTES=$(LC_ALL=C; printf '%s' "${#PROMPT}")
+    echo "in-flight-marker: wc -c unavailable — prompt_bytes counted with \${#PROMPT} under LC_ALL=C" >&2
+    ;;
 esac
 
 jq -cn --arg agent "$SUBAGENT" --arg unit "$UNIT" --arg ts "$TS" \

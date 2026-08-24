@@ -73,19 +73,27 @@ FEAT-034 and wrote `cut -c1-200` of the prompt — a **per-line** operation, so 
 *every* line: measured against the pre-change writer, a 150-line prompt produced a marker holding
 30,171 characters of prompt text, 151x the bound its own comment claimed.
 
-The value grammar is closed, and its three states are distinguishable by inspection alone:
+The value grammar is closed, and its four states are distinguishable by inspection alone:
 
 | `prompt_hash` | `prompt_bytes` | Means |
 |---|---|---|
-| `^[0-9a-f]{16}$` | the prompt's byte length | computed normally |
+| `^[0-9a-f]{16}$` | `wc -c` of the prompt | computed normally |
 | `e3b0c44298fc1c14` | `0` | **computed**, over an empty prompt — not a failure |
-| `unavailable` | still populated | could not compute; also one stderr line |
+| `unavailable` | still populated | no digest, or one that failed `^[0-9a-f]{16}$`; also one stderr line |
+| `^[0-9a-f]{16}$` | `${#PROMPT}` under `LC_ALL=C` | `wc`/`tr` unreachable; exact count, different mechanism; also one stderr line |
 
 `unavailable` carries non-hex letters (`u`, `n`, `v`, `i`, `l`) and is 11 characters rather than 16, so
 it can never parse as a digest — one anchored regex separates "could not compute" from
-"computed and got this" — a degradation can never be misread as a digest. `prompt_bytes` is `wc -c`
-over the same byte stream that is hashed, never `${#PROMPT}`, which counts characters under a UTF-8
-locale and would disagree with the digest invisibly.
+"computed and got this" — a degradation can never be misread as a digest. **That regex runs at the
+writer**, not only in this table: a helper that answers with a deprecation line before the digest, with
+uppercase hex, or with fewer than 16 characters is rejected to `unavailable`, and the stderr line names
+the cause class (`length=N`, `non-hex-character`) and never the rejected value, which is prompt-derived
+(#254 A2, ADR-028 D4). `prompt_bytes` is `wc -c` over the same byte stream that is hashed. Plain
+`${#PROMPT}` is never used as the primary count, because it counts characters under a UTF-8 locale and
+would disagree with the digest invisibly; it is used only as the fourth-state fallback, re-evaluated
+under `LC_ALL=C`, where it counts bytes and agrees with `wc -c` exactly. The fourth row exists because
+`wc` can genuinely be absent, and before #254 A1 that path wrote JSON `null` with no stderr at all —
+a reachable state the closed grammar did not name.
 
 **Accepted residuals, recorded as decisions rather than oversights.** The digest is unsalted, so a
 party holding a candidate prompt can CONFIRM it by recomputing the hash; it cannot recover an unknown

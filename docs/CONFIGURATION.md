@@ -289,10 +289,12 @@ Added by the additive `migrate_31_to_32` migration (schema v31→v32); existing 
 byte length of that same stream). These REPLACE the former `prompt_head`, which stored `cut -c1-200`
 of the prompt — per-line, so 200 characters of *every* line, in practice tens of thousands of
 characters per marker. The rename is deliberate: `prompt_head` named content the field no longer
-carries. Three states, distinguishable by inspection: `^[0-9a-f]{16}$` with a byte count is a normal
+carries. Four states, distinguishable by inspection: `^[0-9a-f]{16}$` with a byte count is a normal
 computation; `e3b0c44298fc1c14` with `prompt_bytes: 0` is a **successful** hash of an empty prompt;
 `unavailable` (it carries non-hex letters and is 11 chars, not 16, so no digest can collide with it) plus one stderr line
-means the digest could not be computed, and `prompt_bytes` stays populated. Nothing needs configuring
+means the digest was absent OR failed the writer's own anchored `^[0-9a-f]{16}$` check, and `prompt_bytes`
+stays populated; and a normal digest beside a count taken by the `${#PROMPT}`-under-`LC_ALL=C` fallback,
+plus one stderr line, means `wc` could not be run (#254 A1 — that path used to write JSON `null` in silence). Nothing needs configuring
 — there is no key for this and `schema_version` is unchanged. Accepted residuals: the digest is
 unsalted, so a held candidate prompt can be CONFIRMED though an unknown one cannot be recovered, and
 `prompt_bytes` reveals prompt size. The exposure being closed is prompt TEXT.

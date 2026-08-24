@@ -308,6 +308,13 @@ assert_contains "hold: named dispatch is a proven orphan, not unverifiable" \
   "$(cat "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null)" '"reason":"in_flight_orphan"'
 teardown_temp_dir
 
+# --- classification block: pinned assertion count — a silent deletion must fail. Anchored on
+# these comments, not line numbers: specified for :213-299, the same block already begins at :223.
+CLASSIFY_ASSERTS=$(awk '/^# --- classification: a fresh FOREGROUND marker/{f=1}
+                        /^# --- classification block: pinned assertion count/{f=0}
+                        f' "$0" | grep -cE '^[[:space:]]*(assert_[a-z_]+|_pass|_fail)[[:space:]]')
+assert_eq "classification block still makes 21 assertion calls" "$CLASSIFY_ASSERTS" "21"
+
 # === Observed classification: the Stop payload decides, not the write-time class (#218) ===
 
 # P3 (C3/AC5) — a non-subagent entry is neither live nor present. It comes first because every
@@ -2801,8 +2808,8 @@ P6_DIFF=$([ "$(jq -r '.prompt_hash' "$P6_MARKER2")" != "$P4_HASH" ] && echo yes 
 assert_eq "P6: prompts differing only after col 200 of each line hash differently" "$P6_DIFF" "yes"
 teardown_temp_dir
 
-# === P7/P8 (FEAT-034 TASK-005): three distinguishable digest states, and the fail-open structure ===
-# Both P7 arms MANUFACTURE a condition no supported host has been observed in (ADR-028 Falsifier 3).
+# === P7/P8: the four distinguishable marker states, and the fail-open structure ===
+# P7a/P7c manufacture an unobserved condition (ADR-028 Falsifier 3); P7b's and P7d's do occur.
 
 P7_PAYLOAD=$(jq -cn '{tool_name:"Agent",tool_input:{subagent_type:"nazgul:implementer",prompt:"NAZGUL_UNIT: TASK-001 degrade",run_in_background:true}}')
 P7_EXPECT_BYTES=$(printf '%s' 'NAZGUL_UNIT: TASK-001 degrade' | wc -c | tr -d ' ')
@@ -2843,35 +2850,140 @@ assert_eq "P7a: degradation announces itself on exactly one stderr line (never s
 P7A_ERR=$(cat "$TEST_DIR/p7a.err")
 teardown_temp_dir
 
-# P7b — degraded state, cause 2: the library cannot be sourced. ABSENT rather than chmod 000,
-# because a CI job running as root reads a 000 file and would silently un-create the condition.
+# P7b — degraded state, cause 2: the helper answered, but not with a digest. All three shapes
+# were driven against the pre-change writer, which recorded every one of them verbatim (#254 A2).
 setup_temp_dir
 setup_nazgul_dir
 create_config
-P7B_DIR="$TEST_DIR/nolib"
-mkdir -p "$P7B_DIR/lib"
-cp "$WRITER" "$P7B_DIR/in-flight-marker.sh"
-cp "$REPO_ROOT/scripts/lib/nazgul-root.sh" "$P7B_DIR/lib/nazgul-root.sh"
-assert_file_exists "P7b (precondition): the shipped tree does carry the library this arm withholds" "$REPO_ROOT/scripts/lib/review-provenance.sh"
-assert_eq "P7b (precondition): the scan tree has no review-provenance.sh to source" "$([ -e "$P7B_DIR/lib/review-provenance.sh" ] && echo yes || echo no)" "no"
-assert_eq "P7b (precondition): the copied writer is byte-identical to the shipped one" "$(cmp -s "$WRITER" "$P7B_DIR/in-flight-marker.sh" && echo same || echo differs)" "same"
-printf '%s' "$P7_PAYLOAD" | bash "$P7B_DIR/in-flight-marker.sh" >/dev/null 2>"$TEST_DIR/p7b.err"; P7B_EC=$?
-assert_exit_code "P7b: a missing review-provenance.sh still exits 0 (fail-open)" "$P7B_EC" 0
-P7B_MARKER=$(find "$TEST_DIR/nazgul/in-flight" -type f 2>/dev/null | head -1)
-assert_eq "P7b: a marker is still written with the library absent" "$([ -n "$P7B_MARKER" ] && echo yes || echo no)" "yes"
-P7B_HASH=$(jq -r '.prompt_hash' "${P7B_MARKER:-/dev/null}")
-assert_eq "P7b: prompt_hash degrades to 'unavailable', never to an empty string" "$P7B_HASH" "unavailable"
-P7B_NOTHEX=$(printf '%s' "$P7B_HASH" | grep -Eq '^[0-9a-f]{16}$' && echo no || echo yes)
-assert_eq "P7b: the degraded value fails the hex grammar on this arm too" "$P7B_HASH/$P7B_NOTHEX" "unavailable/yes"
-assert_eq "P7b: prompt_bytes stays populated" "$(jq -r '.prompt_bytes' "${P7B_MARKER:-/dev/null}")" "$P7_EXPECT_BYTES"
-assert_eq "P7b: the five read fields survive degradation" "$(jq -r '[.agent,.unit,(.dispatched_at_epoch>0|tostring),.background,.named]|join("|")' "${P7B_MARKER:-/dev/null}")" "nazgul:implementer|TASK-001|true|true|false"
-assert_eq "P7b: the missing library announces itself on exactly one stderr line" "$(grep -c . "$TEST_DIR/p7b.err" | tr -d ' ')" "1"
-P7B_ERR=$(cat "$TEST_DIR/p7b.err")
+# NOT under $TEST_DIR — setup_temp_dir's template puts a `:` in the name, which splits a PATH entry.
+P7B_SHIM=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-p7b-XXXXXX" 2>/dev/null || echo "")
+assert_eq "P7b (precondition): the shim bin dir was created" "$([ -n "$P7B_SHIM" ] && [ -d "$P7B_SHIM" ] && echo yes || echo no)" "yes"
+
+# Every shim DRAINS stdin first: an unread pipe hands the writer SIGPIPE, and the nonzero
+# pipeline status empties the value before validation sees it — testing cause 1 while claiming 2.
+_p7b_drive() {
+  chmod +x "$P7B_SHIM/sha256sum"
+  rm -rf "$TEST_DIR/nazgul/in-flight"
+  printf '%s' "$P7_PAYLOAD" | env PATH="$P7B_SHIM:$PATH" "$BASH" "$WRITER" >/dev/null 2>"$TEST_DIR/p7b.err"; P7B_EC=$?
+  P7B_MARKER=$(find "$TEST_DIR/nazgul/in-flight" -type f 2>/dev/null | head -1)
+  P7B_HASH=$(jq -r '.prompt_hash' "${P7B_MARKER:-/dev/null}")
+  P7B_ERR=$(cat "$TEST_DIR/p7b.err")
+}
+
+cat > "$P7B_SHIM/sha256sum" <<'P7B_SHIM_1'
+#!/bin/sh
+cat >/dev/null
+echo "shasum: option -a is deprecated"
+echo "c0e60b7cbbd7a576c0e60b7cbbd7a576c0e60b7cbbd7a576c0e60b7cbbd7a576"
+P7B_SHIM_1
+_p7b_drive
+assert_eq "P7b (precondition): the shim really is the sha256sum the writer resolves" "$(env PATH="$P7B_SHIM:$PATH" "$BASH" -c 'command -v sha256sum')" "$P7B_SHIM/sha256sum"
+assert_exit_code "P7b shape 1 (a wrapper printing a deprecation line first): still exits 0" "$P7B_EC" 0
+assert_eq "P7b shape 1: recorded as 'unavailable', not as the prefixed value" "$P7B_HASH" "unavailable"
+assert_contains "P7b shape 1: stderr names the cause class" "$P7B_ERR" "non-hex-character"
+assert_not_contains "P7b shape 1: stderr never echoes the rejected value — it is prompt-derived" "$P7B_ERR" "shasum:"
+
+cat > "$P7B_SHIM/sha256sum" <<'P7B_SHIM_2'
+#!/bin/sh
+cat >/dev/null
+echo "C0E60B7CBBD7A576C0E60B7CBBD7A576C0E60B7CBBD7A576C0E60B7CBBD7A576"
+P7B_SHIM_2
+_p7b_drive
+assert_exit_code "P7b shape 2 (a busybox-style uppercase-hex build): still exits 0" "$P7B_EC" 0
+assert_eq "P7b shape 2: uppercase hex is not the grammar, so it degrades" "$P7B_HASH" "unavailable"
+assert_contains "P7b shape 2: stderr names the cause class" "$P7B_ERR" "non-hex-character"
+assert_not_contains "P7b shape 2: stderr never echoes the rejected value" "$P7B_ERR" "C0E60B7CBBD7A576"
+assert_eq "P7b shape 2: prompt_bytes stays populated — the degradation was confined to the hash step" "$(jq -r '.prompt_bytes' "${P7B_MARKER:-/dev/null}")" "$P7_EXPECT_BYTES"
+assert_eq "P7b shape 2: the five read fields survive degradation" "$(jq -r '[.agent,.unit,(.dispatched_at_epoch>0|tostring),.background,.named]|join("|")' "${P7B_MARKER:-/dev/null}")" "nazgul:implementer|TASK-001|true|true|false"
+
+cat > "$P7B_SHIM/sha256sum" <<'P7B_SHIM_3'
+#!/bin/sh
+cat >/dev/null
+echo "abc123"
+P7B_SHIM_3
+_p7b_drive
+assert_exit_code "P7b shape 3 (a short-digest helper): still exits 0" "$P7B_EC" 0
+assert_eq "P7b shape 3: a 6-char value is not a digest either" "$P7B_HASH" "unavailable"
+assert_contains "P7b shape 3: stderr names the LENGTH cause, distinct from the character-class one" "$P7B_ERR" "length=6"
+assert_not_contains "P7b shape 3: stderr never echoes the rejected value" "$P7B_ERR" "abc123"
+assert_eq "P7b shape 3: degradation announces itself on exactly one stderr line (never silent)" "$(grep -c . "$TEST_DIR/p7b.err" | tr -d ' ')" "1"
+P7B_PAIR_HASH="$P7B_HASH"
+P7B_PAIR_ERR="$P7B_ERR"
+
+# The validator's own control: it must ACCEPT the conforming shape, or the three arms above
+# would pass on a writer that simply rejected everything.
+cat > "$P7B_SHIM/sha256sum" <<'P7B_SHIM_OK'
+#!/bin/sh
+cat >/dev/null
+echo "c0e60b7cbbd7a576c0e60b7cbbd7a576c0e60b7cbbd7a576c0e60b7cbbd7a576  -"
+P7B_SHIM_OK
+_p7b_drive
+assert_eq "P7b (control): a conforming lowercase digest is ACCEPTED, so the arms above are not vacuous" "$P7B_HASH" "c0e60b7cbbd7a576"
+assert_eq "P7b (control): and an accepted digest says nothing on stderr" "$(grep -c . "$TEST_DIR/p7b.err" | tr -d ' ')" "0"
+[ -n "$P7B_SHIM" ] && rm -rf "$P7B_SHIM"
 teardown_temp_dir
 
 # ADR-028 D4's split, asserted as a pair: the marker records the STATE, stderr names the CAUSE.
-assert_eq "P7: two different causes record one identical marker state" "$P7A_HASH" "$P7B_HASH"
-assert_eq "P7: and the two causes are distinguishable from each other on stderr" "$([ "$P7A_ERR" != "$P7B_ERR" ] && echo yes || echo no)" "yes"
+assert_eq "P7: two different causes record one identical marker state" "$P7A_HASH" "$P7B_PAIR_HASH"
+assert_eq "P7: and the two causes are distinguishable from each other on stderr" "$([ "$P7A_ERR" != "$P7B_PAIR_ERR" ] && echo yes || echo no)" "yes"
+
+# P7c — the decoupling is real rather than renamed (#254 A4). Withholding the library is ABSENT
+# rather than chmod 000, because a CI job running as root reads a 000 file and un-creates it.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+P7C_DIR="$TEST_DIR/nolib"
+mkdir -p "$P7C_DIR/lib"
+cp "$WRITER" "$P7C_DIR/in-flight-marker.sh"
+cp "$REPO_ROOT/scripts/lib/nazgul-root.sh" "$P7C_DIR/lib/nazgul-root.sh"
+assert_file_exists "P7c (precondition): the shipped tree does carry the library this arm withholds" "$REPO_ROOT/scripts/lib/review-provenance.sh"
+assert_eq "P7c (precondition): the scan tree has no review-provenance.sh to source" "$([ -e "$P7C_DIR/lib/review-provenance.sh" ] && echo yes || echo no)" "no"
+assert_eq "P7c (precondition): the copied writer is byte-identical to the shipped one" "$(cmp -s "$WRITER" "$P7C_DIR/in-flight-marker.sh" && echo same || echo differs)" "same"
+printf '%s' "$P7_PAYLOAD" | bash "$P7C_DIR/in-flight-marker.sh" >/dev/null 2>"$TEST_DIR/p7c.err"; P7C_EC=$?
+assert_exit_code "P7c: a tree with no review-provenance.sh still exits 0 (fail-open)" "$P7C_EC" 0
+P7C_MARKER=$(find "$TEST_DIR/nazgul/in-flight" -type f 2>/dev/null | head -1)
+assert_eq "P7c: a marker is still written with the library absent" "$([ -n "$P7C_MARKER" ] && echo yes || echo no)" "yes"
+assert_eq "P7c: prompt_hash is a REAL digest — that library's absence no longer degrades anything" "$(jq -r '.prompt_hash' "${P7C_MARKER:-/dev/null}" | grep -Eq '^[0-9a-f]{16}$' && echo yes || echo no)" "yes"
+assert_eq "P7c: prompt_bytes is populated" "$(jq -r '.prompt_bytes' "${P7C_MARKER:-/dev/null}")" "$P7_EXPECT_BYTES"
+assert_eq "P7c: nothing reaches stderr — there is nothing left to degrade" "$(grep -c . "$TEST_DIR/p7c.err" | tr -d ' ')" "0"
+teardown_temp_dir
+
+# P7d — the FOURTH state (#254 A1): wc unreachable. Pre-change this wrote JSON `null` with ZERO
+# stderr; the count now falls back to ${#PROMPT} under LC_ALL=C, where it counts bytes not chars.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+P7D_PROMPT=$(printf 'NAZGUL_UNIT: TASK-001 h\xc3\xa9llo \xe2\x9c\x93')
+P7D_PAYLOAD=$(jq -cn --arg p "$P7D_PROMPT" '{tool_name:"Agent",tool_input:{subagent_type:"nazgul:implementer",prompt:$p,run_in_background:true}}')
+P7D_EXPECT=$(printf '%s' "$P7D_PROMPT" | wc -c | tr -d ' ')
+P7D_UTF8=$(locale -a 2>/dev/null | grep -iE '^(c|en_us)\.utf-?8$' | head -1)
+if [ -n "$P7D_UTF8" ]; then
+  P7D_CHARS=$(LC_ALL="$P7D_UTF8"; printf '%s' "${#P7D_PROMPT}")
+  assert_eq "P7d (control): the prompt is genuinely multibyte, so a locale-blind fallback would differ" "$([ "$P7D_CHARS" -lt "$P7D_EXPECT" ] && echo yes || echo no)" "yes"
+else
+  _skip "P7d (control): no UTF-8 locale on this host to prove the prompt discriminates"
+fi
+printf '%s' "$P7D_PAYLOAD" | bash "$WRITER" >/dev/null 2>"$TEST_DIR/p7d-ctl.err"
+P7D_CTL_MARKER=$(find "$TEST_DIR/nazgul/in-flight" -type f 2>/dev/null | head -1)
+P7D_CTL_BYTES=$(jq -r '.prompt_bytes' "${P7D_CTL_MARKER:-/dev/null}")
+P7D_CTL_HASH=$(jq -r '.prompt_hash' "${P7D_CTL_MARKER:-/dev/null}")
+assert_eq "P7d (control): a working wc records the byte length" "$P7D_CTL_BYTES" "$P7D_EXPECT"
+assert_eq "P7d (control): and says nothing on stderr" "$(grep -c . "$TEST_DIR/p7d-ctl.err" | tr -d ' ')" "0"
+rm -rf "$TEST_DIR/nazgul/in-flight"
+P7D_SHIM=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-p7d-XXXXXX" 2>/dev/null || echo "")
+printf '#!/bin/sh\nexit 1\n' > "$P7D_SHIM/wc"
+chmod +x "$P7D_SHIM/wc"
+assert_eq "P7d (precondition): the failing wc really is the one the writer resolves" "$(env PATH="$P7D_SHIM:$PATH" "$BASH" -c 'command -v wc')" "$P7D_SHIM/wc"
+printf '%s' "$P7D_PAYLOAD" | env PATH="$P7D_SHIM:$PATH" "$BASH" "$WRITER" >/dev/null 2>"$TEST_DIR/p7d.err"; P7D_EC=$?
+[ -n "$P7D_SHIM" ] && rm -rf "$P7D_SHIM"
+P7D_MARKER=$(find "$TEST_DIR/nazgul/in-flight" -type f 2>/dev/null | head -1)
+assert_exit_code "P7d: a hook that cannot run wc still exits 0 (fail-open)" "$P7D_EC" 0
+assert_eq "P7d: prompt_bytes is a JSON number, never the null this used to write" "$(jq -r '.prompt_bytes|type' "${P7D_MARKER:-/dev/null}")" "number"
+assert_eq "P7d: and it is the SAME byte count the working wc produced" "$(jq -r '.prompt_bytes' "${P7D_MARKER:-/dev/null}")" "$P7D_CTL_BYTES"
+assert_eq "P7d: the hash is untouched — the two fields degrade independently" "$(jq -r '.prompt_hash' "${P7D_MARKER:-/dev/null}")" "$P7D_CTL_HASH"
+assert_eq "P7d: the degradation announces itself on exactly one stderr line" "$(grep -c . "$TEST_DIR/p7d.err" | tr -d ' ')" "1"
+assert_contains "P7d: stderr names wc as the mechanism that degraded" "$(cat "$TEST_DIR/p7d.err")" "wc -c unavailable"
+teardown_temp_dir
 
 # P8 — the THIRD state, which is not a degradation: an absent prompt is "computed and got this".
 # The PAIR is what separates it from 'unavailable'; either field alone reads as an accident.
@@ -2907,16 +3019,18 @@ assert_eq "P8b: the writer's last statement is the unconditional exit 0" "$(tail
 bash -n "$P8B_SRC" >/dev/null 2>&1
 assert_exit_code "P8b: the writer is bash -n clean" "$?" 0
 P8B_SOURCES=$(grep -cE '^[[:space:]]*source ' "$P8B_SRC" | tr -d ' ')
-assert_eq "P8b (floor): the two source pins below have something to check, so neither can pass empty" "$([ "$P8B_SOURCES" -ge 2 ] && echo yes || echo no)" "yes"
+assert_eq "P8b (floor): the source pins below have something to check, so neither can pass empty" "$([ "$P8B_SOURCES" -ge 1 ] && echo yes || echo no)" "yes"
 P8B_TOLERANT=$(grep -cE '^[[:space:]]*source .*2>/dev/null \|\| true[[:space:]]*$' "$P8B_SRC" | tr -d ' ')
 P8B_ROOT=$(grep -cE '^[[:space:]]*source .*lib/nazgul-root\.sh"[[:space:]]*$' "$P8B_SRC" | tr -d ' ')
 assert_eq "P8b: every source line is either explicitly failure-tolerant or the named root resolver" "$((P8B_TOLERANT + P8B_ROOT))" "$P8B_SOURCES"
-P8B_GUARD_LN=$(grep -nE 'declare -F[[:space:]]+_rp_sha256' "$P8B_SRC" | head -1 | cut -d: -f1)
-# COMMAND POSITION, not a bare name match: the writer's own stderr message contains the
-# string, and a pin that counted it would pass on a writer that never calls the helper at all.
-P8B_CALL_LN=$(grep -nE '(^|[|;&{(])[[:space:]]*_rp_sha256([^A-Za-z0-9_]|$)' "$P8B_SRC" | grep -vE '^[0-9]+:[[:space:]]*#' | grep -v 'declare -F' | head -1 | cut -d: -f1)
-assert_eq "P8b: _rp_sha256 is not merely guarded, it is actually invoked" "$([ -n "$P8B_CALL_LN" ] && echo yes || echo no)" "yes"
-assert_eq "P8b: the declare -F guard precedes the first non-comment use of _rp_sha256" "$([ -n "$P8B_GUARD_LN" ] && [ -n "$P8B_CALL_LN" ] && [ "$P8B_GUARD_LN" -lt "$P8B_CALL_LN" ] && echo yes || echo no)" "yes"
+assert_eq "P8b: the writer names review-gate tooling nowhere at all (#254 A4)" "$(grep -c 'review-provenance' "$P8B_SRC" | tr -d ' ')" "0"
+assert_eq "P8b: no PROMPT_BYTES=\"null\" initializer survives (#254 A3)" "$(grep -c 'PROMPT_BYTES="null"' "$P8B_SRC" | tr -d ' ')" "0"
+P8B_DEF_LN=$(grep -nE '^_ifm_sha256\(\)' "$P8B_SRC" | head -1 | cut -d: -f1)
+# COMMAND POSITION, not a bare name match: a pin that counted the definition line or a comment
+# would pass on a writer that defines the helper and then never calls it.
+P8B_CALL_LN=$(grep -nE '[|;&{(][[:space:]]*_ifm_sha256([^A-Za-z0-9_(]|$)' "$P8B_SRC" | grep -vE '^[0-9]+:[[:space:]]*#' | head -1 | cut -d: -f1)
+assert_eq "P8b: _ifm_sha256 is not merely defined, it is actually invoked" "$([ -n "$P8B_CALL_LN" ] && echo yes || echo no)" "yes"
+assert_eq "P8b: the local definition precedes the first non-comment use of _ifm_sha256" "$([ -n "$P8B_DEF_LN" ] && [ -n "$P8B_CALL_LN" ] && [ "$P8B_DEF_LN" -lt "$P8B_CALL_LN" ] && echo yes || echo no)" "yes"
 
 # The root resolver's source carries no `|| true`, so the pin above admits it BY NAME rather than
 # by claiming a tolerance it does not have. This drives the omission and shows it still exits 0.
