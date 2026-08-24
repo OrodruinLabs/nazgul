@@ -30,7 +30,7 @@ run_hook() {
 _write_marker() {
   jq -cn --arg a "$2" --arg u "$3" --argjson e "$4" \
     --arg bg "${5:-missing}" --arg nm "${6:-false}" \
-    '{agent:$a, unit:$u, dispatched_at:"2026-08-01T00:00:00Z", dispatched_at_epoch:$e, prompt_head:("NAZGUL_UNIT: "+$u), background:$bg, named:$nm}' > "$1"
+    '{agent:$a, unit:$u, dispatched_at:"2026-08-01T00:00:00Z", dispatched_at_epoch:$e, prompt_hash:"0123456789abcdef", prompt_bytes:24, background:$bg, named:$nm}' > "$1"
 }
 
 # === Writer: scripts/in-flight-marker.sh (never blocks) ===
@@ -46,7 +46,10 @@ assert_eq "writer: exactly one marker written" "$MARKER_COUNT" "1"
 MARKER_FILE=$(find "$TEST_DIR/nazgul/in-flight" -type f | head -1)
 assert_eq "writer: marker agent field" "$(jq -r '.agent' "$MARKER_FILE")" "nazgul:implementer"
 assert_eq "writer: marker unit field" "$(jq -r '.unit' "$MARKER_FILE")" "TASK-001"
-assert_contains "writer: marker prompt_head carries the prompt prefix" "$(jq -r '.prompt_head' "$MARKER_FILE")" "NAZGUL_UNIT"
+HASH_OK=$(jq -r '.prompt_hash' "$MARKER_FILE" | grep -Eq '^[0-9a-f]{16}$' && echo yes || echo no)
+assert_eq "writer: marker prompt_hash is 16 lowercase hex" "$HASH_OK" "yes"
+assert_eq "writer: marker carries no prompt_head" "$(jq -r 'has("prompt_head")' "$MARKER_FILE")" "false"
+assert_eq "writer: prompt_bytes is a JSON number" "$(jq -r '.prompt_bytes|type' "$MARKER_FILE")" "number"
 EPOCH_OK=$([ "$(jq -r '.dispatched_at_epoch' "$MARKER_FILE")" -gt 0 ] 2>/dev/null && echo yes || echo no)
 assert_eq "writer: dispatched_at_epoch is a positive number" "$EPOCH_OK" "yes"
 assert_eq "writer: background field is 'missing' when payload lacks it" "$(jq -r '.background' "$MARKER_FILE")" "missing"
@@ -2693,5 +2696,68 @@ if command -v shellcheck >/dev/null 2>&1; then
 else
   _skip "shellcheck skipped (not installed): scripts/lib/hook-stdin.sh"
 fi
+
+
+# === P4/P5/P6 (FEAT-034 TASK-004): the marker identifies a dispatch by digest, never by prompt text ===
+
+# P4 (KEYSTONE) — a 150-line prompt whose every line exceeds 200 chars, with a
+# sentinel inside the region the pre-FEAT-034 `cut -c1-200` copied verbatim.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+P4_SENTINEL="ZZQX-SENTINEL-7734"
+P4_PROMPT=$(
+  printf 'NAZGUL_UNIT: TASK-001\n'
+  i=1
+  while [ "$i" -le 150 ]; do
+    if [ "$i" -eq 90 ]; then
+      printf '%039d%s%0200d\n' 0 "$P4_SENTINEL" 0
+    else
+      printf '%0250d\n' 0
+    fi
+    i=$((i + 1))
+  done
+)
+PAYLOAD=$(jq -cn --arg p "$P4_PROMPT" '{tool_name:"Agent",tool_input:{subagent_type:"nazgul:implementer",prompt:$p,run_in_background:true}}')
+printf '%s' "$PAYLOAD" | bash "$WRITER" >/dev/null 2>&1
+P4_MARKER=$(find "$TEST_DIR/nazgul/in-flight" -type f | head -1)
+P4_LEAK=$(grep -rl "$P4_SENTINEL" "$TEST_DIR/nazgul/in-flight" 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "P4: no prompt text reaches disk (sentinel absent from every marker)" "$P4_LEAK" "0"
+P4_MAXLEN=$(jq -r '[.[]|tostring]|max_by(length)|length' "$P4_MARKER")
+P4_CEIL=$([ "$P4_MAXLEN" -le 64 ] && echo yes || echo no)
+assert_eq "P4: no marker JSON value exceeds 64 chars (ceiling, not field-specific)" "$P4_CEIL" "yes"
+assert_eq "P4: prompt_head is gone" "$(jq -r 'has("prompt_head")' "$P4_MARKER")" "false"
+
+# P5 — value grammar, and prompt_bytes equals the byte length THIS test built.
+P5_HASH_OK=$(jq -r '.prompt_hash' "$P4_MARKER" | grep -Eq '^[0-9a-f]{16}$' && echo yes || echo no)
+assert_eq "P5: prompt_hash matches ^[0-9a-f]{16}$" "$P5_HASH_OK" "yes"
+assert_eq "P5: prompt_bytes is a JSON number" "$(jq -r '.prompt_bytes|type' "$P4_MARKER")" "number"
+P5_EXPECT=$(printf '%s' "$P4_PROMPT" | wc -c | tr -d ' ')
+assert_eq "P5: prompt_bytes equals the prompt's byte length" "$(jq -r '.prompt_bytes' "$P4_MARKER")" "$P5_EXPECT"
+assert_eq "P5: the five read fields are undisturbed (agent)" "$(jq -r '.agent' "$P4_MARKER")" "nazgul:implementer"
+assert_eq "P5: background stays a JSON string, never a boolean" "$(jq -r '.background|type' "$P4_MARKER")" "string"
+P4_HASH=$(jq -r '.prompt_hash' "$P4_MARKER")
+teardown_temp_dir
+
+# P6 — determinism, then discrimination past column 200 of every line, which is
+# exactly where the pre-FEAT-034 per-line `cut` stopped looking.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+printf '%s' "$PAYLOAD" | bash "$WRITER" >/dev/null 2>&1
+P6_MARKER=$(find "$TEST_DIR/nazgul/in-flight" -type f | head -1)
+assert_eq "P6: byte-identical prompts hash identically" "$(jq -r '.prompt_hash' "$P6_MARKER")" "$P4_HASH"
+teardown_temp_dir
+
+setup_temp_dir
+setup_nazgul_dir
+create_config
+P6_PROMPT=$(printf '%s' "$P4_PROMPT" | sed 's/$/TAIL-DIFFERENT/')
+P6_PAYLOAD=$(jq -cn --arg p "$P6_PROMPT" '{tool_name:"Agent",tool_input:{subagent_type:"nazgul:implementer",prompt:$p,run_in_background:true}}')
+printf '%s' "$P6_PAYLOAD" | bash "$WRITER" >/dev/null 2>&1
+P6_MARKER2=$(find "$TEST_DIR/nazgul/in-flight" -type f | head -1)
+P6_DIFF=$([ "$(jq -r '.prompt_hash' "$P6_MARKER2")" != "$P4_HASH" ] && echo yes || echo no)
+assert_eq "P6: prompts differing only after col 200 of each line hash differently" "$P6_DIFF" "yes"
+teardown_temp_dir
 
 report_results
