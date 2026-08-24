@@ -571,8 +571,17 @@ note. This is §15's looked-vs-never-looked distinction applied to tests, guards
   roster of the shipped files no glob reaches), and
   `tests/test-shared-ignore-coverage.sh` (enrolled FEAT-034 — the shared-mode ephemeral-ignore-block
   sweep of #251; blocking, so nothing checked is its own failure, with a `K > 0` floor on top of that.
-  Its candidate path set is enumerated FROM SOURCE across `scripts/`, `skills/`, `agents/` and
-  `templates/` rather than from a hand-maintained list of directory names, and every enumerated path
+  Its candidate path set is enumerated FROM SOURCE across every tree that can INSTRUCT A WRITER —
+  `scripts/`, `skills/`, `agents/`, `templates/`, `references/`, `hooks/`, `.github/` and the root
+  `CLAUDE.md`, `RULES.md`, `README.md`, `CHANGELOG.md` — rather than from a hand-maintained list of
+  directory names. `docs/` is the one measured exclusion (#254 C4): of its six otherwise-undeclared
+  keys not one has a producer, four are not project paths at all, and a design document never writes
+  anything, so a runtime path it names is still caught the moment its writer lands in a swept tree.
+  A segment that is only PARTIALLY literal resolves to the wildcard key its literal prefix earns
+  (#254 C1) — discarding the whole occurrence on the first non-literal byte is what left
+  `nazgul/context.backup.*/` structurally unpinnable, present in the block with no key to compare it
+  against, so deleting that entry produced zero findings. An EMPTY literal prefix stays
+  unresolvable, and every enumerated path
   must carry a DECLARED DISPOSITION — a path that has a writer but no decision is a finding, which is
   the anti-drift property #251 lacked. The declaration table is pinned to source in BOTH directions
   (`undeclared` catches a path no row claims, `stale-declaration` catches a row no writer still

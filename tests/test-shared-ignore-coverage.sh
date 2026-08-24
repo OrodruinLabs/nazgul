@@ -27,7 +27,14 @@ export LC_ALL=C
 # NOT normalized, on purpose: `find "$SWEEP_ROOT/$s"` and `${f#"$SWEEP_ROOT"/}` are one
 # expression, so `.`, `./` and a trailing slash cancel (#254 C5, refuted on all four forms).
 SWEEP_ROOT="${NAZGUL_IGNORE_SWEEP_ROOT:-$REPO_ROOT}"
-SOURCE_DIRS="scripts skills agents templates"
+# The population is every tree that can INSTRUCT A WRITER, not every tree that names a path:
+# an instruction file, a hook config or a CI workflow can each introduce a real producer (#254 C4).
+SOURCE_DIRS="scripts skills agents templates references hooks .github"
+# These four instruct the operator. docs/ is excluded on measurement — 30 files, 375 occurrences,
+# 24 keys, 6 undeclared and NOT ONE of the six with a producer (four are not project paths at all).
+SOURCE_FILES="CLAUDE.md RULES.md README.md CHANGELOG.md"
+# Residual risk of that one exclusion: a design doc naming a runtime path before its writer lands is
+# unswept — but the writer itself always lands above, so the path is caught once it can be written.
 INIT_SKILL="skills/init/SKILL.md"
 CLEAN_SKILL="skills/clean/SKILL.md"
 # Sentinels are matched by PREFIX, never as an exact line: the shipped start line carries a
@@ -41,7 +48,9 @@ LOCAL_END="# Nazgul Framework — end local mode"
 # ($NAZGUL_DIR/<seg>), which is dominant and carries no literal for family 1.
 OCC_RE='nazgul/[^[:space:]'"'"'"`]*|\$\{?[Nn][Aa][Zz][Gg][Uu][Ll]_[Dd][Ii][Rr]\}?/[^[:space:]'"'"'"`]*'
 TRAIL_PUNCT='.,;)}"'"'"'`'
-FORBIDDEN_CHARS='${}<>*?()"'"'"'|`'
+# The characters after which a path CONTINUES with content the sweep cannot know — a substitution,
+# a brace, a glob, a `<placeholder>`. Every other non-literal character ends the token instead.
+VAR_INTRO='${*?<'
 
 # Pinned floor (test-messaging-posture.sh's POSTURE_ROSTER idiom). Four fields:
 # key|ephemeral-or-record|block-entry-or-dash|reason; a reason may not contain `|`.
@@ -81,7 +90,8 @@ nazgul/reviews|ephemeral|nazgul/reviews/*/simplify-report.md|Regenerated per rev
 nazgul/reviews|ephemeral|nazgul/reviews/*/diff.patch|A committed stale captured diff makes reviewers analyze old code and emit phantom findings
 nazgul/reviews|ephemeral|nazgul/reviews/post-loop-simplify-report.md|Post-loop working file under the reviews record dir
 nazgul/learning|ephemeral|nazgul/learning/proposed-rules.md|Transient autolearning working file
-nazgul/learning|ephemeral|nazgul/learning/.last-run|Transient autolearning working file'
+nazgul/learning|ephemeral|nazgul/learning/.last-run|Transient autolearning working file
+nazgul/context.backup.*|ephemeral|nazgul/context.backup.*/|Timestamped local snapshot of the tracked nazgul/context/, made on re-run by /nazgul:discover'
 
 # A1-A4 increment `findings` directly; the dogfood, P1/P2/P3 and copy-sync regions raise
 # TESTS_FAILED instead, and each folds its own delta in as it closes, before the next baseline.
@@ -90,23 +100,22 @@ unresolvable=0; block_excluded=0
 KEY_HITS=""
 BLOCK_REGIONS=""
 
-# A segment is UNRESOLVABLE if, after trailing punctuation is stripped, it is
-# empty or carries any non-literal character. RESOLVED holds the survivor.
+# A segment is UNRESOLVABLE only when its LITERAL PREFIX is empty. Discarding a whole occurrence
+# on the first non-literal byte is what left nazgul/context.backup.*/ unpinnable (#254 C1).
 _resolve_segment() {
-  local s="$1" last i c
+  local s="$1" last prefix nxt
   while [ -n "$s" ]; do
     last="${s: -1}"
     case "$TRAIL_PUNCT" in *"$last"*) s="${s%?}" ;; *) break ;; esac
   done
   [ -n "$s" ] || return 1
-  i=0
-  while [ "$i" -lt "${#FORBIDDEN_CHARS}" ]; do
-    c="${FORBIDDEN_CHARS:$i:1}"
-    case "$s" in *"$c"*) return 1 ;; esac
-    i=$((i + 1))
-  done
-  case "$s" in *[!A-Za-z0-9._-]*) return 1 ;; esac
-  RESOLVED="$s"
+  prefix="${s%%[!A-Za-z0-9._-]*}"
+  [ -n "$prefix" ] || return 1
+  if [ "$prefix" = "$s" ]; then RESOLVED="$s"; return 0; fi
+  # Which key the prefix earns is decided by the byte that ENDED it, never by the prefix alone:
+  # `config.json|__DROP__` is a table cell holding a whole path, `context.backup.$(date` is not.
+  nxt="${s:${#prefix}:1}"
+  case "$VAR_INTRO" in *"$nxt"*) RESOLVED="$prefix*" ;; *) RESOLVED="$prefix" ;; esac
   return 0
 }
 
@@ -188,6 +197,12 @@ for s in $SOURCE_DIRS; do
     [ -n "$f" ] || continue
     scan_file "$f"
   done < <(find "$SWEEP_ROOT/$s" -type f 2>/dev/null | sort)
+done
+# An absent root file is skipped rather than counted: the dogfood fixtures below build a scan root
+# out of two directories, and a missing CHANGELOG.md there is not an unreadable one.
+for s in $SOURCE_FILES; do
+  [ -f "$SWEEP_ROOT/$s" ] || continue
+  scan_file "$SWEEP_ROOT/$s"
 done
 
 FIRST_HIT=$(printf '%s' "$KEY_HITS" | awk -F'|' 'NF && !seen[$1]++')
@@ -271,7 +286,7 @@ while IFS= read -r key; do
   if printf '%s' "$ENUM_KEYS" | grep -Fxq -- "$key"; then continue; fi
   stale=$((stale + 1)); findings=$((findings + 1))
   _fail "A4 stale-declaration: $key is declared but no longer enumerated from source" \
-    "no occurrence under $SWEEP_ROOT/{$(printf '%s' "$SOURCE_DIRS" | tr ' ' ',')} — a removed writer must retire its declaration"
+    "no occurrence under $SWEEP_ROOT/{$(printf '%s %s' "$SOURCE_DIRS" "$SOURCE_FILES" | tr ' ' ',')} — a removed writer must retire its declaration"
 done <<EOF
 $DECL_KEYS
 EOF
@@ -531,14 +546,36 @@ _dog_only "S3 read-only occurrence (scripts/task-state-guard.sh:353, the sole na
 assert_contains "S3: a read is enumerated too — a mutating-line filter would miss nazgul/locks" "$D_OUT" \
   "A1 undeclared: nazgul/read-only-dir has no declaration row"
 
+# One token per member of $VAR_INTRO plus the all-punctuation case: an EMPTY literal prefix is
+# unknowable and must stay unresolvable, or the prefix rule starts inventing keys (#254 C1).
 _dog_reset
-printf 'nazgul/$SOMEVAR\nnazgul/<name>\nnazgul/**\nnazgul/...\n' > "$DOG/scripts/unresolvable.sh"
+printf 'nazgul/$SOMEVAR\nnazgul/<name>\nnazgul/**\nnazgul/{a,b}\nnazgul/?x\nnazgul/...\n' > "$DOG/scripts/unresolvable.sh"
 D_OUT=$(_dog_run); D_RC=$?
-assert_eq "S4: all four unresolvable tokens move the tally, none silently dropped" \
-  "$(_dog_paths_field "$D_OUT" unresolvable)" "$((BASE_UNRES + 4))"
+assert_eq "S4: all six unresolvable tokens move the tally, none silently dropped" \
+  "$(_dog_paths_field "$D_OUT" unresolvable)" "$((BASE_UNRES + 6))"
 assert_eq "S4: and none of them is reported as a path" \
   "$(_dog_paths_field "$D_OUT" enumerated)" "$BASE_ENUM"
 _dog_clear "S4: an unresolvable token is counted, not a finding" "$D_OUT" "$D_RC"
+
+# S5/S6 are S4's other half: a NON-empty literal prefix earns a key, and which key it earns is
+# decided by the byte that ended it. Read out through A1, exactly as S1-S3 are.
+_dog_reset
+printf '#!/usr/bin/env bash\ncp -r nazgul/context "nazgul/novel.backup.$(date +%%Y%%m%%d)"\n' > "$DOG/scripts/wild.sh"
+D_OUT=$(_dog_run); D_RC=$?
+_dog_only "S5 literal-prefixed write (skills/discover/SKILL.md:43's own shape)" "$D_OUT" "$D_RC" A1
+assert_contains "S5: the resolvable prefix earns a wildcard key instead of being discarded whole" "$D_OUT" \
+  "A1 undeclared: nazgul/novel.backup.* has no declaration row"
+assert_eq "S5: and it is one key, not one per timestamp the writer could produce" \
+  "$(_dog_paths_field "$D_OUT" enumerated)" "$((BASE_ENUM + 1))"
+
+_dog_reset
+printf '#!/usr/bin/env bash\nRULES=("nazgul/terminated-dir|__DROP__")\n' > "$DOG/scripts/term.sh"
+D_OUT=$(_dog_run); D_RC=$?
+_dog_only "S6 delimiter-terminated write (scripts/lib/bootstrap-scrub-map.sh:19's own shape)" "$D_OUT" "$D_RC" A1
+assert_contains "S6: a byte that ENDS the token yields the exact path the table cell holds" "$D_OUT" \
+  "A1 undeclared: nazgul/terminated-dir has no declaration row"
+assert_not_contains "S6: never the wildcard form, which no .gitignore line for that path would match" \
+  "$D_OUT" "nazgul/terminated-dir*"
 
 # P12 — the pin that would have caught #251 the day nazgul/in-flight/ was introduced.
 _dog_reset
@@ -547,6 +584,18 @@ D_OUT=$(_dog_run); D_RC=$?
 _dog_only "P12 #251: a block that no longer contains its own subject" "$D_OUT" "$D_RC" A2
 assert_contains "P12: the finding names nazgul/in-flight/" "$D_OUT" \
   "A2 unignored: 'nazgul/in-flight/' is absent from the shared-mode block"
+
+# P13 is P12 for the one path the sweep used to be structurally unable to protect: at 0bef561 this
+# same deletion produced 0 findings and exit 0, because no key was ever enumerated to compare.
+_dog_reset
+_dog_block_drop "nazgul/context.backup.*/"
+D_OUT=$(_dog_run); D_RC=$?
+_dog_only "P13 #254 C1: a block that no longer contains its literal-prefixed entry" "$D_OUT" "$D_RC" A2
+assert_contains "P13: the finding names nazgul/context.backup.*/" "$D_OUT" \
+  "A2 unignored: 'nazgul/context.backup.*/' is absent from the shared-mode block"
+_dog_reset
+D_OUT=$(_dog_run); D_RC=$?
+_dog_clear "P13 clears: restoring the block entry clears the unignored finding" "$D_OUT" "$D_RC"
 fi
 findings=$((findings + TESTS_FAILED - D_FAILED_BEFORE))
 
