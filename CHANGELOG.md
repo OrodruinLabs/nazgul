@@ -157,6 +157,129 @@ entry's to assign, which is why the heading above carries none yet.
   claim it was proxying — the two sentences it guards belong to one entry and must travel together —
   so no release instruction is owed here, and no version literal survives in that file to maintain.
 
+### FEAT-035 — PR #254's own review board found 19 things, and one of them was wrong
+
+Three independent reviews of PR #254 — CodeRabbit, GitHub Copilot and a posted `/code-review` — filed
+21 raw comments, **19 distinct findings** after dedup. Every one was dispositioned rather than
+triaged into a deferral list, on a standing operator instruction that a finding may be closed as *not
+a defect with evidence* but never deferred for being small. **18 were actionable and shipped a fix.
+One was refuted and shipped nothing.** This is not a feature and it gets no version heading of its
+own: it is the corrections PR #254's reviewers asked for, applied to the same unmerged branch before
+merge, so that what lands is the thing the board actually reviewed. The per-finding record, with
+verification status for each, is `nazgul/context/254-review-findings-inventory.md`.
+
+The framing matters more than the count. **A reviewer assertion is a hypothesis, and four of these
+nineteen did not survive being checked** — one entirely, three on magnitude. Reproducing a finding
+before fixing it was the difference between shipping the fix and shipping the fix's description.
+
+- **C5 is REFUTED. No code shipped for it, and that is the disposition on purpose.** The claim was
+  that an unnormalized `NAZGUL_IGNORE_SWEEP_ROOT` — relative, or carrying a trailing slash — breaks
+  the `rel` prefix strip, disables block-region exclusion, and produces a wall of undeclared
+  failures. All four variants were driven: `/abs/path/`, `/abs/path`, `.` and `./` each produced
+  output **byte-identical to baseline**, including `block-region-excluded: 32`, the very count the
+  finding says is never consulted. The reason it is robust rather than luckily green is that one
+  expression builds both sides — `find "$SWEEP_ROOT/$s"` prefixes its output with its starting
+  argument *literally*, unnormalized, so whatever form `$SWEEP_ROOT` carries appears identically in
+  the emitted path and in the strip pattern and cancels. The finding's failure model needs the find
+  root and the strip prefix to diverge; they cannot, because neither is written independently.
+  Normalizing anyway would have been harmless — and would have published a bug fix for a bug that
+  does not exist, which is the reason it was declined rather than done for tidiness. **The actionable
+  count is 18, not 19.**
+- **Three findings arrived at the wrong magnitude, and the corrected numbers are the ones that
+  shipped.** **A4** called `scripts/lib/review-provenance.sh` "~400 lines"; it is **248**, and it was
+  sourced defensively, so a load failure never broke the hook. The coupling argument stood on its own
+  and the fix is on the coupling — a `PreToolUse` hook contracted to observe and never block no
+  longer sources review-gate tooling to obtain a 9-line sha256 helper — not on an inflated line
+  count. **C4** counted five `nazgul/` paths in the omitted source trees; the real population is
+  **exactly 17**, ~3x the reported exposure, and every one of them was already declared, so the gap
+  was latent rather than live. **D2** named three malformed emphasis spans across two files.
+- **D2 was real in ONE file only, and two automated reviewers were each wrong about the second.**
+  `docs/superpowers/specs/…-mission-control-design.md:287` genuinely closed and reopened strong
+  emphasis in the wrong positions and is fixed. The two sites CodeRabbit and Copilot both flagged in
+  `docs/superpowers/plans/2026-08-03-objective-c-mission-control.md` (`:69`, `:72`) were read and are
+  **well-formed** — one open, one close, brackets inside — so editing them would have been a no-op
+  change to correct markdown made on two bots' agreement. That file is **absent from this objective's
+  diff**, and its absence is the evidence. Convergence between reviewers is not verification; both
+  can be wrong in the same direction, and here both were.
+
+**C2 was the finding most likely to make the whole of FEAT-034 a no-op, and it was fixed at the
+source.** The shared-mode ignore block lives inside a fenced code span in a *skill file* — a prompt —
+and Step 2.5 tells a model to append it to `.gitignore`. The fence was indented three spaces, and git
+treats leading whitespace as part of the pattern: driven in a scratch repo with `HOME`, XDG and
+system git config neutralised, `   nazgul/in-flight/` gives `check-ignore` rc=1 and **`git add -A`
+stages the marker** — #251's exact reported symptom, fully restored — while the flush-left form gives
+rc=0 and stages nothing. At the base commit every entry line in the block was indented — **32 of
+them, none flush-left**. So the literal, obvious reading of the instruction made every entry inert
+and reopened all three exposure routes. Worse, the new contract test could not see it: it fed its
+git-behaviour arms a `sed 's/^[[:space:]]*//'` copy, validating only the de-indented form, which is
+the form nothing required. **The fix de-indents the block in the source** rather than adding a
+requirement that entries be written flush-left, because a requirement needs a model to comply with it
+at append time and a de-indented source needs nothing. The test now reads the RAW fence bytes and
+carries an INDENTED control that must show the leak (`check-ignore` 1 with no pattern cited, 2 files
+staged), so the de-indenting cannot silently return.
+
+Everything else, by theme:
+
+- **The marker writer (`scripts/in-flight-marker.sh`).** **A1**: `prompt_bytes` degraded to JSON
+  `null` with nothing on stderr when `wc`/`tr` failed — reproduced with a failing `wc` shim first on
+  `PATH`, producing a well-formed 16-hex `prompt_hash` beside a null length and no signal that
+  anything had failed, in the same commit that cites ADR-014. The documented three-state grammar is
+  kept true rather than widened to four: a `${#PROMPT}`-under-`LC_ALL=C` fallback means the field is
+  never `null` again, with one stderr line if even that is unreachable. **A2**: `prompt_hash` is now
+  validated against `^[0-9a-f]{16}$` at the writer — the grammar `RULES.md` marked `[enforced]` was
+  enforced nowhere — with the cause *class* on stderr and never the rejected value. **A3**: both dead
+  sites deleted, including a second `PROMPT_BYTES` `case` whose own comment said it could not change
+  the value. **A4**: the digest helper is inlined; `grep -c 'review-provenance'` on the writer is 0.
+- **The fix reaching existing installs, not only fresh ones.** **B1** was the only finding needing a
+  product decision, and it is the one that decides whether #251 is closed for the people who filed
+  it: the idempotency check keyed on the marker line alone, so no existing shared install — including
+  one reinitialized with `--force` — received the 17 new entries, and the block carried no version
+  stamp, so the stale copy was not even *detectable*. The block now has a version-stamped, delimited
+  region that `--force` detects and replaces whole, which **subsumes B3**: removal and rewrite key on
+  the same region definition, so `/nazgul:clean` can no longer orphan the justification
+  comment lines that the old path-only enumeration named nowhere. **B2**: the `nazgul/inbox/` entry stays
+  ignored, but its justification no longer cites `scripts/sync-inbox-to-github.sh` — a script this
+  plugin does not ship (issue #242) — and the entry honors `automation.heartbeat.inbox.dir` instead
+  of assuming the fixed literal.
+- **The new contract test's own honesty holes**, which were of exactly the class it exists to close.
+  **C1**: `nazgul/context.backup.*/` was structurally unpinnable — its only writer literal contains
+  `$(date +…)`, which the resolver rejected, so no key was ever enumerated and **deleting a live block
+  entry produced `0 findings` and exit 0**. The resolver now keys on the literal prefix, and the same
+  deletion yields exactly one finding and exit 1. The measurement that makes the closure real is a
+  small one: at the base commit, losing a live block entry moved `block-region-excluded` from 32 to
+  31 and nothing else — the sweep's entire reaction was one decrement of its own did-not-look counter.
+  **C3**: dogfood failures were snapshotted out of the `findings` tally, so breaking the C2 detector
+  printed `0 findings` on a run that exited 1 — the file's own thesis inverted. Folding them in moved
+  the same 38 failing assertions from `9 findings` to `38`: twenty-nine failures had been invisible
+  to the §15 line. **C4**: the population grows to `scripts skills agents templates references hooks
+  .github` plus `CLAUDE.md RULES.md README.md CHANGELOG.md`; `docs/` is the single exclusion and it
+  ships with its numbers — 6 undeclared keys, **not one with a producer**, four of which are not
+  project paths at all. **C6**: a skip reason that blamed a missing fixture file while its guard
+  tested only whether an environment variable was set. **C7**: two unchecked `mktemp -d` results that,
+  as root in CI, would have made a helper called 10+ times per run `rm -rf /tree` and `mkdir -p
+  /tree/scripts` outside any temporary directory; the destructive path was reproduced by *printing*
+  the computed value, never by running it. **C8**: committed mode `100755`, pinned by an assertion
+  that reads the index.
+- **Record and documentation.** **D1**: a line-initial `#251` that markdownlint parses as a malformed
+  ATX heading, reflowed. **D3**: PR #254's body said `189 unresolvable` where the run prints `190`.
+  **D4**: TASK-011's Implementation Log lacked the full-suite output its own AC required verbatim,
+  waived in the PR body on a scoped-tests rule — **the waiver was wrong**, because that rule is a
+  default for ordinary tasks and not a ban, and TASK-011 is the whole-objective verification task.
+  The suite has since been run to completion twice: once at the pre-fix base and once over this
+  objective, both exit 0 with `K > 0`.
+
+**What the numbers did.** Widening the enumerator (C4) and making non-resolvable literals pinnable
+(C1) both change what the sweep sees, and both were expected to cascade into newly-undeclared paths.
+They did not: `paths:` moves from `31 enumerated, 31 declared, 0 undeclared, 190 unresolvable, 32
+block-region-excluded` to `32/32/0/251/32`, and the coverage line from `136 scanned, 27 skipped, 109
+checked, 0 findings` to `151 scanned, 35 skipped, 116 checked, 0 findings`. **`undeclared` stayed 0**,
+so `skills/init/SKILL.md` and `skills/clean/SKILL.md` have deliberately empty diffs for that half of
+the work — the outcome the plan named as legitimate provided it was stated rather than assumed. Every
+digit is accounted for: scanned +15 from the new sources, skipped +8 and checked +7 (so `N == M + K`
+still holds), one new enumerated key, and `unresolvable` +61 as **−8 from the better resolver and +69
+from the widened population**. Nothing was narrowed to make anything pass: no occurrence regex was
+tightened, no skip list added, no source removed.
+
 ## [2.34.0] - 2026-08-22
 
 FEAT-033, ADR-027 (#218) — **The dispatch class was being PREDICTED at dispatch time; it is
