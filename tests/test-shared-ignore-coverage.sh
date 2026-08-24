@@ -272,6 +272,188 @@ if [ "$scanned" -ne $((skipped_no_path + skipped_unreadable + checked)) ]; then
     "$scanned != $skipped_no_path + $skipped_unreadable + $checked"
 fi
 
+# Dogfood — a detector that can only ever pass is evidence of nothing (RULES §15).
+# Skipped under an injected sweep root: the fixtures re-enter this file and recurse.
+if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
+  _skip "dogfood fixtures (inner run under an injected sweep root)"
+else
+SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-ignore-sweep-XXXXXX"); trap 'rm -rf "$SCRATCH"' EXIT
+DOG="$SCRATCH/tree"
+DOG_CLASSES=("A1 undeclared" "A2 unignored" "A3 over-ignored" "A4 stale-declaration")
+
+# One literal producer per DECLARED key, so a pristine fixture is clean in both
+# directions: nothing enumerated is undeclared (A1), nothing declared is stale (A4).
+_dog_reset() {
+  rm -rf "$DOG"
+  mkdir -p "$DOG/scripts" "$DOG/${INIT_SKILL%/*}"
+  {
+    printf '#!/usr/bin/env bash\n'
+    while IFS= read -r k; do
+      [ -n "$k" ] && printf 'write_state "%s"\n' "$k"
+    done <<INNER
+$DECL_KEYS
+INNER
+  } > "$DOG/scripts/producer.sh"
+  cp "$REPO_ROOT/$INIT_SKILL" "$DOG/$INIT_SKILL"
+}
+
+_dog_run() { NAZGUL_IGNORE_SWEEP_ROOT="$DOG" bash "$SCRIPT_DIR/$TEST_NAME.sh" 2>&1; }
+
+# Block variations are made on the fixture's COPY, never on the shipped skill, and
+# by the same trimmed-line predicate _extract_block uses.
+_dog_block_drop() {
+  local f="$DOG/$INIT_SKILL"
+  awk -v e="$1" '{ t = $0; sub(/^[[:space:]]+/, "", t) } t != e' "$f" > "$f.new" && mv "$f.new" "$f"
+}
+
+_dog_block_add() {
+  local f="$DOG/$INIT_SKILL"
+  awk -v e="$1" -v m="$BLOCK_MARKER" '
+    { print; t = $0; sub(/^[[:space:]]+/, "", t) }
+    t == m { print "   " e }
+  ' "$f" > "$f.new" && mv "$f.new" "$f"
+}
+
+_dog_unproduce() {
+  local f="$DOG/scripts/producer.sh"
+  grep -vF "write_state \"$1\"" "$f" > "$f.new" && mv "$f.new" "$f"
+}
+
+_dog_n() { local n; n=$(printf '%s\n' "$1" | grep -cF "FAIL: $2"); printf '%s' "$n"; }
+
+# MISSING, never an empty string: a field this cannot find must fail an assertion
+# rather than silently compare equal to another absent field.
+_dog_paths_field() {
+  printf '%s\n' "$1" | awk -v want="$2" '
+    /^paths: / { sub(/^paths: /, ""); n = split($0, p, ", ")
+      for (i = 1; i <= n; i++) { split(p[i], kv, " "); if (kv[2] == want) { print kv[1]; f = 1 } } }
+    END { if (!f) print "MISSING" }'
+}
+
+# Exactly one finding of the named class AND zero of the other three: "a finding
+# appeared" would not distinguish a precise detector from one that fires on everything.
+_dog_only() {
+  local label="$1" out="$2" rc="$3" want="$4"
+  local cls got exp detail="" ok=1
+  for cls in "${DOG_CLASSES[@]}"; do
+    got=$(_dog_n "$out" "$cls")
+    if [ "${cls%% *}" = "$want" ]; then exp=1; else exp=0; fi
+    detail="$detail ${cls%% *}=$got(want $exp)"
+    [ "$got" -eq "$exp" ] || ok=0
+  done
+  if [ "$ok" -eq 1 ]; then
+    _pass "$label: exactly one $want finding, none of the other three —$detail"
+  else
+    _fail "$label: exactly one $want finding, none of the other three" "got —$detail"
+  fi
+  assert_exit_code "$label: blocking" "$rc" 1
+  assert_contains "$label: counted as exactly one finding overall" "$out" ", 1 findings"
+}
+
+_dog_clear() {
+  local label="$1" out="$2" rc="$3"
+  assert_exit_code "$label: exit 0" "$rc" 0
+  assert_contains "$label: zero findings" "$out" ", 0 findings"
+  assert_not_contains "$label: no finding line survives" "$out" "FAIL: "
+}
+
+_dog_reset
+D_OUT=$(_dog_run); D_RC=$?
+_dog_clear "D0 baseline: a fixture whose declarations match its source is clean" "$D_OUT" "$D_RC"
+BASE_UNRES=$(_dog_paths_field "$D_OUT" unresolvable)
+BASE_ENUM=$(_dog_paths_field "$D_OUT" enumerated)
+if [ "$BASE_UNRES" = "MISSING" ] || [ "$BASE_ENUM" = "MISSING" ]; then
+  _fail "D0: the paths line exposes the enumerated and unresolvable tallies" \
+    "enumerated='$BASE_ENUM' unresolvable='$BASE_UNRES' — S4 below cannot measure a delta against a missing baseline"
+  BASE_UNRES=-1; BASE_ENUM=-1
+else
+  _pass "D0: the paths line exposes the enumerated ($BASE_ENUM) and unresolvable ($BASE_UNRES) tallies"
+fi
+assert_eq "D0: every declared key is produced by the fixture" "$BASE_ENUM" "$declared_count"
+
+_dog_reset
+printf '#!/usr/bin/env bash\nmkdir -p "$NAZGUL_DIR/novel-dir"\n' > "$DOG/scripts/novel.sh"
+D_OUT=$(_dog_run); D_RC=$?
+_dog_only "C1 undeclared: a writer of a novel nazgul/ dir with no declaration row" "$D_OUT" "$D_RC" A1
+assert_contains "C1: the finding names the novel path" "$D_OUT" \
+  "A1 undeclared: nazgul/novel-dir has no declaration row"
+rm -f "$DOG/scripts/novel.sh"
+D_OUT=$(_dog_run); D_RC=$?
+_dog_clear "C1 clears: removing the writer clears the undeclared finding" "$D_OUT" "$D_RC"
+
+_dog_reset
+_dog_block_drop "nazgul/logs/"
+D_OUT=$(_dog_run); D_RC=$?
+_dog_only "C2 unignored: an ephemeral declaration whose block entry is absent" "$D_OUT" "$D_RC" A2
+assert_contains "C2: the finding names the absent block entry" "$D_OUT" \
+  "A2 unignored: 'nazgul/logs/' is absent from the shared-mode block"
+_dog_reset
+D_OUT=$(_dog_run); D_RC=$?
+_dog_clear "C2 clears: restoring the block entry clears the unignored finding" "$D_OUT" "$D_RC"
+
+_dog_reset
+_dog_block_add "nazgul/tasks/"
+D_OUT=$(_dog_run); D_RC=$?
+_dog_only "C3 over-ignored: a record key present as an exact block line" "$D_OUT" "$D_RC" A3
+assert_contains "C3: the finding names the over-ignored record" "$D_OUT" \
+  "A3 over-ignored: 'nazgul/tasks' is a record but the shared-mode block ignores it"
+_dog_reset
+D_OUT=$(_dog_run); D_RC=$?
+_dog_clear "C3 clears: removing the block line clears the over-ignored finding" "$D_OUT" "$D_RC"
+
+_dog_reset
+_dog_unproduce "nazgul/x"
+D_OUT=$(_dog_run); D_RC=$?
+_dog_only "C4 stale-declaration: a declared key no file in the scan root produces" "$D_OUT" "$D_RC" A4
+assert_contains "C4: the finding names the stale declaration" "$D_OUT" \
+  "A4 stale-declaration: nazgul/x is declared but no longer enumerated from source"
+_dog_reset
+D_OUT=$(_dog_run); D_RC=$?
+_dog_clear "C4 clears: restoring the writer clears the stale-declaration finding" "$D_OUT" "$D_RC"
+
+# S1-S4 use A1 as the readout: an undeclared key can only be REPORTED if it was
+# ENUMERATED, so the finding is the enumeration proof and its citation is the line.
+_dog_reset
+printf '#!/usr/bin/env bash\nX="$NAZGUL_DIR/aliased-dir"\nmkdir -p "$X"\n' > "$DOG/scripts/aliased.sh"
+D_OUT=$(_dog_run); D_RC=$?
+_dog_only "S1 aliased write (scripts/in-flight-marker.sh:73-74's own shape)" "$D_OUT" "$D_RC" A1
+assert_contains "S1: enumerated from the assignment, with no dataflow analysis" "$D_OUT" \
+  "A1 undeclared: nazgul/aliased-dir has no declaration row"
+assert_contains "S1: cited at the assignment line, not at the later mkdir" "$D_OUT" \
+  "first seen at scripts/aliased.sh:2"
+
+_dog_reset
+printf '#!/usr/bin/env bash\nmkdir -p nazgul/literal-dir\n' > "$DOG/scripts/literal.sh"
+D_OUT=$(_dog_run); D_RC=$?
+_dog_only "S2 literal relative write (templates/skill-partials/report-contract.md:19's shape)" "$D_OUT" "$D_RC" A1
+assert_contains "S2: an unquoted relative literal is enumerated" "$D_OUT" \
+  "A1 undeclared: nazgul/literal-dir has no declaration row"
+
+_dog_reset
+printf '#!/usr/bin/env bash\nif [ -d "$ROOT/nazgul/read-only-dir/x" ]; then :; fi\n' > "$DOG/scripts/readonly.sh"
+D_OUT=$(_dog_run); D_RC=$?
+_dog_only "S3 read-only occurrence (scripts/task-state-guard.sh:353, the sole nazgul/locks literal)" "$D_OUT" "$D_RC" A1
+assert_contains "S3: a read is enumerated too — a mutating-line filter would miss nazgul/locks" "$D_OUT" \
+  "A1 undeclared: nazgul/read-only-dir has no declaration row"
+
+_dog_reset
+printf 'nazgul/$SOMEVAR\nnazgul/<name>\nnazgul/**\nnazgul/...\n' > "$DOG/scripts/unresolvable.sh"
+D_OUT=$(_dog_run); D_RC=$?
+assert_eq "S4: all four unresolvable tokens move the tally, none silently dropped" \
+  "$(_dog_paths_field "$D_OUT" unresolvable)" "$((BASE_UNRES + 4))"
+assert_eq "S4: and none of them is reported as a path" \
+  "$(_dog_paths_field "$D_OUT" enumerated)" "$BASE_ENUM"
+_dog_clear "S4: an unresolvable token is counted, not a finding" "$D_OUT" "$D_RC"
+
+# P12 — the pin that would have caught #251 the day nazgul/in-flight/ was introduced.
+_dog_reset
+_dog_block_drop "nazgul/in-flight/"
+D_OUT=$(_dog_run); D_RC=$?
+_dog_only "P12 #251: a block that no longer contains its own subject" "$D_OUT" "$D_RC" A2
+assert_contains "P12: the finding names nazgul/in-flight/" "$D_OUT" \
+  "A2 unignored: 'nazgul/in-flight/' is absent from the shared-mode block"
+fi
+
 # The unresolvable and block-region tallies are path-level, not file-level: one
 # file can hold both kinds, so neither can live in M without breaking N == M + K.
 RC=0
