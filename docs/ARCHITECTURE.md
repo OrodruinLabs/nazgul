@@ -64,6 +64,33 @@ Used by:
 
 `scripts/in-flight-marker.sh` (`PreToolUse` on the `Agent` tool) writes a small marker file under
 `nazgul/in-flight/` for every subagent dispatch — never blocking, a failed write is a silent no-op.
+
+**A marker identifies a dispatch by digest, never by prompt text (FEAT-034/ADR-028).** It carries
+`prompt_hash` and `prompt_bytes` in place of the former `prompt_head`. The field was RENAMED rather
+than redefined because `prompt_head` names content the field no longer has, and the old name is what
+generated the now-moot redaction requirements in the mission-control documents. `prompt_head` predates
+FEAT-034 and wrote `cut -c1-200` of the prompt — a **per-line** operation, so it kept 200 characters of
+*every* line: measured against the pre-change writer, a 150-line prompt produced a marker holding
+30,171 characters of prompt text, 151x the bound its own comment claimed.
+
+The value grammar is closed, and its three states are distinguishable by inspection alone:
+
+| `prompt_hash` | `prompt_bytes` | Means |
+|---|---|---|
+| `^[0-9a-f]{16}$` | the prompt's byte length | computed normally |
+| `e3b0c44298fc1c14` | `0` | **computed**, over an empty prompt — not a failure |
+| `unavailable` | still populated | could not compute; also one stderr line |
+
+`unavailable` is alphabet-disjoint from hex, so one anchored regex separates "could not compute" from
+"computed and got this" — a degradation can never be misread as a digest. `prompt_bytes` is `wc -c`
+over the same byte stream that is hashed, never `${#PROMPT}`, which counts characters under a UTF-8
+locale and would disagree with the digest invisibly.
+
+**Accepted residuals, recorded as decisions rather than oversights.** The digest is unsalted, so a
+party holding a candidate prompt can CONFIRM it by recomputing the hash; it cannot recover an unknown
+prompt. A keyed digest was rejected because a per-project secret is itself state to store and leak,
+and the field's purpose is matching a marker to a dispatch, which a shared secret does not serve.
+`prompt_bytes` discloses prompt SIZE. Both are accepted: the exposure being closed is prompt TEXT.
 `scripts/subagent-stop.sh` clears the oldest marker matching the completing subagent right after its
 existing `subagent_stop` telemetry append. `scripts/stop-hook.sh` checks for a fresh marker immediately
 before its iteration increment: with a provably-background unnamed one present, it ALLOWS the stop (`exit 0`)

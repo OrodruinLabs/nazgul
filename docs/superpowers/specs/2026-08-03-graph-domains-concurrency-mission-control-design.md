@@ -284,6 +284,7 @@ sub-project phase — PR #80 consistency catch). Ingest is idempotent: batches c
 committed-then-timed-out batch resends harmlessly. Opt-in, kill-switched,
 non-blocking — the `connectors.github` idiom; remote (non-loopback) collector URLs
 must be HTTPS, and `prompt_head` fields are redacted before forwarding.
+**[MOOT as of FEAT-034/ADR-028.** `prompt_head` was removed at the writer; a marker now carries `prompt_hash` + `prompt_bytes` and holds no prompt text, so the redaction step has nothing to act on. The HTTPS requirement stands unchanged.**]**
 
 ### C3. Web frontend (the product surface; Aspire-style single pane)
 
