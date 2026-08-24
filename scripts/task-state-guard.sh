@@ -19,6 +19,48 @@ is_task_manifest() {
   [[ "$p" =~ (^|/)nazgul/tasks/TASK-[0-9]+\.md$ ]]
 }
 
+# Defined HERE: the oversize arm below runs long before this function's old definition site, so it
+# could not canonicalise even in principle and every alias fell through to fail-OPEN (item 1).
+_tsg_canon_path() {
+  # No-existence-required realpath (BSD lacks -m): resolve the longest
+  # existing prefix via cd+pwd -P, reattach what doesn't exist literally.
+  #
+  # A TERMINAL symlink must be resolved too (PR #75 review). Resolving only
+  # dirname left the leaf literal, which is a real BYPASS in the fail-open
+  # direction, not just cosmetic: a path OUTSIDE the project symlinked to an
+  # in-project source file canonicalized as outside, so the boundary check
+  # below exited 0 and the state gate never ran — while the write landed
+  # inside the project. Reproduced: direct write to proj/src/main.ts with no
+  # task IN_PROGRESS exits 2, but the same write via outside/link.ts exited 0.
+  local p="$1" suffix="" dir base
+  dir="$(dirname -- "$p")"
+  base="$(basename -- "$p")"
+  while [ "$dir" != "/" ] && [ ! -d "$dir" ]; do
+    suffix="/$(basename -- "$dir")$suffix"
+    dir="$(dirname -- "$dir")"
+  done
+  dir="$(cd "$dir" 2>/dev/null && pwd -P || printf '%s' "$dir")"
+  # Bounded symlink walk on the leaf, only when it exists and the prefix was
+  # fully resolved (no literal suffix). Bounded to 16 hops so a symlink loop
+  # cannot hang a PreToolUse hook; a still-symlinked leaf at the bound fails
+  # closed in the caller rather than becoming an outside-path allow.
+  if [ -z "$suffix" ]; then
+    local hops=0 target
+    while [ -L "$dir/$base" ] && [ "$hops" -lt 16 ]; do
+      target="$(readlink -- "$dir/$base")" || break
+      case "$target" in
+        /*) dir="$(dirname -- "$target")"; base="$(basename -- "$target")" ;;
+        *)  dir="$(cd "$dir" 2>/dev/null && cd "$(dirname -- "$target")" 2>/dev/null && pwd -P || printf '%s' "$dir")"
+            base="$(basename -- "$target")" ;;
+      esac
+      dir="$(cd "$dir" 2>/dev/null && pwd -P || printf '%s' "$dir")"
+      hops=$((hops + 1))
+    done
+    [ ! -L "$dir/$base" ] || return 1
+  fi
+  printf '%s%s/%s' "$dir" "$suffix" "$base"
+}
+
 RHP_LIB="$SCRIPT_DIR/lib/read-hook-payload.sh"
 # A load that returns 0 having defined nothing is still no payload, and it is
 # scoped like the timeout branch below rather than denying every repo.
@@ -45,7 +87,31 @@ _tsg_prefix_file_path() {
   p="${p#"${p%%[![:space:]]*}"}"
   case "$p" in \"*) p="${p#\"}" ;; *) return 1 ;; esac
   case "$p" in *\"*) ;; *) return 1 ;; esac
-  printf '%s' "${p%%\"*}"
+  p="${p%%\"*}"
+  # A blank target is the least identified thing a payload can hand this arm, so it takes the rc-1
+  # route rather than printing an unnamed target into an allow (item 6).
+  [ -n "$p" ] || return 1
+  _tsg_json_unquote "$p"
+}
+
+# lean-comments: allow-run — which escapes decode, and why every other one refuses, is the whole
+# contract of this helper.
+# The value is raw bytes lifted out of a TRUNCATED envelope, never `jq` output, so a JSON-escaped
+# path reached is_task_manifest with its backslashes intact and missed — a fail-OPEN on the exact
+# target the arm exists to refuse. Only `\\`, `\/` and `\"` decode. Every other escape (`\n`,
+# `\uXXXX`, and a trailing lone backslash, which is also how an ESCAPED closing quote truncates the
+# value) returns 1: a spelling this cannot decode is an unknown target, not a known-safe one.
+_tsg_json_unquote() {
+  local rest="$1" out="" c
+  while [ -n "$rest" ]; do
+    c="${rest:0:1}"; rest="${rest:1}"
+    if [ "$c" != "\\" ]; then out="$out$c"; continue; fi
+    [ -n "$rest" ] || return 1
+    c="${rest:0:1}"; rest="${rest:1}"
+    if [ "$c" = "\\" ] || [ "$c" = "/" ] || [ "$c" = '"' ]; then out="$out$c"; else return 1; fi
+  done
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
 }
 
 [ -r "$RHP_LIB" ] || rhp_unavailable "$RHP_LIB is missing or unreadable"
@@ -70,20 +136,41 @@ if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
   # cannot be read fails closed (an unknown target is not a known-safe one), everything else keeps
   # the fail-open. STILL NOT COVERED on this path, stated rather than left to be discovered: the
   # "source edits require an IN_PROGRESS task" rule, which applies to targets this arm allows.
+  # An unknown target is not a known-safe one — but an unrelated repo's edits were never this
+  # guard's to refuse either, so the deny is scoped exactly as the stall arm below is. Unscoped, it
+  # blocked every oversize Write in any non-Nazgul repo permanently, which is the outcome this
+  # arm's own comment says must not happen (re-review #4 item 2).
+  _tsg_oversize_unknown() {
+    if [ -f "$(resolve_project_root)/nazgul/config.json" ]; then
+      hook_payload_timeout_report "task-state-guard" "fail-closed" \
+        "refusing the edit: $1, so the target is unknown — which is not the same as known-safe"
+      exit 2
+    fi
+    hook_payload_timeout_report "task-state-guard" "fail-open" \
+      "allowing the edit unscreened: $1, and this is not a Nazgul project whose task state it could threaten"
+    exit 0
+  }
   if [ "${HOOK_PAYLOAD_REASON:-}" = "oversize" ]; then
     if OVERSIZE_TARGET=$(_tsg_prefix_file_path); then
-      if is_task_manifest "$OVERSIZE_TARGET"; then
+      # Through the SAME canonicaliser every other check in this guard uses: testing the raw value
+      # let a `..` or `//` alias of a manifest miss is_task_manifest and take fail-OPEN (item 1).
+      if ! OVERSIZE_CANON=$(_tsg_canon_path "$OVERSIZE_TARGET"); then
+        _tsg_oversize_unknown "the envelope names ${OVERSIZE_TARGET}, which could not be canonicalised"
+      fi
+      # Both spellings, and only when they differ: the requested one is the only string the operator
+      # can act on, the resolved one is what was actually tested.
+      OVERSIZE_AS=""
+      [ "$OVERSIZE_CANON" = "$OVERSIZE_TARGET" ] || OVERSIZE_AS=" (canonicalised to ${OVERSIZE_CANON})"
+      if is_task_manifest "$OVERSIZE_CANON"; then
         hook_payload_timeout_report "task-state-guard" "fail-closed" \
-          "refusing the edit: ${OVERSIZE_TARGET} is a task manifest, and an unscreened write to one can delete a quarantine record no later pass would see"
+          "refusing the edit: ${OVERSIZE_TARGET}${OVERSIZE_AS} is a task manifest, and an unscreened write to one can delete a quarantine record no later pass would see"
         exit 2
       fi
       hook_payload_timeout_report "task-state-guard" "fail-open" \
-        "allowing the edit unscreened: ${OVERSIZE_TARGET} is not a task manifest, and a deterministic cap must not refuse every large Write forever"
+        "allowing the edit unscreened: ${OVERSIZE_TARGET}${OVERSIZE_AS} is not a task manifest, and a deterministic cap must not refuse every large Write forever"
       exit 0
     fi
-    hook_payload_timeout_report "task-state-guard" "fail-closed" \
-      "refusing the edit: the truncated envelope yields no file_path, so the target is unknown — which is not the same as known-safe"
-    exit 2
+    _tsg_oversize_unknown "the truncated envelope yields no file_path this arm can use"
   fi
   # With no payload there is no file path to bound, so the deny is decided here
   # — but an unrelated repo's edits were never this guard's to refuse.
@@ -134,46 +221,6 @@ PROJECT_ROOT="$(resolve_project_root)"
 
 # Bound FILE_PATH by PROJECT_ROOT (Defect 3): writes outside this project
 # aren't this guard's business — including another project's own manifest.
-_tsg_canon_path() {
-  # No-existence-required realpath (BSD lacks -m): resolve the longest
-  # existing prefix via cd+pwd -P, reattach what doesn't exist literally.
-  #
-  # A TERMINAL symlink must be resolved too (PR #75 review). Resolving only
-  # dirname left the leaf literal, which is a real BYPASS in the fail-open
-  # direction, not just cosmetic: a path OUTSIDE the project symlinked to an
-  # in-project source file canonicalized as outside, so the boundary check
-  # below exited 0 and the state gate never ran — while the write landed
-  # inside the project. Reproduced: direct write to proj/src/main.ts with no
-  # task IN_PROGRESS exits 2, but the same write via outside/link.ts exited 0.
-  local p="$1" suffix="" dir base
-  dir="$(dirname -- "$p")"
-  base="$(basename -- "$p")"
-  while [ "$dir" != "/" ] && [ ! -d "$dir" ]; do
-    suffix="/$(basename -- "$dir")$suffix"
-    dir="$(dirname -- "$dir")"
-  done
-  dir="$(cd "$dir" 2>/dev/null && pwd -P || printf '%s' "$dir")"
-  # Bounded symlink walk on the leaf, only when it exists and the prefix was
-  # fully resolved (no literal suffix). Bounded to 16 hops so a symlink loop
-  # cannot hang a PreToolUse hook; a still-symlinked leaf at the bound fails
-  # closed in the caller rather than becoming an outside-path allow.
-  if [ -z "$suffix" ]; then
-    local hops=0 target
-    while [ -L "$dir/$base" ] && [ "$hops" -lt 16 ]; do
-      target="$(readlink -- "$dir/$base")" || break
-      case "$target" in
-        /*) dir="$(dirname -- "$target")"; base="$(basename -- "$target")" ;;
-        *)  dir="$(cd "$dir" 2>/dev/null && cd "$(dirname -- "$target")" 2>/dev/null && pwd -P || printf '%s' "$dir")"
-            base="$(basename -- "$target")" ;;
-      esac
-      dir="$(cd "$dir" 2>/dev/null && pwd -P || printf '%s' "$dir")"
-      hops=$((hops + 1))
-    done
-    [ ! -L "$dir/$base" ] || return 1
-  fi
-  printf '%s%s/%s' "$dir" "$suffix" "$base"
-}
-
 case "$FILE_PATH" in
   /*) REQUEST_FILE_PATH="$FILE_PATH" ;;
   *)  REQUEST_FILE_PATH="$PROJECT_ROOT/$FILE_PATH" ;;
@@ -523,19 +570,19 @@ if [ "$NEW_STATUS" = "INVALID" ] \
   exit 2
 fi
 
-# lean-comments: allow-run — the shared anchor and the read budget are both load-bearing.
+# lean-comments: allow-run — the read budget these two helpers exist for, and the anchor they do
+# NOT re-spell.
 # --- ADR-020 QUARANTINE RECORD INTEGRITY (board-5 S-5) ---
-# rc 1 = record absent; rc 0 with an empty value = present but blanked. Takes the manifest TEXT,
-# not a path: `ttg_manifest_field "$(cat "$1")" "$2"` slurped a whole file per field question, up
-# to nine times over on a guard that runs before every Write and Edit in the project. The two
-# texts below are read once each, lazily, so a write that asks no quarantine question pays
-# nothing. The SHARED anchor is unchanged: a second spelling here let a two-space manifest be a
-# live quarantine to this checker and invisible to the transition gate, which laundered the
-# block into CANCELLED.
-_tsg_q_value() {
-  ttg_manifest_field "$1" "$2"
-}
-
+# Every quarantine question below goes to ttg_manifest_field directly: rc 1 = record absent, rc 0
+# with an empty value = present but blanked, off the SHARED anchor — a second spelling here once let
+# a two-space manifest be a live quarantine to this checker and invisible to the transition gate,
+# which laundered the block into CANCELLED. `_tsg_q_value` used to sit in front of it and, after
+# PATCH-008 item 11 moved the file read out, forwarded both arguments unchanged: a stack frame and a
+# name without a fact (re-review #4 item 13). What the read budget actually needed is the two lazy
+# loaders below — that reader takes the manifest TEXT, not a path, and `$(cat "$1")` per field
+# question slurped a whole file up to nine times over on a guard that runs before every Write and
+# Edit in the project. Each text is read once, on first use, so a write that asks no quarantine
+# question pays nothing.
 _TSG_POST_TEXT=""
 _TSG_POST_READ=""
 _tsg_load_post_text() {
@@ -566,10 +613,10 @@ if [ "$OLD_STATUS" = "BLOCKED" ] && [ -f "$CANON_FILE_PATH" ]; then
   _tsg_load_post_text
   for _q_field in "Blocked kind" "Blocked from" "Blocked observed"; do
     _q_old_rc=0
-    _q_old=$(_tsg_q_value "$_TSG_OLD_TEXT" "$_q_field") || _q_old_rc=$?
+    _q_old=$(ttg_manifest_field "$_TSG_OLD_TEXT" "$_q_field") || _q_old_rc=$?
     [ "$_q_old_rc" -eq 0 ] || continue
     _q_new_rc=0
-    _q_new=$(_tsg_q_value "$_TSG_POST_TEXT" "$_q_field") || _q_new_rc=$?
+    _q_new=$(ttg_manifest_field "$_TSG_POST_TEXT" "$_q_field") || _q_new_rc=$?
     if [ "$_q_new_rc" -ne 0 ]; then
       _tsg_q_refuse "this write deletes the quarantine record '${_q_field}'"
     fi
@@ -583,9 +630,9 @@ fi
 # quarantine, so either without a reconciliation kind is half-erased, not clean.
 if [ "$NEW_STATUS" = "BLOCKED" ]; then
   _tsg_load_post_text
-  _q_kind_rc=0; _q_kind=$(_tsg_q_value "$_TSG_POST_TEXT" "Blocked kind") || _q_kind_rc=$?
-  _q_from_rc=0; _q_from=$(_tsg_q_value "$_TSG_POST_TEXT" "Blocked from") || _q_from_rc=$?
-  _q_obs_rc=0;  _q_obs=$(_tsg_q_value "$_TSG_POST_TEXT" "Blocked observed") || _q_obs_rc=$?
+  _q_kind_rc=0; _q_kind=$(ttg_manifest_field "$_TSG_POST_TEXT" "Blocked kind") || _q_kind_rc=$?
+  _q_from_rc=0; _q_from=$(ttg_manifest_field "$_TSG_POST_TEXT" "Blocked from") || _q_from_rc=$?
+  _q_obs_rc=0;  _q_obs=$(ttg_manifest_field "$_TSG_POST_TEXT" "Blocked observed") || _q_obs_rc=$?
   _q_typed=0
   case "$_q_kind" in
     [Rr]econciliation|[Rr]econciliation[[:space:]]*) _q_typed=1 ;;

@@ -2545,7 +2545,7 @@ ovr_run() {
       printf '","file_path":"%s"}}' "$target"
     fi
   } > "$TEST_DIR/over.json"
-  CLAUDE_PROJECT_DIR="$OVR_PROJ" NAZGUL_STAGING_DISABLE=1 \
+  CLAUDE_PROJECT_DIR="${3:-$OVR_PROJ}" NAZGUL_STAGING_DISABLE=1 \
     bash "$OVR_TREE/scripts/task-state-guard.sh" >/dev/null 2>"$TEST_DIR/over.err" \
     < "$TEST_DIR/over.json" || ec=$?
   printf '%s' "$ec"
@@ -2577,6 +2577,65 @@ if grep -q '^HOOK_PAYLOAD_MAX_CHARS=4096$' "$OVR_READER"; then
     "$(ovr_run "$OVR_PROJ/nazgul/tasks/TASK-077.md" planted)" "2"
   assert_contains "oversize: the planted decoy reads as unknown, never as the safe target it names" \
     "$(cat "$TEST_DIR/over.err" 2>/dev/null)" "no file_path"
+
+  OVR_PLAIN="$TEST_DIR/plainrepo"
+  mkdir -p "$OVR_PLAIN/src"
+
+  # re-review #4 item 1 — the arm tested the RAW value while _tsg_canon_path sat ~130 lines BELOW
+  # it, so every alias of the one target it exists to refuse took the fail-OPEN branch instead.
+  assert_eq "oversize item 1: a dot-dot spelling of a task manifest still fails CLOSED" \
+    "$(ovr_run "$OVR_PROJ/nazgul/tasks/../tasks/TASK-077.md")" "2"
+  assert_contains "oversize item 1: the refusal names what the spelling resolved to" \
+    "$(cat "$TEST_DIR/over.err" 2>/dev/null)" "canonicalised to"
+  assert_contains "oversize item 1: and still names the requested spelling, the only string the operator can act on" \
+    "$(cat "$TEST_DIR/over.err" 2>/dev/null)" "nazgul/tasks/../tasks/TASK-077.md"
+  assert_eq "oversize item 1: a doubled-slash spelling of a task manifest still fails CLOSED" \
+    "$(ovr_run "$OVR_PROJ/nazgul/tasks//TASK-077.md")" "2"
+  assert_eq "oversize item 1: a JSON-escaped spelling of a task manifest still fails CLOSED" \
+    "$(ovr_run "${OVR_PROJ}\\/nazgul\\/tasks\\/TASK-077.md")" "2"
+  assert_eq "oversize item 1: an ordinary target reached through dot-dot is still ALLOWED — canonicalising must not turn the fail-open into a deny" \
+    "$(ovr_run "$OVR_PROJ/src/../src/big.txt")" "0"
+  assert_eq "oversize item 1: an escape this cannot decode reads as unknown, never as the safe target it spells" \
+    "$(ovr_run "$OVR_PROJ/src/big\\u002etxt")" "2"
+
+  # re-review #4 item 6 — a payload naming nothing at all reached the branch reserved for targets
+  # this arm HAD screened, and printed a blank name into its own allow message.
+  assert_eq "oversize item 6: an EMPTY file_path reads as unknown, not as known-safe" \
+    "$(ovr_run "")" "2"
+  assert_contains "oversize item 6: and it says the target could not be identified" \
+    "$(cat "$TEST_DIR/over.err" 2>/dev/null)" "no file_path"
+  assert_not_contains "oversize item 6: no blank target name is printed into an allow" \
+    "$(cat "$TEST_DIR/over.err" 2>/dev/null)" "unscreened:  is not a task manifest"
+
+  # re-review #4 item 2 — that deny was UNSCOPED, so a cap-sized Write anywhere else was refused
+  # forever. BOTH dispositions come from one envelope shape, so neither can pass vacuously.
+  if [ ! -e "$OVR_PLAIN/nazgul/config.json" ]; then
+    _pass "[fixture] the unrelated tree really carries no nazgul/config.json"
+  else
+    _fail "[fixture] the unrelated tree really carries no nazgul/config.json"
+  fi
+  assert_eq "oversize item 2: the SAME unreadable envelope fails CLOSED in a Nazgul project" \
+    "$(ovr_run "$OVR_PROJ/src/big.txt" content-first "$OVR_PROJ")" "2"
+  assert_eq "oversize item 2: and fails OPEN where there is no Nazgul state it could threaten" \
+    "$(ovr_run "$OVR_PLAIN/src/big.txt" content-first "$OVR_PLAIN")" "0"
+  assert_contains "oversize item 2: the allow names WHY it was never this guard's business" \
+    "$(cat "$TEST_DIR/over.err" 2>/dev/null)" "not a Nazgul project"
+  assert_eq "oversize item 2: an EMPTY file_path is likewise not an unrelated tree's problem" \
+    "$(ovr_run "" path-first "$OVR_PLAIN")" "0"
+
+  # re-review #4 item 13 — once PATCH-008 item 11 moved the file read OUT of _tsg_q_value, the
+  # wrapper forwarded both arguments unchanged: a stack frame and a name without a fact.
+  TSG_PASSTHRU=$(awk '
+    /^[A-Za-z_][A-Za-z0-9_]*\(\) \{$/ { fn = $0; sub(/\(\).*/, "", fn); n = 0; body = ""; next }
+    fn != "" && /^\}$/ {
+      if (n == 1 && body ~ /^[[:space:]]*ttg_manifest_field[[:space:]]+"\$1"[[:space:]]+"\$2"[[:space:]]*$/)
+        print fn
+      fn = ""; next
+    }
+    fn != "" { n++; body = $0 }
+  ' "$REPO_ROOT/scripts/task-state-guard.sh")
+  assert_eq "item 13: no zero-value wrapper forwards both arguments to the shared field reader" \
+    "$TSG_PASSTHRU" ""
 else
   _fail "[fixture] the oversize tree's cap came down to 4096 chars" \
     "no HOOK_PAYLOAD_MAX_CHARS assignment to rewrite — nothing below was driven over the cap"
