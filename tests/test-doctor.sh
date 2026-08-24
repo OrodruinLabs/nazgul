@@ -1243,11 +1243,11 @@ assert_eq "P12i: paused with an unselectable record is UNSELECTABLE RECORD, not 
 teardown_temp_dir
 
 # --- (n) stop-payload: P12d — the enrollment boundary (ruling item 7) ---
-assert_file_contains "P12d: the RULES §15 registry still names TEN bound entry points" \
-  "$REPO_ROOT/RULES.md" "Ten entry"
+assert_file_contains "P12d: the RULES §15 registry still names ELEVEN bound entry points" \
+  "$REPO_ROOT/RULES.md" "Eleven entry"
 DR_ENTRY_LINE=$(grep -m1 '^ENTRY_POINTS=' "$REPO_ROOT/tests/test-coverage-honesty.sh" || true)
 DR_ENTRY_COUNT=$(printf '%s' "$DR_ENTRY_LINE" | sed -E 's/^ENTRY_POINTS="([^"]*)"$/\1/' | wc -w | tr -d ' ')
-assert_eq "P12d: test-coverage-honesty.sh's roster is still ten entry points" "$DR_ENTRY_COUNT" "10"
+assert_eq "P12d: test-coverage-honesty.sh's roster is still eleven entry points" "$DR_ENTRY_COUNT" "11"
 assert_contains "P12d: doctor's ONE pre-existing enrollment is still there" "$DR_ENTRY_LINE" "doctor"
 assert_not_contains "P12d: the unscored note enrolled no entry point of its own" "$DR_ENTRY_LINE" "stop-payload"
 

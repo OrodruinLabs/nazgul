@@ -16,7 +16,7 @@ trap 'rm -rf "$SCRATCH"' EXIT
 
 # Every entry point named by RULES.md §15; the tally at the bottom fails if one
 # was never driven through _entry_covered.
-ENTRY_POINTS="run-tests lean-comments test-shellcheck doctor comment-verifier heartbeat-triage self-audit audit-agent-state-paths test-dispatch-brief-contract test-messaging-posture"
+ENTRY_POINTS="run-tests lean-comments test-shellcheck doctor comment-verifier heartbeat-triage self-audit audit-agent-state-paths test-dispatch-brief-contract test-messaging-posture test-shared-ignore-coverage"
 COVERED=""
 
 _entry_covered() {
@@ -293,6 +293,34 @@ if [ "$MP_CHECKED_N" -ge 1 ]; then
   _pass "test-messaging-posture: a full run actually checks something"
 else
   _fail "test-messaging-posture: a full run actually checks something" "checked: $MP_CHECKED"
+fi
+
+# test-shared-ignore-coverage, forced all-skip scan root: one source file carrying
+# no nazgul/ path at all — scanned, counted and named, never never-looked-at.
+mkdir -p "$SCRATCH/ig/scripts"
+printf '#!/usr/bin/env bash\necho no state path is named here\n' > "$SCRATCH/ig/scripts/plain.sh"
+IG_OUT=$(NAZGUL_IGNORE_SWEEP_ROOT="$SCRATCH/ig" \
+  bash "$REPO_ROOT/tests/test-shared-ignore-coverage.sh" 2>"$SCRATCH/ig.err")
+IG_RC=$?
+_grammar_check "test-shared-ignore-coverage (all-skip)" "test-shared-ignore-coverage" \
+  "no-nazgul-path unreadable" "$(_last_line "$IG_OUT")" && _entry_covered test-shared-ignore-coverage
+assert_contains "test-shared-ignore-coverage: a zero-check sweep names the K>0 floor as its failure" \
+  "$IG_OUT" "FAIL: K>0 floor: the sweep examined at least one file"
+assert_contains "test-shared-ignore-coverage: forced all-skip emits the nothing-checked signal" \
+  "$(cat "$SCRATCH/ig.err")" "test-shared-ignore-coverage: NOTHING CHECKED — all 1 candidates skipped"
+assert_exit_code "test-shared-ignore-coverage: blocking — nothing checked is a failure" "$IG_RC" 1
+# Pinned, not derived: an inherited scan root would aim the "full run" at whatever
+# tree the caller named, and an empty tree passes while checking nothing.
+IG_FULL=$(NAZGUL_IGNORE_SWEEP_ROOT="$REPO_ROOT" \
+  bash "$REPO_ROOT/tests/test-shared-ignore-coverage.sh" 2>/dev/null)
+_grammar_check "test-shared-ignore-coverage (full run)" "test-shared-ignore-coverage" \
+  "no-nazgul-path unreadable" "$(_last_line "$IG_FULL")"
+IG_CHECKED=$(_last_line "$IG_FULL" | sed -E 's/^.*\), ([0-9]+) checked.*/\1/')
+case "${IG_CHECKED:-}" in ''|*[!0-9]*) IG_CHECKED_N=0 ;; *) IG_CHECKED_N="$IG_CHECKED" ;; esac
+if [ "$IG_CHECKED_N" -ge 1 ]; then
+  _pass "test-shared-ignore-coverage: a full run actually checks something"
+else
+  _fail "test-shared-ignore-coverage: a full run actually checks something" "checked: $IG_CHECKED"
 fi
 
 # Enumeration completeness — the point of the whole file: an entry point with no

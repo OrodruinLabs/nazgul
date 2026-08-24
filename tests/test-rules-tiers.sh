@@ -62,14 +62,14 @@ else
     "found $ADVISORY_COUNT occurrences of [advisory] — expected exactly 35"
 fi
 
-# Bumped per objective, never weakened: 64->69 (FEAT-029), 69->71 (PATCH-002), 71->78
-# +advisory 28->31, 78->79 (FEAT-030 §21 + item 8), 79->82 +advisory 31->35 (FEAT-032 §22).
+# Bumped per objective, never weakened: 64->69 (FEAT-029), 69->71 (PATCH-002), 71->78 +advisory
+# 28->31, 78->79 (FEAT-030 §21 item 8), 79->82 +advisory 31->35 (FEAT-032 §22), 82->83 (FEAT-034).
 ENFORCED_COUNT=$(awk '{ count += gsub(/\[enforced\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ENFORCED_COUNT" -eq 82 ]; then
-  _pass "[enforced] annotation count is exactly 82 (found: $ENFORCED_COUNT)"
+if [ "$ENFORCED_COUNT" -eq 83 ]; then
+  _pass "[enforced] annotation count is exactly 83 (found: $ENFORCED_COUNT)"
 else
-  _fail "[enforced] annotation count is exactly 82" \
-    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 82"
+  _fail "[enforced] annotation count is exactly 83" \
+    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 83"
 fi
 
 # 21 -> 22: FEAT-029 added §2's typed reconciliation quarantine, hook-driven
