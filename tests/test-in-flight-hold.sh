@@ -2529,6 +2529,7 @@ _p14n_entry_of() {
 # same / split / missing: the third state stops an unfindable sentence passing as empty-equals-empty.
 _p14n_colocated() {
   local a b
+  [ -r "$1" ] || { printf 'missing'; return; }
   a="$(_p14n_entry_of "$1" "$2")"
   b="$(_p14n_entry_of "$1" "$3")"
   if [ "$a" = "(absent)" ] || [ "$b" = "(absent)" ]; then printf 'missing'
@@ -2542,10 +2543,17 @@ _p14_check "P14n: ... and the two sentences above belong to one entry, so no rel
 # previous entry must NOT be colocated with the pinned one.
 _p14_check "P14n control: the comparator does tell entries apart, so a 'same' verdict is a finding and not a default" \
   "$(_p14n_colocated "$P14_CHANGELOG" 'unguaranteed channel may shorten a wait, but may never authorize one' 'declines a hold the previous release would have taken')" "split"
+# A permanent control for the third state: `missing` needs standing evidence too, not just a
+# corruption probe that was run once and reverted.
+_p14_check "P14n control: an unfindable sentence reads missing, not a vacuous same" \
+  "$(_p14n_colocated "$P14_CHANGELOG" 'this exact sentence does not appear anywhere in the changelog' 'declines a hold the previous release would have taken')" "missing"
 # The release step rewrites `## Unreleased` into a bracketed version heading — the exact edit the old
 # literal pin went red on. Simulate it on a scratch copy, never the repo file.
 P14N_SIM=$(mktemp "${TMPDIR:-/tmp}/nazgul-p14n-changelog-XXXXXX")
-sed 's/^## Unreleased$/## [99.0.0] - 2099-12-31/' "$P14_CHANGELOG" > "$P14N_SIM"
+# Insert above the first `## ` heading whatever its text, so this holds for `## Unreleased`,
+# `## [Unreleased]`, or an already-released version heading — not just today's exact string.
+awk '!ins && /^## / { print "## [99.0.0] - 2099-12-31"; print ""; ins = 1 } { print }' \
+  "$P14_CHANGELOG" > "$P14N_SIM"
 _p14_check "P14n control: the simulated release really did land a new topmost version heading" \
   "$(grep -m1 '^## ' "$P14N_SIM")" "## [99.0.0] - 2099-12-31"
 _p14_check "P14n control: ... and the colocation check is unmoved by it, which is what the version pin was not" \
