@@ -529,6 +529,23 @@ assert_contains "P12: the finding names nazgul/in-flight/" "$D_OUT" \
 fi
 findings=$((findings + TESTS_FAILED - D_FAILED_BEFORE))
 
+# The committed mode, not the working-tree one: `cp` over a checked-out file leaves the mode
+# alone, so only the index says whether this file's own `./tests/…` dogfood idiom can run.
+M_FAILED_BEFORE=$TESTS_FAILED
+if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
+  _skip "committed-mode pin (inner run under an injected sweep root: \$REPO_ROOT is the fixture's parent, not a checkout tracking this file)"
+else
+M_MODE=$(git -C "$REPO_ROOT" ls-files -s -- "tests/$TEST_NAME.sh" 2>/dev/null | awk '{print $1}')
+if [ -z "$M_MODE" ]; then
+  _fail "C8 mode: git reports a committed mode for tests/$TEST_NAME.sh" \
+    "git ls-files -s named nothing under $REPO_ROOT — a mode that could not be read must not stand in for an executable one"
+else
+  assert_eq "C8 mode: committed 100755, so ./tests/$TEST_NAME.sh runs instead of giving permission denied" \
+    "$M_MODE" "100755"
+fi
+fi
+findings=$((findings + TESTS_FAILED - M_FAILED_BEFORE))
+
 # P1/P2/P3 prove the block changes GIT'S BEHAVIOUR, not the skill's text alone, and
 # run in a scratch `git init` tree: this checkout is local-mode, so there is no in-tree repro.
 if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
