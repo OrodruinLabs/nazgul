@@ -384,10 +384,10 @@ setup_temp_dir
 setup_nazgul_dir
 create_config
 mkdir -p "$TEST_DIR/nazgul/in-flight"
-jq -cn '{agent:"nazgul:implementer", unit:"TASK-001", dispatched_at:"2026-08-01T00:00:00Z", dispatched_at_epoch:1000, prompt_head:"x", background:"true", named:"false"}' \
+jq -cn '{agent:"nazgul:implementer", unit:"TASK-001", dispatched_at:"2026-08-01T00:00:00Z", dispatched_at_epoch:1000, prompt_hash:"0123456789abcdef", prompt_bytes:1, background:"true", named:"false"}' \
   > "$TEST_DIR/nazgul/in-flight/ancient.json"
 NOW=$(date +%s)
-jq -cn --argjson e "$NOW" '{agent:"nazgul:implementer", unit:"TASK-002", dispatched_at:"x", dispatched_at_epoch:$e, prompt_head:"x", background:"true", named:"false"}' \
+jq -cn --argjson e "$NOW" '{agent:"nazgul:implementer", unit:"TASK-002", dispatched_at:"x", dispatched_at_epoch:$e, prompt_hash:"0123456789abcdef", prompt_bytes:1, background:"true", named:"false"}' \
   > "$TEST_DIR/nazgul/in-flight/fresh.json"
 (cd "$TEST_DIR" && bash "$SESSION_SCRIPT" </dev/null >/dev/null 2>&1) || true
 assert_file_exists "sweep: over-age marker quarantined" "$TEST_DIR/nazgul/in-flight/quarantine/ancient.json"
