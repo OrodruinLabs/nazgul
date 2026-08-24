@@ -19,7 +19,7 @@ STOP_HOOK="$REPO_ROOT/scripts/stop-hook.sh"
 # Helper: run hook capturing output and exit code
 # Sets: HOOK_OUTPUT, HOOK_EC
 run_hook() {
-  HOOK_OUTPUT=$(bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+  HOOK_OUTPUT=$(bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 }
 
 # Probe that does NOT call the code under test, so a base-tree replay measures
@@ -812,7 +812,7 @@ mc_setup() {
 
 mc_setup
 mc_evidence TASK-001 "scripts/close-objective.sh (host API, ok)"
-HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "merge-closed DONE is NOT reverted by the reactive gate" "$status" "DONE"
 assert_not_contains "merge-closed DONE: no review-gate violation" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
@@ -822,7 +822,7 @@ teardown_temp_dir
 
 mc_setup
 mc_evidence TASK-001 ""
-HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "a forged merge block does NOT admit DONE — the review route is unweakened" \
   "$status" "IMPLEMENTED"
@@ -843,7 +843,7 @@ chmod +x "$MC_BIN_DOWN/gh"
 
 mc_setup
 mc_evidence TASK-001 "scripts/close-objective.sh (host API, ok)"
-HOOK_OUTPUT=$(PATH="$MC_BIN_DOWN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+HOOK_OUTPUT=$(PATH="$MC_BIN_DOWN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "TASK-022: an unverifiable host does NOT demote a merge-closed DONE" "$status" "DONE"
 assert_not_contains "TASK-022: a deferral is not a review-gate violation" \
@@ -862,7 +862,7 @@ assert_file_contains "TASK-022: the deferral event says it declined to act" \
 count=$(jq -r 'if (.safety._review_reset_counts | has("TASK-001")) then .safety._review_reset_counts["TASK-001"] else "absent" end' "$TEST_DIR/nazgul/config.json")
 assert_eq "TASK-022: a deferral moves no strike counter" "$count" "absent"
 # The second consecutive Stop is where the unfixed ladder landed on BLOCKED.
-HOOK_OUTPUT=$(PATH="$MC_BIN_DOWN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+HOOK_OUTPUT=$(PATH="$MC_BIN_DOWN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "TASK-022: a second unverifiable iteration still leaves DONE in place" "$status" "DONE"
 assert_not_contains "TASK-022: no escalation on a repeated deferral" \
@@ -888,7 +888,7 @@ chmod +x "$MC_BIN_OPEN/gh"
 
 mc_setup
 mc_evidence TASK-001 "scripts/close-objective.sh (host API, ok)"
-HOOK_OUTPUT=$(PATH="$MC_BIN_OPEN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+HOOK_OUTPUT=$(PATH="$MC_BIN_OPEN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "TASK-022: a host answer of not_merged still resets DONE" "$status" "IMPLEMENTED"
 assert_contains "TASK-022: not_merged is still a violation, not a deferral" \
@@ -901,7 +901,7 @@ teardown_temp_dir
 
 mc_setup '.safety._review_reset_counts = {"TASK-001": 1}'
 mc_evidence TASK-001 "scripts/close-objective.sh (host API, ok)"
-HOOK_OUTPUT=$(PATH="$MC_BIN_OPEN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+HOOK_OUTPUT=$(PATH="$MC_BIN_OPEN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "TASK-022: a second not_merged iteration still escalates to BLOCKED" "$status" "BLOCKED"
 assert_contains "TASK-022: the not_merged escalation is still named" \
@@ -922,8 +922,8 @@ assert_file_contains "TASK-023: and the commented block beneath it, not an empty
   "$TEST_DIR/nazgul/tasks/TASK-001.md" "\- \*\*host\*\*: example\.invalid"
 assert_file_contains "TASK-023: with the comment still closed around it" \
   "$TEST_DIR/nazgul/tasks/TASK-001.md" "(host API, ok) -->"
-HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
-HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "TASK-023: a review-closed DONE still stands" "$status" "DONE"
 me_events=$(grep -c '"event":"merge_evidence_missing"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null || true)
@@ -937,7 +937,7 @@ teardown_temp_dir
 # verifier and still refuses with its own token — the gate is unweakened, only the probe moved.
 mc_setup
 mc_evidence TASK-001 ""
-HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 assert_file_contains "TASK-023: a half-written real block still reaches the verifier" \
   "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"merge_evidence_missing"'
 assert_file_contains "TASK-023: with its refusal token unchanged" \
@@ -997,7 +997,7 @@ ct_setup() {
 # The workflow the feature exists to enable: /nazgul:complete writes ## Merge Evidence into
 # EVERY task it closes, so a section-presence pre-filter probed all 21 on every iteration.
 ct_setup 21 true
-HOOK_OUTPUT=$(PATH="$CT_BIN:$PATH" NAZGUL_TEST_GH_CALLS="$CT_CALLS" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+HOOK_OUTPUT=$(PATH="$CT_BIN:$PATH" NAZGUL_TEST_GH_CALLS="$CT_CALLS" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 ct_calls=$(wc -l < "$CT_CALLS" | tr -d ' ')
 assert_eq "#5: 21 review-closed DONE tasks cost ZERO host calls" "${ct_calls:-0}" "0"
 assert_eq "#5: and the review route still holds every one of them at DONE" \
@@ -1009,7 +1009,7 @@ teardown_temp_dir
 # The other half: when the host genuinely has to be asked, N manifests share ONE pr and
 # therefore ONE round trip — while each still gets its own independently computed verdict.
 ct_setup 21 false
-HOOK_OUTPUT=$(PATH="$CT_BIN:$PATH" NAZGUL_TEST_GH_CALLS="$CT_CALLS" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+HOOK_OUTPUT=$(PATH="$CT_BIN:$PATH" NAZGUL_TEST_GH_CALLS="$CT_CALLS" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 ct_calls=$(wc -l < "$CT_CALLS" | tr -d ' ')
 assert_eq "#5: 21 manifests sharing one pr cost exactly ONE host call" "${ct_calls:-0}" "1"
 assert_eq "#5: the memo does not weaken the verdict — the merge route still admits" \
@@ -1040,7 +1040,7 @@ mc_evidence TASK-001 "scripts/close-objective.sh (host API, ok)"
 sed -i.bak 's/^- \*\*pr\*\*: 91$/- **pr**: 999999999/' "$TEST_DIR/nazgul/tasks/TASK-001.md" \
   && rm -f "$TEST_DIR/nazgul/tasks/TASK-001.md.bak"
 for defer_iter in 1 2 3; do
-  HOOK_OUTPUT=$(PATH="$MC_BIN_404:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+  HOOK_OUTPUT=$(PATH="$MC_BIN_404:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
   assert_eq "#6: iteration ${defer_iter} is inside the bound — DONE stands" \
     "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "DONE"
   assert_contains "#6: iteration ${defer_iter} names where it stands against the ceiling" \
@@ -1052,7 +1052,7 @@ for defer_iter in 1 2 3; do
     "$(jq -r '.safety._merge_undecided_counts["TASK-001"] // "absent"' "$TEST_DIR/nazgul/config.json")" \
     "$defer_iter"
 done
-HOOK_OUTPUT=$(PATH="$MC_BIN_404:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+HOOK_OUTPUT=$(PATH="$MC_BIN_404:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 assert_contains "#6: the 4th consecutive unverifiable iteration ENDS the deferral" \
   "$HOOK_OUTPUT" "merge-evidence deferral EXHAUSTED"
 assert_contains "#6: and the exhaustion names the ceiling it reached" \
@@ -1071,7 +1071,7 @@ teardown_temp_dir
 # nothing, and a host that comes back ENDS the run of consecutive deferrals.
 mc_setup
 mc_evidence TASK-001 "scripts/close-objective.sh (host API, ok)"
-HOOK_OUTPUT=$(PATH="$MC_BIN_DOWN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+HOOK_OUTPUT=$(PATH="$MC_BIN_DOWN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 assert_eq "#6: one transient outage still moves no status" \
   "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "DONE"
 assert_eq "#6: one transient outage still records no strike" \
@@ -1079,7 +1079,7 @@ assert_eq "#6: one transient outage still records no strike" \
   "absent"
 assert_eq "#6: one transient outage costs exactly one deferral" \
   "$(jq -r '.safety._merge_undecided_counts["TASK-001"] // "absent"' "$TEST_DIR/nazgul/config.json")" "1"
-HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 assert_eq "#6: the host comes back and the closure is admitted" \
   "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "DONE"
 assert_eq "#6: 'consecutive' really is consecutive — the counter is cleared" \

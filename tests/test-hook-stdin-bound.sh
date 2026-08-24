@@ -21,8 +21,14 @@ READER_LIB="scripts/lib/read-hook-payload.sh"
 # this defect (an operand-blind pattern named six such call sites before it was pinned).
 UNBOUNDED_RE='\$\(cat[[:space:]]*(\)|2>|\|)|^[[:space:]]*cat[[:space:]]*>[[:space:]]*/dev/null'
 DISPOSITIONS="fail-open fail-closed"
-# Each script gets the bound plus slack; a hang is anything still alive after it.
-DEADLINE=6
+# Each script gets the bound plus slack; a hang is anything still alive after it. DERIVED, not
+# a literal: two readers ship (read-hook-payload.sh at 5s, #245's hook-stdin.sh at 10s) and a
+# deadline shorter than the larger bound reports a correctly-bounded hook as a hang.
+_HSB_D1="$(sed -n 's/^HOOK_PAYLOAD_DEADLINE_SECONDS=\([0-9][0-9]*\).*/\1/p' "$REPO_ROOT/scripts/lib/read-hook-payload.sh" 2>/dev/null | head -1)"
+_HSB_D2="$(sed -n 's/^__HS_DEFAULT_TIMEOUT=\([0-9][0-9]*\).*/\1/p' "$REPO_ROOT/scripts/lib/hook-stdin.sh" 2>/dev/null | head -1)"
+case "$_HSB_D1" in ''|*[!0-9]*) _HSB_D1=5 ;; esac
+case "$_HSB_D2" in ''|*[!0-9]*) _HSB_D2=10 ;; esac
+if [ "$_HSB_D1" -ge "$_HSB_D2" ]; then DEADLINE=$((_HSB_D1 + 3)); else DEADLINE=$((_HSB_D2 + 3)); fi
 FLOOR=16
 
 # Three roots: $PROJ puts all six fail-closed guards inside their authority, and the other
@@ -155,6 +161,9 @@ fi
 NO_BRANCH=""
 for h in $HOOKS; do
   f="$REPO_ROOT/scripts/$h"
+  # Scoped to OUR reader by the LIBRARY it sources, not by the function name: #245's
+  # scripts/lib/hook-stdin.sh defines a read_hook_payload too, with its own outcome contract.
+  grep -q 'lib/read-hook-payload.sh' "$f" || continue
   grep -q 'read_hook_payload' "$f" || continue
   grep -q 'HOOK_PAYLOAD_OUTCOME' "$f" || NO_BRANCH="$NO_BRANCH$h "
   grep -qE 'hook_payload_timeout_report "[^"]+" "[^"]+"' "$f" || NO_BRANCH="$NO_BRANCH$h "

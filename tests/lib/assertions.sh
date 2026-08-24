@@ -267,6 +267,15 @@ NZD_HELPER_FILE='tests/lib/assertions.sh'
 # walk never actually exempted is a finding too (nzd_scan's staleness pass).
 nzd_exemption() { # <rel-path> <line-text> -> justification, exit 0 if exempt
   case "$1" in
+    tests/test-in-flight-hold.sh)
+      case "$2" in
+        *'P10_SHIM/sha256sum'*|*'P10_SHIM/shasum'*)
+          echo "the token is a FILE PATH: the block writes and chmods stub binaries at those names to drive the no-digest-tool degradation, and never invokes a digest itself"
+          return 0 ;;
+        *'cksum'*)
+          echo "cksum is a byte-identity check on the test's own config.json across one hook run, asserting the hold wrote an attempt ledger and NOT config state — it digests no security-relevant content and gates nothing"
+          return 0 ;;
+      esac ;;
     tests/test-task-transition-command.sh)
       case "$2" in
         *'HASHBIN/sha256sum'*)

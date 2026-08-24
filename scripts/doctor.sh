@@ -355,6 +355,79 @@ check_stdin_hazard() {
   _doc_report note stdin-hazard "Hook scripts that read stdin via 'cat' without a bounded, non-tty-aware guard can block forever under a non-tty, never-EOF stdin. When running such scripts (or the test harness) outside a real hook context, redirect stdin: 'script < /dev/null'. Informational only; does not affect this run's exit code."
 }
 
+# (n) Stop-payload observability (#218 ruling Q4) — an unscored note, so it adds no
+# RULES §15 registry membership. Every outcome is named; none stands in for another.
+check_stop_payload() {
+  local events="$NAZGUL_DIR/logs/events.jsonl" last="" seen why counts bus paused candidate="no" detail frozen
+  bus=$(_doc_cfg '.telemetry.bus_enabled' true)
+  paused=$(_doc_cfg '.paused' false)
+  if [ -f "$events" ]; then
+    # Presence probe, NOT selection: jq aborts the whole stream at the first malformed
+    # line, so "selected nothing" and "could not read" have to stay distinguishable.
+
+    # BOTH probes survive, only their ORDER changed (PR #245 finding 14): grep short-circuits at the
+    # first hit, so a bus with no record at all now costs one scan instead of two.
+    if grep -q 'stop_payload_observed' "$events" 2>/dev/null; then
+      candidate="yes"
+      last=$(jq -c 'select(.event == "stop_payload_observed")' "$events" 2>/dev/null | tail -1 || true)
+    fi
+  fi
+  if [ "$bus" = "false" ]; then
+    if [ -n "$last" ] || [ "$candidate" = "yes" ]; then
+      frozen="The newest stop_payload_observed line in nazgul/logs/events.jsonl predates the bus being switched off and can never be refreshed, so it is not evidence about this environment now."
+    else
+      frozen="nazgul/logs/events.jsonl holds no stop_payload_observed record and cannot gain one while the bus is off."
+    fi
+    _doc_skip note stop-payload not-applicable-config "TELEMETRY BUS DISABLED: telemetry.bus_enabled is false, so emit_event() returns without writing and no Stop can be recorded here. This check CANNOT ANSWER whether background_tasks reaches this host, and no number of loop iterations will change that. $frozen Set telemetry.bus_enabled to true in nazgul/config.json, run one loop iteration, then re-run /nazgul:doctor."
+    return 0
+  fi
+  if [ -z "$last" ]; then
+    if [ "$candidate" = "yes" ]; then
+      _doc_skip note stop-payload unreadable "UNSELECTABLE RECORD: nazgul/logs/events.jsonl carries the token stop_payload_observed but no record could be selected out of it — jq is absent, or a malformed line aborted the stream before the record was reached. This is 'could not look', not 'looked and found none': whether a Stop has been measured here is UNDETERMINED."
+      return 0
+    fi
+    # Bus-off returned above on purpose: it says no record can EVER be written, while a pause clears
+    # with one /nazgul:start. Only no-record lands here — a record predating the pause is still evidence.
+    if [ "$paused" = "true" ]; then
+      _doc_skip note stop-payload not-applicable-config "LOOP PAUSED: nazgul/config.json has paused=true, so scripts/stop-hook.sh returns at the pause gate BEFORE the stop_payload_observed emit and no Stop can be recorded here. This check CANNOT ANSWER whether background_tasks reaches this host, and running more iterations will not change that: pause is STICKY, cleared only by /nazgul:start, so every further Stop exits at the same gate. Run /nazgul:start to resume the loop, let one Stop complete, then re-run /nazgul:doctor."
+      return 0
+    fi
+    _doc_report note stop-payload "NEVER OBSERVED: nazgul/logs/events.jsonl holds no stop_payload_observed record, so no Stop has been measured in this project yet. This is 'never looked' — it is NOT a report that background_tasks was missing. Run one loop iteration (any Stop emits the record) and re-run /nazgul:doctor."
+    return 0
+  fi
+  seen=$(printf '%s' "$last" | jq -r '.bg_seen // ""' 2>/dev/null || true)
+  if [ -z "$seen" ]; then
+    _doc_skip note stop-payload unreadable "UNREADABLE RECORD: a stop_payload_observed record was selected but carries no readable bg_seen field, so the record itself does not say what was observed. Whether background_tasks reached the last Stop is UNDETERMINED here — which is neither 'present', 'absent', nor 'never observed'."
+    return 0
+  fi
+  if [ "$seen" = "yes" ]; then
+    counts=$(printf '%s' "$last" | jq -r '"entries=\(.entries) subagents=\(.subagents) live=\(.live) types=[\(.types)] statuses=[\(.statuses)]"' 2>/dev/null || printf 'counts unreadable')
+    _doc_report note stop-payload "FIELD PRESENT at the last recorded Stop: background_tasks was delivered and read ($counts). Dispatch class is observable on this host, so the in-flight hold can be decided from the payload instead of predicted at dispatch time."
+    return 0
+  fi
+  why=$(printf '%s' "$last" | jq -r '.why // ""' 2>/dev/null || true)
+  why="${why:-unrecorded}"
+  # Whole-field alternatives, never a prefix glob: read_timeout is a strict prefix
+  # of read_timeout_partial, and the two describe different payloads.
+  case "$why" in
+    field_absent)
+      _doc_report note stop-payload "FIELD ABSENT at the last recorded Stop: a Stop WAS measured, the payload arrived and parsed, and background_tasks was not in it (bg_seen=$seen, why=$why). background_tasks is undocumented, so its shape can change with no deprecation notice. This is 'looked and found none', not 'never looked'."
+      return 0
+      ;;
+    field_wrong_type)
+      _doc_report note stop-payload "FIELD PRESENT BUT WRONG SHAPE at the last recorded Stop: the payload arrived and parsed and background_tasks WAS there, but it is not an array (bg_seen=$seen, why=$why). This is the R3 schema-change canary firing: background_tasks is undocumented, so its shape can change with no deprecation notice, and the classifier degraded to unknown rather than counting a null or object as an empty registry. It is NOT a report that the field was absent."
+      return 0
+      ;;
+    no_stdin)             detail="no payload reached the Stop hook at all — stdin was a terminal, closed, or a clean empty EOF" ;;
+    read_timeout)         detail="the bounded stdin read hit its timeout having read NOTHING" ;;
+    read_timeout_partial) detail="the bounded stdin read hit its timeout with the payload only partly arrived, so what the classifier held was truncated by Nazgul's own bound rather than malformed by the producer" ;;
+    not_json)             detail="the payload arrived but did not parse as JSON" ;;
+    no_jq)                detail="jq is not installed, so the payload could not be inspected at all" ;;
+    *)                    detail="the recorded why is not a member of this check's known set (no_stdin, read_timeout, read_timeout_partial, not_json, field_absent, field_wrong_type, no_jq), so a producer recorded a reason this check has not been taught" ;;
+  esac
+  _doc_skip note stop-payload unreadable "PAYLOAD UNDETERMINED at the last recorded Stop: $detail (bg_seen=$seen, why=$why). Whether background_tasks reached the classifier is UNDETERMINED — this is neither 'present', 'absent', nor 'never observed', and it is NOT a report that background_tasks was missing."
+}
+
 # The gh-stack release ADR-018's probe characterized, and whose exact message
 # strings scripts/lib/stack-utils.sh matches on. The pin lives in source, not in
 # nazgul/config.json, because doctor never writes state (ADR-016): the canary is
@@ -665,7 +738,7 @@ check_sessions() {
   fi
 }
 
-_DOC_CHECK_IDS="config-present plugin-version dependencies git-hooks invoking-shell nazgul-dir-env config-schema stacking stack-registry stdin-hazard messaging remote-control sessions"
+_DOC_CHECK_IDS="config-present plugin-version dependencies git-hooks invoking-shell nazgul-dir-env config-schema stacking stack-registry stdin-hazard stop-payload messaging remote-control sessions"
 _DOC_ONLY=""
 
 # _doc_run <check-id> <function> — runs the check unless --only excluded it.
@@ -747,6 +820,7 @@ main() {
   _doc_run stacking check_stacking
   _doc_run stack-registry check_stack_registry
   _doc_run stdin-hazard check_stdin_hazard
+  _doc_run stop-payload check_stop_payload
   _doc_run messaging check_messaging
   _doc_run remote-control check_remote_control
   _doc_run sessions check_sessions

@@ -791,7 +791,7 @@ teardown_temp_dir
 # CALL SITE 2 — scripts/stop-hook.sh bash-write reconciliation re-verification
 # ---------------------------------------------------------------------------
 run_hook() {
-  HOOK_OUTPUT=$(bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+  HOOK_OUTPUT=$(bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 }
 
 recon_manifest() {

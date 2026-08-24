@@ -70,7 +70,7 @@ consumer_end() {
 }
 
 run_hook() {
-  HOOK_OUTPUT=$(bash "$STOP_HOOK" 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+  HOOK_OUTPUT=$(bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 }
 
 # 1/21 scripts/session-context.sh. FIRST deliberately: at the pre-change base the

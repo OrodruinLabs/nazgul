@@ -14,7 +14,7 @@ metadata:
 
 ## Current State
 - Events bus: !`if [ -s nazgul/logs/events.jsonl ]; then echo "present"; else echo "absent"; fi`
-- Events (last 20): !`if [ -s nazgul/logs/events.jsonl ]; then tail -20 nazgul/logs/events.jsonl; else echo "No events"; fi`
+- Events (last 20 of the last 200 lines, bookkeeping filtered): !`if [ -s nazgul/logs/events.jsonl ]; then E=$(tail -200 nazgul/logs/events.jsonl | grep -v -e '"event":"subagent_stop"' -e '"event":"stop_payload_observed"' | tail -20); if [ -n "$E" ]; then echo "$E"; else echo "The last 200 lines of the bus are ALL subagent_stop/stop_payload_observed bookkeeping — this WINDOW held no other event, which is not the same as the bus holding none; read nazgul/logs/events.jsonl unfiltered"; fi; else echo "No events"; fi`
 - Legacy iterations (last 20): !`tail -20 nazgul/logs/iterations.jsonl 2>/dev/null || echo "No legacy iteration logs"`
 - Recent commits: !`git log --oneline --grep="$(jq -r '.afk.commit_prefix // "feat("' nazgul/config.json 2>/dev/null)" -20 2>/dev/null || echo "No commits found"`
 - Checkpoints: !`ls -1t nazgul/checkpoints/iteration-*.json 2>/dev/null | head -2 || echo "No checkpoints"`
@@ -34,9 +34,28 @@ Set `TIMELINE_SOURCE` based on whether the events bus is available:
 
 In either mode, also collect git commits and checkpoints as supplemental sources (steps 2–3 below).
 
+**The injected "Events (last 20…)" preview is FILTERED; this timeline is NOT.** `subagent_stop` fires once
+per completing subagent and `stop_payload_observed` once per Stop, so on an active loop those two types
+routinely make up most of the raw tail and a 20-line window of it shows minutes of bookkeeping instead of
+the run. The preview therefore excludes exactly those two types by design. Both are still written to
+`events.jsonl`, both still have display rows in Step 4, and the Step-1 command above reads the file
+unfiltered — so a `stop_payload_observed` record IS available to the timeline and to `/nazgul:doctor`, it
+is only kept out of the pre-injected preview. If the preview prints its "last 200 lines are ALL …
+bookkeeping" fallback, that means the window was entirely bookkeeping, NOT that the bus is empty; the
+"Events bus" line above is what distinguishes those two.
+
+**The preview is also BOUNDED, and the bound comes BEFORE the filter.** It reads `tail -200` and filters
+that window, rather than filtering the whole bus and keeping the last 20 — `events.jsonl` grows every
+Stop and is already thousands of lines here, so the unbounded form scanned the entire file to display 20
+rows. Say what the bound costs rather than hiding it: **the filter can now miss.** If all 200 lines of
+the window are `subagent_stop`/`stop_payload_observed`, the preview reports exactly that and shows no
+rows, even when an older non-bookkeeping event exists further back in the file. That is a property of the
+PREVIEW alone — the Step-1 timeline command below reads `events.jsonl` unfiltered AND unbounded, so the
+timeline never inherits this window, and "not in the preview" is never evidence of "not in the bus".
+
 **V1 gaps (events source):** When `TIMELINE_SOURCE=events`, note these known gaps in the event stream:
 - `task_completed` events carry `task_id:"unknown"` — the TaskCompleted hook payload does not expose reliable task identity (CONCERN 2). Display the event but note the missing task ID.
-- Most task state transitions (READY→IN_PROGRESS, IMPLEMENTED→IN_REVIEW, IN_REVIEW→DONE) are NOT captured as `task_transition` events in v1. They are bounded by `reviewer_verdict` + the next `iteration_boundary`. The timeline will not show these intermediate state changes.
+- Task state transitions ARE captured as `task_transition` events (`task_id`, `from`, `to`) whenever the status was written through `scripts/task-transition.sh`, which is the sole sanctioned writer — READY→IN_PROGRESS, IMPLEMENTED→IN_REVIEW and IN_REVIEW→DONE all appear. A status changed OUTSIDE that route emits no such event, so its only trace is the next `iteration_boundary` and, once reconciliation catches it, a quarantine; an unexplained status jump between two `iteration_boundary` lines with no `task_transition` between them is that signature, not a missing feature.
 
 ### Step 2: Collect Supplemental Sources
 
@@ -83,11 +102,18 @@ Map event types to display TYPE labels:
 | `budget_threshold` | — | BUDGET |
 | `objective_complete` | — | COMPLETE |
 | `stop_gate` | — | GATE |
+| `task_transition` | — | TASK (`from` → `to`) |
+| `stop_payload_observed` | — | PAYLOAD |
 | `in_flight_orphan` | — | ORPHAN |
 | `in_flight_swept` | — | SWEPT |
 <!-- No row for `in_flight_unverifiable`: it is a `stop_gate` REASON, never a standalone event, so it
      renders as GATE via the `stop_gate` row above. `in_flight_orphan` earns a row because it is BOTH a
      stop_gate reason AND a standalone event emitted by the SessionStart sweep. Checked, not overlooked. -->
+<!-- `stop_payload_observed` is mapped here on purpose even though the injected preview at the top of this
+     file filters it out: the preview is a 20-line sample, this table governs the FULL timeline, and a Stop
+     whose payload was measured must be renderable. Render it as the observation it is — bg_seen, entries,
+     subagents, live — never as a hold or a gate decision; those are `stop_gate` lines. Same for the
+     `subagent_stop`/AGENT row above, which the preview also filters. -->
 | `dispatch_guard_background_unverifiable` | — | GUARD |
 | `clear_skipped_no_match` | — | MARKER |
 | `clear_fallback_underivable` | — | MARKER |

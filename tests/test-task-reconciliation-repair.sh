@@ -14,7 +14,7 @@ COMMAND="$REPO_ROOT/scripts/task-transition.sh"
 echo "=== $TEST_NAME ==="
 
 run_hook() {
-  HOOK_OUTPUT=$(bash "$STOP_HOOK" 2>&1) || true
+  HOOK_OUTPUT=$(bash "$STOP_HOOK" </dev/null 2>&1) || true
 }
 
 run_cmd() {
