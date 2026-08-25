@@ -1,4 +1,4 @@
-# Guard Fail-Open Inventory — Enforcement Surface (Partial: 16 of ~46 Files)
+# Guard Fail-Open Inventory — Enforcement Surface (Partial: 16 of ~46 Files; `documented 125 → measured 242` rows, 2026-08-26 @ 92bf60f — W1)
 
 ## Scope boundary — read this before the table
 
@@ -81,8 +81,65 @@ deliberately excluded — in every instance checked, `return 1` propagates FAILU
 direction), the opposite of this pattern class, and including it would have diluted the table with
 non-findings.
 
-**As of this task's base commit, this grep returns exactly 125 lines across the 16 files** — the table
-below has exactly 125 rows, one per line, in the same order. **90 are (a), 18 are (b), 17 are (c).**
+**Re-measured 2026-08-26 @ `92bf60f` — W1: this grep now returns 242 lines across the 16 files
+(`documented 125 → measured 242`).** The original assertion — *"returns exactly 125 lines across the 16
+files... 90 are (a), 18 are (b), 17 are (c)"* — was true when written and is retained here as the frozen
+baseline every delta is measured against. It is **no longer** the current count.
+
+**The reproduction control, and what it does and does not establish.** The same command, extracted
+structurally from the `## Reproducing grep` block above and run against `c959a43` (this document's own
+stated base, `= 6f0be16^`), returns **exactly 125**. So `125 → 242` is growth in the *enforcement
+surface*, not drift in the *command* — which is the only thing that makes the new total attributable.
+It does **not** establish that the table's 125 rows are the `c959a43` rows: for 14 of the 16 files the
+table's sites match `6f0be16` exactly, while `pre-merge-commit` (13 vs 12) and `task-state-guard.sh`
+(19 vs 20) are line-shifted, and those two offsetting differences happen to land on the same total.
+That coincidence is filed as `nazgul/inbox/guard-inventory-table-unanchored.md` (issue #262).
+
+**Per-file distribution at `92bf60f`** (16 files, summing to 242; measured 2026-08-26 @ 92bf60f — W1):
+
+| File | Rows | File | Rows |
+|---|---:|---|---:|
+| `scripts/lib/task-transition-guard.sh` | 106 | `scripts/lib/task-utils.sh` | 8 |
+| `scripts/task-state-guard.sh` | 24 | `scripts/lib/parallel-batch.sh` | 8 |
+| `scripts/git-hooks/pre-merge-commit` | 14 | `scripts/lean-comments-guard.sh` | 8 |
+| `scripts/git-hooks/_dispatch.sh` | 12 | `scripts/parallel-dispatch-guard.sh` | 7 |
+| `scripts/parallel-rework-guard.sh` | 11 | `scripts/local-mode-tracking-guard.sh` | 7 |
+| `scripts/lib/review-evidence.sh` | 10 | `scripts/lib/review-provenance.sh` | 6 |
+| `scripts/teammate-idle-guard.sh` | 9 | `scripts/git-hooks/pre-commit` | 5 |
+| — | — | `scripts/pre-tool-guard.sh` | 4 |
+| — | — | `scripts/prompt-guard.sh` | 3 |
+
+`task-transition-guard.sh` alone contributes 106, having absorbed FEAT-031's merge-evidence gate; it
+held 3 rows at `c959a43`.
+
+**The regenerated (a)/(b)/(c) split is a JOIN, not a re-classification:**
+`documented 90/18/17 (a)/(b)/(c) → measured 70/14/14 inherited`, with 144 counted-but-unclassified and
+27 retired. Each current row was joined to an old table row on `(file, construct text)`; the join is
+`nazgul/context/FEAT-035-w1-join.tsv` and its rules, pass-by-pass counts and cross-checks are in
+`nazgul/context/FEAT-035-move0-measurements.md` §W1 (measured 2026-08-26 @ 92bf60f — W1):
+
+| Bucket | Count | Meaning |
+|---|---:|---|
+| `INHERITED-(a)` | 70 | matched an old row; class carried, line number updated |
+| `INHERITED-(b)` | 14 | matched an old row; class carried, line number updated |
+| `INHERITED-(c)` | 14 | matched an old row; class carried, line number updated |
+| `UNCLASSIFIED` | 144 | no old row matches — **counted, not classified** |
+| `RETIRED` | 27 | old row with no current match — (a)=20, (b)=4, (c)=3 |
+
+Both partitions were verified with `comm` over `sort -c`-checked lexicographic input: current
+`242 = 98 inherited + 144 unclassified`; old `125 = 98 matched + 27 retired`. **The (b) retirements, by
+old row number: 32, 52, 58, 74** — each confirmed absent from the current tree by direct grep rather
+than inferred from the join.
+
+**144 of the 242 rows carry no classification, and that is a finding about scope, not a defect in this
+measurement.** Re-classifying them is deliberately out of scope here; naming the bucket is what stops
+*"242 rows are classified"* from being asserted when 98 are. In §15 grammar:
+
+```text
+w1-reproducing-grep: 16 scanned, 0 skipped (unreadable=0, out-of-surface=0), 16 checked, 242 findings
+w1-join:            242 scanned, 0 skipped (unreadable=0), 242 checked, 144 findings
+```
+
 Several rows that textually match the grep are NOT themselves allow-branches (e.g. an extraction-
 fallback cascade step, or a `return 1` propagation reached via the `[ -n... ] ||` clause) — these are
 included for completeness per the "no truncation" mandate and their disposition says so explicitly,
@@ -207,7 +264,22 @@ lines 167, 195, 262, 279, and 292 all say "follow **Branch Setup via `create_fea
 no error-handling instruction anywhere in that section. `skills/` is outside this task's file scope
 (not one of the 16 enforcement-surface scripts) — recorded here per the task brief, not actioned.
 
-## Full classification table (125 rows, one per reproducing-grep hit)
+## Full classification table (125 rows, one per reproducing-grep hit as of the time of writing)
+
+**Frozen baseline — deliberately NOT rewritten.** These 125 rows are the record every delta is measured
+against; regenerating them destroys it. Re-measured 2026-08-26 @ `92bf60f` — W1: the grep now returns
+`documented 125 → measured 242` rows, and the join (`nazgul/context/FEAT-035-w1-join.tsv`) carries
+**98** of these 125 rows forward onto current sites — `INHERITED-(a)` 70, `INHERITED-(b)` 14,
+`INHERITED-(c)` 14 — while `UNCLASSIFIED` 144 current rows have no old row to inherit from and
+`RETIRED` 27 of these rows describe a site that no longer exists ((a)=20, (b)=4, (c)=3; the (b)
+retirements are rows 32, 52, 58, 74).
+**These 125 rows therefore classify 98 of the 242 current rows, not 125 of them.**
+
+The `file:line` anchors below are as-written and are NOT current. 24 of them were already stale at this
+document's own landing commit `6f0be16` — 19 (a), 3 (b), 2 (c), the (b) ones being rows 5, 52 and 53,
+and row 5 is this document's own #1-ranked finding. Filed as
+`nazgul/inbox/guard-inventory-table-unanchored.md` (issue #262); use the join TSV for current sites.
+
 
 | # | Site (file:line) | Construct | What empty/missing means | Class | Disposition |
 |---|---|---|---|---|---|
