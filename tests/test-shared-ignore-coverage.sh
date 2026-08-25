@@ -706,10 +706,158 @@ S_AFTER_END=$(awk -v n="$S_END_LN" 'NR == n + 1 { t = $0; sub(/^[[:space:]]+/, "
 assert_eq "P0 region: the closing fence immediately follows it, so the sentinel is the block's last line" \
   "$S_AFTER_END" '```'
 
-S_LOC_START=$(awk -v e="$LOCAL_MARKER" '{ t = $0; sub(/^[[:space:]]+/, "", t) } t == e { n++ } END { print n + 0 }' "$SWEEP_ROOT/$INIT_SKILL")
-S_LOC_END=$(awk -v e="$LOCAL_END" '{ t = $0; sub(/^[[:space:]]+/, "", t) } t == e { n++ } END { print n + 0 }' "$SWEEP_ROOT/$INIT_SKILL")
+# Prefix, for the reason :42-44 gives for the shared marker: the local start line now carries a
+# ` (vN)` stamp too (#254 C-f), and an exact-line match reads a stamped block as ABSENT.
+S_LOC_START=$(awk -v e="$LOCAL_MARKER" '{ t = $0; sub(/^[[:space:]]+/, "", t) } index(t, e) == 1 { n++ } END { print n + 0 }' "$SWEEP_ROOT/$INIT_SKILL")
+S_LOC_END=$(awk -v e="$LOCAL_END" '{ t = $0; sub(/^[[:space:]]+/, "", t) } index(t, e) == 1 { n++ } END { print n + 0 }' "$SWEEP_ROOT/$INIT_SKILL")
 assert_eq "P0 local region: the local-mode block carries its own sentinel pair, once each" \
   "$S_LOC_START/$S_LOC_END" "1/1"
+
+_stamp_suffix() {
+  awk -v e="$1" '{ t = $0; sub(/^[[:space:]]+/, "", t) } index(t, e) == 1 { print substr(t, length(e) + 1); exit }' "$2"
+}
+# Three-way, so a bare pre-stamp line and an unrelated suffix cannot both read as "not stamped".
+S_LOC_SUFFIX=$(_stamp_suffix "$LOCAL_MARKER" "$SWEEP_ROOT/$INIT_SKILL")
+S_LOC_STAMP="other"
+[ -z "$S_LOC_SUFFIX" ] && S_LOC_STAMP="bare-v1"
+printf '%s\n' "$S_LOC_SUFFIX" | grep -qE '^ \(v[0-9]+\)$' && S_LOC_STAMP="stamped"
+assert_eq "P0 local stamp: the local block's first line carries the (vN) suffix the prefix match above ignores (#254 C-f)" \
+  "$S_LOC_STAMP" "stamped"
+# Shape, not literal: the version LITERAL is hand-copied across prose sites and is #254 C-g's
+# subject, not this pin's. What this pin adds is that one bump cannot land in one fence only.
+assert_eq "P0 local stamp: and it is the same version the shared block ships, in the two fences that are the authoritative copy" \
+  "$S_LOC_SUFFIX" "$(_stamp_suffix "$BLOCK_MARKER" "$SWEEP_ROOT/$INIT_SKILL")"
+
+# Literal strike-out: the phrases below carry backticks, slashes and `^…$`, so a sed s/// control
+# would be a regex bug waiting to read as agreement. Struck out, never deleted, so line counts hold.
+_strike() {
+  awk -v phrase="$1" '{ while ((p = index($0, phrase)) > 0) $0 = substr($0, 1, p - 1) substr($0, p + length(phrase)); print }' "$2"
+}
+_differs() { cmp -s "$1" "$2" && printf 'same' || printf 'differs'; }
+
+# #254 C-a, per FILE and never one combined count of two: two hits are equally consistent with
+# both sentences in the init skill and neither in the clean skill — and clean is what DELETES lines.
+_own_counts() {
+  printf '%s/%s' "$(grep -cF -- "$1" "$2" || true)" "$(grep -cF -- "$1" "$3" || true)"
+}
+S_OWN='A line belongs to the region only if it is a `#` comment or a pattern beginning `nazgul/`'
+S_OWN_STOP='name the line removal stopped at'
+S_OWN_RESID='an abutting user `#` comment is still consumed'
+assert_eq "P0 C-a: the ownership bound on the legacy fallback is stated in init and in clean, once each" \
+  "$(_own_counts "$S_OWN" "$SWEEP_ROOT/$INIT_SKILL" "$SWEEP_ROOT/$CLEAN_SKILL")" "1/1"
+assert_eq "P0 C-a: so is the instruction to NAME the line removal stopped at, which is what tells a user why their tail survived" \
+  "$(_own_counts "$S_OWN_STOP" "$SWEEP_ROOT/$INIT_SKILL" "$SWEEP_ROOT/$CLEAN_SKILL")" "1/1"
+assert_eq "P0 C-a: and the residual it does NOT close — an abutting user comment is still consumed" \
+  "$(_own_counts "$S_OWN_RESID" "$SWEEP_ROOT/$INIT_SKILL" "$SWEEP_ROOT/$CLEAN_SKILL")" "1/1"
+
+S_OWN_MUT_I="$SCRATCH/init-no-own.md"; S_OWN_MUT_C="$SCRATCH/clean-no-own.md"
+_strike "$S_OWN" "$SWEEP_ROOT/$INIT_SKILL" > "$S_OWN_MUT_I"
+_strike "$S_OWN" "$SWEEP_ROOT/$CLEAN_SKILL" > "$S_OWN_MUT_C"
+assert_eq "P0 C-a CONTROL: struck out, the same search reports the rule missing from both copies" \
+  "$(_own_counts "$S_OWN" "$S_OWN_MUT_I" "$S_OWN_MUT_C")" "0/0"
+assert_eq "P0 C-a CONTROL: and the strike-out changed both files, so 0/0 is not a mutant that did nothing" \
+  "$(_differs "$SWEEP_ROOT/$INIT_SKILL" "$S_OWN_MUT_I")/$(_differs "$SWEEP_ROOT/$CLEAN_SKILL" "$S_OWN_MUT_C")" \
+  "differs/differs"
+
+# One destructive operation, one rule: the two copies are compared whole, not phrase by phrase.
+_own_para() { awk -v e='**Legacy fallback**, for a v1 region carrying no end sentinel' 'index($0, e) == 1 { print; exit }' "$1"; }
+S_OWN_PARA=$(_own_para "$SWEEP_ROOT/$INIT_SKILL")
+if [ -n "$S_OWN_PARA" ]; then
+  _pass "P0 C-a floor: the legacy-fallback paragraph is located in $INIT_SKILL (${#S_OWN_PARA} bytes)"
+else
+  _fail "P0 C-a floor: the legacy-fallback paragraph is located in $INIT_SKILL" \
+    "no line begins with the rule — two empty strings would satisfy the byte-identity check below vacuously"
+fi
+assert_eq "P0 C-a: and $CLEAN_SKILL states that rule byte for byte, so the two cannot drift into two rules" \
+  "$(_own_para "$SWEEP_ROOT/$CLEAN_SKILL")" "$S_OWN_PARA"
+
+S_CLEAN_LOC='the region from `# Nazgul Framework (local mode)` — matched by that prefix alone'
+S_CLEAN_LOC_N=$(grep -cF -- "$S_CLEAN_LOC" "$SWEEP_ROOT/$CLEAN_SKILL" || true)
+assert_eq "P0 C-f: /nazgul:clean matches the local start sentinel by PREFIX, so a stamped local block is still found" \
+  "$S_CLEAN_LOC_N" "1"
+S_CLEAN_LOC_CTRL="$SCRATCH/clean-loc.md"
+{ cat "$SWEEP_ROOT/$CLEAN_SKILL"; printf 'Also delete %s.\n' "$S_CLEAN_LOC"; } > "$S_CLEAN_LOC_CTRL"
+assert_eq "P0 C-f CONTROL: appending one occurrence moves the same count by exactly one" \
+  "$(grep -cF -- "$S_CLEAN_LOC" "$S_CLEAN_LOC_CTRL" || true)" "$((S_CLEAN_LOC_N + 1))"
+
+# #254 C-c, three-valued on purpose (§15): a branch that lost its probe and a branch that
+# vanished are different findings, and one combined count of two could report neither.
+_probe_in_bullet() {
+  local line
+  line=$(grep -m1 -F -- "$1" "$3" 2>/dev/null || true)
+  [ -n "$line" ] || { printf 'no-bullet'; return 0; }
+  case "$line" in *"$2"*) printf 'probed' ;; *) printf 'unprobed' ;; esac
+}
+S_PROBE='git check-ignore -q nazgul/in-flight/'
+S_BUL_ABS='- **Absent** —'
+S_BUL_CUR='- **Present at the shipped version** —'
+_probe_pair() { printf '%s/%s' "$(_probe_in_bullet "$S_BUL_ABS" "$S_PROBE" "$1")" "$(_probe_in_bullet "$S_BUL_CUR" "$S_PROBE" "$1")"; }
+assert_eq "P0 C-c: the read-back probe is stated in the append branch AND in the already-current branch" \
+  "$(_probe_pair "$SWEEP_ROOT/$INIT_SKILL")" "probed/probed"
+S_PROBE_MUT="$SCRATCH/init-no-probe.md"
+_strike "$S_PROBE" "$SWEEP_ROOT/$INIT_SKILL" > "$S_PROBE_MUT"
+assert_eq "P0 C-c CONTROL: struck out, each branch reports UNPROBED on its own line, not one shared number" \
+  "$(_probe_pair "$S_PROBE_MUT")" "unprobed/unprobed"
+S_BUL_MUT1="$SCRATCH/init-no-bullet1.md"; S_BUL_MUT="$SCRATCH/init-no-bullets.md"
+_strike "$S_BUL_ABS" "$SWEEP_ROOT/$INIT_SKILL" > "$S_BUL_MUT1"
+_strike "$S_BUL_CUR" "$S_BUL_MUT1" > "$S_BUL_MUT"
+assert_eq "P0 C-c CONTROL: with the two bullets themselves struck out it says no-bullet, never 'unprobed' — looked-and-found-none is not never-looked" \
+  "$(_probe_pair "$S_BUL_MUT")" "no-bullet/no-bullet"
+
+S_FIFTH='leading whitespace on any region line makes the block STALE regardless of its stamp'
+S_INERT='never report success on an inert block'
+S_SHARED_ONLY='the probe belongs to the shared branch alone'
+_once() { grep -cF -- "$1" "$2" || true; }
+assert_eq "P0 C-c: the fifth version case, the never-report-success rule and the shared-branch-only boundary are each stated exactly once" \
+  "$(_once "$S_FIFTH" "$SWEEP_ROOT/$INIT_SKILL")/$(_once "$S_INERT" "$SWEEP_ROOT/$INIT_SKILL")/$(_once "$S_SHARED_ONLY" "$SWEEP_ROOT/$INIT_SKILL")" \
+  "1/1/1"
+S_CC_CTRL="$SCRATCH/init-cc.md"
+{ cat "$SWEEP_ROOT/$INIT_SKILL"; printf 'Again: %s, %s, %s.\n' "$S_FIFTH" "$S_INERT" "$S_SHARED_ONLY"; } > "$S_CC_CTRL"
+assert_eq "P0 C-c CONTROL: appending one occurrence of each moves all three counts by exactly one" \
+  "$(_once "$S_FIFTH" "$S_CC_CTRL")/$(_once "$S_INERT" "$S_CC_CTRL")/$(_once "$S_SHARED_ONLY" "$S_CC_CTRL")" \
+  "2/2/2"
+
+# #254 C-h, split at the Step 4 heading: :176 is the block instruction and :219 the printed
+# remedy, and a rule stated at one but not the other is exactly this finding's shape.
+_count_split_at() {
+  awk -v anchor="$1" -v phrase="$2" '
+    index($0, anchor) == 1 { seen = 1 }
+    { n = 0; s = $0
+      while ((p = index(s, phrase)) > 0) { n++; s = substr(s, p + length(phrase)) }
+      if (seen) after += n; else before += n }
+    END { if (!seen) { print "no-anchor"; exit } print (before + 0) "/" (after + 0) }
+  ' "$3"
+}
+S_STEP4='### Step 4: Display Summary'
+S_CH_RE='^[A-Za-z0-9._/-]+$'
+S_CH_KEY='naming the KEY `automation.heartbeat.inbox.dir` and the rule it failed'
+S_CH_ECHO='Never echo the rejected value'
+_ch_triple() {
+  printf '%s %s %s' "$(_count_split_at "$S_STEP4" "$S_CH_RE" "$1")" \
+    "$(_count_split_at "$S_STEP4" "$S_CH_KEY" "$1")" "$(_count_split_at "$S_STEP4" "$S_CH_ECHO" "$1")"
+}
+assert_eq "P0 C-h: the allowlist regex, the refuse-and-name-the-KEY rule and the never-echo rule are each stated at the Step 2.5 site AND the Step 4 site" \
+  "$(_ch_triple "$SWEEP_ROOT/$INIT_SKILL")" "1/1 1/1 1/1"
+S_CH_MUT1="$SCRATCH/init-ch1.md"; S_CH_MUT2="$SCRATCH/init-ch2.md"; S_CH_MUT="$SCRATCH/init-no-ch.md"
+_strike "$S_CH_RE" "$SWEEP_ROOT/$INIT_SKILL" > "$S_CH_MUT1"
+_strike "$S_CH_KEY" "$S_CH_MUT1" > "$S_CH_MUT2"
+_strike "$S_CH_ECHO" "$S_CH_MUT2" > "$S_CH_MUT"
+assert_eq "P0 C-h CONTROL: struck out, all three report missing from both sites" \
+  "$(_ch_triple "$S_CH_MUT")" "0/0 0/0 0/0"
+S_CH_NOANCHOR="$SCRATCH/init-no-step4.md"
+_strike "$S_STEP4" "$SWEEP_ROOT/$INIT_SKILL" > "$S_CH_NOANCHOR"
+assert_eq "P0 C-h CONTROL: with the Step 4 heading gone the splitter says no-anchor, not a 2/0 that would read as one site satisfying both" \
+  "$(_count_split_at "$S_STEP4" "$S_CH_RE" "$S_CH_NOANCHOR")" "no-anchor"
+
+# The property security praised in scripts/in-flight-marker.sh: the rejection names the KEY and
+# never interpolates the VALUE — least of all into a command a human is asked to run.
+S_CH_VAL='naming the value'
+assert_eq "P0 C-h CONTROL: and neither site instructs naming the rejected VALUE" \
+  "$(_count_split_at "$S_STEP4" "$S_CH_VAL" "$SWEEP_ROOT/$INIT_SKILL")" "0/0"
+S_CH_VAL_CTRL="$SCRATCH/init-ch-value.md"
+{ cat "$SWEEP_ROOT/$INIT_SKILL"; printf 'Print a notice %s it rejected.\n' "$S_CH_VAL"; } > "$S_CH_VAL_CTRL"
+assert_eq "P0 C-h CONTROL: appending one such instruction after Step 4 moves the AFTER count to one, so those zeros are measured" \
+  "$(_count_split_at "$S_STEP4" "$S_CH_VAL" "$S_CH_VAL_CTRL")" "0/1"
 
 S_FLUSH='Write every line flush-left, exactly as shown'
 assert_eq "P0 prose: both Step 2.5 branches state the flush-left requirement, exactly once each" \
@@ -753,9 +901,9 @@ fi
 trap '_rm_scratch "$SCRATCH" "$ROUTES"' EXIT
 mkdir -p "$ROUTES/home"
 
-# The local-mode fence's sha256 at ff64f76, the commit that de-indented it and gave it an end
-# sentinel. A content baseline, pinned rather than read back from a shallow CI clone's git.
-LOCAL_FENCE_SHA_BASE="25f78f95c85600ea86bdfdc3e73ee844d338e3cb6820999e4cab04bda38bb1dd"
+# The local-mode fence's sha256 as FEAT-036/TASK-022 stamps it (#254 C-f); 25f78f95… was ff64f76's
+# pre-stamp fence. A content baseline, pinned rather than read from a shallow CI clone's git.
+LOCAL_FENCE_SHA_BASE="aa19b1b87d8a15f3bb6783b4d8d646a3125179b4ec2298637bbb9fb42a3d1b7f"
 
 # Raw fence lines for the ```gitignore fence CONTAINING a marker. P1 must see WHICH
 # line comes first, so this cannot start AT the marker the way _extract_block does.
@@ -966,9 +1114,13 @@ _fenced_lines "$LOCAL_MARKER" > "$ROUTES/local.raw"
 R_LOCAL_N=$(wc -l < "$ROUTES/local.raw" | tr -d ' ')
 assert_eq "P3 local block: the local-mode fence is its marker, three entries and its end sentinel" \
   "$R_LOCAL_N" "5"
-assert_eq "P3 local block: opened and closed by its own sentinel pair, so it is a region like the shared one" \
-  "$(head -n 1 "$ROUTES/local.raw" | sed 's/^[[:space:]]*//')/$(tail -n 1 "$ROUTES/local.raw" | sed 's/^[[:space:]]*//')" \
-  "$LOCAL_MARKER/$LOCAL_END"
+R_LOC_L1=$(head -n 1 "$ROUTES/local.raw" | sed 's/^[[:space:]]*//')
+R_LOC_L1_CLASS="other"
+[ "${R_LOC_L1#"$LOCAL_MARKER"}" != "$R_LOC_L1" ] && R_LOC_L1_CLASS="marker-prefix"
+[ "$R_LOC_L1" = "$LOCAL_MARKER" ] && R_LOC_L1_CLASS="bare-v1"
+assert_eq "P3 local block: opened by its start-sentinel PREFIX (the line carries a stamp) and closed by its end sentinel" \
+  "$R_LOC_L1_CLASS/$(tail -n 1 "$ROUTES/local.raw" | sed 's/^[[:space:]]*//')" \
+  "marker-prefix/$LOCAL_END"
 R_SHA_TOOL="none"
 command -v sha256sum >/dev/null 2>&1 && R_SHA_TOOL="sha256sum"
 [ "$R_SHA_TOOL" = "none" ] && command -v shasum >/dev/null 2>&1 && R_SHA_TOOL="shasum"
@@ -978,7 +1130,7 @@ if [ "$R_SHA_TOOL" = "none" ]; then
 else
   _pass "P3 local block: hashed with $R_SHA_TOOL"
 fi
-assert_eq "P3 local block: byte-identical to ff64f76, whitespace included" \
+assert_eq "P3 local block: byte-identical to its pinned baseline, whitespace included" \
   "$(_sha256 < "$ROUTES/local.raw")" "$LOCAL_FENCE_SHA_BASE"
 
 findings=$((findings + TESTS_FAILED - R_FAILED_BEFORE))
