@@ -900,6 +900,14 @@ assert_contains "(j): a pre-stamp block is found, not read as absent — the pre
 assert_contains "(j): the drift message names the version found AND the version shipped" \
   "$IB_V1" "block at v1; this plugin ships $DR_IB_SHIPPED"
 assert_contains "(j): and names the remedy" "$IB_V1" "/nazgul:init --force"
+# ---- #254 round-4 HEeX: the stale branch states the stale consequence, not the absent one ------
+# A v1 shared block still ignores checkpoints/, logs/, sessions/, .session_id, .compaction_count,
+# archive/ and the review artifacts, so "the ephemeral runtime journal is tracked, which is #251
+# itself" is true only of the ABSENT branch. Round 3 hoisted one string and overstated this.
+assert_contains "(j) HEeX: a stale shared block reports the entries added SINCE that version, not the whole journal" \
+  "$IB_V1" "the entries added since that version are still tracked"
+assert_not_contains "(j) HEeX: the absent branch's severity must not leak into the stale branch" \
+  "$IB_V1" "which is #251 itself"
 
 printf '  %s\n' "$DR_SHIPPED_BLOCK_LINE" > "$TEST_DIR/.gitignore"
 IB_INDENT=$(_dr_ib_line)
@@ -920,6 +928,39 @@ assert_contains "(j): and it says the entries are inert, not that the version is
 printf '%s\nnazgul/logs/\n# Nazgul Framework — end ephemeral runtime\n' "$DR_SHIPPED_BLOCK_LINE" > "$TEST_DIR/.gitignore"
 assert_contains "(j) CONTROL: the same region flush-left passes, so the finding above is the indentation" \
   "$(_dr_ib_line)" "$(printf 'pass\tignore-block')"
+
+# ---- #254 round-4 HEYm: a BLANK LINE does not end a sentinel-delimited region ------------------
+# skills/init/SKILL.md defines the region as start through end sentinel inclusive, "regardless of
+# blank lines or comments between them". Round 3's scan applied the legacy blank-line bound
+# unconditionally, so an indented entry one blank line down was invisible and a wholly inert block
+# reported `pass ... with every region line flush-left` — the exact class finding 3 was opened on.
+printf '%s\nnazgul/logs/\n\n   nazgul/in-flight/\n# Nazgul Framework — end ephemeral runtime\n' \
+  "$DR_SHIPPED_BLOCK_LINE" > "$TEST_DIR/.gitignore"
+IB_BLANK_INDENT=$(_dr_ib_line)
+assert_contains "(j) HEYm: an indented entry AFTER a blank line inside a v2 region is still found" \
+  "$IB_BLANK_INDENT" "$(printf 'warn\tignore-block')"
+assert_contains "(j) HEYm: and it is reported as inert, not passed as current" "$IB_BLANK_INDENT" "INDENTED"
+# CONTROL: the same shape flush-left passes, so the blank line itself is not what fails it.
+printf '%s\nnazgul/logs/\n\nnazgul/in-flight/\n# Nazgul Framework — end ephemeral runtime\n' \
+  "$DR_SHIPPED_BLOCK_LINE" > "$TEST_DIR/.gitignore"
+assert_contains "(j) HEYm CONTROL: a blank line inside an otherwise flush-left v2 region still passes" \
+  "$(_dr_ib_line)" "$(printf 'pass\tignore-block')"
+
+# ---- #254 round-4 HEag: a v1 region is bounded by OWNERSHIP, not adjacency --------------------
+# A user's own `  build/` under a v1 block is not a block line (not a `#` comment, not a pattern
+# beginning nazgul/), so its indentation must never be attributed to Nazgul — and the operator must
+# not be sent to a state-archiving --force for it. The real finding here is the stale v1 stamp.
+printf '%s\nnazgul/logs/\n  build/\n' "$DR_IB_BARE" > "$TEST_DIR/.gitignore"
+IB_V1_USERLINE=$(_dr_ib_line)
+assert_not_contains "(j) HEag: a user line below a flush-left v1 block is not reported as the block being inert" \
+  "$IB_V1_USERLINE" "INDENTED"
+assert_contains "(j) HEag: the true finding — the stale v1 stamp — is what gets reported instead" \
+  "$IB_V1_USERLINE" "block at v1; this plugin ships $DR_IB_SHIPPED"
+# CONTROL: an indented line that IS owned (begins nazgul/) is still caught in the same v1 shape,
+# so the ownership bound narrows the region rather than disabling the check.
+printf '%s\nnazgul/logs/\n  nazgul/in-flight/\n' "$DR_IB_BARE" > "$TEST_DIR/.gitignore"
+assert_contains "(j) HEag CONTROL: an indented OWNED line in the same v1 shape is still reported inert" \
+  "$(_dr_ib_line)" "INDENTED"
 
 printf 'build/\n' > "$TEST_DIR/.gitignore"
 IB_NOBLOCK=$(_dr_ib_line)
@@ -949,6 +990,26 @@ assert_contains "(j): the local cost is stated honestly — nothing is mis-track
 printf '%s\nnazgul/\n%s\n' "$DR_SHIPPED_LOCAL_LINE" '# Nazgul Framework — end local mode' > "$TEST_DIR/.gitignore"
 IB_LOCAL_OK=$(_dr_ib_line)
 assert_contains "(j) CONTROL: a local install at the shipped stamp passes" "$IB_LOCAL_OK" "$(printf 'pass\tignore-block')"
+# ---- #254 round-4 HEVk: local + ABSENT is the one state where all of nazgul/ really is exposed --
+# Round 3 hoisted ONE `what` string written for the stale branch and reused it here, so doctor told
+# an operator with no block at all that "nothing is mis-tracked".
+printf 'build/\n' > "$TEST_DIR/.gitignore"
+IB_LOCAL_ABSENT=$(_dr_ib_line)
+assert_contains "(j) HEVk: a local install with NO block is a finding" "$IB_LOCAL_ABSENT" "$(printf 'warn\tignore-block')"
+assert_contains "(j) HEVk: and it says the WHOLE tree is tracked, not that nothing is mis-tracked" \
+  "$IB_LOCAL_ABSENT" "the WHOLE nazgul/ tree is tracked"
+assert_not_contains "(j) HEVk: the stale branch's reassurance must never reach the absent branch" \
+  "$IB_LOCAL_ABSENT" "nothing is mis-tracked"
+# ---- #254 round-4 HEW_: a local remediation must PRESERVE local mode ------------------------
+# Step 0 sets LOCAL_MODE from the --local token alone and never reads install_mode, so a bare
+# `--force` on a local install takes the SHARED branch and silently converts the project.
+for _ib_local_case in "absent:$IB_LOCAL_ABSENT" "stale:$IB_LOCAL"; do
+  assert_contains "(j) HEW_: the local ${_ib_local_case%%:*} remediation carries --local, so it cannot convert the install to shared" \
+    "${_ib_local_case#*:}" "/nazgul:init --force --local"
+done
+# CONTROL: the SHARED remediation must NOT carry --local, or the fix would just be a blanket suffix.
+assert_not_contains "(j) HEW_ CONTROL: the shared remediation stays a bare --force" "$IB_V1" "--force --local"
+
 # A mode that is neither is still a NAMED skip: the not-applicable path did not disappear, it moved.
 jq '.install_mode = "unset"' "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.x" \
   && mv "$TEST_DIR/nazgul/config.json.x" "$TEST_DIR/nazgul/config.json"
@@ -962,18 +1023,18 @@ IB_BADCFG=$(_dr_ib_line)
 assert_contains "(j): an unparseable config makes install_mode UNKNOWN, never 'unset'" "$IB_BADCFG" "UNKNOWN rather than unset"
 _dr_config
 
-DR_IB_SET=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$(_dr_ib_msg "$IB_PASS")" "$(_dr_ib_msg "$IB_V1")" \
+DR_IB_SET=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$(_dr_ib_msg "$IB_PASS")" "$(_dr_ib_msg "$IB_V1")" \
   "$(_dr_ib_msg "$IB_INDENT")" "$(_dr_ib_msg "$IB_NOBLOCK")" "$(_dr_ib_msg "$IB_NOFILE")" \
-  "$(_dr_ib_msg "$IB_LOCAL")" "$(_dr_ib_msg "$IB_LOCAL_OK")" "$(_dr_ib_msg "$IB_MODE_OTHER")" \
-  "$(_dr_ib_msg "$IB_BADCFG")")
-assert_eq "(j): the nine reachable states print pairwise-distinct messages, not nine copies of one verdict" \
-  "$(printf '%s\n' "$DR_IB_SET" | sort -u | wc -l | tr -d ' ')" "9"
+  "$(_dr_ib_msg "$IB_LOCAL")" "$(_dr_ib_msg "$IB_LOCAL_OK")" "$(_dr_ib_msg "$IB_LOCAL_ABSENT")" \
+  "$(_dr_ib_msg "$IB_MODE_OTHER")" "$(_dr_ib_msg "$IB_BADCFG")")
+assert_eq "(j): the ten reachable states print pairwise-distinct messages, not ten copies of one verdict" \
+  "$(printf '%s\n' "$DR_IB_SET" | sort -u | wc -l | tr -d ' ')" "10"
 
 # ---- Round-3 finding 5: every remediation that recommends --force discloses what it destroys ---
 # Two of the three said only "re-run /nazgul:init --force"; the absent-block one — #251 live, the
 # operator most likely to be hit — read like a .gitignore edit. One suffix now, so they cannot drift.
 DR_IB_COST='It archives nazgul/ state and re-runs Discovery.'
-for _ib_case in "absent:$IB_NOBLOCK" "no-file:$IB_NOFILE" "indented:$IB_INDENT" "indented-entries:$IB_INDENT_ENTRY" "stale:$IB_V1" "local-stale:$IB_LOCAL"; do
+for _ib_case in "absent:$IB_NOBLOCK" "no-file:$IB_NOFILE" "indented:$IB_INDENT" "indented-entries:$IB_INDENT_ENTRY" "stale:$IB_V1" "local-stale:$IB_LOCAL" "local-absent:$IB_LOCAL_ABSENT"; do
   assert_contains "(j) finding 5: the ${_ib_case%%:*} remediation discloses that --force archives state" \
     "${_ib_case#*:}" "$DR_IB_COST"
 done
@@ -993,7 +1054,7 @@ else
     "$IB_UNREADABLE" "$(printf 'pass\tignore-block\tNot applicable')"
   assert_contains "(j): and it explicitly disclaims the absence claim" "$IB_UNREADABLE" "NOT a report that the block is missing"
   assert_eq "(j): 'could not look' and 'looked and found no block' never print the same thing (RULES §15)" \
-    "$(printf '%s\n%s\n' "$DR_IB_SET" "$(_dr_ib_msg "$IB_UNREADABLE")" | sort -u | wc -l | tr -d ' ')" "10"
+    "$(printf '%s\n%s\n' "$DR_IB_SET" "$(_dr_ib_msg "$IB_UNREADABLE")" | sort -u | wc -l | tr -d ' ')" "11"
 fi
 chmod 644 "$TEST_DIR/.gitignore"
 

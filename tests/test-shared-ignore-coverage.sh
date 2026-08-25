@@ -365,7 +365,10 @@ SCRATCH=""
 SCRATCH_USABLE=0
 # dependent region skips — never `exit 1`, which would end the run before the coverage line this
 # file is §15 entry point eleven for (#254 C-b), and never "", which is C7's root-relative /x.
-if [ -z "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
+# Also when the injected root IS this checkout (#254 round-4 HEgq): tests/test-coverage-honesty.sh
+# drives this file with NAZGUL_IGNORE_SWEEP_ROOT="$REPO_ROOT" and calls that run FULL, so the
+# regions below must have the tree they need instead of skipping under a reason about fixtures.
+if [ -z "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ] || [ "$SWEEP_ROOT" = "$REPO_ROOT" ]; then
   SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-ignore-sweep-XXXXXX" 2>/dev/null) || SCRATCH=""
   if _scratch_usable "$SCRATCH"; then
     trap '_rm_scratch "$SCRATCH"' EXIT
@@ -787,8 +790,8 @@ findings=$((findings + TESTS_FAILED - M_FAILED_BEFORE))
 
 # P0 pins the SOURCE's flush-left property and its region contract, which P2's git arms can only
 # observe indirectly. Skipped on an inner run: _dog_block_add indents its insert on purpose.
-if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
-  _skip "P0 source-structure pins (inner run under an injected sweep root: the dogfood fixtures indent an inserted entry deliberately, so an indented line there is a fixture, not drift)"
+if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ] && [ "$SWEEP_ROOT" != "$REPO_ROOT" ]; then
+  _skip "P0 source-structure pins (sweep root injected and pointing elsewhere: the dogfood fixtures under $SWEEP_ROOT indent an inserted entry deliberately, so an indented line there is a fixture, not drift)"
 elif [ "$SCRATCH_USABLE" -ne 1 ]; then
   _skip "P0 source-structure pins (no usable scratch tree — reported as a finding above; every control below writes its mutant under it)"
 else
@@ -1041,6 +1044,45 @@ assert_eq "P0 C-a: and the removal must report every line it removed, which is t
 assert_eq "P0 C-a: the v1 rule does not cite the v2 block's entry count, the population it never governs" \
   "$(_own_counts 'that first interior comment arrives after only four entries' "$SWEEP_ROOT/$INIT_SKILL" "$SWEEP_ROOT/$CLEAN_SKILL")" "0/0"
 
+# #254 round-4 HEcS. Pinning only the ABSENCE of a wrong claim lets the NEXT wrong claim through,
+# which is exactly what happened: the v2 citation was replaced by a v1 one that was false in both
+# halves. So pin the replacement's TRUTH, against the shipped fence rather than against prose.
+S_OWN_EVIDENCE='# (regenerable, machine-local — safe to delete; not shared across teammates)'
+assert_eq "P0 HEcS: the walking-through-comments justification cites the comment that actually leads every v1 shared block" \
+  "$(_own_counts "$S_OWN_EVIDENCE" "$SWEEP_ROOT/$INIT_SKILL" "$SWEEP_ROOT/$CLEAN_SKILL")" "2/1"
+# The claim is checkable against the live fence: that comment is the line immediately after the
+# start sentinel, i.e. the first interior comment arrives after ZERO entries — not nine, and not
+# four. If the fence ever stops leading with it, this pin goes red with the sentence.
+S_OWN_AFTER=$(grep -A1 -m1 "^$BLOCK_MARKER" "$SWEEP_ROOT/$INIT_SKILL" | tail -1)
+assert_eq "P0 HEcS: and the shipped fence's first line after the sentinel IS that comment, so 'after zero entries' is measured" \
+  "$S_OWN_AFTER" "$S_OWN_EVIDENCE"
+# The two counts the previous rounds got wrong, both permanently negative.
+for _hecs_false in 'arrives after NINE entries' 'no interior comment whatsoever'; do
+  assert_eq "P0 HEcS: the retracted claim '$_hecs_false' does not return" \
+    "$(_own_counts "$_hecs_false" "$SWEEP_ROOT/$INIT_SKILL" "$SWEEP_ROOT/$CLEAN_SKILL")" "0/0"
+done
+
+# #254 round-4 HEkr: the region rule had a THIRD hand-written copy, in doctor.sh, and it had
+# already drifted from the two authoritative ones in both clauses before it shipped. One shell
+# implementation now, and this pins that there is exactly one.
+S_GIB_LIB="$SWEEP_ROOT/scripts/lib/gitignore-block.sh"
+assert_eq "P0 HEkr: the region rule has a single shell implementation" \
+  "$([ -r "$S_GIB_LIB" ] && echo yes || echo no)" "yes"
+# The SOURCE line, not a mention count: the file also names the lib in a shellcheck directive and
+# in the comment explaining the extraction, and a raw count would move with either.
+assert_eq "P0 HEkr: and scripts/doctor.sh sources it rather than re-implementing it" \
+  "$(grep -cE '^[[:space:]]*source .*lib/gitignore-block\.sh' "$SWEEP_ROOT/scripts/doctor.sh" | tr -d ' ')" "1"
+assert_eq "P0 HEkr: that source is failure-tolerant, so a missing lib degrades this read-only check to a named skip" \
+  "$(grep -cE '^[[:space:]]*source .*lib/gitignore-block\.sh" 2>/dev/null \|\| true$' "$SWEEP_ROOT/scripts/doctor.sh" | tr -d ' ')" "1"
+assert_eq "P0 HEkr: no second region walker survives in doctor.sh" \
+  "$(grep -c '_doc_ignore_region_indent' "$SWEEP_ROOT/scripts/doctor.sh" | tr -d ' ')" "0"
+# Both clauses the doctor copy dropped are stated in the lib, so the drift that produced HEYm and
+# HEag would have to be re-introduced deliberately rather than by omission.
+for _gib_clause in 'blank lines and comments are INSIDE the region' 'ownership, not adjacency'; do
+  assert_eq "P0 HEkr: the lib states the clause '$_gib_clause' the doctor copy had dropped" \
+    "$(grep -c -- "$_gib_clause" "$S_GIB_LIB" | tr -d ' ')" "1"
+done
+
 S_OWN_MUT_I="$SCRATCH/init-no-own.md"; S_OWN_MUT_C="$SCRATCH/clean-no-own.md"
 _strike "$S_OWN" "$SWEEP_ROOT/$INIT_SKILL" > "$S_OWN_MUT_I"
 _strike "$S_OWN" "$SWEEP_ROOT/$CLEAN_SKILL" > "$S_OWN_MUT_C"
@@ -1208,8 +1250,8 @@ fi
 
 # P1/P2/P3 prove the block changes GIT'S BEHAVIOUR, not the skill's text alone, and
 # run in a scratch `git init` tree: this checkout is local-mode, so there is no in-tree repro.
-if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
-  _skip "P1/P2/P3 git-behaviour arms (inner run under an injected sweep root)"
+if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ] && [ "$SWEEP_ROOT" != "$REPO_ROOT" ]; then
+  _skip "P1/P2/P3 git-behaviour arms (sweep root injected and pointing elsewhere: $SWEEP_ROOT is not a checkout whose git behaviour these arms can read)"
 elif [ "$SCRATCH_USABLE" -ne 1 ]; then
   _skip "P1/P2/P3 git-behaviour arms (no usable scratch tree — reported as a finding above)"
 else
@@ -1461,8 +1503,8 @@ fi
 
 # A sibling region to the P1/P2/P3 arms, reusing their extractions ($R_DETECT, $R_RM_R,
 # $R_RM_GLOB) under the same guard: one comparison per copy, never two rival ones.
-if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
-  _skip 'P3 copy-sync arms (inner run under an injected sweep root: the $R_DETECT/$R_RM_R/$R_RM_GLOB these arms compare against are assigned only inside the P1/P2/P3 region above, which the same guard skipped)'
+if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ] && [ "$SWEEP_ROOT" != "$REPO_ROOT" ]; then
+  _skip 'P3 copy-sync arms (sweep root injected and pointing elsewhere: the $R_DETECT/$R_RM_R/$R_RM_GLOB these arms compare against are assigned only inside the P1/P2/P3 region above, which the same condition skipped)'
 elif [ "$SCRATCH_USABLE" -ne 1 ]; then
   _skip 'P3 copy-sync arms (no usable scratch tree: the same P1/P2/P3 region that assigns $R_DETECT/$R_RM_R/$R_RM_GLOB was skipped for it)'
 else
@@ -1574,8 +1616,10 @@ fi
 
 # #254 C-b and C-l, driven as CHILD runs rather than asserted about this file's text: a guard that
 # ended the run before the emitter cannot be observed from inside the run it ended.
-if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ] || [ -n "${NAZGUL_IGNORE_SWEEP_CHILD:-}" ]; then
-  _skip "degradation controls (inner or control-child run: driving them from here would recurse without bound)"
+if [ -n "${NAZGUL_IGNORE_SWEEP_CHILD:-}" ]; then
+  _skip "degradation controls (this run IS one of their control children, spawned with NAZGUL_IGNORE_SWEEP_CHILD=1 — that variable, not the sweep root, is what bounds the recursion at depth 1)"
+elif [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ] && [ "$SWEEP_ROOT" != "$REPO_ROOT" ]; then
+  _skip "degradation controls (sweep root injected and pointing elsewhere: the children these arms spawn read $SCRIPT_DIR, not $SWEEP_ROOT, so a fixture root cannot be what they measure)"
 elif [ "$SCRATCH_USABLE" -ne 1 ]; then
   _skip "degradation controls (no usable scratch tree — reported as a finding above; the broken-TMPDIR arm needs a path under it)"
 else
@@ -1616,7 +1660,7 @@ _degraded_arm() {
 X_TMPDIR="$SCRATCH/tmpdir-never-created"
 assert_eq "C-b precondition: the TMPDIR handed to the child does not exist, so its mktemp -d really fails" \
   "$([ -e "$X_TMPDIR" ] && printf 'exists' || printf 'absent')" "absent"
-X_CB_OUT=$(env TMPDIR="$X_TMPDIR" NAZGUL_IGNORE_SWEEP_CHILD=1 bash "$SCRIPT_DIR/$TEST_NAME.sh" 2>&1); X_CB_RC=$?
+X_CB_OUT=$(env -u NAZGUL_IGNORE_SWEEP_ROOT TMPDIR="$X_TMPDIR" NAZGUL_IGNORE_SWEEP_CHILD=1 bash "$SCRIPT_DIR/$TEST_NAME.sh" 2>&1); X_CB_RC=$?
 _degraded_arm "C-b unusable scratch" "$X_CB_OUT" "$X_CB_RC"
 assert_contains "C-b: the finding names the tree it could not create" "$X_CB_OUT" \
   "FAIL: scratch tree: mktemp -d under $X_TMPDIR yields a usable tree"
@@ -1627,7 +1671,7 @@ assert_contains "C-b: including the routes region, whose own guard used to exit 
 
 # C-l's exact combination: the third dogfood branch, with no injected sweep root, so the P0 region
 # below it is entered with SCRATCH assigned. At 7c0a267 this died at :679 on an unbound $SCRATCH.
-X_CL_OUT=$(env NAZGUL_IGNORE_SWEEP_FOLD_PROBE=1 NAZGUL_IGNORE_SWEEP_CHILD=1 bash "$SCRIPT_DIR/$TEST_NAME.sh" 2>&1); X_CL_RC=$?
+X_CL_OUT=$(env -u NAZGUL_IGNORE_SWEEP_ROOT NAZGUL_IGNORE_SWEEP_FOLD_PROBE=1 NAZGUL_IGNORE_SWEEP_CHILD=1 bash "$SCRIPT_DIR/$TEST_NAME.sh" 2>&1); X_CL_RC=$?
 _degraded_arm "C-l fold probe with no injected sweep root" "$X_CL_OUT" "$X_CL_RC"
 assert_contains "C-l: it fails for the fold probe it was asked to raise" "$X_CL_OUT" \
   "FAIL: fold probe: a deliberate dogfood-region failure"

@@ -27,6 +27,39 @@ sha256 fallback and a pass-through alias are gone; and `scripts/lib/sha256.sh`'s
 array marker, because a scalar one can be exported into the environment and silently suppress the
 load. Every fix ships with a control that fails if the fix over-fires.
 
+### PR #254, fourth review pass — twelve findings, five blocking
+
+The third pass's own fixes were reviewed, and most of what came back were regressions that pass
+introduced. **Two of them pointed operators at a destructive command.** `/nazgul:doctor` check (j),
+newly extended to local installs, prescribed `/nazgul:init --force` in local mode — but Step 0 sets
+`LOCAL_MODE` from the `--local` token alone and never reads the project's `install_mode`, so a bare
+`--force` takes the SHARED branch, deletes the local region, rewrites `install_mode` and injects
+CLAUDE.md, silently converting a deliberately-local project. All local remediations now carry
+`--local`. The same hoisting that produced that also gave the local ABSENT branch a reassurance
+written for the stale branch — "nothing is mis-tracked" — in the one state where the entire
+`nazgul/` tree really is exposed; consequences are per-branch and per-mode again.
+
+**Two more were false passes in the region scan**, one blank line apart from the defect it was
+written to close. That scan stopped at the first blank line unconditionally, so an indented entry
+after a blank line inside a v2 block was invisible and doctor printed `pass … with every region line
+flush-left` on an inert block; and for a v1 region it walked by adjacency instead of ownership, so a
+user's own `  build/` under the block was blamed on Nazgul and answered with a state-archiving
+reinit. The root cause was that the region rule existed a THIRD time, hand-written in bash, and had
+drifted from the two authoritative copies before shipping. It now lives once, in
+`scripts/lib/gitignore-block.sh`, which doctor sources.
+
+The fifth blocking finding was evidence, not code: the v1 citation that replaced a wrong v2 one was
+itself wrong in both halves. Every v1 shape of the shared block leads with
+`# (regenerable, machine-local …)` — the first interior comment arrives after ZERO entries, and
+`v1.3.5` does carry one. Pinned by truth now, not only by the absence of the retracted phrase.
+
+Also: the stale-shared branch no longer overstates its severity; round 3's skip-reason fix reached
+one of five sibling guards and now reaches all five (the "full run" the harness reports really does
+run the git-behaviour arms); the earlier entry in this same section no longer documents the pre-fix
+probe and residual as shipped; `128` is reported as git's generic fatal with its own stderr rather
+than asserted to mean "not a git repository"; and three line citations that the merge or an edit had
+moved now resolve.
+
 ### Counts this entry moves
 
 Stated here rather than left to the reader, and checked mechanically by
@@ -403,18 +436,23 @@ layer of the same, and its acceptance criteria check that statement rather than 
   that qualifies as neither, and **names the line it stopped at**. The same paragraph in
   `skills/clean/SKILL.md` was lifted verbatim rather than retyped, and a pin now compares the two
   whole paragraphs byte for byte so one destructive operation cannot acquire two rules. The residual
-  is recorded at the rule site rather than left for the next reviewer: an abutting user `#` comment
-  is still consumed, because a user comment and the block's own justification comments are
-  indistinguishable by shape. **C-c**: Step 2.5 wrote `.gitignore` and never read it back, and
+  is recorded at the rule site rather than left for the next reviewer: abutting user content is
+  still consumed silently — BOTH a `#` comment and a pattern beginning `nazgul/`, each
+  indistinguishable by shape from the block's own lines — which is why the rule now also requires
+  reporting every line the legacy fallback removed (widened from the comment clause alone by the
+  round-3 entry above). **C-c**: Step 2.5 wrote `.gitignore` and never read it back, and
   `"present at the shipped version — do nothing"` made that permanent. Measured: an indented v2 block
   gives `check-ignore` rc 1 and `git add -A` stages `nazgul/in-flight/marker.json` — **#251 fully
   restored** — while its stamp still reads *already current*, so no later `--force` would ever
   rewrite it. The shared branch now probes its own write with `git check-ignore -q
-  nazgul/in-flight/`, treats present-but-not-matching as `BLOCK-INERT`, rewrites flush-left and
-  re-probes, and never reports success on an inert block; a version case for leading whitespace on
-  any region line outranks the other three. Both boundaries are stated at the probe: `check-ignore`
-  needs no such file but does need a git repository, and the probe belongs to the shared branch alone
-  because in local mode a `0` would be earned by the wholesale `nazgul/` entry instead.
+  --no-index nazgul/in-flight/`, treats present-but-not-matching as `BLOCK-INERT`, rewrites
+  flush-left and re-probes, and never reports success on an inert block; a version case for leading
+  whitespace on any region line outranks the other three. The `--no-index` flag and the three-way
+  reading of the exit status (`0` verified / `1` inert / `128` UNVERIFIABLE, cause taken from git's
+  own stderr) arrived with the round-3 entry above: without it the probe consults the index and
+  answers `1` for a path git already TRACKS, which is the #251 population itself. One boundary is
+  stated at the probe — `check-ignore` needs no such file — and the probe belongs to the shared
+  branch alone, because in local mode a `0` would be earned by the wholesale `nazgul/` entry.
 - **C-h** — `automation.heartbeat.inbox.dir` reached a `.gitignore` pattern and a `git rm --cached`
   pathspec unvalidated, and in shared mode that value crosses a trust boundary because
   `nazgul/config.json` is tracked. It is now accepted only as a relative in-project path matching

@@ -36,10 +36,10 @@ source "$_NAZGUL_RP_DIR/review-file-class.sh"
 # Guarded where the two sources above are not, and the asymmetry is the point (#254 round-3
 # finding 9): structured-state.sh and review-file-class.sh are HARD dependencies with no defined
 # degradation, so failing to load one must abort. `_rp_sha256` HAS a defined degradation —
-# compute_review_token's documented `return 1`, which scripts/subagent-stop.sh:339 relies on.
+# compute_review_token's documented `return 1`, relied on at scripts/subagent-stop.sh:299 and :357.
 # An unguarded source would instead abort every `set -euo pipefail` consumer of this lib (the
 # stop-hook DONE gate, review-evidence.sh, task-transition-guard.sh) on a missing digest helper,
-# turning a degradation into an outage. Same call scripts/in-flight-marker.sh:24 makes.
+# turning a degradation into an outage. Same call scripts/in-flight-marker.sh:45 makes.
 # shellcheck source=sha256.sh
 source "$_NAZGUL_RP_DIR/sha256.sh" 2>/dev/null || true
 if ! command -v nz_sha256 >/dev/null 2>&1; then
