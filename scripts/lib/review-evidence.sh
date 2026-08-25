@@ -6,11 +6,11 @@
 # granularity, GROUP-<n>/FEATURE-<feat_id> in group/feature granularity.
 # A consolidated summary.md is NOT evidence — it is a meta-file, excluded below.
 
-# Source structured-state for canonical verdict reading, review-provenance so
-# every sourcer (stop-hook, task-state-guard) transitively gains
-# validate_review_provenance and the dispatch-manifest reader, and task-utils
-# for get_task_field (resolve_review_unit's Group/Wave fallback chain) — makes
-# this file self-contained regardless of what order a caller sources its libs.
+# lean-comments: allow-run — source order is load-bearing, so what each lib is FOR is
+# stated at the sourcing. structured-state: canonical verdict reading. review-provenance:
+# every sourcer transitively gains validate_review_provenance. task-utils: get_task_field
+# for resolve_review_unit's fallback chain. review-file-class: the unit-dir classifier this
+# file shares verbatim with the provenance validator (FEAT-031/TASK-035).
 _NAZGUL_RE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$_NAZGUL_RE_DIR/structured-state.sh"
@@ -18,15 +18,8 @@ source "$_NAZGUL_RE_DIR/structured-state.sh"
 source "$_NAZGUL_RE_DIR/review-provenance.sh"
 # shellcheck source=/dev/null
 source "$_NAZGUL_RE_DIR/task-utils.sh"
-
-# Meta-files in a review dir that are NOT reviewer verdicts.
-# Usage: _is_review_meta_file <basename>
-_is_review_meta_file() {
-  case "$1" in
-    test-failures.md|consolidated-feedback.md|simplify-report.md|summary.md) return 0 ;;
-    *) return 1 ;;
-  esac
-}
+# shellcheck source=/dev/null
+source "$_NAZGUL_RE_DIR/review-file-class.sh"
 
 # A file counts as APPROVED via the canonical structured verdict block first:
 # a leading YAML frontmatter `verdict: APPROVE` reads deterministically as
@@ -557,6 +550,8 @@ resolve_review_unit() {
 #   NO_REVIEWERS_CONFIGURED   — config.json agents.reviewers is empty
 #   MISSING <reviewer>        — no reviews/<unit>/<reviewer>.md
 #   UNAPPROVED <reviewer>     — file exists but lacks an APPROVED verdict
+#   VALIDATOR_DEFECT NOTHING_CHECKED — classifier read no verdict (K>0 floor, §15)
+#   VALIDATOR_DEFECT COVERAGE_ACCOUNTING_DEFECT — the N == M + K identity broke
 #   RECEIPT_MISMATCH <reviewer> — review_gate.receipt_hash_enforcement is
 #                             `true` (opt-in; default `false` as of TASK-009
 #                             round-3, pending a follow-up hardening pass on
@@ -660,23 +655,58 @@ validate_review_evidence() {
     fi
   done <<< "$configured_reviewers"
 
-  # Any extra (non-roster, non-meta) reviewer file must also be APPROVED
-  local rf base name
+  # lean-comments: allow-run — the widening this loop carries is the one that could make the
+  # gate pass by ignoring reviewers, so where the rule LIVES is stated where it is applied.
+  # A .md here is a reviewer VERDICT only if review_classify_unit_file says so, and that
+  # classifier is shared verbatim with validate_review_provenance (review-file-class.sh):
+  # the set of files whose verdict can approve this task and the set whose review_token must
+  # match are the SAME set, by construction rather than by two authors agreeing. This loop is
+  # a BACKSTOP for a seat dropped from the roster to escape its own CHANGES_REQUESTED — every
+  # configured seat was already read unconditionally above, so a `seat` class is counted and
+  # not re-read, and an archive of a seat that pass already read is not counted a second time.
+  local rf base name seat_suffixes skipped klass
+  local scanned=0 checked=0 skip_artifact=0 skip_nonseat=0 skip_superseded=0 pass_findings=0
+  seat_suffixes=$(_re_seat_suffixes "$configured_reviewers")
   for rf in "$review_dir"/*.md; do
     [ -f "$rf" ] || continue
+    scanned=$((scanned + 1))
     base=$(basename "$rf")
-    if _is_review_meta_file "$base"; then
-      continue
-    fi
     name="${base%.md}"
-    if ! grep -qxF "$name" <<< "$configured_reviewers"; then
-      if ! _has_approved_verdict "$rf"; then
-        _re_is_authorized_unverified "$nazgul_dir" "$review_dir" "$name" && continue
-        echo "UNAPPROVED $name"
-        problems=$((problems + 1))
-      fi
+    klass=$(review_classify_unit_file "$base" "$configured_reviewers" "$review_dir" "$seat_suffixes")
+    case "$klass" in
+      seat)       checked=$((checked + 1)); continue ;;
+      artifact)   skip_artifact=$((skip_artifact + 1)); continue ;;
+      non-seat)   skip_nonseat=$((skip_nonseat + 1)); continue ;;
+      superseded) skip_superseded=$((skip_superseded + 1)); continue ;;
+    esac
+    checked=$((checked + 1))
+    if ! _has_approved_verdict "$rf"; then
+      _re_is_authorized_unverified "$nazgul_dir" "$review_dir" "$name" && continue
+      echo "UNAPPROVED $name"
+      problems=$((problems + 1))
+      pass_findings=$((pass_findings + 1))
     fi
   done
+
+  # A classifier that stopped matching would skip every candidate and read as a clean
+  # directory; K==0 over a non-empty scan is that state and blocks with its own token.
+  skipped=$((skip_artifact + skip_nonseat + skip_superseded))
+  if [ "$scanned" -gt 0 ] && [ "$checked" -eq 0 ]; then
+    echo "${NAZGUL_VALIDATOR_DEFECT_PREFIX} NOTHING_CHECKED"
+    problems=$((problems + 1))
+    pass_findings=$((pass_findings + 1))
+  fi
+  if [ "$scanned" -ne $((skipped + checked)) ]; then
+    echo "${NAZGUL_VALIDATOR_DEFECT_PREFIX} COVERAGE_ACCOUNTING_DEFECT"
+    problems=$((problems + 1))
+    pass_findings=$((pass_findings + 1))
+  fi
+  local floor_note=""
+  [ "$scanned" -gt 0 ] && [ "$checked" -eq 0 ] \
+    && floor_note="NOTHING CHECKED — all ${scanned} candidate(s) skipped"
+  review_emit_class_coverage "review-evidence/verdict-files" \
+    "$scanned" "$skip_artifact" "$skip_nonseat" "$skip_superseded" "$checked" "$pass_findings" \
+    "$unit" "$seat_suffixes" "$floor_note"
 
   [ "$problems" -eq 0 ]
 }

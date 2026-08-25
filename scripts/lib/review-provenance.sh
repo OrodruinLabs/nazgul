@@ -22,23 +22,29 @@
 # effects. NOT `set -euo pipefail` — this file is SOURCED into hook shells
 # (task-state-guard.sh, stop-hook.sh) and must not alter their options.
 
-[ -n "${_NAZGUL_REVIEW_PROVENANCE_SOURCED:-}" ] && return 0
-_NAZGUL_REVIEW_PROVENANCE_SOURCED=1
+# RE-SOURCE GUARD: an ARRAY marker, not a scalar and not `declare -F` — bounded-net.sh's header
+# carries the measurement, including the `export -f` shape that defeats `declare -F`.
+[ "${_NZ_REVIEW_PROVENANCE_LOADED[1]:-}" = "loaded" ] && return 0
+_NZ_REVIEW_PROVENANCE_LOADED=(0 loaded)
 
 _NAZGUL_RP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$_NAZGUL_RP_DIR/structured-state.sh"
-# shellcheck source=sha256.sh
-source "$_NAZGUL_RP_DIR/sha256.sh"
+# shellcheck source=/dev/null
+source "$_NAZGUL_RP_DIR/review-file-class.sh"
 
-# Meta-files in a review dir that are NOT reviewer verdicts. Duplicated from
-# review-evidence.sh (not sourced) to keep this lib decoupled.
-_rp_is_meta_file() {
-  case "$1" in
-    test-failures.md|consolidated-feedback.md|simplify-report.md|summary.md) return 0 ;;
-    *) return 1 ;;
-  esac
-}
+# Guarded where the two sources above are not, and the asymmetry is the point (#254 round-3
+# finding 9): structured-state.sh and review-file-class.sh are HARD dependencies with no defined
+# degradation, so failing to load one must abort. `_rp_sha256` HAS a defined degradation —
+# compute_review_token's documented `return 1`, which scripts/subagent-stop.sh:339 relies on.
+# An unguarded source would instead abort every `set -euo pipefail` consumer of this lib (the
+# stop-hook DONE gate, review-evidence.sh, task-transition-guard.sh) on a missing digest helper,
+# turning a degradation into an outage. Same call scripts/in-flight-marker.sh:24 makes.
+# shellcheck source=sha256.sh
+source "$_NAZGUL_RP_DIR/sha256.sh" 2>/dev/null || true
+if ! command -v nz_sha256 >/dev/null 2>&1; then
+  nz_sha256() { return 1; }
+fi
 
 # Thin alias for `nz_sha256` (scripts/lib/sha256.sh), kept so this lib's callers
 # — and the stop-hook DONE gate's — are untouched by the #254 C-i extraction.
@@ -52,6 +58,16 @@ _rp_nonce() {
   fi
 }
 
+# Two paths naming one file. Compared through the resolved parent, so a different
+# spelling of the canonical path is accepted and a genuinely different file is not.
+_rp_same_path() {
+  local a="$1" b="$2" da db
+  [ "$a" = "$b" ] && return 0
+  da="$(cd "$(dirname -- "$a")" 2>/dev/null && pwd -P)" || return 1
+  db="$(cd "$(dirname -- "$b")" 2>/dev/null && pwd -P)" || return 1
+  [ -n "$da" ] && [ -n "$db" ] && [ "$da/$(basename -- "$a")" = "$db/$(basename -- "$b")" ]
+}
+
 # compute_review_token <nonce> <diff_hash> <unit_id> -> prints the first 16
 # hex chars of sha256(nonce \0 diff_hash \0 unit_id); 0 on success. Degrades
 # to allow (prints nothing, returns 1) if no sha256 tool is available.
@@ -62,12 +78,22 @@ compute_review_token() {
   printf '%s\n' "${full:0:16}"
 }
 
+# lean-comments: allow-run — the argument is now constrained, and a constraint nobody
+# can see from the signature is the trap it replaces.
 # write_dispatch_manifest <nazgul_dir> <unit_id> <diff_path> <feat_id> <iteration>
 #   [--selected "<space-list>"] [--skipped "<name:reason;...>"] [--] <reviewer...>
 # Writes nazgul/reviews/<unit_id>/.dispatch.json (see header for schema) and
 # prints the derived token on success. `selected` defaults to the full
-# roster, `skipped` to []. Returns 1 (no output, no file written) if no
+# roster, `skipped` to []. Returns 1 (no output, no manifest written) if no
 # sha256 tool is available.
+#
+# <diff_path> is NOT a free choice. validate_review_provenance always hashes
+# <review_dir>/diff.patch, so a manifest bound to any other file is born STALE and
+# its unit can never pass the DONE gate. Two rules keep the two ends agreeing by
+# construction rather than by caller discipline: a non-empty diff_path that is not
+# the canonical file is REFUSED with a named reason on stderr, and the hash is taken
+# from the canonical file itself — because passing "" while diff.patch exists on disk
+# produced the identical born-stale manifest by the other route.
 write_dispatch_manifest() {
   local nazgul_dir="$1" unit_id="$2" diff_path="$3" feat_id="$4" iteration="$5"
   shift 5
@@ -88,11 +114,21 @@ write_dispatch_manifest() {
   review_dir="$nazgul_dir/reviews/$unit_id"
   mkdir -p "$review_dir" || return 1
 
+  local canonical_diff="$review_dir/diff.patch"
+  if [ -n "$diff_path" ] && ! _rp_same_path "$diff_path" "$canonical_diff"; then
+    printf 'review-provenance: REFUSED to write %s/.dispatch.json\n' "$review_dir" >&2
+    printf 'review-provenance: reason: NON_CANONICAL_DIFF_PATH — handed "%s", but validate_review_provenance always hashes "%s".\n' \
+      "$diff_path" "$canonical_diff" >&2
+    printf 'review-provenance: a manifest bound to any other file is born stale, so this unit could never pass the DONE gate. Write the review diff to the canonical path first.\n' >&2
+    return 1
+  fi
+
   local nonce; nonce=$(_rp_nonce) || return 1
 
+  # The SAME expression the validator evaluates, so the two cannot disagree.
   local diff_hash
-  if [ -n "$diff_path" ] && [ -f "$diff_path" ]; then
-    diff_hash=$(_rp_sha256 < "$diff_path") || return 1
+  if [ -f "$canonical_diff" ]; then
+    diff_hash=$(_rp_sha256 < "$canonical_diff") || return 1
   else
     diff_hash=$(printf '' | _rp_sha256) || return 1
   fi
@@ -165,15 +201,18 @@ write_dispatch_manifest() {
   printf '%s\n' "$token"
 }
 
+# lean-comments: allow-run — the closed problem vocabulary this function's callers parse.
 # validate_review_provenance <nazgul_dir> <unit_id> -> 0 silently if valid;
 # else 1 with one machine-parseable line per problem:
-#   NO_DISPATCH_MANIFEST  — reviewer files present, no .dispatch.json
-#   TOKEN_MISMATCH <name> — reviewer file's review_token != manifest token
-#   TOKEN_MISSING <name>  — reviewer file present, carries no review_token
+#   NO_DISPATCH_MANIFEST  — subject files present, no .dispatch.json
+#   TOKEN_MISMATCH <name> — subject file's review_token != manifest token
+#   TOKEN_MISSING <name>  — subject file present, carries no review_token
 #   DIFF_HASH_STALE       — diff.patch hash != manifest diff_hash
-# Degrades to allow: no reviewer files yet, or a legacy review (no manifest
-# and no reviewer file carries any review_token:). Reviewers listed in the
-# manifest's skipped[] are exempt from TOKEN_MISSING/TOKEN_MISMATCH.
+#   VALIDATOR_DEFECT NOTHING_CHECKED — a board WAS dispatched, classifier read no subject (§15)
+#   VALIDATOR_DEFECT COVERAGE_ACCOUNTING_DEFECT — the subject-file N == M + K identity broke
+# Degrades to allow: no subject files yet, or a legacy review (no manifest and
+# no subject file carries any review_token:). Reviewers listed in the manifest's
+# skipped[] are exempt from TOKEN_MISSING/TOKEN_MISMATCH.
 validate_review_provenance() {
   local nazgul_dir="$1" unit_id="$2"
   local review_dir="$nazgul_dir/reviews/$unit_id"
@@ -181,64 +220,115 @@ validate_review_provenance() {
 
   [ -d "$review_dir" ] || return 0
 
-  local reviewer_files=() rf base
+  # lean-comments: allow-run — this is the widening that could make a tamper-evidence gate
+  # permissive, so its boundary is stated where it is applied. A subject is whatever
+  # review_classify_unit_file (review-file-class.sh) calls a verdict, and NOT ONE NAME MORE:
+  # the same classifier decides which files review-evidence.sh reads as approvals, so the set
+  # whose token must match is exactly the set that can approve a task. A `superseded` archive
+  # or a `non-seat` board document cannot grant approval, so demanding a token from it only
+  # blocks honest work; a `seat`/`extra-seat` file still must carry the dispatch token, which
+  # is what catches a planted or stale verdict. When no roster can be read there is no seat
+  # vocabulary to narrow BY, and the classifier answers `unnarrowed` — checked, never skipped,
+  # because a derivation that fails must widen what is examined, never what is ignored.
+  local config="$nazgul_dir/config.json" configured_reviewers="" seat_suffixes=""
+  [ -f "$config" ] && configured_reviewers=$(jq -r '.agents.reviewers // [] | .[]' "$config" 2>/dev/null || echo "")
+  seat_suffixes=$(_re_seat_suffixes "$configured_reviewers")
+
+  local subject_files=() rf base klass
+  local scanned=0 skip_artifact=0 skip_nonseat=0 skip_superseded=0
   for rf in "$review_dir"/*.md; do
     [ -f "$rf" ] || continue
+    scanned=$((scanned + 1))
     base=$(basename "$rf")
-    _rp_is_meta_file "$base" && continue
-    reviewer_files+=("$rf")
+    klass=$(review_classify_unit_file "$base" "$configured_reviewers" "$review_dir" "$seat_suffixes")
+    case "$klass" in
+      artifact)   skip_artifact=$((skip_artifact + 1)); continue ;;
+      non-seat)   skip_nonseat=$((skip_nonseat + 1)); continue ;;
+      superseded) skip_superseded=$((skip_superseded + 1)); continue ;;
+    esac
+    subject_files+=("$rf")
   done
 
-  [ "${#reviewer_files[@]}" -eq 0 ] && return 0
+  local checked=${#subject_files[@]}
+  local skipped=$((skip_artifact + skip_nonseat + skip_superseded))
+  local problems=0
 
-  if [ ! -f "$manifest" ]; then
+  if [ "$checked" -gt 0 ] && [ ! -f "$manifest" ]; then
     local rf2 has_any_token=0
-    for rf2 in "${reviewer_files[@]}"; do
+    for rf2 in "${subject_files[@]}"; do
       if read_frontmatter_field "$rf2" review_token >/dev/null 2>&1; then
         has_any_token=1
         break
       fi
     done
-    [ "$has_any_token" -eq 0 ] && return 0
-    echo "NO_DISPATCH_MANIFEST"
-    return 1
-  fi
-
-  local manifest_token skipped_names
-  manifest_token=$(jq -r '.token // empty' "$manifest" 2>/dev/null)
-  skipped_names=$(jq -r '.skipped[]?.name // empty' "$manifest" 2>/dev/null)
-
-  local problems=0 name file_token rf2
-  for rf2 in "${reviewer_files[@]}"; do
-    name=$(basename "$rf2" .md)
-    if grep -qxF "$name" <<< "$skipped_names"; then
-      continue
+    if [ "$has_any_token" -eq 1 ]; then
+      echo "NO_DISPATCH_MANIFEST"
+      problems=$((problems + 1))
     fi
-    if file_token=$(read_frontmatter_field "$rf2" review_token); then
-      if [ "$file_token" != "$manifest_token" ]; then
-        echo "TOKEN_MISMATCH $name"
+  elif [ "$checked" -gt 0 ]; then
+    local manifest_token skipped_names
+    manifest_token=$(jq -r '.token // empty' "$manifest" 2>/dev/null)
+    skipped_names=$(jq -r '.skipped[]?.name // empty' "$manifest" 2>/dev/null)
+
+    local name file_token rf3
+    for rf3 in "${subject_files[@]}"; do
+      name=$(basename "$rf3" .md)
+      if grep -qxF "$name" <<< "$skipped_names"; then
+        continue
+      fi
+      if file_token=$(read_frontmatter_field "$rf3" review_token); then
+        if [ "$file_token" != "$manifest_token" ]; then
+          echo "TOKEN_MISMATCH $name"
+          problems=$((problems + 1))
+        fi
+      else
+        echo "TOKEN_MISSING $name"
         problems=$((problems + 1))
       fi
-    else
-      echo "TOKEN_MISSING $name"
-      problems=$((problems + 1))
-    fi
-  done
+    done
 
-  local manifest_diff_hash diff_path current_hash
-  manifest_diff_hash=$(jq -r '.diff_hash // empty' "$manifest" 2>/dev/null)
-  diff_path="$review_dir/diff.patch"
-  if [ -n "$manifest_diff_hash" ]; then
-    if [ -f "$diff_path" ]; then
-      current_hash=$(_rp_sha256 < "$diff_path") || current_hash=""
-    else
-      current_hash=$(printf '' | _rp_sha256) || current_hash=""
+    local manifest_diff_hash diff_path current_hash
+    manifest_diff_hash=$(jq -r '.diff_hash // empty' "$manifest" 2>/dev/null)
+    diff_path="$review_dir/diff.patch"
+    if [ -n "$manifest_diff_hash" ]; then
+      if [ -f "$diff_path" ]; then
+        current_hash=$(_rp_sha256 < "$diff_path") || current_hash=""
+      else
+        current_hash=$(printf '' | _rp_sha256) || current_hash=""
+      fi
+      if [ -n "$current_hash" ] && [ "$current_hash" != "$manifest_diff_hash" ]; then
+        echo "DIFF_HASH_STALE"
+        problems=$((problems + 1))
+      fi
     fi
-    if [ -n "$current_hash" ] && [ "$current_hash" != "$manifest_diff_hash" ]; then
-      echo "DIFF_HASH_STALE"
-      problems=$((problems + 1))
+  elif [ "$scanned" -gt 0 ] && [ -f "$manifest" ]; then
+    # lean-comments: allow-run — the K>0 floor, and the one place this gate's ambiguous case
+    # is decided rather than inherited (RULES.md §15). "Candidates present, none read" is two
+    # different states, and .dispatch.json is what tells them apart: WITHOUT a manifest no
+    # board was ever dispatched here, so an all-paperwork dir is the ordinary pre-review state
+    # this validator has always allowed; WITH one, a board ran and yet not one file reads as a
+    # verdict — the exact shape of a classifier that stopped matching, which must never be
+    # reported as a clean review directory. So the floor blocks only in the second state.
+    echo "${NAZGUL_VALIDATOR_DEFECT_PREFIX} NOTHING_CHECKED"
+    problems=$((problems + 1))
+  fi
+
+  if [ "$scanned" -ne $((skipped + checked)) ]; then
+    echo "${NAZGUL_VALIDATOR_DEFECT_PREFIX} COVERAGE_ACCOUNTING_DEFECT"
+    problems=$((problems + 1))
+  fi
+
+  local floor_note=""
+  if [ "$scanned" -gt 0 ] && [ "$checked" -eq 0 ]; then
+    if [ -f "$manifest" ]; then
+      floor_note="NOTHING CHECKED — all ${scanned} candidate(s) skipped after a board was dispatched"
+    else
+      floor_note="nothing to check — all ${scanned} candidate(s) skipped, no dispatch manifest (pre-review)"
     fi
   fi
+  review_emit_class_coverage "review-provenance/subject-files" \
+    "$scanned" "$skip_artifact" "$skip_nonseat" "$skip_superseded" "$checked" "$problems" \
+    "$unit_id" "$seat_suffixes" "$floor_note"
 
   [ "$problems" -eq 0 ]
 }

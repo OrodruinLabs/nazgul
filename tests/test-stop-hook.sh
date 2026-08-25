@@ -292,6 +292,56 @@ assert_exit_code "CHANGES_REQUESTED: exit 2" "$HOOK_EC" 2
 assert_contains "changes requested warning" "$HOOK_OUTPUT" "CHANGES_REQUESTED"
 teardown_temp_dir
 
+# --- Test 9b (RW-B, FEAT-031 rework): the per-iteration census must count
+# CANCELLED and reconcile against TOTAL, as post-compact.sh:101 already does. ---
+census_line() {
+  printf '%s\n' "$HOOK_OUTPUT" | grep -m1 '^Tasks: ' || true
+}
+
+census_sum() {
+  printf '%s\n' "$1" | sed 's/^Tasks: //; s/ | Total:.*//' \
+    | tr ',' '\n' | awk '{s += $1} END {print s + 0}'
+}
+
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+create_task_file "TASK-002" "CANCELLED"
+create_task_file "TASK-003" "READY"
+run_hook
+assert_exit_code "census: loop continues with a cancelled task present" "$HOOK_EC" 2
+CENSUS=$(census_line)
+if [ -n "$CENSUS" ]; then
+  _pass "census: the iteration status line was emitted (anchor matched)"
+else
+  _fail "census: the iteration status line was emitted (anchor matched)" \
+    "no line starting 'Tasks: ' in the hook output — the assertions below would be vacuous"
+fi
+assert_contains "census: cancelled bucket is printed" "$CENSUS" "1 cancelled"
+assert_contains "census: the total is printed" "$CENSUS" "| Total: 3"
+assert_eq "census: printed buckets reconcile against TOTAL" "$(census_sum "$CENSUS")" "3"
+teardown_temp_dir
+
+# Control: with nothing cancelled the same line still reconciles, so the
+# assertion above measures the cancelled bucket and not the sum by luck.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+create_task_file "TASK-002" "READY"
+run_hook
+CENSUS=$(census_line)
+assert_contains "census control: zero cancelled is still printed" "$CENSUS" "0 cancelled"
+assert_eq "census control: buckets reconcile with nothing cancelled" "$(census_sum "$CENSUS")" "2"
+teardown_temp_dir
+
 # === STATE MUTATIONS ===
 
 # --- Test 10: Iteration incremented ---
@@ -334,6 +384,26 @@ create_task_file "TASK-002" "READY"
 run_hook
 val=$(jq -r '.safety.consecutive_failures' "$TEST_DIR/nazgul/config.json")
 assert_eq "failures incremented to 3" "$val" "3"
+teardown_temp_dir
+
+# lean-comments: allow-run — the two counters disagreed about what finishing a task means.
+# PATCH-007 item 14 — progress was DONE (+APPROVED in YOLO) while the completion condition is
+# DONE + CANCELLED == TOTAL. An operator clearing backlog with /nazgul:task skip therefore shrank
+# the outstanding set every iteration AND accrued a failure strike for it, stopping the run at
+# max 5 with "no progress" on a loop measurably converging on its own completion condition.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.safety.consecutive_failures = 2' '.safety._prev_done_count = 0'
+create_plan
+create_task_file "TASK-001" "CANCELLED"
+create_task_file "TASK-002" "READY"
+run_hook
+val=$(jq -r '.safety.consecutive_failures' "$TEST_DIR/nazgul/config.json")
+assert_eq "a newly CANCELLED task is progress, not a consecutive-failure strike" "$val" "0"
+val=$(jq -r '.safety._prev_done_count' "$TEST_DIR/nazgul/config.json")
+assert_eq "and the recorded count includes it, so the next iteration compares like with like" \
+  "$val" "1"
 teardown_temp_dir
 
 # --- Test 13: Checkpoint created ---
@@ -597,6 +667,52 @@ else
 fi
 teardown_temp_dir
 
+# --- Test 21b (TASK-023): a failed ledger write must not abort the block half-applied —
+# BLOCKED is written first, so aborting left a quarantine with no kind, reason or event ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "IN_PROGRESS"
+# A directory where the ledger file belongs: ttg_log_transition refuses a non-regular
+# ledger and returns 1, the same rc a lock timeout produces.
+mkdir "$TEST_DIR/nazgul/logs/guarded-transitions.jsonl"
+git -C "$TEST_DIR" checkout -q -b conflict-branch
+echo "conflict line A" > "$TEST_DIR/conflict.txt"
+git -C "$TEST_DIR" add conflict.txt
+git -C "$TEST_DIR" commit -q -m "branch A"
+git -C "$TEST_DIR" checkout -q main 2>/dev/null || git -C "$TEST_DIR" checkout -q master
+echo "conflict line B" > "$TEST_DIR/conflict.txt"
+git -C "$TEST_DIR" add conflict.txt
+git -C "$TEST_DIR" commit -q -m "branch B"
+git -C "$TEST_DIR" merge conflict-branch --no-commit 2>/dev/null || true
+porcelain=$(git -C "$TEST_DIR" status --porcelain 2>/dev/null || echo "")
+if echo "$porcelain" | grep -qE '^(U.|.U|AA|DD) '; then
+  ledger_field() { # <label>
+    grep -m1 "^- \*\*$1\*\*:" "$TEST_DIR/nazgul/tasks/TASK-001.md" \
+      | sed 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*$//'
+  }
+  run_hook
+  assert_contains "TASK-023: the ledger write really did fail (fixture is live)" \
+    "$HOOK_OUTPUT" "ledger is not a regular non-symlink file"
+  assert_eq "TASK-023: a failed ledger write still leaves BLOCKED" \
+    "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "BLOCKED"
+  assert_eq "TASK-023: the quarantine is still typed by kind" \
+    "$(ledger_field 'Blocked kind')" "git-conflict"
+  assert_eq "TASK-023: the quarantine still carries its reason" \
+    "$(ledger_field 'Blocked reason')" "git conflict — unmerged files detected"
+  assert_file_contains "TASK-023: the blocked event still fires" \
+    "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"blocked"'
+else
+  _skip "TASK-023: the ledger write really did fail (skipped — no conflict produced)"
+  _skip "TASK-023: a failed ledger write still leaves BLOCKED (skipped — no conflict produced)"
+  _skip "TASK-023: the quarantine is still typed by kind (skipped — no conflict produced)"
+  _skip "TASK-023: the quarantine still carries its reason (skipped — no conflict produced)"
+  _skip "TASK-023: the blocked event still fires (skipped — no conflict produced)"
+fi
+teardown_temp_dir
+
 # --- Test 22: Checkpoint is valid JSON ---
 setup_temp_dir
 setup_git_repo
@@ -640,6 +756,341 @@ run_hook
 status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "DONE with reviews stays DONE" "$status" "DONE"
 teardown_temp_dir
+
+# Merge-closed DONE vs the REACTIVE gate (FEAT-031, ADR-023): a host-corroborated
+# closure survives this pass, and a forged block with the SAME host answer does not.
+MC_BIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-stop-gh-XXXXXX")
+cat > "$MC_BIN/gh" << 'MC_GH_EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  auth) exit 0 ;;
+  pr)
+    [ "${2:-}" = "view" ] || exit 1
+    printf '{"baseRefName":"main","headRefName":"%s","mergeCommit":{"oid":"%s"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED","url":"https://github.com/OrodruinLabs/nazgul/pull/91"}\n' \
+      "${NAZGUL_TEST_MERGE_BRANCH:-}" "${NAZGUL_TEST_MERGE_SHA:-}"
+    exit 0 ;;
+esac
+exit 1
+MC_GH_EOF
+chmod +x "$MC_BIN/gh"
+
+# Usage: mc_evidence <task-id> <recorded-by value, empty for the forged block>
+mc_evidence() {
+  local mf="$TEST_DIR/nazgul/tasks/${1}.md"
+  {
+    printf '\n## Merge Evidence\n'
+    printf -- '- **host**: github.com\n'
+    printf -- '- **pr**: 91\n'
+    printf -- '- **merged-at**: 2026-08-14T23:16:50Z\n'
+    printf -- '- **merge-commit**: %s\n' "$NAZGUL_TEST_MERGE_SHA"
+    printf -- '- **head-ref**: %s\n' "$NAZGUL_TEST_MERGE_BRANCH"
+    [ -z "$2" ] || printf -- '- **recorded-by**: %s\n' "$2"
+  } >> "$mf"
+}
+
+mc_setup() {
+  setup_temp_dir
+  setup_git_repo
+  setup_nazgul_dir
+  git -C "$TEST_DIR" remote add origin "https://github.com/OrodruinLabs/nazgul.git"
+  MC_BASE=$(git -C "$TEST_DIR" rev-parse --abbrev-ref HEAD)
+  NAZGUL_TEST_MERGE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+  export NAZGUL_TEST_MERGE_SHA
+  NAZGUL_TEST_MERGE_BRANCH="feat/FEAT-031-merge-closed"
+  export NAZGUL_TEST_MERGE_BRANCH
+  create_config '.agents.reviewers = ["code-reviewer"]' \
+    ".branch.base = \"${MC_BASE}\"" '.review_gate.require_provenance = false' \
+    '.feat_id = "FEAT-031"' ".branch.feature = \"${NAZGUL_TEST_MERGE_BRANCH}\"" "$@"
+  create_plan
+  # The merge route binds manifest->objective through plan.md, which create_plan writes
+  # neither half of; a fixture missing them tests the refusal, not the closure.
+  { printf -- '---\nfeat_id: FEAT-031\n---\n'; cat "$TEST_DIR/nazgul/plan.md"; printf -- '- TASK-001\n- TASK-002\n'; } \
+    > "$TEST_DIR/nazgul/plan.md.new" && mv "$TEST_DIR/nazgul/plan.md.new" "$TEST_DIR/nazgul/plan.md"
+  create_task_file "TASK-001" "DONE"    # deliberately NO review dir — merge route only
+  create_task_file "TASK-002" "READY"   # keeps the loop alive (exit 2 path)
+}
+
+mc_setup
+mc_evidence TASK-001 "scripts/close-objective.sh (host API, ok)"
+HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "merge-closed DONE is NOT reverted by the reactive gate" "$status" "DONE"
+assert_not_contains "merge-closed DONE: no review-gate violation" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+assert_contains "merge-closed DONE: the admitting route is named" \
+  "$HOOK_OUTPUT" "admitted via the merge-evidence route"
+teardown_temp_dir
+
+mc_setup
+mc_evidence TASK-001 ""
+HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "a forged merge block does NOT admit DONE — the review route is unweakened" \
+  "$status" "IMPLEMENTED"
+assert_contains "a forged merge block still logs the review-gate violation" \
+  "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+teardown_temp_dir
+
+# TASK-022 — an unreachable host must not REVOKE a closure it was never asked to admit:
+# `unverifiable` is an absence of information, which may not move a status in EITHER direction.
+MC_BIN_DOWN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-stop-gh-down-XXXXXX")
+cat > "$MC_BIN_DOWN/gh" << 'MC_GH_DOWN_EOF'
+#!/usr/bin/env bash
+# Installed but unauthenticated, so `gh auth status` fails and the github arm reports
+# provider_unavailable — the merge verdict is `unverifiable`, never `not_merged`.
+exit 1
+MC_GH_DOWN_EOF
+chmod +x "$MC_BIN_DOWN/gh"
+
+mc_setup
+mc_evidence TASK-001 "scripts/close-objective.sh (host API, ok)"
+HOOK_OUTPUT=$(PATH="$MC_BIN_DOWN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "TASK-022: an unverifiable host does NOT demote a merge-closed DONE" "$status" "DONE"
+assert_not_contains "TASK-022: a deferral is not a review-gate violation" \
+  "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+assert_contains "TASK-022: the deferral names its reason" \
+  "$HOOK_OUTPUT" "could not be verified this iteration [reason: unverifiable"
+assert_contains "TASK-022: the deferral denies the review-evidence reading" \
+  "$HOOK_OUTPUT" "NOT a review-evidence violation"
+assert_file_contains "TASK-022: an undecided iteration is recorded, not silent" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" \
+  '"reason":"merge_evidence_undecided","gate":"review_gate_reactive","task_id":"TASK-001"'
+assert_file_contains "TASK-022: the deferral event names the host state it could not read" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"host_state":"provider_unavailable"'
+assert_file_contains "TASK-022: the deferral event says it declined to act" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"action":"deferred"'
+count=$(jq -r 'if (.safety._review_reset_counts | has("TASK-001")) then .safety._review_reset_counts["TASK-001"] else "absent" end' "$TEST_DIR/nazgul/config.json")
+assert_eq "TASK-022: a deferral moves no strike counter" "$count" "absent"
+# The second consecutive Stop is where the unfixed ladder landed on BLOCKED.
+HOOK_OUTPUT=$(PATH="$MC_BIN_DOWN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "TASK-022: a second unverifiable iteration still leaves DONE in place" "$status" "DONE"
+assert_not_contains "TASK-022: no escalation on a repeated deferral" \
+  "$HOOK_OUTPUT" "escalated to BLOCKED"
+teardown_temp_dir
+
+# The boundary: `not_merged` is the host's ANSWER, not its silence, so the review-evidence
+# ladder is untouched — widening the deferral to cover it would be the bypass, not the fix.
+MC_BIN_OPEN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-stop-gh-open-XXXXXX")
+cat > "$MC_BIN_OPEN/gh" << 'MC_GH_OPEN_EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  auth) exit 0 ;;
+  pr)
+    [ "${2:-}" = "view" ] || exit 1
+    printf '{"baseRefName":"main","headRefName":"%s","mergeCommit":null,"mergedAt":null,"state":"OPEN","url":"https://github.com/OrodruinLabs/nazgul/pull/91"}\n' \
+      "${NAZGUL_TEST_MERGE_BRANCH:-}"
+    exit 0 ;;
+esac
+exit 1
+MC_GH_OPEN_EOF
+chmod +x "$MC_BIN_OPEN/gh"
+
+mc_setup
+mc_evidence TASK-001 "scripts/close-objective.sh (host API, ok)"
+HOOK_OUTPUT=$(PATH="$MC_BIN_OPEN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "TASK-022: a host answer of not_merged still resets DONE" "$status" "IMPLEMENTED"
+assert_contains "TASK-022: not_merged is still a violation, not a deferral" \
+  "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+assert_not_contains "TASK-022: not_merged never reaches the deferral arm" \
+  "$HOOK_OUTPUT" "could not be verified this iteration"
+count=$(jq -r '.safety._review_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
+assert_eq "TASK-022: not_merged records the first strike" "$count" "1"
+teardown_temp_dir
+
+mc_setup '.safety._review_reset_counts = {"TASK-001": 1}'
+mc_evidence TASK-001 "scripts/close-objective.sh (host API, ok)"
+HOOK_OUTPUT=$(PATH="$MC_BIN_OPEN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "TASK-022: a second not_merged iteration still escalates to BLOCKED" "$status" "BLOCKED"
+assert_contains "TASK-022: the not_merged escalation is still named" \
+  "$HOOK_OUTPUT" "escalated to BLOCKED"
+teardown_temp_dir
+
+# TASK-023 — the pre-filter matched the HEADING alone, and templates/task-manifest.md ships
+# that heading with its whole block commented out, so EVERY template-born manifest was probed.
+mc_setup
+create_review_dir TASK-001
+{ printf '\n'
+  awk '/^## Merge Evidence/{f=1;print;next} f && /^## /{exit} f{print}' \
+    "$REPO_ROOT/templates/task-manifest.md"
+} >> "$TEST_DIR/nazgul/tasks/TASK-001.md"
+assert_file_contains "TASK-023: the fixture really carries the template's heading" \
+  "$TEST_DIR/nazgul/tasks/TASK-001.md" "## Merge Evidence"
+assert_file_contains "TASK-023: and the commented block beneath it, not an empty section" \
+  "$TEST_DIR/nazgul/tasks/TASK-001.md" "\- \*\*host\*\*: example\.invalid"
+assert_file_contains "TASK-023: with the comment still closed around it" \
+  "$TEST_DIR/nazgul/tasks/TASK-001.md" "(host API, ok) -->"
+HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "TASK-023: a review-closed DONE still stands" "$status" "DONE"
+me_events=$(grep -c '"event":"merge_evidence_missing"' "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null || true)
+assert_eq "TASK-023: the template's commented block is probed ZERO times in two iterations" \
+  "${me_events:-0}" "0"
+assert_not_contains "TASK-023: the verifier is never consulted for it at all" \
+  "$HOOK_OUTPUT" "ttg_verify_merge_evidence:"
+teardown_temp_dir
+
+# The other half: an uncommented field line IS a closure attempt, so it still reaches the
+# verifier and still refuses with its own token — the gate is unweakened, only the probe moved.
+mc_setup
+mc_evidence TASK-001 ""
+HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+assert_file_contains "TASK-023: a half-written real block still reaches the verifier" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"merge_evidence_missing"'
+assert_file_contains "TASK-023: with its refusal token unchanged" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"reason":"truncated"'
+assert_contains "TASK-023: and its stderr refusal unchanged" \
+  "$HOOK_OUTPUT" "ttg_verify_merge_evidence:"
+teardown_temp_dir
+
+# === PR-VIEW BUDGET (PR #240 finding #5) — the pre-filter must be the closure ROUTE, and
+# one question about one PR must cost one host call however many manifests ask it ===
+CT_BIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-stop-gh-count-XXXXXX")
+CT_CALLS="$CT_BIN/pr-view.calls"
+cat > "$CT_BIN/gh" << 'CT_GH_EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  auth) exit 0 ;;
+  pr)
+    [ "${2:-}" = "view" ] || exit 1
+    printf 'pr-view\n' >> "${NAZGUL_TEST_GH_CALLS:-/dev/null}"
+    printf '{"baseRefName":"main","headRefName":"%s","mergeCommit":{"oid":"%s"},"mergedAt":"2026-08-14T23:16:50Z","state":"MERGED","url":"https://github.com/OrodruinLabs/nazgul/pull/91"}\n' \
+      "${NAZGUL_TEST_MERGE_BRANCH:-}" "${NAZGUL_TEST_MERGE_SHA:-}"
+    exit 0 ;;
+esac
+exit 1
+CT_GH_EOF
+chmod +x "$CT_BIN/gh"
+
+# Usage: ct_setup <n DONE tasks, all closed against pr 91> <give them review dirs: true|false>
+ct_setup() {
+  local n="$1" reviews="$2" i id roster=""
+  setup_temp_dir; setup_git_repo; setup_nazgul_dir
+  git -C "$TEST_DIR" remote add origin "https://github.com/OrodruinLabs/nazgul.git"
+  CT_BASE=$(git -C "$TEST_DIR" rev-parse --abbrev-ref HEAD)
+  NAZGUL_TEST_MERGE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD); export NAZGUL_TEST_MERGE_SHA
+  NAZGUL_TEST_MERGE_BRANCH="feat/FEAT-031-merge-closed"; export NAZGUL_TEST_MERGE_BRANCH
+  create_config '.agents.reviewers = ["code-reviewer"]' \
+    ".branch.base = \"${CT_BASE}\"" '.review_gate.require_provenance = false' \
+    '.feat_id = "FEAT-031"' ".branch.feature = \"${NAZGUL_TEST_MERGE_BRANCH}\"" \
+    '.learning.auto_distill_post_loop = false' '.docs.verify_comments = false' \
+    '.self_audit.enabled = false'
+  create_plan
+  for i in $(seq 1 "$n"); do
+    id=$(printf 'TASK-%03d' "$i")
+    create_task_file "$id" "DONE"
+    mc_evidence "$id" "scripts/close-objective.sh (host API, ok)"
+    if [ "$reviews" = "true" ]; then create_review_dir "$id"; fi
+    roster="${roster}- ${id}"$'\n'
+  done
+  id=$(printf 'TASK-%03d' "$((n + 1))")
+  create_task_file "$id" "READY"
+  roster="${roster}- ${id}"$'\n'
+  { printf -- '---\nfeat_id: FEAT-031\n---\n'; cat "$TEST_DIR/nazgul/plan.md"; printf '%s' "$roster"; } \
+    > "$TEST_DIR/nazgul/plan.md.new" && mv "$TEST_DIR/nazgul/plan.md.new" "$TEST_DIR/nazgul/plan.md"
+  : > "$CT_CALLS"
+}
+
+# The workflow the feature exists to enable: /nazgul:complete writes ## Merge Evidence into
+# EVERY task it closes, so a section-presence pre-filter probed all 21 on every iteration.
+ct_setup 21 true
+HOOK_OUTPUT=$(PATH="$CT_BIN:$PATH" NAZGUL_TEST_GH_CALLS="$CT_CALLS" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+ct_calls=$(wc -l < "$CT_CALLS" | tr -d ' ')
+assert_eq "#5: 21 review-closed DONE tasks cost ZERO host calls" "${ct_calls:-0}" "0"
+assert_eq "#5: and the review route still holds every one of them at DONE" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-021.md")" "DONE"
+assert_not_contains "#5: the merge route is not the ACCEPTED route when review evidence is clean" \
+  "$HOOK_OUTPUT" "admitted via the merge-evidence route"
+teardown_temp_dir
+
+# The other half: when the host genuinely has to be asked, N manifests share ONE pr and
+# therefore ONE round trip — while each still gets its own independently computed verdict.
+ct_setup 21 false
+HOOK_OUTPUT=$(PATH="$CT_BIN:$PATH" NAZGUL_TEST_GH_CALLS="$CT_CALLS" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+ct_calls=$(wc -l < "$CT_CALLS" | tr -d ' ')
+assert_eq "#5: 21 manifests sharing one pr cost exactly ONE host call" "${ct_calls:-0}" "1"
+assert_eq "#5: the memo does not weaken the verdict — the merge route still admits" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-021.md")" "DONE"
+ct_routes=$(printf '%s\n' "$HOOK_OUTPUT" | grep -c 'admitted via the merge-evidence route' || true)
+assert_eq "#5: and all 21 still record WHICH route admitted them (memo is per-ANSWER, not per-verdict)" \
+  "${ct_routes:-0}" "21"
+teardown_temp_dir
+
+# === DEFERRAL CEILING (PR #240 finding #6) — the REVOKE-side deferral is a kill switch on the
+# same edge whose ADMIT side deliberately has none, and its trigger is manifest text ===
+MC_BIN_404=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-stop-gh-404-XXXXXX")
+cat > "$MC_BIN_404/gh" << 'MC_GH_404_EOF'
+#!/usr/bin/env bash
+# Authenticated and reachable; the PR number simply names nothing, which is what
+# `gh pr view 999999999` does on a live repo — api_failure, reported as `unverifiable`.
+case "${1:-}" in
+  auth) exit 0 ;;
+esac
+exit 1
+MC_GH_404_EOF
+chmod +x "$MC_BIN_404/gh"
+
+# A ceiling an operator could raise is the switch under another name, so these two config keys
+# are decoys: neither exists, and the fall-through must land on the 4th iteration regardless.
+mc_setup '.review_gate.merge_undecided_max = 99' '.safety.merge_defer_max = 99'
+mc_evidence TASK-001 "scripts/close-objective.sh (host API, ok)"
+sed -i.bak 's/^- \*\*pr\*\*: 91$/- **pr**: 999999999/' "$TEST_DIR/nazgul/tasks/TASK-001.md" \
+  && rm -f "$TEST_DIR/nazgul/tasks/TASK-001.md.bak"
+for defer_iter in 1 2 3; do
+  HOOK_OUTPUT=$(PATH="$MC_BIN_404:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+  assert_eq "#6: iteration ${defer_iter} is inside the bound — DONE stands" \
+    "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "DONE"
+  assert_contains "#6: iteration ${defer_iter} names where it stands against the ceiling" \
+    "$HOOK_OUTPUT" "(deferral ${defer_iter} of 3)"
+  assert_eq "#6: iteration ${defer_iter} records NO review-evidence strike" \
+    "$(jq -r 'if (.safety._review_reset_counts | has("TASK-001")) then "present" else "absent" end' "$TEST_DIR/nazgul/config.json")" \
+    "absent"
+  assert_eq "#6: the deferral is counted on its OWN key" \
+    "$(jq -r '.safety._merge_undecided_counts["TASK-001"] // "absent"' "$TEST_DIR/nazgul/config.json")" \
+    "$defer_iter"
+done
+HOOK_OUTPUT=$(PATH="$MC_BIN_404:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+assert_contains "#6: the 4th consecutive unverifiable iteration ENDS the deferral" \
+  "$HOOK_OUTPUT" "merge-evidence deferral EXHAUSTED"
+assert_contains "#6: and the exhaustion names the ceiling it reached" \
+  "$HOOK_OUTPUT" "reached the limit of 3"
+assert_file_contains "#6: 'deferred' and 'deferral exhausted' are distinguishable in telemetry" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"action":"deferral_exhausted"'
+assert_file_contains "#6: the exhaustion event carries the count and the limit" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"deferrals":3,"limit":3'
+assert_eq "#6: the suppressed ladder finally runs — the strike is recorded" \
+  "$(jq -r '.safety._review_reset_counts["TASK-001"] // "absent"' "$TEST_DIR/nazgul/config.json")" "1"
+assert_eq "#6: a DONE with no review evidence behind it can no longer be held DONE forever" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "IMPLEMENTED"
+teardown_temp_dir
+
+# The direction TASK-022 fixed, unweakened: an unreachable host inside the bound revokes
+# nothing, and a host that comes back ENDS the run of consecutive deferrals.
+mc_setup
+mc_evidence TASK-001 "scripts/close-objective.sh (host API, ok)"
+HOOK_OUTPUT=$(PATH="$MC_BIN_DOWN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+assert_eq "#6: one transient outage still moves no status" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "DONE"
+assert_eq "#6: one transient outage still records no strike" \
+  "$(jq -r 'if (.safety._review_reset_counts | has("TASK-001")) then "present" else "absent" end' "$TEST_DIR/nazgul/config.json")" \
+  "absent"
+assert_eq "#6: one transient outage costs exactly one deferral" \
+  "$(jq -r '.safety._merge_undecided_counts["TASK-001"] // "absent"' "$TEST_DIR/nazgul/config.json")" "1"
+HOOK_OUTPUT=$(PATH="$MC_BIN:$PATH" bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
+assert_eq "#6: the host comes back and the closure is admitted" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "DONE"
+assert_eq "#6: 'consecutive' really is consecutive — the counter is cleared" \
+  "$(jq -r 'if (.safety._merge_undecided_counts | has("TASK-001")) then "present" else "absent" end' "$TEST_DIR/nazgul/config.json")" \
+  "absent"
+teardown_temp_dir
+
+rm -rf "$CT_BIN" "$MC_BIN_404"
+
+rm -rf "$MC_BIN" "$MC_BIN_DOWN" "$MC_BIN_OPEN"
+unset NAZGUL_TEST_MERGE_SHA NAZGUL_TEST_MERGE_BRANCH
 
 # --- Test: YOLO without task-pr — all APPROVED exits cleanly (MF-005 regression) ---
 # Canonical-frontmatter fixtures (create_task_file). Proves the MF-001 fix (TASK-002,
@@ -1013,6 +1464,225 @@ run_hook
 assert_exit_code "group blocked unit: exit 2" "$HOOK_EC" 2
 assert_contains "group blocked unit: awaiting aggregate review" "$HOOK_OUTPUT" "AWAITING AGGREGATE REVIEW"
 assert_not_contains "group blocked unit: NO per-task review for TASK-001" "$HOOK_OUTPUT" "Spawn review-gate agent (nazgul:review-gate) for TASK-001"
+# FEAT-031/ADR-022: BLOCKED means "needs human help, will resume", so it keeps vetoing
+# the board; only CANCELLED is carried out of the unit.
+assert_not_contains "group blocked unit: NO aggregate board while a sibling is BLOCKED" "$HOOK_OUTPUT" "AGGREGATE review unit"
+teardown_temp_dir
+
+# === AGGREGATE CARVE-OUT (board #90): CANCELLED leaves the unit, BLOCKED holds it ===
+# Each row builds a fixture and runs the hook; an unbuildable one is skipped, not passed.
+CO_SCANNED=0; CO_CHECKED=0; CO_SKIPPED=0; CO_UNBUILDABLE=0; CO_FINDINGS=0
+CO_FAILED_AT_ENTRY=0
+EVENTS=""
+
+co_fixture() {
+  # Usage: co_fixture <name> <granularity> <STATUS:group>...
+  local name="$1" gran="$2"; shift 2
+  local i=0 spec status group id
+  CO_SCANNED=$((CO_SCANNED + 1))
+  CO_FAILED_AT_ENTRY=$TESTS_FAILED
+  setup_temp_dir; setup_git_repo; setup_nazgul_dir
+  create_config ".review_gate.granularity = \"${gran}\"" \
+    '.agents.reviewers = ["code-reviewer"]' '.learning.auto_distill_post_loop = false' \
+    '.docs.verify_comments = false' '.self_audit.enabled = false'
+  create_plan
+  for spec in "$@"; do
+    i=$((i + 1))
+    status="${spec%%:*}"; group="${spec##*:}"
+    id=$(printf 'TASK-%03d' "$i")
+    create_task_file "$id" "$status"
+    set_task_group "$id" "$group"
+  done
+  EVENTS="$TEST_DIR/nazgul/logs/events.jsonl"
+  if [ ! -s "$TEST_DIR/nazgul/config.json" ] || [ "$i" -eq 0 ]; then
+    CO_SKIPPED=$((CO_SKIPPED + 1)); CO_UNBUILDABLE=$((CO_UNBUILDABLE + 1))
+    _skip "carve-out [${name}]: fixture unbuildable — not checked"
+    return 1
+  fi
+  CO_CHECKED=$((CO_CHECKED + 1))
+  run_hook
+  return 0
+}
+
+co_close() {
+  if [ "$TESTS_FAILED" -gt "$CO_FAILED_AT_ENTRY" ]; then
+    CO_FINDINGS=$((CO_FINDINGS + 1))
+  fi
+  teardown_temp_dir
+}
+
+# --- 1/9: the headline defect — a task that ships nothing no longer deadlocks the unit ---
+if co_fixture "group carve-out" group IMPLEMENTED:1 IMPLEMENTED:1 CANCELLED:1; then
+  assert_exit_code "carve-out group: exit 2" "$HOOK_EC" 2
+  assert_contains "carve-out group: board fires" "$HOOK_OUTPUT" "AGGREGATE REVIEW READY"
+  assert_contains "carve-out group: board covers ONLY the implemented pair" \
+    "$HOOK_OUTPUT" "covering tasks: TASK-001 TASK-002."
+  assert_contains "carve-out group: names the carried-out task" \
+    "$HOOK_OUTPUT" "carried out CANCELLED (TASK-003)"
+  assert_contains "carve-out group: reports the partial count" \
+    "$HOOK_OUTPUT" "2 of 3 unit tasks reviewed"
+  assert_file_contains "carve-out group: event emitted" "$EVENTS" \
+    '"event":"aggregate_board_cancelled_carveout"'
+  assert_file_contains "carve-out group: event names the unit" "$EVENTS" '"unit":"group 1"'
+  assert_file_contains "carve-out group: event carries the carried-out ids" \
+    "$EVENTS" '"cancelled_tasks":"TASK-003"'
+  assert_file_contains "carve-out group: event carries implemented" "$EVENTS" '"implemented":2'
+  assert_file_contains "carve-out group: event carries total" "$EVENTS" '"total":3'
+  assert_dir_not_exists "carve-out group: cancelled task acquires no review dir" \
+    "$TEST_DIR/nazgul/reviews/TASK-003"
+fi
+co_close
+
+# --- 2/9: one granularity up, where the unit spans every group ---
+if co_fixture "feature carve-out" feature IMPLEMENTED:1 IMPLEMENTED:2 CANCELLED:3; then
+  assert_exit_code "carve-out feature: exit 2" "$HOOK_EC" 2
+  assert_contains "carve-out feature: board fires" "$HOOK_OUTPUT" "AGGREGATE REVIEW READY"
+  assert_contains "carve-out feature: board covers ONLY the implemented pair" \
+    "$HOOK_OUTPUT" "covering tasks: TASK-001 TASK-002."
+  assert_contains "carve-out feature: names the carried-out task" \
+    "$HOOK_OUTPUT" "carried out CANCELLED (TASK-003)"
+  assert_file_contains "carve-out feature: event names the unit" "$EVENTS" '"unit":"feature"'
+  assert_file_contains "carve-out feature: event carries total" "$EVENTS" '"total":3'
+fi
+co_close
+
+# --- 3/9: the half that proves the check was not simply deleted ---
+if co_fixture "blocked veto" group IMPLEMENTED:1 IMPLEMENTED:1 BLOCKED:1; then
+  assert_exit_code "blocked veto: exit 2" "$HOOK_EC" 2
+  assert_contains "blocked veto: unit stays parked" "$HOOK_OUTPUT" "AWAITING AGGREGATE REVIEW"
+  assert_not_contains "blocked veto: NO aggregate board" "$HOOK_OUTPUT" "AGGREGATE review unit"
+  assert_not_contains "blocked veto: nothing is carried out" "$HOOK_OUTPUT" "CARVE-OUT"
+  assert_file_not_contains "blocked veto: no carve-out event" "$EVENTS" \
+    '"event":"aggregate_board_cancelled_carveout"'
+fi
+co_close
+
+# --- 4/9: an empty board is not a clean one ---
+if co_fixture "all cancelled" feature CANCELLED:1 CANCELLED:1; then
+  assert_exit_code "all cancelled: exit 0" "$HOOK_EC" 0
+  assert_contains "all cancelled: the no-dispatch path is reported" \
+    "$HOOK_OUTPUT" "has nothing to review"
+  assert_not_contains "all cancelled: no board readiness" "$HOOK_OUTPUT" "AGGREGATE REVIEW READY"
+  assert_not_contains "all cancelled: no board dispatched" "$HOOK_OUTPUT" "AGGREGATE review unit"
+  # The carve-out event is bound to a dispatch, and this arm dispatches nothing; the named
+  # stderr line above is this case's record (RULES.md §1.15's own wording for it).
+  assert_file_not_contains "all cancelled: no board means no carve-out event" "$EVENTS" \
+    '"event":"aggregate_board_cancelled_carveout"'
+fi
+co_close
+
+# --- 5/9: which unit is "active" must not be decided by a task that ships nothing ---
+if co_fixture "active-group scan" group CANCELLED:1 CANCELLED:1 IMPLEMENTED:2; then
+  assert_exit_code "active-group scan: exit 2" "$HOOK_EC" 2
+  assert_contains "active-group scan: unit resolves to group 2" "$HOOK_OUTPUT" "group 2"
+  assert_contains "active-group scan: board fires" "$HOOK_OUTPUT" "AGGREGATE REVIEW READY"
+  assert_contains "active-group scan: board covers TASK-003" \
+    "$HOOK_OUTPUT" "covering tasks: TASK-003."
+  assert_not_contains "active-group scan: group 1's cancelled pair is not this unit's carve-out" \
+    "$HOOK_OUTPUT" "CARVE-OUT"
+fi
+co_close
+
+# --- 6/9 (TASK-023): bound to the DISPATCH, not the iteration — the scan reaches an unready
+# unit on EVERY Stop, so "fires when it should" cannot catch an event that fires always ---
+if co_fixture "unready across two Stops" feature READY:1 IMPLEMENTED:1 CANCELLED:1; then
+  assert_exit_code "unready carve-out: exit 2" "$HOOK_EC" 2
+  assert_contains "unready carve-out: the unit is NOT ready" \
+    "$HOOK_OUTPUT" "AWAITING AGGREGATE REVIEW"
+  assert_not_contains "unready carve-out: no board is dispatched" \
+    "$HOOK_OUTPUT" "AGGREGATE review unit"
+  assert_contains "unready carve-out: the NOTE is still computed where it always was" \
+    "$HOOK_OUTPUT" "carried out CANCELLED (TASK-003)"
+  run_hook
+  assert_contains "unready carve-out: still unready on the 2nd Stop" \
+    "$HOOK_OUTPUT" "AWAITING AGGREGATE REVIEW"
+  co_events=$(grep -c '"event":"aggregate_board_cancelled_carveout"' "$EVENTS" 2>/dev/null || true)
+  assert_eq "unready carve-out: ZERO events across two no-dispatch iterations" \
+    "${co_events:-0}" "0"
+fi
+co_close
+
+# --- 7/9 (PR #240 finding #11): a unit held by BLOCKED must not emit the marker of a unit
+# that is merely mid-flight. Same shape as 8/9 below except for the second task's status, so
+# the ONLY thing that can distinguish the two markers is the record this row demands ---
+AGG_MARKER_HELD=""
+AGG_MARKER_MIDFLIGHT=""
+if co_fixture "blocked hold" group IMPLEMENTED:1 BLOCKED:1; then
+  AGG_MARKER_HELD=$(printf '%s\n' "$HOOK_OUTPUT" | grep -m1 'AWAITING AGGREGATE REVIEW (' || true)
+  assert_exit_code "blocked hold: exit 2" "$HOOK_EC" 2
+  assert_contains "blocked hold: the unit is still parked, not carried out" \
+    "$HOOK_OUTPUT" "AWAITING AGGREGATE REVIEW"
+  assert_contains "blocked hold: the held count is named" \
+    "$HOOK_OUTPUT" "HELD: 1 of 2 unit task(s) BLOCKED"
+  assert_contains "blocked hold: and the id that is holding it" "$HOOK_OUTPUT" "BLOCKED (TASK-002)"
+  assert_contains "blocked hold: the instruction is followable — implementing will not release it" \
+    "$HOOK_OUTPUT" "CANNOT reach review readiness"
+  assert_not_contains "blocked hold: BLOCKED is NOT carried out of the unit" \
+    "$HOOK_OUTPUT" "AGGREGATE REVIEW READY"
+  assert_not_contains "blocked hold: and it is not a carve-out" "$HOOK_OUTPUT" "CARVE-OUT"
+  assert_file_contains "blocked hold: the held iteration is recorded, not silent" "$EVENTS" \
+    '"event":"aggregate_unit_blocked_hold"'
+  assert_file_contains "blocked hold: the event carries the holding ids" "$EVENTS" \
+    '"blocked_tasks":"TASK-002"'
+  assert_file_contains "blocked hold: the event carries the counts" "$EVENTS" \
+    '"blocked":1,"implemented":1,"total":2'
+fi
+co_close
+
+# --- 8/9: a diagnostic that always fires is not a diagnostic ---
+if co_fixture "no hold without blocked" group IMPLEMENTED:1 READY:1; then
+  AGG_MARKER_MIDFLIGHT=$(printf '%s\n' "$HOOK_OUTPUT" | grep -m1 'AWAITING AGGREGATE REVIEW (' || true)
+  assert_exit_code "unheld unit: exit 2" "$HOOK_EC" 2
+  assert_contains "unheld unit: still mid-flight" "$HOOK_OUTPUT" "AWAITING AGGREGATE REVIEW"
+  assert_not_contains "unheld unit: a unit with zero BLOCKED tasks gains no note" \
+    "$HOOK_OUTPUT" "HELD:"
+  assert_file_not_contains "unheld unit: and no held-unit event" "$EVENTS" \
+    '"event":"aggregate_unit_blocked_hold"'
+fi
+co_close
+
+# Both markers were non-empty and differ: the deadlock is now distinguishable from progress.
+assert_contains "markers: the mid-flight case really produced one" "$AGG_MARKER_MIDFLIGHT" "AWAITING"
+assert_eq "the held marker and the mid-flight marker are NOT byte-identical" \
+  "$([ "$AGG_MARKER_HELD" = "$AGG_MARKER_MIDFLIGHT" ] && echo identical || echo distinguishable)" \
+  "distinguishable"
+
+# --- 9/9: nothing parked at all — CONTINUE_MSG's mid-flight marker never fires here, so the
+# deadlock would otherwise reach the operator as no aggregate output whatsoever ---
+if co_fixture "blocked with nothing parked" feature BLOCKED:1 READY:2; then
+  assert_exit_code "held-empty unit: exit 2" "$HOOK_EC" 2
+  assert_contains "held-empty unit: the scan says the unit cannot reach readiness" \
+    "$HOOK_OUTPUT" "cannot reach review readiness"
+  assert_contains "held-empty unit: the marker says there is nothing to keep implementing" \
+    "$HOOK_OUTPUT" "AGGREGATE REVIEW HELD"
+  assert_not_contains "held-empty unit: it is not reported as mid-flight" \
+    "$HOOK_OUTPUT" "AWAITING AGGREGATE REVIEW"
+  assert_file_contains "held-empty unit: recorded" "$EVENTS" '"event":"aggregate_unit_blocked_hold"'
+fi
+co_close
+
+echo "  carve-out scan: ${CO_SCANNED} scanned, ${CO_SKIPPED} skipped (unbuildable=${CO_UNBUILDABLE}), ${CO_CHECKED} checked, ${CO_FINDINGS} findings"
+assert_eq "carve-out scan: scanned == skipped + checked" \
+  "$CO_SCANNED" "$((CO_SKIPPED + CO_CHECKED))"
+assert_eq "carve-out scan: every scenario was checked" "$CO_CHECKED" "9"
+
+# --- TASK-023: readiness is not dispatch — the HITL hold WITHDRAWS the board, and a
+# withdrawn dispatch is one more iteration that must record no carve-out ---
+setup_temp_dir; setup_git_repo; setup_nazgul_dir
+create_config '.review_gate.granularity = "feature"' '.mode = "hitl"' \
+  '.agents.reviewers = ["code-reviewer"]' '.learning.auto_distill_post_loop = false' \
+  '.docs.verify_comments = false' '.self_audit.enabled = false'
+create_plan
+create_task_file "TASK-001" "IMPLEMENTED"; set_task_group TASK-001 1
+create_task_file "TASK-002" "CANCELLED"; set_task_group TASK-002 1
+touch "$TEST_DIR/nazgul/.hitl-pending"
+run_hook
+assert_contains "hitl hold: the gate replaces the board dispatch" "$HOOK_OUTPUT" "GATE hitl_pending"
+assert_not_contains "hitl hold: no board goes out" "$HOOK_OUTPUT" "AGGREGATE review unit"
+assert_contains "hitl hold: the readiness marker still reports the carve-out" \
+  "$HOOK_OUTPUT" "carried out CANCELLED (TASK-002)"
+assert_file_not_contains "hitl hold: a withdrawn dispatch records no carve-out event" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"event":"aggregate_board_cancelled_carveout"'
 teardown_temp_dir
 
 # --- Granularity feature, INCOMPLETE: park IMPLEMENTED across groups, keep building ---
@@ -1488,6 +2158,52 @@ assert_eq "cycle: a multi-edge window is chained by the ledger, not quarantined"
   "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "DONE"
 teardown_temp_dir
 
+# --- RECON-6: the quarantine must authorize its own BLOCKED in the ledger as its
+# five siblings do; unlogged, the arm's own write reads as a forgery next pass. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "IN_PROGRESS"
+run_hook
+sed -i.bak 's/^status: IN_PROGRESS/status: DONE/' "$TEST_DIR/nazgul/tasks/TASK-001.md" && rm -f "$TEST_DIR/nazgul/tasks/TASK-001.md.bak"
+run_hook
+assert_eq "recon-ledger: forged status quarantined" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "BLOCKED"
+assert_eq "recon-ledger: quarantine edge recorded with stop-hook attribution" \
+  "$(jq -r 'select(.task_id == "TASK-001" and .from == "DONE" and .to == "BLOCKED" and .writer == "stop-hook") | .to' \
+     "$TEST_DIR/nazgul/logs/guarded-transitions.jsonl" 2>/dev/null | head -1)" "BLOCKED"
+teardown_temp_dir
+
+# --- RECON-7: re-entry (a crash between the status write and the checkpoint that
+# records it) must not overwrite the first observation, which is what repair reads. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "IN_PROGRESS"
+run_hook
+sed -i.bak 's/^status: IN_PROGRESS/status: DONE/' "$TEST_DIR/nazgul/tasks/TASK-001.md" && rm -f "$TEST_DIR/nazgul/tasks/TASK-001.md.bak"
+run_hook
+recon_blocked_field() { grep -m1 "^\- \*\*$1\*\*:" "$TEST_DIR/nazgul/tasks/TASK-001.md" 2>/dev/null | sed 's/.*: //'; }
+assert_eq "recon-reentry: first pass records the observed status" \
+  "$(recon_blocked_field 'Blocked observed')" "DONE"
+# Drop only the checkpoint that recorded the quarantine, leaving the stale one newest.
+for recon_cp in "$TEST_DIR"/nazgul/checkpoints/iteration-*.json; do
+  [ -f "$recon_cp" ] || continue
+  if [ "$(jq -r '.task_statuses["TASK-001"] // ""' "$recon_cp" 2>/dev/null)" = "BLOCKED" ]; then rm -f "$recon_cp"; fi
+done
+run_hook
+assert_eq "recon-reentry: the original observed status survives re-quarantine" \
+  "$(recon_blocked_field 'Blocked observed')" "DONE"
+assert_eq "recon-reentry: the original checkpoint status survives re-quarantine" \
+  "$(recon_blocked_field 'Blocked from')" "IN_PROGRESS"
+assert_contains "recon-reentry: re-entry is recorded, not silently skipped" \
+  "$HOOK_OUTPUT" "is already quarantined"
+teardown_temp_dir
+
 # === MF-006: HITL pending-approval marker gates the DEFAULT sequential path ===
 # nazgul/.hitl-pending, when present in mode=hitl, must suppress the DELEGATE
 # line the default sequential DISPATCH_INSTR would otherwise emit — mirroring
@@ -1578,5 +2294,76 @@ P8C_D_EC="$P8C_EC"; P8C_D_WHERE="$P8C_WHERE"; P8C_D_ERR="$P8C_ERR"
 assert_eq "P8c: an old-shape background marker is still held on, not quarantined" "$P8C_C_WHERE" "in-flight"
 assert_contains "P8c: and the hold still names the unit it read from the old shape" "$P8C_C_ERR" "in-flight hold — waiting on 1 BACKGROUND dispatch(es): TASK-901"
 assert_eq "P8c: old and new shapes get a byte-identical hold disposition" "$P8C_C_EC|$P8C_C_WHERE|$P8C_C_ERR" "$P8C_D_EC|$P8C_D_WHERE|$P8C_D_ERR"
+# --- TASK-043 (AC2): a validator-defect-only evidence pass — every reviewer authorized-
+# skipped, only paperwork left — is a checker malfunction, not a task strike. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["qa-reviewer"]' '.review_gate.conditional_dispatch = true'
+create_plan
+create_task_file "TASK-001" "DONE"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf -- 'diff --git a/src/app.py b/src/app.py\n--- a/src/app.py\n+++ b/src/app.py\n' \
+  > "$TEST_DIR/nazgul/reviews/TASK-001/diff.patch"
+jq -n '{unit:"TASK-001", skipped:[{name:"qa-reviewer", reason:"no tests changed"}]}' \
+  > "$TEST_DIR/nazgul/reviews/TASK-001/.dispatch.json"
+printf '# summary\n' > "$TEST_DIR/nazgul/reviews/TASK-001/summary.md"
+create_task_file "TASK-002" "READY"
+run_hook
+assert_exit_code "defect-only: exit 2 (loop continues)" "$HOOK_EC" 2
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "defect-only: DONE left in place" "$status" "DONE"
+assert_not_contains "defect-only: not a review-gate violation" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+assert_not_contains "defect-only: never suggests materialize" "$HOOK_OUTPUT" "materialize"
+assert_contains "defect-only: names the mechanism, not the task" "$HOOK_OUTPUT" \
+  "review-evidence reported a validator defect (NOTHING_CHECKED)"
+assert_file_contains "defect-only: stop_gate event fires" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"reason":"review_validator_defect"'
+assert_file_contains "defect-only: event names the validator" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"validator":"review-evidence"'
+count=$(jq -r '.safety._review_reset_counts["TASK-001"] // 0' "$TEST_DIR/nazgul/config.json")
+assert_eq "defect-only: no strike recorded" "$count" "0"
+teardown_temp_dir
+
+# --- TASK-043 (AC2 converse): a genuine MISSING problem with no validator defect present
+# still takes the ordinary two-strike ladder — the fix must not weaken the real case. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer", "qa-reviewer"]'
+create_plan
+create_task_file "TASK-001" "DONE"
+create_review_dir "TASK-001"
+create_task_file "TASK-002" "READY"
+run_hook
+assert_contains "converse: genuine problem still takes the ladder" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+assert_not_contains "converse: no validator-defect noise on a genuine-only problem" \
+  "$HOOK_OUTPUT" "validator defect"
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "converse: first violation still resets to IMPLEMENTED" "$status" "IMPLEMENTED"
+teardown_temp_dir
+
+# --- TASK-043 (defect ALONGSIDE genuine): a defect arriving next to a real MISSING problem
+# does not swallow the real problem — the ladder still runs on it. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+create_plan
+create_task_file "TASK-001" "DONE"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf '# BOARD-2-OUTCOME\n' > "$TEST_DIR/nazgul/reviews/TASK-001/BOARD-2-OUTCOME.md"
+printf '# adversarial\n' > "$TEST_DIR/nazgul/reviews/TASK-001/adversarial-SEC-1.md"
+create_task_file "TASK-002" "READY"
+run_hook
+assert_contains "alongside: still takes the ladder" "$HOOK_OUTPUT" "REVIEW GATE VIOLATION"
+assert_contains "alongside: real reviewer named in the violation" "$HOOK_OUTPUT" "code-reviewer"
+assert_contains "alongside: the defect is ALSO surfaced, separately" "$HOOK_OUTPUT" \
+  "review-evidence reported a validator defect (NOTHING_CHECKED)"
+assert_file_contains "alongside: stop_gate event still fires" \
+  "$TEST_DIR/nazgul/logs/events.jsonl" '"reason":"review_validator_defect"'
+status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
+assert_eq "alongside: first violation still resets to IMPLEMENTED" "$status" "IMPLEMENTED"
+teardown_temp_dir
 
 report_results

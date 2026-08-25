@@ -7,8 +7,8 @@
 # Idempotent source guard; NOT `set -euo pipefail` — sourced into caller
 # shells that own their own strict-mode setting (mirrors parallel-batch.sh).
 
-[ -n "${_NAZGUL_GIT_HOOKS_SOURCED:-}" ] && return 0
-_NAZGUL_GIT_HOOKS_SOURCED=1
+# NO SENTINEL: the scalar `_NAZGUL_GIT_HOOKS_SOURCED` that sat here made one exported variable
+# enough to leave install_git_hooks undefined — the 127-exit hazard nazgul-root.sh:40-49 measured.
 
 _GH_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _GH_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$_GH_LIB_DIR/../.." && pwd)}"

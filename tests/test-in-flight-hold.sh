@@ -1077,8 +1077,12 @@ _p10_check "config purity: it is NOT a config key" \
   "$(grep -ci 'in_flight_hold_cap' "$REPO_ROOT/templates/config.json" || true)" "0"
 _p10_check "config purity: the valve adds no guards key of its own" \
   "$(jq -r '.guards | has("in_flight_hold_cap")' "$REPO_ROOT/templates/config.json")" "false"
-_p10_check "config purity: templates/config.json still reports schema_version 36" \
-  "$(jq -r '.schema_version' "$REPO_ROOT/templates/config.json")" "36"
+# DERIVED, not pinned: FEAT-031 stepped the schema and a literal here went stale on merge.
+IFH_SCHEMA=$(grep -oE 'migrate_[0-9]+_to_[0-9]+' "$REPO_ROOT/scripts/migrate-config.sh" \
+  | sed -E 's/^migrate_[0-9]+_to_//' | sort -n | tail -1)
+case "$IFH_SCHEMA" in ''|*[!0-9]*) IFH_SCHEMA=37 ;; esac
+_p10_check "config purity: templates/config.json still reports the derived current schema_version" \
+  "$(jq -r '.schema_version' "$REPO_ROOT/templates/config.json")" "$IFH_SCHEMA"
 
 assert_eq "P10 accounting: scanned == skipped + checked" "$P10_SCANNED" "$((P10_SKIPPED + P10_CHECKED))"
 assert_eq "P10 floor: the valve's pin set is not empty" \
@@ -1225,8 +1229,8 @@ _p12_check "config purity: NAZGUL_STOP_PAYLOAD_CAPTURE is not a config key" \
   "$(grep -ci 'stop_payload_capture' "$REPO_ROOT/templates/config.json" || true)" "0"
 _p12_check "config purity: and no migration introduces one" \
   "$(grep -ci 'stop_payload_capture' "$REPO_ROOT/scripts/migrate-config.sh" || true)" "0"
-_p12_check "config purity: templates/config.json still reports schema_version 36" \
-  "$(jq -r '.schema_version' "$REPO_ROOT/templates/config.json")" "36"
+_p12_check "config purity: templates/config.json still reports the derived current schema_version" \
+  "$(jq -r '.schema_version' "$REPO_ROOT/templates/config.json")" "$IFH_SCHEMA"
 
 assert_eq "P12b accounting: scanned == skipped + checked" "$P12_SCANNED" "$((P12_SKIPPED + P12_CHECKED))"
 assert_eq "P12b floor: the capture's pin set is not empty" \
@@ -2636,8 +2640,11 @@ P7_ASSIGN='^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="\$REPO_ROOT/scripts/stop-hook\.s
 # match for an unrelated reason, a count plus the file set cannot.
 P7_DIRECT_EXPECT=10
 P7_DIRECT_FILES_EXPECT="test-observability-hooks.sh test-stop-hook.sh "
-# 44 -> 45: FEAT-034 TASK-005's P8c mixed-version control adds one `bash "$STOP_HOOK"` site.
-P7_CHECKED_EXPECT=45
+# 44 -> 61 on the FEAT-031 merge (that objective added stop-hook execution sites under tests/),
+# 61 -> 62 for FEAT-034/TASK-005's P8c mixed-version control, which adds one `bash "$STOP_HOOK"`
+# site. Deliberately still a PIN, not a derivation — its whole job is to catch a re-narrowed
+# pattern, which a value derived from the same pattern could never do.
+P7_CHECKED_EXPECT=62
 P7_SCANNED=0
 P7_SKIPPED=0
 P7_CHECKED=0
@@ -2976,6 +2983,9 @@ P7C_DIR="$TEST_DIR/norevgate"
 mkdir -p "$P7C_DIR/lib"
 cp "$WRITER" "$P7C_DIR/in-flight-marker.sh"
 cp "$REPO_ROOT/scripts/lib/nazgul-root.sh" "$P7C_DIR/lib/nazgul-root.sh"
+# The bounded stdin reader (FEAT-031/TASK-047) is a HARD dependency of the writer: absent, it
+# fails open before reaching the digest step, so this arm would measure the wrong absence.
+cp "$REPO_ROOT/scripts/lib/read-hook-payload.sh" "$P7C_DIR/lib/read-hook-payload.sh"
 cp "$REPO_ROOT/scripts/lib/sha256.sh" "$P7C_DIR/lib/sha256.sh"
 assert_file_exists "P7c (precondition): the shipped tree does carry the library this arm withholds" "$REPO_ROOT/scripts/lib/review-provenance.sh"
 assert_eq "P7c (precondition): the scan tree has no review-provenance.sh to source" "$([ -e "$P7C_DIR/lib/review-provenance.sh" ] && echo yes || echo no)" "no"
@@ -3001,6 +3011,9 @@ P7F_DIR="$TEST_DIR/nosha"
 mkdir -p "$P7F_DIR/lib"
 cp "$WRITER" "$P7F_DIR/in-flight-marker.sh"
 cp "$REPO_ROOT/scripts/lib/nazgul-root.sh" "$P7F_DIR/lib/nazgul-root.sh"
+# The bounded stdin reader (FEAT-031/TASK-047) is a HARD dependency of the writer: absent, it
+# fails open before reaching the digest step, so this arm would measure the wrong absence.
+cp "$REPO_ROOT/scripts/lib/read-hook-payload.sh" "$P7F_DIR/lib/read-hook-payload.sh"
 assert_file_exists "P7f (precondition): the shipped tree does carry the helper this arm withholds" "$REPO_ROOT/scripts/lib/sha256.sh"
 assert_eq "P7f (precondition): the scan tree has no lib/sha256.sh to source" "$([ -e "$P7F_DIR/lib/sha256.sh" ] && echo yes || echo no)" "no"
 assert_eq "P7f (precondition): the copied writer is byte-identical to the shipped one" "$(cmp -s "$WRITER" "$P7F_DIR/in-flight-marker.sh" && echo same || echo differs)" "same"
@@ -3083,6 +3096,9 @@ assert_eq "P7d (R1): states 1 and 4 agree on hash and count and are separated by
 P7D_MUT_DIR="$TEST_DIR/nolcall"
 mkdir -p "$P7D_MUT_DIR/lib"
 cp "$REPO_ROOT/scripts/lib/nazgul-root.sh" "$P7D_MUT_DIR/lib/nazgul-root.sh"
+# The bounded stdin reader (FEAT-031/TASK-047) is a HARD dependency of the writer: absent, it
+# fails open before reaching the digest step, so this arm would measure the wrong absence.
+cp "$REPO_ROOT/scripts/lib/read-hook-payload.sh" "$P7D_MUT_DIR/lib/read-hook-payload.sh"
 cp "$REPO_ROOT/scripts/lib/sha256.sh" "$P7D_MUT_DIR/lib/sha256.sh"
 sed 's/\$(LC_ALL=C; printf/$(printf/' "$WRITER" > "$P7D_MUT_DIR/in-flight-marker.sh"
 assert_eq "P7d (mutant CONTROL): the mutant differs from the shipped writer by exactly the LC_ALL=C guard" \
@@ -3165,7 +3181,14 @@ P8B_SOURCES=$(grep -cE '^[[:space:]]*source ' "$P8B_SRC" | tr -d ' ')
 assert_eq "P8b (floor): the source pins below have something to check, so neither can pass empty" "$([ "$P8B_SOURCES" -ge 1 ] && echo yes || echo no)" "yes"
 P8B_TOLERANT=$(grep -cE '^[[:space:]]*source .*2>/dev/null \|\| true[[:space:]]*$' "$P8B_SRC" | tr -d ' ')
 P8B_ROOT=$(grep -cE '^[[:space:]]*source .*lib/nazgul-root\.sh"[[:space:]]*$' "$P8B_SRC" | tr -d ' ')
-assert_eq "P8b: every source line is either explicitly failure-tolerant or the named root resolver" "$((P8B_TOLERANT + P8B_ROOT))" "$P8B_SOURCES"
+# Third class: a source whose failure is CAPTURED into a variable rather than swallowed. The rule
+# polices "no source line can abort this fail-open hook", and `source "$LIB" || rc=$?` cannot —
+# the writer then proves the API actually loaded (`declare -F`) and takes its own fail-open exit.
+# Counted separately, never folded into P8B_TOLERANT, so each spelling keeps its own floor.
+P8B_CAPTURED=$(grep -cE '^[[:space:]]*source [^|]*\|\| [A-Za-z_][A-Za-z0-9_]*=\$\?[[:space:]]*$' "$P8B_SRC" | tr -d ' ')
+assert_eq "P8b (floor): the captured-rc class is measured, not assumed — a spelling that stopped matching would pass this pin vacuously" \
+  "$([ "$P8B_CAPTURED" -ge 1 ] && echo yes || echo no)" "yes"
+assert_eq "P8b: every source line is failure-tolerant, captured-rc, or the named root resolver" "$((P8B_TOLERANT + P8B_ROOT + P8B_CAPTURED))" "$P8B_SOURCES"
 assert_eq "P8b: the writer names review-gate tooling nowhere at all (#254 A4)" "$(grep -c 'review-provenance' "$P8B_SRC" | tr -d ' ')" "0"
 assert_eq "P8b: no PROMPT_BYTES=\"null\" initializer survives (#254 A3)" "$(grep -c 'PROMPT_BYTES="null"' "$P8B_SRC" | tr -d ' ')" "0"
 P8B_DEF_LN=$(grep -nE '^_ifm_sha256\(\)' "$P8B_SRC" | head -1 | cut -d: -f1)

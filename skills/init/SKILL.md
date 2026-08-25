@@ -62,7 +62,7 @@ Create the following directories and files:
 ```
 nazgul/
 ├── config.json          # Copy from plugin templates/config.json
-├── plan.md              # Copy from plugin templates/plan.md
+├── plan.md              # Copy from plugin templates/plan.md (see the note below)
 ├── tasks/               # Empty, for task manifests
 ├── checkpoints/         # Empty, for iteration checkpoints
 ├── reviews/             # Empty, for review artifacts
@@ -71,6 +71,9 @@ nazgul/
 ├── logs/                # Empty, for iteration logs
 └── learning/            # Empty, for autolearning registry and working files
 ```
+
+Copy `templates/plan.md` **verbatim, placeholder and all** — do not attempt to fill its frontmatter `feat_id`. That key is inert by design here: `config.feat_id` is still null at init time (`create_feature_branch` assigns it when an objective starts), so init has no value to write and a guessed one would bind the plan to the wrong objective. The Planner substitutes it after writing the `## Tasks` roster, by running `scripts/stamp-plan-objective.sh` (see `agents/planner.md`). Until then the merge-evidence gate refuses this plan by name — which is the intended state for a project with no objective yet.
+
 
 ### Step 2.5: Configure Git Ignore
 This step ALWAYS runs, with two branches based on `LOCAL_MODE` (from Step 0). Read or create `.gitignore` at the project root.
@@ -160,6 +163,9 @@ nazgul/self-audit-window.json
 nazgul/.hitl-pending
 # Exists only between a jq ... > rewrite of config.json and its mv
 nazgul/config.json.tmp
+# The mktemp scratch file scripts/stamp-plan-objective.sh:149 writes plan.md through; like the
+# entry above it exists only between the write and its mv, and its name is a random suffix
+nazgul/.nazgul-plan.*
 # Machine-local work queue; the GitHub board is the durable copy, and keeping the two in sync is a manual operator step today (issue #242)
 nazgul/inbox/
 # Per-session pause note, written only by skills/pause/SKILL.md; machine-local
@@ -208,7 +214,7 @@ Show the user:
 - Reviewer board generated (list all reviewer agents)
 - Companion plugin status
 - Install mode: local (whole `nazgul/` untracked) / shared (decision record tracked; the ephemeral journal gitignored). Do **not** re-enumerate the journal here — point the user at the `# Nazgul Framework — ephemeral runtime` block Step 2.5 wrote into `.gitignore`. That block is the enumeration; a partial copy in this summary is one more site to drift.
-- **Shared-mode reinitialization only:** if `git ls-files nazgul/checkpoints nazgul/logs nazgul/sessions nazgul/.session_id nazgul/.stop_failure nazgul/.compaction_count nazgul/.compaction_count.lock nazgul/.tool_failures nazgul/archive nazgul/conductor 'nazgul/context.backup.*' nazgul/in-flight nazgul/locks nazgul/.heartbeat.lock nazgul/.githooks nazgul/dispatch nazgul/improvement-reports nazgul/self-audit-window.json nazgul/.hitl-pending nazgul/config.json.tmp nazgul/inbox nazgul/HANDOFF.md nazgul/improvements.md 'nazgul/reviews/*/test-failures.md' 'nazgul/reviews/*/simplify-report.md' 'nazgul/reviews/*/diff.patch' nazgul/reviews/post-loop-simplify-report.md nazgul/learning/proposed-rules.md nazgul/learning/.last-run 2>/dev/null` shows any already-tracked ephemeral paths, tell the user to stop tracking them (files stay on disk; `--ignore-unmatch` keeps the command safe when some paths aren't tracked). **This list and the one-shot below must name every entry of the Step 2.5 block** — a path missing here means the advice never prints for the project that needs it. Wildcard entries are quoted and drop the block's trailing slash: the pathspec `nazgul/context.backup.*/` matches nothing. **`diff.patch` matters most here** — a committed, stale captured diff makes reviewers analyze old code and emit phantom findings:
+- **Shared-mode reinitialization only:** if `git ls-files nazgul/checkpoints nazgul/logs nazgul/sessions nazgul/.session_id nazgul/.stop_failure nazgul/.compaction_count nazgul/.compaction_count.lock nazgul/.tool_failures nazgul/archive nazgul/conductor 'nazgul/context.backup.*' nazgul/in-flight nazgul/locks nazgul/.heartbeat.lock nazgul/.githooks nazgul/dispatch nazgul/improvement-reports nazgul/self-audit-window.json nazgul/.hitl-pending nazgul/config.json.tmp 'nazgul/.nazgul-plan.*' nazgul/inbox nazgul/HANDOFF.md nazgul/improvements.md 'nazgul/reviews/*/test-failures.md' 'nazgul/reviews/*/simplify-report.md' 'nazgul/reviews/*/diff.patch' nazgul/reviews/post-loop-simplify-report.md nazgul/learning/proposed-rules.md nazgul/learning/.last-run 2>/dev/null` shows any already-tracked ephemeral paths, tell the user to stop tracking them (files stay on disk; `--ignore-unmatch` keeps the command safe when some paths aren't tracked). **This list and the one-shot below must name every entry of the Step 2.5 block** — a path missing here means the advice never prints for the project that needs it. Wildcard entries are quoted and drop the block's trailing slash: the pathspec `nazgul/context.backup.*/` matches nothing. **`diff.patch` matters most here** — a committed, stale captured diff makes reviewers analyze old code and emit phantom findings:
   ```bash
   git rm -r --cached --ignore-unmatch nazgul/checkpoints nazgul/logs nazgul/sessions nazgul/.session_id \
     nazgul/.stop_failure nazgul/.compaction_count nazgul/.compaction_count.lock nazgul/.tool_failures \
@@ -216,7 +222,8 @@ Show the user:
     nazgul/dispatch nazgul/improvement-reports nazgul/self-audit-window.json nazgul/.hitl-pending \
     nazgul/config.json.tmp nazgul/inbox nazgul/HANDOFF.md nazgul/improvements.md \
     nazgul/learning/proposed-rules.md nazgul/learning/.last-run
-  git rm --cached --ignore-unmatch -- 'nazgul/context.backup.*' 'nazgul/reviews/*/test-failures.md' \
+  git rm --cached --ignore-unmatch -- 'nazgul/context.backup.*' 'nazgul/.nazgul-plan.*' \
+    'nazgul/reviews/*/test-failures.md' \
     'nazgul/reviews/*/simplify-report.md' 'nazgul/reviews/*/diff.patch' nazgul/reviews/post-loop-simplify-report.md
   git commit -m "chore(nazgul): stop tracking ephemeral runtime state"
   ```

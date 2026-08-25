@@ -37,9 +37,17 @@
 # CHANGELOG entry). One caller-side exception: raise_finding()
 # (scripts/lib/raise-finding.sh) intentionally honors an explicit
 # NAZGUL_DIR for its own output path only; resolution here is unaffected.
+#
+# NO SENTINEL. This file carried `_NAZGUL_ROOT_SOURCED` above its definitions, and every
+# caller sources it bare and then calls resolve_project_root under `set -e`. Measured on
+# the shipped tree: exporting `_NAZGUL_ROOT_SOURCED=1` made the source a no-op defining
+# nothing, and ELEVEN of the sixteen hook entry points exited 127 on that first call —
+# four of them fail-closed guards, and a guard that blocks only on exit 2 has by then
+# allowed. Any scalar name is settable by whoever can set an environment variable, so the
+# guard is REMOVED rather than renamed. This file defines three functions and nothing
+# else, so re-sourcing costs three definitions.
 
-[ -n "${_NAZGUL_ROOT_SOURCED:-}" ] && return 0
-_NAZGUL_ROOT_SOURCED=1
+# No re-source sentinel — see NO SENTINEL in the header above.
 
 _nr_has_marker() {
   [ -f "$1/nazgul/config.json" ] && [ -r "$1/nazgul/config.json" ]

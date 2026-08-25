@@ -48,6 +48,11 @@ run_validate() {
   VAL_OUTPUT=$(validate_review_evidence "$TEST_DIR/nazgul" "$1") && VAL_EC=0 || VAL_EC=$?
 }
 
+# Helper: the §15 coverage line the validator writes to stderr. Sets: VAL_STDERR
+run_validate_stderr() {
+  VAL_STDERR=$(validate_review_evidence "$TEST_DIR/nazgul" "$1" 2>&1 >/dev/null) || true
+}
+
 # --- Test 1: All configured reviewers approved — passes, no output ---
 setup_evidence_env "code-reviewer qa-reviewer"
 write_review "TASK-001" "code-reviewer" "APPROVED"
@@ -1290,5 +1295,281 @@ UNRELATED_OUT=$(printf '%s\n' "$UNRELATED_IN" | _re_strip_trailing_orchestrator_
 UNRELATED_EC=$?
 assert_exit_code "trailing-strip: non-canonical trailing block (exit 1, no output)" "$UNRELATED_EC" 1
 assert_eq "trailing-strip: non-canonical trailing block: empty output" "$UNRELATED_OUT" ""
+
+# --- Test 67 (TASK-034, AC1): the artifact grammar is DERIVED — re-extract every unit-dir
+# *.md write target and every self-check arm, then classify each against the predicate. ---
+RG_SCANNED=0; RG_CHECKED=0; RG_SKIPPED=0; RG_NONMD=0; RG_CATCHALL=0; RG_FINDINGS=0
+RG_SPEC="$REPO_ROOT/agents/review-gate.md"
+assert_file_exists "review-gate spec readable (grammar source)" "$RG_SPEC"
+
+# `<x>`/`[x]`/`$x` are the spec's own placeholders; a literal prefix survives them.
+rg_concretise() { printf '%s' "$1" | sed -e 's/<[^>]*>/SAMPLE-1/g' -e 's/\[[^]]*\]/SAMPLE-1/g' -e 's/\$[A-Za-z_][A-Za-z0-9_]*/SAMPLE-1/g' -e 's/\*/SAMPLE-1/g'; }
+rg_is_placeholder_only() { printf '%s' "$1" | grep -qE '^(\[[^]]*\]|<[^>]*>|\$[A-Za-z_][A-Za-z0-9_]*)$'; }
+
+RG_TARGETS=$(grep -oE 'nazgul/reviews/(\[UNIT-ID\]|\$UNIT_ID)/[^ ")`'"'"']*\.md' "$RG_SPEC" | sed 's|.*/||' | sort -u)
+# A case ARM is a bare pattern immediately followed by `)`; a body line whose trailing
+# comment merely contains `)` is not one, and must not be read as a grammar member.
+RG_ARMS=$(awk '/^[[:space:]]*case "\$base" in/{f=1;next} f&&/^[[:space:]]*esac/{f=0} f' "$RG_SPEC" \
+  | awk 'match($0, /^[[:space:]]*[^ "#$)]+\)([[:space:]]|$)/) { p=$0; sub(/^[[:space:]]+/, "", p); sub(/\).*$/, "", p); print p }' \
+  | tr '|' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' | sort -u)
+
+# A silently-empty extraction would classify nothing and pass; pin the one member the
+# defect was about so "found none" can never read the same as "never looked".
+assert_contains "derivation: write targets include the adversarial artifact" "$RG_TARGETS" "adversarial-"
+assert_contains "derivation: self-check arms include adversarial-*.md" "$RG_ARMS" "adversarial-*.md"
+
+while IFS= read -r rg_t; do
+  [ -n "$rg_t" ] || continue
+  RG_SCANNED=$((RG_SCANNED + 1))
+  rg_stem="${rg_t%.md}"
+  RG_CHECKED=$((RG_CHECKED + 1))
+  if rg_is_placeholder_only "$rg_stem"; then
+    if _re_is_orchestrator_artifact "code-reviewer.md"; then
+      RG_FINDINGS=$((RG_FINDINGS + 1))
+      _fail "derivation: reviewer-verdict target '$rg_t' must NOT be classified an artifact" "classified as artifact" "verdict file"
+    else
+      _pass "derivation: reviewer-verdict target '$rg_t' stays a verdict"
+    fi
+    continue
+  fi
+  rg_probe=$(rg_concretise "$rg_t")
+  if _re_is_orchestrator_artifact "$rg_probe"; then
+    _pass "derivation: spec artifact '$rg_t' recognised (probe $rg_probe)"
+  else
+    RG_FINDINGS=$((RG_FINDINGS + 1))
+    _fail "derivation: spec artifact '$rg_t' NOT recognised" "probe $rg_probe read as a reviewer verdict" "non-verdict artifact"
+  fi
+done <<< "$RG_TARGETS"
+
+while IFS= read -r rg_a; do
+  [ -n "$rg_a" ] || continue
+  RG_SCANNED=$((RG_SCANNED + 1))
+  case "$rg_a" in
+    *.md) : ;;
+    *) RG_SKIPPED=$((RG_SKIPPED + 1)); RG_NONMD=$((RG_NONMD + 1)); continue ;;
+  esac
+  if [ "$rg_a" = "*.md" ]; then
+    RG_SKIPPED=$((RG_SKIPPED + 1)); RG_CATCHALL=$((RG_CATCHALL + 1)); continue
+  fi
+  RG_CHECKED=$((RG_CHECKED + 1))
+  rg_probe=$(rg_concretise "$rg_a")
+  if _re_is_orchestrator_artifact "$rg_probe"; then
+    _pass "derivation: self-check arm '$rg_a' recognised (probe $rg_probe)"
+  else
+    RG_FINDINGS=$((RG_FINDINGS + 1))
+    _fail "derivation: self-check arm '$rg_a' NOT recognised" "probe $rg_probe read as a reviewer verdict" "non-verdict artifact"
+  fi
+done <<< "$RG_ARMS"
+
+if [ "$RG_CHECKED" -gt 0 ]; then
+  _pass "derivation: K>0 floor — $RG_CHECKED grammar member(s) actually classified"
+else
+  _fail "derivation: NOTHING CHECKED" "0 classified" ">0"
+fi
+assert_eq "derivation: N == M + K" "$RG_SCANNED" "$((RG_SKIPPED + RG_CHECKED))"
+echo "  grammar-derivation: ${RG_SCANNED} scanned, ${RG_SKIPPED} skipped (non-md=${RG_NONMD}, catch-all=${RG_CATCHALL}), ${RG_CHECKED} checked, ${RG_FINDINGS} findings"
+
+# Helper: replicate this objective's own FEATURE-FEAT-031 census — 4 roster seats, 24
+# per-board seat archives, 14 board documents, 3 adversarial cross-checks (45 .md).
+build_live_census() {
+  local dir="$TEST_DIR/nazgul/reviews/$1" b s
+  mkdir -p "$dir"
+  printf -- '---\nverdict: CHANGES_REQUESTED\n---\nbody\n' > "$dir/architect-reviewer.md"
+  printf -- '---\nverdict: CHANGES_REQUESTED\n---\nbody\n' > "$dir/qa-reviewer.md"
+  printf -- '---\nverdict: APPROVE\n---\nbody\n' > "$dir/code-reviewer.md"
+  printf -- '---\nverdict: APPROVE\n---\nbody\n' > "$dir/security-reviewer.md"
+  for b in 3 4 5 6 7 8; do
+    for s in architect code qa security; do
+      printf -- '---\nverdict: CHANGES_REQUESTED\n---\nboard %s archive\n' "$b" > "$dir/board${b}-${s}-reviewer.md"
+    done
+  done
+  for b in "2-BRIEF" "2-OUTCOME" "3-BRIEF" "3-OUTCOME" "4-EVIDENCE" "4-OUTCOME" "5-EVIDENCE" \
+           "5-OUTCOME" "6-NAVIGATION" "6-OUTCOME" "7-NAVIGATION" "7-OUTCOME" "8-NAVIGATION" "8-OUTCOME"; do
+    printf '# BOARD-%s\n\nOrchestrator board document, no verdict.\n' "$b" > "$dir/BOARD-${b}.md"
+  done
+  for s in ARCH-G QA-1 SEC-1; do
+    printf '# Adversarial cross-check — %s\n\nCONFIRM\n' "$s" > "$dir/adversarial-${s}.md"
+  done
+}
+
+# --- Test 68 (TASK-034, AC3): this objective's own review-directory census reports exactly
+# the two seats lacking an APPROVE, by COUNT and NAME — not "swallowed everything". ---
+setup_evidence_env "architect-reviewer code-reviewer security-reviewer qa-reviewer"
+build_live_census "TASK-001"
+CENSUS_FILES=$(find "$TEST_DIR/nazgul/reviews/TASK-001" -name '*.md' | wc -l | tr -d ' ')
+assert_eq "live census: 45 .md files replicated" "$CENSUS_FILES" "45"
+run_validate "TASK-001"
+run_validate_stderr "TASK-001"
+CENSUS_COUNT=$(printf '%s\n' "$VAL_OUTPUT" | grep -c '^UNAPPROVED ' || true)
+CENSUS_NAMES=$(printf '%s\n' "$VAL_OUTPUT" | sed -n 's/^UNAPPROVED //p' | sort | tr '\n' ' ')
+assert_exit_code "live census: exit 1 (two seats genuinely unapproved)" "$VAL_EC" 1
+assert_eq "live census: exactly 2 UNAPPROVED lines, not 32" "$CENSUS_COUNT" "2"
+assert_eq "live census: and exactly WHICH two" "$CENSUS_NAMES" "architect-reviewer qa-reviewer "
+assert_not_contains "live census: adversarial artifact not a reviewer" "$VAL_OUTPUT" "adversarial-"
+assert_not_contains "live census: board document not a reviewer" "$VAL_OUTPUT" "BOARD-"
+assert_contains "live census: coverage line accounts for all 45" "$VAL_STDERR" \
+  "review-evidence/verdict-files: 45 scanned, 41 skipped (artifact=3, non-seat=14, superseded=24), 4 checked, 0 findings"
+teardown_temp_dir
+
+# --- Test 68b: the live review directory when this checkout has one, pinned to the rot-proof
+# invariant (no orchestrator artifact reported) rather than a board-dependent count. ---
+LIVE_MAIN=$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo "")
+LIVE_NAZGUL=""
+[ -n "$LIVE_MAIN" ] && LIVE_NAZGUL="$(dirname "$LIVE_MAIN")/nazgul"
+if [ -n "$LIVE_NAZGUL" ] && [ -f "$LIVE_NAZGUL/config.json" ] && [ -d "$LIVE_NAZGUL/reviews" ]; then
+  LIVE_TASK=$(find "$LIVE_NAZGUL/tasks" -name 'TASK-*.md' 2>/dev/null | sort | head -1)
+  if [ -n "$LIVE_TASK" ]; then
+    LIVE_OUT=$(validate_review_evidence "$LIVE_NAZGUL" "$(basename "${LIVE_TASK%.md}")" 2>/dev/null) || true
+    LIVE_BAD=$(printf '%s\n' "$LIVE_OUT" | sed -n 's/^UNAPPROVED //p' | grep -cE '^(adversarial-|BOARD-|board[0-9])' || true)
+    assert_eq "live dir: no orchestrator artifact reported as an unapproved reviewer" "$LIVE_BAD" "0"
+    echo "  live dir: $(printf '%s\n' "$LIVE_OUT" | sed -n 's/^UNAPPROVED //p' | tr '\n' ' ')"
+  else
+    _skip "live dir: no task manifest to resolve a review unit from"
+  fi
+else
+  _skip "live dir: no initialised nazgul/ in this checkout (task worktree or CI)"
+fi
+
+# --- Test 69 (TASK-034, AC2 direction A): an orchestrator artifact the spec REQUIRES is
+# ignored — a clean board is not blocked by the review gate's own paperwork. ---
+setup_evidence_env "code-reviewer"
+write_review "TASK-001" "code-reviewer" "APPROVED"
+printf '# Adversarial cross-check — SEC-1\n\nCONFIRM, confidence: 90\n' > "$TEST_DIR/nazgul/reviews/TASK-001/adversarial-SEC-1.md"
+printf '# BOARD-4-OUTCOME\n\nCHANGES_REQUESTED overall, three findings.\n' > "$TEST_DIR/nazgul/reviews/TASK-001/BOARD-4-OUTCOME.md"
+run_validate "TASK-001"
+assert_exit_code "artifacts ignored: exit 0" "$VAL_EC" 0
+assert_eq "artifacts ignored: no output" "$VAL_OUTPUT" ""
+teardown_temp_dir
+
+# --- Test 70 (TASK-034, AC2 direction B): the widening must NOT admit a real reviewer. A
+# seat-shaped file that is not APPROVE still blocks, and is named. ---
+setup_evidence_env "code-reviewer"
+write_review "TASK-001" "code-reviewer" "APPROVED"
+write_review "TASK-001" "extra-reviewer" "REJECTED"
+printf '# BOARD-4-OUTCOME\n\nnot a verdict\n' > "$TEST_DIR/nazgul/reviews/TASK-001/BOARD-4-OUTCOME.md"
+run_validate "TASK-001"
+run_validate_stderr "TASK-001"
+assert_exit_code "seat still blocks alongside artifacts: exit 1" "$VAL_EC" 1
+assert_contains "seat still blocks: named" "$VAL_OUTPUT" "UNAPPROVED extra-reviewer"
+assert_not_contains "seat still blocks: artifact still ignored" "$VAL_OUTPUT" "BOARD-4-OUTCOME"
+assert_contains "seat still blocks: coverage counts 2 checked, 1 finding" "$VAL_STDERR" \
+  "3 scanned, 1 skipped (artifact=0, non-seat=1, superseded=0), 2 checked, 1 findings"
+teardown_temp_dir
+
+# --- Test 71 (TASK-034): the backstop the widening had to survive — a seat DROPPED from the
+# roster after returning CHANGES_REQUESTED is still read and still blocks. ---
+setup_evidence_env "code-reviewer"
+write_review "TASK-001" "code-reviewer" "APPROVED"
+write_frontmatter_verdict "TASK-001" "security-reviewer" "CHANGES_REQUESTED"
+run_validate "TASK-001"
+assert_exit_code "dropped seat still blocks: exit 1" "$VAL_EC" 1
+assert_contains "dropped seat named" "$VAL_OUTPUT" "UNAPPROVED security-reviewer"
+teardown_temp_dir
+
+# --- Test 72 (TASK-034): a per-board archive is the SAME seat, not a new one. It neither
+# resurrects a seat the current board resolved (a) nor masks one it did not (b). ---
+setup_evidence_env "code-reviewer"
+write_review "TASK-001" "code-reviewer" "APPROVED"
+write_frontmatter_verdict "TASK-001" "board7-code-reviewer" "CHANGES_REQUESTED"
+run_validate "TASK-001"
+assert_exit_code "archive does not resurrect a resolved seat: exit 0" "$VAL_EC" 0
+assert_eq "archive: no output" "$VAL_OUTPUT" ""
+teardown_temp_dir
+
+setup_evidence_env "code-reviewer"
+write_frontmatter_verdict "TASK-001" "code-reviewer" "CHANGES_REQUESTED"
+write_frontmatter_verdict "TASK-001" "board7-code-reviewer" "CHANGES_REQUESTED"
+run_validate "TASK-001"
+UNRESOLVED_COUNT=$(printf '%s\n' "$VAL_OUTPUT" | grep -c '^UNAPPROVED ' || true)
+assert_exit_code "archive does not mask an unresolved seat: exit 1" "$VAL_EC" 1
+assert_contains "unresolved seat named once, by seat" "$VAL_OUTPUT" "UNAPPROVED code-reviewer"
+assert_eq "unresolved seat reported exactly once" "$UNRESOLVED_COUNT" "1"
+teardown_temp_dir
+
+# --- Test 73 (TASK-034, AC4): the K>0 floor. A directory whose files were all classified
+# away is NOT a clean directory — it blocks with its own token rather than passing. ---
+setup_evidence_env "code-reviewer"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf '# BOARD-2-OUTCOME\n' > "$TEST_DIR/nazgul/reviews/TASK-001/BOARD-2-OUTCOME.md"
+printf '# adversarial\n' > "$TEST_DIR/nazgul/reviews/TASK-001/adversarial-SEC-1.md"
+run_validate "TASK-001"
+run_validate_stderr "TASK-001"
+assert_exit_code "nothing checked: exit 1" "$VAL_EC" 1
+assert_contains "nothing checked: token" "$VAL_OUTPUT" "NOTHING_CHECKED"
+assert_contains "nothing checked: stderr says so" "$VAL_STDERR" "NOTHING CHECKED — all 2 candidate(s) skipped"
+assert_contains "nothing checked: coverage line" "$VAL_STDERR" \
+  "2 scanned, 2 skipped (artifact=1, non-seat=1, superseded=0), 0 checked"
+teardown_temp_dir
+
+setup_evidence_env "code-reviewer"
+write_review "TASK-001" "code-reviewer" "APPROVED"
+run_validate "TASK-001"
+assert_exit_code "floor does not false-fire on a healthy dir: exit 0" "$VAL_EC" 0
+assert_not_contains "floor does not false-fire: no token" "$VAL_OUTPUT" "NOTHING_CHECKED"
+teardown_temp_dir
+
+# --- Test 74 (TASK-034): dogfood — a swallow-everything classifier is CAUGHT by Test 70's
+# assertion, so that assertion is load-bearing rather than merely green. ---
+setup_evidence_env "code-reviewer"
+write_review "TASK-001" "code-reviewer" "APPROVED"
+write_review "TASK-001" "extra-reviewer" "REJECTED"
+PERMISSIVE_OUT=$(
+  _re_is_orchestrator_artifact() { return 0; }
+  validate_review_evidence "$TEST_DIR/nazgul" "TASK-001" 2>/dev/null
+) || true
+assert_not_contains "dogfood: swallow-everything classifier loses the real seat" "$PERMISSIVE_OUT" "UNAPPROVED extra-reviewer"
+run_validate "TASK-001"
+assert_contains "dogfood: shipped classifier keeps it" "$VAL_OUTPUT" "UNAPPROVED extra-reviewer"
+teardown_temp_dir
+
+# --- Test 75 (TASK-043, AC1): the validator's own health diagnostics carry a shared
+# prefix a consumer can key on, distinct from a per-reviewer problem line. ---
+assert_eq "helper: recognizes a NOTHING_CHECKED defect line" \
+  "$(_re_is_validator_defect_line 'VALIDATOR_DEFECT NOTHING_CHECKED' && echo yes || echo no)" "yes"
+assert_eq "helper: recognizes a COVERAGE_ACCOUNTING_DEFECT defect line" \
+  "$(_re_is_validator_defect_line 'VALIDATOR_DEFECT COVERAGE_ACCOUNTING_DEFECT' && echo yes || echo no)" "yes"
+assert_eq "helper: a genuine problem line is not a defect line" \
+  "$(_re_is_validator_defect_line 'UNAPPROVED code-reviewer' && echo yes || echo no)" "no"
+MIXED=$'MISSING qa-reviewer\nVALIDATOR_DEFECT NOTHING_CHECKED'
+assert_eq "helper: genuine/defect split keeps the genuine line" \
+  "$(_re_genuine_problems "$MIXED")" "MISSING qa-reviewer"
+assert_eq "helper: genuine/defect split keeps the defect line" \
+  "$(_re_defect_problems "$MIXED")" "VALIDATOR_DEFECT NOTHING_CHECKED"
+
+setup_evidence_env "code-reviewer"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf '# BOARD-2-OUTCOME\n' > "$TEST_DIR/nazgul/reviews/TASK-001/BOARD-2-OUTCOME.md"
+printf '# adversarial\n' > "$TEST_DIR/nazgul/reviews/TASK-001/adversarial-SEC-1.md"
+run_validate "TASK-001"
+assert_contains "nothing checked: carries the shared VALIDATOR_DEFECT prefix" \
+  "$VAL_OUTPUT" "VALIDATOR_DEFECT NOTHING_CHECKED"
+teardown_temp_dir
+
+# --- Test 76 (TASK-043, AC1): a validator-defect-only directory (every reviewer authorized
+# skipped, only orchestrator paperwork left) produces the defect token and NO genuine problem. ---
+setup_evidence_env "qa-reviewer" '.review_gate.conditional_dispatch = true'
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf -- 'diff --git a/src/app.py b/src/app.py\n--- a/src/app.py\n+++ b/src/app.py\n' \
+  > "$TEST_DIR/nazgul/reviews/TASK-001/diff.patch"
+jq -n '{unit:"TASK-001", skipped:[{name:"qa-reviewer", reason:"no tests changed"}]}' \
+  > "$TEST_DIR/nazgul/reviews/TASK-001/.dispatch.json"
+printf '# summary\n' > "$TEST_DIR/nazgul/reviews/TASK-001/summary.md"
+run_validate "TASK-001"
+assert_exit_code "defect-only: exit 1 (still fails closed)" "$VAL_EC" 1
+assert_eq "defect-only: output is EXACTLY the prefixed token, no MISSING/UNAPPROVED" \
+  "$VAL_OUTPUT" "VALIDATOR_DEFECT NOTHING_CHECKED"
+teardown_temp_dir
+
+# --- Test 77 (TASK-043, AC3): the transition consumer at task-transition-guard.sh:1418
+# still fails closed on a validator-defect-only directory, not made non-fatal everywhere. ---
+source "$REPO_ROOT/scripts/lib/task-transition-guard.sh"
+setup_evidence_env "code-reviewer"
+mkdir -p "$TEST_DIR/nazgul/reviews/TASK-001"
+printf '# BOARD-2-OUTCOME\n' > "$TEST_DIR/nazgul/reviews/TASK-001/BOARD-2-OUTCOME.md"
+printf '# adversarial\n' > "$TEST_DIR/nazgul/reviews/TASK-001/adversarial-SEC-1.md"
+TTG_OUT=$(ttg_verify_review_evidence "$TEST_DIR/nazgul" "TASK-001") && TTG_EC=0 || TTG_EC=$?
+assert_exit_code "AC3: ttg_verify_review_evidence still refuses (exit 1)" "$TTG_EC" 1
+assert_contains "AC3: refusal still carries the defect token" "$TTG_OUT" "VALIDATOR_DEFECT NOTHING_CHECKED"
+teardown_temp_dir
 
 report_results

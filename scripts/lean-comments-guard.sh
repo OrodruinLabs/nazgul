@@ -35,6 +35,19 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
+RHP_LIB="$SCRIPT_DIR/lib/read-hook-payload.sh"
+# A load that returns 0 having defined nothing is still no payload, so it takes
+# this hook's own posture rather than exiting 127 into whatever that means here.
+rhp_unavailable() {
+  printf 'lean-comments-guard: stdin reader unavailable: %s — fail-open, allowing the write unchecked\n' "$1" >&2
+  exit 0
+}
+[ -r "$RHP_LIB" ] || rhp_unavailable "$RHP_LIB is missing or unreadable"
+rhp_rc=0
+# shellcheck source=./lib/read-hook-payload.sh
+source "$RHP_LIB" || rhp_rc=$?
+declare -F read_hook_payload >/dev/null && declare -F hook_payload_timeout_report >/dev/null \
+  || rhp_unavailable "$RHP_LIB defines no reader API after sourcing (source returned $rhp_rc)"
 
 # Shell-ness by extension, or by shebang when the path carries no usable one
 # (githooks(5) names are extensionless). $2 is the content's first line, if known.
@@ -360,7 +373,12 @@ if [ "${1:-}" = "--check" ]; then
 fi
 
 # Mode 2: PreToolUse hook (stdin JSON)
-INPUT=$(cat 2>/dev/null || echo "")
+read_hook_payload
+if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+  hook_payload_timeout_report "lean-comments-guard" "fail-open" "allowing the write unchecked"
+  exit 0
+fi
+INPUT="$HOOK_PAYLOAD"
 [ -z "$INPUT" ] && exit 0
 
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
@@ -389,7 +407,9 @@ case "$TOOL_NAME" in
 esac
 
 [ -z "$FILE_PATH" ] && exit 0
-FIRST_LINE=$(printf '%s' "$CONTENT" | head -1)
+# Not `printf | head -1`: $CONTENT is the whole tool payload, and past the 64 KiB
+# pipe buffer the producer's SIGPIPE aborted this always-blocking gate silently (#230).
+FIRST_LINE=${CONTENT%%$'\n'*}
 STYLE=$(comment_style_for "$FILE_PATH" "$FIRST_LINE")
 [ -z "$STYLE" ] && exit 0
 HDR=0

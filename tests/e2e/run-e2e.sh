@@ -69,7 +69,7 @@ for test_file in "$TEST_DIR"/test-*.sh; do
 
   CHECKED=$((CHECKED + 1))
   echo "--- $name ---"
-  if bash "$test_file"; then
+  if bash "$test_file" </dev/null; then
     PASSED=$((PASSED + 1))
   else
     FAILED=$((FAILED + 1))

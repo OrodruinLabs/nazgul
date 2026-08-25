@@ -68,6 +68,8 @@ nazgul/reviews|record|-|Review artifacts per task; only the four children declar
 nazgul/learning|record|-|Learned-rule registry and declines stay tracked
 nazgul/x|record|-|An illustrative placeholder in guard comments only (scripts/local-mode-tracking-guard.sh:71); nothing writes it, so it must never be a block line
 nazgul/nazgul|record|-|Prose illustration of the path a NAZGUL_DIR misconfiguration would resolve to (scripts/doctor.sh:335); nothing writes it
+nazgul/pull|record|-|The tail of a github.com/OrodruinLabs/nazgul/pull/<n> PR URL in skills/complete/SKILL.md:15, not a project path at all; nothing writes it, so it must never be a block line
+nazgul/.nazgul-plan.XXXXXX|ephemeral|nazgul/.nazgul-plan.*|The mktemp template scripts/stamp-plan-objective.sh:149 writes plan.md through; a transient scratch file with a random suffix, the same shape as the nazgul/config.json.tmp row above
 nazgul/checkpoints|ephemeral|nazgul/checkpoints/|Per-iteration snapshots the loop regenerates
 nazgul/logs|ephemeral|nazgul/logs/|Per-machine event journal
 nazgul/sessions|ephemeral|nazgul/sessions/|Per-session locks and tracking
@@ -96,7 +98,8 @@ nazgul/reviews|ephemeral|nazgul/reviews/*/diff.patch|A committed stale captured 
 nazgul/reviews|ephemeral|nazgul/reviews/post-loop-simplify-report.md|Post-loop working file under the reviews record dir
 nazgul/learning|ephemeral|nazgul/learning/proposed-rules.md|Transient autolearning working file
 nazgul/learning|ephemeral|nazgul/learning/.last-run|Transient autolearning working file
-nazgul/context.backup.*|ephemeral|nazgul/context.backup.*/|Timestamped local snapshot of the tracked nazgul/context/, made on re-run by /nazgul:discover'
+nazgul/context.backup.*|ephemeral|nazgul/context.backup.*/|Timestamped local snapshot of the tracked nazgul/context/, made on re-run by /nazgul:discover
+nazgul/.nazgul-plan.*|ephemeral|nazgul/.nazgul-plan.*|The wildcard form of the row above, which is what the block line and the Step 4 pathspecs must spell: the mktemp suffix is random, so a literal key can never be the pattern. Two keys because the writer names the template and the block names the glob'
 
 # A1-A4 increment `findings` directly; the dogfood, P1/P2/P3 and copy-sync regions raise
 # TESTS_FAILED instead, and each folds its own delta in as it closes, before the next baseline.
@@ -716,7 +719,8 @@ K_CASE_LINE='  case "$VAR_INTRO" in *"$nxt"*) RESOLVED="$prefix*" ;; *) RESOLVED
 K_MUT="$SCRATCH/pre-c1"
 mkdir -p "$K_MUT" && ln -sfn "$SCRIPT_DIR/lib" "$K_MUT/lib"
 awk -v row="$K_DECL_ROW" -v q="'" -v nxt="$K_NXT_LINE" -v cse="$K_CASE_LINE" '
-  index($0, row) == 1 { print q; next }
+  index($0, row) == 1 { print q; if (substr($0, length($0)) != q) intail = 1; next }
+  intail == 1 { if (substr($0, length($0)) == q) intail = 0; next }
   $0 == nxt { next }
   $0 == cse { print "  return 1"; next }
   { print }
@@ -727,16 +731,29 @@ _k_rows() { awk -v row="$K_DECL_ROW" 'index($0, row) == 1 { n++ } END { print n 
 assert_eq "C-k CONTROL: this file states each mutated site exactly once, and the mutant states neither" \
   "$(_k_rows "$SCRIPT_DIR/$TEST_NAME.sh")/$(grep -cxF -- "$K_CASE_LINE" "$SCRIPT_DIR/$TEST_NAME.sh" || true)::$(_k_rows "$K_MUT/$TEST_NAME.sh")/$(grep -cxF -- "$K_CASE_LINE" "$K_MUT/$TEST_NAME.sh" || true)" \
   "1/1::0/0"
-assert_eq "C-k CONTROL: the mutant is one line shorter — the resolver's nxt line, the only deletion" \
-  "$(( $(wc -l < "$SCRIPT_DIR/$TEST_NAME.sh") - $(wc -l < "$K_MUT/$TEST_NAME.sh") ))" "1"
+# The blanking truncates DECLARATIONS at K_DECL_ROW, so it removes that row AND every row after
+# it — the wildcard tail. Deleted lines = (tail rows - 1 folded into the printed quote) + the
+# resolver's nxt line = exactly the tail size. Derived, so adding a wildcard row cannot silently
+# skew it; the arm below asserts the resulting mutant still parses and runs.
+K_TAIL_ROWS=$(printf '%s\n' "$DECLARATIONS" | awk -v row="$K_DECL_ROW" 'index($0, row) == 1 { f = 1 } f { n++ } END { print n + 0 }')
+assert_eq "C-k CONTROL: the wildcard tail the blanking truncates is measured, not assumed" \
+  "$([ "$K_TAIL_ROWS" -ge 1 ] && echo yes || echo no)" "yes"
+assert_eq "C-k CONTROL: the mutant is exactly the wildcard tail shorter — those rows plus the resolver's nxt line, the only deletions" \
+  "$(( $(wc -l < "$SCRIPT_DIR/$TEST_NAME.sh") - $(wc -l < "$K_MUT/$TEST_NAME.sh") ))" "$K_TAIL_ROWS"
 assert_eq "C-k CONTROL: with the prefix branch replaced by the pre-change discard, so a mutant that failed to apply cannot read as agreement" \
   "$(grep -cxF -- '  return 1' "$K_MUT/$TEST_NAME.sh" || true)" \
   "$(( $(grep -cxF -- '  return 1' "$SCRIPT_DIR/$TEST_NAME.sh" || true) + 1 ))"
 K_OUT=$(env NAZGUL_IGNORE_SWEEP_ROOT="$DOG" bash "$K_MUT/$TEST_NAME.sh" 2>&1); K_RC=$?
 _dog_clear "C-k: before C1, the very fixture P13 just failed on reported nothing at all" "$K_OUT" "$K_RC"
+# Two, not one: the mutant discards every PARTIAL-LITERAL occurrence, and the tail of
+# DECLARATIONS now carries two such keys — nazgul/context.backup.* and nazgul/.nazgul-plan.*.
+# Both are truncated away by the same blanking, so neither leaves a stale declaration behind.
+K_WILDCARD_KEYS=$(printf '%s\n' "$DECL_KEYS" | grep -c '\*$' || true)
+assert_eq "C-k CONTROL: the wildcard-key count the delta below is built on is measured, not assumed" \
+  "$K_WILDCARD_KEYS" "2"
 assert_eq "C-k: because the entry had no key to compare against — the occurrence was discarded whole, not resolved" \
   "$(_run_paths_field "$K_OUT" enumerated)/$(printf '%s\n' "$K_OUT" | grep -c 'context.backup' || true)" \
-  "$((BASE_ENUM - 1))/0"
+  "$((BASE_ENUM - K_WILDCARD_KEYS))/0"
 
 _dog_reset
 D_OUT=$(_dog_run); D_RC=$?

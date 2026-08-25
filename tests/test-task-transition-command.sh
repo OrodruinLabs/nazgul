@@ -763,15 +763,39 @@ assert_contains "symlink alias is routed to the transaction command" \
 
 # F1: an empty array's value expansion is fatal under `set -u` on bash < 4.4.
 # Shell-independent half — the guarded idiom is stripped, so what remains is unguarded.
+#
+# LC_ALL=C is LOAD-BEARING, and sed's exit status is checked rather than discarded. Under a
+# UTF-8 locale BSD sed dies on these files with "RE error: illegal byte sequence"; a dead sed
+# writes nothing, and this scan used to read that empty output as "no findings". It reported
+# clean on macOS for exactly as long as it never ran, while GNU sed on CI found a real site
+# (task-transition-guard.sh's `${pathspec[@]}`). A scan that could not run is "never looked",
+# which is a finding here, not a pass — RULES.md §15.
 UNGUARDED=""
+UG_SCANNED=0; UG_CHECKED=0; UG_SCAN_FAILED=0
 for _f in "$REPO_ROOT/scripts/lib/task-transition-guard.sh" \
   "$REPO_ROOT/scripts/task-transition.sh" "$REPO_ROOT/scripts/task-state-guard.sh"; do
-  _hits=$(sed 's/\${\([A-Za-z_][A-Za-z0-9_]*\)\[@\]+"\${\1\[@\]}"}//g' "$_f" \
-    | grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*\[[@*]\]\}' || true)
+  UG_SCANNED=$((UG_SCANNED + 1))
+  if ! _stripped=$(LC_ALL=C sed 's/\${\([A-Za-z_][A-Za-z0-9_]*\)\[@\]+"\${\1\[@\]}"}//g' "$_f" 2>/dev/null); then
+    UG_SCAN_FAILED=$((UG_SCAN_FAILED + 1))
+    UNGUARDED="${UNGUARDED}${UNGUARDED:+; }${_f##*/}:SCAN-FAILED(sed could not run — not evidence of cleanliness)"
+    continue
+  fi
+  UG_CHECKED=$((UG_CHECKED + 1))
+  _hits=$(printf '%s\n' "$_stripped" | grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*\[[@*]\]\}' || true)
   [ -z "$_hits" ] || UNGUARDED="${UNGUARDED}${UNGUARDED:+; }${_f##*/}:${_hits}"
 done
+printf '  unguarded-expansion: %d scanned, %d skipped (scan-failed=%d), %d checked, %d findings\n' \
+  "$UG_SCANNED" "$UG_SCAN_FAILED" "$UG_SCAN_FAILED" "$UG_CHECKED" \
+  "$([ -z "$UNGUARDED" ] && echo 0 || echo 1)"
 assert_eq "no unguarded empty-array value expansion survives in the transition path" \
   "$UNGUARDED" ""
+# A zero-file scan is a broken enumerator reporting a clean tree.
+if [ "$UG_CHECKED" -ge 1 ]; then
+  _pass "the unguarded-expansion scan actually ran ($UG_CHECKED of $UG_SCANNED files stripped and searched)"
+else
+  _fail "the unguarded-expansion scan actually ran" \
+    "0 of $UG_SCANNED files could be stripped — every result was 'never looked', not 'looked and found none'"
+fi
 
 # PATH bash 5 tolerates the expansion, so only a real bash < 4.4 can turn this red.
 LEGACY_BASH=""

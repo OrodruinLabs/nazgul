@@ -77,18 +77,19 @@ either way.
 `stop_payload_observed` is a FEAT-033 (#218) event TYPE, not a `stop_gate` reason — `stop-hook.sh`
 emits it once per Stop the hook processes, above the `guards.in_flight_hold` kill switch, and BELOW
 the `paused` gate — a paused loop emits nothing, so an absent record is not evidence the Stop did
-not occur. It was absent from
-this fence while the docs describing it shipped, so a fence that cannot see an event cannot validate
-it: an omission here reads downstream as "no such event," which is the same false negative this
-inventory exists to prevent.
+not occur. It was absent from this fence while the docs describing it shipped, so a fence that cannot
+see an event cannot validate it: an omission here reads downstream as "no such event," which is the
+same false negative this inventory exists to prevent.
 
-This list is EVENT names only. A `stop_gate` `reason` is not an event and must never be added here —
+This list is EVENT names only. A `stop_gate` `reason` is not an event and must never be added here.
 `in_flight_hold`, `in_flight_stale`, `in_flight_orphan`, `in_flight_unverifiable`,
 `in_flight_orphan_candidate`, `in_flight_orphan_unattributable`, `in_flight_hold_budget_exhausted`,
-`in_flight_present_not_live`, `in_flight_hold_unbudgetable`, `afk_timeout`, and
-`stacking_unavailable` are reasons carried by the
-single `stop_gate` event, and the reason enumeration lives in `docs/CONFIGURATION.md` Event Types
-plus `RULES.md` §5.
+`in_flight_present_not_live`, `in_flight_hold_unbudgetable`, `afk_timeout` and `stacking_unavailable`
+are reasons carried by the single `stop_gate` event — named here as an EXCLUSION AID so you can decide
+locally, not as the enumeration; there are more than these eleven. The reason enumeration is the
+closed, derived set in `docs/CONFIGURATION.md` -> Telemetry Bus -> Event Types, and only that.
+`RULES.md` §5 is a see-also for the announcement rule: it names a subset and disclaims exhaustiveness
+itself, so it is never the list to check a doc against.
 
 `in_flight_orphan` is NOT in the list above and must not be re-added (PR #223 review #2). It is a
 `stop_gate` reason ONLY. It used to be dual-role — also a standalone event from the SessionStart sweep

@@ -122,7 +122,9 @@ assert_file_exists "archive: still present after re-run" "$INBOX/archive/first.m
 teardown_temp_dir
 
 # --- Test 7.5: file provider never sources the github connector (existing projects have zero github surface) ---
-assert_eq "file provider: connector never sourced" "${_NAZGUL_CONNECTOR_GITHUB_SOURCED:-unset}" "unset"
+# The evidence is the connector's own API: the scalar this read no longer exists anywhere.
+assert_eq "file provider: connector never sourced" \
+  "$(declare -F connector_github_health >/dev/null 2>&1 && echo sourced || echo unsourced)" "unsourced"
 
 # --- GitHub-provider dispatch (provider="github") ---
 # `gh` is a PATH-shim mock over a fixture issue DB + mutable labels (no network); FAKEBIN is a colon-free mktemp dir so PATH parses.
@@ -230,6 +232,46 @@ seed_gh_db
 GH_LIST=$(inbox_list "$INBOX")
 assert_contains     "github list: routes to connector (unclaimed issue 42 lists)" "$GH_LIST" "42"
 assert_not_contains "github list: excludes the claimed issue 43"                  "$GH_LIST" "43"
+
+# lean-comments: allow-run — the forged value is the exact one PATCH-008 kept on a "it has a
+# reader" argument, and the reader was the hazard.
+# ITEM 5 — `_inbox_require_connector` used to return 0 when `_NAZGUL_CONNECTOR_GITHUB_SOURCED` was
+# merely SET, having loaded nothing; the next line called connector_github_health, which exited
+# 127, and `|| return 1` reported that as "the connector is not ready". A healthy connector and an
+# absent one produced the same empty result. The probe now asks whether the API is DEFINED, so a
+# forged scalar of any name changes nothing. Driven in a FRESH process, because this one has
+# already loaded the connector legitimately and could never see the failure.
+IP_LIB="$REPO_ROOT/scripts/lib/inbox-provider.sh"
+for _ip_forge in _NAZGUL_CONNECTOR_GITHUB_SOURCED _NZ_CONNECTOR_GITHUB_LOADED _NAZGUL_INBOX_PROVIDER_SOURCED; do
+  IP_FORGED=$(env "${_ip_forge}=1" "$BASH" -c ". '$IP_LIB'; inbox_list '$INBOX'" 2>/dev/null)
+  assert_contains "github list: an exported ${_ip_forge} cannot make the seam report a healthy connector as not ready" \
+    "$IP_FORGED" "42"
+done
+IP_CLEAN=$("$BASH" -c ". '$IP_LIB'; inbox_list '$INBOX'" 2>/dev/null)
+assert_eq "and the forged runs agree with the un-forged one, so the probe above is not passing vacuously" \
+  "$IP_CLEAN" "$IP_FORGED"
+
+# The readiness probe must name every connector function this seam calls: one exported function
+# answering for the whole API is the `declare -F` hazard in miniature.
+IP_CALLED=$(grep -oE 'connector_github_[a-z_]+' "$IP_LIB" | grep -v '^connector_github_[a-z_]*$(' | sort -u)
+IP_DECL=$(grep -E '^_INBOX_CONNECTOR_API=' "$IP_LIB" | tr ' "' '\n\n' | grep -c '^connector_github_')
+IP_API_MISS=0
+for _ip_fn in $IP_CALLED; do
+  case " $(grep -E '^_INBOX_CONNECTOR_API=' "$IP_LIB") " in
+    *" $_ip_fn "*|*"\"$_ip_fn "*|*" $_ip_fn\""*) ;;
+    *) IP_API_MISS=$((IP_API_MISS + 1)) ;;
+  esac
+done
+IP_CALLED_N=$(printf '%s\n' "$IP_CALLED" | grep -c '[^[:space:]]')
+echo "  connector-api: ${IP_CALLED_N} scanned, 0 skipped, ${IP_CALLED_N} checked, ${IP_API_MISS} findings"
+assert_eq "connector-api: the readiness probe covers every connector function this seam calls" \
+  "$IP_API_MISS" "0"
+if [ "$IP_CALLED_N" -ge 4 ] && [ "$IP_DECL" -ge 4 ]; then
+  _pass "connector-api: the call population was derived from the file (${IP_CALLED_N} calls, ${IP_DECL} declared)"
+else
+  _fail "connector-api: the call population was derived from the file" \
+    "derived ${IP_CALLED_N} call(s) and ${IP_DECL} declared name(s) — a derivation that stopped matching checks nothing"
+fi
 
 GH_GET=$(inbox_get "$INBOX" 42)
 GH_GET_RC=$?

@@ -8,8 +8,8 @@
 # Idempotent source guard; NOT `set -euo pipefail` — sourced into caller shells
 # (heartbeat hook / start skill) that own their own shell options.
 
-[ -n "${_NAZGUL_HEARTBEAT_TRIAGE_SOURCED:-}" ] && return 0
-_NAZGUL_HEARTBEAT_TRIAGE_SOURCED=1
+# NO SENTINEL: the scalar `_NAZGUL_HEARTBEAT_TRIAGE_SOURCED` that sat here made one exported variable
+# enough to leave the triage policy undefined — the 127-exit hazard nazgul-root.sh:40-49 measured.
 
 _HB_TRIAGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null

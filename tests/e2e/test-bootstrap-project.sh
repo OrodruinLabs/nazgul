@@ -4,6 +4,10 @@ set -euo pipefail
 TEST_NAME="e2e-bootstrap-project"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../lib/assertions.sh"
+# The bound its two siblings already had and this file did not: an unbounded `claude -p`
+# holds a CI runner until the job's own limit, and reports nothing when it does.
+source "$SCRIPT_DIR/lib/session-runner.sh"
+BOOTSTRAP_TIMEOUT_S="${E2E_BOOTSTRAP_TIMEOUT:-900}"
 
 echo "=== $TEST_NAME ==="
 
@@ -29,10 +33,22 @@ run_fixture() {
   echo ""
   echo "--- running /nazgul:bootstrap-project against $fixture_name ---"
 
-  (cd "$work" && claude -p "/nazgul:bootstrap-project \"A demo app for e2e validation\" --yes --overwrite" 2>&1) || {
-    _fail "$fixture_name: skill invocation exit 0"
+  local tcmd rc=0
+  tcmd=$(_timeout_cmd)
+  if [ -z "$tcmd" ]; then
+    echo "[e2e] WARNING: unbounded_no_timeout_binary — neither timeout nor gtimeout is on PATH, so this invocation has NO duration bound" >&2
+    (cd "$work" && claude -p "/nazgul:bootstrap-project \"A demo app for e2e validation\" --yes --overwrite" 2>&1) || rc=$?
+  else
+    (cd "$work" && "$tcmd" -k 30 "$BOOTSTRAP_TIMEOUT_S" claude -p "/nazgul:bootstrap-project \"A demo app for e2e validation\" --yes --overwrite" 2>&1) || rc=$?
+  fi
+  if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+    _fail "$fixture_name: skill invocation exit 0" "timed out after ${BOOTSTRAP_TIMEOUT_S}s (exit $rc) — a bound fired, which is not a verdict about the bundle"
     return 1
-  }
+  fi
+  if [ "$rc" -ne 0 ]; then
+    _fail "$fixture_name: skill invocation exit 0" "exit $rc"
+    return 1
+  fi
   _pass "$fixture_name: skill invocation exit 0"
 
   # Bundle checks

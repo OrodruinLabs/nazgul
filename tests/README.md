@@ -60,7 +60,7 @@ retro-edited as the suite grows).
 | Harness + assertion reality | Zero-match/no-file runs, skip accounting, grep-error handling, red-run evidence gate/tool |
 | Scratch-state dogfooding | Guards receive generated shell, hook, Git, and session state in temporary projects; Nazgul runtime snapshots are not committed |
 | State/review loop | Task transitions, review evidence/provenance, dispatch granularity, stop-hook state machine |
-| Config + docs | Terminal schema v36, migration chain, frontmatter, JSON, template freshness, RULES consistency |
+| Config + docs | Terminal schema v37, migration chain, frontmatter, JSON, template freshness, RULES consistency |
 | Paid validation | Manual skill E2E, GitHub stack E2E, and manual/nightly true-entry smoke in scratch projects |
 
 ### Adversarial suites added by FEAT-029

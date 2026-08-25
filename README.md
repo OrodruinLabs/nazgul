@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.34.0-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-2.35.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-Plugin-7c3aed?style=flat-square" alt="Claude Code Plugin">
   <img src="https://img.shields.io/badge/agents-22-orange?style=flat-square" alt="Agents">
@@ -90,8 +90,9 @@ Nazgul auto-detects project state: active work resumes, existing docs trigger pl
 | `/nazgul:start` | Smart start/resume — auto-detects state, derives objective |
 | `/nazgul:status` | Check loop progress, task counts, reviewer board |
 | `/nazgul:pause` | Gracefully pause at next iteration boundary |
-| `/nazgul:task` | Task lifecycle: skip, unblock, add, prioritize, list |
+| `/nazgul:task` | Task lifecycle: skip (records `CANCELLED`), unblock, add, prioritize, list |
 | `/nazgul:review` | Manually trigger review for a task |
+| `/nazgul:complete` | Close an objective whose PR merged — walks stranded tasks to DONE on host merge evidence only |
 | `/nazgul:log` | View run history — iterations, commits, reviews |
 | `/nazgul:board` | Connect task tracking to GitHub Projects |
 | `/nazgul:docs` | View or regenerate project documents |

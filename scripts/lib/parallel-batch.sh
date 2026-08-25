@@ -7,12 +7,14 @@
 #
 # Idempotent source guard; NOT `set -euo pipefail` (sourced into hook shells).
 
-[ -n "${_NAZGUL_PARALLEL_BATCH_SOURCED:-}" ] && return 0
-_NAZGUL_PARALLEL_BATCH_SOURCED=1
+# NO SENTINEL: the scalar `_NAZGUL_PARALLEL_BATCH_SOURCED` that sat here made one exported variable
+# enough to leave compute_dispatch_batch undefined in the stop-hook's dispatch pass — the 127-exit hazard nazgul-root.sh:40-49 measured.
 
 _PB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$_PB_DIR/task-utils.sh"
+# shellcheck source=/dev/null
+source "$_PB_DIR/task-transition-guard.sh"
 
 # _pb_task_map_from_dir <tasks_dir> -> prints {"<id>": {"deps": [...], "status": "..."}}
 # built from each TASK-*.md's "Depends on" list-item field + canonical status.
@@ -57,8 +59,9 @@ _pb_layer_waves() {
   fi
 
   if ! err=$(jq -c '
-    (to_entries | map(select(.value.status == "DONE")) | map(.key)) as $done0
-    | (to_entries | map(select(.value.status != "DONE")) | map(.key) | sort) as $pending0
+    (["DONE", "CANCELLED"]) as $terminal
+    | (to_entries | map(select(.value.status as $s | $terminal | index($s))) | map(.key)) as $done0
+    | (to_entries | map(select(.value.status as $s | $terminal | index($s) | not)) | map(.key) | sort) as $pending0
     | . as $tasks
     | [$done0, $pending0, 1, []]
     | until(
@@ -87,10 +90,10 @@ _pb_layer_waves() {
 }
 
 # compute_waves <tasks_dir> -> prints wave partition JSON:
-# [{"wave": 1, "units": ["TASK-001", ...]}, ...]. DONE tasks are excluded
-# entirely; a fully-DONE or empty graph yields "[]". Rejects (non-zero exit,
-# stderr message) rather than looping when a cycle or unknown dependency id
-# is found.
+# [{"wave": 1, "units": ["TASK-001", ...]}, ...]. Terminal tasks (DONE and,
+# per ADR-022, CANCELLED) are excluded entirely and satisfy their dependents;
+# a fully-terminal or empty graph yields "[]". Rejects (non-zero exit, stderr
+# message) rather than looping on a cycle or unknown dependency id.
 compute_waves() {
   local input="$1" task_map
   if [ -d "$input" ]; then
@@ -221,12 +224,13 @@ execution_should_halt() {
 # -> {"tasks": [...], "parallel": bool, "reason": "..."}
 # Deterministic batch selection (spec §2). Every doubt falls back to a batch of
 # one (proven sequential behavior). A multi-task batch requires: >=2 candidates
-# (READY, all deps DONE) that are members of the same plan.md "### Wave N"
-# section (one-bullet-per-task or comma-grouped, any mix), with pairwise-
-# disjoint "Files modified" scopes, capped at max_parallel.
+# (READY, every dep satisfying ttg_dependency_satisfied — the one authority, so
+# this path is granularity-aware) in the same plan.md "### Wave N" section (any
+# bullet mix), with pairwise-disjoint "Files modified" scopes, capped at max_parallel.
 compute_dispatch_batch() {
   local tasks_dir="$1" plan_md="$2" max_parallel="$3"
   case "$max_parallel" in ''|*[!0-9]*|0) max_parallel=3 ;; esac
+  local nazgul_dir; nazgul_dir=$(dirname "$tasks_dir")
 
   local file id status deps_raw d ok
   local -a candidates=()
@@ -241,7 +245,8 @@ compute_dispatch_batch() {
     for d in $deps_raw; do
       case "$d" in none|None|NONE|"") continue ;; esac
       [ -f "$tasks_dir/$d.md" ] || { ok=0; break; }
-      [ "$(get_task_status "$tasks_dir/$d.md" "PLANNED")" = "DONE" ] || { ok=0; break; }
+      ttg_dependency_satisfied "$nazgul_dir" \
+        "$(get_task_status "$tasks_dir/$d.md" "PLANNED")" || { ok=0; break; }
     done
     [ "$ok" -eq 1 ] && candidates+=("$id")
   done

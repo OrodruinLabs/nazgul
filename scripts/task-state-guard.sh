@@ -10,48 +10,17 @@ source "$SCRIPT_DIR/lib/task-utils.sh"
 source "$SCRIPT_DIR/lib/review-evidence.sh"
 source "$SCRIPT_DIR/lib/task-transition-guard.sh"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
+# shellcheck source=./lib/destructive-patterns.sh
+source "$SCRIPT_DIR/lib/destructive-patterns.sh"
+# nazgul/tasks/TASK-<digits>.md, digits only. Defined up here, away from its is_dispatch_manifest
+# /is_review_diff siblings, because the oversize arm names a target before any envelope is parsed.
+is_task_manifest() {
+  local p="$1"
+  [[ "$p" =~ (^|/)nazgul/tasks/TASK-[0-9]+\.md$ ]]
+}
 
-# Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
-INPUT=$(cat 2>/dev/null || echo "")
-if [ -z "$INPUT" ]; then
-  exit 0
-fi
-
-# Parse JSON input with jq
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
-
-# Handle MultiEdit by checking every edit independently. A task-status-bearing
-# edit is denied and routed to the transactional command, so there is no reason
-# to aggregate sibling strings (aggregation let an earlier same-status string
-# shadow a later real status change). A remove-then-add status sequence is
-# deliberately denied at the removal and must use the transition command.
-if [ "$TOOL_NAME" = "MultiEdit" ]; then
-  EDITS_JSON=$(echo "$INPUT" | jq -c '.tool_input.edits // [] | .[]' 2>/dev/null || echo "")
-  if [ -z "$EDITS_JSON" ]; then
-    exit 0
-  fi
-  while IFS= read -r EDIT; do
-    [ -z "$EDIT" ] && continue
-    SINGLE_INPUT=$(echo "$INPUT" | jq --argjson edit "$EDIT" '
-      .tool_name = "Edit"
-      | .tool_input = $edit
-    ')
-    EC=0
-    echo "$SINGLE_INPUT" | "$0" || EC=$?
-    if [ "$EC" -ne 0 ]; then
-      exit "$EC"
-    fi
-  done <<< "$EDITS_JSON"
-  exit 0
-fi
-
-FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null || echo "")
-
-# Derive project root via the worktree-aware resolver (FEAT-021 / ADR-008)
-PROJECT_ROOT="$(resolve_project_root)"
-
-# Bound FILE_PATH by PROJECT_ROOT (Defect 3): writes outside this project
-# aren't this guard's business — including another project's own manifest.
+# Defined HERE: the oversize arm below runs long before this function's old definition site, so it
+# could not canonicalise even in principle and every alias fell through to fail-OPEN (item 1).
 _tsg_canon_path() {
   # No-existence-required realpath (BSD lacks -m): resolve the longest
   # existing prefix via cd+pwd -P, reattach what doesn't exist literally.
@@ -92,6 +61,166 @@ _tsg_canon_path() {
   printf '%s%s/%s' "$dir" "$suffix" "$base"
 }
 
+RHP_LIB="$SCRIPT_DIR/lib/read-hook-payload.sh"
+# A load that returns 0 having defined nothing is still no payload, and it is
+# scoped like the timeout branch below rather than denying every repo.
+rhp_unavailable() {
+  if [ -f "$(resolve_project_root)/nazgul/config.json" ]; then
+    printf 'task-state-guard: stdin reader unavailable: %s — fail-closed, blocking the edit\n' "$1" >&2
+    exit 2
+  fi
+  printf 'task-state-guard: stdin reader unavailable: %s — fail-open, not a Nazgul project\n' "$1" >&2
+  exit 0
+}
+# The target of a bounded-out write, from read-hook-payload's untrusted prefix — not jq, a truncated
+# envelope is not JSON. Returns 1 unless the WHOLE quoted value fits, so a cut path reads as unknown.
+_tsg_prefix_file_path() {
+  local p="${HOOK_PAYLOAD_PREFIX:-}"
+  case "$p" in *'"file_path"'*) ;; *) return 1 ;; esac
+  # A body key already open means this `file_path` may be a string the write itself supplied, so
+  # the target is unknown rather than found — the attacker picks it otherwise.
+  case "${p%%\"file_path\"*}" in
+    *'"content"'*|*'"new_string"'*|*'"old_string"'*|*'"edits"'*) return 1 ;;
+  esac
+  p="${p#*\"file_path\"}"
+  p="${p#*:}"
+  p="${p#"${p%%[![:space:]]*}"}"
+  case "$p" in \"*) p="${p#\"}" ;; *) return 1 ;; esac
+  case "$p" in *\"*) ;; *) return 1 ;; esac
+  p="${p%%\"*}"
+  # A blank target is the least identified thing a payload can hand this arm, so it takes the rc-1
+  # route rather than printing an unnamed target into an allow (item 6).
+  [ -n "$p" ] || return 1
+  _tsg_json_unquote "$p"
+}
+
+# lean-comments: allow-run — which escapes decode, and why every other one refuses, is the whole
+# contract of this helper.
+# The value is raw bytes lifted out of a TRUNCATED envelope, never `jq` output, so a JSON-escaped
+# path reached is_task_manifest with its backslashes intact and missed — a fail-OPEN on the exact
+# target the arm exists to refuse. Only `\\`, `\/` and `\"` decode. Every other escape (`\n`,
+# `\uXXXX`, and a trailing lone backslash, which is also how an ESCAPED closing quote truncates the
+# value) returns 1: a spelling this cannot decode is an unknown target, not a known-safe one.
+_tsg_json_unquote() {
+  local rest="$1" out="" c
+  while [ -n "$rest" ]; do
+    c="${rest:0:1}"; rest="${rest:1}"
+    if [ "$c" != "\\" ]; then out="$out$c"; continue; fi
+    [ -n "$rest" ] || return 1
+    c="${rest:0:1}"; rest="${rest:1}"
+    if [ "$c" = "\\" ] || [ "$c" = "/" ] || [ "$c" = '"' ]; then out="$out$c"; else return 1; fi
+  done
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
+}
+
+[ -r "$RHP_LIB" ] || rhp_unavailable "$RHP_LIB is missing or unreadable"
+rhp_rc=0
+# shellcheck source=./lib/read-hook-payload.sh
+source "$RHP_LIB" || rhp_rc=$?
+declare -F read_hook_payload >/dev/null && declare -F hook_payload_timeout_report >/dev/null \
+  || rhp_unavailable "$RHP_LIB defines no reader API after sourcing (source returned $rhp_rc)"
+
+# Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
+read_hook_payload
+if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+  # lean-comments: allow-run — the disposition, the claim that was false, and what is still open.
+  # `oversize` is asked SEPARATELY rather than inheriting the stall answer by proximity. A stall or
+  # a deadline is transient, so failing closed costs a retry; the cap is DETERMINISTIC, so a blanket
+  # fail-closed refuses every large Write in the project forever. The previous arm therefore allowed
+  # the write and said reconciliation would catch a padded status edit. It does not: stop-hook.sh's
+  # pass fires only when a task's status CHANGED since the checkpoint, and a padded write that
+  # deletes an ADR-020 quarantine record leaves BLOCKED as BLOCKED — invisible, and then
+  # `BLOCKED -> CANCELLED` is admitted (PATCH-008 item 2). So the target is named instead, from the
+  # reader's bounded UNTRUSTED prefix: a task manifest fails closed, an envelope whose file_path
+  # cannot be read fails closed (an unknown target is not a known-safe one), everything else keeps
+  # the fail-open. STILL NOT COVERED on this path, stated rather than left to be discovered: the
+  # "source edits require an IN_PROGRESS task" rule, which applies to targets this arm allows.
+  # An unknown target is not a known-safe one — but an unrelated repo's edits were never this
+  # guard's to refuse either, so the deny is scoped exactly as the stall arm below is. Unscoped, it
+  # blocked every oversize Write in any non-Nazgul repo permanently, which is the outcome this
+  # arm's own comment says must not happen (re-review #4 item 2).
+  _tsg_oversize_unknown() {
+    if [ -f "$(resolve_project_root)/nazgul/config.json" ]; then
+      hook_payload_timeout_report "task-state-guard" "fail-closed" \
+        "refusing the edit: $1, so the target is unknown — which is not the same as known-safe"
+      exit 2
+    fi
+    hook_payload_timeout_report "task-state-guard" "fail-open" \
+      "allowing the edit unscreened: $1, and this is not a Nazgul project whose task state it could threaten"
+    exit 0
+  }
+  if [ "${HOOK_PAYLOAD_REASON:-}" = "oversize" ]; then
+    if OVERSIZE_TARGET=$(_tsg_prefix_file_path); then
+      # Through the SAME canonicaliser every other check in this guard uses: testing the raw value
+      # let a `..` or `//` alias of a manifest miss is_task_manifest and take fail-OPEN (item 1).
+      if ! OVERSIZE_CANON=$(_tsg_canon_path "$OVERSIZE_TARGET"); then
+        _tsg_oversize_unknown "the envelope names ${OVERSIZE_TARGET}, which could not be canonicalised"
+      fi
+      # Both spellings, and only when they differ: the requested one is the only string the operator
+      # can act on, the resolved one is what was actually tested.
+      OVERSIZE_AS=""
+      [ "$OVERSIZE_CANON" = "$OVERSIZE_TARGET" ] || OVERSIZE_AS=" (canonicalised to ${OVERSIZE_CANON})"
+      if is_task_manifest "$OVERSIZE_CANON"; then
+        hook_payload_timeout_report "task-state-guard" "fail-closed" \
+          "refusing the edit: ${OVERSIZE_TARGET}${OVERSIZE_AS} is a task manifest, and an unscreened write to one can delete a quarantine record no later pass would see"
+        exit 2
+      fi
+      hook_payload_timeout_report "task-state-guard" "fail-open" \
+        "allowing the edit unscreened: ${OVERSIZE_TARGET}${OVERSIZE_AS} is not a task manifest, and a deterministic cap must not refuse every large Write forever"
+      exit 0
+    fi
+    _tsg_oversize_unknown "the truncated envelope yields no file_path this arm can use"
+  fi
+  # With no payload there is no file path to bound, so the deny is decided here
+  # — but an unrelated repo's edits were never this guard's to refuse.
+  if [ -f "$(resolve_project_root)/nazgul/config.json" ]; then
+    hook_payload_timeout_report "task-state-guard" "fail-closed" "blocking the edit"
+    exit 2
+  fi
+  hook_payload_timeout_report "task-state-guard" "fail-open" "not a Nazgul project"
+  exit 0
+fi
+INPUT="$HOOK_PAYLOAD"
+if [ -z "$INPUT" ]; then
+  exit 0
+fi
+
+# Parse JSON input with jq
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
+
+# Handle MultiEdit by checking every edit independently. A task-status-bearing
+# edit is denied and routed to the transactional command, so there is no reason
+# to aggregate sibling strings (aggregation let an earlier same-status string
+# shadow a later real status change). A remove-then-add status sequence is
+# deliberately denied at the removal and must use the transition command.
+if [ "$TOOL_NAME" = "MultiEdit" ]; then
+  EDITS_JSON=$(echo "$INPUT" | jq -c '.tool_input.edits // [] | .[]' 2>/dev/null || echo "")
+  if [ -z "$EDITS_JSON" ]; then
+    exit 0
+  fi
+  while IFS= read -r EDIT; do
+    [ -z "$EDIT" ] && continue
+    SINGLE_INPUT=$(echo "$INPUT" | jq --argjson edit "$EDIT" '
+      .tool_name = "Edit"
+      | .tool_input = $edit
+    ')
+    EC=0
+    echo "$SINGLE_INPUT" | "$0" || EC=$?
+    if [ "$EC" -ne 0 ]; then
+      exit "$EC"
+    fi
+  done <<< "$EDITS_JSON"
+  exit 0
+fi
+
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null || echo "")
+
+# Derive project root via the worktree-aware resolver (FEAT-021 / ADR-008)
+PROJECT_ROOT="$(resolve_project_root)"
+
+# Bound FILE_PATH by PROJECT_ROOT (Defect 3): writes outside this project
+# aren't this guard's business — including another project's own manifest.
 case "$FILE_PATH" in
   /*) REQUEST_FILE_PATH="$FILE_PATH" ;;
   *)  REQUEST_FILE_PATH="$PROJECT_ROOT/$FILE_PATH" ;;
@@ -148,13 +277,6 @@ is_nazgul_path() {
     "${CANON_PROJECT_ROOT}"/nazgul|"${CANON_PROJECT_ROOT}"/nazgul/*) return 0 ;;
   esac
   return 1
-}
-
-# Helper: check if path is a task manifest in the project's nazgul/ dir
-is_task_manifest() {
-  local p="$1"
-  # Must match nazgul/tasks/TASK-<digits>.md (strict: digits only before .md)
-  [[ "$p" =~ (^|/)nazgul/tasks/TASK-[0-9]+\.md$ ]]
 }
 
 # Helper: check if path is a review-unit dispatch manifest
@@ -222,7 +344,53 @@ if ! is_task_manifest "$CANON_FILE_PATH"; then
     fi
   fi
 
-  # Files inside nazgul/ are always allowed (config, plan, reviews, etc.)
+  # Two keys are carved OUT of the nazgul/ allow below: scripts/red-run.sh executes
+  # them directly, so this write is the one route past pre-tool-guard.sh entirely.
+  _tsg_project_command_values() {
+    local payload="$1" out=""
+    if command -v jq >/dev/null 2>&1; then
+      out=$(printf '%s' "$payload" | jq -r '
+        (if (.project | type) == "object" then .project else {} end)
+        | (.test_command, .test_filter_template)
+        | select(type == "string" and . != "")' 2>/dev/null || true)
+    fi
+    # An Edit new_string is a FRAGMENT, not parseable JSON: recover the values
+    # textually rather than treating an unparseable payload as nothing to check.
+    if [ -z "$out" ]; then
+      out=$(printf '%s' "$payload" \
+        | grep -oE '"(test_command|test_filter_template)"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' \
+        | sed -E 's/^"[^"]*"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)
+    fi
+    printf '%s' "$out"
+  }
+
+  _tsg_screen_project_commands() {
+    local payload values value ec
+    payload=$(echo "$INPUT" | jq -r '.tool_input.content // .tool_input.new_string // ""' 2>/dev/null || echo "")
+    [ -n "$payload" ] || return 0
+    values=$(_tsg_project_command_values "$payload")
+    [ -n "$values" ] || return 0
+    while IFS= read -r value; do
+      [ -n "$value" ] || continue
+      ec=0
+      dp_scan_command "$value" || ec=$?
+      [ "$ec" -eq 2 ] || continue
+      echo "NAZGUL STATE GUARD: BLOCKED — this write would set a project command that is on the destructive-command denylist" >&2
+      echo "Denylisted as: $DP_REASON" >&2
+      echo "Value contained: $DP_PATTERN" >&2
+      echo "Value: $value" >&2
+      echo "project.test_command and project.test_filter_template are executed by scripts/red-run.sh, not through the Bash tool, so pre-tool-guard.sh never sees them." >&2
+      exit 2
+    done <<EOF
+$values
+EOF
+  }
+
+  case "$CANON_FILE_PATH" in
+    */nazgul/config.json) _tsg_screen_project_commands ;;
+  esac
+
+  # Everything else inside nazgul/ is always allowed (plan, reviews, etc.)
   if is_nazgul_path "$CANON_FILE_PATH"; then
     exit 0
   fi
@@ -349,9 +517,11 @@ fi
 # task-transition.sh is the sole status authority; TASK-004 separately funnels
 # direct shell mutation, and all cooperative metadata writers must avoid a task
 # while its transition lock exists.
-LOCKED_TASK_ID=$(basename "$CANON_FILE_PATH" .md)
-if [ -d "$CANON_PROJECT_ROOT/nazgul/locks/task-transition-${LOCKED_TASK_ID}.lock" ]; then
-  echo "NAZGUL STATE GUARD: BLOCKED — ${LOCKED_TASK_ID} is locked by an in-flight transactional transition" >&2
+# Derived from the canonical path so a symlink alias cannot downgrade a task
+# manifest into the generic nazgul-file allow branch.
+TASK_ID=$(basename "$CANON_FILE_PATH" .md)
+if [ -d "$CANON_PROJECT_ROOT/nazgul/locks/task-transition-${TASK_ID}.lock" ]; then
+  echo "NAZGUL STATE GUARD: BLOCKED — ${TASK_ID} is locked by an in-flight transactional transition" >&2
   exit 2
 fi
 
@@ -400,6 +570,82 @@ if [ "$NEW_STATUS" = "INVALID" ] \
   exit 2
 fi
 
+# lean-comments: allow-run — the read budget these two helpers exist for, and the anchor they do
+# NOT re-spell.
+# --- ADR-020 QUARANTINE RECORD INTEGRITY (board-5 S-5) ---
+# Every quarantine question below goes to ttg_manifest_field directly: rc 1 = record absent, rc 0
+# with an empty value = present but blanked, off the SHARED anchor — a second spelling here once let
+# a two-space manifest be a live quarantine to this checker and invisible to the transition gate,
+# which laundered the block into CANCELLED. `_tsg_q_value` used to sit in front of it and, after
+# PATCH-008 item 11 moved the file read out, forwarded both arguments unchanged: a stack frame and a
+# name without a fact (re-review #4 item 13). What the read budget actually needed is the two lazy
+# loaders below — that reader takes the manifest TEXT, not a path, and `$(cat "$1")` per field
+# question slurped a whole file up to nine times over on a guard that runs before every Write and
+# Edit in the project. Each text is read once, on first use, so a write that asks no quarantine
+# question pays nothing.
+_TSG_POST_TEXT=""
+_TSG_POST_READ=""
+_tsg_load_post_text() {
+  [ -z "$_TSG_POST_READ" ] || return 0
+  _TSG_POST_TEXT=$(cat "$POST_IMAGE" 2>/dev/null || echo "")
+  _TSG_POST_READ=1
+}
+
+_TSG_OLD_TEXT=""
+_TSG_OLD_READ=""
+_tsg_load_old_text() {
+  [ -z "$_TSG_OLD_READ" ] || return 0
+  _TSG_OLD_TEXT=$(cat "$CANON_FILE_PATH" 2>/dev/null || echo "")
+  _TSG_OLD_READ=1
+}
+
+_tsg_q_refuse() {
+  echo "NAZGUL STATE GUARD: BLOCKED — ${TASK_ID}: $1" >&2
+  echo "Removing a reconciliation quarantine is a state change, not an edit." >&2
+  echo "Its only sanctioned exit is: ${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}/scripts/task-transition.sh repair ${TASK_ID}" >&2
+  exit 2
+}
+
+# The three fields are ONE record, so deleting the first line silently unlocked
+# BLOCKED -> CANCELLED. Narrow by ADR-009: only a write that CHANGES one is denied.
+if [ "$OLD_STATUS" = "BLOCKED" ] && [ -f "$CANON_FILE_PATH" ]; then
+  _tsg_load_old_text
+  _tsg_load_post_text
+  for _q_field in "Blocked kind" "Blocked from" "Blocked observed"; do
+    _q_old_rc=0
+    _q_old=$(ttg_manifest_field "$_TSG_OLD_TEXT" "$_q_field") || _q_old_rc=$?
+    [ "$_q_old_rc" -eq 0 ] || continue
+    _q_new_rc=0
+    _q_new=$(ttg_manifest_field "$_TSG_POST_TEXT" "$_q_field") || _q_new_rc=$?
+    if [ "$_q_new_rc" -ne 0 ]; then
+      _tsg_q_refuse "this write deletes the quarantine record '${_q_field}'"
+    fi
+    if [ "$_q_new" != "$_q_old" ]; then
+      _tsg_q_refuse "this write alters the quarantine record '${_q_field}' ('${_q_old}' -> '${_q_new}')"
+    fi
+  done
+fi
+
+# `Blocked from`/`Blocked observed` are written ONLY by the reconciliation
+# quarantine, so either without a reconciliation kind is half-erased, not clean.
+if [ "$NEW_STATUS" = "BLOCKED" ]; then
+  _tsg_load_post_text
+  _q_kind_rc=0; _q_kind=$(ttg_manifest_field "$_TSG_POST_TEXT" "Blocked kind") || _q_kind_rc=$?
+  _q_from_rc=0; _q_from=$(ttg_manifest_field "$_TSG_POST_TEXT" "Blocked from") || _q_from_rc=$?
+  _q_obs_rc=0;  _q_obs=$(ttg_manifest_field "$_TSG_POST_TEXT" "Blocked observed") || _q_obs_rc=$?
+  _q_typed=0
+  case "$_q_kind" in
+    [Rr]econciliation|[Rr]econciliation[[:space:]]*) _q_typed=1 ;;
+  esac
+  if [ "$_q_typed" -eq 1 ]; then
+    if [ "$_q_from_rc" -ne 0 ] || [ -z "$_q_from" ] || [ "$_q_obs_rc" -ne 0 ] || [ -z "$_q_obs" ]; then
+      _tsg_q_refuse "a typed reconciliation quarantine is missing 'Blocked from' and/or 'Blocked observed'"
+    fi
+  elif [ "$_q_from_rc" -eq 0 ] || [ "$_q_obs_rc" -eq 0 ]; then
+    _tsg_q_refuse "'Blocked from'/'Blocked observed' are present without a reconciliation 'Blocked kind' — the quarantine record is partially erased"
+  fi
+fi
+
 # If file is new (first write), allow PLANNED or READY as initial status
 if [ -z "$OLD_STATUS" ]; then
   if [ "$NEW_STATUS" = "PLANNED" ] || [ "$NEW_STATUS" = "READY" ]; then
@@ -419,26 +665,24 @@ fi
 # source of truth, shared with stop-hook.sh's reconciliation pass (MF-022).
 if ! ttg_valid_transition "$OLD_STATUS" "$NEW_STATUS"; then
   echo "NAZGUL STATE GUARD: BLOCKED — Invalid state transition: ${OLD_STATUS} → ${NEW_STATUS}" >&2
-  case "$OLD_STATUS" in
-    PLANNED)           echo "  PLANNED allowed next: READY, BLOCKED" >&2 ;;
-    READY)             echo "  READY allowed next: IN_PROGRESS, BLOCKED" >&2 ;;
-    IN_PROGRESS)       echo "  IN_PROGRESS allowed next: IMPLEMENTED, BLOCKED" >&2 ;;
-    IMPLEMENTED)       echo "  IMPLEMENTED allowed next: IN_REVIEW, BLOCKED" >&2 ;;
-    IN_REVIEW)         echo "  IN_REVIEW allowed next: DONE, APPROVED (YOLO), CHANGES_REQUESTED, BLOCKED" >&2 ;;
-    APPROVED)          echo "  APPROVED allowed next: DONE" >&2 ;;
-    CHANGES_REQUESTED) echo "  CHANGES_REQUESTED allowed next: IN_PROGRESS, BLOCKED" >&2 ;;
-    BLOCKED)           echo "  BLOCKED allowed next: READY (unblock), IN_REVIEW (materialize)" >&2 ;;
-    DONE)              echo "  DONE is a terminal state — no further transitions allowed" >&2 ;;
-    *)                 echo "  See RULES.md §2 for the permitted transition table" >&2 ;;
-  esac
+  # Derived from ttg_valid_transition, never restated: the hand-kept copy that used to live here
+  # had gone stale for IMPLEMENTED -> DONE and all eight -> CANCELLED edges.
+  if ALLOWED_NEXT=$(ttg_allowed_next "$OLD_STATUS"); then
+    if [ -n "$ALLOWED_NEXT" ]; then
+      echo "  ${OLD_STATUS} allowed next: ${ALLOWED_NEXT}" >&2
+      echo "  Some of those edges carry evidence conditions — see RULES.md §2 for the permitted transition table" >&2
+    else
+      echo "  ${OLD_STATUS} is a terminal state — no further transitions allowed" >&2
+    fi
+  else
+    echo "  See RULES.md §2 for the permitted transition table" >&2
+  fi
   exit 2
 fi
 
-# Derive identity from the canonical path so a symlink alias cannot downgrade a
-# task manifest into the generic nazgul-file allow branch.
-TASK_ID=$(basename "$CANON_FILE_PATH" .md)
 NAZGUL_DIR=$(dirname "$(dirname "$CANON_FILE_PATH")")
-MANIFEST_TEXT=$(cat "$POST_IMAGE")
+_tsg_load_post_text
+MANIFEST_TEXT="$_TSG_POST_TEXT"
 
 if ! ttg_validate_transition "$NAZGUL_DIR" "$PROJECT_ROOT" "$TASK_ID" \
   "$OLD_STATUS" "$NEW_STATUS" "$MANIFEST_TEXT"; then

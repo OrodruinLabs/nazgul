@@ -40,13 +40,13 @@ _dr_config() {
 unset DO_NOT_TRACK DISABLE_TELEMETRY DISABLE_GROWTHBOOK CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
 unset ANTHROPIC_BASE_URL CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX
 
-_dr_hash_file() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    shasum -a 256 "$1" | awk '{print $1}'
-  fi
-}
+# Snapshots are taken inside $( ), where a failure cannot reach the counters. An
+# absent helper AND an absent tool both yield a non-64 probe, so neither is silent.
+NZ_DIGEST_PROBE=$(digest_string probe || true)
+assert_eq "doctor snapshots: the shared digest helper returns a 64-hex digest, so no byte-identity check here is vacuous" \
+  "${#NZ_DIGEST_PROBE}" "64"
+
+_dr_hash_file() { digest_file "$1"; }
 
 # Recursive file-list + checksum snapshot of a directory, one "path hash"
 # line per file, sorted — order-independent and content-sensitive.
@@ -1388,11 +1388,14 @@ assert_eq "P12i: paused with an unselectable record is UNSELECTABLE RECORD, not 
 teardown_temp_dir
 
 # --- (n) stop-payload: P12d — the enrollment boundary (ruling item 7) ---
-assert_file_contains "P12d: the RULES §15 registry still names ELEVEN bound entry points" \
-  "$REPO_ROOT/RULES.md" "Eleven entry"
-DR_ENTRY_LINE=$(grep -m1 '^ENTRY_POINTS=' "$REPO_ROOT/tests/test-coverage-honesty.sh" || true)
-DR_ENTRY_COUNT=$(printf '%s' "$DR_ENTRY_LINE" | sed -E 's/^ENTRY_POINTS="([^"]*)"$/\1/' | wc -w | tr -d ' ')
-assert_eq "P12d: test-coverage-honesty.sh's roster is still eleven entry points" "$DR_ENTRY_COUNT" "11"
+# FEAT-031 made this roster DERIVED from RULES.md §15 itself, so the literal
+# ENTRY_POINTS= line this block used to read is now empty by construction.
+# shellcheck source=./lib/rules-registry.sh
+source "$REPO_ROOT/tests/lib/rules-registry.sh"
+DR_ENTRY_LINE=$(_registry_members "$REPO_ROOT/RULES.md")
+DR_ENTRY_COUNT=$(printf '%s\n' "$DR_ENTRY_LINE" | grep -c . || true)
+assert_eq "P12d floor: the §15 registry was actually parsed, not read as empty" \
+  "$([ "$DR_ENTRY_COUNT" -ge 5 ] && echo yes || echo no)" "yes"
 assert_contains "P12d: doctor's ONE pre-existing enrollment is still there" "$DR_ENTRY_LINE" "doctor"
 assert_not_contains "P12d: the unscored note enrolled no entry point of its own" "$DR_ENTRY_LINE" "stop-payload"
 
