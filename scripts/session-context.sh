@@ -5,6 +5,19 @@ set -euo pipefail
 # Stdout is shown to the agent
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+RHP_LIB="$SCRIPT_DIR/lib/read-hook-payload.sh"
+# A load that returns 0 having defined nothing is still no payload, so it takes
+# this hook's own posture rather than exiting 127 into whatever that means here.
+rhp_unavailable() {
+  printf 'session-context: stdin reader unavailable: %s — fail-open, injecting no session context\n' "$1" >&2
+  exit 0
+}
+[ -r "$RHP_LIB" ] || rhp_unavailable "$RHP_LIB is missing or unreadable"
+rhp_rc=0
+# shellcheck source=./lib/read-hook-payload.sh
+source "$RHP_LIB" || rhp_rc=$?
+declare -F read_hook_payload >/dev/null && declare -F hook_payload_timeout_report >/dev/null \
+  || rhp_unavailable "$RHP_LIB defines no reader API after sourcing (source returned $rhp_rc)"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 PROJECT_ROOT="$(resolve_project_root)"
 NAZGUL_DIR="$(resolve_nazgul_dir)"
@@ -24,17 +37,13 @@ if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
-# Session identity resolution (TASK-006/FEAT-026). CLAUDE_SESSION_ID is not
-# set in the SessionStart hook env, so the fallback chain reads the real id
-# out of the hook's own JSON payload on stdin first: payload .session_id ->
-# CLAUDE_SESSION_ID -> persisted nazgul/.session_id -> synthetic epoch-pid
-# (last resort, matched by the digits-hyphen-digits shape below). Read
-# guarded by a TTY check + tolerant cat, mirroring
-# teammate-idle-guard.sh/subagent-stop.sh so this never hangs the hook.
-STDIN_PAYLOAD=""
-if [ ! -t 0 ]; then
-  STDIN_PAYLOAD=$(cat 2>/dev/null || echo "")
+# CLAUDE_SESSION_ID is unset in the SessionStart hook env, so the real id is read
+# from the hook's own JSON payload first; the rest of the chain is the code below.
+read_hook_payload
+if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+  hook_payload_timeout_report "session-context" "fail-open" "falling back to the other session-id sources"
 fi
+STDIN_PAYLOAD="$HOOK_PAYLOAD"
 PAYLOAD_SESSION_ID=""
 if [ -n "$STDIN_PAYLOAD" ]; then
   PAYLOAD_SESSION_ID=$(printf '%s' "$STDIN_PAYLOAD" | jq -r '.session_id // empty' 2>/dev/null || echo "")
@@ -299,7 +308,7 @@ fi
 # Output context
 cat << CONTEXT_EOF
 Nazgul loop state — iteration ${ITERATION}/${MAX_ITER} | Mode: ${MODE} | Objective: ${OBJECTIVE}
-Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked | Total: ${TOTAL_COUNT}
+Tasks: ${DONE_COUNT} done, ${APPROVED_COUNT} approved, ${READY_COUNT} ready, ${IN_PROGRESS_COUNT} in progress, ${IN_REVIEW_COUNT} in review, ${CHANGES_COUNT} changes requested, ${BLOCKED_COUNT} blocked, ${CANCELLED_COUNT} cancelled | Total: ${TOTAL_COUNT}
 Compactions: ${COMPACTION_COUNT}
 CONTEXT_EOF
 

@@ -35,17 +35,28 @@
 # malformed registry is never collapsed into an empty one: "read the layers and
 # found none" and "could not read the layers" are different answers.
 #
+# EVERY `gh` AND REMOTE `git` CALL HERE IS BOUNDED (TASK-048), via
+# `scripts/lib/bounded-net.sh`: a duration bound plus the credential-prompt
+# suppression `</dev/null` cannot provide, because a helper reads /dev/tty rather
+# than stdin. `_su_push_branch` is the reason this is not a stacking-only concern —
+# it is reached from `stack_submit` in BOTH modes and is not gated on
+# `execution.stacking`, so every user reaches it. A bound that fires arrives as an
+# ordinary non-zero exit and is classified by the paths already here, which never
+# read a failure as a clean result.
+#
 # Idempotent source guard; NOT `set -euo pipefail` (sourced into caller shells
 # that own their own shell options).
 
-[ -n "${_NAZGUL_STACK_UTILS_SOURCED:-}" ] && return 0
-_NAZGUL_STACK_UTILS_SOURCED=1
+# NO SENTINEL: the scalar `_NAZGUL_STACK_UTILS_SOURCED` that sat here made one exported variable
+# enough to leave the sole stack.layers[] writer undefined — the 127-exit hazard nazgul-root.sh:40-49 measured.
 
 _SU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./emit-event.sh
 source "$_SU_DIR/emit-event.sh"
 # shellcheck source=./nazgul-root.sh
 source "$_SU_DIR/nazgul-root.sh"
+# shellcheck source=./bounded-net.sh
+source "$_SU_DIR/bounded-net.sh"
 
 # _su_emit <event_type> [key value ...] -> emit_event with NAZGUL_DIR resolved
 # on demand. emit_event silently no-ops when NAZGUL_DIR is unset (emit-event.sh
@@ -113,12 +124,12 @@ stack_available() {
   # an installed extension intermittently read as "missing" and silently
   # un-stacked the run. Reproduced as a 30%-of-runs suite flake, TASK-013.
   local ext_list
-  ext_list=$(gh extension list 2>/dev/null) || ext_list=""
+  ext_list=$(nz_bounded_run_q quick "gh extension list (stack_available)" gh extension list) || ext_list=""
   case "$ext_list" in
     *"github/gh-stack"*) : ;;
     *) printf 'missing\n'; return 2 ;;
   esac
-  if ! gh auth status >/dev/null 2>&1; then
+  if ! nz_bounded_run_q quick "gh auth status (stack_available)" gh auth status >/dev/null; then
     printf 'missing\n'
     return 2
   fi
@@ -285,7 +296,8 @@ _su_write_history() {
 # non-interactive; stderr surfaced on failure.
 _su_push_branch() {
   local project_root="$1" branch="$2" out rc
-  out=$(git -C "$project_root" push -u origin "$branch" 2>&1)
+  out=$(NZ_BOUNDED_ROOT="$project_root" nz_bounded_git long "git push (stack_submit)" \
+    -C "$project_root" push -u origin "$branch" 2>&1)
   rc=$?
   if [ "$rc" -ne 0 ]; then
     printf 'stack-utils: push of %s to origin failed: %s\n' "$branch" "$out" >&2
@@ -298,11 +310,18 @@ _su_push_branch() {
 # `gh pr create` against the recorded base, non-interactive (all flags
 # explicit). Prints the created PR URL.
 _su_plain_pr() {
-  local base="$1" branch="$2" title="$3" body="$4" out rc
-  out=$(gh pr create --base "$base" --head "$branch" --title "$title" --body "$body" 2>&1)
-  rc=$?
+  local base="$1" branch="$2" title="$3" body="$4" out err errfile rc=0
+  # lean-comments: allow-run — same two opposite failures as merge-provider's site.
+  # stdout alone: the last line here becomes the PERSISTED `pr` field, so a stderr line landing
+  # after gh's URL would register a diagnostic as the PR. The failure text keeps BOTH halves —
+  # a fired bound kills gh before it says anything, and the exit code alone is not a reason.
+  errfile=$(mktemp "${TMPDIR:-/tmp}/nazgul-su-prcreate-XXXXXX" 2>/dev/null) || errfile="/dev/null"
+  out=$(nz_bounded_run_split net "gh pr create" "$errfile" \
+    gh pr create --base "$base" --head "$branch" --title "$title" --body "$body") || rc=$?
+  err=$(cat "$errfile" 2>/dev/null) || err=""
+  [ "$errfile" = "/dev/null" ] || rm -f "$errfile"
   if [ "$rc" -ne 0 ]; then
-    printf 'stack-utils: gh pr create failed for %s -> %s: %s\n' "$branch" "$base" "$out" >&2
+    printf 'stack-utils: gh pr create failed for %s -> %s: %s\n' "$branch" "$base" "${err:-$out}" >&2
     return 1
   fi
   printf '%s\n' "$out" | tail -1
@@ -313,13 +332,13 @@ _su_plain_pr() {
 # for review) then reads the branch's PR URL via `gh pr view`. Prints the URL.
 _su_stacked_pr() {
   local branch="$1" out rc pr_url
-  out=$(gh stack submit --auto --open 2>&1)
+  out=$(nz_bounded_run long "gh stack submit" gh stack submit --auto --open 2>&1)
   rc=$?
   if [ "$rc" -ne 0 ]; then
     printf 'stack-utils: gh stack submit failed for %s (exit %s): %s\n' "$branch" "$rc" "$out" >&2
     return 1
   fi
-  pr_url=$(gh pr view "$branch" --json url -q '.url' 2>/dev/null)
+  pr_url=$(nz_bounded_run_q net "gh pr view (stacked PR url)" gh pr view "$branch" --json url -q '.url')
   if [ -z "$pr_url" ] || [ "$pr_url" = "null" ]; then
     printf 'stack-utils: gh stack submit succeeded but no PR URL found for %s\n' "$branch" >&2
     return 1
@@ -517,7 +536,7 @@ _su_clear_needs_sync() {
 # an auth failure, e.g. the undocumented exit 9 reported as "stacked PRs not
 # enabled" — never trust the tool's own text for this).
 _su_auth_status_tag() {
-  if gh auth status >/dev/null 2>&1; then printf 'ok\n'; else printf 'fail\n'; fi
+  if nz_bounded_run_q quick "gh auth status (auth tag)" gh auth status >/dev/null; then printf 'ok\n'; else printf 'fail\n'; fi
 }
 
 # _su_inbox_dir <config> -> the inbox dir sibling to <config> ("nazgul/inbox").
@@ -542,6 +561,29 @@ _su_cap_body() {
 # for embedding raw gh output in an event without exploding the JSONL line.
 _su_oneline() {
   printf '%s' "$1" | tr '\n' ' ' | cut -c "1-${2:-500}"
+}
+
+# lean-comments: allow-run — names the host class this defends and why a plain capture was wrong.
+# _su_gh_pr_view_json <label> <pr> <fields> -> `gh pr view --json <fields>`, bounded, with the
+# command's stdout captured ALONE. A `2>&1` capture folded bounded-net's own degradation line into
+# the payload, so on a host with no GNU `timeout` — stock macOS, the default — every `jq` parse
+# below came back empty on an OTHERWISE SUCCESSFUL call: a MERGED layer read as unmerged and a
+# CHANGES_REQUESTED review became invisible. Same fix shape merge-provider.sh already carries,
+# through the one shared wrapper: the diagnostic stays on the caller's real stderr AND reaches
+# the failure text, because on a fired bound gh is killed before it says anything at all.
+# Prints the payload on success and the HOST's stderr on failure, because every caller quotes this
+# in its own failure diagnostic and uses jq only on the success path.
+_su_gh_pr_view_json() {
+  local label="$1" pr="$2" fields="$3" out err errfile rc=0
+  errfile=$(mktemp "${TMPDIR:-/tmp}/nazgul-su-prview-XXXXXX" 2>/dev/null) || errfile="/dev/null"
+  out=$(nz_bounded_run_split net "$label" "$errfile" gh pr view "$pr" --json "$fields") || rc=$?
+  err=$(cat "$errfile" 2>/dev/null) || err=""
+  [ "$errfile" = "/dev/null" ] || rm -f "$errfile"
+  if [ "$rc" -ne 0 ]; then
+    printf '%s' "${err:-$out}"
+    return "$rc"
+  fi
+  printf '%s' "$out"
 }
 
 # _su_write_inbox_item <inbox_dir> <filename> <title> <priority> <type>
@@ -689,13 +731,13 @@ _su_extract_remote_ahead_pr() {
 # a gh API one, so the caller can fold it into its own per-tick counter update.
 _su_import_remote_layer() {
   local config="$1" pr="$2" out rc pr_json branch base pr_ref
-  out=$(gh stack checkout "$pr" 2>&1); rc=$?
+  out=$(nz_bounded_run long "gh stack checkout" gh stack checkout "$pr" 2>&1); rc=$?
   if [ "$rc" -ne 0 ]; then
     printf 'stack-utils: gh stack checkout %s failed (exit %s): %s\n' "$pr" "$rc" "$out" >&2
     _su_emit "stack_remote_layer_import_failed" pr "$pr" exit_code:n "$rc" detail "$(_su_oneline "$out")"
     return 1
   fi
-  pr_json=$(gh pr view "$pr" --json headRefName,baseRefName,url 2>&1); rc=$?
+  pr_json=$(_su_gh_pr_view_json "gh pr view (remote layer import)" "$pr" "headRefName,baseRefName,url"); rc=$?
   if [ "$rc" -ne 0 ]; then
     printf 'stack-utils: gh pr view %s failed while importing a remote-ahead layer (exit %s): %s\n' "$pr" "$rc" "$(_su_oneline "$pr_json")" >&2
     _su_emit "stack_api_failure" stage "remote_import_pr_view" pr "$pr" auth_status "$(_su_auth_status_tag)"
@@ -767,7 +809,7 @@ stack_reconcile() {
     pr=$(printf '%s' "$layer" | jq -r '.pr // empty' 2>/dev/null) || pr=""
     { [ -n "$feat_id" ] && [ -n "$pr" ] && [ "$pr" != "null" ]; } || continue
 
-    pr_json=$(gh pr view "$pr" --json state,mergedAt 2>&1); rc=$?
+    pr_json=$(_su_gh_pr_view_json "gh pr view (merge sweep)" "$pr" "state,mergedAt"); rc=$?
     if [ "$rc" -ne 0 ]; then
       api_failure=1
       pr_view_failed=1
@@ -794,7 +836,9 @@ stack_reconcile() {
     if [ "$any_merged" -eq 0 ]; then
       printf 'stack-utils: stack_reconcile: retrying the rebase cascade deferred by an earlier tick (execution.stacking.needs_sync)\n' >&2
     fi
-    sync_out=$(gh stack sync 2>&1); sync_rc=$?
+    # `2>&1` is REQUIRED here, not an oversight: ADR-018's classifier reads gh-stack's STDERR text,
+    # because a real divergence aborts with exit 0.
+    sync_out=$(nz_bounded_run long "gh stack sync" gh stack sync 2>&1); sync_rc=$?
     class=$(_su_classify_sync_result "$sync_rc" "$sync_out")
     case "$class" in
       ok|stale_tracking|not_in_stack)
@@ -890,7 +934,7 @@ stack_detect_changes_requested() {
     pr=$(printf '%s' "$layer" | jq -r '.pr // empty' 2>/dev/null) || pr=""
     { [ -n "$pr" ] && [ "$pr" != "null" ]; } || continue
 
-    pr_json=$(gh pr view "$pr" --json number,reviewDecision,reviews 2>&1); rc=$?
+    pr_json=$(_su_gh_pr_view_json "gh pr view (review state)" "$pr" "number,reviewDecision,reviews"); rc=$?
     if [ "$rc" -ne 0 ]; then
       api_failure=1
       printf 'stack-utils: stack_detect_changes_requested: gh pr view %s failed (exit %s): %s — review state for %s is unknown this tick\n' \

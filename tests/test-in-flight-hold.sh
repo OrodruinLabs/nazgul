@@ -1067,8 +1067,12 @@ _p10_check "config purity: it is NOT a config key" \
   "$(grep -ci 'in_flight_hold_cap' "$REPO_ROOT/templates/config.json" || true)" "0"
 _p10_check "config purity: the valve adds no guards key of its own" \
   "$(jq -r '.guards | has("in_flight_hold_cap")' "$REPO_ROOT/templates/config.json")" "false"
-_p10_check "config purity: templates/config.json still reports schema_version 36" \
-  "$(jq -r '.schema_version' "$REPO_ROOT/templates/config.json")" "36"
+# DERIVED, not pinned: FEAT-031 stepped the schema and a literal here went stale on merge.
+IFH_SCHEMA=$(grep -oE 'migrate_[0-9]+_to_[0-9]+' "$REPO_ROOT/scripts/migrate-config.sh" \
+  | sed -E 's/^migrate_[0-9]+_to_//' | sort -n | tail -1)
+case "$IFH_SCHEMA" in ''|*[!0-9]*) IFH_SCHEMA=37 ;; esac
+_p10_check "config purity: templates/config.json still reports the derived current schema_version" \
+  "$(jq -r '.schema_version' "$REPO_ROOT/templates/config.json")" "$IFH_SCHEMA"
 
 assert_eq "P10 accounting: scanned == skipped + checked" "$P10_SCANNED" "$((P10_SKIPPED + P10_CHECKED))"
 assert_eq "P10 floor: the valve's pin set is not empty" \
@@ -1215,8 +1219,8 @@ _p12_check "config purity: NAZGUL_STOP_PAYLOAD_CAPTURE is not a config key" \
   "$(grep -ci 'stop_payload_capture' "$REPO_ROOT/templates/config.json" || true)" "0"
 _p12_check "config purity: and no migration introduces one" \
   "$(grep -ci 'stop_payload_capture' "$REPO_ROOT/scripts/migrate-config.sh" || true)" "0"
-_p12_check "config purity: templates/config.json still reports schema_version 36" \
-  "$(jq -r '.schema_version' "$REPO_ROOT/templates/config.json")" "36"
+_p12_check "config purity: templates/config.json still reports the derived current schema_version" \
+  "$(jq -r '.schema_version' "$REPO_ROOT/templates/config.json")" "$IFH_SCHEMA"
 
 assert_eq "P12b accounting: scanned == skipped + checked" "$P12_SCANNED" "$((P12_SKIPPED + P12_CHECKED))"
 assert_eq "P12b floor: the capture's pin set is not empty" \
@@ -2514,8 +2518,11 @@ _p14_check "P14n: the Q1 valve's unkeyable corner is recorded as a known constra
   "$([ "$(grep -c 'declines a hold the previous release would have taken' "$P14_CHANGELOG" || true)" -ge 1 ] && echo recorded || echo silent)" "recorded"
 _p14_check "P14n: the supporting claim is scoped to the fixtures, not asserted of the schema" \
   "$(grep -cF 'captured payload in `tests/fixtures/stop-payload/` exhibits a live subagent without an `id`' "$P14_CHANGELOG" || true)" "1"
-_p14_check "P14n: ... and the release adds no new version heading" \
-  "$(grep -m1 '^## \[' "$P14_CHANGELOG")" "## [2.34.0] - 2026-08-22"
+# This asserted #245's heading was the NEWEST, which stops being true the moment another release
+# lands above it (FEAT-031 shipped 2.35.0). What it pins is that TASK-029 added no heading of its
+# own — i.e. #245's entry is still present, exactly once.
+_p14_check "P14n: ... and the release added no version heading of its own" \
+  "$(grep -cF '## [2.34.0] - 2026-08-22' "$P14_CHANGELOG" || true)" "1"
 # THE control that makes the claim evidence rather than assertion: read the fixtures and check it.
 # If a future capture lands with an id-less live subagent, the CHANGELOG sentence becomes false here.
 _p14l_idless() {
@@ -2586,7 +2593,10 @@ P7_ASSIGN='^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="\$REPO_ROOT/scripts/stop-hook\.s
 # match for an unrelated reason, a count plus the file set cannot.
 P7_DIRECT_EXPECT=10
 P7_DIRECT_FILES_EXPECT="test-observability-hooks.sh test-stop-hook.sh "
-P7_CHECKED_EXPECT=44
+# 44 -> 61 on the FEAT-031 merge: that objective added stop-hook execution sites under tests/.
+# Deliberately still a PIN, not a derivation — its whole job is to catch a re-narrowed pattern,
+# which a value derived from the same pattern could never do.
+P7_CHECKED_EXPECT=61
 P7_SCANNED=0
 P7_SKIPPED=0
 P7_CHECKED=0

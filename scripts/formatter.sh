@@ -62,10 +62,25 @@ fi
 
 # --- Parse file path from stdin ---
 
-INPUT=""
-if [[ ! -t 0 ]]; then
-    INPUT=$(cat)
+RHP_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/read-hook-payload.sh"
+# A load that returns 0 having defined nothing is still no payload, so it takes
+# this hook's own posture rather than exiting 127 into whatever that means here.
+rhp_unavailable() {
+  printf 'formatter: stdin reader unavailable: %s — fail-open, skipping the format pass\n' "$1" >&2
+  exit 0
+}
+[ -r "$RHP_LIB" ] || rhp_unavailable "$RHP_LIB is missing or unreadable"
+rhp_rc=0
+# shellcheck source=./lib/read-hook-payload.sh
+source "$RHP_LIB" || rhp_rc=$?
+declare -F read_hook_payload >/dev/null && declare -F hook_payload_timeout_report >/dev/null \
+  || rhp_unavailable "$RHP_LIB defines no reader API after sourcing (source returned $rhp_rc)"
+read_hook_payload
+if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+    hook_payload_timeout_report "formatter" "fail-open" "skipping the format pass"
+    output_result "stdin_timeout" "Bounded stdin read timed out"
 fi
+INPUT="$HOOK_PAYLOAD"
 
 debug_log "Received input: ${INPUT:0:300}..."
 

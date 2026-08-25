@@ -14,7 +14,7 @@ CONFIG="$REPO_ROOT/templates/config.json"
 assert_file_exists "config.json exists" "$CONFIG"
 
 # Top-level fields
-assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "36"
+assert_json_field "has .schema_version" "$CONFIG" ".schema_version" "37"
 assert_eq "v33 guards.team_teardown is absent (dead consumer removed)" \
   "$(jq -r '.guards | has("team_teardown")' "$CONFIG")" "false"
 assert_json_field "v31 guards.team_sweep is true" "$CONFIG" ".guards.team_sweep" "true"
@@ -22,6 +22,9 @@ assert_json_field "v31 guards.team_sweep_min_age_hours is 24" "$CONFIG" ".guards
 assert_json_field "v32 guards.subagent_resume is true" "$CONFIG" ".guards.subagent_resume" "true"
 assert_json_field "v34 guards.in_flight_hold is true" "$CONFIG" ".guards.in_flight_hold" "true"
 assert_json_field "v34 guards.in_flight_stale_minutes is 30" "$CONFIG" ".guards.in_flight_stale_minutes" "30"
+assert_eq "v37 project.test_roots default" "$(jq -c '.project.test_roots' "$CONFIG")" '["tests"]'
+assert_json_field "v37 project.test_filter_template ships DECLARED-but-null, so red-run.sh derives the flag from the runner discovery finds rather than from a template guess (ADR-024 D3)" \
+  "$CONFIG" ".project.test_filter_template" "null"
 assert_json_field "review_gate.simplify_before_review default false" "$CONFIG" ".review_gate.simplify_before_review" "false"
 assert_json_field "review_gate.enforce_granularity default block" "$CONFIG" ".review_gate.enforce_granularity" "block"
 assert_json_field "has .default_mode" "$CONFIG" ".default_mode" "null"

@@ -14,25 +14,51 @@ echo "=== $TEST_NAME ==="
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-coverage-honesty-XXXXXX")
 trap 'rm -rf "$SCRATCH"' EXIT
 
-# Every entry point named by RULES.md §15; the tally at the bottom fails if one
-# was never driven through _entry_covered.
-ENTRY_POINTS="run-tests lean-comments test-shellcheck doctor comment-verifier heartbeat-triage self-audit audit-agent-state-paths test-dispatch-brief-contract test-messaging-posture"
+# lean-comments: allow-run — the tautology this derivation replaces, kept at the derivation.
+# The denominator is DERIVED from RULES.md §15's own registry bullet by
+# tests/lib/rules-registry.sh, never authored here: an authored copy counts the list
+# it validates, so it can never disagree with itself, and a member added to the
+# registry with no driver would read as covered.
+RULES_DOC="$REPO_ROOT/RULES.md"
+# shellcheck disable=SC2034  # read by tests/lib/rules-registry.sh, not within this file
+REGISTRY_DRIVER_REL="tests/$(basename "$0")"
+source "$SCRIPT_DIR/lib/rules-registry.sh"
+
+REGISTRY_MEMBERS=$(_registry_members "$RULES_DOC")
+REGISTRY_N=$(printf '%s\n' "$REGISTRY_MEMBERS" | grep -c . || true)
+ENTRY_POINTS=""
+while IFS= read -r _rp; do
+  [ -n "$_rp" ] || continue
+  ENTRY_POINTS="${ENTRY_POINTS}$(_registry_token "$_rp" "$REPO_ROOT")
+"
+done <<< "$REGISTRY_MEMBERS"
 COVERED=""
+
+REGISTRY_FLOOR=5
+if [ "$REGISTRY_N" -ge "$REGISTRY_FLOOR" ]; then
+  _pass "RULES.md §15: the registry bullet was actually parsed ($REGISTRY_N members >= $REGISTRY_FLOOR)"
+else
+  _fail "RULES.md §15: the registry bullet was actually parsed" \
+    "derived $REGISTRY_N member(s) from $RULES_DOC — a derivation that finds nothing is 'never looked', not an empty registry"
+fi
+assert_eq "RULES.md §15: the registry's stated size matches the members derived from it" \
+  "$REGISTRY_N" "$(_registry_declared_count "$RULES_DOC")"
 
 _entry_covered() {
   COVERED="$COVERED $1"
 }
 
-# _grammar_check <label> <entry-point> <closed-reason-list> <line> — grammar,
-# N == M + K, and the closed reason list in order, summing to M.
+# _grammar_check <label> <entry-point> <closed-reason-list> <line> [<k-noun> <f-noun>] —
+# grammar, N == M + K, reasons in order summing to M; nouns default to checked/findings.
 _grammar_check() {
   local label="$1" entry="$2" reasons="$3" line="$4"
+  local knoun="${5:-checked}" fnoun="${6:-findings}"
   local reason_re="" r first=1 n m k f sum
   for r in $reasons; do
     if [ "$first" = "1" ]; then reason_re="$r=([0-9]+)"; first=0
     else reason_re="$reason_re, $r=([0-9]+)"; fi
   done
-  local grammar="^$entry: ([0-9]+) scanned, ([0-9]+) skipped \($reason_re\), ([0-9]+) checked, ([0-9]+) findings$"
+  local grammar="^$entry: ([0-9]+) scanned, ([0-9]+) skipped \($reason_re\), ([0-9]+) $knoun, ([0-9]+) $fnoun$"
   if ! printf '%s' "$line" | grep -qE "$grammar"; then
     _fail "$label: coverage line conforms to the RULES.md §15 grammar" "got: '$line'"
     return 1
@@ -41,8 +67,8 @@ _grammar_check() {
 
   n=$(printf '%s' "$line" | sed -E 's/^[^:]*: ([0-9]+) scanned.*/\1/')
   m=$(printf '%s' "$line" | sed -E 's/^.* ([0-9]+) skipped \(.*/\1/')
-  k=$(printf '%s' "$line" | sed -E 's/^.*\), ([0-9]+) checked.*/\1/')
-  f=$(printf '%s' "$line" | sed -E 's/^.*, ([0-9]+) findings$/\1/')
+  k=$(printf '%s' "$line" | sed -E "s/^.*\), ([0-9]+) $knoun.*/\1/")
+  f=$(printf '%s' "$line" | sed -E "s/^.*, ([0-9]+) $fnoun\$/\1/")
   assert_eq "$label: N == M + K" "$n" "$((m + k))"
 
   sum=0
@@ -267,6 +293,24 @@ else
   _fail "test-dispatch-brief-contract: a full run actually checks something" "checked: $DB_CHECKED"
 fi
 
+# close-objective, forced all-skip: one already-DONE manifest, listed in its objective's own
+# roster so the scan reaches it, in a tree with no remote — counted, and no host is asked.
+CO_REASONS="already-terminal not-closable-status unreadable not-this-objective pr-not-this-objective not-merged merge-unverifiable evidence-write-failed transition-refused"
+mkdir -p "$SCRATCH/co/nazgul/tasks" "$SCRATCH/co/nazgul/logs"
+printf '{"schema_version":1,"feat_id":"FEAT-001"}\n' > "$SCRATCH/co/nazgul/config.json"
+printf -- '---\nfeat_id: FEAT-001\n---\n# Plan\n\n## Tasks\n\n| TASK-001 | already closed | DONE |\n' \
+  > "$SCRATCH/co/nazgul/plan.md"
+printf -- '---\nstatus: DONE\n---\n# TASK-001: already closed\n' > "$SCRATCH/co/nazgul/tasks/TASK-001.md"
+CO_OUT=$(bash "$REPO_ROOT/scripts/close-objective.sh" --pr 1 --project-root "$SCRATCH/co" 2>"$SCRATCH/co.err")
+CO_RC=$?
+_grammar_check "close-objective (all-skip)" "close-objective" "$CO_REASONS" "$(_last_line "$CO_OUT")" \
+  closed refused && _entry_covered close-objective
+assert_contains "close-objective: forced all-skip emits the nothing-checked signal" \
+  "$(cat "$SCRATCH/co.err")" "close-objective: NOTHING CHECKED — all 1 candidate(s) skipped"
+assert_exit_code "close-objective: blocking — nothing closed is a failure" "$CO_RC" 2
+assert_contains "close-objective: the vacuous run reaches the bus" \
+  "$(cat "$SCRATCH/co/nazgul/logs/events.jsonl" 2>/dev/null)" '"entry_point":"close-objective"'
+
 # test-messaging-posture, forced empty surface root: no shipped surface exists to
 # enumerate, so the K>0 floor must FAIL rather than report a clean surface.
 mkdir -p "$SCRATCH/empty"
@@ -295,6 +339,201 @@ else
   _fail "test-messaging-posture: a full run actually checks something" "checked: $MP_CHECKED"
 fi
 
+# test-doc-contract-fields, forced empty doc root: every document is unreadable, so every
+# claim binding is scanned and skipped rather than never enumerated.
+mkdir -p "$SCRATCH/nodocs"
+DC_OUT=$(NAZGUL_DOC_CONTRACT_DOC_ROOT="$SCRATCH/nodocs" \
+  bash "$REPO_ROOT/tests/test-doc-contract-fields.sh" 2>"$SCRATCH/dc.err")
+DC_RC=$?
+_grammar_check "test-doc-contract-fields (all-skip)" "test-doc-contract-fields" \
+  "unreadable no-claim" "$(_last_line "$DC_OUT")" && _entry_covered test-doc-contract-fields
+# The candidate count is read back off the same run's own coverage line: pinning the number
+# here would make a document added to the derived population read as a defect.
+DC_SCANNED=$(_last_line "$DC_OUT" | sed -E 's/^[^:]*: ([0-9]+) scanned.*/\1/')
+case "${DC_SCANNED:-}" in ''|*[!0-9]*) DC_SCANNED_N=0 ;; *) DC_SCANNED_N="$DC_SCANNED" ;; esac
+assert_contains "test-doc-contract-fields: forced all-skip emits the nothing-checked signal" \
+  "$(cat "$SCRATCH/dc.err")" "test-doc-contract-fields: NOTHING CHECKED — all $DC_SCANNED_N candidates skipped"
+if [ "$DC_SCANNED_N" -ge 12 ]; then
+  _pass "test-doc-contract-fields: the all-skip run still enumerated its candidates ($DC_SCANNED_N >= 12)"
+else
+  _fail "test-doc-contract-fields: the all-skip run still enumerated its candidates" \
+    "scanned $DC_SCANNED_N — an all-skip run that enumerates nothing proves nothing"
+fi
+assert_exit_code "test-doc-contract-fields: blocking — nothing checked is a failure" "$DC_RC" 1
+# Pinned, not derived: an inherited doc root would aim the "full run" at whatever tree
+# the caller named, and a tree holding no documents passes while checking nothing.
+DC_FULL=$(NAZGUL_DOC_CONTRACT_DOC_ROOT="$REPO_ROOT" \
+  bash "$REPO_ROOT/tests/test-doc-contract-fields.sh" 2>/dev/null)
+_grammar_check "test-doc-contract-fields (full run)" "test-doc-contract-fields" \
+  "unreadable no-claim" "$(_last_line "$DC_FULL")"
+DC_CHECKED=$(_last_line "$DC_FULL" | sed -E 's/^.*\), ([0-9]+) checked.*/\1/')
+case "${DC_CHECKED:-}" in ''|*[!0-9]*) DC_CHECKED_N=0 ;; *) DC_CHECKED_N="$DC_CHECKED" ;; esac
+if [ "$DC_CHECKED_N" -ge 1 ]; then
+  _pass "test-doc-contract-fields: a full run actually checks something"
+else
+  _fail "test-doc-contract-fields: a full run actually checks something" "checked: $DC_CHECKED"
+fi
+
+# red-run-evidence (scripts/lib/task-transition-guard.sh), all-skip on BOTH its scans; the
+# gate's seven dispositions decide allow/deny, so a vacuous scan reports, never re-decides.
+mkdir -p "$SCRATCH/rr/nazgul" "$SCRATCH/rr/tests"
+source "$REPO_ROOT/scripts/lib/task-transition-guard.sh"
+printf '{"schema_version":1,"project":{"test_roots":["gone-a","gone-b"]}}\n' > "$SCRATCH/rr/nazgul/config.json"
+NAZGUL_DIR="$SCRATCH/rr/nazgul" \
+  _ttg_red_run_in_scope "## Metadata
+- **ID**: TASK-001
+- **Files modified**: [\"docs/PRD.md\"]
+" "$SCRATCH/rr" "$SCRATCH/rr/nazgul" >/dev/null 2>"$SCRATCH/rr-roots.err"
+RR_ROOTS_LINE=$(grep -E '^red-run-evidence/tests-root: [0-9]+ scanned' "$SCRATCH/rr-roots.err" | tail -1)
+_grammar_check "red-run-evidence/tests-root (all-skip)" "red-run-evidence/tests-root" \
+  "unsafe unresolvable" "$RR_ROOTS_LINE" && RR_ROOTS_OK=1
+assert_contains "red-run-evidence/tests-root: forced all-skip emits the nothing-checked signal" \
+  "$(cat "$SCRATCH/rr-roots.err")" "red-run-evidence/tests-root: NOTHING CHECKED — all 2 candidate(s) skipped"
+assert_contains "red-run-evidence/tests-root: the §15 line ends at findings; context is its own line" \
+  "$(cat "$SCRATCH/rr-roots.err")" "red-run-evidence/tests-root: context=red-run scope predicate;"
+
+# The per-file scan, forced all-skip: one changed test file discharged by an enumerated
+# N/A, so the population is enumerated and every member lands in a named skip bucket.
+git -C "$SCRATCH/rr" init -q 2>/dev/null
+git -C "$SCRATCH/rr" config user.email t@t.t; git -C "$SCRATCH/rr" config user.name t
+printf '{"schema_version":1,"project":{"test_roots":["tests"]}}\n' > "$SCRATCH/rr/nazgul/config.json"
+printf '#!/usr/bin/env bash\necho x\n' > "$SCRATCH/rr/tests/test-x.sh"
+git -C "$SCRATCH/rr" add -A >/dev/null 2>&1
+git -C "$SCRATCH/rr" commit -q -m "seed" >/dev/null 2>&1
+RR_SHA=$(git -C "$SCRATCH/rr" rev-parse HEAD)
+NAZGUL_DIR="$SCRATCH/rr/nazgul" ttg_verify_red_run_evidence "## Metadata
+- **ID**: TASK-001
+- **Files modified**: [\"tests/test-x.sh\"]
+
+## Commits
+- $RR_SHA
+
+## Red-Run Evidence
+- red-run: N/A — revert
+" "$SCRATCH/rr" TASK-001 2>"$SCRATCH/rr-files.err"
+RR_FILES_LINE=$(grep -E '^red-run-evidence/files: [0-9]+ scanned' "$SCRATCH/rr-files.err" | tail -1)
+_grammar_check "red-run-evidence/files (all-skip)" "red-run-evidence/files" \
+  "support enumerated-na" "$RR_FILES_LINE" && RR_FILES_OK=1
+assert_contains "red-run-evidence/files: forced all-skip emits the nothing-checked signal" \
+  "$(cat "$SCRATCH/rr-files.err")" "red-run-evidence/files: NOTHING CHECKED — all 1 candidate(s) skipped"
+# One entry point, two scans: it is covered only when BOTH conform, never on the easier one.
+[ "${RR_ROOTS_OK:-0}${RR_FILES_OK:-0}" = "11" ] && _entry_covered red-run-evidence
+
+# And a run with a real candidate must actually check something: an entry point that only
+# ever conforms while vacuous is not covered by the contract.
+printf '#!/usr/bin/env bash\necho y\n' > "$SCRATCH/rr/tests/test-y.sh"
+git -C "$SCRATCH/rr" add -A >/dev/null 2>&1
+git -C "$SCRATCH/rr" commit -q -m "second" >/dev/null 2>&1
+RR_SHA2=$(git -C "$SCRATCH/rr" rev-parse HEAD)
+NAZGUL_DIR="$SCRATCH/rr/nazgul" ttg_verify_red_run_evidence "## Metadata
+- **ID**: TASK-001
+- **Files modified**: [\"tests/test-y.sh\"]
+
+## Commits
+- $RR_SHA2
+
+## Red-Run Evidence
+- red-run: tests/test-y.sh :: case \"x\"
+  - pre-change-ref: $RR_SHA
+  - result: FAILED (exit 1)
+" "$SCRATCH/rr" TASK-001 2>"$SCRATCH/rr-full.err"
+RR_FULL_LINE=$(grep -E '^red-run-evidence/files: [0-9]+ scanned' "$SCRATCH/rr-full.err" | tail -1)
+_grammar_check "red-run-evidence/files (mixed)" "red-run-evidence/files" \
+  "support enumerated-na" "$RR_FULL_LINE"
+assert_contains "red-run-evidence: a run with a real candidate actually checks something" \
+  "$RR_FULL_LINE" "1 checked"
+assert_not_contains "red-run-evidence: one checked candidate is not a vacuous run" \
+  "$(cat "$SCRATCH/rr-full.err")" "NOTHING CHECKED"
+
+# The derivation, dogfooded against scratch registries: the shipped RULES.md
+# yields exactly the driven set, so the failing directions never run against it.
+REG_MUT="$SCRATCH/rules-mutant.md"
+{
+  printf -- '- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Twelve entry points are bound\n'
+  printf -- '  by the contract above: `tests/run-tests.sh`, `scripts/lean-comments-guard.sh --check`,\n'
+  printf -- '  `tests/test-phantom-entry.sh`, and `tests/test-coverage-honesty.sh` drives every one of them.\n'
+  printf -- '\n'
+} > "$REG_MUT"
+MUT_MEMBERS=$(_registry_members "$REG_MUT")
+assert_contains "registry dogfood: a member added to the bullet is derived" \
+  "$MUT_MEMBERS" "tests/test-phantom-entry.sh"
+assert_not_contains "registry dogfood: the driver named in its own bullet is not a member" \
+  "$MUT_MEMBERS" "tests/test-coverage-honesty.sh"
+MUT_TOKENS=$(while IFS= read -r _rp; do [ -n "$_rp" ] || continue; _registry_token "$_rp" "$REPO_ROOT"; done <<< "$MUT_MEMBERS")
+assert_contains "registry dogfood: a registered member nothing drives is reported missing" \
+  "$(_registry_missing "$MUT_TOKENS" "$COVERED")" "test-phantom-entry"
+assert_eq "registry dogfood: the stated size is read from the bullet, not from the list" \
+  "$(_registry_declared_count "$REG_MUT")" "12"
+assert_eq "registry dogfood: a bullet stating 12 while listing 3 is a contradiction the test can see" \
+  "$(printf '%s\n' "$MUT_MEMBERS" | grep -c .)" "3"
+
+REG_GONE="$SCRATCH/rules-no-registry.md"
+printf '## 15. Git-Level Guards\n\nno registry bullet here at all\n' > "$REG_GONE"
+assert_eq "registry dogfood: a doc with no registry bullet derives nothing (the floor's input)" \
+  "$(_registry_members "$REG_GONE" | grep -c . || true)" "0"
+
+# review-file-class prints for BOTH DONE-gate passes, so — like red-run-evidence's two scans — the
+# entry is covered only when BOTH tokens conform. Forced all-skip: a dir of orchestrator artifacts.
+RFC_EVIDENCE_OK=0; RFC_PROVENANCE_OK=0
+mkdir -p "$SCRATCH/re/nazgul/reviews/TASK-001"
+source "$REPO_ROOT/scripts/lib/review-evidence.sh"
+printf '{"schema_version":1,"agents":{"reviewers":["code-reviewer"]},"review_gate":{"granularity":"task"}}\n' \
+  > "$SCRATCH/re/nazgul/config.json"
+printf '# BOARD-2-OUTCOME\n' > "$SCRATCH/re/nazgul/reviews/TASK-001/BOARD-2-OUTCOME.md"
+printf '# adversarial\n' > "$SCRATCH/re/nazgul/reviews/TASK-001/adversarial-SEC-1.md"
+RE_OUT=$(validate_review_evidence "$SCRATCH/re/nazgul" TASK-001 2>"$SCRATCH/re.err") || true
+RE_LINE=$(grep -E '^review-evidence/verdict-files: [0-9]+ scanned' "$SCRATCH/re.err" | tail -1)
+_grammar_check "review-evidence/verdict-files (all-skip)" "review-evidence/verdict-files" \
+  "artifact non-seat superseded" "$RE_LINE" && RFC_EVIDENCE_OK=1
+assert_contains "review-evidence: forced all-skip emits the nothing-checked signal" \
+  "$(cat "$SCRATCH/re.err")" "review-evidence/verdict-files: NOTHING CHECKED — all 2 candidate(s) skipped"
+# This entry point's floor BLOCKS rather than only reporting: an all-skipped scan is the exact
+# shape of a classifier that stopped matching, which must never read as a clean review directory.
+assert_contains "review-evidence: the blocking floor reaches the caller, not just stderr" \
+  "$RE_OUT" "NOTHING_CHECKED"
+
+# And a run with a real reviewer file must actually check something.
+printf -- '---\nverdict: APPROVE\n---\nbody\n' > "$SCRATCH/re/nazgul/reviews/TASK-001/code-reviewer.md"
+validate_review_evidence "$SCRATCH/re/nazgul" TASK-001 >/dev/null 2>"$SCRATCH/re-full.err" || true
+RE_FULL_LINE=$(grep -E '^review-evidence/verdict-files: [0-9]+ scanned' "$SCRATCH/re-full.err" | tail -1)
+_grammar_check "review-evidence/verdict-files (mixed)" "review-evidence/verdict-files" \
+  "artifact non-seat superseded" "$RE_FULL_LINE"
+assert_contains "review-evidence: a run with a real reviewer file checks something" \
+  "$RE_FULL_LINE" "1 checked"
+
+# review-provenance (scripts/lib/review-provenance.sh), forced all-skip over the SAME directory:
+# it shares the fourteenth entry point's classifier, so the two partitions must be identical.
+rm -f "$SCRATCH/re/nazgul/reviews/TASK-001/code-reviewer.md"
+printf 'diff\n' > "$SCRATCH/re/nazgul/reviews/TASK-001/diff.patch"
+write_dispatch_manifest "$SCRATCH/re/nazgul" TASK-001 "$SCRATCH/re/nazgul/reviews/TASK-001/diff.patch" \
+  FEAT-000 1 -- code-reviewer >/dev/null
+RP_OUT=$(validate_review_provenance "$SCRATCH/re/nazgul" TASK-001 2>"$SCRATCH/rp.err") || true
+RP_LINE=$(grep -E '^review-provenance/subject-files: [0-9]+ scanned' "$SCRATCH/rp.err" | tail -1)
+_grammar_check "review-provenance/subject-files (all-skip)" "review-provenance/subject-files" \
+  "artifact non-seat superseded" "$RP_LINE" && RFC_PROVENANCE_OK=1
+assert_contains "review-provenance: forced all-skip emits the nothing-checked signal" \
+  "$(cat "$SCRATCH/rp.err")" "NOTHING CHECKED — all 2 candidate(s) skipped after a board was dispatched"
+# Conditional floor: a board WAS dispatched here, so nothing-read blocks. Without the manifest the
+# same directory is the ordinary pre-review state — "looked and found none", not "never looked".
+assert_contains "review-provenance: the floor reaches the caller when a board was dispatched" \
+  "$RP_OUT" "NOTHING_CHECKED"
+rm -f "$SCRATCH/re/nazgul/reviews/TASK-001/.dispatch.json"
+RP_PRE=$(validate_review_provenance "$SCRATCH/re/nazgul" TASK-001 2>"$SCRATCH/rp-pre.err") || true
+assert_eq "review-provenance: the same all-skip scan pre-review says nothing to the caller" "$RP_PRE" ""
+assert_contains "review-provenance: and still names the state on stderr" \
+  "$(cat "$SCRATCH/rp-pre.err")" "nothing to check — all 2 candidate(s) skipped, no dispatch manifest (pre-review)"
+
+# One emitter, two tokens: half a conforming entry point is not a covered one.
+if [ "$RFC_EVIDENCE_OK$RFC_PROVENANCE_OK" = "11" ]; then
+  _entry_covered review-file-class
+  _pass "review-file-class: BOTH tokens conform, so the shared emitter counts as covered"
+else
+  _fail "review-file-class: BOTH tokens conform" \
+    "verdict-files=$RFC_EVIDENCE_OK subject-files=$RFC_PROVENANCE_OK — one conforming token does not cover an emitter that prints two"
+fi
+assert_eq "review-file-class: the two passes partition the same directory identically" \
+  "$(printf '%s' "$RE_LINE" | sed 's/^[^:]*: //')" "$(printf '%s' "$RP_LINE" | sed 's/^[^:]*: //')"
+
 # Enumeration completeness — the point of the whole file: an entry point with no
 # emitter must FAIL here, not silently drop out of the list.
 for entry in $ENTRY_POINTS; do
@@ -305,8 +544,81 @@ for entry in $ENTRY_POINTS; do
   esac
 done
 
+# The other direction: a driver for something §15 does not list is an unregistered
+# entry point, not extra credit — the registry and the drivers must be the same set.
+for entry in $COVERED; do
+  case " $(printf '%s' "$ENTRY_POINTS" | tr '\n' ' ') " in
+    *" $entry "*) ;;
+    *) _fail "driver '$entry' names an entry point RULES.md §15 registers" \
+         "this file drives it, the registry does not list it — enroll it there or stop counting it here" ;;
+  esac
+done
+
+# The CONVERSE direction (RULES §15): every shipped §15-grammar emitter is a registered entry
+# point. The loops above ask only "is every member driven?". Population DERIVED, not authored.
+EMIT_SCANNED=0; EMIT_SKIP_TESTS=0; EMIT_SKIP_UNREADABLE=0; EMIT_CHECKED=0; EMIT_FINDINGS=0
+EMIT_UNREGISTERED=""
+REGISTRY_MEMBERS_ALL="$REGISTRY_MEMBERS
+$REGISTRY_DRIVER_REL"
+while IFS="$(printf '\t')" read -r _state _rel; do
+  [ -n "${_rel:-}" ] || continue
+  EMIT_SCANNED=$((EMIT_SCANNED + 1))
+  if [ "$_state" = "unreadable" ]; then
+    EMIT_SKIP_UNREADABLE=$((EMIT_SKIP_UNREADABLE + 1)); continue
+  fi
+  case "$_rel" in
+    tests/*) EMIT_SKIP_TESTS=$((EMIT_SKIP_TESTS + 1)); continue ;;
+  esac
+  EMIT_CHECKED=$((EMIT_CHECKED + 1))
+  if ! printf '%s\n' "$REGISTRY_MEMBERS_ALL" | grep -qxF "$_rel"; then
+    EMIT_FINDINGS=$((EMIT_FINDINGS + 1)); EMIT_UNREGISTERED="$EMIT_UNREGISTERED$_rel "
+  fi
+done <<< "$(_registry_emitter_scan "$REPO_ROOT")"
+
+_grammar_check "registry converse (emitter -> member)" "registry-converse" \
+  "tests-tree unreadable" \
+  "registry-converse: $EMIT_SCANNED scanned, $((EMIT_SKIP_TESTS + EMIT_SKIP_UNREADABLE)) skipped (tests-tree=$EMIT_SKIP_TESTS, unreadable=$EMIT_SKIP_UNREADABLE), $EMIT_CHECKED checked, $EMIT_FINDINGS findings"
+if [ "$EMIT_CHECKED" -ge 5 ]; then
+  _pass "registry converse: the emitter derivation actually looked ($EMIT_CHECKED checked >= 5)"
+else
+  _fail "registry converse: the emitter derivation actually looked" \
+    "checked $EMIT_CHECKED under $REPO_ROOT — a derivation that finds nothing is 'never looked', not a clean tree"
+fi
+assert_eq "registry converse: every scripts/** and agents/** grammar emitter is a §15 member" \
+  "${EMIT_UNREGISTERED% }" ""
+
+# Mutation, the direction TASK-016/017's B1/B2 do not cover: an emitter added with no
+# registration must go RED. A registered member with no driver is already covered above.
+EMIT_MUT="$SCRATCH/emitter-mutant"
+mkdir -p "$EMIT_MUT/scripts" "$EMIT_MUT/tests"
+printf "printf 'rogue: %%d scanned, %%d skipped (why=%%d), %%d checked, %%d findings\\\\n'\n" \
+  > "$EMIT_MUT/scripts/rogue-check.sh"
+printf "printf 'in-tests: %%d scanned, %%d skipped (why=%%d), %%d checked, %%d findings\\\\n'\n" \
+  > "$EMIT_MUT/tests/test-rogue.sh"
+MUT_SCAN=$(_registry_emitter_scan "$EMIT_MUT")
+assert_contains "[mutation] an unregistered scripts/ emitter is derived from the tree" \
+  "$MUT_SCAN" "scripts/rogue-check.sh"
+MUT_UNREG=""
+while IFS="$(printf '\t')" read -r _state _rel; do
+  [ "${_state:-}" = "emitter" ] || continue
+  case "$_rel" in tests/*) continue ;; esac
+  printf '%s\n' "$REGISTRY_MEMBERS_ALL" | grep -qxF "$_rel" || MUT_UNREG="$MUT_UNREG$_rel "
+done <<< "$MUT_SCAN"
+assert_eq "[mutation] and the same predicate that passes on the shipped tree reports it" \
+  "${MUT_UNREG% }" "scripts/rogue-check.sh"
+assert_contains "[mutation] the stated tests/** residual is real, not assumed: it is skipped, not found" \
+  "$MUT_SCAN" "tests/test-rogue.sh"
+
+# A test that only asserts on a literal coverage line is not an emitter — otherwise the
+# scan would name every file in this directory and the finding would mean nothing.
+NOT_EMIT="$SCRATCH/not-emitter"
+mkdir -p "$NOT_EMIT/scripts"
+printf 'assert_contains "x" "$OUT" "doctor: 3 scanned, 0 skipped (a=0), 3 checked, 0 findings"\n' \
+  > "$NOT_EMIT/scripts/asserts-only.sh"
+assert_eq "registry converse: a literal assertion is not mistaken for a producer" \
+  "$(_registry_emitter_scan "$NOT_EMIT" | grep -c . || true)" "0"
+
 COVERED_COUNT=$(printf '%s' "$COVERED" | wc -w | tr -d ' ')
-EXPECTED_COUNT=$(printf '%s' "$ENTRY_POINTS" | wc -w | tr -d ' ')
-assert_eq "every enumerated entry point was driven" "$COVERED_COUNT" "$EXPECTED_COUNT"
+assert_eq "every entry point RULES.md §15 registers was driven" "$COVERED_COUNT" "$REGISTRY_N"
 
 report_results

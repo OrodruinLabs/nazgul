@@ -79,28 +79,46 @@ Total: 5 | Done: 1 | Active: 2 | Blocked: 1 | Planned: 1
 
 Take a task out of the run without implementing or reviewing it.
 
-`SKIPPED` is deliberately NOT written: it is absent from `VALID_STATUSES`
-(`scripts/lib/structured-state.sh`), so a manifest carrying it resolves to `INVALID`, counts into no
-tracked bucket, and is reported as an off-vocabulary status on every iteration. A skipped task is
-recorded as `BLOCKED` with an explicit operator reason instead.
+A skipped task is recorded as `CANCELLED`: the operator has declared it unshippable. `CANCELLED` is
+terminal like `DONE` — it has no out-edge — and it is explicitly NOT `BLOCKED`, which means "needs
+human help, will resume". It satisfies the dependency gate, so downstream tasks promote on their own
+and no `Depends on` line is ever edited (ADR-022).
 
 1. Validate the task file exists: `nazgul/tasks/TASK-NNN.md`
 2. If not found, error: "Task TASK-NNN not found."
-3. Read the task's current status. If it is already `DONE` or `BLOCKED`, report that and stop.
-4. Record the skip:
+3. Read the task's current status. If it is already `DONE` or `CANCELLED`, report that it is terminal
+   and stop.
+4. **Route by blocker class, BEFORE any manifest edit.** If the status is `BLOCKED`, read
+   `- **Blocked kind**:` from the manifest.
+   - Exactly `reconciliation` — do NOT skip, and write NOTHING to the manifest: no
+     `- **Cancelled reason**:`, no other field. `ttg_validate_transition` refuses
+     `BLOCKED -> CANCELLED` for a typed reconciliation quarantine, so a reason recorded first would
+     document a cancellation that never happened — which reads to the next human as one that merely
+     failed to save, and invites saving it by hand, which is the forgery route ADR-020 closed. Report:
+     "TASK-NNN is in a reconciliation quarantine — cancellation is refused. Its only sanctioned exit
+     is `${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh repair TASK-NNN`." Then stop.
+   - any other value (`review-evidence`, `review-provenance`, `git-conflict`), or no `Blocked kind`
+     line at all — an ordinary blocker; continue with the steps below. The guard matches the whole
+     value, anchored and case-insensitively, so only the bare word `reconciliation` is refused and
+     every other blocker class still cancels normally (RULES.md §2).
+5. Record WHY, as ordinary non-status manifest content, BEFORE the transition — set
+   `- **Cancelled reason**: [one line]` under `## Metadata`. `--reason` is rejected by the transition
+   command for any target but `BLOCKED`, so the reason is written here or it is not written at all.
+6. Record the skip:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition TASK-NNN <CURRENT_STATUS> BLOCKED \
-  --reason "skipped by operator via /nazgul:task skip"
+"${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition TASK-NNN <CURRENT_STATUS> CANCELLED
 ```
 
-5. Scan every other task manifest for a `- **Depends on**:` line naming TASK-NNN and edit that line to
-   drop it (`none` when it was the only dependency). This is non-status content, so it is an ordinary
-   edit — and it is the ONLY way downstream tasks can proceed, because the dependency gate requires
-   every dependency to be `DONE` (or `APPROVED` in YOLO) and a skipped task is neither.
-6. Do not promote anything by hand: the stop-hook auto-promotes each now-unblocked `PLANNED` task to
+   Step 4 is a precondition, not the enforcement: the same refusal is applied by the guard here, so a
+   quarantine written after Step 4 is still caught. A non-zero exit means nothing was written — report
+   the refusal verbatim and stop.
+7. Do not promote anything by hand and do not edit any `- **Depends on**:` line: the plan graph is the
+   record of what the plan was. The stop-hook auto-promotes each now-unblocked `PLANNED` task to
    `READY` on its next iteration.
-7. Output: "TASK-NNN skipped (recorded as BLOCKED). [N] downstream task(s) had the dependency removed."
+8. Count the task manifests whose `- **Depends on**:` line names TASK-NNN — those are the downstream
+   tasks this skip releases.
+9. Output: "TASK-NNN skipped (recorded as CANCELLED). [N] downstream task(s) will auto-promote."
 
 ---
 
@@ -110,8 +128,10 @@ Reset a BLOCKED task back to READY so it can be picked up by the loop.
 
 1. Validate the task file exists: `nazgul/tasks/TASK-NNN.md`
 2. If not found, error: "Task TASK-NNN not found."
-3. If the task is not BLOCKED, warn: "TASK-NNN is not blocked (current status: [status])."
-4. **Route by blocker class.** Read `- **Blocked kind**:` from the manifest BEFORE doing anything else.
+3. If the status is `DONE` or `CANCELLED`, refuse: "TASK-NNN is [status], which is terminal — it has
+   no transition back to READY." Stop; `unblock` cannot reverse a completed or cancelled task.
+4. If the task is not BLOCKED, warn: "TASK-NNN is not blocked (current status: [status])."
+5. **Route by blocker class.** Read `- **Blocked kind**:` from the manifest BEFORE doing anything else.
    - `reconciliation` — do NOT unblock. This is the stop-hook's integrity quarantine: the code and its
      review may be entirely intact, only the state provenance was lost, so sending it to `READY` would
      throw away reviewed work and re-run the implementer. Run
@@ -121,15 +141,15 @@ Reset a BLOCKED task back to READY so it can be picked up by the loop.
      repair refuses, report its diagnostic verbatim and stop — do NOT fall back to unblock.
    - any other value (`review-evidence`, `review-provenance`, `git-conflict`), or no `Blocked kind`
      line at all — an ordinary blocker; continue with the steps below. `repair` will refuse these.
-5. Clear the `- **Blocked reason**:` line and reset `- **Retry count**:` to `0/3`. Both are non-status
+6. Clear the `- **Blocked reason**:` line and reset `- **Retry count**:` to `0/3`. Both are non-status
    content, so edit them directly, and do it BEFORE the transition.
-6. Return it to the queue:
+7. Return it to the queue:
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh" transition TASK-NNN BLOCKED READY
 ```
 
-7. Output: "TASK-NNN unblocked and set to READY. It will be picked up in the next iteration."
+8. Output: "TASK-NNN unblocked and set to READY. It will be picked up in the next iteration."
 
 ---
 

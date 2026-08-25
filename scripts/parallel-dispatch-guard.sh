@@ -7,12 +7,39 @@ set -euo pipefail
 # completed-unit enforcement applies only when execution.parallel is on.
 # Exit 0 = allow. Exit 2 = deny (reason on stderr).
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+RHP_LIB="$SCRIPT_DIR/lib/read-hook-payload.sh"
+# Recorded, not acted on: a load that defines nothing is no payload, and the deny
+# waits for the same config and kill-switch gates the timeout deny waits for.
+RHP_ERROR=""
+rhp_unavailable() { RHP_ERROR="$1"; }
+[ -r "$RHP_LIB" ] || rhp_unavailable "$RHP_LIB is missing or unreadable"
+rhp_rc=0
+if [ -z "$RHP_ERROR" ]; then
+  # shellcheck source=/dev/null
+  source "$RHP_LIB" || rhp_rc=$?
+  declare -F read_hook_payload >/dev/null && declare -F hook_payload_timeout_report >/dev/null \
+    || rhp_unavailable "$RHP_LIB defines no reader API after sourcing (source returned $rhp_rc)"
+fi
+
+# A timeout denies, but only once this guard is known to apply; the config and
+# kill-switch gates below decide that, so the deny waits for them.
 INPUT="${1:-}"
-[ -z "$INPUT" ] && INPUT=$(cat 2>/dev/null || echo "")
-[ -z "$INPUT" ] && exit 0
+STDIN_TIMEOUT=0
+if [ -z "$INPUT" ]; then
+  if [ -n "$RHP_ERROR" ]; then
+    STDIN_TIMEOUT=1
+  else
+    read_hook_payload
+    if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+      STDIN_TIMEOUT=1
+    fi
+    INPUT="$HOOK_PAYLOAD"
+  fi
+fi
+if [ "$STDIN_TIMEOUT" = "0" ] && [ -z "$INPUT" ]; then exit 0; fi
 command -v jq >/dev/null 2>&1 || exit 0
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 
@@ -30,6 +57,15 @@ PARALLEL=$(jq -r '.execution.parallel // false' "$CONFIG")
 # Kill-switch (explicit false disables; absent/true enabled).
 ENFORCE=$(jq -r 'if .execution.enforce.dispatch_guard == null then "true" else (.execution.enforce.dispatch_guard|tostring) end' "$CONFIG" 2>/dev/null || echo "true")
 [ "$ENFORCE" = "false" ] && exit 0
+
+if [ "$STDIN_TIMEOUT" = "1" ]; then
+  if [ -n "$RHP_ERROR" ]; then
+    printf 'parallel-dispatch-guard: stdin reader unavailable: %s — fail-closed, denying the dispatch\n' "$RHP_ERROR" >&2
+  else
+    hook_payload_timeout_report "parallel-dispatch-guard" "fail-closed" "denying the dispatch"
+  fi
+  exit 2
+fi
 
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/emit-event.sh"
@@ -127,8 +163,8 @@ _resolution_integrity_ok() {
 
 # Never re-dispatch a completed unit. Prompt carries `NAZGUL_UNIT: TASK-NNN`
 # (grepped as data — never eval'd). Status source is the task manifest —
-# canonical state, no stored graph. An IMPLEMENTED unit still legitimately
-# needs its review-gate dispatch; only a DONE unit's review is wasted work.
+# canonical state, no stored graph. An IMPLEMENTED unit still needs its
+# review-gate dispatch; a DONE or CANCELLED unit's does not (ADR-022).
 UNIT=$(printf '%s' "$PROMPT" | grep -oE 'NAZGUL_UNIT: TASK-[0-9]+' | head -1 | sed 's/^NAZGUL_UNIT: //' || true)
 if [ -n "$UNIT" ] && [ -f "$TASKS_DIR/$UNIT.md" ] && is_work_unit "$SUBAGENT"; then
   # shellcheck source=/dev/null
@@ -136,8 +172,8 @@ if [ -n "$UNIT" ] && [ -f "$TASKS_DIR/$UNIT.md" ] && is_work_unit "$SUBAGENT"; t
   STATUS=$(get_task_status "$TASKS_DIR/$UNIT.md" "")
   BLOCK=""
   case "$SUBAGENT" in
-    *review-gate*) case "$STATUS" in DONE) BLOCK=1 ;; esac ;;
-    *)             case "$STATUS" in IMPLEMENTED|DONE) BLOCK=1 ;; esac ;;
+    *review-gate*) case "$STATUS" in DONE|CANCELLED) BLOCK=1 ;; esac ;;
+    *)             case "$STATUS" in IMPLEMENTED|DONE|CANCELLED) BLOCK=1 ;; esac ;;
   esac
   if [ -n "$BLOCK" ]; then
     # Only checked before trusting a BLOCK verdict, so it never emits

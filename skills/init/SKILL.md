@@ -62,7 +62,7 @@ Create the following directories and files:
 ```
 nazgul/
 ├── config.json          # Copy from plugin templates/config.json
-├── plan.md              # Copy from plugin templates/plan.md
+├── plan.md              # Copy from plugin templates/plan.md (see the note below)
 ├── tasks/               # Empty, for task manifests
 ├── checkpoints/         # Empty, for iteration checkpoints
 ├── reviews/             # Empty, for review artifacts
@@ -71,6 +71,9 @@ nazgul/
 ├── logs/                # Empty, for iteration logs
 └── learning/            # Empty, for autolearning registry and working files
 ```
+
+Copy `templates/plan.md` **verbatim, placeholder and all** — do not attempt to fill its frontmatter `feat_id`. That key is inert by design here: `config.feat_id` is still null at init time (`create_feature_branch` assigns it when an objective starts), so init has no value to write and a guessed one would bind the plan to the wrong objective. The Planner substitutes it after writing the `## Tasks` roster, by running `scripts/stamp-plan-objective.sh` (see `agents/planner.md`). Until then the merge-evidence gate refuses this plan by name — which is the intended state for a project with no objective yet.
+
 
 ### Step 2.5: Configure Git Ignore
 This step ALWAYS runs, with two branches based on `LOCAL_MODE` (from Step 0). Read or create `.gitignore` at the project root.

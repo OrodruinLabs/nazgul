@@ -176,6 +176,99 @@ else
   _pass "TASK-007/D4: curl invocation not bare-&-backgrounded"
 fi
 
+# --- Test 7 (RW-B, FEAT-031 rework): the payload is counted by the ONE shared
+# parser, so it learns CANCELLED and reads frontmatter (a private grep did not). ---
+curl_payload() {
+  # jq -n pretty-prints, so the single -d argv token spans many captured lines:
+  # take everything strictly between the "-d" flag and the next "--max-time".
+  awk '$0 == "--max-time" { p = 0 } p == 1 { print } $0 == "-d" { p = 1 }' \
+    "$NAZGUL_TEST_CURL_ARGV"
+}
+
+setup_temp_dir
+setup_nazgul_dir
+create_config \
+  '.webhooks.enabled = true' \
+  '.webhooks.url = "https://example.invalid/hook"' \
+  '.webhooks.events = ["Stop"]'
+create_task_file "TASK-001" "DONE"
+create_task_file "TASK-002" "CANCELLED"
+create_task_file "TASK-003" "READY"
+run_webhook "Stop"
+PAYLOAD=$(curl_payload) || PAYLOAD=""
+if [ -n "$PAYLOAD" ]; then
+  _pass "cancelled census: the curl payload was captured (anchor matched)"
+else
+  _fail "cancelled census: the curl payload was captured (anchor matched)" \
+    "no argv token followed '-d' — the assertions below would be vacuous"
+fi
+assert_eq "cancelled census: frontmatter DONE is counted (shared parser, not a legacy grep)" \
+  "$(printf '%s' "$PAYLOAD" | jq -r '.tasks_done')" "1"
+assert_eq "cancelled census: tasks_cancelled is reported" \
+  "$(printf '%s' "$PAYLOAD" | jq -r '.tasks_cancelled')" "1"
+assert_eq "cancelled census: tasks_total unchanged in meaning" \
+  "$(printf '%s' "$PAYLOAD" | jq -r '.tasks_total')" "3"
+teardown_temp_dir
+
+# An all-terminal objective must reconcile: done + cancelled == total, so a
+# downstream consumer never sees a completed objective as forever-incomplete.
+setup_temp_dir
+setup_nazgul_dir
+create_config \
+  '.webhooks.enabled = true' \
+  '.webhooks.url = "https://example.invalid/hook"' \
+  '.webhooks.events = ["Stop"]'
+create_task_file "TASK-001" "DONE"
+create_task_file "TASK-002" "CANCELLED"
+run_webhook "Stop"
+PAYLOAD=$(curl_payload) || PAYLOAD=""
+assert_eq "cancelled census: done + cancelled == total for a completed objective" \
+  "$(printf '%s' "$PAYLOAD" | jq -r '.tasks_done + .tasks_cancelled == .tasks_total')" "true"
+teardown_temp_dir
+
+# Legacy list-item manifests must keep working — the shared parser is a
+# superset of the grep it replaced, not a swap of one format for another.
+setup_temp_dir
+setup_nazgul_dir
+create_config \
+  '.webhooks.enabled = true' \
+  '.webhooks.url = "https://example.invalid/hook"' \
+  '.webhooks.events = ["Stop"]'
+create_task_file_legacy "TASK-001" "DONE"
+create_task_file_legacy "TASK-002" "CANCELLED"
+run_webhook "Stop"
+PAYLOAD=$(curl_payload) || PAYLOAD=""
+assert_eq "legacy format: DONE still counted" \
+  "$(printf '%s' "$PAYLOAD" | jq -r '.tasks_done')" "1"
+assert_eq "legacy format: CANCELLED still counted" \
+  "$(printf '%s' "$PAYLOAD" | jq -r '.tasks_cancelled')" "1"
+teardown_temp_dir
+
+# --- board-3 NEW-4: the hook declares its POST best-effort, so a manifest matching none
+# of the parser's inline status forms must not end the run before curl, and must count. ---
+setup_temp_dir
+setup_nazgul_dir
+create_config \
+  '.webhooks.enabled = true' \
+  '.webhooks.url = "https://example.invalid/hook"' \
+  '.webhooks.events = ["Stop"]'
+create_task_file "TASK-001" "DONE"
+printf '# TASK-BLOCK\n\n## Status\nDONE\n' > "$TEST_DIR/nazgul/tasks/TASK-BLOCK.md"
+printf '# TASK-NONE\n\nthis manifest carries no status in any format\n' > "$TEST_DIR/nazgul/tasks/TASK-NONE.md"
+run_webhook "Stop"
+PAYLOAD=$(curl_payload) || PAYLOAD=""
+if [ -n "$PAYLOAD" ]; then
+  _pass "no-inline-status manifest: the hook still reached curl (payload captured)"
+else
+  _fail "no-inline-status manifest: the hook still reached curl (payload captured)" \
+    "no argv token followed '-d' — webhook-forward.sh ended before POSTing"
+fi
+assert_eq "no-inline-status manifest: ATX-block DONE is counted alongside frontmatter DONE" \
+  "$(printf '%s' "$PAYLOAD" | jq -r '.tasks_done')" "2"
+assert_eq "no-inline-status manifest: the status-less manifest still enters the census" \
+  "$(printf '%s' "$PAYLOAD" | jq -r '.tasks_total')" "3"
+teardown_temp_dir
+
 rm -rf "$FAKEBIN"
 
 # --- Test 6: bash -n / shellcheck sanity (project convention) ---

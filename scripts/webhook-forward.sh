@@ -8,6 +8,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
+source "$SCRIPT_DIR/lib/task-utils.sh"
 
 PROJECT_ROOT="$(resolve_project_root)"
 NAZGUL_DIR="$PROJECT_ROOT/nazgul"
@@ -46,25 +47,9 @@ OBJECTIVE=$(jq -r '.objective // "none"' "$CONFIG")
 FEAT_ID=$(jq -r '.feat_display_id // ""' "$CONFIG")
 GIT_BRANCH=$(git -C "$PROJECT_ROOT" branch --show-current 2>/dev/null || echo "unknown")
 
-# Count tasks
-DONE_COUNT=0
-TOTAL_COUNT=0
-ACTIVE_TASK=""
-if [ -d "$NAZGUL_DIR/tasks" ]; then
-  for task_file in "$NAZGUL_DIR/tasks"/TASK-*.md; do
-    [ -f "$task_file" ] || continue
-    TOTAL_COUNT=$((TOTAL_COUNT + 1))
-    STATUS=$(grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$task_file" 2>/dev/null | sed 's/.*:[[:space:]]*//' || echo "PLANNED")
-    if [ "$STATUS" = "DONE" ]; then
-      DONE_COUNT=$((DONE_COUNT + 1))
-    fi
-    if [ -z "$ACTIVE_TASK" ]; then
-      if [ "$STATUS" = "IN_PROGRESS" ] || [ "$STATUS" = "IN_REVIEW" ] || [ "$STATUS" = "IMPLEMENTED" ]; then
-        ACTIVE_TASK=$(basename "$task_file" .md)
-      fi
-    fi
-  done
-fi
+# Count tasks through the one shared parser. The private grep this replaced
+# could not learn CANCELLED when task-utils.sh did, and read no frontmatter.
+count_tasks_and_find_active "$NAZGUL_DIR/tasks"
 
 PAYLOAD=$(jq -n \
   --arg event "$EVENT_TYPE" \
@@ -76,6 +61,7 @@ PAYLOAD=$(jq -n \
   --argjson iteration "$ITERATION" \
   --argjson max_iter "$MAX_ITER" \
   --argjson "done" "$DONE_COUNT" \
+  --argjson cancelled "$CANCELLED_COUNT" \
   --argjson total "$TOTAL_COUNT" \
   --arg timestamp "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
   '{
@@ -88,6 +74,7 @@ PAYLOAD=$(jq -n \
     iteration: $iteration,
     max_iterations: $max_iter,
     tasks_done: $done,
+    tasks_cancelled: $cancelled,
     tasks_total: $total,
     active_task: $active_task
   }')

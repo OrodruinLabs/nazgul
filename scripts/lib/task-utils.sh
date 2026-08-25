@@ -76,8 +76,8 @@ get_task_status() {
   if [ "$fm_rc" -eq 0 ]; then echo "$fm_status"; return; fi
   if [ "$fm_rc" -eq 2 ]; then echo "INVALID"; return; fi
   # fm_rc==1 (no status frontmatter): fall through to legacy parsing below.
-  # Try inline formats first (colon on same line)
-  result=$(grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$1" 2>/dev/null | sed 's/.*:[[:space:]]*//')
+  # Inline formats first; `|| true` so a no-match reaches this function's own documented default instead of aborting an errexit caller.
+  result=$(grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$1" 2>/dev/null | sed 's/.*:[[:space:]]*//' || true)
   if [ -n "$result" ]; then
     echo "$result"
     return
@@ -140,6 +140,39 @@ set_task_status() {
   fi
 }
 
+# lean-comments: allow-run — one anchor, and what each narrowing of it cost.
+# NZ_MANIFEST_FIELD_ANCHOR is THE anchor for a `- **Field**: value` manifest line. It existed in
+# two spellings — `^-[[:space:]]*\*\*` in the transition library and task-state-guard, `^\- \*\*`
+# in the transition gate and the stop-hook — so a manifest written with two spaces after the dash was a LIVE
+# quarantine to the Write/Edit checker and invisible to the gate, and `BLOCKED -> CANCELLED`
+# laundered an integrity block into a terminal status (#232 residual, PATCH-007 item 9). Both
+# spellings then pinned the dash to column 0, so an INDENTED record was seen by neither
+# (PATCH-008 item 4). The tolerant form is the one kept, deliberately: a record seen and refused
+# costs an operator one retry, a record NOT seen costs the block itself. Its one cost in the other
+# direction is priced and accepted: the BLOCKED -> IN_REVIEW review-evidence class in
+# task-transition-guard.sh also widens, onto an edge that still has to produce review evidence to
+# reach DONE. It lives HERE, in the lowest lib, because get_task_field below needs it and
+# task-utils cannot source the library that sources task-utils.
+NZ_MANIFEST_FIELD_ANCHOR='^[[:space:]]*-[[:space:]]*\*\*'
+
+# lean-comments: allow-run — this is the WRITER half of the anchor above, and why it must exist.
+# A reader anchor that widens while its writers stay pinned is not a smaller defect than having no
+# anchor: PATCH-008 item 4 widened the reader alone, and every writer of the same field kept
+# matching column 0 only — so `repair`'s awk left an INDENTED record byte-identical while printing
+# `recorded`, and `set_manifest_field` APPENDED a second record that the reader's `grep -m1` then
+# read past (re-review #4 items 3, 4). Both are the SAME anchor in two dialects, so the ERE form is
+# TRANSLITERATED from the reader's own value rather than spelled a second time — `\*` is the only
+# ERE escape it uses, and tests/test-quarantine-refusal-corpus.sh asserts no backslash survives, so
+# an added escape fails loudly instead of silently narrowing one dialect.
+NZ_MANIFEST_FIELD_ANCHOR_ERE="${NZ_MANIFEST_FIELD_ANCHOR//\\\*/[*]}"
+
+# nz_manifest_field_pattern_ere <field> -> that field's line in every spelling the reader accepts;
+# the SOLE source of a writer's pattern. Lowercased label: apply it with `grep -iE` / awk `tolower($0)`.
+nz_manifest_field_pattern_ere() {
+  printf '%s%s[*][*]:' "$NZ_MANIFEST_FIELD_ANCHOR_ERE" \
+    "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+}
+
 # Extract a metadata list-item field from a task manifest.
 # Reads list-item form:  - **<Field>**: <value>
 # Returns the trimmed value, or the supplied default (or empty) when absent.
@@ -147,7 +180,9 @@ set_task_status() {
 # Usage: get_task_field <file> <field-label> [default]
 get_task_field() {
   local file="$1" field="$2" default="${3:-}" result
-  result=$(grep -m1 -E "^\- \*\*${field}\*\*:" "$file" 2>/dev/null | sed 's/.*:[[:space:]]*//' | sed 's/[[:space:]]*$//')
+  # The shared anchor, not a fifth hand-spelling. Every consumer reads "field absent" as the
+  # permissive answer (an unread `Files modified` disables the File Scope guard), so the pin was fail-open.
+  result=$(grep -m1 -iE "${NZ_MANIFEST_FIELD_ANCHOR}${field}\*\*:" "$file" 2>/dev/null | sed 's/.*:[[:space:]]*//' | sed 's/[[:space:]]*$//')
   if [ -n "$result" ]; then echo "$result"; else echo "$default"; fi
 }
 
@@ -200,7 +235,8 @@ count_tasks_by_status() {
 # every call site keep working unchanged):
 #   Sets these globals (not `local` — intentionally visible to the caller):
 #     DONE_COUNT READY_COUNT IN_PROGRESS_COUNT IN_REVIEW_COUNT APPROVED_COUNT
-#     CHANGES_COUNT BLOCKED_COUNT PLANNED_COUNT INVALID_COUNT TOTAL_COUNT
+#     CHANGES_COUNT BLOCKED_COUNT PLANNED_COUNT CANCELLED_COUNT INVALID_COUNT
+#     TOTAL_COUNT
 #       - one bucket per canonical status (IMPLEMENTED and IN_REVIEW both land
 #         in IN_REVIEW_COUNT, matching the existing case blocks); TOTAL_COUNT is
 #         incremented for every manifest found, INCLUDING invalid ones (faithful
@@ -225,7 +261,7 @@ count_tasks_and_find_active() {
 
   DONE_COUNT=0; READY_COUNT=0; IN_PROGRESS_COUNT=0; IN_REVIEW_COUNT=0
   APPROVED_COUNT=0; CHANGES_COUNT=0; BLOCKED_COUNT=0; PLANNED_COUNT=0
-  INVALID_COUNT=0; TOTAL_COUNT=0
+  CANCELLED_COUNT=0; INVALID_COUNT=0; TOTAL_COUNT=0
   ACTIVE_TASK=""; ACTIVE_STATUS=""; ACTIVE_RETRY=0
   INVALID_TASKS=""
 
@@ -244,6 +280,7 @@ count_tasks_and_find_active() {
         CHANGES_REQUESTED) CHANGES_COUNT=$((CHANGES_COUNT + 1)) ;;
         BLOCKED) BLOCKED_COUNT=$((BLOCKED_COUNT + 1)) ;;
         PLANNED) PLANNED_COUNT=$((PLANNED_COUNT + 1)) ;;
+        CANCELLED) CANCELLED_COUNT=$((CANCELLED_COUNT + 1)) ;;
         *)
           task_id=$(basename "$task_file" .md)
           # get_task_status() normalizes any off-vocabulary frontmatter value to

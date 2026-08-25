@@ -14,8 +14,8 @@
 # Idempotent source guard; NOT `set -euo pipefail` — sourced into caller
 # shells that own their own shell options (mirrors scripts/lib/inbox-provider.sh).
 
-[ -n "${_NAZGUL_RAISE_FINDING_SOURCED:-}" ] && return 0
-_NAZGUL_RAISE_FINDING_SOURCED=1
+# NO SENTINEL: the scalar `_NAZGUL_RAISE_FINDING_SOURCED` that sat here made one exported variable
+# enough to leave raise_finding undefined — the 127-exit hazard nazgul-root.sh:40-49 measured.
 
 _RF_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
@@ -85,9 +85,12 @@ raise_finding() {
     return 0
   fi
 
+  # -w, not a bare -x: see emit-event.sh. A stale lockfile must not park the producer.
   local lockfile="${findings_file}.lock"
   if [ "$_RF_HAS_FLOCK" = "1" ]; then
-    ( flock -x 200; printf '%s\n' "$record" >> "$findings_file" ) 200>"$lockfile" 2>/dev/null || {
+    ( flock -w "${NAZGUL_FINDING_LOCK_WAIT:-5}" -x 200 \
+        || printf 'raise_finding: lock_wait_exceeded: %ss on %s — appending unserialised (O_APPEND), the finding is NOT lost\n' "${NAZGUL_FINDING_LOCK_WAIT:-5}" "$lockfile" >&2
+      printf '%s\n' "$record" >> "$findings_file" ) 200>"$lockfile" || {
       printf 'raise_finding: append to %s failed — finding NOT recorded\n' "$findings_file" >&2
       return 0
     }

@@ -40,6 +40,8 @@ cat > "$FAKEBIN/gh" << 'EOF'
 # Mock gh for stack-utils tests. Env switches inject extension/auth/failure
 # states; NAZGUL_TEST_GH_*_LOG paths record what was invoked.
 sub="${1:-}"; shift || true
+# A host that never answers: the bound, not the host, is what ends the call.
+[ "${NAZGUL_TEST_GH_STALL:-0}" = "1" ] && sleep 30
 case "$sub" in
   extension)
     action="${1:-}"; shift || true
@@ -1215,6 +1217,88 @@ jq '.objectives_history = [{feat_id:"FEAT-OTHER", objective:"unrelated", started
 hist_err=$(_su_write_history "$NOHIST_CONFIG" "FEAT-870" "https://github.com/o/r/pull/870" 2>&1); hist_rc=$?
 assert_exit_code "_su_write_history: zero matches is a failure, not a silent success" "$hist_rc" 1
 assert_contains "_su_write_history: zero matches names the feat_id and the PR" "$hist_err" "FEAT-870"
+
+# lean-comments: allow-run — names the host class this defends and why the suite could not see it.
+# PATCH-007 item 15 — the stock-macOS host: a degradation line is not a payload.
+# GNU `timeout` is absent from stock macOS by default, so bounded-net names its missing bound on
+# stderr during an OTHERWISE SUCCESSFUL call. Capturing `2>&1` folded that line into the JSON, so
+# every `jq` parse here came back empty: `stack_reconcile` read a MERGED layer as unmerged (no
+# stack_layer_merged, no base advance, no sync) and `stack_detect_changes_requested` never saw a
+# CHANGES_REQUESTED review, which is the SOLE trigger for the p1 rework item the feature promises.
+# This suite never set NAZGUL_TIMEOUT_CMD, so the default host was the untested one.
+export NAZGUL_TIMEOUT_CMD=""
+
+NOBIN_REC="$TEST_DIR/nazgul/config-nobin-reconcile.json"
+jq '
+  .execution.stacking.enabled = true
+  | .stack.layers = [{feat_id:"FEAT-900", branch:"feat/FEAT-900-x", pr:"https://github.com/o/r/pull/900", base:"main", state:"open", opened_at:"2026-08-02T00:00:00Z", merged_at:null}]
+' "$CONFIG" > "$NOBIN_REC"
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":900,"state":"MERGED","mergedAt":"2026-08-02T05:00:00Z"}'
+: > "$EVENTS_FILE_PATH"
+NOBIN_REC_ERR=$(stack_reconcile "$NOBIN_REC" 2>&1 >/dev/null); nobin_rec_rc=$?
+assert_exit_code "no timeout binary: stack_reconcile returns 0" "$nobin_rec_rc" 0
+assert_eq "no timeout binary: a MERGED layer is still seen as merged — a degradation line is not the payload" \
+  "$(jq -r '.stack.layers[] | select(.feat_id=="FEAT-900") | .state' "$NOBIN_REC")" "merged"
+assert_eq "no timeout binary: mergedAt survives the capture intact" \
+  "$(jq -r '.stack.layers[] | select(.feat_id=="FEAT-900") | .merged_at' "$NOBIN_REC")" "2026-08-02T05:00:00Z"
+assert_eq "no timeout binary: the merge is recorded on the bus, not silently skipped" \
+  "$(_event_count stack_layer_merged)" "1"
+assert_contains "no timeout binary: and the missing bound is still LOUD on the caller's real stderr" \
+  "$NOBIN_REC_ERR" "unbounded_no_timeout_binary"
+unset NAZGUL_TEST_GH_PR_VIEW_JSON
+
+NOBIN_REW="$TEST_DIR/nazgul/config-nobin-rework.json"
+jq '
+  .execution.stacking.enabled = true
+  | .execution.stacking.rework_priority = 1
+  | .stack.layers = [{feat_id:"FEAT-901", branch:"feat/FEAT-901-x", pr:"https://github.com/o/r/pull/901", base:"main", state:"open", opened_at:"2026-08-02T00:00:00Z", merged_at:null}]
+' "$CONFIG" > "$NOBIN_REW"
+export NAZGUL_TEST_GH_PR_VIEW_JSON='{"number":901,"reviewDecision":"CHANGES_REQUESTED","reviews":[{"id":"REVIEW_901","state":"CHANGES_REQUESTED","body":"stock-host rework body"}]}'
+: > "$EVENTS_FILE_PATH"
+stack_detect_changes_requested "$NOBIN_REW" >/dev/null 2>&1
+assert_file_exists "no timeout binary: the p1 rework item the feature promises is still filed" \
+  "$TEST_DIR/nazgul/inbox/stack-rework-pr901-REVIEW_901.md"
+assert_eq "no timeout binary: stack_rework_filed emitted exactly once" \
+  "$(_event_count stack_rework_filed)" "1"
+unset NAZGUL_TEST_GH_PR_VIEW_JSON
+
+# A failure must still quote the HOST's error text, not lose it to the split capture.
+# A fresh config: $NOBIN_REC's only layer is now merged, so it would ask the host nothing.
+NOBIN_FAIL="$TEST_DIR/nazgul/config-nobin-apifail.json"
+jq '
+  .execution.stacking.enabled = true
+  | .stack.layers = [{feat_id:"FEAT-902", branch:"feat/FEAT-902-x", pr:"https://github.com/o/r/pull/902", base:"main", state:"open", opened_at:"2026-08-02T00:00:00Z", merged_at:null}]
+' "$CONFIG" > "$NOBIN_FAIL"
+export NAZGUL_TEST_GH_PR_VIEW_JSON_FAIL=1
+NOBIN_FAIL_ERR=$(stack_reconcile "$NOBIN_FAIL" 2>&1 >/dev/null)
+assert_contains "no timeout binary: an API failure still quotes the host's own error text" \
+  "$NOBIN_FAIL_ERR" "simulated API failure"
+unset NAZGUL_TEST_GH_PR_VIEW_JSON_FAIL
+unset NAZGUL_TIMEOUT_CMD
+
+# lean-comments: allow-run — the sibling of the case above, and its exact inverse.
+# THE FIRED-BOUND RECORD (PATCH-008 item 8). The block above proves the HOST's error text
+# survives the stderr split. When the BOUND fires instead, gh is killed before it says anything,
+# so the split left both halves empty and each wrapper's failure text ended at the exit code —
+# `bound_exceeded` reaching the terminal and never the diagnostic a caller quotes. Same shape as
+# merge-provider.sh's, and fixed by the same shared wrapper rather than a third hand-rolled split.
+if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
+  SU_BOUND_RC=0
+  SU_BOUND_OUT=$(NAZGUL_TEST_GH_STALL=1 NAZGUL_NET_TIMEOUT=1 \
+    _su_gh_pr_view_json "gh pr view (bound probe)" 901 "state,mergedAt" 2>/dev/null) || SU_BOUND_RC=$?
+  assert_exit_code "fired bound: _su_gh_pr_view_json returns the bound's own exit, not a parse error" \
+    "$SU_BOUND_RC" 124
+  assert_contains "fired bound: and what it hands its caller to quote NAMES the bound" \
+    "$SU_BOUND_OUT" "bound_exceeded"
+  # The RECORD line only: this wrapper's diagnostic and bounded-net's both land on stderr, so a
+  # whole-stream assertion here would pass on the terminal copy and see nothing.
+  SU_PR_ERR=$(NAZGUL_TEST_GH_STALL=1 NAZGUL_NET_TIMEOUT=1 \
+    _su_plain_pr main feat/bound-probe "t" "b" 2>&1 >/dev/null) || true
+  assert_contains "fired bound: the pr-create failure record NAMES the bound rather than only its exit code" \
+    "$(printf '%s\n' "$SU_PR_ERR" | grep 'gh pr create failed')" "bound_exceeded"
+else
+  _skip "the fired-bound record at stack-utils' two gh wrappers (neither timeout nor gtimeout is on this host)"
+fi
 
 teardown_temp_dir
 rm -rf "$FAKEBIN" "$NOGH_DIR"

@@ -45,7 +45,66 @@ set -euo pipefail
 # is `cat`/`tee`, so `echo $((1<<2))` is a shift operator, not a heredoc open.
 
 # Read tool input from stdin (Claude Code passes JSON for PreToolUse hooks)
-INPUT=$(cat 2>/dev/null || echo "")
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+RHP_LIB="$SCRIPT_DIR/lib/read-hook-payload.sh"
+# lean-comments: allow-run — the fallback exists for a failure this file cannot observe.
+# This guard's scope question, answered WITHOUT depending on a second library loading.
+# nazgul-root.sh stays primary (ADR-008), but the reader-unavailable path below exists
+# precisely BECAUSE scripts/lib/ may be unusable, and an unconditional `source` there was
+# defeated by its own cause: the missing file aborted under `set -e` with exit 1, which a
+# PreToolUse hook reads as ALLOW. The fallback reproduces the resolver's own order for this
+# one question, so the two agree wherever the resolver can answer at all.
+_lmtg_config_path() {
+  local root=""
+  if [ -r "$SCRIPT_DIR/lib/nazgul-root.sh" ] \
+     && source "$SCRIPT_DIR/lib/nazgul-root.sh" 2>/dev/null \
+     && declare -F resolve_project_root >/dev/null; then
+    root="$(resolve_project_root 2>/dev/null || true)"
+  fi
+  if [ -z "$root" ]; then
+    if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+      root="$CLAUDE_PROJECT_DIR"
+    else
+      root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+      [ -n "$root" ] && [ -r "$root/nazgul/config.json" ] || root="$(pwd)"
+    fi
+  fi
+  printf '%s\n' "$root/nazgul/config.json"
+}
+
+# A load that returns 0 having defined nothing is still no payload, and it is
+# scoped like the timeout branch below rather than denying every repo.
+rhp_unavailable() {
+  local cfg
+  cfg="$(_lmtg_config_path)"
+  if [ -f "$cfg" ] \
+    && [ "$(jq -r '.install_mode // ""' "$cfg" 2>/dev/null || echo "")" = "local" ]; then
+    printf 'local-mode-tracking-guard: stdin reader unavailable: %s — fail-closed, blocking the command\n' "$1" >&2
+    exit 2
+  fi
+  printf 'local-mode-tracking-guard: stdin reader unavailable: %s — fail-open, guard is out of scope here\n' "$1" >&2
+  exit 0
+}
+[ -r "$RHP_LIB" ] || rhp_unavailable "$RHP_LIB is missing or unreadable"
+rhp_rc=0
+# shellcheck source=./lib/read-hook-payload.sh
+source "$RHP_LIB" || rhp_rc=$?
+declare -F read_hook_payload >/dev/null && declare -F hook_payload_timeout_report >/dev/null \
+  || rhp_unavailable "$RHP_LIB defines no reader API after sourcing (source returned $rhp_rc)"
+read_hook_payload
+if [ "$HOOK_PAYLOAD_OUTCOME" = "timeout" ]; then
+  # With no command text every pre-filter below would allow, so the deny is
+  # decided here — and only for the local-mode project this guard is scoped to.
+  TIMEOUT_CONFIG="$(_lmtg_config_path)"
+  if [ -f "$TIMEOUT_CONFIG" ] \
+    && [ "$(jq -r '.install_mode // ""' "$TIMEOUT_CONFIG" 2>/dev/null || echo "")" = "local" ]; then
+    hook_payload_timeout_report "local-mode-tracking-guard" "fail-closed" "blocking the command"
+    exit 2
+  fi
+  hook_payload_timeout_report "local-mode-tracking-guard" "fail-open" "guard is out of scope here"
+  exit 0
+fi
+INPUT="$HOOK_PAYLOAD"
 
 # No input — allow
 if [ -z "$INPUT" ]; then
@@ -397,14 +456,9 @@ if [ "$HAS_NAZGUL_PATH" != "1" ]; then
   exit 0
 fi
 
-# Resolution deferred to here (past the pre-filters and the tokenizer) so the
-# overwhelming majority of Bash calls — which never carry a nazgul/ pathspec —
-# never pay for it.
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/lib/nazgul-root.sh"
-
-PROJECT_ROOT="$(resolve_project_root)"
-CONFIG="$PROJECT_ROOT/nazgul/config.json"
+# Deferred past the pre-filters so calls carrying no nazgul/ pathspec never pay for it, and via
+# the same helper as the unavailable branches: an unconditional `source` here exits 1 = hook ALLOW.
+CONFIG="$(_lmtg_config_path)"
 
 # Degrade gracefully: config absent → allow
 if [ ! -f "$CONFIG" ]; then

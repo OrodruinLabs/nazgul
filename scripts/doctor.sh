@@ -26,6 +26,10 @@ source "$SCRIPT_DIR/lib/git-hooks.sh"
 # Check (m) reads locks through session-tracker's own read-only predicate, so reader and writer cannot drift.
 # shellcheck source=lib/session-tracker.sh
 source "$SCRIPT_DIR/lib/session-tracker.sh"
+# A read-only preflight that hangs is worse than one that reports a gap, so every
+# `gh` probe below runs under the `quick` tier (TASK-048).
+# shellcheck source=lib/bounded-net.sh
+source "$SCRIPT_DIR/lib/bounded-net.sh"
 
 # Captured before this script's own NAZGUL_DIR assignment below shadows it —
 # check (e) needs to know what the OPERATOR's environment held, not what
@@ -180,7 +184,7 @@ check_dependencies() {
     return 0
   fi
 
-  if gh auth status >/dev/null 2>&1; then
+  if nz_bounded_run_q quick "gh auth status (doctor deps)" gh auth status >/dev/null; then
     _doc_report pass dependencies "jq and gh found; gh is authenticated."
   else
     _doc_report warn dependencies "gh is installed but not authenticated — run 'gh auth login' before using connectors.github or board sync."
@@ -488,7 +492,7 @@ check_stacking() {
   # fixed in stack_available() (doctor.sh runs under `set -euo pipefail`), which
   # would report an installed extension as missing on a fraction of runs.
   local ext_list
-  ext_list=$(gh extension list 2>/dev/null) || ext_list=""
+  ext_list=$(nz_bounded_run_q quick "gh extension list (doctor stacking)" gh extension list) || ext_list=""
   case "$ext_list" in
     *"github/gh-stack"*) : ;;
     *)
@@ -496,7 +500,7 @@ check_stacking() {
       return 0 ;;
   esac
 
-  if ! gh auth status >/dev/null 2>&1; then
+  if ! nz_bounded_run_q quick "gh auth status (doctor stacking)" gh auth status >/dev/null; then
     _doc_report warn stacking "execution.stacking.enabled is true but gh is not authenticated — run 'gh auth login'."
     return 0
   fi
@@ -562,7 +566,7 @@ check_stack_registry() {
       abandoned="$abandoned $feat_id"
       continue
     fi
-    state="$(gh pr view "$pr" --json state -q '.state' 2>/dev/null)" || state=""
+    state="$(nz_bounded_run_q quick "gh pr view (doctor registry drift)" gh pr view "$pr" --json state -q '.state')" || state=""
     if [ -z "$state" ]; then
       unreadable=$((unreadable + 1))
       continue

@@ -51,7 +51,7 @@ export NAZGUL_TEAMS_DIR=""  # set per test after TEST_DIR exists
 setup_temp_dir; setup_nazgul_dir
 create_config '.schema_version = 30 | .guards.team_sweep = false'
 CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO_ROOT/scripts/migrate-config.sh" >/dev/null 2>&1
-assert_json_field "v30 chain: schema_version reaches terminal 36" "$TEST_DIR/nazgul/config.json" '.schema_version' "36"
+assert_json_field "v30 chain: schema_version reaches terminal 37" "$TEST_DIR/nazgul/config.json" '.schema_version' "37"
 assert_eq "v33: guards.team_teardown removed (was at default true)" \
   "$(jq -r '.guards | has("team_teardown")' "$TEST_DIR/nazgul/config.json")" "false"
 assert_json_field "v31: explicit team_sweep=false preserved through v34" "$TEST_DIR/nazgul/config.json" '.guards.team_sweep' "false"

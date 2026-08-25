@@ -2,9 +2,8 @@
 # Nazgul git-utils — small, robust git helpers shared by hooks.
 # Sourced by stop-hook.sh and pre-compact.sh.
 
-# Idempotent source guard (a hook may source several libs in one shell).
-[ -n "${_NAZGUL_GIT_UTILS_SOURCED:-}" ] && return 0
-_NAZGUL_GIT_UTILS_SOURCED=1
+# NO SENTINEL: the scalar `_NAZGUL_GIT_UTILS_SOURCED` that sat here made one exported variable
+# enough to leave the diff helpers undefined — the 127-exit hazard nazgul-root.sh:40-49 measured.
 
 # files_modified_json <repo_dir> [<base_ref>]
 # Print a JSON array of paths changed between a base and HEAD. Always prints

@@ -84,11 +84,9 @@ if [ "$SUBCOMMAND" = "transition" ]; then
   exit 0
 fi
 
-# Read one `- **<Label>**: <value>` manifest field, trimmed; empty when absent.
+# The shared anchor, so this reader cannot disagree with the gate that refuses the same record.
 repair_field() {
-  printf '%s\n' "$MANIFEST_TEXT" \
-    | grep -m1 -iE "^- \*\*$1\*\*:" \
-    | sed 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*$//' || true
+  ttg_manifest_field "$MANIFEST_TEXT" "$1" || true
 }
 
 repair_deny() {
@@ -112,16 +110,17 @@ BLOCKED_KIND=$(repair_field "Blocked kind")
 if [ -z "$BLOCKED_KIND" ]; then
   repair_deny "the manifest records no 'Blocked kind' — an untyped blocker is not a reconciliation quarantine; use /nazgul:task unblock" "untyped_blocker"
 fi
-case "$(printf '%s' "$BLOCKED_KIND" | tr '[:upper:]' '[:lower:]')" in
-  reconciliation) ;;
-  *) repair_deny "blocker kind is '${BLOCKED_KIND}', not 'reconciliation'; repair is closed to other blocker classes — use /nazgul:task unblock" "wrong_blocker_kind" ;;
-esac
+# The SHARED predicate, never a second reading: a manifest the gate holds and repair refuses is one
+# the Write/Edit checker will not let an operator edit either — frozen, with no exit at all.
+if ! ttg_is_reconciliation_quarantine "$MANIFEST_TEXT"; then
+  repair_deny "blocker kind is '${BLOCKED_KIND}', not 'reconciliation'; repair is closed to other blocker classes — use /nazgul:task unblock" "wrong_blocker_kind"
+fi
 
 QUARANTINE_FROM=$(repair_field "Blocked from")
 QUARANTINE_OBSERVED=$(repair_field "Blocked observed")
 for _field_pair in "Blocked from:$QUARANTINE_FROM" "Blocked observed:$QUARANTINE_OBSERVED"; do
   case "${_field_pair##*:}" in
-    PLANNED|READY|IN_PROGRESS|IMPLEMENTED|IN_REVIEW|APPROVED|CHANGES_REQUESTED|DONE|BLOCKED) ;;
+    PLANNED|READY|IN_PROGRESS|IMPLEMENTED|IN_REVIEW|APPROVED|CHANGES_REQUESTED|DONE|BLOCKED|CANCELLED) ;;
     *) repair_deny "quarantine metadata is incomplete: '${_field_pair%%:*}' is '${_field_pair##*:}', not a canonical status" "corrupt_quarantine_metadata" ;;
   esac
 done
@@ -161,7 +160,7 @@ REQUIRE_PROVENANCE=$(jq -r 'if .review_gate.require_provenance == false then "fa
 REVIEW_UNIT=$(resolve_review_unit "$NAZGUL_DIR" "$TASK_ID")
 
 repair_check "commit-evidence" ttg_verify_commit_evidence "$MANIFEST_TEXT" "$PROJECT_ROOT"
-repair_check "red-run-evidence" ttg_verify_red_run_evidence "$MANIFEST_TEXT" "$PROJECT_ROOT" "$TASK_ID"
+repair_check "red-run-evidence" ttg_verify_red_run_evidence "$MANIFEST_TEXT" "$PROJECT_ROOT" "$TASK_ID" "$NAZGUL_DIR"
 repair_check "review-directory" repair_review_dir_safe
 repair_check "review-verdicts" repair_review_evidence_complete
 repair_check "review-provenance" repair_provenance_valid
@@ -222,14 +221,24 @@ REPAIRED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # Staged through nz_rewrite_file: it picks an unpredictable colocated name and
 # carries the manifest mode over, so no pre-created `.repair.tmp` can be aimed.
 export NAZGUL_REPAIR_LINE="- **Blocked kind**: reconciliation (repaired ${REPAIRED_AT})"
-if ! nz_rewrite_file "$MANIFEST_FILE" awk \
-  '$0 ~ /^- [*][*]Blocked kind[*][*]:/ { print ENVIRON["NAZGUL_REPAIR_LINE"]; next } { print }' \
+if ! nz_rewrite_file "$MANIFEST_FILE" awk -v pat="$(nz_manifest_field_pattern_ere "Blocked kind")" \
+  '{ if (tolower($0) ~ pat) print ENVIRON["NAZGUL_REPAIR_LINE"]; else print }' \
   "$MANIFEST_FILE"; then
   unset NAZGUL_REPAIR_LINE
   echo "task-transition: repair ${TASK_ID} completed its walk but could not mark the quarantine repaired; rerun repair after fixing the manifest" >&2
   exit 1
 fi
 unset NAZGUL_REPAIR_LINE
+# nz_rewrite_file exits 0 on a NO-OP, so a pattern that matched nothing reported success over a
+# record that never changed (item 3). A write is not written until it is read back (ADR-021).
+if ttg_is_reconciliation_quarantine "$(cat "$MANIFEST_FILE" 2>/dev/null || echo "")"; then
+  REPAIR_LIVE=$(get_task_status "$MANIFEST_FILE" "")
+  echo "task-transition: repair ${TASK_ID} completed its walk but the manifest STILL reads as a live reconciliation quarantine after the rewrite; refusing to report a repair that did not land. The walk is not reversible from ${REPAIR_LIVE:-missing} — the manifest needs human repair" >&2
+  _ttg_emit_event "$NAZGUL_DIR" "reconciliation_repair" \
+    task_id "$TASK_ID" action "halted" reason "repair_marker_not_persisted" \
+    quarantine "live" live_status "${REPAIR_LIVE:-missing}"
+  exit 1
+fi
 
 _ttg_emit_event "$NAZGUL_DIR" "reconciliation_repair" \
   task_id "$TASK_ID" action "repaired" review_unit "$REVIEW_UNIT" \

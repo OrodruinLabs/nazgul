@@ -103,7 +103,17 @@ Write the plan to `<main_worktree_path>/nazgul/plan.md` with:
 - Objective
 - Status Summary
 - Parallel Groups with all tasks
+- `## Tasks` roster — one entry per task, as real lines, NOT inside an HTML comment
 - Recovery Pointer
+
+**Then bind the plan to this objective. It is not planned until you have.** `nazgul/plan.md` ships from `templates/plan.md` with the inert placeholder `feat_id: <FEAT-NNN>` in its frontmatter, and nothing before you can substitute it — `/nazgul:init` copies the template verbatim and `config.feat_id` is still null at that point. You are the only writer of the `## Tasks` roster, and that frontmatter is a claim ABOUT that roster, so you are the only one who can honestly make it. Immediately after writing the roster, run:
+
+```bash
+CLAUDE_PROJECT_DIR="<main_worktree_path>" bash "${CLAUDE_PLUGIN_ROOT}/scripts/stamp-plan-objective.sh" \
+  --project-root "<main_worktree_path>"
+```
+
+It reads `config.feat_id` and writes THAT value — never type the id yourself and never re-derive it (from `objectives_history` length, a branch name, or anything else); a re-derived id binds the plan to an off-by-one objective. It prints `action=stamped` or `action=already-bound` and the persisted value it re-read from disk. A non-zero exit means the plan was NOT bound: read the refusal, fix the cause (most often an empty roster), and re-run — do not hand-edit the frontmatter instead. Leaving the placeholder in place makes `IMPLEMENTED -> DONE` by merge evidence unreachable for the whole objective, and the gate will say so by name.
 
 Write individual task manifests to `<main_worktree_path>/nazgul/tasks/TASK-NNN.md` using the task manifest template. Read the template at `templates/task-manifest.md` first — copy its exact field formats (e.g. `**Retry count**: 0/3` not bare `0`). The stop hook parses these fields with sed; format mismatches cause failures. Each new `TASK-NNN.md` MUST begin with a `---` / `status: PLANNED` / `---` YAML frontmatter block — this is the canonical task status read by the hooks.
 
