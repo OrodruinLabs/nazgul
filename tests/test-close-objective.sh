@@ -933,6 +933,7 @@ REG_WORD=$(printf '%s\n' "$REG_BLOCK" | sed -n 's/.*`\[enforced\]` \([A-Za-z]*\)
 case "$REG_COUNT" in
   9) REG_EXPECT="Nine" ;; 10) REG_EXPECT="Ten" ;; 11) REG_EXPECT="Eleven" ;;
   12) REG_EXPECT="Twelve" ;; 13) REG_EXPECT="Thirteen" ;; 14) REG_EXPECT="Fourteen" ;;
+  15) REG_EXPECT="Fifteen" ;;
   *) REG_EXPECT="" ;;
 esac
 if [ -z "$REG_EXPECT" ]; then

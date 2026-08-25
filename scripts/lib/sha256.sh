@@ -12,11 +12,18 @@
 # callers (the stop-hook DONE gate, review-evidence, task-transition-guard)
 # are untouched.
 #
-# Idempotent source guard, no top-level side effects. NOT `set -euo pipefail`
-# — this file is SOURCED into hook shells and must not alter their options.
+# No top-level side effects. NOT `set -euo pipefail` — this file is SOURCED into
+# hook shells and must not alter their options.
+#
+# RE-SOURCE GUARD: an ARRAY marker, not a scalar. A scalar guard is FORGEABLE — the
+# environment can export `_NAZGUL_SHA256_SOURCED=1` and the `return 0` fires before
+# nz_sha256 is ever defined, so every caller silently degrades its digest to
+# `unavailable` with nothing to indicate why. Arrays cannot be exported, so this
+# marker can only come from an actual earlier source of this file. Same idiom and
+# same reason as scripts/lib/review-file-class.sh; pinned by tests/test-bounded-net.sh.
 
-[ -n "${_NAZGUL_SHA256_SOURCED:-}" ] && return 0
-_NAZGUL_SHA256_SOURCED=1
+[ "${_NZ_SHA256_LOADED[1]:-}" = "loaded" ] && return 0
+_NZ_SHA256_LOADED=(0 loaded)
 
 # Reads stdin, prints the 64-char lowercase hex digest. Returns 1 rather than
 # aborting when neither tool exists, so a caller under `set -e` can degrade.

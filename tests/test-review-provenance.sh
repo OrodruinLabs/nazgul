@@ -658,4 +658,44 @@ assert_exit_code "empty diff_path with a diff.patch on disk: hashes the file the
   "$VAL_EC" 0
 teardown_temp_dir
 
+# --- #254 round-3 finding 9: the sha256 source must not abort a `set -e` consumer -------------
+# Before TASK-021 `_rp_sha256` was inlined, so this lib could not fail to load over a missing
+# digest helper. The extraction added a top-level `source .../sha256.sh`, and an unguarded one
+# returns non-zero when the file is absent — which under `set -euo pipefail` aborts EVERY consumer
+# of this lib: the stop-hook DONE gate, review-evidence.sh, task-transition-guard.sh. That turns a
+# DEFINED degradation (compute_review_token's documented `return 1`, which scripts/subagent-stop.sh
+# relies on) into an outage. Both directions are driven, so the pass is earned and not incidental.
+RP_G=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-rp-guard-XXXXXX")
+mkdir -p "$RP_G/lib"
+cp "$REPO_ROOT/scripts/lib/review-provenance.sh" "$REPO_ROOT/scripts/lib/structured-state.sh" \
+   "$REPO_ROOT/scripts/lib/review-file-class.sh" "$RP_G/lib/"
+assert_eq "finding 9 (precondition): the probe tree deliberately has no lib/sha256.sh to source" \
+  "$([ -e "$RP_G/lib/sha256.sh" ] && echo yes || echo no)" "no"
+cat > "$RP_G/probe.sh" <<'RPEOF'
+set -euo pipefail
+source "$1/lib/review-provenance.sh"
+echo "SOURCED"
+compute_review_token n d u >/dev/null 2>&1 && echo "TOKEN" || echo "DEGRADED"
+RPEOF
+RP_G_OUT=$(bash "$RP_G/probe.sh" "$RP_G" 2>/dev/null); RP_G_EC=$?
+assert_exit_code "finding 9: a set -e caller survives sourcing this lib with no sha256 helper present" "$RP_G_EC" 0
+assert_contains "finding 9: the source itself does not abort — the caller reaches the next statement" "$RP_G_OUT" "SOURCED"
+assert_contains "finding 9: and compute_review_token takes its DOCUMENTED degradation instead" "$RP_G_OUT" "DEGRADED"
+# CONTROL: strip the guard and the same tree aborts, so the arm above measures the guard and not
+# merely the absence of a hard dependency.
+sed 's|^source "$_NAZGUL_RP_DIR/sha256.sh" 2>/dev/null .*|source "$_NAZGUL_RP_DIR/sha256.sh"|' \
+  "$RP_G/lib/review-provenance.sh" > "$RP_G/lib/rp-unguarded.sh"
+assert_eq "finding 9 CONTROL (precondition): the mutant really did drop the guard" \
+  "$(grep -c 'sha256.sh" 2>/dev/null' "$RP_G/lib/rp-unguarded.sh" | tr -d ' ')" "0"
+cat > "$RP_G/probe2.sh" <<'RPEOF'
+set -euo pipefail
+source "$1/lib/rp-unguarded.sh"
+echo "SOURCED"
+RPEOF
+RP_G_OUT2=$(bash "$RP_G/probe2.sh" "$RP_G" 2>/dev/null); RP_G_EC2=$?
+assert_eq "finding 9 CONTROL: unguarded, the same absent helper aborts the set -e caller before it reaches anything" \
+  "$([ "$RP_G_EC2" -ne 0 ] && echo aborted || echo survived)" "aborted"
+assert_not_contains "finding 9 CONTROL: and the caller never reached the statement after the source" "$RP_G_OUT2" "SOURCED"
+rm -rf "$RP_G"
+
 report_results

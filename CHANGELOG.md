@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### PR #254, third review pass — eleven findings, all closed
+
+The review that followed the FEAT-031 merge found eleven, and the two that mattered most were
+mechanisms defeating their own purpose. **The `.gitignore` read-back probe reported BLOCK-INERT for
+a CORRECT block on exactly the #251 population**: `git check-ignore` consults the index first, so a
+project that already committed its markers — the case `--force` exists to remedy — probed 1, was
+told to rewrite flush-left and re-probe, probed 1 again, and was forbidden from reporting success,
+with the `git rm --cached` that clears the index entry still ahead of it. The probe passes
+`--no-index` now and reads its exit status three ways: 0 verified, 1 inert, 128 UNVERIFIABLE — "could
+not answer" is not an answer of "inert". **Doctor's indentation branch tested only the start
+sentinel**, so a block whose sentinel was flush-left over indented entries — what a hand-edited
+rewrite produces — matched nothing while doctor printed `pass ... the version this plugin ships`; the
+whole region is scanned now, in pure bash because that script is driven under a minimal PATH with no
+`awk`. Also: check (j) covers LOCAL installs, which this PR had version-stamped without giving them
+any surface that reports drift (this repo was the live instance); `self_audit.backlog_path` joins
+`automation.heartbeat.inbox.dir` under one rule over a table, rather than a second hand-written copy;
+the legacy fallback's recorded residual now covers BOTH ownership clauses and requires reporting
+every line removed; three `--force` remediations disclose what `--force` destroys instead of one; the
+version pin stops policing three other version namespaces in `scripts/doctor.sh`; a third copy of the
+sha256 fallback and a pass-through alias are gone; and `scripts/lib/sha256.sh`'s re-source guard is an
+array marker, because a scalar one can be exported into the environment and silently suppress the
+load. Every fix ships with a control that fails if the fix over-fires.
+
 ### Counts this entry moves
 
 Stated here rather than left to the reader, and checked mechanically by
