@@ -73,14 +73,27 @@ FEAT-034 and wrote `cut -c1-200` of the prompt — a **per-line** operation, so 
 *every* line: measured against the pre-change writer, a 150-line prompt produced a marker holding
 30,171 characters of prompt text, 151x the bound its own comment claimed.
 
-The value grammar is closed, and its four states are distinguishable by inspection alone:
+The value grammar is closed, and its four states are distinguishable by inspection alone — but only
+because a THIRD field, `prompt_bytes_source`, carries the fourth one:
 
-| `prompt_hash` | `prompt_bytes` | Means |
-|---|---|---|
-| `^[0-9a-f]{16}$` | `wc -c` of the prompt | computed normally |
-| `e3b0c44298fc1c14` | `0` | **computed**, over an empty prompt — not a failure |
-| `unavailable` | still populated | no digest, or one that failed `^[0-9a-f]{16}$`; also one stderr line |
-| `^[0-9a-f]{16}$` | `${#PROMPT}` under `LC_ALL=C` | `wc`/`tr` unreachable; exact count, different mechanism; also one stderr line |
+| `prompt_hash` | `prompt_bytes` | `prompt_bytes_source` | Means |
+|---|---|---|---|
+| `^[0-9a-f]{16}$` | `wc -c` of the prompt | `wc` | computed normally |
+| `e3b0c44298fc1c14` | `0` | `wc` | **computed**, over an empty prompt — not a failure |
+| `unavailable` | still populated | either | no digest, or one that failed `^[0-9a-f]{16}$`; also one stderr line |
+| `^[0-9a-f]{16}$` | the same count `wc` would have given | `shell` | no usable count from `wc -c \| tr`; also one stderr line |
+
+The two fields degrade on INDEPENDENT axes, which is why row 3's source column reads "either": a
+marker can lose the digest, the count's mechanism, both, or neither. **The column is scoped to the
+bytes axis and makes no claim about the hash axis.** The two `prompt_hash: "unavailable"` causes — no
+digest tool reachable at all, versus a tool that answered with something that failed the anchored
+regex — are still separated only on stderr, exactly as before, and this column does not separate them.
+Row 4 exists as a row at all because of `prompt_bytes_source`: its count is EXACT and equal to `wc`'s
+(#254 R1), so rows 1 and 4 were byte-identical in the marker until the mechanism was persisted beside
+it, and any four-way classifier built from the earlier three-column table could never emit its fourth
+bucket. `prompt_bytes_source` is `"wc"` or `"shell"` and nothing else. The marker file is a
+per-dispatch JSON artifact with no version of its own, so adding it required no `schema_version` bump
+and no config key.
 
 `unavailable` carries non-hex letters (`u`, `n`, `v`, `i`, `l`) and is 11 characters rather than 16, so
 it can never parse as a digest — one anchored regex separates "could not compute" from
@@ -91,9 +104,11 @@ the cause class (`length=N`, `non-hex-character`) and never the rejected value, 
 (#254 A2, ADR-028 D4). `prompt_bytes` is `wc -c` over the same byte stream that is hashed. Plain
 `${#PROMPT}` is never used as the primary count, because it counts characters under a UTF-8 locale and
 would disagree with the digest invisibly; it is used only as the fourth-state fallback, re-evaluated
-under `LC_ALL=C`, where it counts bytes and agrees with `wc -c` exactly. The fourth row exists because
-`wc` can genuinely be absent, and before #254 A1 that path wrote JSON `null` with no stderr at all —
-a reachable state the closed grammar did not name.
+under `LC_ALL=C`, where it counts bytes and agrees with `wc -c` exactly. The fallback fires whenever
+the `wc -c | tr` pipeline yields no usable count — an absent `wc`, an absent `tr`, a signal, or a `wc`
+that works perfectly but pads its output with TABs, which `tr -d ' '` does not strip — so its stderr
+line names that TESTED condition and not any one cause (#254 C-j). Before #254 A1 that path wrote JSON
+`null` with no stderr at all — a reachable state the closed grammar did not name.
 
 **Accepted residuals, recorded as decisions rather than oversights.** The digest is unsalted, so a
 party holding a candidate prompt can CONFIRM it by recomputing the hash; it cannot recover an unknown

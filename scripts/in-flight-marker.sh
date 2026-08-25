@@ -107,18 +107,24 @@ fi
 
 # Bytes over the SAME stream that is hashed. `${#PROMPT}` counts characters under a UTF-8
 # locale, so the fallback re-counts under LC_ALL=C, where it counts bytes and agrees with wc.
+PROMPT_BYTES_SOURCE="wc"
 PROMPT_BYTES=$(printf '%s' "$PROMPT" | wc -c 2>/dev/null | tr -d ' ') || PROMPT_BYTES=""
 case "$PROMPT_BYTES" in
   ''|*[!0-9]*)
+    # The fallback's count EQUALS wc's, so the mechanism is the only separating signal and it is
+    # persisted rather than left on stderr alone (#254 R1, ADR-014).
     PROMPT_BYTES=$(LC_ALL=C; printf '%s' "${#PROMPT}")
-    echo "in-flight-marker: wc -c unavailable — prompt_bytes counted with \${#PROMPT} under LC_ALL=C" >&2
+    PROMPT_BYTES_SOURCE="shell"
+    # Names the TESTED condition, not a cause: an absent `wc`, an absent `tr`, a signal, and a
+    # TAB-padded count all land here, the last with `wc` working perfectly (#254 C-j).
+    echo "in-flight-marker: no usable byte count from 'wc -c | tr' — prompt_bytes counted with \${#PROMPT} under LC_ALL=C" >&2
     ;;
 esac
 
 jq -cn --arg agent "$SUBAGENT" --arg unit "$UNIT" --arg ts "$TS" \
   --argjson epoch "$EPOCH" --arg hash "$PROMPT_HASH" --argjson bytes "$PROMPT_BYTES" \
-  --arg bg "$BACKGROUND" --arg named "$NAMED" \
-  '{agent:$agent, unit:$unit, dispatched_at:$ts, dispatched_at_epoch:$epoch, prompt_hash:$hash, prompt_bytes:$bytes, background:$bg, named:$named}' \
+  --arg bytes_source "$PROMPT_BYTES_SOURCE" --arg bg "$BACKGROUND" --arg named "$NAMED" \
+  '{agent:$agent, unit:$unit, dispatched_at:$ts, dispatched_at_epoch:$epoch, prompt_hash:$hash, prompt_bytes:$bytes, prompt_bytes_source:$bytes_source, background:$bg, named:$named}' \
   > "$MARKER_FILE" 2>/dev/null || true
 
 exit 0

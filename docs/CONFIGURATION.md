@@ -285,16 +285,23 @@ Added by the additive `migrate_31_to_32` migration (schema v31→v32); existing 
 ## In-Flight Dispatch Hold
 
 **Marker contents (FEAT-034/ADR-028).** A marker names a dispatch by digest, never by prompt text:
-`prompt_hash` (the leading 16 lowercase hex of sha256 over the whole prompt) and `prompt_bytes` (the
-byte length of that same stream). These REPLACE the former `prompt_head`, which stored `cut -c1-200`
+`prompt_hash` (the leading 16 lowercase hex of sha256 over the whole prompt), `prompt_bytes` (the
+byte length of that same stream), and `prompt_bytes_source` (`"wc"` or `"shell"` — which mechanism
+took that count). The first two REPLACE the former `prompt_head`, which stored `cut -c1-200`
 of the prompt — per-line, so 200 characters of *every* line, in practice tens of thousands of
 characters per marker. The rename is deliberate: `prompt_head` named content the field no longer
-carries. Four states, distinguishable by inspection: `^[0-9a-f]{16}$` with a byte count is a normal
-computation; `e3b0c44298fc1c14` with `prompt_bytes: 0` is a **successful** hash of an empty prompt;
+carries. Four states, distinguishable by inspection: `^[0-9a-f]{16}$` with a byte count and
+`prompt_bytes_source: "wc"` is a normal computation; `e3b0c44298fc1c14` with `prompt_bytes: 0` is a
+**successful** hash of an empty prompt;
 `unavailable` (it carries non-hex letters and is 11 chars, not 16, so no digest can collide with it) plus one stderr line
 means the digest was absent OR failed the writer's own anchored `^[0-9a-f]{16}$` check, and `prompt_bytes`
-stays populated; and a normal digest beside a count taken by the `${#PROMPT}`-under-`LC_ALL=C` fallback,
-plus one stderr line, means `wc` could not be run (#254 A1 — that path used to write JSON `null` in silence). Nothing needs configuring
+stays populated; and `prompt_bytes_source: "shell"` plus one stderr line means the `wc -c | tr` pipeline
+yielded no usable count — an absent `wc`, an absent `tr`, a signal, or a working `wc` whose output is
+TAB-padded, since `tr -d ' '` strips spaces only (#254 C-j) — so the count was taken by the
+`${#PROMPT}`-under-`LC_ALL=C` fallback (#254 A1 — that path used to write JSON `null` in silence).
+That fourth state's count is EXACT and equal to `wc`'s, so `prompt_bytes_source` is the ONLY field
+separating it from a normal computation (#254 R1); it says nothing about the hash axis, whose two
+`unavailable` causes remain distinguishable on stderr alone. Nothing needs configuring
 — there is no key for this and `schema_version` is unchanged. Accepted residuals: the digest is
 unsalted, so a held candidate prompt can be CONFIRMED though an unknown one cannot be recovered, and
 `prompt_bytes` reveals prompt size. The exposure being closed is prompt TEXT.

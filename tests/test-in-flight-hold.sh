@@ -2814,6 +2814,10 @@ teardown_temp_dir
 P7_PAYLOAD=$(jq -cn '{tool_name:"Agent",tool_input:{subagent_type:"nazgul:implementer",prompt:"NAZGUL_UNIT: TASK-001 degrade",run_in_background:true}}')
 P7_EXPECT_BYTES=$(printf '%s' 'NAZGUL_UNIT: TASK-001 degrade' | wc -c | tr -d ' ')
 
+# One predicate for all three mktemp -d sites below (#254 R2), deliberately the same shape as
+# _scratch_usable in test-shared-ignore-coverage.sh: a second, independently written one would diverge.
+_shim_usable() { [ -n "${1:-}" ] && [ -d "$1" ]; }
+
 # P7a — degraded state, cause 1: no sha tool reachable at all. Proves the path is CORRECT;
 # it says nothing about the path being REACHABLE, and nothing here should be read as claiming it.
 setup_temp_dir
@@ -2822,7 +2826,22 @@ create_config
 # NOT under $TEST_DIR: setup_temp_dir's template puts a `:` in the name, and a colon in a
 # PATH entry splits it into two bogus ones — the jq precondition below caught exactly that.
 P7A_BIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-p7a-XXXXXX" 2>/dev/null || echo "")
-assert_eq "P7a (precondition): the stripped-PATH bin dir was created" "$([ -n "$P7A_BIN" ] && [ -d "$P7A_BIN" ] && echo yes || echo no)" "yes"
+P7A_RAN=0
+if ! _shim_usable "$P7A_BIN"; then
+  _fail "P7a (precondition): the stripped-PATH bin dir was created" \
+    "got '$P7A_BIN' — an empty value symlinks the whole tool set to /<tool> outside any temp dir, where cleanup's own [ -n ] guard then skips it (#254 R2); the P7a arm did not run"
+else
+# R2 control: the predicate driven both ways — a guard refusing everything and one refusing nothing
+# read identically otherwise. The empty value's second-order harm is asserted too, not only its path.
+R2_EMPTY_SHIM=""
+if _shim_usable "$R2_EMPTY_SHIM"; then R2_EMPTY_VERDICT="use"; else R2_EMPTY_VERDICT="refuse"; fi
+if _shim_usable "$P7A_BIN"; then R2_REAL_VERDICT="use"; else R2_REAL_VERDICT="refuse"; fi
+assert_eq "R2: an empty mktemp -d result is refused" "$R2_EMPTY_VERDICT" "refuse"
+assert_eq "R2: and a real one is used, so the guard is not refusing everything" "$R2_REAL_VERDICT" "use"
+assert_eq "R2: the refused value computes a root-relative write target — shown here, never written to" \
+  "$R2_EMPTY_SHIM/sha256sum" "/sha256sum"
+assert_eq "R2: and it would lead PATH with an empty element, which bash searches as '.', so a green arm would prove nothing" \
+  "$(env PATH="$R2_EMPTY_SHIM:/nonexistent-bin" "$BASH" -c 'case "$PATH" in :*) echo leads-empty ;; *) echo other ;; esac')" "leads-empty"
 P7A_UNLINKABLE=""
 for _p7a_tool in jq date mkdir tr grep sed head wc cat dirname; do
   _p7a_path=$(type -P "$_p7a_tool" 2>/dev/null)
@@ -2845,9 +2864,13 @@ assert_eq "P7a: prompt_hash records the STATE as the literal 'unavailable'" "$P7
 P7A_NOTHEX=$(printf '%s' "$P7A_HASH" | grep -Eq '^[0-9a-f]{16}$' && echo no || echo yes)
 assert_eq "P7a: 'unavailable' carries non-hex letters and is not 16 chars, so one anchored regex settles it" "$P7A_HASH/$P7A_NOTHEX" "unavailable/yes"
 assert_eq "P7a: prompt_bytes stays populated — the degradation was confined to the hash step" "$(jq -r '.prompt_bytes' "${P7A_MARKER:-/dev/null}")" "$P7_EXPECT_BYTES"
+P7A_BYTES_SRC=$(jq -r '.prompt_bytes_source' "${P7A_MARKER:-/dev/null}")
+assert_eq "P7a: and prompt_bytes_source still reads 'wc' — the two fields degrade on independent axes (#254 R1)" "$P7A_BYTES_SRC" "wc"
 assert_eq "P7a: the five read fields survive degradation" "$(jq -r '[.agent,.unit,(.dispatched_at_epoch>0|tostring),.background,.named]|join("|")' "${P7A_MARKER:-/dev/null}")" "nazgul:implementer|TASK-001|true|true|false"
 assert_eq "P7a: degradation announces itself on exactly one stderr line (never silent)" "$(grep -c . "$TEST_DIR/p7a.err" | tr -d ' ')" "1"
 P7A_ERR=$(cat "$TEST_DIR/p7a.err")
+P7A_RAN=1
+fi
 teardown_temp_dir
 
 # P7b — degraded state, cause 2: the helper answered, but not with a digest. All three shapes
@@ -2857,7 +2880,11 @@ setup_nazgul_dir
 create_config
 # NOT under $TEST_DIR — setup_temp_dir's template puts a `:` in the name, which splits a PATH entry.
 P7B_SHIM=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-p7b-XXXXXX" 2>/dev/null || echo "")
-assert_eq "P7b (precondition): the shim bin dir was created" "$([ -n "$P7B_SHIM" ] && [ -d "$P7B_SHIM" ] && echo yes || echo no)" "yes"
+P7B_RAN=0
+if ! _shim_usable "$P7B_SHIM"; then
+  _fail "P7b (precondition): the shim bin dir was created" \
+    "got '$P7B_SHIM' — an empty value writes and chmods /sha256sum outside any temp dir and leads PATH with '.', so the three shapes below would not be testing the shim at all (#254 R2); the P7b arm did not run"
+else
 
 # Every shim DRAINS stdin first: an unread pipe hands the writer SIGPIPE, and the nonzero
 # pipeline status empties the value before validation sees it — testing cause 1 while claiming 2.
@@ -2909,6 +2936,7 @@ assert_not_contains "P7b shape 3: stderr never echoes the rejected value" "$P7B_
 assert_eq "P7b shape 3: degradation announces itself on exactly one stderr line (never silent)" "$(grep -c . "$TEST_DIR/p7b.err" | tr -d ' ')" "1"
 P7B_PAIR_HASH="$P7B_HASH"
 P7B_PAIR_ERR="$P7B_ERR"
+P7B_PAIR_BYTES_SRC=$(jq -r '.prompt_bytes_source' "${P7B_MARKER:-/dev/null}")
 
 # The validator's own control: it must ACCEPT the conforming shape, or the three arms above
 # would pass on a writer that simply rejected everything.
@@ -2920,12 +2948,22 @@ P7B_SHIM_OK
 _p7b_drive
 assert_eq "P7b (control): a conforming lowercase digest is ACCEPTED, so the arms above are not vacuous" "$P7B_HASH" "c0e60b7cbbd7a576"
 assert_eq "P7b (control): and an accepted digest says nothing on stderr" "$(grep -c . "$TEST_DIR/p7b.err" | tr -d ' ')" "0"
+P7B_RAN=1
+fi
 [ -n "$P7B_SHIM" ] && rm -rf "$P7B_SHIM"
 teardown_temp_dir
 
 # ADR-028 D4's split, asserted as a pair: the marker records the STATE, stderr names the CAUSE.
+if [ "$P7A_RAN" -eq 1 ] && [ "$P7B_RAN" -eq 1 ]; then
 assert_eq "P7: two different causes record one identical marker state" "$P7A_HASH" "$P7B_PAIR_HASH"
 assert_eq "P7: and the two causes are distinguishable from each other on stderr" "$([ "$P7A_ERR" != "$P7B_PAIR_ERR" ] && echo yes || echo no)" "yes"
+# R1's boundary, pinned rather than trusted: prompt_bytes_source separates the BYTES axis only. Both
+# hash causes still read 'wc' here, so its arrival never turns state-4 readability into a cause claim.
+assert_eq "P7: prompt_bytes_source does NOT separate the two hash causes — those stay stderr-only (#254 R1)" \
+  "$P7A_BYTES_SRC/$P7B_PAIR_BYTES_SRC" "wc/wc"
+else
+  _skip "P7: the state-vs-cause pair (P7a or P7b did not run — see the shim precondition above)"
+fi
 
 # P7c — the decoupling is real rather than renamed (#254 A4). Withholding the library is ABSENT
 # rather than chmod 000, because a CI job running as root reads a 000 file and un-creates it.
@@ -2948,8 +2986,8 @@ assert_eq "P7c: prompt_bytes is populated" "$(jq -r '.prompt_bytes' "${P7C_MARKE
 assert_eq "P7c: nothing reaches stderr — there is nothing left to degrade" "$(grep -c . "$TEST_DIR/p7c.err" | tr -d ' ')" "0"
 teardown_temp_dir
 
-# P7d — the FOURTH state (#254 A1): wc unreachable. Pre-change this wrote JSON `null` with ZERO
-# stderr; the count now falls back to ${#PROMPT} under LC_ALL=C, where it counts bytes not chars.
+# P7d — the FOURTH state (#254 A1): no usable count from wc. Pre-change this wrote JSON `null` with
+# ZERO stderr; the count now falls back to ${#PROMPT} under LC_ALL=C, where it counts bytes not chars.
 setup_temp_dir
 setup_nazgul_dir
 create_config
@@ -2957,32 +2995,93 @@ P7D_PROMPT=$(printf 'NAZGUL_UNIT: TASK-001 h\xc3\xa9llo \xe2\x9c\x93')
 P7D_PAYLOAD=$(jq -cn --arg p "$P7D_PROMPT" '{tool_name:"Agent",tool_input:{subagent_type:"nazgul:implementer",prompt:$p,run_in_background:true}}')
 P7D_EXPECT=$(printf '%s' "$P7D_PROMPT" | wc -c | tr -d ' ')
 P7D_UTF8=$(locale -a 2>/dev/null | grep -iE '^(c|en_us)\.utf-?8$' | head -1)
-if [ -n "$P7D_UTF8" ]; then
-  P7D_CHARS=$(LC_ALL="$P7D_UTF8"; printf '%s' "${#P7D_PROMPT}")
-  assert_eq "P7d (control): the prompt is genuinely multibyte, so a locale-blind fallback would differ" "$([ "$P7D_CHARS" -lt "$P7D_EXPECT" ] && echo yes || echo no)" "yes"
+P7D_SHIM=""
+if [ -z "$P7D_UTF8" ]; then
+  # The WHOLE arm skips, not just its control: under an ambient C locale the fallback agrees with wc
+  # whether or not it re-counts, so a green P7d would be environment-supplied evidence (#254 C-e).
+  _skip "P7d: no UTF-8 locale on this host, so nothing here could distinguish a locale-blind fallback"
 else
-  _skip "P7d (control): no UTF-8 locale on this host to prove the prompt discriminates"
-fi
-printf '%s' "$P7D_PAYLOAD" | bash "$WRITER" >/dev/null 2>"$TEST_DIR/p7d-ctl.err"
+P7D_CHARS=$(LC_ALL="$P7D_UTF8"; printf '%s' "${#P7D_PROMPT}")
+assert_eq "P7d (control): the prompt is genuinely multibyte, so a locale-blind fallback would differ" "$([ "$P7D_CHARS" -lt "$P7D_EXPECT" ] && echo yes || echo no)" "yes"
+printf '%s' "$P7D_PAYLOAD" | env LC_ALL="$P7D_UTF8" "$BASH" "$WRITER" >/dev/null 2>"$TEST_DIR/p7d-ctl.err"
 P7D_CTL_MARKER=$(find "$TEST_DIR/nazgul/in-flight" -type f 2>/dev/null | head -1)
 P7D_CTL_BYTES=$(jq -r '.prompt_bytes' "${P7D_CTL_MARKER:-/dev/null}")
 P7D_CTL_HASH=$(jq -r '.prompt_hash' "${P7D_CTL_MARKER:-/dev/null}")
+P7D_CTL_SRC=$(jq -r '.prompt_bytes_source' "${P7D_CTL_MARKER:-/dev/null}")
 assert_eq "P7d (control): a working wc records the byte length" "$P7D_CTL_BYTES" "$P7D_EXPECT"
+assert_eq "P7d (control): and names 'wc' as the mechanism that took it" "$P7D_CTL_SRC" "wc"
 assert_eq "P7d (control): and says nothing on stderr" "$(grep -c . "$TEST_DIR/p7d-ctl.err" | tr -d ' ')" "0"
 rm -rf "$TEST_DIR/nazgul/in-flight"
 P7D_SHIM=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-p7d-XXXXXX" 2>/dev/null || echo "")
+if ! _shim_usable "$P7D_SHIM"; then
+  _fail "P7d (precondition): the failing-wc shim dir was created" \
+    "got '$P7D_SHIM' — an empty value writes and chmods /wc outside any temp dir, where cleanup's own [ -n ] guard then skips it (#254 R2); the P7d degradation arm did not run"
+else
 printf '#!/bin/sh\nexit 1\n' > "$P7D_SHIM/wc"
 chmod +x "$P7D_SHIM/wc"
 assert_eq "P7d (precondition): the failing wc really is the one the writer resolves" "$(env PATH="$P7D_SHIM:$PATH" "$BASH" -c 'command -v wc')" "$P7D_SHIM/wc"
-printf '%s' "$P7D_PAYLOAD" | env PATH="$P7D_SHIM:$PATH" "$BASH" "$WRITER" >/dev/null 2>"$TEST_DIR/p7d.err"; P7D_EC=$?
-[ -n "$P7D_SHIM" ] && rm -rf "$P7D_SHIM"
+printf '%s' "$P7D_PAYLOAD" | env LC_ALL="$P7D_UTF8" PATH="$P7D_SHIM:$PATH" "$BASH" "$WRITER" >/dev/null 2>"$TEST_DIR/p7d.err"; P7D_EC=$?
 P7D_MARKER=$(find "$TEST_DIR/nazgul/in-flight" -type f 2>/dev/null | head -1)
 assert_exit_code "P7d: a hook that cannot run wc still exits 0 (fail-open)" "$P7D_EC" 0
 assert_eq "P7d: prompt_bytes is a JSON number, never the null this used to write" "$(jq -r '.prompt_bytes|type' "${P7D_MARKER:-/dev/null}")" "number"
 assert_eq "P7d: and it is the SAME byte count the working wc produced" "$(jq -r '.prompt_bytes' "${P7D_MARKER:-/dev/null}")" "$P7D_CTL_BYTES"
 assert_eq "P7d: the hash is untouched — the two fields degrade independently" "$(jq -r '.prompt_hash' "${P7D_MARKER:-/dev/null}")" "$P7D_CTL_HASH"
 assert_eq "P7d: the degradation announces itself on exactly one stderr line" "$(grep -c . "$TEST_DIR/p7d.err" | tr -d ' ')" "1"
-assert_contains "P7d: stderr names wc as the mechanism that degraded" "$(cat "$TEST_DIR/p7d.err")" "wc -c unavailable"
+assert_contains "P7d: stderr names the TESTED condition rather than a cause the guard never checks (#254 C-j)" "$(cat "$TEST_DIR/p7d.err")" "no usable byte count from 'wc -c | tr'"
+# R1: the hash and the count are IDENTICAL to the control's, so prompt_bytes_source is the only
+# thing separating state 4 from state 1 — without it a four-way classifier never emits bucket 4.
+P7D_SRC=$(jq -r '.prompt_bytes_source' "${P7D_MARKER:-/dev/null}")
+assert_eq "P7d: prompt_bytes_source names the FALLBACK, so state 4 is readable in the artifact (#254 R1)" "$P7D_SRC" "shell"
+assert_eq "P7d (R1): states 1 and 4 agree on hash and count and are separated by that column alone" \
+  "$([ "$P7D_CTL_HASH/$P7D_CTL_BYTES" = "$(jq -r '"\(.prompt_hash)/\(.prompt_bytes)"' "${P7D_MARKER:-/dev/null}")" ] && [ "$P7D_CTL_SRC" != "$P7D_SRC" ] && echo separated || echo indistinguishable)" "separated"
+
+# C-e's mutant CONTROL: the shipped writer with the fallback's LC_ALL=C guard stripped. Under the
+# same discovered locale it counts CHARACTERS, so agreement here would mean the locale came from the host.
+P7D_MUT_DIR="$TEST_DIR/nolcall"
+mkdir -p "$P7D_MUT_DIR/lib"
+cp "$REPO_ROOT/scripts/lib/nazgul-root.sh" "$P7D_MUT_DIR/lib/nazgul-root.sh"
+sed 's/\$(LC_ALL=C; printf/$(printf/' "$WRITER" > "$P7D_MUT_DIR/in-flight-marker.sh"
+assert_eq "P7d (mutant CONTROL): the mutant differs from the shipped writer by exactly the LC_ALL=C guard" \
+  "$(( $(grep -c 'LC_ALL=C;' "$WRITER") - $(grep -c 'LC_ALL=C;' "$P7D_MUT_DIR/in-flight-marker.sh") ))" "1"
+rm -rf "$TEST_DIR/nazgul/in-flight"
+printf '%s' "$P7D_PAYLOAD" | env LC_ALL="$P7D_UTF8" PATH="$P7D_SHIM:$PATH" "$BASH" "$P7D_MUT_DIR/in-flight-marker.sh" >/dev/null 2>&1
+P7D_MUT_MARKER=$(find "$TEST_DIR/nazgul/in-flight" -type f 2>/dev/null | head -1)
+P7D_MUT_BYTES=$(jq -r '.prompt_bytes' "${P7D_MUT_MARKER:-/dev/null}")
+assert_eq "P7d (mutant CONTROL): stripped of LC_ALL=C the same fallback counts characters, so it disagrees with wc" \
+  "$P7D_MUT_BYTES/$([ "$P7D_MUT_BYTES" != "$P7D_EXPECT" ] && echo differs || echo same)" "$P7D_CHARS/differs"
+fi
+fi
+[ -n "$P7D_SHIM" ] && rm -rf "$P7D_SHIM"
+teardown_temp_dir
+
+# P7e — C-j's control: the SAME fallback reached by a cause that is NOT an absent wc. A wc that
+# answers correctly but pads with TABs survives the writer's `tr -d ' '`, which strips spaces only.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+P7E_PAYLOAD=$(jq -cn '{tool_name:"Agent",tool_input:{subagent_type:"nazgul:implementer",prompt:"NAZGUL_UNIT: TASK-001 tab-padded",run_in_background:true}}')
+P7E_EXPECT=$(printf '%s' 'NAZGUL_UNIT: TASK-001 tab-padded' | wc -c | tr -d ' ')
+P7E_REAL_WC=$(type -P wc 2>/dev/null)
+P7E_SHIM=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-p7e-XXXXXX" 2>/dev/null || echo "")
+if ! _shim_usable "$P7E_SHIM" || [ -z "$P7E_REAL_WC" ]; then
+  _fail "P7e (precondition): a shim dir and a real wc for the shim to delegate to" \
+    "shim='$P7E_SHIM' wc='$P7E_REAL_WC' — an empty shim writes /wc outside any temp dir (#254 R2); the C-j cause arm did not run"
+else
+{ printf '#!/bin/sh\n'; printf 'printf "\\t%%s\\t\\n" "$(%s "$@" | tr -d " ")"\n' "$P7E_REAL_WC"; } > "$P7E_SHIM/wc"
+chmod +x "$P7E_SHIM/wc"
+P7E_SHIM_OUT=$(printf '%s' 'abc' | env PATH="$P7E_SHIM:$PATH" "$BASH" -c 'wc -c')
+assert_eq "P7e (precondition): the shim's wc is CORRECT — 'abc' is 3 bytes, so wc itself works perfectly" "$(printf '%s' "$P7E_SHIM_OUT" | tr -cd '0-9')" "3"
+assert_eq "P7e (precondition): and its padding survives the writer's own tr -d ' '" "$(printf '%s' "$P7E_SHIM_OUT" | tr -d ' ' | grep -c '[^0-9]')" "1"
+printf '%s' "$P7E_PAYLOAD" | env PATH="$P7E_SHIM:$PATH" "$BASH" "$WRITER" >/dev/null 2>"$TEST_DIR/p7e.err"; P7E_EC=$?
+P7E_MARKER=$(find "$TEST_DIR/nazgul/in-flight" -type f 2>/dev/null | head -1)
+assert_exit_code "P7e: a working-but-TAB-padded wc still exits 0 (fail-open)" "$P7E_EC" 0
+assert_eq "P7e: the fallback fired with wc working perfectly, and still recorded the exact byte count" "$(jq -r '.prompt_bytes' "${P7E_MARKER:-/dev/null}")" "$P7E_EXPECT"
+assert_eq "P7e: prompt_bytes_source records 'shell', so this cause reaches state 4 too" "$(jq -r '.prompt_bytes_source' "${P7E_MARKER:-/dev/null}")" "shell"
+assert_contains "P7e (C-j): the message is TRUE for a cause that is not an absent wc" "$(cat "$TEST_DIR/p7e.err")" "no usable byte count from 'wc -c | tr'"
+assert_not_contains "P7e (C-j): and it never asserts wc was unavailable — here wc answered correctly" "$(cat "$TEST_DIR/p7e.err")" "wc -c unavailable"
+assert_eq "P7e: still exactly one stderr line" "$(grep -c . "$TEST_DIR/p7e.err" | tr -d ' ')" "1"
+fi
+[ -n "$P7E_SHIM" ] && rm -rf "$P7E_SHIM"
 teardown_temp_dir
 
 # P8 — the THIRD state, which is not a degradation: an absent prompt is "computed and got this".
