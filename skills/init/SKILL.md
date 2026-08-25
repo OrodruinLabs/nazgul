@@ -99,7 +99,7 @@ There are exactly two Nazgul `.gitignore` blocks, and each is a **delimited regi
 
 **If `LOCAL_MODE=true` (local mode — nothing tracked in git):**
 1. Remove the shared-mode region if present.
-2. Apply **the version switch** above to the local-mode region, located by its start-sentinel prefix `# Nazgul Framework (local mode)`. The read-back probe is the shared branch's alone; every other case, the fifth included, applies here unchanged. **Write every line flush-left, exactly as shown** — leading whitespace is part of a `.gitignore` pattern, so an indented copy makes every entry inert and re-opens #251.
+2. Apply **the version switch** above to the local-mode region, located by its start-sentinel prefix `# Nazgul Framework (local mode)`. The read-back probe is the shared branch's alone; every other case, the leading-whitespace case included, applies here unchanged. **Write every line flush-left, exactly as shown** — leading whitespace is part of a `.gitignore` pattern, so an indented copy makes every entry inert and re-opens #251.
 
 ```gitignore
 # Nazgul Framework (local mode) (v2)

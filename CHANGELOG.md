@@ -280,6 +280,211 @@ still holds), one new enumerated key, and `unresolvable` +61 as **−8 from the 
 from the widened population**. Nothing was narrowed to make anything pass: no occurrence regex was
 tightened, no skip list added, no source removed.
 
+### FEAT-036 — the board that reviewed FEAT-035 found 16 more, and every blocking one broke this branch's own doctrine
+
+The four-reviewer aggregate board on unit `FEATURE-FEAT-035` — architect CHANGES_REQUESTED 84, code
+CHANGES_REQUESTED 84, security APPROVE 84, qa APPROVE 88 — filed **16 distinct findings after dedup:
+3 blocking (R1, R2, R3) and 13 concerns (C-a … C-m). All 16 shipped a fix on this same unmerged
+branch and none was deferred.** The standing instruction is that a finding may be closed as *not a
+defect, with evidence*, but never deferred for being small; unlike FEAT-035's C5 this round closed
+none that way, so the actionable count and the filed count are the same number. Like FEAT-035 this
+**is not a feature and gets no version heading of its own**: it is the corrections a review board
+asked for, applied before merge so that what lands is the thing the board actually reviewed. The
+per-finding record is `nazgul/context/254-board-findings-inventory.md`.
+
+**The pattern the four reviewers converged on matters more than the count: every blocking finding
+was one of this objective's own doctrines violated by this objective's own code.** R1 is ADR-014 — *a
+mechanism that fails must not look like a mechanism that had nothing to do* — reintroduced by the fix
+for A1, whose premise was ADR-014. R2 is an unchecked `mktemp -d` in the pull request that fixed
+unchecked `mktemp -d`. Below the blocking line the shape repeats: **C-b** is `RULES.md` §15 broken
+inside the §15 entry point, **C-j** is C6's class, and **C-l** is commit `387f7a8`'s class
+reintroduced by the very commit that fixed it. A correction is a change like any other and inherits
+no immunity from the class it corrects — so every task here states how it avoids adding a third
+layer of the same, and its acceptance criteria check that statement rather than trusting it.
+
+**Two decisions this round MADE rather than inherited**, because a future reader needs the why:
+
+1. **R1 ships an additive marker field, not a doc-only correction.** `docs/ARCHITECTURE.md` and
+   `docs/CONFIGURATION.md` claimed four marker states "distinguishable by inspection" while
+   `tests/test-in-flight-hold.sh` asserted that states 1 and 4 are byte-identical — same
+   `prompt_hash`, same `prompt_bytes`, the fourth row naming a *mechanism* rather than an observable.
+   A consumer building a degradation counter from those docs writes a four-way classifier whose
+   fourth bucket can never be emitted. Correcting the sentences would have **documented** the ADR-014
+   violation instead of closing it, leaving state 4's only signal one stderr line persisted nowhere.
+   Markers now carry `prompt_bytes_source` (`wc` or `shell`) beside `prompt_bytes`. Precedent:
+   FEAT-030's comment-verifier gate writes three *different* persisted values so a satisfied gate
+   records who satisfied it. **`schema_version` stays 36 and this adds zero config keys** — the
+   marker is a per-dispatch artifact with no version field, `scripts/migrate-config.sh` never touches
+   one, and the strongest point of the five-point re-verification is that `tests/test-stop-hook.sh`'s
+   P8c builds its marker shapes from `jq` object *literals* and never invokes the writer at all, so a
+   new writer field cannot reach it by any path. The new column is claimed only for the pair it
+   separates: an assertion pins `wc`/`wc` across the two *hash*-degradation arms, so a bytes-axis
+   observable can never be misread as a claim about the cause of a hash degradation.
+2. **C-f stamps the local-mode ignore block `(v2)` and moves it onto the version switch**, rather
+   than recording the asymmetry as a deliberate ruling. This objective is what ADDED the local end
+   sentinel, so every existing local install — **including this repository's own `/.gitignore`** —
+   would run `--force`, see the start sentinel already present, do nothing, and never receive its
+   region boundary. A ruling would have left that population *fixable but not detectable*, which is
+   R3's shape in the other block. Hoisting the switch into Step 2.5's preamble instead of duplicating
+   it *reduced* the hand-copied `v2` prose sites in `skills/init/SKILL.md` from three to one.
+
+### The three blocking findings
+
+- **R2 was filed with two sites and fixed at four.** `TMPDIR` nonexistent ⇒ the shim variable is
+  empty ⇒ `printf … > "$SHIM/wc"` writes `/wc` and `chmod +x /wc`; as root in CI those persist,
+  because cleanup's `[ -n "$SHIM" ] && rm -rf` is correctly guarded and therefore skips them. The
+  second-order effect neither the filing nor the security review named: `PATH="$SHIM:$PATH"` becomes
+  `":$PATH"`, whose empty leading element **is the current directory**, so the arms also silently
+  stop testing what they claim to test. The reproduction ran first (`sh: /wc: Read-only file
+  system`), then one `_shim_usable` predicate — deliberately the byte-shape of the sibling file's
+  `_scratch_usable` rather than a second independently written guard — was applied to **all four**
+  `mktemp -d` results, including P7a's symlink loop three lines above one of the filed sites.
+  Leaving a byte-identical instance untouched inside the stretch being fixed would have been this
+  objective's own governing pattern recurring a third time. The guard **skips the arm; it never
+  `exit`s**, so the rest of the file still runs.
+- **R3 — the drift notice was unreachable for exactly the population it was built for.** Step 2.5's
+  "stale block, no `--force`" state sits downstream of Step 0.5's *"if Nazgul is already initialized,
+  STOP here"*, and an existing shared install by definition has a tracked `nazgul/config.json` — so
+  the notice fires only where replacing the block is the right action instead. Worse, no read-only
+  surface knew the block existed: `scripts/doctor.sh` contained no `gitignore` string at all, so
+  nothing could tell a v1 install it was v1. Doctor's roster goes **fourteen checks to fifteen**. The
+  new `ignore-block` check gates on `install_mode == "shared"`, **prefix**-matches the sentinel so a
+  pre-stamp v1 block reads as found rather than absent, distinguishes absent from stale from current
+  (§15's looked-vs-never-looked), and **derives** the shipped stamp from `skills/init/SKILL.md`'s own
+  fence so `scripts/doctor.sh` never becomes a fifth hand-copied `v2` site. The unreachable notice in
+  the skill is deleted and its *action* — replace the region — takes its place.
+
+### The thirteen concerns
+
+- **The two destructive boundaries, both reproduced in a scratch `git init` tree before anything was
+  written.** **C-a**: FEAT-035's fallback walked *through* comments and stopped only at a blank line
+  or EOF, and this diff made it the boundary for two destructive operations. Driven against a v1
+  block with no blank separator, a user's `# my own ignores` / `build/` / `.env.local` was consumed
+  **entirely** — under the *older* rule their comment had terminated removal and all three survived,
+  so it was a strict improvement for the block and a strict regression for abutting user content.
+  Removal is now bounded by **ownership, not adjacency** (a `#` comment, or a pattern beginning
+  `nazgul/`; in local mode also `.claude/agents/generated/` and `.mcp.json`), stops at the first line
+  that qualifies as neither, and **names the line it stopped at**. The same paragraph in
+  `skills/clean/SKILL.md` was lifted verbatim rather than retyped, and a pin now compares the two
+  whole paragraphs byte for byte so one destructive operation cannot acquire two rules. The residual
+  is recorded at the rule site rather than left for the next reviewer: an abutting user `#` comment
+  is still consumed, because a user comment and the block's own justification comments are
+  indistinguishable by shape. **C-c**: Step 2.5 wrote `.gitignore` and never read it back, and
+  `"present at the shipped version — do nothing"` made that permanent. Measured: an indented v2 block
+  gives `check-ignore` rc 1 and `git add -A` stages `nazgul/in-flight/marker.json` — **#251 fully
+  restored** — while its stamp still reads *already current*, so no later `--force` would ever
+  rewrite it. The shared branch now probes its own write with `git check-ignore -q
+  nazgul/in-flight/`, treats present-but-not-matching as `BLOCK-INERT`, rewrites flush-left and
+  re-probes, and never reports success on an inert block; a version case for leading whitespace on
+  any region line outranks the other three. Both boundaries are stated at the probe: `check-ignore`
+  needs no such file but does need a git repository, and the probe belongs to the shared branch alone
+  because in local mode a `0` would be earned by the wholesale `nazgul/` entry instead.
+- **C-h** — `automation.heartbeat.inbox.dir` reached a `.gitignore` pattern and a `git rm --cached`
+  pathspec unvalidated, and in shared mode that value crosses a trust boundary because
+  `nazgul/config.json` is tracked. It is now accepted only as a relative in-project path matching
+  `^[A-Za-z0-9._/-]+$` with no `..` and no glob metacharacter, at both sites, with the notice naming
+  the **key and the rule** and never echoing the rejected value.
+- **C-b and C-l were one mechanism and were fixed as one.** `tests/test-shared-ignore-coverage.sh` is
+  §15 entry point eleven, and its two new `mktemp` guards did `_fail` then `exit 1` — bypassing the
+  emitter, so a real `mktemp` failure printed **no `paths:` line and no `N scanned … F findings`
+  line**. C3's original finding was "0 findings on a run that exited 1"; this was the same shape with
+  the number *removed* rather than wrong. Meanwhile a third guard branch added later left `$SCRATCH`
+  unassigned on one reachable path, under a comment still asserting that *"the two sections share one
+  guard condition, so `$SCRATCH` is always set"* — `387f7a8`'s class, reintroduced by the fix itself.
+  There is now **one** `mktemp -d`, one guard, one trap and one `SCRATCH_USABLE` flag that all four
+  dependent regions consult; both `exit 1`s are gone, an unusable tree raises `findings` and every
+  dependent region skips with a named reason, and the run still reaches both terminal lines. Two
+  child-run controls **drive** the degradation rather than asserting about the source, each checked
+  for the `paths:` line, the §15 grammar, `N == M + K` *in the degraded run*, `F >= 1` and a non-zero
+  exit, through one shared helper so the two cannot drift into two contracts. Recursion is bounded by
+  a child marker. The stale comment was **deleted rather than reworded**, because the fix makes its
+  claim true by construction: there is no longer a second section for a comment to be wrong about.
+- **C-d was solved by splitting A4 by direction, not by dropping `CHANGELOG.md`** — and the choice is
+  the point. The cheap alternative the finding offered was to remove the changelog from the swept
+  population, but `SOURCE_FILES` also feeds the `undeclared` direction, and **narrowing the
+  enumerator to make a count come out is the mechanism this file exists to remove**, rejected under
+  every name. So `SOURCE_DIRS` and `SOURCE_FILES` are byte-identical to before and A1's population
+  did not move; only the `stale-declaration` direction excludes the append-only **record** files —
+  today exactly `CHANGELOG.md` — because a changelog instructs nobody and never loses a line, so a
+  path it has ever named would stay enumerated forever and no retired writer could be reported again.
+  Nothing is dropped to buy that: every file is still read, the scanned/skipped/checked accounting is
+  **byte-identical**, and the 94 occurrences the second direction declines are tallied on the
+  `paths:` line as a new `record-only-excluded` field rather than discarded. `nazgul/conductor` is
+  the control and it fires; a companion arm proves the record file still feeds A1, and a permanent
+  mutant with the exclusion emptied proves the same fixture reported **nothing at all** before the
+  split. Verified before the split was written: no declared key is produced by `CHANGELOG.md` alone,
+  so the split cannot fire spuriously here.
+- **C-k** — C1's before-state was prose in an HTML comment where C3's got a permanent mutant. It now
+  gets one too: both halves of C1 removed at once, run against the very fixture the live pin fails
+  on, asserting `0 findings` and exit 0 — with **applied-proof three ways** (a one-line delta, each
+  mutated site counted 1/1 live and 0/0 in the mutant, and `return 1` counted at +1), because "no
+  findings" is otherwise equally consistent with a mutant that changed nothing. The declaration row
+  is blanked to its closing quote rather than deleted, since that row terminates the single-quoted
+  declarations string and deleting it would have produced a mutant that could not fail for the right
+  reason.
+- **C-g was re-measured and the count had moved: three hand-copied sites, not the four filed.** The
+  hoist in C-f's fix took `skills/init/SKILL.md` from three prose sites to one, and R3's fix deleted
+  the notice bullet. The pin now **derives** the shipped stamp from the shared fence's own first line
+  and buckets every version literal outside the fences into shipped / the permanent pre-stamp `v1`
+  class / **other** — "other" being the finding — with a floor (`shipped >= 3`, `legacy >= 1`, all
+  three population files readable) so "no other version" can never be satisfied by a population that
+  stopped naming any version at all. The control bumps the fence to a *derived* `v$((N+1))`, so it
+  can never coincide with the shipped value, and the pin fires on all three sites and names the stale
+  literal. Answered honestly rather than pinned around: `scripts/doctor.sh` does name one `v2`
+  literal, in the comment explaining why it derives the stamp instead of copying it — it is in the
+  scanned population, so a bump forces that comment to be revisited like any other site.
+- **C-i** — one sha256 body, one recorded rationale. Two hooks carried the same nine lines under
+  **contradictory** comments. `nz_sha256` in the new `scripts/lib/sha256.sh` is now the only copy
+  (`grep -rl 'command -v sha256sum' scripts/` returns exactly that file), with the two prior helpers
+  reduced to thin aliases so not one of the ~15 existing call sites moved — including the DONE gate's
+  four. The marker writer's `source` is deliberately **guarded**, unlike the unguarded one above it:
+  an absent helper reaches the pre-existing `prompt_hash: "unavailable"` branch with one stderr line,
+  never an abort of a hook contracted never to block. A new arm withholds the library by absence and
+  pins exit 0, the literal `unavailable`, an intact `prompt_bytes`, and exactly one stderr line
+  **byte-identical** to the sha256-missing arm's.
+- **C-e's stated trigger was wrong, and the corrected one is what shipped.** The finding said the
+  control would go green "on a host with `LANG` unset"; that does **not** reproduce on macOS — with
+  `LANG`, `LC_ALL` and `LC_CTYPE` all unset, bash still counts characters here, so the pre-change
+  test caught the mutation. The reachable condition is an ambient **`LC_ALL=C`**, which is ordinary
+  in CI and in POSIX containers: under it, against a writer with `LC_ALL=C;` stripped from the
+  fallback, the pre-change assertion **passes** and the post-change one fails. The arm now gates on
+  the discovered UTF-8 locale *as a whole* — skipping the arm, not merely its control, when none
+  exists — and applies that locale to both writer runs, with a `grep -c` delta of exactly 1 proving
+  the mutant applied.
+- **C-j** — the fallback's stderr line said `wc -c unavailable`, naming a cause the guard does not
+  test: the guard checks whether the *result* is all digits, which a missing `tr`, a signal, or a
+  TAB-padded `wc` all reach with `wc` working perfectly. It now names the tested condition — *no
+  usable byte count from `wc -c | tr`* — and a new arm drives it with a shim that delegates to the
+  real `wc` and only pads the answer with TABs, which `tr -d ' '` does not strip.
+- **C-m** — `nazgul/docs/TRD.md` §4.2 and §4.7 still described a population and a resolver that no
+  longer ship, and that TRD is the document the widening cites for its own authority. Both sections
+  carry dated **amendment** notes rather than rewrites — a TRD records what an objective decided at
+  its time — pointing at `RULES.md` §15 and at these entries as the current statement. Deliberately
+  invisible in the diff: this checkout is a local-mode install where `nazgul/` is gitignored, so the
+  amendment is read by the next implementer and committed nowhere.
+
+### What the numbers did
+
+`--filter=in-flight-hold` goes **619 → 636 → 656** assertions across the two tasks that touched it.
+`--filter=shared-ignore-coverage` goes **155 → 176 → 228**, with its coverage line unchanged at `152
+scanned, 36 skipped (no-nazgul-path=36, unreadable=0), 116 checked, 0 findings` and its `paths:` line
+gaining the `record-only-excluded` field described under C-d. `--filter=test-doctor` reaches 321 with
+doctor's fifteenth check. **Nothing was narrowed anywhere to make any of it come out**: the
+occurrence regex, both source populations, the sweep root and its refutation comment are all
+byte-identical, no skip list was added, and FEAT-035's C5 stays refuted with zero code shipped.
+
+And this entry moved those counters itself, because `CHANGELOG.md` is inside the swept population.
+Measured immediately before and immediately after it landed, with nothing else in the tree changing:
+`unresolvable` **259 → 262** and `record-only-excluded` **94 → 101** — seven resolvable runtime paths
+this entry names, declined by the `stale-declaration` direction per C-d and *tallied* rather than
+discarded, plus three bare-prefix tokens the resolver still declines to key. `enumerated`,
+`declared`, `undeclared` and `block-region-excluded` are unchanged at **32 / 32 / 0 / 32**, and the
+coverage line is byte-identical at `152 scanned, 36 skipped (no-nazgul-path=36, unreadable=0), 116
+checked, 0 findings`. Pinning that first figure took three measurements, because the first two drafts
+of this very paragraph each spelled out runtime paths of their own and moved the number they were
+reporting — the second time in two objectives that a release note has moved the published figure, and
+the reason every citation of it names the commit it was taken at rather than floating free.
+
 ## [2.34.0] - 2026-08-22
 
 FEAT-033, ADR-027 (#218) — **The dispatch class was being PREDICTED at dispatch time; it is
