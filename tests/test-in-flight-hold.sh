@@ -3191,17 +3191,17 @@ assert_eq "P8b (floor): the captured-rc class is measured, not assumed — a spe
 assert_eq "P8b: every source line is failure-tolerant, captured-rc, or the named root resolver" "$((P8B_TOLERANT + P8B_ROOT + P8B_CAPTURED))" "$P8B_SOURCES"
 assert_eq "P8b: the writer names review-gate tooling nowhere at all (#254 A4)" "$(grep -c 'review-provenance' "$P8B_SRC" | tr -d ' ')" "0"
 assert_eq "P8b: no PROMPT_BYTES=\"null\" initializer survives (#254 A3)" "$(grep -c 'PROMPT_BYTES="null"' "$P8B_SRC" | tr -d ' ')" "0"
-P8B_DEF_LN=$(grep -nE '^_ifm_sha256\(\)' "$P8B_SRC" | head -1 | cut -d: -f1)
-# COMMAND POSITION, not a bare name match: a pin that counted the definition line or a comment
-# would pass on a writer that defines the helper and then never calls it.
-P8B_CALL_LN=$(grep -nE '[|;&{(][[:space:]]*_ifm_sha256([^A-Za-z0-9_(]|$)' "$P8B_SRC" | grep -vE '^[0-9]+:[[:space:]]*#' | head -1 | cut -d: -f1)
-assert_eq "P8b: _ifm_sha256 is not merely defined, it is actually invoked" "$([ -n "$P8B_CALL_LN" ] && echo yes || echo no)" "yes"
-assert_eq "P8b: the local definition precedes the first non-comment use of _ifm_sha256" "$([ -n "$P8B_DEF_LN" ] && [ -n "$P8B_CALL_LN" ] && [ "$P8B_DEF_LN" -lt "$P8B_CALL_LN" ] && echo yes || echo no)" "yes"
-# _ifm_sha256 is a THIN ALIAS since #254 C-i, so the two pins above no longer imply a local
-# implementation — these say where the body actually lives, and that only one copy of it exists.
+# Round-3 finding 10: the writer used to define `_ifm_sha256() { nz_sha256; }` and call that. After
+# the C-i extraction the wrapper had nothing left to wrap, and it HID which helper actually ran when
+# the degradation below fired. The call site names nz_sha256 directly now, so these pins follow it.
+P8B_CALL_LN=$(grep -nE '[|;&{(][[:space:]]*nz_sha256([^A-Za-z0-9_(]|$)' "$P8B_SRC" | grep -vE '^[0-9]+:[[:space:]]*#' | head -1 | cut -d: -f1)
+assert_eq "P8b: the shared helper is not merely sourced, it is actually invoked" "$([ -n "$P8B_CALL_LN" ] && echo yes || echo no)" "yes"
+assert_eq "P8b (finding 10): no pass-through wrapper survives between the call site and the shared helper" \
+  "$(grep -c '_ifm_sha256' "$P8B_SRC" | tr -d ' ')" "0"
+# These say where the body actually lives, and that only one copy of it exists.
 P8B_SHA_SRC_LN=$(grep -nE '^[[:space:]]*source .*lib/sha256\.sh"' "$P8B_SRC" | head -1 | cut -d: -f1)
 assert_eq "P8b (C-i): the writer SOURCES the shared sha256 helper" "$([ -n "$P8B_SHA_SRC_LN" ] && echo yes || echo no)" "yes"
-assert_eq "P8b (C-i): that source precedes the first non-comment use, so the alias resolves when called" "$([ -n "$P8B_SHA_SRC_LN" ] && [ -n "$P8B_CALL_LN" ] && [ "$P8B_SHA_SRC_LN" -lt "$P8B_CALL_LN" ] && echo yes || echo no)" "yes"
+assert_eq "P8b (C-i): that source precedes the first non-comment use, so nz_sha256 resolves when called" "$([ -n "$P8B_SHA_SRC_LN" ] && [ -n "$P8B_CALL_LN" ] && [ "$P8B_SHA_SRC_LN" -lt "$P8B_CALL_LN" ] && echo yes || echo no)" "yes"
 assert_eq "P8b (C-i): and no copy of the sha256sum/shasum fallback body survives in the writer" "$(grep -c 'command -v sha256sum' "$P8B_SRC" | tr -d ' ')" "0"
 P8B_SHA_BODIES=$(grep -rl 'command -v sha256sum' "$REPO_ROOT/scripts" 2>/dev/null | sed "s|^$REPO_ROOT/||" | sort | tr '\n' ' ')
 assert_eq "P8b (C-i): exactly one file under scripts/ carries that body, and it is the shared library" "$P8B_SHA_BODIES" "scripts/lib/sha256.sh "

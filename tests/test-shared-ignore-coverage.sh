@@ -766,8 +766,13 @@ findings=$((findings + TESTS_FAILED - D_FAILED_BEFORE))
 # The committed mode, not the working-tree one: `cp` over a checked-out file leaves the mode
 # alone, so only the index says whether this file's own `./tests/…` dogfood idiom can run.
 M_FAILED_BEFORE=$TESTS_FAILED
-if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
-  _skip "committed-mode pin (inner run under an injected sweep root: \$REPO_ROOT is the fixture's parent, not a checkout tracking this file)"
+# Round-3 finding 11: this guard fired on the variable being SET and gave a reason about the tree
+# it points AT — but tests/test-coverage-honesty.sh drives this file with
+# NAZGUL_IGNORE_SWEEP_ROOT="$REPO_ROOT", where $REPO_ROOT IS a checkout tracking this file, so the
+# stated reason did not hold for the caller that triggers it most. Test the condition the reason
+# claims: when the sweep root IS this checkout there is nothing to skip, so the pin simply runs.
+if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ] && [ "$SWEEP_ROOT" != "$REPO_ROOT" ]; then
+  _skip "committed-mode pin (sweep root injected and pointing elsewhere: $SWEEP_ROOT is the fixture's parent, not a checkout tracking this file)"
 else
 M_MODE=$(git -C "$REPO_ROOT" ls-files -s -- "tests/$TEST_NAME.sh" 2>/dev/null | awk '{print $1}')
 if [ -z "$M_MODE" ]; then
@@ -900,35 +905,51 @@ _shipped_stamp() { _stamp_suffix "$BLOCK_MARKER" "$1" | sed -nE 's/^ \(v([0-9]+)
 
 # Version literals OUTSIDE the fences, bucketed by what each can mean: the derived stamp, the
 # permanent pre-stamp class v1, or a THIRD value — a site a bump updated the fence but not the prose for.
+# `ctx`, when non-empty, narrows the population to lines that are actually ABOUT the ignore block
+# (round-3 finding 4). scripts/doctor.sh is a 900-line diagnostic whose subject matter also includes
+# gh-stack releases, config schema_version and plugin versions; it passed only because those are
+# currently spelled as variables (`v$_DOC_GH_STACK_PINNED`) rather than literals. Inlining any one
+# of them would have failed a pin about the .gitignore block's version, pointing at a gh-stack line.
+# The excluded count is printed as a fifth field, so a filter that stopped excluding anything is
+# visible rather than silently turning the narrowing back into a whole-file scan.
 _version_buckets() {
-  awk -v ship="$1" -v regions="$2" '
+  awk -v ship="$1" -v regions="$2" -v ctx="$4" '
     BEGIN { cnt = split(regions, r, /[[:space:]]+/)
       for (i = 1; i <= cnt; i++) { if (r[i] == "") continue; split(r[i], b, "-"); lo[i] = b[1]; hi[i] = b[2] } }
     { inr = 0
       for (i = 1; i <= cnt; i++) if (r[i] != "" && NR >= lo[i] && NR <= hi[i]) inr = 1
       if (inr) next
+      if (ctx != "" && $0 !~ ctx) { xc++; next }
       n = split($0, w, /[^A-Za-z0-9]+/)
       for (j = 1; j <= n; j++) {
         if (w[j] !~ /^v[0-9]+$/) continue
         if (w[j] == ship) sh++
         else if (w[j] == "v1") lg++
         else { ot++; otl = otl (otl == "" ? "" : " ") w[j] "@" FILENAME ":" NR } } }
-    END { printf "%d %d %d %s\n", sh + 0, lg + 0, ot + 0, (otl == "" ? "-" : otl) }
+    END { printf "%d %d %d %d %s\n", sh + 0, lg + 0, ot + 0, xc + 0, (otl == "" ? "-" : otl) }
   ' "$3"
 }
 
 # scripts/doctor.sh is in the population precisely BECAUSE it names one v2 literal — in the comment
-# explaining why it derives the stamp instead of copying it. Covered, never excluded (#254 C-g).
+# explaining why it derives the stamp instead of copying it. Covered, never excluded (#254 C-g) —
+# but narrowed to its ignore-block lines (round-3 finding 4), because the rest of that file names
+# three OTHER version namespaces and a literal in any of them would fail this pin with a message
+# about the .gitignore block. The two skills are scanned whole: their whole subject IS the block.
 G_SITE_FILES="$INIT_SKILL $CLEAN_SKILL scripts/doctor.sh"
+G_DOCTOR_CTX='Nazgul Framework|ignore-block|_DOC_IGNORE|stamp'
 _version_tally() {
-  local init="$1" ship="$2" spec f sh=0 lg=0 ot=0 otl="" a b c d
+  local init="$1" ship="$2" spec f sh=0 lg=0 ot=0 otl="" xtot=0 a b c d e ctx
   for f in $G_SITE_FILES; do
-    case "$f" in "$INIT_SKILL") spec="$init|$S_REGIONS" ;; *) spec="$SWEEP_ROOT/$f|" ;; esac
-    read -r a b c d <<< "$(_version_buckets "$ship" "${spec#*|}" "${spec%%|*}")"
-    sh=$((sh + a)); lg=$((lg + b)); ot=$((ot + c))
+    case "$f" in
+      "$INIT_SKILL") spec="$init|$S_REGIONS"; ctx="" ;;
+      "$CLEAN_SKILL") spec="$SWEEP_ROOT/$f|"; ctx="" ;;
+      *) spec="$SWEEP_ROOT/$f|"; ctx="$G_DOCTOR_CTX" ;;
+    esac
+    read -r a b c e d <<< "$(_version_buckets "$ship" "${spec#*|}" "${spec%%|*}" "$ctx")"
+    sh=$((sh + a)); lg=$((lg + b)); ot=$((ot + c)); xtot=$((xtot + e))
     [ "$d" = "-" ] || otl="$otl${otl:+ }$d"
   done
-  printf '%s %s %s %s' "$sh" "$lg" "$ot" "${otl:--}"
+  printf '%s %s %s %s %s' "$sh" "$lg" "$ot" "$xtot" "${otl:--}"
 }
 
 G_SITE_N=0
@@ -943,9 +964,25 @@ else
     "no ' (vN)' suffix on the marker line under $SWEEP_ROOT — with nothing derived, every site below would be compared against the empty string"
   G_SHIP="__underived__"
 fi
-read -r G_SH G_LG G_OT G_OTL <<< "$(_version_tally "$SWEEP_ROOT/$INIT_SKILL" "$G_SHIP")"
+read -r G_SH G_LG G_OT G_XCL G_OTL <<< "$(_version_tally "$SWEEP_ROOT/$INIT_SKILL" "$G_SHIP")"
 assert_eq "P0 C-g: no prose site across the $G_SITE_N scanned file(s) names a version other than the derived $G_SHIP or the pre-stamp class v1" \
   "$G_OT/$G_OTL" "0/-"
+# Round-3 finding 4. The narrowing must be MEASURED, not assumed: a ctx regex that stopped matching
+# would exclude nothing and quietly restore the whole-file scan this finding is about.
+assert_eq "P0 finding-4 (floor): the doctor.sh narrowing actually excluded lines, so it has not silently become a whole-file scan again" \
+  "$([ "${G_XCL:-0}" -ge 1 ] && echo yes || echo no)" "yes"
+# CONTROL, the finding's own reproduction: scripts/doctor.sh legitimately names gh-stack releases,
+# config schema_version and plugin versions. Those are spelled as variables today, which is the only
+# reason the unnarrowed scan passed; inlining one made C-g fail with a message about the .gitignore
+# block, pointing at a gh-stack line. Both directions are driven, so the exclusion is the mechanism.
+G_CTX_MUT="$SCRATCH/doctor-ghstack.sh"
+{ cat "$SWEEP_ROOT/scripts/doctor.sh"; printf '# gh-stack v0.1.0 is the pinned release\n'; } > "$G_CTX_MUT"
+read -r _ _ G_CTX_OT _ G_CTX_OTL <<< "$(_version_buckets "$G_SHIP" "" "$G_CTX_MUT" "$G_DOCTOR_CTX")"
+assert_eq "P0 finding-4 CONTROL: a foreign version namespace in doctor.sh is outside the population, not a finding about the ignore block" \
+  "$G_CTX_OT/$G_CTX_OTL" "0/-"
+read -r _ _ G_CTX_OT_WIDE _ _ <<< "$(_version_buckets "$G_SHIP" "" "$G_CTX_MUT" "")"
+assert_eq "P0 finding-4 CONTROL: and unnarrowed the SAME line IS a finding, so the narrowing is what excludes it and the zero above is earned" \
+  "$G_CTX_OT_WIDE" "1"
 if [ "$G_SH" -ge 3 ] && [ "$G_LG" -ge 1 ]; then
   _pass "P0 C-g floor: $G_SH prose mention(s) of $G_SHIP and $G_LG of v1 were bucketed, so the zero above is a measured zero"
 else
@@ -966,7 +1003,7 @@ awk -v m="$BLOCK_MARKER" -v nv="$G_NEXT" '
 assert_eq "P0 C-g CONTROL: the mutant carries the bumped stamp and the same line count, so nothing but the fence moved" \
   "$(_shipped_stamp "$G_V_MUT")/$(wc -l < "$G_V_MUT" | tr -d ' ')" \
   "$G_NEXT/$(wc -l < "$SWEEP_ROOT/$INIT_SKILL" | tr -d ' ')"
-read -r G_M_SH _ G_M_OT G_M_OTL <<< "$(_version_tally "$G_V_MUT" "$G_NEXT")"
+read -r G_M_SH _ G_M_OT _ G_M_OTL <<< "$(_version_tally "$G_V_MUT" "$G_NEXT")"
 assert_eq "P0 C-g CONTROL: against it the pin FIRES on every prose site the bump left behind, and finds none naming the bumped value" \
   "$([ "$G_M_OT" -ge 1 ] && printf 'fires-%s' "$G_M_OT" || printf 'silent')/$G_M_SH" "fires-$G_SH/0"
 assert_contains "P0 C-g CONTROL: and it names the stale literal it found, not merely that one exists" \
@@ -1198,7 +1235,13 @@ _fenced_lines() {
   ' "$SWEEP_ROOT/$INIT_SKILL"
 }
 
-_sha256() { { command -v sha256sum >/dev/null 2>&1 && sha256sum || shasum -a 256; } | awk '{print $1}'; }
+# Round-3 finding 6: this was a THIRD copy of the fallback body, in the very PR whose TASK-021
+# extracted it so exactly one would exist — and its `&&`/`||` chain had a failure mode nz_sha256
+# cannot reach: with sha256sum ON PATH but exiting nonzero, `||` runs shasum against a stdin the
+# first command already consumed, hashing empty input and returning e3b0c442… . The digest pin
+# below would then fail naming no cause. Sourcing the lib also dogfoods it from tests/.
+# shellcheck source=../scripts/lib/sha256.sh
+source "$REPO_ROOT/scripts/lib/sha256.sh"
 
 # Whitespace-delimited membership, so nazgul/in-flight cannot be satisfied by a
 # substring of a longer pathspec such as nazgul/in-flight-other.
@@ -1411,7 +1454,7 @@ else
   _pass "P3 local block: hashed with $R_SHA_TOOL"
 fi
 assert_eq "P3 local block: byte-identical to its pinned baseline, whitespace included" \
-  "$(_sha256 < "$ROUTES/local.raw")" "$LOCAL_FENCE_SHA_BASE"
+  "$(nz_sha256 < "$ROUTES/local.raw")" "$LOCAL_FENCE_SHA_BASE"
 
 findings=$((findings + TESTS_FAILED - R_FAILED_BEFORE))
 fi

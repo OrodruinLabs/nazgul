@@ -88,7 +88,6 @@ _sanitize() {
   s="${s//../_}"
   [ -n "$s" ] && printf '%s' "$s" || printf 'unknown'
 }
-_ifm_sha256() { nz_sha256; }
 
 SAFE_AGENT=$(_sanitize "${SUBAGENT:-unknown}")
 SAFE_UNIT=$(_sanitize "$UNIT")
@@ -104,7 +103,7 @@ MARKER_FILE="$MARKER_DIR/${SAFE_AGENT}__${SAFE_UNIT}__${EPOCH}-${NONCE}.json"
 # Identify the dispatch by digest, never by prompt text (ADR-028). `unavailable`
 # has non-hex letters and is 11 chars, not 16, so it never reads as a digest.
 PROMPT_HASH="unavailable"
-_ifm_full=$(printf '%s' "$PROMPT" | _ifm_sha256 2>/dev/null) || _ifm_full=""
+_ifm_full=$(printf '%s' "$PROMPT" | nz_sha256 2>/dev/null) || _ifm_full=""
 _ifm_short="${_ifm_full:0:16}"
 # The two-state grammar is enforced HERE, not merely published: a wrapper that prefixes a
 # deprecation line, an uppercase-hex build, or a short digest all reach this point (#254 A2).
