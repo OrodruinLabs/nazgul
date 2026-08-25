@@ -328,17 +328,66 @@ check_config_schema() {
   fi
 }
 
-# (j) Shared-mode .gitignore block drift (#251, FEAT-036 R3): /nazgul:init STOPs on an
-# already-initialized project before its own version switch runs, so nothing else tells a v1 install it is v1.
+# (j) .gitignore block drift (#251, FEAT-036 R3): /nazgul:init STOPs on an already-initialized
+# project before its own version switch runs, so nothing else tells an install its block is stale.
 _DOC_IGNORE_SENTINEL='# Nazgul Framework — ephemeral runtime'
+_DOC_IGNORE_END='# Nazgul Framework — end ephemeral runtime'
+# Round-3 finding 7: this PR version-stamped the LOCAL block too, giving it a stamp and an end
+# sentinel it never had. A check that returns "not applicable" for local mode leaves every
+# pre-existing local install with no surface that reports it is v1 — and /nazgul:clean then falls
+# to its ownership-bounded legacy fallback, the DESTRUCTIVE path, forever.
+_DOC_IGNORE_SENTINEL_LOCAL='# Nazgul Framework (local mode)'
+_DOC_IGNORE_END_LOCAL='# Nazgul Framework — end local mode'
+
+# Round-3 finding 5: /nazgul:init --force archives nazgul/ state and re-runs Discovery. One of the
+# three remediations disclosed that and two did not, so the operator most likely to be hit — the
+# absent-block case, #251 live — was handed a state-archiving reinit as if it were a gitignore edit.
+# One suffix, appended to all three, so they cannot drift apart again.
+_DOC_IGNORE_FORCE_COST='It archives nazgul/ state and re-runs Discovery.'
 
 # The shipped stamp is DERIVED from skills/init/SKILL.md's fence, never copied here: a literal
 # would be a fifth hand-copied `v2` site (#254 C-g). A pre-stamp install carries no suffix and IS v1.
+# Literal prefix-strip rather than a regex: the local sentinel contains parentheses, which an ERE
+# would read as a group and match without them.
 _doc_ignore_stamp() {
-  local v
-  v="$(printf '%s' "$1" | sed -nE "s/^[[:space:]]*${_DOC_IGNORE_SENTINEL}[[:space:]]*\(v([0-9]+)\).*$/\1/p")"
+  local line="$1" sentinel="$2" rest v
+  rest="${line#"${line%%[![:space:]]*}"}"
+  rest="${rest#"$sentinel"}"
+  v="$(printf '%s' "$rest" | sed -nE 's/^[[:space:]]*\(v([0-9]+)\).*$/\1/p')"
   [ -n "$v" ] || v=1
   printf 'v%s' "$v"
+}
+
+# Round-3 finding 3: the indentation branch tested only the START SENTINEL, so a block whose
+# sentinel is flush-left while its ENTRIES are indented — exactly what a partial or hand-edited
+# rewrite produces — fell through to the stamp comparison and reported `pass ... the version this
+# plugin ships` while matching nothing. .gitignore treats leading whitespace as part of the
+# pattern, so ANY indented region line makes the block inert; the whole region is scanned now.
+# Region = start sentinel through end sentinel; with no end sentinel (a v1 install) it ends at the
+# first blank line or EOF, which is the legacy fallback's own bound.
+# Pure bash, no awk: tests/test-doctor.sh drives this script under a MINIMAL PATH
+# (dirname git grep sed sort tail cat bash jq) and awk is not in it. The only other awk in this
+# file sits behind the stacking gate, which that fixture never reaches; this runs on every tick.
+# A quoted case pattern matches literally, so the local sentinel's parentheses need no escaping.
+_doc_ignore_region_indent() {
+  local file="$1" start="$2" end="$3" line trimmed inr=0 bad=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    if [ "$inr" -eq 0 ]; then
+      case "$trimmed" in
+        "$start"*)
+          inr=1
+          case "$line" in [[:space:]]*) bad=1 ;; esac
+          ;;
+      esac
+      continue
+    fi
+    # Blank first: a whitespace-only line ENDS a legacy region, it is not an indented entry.
+    case "$trimmed" in '') break ;; esac
+    case "$line" in [[:space:]]*) bad=1 ;; esac
+    case "$trimmed" in "$end"*) break ;; esac
+  done < "$file"
+  if [ "$bad" -eq 1 ]; then printf 'indented'; else printf 'flush'; fi
 }
 
 check_ignore_block() {
@@ -351,50 +400,60 @@ check_ignore_block() {
     return 0
   fi
 
-  local mode
+  local mode sentinel end_sentinel what
   mode="$(_doc_cfg '.install_mode' 'unset')"
-  if [ "$mode" != "shared" ]; then
-    _doc_skip pass ignore-block not-applicable-config "Not applicable — install_mode is '$mode'; the '$_DOC_IGNORE_SENTINEL' block is shared mode's, and local mode ignores the whole nazgul/ tree instead."
-    return 0
-  fi
+  case "$mode" in
+    shared)
+      sentinel="$_DOC_IGNORE_SENTINEL"; end_sentinel="$_DOC_IGNORE_END"
+      what="the ephemeral runtime journal is tracked, which is #251 itself" ;;
+    local)
+      sentinel="$_DOC_IGNORE_SENTINEL_LOCAL"; end_sentinel="$_DOC_IGNORE_END_LOCAL"
+      # Honest scope: in local mode the whole nazgul/ tree is ignored by the block's own first
+      # entry, so a stale stamp here does NOT mean anything is tracked. What it costs is the end
+      # sentinel — without it /nazgul:clean cannot bound the region by sentinel and falls to the
+      # ownership-bounded legacy fallback, which deletes abutting user lines.
+      what="nothing is mis-tracked, but /nazgul:clean must fall back to ownership-bounded removal instead of the sentinel-delimited path" ;;
+    *)
+      _doc_skip pass ignore-block not-applicable-config "Not applicable — install_mode is '$mode', which is neither 'shared' nor 'local', so which block this project wants cannot be decided."
+      return 0 ;;
+  esac
 
   local skill="${SCRIPT_DIR%/*}/skills/init/SKILL.md" shipped_line shipped
-  shipped_line="$(grep -m1 "^$_DOC_IGNORE_SENTINEL" "$skill" 2>/dev/null || true)"
+  shipped_line="$(grep -m1 "^$sentinel" "$skill" 2>/dev/null || true)"
   if [ -z "$shipped_line" ]; then
-    _doc_skip pass ignore-block unreadable "Not applicable — no '$_DOC_IGNORE_SENTINEL' fence in $skill, so this plugin ships no version stamp to compare an install against."
+    _doc_skip pass ignore-block unreadable "Not applicable — no '$sentinel' fence in $skill, so this plugin ships no version stamp to compare an install against."
     return 0
   fi
-  shipped="$(_doc_ignore_stamp "$shipped_line")"
+  shipped="$(_doc_ignore_stamp "$shipped_line" "$sentinel")"
 
   local gitignore="$PROJECT_ROOT/.gitignore" found_line=""
   if [ -e "$gitignore" ] && [ ! -r "$gitignore" ]; then
     _doc_skip pass ignore-block unreadable "Not applicable — $gitignore exists but could not be read, so whether it carries the block is UNKNOWN. This is NOT a report that the block is missing."
     return 0
   fi
-  [ ! -f "$gitignore" ] || found_line="$(grep -m1 "^[[:space:]]*$_DOC_IGNORE_SENTINEL" "$gitignore" 2>/dev/null || true)"
+  [ ! -f "$gitignore" ] || found_line="$(grep -m1 "^[[:space:]]*$sentinel" "$gitignore" 2>/dev/null || true)"
 
-  # Absent in a shared install is #251 live, not drift, so it gets its own message. warn, not fail:
-  # doctor reserves fail for a prerequisite it cannot work around (jq, an unreadable config), and the loop still runs.
+  # Absent in an initialized install is the live defect, not drift, so it gets its own message. warn,
+  # not fail: doctor reserves fail for a prerequisite it cannot work around (jq, an unreadable config).
   if [ -z "$found_line" ]; then
-    local absence="carries no '$_DOC_IGNORE_SENTINEL' block"
+    local absence="carries no '$sentinel' block"
     [ -f "$gitignore" ] || absence="does not exist at all"
-    _doc_report warn ignore-block "install_mode is shared but $gitignore $absence — every ephemeral nazgul/ path is tracked, which is #251 itself. Re-run /nazgul:init --force to write the $shipped block."
+    _doc_report warn ignore-block "install_mode is $mode but $gitignore $absence — $what. Re-run /nazgul:init --force to write the $shipped block. $_DOC_IGNORE_FORCE_COST"
     return 0
   fi
 
-  local installed
-  installed="$(_doc_ignore_stamp "$found_line")"
-  case "$found_line" in
-    [[:space:]]*)
-      _doc_report warn ignore-block "$gitignore carries the '$_DOC_IGNORE_SENTINEL' block at $installed but INDENTED, and .gitignore treats leading whitespace as part of the pattern — every entry is inert however current the stamp reads. Re-run /nazgul:init --force to rewrite the region flush-left."
-      return 0
-      ;;
-  esac
+  local installed indent
+  installed="$(_doc_ignore_stamp "$found_line" "$sentinel")"
+  indent="$(_doc_ignore_region_indent "$gitignore" "$sentinel" "$end_sentinel")"
+  if [ "$indent" = "indented" ]; then
+    _doc_report warn ignore-block "$gitignore carries the '$sentinel' block at $installed but at least one line of the region is INDENTED, and .gitignore treats leading whitespace as part of the pattern — those entries are inert however current the stamp reads. Re-run /nazgul:init --force to rewrite the region flush-left. $_DOC_IGNORE_FORCE_COST"
+    return 0
+  fi
 
   if [ "$installed" = "$shipped" ]; then
-    _doc_report pass ignore-block "$gitignore carries the '$_DOC_IGNORE_SENTINEL' block at $installed, the version this plugin ships (read from $skill)."
+    _doc_report pass ignore-block "$gitignore carries the '$sentinel' block at $installed, the version this plugin ships (read from $skill), with every region line flush-left."
   else
-    _doc_report warn ignore-block "$gitignore carries the '$_DOC_IGNORE_SENTINEL' block at $installed; this plugin ships $shipped (read from $skill), so the entries added since $installed are still tracked. Re-run /nazgul:init --force to replace the region — it archives nazgul/ state and re-runs Discovery."
+    _doc_report warn ignore-block "$gitignore carries the '$sentinel' block at $installed; this plugin ships $shipped (read from $skill), so $what. Re-run /nazgul:init --force to replace the region. $_DOC_IGNORE_FORCE_COST"
   fi
 }
 

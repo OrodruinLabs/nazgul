@@ -27,6 +27,14 @@ DR_ROSTER_COUNT=$(grep -m1 '^_DOC_CHECK_IDS=' "$DOCTOR" | sed -E 's/^_DOC_CHECK_
 # The shipped ephemeral-block first line, read from the skill that writes it — the same
 # derivation check (j) performs, so this fixture tracks a version bump instead of pinning one.
 DR_SHIPPED_BLOCK_LINE=$(grep -m1 '^# Nazgul Framework — ephemeral runtime' "$REPO_ROOT/skills/init/SKILL.md")
+DR_SHIPPED_LOCAL_LINE=$(grep -m1 '^# Nazgul Framework (local mode)' "$REPO_ROOT/skills/init/SKILL.md")
+
+# Local-mode fixtures need the LOCAL block: _dr_config writes the shared one, and since round-3
+# finding 7 check (j) reads whichever block install_mode names rather than skipping local outright.
+_dr_local_gitignore() {
+  printf '%s\nnazgul/\n.claude/agents/generated/\n.mcp.json\n%s\n' \
+    "$DR_SHIPPED_LOCAL_LINE" '# Nazgul Framework — end local mode' > "$TEST_DIR/.gitignore"
+}
 
 # templates/config.json ships install_mode "shared", so check (j) fires in EVERY fixture below and
 # an absent block would push each aggregate exit to 1. _dr_config installs the current block too.
@@ -295,6 +303,7 @@ setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
 _dr_config '.install_mode = "local"' '.guards.git_hooks = false'
+_dr_local_gitignore
 OUT=$(env -u CLAUDE_PLUGIN_ROOT "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "plugin-version no-CLAUDE_PLUGIN_ROOT fixture: aggregate exit 0" "$EXIT" 0
 assert_contains "plugin-version no-CLAUDE_PLUGIN_ROOT fixture: passes as not applicable" "$OUT" "$(printf 'pass\tplugin-version')"
@@ -308,6 +317,7 @@ setup_nazgul_dir
 mkdir -p "$TEST_DIR/.claude-plugin"
 printf '{"name":"nazgul","version":"9.9.9"}\n' > "$TEST_DIR/.claude-plugin/plugin.json"
 _dr_config '.install_mode = "local"' '.guards.git_hooks = false'
+_dr_local_gitignore
 PLUGIN_ROOT_MATCH=$(_dr_plugin_root "9.9.9")
 OUT=$(CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT_MATCH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "plugin-version match fixture: aggregate exit 0" "$EXIT" 0
@@ -336,6 +346,7 @@ setup_nazgul_dir
 mkdir -p "$TEST_DIR/.claude-plugin"
 printf '{"name":"nazgul","version":"1.0.0"}\n' > "$TEST_DIR/.claude-plugin/plugin.json"
 _dr_config '.install_mode = "local"' '.guards.git_hooks = false'
+_dr_local_gitignore
 PLUGIN_ROOT_MISMATCH=$(_dr_plugin_root "2.0.0")
 OUT=$(CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT_MISMATCH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "plugin-version mismatch fixture: aggregate exit 1 (warn)" "$EXIT" 1
@@ -896,6 +907,20 @@ assert_contains "(j): an indented block is stale however current its stamp reads
   "$IB_INDENT" "$(printf 'warn\tignore-block')"
 assert_contains "(j): and the message says the entries are inert, not that the version is old" "$IB_INDENT" "inert"
 
+# Round-3 finding 3: the case the old branch MISSED — sentinel flush-left, ENTRIES indented, which
+# is what a partial or hand-edited rewrite produces. The stamp reads current and the block matches
+# nothing, so before the region scan this printed `pass ... the version this plugin ships`.
+printf '%s\n   nazgul/logs/\n# Nazgul Framework — end ephemeral runtime\n' "$DR_SHIPPED_BLOCK_LINE" > "$TEST_DIR/.gitignore"
+IB_INDENT_ENTRY=$(_dr_ib_line)
+assert_contains "(j): a flush-left sentinel over INDENTED entries is a finding, not a pass on a current stamp" \
+  "$IB_INDENT_ENTRY" "$(printf 'warn\tignore-block')"
+assert_contains "(j): and it says the entries are inert, not that the version is old" "$IB_INDENT_ENTRY" "inert"
+# CONTROL: the same block with its entries flush-left passes, so the arm above measures the
+# indentation and not merely the presence of a second line.
+printf '%s\nnazgul/logs/\n# Nazgul Framework — end ephemeral runtime\n' "$DR_SHIPPED_BLOCK_LINE" > "$TEST_DIR/.gitignore"
+assert_contains "(j) CONTROL: the same region flush-left passes, so the finding above is the indentation" \
+  "$(_dr_ib_line)" "$(printf 'pass\tignore-block')"
+
 printf 'build/\n' > "$TEST_DIR/.gitignore"
 IB_NOBLOCK=$(_dr_ib_line)
 assert_contains "(j): a shared install whose .gitignore carries no block at all is a finding" \
@@ -908,24 +933,54 @@ assert_contains "(j): no .gitignore at all is still a determinate observation, n
   "$IB_NOFILE" "$(printf 'warn\tignore-block')"
 assert_contains "(j): and it says which of the two absences it saw" "$IB_NOFILE" "does not exist at all"
 
-printf '%s\nnazgul/logs/\n' "$DR_SHIPPED_BLOCK_LINE" > "$TEST_DIR/.gitignore"
+# Round-3 finding 7: this PR stamped the LOCAL block and gave it an end sentinel, so a local
+# install can now be v1 — and returning "not applicable" left it with no surface that says so,
+# which is the one job skills/doctor/SKILL.md bills this check with.
 jq '.install_mode = "local"' "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.x" \
   && mv "$TEST_DIR/nazgul/config.json.x" "$TEST_DIR/nazgul/config.json"
+printf '%s\nnazgul/\n' "${DR_SHIPPED_LOCAL_LINE%% (v*}" > "$TEST_DIR/.gitignore"
 IB_LOCAL=$(_dr_ib_line)
-assert_contains "(j): a local install is a named not-applicable skip, never a pass on nothing" \
-  "$IB_LOCAL" "$(printf 'pass\tignore-block\tNot applicable')"
-assert_contains "(j): the skip names the install mode it read" "$IB_LOCAL" "install_mode is 'local'"
+assert_contains "(j): a v1 LOCAL install is reported, where it used to be a not-applicable skip" \
+  "$IB_LOCAL" "$(printf 'warn\tignore-block')"
+assert_contains "(j): and the local message names the version found" "$IB_LOCAL" "block at v1"
+assert_contains "(j): the local cost is stated honestly — nothing is mis-tracked, the sentinel-delimited removal is what is lost" \
+  "$IB_LOCAL" "ownership-bounded removal"
+# CONTROL: a local install carrying the shipped stamped block passes, so the warn above is the stamp.
+printf '%s\nnazgul/\n%s\n' "$DR_SHIPPED_LOCAL_LINE" '# Nazgul Framework — end local mode' > "$TEST_DIR/.gitignore"
+IB_LOCAL_OK=$(_dr_ib_line)
+assert_contains "(j) CONTROL: a local install at the shipped stamp passes" "$IB_LOCAL_OK" "$(printf 'pass\tignore-block')"
+# A mode that is neither is still a NAMED skip: the not-applicable path did not disappear, it moved.
+jq '.install_mode = "unset"' "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.x" \
+  && mv "$TEST_DIR/nazgul/config.json.x" "$TEST_DIR/nazgul/config.json"
+IB_MODE_OTHER=$(_dr_ib_line)
+assert_contains "(j): a mode that is neither shared nor local is a named not-applicable skip, never a pass on nothing" \
+  "$IB_MODE_OTHER" "$(printf 'pass\tignore-block\tNot applicable')"
+assert_contains "(j): the skip names the install mode it read" "$IB_MODE_OTHER" "install_mode is 'unset'"
 
 printf 'not json\n' > "$TEST_DIR/nazgul/config.json"
 IB_BADCFG=$(_dr_ib_line)
 assert_contains "(j): an unparseable config makes install_mode UNKNOWN, never 'unset'" "$IB_BADCFG" "UNKNOWN rather than unset"
 _dr_config
 
-DR_IB_SET=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$(_dr_ib_msg "$IB_PASS")" "$(_dr_ib_msg "$IB_V1")" \
+DR_IB_SET=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$(_dr_ib_msg "$IB_PASS")" "$(_dr_ib_msg "$IB_V1")" \
   "$(_dr_ib_msg "$IB_INDENT")" "$(_dr_ib_msg "$IB_NOBLOCK")" "$(_dr_ib_msg "$IB_NOFILE")" \
-  "$(_dr_ib_msg "$IB_LOCAL")" "$(_dr_ib_msg "$IB_BADCFG")")
-assert_eq "(j): the seven reachable states print pairwise-distinct messages, not seven copies of one verdict" \
-  "$(printf '%s\n' "$DR_IB_SET" | sort -u | wc -l | tr -d ' ')" "7"
+  "$(_dr_ib_msg "$IB_LOCAL")" "$(_dr_ib_msg "$IB_LOCAL_OK")" "$(_dr_ib_msg "$IB_MODE_OTHER")" \
+  "$(_dr_ib_msg "$IB_BADCFG")")
+assert_eq "(j): the nine reachable states print pairwise-distinct messages, not nine copies of one verdict" \
+  "$(printf '%s\n' "$DR_IB_SET" | sort -u | wc -l | tr -d ' ')" "9"
+
+# ---- Round-3 finding 5: every remediation that recommends --force discloses what it destroys ---
+# Two of the three said only "re-run /nazgul:init --force"; the absent-block one — #251 live, the
+# operator most likely to be hit — read like a .gitignore edit. One suffix now, so they cannot drift.
+DR_IB_COST='It archives nazgul/ state and re-runs Discovery.'
+for _ib_case in "absent:$IB_NOBLOCK" "no-file:$IB_NOFILE" "indented:$IB_INDENT" "indented-entries:$IB_INDENT_ENTRY" "stale:$IB_V1" "local-stale:$IB_LOCAL"; do
+  assert_contains "(j) finding 5: the ${_ib_case%%:*} remediation discloses that --force archives state" \
+    "${_ib_case#*:}" "$DR_IB_COST"
+done
+# CONTROL: the pass message recommends nothing, so it must NOT carry the cost clause — otherwise
+# the loop above would pass on a suffix appended unconditionally to every line.
+assert_not_contains "(j) finding 5 CONTROL: the pass message recommends no --force, so it carries no cost clause" \
+  "$IB_PASS" "$DR_IB_COST"
 
 # The unreadable arm needs a file this process genuinely cannot read; root can, so it is
 # announced as skipped rather than asserted vacuously.
@@ -938,7 +993,7 @@ else
     "$IB_UNREADABLE" "$(printf 'pass\tignore-block\tNot applicable')"
   assert_contains "(j): and it explicitly disclaims the absence claim" "$IB_UNREADABLE" "NOT a report that the block is missing"
   assert_eq "(j): 'could not look' and 'looked and found no block' never print the same thing (RULES §15)" \
-    "$(printf '%s\n%s\n' "$DR_IB_SET" "$(_dr_ib_msg "$IB_UNREADABLE")" | sort -u | wc -l | tr -d ' ')" "8"
+    "$(printf '%s\n%s\n' "$DR_IB_SET" "$(_dr_ib_msg "$IB_UNREADABLE")" | sort -u | wc -l | tr -d ' ')" "10"
 fi
 chmod 644 "$TEST_DIR/.gitignore"
 
@@ -992,7 +1047,17 @@ assert_file_contains "R3: and names the read-only surface that reports drift ins
 assert_file_contains "R3: the stale branch now replaces the region rather than reporting it" \
   "$REPO_ROOT/skills/init/SKILL.md" "This is the ONLY stale branch"
 assert_file_contains "R3: skills/doctor/SKILL.md names the fifteenth check it now runs" \
-  "$REPO_ROOT/skills/doctor/SKILL.md" "ephemeral-runtime block at the version this plugin ships"
+  "$REPO_ROOT/skills/doctor/SKILL.md" "at the version this plugin ships"
+# Round-3 finding 7: the doc billed (j) as "the only surface that tells a v1 install it is v1"
+# while the check skipped local mode outright, so half the installs it claimed to cover had no
+# surface at all. Both modes must be named where that claim is made.
+for _r3_mode in "the ephemeral-runtime block in shared mode" "the local-mode block in local"; do
+  assert_file_contains "R3 finding 7: skills/doctor/SKILL.md says (j) covers $_r3_mode" \
+    "$REPO_ROOT/skills/doctor/SKILL.md" "$_r3_mode"
+done
+# And the region scan, which is what finding 3 bought: a stamp alone cannot see an inert block.
+assert_file_contains "R3 finding 3: skills/doctor/SKILL.md says the whole region is checked flush-left, not just the stamp" \
+  "$REPO_ROOT/skills/doctor/SKILL.md" "every region line flush-left"
 teardown_temp_dir
 
 # Coverage honesty (FEAT-028 TASK-015, TRD §6): a check with nothing to inspect is
