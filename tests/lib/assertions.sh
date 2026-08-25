@@ -275,6 +275,24 @@ nzd_exemption() { # <rel-path> <line-text> -> justification, exit 0 if exempt
         *'cksum'*)
           echo "cksum is a byte-identity check on the test's own config.json across one hook run, asserting the hold wrote an attempt ledger and NOT config state — it digests no security-relevant content and gates nothing"
           return 0 ;;
+        *'P7B_SHIM/sha256sum'*|*'R2_EMPTY_SHIM/sha256sum'*)
+          echo "the token is a FILE PATH: the #254 R2/P7b block writes and chmods stub binaries at those names to drive the malformed-digest rejection, and never invokes a digest itself"
+          return 0 ;;
+        *'an empty value writes and chmods /sha256sum outside any temp dir'*)
+          echo "the token sits inside the _fail MESSAGE reporting that the shim dir was unusable and the P7b arm did not run; it names the hazard rather than computing anything"
+          return 0 ;;
+        *'shasum: option -a is deprecated'*)
+          echo "the token is the STUB's own stdout inside a heredoc: shape 1 makes the fake sha256sum print a deprecation line before its digest, which IS the malformed input under test"
+          return 0 ;;
+        *'"$P7B_ERR" "shasum:"'*)
+          echo "the token is the needle of an assert_not_contains proving the writer's stderr never echoes the rejected value; it asserts an ABSENCE and computes nothing"
+          return 0 ;;
+      esac ;;
+    tests/test-shared-ignore-coverage.sh)
+      case "$2" in
+        *'a sha256 tool (sha256sum or shasum) is on PATH'*)
+          echo "the token sits inside the _fail message of an AVAILABILITY precondition — with neither tool present the local-fence digest pin would be vacuous rather than passing; the hashing itself goes through nz_sha256 (scripts/lib/sha256.sh)"
+          return 0 ;;
       esac ;;
     tests/test-task-transition-command.sh)
       case "$2" in
