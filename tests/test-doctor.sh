@@ -976,11 +976,13 @@ DR_NOTICE_CTRL="$TEST_DIR/init-notice-control.md"
 { cat "$REPO_ROOT/skills/init/SKILL.md"; printf 'print a notice: %s stays tracked.\n' "$DR_NOTICE"; } > "$DR_NOTICE_CTRL"
 assert_eq "R3 CONTROL: appending one occurrence moves that count to one, so the zero above is MEASURED" \
   "$(grep -cF -- "$DR_NOTICE" "$DR_NOTICE_CTRL" || true)" "1"
-DR_NOFORCE='Present but stale, no `--force`'
+# Wording-agnostic on purpose: TASK-022 renamed this bullet from "Present, stale" to
+# "Present but stale", and a needle pinned to either spelling reads 0 for the wrong reason.
+DR_NOFORCE='stale, no `--force`'
 assert_eq "R3: and the unreachable fourth state is gone from the version switch too" \
   "$(grep -cF -- "$DR_NOFORCE" "$REPO_ROOT/skills/init/SKILL.md" || true)" "0"
 DR_NOFORCE_CTRL="$TEST_DIR/init-noforce-control.md"
-{ cat "$REPO_ROOT/skills/init/SKILL.md"; printf -- '- **%s** — report it.\n' "$DR_NOFORCE"; } > "$DR_NOFORCE_CTRL"
+{ cat "$REPO_ROOT/skills/init/SKILL.md"; printf -- '- **Present but %s** — report it.\n' "$DR_NOFORCE"; } > "$DR_NOFORCE_CTRL"
 assert_eq "R3 CONTROL: that zero is measured too" \
   "$(grep -cF -- "$DR_NOFORCE" "$DR_NOFORCE_CTRL" || true)" "1"
 assert_file_contains "R3: the skill states why that state cannot occur, so it cannot be re-added by accident" \
