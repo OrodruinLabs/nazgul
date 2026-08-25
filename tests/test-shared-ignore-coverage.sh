@@ -68,6 +68,8 @@ nazgul/reviews|record|-|Review artifacts per task; only the four children declar
 nazgul/learning|record|-|Learned-rule registry and declines stay tracked
 nazgul/x|record|-|An illustrative placeholder in guard comments only (scripts/local-mode-tracking-guard.sh:71); nothing writes it, so it must never be a block line
 nazgul/nazgul|record|-|Prose illustration of the path a NAZGUL_DIR misconfiguration would resolve to (scripts/doctor.sh:335); nothing writes it
+nazgul/scratch|record|-|Prose illustration of a USER pattern that the legacy fallback would consume (skills/init/SKILL.md, ownership rule); nothing writes it, so it must never be a block line
+nazgul/notes.md|record|-|The file-shaped half of the same illustration; a user path indistinguishable by shape from a block entry is the residual that rule records, and ignoring it would delete the very content the warning is about
 nazgul/pull|record|-|The tail of a github.com/OrodruinLabs/nazgul/pull/<n> PR URL in skills/complete/SKILL.md:15, not a project path at all; nothing writes it, so it must never be a block line
 nazgul/.nazgul-plan.XXXXXX|ephemeral|nazgul/.nazgul-plan.*|The mktemp template scripts/stamp-plan-objective.sh:149 writes plan.md through; a transient scratch file with a random suffix, the same shape as the nazgul/config.json.tmp row above
 nazgul/checkpoints|ephemeral|nazgul/checkpoints/|Per-iteration snapshots the loop regenerates
@@ -985,13 +987,22 @@ _own_counts() {
 }
 S_OWN='A line belongs to the region only if it is a `#` comment or a pattern beginning `nazgul/`'
 S_OWN_STOP='name the line removal stopped at'
-S_OWN_RESID='an abutting user `#` comment is still consumed'
+S_OWN_RESID='BOTH ownership clauses consume abutting user content silently'
+S_OWN_REPORT='REPORT EVERY LINE IT REMOVED'
 assert_eq "P0 C-a: the ownership bound on the legacy fallback is stated in init and in clean, once each" \
   "$(_own_counts "$S_OWN" "$SWEEP_ROOT/$INIT_SKILL" "$SWEEP_ROOT/$CLEAN_SKILL")" "1/1"
 assert_eq "P0 C-a: so is the instruction to NAME the line removal stopped at, which is what tells a user why their tail survived" \
   "$(_own_counts "$S_OWN_STOP" "$SWEEP_ROOT/$INIT_SKILL" "$SWEEP_ROOT/$CLEAN_SKILL")" "1/1"
-assert_eq "P0 C-a: and the residual it does NOT close — an abutting user comment is still consumed" \
+assert_eq "P0 C-a: and the residual it does NOT close, stated for BOTH ownership clauses and not the comment one alone (round-3 finding 8)" \
   "$(_own_counts "$S_OWN_RESID" "$SWEEP_ROOT/$INIT_SKILL" "$SWEEP_ROOT/$CLEAN_SKILL")" "1/1"
+# The silent half needs an ACTION, not just a disclosure: the qualifies-as-neither case is loud,
+# so a consumed user line must be reported too, in both copies of the rule.
+assert_eq "P0 C-a: and the removal must report every line it removed, which is the only notice a silently-consumed user line ever gets" \
+  "$(_own_counts "$S_OWN_REPORT" "$SWEEP_ROOT/$INIT_SKILL" "$SWEEP_ROOT/$CLEAN_SKILL")" "1/1"
+# Negative pin: the v2 block's four-entry lead-in described a population this fallback cannot run
+# on (v2 carries an end sentinel). Its return would be the same mis-citation, so it reads zero.
+assert_eq "P0 C-a: the v1 rule does not cite the v2 block's entry count, the population it never governs" \
+  "$(_own_counts 'that first interior comment arrives after only four entries' "$SWEEP_ROOT/$INIT_SKILL" "$SWEEP_ROOT/$CLEAN_SKILL")" "0/0"
 
 S_OWN_MUT_I="$SCRATCH/init-no-own.md"; S_OWN_MUT_C="$SCRATCH/clean-no-own.md"
 _strike "$S_OWN" "$SWEEP_ROOT/$INIT_SKILL" > "$S_OWN_MUT_I"
@@ -1003,7 +1014,13 @@ assert_eq "P0 C-a CONTROL: and the strike-out changed both files, so 0/0 is not 
   "differs/differs"
 
 # One destructive operation, one rule: the two copies are compared whole, not phrase by phrase.
-_own_para() { awk -v e='**Legacy fallback**, for a v1 region carrying no end sentinel' 'index($0, e) == 1 { print; exit }' "$1"; }
+# BOTH paragraphs: round-3 finding 8 split the residual onto its own, and a byte-identity check
+# that stopped at the first would let the two copies drift in exactly the half that is destructive.
+_own_para() {
+  awk -v a='**Legacy fallback**, for a v1 region carrying no end sentinel' \
+      -v b='**The residual this does not close' \
+      'index($0, a) == 1 || index($0, b) == 1 { print }' "$1"
+}
 S_OWN_PARA=$(_own_para "$SWEEP_ROOT/$INIT_SKILL")
 if [ -n "$S_OWN_PARA" ]; then
   _pass "P0 C-a floor: the legacy-fallback paragraph is located in $INIT_SKILL (${#S_OWN_PARA} bytes)"
@@ -1031,7 +1048,9 @@ _probe_in_bullet() {
   [ -n "$line" ] || { printf 'no-bullet'; return 0; }
   case "$line" in *"$2"*) printf 'probed' ;; *) printf 'unprobed' ;; esac
 }
-S_PROBE='git check-ignore -q nazgul/in-flight/'
+# --no-index is part of the probe, not decoration (round-3 finding 1): without it the probe
+# consults the index and answers 1 for a TRACKED path, which is the #251 population itself.
+S_PROBE='git check-ignore -q --no-index nazgul/in-flight/'
 S_BUL_ABS='- **Absent** —'
 S_BUL_CUR='- **Present at the shipped version** —'
 _probe_pair() { printf '%s/%s' "$(_probe_in_bullet "$S_BUL_ABS" "$S_PROBE" "$1")" "$(_probe_in_bullet "$S_BUL_CUR" "$S_PROBE" "$1")"; }
@@ -1073,7 +1092,10 @@ _count_split_at() {
 }
 S_STEP4='### Step 4: Display Summary'
 S_CH_RE='^[A-Za-z0-9._/-]+$'
-S_CH_KEY='naming the KEY `automation.heartbeat.inbox.dir` and the rule it failed'
+# Round-3 finding 2 generalised the rule from one hand-written copy per key to ONE rule over a
+# table of keys, so the refusal wording no longer names a key. The per-key coverage that used
+# to ride along in this literal is now its own pin, below.
+S_CH_KEY='naming the KEY that failed and the rule it failed'
 S_CH_ECHO='Never echo the rejected value'
 _ch_triple() {
   printf '%s %s %s' "$(_count_split_at "$S_STEP4" "$S_CH_RE" "$1")" \
@@ -1087,6 +1109,26 @@ _strike "$S_CH_KEY" "$S_CH_MUT1" > "$S_CH_MUT2"
 _strike "$S_CH_ECHO" "$S_CH_MUT2" > "$S_CH_MUT"
 assert_eq "P0 C-h CONTROL: struck out, all three report missing from both sites" \
   "$(_ch_triple "$S_CH_MUT")" "0/0 0/0 0/0"
+
+# Round-3 finding 2: `self_audit.backlog_path` was as configurable as the inbox dir and as
+# hardcoded in the block, and the fix for one key was never applied to the other. The rule is now
+# one rule over a TABLE, so this pins the WHOLE table — every configurable key stated at the Step
+# 2.5 site AND the Step 4 site. Without it, generalising the wording would pass while a key was
+# quietly missing from the table it claims to govern.
+S_CH_KEYS='automation.heartbeat.inbox.dir self_audit.backlog_path'
+S_CH_KEYS_N=0
+for _ch_k in $S_CH_KEYS; do
+  S_CH_KEYS_N=$((S_CH_KEYS_N + 1))
+  assert_eq "P0 finding-2: the configurable key $_ch_k is named at the Step 2.5 site AND the Step 4 site" \
+    "$(_count_split_at "$S_STEP4" "$_ch_k" "$SWEEP_ROOT/$INIT_SKILL")" "1/1"
+done
+assert_eq "P0 finding-2 (floor): the configurable-key roster is measured, so the loop above cannot pass vacuously" \
+  "$S_CH_KEYS_N" "2"
+# CONTROL: strike one key and its site pair collapses, so the 1/1s above are measured, not assumed.
+S_CH_K_MUT="$SCRATCH/init-no-backlog.md"
+_strike 'self_audit.backlog_path' "$SWEEP_ROOT/$INIT_SKILL" > "$S_CH_K_MUT"
+assert_eq "P0 finding-2 CONTROL: with the backlog key struck out its pair reads 0/0, the pre-fix state this pin exists to catch" \
+  "$(_count_split_at "$S_STEP4" 'self_audit.backlog_path' "$S_CH_K_MUT")" "0/0"
 S_CH_NOANCHOR="$SCRATCH/init-no-step4.md"
 _strike "$S_STEP4" "$SWEEP_ROOT/$INIT_SKILL" > "$S_CH_NOANCHOR"
 assert_eq "P0 C-h CONTROL: with the Step 4 heading gone the splitter says no-anchor, not a 2/0 that would read as one site satisfying both" \
