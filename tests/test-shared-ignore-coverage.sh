@@ -11,7 +11,9 @@ set -uo pipefail
 #     wrong for exactly the ambiguous cases where the answer matters.
 # Four assertions, four finding classes: A1 undeclared, A2 unignored,
 # A3 over-ignored, A4 stale-declaration. A1 and A4 pin the declaration table to
-# source in BOTH directions, so the hand-maintained half cannot drift either.
+# source in BOTH directions, so the hand-maintained half cannot drift either; A4
+# searches the writer-instructing half of that population alone, because an
+# append-only RECORD names a path forever and would make it unfalsifiable.
 # The block is EXTRACTED from the skill at test time, never retyped: a copy
 # carried here would assert only that the copy is correct. Block membership is
 # tested PER-DECLARATION against exact block lines, never by prefix, so
@@ -33,6 +35,9 @@ SOURCE_DIRS="scripts skills agents templates references hooks .github"
 # These four instruct the operator. docs/ is excluded on measurement — 30 files, 375 occurrences,
 # 24 keys, 6 undeclared and NOT ONE of the six with a producer (four are not project paths at all).
 SOURCE_FILES="CLAUDE.md RULES.md README.md CHANGELOG.md"
+# A1 keeps sweeping these; A4's comparison set alone drops them, because an append-only RECORD names
+# a path forever and a row whose last writer was deleted could otherwise never read as stale (#254 C-d).
+RECORD_ONLY_FILES="CHANGELOG.md"
 # Residual risk of that one exclusion: a design doc naming a runtime path before its writer lands is
 # unswept — but the writer itself always lands above, so the path is caught once it can be written.
 INIT_SKILL="skills/init/SKILL.md"
@@ -96,7 +101,7 @@ nazgul/context.backup.*|ephemeral|nazgul/context.backup.*/|Timestamped local sna
 # A1-A4 increment `findings` directly; the dogfood, P1/P2/P3 and copy-sync regions raise
 # TESTS_FAILED instead, and each folds its own delta in as it closes, before the next baseline.
 scanned=0; skipped_no_path=0; skipped_unreadable=0; checked=0; findings=0
-unresolvable=0; block_excluded=0
+unresolvable=0; block_excluded=0; record_only=0
 KEY_HITS=""
 BLOCK_REGIONS=""
 
@@ -211,6 +216,21 @@ DECL_KEYS=$(printf '%s\n' "$DECLARATIONS" | cut -d'|' -f1 | sort -u)
 enumerated_count=$(printf '%s' "$ENUM_KEYS" | grep -c . || true)
 declared_count=$(printf '%s' "$DECL_KEYS" | grep -c . || true)
 
+# The direction split (#254 C-d): every occurrence above is still enumerated for A1, and the
+# record-only files are dropped from THIS set alone — tallied as they go, never silently discarded.
+A4_SOURCE_FILES=""
+for s in $SOURCE_FILES; do
+  case " $RECORD_ONLY_FILES " in *" $s "*) continue ;; esac
+  A4_SOURCE_FILES="$A4_SOURCE_FILES $s"
+done
+A4_SOURCE_FILES="${A4_SOURCE_FILES# }"
+PRODUCER_HITS="$KEY_HITS"
+for s in $RECORD_ONLY_FILES; do
+  record_only=$((record_only + $(printf '%s' "$PRODUCER_HITS" | grep -cF -- "|$s:" || true)))
+  PRODUCER_HITS=$(printf '%s' "$PRODUCER_HITS" | grep -vF -- "|$s:" || true)
+done
+PRODUCED_KEYS=$(printf '%s' "$PRODUCER_HITS" | cut -d'|' -f1 | sort -u)
+
 BLOCK=$(_extract_block)
 block_usable=1
 if [ -z "$BLOCK" ]; then
@@ -283,14 +303,14 @@ fi
 stale=0
 while IFS= read -r key; do
   [ -n "$key" ] || continue
-  if printf '%s' "$ENUM_KEYS" | grep -Fxq -- "$key"; then continue; fi
+  if printf '%s' "$PRODUCED_KEYS" | grep -Fxq -- "$key"; then continue; fi
   stale=$((stale + 1)); findings=$((findings + 1))
-  _fail "A4 stale-declaration: $key is declared but no longer enumerated from source" \
-    "no occurrence under $SWEEP_ROOT/{$(printf '%s %s' "$SOURCE_DIRS" "$SOURCE_FILES" | tr ' ' ',')} — a removed writer must retire its declaration"
+  _fail "A4 stale-declaration: $key is declared but no writer still names it" \
+    "no occurrence under $SWEEP_ROOT/{$(printf '%s %s' "$SOURCE_DIRS" "$A4_SOURCE_FILES" | tr ' ' ',')} — a removed writer must retire its declaration"
 done <<EOF
 $DECL_KEYS
 EOF
-[ "$stale" -eq 0 ] && _pass "A4 stale-declaration: all $declared_count declared key(s) are still enumerated from source"
+[ "$stale" -eq 0 ] && _pass "A4 stale-declaration: all $declared_count declared key(s) are still named by a writer ($record_only record-only occurrence(s) excluded)"
 
 if [ "$checked" -gt 0 ]; then
   [ "$findings" -eq 0 ] && _pass "the shared-mode ignore block agrees with source in both directions ($checked files, $enumerated_count paths)"
@@ -311,13 +331,48 @@ if [ "$scanned" -ne $((skipped_no_path + skipped_unreadable + checked)) ]; then
     "$scanned != $skipped_no_path + $skipped_unreadable + $checked"
 fi
 
-# One predicate for both mktemp -d sites and for C7's control below: a second, independently
-# written test would be the divergence the SWEEP_ROOT disposition above says to avoid.
+# One predicate for the single mktemp -d site, for its routes subtree and for C7's control below: a
+# second, independently written test would be the divergence the SWEEP_ROOT disposition above avoids.
 _scratch_usable() { [ -n "${1:-}" ] && [ -d "$1" ]; }
 
 # Removal is guarded on a non-empty value, so a trap installed before a failed mktemp -d
 # cannot degrade to `rm -rf ""`.
 _rm_scratch() { local d; for d in "$@"; do [ -n "$d" ] && rm -rf "$d"; done; return 0; }
+
+# MISSING, never an empty string: a field these cannot find must fail an assertion
+# rather than silently compare equal to another absent field.
+_run_findings() {
+  printf '%s\n' "$1" | awk '/, [0-9]+ findings$/ { f = $(NF - 1) } END { print (f == "" ? "MISSING" : f) }'
+}
+
+_run_paths_field() {
+  printf '%s\n' "$1" | awk -v want="$2" '
+    /^paths: / { sub(/^paths: /, ""); n = split($0, p, ", ")
+      for (i = 1; i <= n; i++) { split(p[i], kv, " "); if (kv[2] == want) { print kv[1]; f = 1 } } }
+    END { if (!f) print "MISSING" }'
+}
+
+# ONE tree for every region that writes a fixture, created before the FIRST of them rather than in a
+# branch of the first: the dogfood region has three branches and only its third assigned SCRATCH,
+SCRATCH=""
+# while P0, routes and copy-sync are guarded on NAZGUL_IGNORE_SWEEP_ROOT alone and reached it on the
+# other two, unbound under `set -u` (#254 C-l). An unusable tree is a REPORTED finding every
+SCRATCH_USABLE=0
+# dependent region skips — never `exit 1`, which would end the run before the coverage line this
+# file is §15 entry point eleven for (#254 C-b), and never "", which is C7's root-relative /x.
+if [ -z "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
+  SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-ignore-sweep-XXXXXX" 2>/dev/null) || SCRATCH=""
+  if _scratch_usable "$SCRATCH"; then
+    trap '_rm_scratch "$SCRATCH"' EXIT
+    mkdir -p "$SCRATCH/routes/home" 2>/dev/null || true
+    _scratch_usable "$SCRATCH/routes/home" && SCRATCH_USABLE=1
+  fi
+  if [ "$SCRATCH_USABLE" -ne 1 ]; then
+    findings=$((findings + 1))
+    _fail "scratch tree: mktemp -d under ${TMPDIR:-/tmp} yields a usable tree" \
+      "got '$SCRATCH' — the dogfood, P0, routes and copy-sync regions all write fixtures under it and are SKIPPED below; reported here as one finding so the run still reaches its coverage line"
+  fi
+fi
 
 # Dogfood — a detector that can only ever pass is evidence of nothing (RULES §15).
 # Skipped under an injected sweep root: the fixtures re-enter this file and recurse.
@@ -329,17 +384,11 @@ if [ -n "${NAZGUL_IGNORE_SWEEP_FOLD_PROBE:-}" ]; then
     "raised by NAZGUL_IGNORE_SWEEP_FOLD_PROBE — it must reach the findings tally, not TESTS_FAILED alone"
 elif [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
   _skip "dogfood fixtures (inner run under an injected sweep root)"
+elif [ "$SCRATCH_USABLE" -ne 1 ]; then
+  _skip "dogfood fixtures (no usable scratch tree — reported as a finding above)"
 else
-SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-ignore-sweep-XXXXXX" 2>/dev/null) || SCRATCH=""
-if ! _scratch_usable "$SCRATCH"; then
-  _fail "dogfood scratch: mktemp -d under ${TMPDIR:-/tmp} yields a directory" \
-    "got '$SCRATCH' — an empty value makes \$DOG the root-relative /tree that _dog_reset would remove and recreate outside any temp dir (#254 C7); the dogfood arms did not run"
-  exit 1
-fi
-trap '_rm_scratch "$SCRATCH"' EXIT
-
-# C7 control: the same predicate the two mktemp sites use, driven both ways — a guard that
-# refused everything and one that refused nothing would otherwise read identically.
+# C7 control: the same predicate the scratch site and its routes subtree use, driven both ways — a
+# guard that refused everything and one that refused nothing would otherwise read identically.
 C7_EMPTY_SCRATCH=""
 if _scratch_usable "$C7_EMPTY_SCRATCH"; then C7_EMPTY_VERDICT="use"; else C7_EMPTY_VERDICT="refuse"; fi
 if _scratch_usable "$SCRATCH"; then C7_REAL_VERDICT="use"; else C7_REAL_VERDICT="refuse"; fi
@@ -391,20 +440,32 @@ _dog_unproduce() {
   grep -vF "write_state \"$1\"" "$f" > "$f.new" && mv "$f.new" "$f"
 }
 
+# Strikes a path out of the fixture skill's PROSE only, leaving the fences alone: the block entry
+# has to survive, or an arm about a retired WRITER would be measuring an A2 finding as well.
+_dog_unmention() {
+  local f="$DOG/$INIT_SKILL"
+  awk -v pat="$1" '
+    { t = $0; sub(/^[[:space:]]+/, "", t) }
+    !inf && t == "```gitignore" { inf = 1; print; next }
+    inf && t == "```" { inf = 0; print; next }
+    inf { print; next }
+    { while ((p = index($0, pat)) > 0) $0 = substr($0, 1, p - 1) substr($0, p + length(pat)); print }
+  ' "$f" > "$f.new" && mv "$f.new" "$f"
+}
+
+# Occurrences outside the fences, so a strike that matched nothing cannot read as a retired writer.
+_dog_prose_hits() {
+  awk -v pat="$1" '
+    { t = $0; sub(/^[[:space:]]+/, "", t) }
+    !inf && t == "```gitignore" { inf = 1; next }
+    inf && t == "```" { inf = 0; next }
+    inf { next }
+    { s = $0; while ((p = index(s, pat)) > 0) { n++; s = substr(s, p + length(pat)) } }
+    END { print n + 0 }
+  ' "$DOG/$INIT_SKILL"
+}
+
 _dog_n() { local n; n=$(printf '%s\n' "$1" | grep -cF "FAIL: $2"); printf '%s' "$n"; }
-
-# MISSING, never an empty string: a field these cannot find must fail an assertion
-# rather than silently compare equal to another absent field.
-_dog_findings() {
-  printf '%s\n' "$1" | awk '/, [0-9]+ findings$/ { f = $(NF - 1) } END { print (f == "" ? "MISSING" : f) }'
-}
-
-_dog_paths_field() {
-  printf '%s\n' "$1" | awk -v want="$2" '
-    /^paths: / { sub(/^paths: /, ""); n = split($0, p, ", ")
-      for (i = 1; i <= n; i++) { split(p[i], kv, " "); if (kv[2] == want) { print kv[1]; f = 1 } } }
-    END { if (!f) print "MISSING" }'
-}
 
 # Exactly one finding of the named class AND zero of the other three: "a finding
 # appeared" would not distinguish a precise detector from one that fires on everything.
@@ -436,8 +497,8 @@ _dog_clear() {
 _dog_reset
 D_OUT=$(_dog_run); D_RC=$?
 _dog_clear "D0 baseline: a fixture whose declarations match its source is clean" "$D_OUT" "$D_RC"
-BASE_UNRES=$(_dog_paths_field "$D_OUT" unresolvable)
-BASE_ENUM=$(_dog_paths_field "$D_OUT" enumerated)
+BASE_UNRES=$(_run_paths_field "$D_OUT" unresolvable)
+BASE_ENUM=$(_run_paths_field "$D_OUT" enumerated)
 if [ "$BASE_UNRES" = "MISSING" ] || [ "$BASE_ENUM" = "MISSING" ]; then
   _fail "D0: the paths line exposes the enumerated and unresolvable tallies" \
     "enumerated='$BASE_ENUM' unresolvable='$BASE_UNRES' — S4 below cannot measure a delta against a missing baseline"
@@ -449,9 +510,9 @@ assert_eq "D0: every declared key is produced by the fixture" "$BASE_ENUM" "$dec
 
 # C3: this region raises TESTS_FAILED, not `findings`, so a dogfood failure reaches the §15
 # line only through the delta folded in when the region closes. Differenced against D0's run.
-D_FOLD_CLEAN=$(_dog_findings "$D_OUT")
+D_FOLD_CLEAN=$(_run_findings "$D_OUT")
 D_FOLD_OUT=$(_dog_fold_run); D_FOLD_RC=$?
-D_FOLD_PROBE=$(_dog_findings "$D_FOLD_OUT")
+D_FOLD_PROBE=$(_run_findings "$D_FOLD_OUT")
 if [ "$D_FOLD_CLEAN" = "MISSING" ] || [ "$D_FOLD_PROBE" = "MISSING" ]; then
   _fail "C3 fold: both runs expose a findings tally for the delta to be taken from" \
     "clean='$D_FOLD_CLEAN' probe='$D_FOLD_PROBE' — two absent counts must not read as a delta of zero"
@@ -471,7 +532,7 @@ assert_eq "C3 fold CONTROL: the mutant differs from this file by exactly the fol
   "$(( $(wc -l < "$SCRIPT_DIR/$TEST_NAME.sh") - $(wc -l < "$D_MUT/$TEST_NAME.sh") ))" "1"
 D_MUT_OUT=$(env NAZGUL_IGNORE_SWEEP_FOLD_PROBE=1 NAZGUL_IGNORE_SWEEP_ROOT="$DOG" bash "$D_MUT/$TEST_NAME.sh" 2>&1)
 D_MUT_RC=$?
-D_FOLD_MUT=$(_dog_findings "$D_MUT_OUT")
+D_FOLD_MUT=$(_run_findings "$D_MUT_OUT")
 if [ "$D_FOLD_MUT" = "MISSING" ] || [ "$D_FOLD_CLEAN" = "MISSING" ]; then
   _fail "C3 fold CONTROL: the mutant run exposes a findings tally to difference" \
     "mutant='$D_FOLD_MUT' clean='$D_FOLD_CLEAN' — an absent count must not read as the under-count being looked for"
@@ -516,10 +577,61 @@ _dog_unproduce "nazgul/x"
 D_OUT=$(_dog_run); D_RC=$?
 _dog_only "C4 stale-declaration: a declared key no file in the scan root produces" "$D_OUT" "$D_RC" A4
 assert_contains "C4: the finding names the stale declaration" "$D_OUT" \
-  "A4 stale-declaration: nazgul/x is declared but no longer enumerated from source"
+  "A4 stale-declaration: nazgul/x is declared but no writer still names it"
 _dog_reset
 D_OUT=$(_dog_run); D_RC=$?
 _dog_clear "C4 clears: restoring the writer clears the stale-declaration finding" "$D_OUT" "$D_RC"
+
+# C-d, A1's side of the split: an append-only RECORD is still swept, so a path named only there is
+# still ENUMERATED and still has to carry a declaration. Dropping the file would lose exactly this.
+_dog_reset
+printf '# Changelog\n- FEAT-999 writes nazgul/recorded-only-dir\n' > "$DOG/CHANGELOG.md"
+D_OUT=$(_dog_run); D_RC=$?
+_dog_only "C-d A1 side: a path named ONLY by the append-only record is enumerated all the same" "$D_OUT" "$D_RC" A1
+assert_contains "C-d A1 side: the finding names the record-only path" "$D_OUT" \
+  "A1 undeclared: nazgul/recorded-only-dir has no declaration row"
+assert_eq "C-d A1 side: and its occurrence is TALLIED as excluded from A4, not dropped unrecorded" \
+  "$(_run_paths_field "$D_OUT" record-only-excluded)" "1"
+
+# C-d, A4's side: nazgul/conductor is the finding's own live proof — declared, block entry present,
+# sole producer scripts/migrate-config.sh:583. Retire that writer and A4 must fire past the record.
+_dog_reset
+printf '# Changelog\n- migrate_25_to_26 removed the nazgul/conductor runtime dir\n' > "$DOG/CHANGELOG.md"
+D_CD_PROSE_BEFORE=$(_dog_prose_hits "nazgul/conductor")
+_dog_unproduce "nazgul/conductor"
+_dog_unmention "nazgul/conductor"
+assert_eq "C-d A4 side: the fixture really did lose every writer of the path, prose included" \
+  "$([ "$D_CD_PROSE_BEFORE" -ge 1 ] && printf 'had-%s' "$D_CD_PROSE_BEFORE" || printf 'had-none')/$(_dog_prose_hits "nazgul/conductor")/$(grep -cF 'write_state "nazgul/conductor"' "$DOG/scripts/producer.sh" || true)" \
+  "had-$D_CD_PROSE_BEFORE/0/0"
+assert_eq "C-d A4 side: while the block entry the A2 arms read is untouched, so this arm measures one class" \
+  "$(grep -cxF 'nazgul/conductor/' "$DOG/$INIT_SKILL" || true)" "1"
+D_OUT=$(_dog_run); D_RC=$?
+_dog_only "C-d A4 side: a retired writer is reported stale even while the record still names the path" "$D_OUT" "$D_RC" A4
+assert_contains "C-d A4 side: the finding names the retired declaration" "$D_OUT" \
+  "A4 stale-declaration: nazgul/conductor is declared but no writer still names it"
+assert_contains "C-d A4 side: and the message names the population A4 actually searched" "$D_OUT" \
+  "CLAUDE.md,RULES.md,README.md} —"
+assert_not_contains "C-d A4 side: which does not include the record file A1 still sweeps (that would be C-j's defect here)" \
+  "$D_OUT" "README.md,CHANGELOG.md}"
+
+# The split's own control: the same fixture against a copy whose record-only set is EMPTY — the
+# pre-change comparison set — must report nothing, or "A4 fired" would also fit a detector that always does.
+D_CD_LINE='RECORD_ONLY_FILES="CHANGELOG.md"'
+D_CD_MUT="$SCRATCH/no-split"
+mkdir -p "$D_CD_MUT" && ln -sfn "$SCRIPT_DIR/lib" "$D_CD_MUT/lib"
+awk -v old="$D_CD_LINE" '{ if ($0 == old) print "RECORD_ONLY_FILES=\"\""; else print }' \
+  "$SCRIPT_DIR/$TEST_NAME.sh" > "$D_CD_MUT/$TEST_NAME.sh"
+assert_eq "C-d CONTROL: this file names the record-only set exactly once, and the mutant empties it in place" \
+  "$(grep -cxF -- "$D_CD_LINE" "$SCRIPT_DIR/$TEST_NAME.sh" || true)/$(grep -cxF -- "$D_CD_LINE" "$D_CD_MUT/$TEST_NAME.sh" || true)/$(( $(wc -l < "$SCRIPT_DIR/$TEST_NAME.sh") - $(wc -l < "$D_CD_MUT/$TEST_NAME.sh") ))" \
+  "1/0/0"
+assert_eq "C-d CONTROL: and the emptied set is the only difference, so a mutant that failed to apply cannot read as agreement" \
+  "$(grep -cxF -- 'RECORD_ONLY_FILES=""' "$D_CD_MUT/$TEST_NAME.sh" || true)" "1"
+D_CD_OUT=$(env NAZGUL_IGNORE_SWEEP_ROOT="$DOG" bash "$D_CD_MUT/$TEST_NAME.sh" 2>&1); D_CD_RC=$?
+_dog_clear "C-d CONTROL: without the direction split the very same fixture reports nothing at all" "$D_CD_OUT" "$D_CD_RC"
+
+_dog_reset
+D_OUT=$(_dog_run); D_RC=$?
+_dog_clear "C-d clears: restoring the writer clears the stale-declaration finding" "$D_OUT" "$D_RC"
 
 # S1-S4 use A1 as the readout: an undeclared key can only be REPORTED if it was
 # ENUMERATED, so the finding is the enumeration proof and its citation is the line.
@@ -552,9 +664,9 @@ _dog_reset
 printf 'nazgul/$SOMEVAR\nnazgul/<name>\nnazgul/**\nnazgul/{a,b}\nnazgul/?x\nnazgul/...\n' > "$DOG/scripts/unresolvable.sh"
 D_OUT=$(_dog_run); D_RC=$?
 assert_eq "S4: all six unresolvable tokens move the tally, none silently dropped" \
-  "$(_dog_paths_field "$D_OUT" unresolvable)" "$((BASE_UNRES + 6))"
+  "$(_run_paths_field "$D_OUT" unresolvable)" "$((BASE_UNRES + 6))"
 assert_eq "S4: and none of them is reported as a path" \
-  "$(_dog_paths_field "$D_OUT" enumerated)" "$BASE_ENUM"
+  "$(_run_paths_field "$D_OUT" enumerated)" "$BASE_ENUM"
 _dog_clear "S4: an unresolvable token is counted, not a finding" "$D_OUT" "$D_RC"
 
 # S5/S6 are S4's other half: a NON-empty literal prefix earns a key, and which key it earns is
@@ -566,7 +678,7 @@ _dog_only "S5 literal-prefixed write (skills/discover/SKILL.md:43's own shape)" 
 assert_contains "S5: the resolvable prefix earns a wildcard key instead of being discarded whole" "$D_OUT" \
   "A1 undeclared: nazgul/novel.backup.* has no declaration row"
 assert_eq "S5: and it is one key, not one per timestamp the writer could produce" \
-  "$(_dog_paths_field "$D_OUT" enumerated)" "$((BASE_ENUM + 1))"
+  "$(_run_paths_field "$D_OUT" enumerated)" "$((BASE_ENUM + 1))"
 
 _dog_reset
 printf '#!/usr/bin/env bash\nRULES=("nazgul/terminated-dir|__DROP__")\n' > "$DOG/scripts/term.sh"
@@ -593,6 +705,39 @@ D_OUT=$(_dog_run); D_RC=$?
 _dog_only "P13 #254 C1: a block that no longer contains its literal-prefixed entry" "$D_OUT" "$D_RC" A2
 assert_contains "P13: the finding names nazgul/context.backup.*/" "$D_OUT" \
   "A2 unignored: 'nazgul/context.backup.*/' is absent from the shared-mode block"
+
+# C-k: C1's BEFORE state, permanently in-file and driven, where it was a hand reproduction inside a
+# task manifest no run ever executes — the C3 fold CONTROL idiom, on this file's headline claim.
+K_DECL_ROW='nazgul/context.backup.*|ephemeral|'
+K_NXT_LINE='  nxt="${s:${#prefix}:1}"'
+K_CASE_LINE='  case "$VAR_INTRO" in *"$nxt"*) RESOLVED="$prefix*" ;; *) RESOLVED="$prefix" ;; esac'
+# BOTH halves go at once: with either alive the other still reports P13's finding. The declaration
+# row is blanked to its closing quote, not deleted — that row carries the DECLARATIONS terminator.
+K_MUT="$SCRATCH/pre-c1"
+mkdir -p "$K_MUT" && ln -sfn "$SCRIPT_DIR/lib" "$K_MUT/lib"
+awk -v row="$K_DECL_ROW" -v q="'" -v nxt="$K_NXT_LINE" -v cse="$K_CASE_LINE" '
+  index($0, row) == 1 { print q; next }
+  $0 == nxt { next }
+  $0 == cse { print "  return 1"; next }
+  { print }
+' "$SCRIPT_DIR/$TEST_NAME.sh" > "$K_MUT/$TEST_NAME.sh"
+# Counted by the mutation's OWN predicate, never by a second one: the row's literal also appears in
+# the K_DECL_ROW assignment three lines up, which the mutation deliberately leaves alone.
+_k_rows() { awk -v row="$K_DECL_ROW" 'index($0, row) == 1 { n++ } END { print n + 0 }' "$1"; }
+assert_eq "C-k CONTROL: this file states each mutated site exactly once, and the mutant states neither" \
+  "$(_k_rows "$SCRIPT_DIR/$TEST_NAME.sh")/$(grep -cxF -- "$K_CASE_LINE" "$SCRIPT_DIR/$TEST_NAME.sh" || true)::$(_k_rows "$K_MUT/$TEST_NAME.sh")/$(grep -cxF -- "$K_CASE_LINE" "$K_MUT/$TEST_NAME.sh" || true)" \
+  "1/1::0/0"
+assert_eq "C-k CONTROL: the mutant is one line shorter — the resolver's nxt line, the only deletion" \
+  "$(( $(wc -l < "$SCRIPT_DIR/$TEST_NAME.sh") - $(wc -l < "$K_MUT/$TEST_NAME.sh") ))" "1"
+assert_eq "C-k CONTROL: with the prefix branch replaced by the pre-change discard, so a mutant that failed to apply cannot read as agreement" \
+  "$(grep -cxF -- '  return 1' "$K_MUT/$TEST_NAME.sh" || true)" \
+  "$(( $(grep -cxF -- '  return 1' "$SCRIPT_DIR/$TEST_NAME.sh" || true) + 1 ))"
+K_OUT=$(env NAZGUL_IGNORE_SWEEP_ROOT="$DOG" bash "$K_MUT/$TEST_NAME.sh" 2>&1); K_RC=$?
+_dog_clear "C-k: before C1, the very fixture P13 just failed on reported nothing at all" "$K_OUT" "$K_RC"
+assert_eq "C-k: because the entry had no key to compare against — the occurrence was discarded whole, not resolved" \
+  "$(_run_paths_field "$K_OUT" enumerated)/$(printf '%s\n' "$K_OUT" | grep -c 'context.backup' || true)" \
+  "$((BASE_ENUM - 1))/0"
+
 _dog_reset
 D_OUT=$(_dog_run); D_RC=$?
 _dog_clear "P13 clears: restoring the block entry clears the unignored finding" "$D_OUT" "$D_RC"
@@ -620,6 +765,8 @@ findings=$((findings + TESTS_FAILED - M_FAILED_BEFORE))
 # observe indirectly. Skipped on an inner run: _dog_block_add indents its insert on purpose.
 if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
   _skip "P0 source-structure pins (inner run under an injected sweep root: the dogfood fixtures indent an inserted entry deliberately, so an indented line there is a fixture, not drift)"
+elif [ "$SCRATCH_USABLE" -ne 1 ]; then
+  _skip "P0 source-structure pins (no usable scratch tree — reported as a finding above; every control below writes its mutant under it)"
 else
 S_FAILED_BEFORE=$TESTS_FAILED
 
@@ -723,10 +870,89 @@ S_LOC_STAMP="other"
 printf '%s\n' "$S_LOC_SUFFIX" | grep -qE '^ \(v[0-9]+\)$' && S_LOC_STAMP="stamped"
 assert_eq "P0 local stamp: the local block's first line carries the (vN) suffix the prefix match above ignores (#254 C-f)" \
   "$S_LOC_STAMP" "stamped"
-# Shape, not literal: the version LITERAL is hand-copied across prose sites and is #254 C-g's
-# subject, not this pin's. What this pin adds is that one bump cannot land in one fence only.
+# Shape, not literal, HERE: the two fences are pinned to each other, and the prose that copies their
+# literal is #254 C-g's subject immediately below, which derives the value rather than naming one.
 assert_eq "P0 local stamp: and it is the same version the shared block ships, in the two fences that are the authoritative copy" \
   "$S_LOC_SUFFIX" "$(_stamp_suffix "$BLOCK_MARKER" "$SWEEP_ROOT/$INIT_SKILL")"
+
+# #254 C-g. The shipped version is DERIVED from the shared fence's own first line — the copy
+# skills/init/SKILL.md:82 calls authoritative — never named here, which would be one more copy.
+_shipped_stamp() { _stamp_suffix "$BLOCK_MARKER" "$1" | sed -nE 's/^ \(v([0-9]+)\)$/v\1/p'; }
+
+# Version literals OUTSIDE the fences, bucketed by what each can mean: the derived stamp, the
+# permanent pre-stamp class v1, or a THIRD value — a site a bump updated the fence but not the prose for.
+_version_buckets() {
+  awk -v ship="$1" -v regions="$2" '
+    BEGIN { cnt = split(regions, r, /[[:space:]]+/)
+      for (i = 1; i <= cnt; i++) { if (r[i] == "") continue; split(r[i], b, "-"); lo[i] = b[1]; hi[i] = b[2] } }
+    { inr = 0
+      for (i = 1; i <= cnt; i++) if (r[i] != "" && NR >= lo[i] && NR <= hi[i]) inr = 1
+      if (inr) next
+      n = split($0, w, /[^A-Za-z0-9]+/)
+      for (j = 1; j <= n; j++) {
+        if (w[j] !~ /^v[0-9]+$/) continue
+        if (w[j] == ship) sh++
+        else if (w[j] == "v1") lg++
+        else { ot++; otl = otl (otl == "" ? "" : " ") w[j] "@" FILENAME ":" NR } } }
+    END { printf "%d %d %d %s\n", sh + 0, lg + 0, ot + 0, (otl == "" ? "-" : otl) }
+  ' "$3"
+}
+
+# scripts/doctor.sh is in the population precisely BECAUSE it names one v2 literal — in the comment
+# explaining why it derives the stamp instead of copying it. Covered, never excluded (#254 C-g).
+G_SITE_FILES="$INIT_SKILL $CLEAN_SKILL scripts/doctor.sh"
+_version_tally() {
+  local init="$1" ship="$2" spec f sh=0 lg=0 ot=0 otl="" a b c d
+  for f in $G_SITE_FILES; do
+    case "$f" in "$INIT_SKILL") spec="$init|$S_REGIONS" ;; *) spec="$SWEEP_ROOT/$f|" ;; esac
+    read -r a b c d <<< "$(_version_buckets "$ship" "${spec#*|}" "${spec%%|*}")"
+    sh=$((sh + a)); lg=$((lg + b)); ot=$((ot + c))
+    [ "$d" = "-" ] || otl="$otl${otl:+ }$d"
+  done
+  printf '%s %s %s %s' "$sh" "$lg" "$ot" "${otl:--}"
+}
+
+G_SITE_N=0
+for g_f in $G_SITE_FILES; do [ -r "$SWEEP_ROOT/$g_f" ] && G_SITE_N=$((G_SITE_N + 1)); done
+assert_eq "P0 C-g: every file in the version-site population is readable, so an absent one cannot read as a site that agreed" \
+  "$G_SITE_N" "3"
+G_SHIP=$(_shipped_stamp "$SWEEP_ROOT/$INIT_SKILL")
+if [ -n "$G_SHIP" ]; then
+  _pass "P0 C-g: the shipped version is DERIVED from the shared fence's first line ($G_SHIP), never named by this pin"
+else
+  _fail "P0 C-g: the shipped version is DERIVED from the shared fence's first line" \
+    "no ' (vN)' suffix on the marker line under $SWEEP_ROOT — with nothing derived, every site below would be compared against the empty string"
+  G_SHIP="__underived__"
+fi
+read -r G_SH G_LG G_OT G_OTL <<< "$(_version_tally "$SWEEP_ROOT/$INIT_SKILL" "$G_SHIP")"
+assert_eq "P0 C-g: no prose site across the $G_SITE_N scanned file(s) names a version other than the derived $G_SHIP or the pre-stamp class v1" \
+  "$G_OT/$G_OTL" "0/-"
+if [ "$G_SH" -ge 3 ] && [ "$G_LG" -ge 1 ]; then
+  _pass "P0 C-g floor: $G_SH prose mention(s) of $G_SHIP and $G_LG of v1 were bucketed, so the zero above is a measured zero"
+else
+  _fail "P0 C-g floor: the population names the shipped version at least three times and the v1 class at least once" \
+    "shipped=$G_SH legacy=$G_LG — a population that stopped naming any version satisfies 'no other version' vacuously; re-measure the sites and move this floor deliberately"
+fi
+
+# The pin's control: bump the FENCE alone, derived one past the shipped stamp so it can never
+# coincide with it. Every prose site then names the old version and the pin has to fail.
+if [ "$G_SHIP" = "__underived__" ]; then
+  _skip "P0 C-g CONTROL (no derived stamp to bump — reported as a finding above)"
+else
+G_NEXT="v$(( ${G_SHIP#v} + 1 ))"
+G_V_MUT="$SCRATCH/init-bumped.md"
+awk -v m="$BLOCK_MARKER" -v nv="$G_NEXT" '
+  !done { t = $0; sub(/^[[:space:]]+/, "", t); if (index(t, m) == 1) { print m " (" nv ")"; done = 1; next } }
+  { print }' "$SWEEP_ROOT/$INIT_SKILL" > "$G_V_MUT"
+assert_eq "P0 C-g CONTROL: the mutant carries the bumped stamp and the same line count, so nothing but the fence moved" \
+  "$(_shipped_stamp "$G_V_MUT")/$(wc -l < "$G_V_MUT" | tr -d ' ')" \
+  "$G_NEXT/$(wc -l < "$SWEEP_ROOT/$INIT_SKILL" | tr -d ' ')"
+read -r G_M_SH _ G_M_OT G_M_OTL <<< "$(_version_tally "$G_V_MUT" "$G_NEXT")"
+assert_eq "P0 C-g CONTROL: against it the pin FIRES on every prose site the bump left behind, and finds none naming the bumped value" \
+  "$([ "$G_M_OT" -ge 1 ] && printf 'fires-%s' "$G_M_OT" || printf 'silent')/$G_M_SH" "fires-$G_SH/0"
+assert_contains "P0 C-g CONTROL: and it names the stale literal it found, not merely that one exists" \
+  "$G_M_OTL" "$G_SHIP@"
+fi
 
 # Literal strike-out: the phrases below carry backticks, slashes and `^…$`, so a sed s/// control
 # would be a regex bug waiting to read as agreement. Struck out, never deleted, so line counts hold.
@@ -808,7 +1034,7 @@ S_FIFTH='leading whitespace on any region line makes the block STALE regardless 
 S_INERT='never report success on an inert block'
 S_SHARED_ONLY='the probe belongs to the shared branch alone'
 _once() { grep -cF -- "$1" "$2" || true; }
-assert_eq "P0 C-c: the fifth version case, the never-report-success rule and the shared-branch-only boundary are each stated exactly once" \
+assert_eq "P0 C-c: the leading-whitespace version case, the never-report-success rule and the shared-branch-only boundary are each stated exactly once" \
   "$(_once "$S_FIFTH" "$SWEEP_ROOT/$INIT_SKILL")/$(_once "$S_INERT" "$SWEEP_ROOT/$INIT_SKILL")/$(_once "$S_SHARED_ONLY" "$SWEEP_ROOT/$INIT_SKILL")" \
   "1/1/1"
 S_CC_CTRL="$SCRATCH/init-cc.md"
@@ -888,18 +1114,13 @@ fi
 # run in a scratch `git init` tree: this checkout is local-mode, so there is no in-tree repro.
 if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
   _skip "P1/P2/P3 git-behaviour arms (inner run under an injected sweep root)"
+elif [ "$SCRATCH_USABLE" -ne 1 ]; then
+  _skip "P1/P2/P3 git-behaviour arms (no usable scratch tree — reported as a finding above)"
 else
 R_FAILED_BEFORE=$TESTS_FAILED
-ROUTES=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-ignore-routes-XXXXXX" 2>/dev/null) || ROUTES=""
-if ! _scratch_usable "$ROUTES"; then
-  _fail "routes scratch: mktemp -d under ${TMPDIR:-/tmp} yields a directory" \
-    "got '$ROUTES' — the P1/P2/P3 arms write their fences and their two git repos under it; refusing an empty path (#254 C7)"
-  exit 1
-fi
-# Supersedes the dogfood trap and must keep removing BOTH trees; the two sections
-# share one guard condition, so $SCRATCH is always set by the time this runs.
-trap '_rm_scratch "$SCRATCH" "$ROUTES"' EXIT
-mkdir -p "$ROUTES/home"
+# A child of the one scratch tree, created and proven usable with it: one mktemp -d site, one guard
+# and one trap is what makes "every region shares a guard condition" true rather than nearly true.
+ROUTES="$SCRATCH/routes"
 
 # The local-mode fence's sha256 as FEAT-036/TASK-022 stamps it (#254 C-f); 25f78f95… was ff64f76's
 # pre-stamp fence. A content baseline, pinned rather than read from a shallow CI clone's git.
@@ -1140,6 +1361,8 @@ fi
 # $R_RM_GLOB) under the same guard: one comparison per copy, never two rival ones.
 if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ]; then
   _skip 'P3 copy-sync arms (inner run under an injected sweep root: the $R_DETECT/$R_RM_R/$R_RM_GLOB these arms compare against are assigned only inside the P1/P2/P3 region above, which the same guard skipped)'
+elif [ "$SCRATCH_USABLE" -ne 1 ]; then
+  _skip 'P3 copy-sync arms (no usable scratch tree: the same P1/P2/P3 region that assigns $R_DETECT/$R_RM_R/$R_RM_GLOB was skipped for it)'
 else
 C_FAILED_BEFORE=$TESTS_FAILED
 CLEAN_ANCHOR='Remove the \*\*shared-mode ephemeral\*\* block'
@@ -1247,12 +1470,79 @@ assert_not_contains "P3 copy 3 region CONTROL: and not the local-mode end sentin
 findings=$((findings + TESTS_FAILED - C_FAILED_BEFORE))
 fi
 
+# #254 C-b and C-l, driven as CHILD runs rather than asserted about this file's text: a guard that
+# ended the run before the emitter cannot be observed from inside the run it ended.
+if [ -n "${NAZGUL_IGNORE_SWEEP_ROOT:-}" ] || [ -n "${NAZGUL_IGNORE_SWEEP_CHILD:-}" ]; then
+  _skip "degradation controls (inner or control-child run: driving them from here would recurse without bound)"
+elif [ "$SCRATCH_USABLE" -ne 1 ]; then
+  _skip "degradation controls (no usable scratch tree — reported as a finding above; the broken-TMPDIR arm needs a path under it)"
+else
+X_FAILED_BEFORE=$TESTS_FAILED
+
+# One parse of a child's tail line into its four numbers, MISSING rather than empty: a run that
+# printed no tail must fail an assertion, not compare equal to one whose numbers happened to match.
+_tail_fields() {
+  printf '%s\n' "$1" | awk -v t="$TEST_NAME" '
+    index($0, t ": ") == 1 && $0 ~ / scanned, / { n = $2; m = $4; k = $(NF - 3); f = $(NF - 1); ok = 1 }
+    END { if (ok) print n, m, k, f; else print "MISSING MISSING MISSING MISSING" }'
+}
+
+# Both degraded shapes are checked against the same four properties, because C-b is not "the guard
+# was reached" — it is that a REACHED guard still leaves this §15 entry point its coverage line.
+_degraded_arm() {
+  local label="$1" out="$2" rc="$3" n m k f
+  read -r n m k f <<< "$(_tail_fields "$out")"
+  assert_eq "$label: the run still prints its paths line, exactly once" \
+    "$(printf '%s\n' "$out" | grep -c '^paths: ' || true)" "1"
+  if [ "$n" = "MISSING" ]; then
+    _fail "$label: the run still prints its RULES.md §15 coverage line" \
+      "no '$TEST_NAME: N scanned …' line in the child's output — a guard that ends the run before the emitter IS C-b"
+    return 0
+  fi
+  _pass "$label: the run still prints its RULES.md §15 coverage line ($n scanned, $m skipped, $k checked, $f findings)"
+  assert_eq "$label: and the accounting identity holds in the degraded run too (N == M + K)" "$n" "$((m + k))"
+  if [ "$f" -ge 1 ]; then
+    _pass "$label: the degradation is REPORTED in that tally ($f), not removed from it"
+  else
+    _fail "$label: the degradation is REPORTED in that tally" \
+      "findings=$f — C3's shape with the number wrong instead of absent"
+  fi
+  assert_exit_code "$label: and the run is blocking" "$rc" 1
+}
+
+# Never created, so mktemp -d genuinely fails rather than being told to fail.
+X_TMPDIR="$SCRATCH/tmpdir-never-created"
+assert_eq "C-b precondition: the TMPDIR handed to the child does not exist, so its mktemp -d really fails" \
+  "$([ -e "$X_TMPDIR" ] && printf 'exists' || printf 'absent')" "absent"
+X_CB_OUT=$(env TMPDIR="$X_TMPDIR" NAZGUL_IGNORE_SWEEP_CHILD=1 bash "$SCRIPT_DIR/$TEST_NAME.sh" 2>&1); X_CB_RC=$?
+_degraded_arm "C-b unusable scratch" "$X_CB_OUT" "$X_CB_RC"
+assert_contains "C-b: the finding names the tree it could not create" "$X_CB_OUT" \
+  "FAIL: scratch tree: mktemp -d under $X_TMPDIR yields a usable tree"
+assert_contains "C-b: and every region that needed one says SKIP rather than nothing at all" "$X_CB_OUT" \
+  "SKIP: dogfood fixtures (no usable scratch tree"
+assert_contains "C-b: including the routes region, whose own guard used to exit before the emitter too" "$X_CB_OUT" \
+  "SKIP: P1/P2/P3 git-behaviour arms (no usable scratch tree"
+
+# C-l's exact combination: the third dogfood branch, with no injected sweep root, so the P0 region
+# below it is entered with SCRATCH assigned. At 7c0a267 this died at :679 on an unbound $SCRATCH.
+X_CL_OUT=$(env NAZGUL_IGNORE_SWEEP_FOLD_PROBE=1 NAZGUL_IGNORE_SWEEP_CHILD=1 bash "$SCRIPT_DIR/$TEST_NAME.sh" 2>&1); X_CL_RC=$?
+_degraded_arm "C-l fold probe with no injected sweep root" "$X_CL_OUT" "$X_CL_RC"
+assert_contains "C-l: it fails for the fold probe it was asked to raise" "$X_CL_OUT" \
+  "FAIL: fold probe: a deliberate dogfood-region failure"
+assert_not_contains "C-l: never for an unbound \$SCRATCH, which aborted before either tail line" \
+  "$X_CL_OUT" "SCRATCH: unbound variable"
+assert_contains "C-l: and the P0 region it used to abort inside runs to its own controls" "$X_CL_OUT" \
+  "PASS: P0 flush-left CONTROL:"
+
+findings=$((findings + TESTS_FAILED - X_FAILED_BEFORE))
+fi
+
 # The unresolvable and block-region tallies are path-level, not file-level: one
 # file can hold both kinds, so neither can live in M without breaking N == M + K.
 RC=0
 report_results || RC=1
-printf 'paths: %d enumerated, %d declared, %d undeclared, %d unresolvable, %d block-region-excluded\n' \
-  "$enumerated_count" "$declared_count" "$undeclared" "$unresolvable" "$block_excluded"
+printf 'paths: %d enumerated, %d declared, %d undeclared, %d unresolvable, %d block-region-excluded, %d record-only-excluded\n' \
+  "$enumerated_count" "$declared_count" "$undeclared" "$unresolvable" "$block_excluded" "$record_only"
 printf '%s: %d scanned, %d skipped (no-nazgul-path=%d, unreadable=%d), %d checked, %d findings\n' \
   "$TEST_NAME" "$scanned" "$((skipped_no_path + skipped_unreadable))" \
   "$skipped_no_path" "$skipped_unreadable" "$checked" "$findings"

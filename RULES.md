@@ -585,7 +585,14 @@ note. This is §15's looked-vs-never-looked distinction applied to tests, guards
   must carry a DECLARED DISPOSITION — a path that has a writer but no decision is a finding, which is
   the anti-drift property #251 lacked. The declaration table is pinned to source in BOTH directions
   (`undeclared` catches a path no row claims, `stale-declaration` catches a row no writer still
-  produces), and block membership is asserted per declaration rather than per declared key, because
+  produces), and those two directions read DIFFERENT populations (#254 C-d): `undeclared` reads the
+  whole swept set above, while `stale-declaration` excludes the append-only RECORD files — today
+  exactly `CHANGELOG.md` — because a changelog instructs nobody and never loses a line, so a path it
+  has ever named would stay enumerated forever and no retired writer could be reported again. Nothing
+  is dropped from the sweep to buy that: every file is still read, the `scanned`/`skipped`/`checked`
+  accounting is unchanged, and the occurrences the second direction declines are tallied as
+  `record-only-excluded` on the `paths:` line rather than discarded. Block membership is asserted per
+  declaration rather than per declared key, because
   the block's existing `nazgul/reviews/*/…` globs ignore particular children of a record directory
   without ignoring the directory itself).
   `tests/test-coverage-honesty.sh` drives every one of them under a forced
