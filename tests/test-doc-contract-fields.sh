@@ -189,9 +189,14 @@ _num() {
 
 # A release-noted document is checked in its NEWEST section only: older entries are frozen
 # records of what was true when they shipped, and rewriting those would be the lie.
+# The NEWEST section, which is not always a bracketed version heading. A branch with unreleased
+# work carries `## Unreleased` above the last release, and matching only `^## [` walked straight
+# past it to check the FROZEN release record against the current tree — so every count this branch
+# moved read as drift in a section that must never be edited. `## Unreleased` is a release heading
+# for this purpose; anything with neither form still falls through to the whole file.
 _live_region() {
-  if grep -qE '^## \[' "$1"; then
-    awk '/^## \[/ { n++ } n == 1 { print } n > 1 { exit }' "$1"
+  if grep -qE '^## (\[|Unreleased)' "$1"; then
+    awk '/^## (\[|Unreleased)/ { n++ } n == 1 { print } n > 1 { exit }' "$1"
   else
     cat "$1"
   fi

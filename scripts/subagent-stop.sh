@@ -346,10 +346,12 @@ _resume_dispatch_key() {
 # key may contain path-unsafe characters). Directory lives under
 # nazgul/logs/, mirroring stop-hook.sh's own marker/attempts-file
 # convention, generalized here to one file per concurrent dispatch instead
-# of a single shared file per objective. Uses the shared `_rp_sha256` helper
-# (review-provenance.sh, transitively sourced via review-evidence.sh) rather
-# than reimplementing the sha256sum/shasum fallback: a top-level pipeline
-# with neither tool installed would abort the whole hook under `set -e`.
+# of a single shared file per objective. Hashes through `_rp_sha256`
+# (review-provenance.sh, transitively sourced via review-evidence.sh), now a
+# thin alias for the one shared `nz_sha256` in scripts/lib/sha256.sh (#254
+# C-i). Calling a helper rather than inlining the fallback is what keeps this
+# safe: a top-level pipeline with neither tool installed would abort the whole
+# hook under `set -e`, whereas the helper returns 1 and `|| hash=""` degrades.
 _resume_attempts_file() {
   local key="$1" hash
   hash=$(printf '%s' "$key" | _rp_sha256) || hash=""

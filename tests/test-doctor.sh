@@ -24,6 +24,25 @@ DOCTOR="$REPO_ROOT/scripts/doctor.sh"
 # is a comparison against the DECLARED roster rather than a literal that drifts.
 DR_ROSTER_COUNT=$(grep -m1 '^_DOC_CHECK_IDS=' "$DOCTOR" | sed -E 's/^_DOC_CHECK_IDS="([^"]*)"$/\1/' | wc -w | tr -d ' ' || true)
 
+# The shipped ephemeral-block first line, read from the skill that writes it — the same
+# derivation check (j) performs, so this fixture tracks a version bump instead of pinning one.
+DR_SHIPPED_BLOCK_LINE=$(grep -m1 '^# Nazgul Framework — ephemeral runtime' "$REPO_ROOT/skills/init/SKILL.md")
+DR_SHIPPED_LOCAL_LINE=$(grep -m1 '^# Nazgul Framework (local mode)' "$REPO_ROOT/skills/init/SKILL.md")
+
+# Local-mode fixtures need the LOCAL block: _dr_config writes the shared one, and since round-3
+# finding 7 check (j) reads whichever block install_mode names rather than skipping local outright.
+_dr_local_gitignore() {
+  printf '%s\nnazgul/\n.claude/agents/generated/\n.mcp.json\n%s\n' \
+    "$DR_SHIPPED_LOCAL_LINE" '# Nazgul Framework — end local mode' > "$TEST_DIR/.gitignore"
+}
+
+# templates/config.json ships install_mode "shared", so check (j) fires in EVERY fixture below and
+# an absent block would push each aggregate exit to 1. _dr_config installs the current block too.
+_dr_config() {
+  create_config "$@"
+  printf '%s\nnazgul/logs/\n# Nazgul Framework — end ephemeral runtime\n' "$DR_SHIPPED_BLOCK_LINE" > "$TEST_DIR/.gitignore"
+}
+
 # Checks (k)/(l) read the operator's real shell env, so a host that exports a
 # feature-flag killer would flip every full-run aggregate-exit assertion below.
 unset DO_NOT_TRACK DISABLE_TELEMETRY DISABLE_GROWTHBOOK CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
@@ -77,7 +96,7 @@ HIGHEST_MIGRATION=$(grep -oE 'migrate_[0-9]+_to_[0-9]+' "$REPO_ROOT/scripts/migr
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+_dr_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
   '.board.enabled = false' '.guards.git_hooks = false'
 
 OUT=$(env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR "$DOCTOR" 2>&1); EXIT=$?
@@ -116,7 +135,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config
+_dr_config
 NOJQ_SHIM=$(_dr_shim_path dirname git grep sed sort tail cat bash gh)
 OUT=$(PATH="$NOJQ_SHIM" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "jq-missing fixture: aggregate exit 2 (worst=fail)" "$EXIT" 2
@@ -129,7 +148,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.connectors.github.enabled = true'
+_dr_config '.connectors.github.enabled = true'
 NOGH_SHIM=$(_dr_shim_path dirname git grep sed sort tail cat bash jq)
 OUT=$(PATH="$NOGH_SHIM" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "gh-missing-but-required fixture: aggregate exit 1 (worst=warn)" "$EXIT" 1
@@ -142,7 +161,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.connectors.github.enabled = false' '.board.enabled = false' '.guards.git_hooks = false'
+_dr_config '.connectors.github.enabled = false' '.board.enabled = false' '.guards.git_hooks = false'
 OUT=$(PATH="$(_dr_shim_path dirname git grep sed sort tail cat bash jq)" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "gh-not-required fixture: aggregate exit 0" "$EXIT" 0
 assert_contains "gh-not-required fixture: dependencies passes with gh absent+optional" "$OUT" "$(printf 'pass\tdependencies')"
@@ -163,7 +182,7 @@ chmod +x "$FAKEBIN/gh"
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.connectors.github.enabled = false' '.board.enabled = false' '.guards.git_hooks = false'
+_dr_config '.connectors.github.enabled = false' '.board.enabled = false' '.guards.git_hooks = false'
 CALL_LOG="$TEST_DIR/gh-calls.log"; : > "$CALL_LOG"
 OUT=$(NAZGUL_TEST_GH_CALLS="$CALL_LOG" PATH="$FAKEBIN:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "gh-not-needed fixture: aggregate exit 0" "$EXIT" 0
@@ -173,7 +192,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.connectors.github.enabled = true' '.guards.git_hooks = false'
+_dr_config '.connectors.github.enabled = true' '.guards.git_hooks = false'
 CALL_LOG="$TEST_DIR/gh-calls.log"; : > "$CALL_LOG"
 OUT=$(NAZGUL_TEST_GH_CALLS="$CALL_LOG" NAZGUL_TEST_GH_AUTH=ok PATH="$FAKEBIN:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "gh-authenticated fixture: aggregate exit 0" "$EXIT" 0
@@ -184,7 +203,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.board.enabled = true'
+_dr_config '.board.enabled = true'
 CALL_LOG="$TEST_DIR/gh-calls.log"; : > "$CALL_LOG"
 OUT=$(NAZGUL_TEST_GH_CALLS="$CALL_LOG" NAZGUL_TEST_GH_AUTH=fail PATH="$FAKEBIN:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "gh-not-authenticated fixture: aggregate exit 1 (warn)" "$EXIT" 1
@@ -198,7 +217,7 @@ rm -rf "$FAKEBIN"
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.schema_version = 1'
+_dr_config '.schema_version = 1'
 OUT=$("$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "stale-schema fixture: aggregate exit 1 (warn)" "$EXIT" 1
 assert_contains "stale-schema fixture: config-schema warns" "$OUT" "$(printf 'warn\tconfig-schema')"
@@ -211,7 +230,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config ".schema_version = $HIGHEST_MIGRATION" '.guards.git_hooks = false'
+_dr_config ".schema_version = $HIGHEST_MIGRATION" '.guards.git_hooks = false'
 OUT=$("$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "current-schema fixture: aggregate exit 0" "$EXIT" 0
 assert_contains "current-schema fixture: config-schema passes" "$OUT" "$(printf 'pass\tconfig-schema')"
@@ -221,7 +240,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.schema_version = 1'
+_dr_config '.schema_version = 1'
 MIXED_SHIM=$(_dr_shim_path dirname git grep sed sort tail cat bash gh)
 OUT=$(PATH="$MIXED_SHIM" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "fail+warn mixed fixture: aggregate exit 2 (fail dominates warn)" "$EXIT" 2
@@ -236,7 +255,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.schema_version = 1' '.connectors.github.enabled = true' '.guards.git_hooks = true'
+_dr_config '.schema_version = 1' '.connectors.github.enabled = true' '.guards.git_hooks = true'
 install_git_hooks "$TEST_DIR" "$TEST_DIR/nazgul/config.json"
 BEFORE=$(_dr_snapshot "$TEST_DIR/nazgul")
 BEFORE_HOOKS_PATH=$(git -C "$TEST_DIR" config --get core.hooksPath)
@@ -270,7 +289,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false'
+_dr_config '.guards.git_hooks = false'
 PLUGIN_ROOT_NA=$(_dr_plugin_root "5.5.5")
 OUT=$(CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT_NA" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "plugin-version not-applicable fixture: aggregate exit 0" "$EXIT" 0
@@ -283,7 +302,8 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.install_mode = "local"' '.guards.git_hooks = false'
+_dr_config '.install_mode = "local"' '.guards.git_hooks = false'
+_dr_local_gitignore
 OUT=$(env -u CLAUDE_PLUGIN_ROOT "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "plugin-version no-CLAUDE_PLUGIN_ROOT fixture: aggregate exit 0" "$EXIT" 0
 assert_contains "plugin-version no-CLAUDE_PLUGIN_ROOT fixture: passes as not applicable" "$OUT" "$(printf 'pass\tplugin-version')"
@@ -296,7 +316,8 @@ setup_git_repo
 setup_nazgul_dir
 mkdir -p "$TEST_DIR/.claude-plugin"
 printf '{"name":"nazgul","version":"9.9.9"}\n' > "$TEST_DIR/.claude-plugin/plugin.json"
-create_config '.install_mode = "local"' '.guards.git_hooks = false'
+_dr_config '.install_mode = "local"' '.guards.git_hooks = false'
+_dr_local_gitignore
 PLUGIN_ROOT_MATCH=$(_dr_plugin_root "9.9.9")
 OUT=$(CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT_MATCH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "plugin-version match fixture: aggregate exit 0" "$EXIT" 0
@@ -310,7 +331,7 @@ setup_git_repo
 setup_nazgul_dir
 mkdir -p "$TEST_DIR/.claude-plugin"
 printf '{"name":"nazgul","version":"3.0.0"}\n' > "$TEST_DIR/.claude-plugin/plugin.json"
-create_config '.guards.git_hooks = false'
+_dr_config '.guards.git_hooks = false'
 PLUGIN_ROOT_CWD=$(_dr_plugin_root "3.0.0")
 OUT=$(CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT_CWD" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "plugin-version plugin-repo-cwd fixture: aggregate exit 0" "$EXIT" 0
@@ -324,7 +345,8 @@ setup_git_repo
 setup_nazgul_dir
 mkdir -p "$TEST_DIR/.claude-plugin"
 printf '{"name":"nazgul","version":"1.0.0"}\n' > "$TEST_DIR/.claude-plugin/plugin.json"
-create_config '.install_mode = "local"' '.guards.git_hooks = false'
+_dr_config '.install_mode = "local"' '.guards.git_hooks = false'
+_dr_local_gitignore
 PLUGIN_ROOT_MISMATCH=$(_dr_plugin_root "2.0.0")
 OUT=$(CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT_MISMATCH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "plugin-version mismatch fixture: aggregate exit 1 (warn)" "$EXIT" 1
@@ -345,7 +367,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = true'
+_dr_config '.guards.git_hooks = true'
 OUT=$("$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "git-hooks-unset fixture: aggregate exit 1 (warn)" "$EXIT" 1
 assert_contains "git-hooks-unset fixture: warns" "$OUT" "$(printf 'warn\tgit-hooks')"
@@ -354,7 +376,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = true'
+_dr_config '.guards.git_hooks = true'
 git -C "$TEST_DIR" config core.hooksPath ".husky"
 OUT=$("$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "git-hooks-drifted fixture: aggregate exit 1 (warn)" "$EXIT" 1
@@ -365,7 +387,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = true'
+_dr_config '.guards.git_hooks = true'
 mkdir -p "$TEST_DIR/nazgul/.githooks"
 touch "$TEST_DIR/nazgul/.githooks/pre-commit"
 git -C "$TEST_DIR" config core.hooksPath "nazgul/.githooks"
@@ -378,7 +400,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = true'
+_dr_config '.guards.git_hooks = true'
 install_git_hooks "$TEST_DIR" "$TEST_DIR/nazgul/config.json"
 BEFORE_GH_PATH=$(git -C "$TEST_DIR" config --get core.hooksPath)
 OUT=$("$DOCTOR" 2>&1); EXIT=$?
@@ -395,7 +417,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false'
+_dr_config '.guards.git_hooks = false'
 OUT=$("$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "invoking-shell bash fixture: aggregate exit 0" "$EXIT" 0
 assert_contains "invoking-shell bash fixture: passes" "$OUT" "$(printf 'pass\tinvoking-shell')"
@@ -404,7 +426,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false'
+_dr_config '.guards.git_hooks = false'
 OUT=$(NAZGUL_TEST_SHELL_NAME=zsh "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "invoking-shell non-bash fixture: aggregate exit 1 (warn)" "$EXIT" 1
 assert_contains "invoking-shell non-bash fixture: warns" "$OUT" "$(printf 'warn\tinvoking-shell')"
@@ -419,7 +441,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false'
+_dr_config '.guards.git_hooks = false'
 OUT=$(env -u NAZGUL_DIR "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "nazgul-dir-env unset fixture: aggregate exit 0" "$EXIT" 0
 assert_contains "nazgul-dir-env unset fixture: passes" "$OUT" "$(printf 'pass\tnazgul-dir-env')"
@@ -429,7 +451,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false'
+_dr_config '.guards.git_hooks = false'
 OUT=$(NAZGUL_DIR="$TEST_DIR/nazgul" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "nazgul-dir-env set fixture: aggregate exit 1 (warn)" "$EXIT" 1
 assert_contains "nazgul-dir-env set fixture: warns" "$OUT" "$(printf 'warn\tnazgul-dir-env')"
@@ -467,7 +489,7 @@ STACK_LAYER_OPEN='.stack.layers = [{"feat_id":"FEAT-100","branch":"feat/x","pr":
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false'
+_dr_config '.guards.git_hooks = false'
 OUT=$(PATH="$(_dr_shim_path dirname git grep sed sort tail cat bash jq)" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "stacking-disabled fixture: aggregate exit 0" "$EXIT" 0
 assert_contains "stacking-disabled fixture: stacking not applicable" "$OUT" "Not applicable — execution.stacking.enabled is false."
@@ -478,7 +500,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
 OUT=$(PATH="$(_dr_shim_path dirname git grep sed sort tail cat bash jq)" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "stacking gh-missing fixture: aggregate exit 1 (warn)" "$EXIT" 1
 assert_contains "stacking gh-missing fixture: stacking warns" "$OUT" "$(printf 'warn\tstacking')"
@@ -489,7 +511,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
 OUT=$(NAZGUL_TEST_GH_STACK_EXT=no PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "stacking extension-missing fixture: aggregate exit 1 (warn)" "$EXIT" 1
 assert_contains "stacking extension-missing fixture: stacking warns" "$OUT" "$(printf 'warn\tstacking')"
@@ -500,7 +522,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
 OUT=$(NAZGUL_TEST_GH_AUTH=fail PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "stacking not-authed fixture: aggregate exit 1 (warn)" "$EXIT" 1
 assert_contains "stacking not-authed fixture: stacking warns" "$OUT" "$(printf 'warn\tstacking')"
@@ -511,7 +533,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' \
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' \
   '.execution.stacking.halted = true' '.execution.stacking.halt_reason = "sync conflict on FEAT-100"'
 OUT=$(PATH="$(_dr_shim_path dirname git grep sed sort tail cat bash jq)" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "stacking halted fixture: aggregate exit 1 (warn)" "$EXIT" 1
@@ -523,7 +545,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
 OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "stacking ready fixture: aggregate exit 0" "$EXIT" 0
 assert_contains "stacking ready fixture: stacking passes" "$OUT" "$(printf 'pass\tstacking')"
@@ -533,7 +555,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' "$STACK_LAYER_OPEN"
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' "$STACK_LAYER_OPEN"
 OUT=$(NAZGUL_TEST_GH_PR_STATE=OPEN PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "stack-registry no-drift fixture: aggregate exit 0" "$EXIT" 0
 assert_contains "stack-registry no-drift fixture: passes" "$OUT" "$(printf 'pass\tstack-registry')"
@@ -543,7 +565,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' "$STACK_LAYER_OPEN"
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' "$STACK_LAYER_OPEN"
 OUT=$(NAZGUL_TEST_GH_PR_STATE=MERGED PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "stack-registry drift fixture: aggregate exit 1 (warn)" "$EXIT" 1
 assert_contains "stack-registry drift fixture: warns" "$OUT" "$(printf 'warn\tstack-registry')"
@@ -555,7 +577,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' "$STACK_LAYER_OPEN"
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' "$STACK_LAYER_OPEN"
 OUT=$(NAZGUL_TEST_GH_PR_STATE=CLOSED PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "stack-registry closed-drift fixture: aggregate exit 1 (warn)" "$EXIT" 1
 assert_contains "stack-registry closed-drift fixture: warns" "$OUT" "$(printf 'warn\tstack-registry')"
@@ -569,7 +591,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' \
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' \
   '.stack.layers = [{"feat_id":"FEAT-101","branch":"feat/y","pr":null,"base":"main","state":"open","opened_at":"2026-01-01T00:00:00Z","merged_at":null}]'
 OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "stack-registry no-pr fixture: aggregate exit 1 (warn)" "$EXIT" 1
@@ -583,7 +605,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' "$STACK_LAYER_OPEN"
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' "$STACK_LAYER_OPEN"
 OUT=$(PATH="$(_dr_shim_path dirname git grep sed sort tail cat bash jq)" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "stack-registry gh-unavailable fixture: aggregate exit 1 (stacking check warns too)" "$EXIT" 1
 assert_contains "stack-registry gh-unavailable fixture: notes, never falsely passes" "$OUT" "$(printf 'note\tstack-registry')"
@@ -594,7 +616,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' "$STACK_LAYER_OPEN"
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' "$STACK_LAYER_OPEN"
 OUT=$(NAZGUL_TEST_GH_PR_STATE=FAIL PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "stack-registry unreadable-api fixture: aggregate exit 0 (note is non-blocking)" "$EXIT" 0
 assert_contains "stack-registry unreadable-api fixture: notes, never falsely passes" "$OUT" "$(printf 'note\tstack-registry')"
@@ -605,7 +627,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
 OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "stack-registry empty-registry fixture: aggregate exit 0" "$EXIT" 0
 assert_contains "stack-registry empty-registry fixture: passes not applicable" "$OUT" "$(printf 'pass\tstack-registry')"
@@ -624,7 +646,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false'
+_dr_config '.guards.git_hooks = false'
 printf '{ "execution": { "stacking": ' > "$TEST_DIR/nazgul/config.json"
 OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "unparseable-config fixture: aggregate exit 2 (fail)" "$EXIT" 2
@@ -640,7 +662,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' '.stack.layers = "corrupt"'
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' '.stack.layers = "corrupt"'
 OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "malformed-registry fixture: aggregate exit 1 (warn)" "$EXIT" 1
 assert_contains "malformed-registry fixture: stack-registry warns" "$OUT" "$(printf 'warn\tstack-registry')"
@@ -654,7 +676,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' "$STACK_LAYER_OPEN"
+_dr_config '.guards.git_hooks = false' "$STACK_LAYER_OPEN"
 OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "disabled-with-layers fixture: aggregate exit 1 (warn)" "$EXIT" 1
 assert_contains "disabled-with-layers fixture: stack-registry warns" "$OUT" "$(printf 'warn\tstack-registry')"
@@ -667,7 +689,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' \
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' \
   '.execution.stacking.api_failures = 2'
 OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "api-failures fixture: aggregate exit 1 (warn)" "$EXIT" 1
@@ -680,7 +702,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' \
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' \
   '.execution.stacking.halted = true' '.execution.stacking.halt_reason = "conflict"'
 OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_contains "halted fixture: remediation names api_failures, not just the halted flag" "$OUT" "api_failures"
@@ -699,7 +721,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
 OUT=$(PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "version canary (pinned v0.1.0): aggregate exit 0" "$EXIT" 0
 assert_contains "version canary (pinned v0.1.0): stacking still passes" "$OUT" "$(printf 'pass\tstacking')"
@@ -711,7 +733,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
 OUT=$(NAZGUL_TEST_GH_STACK_VER=v0.2.0 PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "version canary (drifted v0.2.0): aggregate exit 1 (warn)" "$EXIT" 1
 assert_contains "version canary (drifted v0.2.0): stacking warns" "$OUT" "$(printf 'warn\tstacking')"
@@ -728,7 +750,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true'
 OUT=$(NAZGUL_TEST_GH_STACK_VER= PATH="$FAKEBIN_STACK:$PATH" "$DOCTOR" 2>&1); EXIT=$?
 assert_exit_code "version canary (no version in the row): aggregate exit 0 (note is non-blocking)" "$EXIT" 0
 assert_contains "version canary (no version in the row): notes" "$OUT" "$(printf 'note\tstacking')"
@@ -743,7 +765,7 @@ rm -rf "$FAKEBIN_STACK"
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' "$STACK_LAYER_OPEN"
+_dr_config '.guards.git_hooks = false' '.execution.stacking.enabled = true' "$STACK_LAYER_OPEN"
 BEFORE_STACK_ZW=$(_dr_snapshot "$TEST_DIR/nazgul")
 FAKEBIN_STACK2=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-doctor-stack-fakebin2-XXXXXX")
 cat > "$FAKEBIN_STACK2/gh" << 'FAKE_GH_STACK_EOF2'
@@ -767,7 +789,7 @@ teardown_temp_dir
 # HOME is pinned to the scratch tree: _doc_flag_killers reads ~/.claude/settings.json.
 setup_temp_dir
 setup_nazgul_dir
-create_config
+_dr_config
 OUT=$(cd "$TEST_DIR" && HOME="$TEST_DIR" DO_NOT_TRACK=1 CLAUDE_CODE_MESSAGING_SOCKET= bash "$DOCTOR" --only=messaging 2>/dev/null)
 assert_contains "doctor messaging: flag-killer named with source" "$OUT" "DO_NOT_TRACK"
 assert_contains "doctor messaging: a flag killer is a warn, not a note" "$OUT" "$(printf 'warn\tmessaging')"
@@ -793,7 +815,7 @@ teardown_temp_dir
 # --- (l) remote-control: named causes ---
 setup_temp_dir
 setup_nazgul_dir
-create_config
+_dr_config
 OUT=$(cd "$TEST_DIR" && HOME="$TEST_DIR" env -u DO_NOT_TRACK -u DISABLE_TELEMETRY -u DISABLE_GROWTHBOOK -u CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC \
   ANTHROPIC_BASE_URL="https://proxy.example" bash "$DOCTOR" --only=remote-control 2>/dev/null)
 assert_contains "doctor remote-control: names ANTHROPIC_BASE_URL" "$OUT" "ANTHROPIC_BASE_URL"
@@ -811,7 +833,7 @@ teardown_temp_dir
 # --- (m) sessions: shared-tree collision ---
 setup_temp_dir
 setup_nazgul_dir
-create_config
+_dr_config
 mkdir -p "$TEST_DIR/nazgul/sessions"
 jq -cn --arg p "$$" '{pid:$p, session:"a", toplevel:"/repo/x"}' > "$TEST_DIR/nazgul/sessions/a.lock"
 jq -cn --arg p "$$" '{pid:$p, session:"b", toplevel:"/repo/x"}' > "$TEST_DIR/nazgul/sessions/b.lock"
@@ -840,7 +862,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false'
+_dr_config '.guards.git_hooks = false'
 mkdir -p "$TEST_DIR/nazgul/sessions"
 jq -cn '{pid:"2147483646", session:"legacy"}' > "$TEST_DIR/nazgul/sessions/legacy.lock"
 OUT=$(cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR bash "$DOCTOR" 2>/dev/null)
@@ -850,13 +872,262 @@ assert_contains "empty-scan fixture: the run reached the coverage line, so it wa
   "$(printf '%s' "$OUT" | tail -1)" "$DR_ROSTER_COUNT scanned"
 teardown_temp_dir
 
+# (j) ignore-block — the R3 check. Every state gets its OWN message, because "looked and found no
+# block" and "could not look" collapsing into one allow is what RULES §15 exists to forbid.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+_dr_config
+
+DR_IB_SHIPPED=$(printf '%s' "$DR_SHIPPED_BLOCK_LINE" | sed -nE 's/.*\(v([0-9]+)\).*/v\1/p')
+DR_IB_BARE=${DR_SHIPPED_BLOCK_LINE%% (v*}
+
+_dr_ib_line() {
+  local out
+  out=$( (cd "$TEST_DIR" && bash "$DOCTOR" --only=ignore-block) 2>/dev/null )
+  printf '%s' "$out" | head -1
+}
+_dr_ib_msg() { printf '%s' "$1" | cut -f3-; }
+
+IB_PASS=$(_dr_ib_line)
+assert_contains "(j): a shared install carrying the shipped block passes" "$IB_PASS" "$(printf 'pass\tignore-block')"
+assert_contains "(j): the pass names the version it found" "$IB_PASS" "block at $DR_IB_SHIPPED"
+
+printf '%s\nnazgul/logs/\n' "$DR_IB_BARE" > "$TEST_DIR/.gitignore"
+IB_V1=$(_dr_ib_line)
+assert_contains "(j): a pre-stamp block is found, not read as absent — the prefix match is what makes v1 visible" \
+  "$IB_V1" "$(printf 'warn\tignore-block')"
+assert_contains "(j): the drift message names the version found AND the version shipped" \
+  "$IB_V1" "block at v1; this plugin ships $DR_IB_SHIPPED"
+assert_contains "(j): and names the remedy" "$IB_V1" "/nazgul:init --force"
+# ---- #254 round-4 HEeX: the stale branch states the stale consequence, not the absent one ------
+# A v1 shared block still ignores checkpoints/, logs/, sessions/, .session_id, .compaction_count,
+# archive/ and the review artifacts, so "the ephemeral runtime journal is tracked, which is #251
+# itself" is true only of the ABSENT branch. Round 3 hoisted one string and overstated this.
+assert_contains "(j) HEeX: a stale shared block reports the entries added SINCE that version, not the whole journal" \
+  "$IB_V1" "the entries added since that version are still tracked"
+assert_not_contains "(j) HEeX: the absent branch's severity must not leak into the stale branch" \
+  "$IB_V1" "which is #251 itself"
+
+printf '  %s\n' "$DR_SHIPPED_BLOCK_LINE" > "$TEST_DIR/.gitignore"
+IB_INDENT=$(_dr_ib_line)
+assert_contains "(j): an indented block is stale however current its stamp reads (C-c's residual)" \
+  "$IB_INDENT" "$(printf 'warn\tignore-block')"
+assert_contains "(j): and the message says the entries are inert, not that the version is old" "$IB_INDENT" "inert"
+
+# Round-3 finding 3: the case the old branch MISSED — sentinel flush-left, ENTRIES indented, which
+# is what a partial or hand-edited rewrite produces. The stamp reads current and the block matches
+# nothing, so before the region scan this printed `pass ... the version this plugin ships`.
+printf '%s\n   nazgul/logs/\n# Nazgul Framework — end ephemeral runtime\n' "$DR_SHIPPED_BLOCK_LINE" > "$TEST_DIR/.gitignore"
+IB_INDENT_ENTRY=$(_dr_ib_line)
+assert_contains "(j): a flush-left sentinel over INDENTED entries is a finding, not a pass on a current stamp" \
+  "$IB_INDENT_ENTRY" "$(printf 'warn\tignore-block')"
+assert_contains "(j): and it says the entries are inert, not that the version is old" "$IB_INDENT_ENTRY" "inert"
+# CONTROL: the same block with its entries flush-left passes, so the arm above measures the
+# indentation and not merely the presence of a second line.
+printf '%s\nnazgul/logs/\n# Nazgul Framework — end ephemeral runtime\n' "$DR_SHIPPED_BLOCK_LINE" > "$TEST_DIR/.gitignore"
+assert_contains "(j) CONTROL: the same region flush-left passes, so the finding above is the indentation" \
+  "$(_dr_ib_line)" "$(printf 'pass\tignore-block')"
+
+# ---- #254 round-4 HEYm: a BLANK LINE does not end a sentinel-delimited region ------------------
+# skills/init/SKILL.md defines the region as start through end sentinel inclusive, "regardless of
+# blank lines or comments between them". Round 3's scan applied the legacy blank-line bound
+# unconditionally, so an indented entry one blank line down was invisible and a wholly inert block
+# reported `pass ... with every region line flush-left` — the exact class finding 3 was opened on.
+printf '%s\nnazgul/logs/\n\n   nazgul/in-flight/\n# Nazgul Framework — end ephemeral runtime\n' \
+  "$DR_SHIPPED_BLOCK_LINE" > "$TEST_DIR/.gitignore"
+IB_BLANK_INDENT=$(_dr_ib_line)
+assert_contains "(j) HEYm: an indented entry AFTER a blank line inside a v2 region is still found" \
+  "$IB_BLANK_INDENT" "$(printf 'warn\tignore-block')"
+assert_contains "(j) HEYm: and it is reported as inert, not passed as current" "$IB_BLANK_INDENT" "INDENTED"
+# CONTROL: the same shape flush-left passes, so the blank line itself is not what fails it.
+printf '%s\nnazgul/logs/\n\nnazgul/in-flight/\n# Nazgul Framework — end ephemeral runtime\n' \
+  "$DR_SHIPPED_BLOCK_LINE" > "$TEST_DIR/.gitignore"
+assert_contains "(j) HEYm CONTROL: a blank line inside an otherwise flush-left v2 region still passes" \
+  "$(_dr_ib_line)" "$(printf 'pass\tignore-block')"
+
+# ---- #254 round-4 HEag: a v1 region is bounded by OWNERSHIP, not adjacency --------------------
+# A user's own `  build/` under a v1 block is not a block line (not a `#` comment, not a pattern
+# beginning nazgul/), so its indentation must never be attributed to Nazgul — and the operator must
+# not be sent to a state-archiving --force for it. The real finding here is the stale v1 stamp.
+printf '%s\nnazgul/logs/\n  build/\n' "$DR_IB_BARE" > "$TEST_DIR/.gitignore"
+IB_V1_USERLINE=$(_dr_ib_line)
+assert_not_contains "(j) HEag: a user line below a flush-left v1 block is not reported as the block being inert" \
+  "$IB_V1_USERLINE" "INDENTED"
+assert_contains "(j) HEag: the true finding — the stale v1 stamp — is what gets reported instead" \
+  "$IB_V1_USERLINE" "block at v1; this plugin ships $DR_IB_SHIPPED"
+# CONTROL: an indented line that IS owned (begins nazgul/) is still caught in the same v1 shape,
+# so the ownership bound narrows the region rather than disabling the check.
+printf '%s\nnazgul/logs/\n  nazgul/in-flight/\n' "$DR_IB_BARE" > "$TEST_DIR/.gitignore"
+assert_contains "(j) HEag CONTROL: an indented OWNED line in the same v1 shape is still reported inert" \
+  "$(_dr_ib_line)" "INDENTED"
+
+printf 'build/\n' > "$TEST_DIR/.gitignore"
+IB_NOBLOCK=$(_dr_ib_line)
+assert_contains "(j): a shared install whose .gitignore carries no block at all is a finding" \
+  "$IB_NOBLOCK" "$(printf 'warn\tignore-block')"
+assert_contains "(j): absence is named as #251 itself, not reported as drift" "$IB_NOBLOCK" "#251"
+
+rm -f "$TEST_DIR/.gitignore"
+IB_NOFILE=$(_dr_ib_line)
+assert_contains "(j): no .gitignore at all is still a determinate observation, not a skip" \
+  "$IB_NOFILE" "$(printf 'warn\tignore-block')"
+assert_contains "(j): and it says which of the two absences it saw" "$IB_NOFILE" "does not exist at all"
+
+# Round-3 finding 7: this PR stamped the LOCAL block and gave it an end sentinel, so a local
+# install can now be v1 — and returning "not applicable" left it with no surface that says so,
+# which is the one job skills/doctor/SKILL.md bills this check with.
+jq '.install_mode = "local"' "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.x" \
+  && mv "$TEST_DIR/nazgul/config.json.x" "$TEST_DIR/nazgul/config.json"
+printf '%s\nnazgul/\n' "${DR_SHIPPED_LOCAL_LINE%% (v*}" > "$TEST_DIR/.gitignore"
+IB_LOCAL=$(_dr_ib_line)
+assert_contains "(j): a v1 LOCAL install is reported, where it used to be a not-applicable skip" \
+  "$IB_LOCAL" "$(printf 'warn\tignore-block')"
+assert_contains "(j): and the local message names the version found" "$IB_LOCAL" "block at v1"
+assert_contains "(j): the local cost is stated honestly — nothing is mis-tracked, the sentinel-delimited removal is what is lost" \
+  "$IB_LOCAL" "ownership-bounded removal"
+# CONTROL: a local install carrying the shipped stamped block passes, so the warn above is the stamp.
+printf '%s\nnazgul/\n%s\n' "$DR_SHIPPED_LOCAL_LINE" '# Nazgul Framework — end local mode' > "$TEST_DIR/.gitignore"
+IB_LOCAL_OK=$(_dr_ib_line)
+assert_contains "(j) CONTROL: a local install at the shipped stamp passes" "$IB_LOCAL_OK" "$(printf 'pass\tignore-block')"
+# ---- #254 round-4 HEVk: local + ABSENT is the one state where all of nazgul/ really is exposed --
+# Round 3 hoisted ONE `what` string written for the stale branch and reused it here, so doctor told
+# an operator with no block at all that "nothing is mis-tracked".
+printf 'build/\n' > "$TEST_DIR/.gitignore"
+IB_LOCAL_ABSENT=$(_dr_ib_line)
+assert_contains "(j) HEVk: a local install with NO block is a finding" "$IB_LOCAL_ABSENT" "$(printf 'warn\tignore-block')"
+assert_contains "(j) HEVk: and it says the WHOLE tree is tracked, not that nothing is mis-tracked" \
+  "$IB_LOCAL_ABSENT" "the WHOLE nazgul/ tree is tracked"
+assert_not_contains "(j) HEVk: the stale branch's reassurance must never reach the absent branch" \
+  "$IB_LOCAL_ABSENT" "nothing is mis-tracked"
+# ---- #254 round-4 HEW_: a local remediation must PRESERVE local mode ------------------------
+# Step 0 sets LOCAL_MODE from the --local token alone and never reads install_mode, so a bare
+# `--force` on a local install takes the SHARED branch and silently converts the project.
+for _ib_local_case in "absent:$IB_LOCAL_ABSENT" "stale:$IB_LOCAL"; do
+  assert_contains "(j) HEW_: the local ${_ib_local_case%%:*} remediation carries --local, so it cannot convert the install to shared" \
+    "${_ib_local_case#*:}" "/nazgul:init --force --local"
+done
+# CONTROL: the SHARED remediation must NOT carry --local, or the fix would just be a blanket suffix.
+assert_not_contains "(j) HEW_ CONTROL: the shared remediation stays a bare --force" "$IB_V1" "--force --local"
+
+# A mode that is neither is still a NAMED skip: the not-applicable path did not disappear, it moved.
+jq '.install_mode = "unset"' "$TEST_DIR/nazgul/config.json" > "$TEST_DIR/nazgul/config.json.x" \
+  && mv "$TEST_DIR/nazgul/config.json.x" "$TEST_DIR/nazgul/config.json"
+IB_MODE_OTHER=$(_dr_ib_line)
+assert_contains "(j): a mode that is neither shared nor local is a named not-applicable skip, never a pass on nothing" \
+  "$IB_MODE_OTHER" "$(printf 'pass\tignore-block\tNot applicable')"
+assert_contains "(j): the skip names the install mode it read" "$IB_MODE_OTHER" "install_mode is 'unset'"
+
+printf 'not json\n' > "$TEST_DIR/nazgul/config.json"
+IB_BADCFG=$(_dr_ib_line)
+assert_contains "(j): an unparseable config makes install_mode UNKNOWN, never 'unset'" "$IB_BADCFG" "UNKNOWN rather than unset"
+_dr_config
+
+DR_IB_SET=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$(_dr_ib_msg "$IB_PASS")" "$(_dr_ib_msg "$IB_V1")" \
+  "$(_dr_ib_msg "$IB_INDENT")" "$(_dr_ib_msg "$IB_NOBLOCK")" "$(_dr_ib_msg "$IB_NOFILE")" \
+  "$(_dr_ib_msg "$IB_LOCAL")" "$(_dr_ib_msg "$IB_LOCAL_OK")" "$(_dr_ib_msg "$IB_LOCAL_ABSENT")" \
+  "$(_dr_ib_msg "$IB_MODE_OTHER")" "$(_dr_ib_msg "$IB_BADCFG")")
+assert_eq "(j): the ten reachable states print pairwise-distinct messages, not ten copies of one verdict" \
+  "$(printf '%s\n' "$DR_IB_SET" | sort -u | wc -l | tr -d ' ')" "10"
+
+# ---- Round-3 finding 5: every remediation that recommends --force discloses what it destroys ---
+# Two of the three said only "re-run /nazgul:init --force"; the absent-block one — #251 live, the
+# operator most likely to be hit — read like a .gitignore edit. One suffix now, so they cannot drift.
+DR_IB_COST='It archives nazgul/ state and re-runs Discovery.'
+for _ib_case in "absent:$IB_NOBLOCK" "no-file:$IB_NOFILE" "indented:$IB_INDENT" "indented-entries:$IB_INDENT_ENTRY" "stale:$IB_V1" "local-stale:$IB_LOCAL" "local-absent:$IB_LOCAL_ABSENT"; do
+  assert_contains "(j) finding 5: the ${_ib_case%%:*} remediation discloses that --force archives state" \
+    "${_ib_case#*:}" "$DR_IB_COST"
+done
+# CONTROL: the pass message recommends nothing, so it must NOT carry the cost clause — otherwise
+# the loop above would pass on a suffix appended unconditionally to every line.
+assert_not_contains "(j) finding 5 CONTROL: the pass message recommends no --force, so it carries no cost clause" \
+  "$IB_PASS" "$DR_IB_COST"
+
+# The unreadable arm needs a file this process genuinely cannot read; root can, so it is
+# announced as skipped rather than asserted vacuously.
+chmod 000 "$TEST_DIR/.gitignore"
+if [ -r "$TEST_DIR/.gitignore" ]; then
+  _skip "(j) unreadable arm (skipped — chmod 000 left the file readable; running as root?)"
+else
+  IB_UNREADABLE=$(_dr_ib_line)
+  assert_contains "(j): an unreadable .gitignore is 'could not look', reported as a skip" \
+    "$IB_UNREADABLE" "$(printf 'pass\tignore-block\tNot applicable')"
+  assert_contains "(j): and it explicitly disclaims the absence claim" "$IB_UNREADABLE" "NOT a report that the block is missing"
+  assert_eq "(j): 'could not look' and 'looked and found no block' never print the same thing (RULES §15)" \
+    "$(printf '%s\n%s\n' "$DR_IB_SET" "$(_dr_ib_msg "$IB_UNREADABLE")" | sort -u | wc -l | tr -d ' ')" "11"
+fi
+chmod 644 "$TEST_DIR/.gitignore"
+
+# The derivation control, and it is the strong one: a shipped block stamped (v3) must move
+# doctor's reported expectation to v3. A hardcoded literal in doctor.sh cannot pass this.
+DR_IB_V3ROOT=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-doctor-v3-XXXXXX")
+cp -R "$REPO_ROOT/scripts" "$DR_IB_V3ROOT/scripts"
+mkdir -p "$DR_IB_V3ROOT/skills/init"
+sed "s|^$DR_SHIPPED_BLOCK_LINE\$|$DR_IB_BARE (v3)|" "$REPO_ROOT/skills/init/SKILL.md" > "$DR_IB_V3ROOT/skills/init/SKILL.md"
+assert_file_contains "(j) derivation floor: the fixture plugin really does ship a (v3) block" \
+  "$DR_IB_V3ROOT/skills/init/SKILL.md" "^$DR_IB_BARE (v3)\$"
+printf '%s\nnazgul/logs/\n' "$DR_SHIPPED_BLOCK_LINE" > "$TEST_DIR/.gitignore"
+IB_V3=$( (cd "$TEST_DIR" && bash "$DR_IB_V3ROOT/scripts/doctor.sh" --only=ignore-block) 2>/dev/null | head -1)
+assert_contains "(j) derivation: a (v3) shipped block flips the same $DR_IB_SHIPPED install to drift" \
+  "$IB_V3" "$(printf 'warn\tignore-block')"
+assert_contains "(j) derivation: doctor reports the version it READ from the skill, never a literal of its own" \
+  "$IB_V3" "this plugin ships v3"
+assert_contains "(j) derivation: and names the file it derived from" "$IB_V3" "skills/init/SKILL.md"
+rm -rf "$DR_IB_V3ROOT"
+
+# Zero-write, extended to (j): it reads .gitignore and must never repair it — doctor's only
+# fix path is the remediation text it prints.
+BEFORE_IB=$(_dr_snapshot "$TEST_DIR/nazgul")
+BEFORE_IB_GI=$(_dr_hash_file "$TEST_DIR/.gitignore")
+(cd "$TEST_DIR" && bash "$DOCTOR" --only=ignore-block >/dev/null 2>&1)
+assert_eq "(j) zero-write: nothing under nazgul/ changed" "$(_dr_snapshot "$TEST_DIR/nazgul")" "$BEFORE_IB"
+assert_eq "(j) zero-write: the .gitignore it read is byte-identical afterwards" \
+  "$(_dr_hash_file "$TEST_DIR/.gitignore")" "$BEFORE_IB_GI"
+
+# R3 part 2: the unreachable notice is gone from the skill, and its action took its place.
+DR_NOTICE='Until then the block'
+assert_eq "R3: skills/init/SKILL.md no longer carries the stale-block notice Step 0.5 made unreachable" \
+  "$(grep -cF -- "$DR_NOTICE" "$REPO_ROOT/skills/init/SKILL.md" || true)" "0"
+DR_NOTICE_CTRL="$TEST_DIR/init-notice-control.md"
+{ cat "$REPO_ROOT/skills/init/SKILL.md"; printf 'print a notice: %s stays tracked.\n' "$DR_NOTICE"; } > "$DR_NOTICE_CTRL"
+assert_eq "R3 CONTROL: appending one occurrence moves that count to one, so the zero above is MEASURED" \
+  "$(grep -cF -- "$DR_NOTICE" "$DR_NOTICE_CTRL" || true)" "1"
+# Wording-agnostic on purpose: TASK-022 renamed this bullet from "Present, stale" to
+# "Present but stale", and a needle pinned to either spelling reads 0 for the wrong reason.
+DR_NOFORCE='stale, no `--force`'
+assert_eq "R3: and the unreachable fourth state is gone from the version switch too" \
+  "$(grep -cF -- "$DR_NOFORCE" "$REPO_ROOT/skills/init/SKILL.md" || true)" "0"
+DR_NOFORCE_CTRL="$TEST_DIR/init-noforce-control.md"
+{ cat "$REPO_ROOT/skills/init/SKILL.md"; printf -- '- **Present but %s** — report it.\n' "$DR_NOFORCE"; } > "$DR_NOFORCE_CTRL"
+assert_eq "R3 CONTROL: that zero is measured too" \
+  "$(grep -cF -- "$DR_NOFORCE" "$DR_NOFORCE_CTRL" || true)" "1"
+assert_file_contains "R3: the skill states why that state cannot occur, so it cannot be re-added by accident" \
+  "$REPO_ROOT/skills/init/SKILL.md" "Three reachable states, not four"
+assert_file_contains "R3: and names the read-only surface that reports drift instead" \
+  "$REPO_ROOT/skills/init/SKILL.md" "read-only \`ignore-block\` check"
+assert_file_contains "R3: the stale branch now replaces the region rather than reporting it" \
+  "$REPO_ROOT/skills/init/SKILL.md" "This is the ONLY stale branch"
+assert_file_contains "R3: skills/doctor/SKILL.md names the fifteenth check it now runs" \
+  "$REPO_ROOT/skills/doctor/SKILL.md" "at the version this plugin ships"
+# Round-3 finding 7: the doc billed (j) as "the only surface that tells a v1 install it is v1"
+# while the check skipped local mode outright, so half the installs it claimed to cover had no
+# surface at all. Both modes must be named where that claim is made.
+for _r3_mode in "the ephemeral-runtime block in shared mode" "the local-mode block in local"; do
+  assert_file_contains "R3 finding 7: skills/doctor/SKILL.md says (j) covers $_r3_mode" \
+    "$REPO_ROOT/skills/doctor/SKILL.md" "$_r3_mode"
+done
+# And the region scan, which is what finding 3 bought: a stamp alone cannot see an inert block.
+assert_file_contains "R3 finding 3: skills/doctor/SKILL.md says the whole region is checked flush-left, not just the stamp" \
+  "$REPO_ROOT/skills/doctor/SKILL.md" "every region line flush-left"
+teardown_temp_dir
+
 # Coverage honesty (FEAT-028 TASK-015, TRD §6): a check with nothing to inspect is
 # skipped with an enumerated reason, and the vacuous case writes nothing.
 
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config '.guards.git_hooks = false'
+_dr_config '.guards.git_hooks = false'
 OUT=$("$DOCTOR" 2>/dev/null); EXIT=$?
 COVERAGE=$(printf '%s' "$OUT" | tail -1)
 DR_GRAMMAR="^doctor: ([0-9]+) scanned, ([0-9]+) skipped \(not-applicable-config=([0-9]+), not-applicable-env=([0-9]+), no-candidates=([0-9]+), unreadable=([0-9]+)\), ([0-9]+) checked, ([0-9]+) findings$"
@@ -867,7 +1138,7 @@ else
 fi
 read -r D_SCANNED D_SKIPPED D_CHECKED <<<"$(printf '%s' "$COVERAGE" | sed -E "s/$DR_GRAMMAR/\1 \2 \7/")"
 assert_eq "coverage line adds up (N == M + K)" "$D_SCANNED" "$((D_SKIPPED + D_CHECKED))"
-assert_eq "the declared roster is the fourteen checks the docs name" "$DR_ROSTER_COUNT" "14"
+assert_eq "the declared roster is the fifteen checks the docs name" "$DR_ROSTER_COUNT" "15"
 assert_eq "every check reports exactly once, so N is the full check roster" "$D_SCANNED" "$DR_ROSTER_COUNT"
 if [ "$D_SKIPPED" -ge 1 ]; then
   _pass "the disabled-guard check is counted as skipped, not as a check that passed on nothing"
@@ -916,7 +1187,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+_dr_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
   '.board.enabled = false' '.guards.git_hooks = false'
 mkdir -p "$TEST_DIR/.claude"
 jq -n '{env:{DISABLE_TELEMETRY:"0", DO_NOT_TRACK:"false"}}' > "$TEST_DIR/.claude/settings.json"
@@ -933,7 +1204,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+_dr_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
   '.board.enabled = false' '.guards.git_hooks = false'
 mkdir -p "$TEST_DIR/.claude"
 jq -n '{env:{DISABLE_TELEMETRY:"1"}}' > "$TEST_DIR/.claude/settings.json"
@@ -948,7 +1219,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+_dr_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
   '.board.enabled = false' '.guards.git_hooks = false'
 mkdir -p "$TEST_DIR/.claude"
 jq -n '{disableRemoteControl:true}' > "$TEST_DIR/.claude/settings.local.json"
@@ -970,7 +1241,7 @@ assert_file_contains "check_remote_control consults settings.local.json" \
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+_dr_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
   '.board.enabled = false' '.guards.git_hooks = false'
 
 _dr_stop_payload_msg() { printf '%s' "$1" | grep -m1 'stop-payload' | cut -f3 || true; }
@@ -1056,7 +1327,7 @@ assert_eq "P12e floor: every enumerated outcome token is a real string in doctor
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+_dr_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
   '.board.enabled = false' '.guards.git_hooks = false'
 mkdir -p "$TEST_DIR/nazgul/logs"
 DR_SP_EVENTS="$TEST_DIR/nazgul/logs/events.jsonl"
@@ -1140,7 +1411,7 @@ teardown_temp_dir
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+_dr_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
   '.board.enabled = false' '.guards.git_hooks = false' '.telemetry.bus_enabled = false'
 DR_SP_EVENTS="$TEST_DIR/nazgul/logs/events.jsonl"
 DR_SP_OUT=$(_dr_sp_run)
@@ -1161,7 +1432,7 @@ assert_eq "P12g: a stale record cannot be refreshed while the bus is off, so it 
   "$(_dr_sp_outcomes "$(_dr_sp_run)")" "TELEMETRY BUS DISABLED|"
 assert_contains "P12g: and the stale-record wording differs from the no-record wording" \
   "$(_dr_sp_msg "$(_dr_sp_run)")" "can never be refreshed"
-create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+_dr_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
   '.board.enabled = false' '.guards.git_hooks = false' '.telemetry.bus_enabled = true'
 assert_eq "P12g: flipping the bus back on returns the same record to FIELD PRESENT" \
   "$(_dr_sp_outcomes "$(_dr_sp_run)")" "FIELD PRESENT at the last recorded Stop|"
@@ -1182,7 +1453,7 @@ assert_eq "P12g: SKILL.md enumerates all 7 named outcomes doctor can report (7 s
 setup_temp_dir
 setup_git_repo
 setup_nazgul_dir
-create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+_dr_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
   '.board.enabled = false' '.guards.git_hooks = false' '.paused = true'
 DR_SP_EVENTS="$TEST_DIR/nazgul/logs/events.jsonl"
 DR_SP_OUT=$(_dr_sp_run)
@@ -1210,7 +1481,7 @@ assert_eq "P12i: paused WITH a record still reports that record normally" \
 # The NEGATIVE control: same empty log, pause flipped off. Without it an arm that fired
 # unconditionally would leave every cell above green.
 rm -f "$DR_SP_EVENTS"
-create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+_dr_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
   '.board.enabled = false' '.guards.git_hooks = false' '.paused = false'
 DR_SP_OUT=$(_dr_sp_run)
 DR_SP_M_NEVER2=$(_dr_sp_msg "$DR_SP_OUT")
@@ -1228,14 +1499,14 @@ assert_eq "P12i: the paused arm does not print the same thing as never-observed 
 
 # Precedence, pinned both ways: bus-off wins because it is the stronger claim — no record can
 # EVER be written — where a pause clears with one operator command.
-create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+_dr_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
   '.board.enabled = false' '.guards.git_hooks = false' '.paused = true' '.telemetry.bus_enabled = false'
 assert_eq "P12i: paused AND bus off reports bus-disabled — one arm wins, never both" \
   "$(_dr_sp_outcomes "$(_dr_sp_run)")" "TELEMETRY BUS DISABLED|"
 
 # "Could not look" outranks "cannot look yet": a record may already exist, and reporting the
 # pause instead would hide that a Stop was in fact measured here.
-create_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+_dr_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
   '.board.enabled = false' '.guards.git_hooks = false' '.paused = true'
 printf '{"event":"stop_payload_observed", TRUNCATED\n' > "$DR_SP_EVENTS"
 assert_eq "P12i: paused with an unselectable record is UNSELECTABLE RECORD, not LOOP PAUSED" \

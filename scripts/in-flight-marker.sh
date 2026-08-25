@@ -39,6 +39,10 @@ command -v jq >/dev/null 2>&1 || exit 0
 
 # shellcheck source=lib/nazgul-root.sh
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
+# Guarded, unlike the line above: an absent helper must reach the existing degradation
+# below (`prompt_hash` = `unavailable` + one stderr line), never abort a hook that never blocks.
+# shellcheck source=lib/sha256.sh
+source "$SCRIPT_DIR/lib/sha256.sh" 2>/dev/null || true
 
 NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
@@ -84,6 +88,7 @@ _sanitize() {
   s="${s//../_}"
   [ -n "$s" ] && printf '%s' "$s" || printf 'unknown'
 }
+
 SAFE_AGENT=$(_sanitize "${SUBAGENT:-unknown}")
 SAFE_UNIT=$(_sanitize "$UNIT")
 
@@ -95,13 +100,45 @@ MARKER_DIR="$NAZGUL_DIR/in-flight"
 mkdir -p "$MARKER_DIR" 2>/dev/null || exit 0
 
 MARKER_FILE="$MARKER_DIR/${SAFE_AGENT}__${SAFE_UNIT}__${EPOCH}-${NONCE}.json"
-# prompt_head is stored as inert data (first ~200 chars), never eval'd.
-PROMPT_HEAD=$(printf '%s' "$PROMPT" | cut -c1-200)
+# Identify the dispatch by digest, never by prompt text (ADR-028). `unavailable`
+# has non-hex letters and is 11 chars, not 16, so it never reads as a digest.
+PROMPT_HASH="unavailable"
+_ifm_full=$(printf '%s' "$PROMPT" | nz_sha256 2>/dev/null) || _ifm_full=""
+_ifm_short="${_ifm_full:0:16}"
+# The two-state grammar is enforced HERE, not merely published: a wrapper that prefixes a
+# deprecation line, an uppercase-hex build, or a short digest all reach this point (#254 A2).
+_ifm_reject=""
+[ "${#_ifm_short}" -eq 16 ] || _ifm_reject="length=${#_ifm_short}"
+case "$_ifm_short" in *[!0-9a-f]*) _ifm_reject="${_ifm_reject:+$_ifm_reject,}non-hex-character" ;; esac
+if [ -z "$_ifm_reject" ]; then
+  PROMPT_HASH="$_ifm_short"
+elif [ -z "$_ifm_full" ]; then
+  echo "in-flight-marker: sha256 unavailable — prompt_hash recorded as 'unavailable'" >&2
+else
+  # Names the cause class, never the rejected value — that value is prompt-derived (ADR-028 D4).
+  echo "in-flight-marker: sha256 helper returned a non-conforming digest ($_ifm_reject) — prompt_hash recorded as 'unavailable'" >&2
+fi
+
+# Bytes over the SAME stream that is hashed. `${#PROMPT}` counts characters under a UTF-8
+# locale, so the fallback re-counts under LC_ALL=C, where it counts bytes and agrees with wc.
+PROMPT_BYTES_SOURCE="wc"
+PROMPT_BYTES=$(printf '%s' "$PROMPT" | wc -c 2>/dev/null | tr -d ' ') || PROMPT_BYTES=""
+case "$PROMPT_BYTES" in
+  ''|*[!0-9]*)
+    # The fallback's count EQUALS wc's, so the mechanism is the only separating signal and it is
+    # persisted rather than left on stderr alone (#254 R1, ADR-014).
+    PROMPT_BYTES=$(LC_ALL=C; printf '%s' "${#PROMPT}")
+    PROMPT_BYTES_SOURCE="shell"
+    # Names the TESTED condition, not a cause: an absent `wc`, an absent `tr`, a signal, and a
+    # TAB-padded count all land here, the last with `wc` working perfectly (#254 C-j).
+    echo "in-flight-marker: no usable byte count from 'wc -c | tr' — prompt_bytes counted with \${#PROMPT} under LC_ALL=C" >&2
+    ;;
+esac
 
 jq -cn --arg agent "$SUBAGENT" --arg unit "$UNIT" --arg ts "$TS" \
-  --argjson epoch "$EPOCH" --arg head "$PROMPT_HEAD" \
-  --arg bg "$BACKGROUND" --arg named "$NAMED" \
-  '{agent:$agent, unit:$unit, dispatched_at:$ts, dispatched_at_epoch:$epoch, prompt_head:$head, background:$bg, named:$named}' \
+  --argjson epoch "$EPOCH" --arg hash "$PROMPT_HASH" --argjson bytes "$PROMPT_BYTES" \
+  --arg bytes_source "$PROMPT_BYTES_SOURCE" --arg bg "$BACKGROUND" --arg named "$NAMED" \
+  '{agent:$agent, unit:$unit, dispatched_at:$ts, dispatched_at_epoch:$epoch, prompt_hash:$hash, prompt_bytes:$bytes, prompt_bytes_source:$bytes_source, background:$bg, named:$named}' \
   > "$MARKER_FILE" 2>/dev/null || true
 
 exit 0

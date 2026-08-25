@@ -33,15 +33,22 @@ source "$_NAZGUL_RP_DIR/structured-state.sh"
 # shellcheck source=/dev/null
 source "$_NAZGUL_RP_DIR/review-file-class.sh"
 
-_rp_sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum | awk '{print $1}'
-  elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 | awk '{print $1}'
-  else
-    return 1
-  fi
-}
+# Guarded where the two sources above are not, and the asymmetry is the point (#254 round-3
+# finding 9): structured-state.sh and review-file-class.sh are HARD dependencies with no defined
+# degradation, so failing to load one must abort. `_rp_sha256` HAS a defined degradation —
+# compute_review_token's documented `return 1`, relied on at scripts/subagent-stop.sh:299 and :357.
+# An unguarded source would instead abort every `set -euo pipefail` consumer of this lib (the
+# stop-hook DONE gate, review-evidence.sh, task-transition-guard.sh) on a missing digest helper,
+# turning a degradation into an outage. Same call scripts/in-flight-marker.sh:45 makes.
+# shellcheck source=sha256.sh
+source "$_NAZGUL_RP_DIR/sha256.sh" 2>/dev/null || true
+if ! command -v nz_sha256 >/dev/null 2>&1; then
+  nz_sha256() { return 1; }
+fi
+
+# Thin alias for `nz_sha256` (scripts/lib/sha256.sh), kept so this lib's callers
+# — and the stop-hook DONE gate's — are untouched by the #254 C-i extraction.
+_rp_sha256() { nz_sha256; }
 
 _rp_nonce() {
   if command -v openssl >/dev/null 2>&1; then

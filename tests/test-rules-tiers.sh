@@ -69,14 +69,16 @@ fi
 # 82->91 (FEAT-031: §2 cancellation x2, the CANCELLED dependency gate, §2 merge evidence x3,
 # §16 seam x3). FEAT-031 and FEAT-032 landed concurrently; 91 is the counted total of both,
 # not the sum either branch asserted alone. 91->92 (FEAT-031/TASK-019: §15's converse direction —
-# every shipped grammar emitter is a registered entry point). 92->93 (FEAT-031/TASK-047: §15's one
-# bounded stdin read for the hook layer, with timeout as its own outcome).
+# every shipped grammar emitter is a registered entry point). 92->94 (FEAT-031/TASK-047: §15's one
+# bounded stdin read for the hook layer, with timeout as its own outcome). 93->94 (FEAT-034: §15's
+# fifteenth bound entry point, tests/test-shared-ignore-coverage.sh). FEAT-031 and FEAT-034 landed
+# concurrently; 94 is the counted total of both, not the sum either branch asserted alone.
 ENFORCED_COUNT=$(awk '{ count += gsub(/\[enforced\]/, "") } END { print count + 0 }' "$RULES_FILE")
-if [ "$ENFORCED_COUNT" -eq 93 ]; then
-  _pass "[enforced] annotation count is exactly 93 (found: $ENFORCED_COUNT)"
+if [ "$ENFORCED_COUNT" -eq 94 ]; then
+  _pass "[enforced] annotation count is exactly 94 (found: $ENFORCED_COUNT)"
 else
-  _fail "[enforced] annotation count is exactly 93" \
-    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 93"
+  _fail "[enforced] annotation count is exactly 94" \
+    "found $ENFORCED_COUNT occurrences of [enforced] — expected exactly 94"
 fi
 
 # 21->22 (FEAT-029, §2's typed quarantine), 22->23 (FEAT-031, §3.15's carve-out record):

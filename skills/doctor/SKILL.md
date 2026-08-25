@@ -1,6 +1,6 @@
 ---
 name: nazgul:doctor
-description: Run the Nazgul read-only preflight diagnostic — checks jq/gh presence and auth, git-hooks drift, cache-vs-repo plugin version, the bash-vs-zsh hazard, the NAZGUL_DIR footgun, config-schema staleness, cross-session messaging and Remote Control eligibility, shared-working-tree session collisions, and (when execution.stacking is enabled) gh-stack tooling readiness and registry-vs-GitHub drift. Use when asked to "check my nazgul environment", "run doctor", "why isn't my plugin change taking effect", or before starting a loop.
+description: Run the Nazgul read-only preflight diagnostic — checks jq/gh presence and auth, git-hooks drift, cache-vs-repo plugin version, the bash-vs-zsh hazard, the NAZGUL_DIR footgun, config-schema staleness, either install mode's .gitignore Nazgul-block drift (stamp and flush-left region), cross-session messaging and Remote Control eligibility, shared-working-tree session collisions, and (when execution.stacking is enabled) gh-stack tooling readiness and registry-vs-GitHub drift. Use when asked to "check my nazgul environment", "run doctor", "why isn't my plugin change taking effect", or before starting a loop.
 allowed-tools: Bash, Read
 metadata:
   author: Jose Mejia
@@ -9,7 +9,7 @@ metadata:
 # Nazgul Doctor
 
 ## Examples
-- `/nazgul:doctor` — Run all fourteen checks (a config-present engine check plus the thirteen environment checks (a)-(i) and (k)-(n), where (h)/(i) cover stacking tooling readiness and registry-vs-GitHub drift, (k)/(l)/(m) cover messaging eligibility, Remote Control eligibility, and shared-working-tree session collisions, and (n) reports the last Stop payload's `background_tasks` state — field present, field present but wrong shape, field absent, payload undetermined, record unselectable, never observed, telemetry bus disabled, or loop paused) and report pass/warn/fail with remediation
+- `/nazgul:doctor` — Run all fifteen checks (a config-present engine check plus the fourteen environment checks (a)-(n), where (h)/(i) cover stacking tooling readiness and registry-vs-GitHub drift, (j) reports whether an install's `.gitignore` carries the block its OWN mode wants — the ephemeral-runtime block in shared mode, the local-mode block in local, both version-stamped since #251 — at the version this plugin ships and with every region line flush-left, which is the only surface that tells a v1 install of either mode that it is v1 — (k)/(l)/(m) cover messaging eligibility, Remote Control eligibility, and shared-working-tree session collisions, and (n) reports the last Stop payload's `background_tasks` state — field present, field present but wrong shape, field absent, payload undetermined, record unselectable, never observed, telemetry bus disabled, or loop paused) and report pass/warn/fail with remediation
 
 ## Instructions
 
@@ -22,7 +22,7 @@ Format all output per `${CLAUDE_PLUGIN_ROOT}/references/ui-brand.md` — stage b
 ```
 
 Capture both stdout and the exit code. This is the entire implementation — `scripts/doctor.sh` runs
-all fourteen checks read-only. It never writes to `nazgul/`, git config, or anywhere else; this skill only
+all fifteen checks read-only. It never writes to `nazgul/`, git config, or anywhere else; this skill only
 formats what it reports. Every stdout line has the shape `<verdict>\t<check-id>\t<message>`, verdict one
 of `pass`/`warn`/`fail`/`note`. The exit code is the aggregate: 0 = all pass, 1 = worst is warn, 2 = worst
 is fail.

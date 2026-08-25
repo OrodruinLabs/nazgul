@@ -78,21 +78,51 @@ Copy `templates/plan.md` **verbatim, placeholder and all** — do not attempt to
 ### Step 2.5: Configure Git Ignore
 This step ALWAYS runs, with two branches based on `LOCAL_MODE` (from Step 0). Read or create `.gitignore` at the project root.
 
-There are exactly two Nazgul `.gitignore` blocks, each identified by its **exact first-line marker** (match this line exactly when detecting/removing/idempotency-checking — do not match on the descriptive comment lines):
-- local mode → marker `# Nazgul Framework (local mode)`
-- shared mode → marker `# Nazgul Framework — ephemeral runtime`
+There are exactly two Nazgul `.gitignore` blocks, and each is a **delimited region** rather than a marker line with an implied extent. One region definition serves every site that touches them: detection, idempotency, mode-switch removal, the `--force` rewrite below, and `/nazgul:clean` Step 8.
+- local mode → start sentinel `# Nazgul Framework (local mode)`, end sentinel `# Nazgul Framework — end local mode`
+- shared mode → start sentinel `# Nazgul Framework — ephemeral runtime`, end sentinel `# Nazgul Framework — end ephemeral runtime`
 
-**Mode-switch safety (do this in BOTH branches first):** remove the *opposite* mode's block if present, before appending this mode's. Otherwise a stale block conflicts — e.g. a leftover local-mode block ignores the whole `nazgul/` tree and would prevent shared mode from tracking the decision record. Removing a block means deleting its marker line and the lines under it up to the next blank line / comment.
+**Both blocks are version-stamped, and detection matches the stable start-sentinel prefix alone.** Each block's first line is its start sentinel followed by a ` (vN)` suffix, and **the version this plugin ships is `v2`**; the two fences below are the authoritative copy of both first lines, so read a stamp from them and never from prose. Match the sentinel prefix and read the ` (vN)` suffix as a separate field — an install predating the stamp carries the bare sentinel and IS a v1 block that must still be found. No suffix means v1.
+
+**Region** = the start-sentinel line through the end-sentinel line, **inclusive**, regardless of blank lines or comments between them.
+
+**Legacy fallback**, for a v1 region carrying no end sentinel — bound the region by OWNERSHIP, not by adjacency, because this rule is the boundary for two DESTRUCTIVE operations (the `--force` rewrite and `/nazgul:clean` Step 8). A line belongs to the region only if it is a `#` comment or a pattern beginning `nazgul/` — in the local-mode block also `.claude/agents/generated/` or `.mcp.json`. The region runs from the start sentinel through the last consecutive line that qualifies, terminating at the first BLANK line or EOF and, sooner, at the first line that qualifies as neither: stop there and **name the line removal stopped at**, so a user whose own patterns abutted the block learns why the tail was left. Walking THROUGH the block's own justification comments is deliberate, and the evidence is stronger than an entry count: in EVERY v1 shape of the shared block — `v1.3.5`, `v1.6.0` and the last pre-stamp release alike — the first line after the start sentinel is ITSELF a comment, `# (regenerable, machine-local — safe to delete; not shared across teammates)`. A rule that stopped at the first comment would therefore bound the region at the sentinel alone and orphan every entry under it. The local-mode block, by contrast, carries no interior comment at all, which is why this rule is stated for both rather than derived from either. **Cite the population this fallback actually governs — v1 regions — and never the shipped v2 block**, which carries an end sentinel and so never reaches this fallback at all.
+
+**The residual this does not close, recorded here rather than left for the next reviewer:** BOTH ownership clauses consume abutting user content silently, not the comment clause alone. A user `#` comment is indistinguishable by shape from the block's own justification comments — and a user pattern beginning `nazgul/` (`nazgul/scratch/`, `nazgul/notes.md`) is exactly as indistinguishable from the block's own entries. Either one, sitting directly below a v1 block, is deleted by the `--force` rewrite and by `/nazgul:clean` Step 8. That deletion is SILENT where the qualifies-as-neither case is loud, which is the asymmetry to close: **whenever the legacy fallback bounded the region, REPORT EVERY LINE IT REMOVED**, not only the line removal stopped at. That report is the only notice a user gets that their own content was inside the boundary.
+
+**Match with leading whitespace allowed; append flush-left.** Every block installed before this version was appended indented, so sentinel and line matching must tolerate leading whitespace when DETECTING or REMOVING. Appends are always flush-left — see the rule in each branch below.
+
+**The version switch — BOTH branches apply it to their own region.** Never key idempotency on the sentinel's mere presence: presence alone is what left every install predating a block change without the entries it needs. **Three reachable states, not four:** Step 0.5 item 4 STOPs an already-initialized project before this step unless `--force` was passed, so "stale block, no `--force`" cannot be reached from here — every run that arrives carrying a stale region is already authorised to write it (a `--force` reinit, or a genuinely fresh init whose `nazgul/config.json` did not exist and which therefore has no prior state to preserve). Reporting drift instead of repairing it belongs to `/nazgul:doctor`'s read-only `ignore-block` check, which is the surface an existing install actually reaches; a notice here would fire only where replacing is the right action.
+- **Absent** — append this branch's block below. In the shared branch, then run the read-back probe: `git check-ignore -q --no-index nazgul/in-flight/`.
+- **Present at the shipped version** — already current; change nothing. In the shared branch, still run the read-back probe: `git check-ignore -q --no-index nazgul/in-flight/`. A block can be stamped current and be 100% inert, and a stamp trusted without a probe reports "current" forever.
+- **Present but stale** (no ` (vN)` suffix, or a version other than the one shipped) — delete the whole region, legacy fallback included, append this branch's block below in its place, and probe as above. This is the ONLY stale branch, for the reason stated above; do not re-add a report-and-leave-it variant.
+- **Present with leading whitespace on ANY region line** — leading whitespace on any region line makes the block STALE regardless of its stamp, and this case outranks the three above. `.gitignore` treats leading whitespace as part of the pattern, so an indented block is wholly inert while its stamp still reads current; without this case an indented append can never be repaired, because every later run reads the stamp and refuses to rewrite.
+
+**Read the write back — shared branch only** (RULES.md §21: a write is not written until it is read back). After the append AND after the already-current branch, probe the installed file with `git check-ignore -q --no-index nazgul/in-flight/`.
+
+**`--no-index` is load-bearing, not tidiness.** Without it `git check-ignore` consults the INDEX first and reports any path git ALREADY TRACKS as not-ignored, whatever the block says — and that is precisely the #251 population, a project that committed its markers, which is the exact case a `--force` reinit is the remedy for. The bare probe therefore returns 1 on a perfectly correct block, and the BLOCK-INERT rule below would rewrite it flush-left, re-probe, get 1 again, and be forbidden from ever reporting success — with Step 4's `git rm --cached` remedy, the only thing that clears the index entry, still ahead of it. `--no-index` asks the question actually being asked: does this block match this path?
+
+**Read the exit status three ways, never two** (RULES.md §15 — "looked and found none" and "could not look" are different states):
+- **`0` — VERIFIED.** Present and matching. The only status that may report success.
+- **`1` — BLOCK-INERT.** Present but not matching, almost always leading whitespace. Re-write the region flush-left and RE-PROBE — **never report success on an inert block.** If the re-probe still returns 1, STOP and say so plainly; never loop.
+- **`128` — UNVERIFIABLE.** 128 is git's GENERIC fatal status, not a single cause: no git repository, an unreadable `.gitignore` or `core.excludesFile`, a pathspec outside the repository, a corrupted repo. **Do not assert a cause from the status** — that is the same conflation this rule exists to forbid, one level down. CAPTURE the probe's stderr and report it verbatim: *"the block was written; whether it matches could not be checked — git said: `<stderr>`"*. Do **NOT** rewrite the region. A status meaning "could not answer" must never be recorded as an answer of "inert".
+
+One boundary remains, stated rather than discovered: `git check-ignore` does not require the path to exist, so nothing needs creating; and the probe belongs to the shared branch alone, because in local mode the whole `nazgul/` tree is ignored, so a 0 there is earned by the `nazgul/` entry rather than by this block, and a probe that passes for the wrong reason is worse than none.
+
+**Mode-switch safety (do this in BOTH branches first):** remove the *opposite* mode's region if present, before appending this mode's. Otherwise a stale block conflicts — e.g. a leftover local-mode block ignores the whole `nazgul/` tree and would prevent shared mode from tracking the decision record.
 
 **If `LOCAL_MODE=true` (local mode — nothing tracked in git):**
-1. Remove the shared-mode block (marker `# Nazgul Framework — ephemeral runtime`) if present.
-2. If the `# Nazgul Framework (local mode)` marker is NOT already present, append:
-   ```gitignore
-   # Nazgul Framework (local mode)
-   nazgul/
-   .claude/agents/generated/
-   .mcp.json
-   ```
+1. Remove the shared-mode region if present.
+2. Apply **the version switch** above to the local-mode region, located by its start-sentinel prefix `# Nazgul Framework (local mode)`. The read-back probe is the shared branch's alone; every other case, the leading-whitespace case included, applies here unchanged. **Write every line flush-left, exactly as shown** — leading whitespace is part of a `.gitignore` pattern, so an indented copy makes every entry inert and re-opens #251.
+
+```gitignore
+# Nazgul Framework (local mode) (v2)
+nazgul/
+.claude/agents/generated/
+.mcp.json
+# Nazgul Framework — end local mode
+```
+
 3. Set `install_mode` to `"local"`:
    ```bash
    jq '.install_mode = "local"' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
@@ -100,30 +130,87 @@ There are exactly two Nazgul `.gitignore` blocks, each identified by its **exact
 
 **Otherwise (shared mode — track the decision record, ignore the ephemeral journal):**
 The decision record (`config.json`, `plan.md`, `tasks/`, `reviews/`, `docs/`, `context/`, generated agents) stays tracked so teammates can resume the loop from a clone. Only regenerable, machine-local journal files are ignored.
-1. Remove the local-mode block (marker `# Nazgul Framework (local mode)`) if present.
-2. If the `# Nazgul Framework — ephemeral runtime` marker is NOT already present, append (the marker is the FIRST line exactly; the second line is a descriptive comment):
-   ```gitignore
-   # Nazgul Framework — ephemeral runtime
-   # (regenerable, machine-local — safe to delete; not shared across teammates)
-   nazgul/checkpoints/
-   nazgul/logs/
-   nazgul/sessions/
-   nazgul/.session_id
-   nazgul/.compaction_count
-   nazgul/archive/
-   nazgul/reviews/*/test-failures.md
-   nazgul/reviews/*/simplify-report.md
-   nazgul/reviews/*/diff.patch
-   nazgul/reviews/post-loop-simplify-report.md
-   # Transient autolearning working files (registry + declines stay tracked)
-   nazgul/learning/proposed-rules.md
-   nazgul/learning/.last-run
-   ```
-3. Set `install_mode` to `"shared"`:
+1. Remove the local-mode region if present.
+2. Apply **the version switch** above to the shared-mode region, located by its start-sentinel prefix `# Nazgul Framework — ephemeral runtime`, including the read-back probe, which is this branch's alone.
+
+   **Write every line flush-left, exactly as shown.** Leading whitespace is part of a `.gitignore` pattern: an indented copy makes every entry inert, `git check-ignore` exits 1 instead of 0, and `git add -A` stages the very files this block exists to keep out of git (#251).
+
+```gitignore
+# Nazgul Framework — ephemeral runtime (v2)
+# (regenerable, machine-local — safe to delete; not shared across teammates)
+nazgul/checkpoints/
+nazgul/logs/
+nazgul/sessions/
+nazgul/.session_id
+# Per-session record of the last turn that ended via an API error (scripts/stop-failure.sh:33); sibling of .session_id above
+nazgul/.stop_failure
+nazgul/.compaction_count
+# The mkdir mutual-exclusion lock guarding the counter above (claimed at scripts/post-compact.sh:69 and scripts/session-context.sh:228, reset at scripts/pre-compact.sh:33)
+# The nazgul/.compaction_count entry above does NOT cover it: a gitignore pattern matches a whole path component, and .compaction_count.lock is a different component
+nazgul/.compaction_count.lock
+# Consecutive-tool-failure counter (scripts/task-completed.sh:37); per-session, meaningless off its own machine
+nazgul/.tool_failures
+nazgul/archive/
+# The conductor runtime dir removed by migrate_25_to_26 (scripts/migrate-config.sh:583); nothing writes it any more, so a copy surviving in an upgraded project is residue
+# The one arguable member of this block, included deliberately rather than by oversight: declaring it a record would be false, and teaching the enumerator to skip it is TRD 4.7 course (C), rejected
+nazgul/conductor/
+# Timestamped local snapshot of the tracked nazgul/context/, made on re-run by /nazgul:discover (skills/discover/SKILL.md:43); the tracked original is the shared copy
+nazgul/context.backup.*/
+# Per-dispatch markers, written at PreToolUse(Agent) and cleared at SubagentStop; the trailing slash also covers in-flight/quarantine/
+nazgul/in-flight/
+# Transient mkdir mutual-exclusion dirs; meaningless off their own machine
+nazgul/locks/
+# The heartbeat tick lock (scripts/heartbeat.sh:40,63); likewise meaningless off its own machine
+nazgul/.heartbeat.lock
+# Generated from scripts/git-hooks/ at install (scripts/lib/git-hooks.sh:16,128); committing it commits a stale copy of shipped code
+nazgul/.githooks/
+# Per-dispatch report manifests; per-session
+nazgul/dispatch/
+# Per-run self-rating JSON (scripts/file-improvement-report.sh:11)
+nazgul/improvement-reports/
+# A per-machine log-offset cursor (scripts/self-audit.sh:169)
+nazgul/self-audit-window.json
+# A transient approval marker (scripts/stop-hook.sh:1823)
+nazgul/.hitl-pending
+# Exists only between a jq ... > rewrite of config.json and its mv
+nazgul/config.json.tmp
+# The mktemp scratch file scripts/stamp-plan-objective.sh:149 writes plan.md through; like the
+# entry above it exists only between the write and its mv, and its name is a random suffix
+nazgul/.nazgul-plan.*
+# Machine-local work queue; the GitHub board is the durable copy, and keeping the two in sync is a manual operator step today (issue #242)
+nazgul/inbox/
+# Per-session pause note, written only by skills/pause/SKILL.md; machine-local
+nazgul/HANDOFF.md
+# Operator-ruled ephemeral: ~420 KB, append-only across objectives, and NOT regenerable
+# The recorded consequence, not an oversight: in shared mode the self-audit backlog does not reach teammates
+nazgul/improvements.md
+nazgul/reviews/*/test-failures.md
+nazgul/reviews/*/simplify-report.md
+nazgul/reviews/*/diff.patch
+nazgul/reviews/post-loop-simplify-report.md
+# Transient autolearning working files (registry + declines stay tracked)
+nazgul/learning/proposed-rules.md
+nazgul/learning/.last-run
+# Nazgul Framework — end ephemeral runtime
+```
+
+3. **Two block entries name CONFIGURABLE paths, and the fence can only ever carry their DEFAULTS. Apply ONE rule over both keys — a second hand-written copy per key is exactly how the first one drifted:**
+
+   | config key | the default the block names | shipped readers that honour it |
+   |---|---|---|
+   | `automation.heartbeat.inbox.dir` | `nazgul/inbox` | `scripts/heartbeat.sh:234` |
+   | `self_audit.backlog_path` | `nazgul/improvements.md` | `scripts/self-audit.sh:58`, `scripts/stop-hook.sh:1838` |
+
+   For EACH row: read the key with `jq -r '<key> // "<default>"' nazgul/config.json`. If the value equals the default, do nothing. Otherwise the block's line names the wrong path — append the configured path as an ADDITIONAL entry immediately after that default's own line, carrying the same justification comment, and name it in Step 4's detection probe and both `git rm` remedies alongside the block's own entries. Give it a trailing `/` only where the default carries one: `nazgul/inbox/` is a directory, `nazgul/improvements.md` is a file, and a trailing slash on a file matches nothing. Neither key is hypothetical — both are read by shipped code today, in the third column.
+
+   **Validate the value before it becomes a `.gitignore` pattern or a `git rm` pathspec.** In shared mode `nazgul/config.json` is TRACKED, so BOTH keys cross a trust boundary — a clone, a contributor PR. Accept a value only if it is a relative path under the project root matching `^[A-Za-z0-9._/-]+$`, with no leading `/`, no `..` segment and no glob metacharacter; `*` would otherwise append `*/` and un-track the whole repository, and reduce Step 4's un-tracking pathspec list to that same one character. On rejection, REFUSE: skip that entry and print a notice naming the KEY that failed and the rule it failed. **Never echo the rejected value** — not in the notice, and above all not inside a `git rm` command a human is being asked to run. Precedent: `scripts/in-flight-marker.sh`'s `_sanitize` allowlist.
+
+   A project that changes either key after init is migrated by step 2's version-stamped `--force` rewrite — a block change having somewhere to land is exactly what the stamp buys. **Honest boundary:** `tests/test-shared-ignore-coverage.sh` pins the default literals only; a non-default path is carried by this instruction, not by a check.
+4. Set `install_mode` to `"shared"`:
    ```bash
    jq '.install_mode = "shared"' nazgul/config.json > nazgul/config.json.tmp && mv nazgul/config.json.tmp nazgul/config.json
    ```
-4. If this is a reinitialization (`--force`) of a project that already committed the ephemeral paths, tell the user they can stop tracking them with the one-shot in Step 4's summary.
+5. If this is a reinitialization (`--force`) of a project that already committed the ephemeral paths, tell the user they can stop tracking them with the one-shot in Step 4's summary.
 
 ### Step 3: Run Discovery
 Dispatch via the `Agent` tool with `subagent_type: "nazgul:discovery"` — **do not pass a `name`/`-n` parameter.** Naming an `Agent`-tool dispatch folds it into team/roster infrastructure even without an explicit team spawn (ADR-017); discovery is one-shot work (scan, write, return), so it stays on the unnamed one-shot subagent primitive.
@@ -148,15 +235,21 @@ Show the user:
 - Number of files scanned
 - Reviewer board generated (list all reviewer agents)
 - Companion plugin status
-- Install mode: local (whole `nazgul/` untracked) / shared (decision record tracked; ephemeral journal — checkpoints, logs, sessions, archive — gitignored)
-- **Shared-mode reinitialization only:** if `git ls-files nazgul/checkpoints nazgul/logs nazgul/sessions nazgul/archive nazgul/.session_id nazgul/.compaction_count 'nazgul/reviews/*/test-failures.md' 'nazgul/reviews/*/simplify-report.md' 'nazgul/reviews/*/diff.patch' nazgul/reviews/post-loop-simplify-report.md 2>/dev/null` shows any already-tracked ephemeral paths, tell the user to stop tracking them (files stay on disk; `--ignore-unmatch` keeps the command safe when some paths aren't tracked). **`diff.patch` matters most here** — a committed, stale captured diff makes reviewers analyze old code and emit phantom findings:
+- Install mode: local (whole `nazgul/` untracked) / shared (decision record tracked; the ephemeral journal gitignored). Do **not** re-enumerate the journal here — point the user at the `# Nazgul Framework — ephemeral runtime` block Step 2.5 wrote into `.gitignore`. That block is the enumeration; a partial copy in this summary is one more site to drift.
+- **Shared-mode reinitialization only:** if `git ls-files nazgul/checkpoints nazgul/logs nazgul/sessions nazgul/.session_id nazgul/.stop_failure nazgul/.compaction_count nazgul/.compaction_count.lock nazgul/.tool_failures nazgul/archive nazgul/conductor 'nazgul/context.backup.*' nazgul/in-flight nazgul/locks nazgul/.heartbeat.lock nazgul/.githooks nazgul/dispatch nazgul/improvement-reports nazgul/self-audit-window.json nazgul/.hitl-pending nazgul/config.json.tmp 'nazgul/.nazgul-plan.*' nazgul/inbox nazgul/HANDOFF.md nazgul/improvements.md 'nazgul/reviews/*/test-failures.md' 'nazgul/reviews/*/simplify-report.md' 'nazgul/reviews/*/diff.patch' nazgul/reviews/post-loop-simplify-report.md nazgul/learning/proposed-rules.md nazgul/learning/.last-run 2>/dev/null` shows any already-tracked ephemeral paths, tell the user to stop tracking them (files stay on disk; `--ignore-unmatch` keeps the command safe when some paths aren't tracked). **This list and the one-shot below must name every entry of the Step 2.5 block** — a path missing here means the advice never prints for the project that needs it. Wildcard entries are quoted and drop the block's trailing slash: the pathspec `nazgul/context.backup.*/` matches nothing. **`diff.patch` matters most here** — a committed, stale captured diff makes reviewers analyze old code and emit phantom findings:
   ```bash
-  git rm -r --cached --ignore-unmatch nazgul/checkpoints nazgul/logs nazgul/sessions nazgul/archive \
-    nazgul/.session_id nazgul/.compaction_count
-  git rm --cached --ignore-unmatch -- 'nazgul/reviews/*/test-failures.md' 'nazgul/reviews/*/simplify-report.md' \
-    'nazgul/reviews/*/diff.patch' nazgul/reviews/post-loop-simplify-report.md
+  git rm -r --cached --ignore-unmatch nazgul/checkpoints nazgul/logs nazgul/sessions nazgul/.session_id \
+    nazgul/.stop_failure nazgul/.compaction_count nazgul/.compaction_count.lock nazgul/.tool_failures \
+    nazgul/archive nazgul/conductor nazgul/in-flight nazgul/locks nazgul/.heartbeat.lock nazgul/.githooks \
+    nazgul/dispatch nazgul/improvement-reports nazgul/self-audit-window.json nazgul/.hitl-pending \
+    nazgul/config.json.tmp nazgul/inbox nazgul/HANDOFF.md nazgul/improvements.md \
+    nazgul/learning/proposed-rules.md nazgul/learning/.last-run
+  git rm --cached --ignore-unmatch -- 'nazgul/context.backup.*' 'nazgul/.nazgul-plan.*' \
+    'nazgul/reviews/*/test-failures.md' \
+    'nazgul/reviews/*/simplify-report.md' 'nazgul/reviews/*/diff.patch' nazgul/reviews/post-loop-simplify-report.md
   git commit -m "chore(nazgul): stop tracking ephemeral runtime state"
   ```
+- **Non-default configurable paths:** if `automation.heartbeat.inbox.dir` or `self_audit.backlog_path` was changed from its default (Step 2.5, shared branch, step 3), the detection probe and both `git rm` one-shots above must name that path too — the lists above carry the default literals only, and the extra entry is added by that instruction rather than by a check. **Validate the value before it becomes a `.gitignore` pattern or a `git rm` pathspec.** In shared mode `nazgul/config.json` is TRACKED, so BOTH keys cross a trust boundary — a clone, a contributor PR. Accept a value only if it is a relative path under the project root matching `^[A-Za-z0-9._/-]+$`, with no leading `/`, no `..` segment and no glob metacharacter; `*` would otherwise append `*/` and un-track the whole repository, and reduce Step 4's un-tracking pathspec list to that same one character. On rejection, REFUSE: skip that entry and print a notice naming the KEY that failed and the rule it failed. **Never echo the rejected value** — not in the notice, and above all not inside a `git rm` command a human is being asked to run. Precedent: `scripts/in-flight-marker.sh`'s `_sanitize` allowlist.
 - Next step: `/nazgul:start "your objective"`
 
 ### Step 5: Inject CLAUDE.md (Shared Mode Only)
