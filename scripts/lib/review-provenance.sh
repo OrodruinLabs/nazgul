@@ -28,6 +28,8 @@ _NAZGUL_REVIEW_PROVENANCE_SOURCED=1
 _NAZGUL_RP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$_NAZGUL_RP_DIR/structured-state.sh"
+# shellcheck source=sha256.sh
+source "$_NAZGUL_RP_DIR/sha256.sh"
 
 # Meta-files in a review dir that are NOT reviewer verdicts. Duplicated from
 # review-evidence.sh (not sourced) to keep this lib decoupled.
@@ -38,15 +40,9 @@ _rp_is_meta_file() {
   esac
 }
 
-_rp_sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum | awk '{print $1}'
-  elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 | awk '{print $1}'
-  else
-    return 1
-  fi
-}
+# Thin alias for `nz_sha256` (scripts/lib/sha256.sh), kept so this lib's callers
+# — and the stop-hook DONE gate's — are untouched by the #254 C-i extraction.
+_rp_sha256() { nz_sha256; }
 
 _rp_nonce() {
   if command -v openssl >/dev/null 2>&1; then

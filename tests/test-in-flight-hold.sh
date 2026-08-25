@@ -2965,25 +2965,68 @@ else
   _skip "P7: the state-vs-cause pair (P7a or P7b did not run — see the shim precondition above)"
 fi
 
-# P7c — the decoupling is real rather than renamed (#254 A4). Withholding the library is ABSENT
-# rather than chmod 000, because a CI job running as root reads a 000 file and un-creates it.
+# P7c — the decoupling is real rather than renamed (#254 A4). What is withheld is REVIEW-GATE
+# tooling, not every library: since #254 C-i the writer sources the shared lib/sha256.sh, which this
+# arm therefore COPIES IN, so the claim below is exactly "no review-gate tooling" and nothing wider.
+# Withholding is ABSENT rather than chmod 000, because a CI job running as root reads a 000 file.
 setup_temp_dir
 setup_nazgul_dir
 create_config
-P7C_DIR="$TEST_DIR/nolib"
+P7C_DIR="$TEST_DIR/norevgate"
 mkdir -p "$P7C_DIR/lib"
 cp "$WRITER" "$P7C_DIR/in-flight-marker.sh"
 cp "$REPO_ROOT/scripts/lib/nazgul-root.sh" "$P7C_DIR/lib/nazgul-root.sh"
+cp "$REPO_ROOT/scripts/lib/sha256.sh" "$P7C_DIR/lib/sha256.sh"
 assert_file_exists "P7c (precondition): the shipped tree does carry the library this arm withholds" "$REPO_ROOT/scripts/lib/review-provenance.sh"
 assert_eq "P7c (precondition): the scan tree has no review-provenance.sh to source" "$([ -e "$P7C_DIR/lib/review-provenance.sh" ] && echo yes || echo no)" "no"
+assert_file_exists "P7c (precondition): but it DOES carry lib/sha256.sh — the withholding is scoped to review-gate tooling (#254 C-i)" "$P7C_DIR/lib/sha256.sh"
 assert_eq "P7c (precondition): the copied writer is byte-identical to the shipped one" "$(cmp -s "$WRITER" "$P7C_DIR/in-flight-marker.sh" && echo same || echo differs)" "same"
 printf '%s' "$P7_PAYLOAD" | bash "$P7C_DIR/in-flight-marker.sh" >/dev/null 2>"$TEST_DIR/p7c.err"; P7C_EC=$?
-assert_exit_code "P7c: a tree with no review-provenance.sh still exits 0 (fail-open)" "$P7C_EC" 0
+assert_exit_code "P7c: a tree with no review-gate tooling still exits 0 (fail-open)" "$P7C_EC" 0
 P7C_MARKER=$(find "$TEST_DIR/nazgul/in-flight" -type f 2>/dev/null | head -1)
-assert_eq "P7c: a marker is still written with the library absent" "$([ -n "$P7C_MARKER" ] && echo yes || echo no)" "yes"
-assert_eq "P7c: prompt_hash is a REAL digest — that library's absence no longer degrades anything" "$(jq -r '.prompt_hash' "${P7C_MARKER:-/dev/null}" | grep -Eq '^[0-9a-f]{16}$' && echo yes || echo no)" "yes"
+assert_eq "P7c: a marker is still written with review-provenance.sh absent" "$([ -n "$P7C_MARKER" ] && echo yes || echo no)" "yes"
+assert_eq "P7c: prompt_hash is a REAL digest — the writer depends on no review-gate tooling" "$(jq -r '.prompt_hash' "${P7C_MARKER:-/dev/null}" | grep -Eq '^[0-9a-f]{16}$' && echo yes || echo no)" "yes"
 assert_eq "P7c: prompt_bytes is populated" "$(jq -r '.prompt_bytes' "${P7C_MARKER:-/dev/null}")" "$P7_EXPECT_BYTES"
 assert_eq "P7c: nothing reaches stderr — there is nothing left to degrade" "$(grep -c . "$TEST_DIR/p7c.err" | tr -d ' ')" "0"
+teardown_temp_dir
+
+# P7f — the bill the C-i extraction owes: the writer now SOURCES lib/sha256.sh, so a tree without it
+# must reach the EXISTING degradation rather than abort a hook contracted never to block. Withheld
+# by absence, on P7c's precedent. The control below restores the file into the SAME tree, so what is
+# measured is the helper's absence and not something else about the scan tree.
+setup_temp_dir
+setup_nazgul_dir
+create_config
+P7F_DIR="$TEST_DIR/nosha"
+mkdir -p "$P7F_DIR/lib"
+cp "$WRITER" "$P7F_DIR/in-flight-marker.sh"
+cp "$REPO_ROOT/scripts/lib/nazgul-root.sh" "$P7F_DIR/lib/nazgul-root.sh"
+assert_file_exists "P7f (precondition): the shipped tree does carry the helper this arm withholds" "$REPO_ROOT/scripts/lib/sha256.sh"
+assert_eq "P7f (precondition): the scan tree has no lib/sha256.sh to source" "$([ -e "$P7F_DIR/lib/sha256.sh" ] && echo yes || echo no)" "no"
+assert_eq "P7f (precondition): the copied writer is byte-identical to the shipped one" "$(cmp -s "$WRITER" "$P7F_DIR/in-flight-marker.sh" && echo same || echo differs)" "same"
+printf '%s' "$P7_PAYLOAD" | bash "$P7F_DIR/in-flight-marker.sh" >/dev/null 2>"$TEST_DIR/p7f.err"; P7F_EC=$?
+assert_exit_code "P7f: an absent lib/sha256.sh degrades the digest, it never aborts the hook (exit 0)" "$P7F_EC" 0
+P7F_MARKER=$(find "$TEST_DIR/nazgul/in-flight" -type f 2>/dev/null | head -1)
+assert_eq "P7f: a marker is still written with the helper absent" "$([ -n "$P7F_MARKER" ] && echo yes || echo no)" "yes"
+assert_eq "P7f: prompt_hash takes the EXISTING degradation, recorded as the literal 'unavailable'" "$(jq -r '.prompt_hash' "${P7F_MARKER:-/dev/null}")" "unavailable"
+assert_eq "P7f: prompt_bytes stays populated — the absence is confined to the hash step" "$(jq -r '.prompt_bytes' "${P7F_MARKER:-/dev/null}")" "$P7_EXPECT_BYTES"
+assert_eq "P7f: the five read fields survive the missing dependency" "$(jq -r '[.agent,.unit,(.dispatched_at_epoch>0|tostring),.background,.named]|join("|")' "${P7F_MARKER:-/dev/null}")" "nazgul:implementer|TASK-001|true|true|false"
+assert_eq "P7f: exactly one stderr line — no NEW failure mode was invented by the extraction" "$(grep -c . "$TEST_DIR/p7f.err" | tr -d ' ')" "1"
+P7F_ERR=$(cat "$TEST_DIR/p7f.err")
+assert_contains "P7f: and it is the pre-existing sha256-unavailable line, not a source-failure message" "$P7F_ERR" "sha256 unavailable"
+assert_not_contains "P7f: nothing about the failed source reaches stderr — that redirect is what keeps the hook silent" "$P7F_ERR" "sha256.sh"
+if [ "${P7A_RAN:-0}" -eq 1 ]; then
+  assert_eq "P7f: byte-identical to the absent-tool cause's line (P7a), so the two share one degradation path" "$P7F_ERR" "${P7A_ERR:-}"
+else
+  _skip "P7f: the shared-line pair (P7a did not run — see its shim precondition above)"
+fi
+rm -rf "$TEST_DIR/nazgul/in-flight"
+cp "$REPO_ROOT/scripts/lib/sha256.sh" "$P7F_DIR/lib/sha256.sh"
+printf '%s' "$P7_PAYLOAD" | bash "$P7F_DIR/in-flight-marker.sh" >/dev/null 2>"$TEST_DIR/p7f-ctl.err"; P7F_CTL_EC=$?
+P7F_CTL_MARKER=$(find "$TEST_DIR/nazgul/in-flight" -type f 2>/dev/null | head -1)
+assert_exit_code "P7f (control): the SAME tree with the helper restored still exits 0" "$P7F_CTL_EC" 0
+assert_eq "P7f (control): and records a REAL digest, so the arm above measures the absence itself" "$(jq -r '.prompt_hash' "${P7F_CTL_MARKER:-/dev/null}" | grep -Eq '^[0-9a-f]{16}$' && echo yes || echo no)" "yes"
+assert_eq "P7f (control): with nothing on stderr" "$(grep -c . "$TEST_DIR/p7f-ctl.err" | tr -d ' ')" "0"
 teardown_temp_dir
 
 # P7d — the FOURTH state (#254 A1): no usable count from wc. Pre-change this wrote JSON `null` with
@@ -3040,6 +3083,7 @@ assert_eq "P7d (R1): states 1 and 4 agree on hash and count and are separated by
 P7D_MUT_DIR="$TEST_DIR/nolcall"
 mkdir -p "$P7D_MUT_DIR/lib"
 cp "$REPO_ROOT/scripts/lib/nazgul-root.sh" "$P7D_MUT_DIR/lib/nazgul-root.sh"
+cp "$REPO_ROOT/scripts/lib/sha256.sh" "$P7D_MUT_DIR/lib/sha256.sh"
 sed 's/\$(LC_ALL=C; printf/$(printf/' "$WRITER" > "$P7D_MUT_DIR/in-flight-marker.sh"
 assert_eq "P7d (mutant CONTROL): the mutant differs from the shipped writer by exactly the LC_ALL=C guard" \
   "$(( $(grep -c 'LC_ALL=C;' "$WRITER") - $(grep -c 'LC_ALL=C;' "$P7D_MUT_DIR/in-flight-marker.sh") ))" "1"
@@ -3130,6 +3174,14 @@ P8B_DEF_LN=$(grep -nE '^_ifm_sha256\(\)' "$P8B_SRC" | head -1 | cut -d: -f1)
 P8B_CALL_LN=$(grep -nE '[|;&{(][[:space:]]*_ifm_sha256([^A-Za-z0-9_(]|$)' "$P8B_SRC" | grep -vE '^[0-9]+:[[:space:]]*#' | head -1 | cut -d: -f1)
 assert_eq "P8b: _ifm_sha256 is not merely defined, it is actually invoked" "$([ -n "$P8B_CALL_LN" ] && echo yes || echo no)" "yes"
 assert_eq "P8b: the local definition precedes the first non-comment use of _ifm_sha256" "$([ -n "$P8B_DEF_LN" ] && [ -n "$P8B_CALL_LN" ] && [ "$P8B_DEF_LN" -lt "$P8B_CALL_LN" ] && echo yes || echo no)" "yes"
+# _ifm_sha256 is a THIN ALIAS since #254 C-i, so the two pins above no longer imply a local
+# implementation — these say where the body actually lives, and that only one copy of it exists.
+P8B_SHA_SRC_LN=$(grep -nE '^[[:space:]]*source .*lib/sha256\.sh"' "$P8B_SRC" | head -1 | cut -d: -f1)
+assert_eq "P8b (C-i): the writer SOURCES the shared sha256 helper" "$([ -n "$P8B_SHA_SRC_LN" ] && echo yes || echo no)" "yes"
+assert_eq "P8b (C-i): that source precedes the first non-comment use, so the alias resolves when called" "$([ -n "$P8B_SHA_SRC_LN" ] && [ -n "$P8B_CALL_LN" ] && [ "$P8B_SHA_SRC_LN" -lt "$P8B_CALL_LN" ] && echo yes || echo no)" "yes"
+assert_eq "P8b (C-i): and no copy of the sha256sum/shasum fallback body survives in the writer" "$(grep -c 'command -v sha256sum' "$P8B_SRC" | tr -d ' ')" "0"
+P8B_SHA_BODIES=$(grep -rl 'command -v sha256sum' "$REPO_ROOT/scripts" 2>/dev/null | sed "s|^$REPO_ROOT/||" | sort | tr '\n' ' ')
+assert_eq "P8b (C-i): exactly one file under scripts/ carries that body, and it is the shared library" "$P8B_SHA_BODIES" "scripts/lib/sha256.sh "
 
 # The root resolver's source carries no `|| true`, so the pin above admits it BY NAME rather than
 # by claiming a tolerance it does not have. This drives the omission and shows it still exits 0.

@@ -18,6 +18,10 @@ command -v jq >/dev/null 2>&1 || exit 0
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/nazgul-root.sh
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
+# Guarded, unlike the line above: an absent helper must reach the existing degradation
+# below (`prompt_hash` = `unavailable` + one stderr line), never abort a hook that never blocks.
+# shellcheck source=lib/sha256.sh
+source "$SCRIPT_DIR/lib/sha256.sh" 2>/dev/null || true
 
 NAZGUL_DIR="$(resolve_nazgul_dir)"
 CONFIG="$NAZGUL_DIR/config.json"
@@ -63,17 +67,7 @@ _sanitize() {
   s="${s//../_}"
   [ -n "$s" ] && printf '%s' "$s" || printf 'unknown'
 }
-# Duplicated from `_rp_sha256` rather than sourcing the review-gate provenance lib: a hook that
-# runs on every Agent dispatch stays decoupled from it, as that lib does for `_rp_is_meta_file`.
-_ifm_sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum | awk '{print $1}'
-  elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 | awk '{print $1}'
-  else
-    return 1
-  fi
-}
+_ifm_sha256() { nz_sha256; }
 
 SAFE_AGENT=$(_sanitize "${SUBAGENT:-unknown}")
 SAFE_UNIT=$(_sanitize "$UNIT")
