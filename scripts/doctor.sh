@@ -16,7 +16,8 @@ set -euo pipefail
 # checks (a), (c), (d). TASK-003 added check (e). FEAT-027/TASK-009 adds
 # checks (h), (i). FEAT-032/TASK-009 adds (k) messaging, (l) remote-control,
 # and (m) sessions — all three read env, settings files, and lock files only,
-# and NEVER connect to the messaging socket.
+# and NEVER connect to the messaging socket. FEAT-036/TASK-023 adds (j)
+# ignore-block, which derives its expectation from skills/init/SKILL.md.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/nazgul-root.sh
@@ -320,6 +321,76 @@ check_config_schema() {
     _doc_report warn config-schema "nazgul/config.json schema_version $live is behind the latest migration target $highest — run scripts/migrate-config.sh to bring it current."
   else
     _doc_report pass config-schema "nazgul/config.json schema_version $live is current (latest migration target: $highest)."
+  fi
+}
+
+# (j) Shared-mode .gitignore block drift (#251, FEAT-036 R3): /nazgul:init STOPs on an
+# already-initialized project before its own version switch runs, so nothing else tells a v1 install it is v1.
+_DOC_IGNORE_SENTINEL='# Nazgul Framework — ephemeral runtime'
+
+# The shipped stamp is DERIVED from skills/init/SKILL.md's fence, never copied here: a literal
+# would be a fifth hand-copied `v2` site (#254 C-g). A pre-stamp install carries no suffix and IS v1.
+_doc_ignore_stamp() {
+  local v
+  v="$(printf '%s' "$1" | sed -nE "s/^[[:space:]]*${_DOC_IGNORE_SENTINEL}[[:space:]]*\(v([0-9]+)\).*$/\1/p")"
+  [ -n "$v" ] || v=1
+  printf 'v%s' "$v"
+}
+
+check_ignore_block() {
+  if [ ! -f "$CONFIG" ]; then
+    _doc_skip pass ignore-block not-applicable-config "No nazgul/config.json to check yet — run /nazgul:init first."
+    return 0
+  fi
+  if ! _doc_config_parses; then
+    _doc_skip pass ignore-block unreadable "Not applicable — nazgul/config.json exists but is not parseable JSON, so install_mode is UNKNOWN rather than unset and whether this project wants the block at all cannot be decided."
+    return 0
+  fi
+
+  local mode
+  mode="$(_doc_cfg '.install_mode' 'unset')"
+  if [ "$mode" != "shared" ]; then
+    _doc_skip pass ignore-block not-applicable-config "Not applicable — install_mode is '$mode'; the '$_DOC_IGNORE_SENTINEL' block is shared mode's, and local mode ignores the whole nazgul/ tree instead."
+    return 0
+  fi
+
+  local skill="${SCRIPT_DIR%/*}/skills/init/SKILL.md" shipped_line shipped
+  shipped_line="$(grep -m1 "^$_DOC_IGNORE_SENTINEL" "$skill" 2>/dev/null || true)"
+  if [ -z "$shipped_line" ]; then
+    _doc_skip pass ignore-block unreadable "Not applicable — no '$_DOC_IGNORE_SENTINEL' fence in $skill, so this plugin ships no version stamp to compare an install against."
+    return 0
+  fi
+  shipped="$(_doc_ignore_stamp "$shipped_line")"
+
+  local gitignore="$PROJECT_ROOT/.gitignore" found_line=""
+  if [ -e "$gitignore" ] && [ ! -r "$gitignore" ]; then
+    _doc_skip pass ignore-block unreadable "Not applicable — $gitignore exists but could not be read, so whether it carries the block is UNKNOWN. This is NOT a report that the block is missing."
+    return 0
+  fi
+  [ ! -f "$gitignore" ] || found_line="$(grep -m1 "^[[:space:]]*$_DOC_IGNORE_SENTINEL" "$gitignore" 2>/dev/null || true)"
+
+  # Absent in a shared install is #251 live, not drift, so it gets its own message. warn, not fail:
+  # doctor reserves fail for a prerequisite it cannot work around (jq, an unreadable config), and the loop still runs.
+  if [ -z "$found_line" ]; then
+    local absence="carries no '$_DOC_IGNORE_SENTINEL' block"
+    [ -f "$gitignore" ] || absence="does not exist at all"
+    _doc_report warn ignore-block "install_mode is shared but $gitignore $absence — every ephemeral nazgul/ path is tracked, which is #251 itself. Re-run /nazgul:init --force to write the $shipped block."
+    return 0
+  fi
+
+  local installed
+  installed="$(_doc_ignore_stamp "$found_line")"
+  case "$found_line" in
+    [[:space:]]*)
+      _doc_report warn ignore-block "$gitignore carries the '$_DOC_IGNORE_SENTINEL' block at $installed but INDENTED, and .gitignore treats leading whitespace as part of the pattern — every entry is inert however current the stamp reads. Re-run /nazgul:init --force to rewrite the region flush-left."
+      return 0
+      ;;
+  esac
+
+  if [ "$installed" = "$shipped" ]; then
+    _doc_report pass ignore-block "$gitignore carries the '$_DOC_IGNORE_SENTINEL' block at $installed, the version this plugin ships (read from $skill)."
+  else
+    _doc_report warn ignore-block "$gitignore carries the '$_DOC_IGNORE_SENTINEL' block at $installed; this plugin ships $shipped (read from $skill), so the entries added since $installed are still tracked. Re-run /nazgul:init --force to replace the region — it archives nazgul/ state and re-runs Discovery."
   fi
 }
 
@@ -734,7 +805,7 @@ check_sessions() {
   fi
 }
 
-_DOC_CHECK_IDS="config-present plugin-version dependencies git-hooks invoking-shell nazgul-dir-env config-schema stacking stack-registry stdin-hazard stop-payload messaging remote-control sessions"
+_DOC_CHECK_IDS="config-present plugin-version dependencies git-hooks invoking-shell nazgul-dir-env config-schema ignore-block stacking stack-registry stdin-hazard stop-payload messaging remote-control sessions"
 _DOC_ONLY=""
 
 # _doc_run <check-id> <function> — runs the check unless --only excluded it.
@@ -813,6 +884,7 @@ main() {
   _doc_run invoking-shell check_invoking_shell
   _doc_run nazgul-dir-env check_nazgul_dir_env
   _doc_run config-schema check_config_schema
+  _doc_run ignore-block check_ignore_block
   _doc_run stacking check_stacking
   _doc_run stack-registry check_stack_registry
   _doc_run stdin-hazard check_stdin_hazard
