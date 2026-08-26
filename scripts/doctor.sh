@@ -17,7 +17,9 @@ set -euo pipefail
 # checks (h), (i). FEAT-032/TASK-009 adds (k) messaging, (l) remote-control,
 # and (m) sessions — all three read env, settings files, and lock files only,
 # and NEVER connect to the messaging socket. FEAT-036/TASK-023 adds (j)
-# ignore-block, which derives its expectation from skills/init/SKILL.md.
+# ignore-block, which derives its expectation from skills/init/SKILL.md, and
+# FEAT-036/TASK-012 adds (o) red-run-coverage, which re-asks the IMPLEMENTED
+# gate's red-run check over every manifest and reports what it finds.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/nazgul-root.sh
@@ -862,7 +864,160 @@ check_sessions() {
   fi
 }
 
-_DOC_CHECK_IDS="config-present plugin-version dependencies git-hooks invoking-shell nazgul-dir-env config-schema ignore-block stacking stack-registry stdin-hazard stop-payload messaging remote-control sessions"
+# lean-comments: allow-run — why this check exists at all, and why the sweep runs in a
+# subshell with emit_event neutralised; a reader who drops either note turns a read-only
+# check into a writer.
+# (o) Red-run evidence re-ask (#227). ttg_verify_red_run_evidence runs from exactly ONE call
+# site — the IN_PROGRESS -> IMPLEMENTED arm — so a task that never goes backwards is never
+# re-checked, and a rule tightened after that task shipped leaves its own backlog invisible.
+# This check drives the CURRENT gate over EVERY manifest and reports the RULES §15 grammar.
+# It REPORTS ONLY: no transition, no remediation, no backfill (PRD Non-Goal 4), no write.
+# The guard library is sourced inside a SUBSHELL with emit_event neutralised because it
+# sources scripts/lib/emit-event.sh, and _ttg_red_run_deny would otherwise append a
+# red_run_missing record to nazgul/logs/events.jsonl — the one write doctor must never make.
+_DOC_RED_RUN_GUARD="$SCRIPT_DIR/lib/task-transition-guard.sh"
+_DOC_RED_RUN_NAME_CAP=12
+
+# _doc_red_run_sweep <newline-separated manifest paths> — one "<class>\t<TASK-ID>\t<reason>"
+# line per manifest on stdout, class one of clean|finding|not-applicable|unreadable.
+_doc_red_run_sweep() {
+  (
+    # shellcheck source=lib/task-transition-guard.sh
+    source "$_DOC_RED_RUN_GUARD" || exit 1
+    emit_event() { return 0; }
+    local m id text rc reason
+    while IFS= read -r m; do
+      [ -n "$m" ] || continue
+      id="${m##*/}"; id="${id%.md}"
+      if [ ! -r "$m" ] || ! text=$(cat -- "$m" 2>/dev/null); then
+        printf 'unreadable\t%s\t%s\n' "$id" "read_failed"
+        continue
+      fi
+      TTG_RED_RUN_REASON=""
+      rc=0
+      ttg_verify_red_run_evidence "$text" "$PROJECT_ROOT" "$id" "$NAZGUL_DIR" 2>/dev/null || rc=$?
+      # An empty reason means no arm ever named one; the exit code below still decides.
+      reason="${TTG_RED_RUN_REASON:-verified}"
+      case "$reason" in
+        not_applicable)
+          printf 'not-applicable\t%s\t%s\n' "$id" "$reason" ;;
+        verified|enumerated_na)
+          if [ "$rc" -eq 0 ]; then
+            printf 'clean\t%s\t%s\n' "$id" "$reason"
+          else
+            printf 'finding\t%s\t%s\n' "$id" "$reason"
+          fi ;;
+        *)
+          printf 'finding\t%s\t%s\n' "$id" "$reason" ;;
+      esac
+    done < <(printf '%s\n' "$1")
+  )
+}
+
+check_red_run_coverage() {
+  local tasks_dir="$NAZGUL_DIR/tasks" list="" total=0 m
+  local clean=0 findings=0 na=0 unreadable=0 f_extra=0 u_extra=0
+  local f_named="" u_named="" klass id reason skipped checked grammar msg floor="" verdict
+  local switch_note="" close
+  local -a manifests=()
+
+  close="Doctor only re-asked the gate: it ran no transition, edited no manifest, and wrote nothing. Backfilling history is not doctor's job — this is a report, not a queue."
+
+  if [ ! -d "$tasks_dir" ]; then
+    _doc_skip pass red-run-coverage no-candidates "Not applicable — there is no nazgul/tasks/ directory, so no manifest exists to re-ask the red-run evidence gate about. red-run-coverage: 0 scanned, 0 skipped (unreadable=0, not-applicable=0), 0 checked, 0 findings."
+    return 0
+  fi
+  # An unlistable directory globs to nothing, exactly as an empty one does, so the permission
+  # bits are probed explicitly rather than inferred from an empty result.
+  if [ ! -r "$tasks_dir" ] || [ ! -x "$tasks_dir" ]; then
+    _doc_skip warn red-run-coverage unreadable "COULD NOT LOOK: nazgul/tasks/ exists but this process cannot list it, so the red-run evidence gate was re-asked about NOTHING. This is NOT a report that every manifest carries evidence — whether a backlog exists here is UNDETERMINED. Make nazgul/tasks/ readable, then re-run /nazgul:doctor. red-run-coverage: 0 scanned, 0 skipped (unreadable=0, not-applicable=0), 0 checked, 0 findings."
+    return 0
+  fi
+  # Enumerated by glob, not by find(1): doctor must report the same roster on a host whose
+  # PATH is missing an external tool, and an unmatched glob stays literal without nullglob.
+  for m in "$tasks_dir"/TASK-*.md; do
+    [ -e "$m" ] || continue
+    manifests+=("$m")
+  done
+  total=${#manifests[@]}
+  if [ "$total" -eq 0 ]; then
+    _doc_skip pass red-run-coverage no-candidates "Not applicable — nazgul/tasks/ holds no TASK-*.md manifest, so there is nothing to re-ask the red-run evidence gate about. red-run-coverage: 0 scanned, 0 skipped (unreadable=0, not-applicable=0), 0 checked, 0 findings."
+    return 0
+  fi
+
+  if [ ! -r "$_DOC_RED_RUN_GUARD" ]; then
+    _doc_skip warn red-run-coverage unreadable "COULD NOT LOOK: $total manifest(s) are present but scripts/lib/task-transition-guard.sh is absent or unreadable, so ttg_verify_red_run_evidence could not be re-asked about any of them. This is NOT a report that every manifest carries evidence — all $total are UNDETERMINED. Reinstall or repair the plugin, then re-run /nazgul:doctor. red-run-coverage: $total scanned, $total skipped (unreadable=$total, not-applicable=0), 0 checked, 0 findings."
+    return 0
+  fi
+
+  list=$(printf '%s\n' "${manifests[@]}")
+  while IFS=$'\t' read -r klass id reason; do
+    case "$klass" in
+      clean)   clean=$((clean + 1)) ;;
+      finding)
+        findings=$((findings + 1))
+        if [ "$findings" -le "$_DOC_RED_RUN_NAME_CAP" ]; then
+          f_named="${f_named:+$f_named, }$id ($reason)"
+        else
+          f_extra=$((f_extra + 1))
+        fi ;;
+      not-applicable) na=$((na + 1)) ;;
+      unreadable)
+        unreadable=$((unreadable + 1))
+        if [ "$unreadable" -le "$_DOC_RED_RUN_NAME_CAP" ]; then
+          u_named="${u_named:+$u_named, }$id"
+        else
+          u_extra=$((u_extra + 1))
+        fi ;;
+    esac
+  done < <(_doc_red_run_sweep "$list")
+  [ "$f_extra" -eq 0 ] || f_named="$f_named, +$f_extra more"
+  [ "$u_extra" -eq 0 ] || u_named="$u_named, +$u_extra more"
+
+  skipped=$((unreadable + na))
+  checked=$((clean + findings))
+  grammar="red-run-coverage: $total scanned, $skipped skipped (unreadable=$unreadable, not-applicable=$na), $checked checked, $findings findings"
+
+  if [ "$total" -ne $((skipped + checked)) ]; then
+    printf 'doctor: INTERNAL — red-run sweep accounting mismatch: %d scanned != %d skipped + %d checked\n' \
+      "$total" "$skipped" "$checked" >&2
+    _doc_report warn red-run-coverage "INTERNAL — the red-run sweep did not account for every manifest ($grammar; $total scanned != $skipped skipped + $checked checked), so its numbers describe an incomplete pass and must not be read as a clean bill. $close"
+    return 0
+  fi
+
+  if [ "$(_doc_cfg '.guards.red_run_evidence' 'true')" = "false" ]; then
+    switch_note=" guards.red_run_evidence is false in nazgul/config.json, so this gate's block is suppressed on the live IMPLEMENTED edge and a refusal inside a multi-entry manifest can be masked by a later verified entry — the finding count above is a FLOOR, not a total."
+  fi
+
+  if [ "$checked" -eq 0 ]; then
+    floor="NOTHING CHECKED: "
+    if [ "$unreadable" -gt 0 ]; then
+      _doc_report warn red-run-coverage "${floor}${grammar}. Every one of the $total manifest(s) was skipped and $unreadable could not be read at all ($u_named), so no evidence was examined. This is 'could not look', NOT 'looked and found none' — whether a red-run backlog exists here is UNDETERMINED.$switch_note $close"
+      return 0
+    fi
+    _doc_skip pass red-run-coverage no-candidates "${floor}${grammar}. Not applicable — all $total manifest(s) were read and none declares a scripts/** or tests/** path, so no manifest carries a red-run obligation and there was no evidence to check. That is a measured 'no candidates', not an unexamined one.$switch_note $close"
+    return 0
+  fi
+
+  msg="$grammar"
+  if [ "$findings" -gt 0 ]; then
+    msg="$msg — ttg_verify_red_run_evidence refuses these manifests as the rule stands TODAY: $f_named. The gate runs from one call site, the IN_PROGRESS -> IMPLEMENTED edge, so a task that never went backwards was never re-asked: this is the pre-existing backlog surfacing, not a new failure."
+  fi
+  if [ "$unreadable" -gt 0 ]; then
+    msg="$msg $unreadable manifest(s) could NOT BE READ ($u_named) and are counted as skipped, never as a finding: 'could not look' and 'looked and found evidence wanting' are different answers and this check does not print them the same way."
+  fi
+  msg="$msg$switch_note"
+  if [ "$findings" -gt 0 ] || [ "$unreadable" -gt 0 ]; then
+    verdict="warn"
+    msg="$msg Remediation is per task and by hand: for a task still live, re-capture with 'scripts/red-run.sh <TASK-ID> --filter=<scoped>'. $close"
+  else
+    verdict="pass"
+    msg="$msg. Every manifest carrying a red-run obligation satisfies the gate as it stands today, re-asked here rather than assumed from the single edge that ran it once. $close"
+  fi
+  _doc_report "$verdict" red-run-coverage "$msg"
+}
+
+_DOC_CHECK_IDS="config-present plugin-version dependencies git-hooks invoking-shell nazgul-dir-env config-schema ignore-block stacking stack-registry stdin-hazard stop-payload messaging remote-control sessions red-run-coverage"
 _DOC_ONLY=""
 
 # _doc_run <check-id> <function> — runs the check unless --only excluded it.
@@ -949,6 +1104,7 @@ main() {
   _doc_run messaging check_messaging
   _doc_run remote-control check_remote_control
   _doc_run sessions check_sessions
+  _doc_run red-run-coverage check_red_run_coverage
   _doc_emit_coverage_line
   exit "$_DOC_WORST"
 }

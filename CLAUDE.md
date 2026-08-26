@@ -24,7 +24,7 @@ skills/                              # User-facing commands (/nazgul:*)
 │   ├── verify/SKILL.md
 │   ├── metrics/SKILL.md
 │   ├── heartbeat/SKILL.md           # Opt-in automation-heartbeat tick (inbox triage + auto-start)
-│   ├── doctor/SKILL.md              # Read-only environment preflight diagnostic (fifteen checks)
+│   ├── doctor/SKILL.md              # Read-only environment preflight diagnostic (sixteen checks)
 │   ├── complete/SKILL.md            # Close an objective merged outside the loop (host-verified merge evidence)
 │   └── bootstrap-project/SKILL.md   # Emit portable Nazgul-free bundle (one-shot)
 agents/                              # Subagent definitions
@@ -79,7 +79,7 @@ scripts/                             # Shell scripts for hooks
 │   ├── gen-skill-docs.sh            # Skill template: resolve {{PARTIAL:name}}
 │   ├── bootstrap-transform.sh       # bootstrap-project: Nazgul-token scrub pass
 │   ├── heartbeat.sh                 # Opt-in automation-heartbeat tick engine (separate entry path)
-│   ├── doctor.sh                    # Read-only preflight diagnostic (fifteen checks, never writes state)
+│   ├── doctor.sh                    # Read-only preflight diagnostic (sixteen checks, never writes state)
 │   ├── audit-agent-state-paths.sh   # Agent-roster runtime-state path audit (advisory; §15 entry point)
 │   ├── git-hooks/                   # Templates installed into the managed core.hooksPath dir
 │   │   ├── _dispatch.sh             # Chain-dispatcher: forwards to any pre-existing user hook
@@ -269,7 +269,7 @@ Objective → Discovery (+ Classification) → Doc Generator → Planner → Imp
 - `/nazgul:verify` — Human acceptance testing for completed tasks
 - `/nazgul:heartbeat` — Run one automation-heartbeat tick by hand: triages `nazgul/inbox/` and auto-starts the next objective if idle and clear. Opt-in and default-off (`automation.heartbeat.enabled: false`); a separate entry path from the main loop with no changes to the sequential or parallel execution path
 - `/nazgul:complete` — Close an objective whose PR merged outside the loop: reads merge state from the host's PR API, records `## Merge Evidence` in each stranded manifest from the host's own answer, and walks each task to DONE through `scripts/task-transition.sh`. Never edits frontmatter, never fabricates a review, and never infers a merge from git ancestry
-- `/nazgul:doctor` — Read-only environment preflight: reports plugin-version drift, `jq`/`gh` deps, git-hooks drift, the bash-vs-zsh hazard, the `NAZGUL_DIR` footgun, config-schema staleness, `.gitignore` Nazgul-block drift in BOTH install modes — stamp plus a whole-region flush-left scan (the only surface that tells a v1 install it is v1), cross-session messaging and Remote Control eligibility, shared-working-tree session collisions, and — when `execution.stacking` is enabled — gh-stack tooling readiness plus registry-vs-GitHub drift. Never writes state; its only fix path is text on stdout
+- `/nazgul:doctor` — Read-only environment preflight: reports plugin-version drift, `jq`/`gh` deps, git-hooks drift, the bash-vs-zsh hazard, the `NAZGUL_DIR` footgun, config-schema staleness, `.gitignore` Nazgul-block drift in BOTH install modes — stamp plus a whole-region flush-left scan (the only surface that tells a v1 install it is v1), cross-session messaging and Remote Control eligibility, shared-working-tree session collisions, the red-run evidence backlog re-asked over EVERY task manifest (`#227` — the gate itself runs from one call site, so a task that never goes backwards is never re-checked), and — when `execution.stacking` is enabled — gh-stack tooling readiness plus registry-vs-GitHub drift. Never writes state; its only fix path is text on stdout
 - `/nazgul:help` — Quick reference for all commands and modes
 
 ## Backlog Rule — every inbox item exists on the GitHub board
