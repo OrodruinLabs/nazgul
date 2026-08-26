@@ -418,23 +418,32 @@ assert_contains "unusable answer: the diagnostic names the unusable field" \
 assert_not_contains "unusable answer: no partial evidence section was written" \
   "$(cat "$FX/nazgul/tasks/TASK-051.md")" "## Merge Evidence"
 
-# Scenario F — a refusal is a REPORTED outcome, typed, never a crash. A regular file
-# where nazgul/locks/ must be a directory makes the sanctioned writer refuse.
-_fixture refused
+# lean-comments: allow-run — INVERTED here, with its reason: the reason this obstruction
+# produces changed because the mechanism did.
+# Scenario F — a refusal is a REPORTED outcome, typed, never a crash. A regular file where
+# nazgul/locks/ must be a directory used to be refused first by the status writer, and this
+# case asserted `transition-refused`. Under ADR-031 the evidence write and the status writer
+# resolve the SAME per-task lock through nz_manifest_lock_path, so an unusable locks/ stops the
+# close before a byte is written: the reason is `evidence-write-failed` and the record carries
+# the primitive's own named cause. `transition-refused` is driven by scenario F2 below instead.
+_fixture unusablelocks
 _manifest TASK-061 IMPLEMENTED
 printf 'not a directory\n' > "$FX/nazgul/locks"
 NAZGUL_TEST_GH_CASE=merged _run "$FX" 88
-assert_exit_code "transition refused: a refusal exits nonzero, having crashed on nothing" "$CO_RC" 1
-_grammar "transition refused"
-_reason "transition refused" "transition-refused" 1
-assert_eq "transition refused: it is counted as a refusal, not only as a skip" "$CO_F" "1"
-assert_contains "transition refused: the refusal record is TYPED and names the task" \
-  "$CO_ERR" "REFUSED TASK-061 [reason: transition-refused]"
-assert_file_contains "transition refused: the refusal reaches the bus" \
+assert_exit_code "unusable locks/: a refusal exits nonzero, having crashed on nothing" "$CO_RC" 1
+_grammar "unusable locks/"
+_reason "unusable locks/" "evidence-write-failed" 1
+_reason "unusable locks/" "transition-refused" 0
+assert_eq "unusable locks/: it is counted as a refusal, not only as a skip" "$CO_F" "1"
+assert_contains "unusable locks/: the refusal record is TYPED and names the task" \
+  "$CO_ERR" "REFUSED TASK-061 [reason: evidence-write-failed]"
+assert_contains "unusable locks/: and carries the primitive's OWN named cause, not a paraphrase" \
+  "$CO_ERR" "cause: locks_dir_unusable"
+assert_file_contains "unusable locks/: the refusal reaches the bus" \
   "$FX/nazgul/logs/events.jsonl" '"event":"close_objective_refused"'
-assert_eq "transition refused: the task stayed where it was" \
+assert_eq "unusable locks/: the task stayed where it was" \
   "$(get_task_status "$FX/nazgul/tasks/TASK-061.md")" "IMPLEMENTED"
-assert_contains "transition refused: the closer never claims a clean close-out" \
+assert_contains "unusable locks/: the closer never claims a clean close-out" \
   "$CO_ERR" "NOTHING CHECKED"
 
 # lean-comments: allow-run — states what makes this a proof rather than a spot check.
@@ -443,21 +452,77 @@ assert_contains "transition refused: the closer never claims a clean close-out" 
 # transition would spend. The proof is not that the section is gone but that, with the
 # obstruction removed, the sanctioned writer still refuses — which it could only do if the
 # residue is genuinely absent.
-assert_not_contains "transition refused: no ## Merge Evidence residue survives the refusal" \
+assert_not_contains "unusable locks/: a write that never opened wrote no ## Merge Evidence" \
   "$(cat "$FX/nazgul/tasks/TASK-061.md")" "## Merge Evidence"
-assert_contains "transition refused: the refusal record says the manifest was rolled back" \
-  "$CO_ERR" "rolled back to its pre-close bytes"
 rm -f "$FX/nazgul/locks"
 RESIDUE_OUT=$(CLAUDE_PROJECT_DIR="$FX" bash "$REPO_ROOT/scripts/task-transition.sh" \
   transition TASK-061 IMPLEMENTED DONE 2>&1)
 RESIDUE_RC=$?
-assert_exit_code "transition refused: a later IMPLEMENTED -> DONE cannot spend the refused run's evidence" \
+assert_exit_code "unusable locks/: a later IMPLEMENTED -> DONE cannot spend the refused run's evidence" \
   "$RESIDUE_RC" 1
-assert_eq "transition refused: and the task is still where the refusal left it" \
+assert_eq "unusable locks/: and the task is still where the refusal left it" \
   "$(get_task_status "$FX/nazgul/tasks/TASK-061.md")" "IMPLEMENTED"
-assert_contains "transition refused: the writer refuses for want of merge evidence, naming it" \
+assert_contains "unusable locks/: the writer refuses for want of merge evidence, naming it" \
   "$RESIDUE_OUT" "merge evidence"
+_drove evidence-write-failed
+
+# lean-comments: allow-run — says why the obstruction moved and what the rollback now proves.
+# Scenario F2 — the walk to DONE refused AFTER a good evidence write, which is the only state
+# in which the rollback is reachable at all. The gate re-asks the host in its OWN process, so a
+# scripted third answer refuses it there while the closer's own read-back verified: the section
+# is written, then undone under the same primitive, and the refusal record says so.
+_fixture txnrefused
+_manifest TASK-062 IMPLEMENTED
+GH_SEQ_TXN="$SCRATCH/gh-seq-txnrefused"
+printf 'merged\nmerged\nerror\n' > "$GH_SEQ_TXN"
+rm -f "$GH_SEQ_TXN.n"
+NAZGUL_TEST_GH_SEQ="$GH_SEQ_TXN" NAZGUL_TEST_GH_CASE=merged _run "$FX" 88
+assert_exit_code "transition refused: a refusal exits nonzero, having crashed on nothing" "$CO_RC" 1
+_grammar "transition refused"
+_reason "transition refused" "transition-refused" 1
+_reason "transition refused" "evidence-write-failed" 0
+assert_eq "transition refused: it is counted as a refusal, not only as a skip" "$CO_F" "1"
+assert_contains "transition refused: the refusal record is TYPED and names the task" \
+  "$CO_ERR" "REFUSED TASK-062 [reason: transition-refused]"
+assert_file_contains "transition refused: the refusal reaches the bus" \
+  "$FX/nazgul/logs/events.jsonl" '"event":"close_objective_refused"'
+assert_eq "transition refused: the task stayed where it was" \
+  "$(get_task_status "$FX/nazgul/tasks/TASK-062.md")" "IMPLEMENTED"
+assert_not_contains "transition refused: no ## Merge Evidence residue survives the refusal" \
+  "$(cat "$FX/nazgul/tasks/TASK-062.md")" "## Merge Evidence"
+assert_contains "transition refused: the refusal record says the manifest was rolled back" \
+  "$CO_ERR" "rolled back to its pre-close bytes"
 _drove transition-refused
+
+# lean-comments: allow-run — the shared-lock-path property, driven from OUTSIDE this process.
+# Scenario F3 — ADR-031 consequence 1: the evidence writer and the status writer resolve ONE
+# lock path, or they serialize by luck. A lock held by a LIVE owner outside this process must
+# therefore stop the evidence write itself. Before FEAT-036 nothing about `## Merge Evidence`
+# was locked at all, so a concurrent transition and a concurrent close could both be mid-write
+# on one manifest, and the loser's bytes were the ones a gate later read.
+_fixture lockheld
+_manifest TASK-063 IMPLEMENTED
+CO_LOCK_DIR="$FX/nazgul/locks/task-transition-TASK-063.lock"
+mkdir -p "$CO_LOCK_DIR"
+sleep 120 &
+CO_LOCK_PID=$!
+printf '%s %s\n' "$CO_LOCK_PID" "abcdef0123456789" \
+  > "$CO_LOCK_DIR/owner.$CO_LOCK_PID.abcdef0123456789"
+NAZGUL_TEST_GH_CASE=merged _run "$FX" 88
+kill "$CO_LOCK_PID" 2>/dev/null || true
+wait "$CO_LOCK_PID" 2>/dev/null || true
+assert_exit_code "held lock: the close is refused rather than raced" "$CO_RC" 1
+_grammar "held lock"
+_reason "held lock" "evidence-write-failed" 1
+assert_contains "held lock: the refusal carries the primitive's own named cause" \
+  "$CO_ERR" "cause: lock_unavailable"
+assert_contains "held lock: and names the task whose lock is held" \
+  "$CO_ERR" "another transition already holds the TASK-063 lock"
+assert_not_contains "held lock: nothing was written into a manifest another writer holds" \
+  "$(cat "$FX/nazgul/tasks/TASK-063.md")" "## Merge Evidence"
+assert_eq "held lock: the task stayed where it was" \
+  "$(get_task_status "$FX/nazgul/tasks/TASK-063.md")" "IMPLEMENTED"
+rm -rf "$CO_LOCK_DIR"
 
 # Scenario G — an unwritable manifest is a named refusal, not a traceback.
 _fixture unwritable
@@ -899,6 +964,42 @@ assert_contains "the shared roster authority lives beside the shared PR binding"
   "$GUARD_SRC" "ttg_task_in_objective()"
 assert_contains "and the merge-evidence gate actually calls it — a lifted check nobody calls is a deleted one" \
   "$GUARD_SRC" 'ttg_task_in_objective "$nazgul_dir" "$task_id"'
+
+# lean-comments: allow-run — the ADR-031 boundary: shared PRIMITIVE, unchanged AUTHORITY.
+# The bytes now go through scripts/lib/manifest-write.sh, and the hand-rolled snapshot that
+# used to sit beside it is GONE rather than merely unused — a second private implementation of
+# snapshot-plus-atomic-install is exactly the duplication the primitive exists to remove.
+assert_contains "the evidence write installs through the shared primitive's INNER form" \
+  "$CLOSER_SRC" 'nz_manifest_write_locked "$NAZGUL_DIR" "$task_id" -- _co_evidence_producer'
+assert_contains "the rollback installs through the same primitive, under the lock already held" \
+  "$CLOSER_SRC" '_co_rollback_via nz_manifest_write_locked'
+assert_contains "and the walk's own undo takes the OUTER form, the walk having released the lock" \
+  "$CLOSER_SRC" '_co_rollback_via nz_manifest_write "$task_id"'
+assert_not_contains "no manifest is rewritten through the unlocked helper any more" \
+  "$CLOSER_SRC" "nz_rewrite_file"
+assert_not_contains "the hand-rolled snapshot mechanism is GONE, not merely unused" \
+  "$CLOSER_SRC" "SNAPSHOT_FILE"
+assert_contains "the pre-close bytes come from the primitive's own snapshot, inside its CAS window" \
+  "$CLOSER_SRC" 'cat "$snapshot" > "$CO_PRECLOSE_FILE"'
+assert_eq "the per-task lock path is the primitive's single source, not a second spelling" \
+  "$(printf '%s\n' "$CLOSER_SRC" | grep -c 'nz_manifest_lock_path')" "1"
+assert_eq "the closer opens exactly ONE critical section per close" \
+  "$(printf '%s\n' "$CLOSER_SRC" | grep -c '_co_with_task_lock "\$task_id"')" "1"
+
+# One critical section means all three steps sit inside it — the window ADR-031 names is the
+# one between a refused close's write and its undo, and it is closed by holding, not by luck.
+CO_LOCKED_BODY=$(printf '%s\n' "$CLOSER_SRC" | awk '/^_co_locked_close\(\) \{/{f=1} f{print} f && /^\}$/{exit}')
+assert_contains "one critical section: the evidence write is inside it" \
+  "$CO_LOCKED_BODY" "_co_write_evidence"
+assert_contains "one critical section: so is the host-verified read-back" \
+  "$CO_LOCKED_BODY" "ttg_verify_merge_evidence"
+assert_contains "one critical section: and so is the rollback" \
+  "$CO_LOCKED_BODY" "_co_rollback "
+
+# There is no kill switch on the last gate before DONE, and this adoption introduces none:
+# a switch on manifest-write integrity would be the bypass the merge-evidence gate refuses.
+assert_eq "the closer reads no guards.* key — the DONE path keeps no kill switch" \
+  "$(printf '%s\n' "$CLOSER_SRC" | grep -c 'guards\.')" "0"
 
 # The constraint the whole objective rests on: this script is a CALLER of the sole
 # sanctioned writer, never a writer. Asserted against its source, not its behaviour.
