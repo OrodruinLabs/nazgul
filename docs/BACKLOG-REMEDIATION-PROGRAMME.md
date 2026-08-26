@@ -266,24 +266,97 @@ Strict sequencing prevents it; nothing else does.
 
 ## Class → objective map
 
-| Class | Issues | n | Objective |
-|---|---|---|---|
-| C15 Red-run producer hardening | 140 226 227 235 241 | 5 | OBJ-A |
-| C1 Hand-rolled manifest readers | 105 108 169 203 | 4 | OBJ-A |
-| C11 Host hardwiring | 114 117 | 2 | OBJ-B |
-| C9 Command-string tokenizer guards | 127 139 159 162 163 164 165 202 243 246 | 10 | OBJ-C |
-| C8 Dispatch non-delivery | 93 99 126 151 156 199 211 214 218 219 222 238 244 | 13 | OBJ-D |
-| C7 Granularity consumers | 106 112 121 122 123 130 208 | 7 | OBJ-E |
-| C5 Authored list where derivation belongs | 95 143 161 170 | 4 | OBJ-F |
-| C6 Two trees / path root | 113 120 124 145 152 189 191 198 | 8 | OBJ-F |
-| C2 Unbounded waits | 155 201 | 2 | shipped — verify at Move 0 |
-| C3 Guard fail-open / silent abort | 115 118 119 125 136 137 138 141 144 148 149 150 154 158 160 166 171 173 174 188 213 233 234 237 | 24 | OBJ-G + OBJ-H, **re-count first** |
-| C10 Recording without consumption | 101 107 111 133 176 192 193 196 210 225 | 10 | OBJ-I (a) + residue (b) |
-| C12 Convention, not mechanism | 102 128 132 153 200 212 215 217 | 8 | **dissolved** → patch |
-| C13 Loop-safety gates on wrong quantity | 96 97 98 100 103 224 236 | 7 | **dissolved** → patch |
+| Class | Issues | n | M open/closed | ADR-029 | Objective |
+|---|---|---|---|---|---|
+| C15 Red-run producer hardening | 140 226 227 235 241 | 5 | 4/1 | `RESIZED` | OBJ-A |
+| C1 Hand-rolled manifest readers | 105 108 169 203 | 4 | 4/0 | `CONFIRMED` | OBJ-A |
+| C11 Host hardwiring | 114 117 | 2 | 2/0 | `CONFIRMED` | OBJ-B |
+| C9 Command-string tokenizer guards | 127 139 159 162 163 164 165 202 243 246 | 10 | 10/0 | `CONFIRMED` | OBJ-C |
+| C8 Dispatch non-delivery | 93 99 126 151 156 199 211 214 218 219 222 238 244 | 13 | 12/1 | `RESIZED` | OBJ-D |
+| C7 Granularity consumers | 106 112 121 122 123 130 208 | 7 | 7/0 | `CONFIRMED` | OBJ-E |
+| C5 Authored list where derivation belongs | 95 143 161 170 | 4 | 4/0 | `CONFIRMED` | OBJ-F |
+| C6 Two trees / path root | 113 120 124 145 152 189 191 198 | 8 | 7/1 | `RESIZED` | OBJ-F |
+| C2 Unbounded waits | 155 201 | 2 | 2/0 | `CONFIRMED` | shipped — verify at Move 0 |
+| C3 Guard fail-open / silent abort | 115 118 119 125 136 137 138 141 144 148 149 150 154 158 160 166 171 173 174 188 213 233 234 237 | 24 | 24/0 | `CONFIRMED` | OBJ-G + OBJ-H, **re-count first** |
+| C10 Recording without consumption | 101 107 111 133 176 192 193 196 210 225 | 10 | 10/0 | `CONFIRMED` | OBJ-I (a) + residue (b) |
+| C12 Convention, not mechanism | 102 128 132 153 200 212 215 217 | 8 | 8/0 | `CONFIRMED` | **dissolved** → patch |
+| C13 Loop-safety gates on wrong quantity | 96 97 98 100 103 224 236 | 7 | 7/0 | `CONFIRMED` | **dissolved** → patch |
 
 Verified: 104 issue numbers, 104 unique, 0 duplicates, all exist on the board, none already closed.
 **These counts are pre-merge and must be re-derived at Move 0.**
+
+**Measured at Move 0 (W3).** `M` and the `ADR-029` token above are derived from one issue snapshot,
+`nazgul/context/FEAT-035-issues-snapshot.json`, taken at `at=2026-08-25T23:55:56Z` (169 issues, `jq
+'length'` asserted `< 1000`, so the list is a count and not a floor). Per-issue detail is in
+`nazgul/context/FEAT-035-class-membership.tsv`; every figure here recomputes from those two files, and
+no figure in Move 0 comes from a second live call. `M` is the count of a row's issues that are **OPEN**
+in that snapshot; `n` is untouched, because it is the frozen pre-merge prediction the delta is measured
+against.
+
+`documented n = 104 → measured M = 101 open, 3 closed`. Tokens: **10 `CONFIRMED`, 3 `RESIZED`, and
+none of the other four** — no class dissolved, nothing grew, and no input was unreadable. The three
+closures are `#235` (C15), `#218` (C8) and `#198` (C6), one apiece; the three `RESIZED` rows are exactly
+those three classes. **The dissolution this programme was most worried about did not happen.** C3 — the
+class named in "the three ways this programme breaks" as the one already dissolving, sized against a
+pre-fix tree — measures `24/0`: not one of its issues has closed.
+
+Two boundaries on that result, both of which change what `CONFIRMED` is allowed to mean:
+
+- **`M` measures the board, not the tree.** ADR-029/D1 requires two independently measured facts, and
+  `M` is only the first; `X` — whether each member's fix is verifiably present in the tree — is measured
+  separately at W4 and is *not* derived from `M`. A member whose fix has shipped while its issue stays
+  open still counts as OPEN here (D2), so `C3 CONFIRMED` says "24 of its issues are open", **not** "24
+  units of work remain". C2's row is the same shape read from the other side: its objective column says
+  *shipped*, and both its issues are still open.
+- **`M` is measured over the table's own numbers only, and can still move up.** Sixteen issues filed
+  after the classification instant are absent from every row above; twelve are open and are candidate
+  members of some class (the thirteenth, `#248`, is the programme itself). Folding them in is W4's work
+  under ADR-030, and it can only push an `M` **up** — so a `CONFIRMED` or `RESIZED` row here may yet
+  become `GROWN`, and none can become more dissolved than it already is.
+
+**There is no `C4` row and no `C14` row, and the absence is a numbering gap — not a class dropped
+without a record.** `grep -cE '^\| C(4|14) '` returns `0`, and the ids appear in **zero bytes** of this
+repository. Four independent checks decide it rather than one:
+
+1. **No version of this document ever had such a row.** It has exactly one commit in history (`f3de728`,
+   PR #240's squash); `git log --all -S'C14'` and `-S'| C4 '` both return nothing, and the ids are
+   absent from board item #248's body and comments and from PR #240's body. There is no deletion to
+   find.
+2. **The document's convention for a class that stops being a class is to keep the row and mark it.**
+   C12 and C13 are dissolved and still occupy rows, marked `**dissolved** → patch`. ADR-029/D3 later
+   codifies exactly that ("Row **kept and marked**, never deleted"). Under this document's own practice
+   a dropped class leaves a marked row, not a hole.
+3. **The id space is a label space, not a sequence.** It is subdivided rather than renumbered (`C3-i`,
+   `C3-ii`, `C3-iii`, `C10a`, `C10b`), and the rows are ordered by objective — `C15` first, `C13` last —
+   so a gap in it carries no positional meaning. #248's own title states **"13 defect classes"**,
+   matching the thirteen rows.
+4. **There is no orphan population for a fourteenth class to have held.** Reconstructing this
+   document's own 144 from the snapshot (`createdAt <= T`, open at `T`) returns **exactly 144** at
+   `T=2026-08-22T00:00:00Z`, and nineteen of them sit in no bucket this document declares: **sixteen
+   open `type:feature` roadmap items** (#109 #129 #131 #134 #135 #146 #157 #168 #177 #181 #182 #183 #184
+   #185 #186 #216), **one open bug** (#209), and **two already-closed bugs** (#172, #242). One bug is
+   not a class — D4's own bar — and sixteen feature requests are not a defect class at all. The
+   unaccounted set has no root cause to share.
+
+   The finding does not rest on pinning the instant. The same nineteen are returned at
+   `T=2026-08-22T10:37:29Z`, the first instant that contains all 127 declared members; and across
+   `2026-08-21T00:00:00Z` … `2026-08-22T23:59:59Z` the count moves only between **18 and 20**, every
+   difference being one already-CLOSED bug entering the window (#242, then #247). The eighteen-member
+   core is invariant over the whole range.
+
+What the evidence does **not** settle, stated rather than left silent: the classification pass itself
+left no artifact in this repository, so whether the ids `C4` and `C14` were transiently allocated during
+that unrecorded session and folded into neighbours cannot be recovered. That is a question about a
+working note, not about a class with members — checks 1 and 4 close the version history and the member
+population respectively, and those are the two things a dropped class would have left behind.
+
+**One row-shape limitation, recorded because a single token cannot express it.** C3's 24 members are
+chartered across two objectives (OBJ-G for `C3-i`+`C3-ii`, OBJ-H for `C3-iii`) and C10's 10 across two
+destinations (OBJ-I for `C10a`, patch residue for `C10b`), and neither split is enumerated anywhere in
+this document — unlike C12's and C13's, which are re-listed member by member below. Their tokens are
+therefore **whole-row** tokens: `C3 CONFIRMED` cannot say that one half dissolved and the other did not.
+Filed as issue **#264** (p2) under the standing clause; not fixed here, and ADR-029/D7 forbids this
+objective from re-chartering an objective in any case.
 
 Dead on merge of PR #240 (15, all currently OPEN): #89 #90 #91 #92 #116 #142 #167 #180 #197 #204 #220
 #221 #228 #229 #230. Partial, needs a merge-time check: #231 #232 #239.
