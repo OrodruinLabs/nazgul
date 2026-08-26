@@ -562,6 +562,62 @@ fi
 assert_eq "review-file-class: the two passes partition the same directory identically" \
   "$(printf '%s' "$RE_LINE" | sed 's/^[^:]*: //')" "$(printf '%s' "$RP_LINE" | sed 's/^[^:]*: //')"
 
+# test-manifest-write-integrity: ONE walk of scripts/**, TWO tokens — like the thirteenth and
+# fourteenth above, covered only when BOTH conform. Its lines are indented; the anchor is the token.
+MWI_A_OK=0; MWI_B_OK=0
+MW_FULL=$(bash "$REPO_ROOT/tests/test-manifest-write-integrity.sh" 2>/dev/null | sed 's/^[[:space:]]*//')
+MW_A_FULL=$(grep -E '^manifest-writers: [0-9]+ scanned' <<< "$MW_FULL" | tail -1)
+MW_B_FULL=$(grep -E '^status-readers: [0-9]+ scanned' <<< "$MW_FULL" | tail -1)
+_grammar_check "manifest-writers (full run)" "manifest-writers" \
+  "no-write-verb primitive unreadable" "$MW_A_FULL" && MWI_A_OK=1
+_grammar_check "status-readers (full run)" "status-readers" \
+  "no-status-read authority unreadable" "$MW_B_FULL" && MWI_B_OK=1
+for mw_pair in "manifest-writers|$MW_A_FULL" "status-readers|$MW_B_FULL"; do
+  mw_k=$(printf '%s' "${mw_pair#*|}" | sed -E 's/^.*\), ([0-9]+) checked.*/\1/')
+  case "${mw_k:-}" in ''|*[!0-9]*) mw_k=0 ;; esac
+  if [ "$mw_k" -ge 1 ]; then
+    _pass "${mw_pair%%|*}: a full run actually checks something ($mw_k)"
+  else
+    _fail "${mw_pair%%|*}: a full run actually checks something" "checked: ${mw_pair#*|}"
+  fi
+done
+assert_eq "test-manifest-write-integrity: both tokens walked the same population" \
+  "$(printf '%s' "$MW_A_FULL" | sed -E 's/^[^:]*: ([0-9]+) scanned.*/\1/')" \
+  "$(printf '%s' "$MW_B_FULL" | sed -E 's/^[^:]*: ([0-9]+) scanned.*/\1/')"
+
+# Forced all-skip WITHOUT adding a scan-root knob: that file states its population must not be
+# widened, so the shipped emitter is run verbatim at a substituted root instead.
+mkdir -p "$SCRATCH/mw/scripts" "$SCRATCH/mw/tests"
+cp -R "$REPO_ROOT/tests/lib" "$SCRATCH/mw/tests/lib"
+cp "$REPO_ROOT/tests/test-manifest-write-integrity.sh" "$SCRATCH/mw/tests/"
+printf '#!/usr/bin/env bash\necho this file writes no manifest and reads no status\n' \
+  > "$SCRATCH/mw/scripts/plain.sh"
+MW_SKIP=$(bash "$SCRATCH/mw/tests/test-manifest-write-integrity.sh" 2>/dev/null | sed 's/^[[:space:]]*//')
+MW_A_SKIP=$(grep -E '^manifest-writers: [0-9]+ scanned' <<< "$MW_SKIP" | tail -1)
+MW_B_SKIP=$(grep -E '^status-readers: [0-9]+ scanned' <<< "$MW_SKIP" | tail -1)
+_grammar_check "manifest-writers (all-skip)" "manifest-writers" \
+  "no-write-verb primitive unreadable" "$MW_A_SKIP"
+_grammar_check "status-readers (all-skip)" "status-readers" \
+  "no-status-read authority unreadable" "$MW_B_SKIP"
+assert_contains "manifest-writers: the all-skip walk enumerates its candidate and checks none" \
+  "$MW_A_SKIP" "1 scanned, 1 skipped (no-write-verb=1, primitive=0, unreadable=0), 0 checked"
+assert_contains "status-readers: the all-skip walk enumerates its candidate and checks none" \
+  "$MW_B_SKIP" "1 scanned, 1 skipped (no-status-read=1, authority=0, unreadable=0), 0 checked"
+# Both K>0 floors BLOCK: an all-skipped walk is the shape of a collapsed predicate, and the
+# failure is named per token rather than folded into one verdict.
+assert_contains "manifest-writers: a zero-check walk names the K>0 floor as its failure" \
+  "$MW_SKIP" "FAIL: manifest-writers: the predicate still matches its subjects"
+assert_contains "status-readers: a zero-check walk names the K>0 floor as its failure" \
+  "$MW_SKIP" "FAIL: status-readers: the predicate still matches its subjects"
+# One walk, two tokens: half a conforming entry point is not a covered one.
+if [ "$MWI_A_OK$MWI_B_OK" = "11" ]; then
+  _entry_covered test-manifest-write-integrity
+  _pass "test-manifest-write-integrity: BOTH tokens conform, so the shared walk counts as covered"
+else
+  _fail "test-manifest-write-integrity: BOTH tokens conform" \
+    "manifest-writers=$MWI_A_OK status-readers=$MWI_B_OK — one conforming token does not cover a walk that prints two"
+fi
+
 # Enumeration completeness — the point of the whole file: an entry point with no
 # emitter must FAIL here, not silently drop out of the list.
 for entry in $ENTRY_POINTS; do

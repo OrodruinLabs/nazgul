@@ -407,6 +407,38 @@ else
   assert_eq "consumer-scan: the review-provenance exemption's 'no predicate reads a task status' claim still holds" \
     "$(grep -E "$SCS_STATUS_TOKENS" "$RP_SRC" | grep -vE '^[[:space:]]*#' | grep -cvE 'printf|echo')" "0"
 
+  # The doctor.sh arm (#286) is justified BEHAVIOURALLY: its (o) red-run-coverage check globs
+  # nazgul/tasks/TASK-*.md status-blind, so two fixtures differing only in `status:` must agree.
+  DOCTOR_SRC="$REPO_ROOT/scripts/doctor.sh"
+  DOCTOR_CODE=$(scs_code "$DOCTOR_SRC")
+  if [ -n "$DOCTOR_CODE" ]; then
+    _pass "consumer-scan: doctor.sh's non-comment body was extracted (the claim below reads something)"
+  else
+    _fail "consumer-scan: doctor.sh's non-comment body was extracted" \
+      "scs_code returned nothing, so the claim below would pass by never looking"
+  fi
+  # The structural half reuses the scan's OWN reach signals rather than a second authored copy.
+  assert_eq "consumer-scan: the doctor.sh exemption's 'reads no task status' claim still holds" \
+    "$(grep -cE "(${SCS_SIGNAL_AUTHORITY}|${SCS_SIGNAL_FIELD})" <<< "$DOCTOR_CODE")" "0"
+
+  _dcs_doctor_report() { # <status> -> doctor's red-run-coverage report line for one such manifest
+    local st="$1" out
+    setup_temp_dir; setup_git_repo; setup_nazgul_dir; create_config
+    printf -- '---\nstatus: %s\n---\n# TASK-900\n\n## Metadata\n- **Base SHA**: %s\n\n## Commits\n%s\n\n## Red-Run Evidence\n\n## File Scope\n\n**Modifies**:\n- `scripts/foo.sh`\n' \
+      "$st" "$(git -C "$TEST_DIR" rev-parse HEAD~1)" "$(git -C "$TEST_DIR" rev-parse HEAD)" \
+      > "$TEST_DIR/nazgul/tasks/TASK-900.md"
+    out=$( (cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR \
+      bash "$DOCTOR_SRC" --only=red-run-coverage 2>/dev/null) )
+    grep -m1 'red-run-coverage' <<< "$out"
+    teardown_temp_dir
+  }
+  DCS_CANCELLED=$(_dcs_doctor_report CANCELLED)
+  DCS_IMPLEMENTED=$(_dcs_doctor_report IMPLEMENTED)
+  assert_contains "consumer-scan: the doctor.sh exemption was driven against a real finding, not a vacuous run" \
+    "$DCS_CANCELLED" "1 scanned, 0 skipped (unreadable=0, not-applicable=0), 1 checked, 1 findings"
+  assert_eq "consumer-scan: doctor.sh reports a CANCELLED manifest exactly as it reports an IMPLEMENTED one" \
+    "$DCS_CANCELLED" "$DCS_IMPLEMENTED"
+
   # The staleness checks read the live oracle's own case arms. An extraction that
   # returns nothing would pass both of them by never looking (RULES.md §15).
   EXEMPTION_ARMS=$(scs_exemption_paths | grep -c .)
