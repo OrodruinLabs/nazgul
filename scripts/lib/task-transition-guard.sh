@@ -544,11 +544,76 @@ _ttg_drop_prohibitions() {
     }'
 }
 
-# Scope is the union of declared paths and Base SHA..HEAD; diff failure degrades loudly to manifest-only.
+_TTG_TASK_DIFF_OUT=""
+_TTG_TASK_DIFF_DETAIL=""
+
+# lean-comments: allow-run — why the answer is returned in a global rather than on stdout,
+# and why "derived nothing" and "derived part of it" are two returns and not one.
+# The task's OWN changed files: every SHA under `## Commits` — read through the identical
+# awk boundary ttg_verify_commit_evidence uses, so the two mechanisms cannot disagree about
+# what `## Commits` means — diffed against its FIRST parent, unioned. A parentless commit
+# has no first parent to diff against, so its own `show` listing is that commit's diff.
+# Sets `_TTG_TASK_DIFF_OUT` instead of printing: a command substitution would run this in a
+# subshell and lose `_TTG_TASK_DIFF_DETAIL`, which is the degradation the caller must name.
+# Returns 1 when NO set could be derived at all; on success `_TTG_TASK_DIFF_DETAIL` is
+# non-empty only when part of the recorded set was unreadable.
+# Usage: _ttg_task_commit_diff <project_root> <manifest_text> [pathspec ...]
+_ttg_task_commit_diff() {
+  local project_root="$1" manifest_text="$2"
+  shift 2
+  local commits sha one out="" seen=0 resolved=0 unresolved=0 failed=0
+  _TTG_TASK_DIFF_OUT=""
+  _TTG_TASK_DIFF_DETAIL=""
+  commits=$(printf '%s' "$manifest_text" | awk '/^## Commits/{f=1;next} /^## /{f=0} f')
+  while IFS= read -r sha; do
+    [ -n "$sha" ] || continue
+    seen=$((seen + 1))
+    if ! git -C "$project_root" cat-file -e "${sha}^{commit}" 2>/dev/null; then
+      unresolved=$((unresolved + 1))
+      continue
+    fi
+    if git -C "$project_root" rev-parse --verify --quiet "${sha}^{commit}^" >/dev/null 2>&1; then
+      if ! one=$(git -C "$project_root" diff --name-only "${sha}^" "$sha" -- "$@" 2>/dev/null); then
+        failed=$((failed + 1))
+        continue
+      fi
+    elif ! one=$(git -C "$project_root" show --pretty=format: --name-only "$sha" -- "$@" 2>/dev/null); then
+      failed=$((failed + 1))
+      continue
+    fi
+    resolved=$((resolved + 1))
+    out="${out}${one}
+"
+  done < <(printf '%s' "$commits" | grep -oE "$TTG_SHA_SCAN_RE" || true)
+
+  if [ "$seen" -eq 0 ]; then
+    _TTG_TASK_DIFF_DETAIL="the manifest records no SHA under ## Commits"
+    return 1
+  fi
+  if [ "$resolved" -eq 0 ]; then
+    _TTG_TASK_DIFF_DETAIL="none of the ${seen} SHA(s) under ## Commits could be diffed in ${project_root} (unresolvable=${unresolved}, diff-failed=${failed})"
+    return 1
+  fi
+  [ "$((unresolved + failed))" -eq 0 ] \
+    || _TTG_TASK_DIFF_DETAIL="only ${resolved} of ${seen} SHA(s) under ## Commits could be diffed (unresolvable=${unresolved}, diff-failed=${failed})"
+  _TTG_TASK_DIFF_OUT=$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | LC_ALL=C sort -u || true)
+  return 0
+}
+
+# lean-comments: allow-run — why the file set is the task's own commits, and why the two
+# unusable states below take OPPOSITE dispositions rather than one shared degrade path.
+# Scope is the union of the declared paths and the task's OWN committed diff. It used to be
+# `Base SHA..HEAD`, which on a shared feature branch is branch-CUMULATIVE: every task was
+# charged with every sibling's changes (#241) — over-blocking only, never over-allowing, but
+# unfixable except by hand. An unusable `## Commits` inside a git repo fails CLOSED (in
+# scope): the commits are readable in principle, so their absence is ambiguity. Git being
+# unavailable is not ambiguity but impossibility — red-run.sh cannot capture evidence
+# without git either — so that state still degrades loudly to the manifest field alone
+# rather than raising a gate nothing in that tree could satisfy.
 _ttg_red_run_in_scope() {
   local manifest_text="$1" project_root="$2"
   local nazgul_dir="${3:-$project_root/nazgul}"
-  local declared diff_out base_sha degrade="" alt
+  local declared degrade="" alt
 
   if ! _ttg_red_run_roots "$project_root" "$nazgul_dir"; then
     echo "ttg_verify_red_run_evidence: red-run scope predicate could not determine the tests roots (project.test_roots is ${_TTG_ROOTS_DETAIL}) — failing closed, this task is treated as in scope" >&2
@@ -570,18 +635,13 @@ $(printf '%s' "$manifest_text" | awk '/^## File Scope/{f=1;next} /^## /{f=0} f' 
     degrade="git unavailable"
   elif ! git -C "$project_root" rev-parse --git-dir >/dev/null 2>&1; then
     degrade="project root is not a git repository"
+  elif ! _ttg_task_commit_diff "$project_root" "$manifest_text"; then
+    echo "ttg_verify_red_run_evidence: red-run scope predicate could not read this task's own committed diff (${_TTG_TASK_DIFF_DETAIL}) — failing closed, this task is treated as in scope" >&2
+    return 0
   else
-    base_sha=$(printf '%s' "$manifest_text" \
-      | awk '/^## Metadata/{f=1;next} /^## /{f=0} f' \
-      | grep -iE '^[[:space:]]*-[[:space:]]*\*\*Base SHA\*\*' | head -1 \
-      | grep -oE "$TTG_SHA_SCAN_RE" | head -1 || true)
-    if [ -z "$base_sha" ]; then
-      degrade="no Base SHA in the manifest"
-    elif ! git -C "$project_root" cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
-      degrade="Base SHA ${base_sha} does not resolve"
-    elif ! diff_out=$(git -C "$project_root" diff --name-only "${base_sha}..HEAD" 2>/dev/null); then
-      degrade="git diff ${base_sha}..HEAD failed"
-    elif printf '%s\n' "$diff_out" | grep -qE "^(${alt})/"; then
+    [ -z "$_TTG_TASK_DIFF_DETAIL" ] \
+      || echo "ttg_verify_red_run_evidence: red-run scope predicate read a PARTIAL commit set (${_TTG_TASK_DIFF_DETAIL})" >&2
+    if printf '%s\n' "$_TTG_TASK_DIFF_OUT" | grep -qE "^(${alt})/"; then
       return 0
     fi
   fi

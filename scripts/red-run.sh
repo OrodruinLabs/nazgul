@@ -46,7 +46,7 @@ set -euo pipefail
 # multi-root evidence this producer could not generate, pushing the operator back
 # to hand-authoring the block ADR-019 exists to mechanize.
 #
-# The copy set defaults to the task's changed files under those roots MINUS the
+# The copy set defaults to the task's OWN changed files (its `## Commits`, each against its first parent — never the branch-cumulative `Base SHA..HEAD`, #241) under those roots MINUS the
 # harness itself: copying a changed `tests/run-tests.sh` into the pre-change tree
 # would run the new tests under the changed runner, which is the change being
 # present — the exact vacuity this script exists to detect. `--copy=` (repeatable)
@@ -423,15 +423,31 @@ done
 [ "${#FILTER_ARGV[@]}" -gt 0 ] || die \
   "project.test_filter_template in $RR_CONFIG expands to no argument: '$FILTER_TEMPLATE'."
 
+# lean-comments: allow-run — the fallback below is the defect being fixed, so it says so.
+# On a shared feature branch `${BASE_SHA}..HEAD` is branch-CUMULATIVE and drags a sibling
+# task's test files into this capture (#241), so the committed half of the set is this
+# task's own recorded commits; the working tree and untracked files are unioned on top
+# because a capture may precede the commit that records them.
+RR_COMMITTED_SOURCE="the copy set pinned by --copy"
 if [ -n "$EXPLICIT_COPY" ]; then
   TEST_FILES="$EXPLICIT_COPY"
   echo "red-run: copy set pinned by --copy; no derivation, no exclusions" >&2
 else
+  if _ttg_task_commit_diff "$PROJECT_ROOT" "$(cat "$MANIFEST")" "${RR_ROOT_PATHSPEC[@]}"; then
+    RR_COMMITTED="$_TTG_TASK_DIFF_OUT"
+    RR_COMMITTED_SOURCE="this task's own ## Commits"
+    [ -z "$_TTG_TASK_DIFF_DETAIL" ] \
+      || echo "red-run: PARTIAL commit set — ${_TTG_TASK_DIFF_DETAIL}" >&2
+  else
+    RR_COMMITTED=$(git -C "$PROJECT_ROOT" diff --name-only "${BASE_SHA}..HEAD" -- "${RR_ROOT_PATHSPEC[@]}" 2>/dev/null || true)
+    RR_COMMITTED_SOURCE="${BASE_SHA}..HEAD"
+    echo "red-run: cannot derive this task's own committed diff (${_TTG_TASK_DIFF_DETAIL}) — falling back to the branch-cumulative ${BASE_SHA}..HEAD diff, which on a shared branch can copy a sibling task's test files in" >&2
+  fi
   TEST_FILES=$( {
-      git -C "$PROJECT_ROOT" diff --name-only "${BASE_SHA}..HEAD" -- "${RR_ROOT_PATHSPEC[@]}" 2>/dev/null || true
+      printf '%s\n' "$RR_COMMITTED"
       git -C "$PROJECT_ROOT" diff --name-only HEAD -- "${RR_ROOT_PATHSPEC[@]}" 2>/dev/null || true
       git -C "$PROJECT_ROOT" ls-files --others --exclude-standard -- "${RR_ROOT_PATHSPEC[@]}" 2>/dev/null || true
-    } | sort -u | grep -v '^$' || true)
+    } | LC_ALL=C sort -u | grep -v '^$' || true)
 fi
 
 COPY_LIST=""
@@ -467,7 +483,7 @@ $TEST_FILES
 EOF
 
 [ -n "$COPY_LIST" ] || die \
-  "$TASK_ID changes no copyable file under this project's test roots [$RR_ROOTS_LIST] (looked at ${BASE_SHA}..HEAD, the working tree, and untracked files)." \
+  "$TASK_ID changes no copyable file under this project's test roots [$RR_ROOTS_LIST] (looked at ${RR_COMMITTED_SOURCE}, the working tree, and untracked files)." \
   "There is nothing to red-run. If that is correct, record an enumerated N/A token instead." \
   "If the only changed test-tree file is the harness itself, pin the copy set with --copy=<path>."
 

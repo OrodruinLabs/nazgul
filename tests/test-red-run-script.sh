@@ -82,14 +82,19 @@ VACUOUS_MASK
   HEAD_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
 }
 
-# Manifest carrying a Base SHA, a Commits SHA, and the given ## Red-Run Evidence
-# body — empty $3 means the section is omitted entirely (the append case).
+# Manifest carrying a Base SHA, the given ## Red-Run Evidence body, and the task's OWN
+# commit list: $4 pins it, `none` empties it, default `$base..HEAD` read from $WM_REPO.
+WM_REPO=""
 write_manifest() {
-  local id="$1" base="$2" evidence="${3:-}"
+  local id="$1" base="$2" evidence="${3:-}" commits="${4:-}" repo="${WM_REPO:-$TEST_DIR}"
+  case "$commits" in
+    none) commits="" ;;
+    "") commits=$(git -C "$repo" rev-list "${base}..HEAD" 2>/dev/null | sed 's/^/- /') ;;
+  esac
   {
     printf -- '---\nstatus: IN_PROGRESS\n---\n# %s: scratch task\n\n' "$id"
     printf -- '## Metadata\n- **ID**: %s\n- **Files modified**: ["scripts/feature.sh", "tests/test-alpha.sh"]\n- **Base SHA**: %s\n\n' "$id" "$base"
-    printf -- '## Commits\n%s\n\n' "$HEAD_SHA"
+    printf -- '## Commits\n%s\n\n' "$commits"
     if [ -n "$evidence" ]; then
       printf -- '## Red-Run Evidence\n%s\n\n' "$evidence"
     fi
@@ -564,6 +569,71 @@ assert_contains "no changed tests: says it looked, and where" "$RR_OUT" "the wor
 assert_contains "no changed tests: points at the enumerated N/A escape" "$RR_OUT" "enumerated N/A token"
 assert_eq "no changed tests: no scratch worktree is left behind" "$(worktree_count)" "1"
 
+teardown_temp_dir
+
+# #241 — the copy set is the TASK's own commits, not the branch's. Two tasks commit to
+# one branch: BASE..HEAD carries both tasks' test files, each `## Commits` carries one.
+setup_project
+cat > "$TEST_DIR/tests/test-alpha-sibling.sh" <<'SIBLING'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "=== test-alpha-sibling ==="
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/scripts/sibling.sh" ]; then
+  echo "  PASS: sibling.sh is wired in"
+  exit 0
+fi
+echo "  FAIL: sibling.sh is wired in"
+exit 1
+SIBLING
+printf '#!/usr/bin/env bash\necho sibling\n' > "$TEST_DIR/scripts/sibling.sh"
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "a SIBLING task's work on the same branch"
+SIBLING_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+cat > "$TEST_DIR/tests/test-alpha-mine.sh" <<'MINE'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "=== test-alpha-mine ==="
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/scripts/mine.sh" ]; then
+  echo "  PASS: mine.sh is wired in"
+  exit 0
+fi
+echo "  FAIL: mine.sh is wired in"
+exit 1
+MINE
+printf '#!/usr/bin/env bash\necho mine\n' > "$TEST_DIR/scripts/mine.sh"
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "MY task's work on the same branch"
+MINE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+RR241_DIR="$TEST_DIR/nazgul/tasks"
+
+write_manifest TASK-241 "$BASE_SHA" "" "- $MINE_SHA"
+run_capture TASK-241 --filter=alpha
+assert_exit_code "#241: a task-scoped capture completes" "$RR_EC" 0
+assert_file_contains "#241: this task's own committed test file IS copied" \
+  "$RR241_DIR/TASK-241.md" 'red-run: tests/test-alpha-mine.sh'
+assert_file_not_contains "#241: a sibling's committed test file on the same branch is NOT" \
+  "$RR241_DIR/TASK-241.md" 'red-run: tests/test-alpha-sibling.sh'
+
+# POSITIVE CONTROL — the sibling file is perfectly capable of producing an entry, so its
+# absence above is the commit set deciding, not the file being unusable.
+write_manifest TASK-242 "$BASE_SHA" "" "- $SIBLING_SHA
+- $MINE_SHA"
+run_capture TASK-242 --filter=alpha
+assert_exit_code "#241 control: a two-commit capture completes" "$RR_EC" 0
+assert_file_contains "#241 control: recording BOTH commits copies the sibling's file too" \
+  "$RR241_DIR/TASK-242.md" 'red-run: tests/test-alpha-sibling.sh'
+assert_file_contains "#241 control: and this task's own file beside it" \
+  "$RR241_DIR/TASK-242.md" 'red-run: tests/test-alpha-mine.sh'
+
+# The fallback is announced, never silent: a manifest with no usable `## Commits` still
+# captures from the branch-cumulative range, and says that is what it fell back to.
+write_manifest TASK-243 "$BASE_SHA" "" "none"
+run_capture TASK-243 --filter=alpha
+assert_exit_code "#241: the fallback capture completes" "$RR_EC" 0
+assert_contains "#241: an unusable ## Commits names the fallback it took" \
+  "$RR_OUT" "falling back to the branch-cumulative"
+assert_file_contains "#241: and the fallback really is the wider set" \
+  "$RR241_DIR/TASK-243.md" 'red-run: tests/test-alpha-sibling.sh'
 teardown_temp_dir
 
 # The project's own runner, not this repo's harness. Ordered FIRST among the
@@ -1780,6 +1850,7 @@ exit 1
 WTTRACKED
   git -C "$RRW_WT" add tests/test-alpha-wt-tracked.sh
   git -C "$RRW_WT" commit -q -m "a commit the main working tree does not carry"
+  WM_REPO="$RRW_WT"
 }
 
 rrw_teardown() {
@@ -1792,7 +1863,7 @@ rrw_teardown() {
     git -C "$RRW_MAIN" worktree prune >/dev/null 2>&1 || true
   fi
   [ -n "$RRW_PARENT" ] && rm -rf "$RRW_PARENT"
-  RRW_PARENT=""; RRW_MAIN=""; RRW_WT=""
+  RRW_PARENT=""; RRW_MAIN=""; RRW_WT=""; WM_REPO=""
 }
 
 rrw_capture() {

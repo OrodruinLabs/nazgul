@@ -1362,4 +1362,134 @@ assert_eq "merge-route: no row disagreed with its declared verdict" "$MERGE_ROWS
 teardown_temp_dir
 rm -f "$MERGE_ERR"
 
+# #241 — one shared-branch fixture: a sibling's, a docs-only and a tests/** commit all
+# sit between Base SHA and HEAD, so `Base SHA..HEAD` puts EVERY task in scope.
+setup_temp_dir
+SCOPE_ERR_FILE="$TEST_DIR/.scope-stderr"
+git -C "$TEST_DIR" init -q
+git -C "$TEST_DIR" config user.email "test@nazgul.dev"
+git -C "$TEST_DIR" config user.name "Nazgul Test"
+mkdir -p "$TEST_DIR/tests" "$TEST_DIR/scripts" "$TEST_DIR/docs"
+printf '#!/usr/bin/env bash\n' > "$TEST_DIR/tests/test-existing.sh"
+printf 'prd\n' > "$TEST_DIR/docs/PRD.md"
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "base"
+SC_BASE=$(git -C "$TEST_DIR" rev-parse HEAD)
+printf '#!/usr/bin/env bash\n' > "$TEST_DIR/tests/test-sibling.sh"
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "TASK-A: a sibling's tests"
+SC_SIBLING=$(git -C "$TEST_DIR" rev-parse HEAD)
+printf 'design\n' > "$TEST_DIR/docs/design.md"
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "TASK-B: docs only"
+SC_DOCS=$(git -C "$TEST_DIR" rev-parse HEAD)
+printf '#!/usr/bin/env bash\n' > "$TEST_DIR/tests/test-mine.sh"
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "TASK-C: my own tests"
+SC_MINE=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+# Sets SCOPE_EC (0 = in scope) and SCOPE_ERR. Called in THIS shell, stderr to a
+# file, so the predicate's globals survive the call.
+scope_call() {
+  if _ttg_red_run_in_scope "$1" "$TEST_DIR" "$TEST_DIR/nazgul" 2>"$SCOPE_ERR_FILE" >/dev/null; then
+    SCOPE_EC=0
+  else
+    SCOPE_EC=$?
+  fi
+  SCOPE_ERR=$(cat "$SCOPE_ERR_FILE")
+}
+
+scope_manifest() {
+  printf '## Metadata\n- **ID**: %s\n- **Files modified**: %s\n- **Base SHA**: %s\n\n## Commits\n%s\n\n## Description\nx\n' \
+    "$1" "$2" "$SC_BASE" "$3"
+}
+
+# POSITIVE CONTROL for every negative below: the branch-cumulative diff really does
+# reach tests/**, so an out-of-scope verdict is the predicate's, not an empty fixture's.
+SC_BRANCH_DIFF=$(git -C "$TEST_DIR" diff --name-only "${SC_BASE}..HEAD")
+assert_contains "#241 control: Base SHA..HEAD really does carry a sibling's tests/** file" \
+  "$SC_BRANCH_DIFF" "tests/test-sibling.sh"
+assert_contains "#241 control: Base SHA..HEAD really does carry a second task's tests/** file" \
+  "$SC_BRANCH_DIFF" "tests/test-mine.sh"
+
+# The fix: a docs-only task on that same branch is OUT of scope. Under Base SHA..HEAD
+# it was in scope purely because siblings shared the branch.
+scope_call "$(scope_manifest TASK-B '["docs/design.md"]' "- ${SC_DOCS}")"
+assert_exit_code "#241: a docs-only task is out of scope despite siblings' tests/** on the same branch" "$SCOPE_EC" 1
+assert_not_contains "#241: a computable own-diff is never reported as degraded" \
+  "$SCOPE_ERR" "degraded to manifest-only"
+assert_not_contains "#241: a computable own-diff is never reported as fail-closed" \
+  "$SCOPE_ERR" "failing closed"
+
+# ANTI-EVASION, unchanged: the declared field understates to empty, the task's OWN
+# commit touches tests/** — still in scope.
+scope_call "$(scope_manifest TASK-C '[]' "- ${SC_MINE}")"
+assert_exit_code "#241: a Files-modified-[] manifest whose own commit touches tests/** is in scope" "$SCOPE_EC" 0
+
+# The declared arm still decides on its own, before git is consulted at all.
+scope_call "$(scope_manifest TASK-B '["tests/test-mine.sh"]' "- ${SC_DOCS}")"
+assert_exit_code "#241: the declared field alone still puts a docs-only commit set in scope" "$SCOPE_EC" 0
+
+# Disjointness, stated as sets rather than inferred from a verdict.
+_ttg_task_commit_diff "$TEST_DIR" "$(scope_manifest TASK-A '[]' "- ${SC_SIBLING}")"
+assert_eq "#241: TASK-A's set is exactly its own commit's paths" "$_TTG_TASK_DIFF_OUT" "tests/test-sibling.sh"
+_ttg_task_commit_diff "$TEST_DIR" "$(scope_manifest TASK-C '[]' "- ${SC_MINE}")"
+assert_eq "#241: TASK-C's set is exactly its own commit's paths" "$_TTG_TASK_DIFF_OUT" "tests/test-mine.sh"
+assert_not_contains "#241: no sibling path leaks into TASK-C's set" "$_TTG_TASK_DIFF_OUT" "test-sibling"
+
+# Two SHAs under one heading are UNIONED, not last-one-wins.
+_ttg_task_commit_diff "$TEST_DIR" "$(scope_manifest TASK-C '[]' "- ${SC_DOCS}
+- ${SC_MINE}")"
+assert_eq "#241: a multi-commit task unions its own commits" "$_TTG_TASK_DIFF_OUT" "docs/design.md
+tests/test-mine.sh"
+
+# A parentless commit has no first parent to diff against; its own listing is its diff,
+# so the root commit of a repository is derived rather than fail-closed.
+_ttg_task_commit_diff "$TEST_DIR" "$(scope_manifest TASK-Z '[]' "- ${SC_BASE}")"
+assert_eq "#241: a parentless commit's own listing is its diff" "$_TTG_TASK_DIFF_OUT" "docs/PRD.md
+tests/test-existing.sh"
+
+# FAIL CLOSED — the commits are readable in principle, so an unusable set is ambiguity,
+# and each unusable shape names itself on stderr.
+scope_call "$(scope_manifest TASK-B '["docs/design.md"]' "")"
+assert_exit_code "#241: an empty ## Commits fails closed to in scope" "$SCOPE_EC" 0
+assert_contains "#241: the empty-commits degradation names itself" \
+  "$SCOPE_ERR" "could not read this task's own committed diff (the manifest records no SHA under ## Commits)"
+
+scope_call "$(scope_manifest TASK-B '["docs/design.md"]' "- deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")"
+assert_exit_code "#241: an unresolvable ## Commits SHA fails closed to in scope" "$SCOPE_EC" 0
+assert_contains "#241: the unresolvable-commits degradation names itself, distinctly" \
+  "$SCOPE_ERR" "none of the 1 SHA(s) under ## Commits could be diffed"
+
+# PARTIAL is a third state: enough resolved to decide, and the shortfall is still named.
+scope_call "$(scope_manifest TASK-C '[]' "- ${SC_MINE}
+- deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")"
+assert_exit_code "#241: a partly-readable commit set still decides" "$SCOPE_EC" 0
+assert_contains "#241: a partial commit set announces the shortfall" \
+  "$SCOPE_ERR" "PARTIAL commit set (only 1 of 2 SHA(s) under ## Commits could be diffed"
+
+# The gate that consumes the predicate still BLOCKS an in-scope task with no evidence —
+# a scope arm that stopped blocking everything would be a hole, not a fix.
+if ttg_verify_red_run_evidence "$(scope_manifest TASK-C '[]' "- ${SC_MINE}")" "$TEST_DIR" TASK-C \
+  2>"$SCOPE_ERR_FILE" >/dev/null; then SCOPE_EC=0; else SCOPE_EC=$?; fi
+assert_exit_code "#241 control: the gate still refuses an in-scope task carrying no evidence" "$SCOPE_EC" 1
+assert_eq "#241 control: and it refuses it as 'absent'" "${TTG_RED_RUN_REASON:-<unset>}" "absent"
+
+if ttg_verify_red_run_evidence "$(scope_manifest TASK-B '["docs/design.md"]' "- ${SC_DOCS}")" "$TEST_DIR" TASK-B \
+  2>"$SCOPE_ERR_FILE" >/dev/null; then SCOPE_EC=0; else SCOPE_EC=$?; fi
+assert_exit_code "#241: and it allows the out-of-scope task beside it" "$SCOPE_EC" 0
+assert_eq "#241: reason is 'not_applicable', not a suppressed block" "${TTG_RED_RUN_REASON:-<unset>}" "not_applicable"
+teardown_temp_dir
+
+# Impossibility, not ambiguity: without git no red run could be captured either, so this
+# state degrades to the manifest field alone rather than raising an unsatisfiable gate.
+setup_temp_dir
+mkdir -p "$TEST_DIR/tests"
+SCOPE_ERR_FILE="$TEST_DIR/.scope-stderr"
+scope_call "$(printf '## Metadata\n- **ID**: TASK-B\n- **Files modified**: ["docs/design.md"]\n\n## Commits\n- deadbeef\n\n## Description\nx\n')"
+assert_exit_code "#241: a non-repo project root still degrades to manifest-only, allowing" "$SCOPE_EC" 1
+assert_contains "#241: the non-repo degradation still names itself" \
+  "$SCOPE_ERR" "degraded to manifest-only (project root is not a git repository)"
+teardown_temp_dir
+
 report_results

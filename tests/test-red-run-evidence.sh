@@ -44,8 +44,9 @@ rr_call() {
 }
 
 # Scratch repo: BASE_SHA (with tests/test-foo.sh present) then HEAD_SHA, which
-# adds scripts/foo.sh — so the Base SHA..HEAD diff really does put the tree in
-# `scripts/**` scope. ORPHAN_SHA is a real parentless commit built with
+# adds scripts/foo.sh — so that commit's OWN diff really does put the task in
+# `scripts/**` scope, while DOCS_ONLY_SHA between them is a sibling task's docs-only
+# commit on the same branch (#241). ORPHAN_SHA is a real parentless commit built with
 # commit-tree (never checked out, so the worktree is untouched): git resolves
 # it, and it is an ancestor of nothing here.
 setup_rr_repo() {
@@ -58,6 +59,11 @@ setup_rr_repo() {
   git -C "$TEST_DIR" add -A
   git -C "$TEST_DIR" commit -q -m "base"
   BASE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+  mkdir -p "$TEST_DIR/docs"
+  printf 'notes\n' > "$TEST_DIR/docs/NOTES.md"
+  git -C "$TEST_DIR" add -A
+  git -C "$TEST_DIR" commit -q -m "a sibling task's docs-only work"
+  DOCS_ONLY_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
   printf 'echo work\n' >> "$TEST_DIR/scripts/foo.sh"
   git -C "$TEST_DIR" add -A
   git -C "$TEST_DIR" commit -q -m "the task's work"
@@ -97,10 +103,10 @@ assert_eq "absent: event carries task_id and reason" \
 
 # ---------------------------------------------------------------------------
 # STATE 2 — section absent, task NOT in scope: ALLOW, announce the skipped
-# check. Base SHA is HEAD here, so BOTH arms of the union genuinely say
-# out-of-scope rather than the diff arm being unavailable.
+# check. The task's OWN recorded commit is docs-only here, so BOTH arms of the
+# union genuinely say out-of-scope rather than the diff arm being unavailable.
 # ---------------------------------------------------------------------------
-OUT_OF_SCOPE=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n- **Base SHA**: %s\n\n## Commits\n- %s\n\n## Description\nx\n' "$HEAD_SHA" "$HEAD_SHA")
+OUT_OF_SCOPE=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n- **Base SHA**: %s\n\n## Commits\n- %s\n\n## Description\nx\n' "$BASE_SHA" "$DOCS_ONLY_SHA")
 rr_call "$OUT_OF_SCOPE" "$TEST_DIR"
 assert_exit_code "absent + out of scope: allows" "$RR_EC" 0
 assert_eq "absent + out of scope: reason is 'not_applicable'" "$RR_REASON" "not_applicable"
@@ -135,7 +141,7 @@ assert_not_contains "empty section: never reported as content hidden in a commen
   "$RR_STDERR" "only inside an HTML comment"
 
 # Payload-state matrix, so a state that stopped being reachable cannot read as a
-# state that never existed (RULES.md §15). Columns: body | scope | base | reason | exit.
+# state that never existed (RULES.md §15). Columns: body | scope | commit | reason | exit.
 payload_body() {
   case "$1" in
     empty) printf '' ;;
@@ -150,19 +156,19 @@ payload_body() {
 
 payload_manifest() {
   printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: %s\n- **Base SHA**: %s\n\n## Commits\n- %s — feat: work\n\n## Red-Run Evidence\n%s\n\n## Description\nx\n' \
-    "$2" "$3" "$HEAD_SHA" "$1"
+    "$2" "$BASE_SHA" "$3" "$1"
 }
 
-PAYLOAD_CASES='empty|["scripts/foo.sh"]|base|absent|1
-blank|["scripts/foo.sh"]|base|absent|1
-commented|["scripts/foo.sh"]|base|commented_out|1
-commented-prose|["scripts/foo.sh"]|base|commented_out|1
-empty|["docs/PRD.md"]|head|not_applicable|0
-commented|["docs/PRD.md"]|head|not_applicable|0
-prose|["scripts/foo.sh"]|base|corrupt|1
-entry|["scripts/foo.sh"]|base|verified|0'
+PAYLOAD_CASES='empty|["scripts/foo.sh"]|work|absent|1
+blank|["scripts/foo.sh"]|work|absent|1
+commented|["scripts/foo.sh"]|work|commented_out|1
+commented-prose|["scripts/foo.sh"]|work|commented_out|1
+empty|["docs/PRD.md"]|docs|not_applicable|0
+commented|["docs/PRD.md"]|docs|not_applicable|0
+prose|["scripts/foo.sh"]|work|corrupt|1
+entry|["scripts/foo.sh"]|work|verified|0'
 PM_SCANNED=0; PM_CHECKED=0; PM_UNRENDERABLE=0; PM_FINDINGS=0
-while IFS='|' read -r pm_body pm_scope pm_base pm_reason pm_ec; do
+while IFS='|' read -r pm_body pm_scope pm_commit pm_reason pm_ec; do
   [ -n "$pm_body" ] || continue
   PM_SCANNED=$((PM_SCANNED + 1))
   if ! pm_rendered=$(payload_body "$pm_body"); then
@@ -171,7 +177,7 @@ while IFS='|' read -r pm_body pm_scope pm_base pm_reason pm_ec; do
     continue
   fi
   PM_CHECKED=$((PM_CHECKED + 1))
-  case "$pm_base" in head) pm_sha="$HEAD_SHA" ;; *) pm_sha="$BASE_SHA" ;; esac
+  case "$pm_commit" in docs) pm_sha="$DOCS_ONLY_SHA" ;; *) pm_sha="$HEAD_SHA" ;; esac
   rr_call "$(payload_manifest "$pm_rendered" "$pm_scope" "$pm_sha")" "$TEST_DIR"
   if [ "$RR_REASON" = "$pm_reason" ] && [ "$RR_EC" -eq "$pm_ec" ]; then
     _pass "payload-matrix: body=${pm_body} scope=${pm_scope} → ${pm_reason} (exit ${pm_ec})"
@@ -231,6 +237,11 @@ setup_monorepo_repo() {
   git -C "$TEST_DIR" add -A
   git -C "$TEST_DIR" commit -q -m "base"
   BASE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+  mkdir -p "$TEST_DIR/docs"
+  printf 'notes\n' > "$TEST_DIR/docs/NOTES.md"
+  git -C "$TEST_DIR" add -A
+  git -C "$TEST_DIR" commit -q -m "a sibling task's docs-only work"
+  DOCS_ONLY_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
   printf 'echo work\n' >> "$TEST_DIR/scripts/foo.sh"
   git -C "$TEST_DIR" add -A
   git -C "$TEST_DIR" commit -q -m "the task's work"
@@ -298,7 +309,7 @@ rm -f "$TEST_DIR/src/App/tests/escape" "$TEST_DIR/src/App/tests/test-linked.sh"
 # An unresolvable configured root is SKIPPED AND COUNTED, never silently dropped:
 # a root set that quietly shrinks to empty re-creates the same unsatisfiable gate.
 create_config '.project.test_roots = ["src/Ghost/tests", "src/App/tests"]'
-MONO_OUT_OF_SCOPE=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n- **Base SHA**: %s\n\n## Commits\n- %s\n\n## Description\nx\n' "$HEAD_SHA" "$HEAD_SHA")
+MONO_OUT_OF_SCOPE=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n- **Base SHA**: %s\n\n## Commits\n- %s\n\n## Description\nx\n' "$BASE_SHA" "$DOCS_ONLY_SHA")
 rr_call "$MONO_OUT_OF_SCOPE" "$TEST_DIR"
 assert_exit_code "skipped root: an out-of-scope task is still allowed" "$RR_EC" 0
 assert_contains "skipped root: the scan reports what it examined, with the reason named" \
@@ -404,11 +415,11 @@ setup_rr_repo
 setup_nazgul_dir
 create_config
 
-# Base SHA is HEAD, so the diff arm genuinely says docs-only and the verdict
-# rests on the declared-scope arm alone.
+# The task's OWN recorded commit is docs-only, so the diff arm genuinely says
+# docs-only and the verdict rests on the declared-scope arm alone.
 prohibition_manifest() {
   printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n- **Base SHA**: %s\n\n## Commits\n- %s\n\n## File Scope\n%s\n\n## Description\nx\n' \
-    "$HEAD_SHA" "$HEAD_SHA" "$1"
+    "$BASE_SHA" "$DOCS_ONLY_SHA" "$1"
 }
 
 rr_call "$(prohibition_manifest '**Modifies**:
@@ -464,13 +475,13 @@ assert_contains "present + no entry: distinct diagnostic" \
 STDERR_CORRUPT="$RR_STDERR"
 
 COMMENT_ONLY_OUT=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n- **Base SHA**: %s\n\n## Commits\n- %s — docs: work\n\n## Red-Run Evidence\n<!-- not filled in yet -->\n\n## Description\nx\n' \
-  "$HEAD_SHA" "$HEAD_SHA")
+  "$BASE_SHA" "$DOCS_ONLY_SHA")
 rr_call "$COMMENT_ONLY_OUT" "$TEST_DIR"
 assert_exit_code "comment-only + out of scope: allows" "$RR_EC" 0
 assert_eq "comment-only + out of scope: reason is not_applicable" "$RR_REASON" "not_applicable"
 
 TEMPLATE_SCOPE_OUT=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n- **Base SHA**: %s\n\n## File Scope\n<!--\n**Creates:**\n- `tests/models/user.test.ts`\n-->\n\n## Commits\n- %s — docs: work\n\n## Red-Run Evidence\n<!-- not filled in yet -->\n\n## Description\nx\n' \
-  "$HEAD_SHA" "$HEAD_SHA")
+  "$BASE_SHA" "$DOCS_ONLY_SHA")
 rr_call "$TEMPLATE_SCOPE_OUT" "$TEST_DIR"
 assert_exit_code "template scope comments: example test paths do not put a docs task in scope" "$RR_EC" 0
 assert_eq "template scope comments: reason is not_applicable" "$RR_REASON" "not_applicable"
@@ -692,7 +703,8 @@ fi
 teardown_temp_dir
 
 # ---------------------------------------------------------------------------
-# D-3 SCOPE PREDICATE — UNION of the manifest field and the Base SHA..HEAD diff
+# D-3 SCOPE PREDICATE — UNION of the manifest field and the task's OWN committed
+# diff (#241: each `## Commits` SHA against its first parent, never Base SHA..HEAD)
 # ---------------------------------------------------------------------------
 setup_rr_repo
 # The manifest UNDERSTATES its scope (docs only) but the diff touches scripts/.
@@ -726,25 +738,55 @@ assert_not_contains "union: a computable diff is never reported as degraded" \
 teardown_temp_dir
 
 # --- THIRD STATE: the diff cannot be computed at all ---
-# "Could not look" is not "looked and found nothing" — the degrade is announced,
-# never silent, and falls back to the manifest field alone.
+# "Could not look" is not "looked and found nothing", and the two unusable states
+# take OPPOSITE dispositions: an unusable `## Commits` inside a git repo is
+# ambiguity and fails CLOSED, while no git at all is impossibility (no red run
+# could be captured there either) and degrades to the manifest field alone.
 setup_rr_repo
+# INVERTED for #241: the Base SHA used to be the predicate's only git input, so its
+# absence excused the task. It now reads `## Commits`, which this manifest carries.
 NO_BASE=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n\n## Commits\n- %s\n\n## Description\nx\n' "$HEAD_SHA")
 rr_call "$NO_BASE" "$TEST_DIR"
-assert_exit_code "degraded (no Base SHA): falls back to manifest-only, allows" "$RR_EC" 0
-assert_contains "degraded (no Base SHA): announced on stderr" \
-  "$RR_STDERR" "red-run scope predicate degraded to manifest-only (no Base SHA in the manifest)"
+assert_exit_code "no Base SHA: the task's own commit still decides — in scope, blocks" "$RR_EC" 1
+assert_eq "no Base SHA: reason is 'absent', not an excused degrade" "$RR_REASON" "absent"
+assert_not_contains "no Base SHA: the retired Base-SHA degrade path no longer fires" \
+  "$RR_STDERR" "no Base SHA in the manifest"
 
+# The other direction from the same shape, so the inversion above is not just
+# "the predicate started blocking everything".
+NO_BASE_DOCS=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n\n## Commits\n- %s\n\n## Description\nx\n' "$DOCS_ONLY_SHA")
+rr_call "$NO_BASE_DOCS" "$TEST_DIR"
+assert_exit_code "no Base SHA: a docs-only commit set is still out of scope" "$RR_EC" 0
+assert_eq "no Base SHA: and it is allowed as 'not_applicable'" "$RR_REASON" "not_applicable"
+
+# INVERTED for #241: an unresolvable Base SHA no longer blinds the scope predicate
+# either, for the same reason.
 BAD_BASE=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n- **Base SHA**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n\n## Commits\n- %s\n\n## Description\nx\n' "$HEAD_SHA")
 rr_call "$BAD_BASE" "$TEST_DIR"
-assert_contains "degraded (unresolvable Base SHA): names that reason, distinctly" \
-  "$RR_STDERR" "Base SHA deadbeefdeadbeefdeadbeefdeadbeefdeadbeef does not resolve"
+assert_exit_code "unresolvable Base SHA: the task's own commit still decides" "$RR_EC" 1
+assert_not_contains "unresolvable Base SHA: no longer reported as a scope degrade" \
+  "$RR_STDERR" "does not resolve"
+
+# FAIL CLOSED inside a git repo: the commits were readable in principle, so an
+# unusable set is ambiguity and the task is treated as in scope.
+NO_COMMITS=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n- **Base SHA**: %s\n\n## Commits\n\n## Description\nx\n' "$BASE_SHA")
+rr_call "$NO_COMMITS" "$TEST_DIR"
+assert_exit_code "empty ## Commits: fails closed to in scope" "$RR_EC" 1
+assert_contains "empty ## Commits: the fail-closed degradation names itself" \
+  "$RR_STDERR" "could not read this task's own committed diff (the manifest records no SHA under ## Commits)"
+
+UNRESOLVABLE_COMMITS=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n- **Base SHA**: %s\n\n## Commits\n- deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n\n## Description\nx\n' "$BASE_SHA")
+rr_call "$UNRESOLVABLE_COMMITS" "$TEST_DIR"
+assert_exit_code "unresolvable ## Commits: fails closed to in scope" "$RR_EC" 1
+assert_contains "unresolvable ## Commits: named distinctly from the empty case" \
+  "$RR_STDERR" "none of the 1 SHA(s) under ## Commits could be diffed"
 teardown_temp_dir
 
 setup_temp_dir
 mkdir -p "$TEST_DIR/tests"
 NO_REPO=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n- **Base SHA**: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n\n## Commits\n- deadbeef\n\n## Description\nx\n')
 rr_call "$NO_REPO" "$TEST_DIR"
+assert_exit_code "degraded (non-repo project root): still allows — impossibility, not ambiguity" "$RR_EC" 0
 assert_contains "degraded (non-repo project root): names that reason, distinctly" \
   "$RR_STDERR" "degraded to manifest-only (project root is not a git repository)"
 teardown_temp_dir
