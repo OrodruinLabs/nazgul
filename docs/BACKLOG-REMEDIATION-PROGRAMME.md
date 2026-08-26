@@ -224,6 +224,63 @@ and its `N scanned, M skipped, K created, F failed` line as though it ships, and
 This is a documentation-vs-tree divergence in the governing file, and it is the rule that would have kept
 the 144-issue backlog honest in the first place.
 
+**Known before you start — two blockers, both verified 2026-08-26 (FEAT-035 W7). Read this before
+re-landing anything.**
+
+**1. The mechanism was already built once, and it was pulled on purpose.** A working 137-line
+prototype was committed as `e18aa18` (`2026-08-15 11:37:07 +0100`, *"chore: land the inbox-to-board
+sync script"*, `scripts/sync-inbox-to-github.sh`, +137) and removed by `6bc5324`
+(`2026-08-15 12:57:41 +0100`, `Revert "chore: land the inbox-to-board sync script"`, −137) —
+**80 m 34 s** later. The revert body is the bare `git revert` boilerplate (`This reverts commit
+e18aa18…`) and carries no trailer, so in git the removal **looks** unexplained. It is not.
+
+**2. The reason is stated — on the board, not in git.** Issue `#193` (**OPEN**, `type:feature`,
+`priority:1`, opened `2026-08-15T10:56:02Z`, already classed here under **C10**) records it: the
+prototype was hand-written mid-session — *"never planned, never decomposed into tasks, never seen by
+the review board, no tests, no red-run evidence"* — was **caught bypassing the loop**, and was
+**deliberately not pushed to `main`**. It was filed **18 m 55 s after the landing and 61 m 39 s
+before the revert**, i.e. inside the 80-minute window that reads as a silent gap. This is a
+**decision, not an unexplained revert, and it changes what the fix is**: the work is *build it
+through the loop*, not *restore `e18aa18`*.
+
+**3. The board trail is stale in the one place a reader would start.** One gap has three entries and
+two are closed: `#242` (`CLOSED`/`NOT_PLANNED`, `2026-08-23T07:52:04Z`) was closed as a duplicate of
+`#247`, and `#247` was itself closed **80 seconds later** (`CLOSED`/`NOT_PLANNED`,
+`2026-08-23T07:53:24Z`) as a duplicate of `#193`. `#242`'s closing comment says *"#247 is the live
+entry"* — that sentence is now false. **The live entry is `#193`**, and it is the only one of the
+three that carries the actual reason. Anyone citing `#247` for the revert history is citing a closed
+issue whose own account (*"reverted … with no stated reason"*) `#193` corrects.
+
+**4. Why the history looks absent: it is reachable by message, never by path.** Neither `e18aa18` nor
+`6bc5324` is an ancestor of `main` or of any ref — `git branch -a --contains` is empty for both, no
+reflog entry references them, and a fresh `git clone` of this repository contains **neither object**
+(their parent `d6f7582` clones fine). Consequently
+`git log --all -- scripts/sync-inbox-to-github.sh` returns **zero rows**, which is the probe a reader
+runs first. The pair survives on `main` only inside the squashed body of `f3de728` (PR #240), which
+carries **both** the landing bullet and the revert bullet — so use `git log --grep='inbox-to-board'`,
+not a path filter. `#193`'s warning that the bypass might land with FEAT-031 was **checked and did
+not happen**: `git ls-tree f3de728 scripts/sync-inbox-to-github.sh` is empty.
+
+**5. The prototype is not a drop-in for what `CLAUDE.md` documents.** It is recoverable today with
+`git show e18aa18:scripts/sync-inbox-to-github.sh` (6 723 bytes) **on this machine only**, and it
+diverges from the governing text in five measured ways, every one of which is a decision OBJ-I has to
+make rather than inherit: it writes `type:<v>` / `priority:<n>` labels where `CLAUDE.md` documents
+`type: bug` / `pN`; it prints a **six**-field coverage line (`… skipped (up to date), created,
+updated, stale, failed`) where `CLAUDE.md` documents four; its `--check` exits 1 on missing **or
+stale** where `CLAUDE.md` documents only "lacks an `issue:`"; the whole `synced_sha` staleness
+mechanism is undocumented; and it requires **`python3`** (three invocations), which is not in this
+project's stated dependencies. It also runs `set -uo pipefail`, without the `-e` this repo's code
+style requires of a non-library, non-fail-open script. `#193` adds six more preconditions (hardcoded
+repo/project/field ids, the `inbox-provider.sh` seam, one label-scheme definition, tests plus red-run
+evidence, inbox concurrency, and naming the enforcement point).
+
+**6. Direct evidence for the exit criterion, measured inside this objective.** Because the documented
+mechanism does not exist, **every** backlog filing here used the manual four-step substitute by hand:
+thirteen items (`#260`–`#272`), board ranks 14–26, each one `gh issue create` → `gh project item-add`
+→ set `Rank` → write `issue:` back. The invariant currently holds — 26 inbox items, **0** without an
+`issue:` — but it holds *because a human did the script's job thirteen times in one objective*, which
+is precisely the decay `#193`'s item 6 predicts for a rule enforced only by a manually-run script.
+
 **Exit:** `--check` exits 1 on an unsynced item; the run emits the coverage line; CLAUDE.md's Backlog Rule
 cites a file that exists.
 
