@@ -618,34 +618,115 @@ if [ "$BUDGET_ENABLED" = "true" ]; then
   fi
 fi
 
-# Upsert one `- **<Label>**: <value>` manifest line: replace the existing line
-# with that label, or append when the label is absent.
-set_manifest_field() {
-  local file="$1" label="$2" value="$3"
-  # The append branch follows a symlinked manifest just as the replace branch
-  # once followed a symlinked `${file}.field.tmp`, so both are gated here.
-  if [ -L "$file" ] || [ ! -f "$file" ]; then
-    echo "set_manifest_field: refusing to write ${file}: not a regular non-symlink file" >&2
-    return 1
+# --- SHARED MANIFEST-WRITE ADOPTION (ADR-031) ---
+
+# lean-comments: allow-run — the inner/outer choice is a deadlock hazard, so it is stated once.
+# Every manifest write below installs through scripts/lib/manifest-write.sh: one lock, a
+# compare-and-swap against the bytes the producer read, an atomic rename, a read-back. The OUTER
+# form throughout — the stop hook holds no lock of its own, and the inner form installs without
+# one. AUTHORITY is untouched: RULES.md §2's enumerated exception is sanctioned by each arm's own
+# `ttg_log_transition … writer=stop-hook`, which stays exactly where it is.
+
+# Published for the read-back predicate: the outer form runs both the producer and the verify
+# inside a subshell, so a target cannot travel back out of one.
+_MW_STATUS_TARGET=""
+
+# The producer for a status arm: it rewrites the SNAPSHOT the primitive hands it, so the
+# read-modify-write lands inside the CAS. Usage: _mw_status_producer <from> <to> <snapshot>
+_mw_status_producer() {
+  local from="$1" to="$2" snapshot="$3"
+  # stdout IS the replacement manifest, so the transform phase is redirected wholesale;
+  # a stray byte on stdout would be installed as manifest text.
+  {
+    set_task_status "$snapshot" "$from" "$to" || return 1
+    # set_task_status is a content-level compare-and-swap that NO-OPS on a stale source
+    # and still returns 0, so the staged bytes are the only honest evidence it applied.
+    if [ "$(get_task_status "$snapshot" "")" != "$to" ]; then
+      echo "stop-hook: staged status rewrite for ${from} -> ${to} did not reach ${to}" >&2
+      return 1
+    fi
+  } >&2
+  cat "$snapshot"
+}
+
+# The read-back predicate for a status arm: the installed bytes must parse to the exact
+# target, from disk, after the rename.
+_mw_verify_status() {
+  local file="$1" live
+  live=$(get_task_status "$file" "")
+  if [ "$live" = "$_MW_STATUS_TARGET" ]; then return 0; fi
+  echo "stop-hook: write completed but disk verification did not find ${_MW_STATUS_TARGET} (found ${live:-missing})" >&2
+  return 1
+}
+
+# The producer for a field upsert: replace every record the shared anchor matches, or append one
+# when the label is absent. Usage: _mw_field_producer <field-pattern> <snapshot>
+_mw_field_producer() {
+  local pat="$1" snapshot="$2"
+  if grep -qiE "$pat" "$snapshot" 2>/dev/null; then
+    awk -v pat="$pat" \
+      '{ if (tolower($0) ~ pat) print ENVIRON["NAZGUL_FIELD_LINE"]; else print }' "$snapshot"
+    return
   fi
+  cat "$snapshot" || return 1
+  # Every reader of these fields is `^`-anchored, so a manifest with no trailing
+  # newline would absorb the new field into its last line and hide it.
+  if [ -s "$snapshot" ] && [ -n "$(tail -c 1 "$snapshot")" ]; then printf '\n'; fi
+  printf '%s\n' "$NAZGUL_FIELD_LINE"
+}
+
+# The read-back predicate for a field upsert: the installed bytes must carry the staged record
+# verbatim — nz_rewrite_file returns 0 on a no-op, so "it was written" proved nothing.
+_mw_verify_field() {
+  local file="$1"
+  if grep -qxF -- "$NAZGUL_FIELD_LINE" "$file"; then return 0; fi
+  echo "stop-hook: field write completed but ${file} does not read back '${NAZGUL_FIELD_LINE}'" >&2
+  return 1
+}
+
+# A refused manifest write is a mechanism that ACTED and was declined, not one that had nothing
+# to do (ADR-013). Usage: report_manifest_write_refusal <task_id> <site> <detail>
+report_manifest_write_refusal() {
+  local task_id="$1" site="$2" detail="$3"
+  echo "NAZGUL MANIFEST WRITE: ${task_id} ${site} was REFUSED by the shared write primitive (${detail}) — the manifest is unchanged and nothing that depends on the write was recorded" >&2
+  emit_event "stop_gate" \
+    reason "manifest_write_refused" \
+    gate "$site" \
+    task_id "$task_id" \
+    detail "$detail"
+}
+
+# The six sanctioned auto-block / auto-demote arms' ONE install path; each CALLER still ledger-logs
+# its own edge with writer=stop-hook. Usage: install_task_status <task_id> <from> <to> <site>
+install_task_status() {
+  local task_id="$1" from="$2" to="$3" site="$4"
+  _MW_STATUS_TARGET="$to"
+  if nz_manifest_write "$NAZGUL_DIR" "$task_id" --verify _mw_verify_status -- \
+    _mw_status_producer "$from" "$to"; then
+    return 0
+  fi
+  report_manifest_write_refusal "$task_id" "$site" "${from} -> ${to}"
+  return 1
+}
+
+# lean-comments: allow-run — the moved refusal has to stay findable from the call site.
+# Upsert one `- **<Label>**: <value>` manifest line: replace the existing record, or append when
+# the label is absent. The symlink/non-regular refusal once spelled here is the primitive's now,
+# so both branches share one wording of it. Usage: set_manifest_field <task_id> <label> <value>
+set_manifest_field() {
+  local task_id="$1" label="$2" value="$3" field_pat rc=0
   # Both spellings come from the reader's own anchor: hand-spelled `^- ` sent every shape the
   # READER accepts down the APPEND branch, and `grep -m1` then kept returning the stale record.
-  local field_pat
   field_pat=$(nz_manifest_field_pattern_ere "$label")
-  if grep -qiE "$field_pat" "$file" 2>/dev/null; then
-    # Exported explicitly: an assignment PREFIX reaches an external command, but
-    # nz_rewrite_file is a shell function, and awk runs one level below it.
-    export NAZGUL_FIELD_LINE="- **${label}**: ${value}"
-    nz_rewrite_file "$file" awk -v pat="$field_pat" \
-      '{ if (tolower($0) ~ pat) print ENVIRON["NAZGUL_FIELD_LINE"]; else print }' \
-      "$file" || { unset NAZGUL_FIELD_LINE; return 1; }
-    unset NAZGUL_FIELD_LINE
-  else
-    # Every reader of these fields is `^`-anchored, so a manifest with no trailing
-    # newline would absorb the new field into its last line and hide it.
-    if [ -s "$file" ] && [ -n "$(tail -c 1 "$file")" ]; then printf '\n' >> "$file"; fi
-    printf -- '- **%s**: %s\n' "$label" "$value" >> "$file"
-  fi
+  # Exported explicitly: an assignment PREFIX reaches an external command, but the producer
+  # is a shell function, and awk runs one level below it.
+  export NAZGUL_FIELD_LINE="- **${label}**: ${value}"
+  nz_manifest_write "$NAZGUL_DIR" "$task_id" --verify _mw_verify_field -- \
+    _mw_field_producer "$field_pat" || rc=$?
+  unset NAZGUL_FIELD_LINE
+  if [ "$rc" -eq 0 ]; then return 0; fi
+  report_manifest_write_refusal "$task_id" "set_manifest_field" "$label"
+  return 1
 }
 
 # A validator-defect line is the CHECKER's health, not the task's (FEAT-031/TASK-043).
@@ -715,16 +796,21 @@ if [ "$RECON_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
             echo "NAZGUL BASH-WRITE RECONCILIATION: BLOCKED — ${RECON_TASK_ID} carries no verified red-run evidence (${TTG_RED_RUN_REASON}) for its IMPLEMENTED status" >&2
             RECON_REASON="unverified red-run evidence (${TTG_RED_RUN_REASON}) on a status changed ${RECON_PREV_STATUS} → IMPLEMENTED outside the guarded Write/Edit/MultiEdit path (stop-hook reconciliation, FEAT-028)"
           fi
-          set_task_status "$recon_task_file" "$RECON_LIVE_STATUS" "BLOCKED"
+          # A refused install left nothing to annotate, and report_manifest_write_refusal
+          # already named and recorded it, so the quarantine is not claimed either.
+          install_task_status "$RECON_TASK_ID" "$RECON_LIVE_STATUS" "BLOCKED" \
+            "reconciliation_quarantine" || continue
           # Ledger-log it or the next pass reads this quarantine as a forgery; `|| true`
           # as at the five siblings: aborting after BLOCKED is written strands it typeless.
           ttg_log_transition "$NAZGUL_DIR" "$RECON_TASK_ID" "$RECON_LIVE_STATUS" "BLOCKED" "" "" "stop-hook" || true
-          # Typed integrity annotation (ADR-020): the quarantine is NOT an
-          # ordinary graph edge, so it records machine-readable endpoints.
-          set_manifest_field "$recon_task_file" "Blocked kind" "reconciliation"
-          set_manifest_field "$recon_task_file" "Blocked from" "$RECON_PREV_STATUS"
-          set_manifest_field "$recon_task_file" "Blocked observed" "$RECON_LIVE_STATUS"
-          set_manifest_field "$recon_task_file" "Blocked reason" "$RECON_REASON"
+          # lean-comments: allow-run — the typed record and why a refused annotation is tolerated.
+          # Typed integrity annotation (ADR-020): the quarantine is NOT an ordinary graph edge,
+          # so it records machine-readable endpoints. `|| true` because set_manifest_field
+          # reports its own refusal — one declined annotation must not end the iteration.
+          set_manifest_field "$RECON_TASK_ID" "Blocked kind" "reconciliation" || true
+          set_manifest_field "$RECON_TASK_ID" "Blocked from" "$RECON_PREV_STATUS" || true
+          set_manifest_field "$RECON_TASK_ID" "Blocked observed" "$RECON_LIVE_STATUS" || true
+          set_manifest_field "$RECON_TASK_ID" "Blocked reason" "$RECON_REASON" || true
           echo "NAZGUL BASH-WRITE RECONCILIATION: ${RECON_TASK_ID} quarantined (kind=reconciliation, from=${RECON_PREV_STATUS}, observed=${RECON_LIVE_STATUS}) — revalidate evidence with: \${CLAUDE_PLUGIN_ROOT}/scripts/task-transition.sh repair ${RECON_TASK_ID}" >&2
           emit_event "reconciliation_quarantine" \
             task_id "$RECON_TASK_ID" kind "reconciliation" \
@@ -880,27 +966,30 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
           action "deferred"
       elif [ -n "$EVIDENCE_PROBLEMS" ]; then
         if [ "$EVID_RESET_COUNT" -ge 1 ]; then
-          # Second consecutive violation — escalate to BLOCKED with remediation
-          set_task_status "$task_file" "DONE" "BLOCKED"
-          ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "BLOCKED" "" "" "stop-hook" || true
-          BLOCKED_REASON_TEXT="review evidence missing (${MISSING_LIST}) — run /nazgul:review --materialize ${TASK_ID}"
-          set_manifest_field "$task_file" "Blocked kind" "review-evidence"
-          set_manifest_field "$task_file" "Blocked reason" "$BLOCKED_REASON_TEXT"
-          jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
-          DONE_COUNT=$((DONE_COUNT - 1))
-          BLOCKED_COUNT=$((BLOCKED_COUNT + 1))
-          REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} escalated to BLOCKED — review evidence missing: ${MISSING_LIST}. Run /nazgul:review --materialize ${TASK_ID}
+          # Second consecutive violation — escalate to BLOCKED with remediation. A refused
+          # install strikes nothing: no ledger edge, no counter move, no violation line.
+          if install_task_status "$TASK_ID" "DONE" "BLOCKED" "review_evidence_escalate"; then
+            ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "BLOCKED" "" "" "stop-hook" || true
+            BLOCKED_REASON_TEXT="review evidence missing (${MISSING_LIST}) — run /nazgul:review --materialize ${TASK_ID}"
+            set_manifest_field "$TASK_ID" "Blocked kind" "review-evidence" || true
+            set_manifest_field "$TASK_ID" "Blocked reason" "$BLOCKED_REASON_TEXT" || true
+            jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+            DONE_COUNT=$((DONE_COUNT - 1))
+            BLOCKED_COUNT=$((BLOCKED_COUNT + 1))
+            REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} escalated to BLOCKED — review evidence missing: ${MISSING_LIST}. Run /nazgul:review --materialize ${TASK_ID}
 "
+          fi
         else
           # First violation — reset to IMPLEMENTED. Ledger-logged with a writer, or the
           # ledger says DONE while the manifest says IMPLEMENTED: unreadable as tampering.
-          set_task_status "$task_file" "DONE" "IMPLEMENTED"
-          ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "IMPLEMENTED" "" "" "stop-hook" || true
-          jq --arg t "$TASK_ID" '.safety._review_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
-          DONE_COUNT=$((DONE_COUNT - 1))
-          IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
-          REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} reset DONE → IMPLEMENTED — missing/unapproved reviews: ${MISSING_LIST}. Fix: spawn review-gate for ${TASK_ID} with <main_worktree_path> = ${PROJECT_ROOT}, or run /nazgul:review --materialize ${TASK_ID}
+          if install_task_status "$TASK_ID" "DONE" "IMPLEMENTED" "review_evidence_demote"; then
+            ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "IMPLEMENTED" "" "" "stop-hook" || true
+            jq --arg t "$TASK_ID" '.safety._review_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+            DONE_COUNT=$((DONE_COUNT - 1))
+            IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
+            REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} reset DONE → IMPLEMENTED — missing/unapproved reviews: ${MISSING_LIST}. Fix: spawn review-gate for ${TASK_ID} with <main_worktree_path> = ${PROJECT_ROOT}, or run /nazgul:review --materialize ${TASK_ID}
 "
+          fi
         fi
       else
         # Evidence passed — gate on tamper/staleness provenance next (own bounded
@@ -909,29 +998,32 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
           PROVENANCE_LIST=$(echo "$PROVENANCE_PROBLEMS" | tr '\n' ',' | sed 's/,$//; s/,/, /g')
           if [ "$PROV_RESET_COUNT" -ge 1 ]; then
             # Second consecutive violation — escalate to BLOCKED with remediation
-            set_task_status "$task_file" "DONE" "BLOCKED"
-            ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "BLOCKED" "" "" "stop-hook" || true
-            BLOCKED_REASON_TEXT="review provenance invalid (${PROVENANCE_LIST}) — re-run review-gate so a fresh diff-bound dispatch manifest is written"
-            set_manifest_field "$task_file" "Blocked kind" "review-provenance"
-            set_manifest_field "$task_file" "Blocked reason" "$BLOCKED_REASON_TEXT"
-            # Evidence passed to reach this branch — clear its (now-stale) counter too,
-            # so a later fresh evidence issue doesn't over-escalate as a 2nd strike.
-            jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | del(.safety._provenance_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
-            DONE_COUNT=$((DONE_COUNT - 1))
-            BLOCKED_COUNT=$((BLOCKED_COUNT + 1))
-            REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} escalated to BLOCKED — review provenance invalid: ${PROVENANCE_LIST}. Re-run review-gate so a fresh diff-bound dispatch manifest is written for ${TASK_ID}
+            if install_task_status "$TASK_ID" "DONE" "BLOCKED" "review_provenance_escalate"; then
+              ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "BLOCKED" "" "" "stop-hook" || true
+              BLOCKED_REASON_TEXT="review provenance invalid (${PROVENANCE_LIST}) — re-run review-gate so a fresh diff-bound dispatch manifest is written"
+              set_manifest_field "$TASK_ID" "Blocked kind" "review-provenance" || true
+              set_manifest_field "$TASK_ID" "Blocked reason" "$BLOCKED_REASON_TEXT" || true
+              # Evidence passed to reach this branch — clear its (now-stale) counter too,
+              # so a later fresh evidence issue doesn't over-escalate as a 2nd strike.
+              jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | del(.safety._provenance_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+              DONE_COUNT=$((DONE_COUNT - 1))
+              BLOCKED_COUNT=$((BLOCKED_COUNT + 1))
+              REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} escalated to BLOCKED — review provenance invalid: ${PROVENANCE_LIST}. Re-run review-gate so a fresh diff-bound dispatch manifest is written for ${TASK_ID}
 "
+            fi
           else
+            # lean-comments: allow-run — the two independent ladders, unchanged by the adoption.
             # First violation — reset to IMPLEMENTED with diagnostics.
             # Evidence passed to reach this branch — clear its (now-stale) counter so
             # the two gates' ladders stay independent (evidence is currently valid).
-            set_task_status "$task_file" "DONE" "IMPLEMENTED"
-            ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "IMPLEMENTED" "" "" "stop-hook" || true
-            jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | .safety._provenance_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
-            DONE_COUNT=$((DONE_COUNT - 1))
-            IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
-            REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} reset DONE → IMPLEMENTED — review provenance invalid: ${PROVENANCE_LIST}. Fix: re-run review-gate so a fresh diff-bound dispatch manifest is written for ${TASK_ID}
+            if install_task_status "$TASK_ID" "DONE" "IMPLEMENTED" "review_provenance_demote"; then
+              ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "IMPLEMENTED" "" "" "stop-hook" || true
+              jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | .safety._provenance_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
+              DONE_COUNT=$((DONE_COUNT - 1))
+              IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
+              REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} reset DONE → IMPLEMENTED — review provenance invalid: ${PROVENANCE_LIST}. Fix: re-run review-gate so a fresh diff-bound dispatch manifest is written for ${TASK_ID}
 "
+            fi
           fi
         elif [ "$EVID_RESET_COUNT" != "0" ] || [ "$PROV_RESET_COUNT" != "0" ]; then
           # Evidence and provenance are both now valid — clear both stale counters
@@ -1514,30 +1606,33 @@ if echo "$GIT_PORCELAIN" | grep -qE '^(U.|.U|AA|DD) '; then
   GIT_CONFLICT_DETECTED=true
   # Set the active task to BLOCKED with reason "git conflict"
   if [ -n "$ACTIVE_TASK" ] && [ -f "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" ]; then
+    # lean-comments: allow-run — the ".*" hazard is the reason this arm reads the status first.
     # Force-block regardless of current status: read it first and pass it back as
     # old_status. A literal ".*" old_status (the prior approach) only worked by
     # accident on the sed-based legacy branches of set_task_status, which treat
     # old_status as a regex fragment; the canonical-frontmatter branch does a
-    # strict string compare and silently no-ops against ".*", so every real
-    # (frontmatter) manifest never actually reached BLOCKED on a git conflict.
+    # strict string compare and silently no-ops against ".*". Those branches now run
+    # against the primitive's snapshot, and the staged read-back refuses that no-op
+    # outright, so a stale old_status can no longer pass for a completed block.
     _active_task_status=$(get_task_status "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md")
-    set_task_status "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" "$_active_task_status" "BLOCKED"
-    # Ledger-log it or reconciliation flags this legitimate conflict-block as a forgery.
-    # `|| true` as at all four siblings: aborting after BLOCKED is written strands it typeless.
-    ttg_log_transition "$NAZGUL_DIR" "$ACTIVE_TASK" "$_active_task_status" "BLOCKED" "" "" "stop-hook" || true
-    # Kind and reason are upserted together: the prior grep-guarded sed had no else
-    # branch, so a first-time block landed a typed quarantine with no reason at all.
-    set_manifest_field "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" "Blocked kind" "git-conflict"
-    set_manifest_field "$NAZGUL_DIR/tasks/${ACTIVE_TASK}.md" "Blocked reason" "git conflict — unmerged files detected"
-    ACTIVE_BLOCKED_REASON="git conflict"
-    # Emit blocked event (pure observer; state already set by set_task_status above).
-    emit_event "blocked" task_id "${ACTIVE_TASK:-unknown}" reason "git conflict"
+    if install_task_status "$ACTIVE_TASK" "$_active_task_status" "BLOCKED" "git_conflict"; then
+      # Ledger-log it or reconciliation flags this legitimate conflict-block as a forgery.
+      # `|| true` as at all four siblings: aborting after BLOCKED is written strands it typeless.
+      ttg_log_transition "$NAZGUL_DIR" "$ACTIVE_TASK" "$_active_task_status" "BLOCKED" "" "" "stop-hook" || true
+      # Kind and reason are upserted together: the prior grep-guarded sed had no else
+      # branch, so a first-time block landed a typed quarantine with no reason at all.
+      set_manifest_field "$ACTIVE_TASK" "Blocked kind" "git-conflict" || true
+      set_manifest_field "$ACTIVE_TASK" "Blocked reason" "git conflict — unmerged files detected" || true
+      ACTIVE_BLOCKED_REASON="git conflict"
+      # Emit blocked event (pure observer; state already installed above and read back).
+      emit_event "blocked" task_id "${ACTIVE_TASK:-unknown}" reason "git conflict"
+    fi
   fi
 fi
 
 # --- Iteration boundary emit (replaces legacy iterations.jsonl write) ---
 # Emit iteration_boundary to the telemetry bus. Pure observer after all state
-# writes; does not gate, reorder, or replace any set_task_status call.
+# writes; does not gate, reorder, or replace any install_task_status call.
 emit_event "iteration_boundary" \
   active_task "${ACTIVE_TASK:-none}" \
   active_status "${ACTIVE_STATUS:-none}" \

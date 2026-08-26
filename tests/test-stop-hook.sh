@@ -2366,4 +2366,168 @@ status=$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")
 assert_eq "alongside: first violation still resets to IMPLEMENTED" "$status" "IMPLEMENTED"
 teardown_temp_dir
 
+# --- MW helpers (FEAT-036/TASK-006): the git-conflict arm is the cheapest live driver of
+# both a `set_task_status` arm and a `set_manifest_field` upsert in one hook run. ---
+mw_make_conflict() {
+  git -C "$TEST_DIR" checkout -q -b mw-conflict-branch
+  echo "conflict line A" > "$TEST_DIR/conflict.txt"
+  git -C "$TEST_DIR" add conflict.txt
+  git -C "$TEST_DIR" commit -q -m "branch A"
+  git -C "$TEST_DIR" checkout -q main 2>/dev/null || git -C "$TEST_DIR" checkout -q master
+  echo "conflict line B" > "$TEST_DIR/conflict.txt"
+  git -C "$TEST_DIR" add conflict.txt
+  git -C "$TEST_DIR" commit -q -m "branch B"
+  git -C "$TEST_DIR" merge mw-conflict-branch --no-commit 2>/dev/null || true
+  git -C "$TEST_DIR" status --porcelain 2>/dev/null | grep -qE '^(U.|.U|AA|DD) '
+}
+
+mw_field() { # <task-id> <label>
+  grep -m1 "^- \*\*$2\*\*:" "$TEST_DIR/nazgul/tasks/$1.md" 2>/dev/null \
+    | sed 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+# A live owner file, not a bare directory: the primitive reclaims an ownerless lock after its
+# orphan grace, so an unowned one would make this fixture a slow race instead of a held lock.
+mw_hold_lock() { # <task-id>
+  local lock="$TEST_DIR/nazgul/locks/task-transition-$1.lock"
+  mkdir -p "$TEST_DIR/nazgul/locks"
+  mkdir "$lock"
+  printf '%s %s\n' "$$" "deadbeefcafe1234" > "$lock/owner.$$.deadbeefcafe1234"
+}
+
+# --- MW-1 (FEAT-036/TASK-006): every arm installs through the shared primitive, so a HELD per-task
+# lock refuses BOTH halves — status write and typed annotation — where both once wrote past it. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "IN_PROGRESS"
+mw_hold_lock "TASK-001"
+if mw_make_conflict; then
+  run_hook
+  assert_eq "MW-1: a held lock leaves the status untouched" \
+    "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "IN_PROGRESS"
+  assert_eq "MW-1: and nothing is appended past the lock either" \
+    "$(mw_field TASK-001 'Blocked kind')" ""
+  assert_contains "MW-1: the refusal names the lock it lost" \
+    "$HOOK_OUTPUT" "another transition already holds the TASK-001 lock"
+  assert_contains "MW-1: a refused write is reported, never swallowed" \
+    "$HOOK_OUTPUT" "REFUSED by the shared write primitive"
+  assert_file_contains "MW-1: and is recorded as its own stop_gate event" \
+    "$TEST_DIR/nazgul/logs/events.jsonl" '"reason":"manifest_write_refused"'
+  if [ -f "$TEST_DIR/nazgul/logs/guarded-transitions.jsonl" ] \
+    && grep -q '"writer":"stop-hook"' "$TEST_DIR/nazgul/logs/guarded-transitions.jsonl"; then
+    _fail "MW-1: a refused install claims no ledger edge"
+  else
+    _pass "MW-1: a refused install claims no ledger edge"
+  fi
+else
+  _skip "MW-1: a held lock leaves the status untouched (skipped — no conflict produced)"
+  _skip "MW-1: and nothing is appended past the lock either (skipped — no conflict produced)"
+  _skip "MW-1: the refusal names the lock it lost (skipped — no conflict produced)"
+  _skip "MW-1: a refused write is reported, never swallowed (skipped — no conflict produced)"
+  _skip "MW-1: and is recorded as its own stop_gate event (skipped — no conflict produced)"
+  _skip "MW-1: a refused install claims no ledger edge (skipped — no conflict produced)"
+fi
+teardown_temp_dir
+
+# --- MW-2: with the lock free the same arm still completes end to end. The adoption moved the
+# MECHANICS; the authority — RULES.md §2's `writer=stop-hook` ledger entry — is byte-unchanged. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+create_task_file "TASK-001" "IN_PROGRESS"
+if mw_make_conflict; then
+  run_hook
+  assert_eq "MW-2: the arm still reaches BLOCKED" \
+    "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-001.md")" "BLOCKED"
+  assert_eq "MW-2: the kind is upserted exactly once" \
+    "$(grep -c '^- \*\*Blocked kind\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md")" "1"
+  assert_eq "MW-2: the reason is upserted exactly once" \
+    "$(grep -c '^- \*\*Blocked reason\*\*:' "$TEST_DIR/nazgul/tasks/TASK-001.md")" "1"
+  assert_file_contains "MW-2: the sanctioned exception still ledger-logs its own edge" \
+    "$TEST_DIR/nazgul/logs/guarded-transitions.jsonl" '"writer":"stop-hook"'
+  assert_not_contains "MW-2: nothing was refused on the clear path" \
+    "$HOOK_OUTPUT" "REFUSED by the shared write primitive"
+  # The one observable proof of WHICH path installed the bytes: nothing else in this
+  # fixture takes a per-task lock, so the directory exists only if the primitive ran.
+  if [ -d "$TEST_DIR/nazgul/locks" ]; then
+    _pass "MW-2: the write really went through the primitive's own lock path"
+  else
+    _fail "MW-2: the write really went through the primitive's own lock path"
+  fi
+  assert_eq "MW-2: and the lock was released, not leaked" \
+    "$(find "$TEST_DIR/nazgul/locks" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')" "0"
+  assert_eq "MW-2: no staging residue is left beside the manifest" \
+    "$(find "$TEST_DIR/nazgul/tasks" -maxdepth 1 -name '.*' 2>/dev/null | wc -l | tr -d ' ')" "0"
+else
+  _skip "MW-2: the arm still reaches BLOCKED (skipped — no conflict produced)"
+  _skip "MW-2: the kind is upserted exactly once (skipped — no conflict produced)"
+  _skip "MW-2: the reason is upserted exactly once (skipped — no conflict produced)"
+  _skip "MW-2: the sanctioned exception still ledger-logs its own edge (skipped — no conflict produced)"
+  _skip "MW-2: nothing was refused on the clear path (skipped — no conflict produced)"
+  _skip "MW-2: the write really went through the primitive's own lock path (skipped — no conflict produced)"
+  _skip "MW-2: and the lock was released, not leaked (skipped — no conflict produced)"
+  _skip "MW-2: no staging residue is left beside the manifest (skipped — no conflict produced)"
+fi
+teardown_temp_dir
+
+# --- MW-3: the trailing-newline guard moved INSIDE the producer and still fires. Every reader
+# of these fields is `^`-anchored, so an absorbed record is an invisible one. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+mw_manifest="$TEST_DIR/nazgul/tasks/TASK-001.md"
+printf -- '---\nstatus: IN_PROGRESS\n---\n# TASK-001: Test task\n\n- **Depends on**: none\n- **Group**: 1\n- **Retry count**: 0/3\n- **Assigned to**: implementer' > "$mw_manifest"
+if mw_make_conflict; then
+  run_hook
+  assert_eq "MW-3: the appended record is its own line, not absorbed into the last one" \
+    "$(grep -c '^- \*\*Blocked kind\*\*: git-conflict$' "$mw_manifest")" "1"
+  assert_eq "MW-3: the manifest's previous last line survives intact" \
+    "$(grep -c '^- \*\*Assigned to\*\*: implementer$' "$mw_manifest")" "1"
+  assert_eq "MW-3: the append branch did not tear the manifest" \
+    "$(get_task_status "$mw_manifest")" "BLOCKED"
+else
+  _skip "MW-3: the appended record is its own line, not absorbed into the last one (skipped — no conflict produced)"
+  _skip "MW-3: the manifest's previous last line survives intact (skipped — no conflict produced)"
+  _skip "MW-3: the append branch did not tear the manifest (skipped — no conflict produced)"
+fi
+teardown_temp_dir
+
+# --- MW-4: the symlink/non-regular refusal that used to be spelled in set_manifest_field is the
+# primitive's now, in ONE wording for both branches, and it still fires. ---
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config
+create_plan
+mw_target="$TEST_DIR/mw-symlink-target.md"
+printf -- '---\nstatus: IN_PROGRESS\n---\n# TASK-001: Test task\n\n- **Depends on**: none\n- **Group**: 1\n- **Retry count**: 0/3\n' > "$mw_target"
+ln -s "$mw_target" "$TEST_DIR/nazgul/tasks/TASK-001.md"
+if mw_make_conflict; then
+  run_hook
+  assert_eq "MW-4: a symlinked manifest is refused and its target keeps its status" \
+    "$(get_task_status "$mw_target")" "IN_PROGRESS"
+  assert_eq "MW-4: and nothing was appended through the symlink" \
+    "$(grep -c '^- \*\*Blocked kind\*\*:' "$mw_target")" "0"
+  assert_contains "MW-4: the refusal is named on stderr" \
+    "$HOOK_OUTPUT" "refusing to write"
+  if [ -L "$TEST_DIR/nazgul/tasks/TASK-001.md" ]; then
+    _pass "MW-4: the symlink itself was never replaced by a regular file"
+  else
+    _fail "MW-4: the symlink itself was never replaced by a regular file"
+  fi
+else
+  _skip "MW-4: a symlinked manifest is refused and its target keeps its status (skipped — no conflict produced)"
+  _skip "MW-4: and nothing was appended through the symlink (skipped — no conflict produced)"
+  _skip "MW-4: the refusal is named on stderr (skipped — no conflict produced)"
+  _skip "MW-4: the symlink itself was never replaced by a regular file (skipped — no conflict produced)"
+fi
+teardown_temp_dir
+
 report_results
