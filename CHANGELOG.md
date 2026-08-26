@@ -8,7 +8,7 @@ All notable changes to this project will be documented in this file.
 
 **Architecture:** A new shared write primitive `scripts/lib/manifest-write.sh` (ADR-031) factors out the compare-and-swap semantics used by six manifest-writing scripts — it knows locks, snapshots, hashes, renames and read-backs, but is **status-agnostic** and confers no authority. `scripts/task-transition.sh` remains the sole sanctioned STATUS writer; `scripts/red-run.sh`, `scripts/stop-hook.sh`, and `scripts/close-objective.sh` remain the sole writers of their respective evidence sections. The six authors share a single transactional primitive, not authority. **Schema version stays 37** — no config keys, state-machine edges, or `schema_version` changed.
 
-**Task count and reviewers:** Sixteen tasks, base SHA `3b0b859`, one `FEATURE-FEAT-036` aggregate board (architect 84 / code 84 / security 84 / qa 86, all `APPROVE`, zero `REJECT`). Fourteen non-blocking findings were filed rather than absorbed (`#288`-`#292`).
+**Task count and reviewers:** Sixteen tasks, base SHA `3b0b859`, one `FEATURE-FEAT-036` aggregate board (architect 84 / code 84 / security 84 / qa 86, all `APPROVE`, zero `REJECT`). **Five** issues were filed rather than absorbed (`#288`-`#292`), carrying the board's non-blocking findings (13 `CONCERN` verdicts across the four seats: architect 6, security 4, code 3, qa 0 — qa's three were recorded as non-blocking `PASS`).
 
 **Scope and verdicts:**
 
