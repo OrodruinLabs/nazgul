@@ -358,8 +358,54 @@ therefore **whole-row** tokens: `C3 CONFIRMED` cannot say that one half dissolve
 Filed as issue **#264** (p2) under the standing clause; not fixed here, and ADR-029/D7 forbids this
 objective from re-chartering an objective in any case.
 
-Dead on merge of PR #240 (15, all currently OPEN): #89 #90 #91 #92 #116 #142 #167 #180 #197 #204 #220
-#221 #228 #229 #230. Partial, needs a merge-time check: #231 #232 #239.
+Dead on merge of PR #240 — **`documented 15 → measured 7 closed / 8 open`**, measured at Move 0 (W3-X) from `nazgul/context/FEAT-035-issues-snapshot.json` (`at=2026-08-25T23:55:56Z`), never from a second live call. The prediction is retained verbatim as the baseline the delta is measured against: *(15, all currently OPEN): #89 #90 #91 #92 #116 #142 #167 #180 #197 #204 #220 #221 #228 #229 #230. Partial, needs a merge-time check: #231 #232 #239.*
+
+- **7 closed**, every one `COMPLETED` on `2026-08-25`: `#89` `#90` `#91` `#92` `#220` `#228` `#229`.
+- **8 open**: `#116` `#142` `#167` `#180` `#197` `#204` `#221` `#230`.
+- The three partials resolve **individually**, not as a group: **`#239` CLOSED (`COMPLETED`)**,
+  **`#231` OPEN**, **`#232` OPEN**.
+
+**Which class row does each survivor sit in? None of them — and that is the measurement, not a hole in
+it.** The eight survivors and the two open partials intersect this table's 104 members in **zero**
+issues, and intersect the twenty residue items (C12's eight, C13's seven, the five one-offs) in zero as
+well. `comm` over lexicographically sorted sets, `sort -c`-verified before any output was trusted, with
+a positive control that returns 5 on five known members. Each survivor appears in this whole document
+exactly **once** — in the sentence above. So the shortfall of eight did **not** get absorbed by one
+class and did not spread thinly across several: **it falls entirely outside the class table, and no
+row's `M` moves because of it.** The planning consequence is the sharp part: these ten issues are owned
+by no objective, because the programme excluded them on the prediction that they would be dead.
+
+| survivor | class row | residue bucket | `X` — fix present in the tree at `92bf60f`? |
+|---|---|---|---|
+| #116 | none | none | **PARTIAL** — `red-run.sh`'s `--state-root` shipped; `task-transition.sh:70` still derives `NAZGUL_DIR="$PROJECT_ROOT/nazgul"`, one root for two trees |
+| #142 | none | none | **PRESENT** — `tests/lib/assertions.sh`, all four helpers `-e` + three-way `rc>=2`; regression `tests/test-assertion-vacuity.sh` |
+| #167 | none | none | **PRESENT** — `review-file-class.sh:49` excludes `adversarial-*.md` |
+| #180 | none | none | **PRESENT** — `nazgul-root.sh:57-58` returns a set `CLAUDE_PROJECT_DIR` unconditionally |
+| #197 | none | none | **PRESENT** — `webhook-forward.sh:52` calls `count_tasks_and_find_active` |
+| #204 | none | none | **PRESENT** — `tests/test-hook-command-modes.sh`, population derived from `hooks/hooks.json` |
+| #221 | none | none | **PRESENT** — same shipped change as #167 |
+| #230 | none | none | **PRESENT** — `status-consumer-scan.sh` walks on fd 9 |
+| #231 (partial) | none | none | **ABSENT** — the `producer \| early-exit-consumer` shape is still live under `pipefail` in all three named files |
+| #232 (partial) | none | none | **PARTIAL** — the validator now refuses a typed quarantine; the issue's own "still open" clause (absent `Blocked kind` line) holds, verified by running the shipped predicate |
+
+**`X`, and why a fixed issue still counts as open (ADR-029/D1, D2).** `M` above is board state. `X` —
+whether the fix a class's mechanism would deliver is verifiably present in the tree at `92bf60f` — is
+counted **separately, and is not derived from `M`**. Read together they overturn the reading a bare
+`-8` invites: **seven of the eight survivors are already fixed in the tree.** The prediction was
+substantively right about the *work* and wrong about the *board* — the merge shipped the fixes and
+closed 7 of 15 issues, and nothing observed the other 8. Per **D2 these seven still count as OPEN**;
+`X` never silently reduces `M`, because the board is the durable record and a shipped-but-open issue is
+a backlog-hygiene defect rather than a smaller class. They are flagged `stale-issue` and **filed**:
+**issue #265** (p2, board Rank 19). A second defect surfaced while measuring them — three of the
+eighteen `nazgul/inbox/` items are for closed or already-shipped work and the heartbeat would auto-start
+an objective for one — is **issue #266** (p1, board Rank 20). Per-issue results, including the
+`not-separately-measured` reason for every member outside `X`'s bounded population, are in
+`nazgul/context/FEAT-035-fix-presence.tsv`; the transcript is `### W3-X`.
+
+**Population note for the "none already closed" claim above.** The seven closures do **not** falsify
+`Verified: … none already closed`: that sentence is about the **104 class members**, and the fifteen
+dead-on-merge issues are disjoint from them (`comm -12` returns empty). The two populations must not be
+added together. The 104's own closure count is `3` (#235, #218, #198), measured in W3.
 
 ---
 
