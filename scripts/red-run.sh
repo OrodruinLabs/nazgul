@@ -925,20 +925,43 @@ CAPTURE_NOTE=""
 # captures, so one block-level line would describe only the newest of the runs below it.
 CAPTURE_LINE="  - capture: \`${RUN_CMD}\` in a detached worktree at \`${BASE_SHA}\`; ${COPIED} changed test file(s) copied in${CAPTURE_NOTE}${RUNNER_NOTE}; runner exit ${RUN_EC} in ${ELAPSED}s"
 
+# lean-comments: allow-run — the borrowing this replaces was SILENT, and a reader must not
+# shorten the record back to "the case is whichever FAIL: line we found".
+# #140: `$GLOBAL_FIRST_FAIL` is the first FAIL: line ANYWHERE in the run, so substituting it
+# for a file whose own section named nothing published a SIBLING's case as this entry's
+# attribution. A `case` may now come only from this file's own `=== <stem> ===` section; the
+# global line survives as `- run-context:`, which is context and says so. Every entry carries
+# exactly one `- attribution:` line, so the two are told apart by what is PRESENT rather than
+# by inferring from a missing line — an entry written before this change has neither.
+rr_attribution_lines() {
+  local stem="$1" fail_line="$2" borrowed
+  if [ -n "$fail_line" ]; then
+    printf '  - attribution: per-file — the runner named this case inside its own `=== %s ===` section\n' "$stem"
+    return 0
+  fi
+  printf '  - attribution: per-file section absent; the runner named no case for this file\n'
+  if [ -n "$GLOBAL_FIRST_FAIL" ]; then
+    borrowed=$(printf '%s' "$GLOBAL_FIRST_FAIL" | sed -E 's/^[[:space:]]+//')
+    printf '  - run-context: the FIRST FAIL: line of the whole run, which belongs to whichever file printed it and not necessarily this one: %s\n' "$borrowed"
+  else
+    printf '  - run-context: the run printed no FAIL: line at all, so there was no case to borrow\n'
+  fi
+}
+
 NEW_PATHS=()
 NEW_TEXTS=()
 while IFS= read -r name; do
   [ -n "$name" ] || continue
   stem="${name%.sh}"
   fail_line=$(first_fail_for "$stem")
-  [ -n "$fail_line" ] || fail_line="$GLOBAL_FIRST_FAIL"
   if [ -n "$fail_line" ]; then
     case_name=$(printf '%s' "$fail_line" | sed -E 's/^[[:space:]]*FAIL:[[:space:]]*//')
     result_detail="\"FAIL: ${case_name}\""
   else
-    case_name="(no FAIL: line reported)"
+    case_name="(no FAIL: line reported for this file)"
     result_detail="the file exited non-zero without naming a case"
   fi
+  attribution=$(rr_attribution_lines "$stem" "$fail_line")
   rel_path=$(rr_rel_for_name "$name") || die \
     "the pre-change run named $name, which is not in the copied test set — refusing to record a path this capture did not produce"
   if [ ! -f "$PROJECT_ROOT/$rel_path" ]; then
@@ -948,6 +971,7 @@ while IFS= read -r name; do
   NEW_TEXTS+=("- red-run: ${rel_path} :: case \"${case_name}\"
   - pre-change-ref: ${BASE_SHA}
   - result: FAILED (exit ${RUN_EC}) — ${result_detail}
+${attribution}
 ${CAPTURE_LINE}
   - captured-by: scripts/red-run.sh at $(date -u +%Y-%m-%dT%H:%M:%SZ)
 ")

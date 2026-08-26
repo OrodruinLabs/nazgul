@@ -428,6 +428,135 @@ assert_contains "unrelated failure: explains why the runner's failure is insuffi
 assert_file_not_contains "unrelated failure: writes NO evidence block" "$MANIFEST13" \
   '## Red-Run Evidence'
 
+# lean-comments: allow-run — the live instance is why this fixture exists; a reader must
+# not shorten it to "a multi-file case".
+# #140: a borrowed case label can no longer be recorded as attribution. `$GLOBAL_FIRST_FAIL`
+# is the first FAIL: line ANYWHERE in the run, so it belongs to whichever file printed it,
+# and substituting it for a file whose own section named nothing published a SIBLING's case
+# as that entry's `case`, unmarked — observed live when FEAT-036/TASK-004's capture recorded
+# TASK-003's case for a file with 37 failing assertions of its own.
+teardown_temp_dir
+setup_temp_dir
+git -C "$TEST_DIR" init -q -b main
+git -C "$TEST_DIR" config user.email "test@nazgul.dev"
+git -C "$TEST_DIR" config user.name "Nazgul Test"
+mkdir -p "$TEST_DIR/tests" "$TEST_DIR/scripts" "$TEST_DIR/nazgul/tasks"
+cp "$REPO_ROOT/tests/run-tests.sh" "$TEST_DIR/tests/run-tests.sh"
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "base"
+ATTR_BASE=$(git -C "$TEST_DIR" rev-parse HEAD)
+printf '#!/usr/bin/env bash\necho feature\n' > "$TEST_DIR/scripts/feature.sh"
+# A runs first (glob order) and names its own case, so it OWNS $GLOBAL_FIRST_FAIL.
+cat > "$TEST_DIR/tests/test-att-a.sh" <<'ATT_A'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "=== test-att-a ==="
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/scripts/feature.sh" ]; then
+  echo "  PASS: att-a sees the feature"
+  exit 0
+fi
+echo "  FAIL: att-a names its own failing case"
+exit 1
+ATT_A
+# B prints its own section header and NO FAIL: line: a section that names no case.
+cat > "$TEST_DIR/tests/test-att-b.sh" <<'ATT_B'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "=== test-att-b ==="
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/scripts/feature.sh" ]; then
+  exit 0
+fi
+echo "  att-b went wrong and names no case"
+exit 1
+ATT_B
+# C prints no section header at all: there is no per-file section to read.
+cat > "$TEST_DIR/tests/test-att-c.sh" <<'ATT_C'
+#!/usr/bin/env bash
+set -uo pipefail
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/scripts/feature.sh" ]; then
+  exit 0
+fi
+echo "  att-c prints no section header"
+exit 1
+ATT_C
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "the task's work: three test files, one naming its own case"
+
+# One entry's complete record, sliced out of the block so a per-file claim can be
+# asserted against the file it names rather than against the manifest as a whole.
+attr_entry() {
+  awk -v p="- red-run: ${1} ::" \
+    'index($0, p) == 1 { f = 1; print; next } /^- red-run:/ { f = 0 } f' "$2"
+}
+
+write_manifest TASK-160 "$ATTR_BASE"
+MANIFEST160="$TEST_DIR/nazgul/tasks/TASK-160.md"
+run_capture TASK-160 --filter=att
+assert_exit_code "attribution: the multi-file capture is red" "$RR_EC" 0
+assert_eq "attribution: one entry per failing file" \
+  "$(grep -c '^- red-run:' "$MANIFEST160")" "3"
+
+ATTR_A=$(attr_entry tests/test-att-a.sh "$MANIFEST160")
+ATTR_B=$(attr_entry tests/test-att-b.sh "$MANIFEST160")
+ATTR_C=$(attr_entry tests/test-att-c.sh "$MANIFEST160")
+
+assert_contains "attribution: A's case is the one A's own section named" \
+  "$ATTR_A" 'case "att-a names its own failing case"'
+assert_contains "attribution: and A's entry says the case came from A's own section" \
+  "$ATTR_A" 'attribution: per-file'
+assert_contains "attribution: naming the section it was read from" \
+  "$ATTR_A" '`=== test-att-a ===` section'
+assert_not_contains "attribution: an attributed entry carries no borrowed context" \
+  "$ATTR_A" 'run-context:'
+
+# lean-comments: allow-run — "not as a case" is the whole claim; dropping the second half
+# turns it back into "A's line never appears in B's entry", which is not what shipped.
+# The defect, stated as the assertion that would have failed before this change: B named no
+# case, so B's entry must not publish A's AS A CASE. A's line may still appear in B's entry,
+# but only under `run-context:` — borrowed and attributed are two records now, not one.
+assert_not_contains "attribution: B does not publish A's failing case as its own case" \
+  "$ATTR_B" 'case "att-a names its own failing case"'
+assert_contains "attribution: B's case says the absence is B's own" \
+  "$ATTR_B" 'case "(no FAIL: line reported for this file)"'
+assert_contains "attribution: B's entry marks the absent section as the reason" \
+  "$ATTR_B" 'attribution: per-file section absent; the runner named no case for this file'
+assert_not_contains "attribution: C does not publish A's failing case either" \
+  "$ATTR_C" 'case "att-a names its own failing case"'
+assert_contains "attribution: C, which printed no section header at all, reads the same" \
+  "$ATTR_C" 'attribution: per-file section absent; the runner named no case for this file'
+
+# lean-comments: allow-run — without the vacuity argument stated, this reads as a duplicate
+# of the assertions above it and gets deleted.
+# POSITIVE CONTROL. On a run where no FAIL: line existed at all there would be nothing to
+# borrow, so the two assertions above would pass vacuously. The run-context line is fed by
+# the same $GLOBAL_FIRST_FAIL the pre-change code substituted, so its presence here IS the
+# proof that the old shape would have written A's case into B's entry.
+assert_contains "attribution (positive control): the borrowable line existed and is recorded as context" \
+  "$ATTR_B" 'run-context: the FIRST FAIL: line of the whole run'
+assert_contains "attribution (positive control): context carries the sibling's line verbatim" \
+  "$ATTR_B" 'FAIL: att-a names its own failing case'
+assert_eq "attribution (positive control): borrowed context on both unattributed entries, never on the attributed one" \
+  "$(grep -c 'run-context: the FIRST FAIL: line of the whole run' "$MANIFEST160")" "2"
+# The discriminator: pre-change this count is 3 — one real attribution and two borrowings
+# that read identically. Post-change it is 1, and only the file that earned it.
+assert_eq "attribution: exactly one entry publishes A's case as a case" \
+  "$(grep -c 'case "att-a names its own failing case"' "$MANIFEST160")" "1"
+
+# The new lines are ADDITIVE: the shipped gate still parses every entry.
+# shellcheck disable=SC2034  # read by the sourced guard library, not within this file
+NAZGUL_DIR="$TEST_DIR/nazgul"
+if ttg_verify_red_run_evidence "$(cat "$MANIFEST160")" "$TEST_DIR" TASK-160 2>/dev/null >/dev/null; then
+  ATTR_GATE_EC=0
+else
+  ATTR_GATE_EC=$?
+fi
+assert_exit_code "attribution: the evidence gate ACCEPTS a block carrying the new lines" "$ATTR_GATE_EC" 0
+assert_eq "attribution: and its disposition is 'verified', not a degraded allow" \
+  "${TTG_RED_RUN_REASON:-<unset>}" "verified"
+
+teardown_temp_dir
+setup_project
+
 # --- filter derived from the manifest's Test Obligation ---------------------
 write_manifest TASK-006 "$BASE_SHA"
 MANIFEST6="$TEST_DIR/nazgul/tasks/TASK-006.md"
@@ -1446,6 +1575,14 @@ PYTEST_FAIL
     "$MANIFEST141" 'red-run: tests/test-zeta.sh'
   assert_file_contains "named-file shape: the record is honest that no case was named" \
     "$MANIFEST141" 'the file exited non-zero without naming a case'
+  assert_file_contains "named-file shape: the absent case is scoped to THIS file" \
+    "$MANIFEST141" 'case "(no FAIL: line reported for this file)"'
+  assert_file_contains "named-file shape: and the absence is marked, not left to inference" \
+    "$MANIFEST141" 'attribution: per-file section absent'
+  # The other value of run-context: "there was no case anywhere" is a different state from
+  # "there was one, and it belonged to a sibling" — recorded rather than left as a gap.
+  assert_file_contains "named-file shape: run-context says the run named no case at all" \
+    "$MANIFEST141" 'run-context: the run printed no FAIL: line at all'
   assert_file_contains "named-file shape: the recorded exit code is the runner's own" \
     "$MANIFEST141" 'result: FAILED (exit 5)'
   teardown_temp_dir
