@@ -2,6 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.36.1] - 2026-08-26
+
+### FEAT-035 (Move 0 of the Backlog Remediation Programme, board issue #248) — two documents' counts re-derived from commands run, not carried forward
+
+No script, hook, guard, config key, state-machine edge or schema version changed —
+`schema_version` stays **37**. FEAT-035 is an analysis pass, not a code change: every asserted count
+in `docs/guard-fail-open-inventory.md` and `docs/BACKLOG-REMEDIATION-PROGRAMME.md` was regenerated
+from the command that produces it, with every delta recorded in place as `documented N → measured M`
+rather than silently overwritten — the programme's own margin note is the standard this pass was held
+to: *"a count carried forward unverified is exactly the failure this repo keeps writing rules about."*
+Eleven tasks, base SHA `92bf60f`, one `FEATURE-FEAT-035` aggregate board (architect 88 / code 86 /
+security 88 / qa 90, all `APPROVE`).
+
+- The inventory's own reproducing grep, re-run at `92bf60f`, returns **242** rows across its 16-file
+  enforcement surface, not the **125** it asserted. The assertion had already gone stale once before
+  without being caught: the same grep returned 164 when the document was last hand-amended, and 242
+  now — `task-transition-guard.sh` alone contributes 106 of the 242, having absorbed FEAT-031's
+  merge-evidence gate.
+- The programme's thirteen-class table: `documented n = 104 → measured M = 101 open, 3 closed`;
+  **10** classes `CONFIRMED`, **3** `RESIZED`, **0** dissolved. The nine chartered objectives
+  (OBJ-A…OBJ-I) were re-verdicted from those class tokens by ADR-029/D3 rather than judged: **6**
+  still-warranted, **3** re-scoped, **0** dissolved, **0** unplannable.
+- The connector-visibility gap is two independent invisibilities that compose, not one: **53 of 153**
+  open issues are invisible to the GitHub connector (22 by the `--label nazgul` query it runs, 31 more
+  by an undocumented `--limit 100` pull cap — the two sets do not overlap), against the programme's
+  documented **23 of 144**.
+- OBJ-I's blocker was reclassified, not merely restated. `scripts/sync-inbox-to-github.sh` is
+  confirmed absent from the tree; it was landed once, at `e18aa18`, and reverted **80m34s** later at
+  `6bc5324` — not silently, on a stated reason recorded at issue `#193` (caught bypassing the loop:
+  never planned, never reviewed, no tests, no red-run evidence). OBJ-I's fix is therefore *build it
+  through the loop*, not *restore the prototype*.
+- **Sixteen** new defects surfaced by the re-derivation were filed as GitHub issues (`#260`–`#275`,
+  board ranks 14–29) rather than fixed in-scope, per the objective's own standing scope-containment
+  clause — none were absorbed into this pass.
+- Verification: `tests/run-tests.sh --filter=doc-contract-fields` is byte-identical to its `92bf60f`
+  baseline (`279/279 passed`, `206 checked, 0 findings`). The full 119-file suite was not run — no
+  code changed, so it is not the warranted surface.
+
+An earlier, informally-numbered round of PR #254 follow-up fixes used "FEAT-035"/"FEAT-036" as ad hoc
+per-batch labels for its own task commits (see "PR #254's own review board found 19 things" and
+"FEAT-036" below in this same section) — those never entered `nazgul/config.json`'s
+`objectives_history` and are unrelated to this entry. The tracked `objectives_history`'s only
+`FEAT-035` is the one this entry describes, started `2026-08-25T22:36:00Z`.
+
 ## [2.36.0] - 2026-08-25
 
 ### PR #254, third review pass — eleven findings, all closed
