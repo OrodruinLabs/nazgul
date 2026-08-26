@@ -244,6 +244,88 @@ objectives rather than after them all. They are the cheapest morale wins on the 
 One carve-out: **#215's doctor check** (diff `config.guards` against `templates/config.json`) is a genuine
 one-task mechanism — attach it to whichever objective already touches `doctor.sh`.
 
+### The `#255` / `#128` pairing — a classification defect, not a scheduling one
+
+**Recorded at Move 0 (W5), per ADR-030/D3–D6.** `#128` sits in **C12**, which the paragraph above
+dissolved and routed to `/nazgul:patch`. `#255` is not in the class table at all — it postdates it, and
+W4 placed it in the derived uncovered population (**row 32** of the 44; **row 30** of this document's
+41-row residue-reason table) with a reason and no adjudication, which is this section's job. Two items
+with a **stated** causal dependency were separated by a classification boundary — one into "dissolved,
+route to patch", one into "not covered" — and until this amendment nothing in the programme bound them.
+The cheap patch could ship first and **enlarge** the uncovered defect, and every step of that would
+look correct.
+
+**This is a classification defect, not a scheduling one.** A scheduling defect is fixed by reordering.
+A classification defect means the taxonomy put related things in unrelated places, and reordering
+cannot reach it — there is no order in which "`#128` is an individual patch" and "`#255` is uncovered"
+are both true and safe, because the harm is done by the two verdicts, not by their sequence.
+
+**The override fires, and it fires on text, not on resemblance.** ADR-030/D4 admits only a dependency
+an issue records **about itself**. `#255` carries one, in its own `## Related` section, quoted verbatim
+from `gh issue view 255 --repo OrodruinLabs/nazgul --json body` at `at=2026-08-26T01:34:55Z`:
+
+> Adjacent but distinct from **#128** ("the live, blocking DONE-transition gate never calls
+> `validate_review_provenance`"). #128 is about the check not being invoked; this is about the check
+> being invoked and passing vacuously. Fixing #128 alone would make this bug *more* reachable.
+
+That is D3's condition met literally: resolving `P` (`#128`) alone leaves `Q` (`#255`) **worse**, and
+`Q` says so in its own text. Presence is measured, not eyeballed — `grep -Fc` on the fetched body
+returns `1` for that sentence, `1` for a `CONTROL(+)`, and `0` for a `CONTROL(-)` mirror sentence that
+is not there. An inferred coupling would not have fired the override, and D4 is deliberate about that:
+one that fired on inference would eventually bind every pair of issues touching the same file.
+
+**Why D6's "both directions" is a measurement here, not a style rule.** The same question asked of
+`#128`'s body returns the opposite answer: `grep -Fc '255'` over its 6,274 characters finds **no
+mention of `#255` at all**. The coupling is stated in exactly **one** direction — and it is stated on
+the *expensive* side (`#255`, `priority:1`, no chartered mechanism), while the item that gets scheduled
+first is the *cheap* one (`#128`, `priority:2`, residue, routed to patch). Whoever opens `#128` to
+patch it finds nothing pointing at `#255`. ADR-030/D6's reason — "a one-directional note is only found
+by whoever happens to open the right one first" — is not a hypothetical for this pair; it is the
+measured state of the two bodies, which is why the binding is written into this document twice.
+
+**The routing verdict, stated rather than implied:**
+
+- **`#128` — `bound-to: #255`.** It stays residue, and it **may not be routed to `/nazgul:patch`
+  independently** (ADR-030/D3). It is patchable only together with `#255`, or after `#255` has been
+  disposed of. The annotation is repeated on its own entry in the C12 residue list below.
+- **`#255` — `bound-to: #128`.** It stays residue with the W4 reason on its row, and its disposition is
+  now gated on the pair rather than on its own row. The annotation is repeated on that row.
+
+**What this does NOT do (ADR-030/D5, ADR-029/D7).** The C12 dissolution argument above is untouched and
+is not re-opened — the pair is bound *within* the routing the programme already chose, not against it.
+No objective is created, re-chartered or re-scoped for the pair; no class row's `Issues`, `n`, `M` or
+ADR-029 token is edited; and neither issue is fixed, closed, commented on, re-labelled or re-parented.
+The verdict is recorded; the acting is somebody else's turn.
+
+**The cost, stated rather than discovered.** ADR-030 accepts this in advance, and the instance is worth
+naming: a bound item **loses the scheduling freedom** the programme values for its cheapest wins.
+`#128`'s first sub-defect is a call-site change — have `ttg_verify_review_evidence` call
+`validate_review_provenance` — which is exactly the shape the residue route exists to ship quickly, and
+it is now held behind a `priority:1` defect that no chartered mechanism reaches. That is the trade D3
+makes on purpose. The alternative is shipping a fix that enlarges a defect nobody is tracking, and
+`#255`'s own text is what tells us that is what would happen.
+
+**Filed during W5, not absorbed (standing clause):**
+
+- **#269** (p2, `type:bug`, board Rank 23 / Todo) — two of the 41 residue reasons below (`#232` and
+  `#255`) **stop mid-clause** at an escaped pipe, and W4's `w4-d2-completeness` pass scores them clean
+  because its predicate is *non-empty*, not *intact*: re-run today it still reports `residue rows=41
+  non-empty-reason=41 empty=0 findings=0`. ADR-030/D2 exists so an unassigned issue stays
+  distinguishable from an unexamined one; a reason truncated mid-clause is neither. **Not repaired
+  here** — W5 prepends its binding to `#255`'s row and leaves the truncation at the row's end byte for
+  byte, so `grep -c '[\\] |$'` still returns `2` and the filing keeps a live instance.
+- **#270** (p3, `type:bug`, board Rank 24 / Todo) — `#128` carries **two incompatible routings**: this
+  document sends it to `/nazgul:patch` as a dissolved-C12 member, while its own body ends with
+  `## STATUS 2026-08-01 (alignment pass): CONSUMED BY charter Objective C` — *"close this filing via
+  that objective."* Neither document mentions the other, and the binding above now makes a **third**
+  constraint on the same item. Found while reading `#128`'s text for the D4 test. Reconciling the two
+  is deliberately **not** done here: choosing an owner is re-chartering, which D5 forbids.
+- Recorded and deliberately **not** filed: ranks 23 and 24 were already held by `#111` and `#112`, so
+  both filings land on duplicate ranks (the board now has 19 duplicated rank values across 152 items).
+  That is **#196** — "rank is documented as the backlog ordering key but no code reads it" — so it is
+  cited rather than re-filed, and nothing was renumbered, which would imply an ordering authority #196
+  proves does not exist.
+
 ---
 
 ## The three ways this programme breaks
@@ -462,6 +544,11 @@ under the programme would misrepresent them as class work with a mechanism behin
 here instead:
 
 - **C12 (dissolved):** #102 #128 #132 #153 #200 #212 #215 #217
+  - `#128` — **bound-to: #255** (ADR-030/D3+D6): **not routable to `/nazgul:patch` independently**; see
+    "The `#255` / `#128` pairing" in the Residue section. A second, unreconciled routing is claimed on
+    the issue's own body — **#270**. *(Indented on purpose: the residue-cardinality extraction counts
+    ids only on `^- **` lines, and `#255` is not a C12 member, so the three bullets still extract
+    8 + 7 + 5 = 20.)*
 - **C13 (dissolved, 5-of-7 p0/p1 — schedule between objectives):** #96 #97 #98 #100 #103 #224 #236
 - **Genuine one-offs:** #110 #147 #175 #179 #190
 
@@ -547,7 +634,7 @@ population — but sending them to `/nazgul:patch` would schedule work that does
 | #248 | OPEN | **not a defect.** This is the programme's own board item — the `priority:0` parent of the 89 sub-issues. It is the container for the classes, not a member of one. (TASK-003 excluded it from its 12 candidates for the same reason.) |
 | #249 | OPEN | names C2's territory (unbounded `gh`), and C2's shipped mechanism is exactly what does not reach it: `scripts/lib/bounded-net.sh` bounds only processes that SOURCE it, while #249's two populations are skill-load bang-commands and `gh`/`git` in agent and skill PROSE, neither of which sources anything. |
 | #253 | OPEN | proposes a NEW cross-cutting mechanism — a registered, honesty-checked refusal corpus per gate. Mechanism-creating, not an instance of a chartered mechanism; no class's objective builds it. |
-| #255 | OPEN | **the #128 pairing is DEFERRED to TASK-007 (W5), which owns that binding in full.** As an assignment, neither candidate class reaches it. Not C3-(i)/(ii)/(iii): the defect is a self-referential comparison (both operands are artifacts of the round that wrote the directory), not a pipeline race, a `\ |
+| #255 | OPEN | **bound-to: #128** (ADR-030/D3+D6, adjudicated by W5 — see "The `#255` / `#128` pairing" in the Residue section): `#128` may not be routed to `/nazgul:patch` independently, and this row's disposition is gated on the pair, not on this row alone. As an assignment, neither candidate class reaches it. Not C3-(i)/(ii)/(iii): the defect is a self-referential comparison (both operands are artifacts of the round that wrote the directory), not a pipeline race, a `\ |
 | #256 | OPEN | `cleanup_all_worktrees`'s sweep predicate recognises only `TASK-*` and reports success while leaving `RW-*` state behind. A narrowed predicate, but not C3-(i)/(ii)/(iii) and not on an authorization path; no chartered mechanism produces the `scanned / removed` coverage line it asks for. |
 | #257 | OPEN | C10's shape (items recorded, never consumable) but OBJ-I's chartered mechanism is `sync-inbox-to-github.sh --check`, the **inbox to board** enforcement. #257 needs a provider-switch MIGRATION enrolling file-provider items into `connectors.github.map`; OBJ-I builds no migration step. |
 | #258 | OPEN | asks for a §15 enrolment of `scripts/lib/gitignore-block.sh`. No class's objective is chartered to enrol entry points generally, and this is an unreported partition rather than a fail-open, so C3's three mechanisms do not address it. |
