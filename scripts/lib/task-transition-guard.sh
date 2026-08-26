@@ -8,6 +8,10 @@
 _TTG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$_TTG_DIR/task-utils.sh"
+# The shared transactional manifest-write primitive, which owns the per-task lock this
+# library used to define. Sourcing is one-directional: manifest-write.sh never sources back.
+# shellcheck source=/dev/null
+source "$_TTG_DIR/manifest-write.sh"
 # shellcheck source=/dev/null
 source "$_TTG_DIR/review-evidence.sh"
 # shellcheck source=/dev/null
@@ -1954,120 +1958,10 @@ ttg_review_evidence_paths_safe() {
   return 0
 }
 
-# Age in whole seconds of a path's mtime. Non-zero when no stat(1) dialect on
-# this host can answer, and callers must then fail closed.
-_ttg_mtime_age_seconds() {
-  local path="$1" mtime="" now=""
-  mtime=$(stat -f '%m' "$path" 2>/dev/null) || mtime=""
-  if [ -z "$mtime" ]; then
-    mtime=$(stat -c '%Y' "$path" 2>/dev/null) || mtime=""
-  fi
-  [ -n "$mtime" ] || return 1
-  now=$(date +%s 2>/dev/null) || now=""
-  [ -n "$now" ] || return 1
-  case "${mtime}${now}" in *[!0-9]*) return 1 ;; esac
-  printf '%s\n' "$((now - mtime))"
-}
-
-# Per-task callers pass attempts=1, so an unreclaimable lock wedges every later
-# transition for that task until a human runs rmdir.
-_TTG_LOCK_ORPHAN_GRACE_SECONDS=30
-
-# mkdir locks are portable to Bash 3.2 and work across separate command
-# processes. Ownership lives in a tokenized owner filename, which makes stale
-# reclamation ABA-safe. A dead owner is reclaimable; a live or malformed one
-# fails closed; an ownerless directory — a writer killed between its mkdir and
-# its owner write — is reclaimable only after the grace period above and only
-# through rmdir, which refuses a directory that has since gained an owner.
-_ttg_acquire_lock() {
-  local lock="$1" attempts="${2:-1}" delay="${3:-0.02}"
-  local n=0 owner="" owner_pid="" owner_token="" owner_file="" owner_leaf="" token="" lock_age=""
-  local -a owner_files
-  TTG_LOCK_TOKEN=""
-  token=$(_rp_nonce) || token=""
-  [ -n "$token" ] || return 1
-  while [ "$n" -lt "$attempts" ]; do
-    if { [ -e "$lock" ] || [ -L "$lock" ]; } \
-      && { [ ! -d "$lock" ] || [ -L "$lock" ]; }; then
-      return 1
-    fi
-    if mkdir "$lock" 2>/dev/null; then
-      owner_file="$lock/owner.$$.${token}"
-      # Published before the write so a signal in this window still reaches the
-      # caller's release trap with the directory this call created.
-      TTG_LOCK_TOKEN="$token"
-      if ! printf '%s %s\n' "$$" "$token" > "$owner_file"; then
-        TTG_LOCK_TOKEN=""
-        rmdir "$lock" 2>/dev/null || true
-        return 1
-      fi
-      owner_files=("$lock"/owner.*)
-      if [ "${#owner_files[@]}" -eq 1 ] && [ "${owner_files[0]}" = "$owner_file" ]; then
-        return 0
-      fi
-      # A grace reclaim took the directory mid-claim and the owner file above
-      # landed in a successor's lock; withdraw rather than co-own it.
-      TTG_LOCK_TOKEN=""
-      rm -f "$owner_file" 2>/dev/null || true
-      n=$((n + 1))
-      [ "$n" -lt "$attempts" ] && sleep "$delay"
-      continue
-    fi
-
-    owner=""
-    owner_files=("$lock"/owner.*)
-    if [ "${#owner_files[@]}" -eq 1 ] \
-      && [ ! -e "${owner_files[0]}" ] && [ ! -L "${owner_files[0]}" ]; then
-      lock_age=$(_ttg_mtime_age_seconds "$lock") || lock_age=""
-      if [ -n "$lock_age" ] && [ "$lock_age" -ge "$_TTG_LOCK_ORPHAN_GRACE_SECONDS" ] \
-        && rmdir "$lock" 2>/dev/null; then
-        continue
-      fi
-      n=$((n + 1))
-      [ "$n" -lt "$attempts" ] && sleep "$delay"
-      continue
-    fi
-    [ "${#owner_files[@]}" -eq 1 ] || {
-      n=$((n + 1))
-      [ "$n" -lt "$attempts" ] && sleep "$delay"
-      continue
-    }
-    owner_file="${owner_files[0]}"
-    [ -f "$owner_file" ] && [ ! -L "$owner_file" ] \
-      && IFS= read -r owner < "$owner_file" || true
-    owner_pid=${owner%% *}
-    owner_token=${owner#* }
-    owner_leaf=${owner_file##*/}
-    if [[ "$owner_pid" =~ ^[0-9]+$ ]] \
-      && [[ "$owner_token" =~ ^[0-9a-f]+$ ]] \
-      && [ "$owner_leaf" = "owner.${owner_pid}.${owner_token}" ] \
-      && ! kill -0 "$owner_pid" 2>/dev/null; then
-      if rm "$owner_file" 2>/dev/null && rmdir "$lock" 2>/dev/null; then
-        continue
-      fi
-    fi
-    n=$((n + 1))
-    [ "$n" -lt "$attempts" ] && sleep "$delay"
-  done
-  return 1
-}
-
-_ttg_release_lock() {
-  local lock="$1" token="$2" owner="" owner_file=""
-  owner_file="$lock/owner.$$.${token}"
-  [ -d "$lock" ] && [ ! -L "$lock" ] || return 1
-  if [ ! -e "$owner_file" ] && [ ! -L "$owner_file" ]; then
-    # Claimed but never owned: clear it rather than waiting out the orphan
-    # grace. rmdir refuses a directory holding anyone else's owner file.
-    rmdir "$lock" 2>/dev/null
-    return
-  fi
-  [ -f "$owner_file" ] && [ ! -L "$owner_file" ] \
-    && IFS= read -r owner < "$owner_file" || true
-  [ "$owner" = "$$ $token" ] || return 1
-  rm "$owner_file" 2>/dev/null || return 1
-  rmdir "$lock" 2>/dev/null
-}
+# Thin aliases: the lock primitives now live in scripts/lib/manifest-write.sh (ADR-031),
+# so the status writer and every evidence writer contend on ONE implementation.
+_ttg_acquire_lock() { _nz_acquire_lock "$1" "${2:-1}" "${3:-0.02}" TTG_LOCK_TOKEN; }
+_ttg_release_lock() { _nz_release_lock "$@"; }
 
 # Delegate: one mode probe for the whole codebase (scripts/lib/task-utils.sh). An unreadable
 # mode is named and refused, never substituted with a default (issue #204).
