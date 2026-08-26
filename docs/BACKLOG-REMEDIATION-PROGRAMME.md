@@ -285,6 +285,32 @@ Strict sequencing prevents it; nothing else does.
 Verified: 104 issue numbers, 104 unique, 0 duplicates, all exist on the board, none already closed.
 **These counts are pre-merge and must be re-derived at Move 0.**
 
+**Re-derived at Move 0 (W8), clause by clause —
+`documented "104 issue numbers, 104 unique, 0 duplicates, all exist on the board, none already closed"
+→ measured "104 raw, 104 unique, 0 duplicates, 104 of 104 on the board, K = 3 already closed"`, at
+`at=2026-08-25T23:55:56Z`.** **Four of the five clauses hold; the fifth does not.** The two sentences
+above are retained unchanged as the frozen pre-merge baseline the delta is measured against. The
+three closed members are **`#235`** (C15), **`#218`** (C8) and **`#198`** (C6) — the same three that
+make those rows `RESIZED`, so this is one fact counted once, not a second finding. Clause 4 is the
+strongest of the five: 104 of 104 resolve in the snapshot, none `NOT-ON-BOARD` and none `AMBIGUOUS`.
+
+**The extraction is the `Issues` column, and the sentence above never said so.** Clauses 1-3 are
+measured over field 3 of each class row (`awk -F'|' '{print $3}'`), not over the whole row. A
+column-agnostic `[0-9]{2,3}` scan of the same rows also picks up the `n` and `M` columns and returns
+**108 / 107 / 1 duplicate at `92bf60f`** — the tree as it stood before Move 0 amended anything — and
+**112 / 108 / 2** today; it has never returned 104, at any SHA in this file's history. The stated
+`104` is right and its unstated method is what is wrong; filed as issue **#267** (p2) and **not fixed
+here**, per the standing clause. Cross-check, from a second independent quantity in the same table: the
+`n` column sums to **104**.
+
+**When clause 5 was true, and what made it false — the two are not the same question.** `#218` closed
+`2026-08-23T21:38:32Z`, **1 day 12 h 54 m before `f3de728`** — the single commit that introduced the
+sentence above (`2026-08-25T10:32:31Z`). *The claim was already false at the instant it was written*,
+by one member, and no merge is involved in that. `#198` and `#235` then closed 4 s and 6 s **after**
+that commit. So the clause was last true at some instant before `2026-08-23T21:38:32Z`, which is after
+the classification pass this document reports (W3 reconstructs its 144 at `T=2026-08-22`) — the
+sentence was true when the classification was done and stale by the time it was committed.
+
 **Measured at Move 0 (W3).** `M` and the `ADR-029` token above are derived from one issue snapshot,
 `nazgul/context/FEAT-035-issues-snapshot.json`, taken at `at=2026-08-25T23:55:56Z` (169 issues, `jq
 'length'` asserted `< 1000`, so the list is a count and not a floor). Per-issue detail is in
@@ -402,10 +428,25 @@ an objective for one — is **issue #266** (p1, board Rank 20). Per-issue result
 `not-separately-measured` reason for every member outside `X`'s bounded population, are in
 `nazgul/context/FEAT-035-fix-presence.tsv`; the transcript is `### W3-X`.
 
-**Population note for the "none already closed" claim above.** The seven closures do **not** falsify
-`Verified: … none already closed`: that sentence is about the **104 class members**, and the fifteen
-dead-on-merge issues are disjoint from them (`comm -12` returns empty). The two populations must not be
-added together. The 104's own closure count is `3` (#235, #218, #198), measured in W3.
+**Population note for the "none already closed" claim above — the warning has two halves, and taking
+only the first is how a reader gets it wrong in the other direction.** *Half one:* the seven closures
+do **not** falsify `Verified: … none already closed` **by membership**. That sentence is about the
+**104 class members**; the fifteen dead-on-merge issues and the three partials are disjoint from them,
+measured at W8 as `comm -12` over lexicographically sorted sets (`sort -c`-verified on both inputs
+first, since a numeric sort makes `comm` report every line as unique) → **empty**, against a positive
+control on five known members that returns **5**. The two populations must not be added together, and
+the 104's own closure count is `K = 3` (`#235`, `#218`, `#198`).
+
+*Half two, and it is the half a disjointness result invites you to skip:* **disjoint lists do not mean
+an unrelated event.** Ten issues closed in the five seconds after `f3de728` was committed — eight of
+the enumerated eighteen **and `#198` and `#235`, two of the 104**. The merge instant reached both
+populations; the *prediction list* reached only one, because those two were never predicted to die.
+And `#218`, the third, closed a day and a half **before** that commit, so no merge explains it at all.
+The correct statement is therefore **"no issue this document listed as dead-on-merge is among the
+104"** — which is what was measured — and **not** "the merge left the 104 alone", which is false.
+Causation for `#198`/`#235` is *not* asserted: `f3de728`'s message carries no `Closes #N` keyword at
+all (probed with a positive control), so what is recorded here is a measured coincidence of instants,
+and the closing event itself is not in the snapshot.
 
 ---
 
