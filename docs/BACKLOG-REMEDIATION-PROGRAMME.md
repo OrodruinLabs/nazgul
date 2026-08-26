@@ -94,6 +94,26 @@ residue. Everything else collides on `scripts/**` guards, the §15 registry, or 
 
 Each is one objective, one PR, merged before the next starts.
 
+**Move 0 verdicts (FEAT-035).** Each section below now ends with one `**Verdict (Move 0):**` line —
+nine in total, one per objective — carrying exactly one of **still-warranted**, **re-scoped** or
+**dissolved**, derived from that objective's class rows' ADR-029 tokens by the rule in ADR-029/D3
+rather than by judgment: every class `CONFIRMED` yields still-warranted; any class `RESIZED` or
+`GROWN` yields re-scoped; `M == 0` or `M == 1` yields dissolved; and any class `UNRESOLVED` makes the
+objective **unplannable**, which is what its line would say (ADR-029/D6). Measured across all
+thirteen rows at `at=2026-08-25T23:55:56Z`: **10 `CONFIRMED`, 3 `RESIZED`, and none of the other
+four** — so six objectives read still-warranted, three read re-scoped, **none dissolved**, and none is
+unplannable. No row satisfies D5's `M > n + 4`, so **no `SPLIT-REQUIRED` note fires anywhere**
+(re-derived with both operands forced numeric and paired with a threshold control that returns 10 —
+the unforced form silently returns 4, which is issue `#273`).
+
+**These verdicts are recorded, not executed (ADR-029/D7) — and the handoff they rely on is not
+mechanized.** No charter, exit criterion, dependency-graph line, class row or residue routing is
+edited by them; no objective is started, split, merged or re-chartered. ADR-029's own Consequences
+state the residual rather than leaving it to be discovered: *"nothing mechanically forces the planner
+of OBJ-A to read the verdict line. That is a real gap and it is not closed here; closing it would
+require a gate, which is code, which this objective does not write."* Read each line as **input to
+whoever plans that objective next**, not as an instruction that binds them, because nothing binds it.
+
 ### OBJ-A — Manifest write integrity (C15 + C1) — *first code objective*
 
 Extract the lock + validate + temp-rename + read-back primitive into `scripts/lib/`; `task-transition.sh`
@@ -110,6 +130,17 @@ behavioural rows in `tests/test-cancelled-status-consumers.sh` instead.
 **Exit:** no script writes a task manifest except through the shared primitive; a concurrency test proves
 an interrupted red-run write leaves the manifest intact; zero hand-rolled status readers outside
 `task-utils.sh`; suite green with `K > 0`.
+
+**Verdict (Move 0):** **re-scoped** — C15 is `RESIZED` (`documented n = 5 → measured M = 4 open /
+1 closed`; `#235` CLOSED `COMPLETED`) and C1 is `CONFIRMED` (`4 → 4 open / 0 closed`), so the
+objective's combined membership is `documented 9 → measured 8 open / 1 closed`. Under ADR-029/D3 one
+`RESIZED` row is enough to re-scope the objective, which stands at the smaller size; `n` is retained
+in both rows so the delta stays visible, and D5's `M > n + 4` is false on both, so no
+`SPLIT-REQUIRED` note attaches. C15's four survivors are `#140` `#226` `#227` `#241`. What this does
+**not** say: `M` is board state, not tree state (ADR-029/D1), and `X` was not separately measured for
+either row — W3-X's fix-presence population is bounded, and the `not-separately-measured` reason
+recorded for every C15 and C1 member is that *no mechanism has shipped*, checkable against this
+document's own `**Status:** chartered, not started`. Source: §W3 (tokens and `M`), §W3-X (`X`'s bound).
 
 ### OBJ-B — Host seam: submit *and* close (C11, re-scoped) — *slotted early: paid work*
 
@@ -132,6 +163,17 @@ objective to both ends, or state in the release notes that ADO remains blocked a
 `unsupported_host` at submit **and** a named, documented answer at the DONE gate; `stack.layers[]` and
 `objectives_history[].pr` still written by `stack-utils.sh` alone; no PR recipe reintroduced into prose.
 
+**Verdict (Move 0):** **still-warranted** — C11 is `CONFIRMED`, `documented n = 2 → measured M = 2
+open / 0 closed` (`#114` `#117`); one of the ten rows that did not move on either merge, and unjoined
+by any post-programme issue at W4. Two things bound what that licenses. First, `M` measures the
+board, not the tree: `X` was not separately measured here, the recorded reason being that no
+mechanism has shipped. Second — and this is the one a reader is most likely to trip on — the
+parenthetical in this section's heading records the **architect review's mechanism correction**,
+which is a different axis from an ADR-029 membership token; this verdict is the membership one, and
+it says the membership is unchanged. The scope correction already stated above, that Azure DevOps
+remains blocked at the DONE gate unless *close* is scoped in alongside *submit*, is untouched by the
+arithmetic and survives verbatim. Source: §W3, §W4.
+
 ### OBJ-C — Command-string guard retirement (C9)
 
 Post-staging git truth beats tokenizing shell grammar, and FEAT-010 already made this move once. Two
@@ -149,6 +191,13 @@ preconditions the class table did not state:
 fails loudly when `core.hooksPath` points at an unpopulated dir; the awk tokenizer is **deleted**, not
 bypassed.
 
+**Verdict (Move 0):** **still-warranted** — C9 is `CONFIRMED`, `documented n = 10 → measured M = 10
+open / 0 closed` (`#127` `#139` `#159` `#162` `#163` `#164` `#165` `#202` `#243` `#246`): the largest
+row in the table that neither merge touched, and no post-programme issue joined it under ADR-030/D1
+at W4. `X` is unmeasured for all ten, the recorded reason again being that no mechanism has shipped,
+so this verdict carries membership only and makes no claim about how much of the work is already
+done. Source: §W3, §W4.
+
 ### OBJ-D — Dispatch identity (C8, keystone-first)
 
 **Task 1 is a payload probe**, because the premise is not readable from source. If `AGENT` really resolves
@@ -161,6 +210,18 @@ anti-fabricated-board control, never records.**
 resolves or emits a named non-resolution event; a dogfooded test proves the receipt binding records on a
 reviewer dispatch.
 
+**Verdict (Move 0):** **re-scoped** — C8 is `RESIZED`, `documented n = 13 → measured M = 12 open /
+1 closed` (`#218` CLOSED `COMPLETED`). Twelve of thirteen members survive, so the keystone premise is
+intact at the smaller size; `n = 13` is retained in the row and D5's threshold is not met
+(`12 > 17` is false), so no `SPLIT-REQUIRED` note attaches. `#218` carries a second fact worth
+keeping with this objective: it closed at `2026-08-23T21:38:32Z`, **1 day 12 h 54 m before** the
+single commit that wrote this document's `Verified: … none already closed` clause, so that clause was
+already false when it was written, by this member, with no merge involved. One candidate was
+considered for this row at W4 and **refused** on D1's mechanism test: `#131` is C8-adjacent, but
+OBJ-D's mechanism is dispatch *identity* and none of its exit criteria produce the
+live-background-task detector `#131` asks for — so `#131` stays uncovered rather than being absorbed.
+Source: §W3 (token), §W8 (the clause-5 timing), §W4 (the refusal).
+
 ### OBJ-E — Granularity consumers (C7)
 
 Verified sound as scoped. `pre-merge-commit` has **zero** `granularity` references and hard-codes
@@ -169,6 +230,13 @@ Verified sound as scoped. `pre-merge-commit` has **zero** `granularity` referenc
 **Exit:** a derived scan shows zero hard-coded review-unit assumptions outside the resolver; a
 `feature`-granularity fixture merges cleanly through `pre-merge-commit`; §15 registry updated in the same
 change.
+
+**Verdict (Move 0):** **still-warranted** — C7 is `CONFIRMED`, `documented n = 7 → measured M = 7
+open / 0 closed` (`#106` `#112` `#121` `#122` `#123` `#130` `#208`), unmoved by both merges and
+unjoined at W4. One boundary, stated so the verdict is not read as more than it is: this section's
+premise that `pre-merge-commit` has **zero** `granularity` references was **not** re-measured at
+Move 0 — W1 re-derived that file's *fail-open* row set (14 current rows), which is a different
+population — so what is confirmed here is the membership, not the premise. Source: §W3, §W1.
 
 ### OBJ-F — Derivation over authorship (C5 + C6, staged, ~8–10 tasks)
 
@@ -190,6 +258,24 @@ pattern the auditor itself used when it shipped.
 a script; the widened audit reports `F == 0` over the shipped roster with the new classes counted in `F`;
 `K > 0` floor holds.
 
+**Verdict (Move 0):** **re-scoped** — C6 is `RESIZED` (`documented n = 8 → measured M = 7 open /
+1 closed`; `#198` CLOSED `COMPLETED`) and C5 is `CONFIRMED` (`4 → 4 open / 0 closed`), giving a
+combined `documented 12 → measured 11 open / 1 closed`; D5's threshold is not met on either row. One
+further movement is **recorded here and deliberately not applied to the rows** (ADR-029/D7): W4
+admitted `#250` to C5 on D1's mechanism test — the same authored-enumeration defect as C5's own
+`#143`, in the same file, one list over — so C5's arithmetic consequence is `4 → 5`. That changes
+neither the verdict nor the note: with `n` frozen at 4 and `M = 5` the token would be `GROWN` and
+`5 > 8` is still false; with `n` moving to 5 alongside `M` it stays `CONFIRMED`. Two things this
+objective must not be read as covering. `#116` — C6's shape *exactly* — was **refused** into C6 at W4
+on scope rather than resemblance: OBJ-F's C6 exit is `F == 0` over the shipped agent roster, an
+auditor whose population is `agents/**` path strings, while `#116` is a root-derivation defect in
+shell (`scripts/task-transition.sh:70`) that the auditor never reads. It is also the **one genuinely
+live** survivor of the eight dead-on-merge issues (`X = PARTIAL`), which makes it real work owned by
+no objective and by no residue bucket. `#157` was refused on the same axis. The C5-was-undersized-4×
+and C6-cannot-land-in-one-task findings above are untouched: both are claims about *mechanism*, and
+no count taken at Move 0 measured mechanism. Source: §W3 (tokens), §W4 (`#250`, `#116`, `#157`),
+§W3-X (`#116`'s `X`).
+
 ### OBJ-G — Guard ambiguity, part 1: the derivable shapes (C3-i + C3-ii)
 
 **Only after C2's own defects land.** C3 was rejected as "one mechanism" — it is three:
@@ -201,6 +287,24 @@ a script; the widened audit reports `F == 0` over the shipped roster with the ne
 
 **Exit:** both scanners emit the §15 grammar with `K > 0` floors and are dogfooded on synthetic violators;
 every site found is fixed or enumerated-exempt with a stated reason.
+
+**Verdict (Move 0):** **still-warranted** — C3 is `CONFIRMED`, `documented n = 24 → measured M = 24
+open / 0 closed`. **The dissolution this programme predicted for exactly this class did not happen.**
+"The three ways this programme breaks" names C3 as *already* dissolving on contact; not one of its
+twenty-four issues has closed, and the mechanism behind that prediction was checked rather than
+assumed — W3-X probed C3's twenty-four against the six stdin rows the shared payload reader closed
+and the intersection is **empty**, so those closures reduce C3 by nothing. The companion claim that
+*"TASK-050 closed another"* is `UNRESOLVABLE` on nine enumerated searches (§W2, filed `#263`), so it
+supports no reduction either. `#231` joins C3(i) here under ADR-030/D1 with `X = ABSENT` — live work,
+the shape still present under `pipefail` in all three of its named files — an arithmetic consequence
+`n 24 → 26` **recorded, not applied**, which fires no `SPLIT-REQUIRED` under either reading of `n`
+(`26 > 28` is false). Two limits this verdict does not clear and must not be read as clearing. This
+section's hard dependency, C2, verifies **PARTIAL on both members** at `92bf60f` — `#155`'s harness
+half (`run-tests.sh:61` runs each file without a per-file `timeout`) and `#201`'s reported hang site
+are both open — so "only after C2's own defects land" is still an open precondition, not a satisfied
+one. And C3's `24` is a **whole-row** count: this document nowhere enumerates which members are
+C3-i/ii and which are C3-iii, so the objective is warranted but **not sizeable** from the table as it
+stands (`#264`). Source: §W3, §W3-X, §W2, §W4.
 
 ### OBJ-H — Guard ambiguity, part 2: the 18 rows (C3-iii)
 
@@ -214,6 +318,38 @@ The worklist already exists: the 18 category-(b) rows, re-derived at Move 0.
 
 **Exit:** every surviving (b) row is fixed or re-classified to (c) with an in-code audit comment and a
 RULES.md citation; the inventory's counts are **regenerated, not hand-edited**.
+
+**Verdict (Move 0):** **still-warranted** — C3 is `CONFIRMED`, `documented n = 24 → measured M = 24
+open / 0 closed`: the same whole-row token OBJ-G carries, with the same unenumerated C3-i/ii ÷ C3-iii
+split, so this objective too is warranted but **not sizeable** from the table (`#264`). **Its
+worklist, however, is compromised at the anchor level, on three independent measurements.**
+*(1) The corpus.* The inventory's own reproducing grep returns `documented 125 → measured 242` rows
+over the same 16 files, and W1's join across the two sides buckets them `INHERITED-(a) = 70`,
+`INHERITED-(b) = 14`, `INHERITED-(c) = 14` (98 inherited of 242), `UNCLASSIFIED = 144` and
+`RETIRED = 27`; both partitions check (`242 = 98 + 144`, `125 = 98 + 27`). So 144 current rows carry
+no classification at all — counted, and deliberately **not** classified.
+*(2) The `(b)` population itself.* `documented 18 → measured 14 surviving sites + 4 retired` (old
+rows **32, 52, 58, 74**, each confirmed absent by direct `grep -c` rather than inferred from the
+join). W2 re-checked six of the eighteen (rows 32, 38, 58, 76, 80, 91) and names the twelve it did
+not (5, 17, 21, 26, 39, 41, 52, 53, 74, 77, 89, 108); because 32 and 58 are among the retired four,
+**only 4 of the 14 surviving `(b)` sites have been re-checked and 10 have not**. Of those four, three
+can still allow on a stdin failure and row 80 is only *half* closed, so none of them should be
+recorded as closed.
+*(3) The anchors.* The 125-row table reproduces at **no commit** — PR #74 was squash-merged, so the
+tree it was written against was never committed — and **24 of its rows carried `file:line` anchors
+that were already wrong when the document landed**, three of them `(b)` rows **5, 52 and 53**, where
+row 5 is the document's own #1-ranked most serious finding. That is `#262`, which W4 admitted to
+C3(iii) here on D1's mechanism test: this objective's own "regenerated, not hand-edited" exit
+criterion *is* its fix.
+**Taken together: "the 18 rows" is no longer a worklist as written** — four of the eighteen name
+sites that no longer exist, three of the survivors are anchored to a tree that was never committed,
+and the corpus they were drawn from has since roughly doubled — **so it must be re-derived before a
+task is written against it.** **The scoping question that raises is stated here and deliberately not
+answered** (ADR-029/D7, PRD Non-Goal 2): whether to re-derive a worklist from the 242, to
+re-classify the 144 `UNCLASSIFIED`, or to do neither is **OBJ-H's decision**, to be made informed by
+these numbers and against the inventory header's own conclusion that classifying all of them "has
+almost no yield". Source: §W1 (join, retirements, anchors), §W2 (`(b)` survival), §W3 (token),
+§W4 (`#262`).
 
 ### OBJ-I — Backlog enforcement (C10a)
 
@@ -283,6 +419,31 @@ is precisely the decay `#193`'s item 6 predicts for a rule enforced only by a ma
 
 **Exit:** `--check` exits 1 on an unsynced item; the run emits the coverage line; CLAUDE.md's Backlog Rule
 cites a file that exists.
+
+**Verdict (Move 0):** **still-warranted** — C10 is `CONFIRMED`, `documented n = 10 → measured M = 10
+open / 0 closed`, and, like C3, a **whole-row** token whose `C10a` ÷ `C10b` split this document never
+enumerates, so the objective is warranted but **not sizeable** from the table (`#264`). This
+section's premise re-verifies at `92bf60f`: `scripts/sync-inbox-to-github.sh` is absent from the
+working tree, from the index and from `HEAD` (against a positive control that resolves
+`scripts/red-run.sh`), so the documentation-vs-tree divergence stands exactly as written. **What has
+changed is the shape of the fix, and it changes on W7's two blockers.** *First,* the mechanism was
+built once and pulled **on purpose**: `e18aa18` (+137) landed it and `6bc5324` (−137) reverted it
+**80 m 34 s** later. *Second,* the revert's reason is not absent, it is **elsewhere** — `#193`
+(**OPEN**, and already a member of this very row) records that the prototype was hand-written
+mid-session, *caught bypassing the loop*, and **deliberately not pushed**, filed 18 m 55 s after the
+landing and 61 m 39 s before the revert, i.e. inside the window that reads in git as a silent gap.
+So this objective's work is **build it through the loop**, not *restore `e18aa18`* — and the two SHAs
+are not a fallback in any case: both are unreachable from every ref, in no reflog, absent from a
+fresh `--no-local` clone, and past default gc expiry on **2026-08-29**. The live board entry is
+`#193`, **not `#247`**: `#242` closed as a duplicate of `#247`, which closed **80 seconds later** as
+a duplicate of `#193`, so a reader arriving by the obvious route lands on a closed issue whose own
+account `#193` corrects. Direct evidence for the exit criterion, measured inside Move 0 and moved by
+this task: the invariant the missing `--check` would enforce **holds** — now **27** inbox items,
+**0** without an `issue:` — and it holds because a human performed the four-step substitute
+**fourteen times in this one objective** (`#260`–`#273`, board ranks 14–27). The section above says
+thirteen and 26; it was correct when written and this task's own standing-clause filing (`#273`)
+moved it, which is precisely the decay `#193`'s item 6 predicts. Source: §W7 (both blockers, the
+board trail, the clone), §W3 (token), §W4 (`#264`).
 
 ---
 
