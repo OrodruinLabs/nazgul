@@ -663,9 +663,49 @@ hand-off, and neither one's check finds the other's instance.
 
 ## Two facts not on the board
 
-- **23 of 144 issues are invisible to the connector.** 121 carry the `nazgul` label it queries; 23 do not.
-  The gap regrows with every unlabelled filing, so any burn-down measured through the connector
-  under-counts. OBJ-I's mechanism is what closes it.
+- **53 of 153 open issues are invisible to the connector — by TWO independent mechanisms, not one, and
+  they compose.** The programme recorded a single invisibility. Its **claim** is unchanged and now
+  larger: a burn-down measured through the connector under-counts, and OBJ-I's mechanism is what closes
+  it. Its **numbers** move and its **scope roughly doubles**. Documented: *23 of 144 invisible, 121
+  carrying the label* — retained here beside the measured values rather than silently replaced.
+  Re-measured live at `caecf14`, `at=2026-08-26T01:57:37Z`.
+  - **By LABEL — 22 of 153 open.** The connector queries `--label nazgul`; an open issue without it is
+    never seen. Documented 23 of 144 with 121 labelled; measured **22 of 153 with 131 labelled**. This
+    gap did *not* grow during Move 0 — the 22 ids are byte-identical to the frozen snapshot's.
+  - **By CAP — 31 of the 131 it does query, and the drop is silent.** `connector_github_pull_list`
+    (`scripts/lib/connector-github.sh:204-211`) reads `.connectors.github.pull.max_items` with a default
+    of `100` at `:208` and hands it to `gh issue list --limit` at `:211`. **This config has no
+    `max_items` key** — `.connectors.github.pull` holds only `label`, `claimed_label` and
+    `max_body_bytes` — so the default *always* applies. `gh issue list` returns newest-first, so the cap
+    keeps the 100 newest and discards the **oldest**: measured boundary `max(dropped)=125` against
+    `min(returned)=126`, a clean partition on issue number. Nothing reports it. The real instrument,
+    `inbox_list nazgul/inbox` through the provider seam, returns exactly 100 ids with **0 bytes on
+    stderr**, no `scanned / skipped / checked` coverage line and no event — `RULES.md` §15 at a cap
+    instead of a lookup, and worse than either, because it looked at 100 of 131 and answered as though
+    it had looked at all of them. Filed **#260**; the sibling per-candidate API cost is **#261**.
+  - **They do not overlap, so they add.** The cap acts only on what the label admitted, so `comm -12`
+    of the two sets is `0` and the union is exactly `22 + 31 = 53`. The visible set is **exactly 100**
+    and is pinned there: past 100 labelled issues every further filing is invisible on arrival.
+  - **The composition is where the harm lands. All seven C13 issues are invisible** — #96 #97 #98 #100
+    #103 by cap (every one `priority:1`) and #224 #236 by label — so the class this programme dissolves
+    to `/nazgul:patch` and calls *"the cheapest morale wins on the board"* is **0 of 7 visible** to the
+    mechanism that would schedule it. Neither invisibility finds all seven alone; only the composed view
+    does. Across the whole class table 41 of the 101 classed-and-open issues are invisible, and **39 of
+    the 55 open p0/p1 issues — 71%** — while nothing at p3 or below is invisible at all. The cap
+    discards by age, and in this backlog age tracks priority.
+  - **Move 0 widened the gap it was measuring, one for one, and that is a property rather than a
+    confound.** Its eleven filings (#260–#270) moved the labelled count 120 → 131 and the dropped count
+    20 → 31; filing #271 during this measurement moved them to 132 / 32, evicting #126 — measured before
+    and after, inside the same task. The ids evicted are never the ids filed: new work enters at the top
+    and old work falls off the bottom, so a positional cap turns every act of filing into an act of
+    hiding. **#271** is the compounding defect found here: the "handled" filter runs *after* the cap, so
+    each claimed issue shrinks the pool (measured 100 → 90) and admits none of the 31 in its place —
+    under normal operation the visible pool decays while the invisible tail never moves.
+  - Full derivation, both sets enumerated, every `comm` input verified lexicographically sorted and
+    every live call timestamped: `nazgul/context/FEAT-035-connector-visibility.md` (W6). **Recorded, not
+    executed** (ADR-029/D7): the connector is untouched, no `max_items` key was added, the cap was not
+    raised, and no issue was labelled or edited — including **#260**, whose own text still says *"the 20
+    oldest"* and is stale by the very mechanism it describes.
 - **The non-delivery detector does not cover the dispatch path an operator actually uses.** Four subagents
   in one session ended their turn announcing the next step with the work already done. The bounded resume
   fires on `SubagentStop` inside the loop; direct `Agent` dispatches from an interactive session are
