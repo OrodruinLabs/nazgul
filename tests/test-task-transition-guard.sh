@@ -1449,12 +1449,25 @@ _ttg_task_commit_diff "$TEST_DIR" "$(scope_manifest TASK-Z '[]' "- ${SC_BASE}")"
 assert_eq "#241: a parentless commit's own listing is its diff" "$_TTG_TASK_DIFF_OUT" "docs/PRD.md
 tests/test-existing.sh"
 
-# FAIL CLOSED — the commits are readable in principle, so an unusable set is ambiguity,
-# and each unusable shape names itself on stderr.
+# lean-comments: allow-run — why empty and unreadable differ here
+# EMPTY is not UNREADABLE, and the two take opposite dispositions. Nothing recorded means
+# nothing could be read, so failing closed there charged every PLANNED/READY manifest with an
+# obligation its own File Scope never declared — a gate raised against work that has not
+# started. It degrades to the manifest field alone and SAYS so; the manifest below declares
+# only docs/, so the answer is OUT of scope.
 scope_call "$(scope_manifest TASK-B '["docs/design.md"]' "")"
-assert_exit_code "#241: an empty ## Commits fails closed to in scope" "$SCOPE_EC" 0
-assert_contains "#241: the empty-commits degradation names itself" \
-  "$SCOPE_ERR" "could not read this task's own committed diff (the manifest records no SHA under ## Commits)"
+assert_exit_code "#241/#293: an EMPTY ## Commits degrades to manifest-only, not fail-closed" "$SCOPE_EC" 1
+assert_contains "#241/#293: the empty-commits degradation names itself" \
+  "$SCOPE_ERR" "degraded to manifest-only (the manifest records no SHA under ## Commits)"
+assert_not_contains "#241/#293: and it is NOT reported as an unreadable commit set" \
+  "$SCOPE_ERR" "could not read this task's own committed diff"
+
+# lean-comments: allow-run — why the control runs before the assertion
+# POSITIVE CONTROL for the line above: the SAME empty ## Commits, on a manifest that DOES
+# declare a scripts/** path, is still in scope. The declared-scope arm runs first and is
+# untouched, so the degrade above can never be read as "an empty ## Commits allows anything".
+scope_call "$(scope_manifest TASK-B '["scripts/thing.sh"]' "")"
+assert_exit_code "#241/#293 control: an empty ## Commits still yields IN scope when the manifest declares one" "$SCOPE_EC" 0
 
 scope_call "$(scope_manifest TASK-B '["docs/design.md"]' "- deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")"
 assert_exit_code "#241: an unresolvable ## Commits SHA fails closed to in scope" "$SCOPE_EC" 0
@@ -1467,6 +1480,40 @@ scope_call "$(scope_manifest TASK-C '[]' "- ${SC_MINE}
 assert_exit_code "#241: a partly-readable commit set still decides" "$SCOPE_EC" 0
 assert_contains "#241: a partial commit set announces the shortfall" \
   "$SCOPE_ERR" "PARTIAL commit set (only 1 of 2 SHA(s) under ## Commits could be diffed"
+
+# lean-comments: allow-run — why a merge fixture is built by hand
+# A MERGE commit authored none of what its first-parent diff lists. `git diff <merge>^ <merge>`
+# is the whole delta the merged branch brought in, so recording a "merge main in" commit
+# re-acquired the branch-cumulative set #241 removed, by the route #241 closed. This repo merges
+# main in rather than rebasing, so the shape is live, not hypothetical.
+git -C "$TEST_DIR" checkout -q -b sc-side "$SC_BASE"
+printf 'x\n' > "$TEST_DIR/tests/test-from-side.sh"
+git -C "$TEST_DIR" add -A >/dev/null 2>&1
+git -C "$TEST_DIR" -c user.email=t@t -c user.name=t commit -qm "side work" >/dev/null 2>&1
+SC_SIDE=$(git -C "$TEST_DIR" rev-parse HEAD)
+git -C "$TEST_DIR" checkout -q "$SC_MINE"
+git -C "$TEST_DIR" -c user.email=t@t -c user.name=t merge -q --no-ff "$SC_SIDE" -m "merge side" >/dev/null 2>&1
+SC_MERGE=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+# Positive control FIRST: prove the merge's first-parent diff really does carry the foreign
+# path, so the assertion below measures the exclusion rather than an empty fixture.
+assert_contains "#293 control: the merge's own first-parent diff DOES carry the side branch's file" \
+  "$(git -C "$TEST_DIR" diff --name-only "${SC_MERGE}^" "$SC_MERGE")" "tests/test-from-side.sh"
+
+_ttg_task_commit_diff "$TEST_DIR" "$(scope_manifest TASK-C '[]' "- ${SC_MINE}
+- ${SC_MERGE}")"
+assert_eq "#293: a recorded merge commit contributes no paths to the task's own set" \
+  "$_TTG_TASK_DIFF_OUT" "tests/test-mine.sh"
+assert_not_contains "#293: the merged branch's files do not leak into the task's set" \
+  "$_TTG_TASK_DIFF_OUT" "test-from-side"
+assert_contains "#293: the skipped merge is COUNTED, never silently dropped" \
+  "$_TTG_TASK_DIFF_DETAIL" "merges-skipped=1"
+
+_ttg_task_commit_diff "$TEST_DIR" "$(scope_manifest TASK-C '[]' "- ${SC_MERGE}")"
+MERGE_ONLY_EC=$?
+assert_exit_code "#293: a merge-ONLY ## Commits derives nothing and fails closed" "$MERGE_ONLY_EC" 1
+assert_contains "#293: and it says the merges are why" \
+  "$_TTG_TASK_DIFF_DETAIL" "merges-skipped=1"
 
 # The gate that consumes the predicate still BLOCKS an in-scope task with no evidence —
 # a scope arm that stopped blocking everything would be a hole, not a fix.

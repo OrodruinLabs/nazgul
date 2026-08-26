@@ -767,13 +767,24 @@ assert_exit_code "unresolvable Base SHA: the task's own commit still decides" "$
 assert_not_contains "unresolvable Base SHA: no longer reported as a scope degrade" \
   "$RR_STDERR" "does not resolve"
 
-# FAIL CLOSED inside a git repo: the commits were readable in principle, so an
-# unusable set is ambiguity and the task is treated as in scope.
+# lean-comments: allow-run — why empty and unreadable differ here
+# EMPTY is not UNREADABLE. Nothing was recorded, so nothing could be read: this degrades to
+# the manifest field alone rather than failing closed, because failing closed here refused
+# every not-yet-implemented manifest for lacking evidence it cannot owe yet. The manifest
+# below declares only docs/, so the gate ALLOWS it.
 NO_COMMITS=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n- **Base SHA**: %s\n\n## Commits\n\n## Description\nx\n' "$BASE_SHA")
 rr_call "$NO_COMMITS" "$TEST_DIR"
-assert_exit_code "empty ## Commits: fails closed to in scope" "$RR_EC" 1
-assert_contains "empty ## Commits: the fail-closed degradation names itself" \
-  "$RR_STDERR" "could not read this task's own committed diff (the manifest records no SHA under ## Commits)"
+assert_exit_code "empty ## Commits: degrades to manifest-only and the docs-only task is allowed" "$RR_EC" 0
+assert_contains "empty ## Commits: the degradation names itself" \
+  "$RR_STDERR" "degraded to manifest-only (the manifest records no SHA under ## Commits)"
+assert_not_contains "empty ## Commits: and is NOT reported as an unreadable commit set" \
+  "$RR_STDERR" "could not read this task's own committed diff"
+
+# POSITIVE CONTROL: the same empty ## Commits on a manifest that DOES declare scripts/** is
+# still refused, so the line above cannot be read as "an empty ## Commits allows anything".
+NO_COMMITS_SCRIPTS=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["scripts/thing.sh"]\n- **Base SHA**: %s\n\n## Commits\n\n## Description\nx\n' "$BASE_SHA")
+rr_call "$NO_COMMITS_SCRIPTS" "$TEST_DIR"
+assert_exit_code "empty ## Commits control: a scripts/**-declaring manifest is still refused" "$RR_EC" 1
 
 UNRESOLVABLE_COMMITS=$(printf '## Metadata\n- **ID**: TASK-001\n- **Files modified**: ["docs/PRD.md"]\n- **Base SHA**: %s\n\n## Commits\n- deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n\n## Description\nx\n' "$BASE_SHA")
 rr_call "$UNRESOLVABLE_COMMITS" "$TEST_DIR"

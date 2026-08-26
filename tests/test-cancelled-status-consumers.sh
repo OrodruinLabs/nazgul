@@ -1110,10 +1110,27 @@ else
     assert_eq "start skill (b): and that zero is READABLE, which is what makes FRESH legitimate" \
       "$(start_field "$SB_EMPTY" total)" "0"
     teardown_temp_dir
+    # INVERTED IN PLACE (PR #293 finding 11a). This case asserted that an ABSENT tasks dir is
+    # "the same real zero" as an empty one. It is not, and the difference is destructive: total=0
+    # selects STATE: FRESH, whose New Objective Override archives plan.md, tasks/, reviews/, docs/
+    # and checkpoints/. An EMPTY directory is an ANSWER ("this project has no tasks"); an ABSENT
+    # one is the ABSENCE of an answer ("I could not find where the tasks are") — RULES §15's
+    # looked-vs-never-looked distinction applied to the filesystem. The probe now refuses to put a
+    # number on the second, so no later state can read a zero off it.
     setup_temp_dir
     SB_ABSENT=$(start_counts "$TEST_DIR")
-    assert_eq "start skill (b): an absent tasks dir is the same real zero" \
-      "$SB_ABSENT" "active=0 done=0 cancelled=0 total=0"
+    case "$SB_ABSENT" in
+      UNREADABLE*) _pass "start skill (b): an absent tasks dir is UNREADABLE, never a zero" ;;
+      *) _fail "start skill (b): an absent tasks dir is UNREADABLE, never a zero" \
+           "got '$SB_ABSENT' — a count here routes an unlocatable project to FRESH, which archives" ;;
+    esac
+    # The refusal must carry NO count token, or a later state can still read a number off the line.
+    case "$SB_ABSENT" in
+      *active=*|*done=*|*cancelled=*|*total=*)
+        _fail "start skill (b): the absent-dir refusal carries no count field" \
+          "got '$SB_ABSENT' — an UNREADABLE line must not be parseable as counts" ;;
+      *) _pass "start skill (b): the absent-dir refusal carries no count field" ;;
+    esac
     teardown_temp_dir
 
     # (c) Unreadable with total > 0 — the #108 shape verbatim: no frontmatter status,

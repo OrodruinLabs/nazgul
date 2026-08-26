@@ -137,11 +137,6 @@ _tree_producers() {
 # IMMEDIATELY after `"stop_gate"` — ` +` admits whitespace only, so an intervening k/v pair hides
 # the site — and its value must match `[a-z_]+`, so an interpolated or mixed-case value is a
 # passthrough, not a name. SR4 plants one of each and measures that neither is derived.
-# A stop_gate reason reaches emit_event two ways, and a derivation that sees only the first
-# UNDERCOUNTS while looking like it counted (#287): the inline `reason "x"` pair, and an array
-# built earlier and expanded at the call site (`ARGS=(reason "x")` … `emit_event "stop_gate"
-# "${ARGS[@]}"`). The array form is bound to a stop_gate emission before its value is trusted —
-# matching every `=(reason "x")` in the tree would count arrays that feed some other event.
 # A stop_gate reason reaches emit_event three ways, and a derivation that sees only the first
 # UNDERCOUNTS while looking like it counted (#287). All three ship today:
 #   (1) inline      emit_event "stop_gate" reason "x"

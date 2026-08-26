@@ -266,18 +266,25 @@ MANIFEST="$STATE_ROOT/nazgul/tasks/$TASK_ID.md"
   "no manifest at $STATE_ROOT/nazgul/tasks/$TASK_ID.md or $STATE_ROOT/nazgul/tasks/patches/$TASK_ID.md" \
   "State tree resolved from $STATE_ROOT_SOURCE; code tree is $PROJECT_ROOT."
 
-# lean-comments: allow-run — the refusal's cost is a capability red-run used to have, so the
-# reason it is not simply kept has to survive here.
-# The shared primitive (ADR-031) addresses <state_root>/tasks/TASK-NNN.md and nothing else, so a
-# manifest it cannot name — a PATCH-NNN id, or one under nazgul/tasks/patches/ — has no locked,
-# atomic, read-back install available. That is refused HERE, before the multi-minute run rather
-# than after it, and red-run keeps NO unlocked fallback for those manifests: that fallback is
-# #226 itself, and a capability kept by writing torn manifests is not a capability.
+# lean-comments: allow-run — the refusal is now narrow, so what it still refuses has to be said.
+# The primitive addresses BOTH shapes /nazgul:patch and the planner produce:
+# <state_root>/tasks/TASK-NNN.md and <state_root>/tasks/patches/PATCH-NNN.md. Refusing the
+# second outright cost red-run a capability its own consumer still demands — task-state-guard
+# runs the IMPLEMENTED red-run gate for PATCH ids, so a patch touching scripts/** could not
+# produce the evidence it was blocked for, leaving hand-authoring (the forgery route ADR-019
+# mechanized away) or a global kill switch. Any OTHER path is still refused HERE, before the
+# multi-minute run rather than after it, and red-run keeps NO unlocked fallback: that fallback
+# is #226 itself, and a capability kept by writing torn manifests is not a capability.
 RR_STATE_DIR="$STATE_ROOT/nazgul"
-if [ "$MANIFEST" != "$RR_STATE_DIR/tasks/$TASK_ID.md" ] || [[ ! "$TASK_ID" =~ ^TASK-[0-9]+$ ]]; then
+RR_ADDRESSABLE=""
+case "$TASK_ID" in
+  TASK-*) RR_ADDRESSABLE="$RR_STATE_DIR/tasks/$TASK_ID.md" ;;
+  PATCH-*) RR_ADDRESSABLE="$RR_STATE_DIR/tasks/patches/$TASK_ID.md" ;;
+esac
+if [ -z "$RR_ADDRESSABLE" ] || [ "$MANIFEST" != "$RR_ADDRESSABLE" ]; then
   die \
     "$TASK_ID's manifest is $MANIFEST, which the shared manifest-write primitive cannot address." \
-    "It installs only <state_root>/tasks/TASK-NNN.md, and red-run will not fall back to the unlocked truncating write ADR-031 replaced (#226)." \
+    "It installs only <state_root>/tasks/TASK-NNN.md and <state_root>/tasks/patches/PATCH-NNN.md, and red-run will not fall back to the unlocked truncating write ADR-031 replaced (#226)." \
     "This is not a red run that failed — nothing was run at all."
 fi
 
@@ -1066,8 +1073,11 @@ cat "$RR_WRITE_ERR" >&2 || true
 if [ "$RR_WRITE_EC" -ne 0 ]; then
   RR_WRITE_CAUSE=$(sed -n 's/.*(cause: \([a-z_]*\)).*/\1/p' "$RR_WRITE_ERR" | tail -1)
   [ -n "$RR_WRITE_CAUSE" ] || RR_WRITE_CAUSE="unreported"
-  # A closed set of named refusals, because the three differ in what they leave on disk and
-  # a diagnostic that guesses wrong sends the operator to repair the wrong thing.
+  # lean-comments: allow-run — what each named refusal leaves on disk
+  # A closed set of named refusals, because they differ in what they leave on disk and a
+  # diagnostic that guesses wrong sends the operator to repair the wrong thing. Only
+  # verify_failed_unrestored leaves changed bytes; every other cause, verify_failed now
+  # included, restores the manifest before returning.
   case "$RR_WRITE_CAUSE" in
     cas_mismatch_snapshot|cas_mismatch_install)
       die_code 7 \
@@ -1078,9 +1088,15 @@ if [ "$RR_WRITE_EC" -ne 0 ]; then
       ;;
     verify_failed)
       die_code 7 \
-        "WRITE REFUSED — the pre-change run was RED and the block WAS installed, but the read-back rejected the installed bytes (cause: $RR_WRITE_CAUSE)." \
-        "$MANIFEST has been replaced and needs a human read before anything is transitioned on it — this is the one refusal that does not leave the manifest untouched." \
+        "WRITE REFUSED — the pre-change run was RED and the block was installed, but the read-back rejected the installed bytes, so the primitive ROLLED THE WRITE BACK (cause: $RR_WRITE_CAUSE)." \
+        "$MANIFEST holds its pre-capture content and carries no evidence block from this run." \
         "The run itself is not in doubt — only the write's read-back failed."
+      ;;
+    verify_failed_unrestored)
+      die_code 7 \
+        "WRITE REFUSED — the pre-change run was RED, the read-back rejected the installed bytes, AND the rollback to the pre-capture content FAILED (cause: $RR_WRITE_CAUSE)." \
+        "$MANIFEST has been replaced with bytes a read-back declared bad and needs a human read before anything is transitioned on it — this is the ONE refusal that leaves the manifest changed." \
+        "The run itself is not in doubt — only the write's read-back and its rollback failed."
       ;;
   esac
   die_code 7 \

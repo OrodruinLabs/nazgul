@@ -169,7 +169,7 @@ VERIFY_ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/nazgul-close-objective-verify.XXXXXX")
 CO_PRECLOSE_FILE=$(mktemp "${TMPDIR:-/tmp}/nazgul-close-objective-preclose.XXXXXX")
 CO_HELD_LOCK=""
 trap 'rm -f "$MP_ERR_FILE" "$VERIFY_ERR_FILE" "$CO_PRECLOSE_FILE" 2>/dev/null || true
-      [ -z "${CO_HELD_LOCK:-}" ] || _nz_release_lock "$CO_HELD_LOCK" "${NZ_LOCK_TOKEN:-}" 2>/dev/null || true' EXIT
+      [ -z "${NZ_LOCK_TOKEN:-}" ] || _nz_release_lock "${CO_HELD_LOCK:-}" "$NZ_LOCK_TOKEN" 2>/dev/null || true' EXIT
 # Bash runs no EXIT trap on an untrapped INT/TERM, and the lock is a directory: without these
 # an operator's Ctrl-C mid-close wedges every later transition for that task until a human rmdirs.
 trap 'exit 130' INT
@@ -375,13 +375,23 @@ _co_with_task_lock() {
     return 1
   fi
   NZ_LOCK_TOKEN=""
+  # lean-comments: allow-run — why the trap keys on the token and not the path
+  # The PATH is published before the acquire and the trap's GUARD is the token, never the
+  # path: _nz_acquire_lock publishes NZ_LOCK_TOKEN between its successful mkdir and its owner
+  # write precisely so a signal in that window still reaches a release. Guarding on a variable
+  # assigned only AFTER the acquire returned reopened that window — a Ctrl-C landing inside it
+  # left the directory, with a live owner file naming a dead pid, wedging every later
+  # transition for this task. The token is non-empty exactly when this call owns the directory,
+  # so a stale path with an empty token releases nothing.
+  CO_HELD_LOCK="$lock"
   if ! _nz_acquire_lock "$lock" 1; then
+    CO_HELD_LOCK=""
     CO_LOCK_ERR=$(_nz_mw_fail lock_unavailable "another transition already holds the ${task_id} lock" 2>&1) || true
     return 1
   fi
-  CO_HELD_LOCK="$lock"
   "$@" || rc=$?
   _nz_release_lock "$lock" "$NZ_LOCK_TOKEN" 2>/dev/null || true
+  NZ_LOCK_TOKEN=""
   CO_HELD_LOCK=""
   return "$rc"
 }
@@ -420,8 +430,26 @@ _co_close_one() {
     return 0
   fi
   if [ "$lrc" -ne 0 ]; then
-    # No rollback on this arm: nz_manifest_write_locked installs through an atomic rename, so
-    # a failed write left the manifest untouched and a restore here could only add noise.
+    # lean-comments: allow-run — why one refusal cause needs a rollback the others do not
+    # No rollback on this arm: nz_manifest_write_locked restores the manifest itself on every
+    # refusal, so a failed write left the file at its pre-write content and a restore here
+    # could only add noise. The single exception names itself — verify_failed_unrestored means
+    # the primitive's own rollback failed, so the rejected bytes ARE the manifest. This close
+    # is still refused, but it must not be reported as one that left nothing behind: an
+    # installed ## Merge Evidence block is a standing DONE-gate token, and CO_PRECLOSE_FILE
+    # holds the bytes that would undo it.
+    case "${CO_WRITE_ERR}${CO_LOCK_ERR}" in
+      *verify_failed_unrestored*)
+        SKIP_EVIDENCE_WRITE=$((SKIP_EVIDENCE_WRITE + 1))
+        # lean-comments: allow-run — which lock form this arm owns, and why
+        # The OUTER form, as at the transition-refused arm below: _co_with_task_lock has
+        # already returned, so nothing holds this task's lock and the _locked variant would
+        # be asserting ownership it does not have.
+        _co_rollback_via nz_manifest_write "$task_id" "$manifest" || true
+        _refuse "$task_id" "evidence-write-unrestored" "the ## Merge Evidence write into ${manifest} was refused AFTER its bytes were installed and the primitive's own rollback failed; a restore from the pre-close snapshot was attempted here${CO_ROLLBACK_NOTE}. READ ${manifest} BY HAND before transitioning anything on it — an installed ## Merge Evidence block satisfies ttg_verify_merge_evidence whether or not the close that wrote it succeeded: $(printf '%s' "${CO_WRITE_ERR}${CO_LOCK_ERR}" | tr '\n' ' ')"
+        return 0
+        ;;
+    esac
     SKIP_EVIDENCE_WRITE=$((SKIP_EVIDENCE_WRITE + 1))
     _refuse "$task_id" "evidence-write-failed" "could not record ## Merge Evidence in ${manifest}: $(printf '%s' "${CO_WRITE_ERR}${CO_LOCK_ERR}" | tr '\n' ' ')"
     return 0

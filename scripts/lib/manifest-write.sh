@@ -174,8 +174,8 @@ _nz_release_lock() {
 # interleaving test by luck. Usage: nz_manifest_lock_path <state_root> <task_id> [create]
 nz_manifest_lock_path() {
   local state_root="${1:-}" task_id="${2:-}" create="${3:-true}" root_real path real
-  [[ "$task_id" =~ ^TASK-[0-9]+$ ]] \
-    || _nz_mw_fail bad_arguments "task id must match TASK-[0-9]+, got '${task_id}'" || return 1
+  [[ "$task_id" =~ ^(TASK|PATCH)-[0-9]+$ ]] \
+    || _nz_mw_fail bad_arguments "task id must match TASK-[0-9]+ or PATCH-[0-9]+, got '${task_id}'" || return 1
   { [ -d "$state_root" ] && [ ! -L "$state_root" ]; } \
     || _nz_mw_fail state_root_unusable "${state_root:-<unnamed>} is not a regular non-symlink directory" || return 1
   root_real=$(cd "$state_root" 2>/dev/null && pwd -P) || root_real=""
@@ -196,12 +196,18 @@ nz_manifest_lock_path() {
   printf '%s\n' "$real/task-transition-${task_id}.lock"
 }
 
+# lean-comments: allow-run — the refusal rule, and why the address space has two shapes.
 # A symlink destination is refused by its own name: a write through one installs over
 # whatever it aims at (PATCH-005). Usage: _nz_manifest_path <state_root> <task_id>
+# Two manifest shapes, because /nazgul:patch writes PATCH-NNN under tasks/patches/ and a
+# primitive that cannot address it leaves that route with no locked, atomic, read-back
+# install — which is how red-run lost the capability entirely rather than routing it.
+# The patches/ level gets the SAME discipline as tasks/: regular, non-symlink, resolving
+# to itself, with the final parent re-checked so no component can escape.
 _nz_manifest_path() {
-  local state_root="${1:-}" task_id="${2:-}" root_real tasks_real file parent_real
-  [[ "$task_id" =~ ^TASK-[0-9]+$ ]] \
-    || _nz_mw_fail bad_arguments "task id must match TASK-[0-9]+, got '${task_id}'" || return 1
+  local state_root="${1:-}" task_id="${2:-}" root_real tasks_real file parent_real dir_real
+  [[ "$task_id" =~ ^(TASK|PATCH)-[0-9]+$ ]] \
+    || _nz_mw_fail bad_arguments "task id must match TASK-[0-9]+ or PATCH-[0-9]+, got '${task_id}'" || return 1
   { [ -d "$state_root" ] && [ ! -L "$state_root" ]; } \
     || _nz_mw_fail state_root_unusable "${state_root:-<unnamed>} is not a regular non-symlink directory" || return 1
   root_real=$(cd "$state_root" 2>/dev/null && pwd -P) || root_real=""
@@ -212,14 +218,22 @@ _nz_manifest_path() {
   tasks_real=$(cd "$root_real/tasks" 2>/dev/null && pwd -P) || tasks_real=""
   [ "$tasks_real" = "$root_real/tasks" ] \
     || _nz_mw_fail tasks_dir_unusable "${root_real}/tasks does not resolve to itself" || return 1
-  file="$tasks_real/$task_id.md"
+  dir_real="$tasks_real"
+  if [[ "$task_id" == PATCH-* ]]; then
+    { [ -d "$tasks_real/patches" ] && [ ! -L "$tasks_real/patches" ]; } \
+      || _nz_mw_fail tasks_dir_unusable "${tasks_real}/patches is not a regular non-symlink directory" || return 1
+    dir_real=$(cd "$tasks_real/patches" 2>/dev/null && pwd -P) || dir_real=""
+    [ "$dir_real" = "$tasks_real/patches" ] \
+      || _nz_mw_fail tasks_dir_unusable "${tasks_real}/patches does not resolve to itself" || return 1
+  fi
+  file="$dir_real/$task_id.md"
   [ ! -L "$file" ] \
     || _nz_mw_fail symlink_destination "refusing to write ${file}: it is a symlink" || return 1
   [ -f "$file" ] \
-    || _nz_mw_fail no_manifest "no regular task manifest for ${task_id} under ${tasks_real}" || return 1
+    || _nz_mw_fail no_manifest "no regular task manifest for ${task_id} under ${dir_real}" || return 1
   parent_real=$(cd "$(dirname "$file")" 2>/dev/null && pwd -P) || parent_real=""
-  [ "$parent_real" = "$tasks_real" ] \
-    || _nz_mw_fail symlink_destination "refusing to write ${file}: its parent escapes ${tasks_real}" || return 1
+  [ "$parent_real" = "$dir_real" ] \
+    || _nz_mw_fail symlink_destination "refusing to write ${file}: its parent escapes ${dir_real}" || return 1
   printf '%s\n' "$file"
 }
 
@@ -236,6 +250,23 @@ _nz_default_verify() {
   printf 'nz_manifest_write: installed manifest %s parses to %s, which is not a valid status\n' \
     "$file" "${status:-<missing>}" >&2
   return 1
+}
+
+# lean-comments: allow-run — why cleanup is registered rather than trapped here
+# The two colocated temp files in flight, published so the lock wrapper's SUBSHELL trap can
+# reclaim them. A `trap … EXIT` set here instead would run in the CALLER's shell and silently
+# replace whatever trap that caller had already installed, so the cleanup is registered where a
+# trap already exists rather than by adding a second one that fights the first.
+_NZ_MW_SNAPSHOT=""
+_NZ_MW_STAGE=""
+NZ_MW_INSTALLED=0
+NZ_MW_BEFORE_HASH=""
+
+_nz_mw_cleanup() {
+  [ -z "${_NZ_MW_SNAPSHOT:-}" ] || rm -f "$_NZ_MW_SNAPSHOT"
+  [ -z "${_NZ_MW_STAGE:-}" ] || rm -f "$_NZ_MW_STAGE"
+  _NZ_MW_SNAPSHOT=""
+  _NZ_MW_STAGE=""
 }
 
 # Steps 2-7 of the protocol. ASSUMES THE CALLER ALREADY HOLDS THE LOCK.
@@ -267,28 +298,38 @@ nz_manifest_write_locked() {
     || _nz_mw_fail mode_unreadable "no stat dialect on this host could read the mode of ${file}" || return 1
   # mktemp, never a predictable sibling: a predictable name can be pre-created as a
   # symlink, and the redirection then installs over whatever it aims at (PATCH-005).
+  NZ_MW_INSTALLED=0
+  NZ_MW_BEFORE_HASH=""
   snapshot=$(mktemp "${file%/*}/.${task_id}.snapshot.XXXXXX") \
     || _nz_mw_fail stage_failed "could not create a colocated snapshot beside ${file}" || return 1
+  _NZ_MW_SNAPSHOT="$snapshot"
   stage=$(mktemp "${file%/*}/.${task_id}.stage.XXXXXX") || {
-    rm -f "$snapshot"
+    _nz_mw_cleanup
     _nz_mw_fail stage_failed "could not create a colocated staging file beside ${file}"
     return 1
   }
+  _NZ_MW_STAGE="$stage"
   if ! cp "$file" "$snapshot"; then
-    rm -f "$snapshot" "$stage"
+    _nz_mw_cleanup
     _nz_mw_fail stage_failed "could not snapshot ${task_id}"
     return 1
   fi
 
   before_hash=$(nz_sha256 < "$snapshot") || before_hash=""
+  # lean-comments: allow-run — why the snapshot outlives the rename
+  # Published so the producer does not hash the same unmodified bytes a second time. The
+  # ledger records this value as before_sha256, and two independent computations of one
+  # number are two things that can disagree — including silently, if the two hash helpers
+  # are ever changed apart. One computation, one authority.
+  NZ_MW_BEFORE_HASH="$before_hash"
   if [ -z "$before_hash" ]; then
-    rm -f "$snapshot" "$stage"
+    _nz_mw_cleanup
     _nz_mw_fail digest_unavailable "no SHA-256 implementation available for snapshot comparison"
     return 1
   fi
   current_hash=$(nz_sha256 < "$file") || current_hash=""
   if [ -z "$current_hash" ] || [ "$current_hash" != "$before_hash" ]; then
-    rm -f "$snapshot" "$stage"
+    _nz_mw_cleanup
     _nz_mw_fail cas_mismatch_snapshot "${task_id} changed while its snapshot was taken; concurrent content preserved"
     return 1
   fi
@@ -296,41 +337,62 @@ nz_manifest_write_locked() {
   # The producer reads the SNAPSHOT, never the live file: that is what puts the
   # read-modify-write inside the compare-and-swap rather than merely before it.
   if ! "$@" "$snapshot" > "$stage"; then
-    rm -f "$snapshot" "$stage"
+    _nz_mw_cleanup
     _nz_mw_fail producer_failed "the producer for ${task_id} returned non-zero; ${file} is unchanged"
     return 1
   fi
   if [ ! -s "$stage" ]; then
-    rm -f "$snapshot" "$stage"
+    _nz_mw_cleanup
     _nz_mw_fail producer_empty "the producer for ${task_id} produced no output; ${file} is unchanged"
     return 1
   fi
 
   current_hash=$(nz_sha256 < "$file") || current_hash=""
   if [ -z "$current_hash" ] || [ "$current_hash" != "$before_hash" ]; then
-    rm -f "$snapshot" "$stage"
+    _nz_mw_cleanup
     _nz_mw_fail cas_mismatch_install "${task_id} changed while its replacement was produced; concurrent content preserved"
     return 1
   fi
 
   if ! chmod "$mode" "$stage"; then
-    rm -f "$snapshot" "$stage"
+    _nz_mw_cleanup
     _nz_mw_fail mode_preserve_failed "could not preserve the ${mode} mode of ${file}"
     return 1
   fi
   if ! mv "$stage" "$file"; then
-    rm -f "$snapshot" "$stage"
+    _nz_mw_cleanup
     _nz_mw_fail install_failed "atomic manifest replace failed for ${task_id}"
     return 1
   fi
-  rm -f "$snapshot"
+  _NZ_MW_STAGE=""
+  NZ_MW_INSTALLED=1
 
+  # lean-comments: allow-run — why the read-back is fatal, and why the snapshot outlives it.
   # A failing read-back is a loud non-zero, never a warning: nz_rewrite_file returns 0
   # on a no-op, which is how a caller could once print `recorded` over an unchanged record.
+  #
+  # The snapshot is kept until AFTER this read-back, because `verify_failed` was the one
+  # cause that fired on the far side of the rename and so the one refusal that CHANGED the
+  # manifest — while every adopter's diagnostic said a refused write leaves the file
+  # untouched. Two of the three said it in those words. Rather than teach three callers to
+  # special-case one cause, the ROLLBACK makes the sentence true: a refused write never
+  # leaves changed bytes on disk. The restore is the same atomic rename, so it cannot tear.
   if ! "$verify_fn" "$file"; then
-    _nz_mw_fail verify_failed "${task_id} was written, but ${verify_fn} rejected the installed bytes"
+    if mv "$snapshot" "$file"; then
+      _NZ_MW_SNAPSHOT=""
+      NZ_MW_INSTALLED=0
+      _nz_mw_fail verify_failed "${task_id} was written but ${verify_fn} rejected the installed bytes; the write was ROLLED BACK and ${file} holds its pre-write content"
+      return 1
+    fi
+    # lean-comments: allow-run — why the hash is published rather than recomputed
+    # The restore itself failed, so the rejected bytes ARE the manifest. This is the only
+    # state in which a refusal leaves the file changed, and it gets its own cause name so no
+    # caller can report it with the sentence that fits every other refusal.
+    _nz_mw_cleanup
+    _nz_mw_fail verify_failed_unrestored "${task_id} was written, ${verify_fn} rejected the installed bytes, AND the rollback to its pre-write content FAILED; ${file} holds bytes a read-back declared bad and needs a human read before anything is transitioned on it"
     return 1
   fi
+  _nz_mw_cleanup
   return 0
 }
 
@@ -346,7 +408,7 @@ nz_manifest_with_lock() {
     # Keyed on the token _nz_acquire_lock publishes before it writes its owner
     # file, so no signal window can skip the release.
     NZ_LOCK_TOKEN=""
-    trap '[ -z "${NZ_LOCK_TOKEN:-}" ] || _nz_release_lock "$lock" "$NZ_LOCK_TOKEN" 2>/dev/null || true' EXIT
+    trap '_nz_mw_cleanup; [ -z "${NZ_LOCK_TOKEN:-}" ] || _nz_release_lock "$lock" "$NZ_LOCK_TOKEN" 2>/dev/null || true' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
     if ! _nz_acquire_lock "$lock" 1; then

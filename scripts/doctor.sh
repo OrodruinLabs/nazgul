@@ -878,20 +878,38 @@ check_sessions() {
 _DOC_RED_RUN_GUARD="$SCRIPT_DIR/lib/task-transition-guard.sh"
 _DOC_RED_RUN_NAME_CAP=12
 
+# lean-comments: allow-run — why an un-gated manifest is skipped rather than reported
+# The gate fires on ONE edge, IN_PROGRESS -> IMPLEMENTED. A manifest that has never reached
+# IMPLEMENTED has never faced it, so re-asking charges unstarted work with a backlog it cannot
+# owe — every PLANNED task in a live objective would read as a finding and flip doctor to warn
+# on a project whose only fault is that it is mid-flight. CANCELLED joins them from the other
+# end: it will never ship, so its evidence is moot. Both are SKIPPED WITH A REASON and counted
+# in the grammar, never dropped — §15: "nothing to do" and "nothing was examined" must not
+# print the same thing. A status that will not parse is still CHECKED, so a broken manifest
+# cannot hide inside the skip bucket.
+_DOC_RED_RUN_GATED_STATUSES="IMPLEMENTED IN_REVIEW APPROVED CHANGES_REQUESTED DONE BLOCKED"
+
 # _doc_red_run_sweep <newline-separated manifest paths> — one "<class>\t<TASK-ID>\t<reason>"
-# line per manifest on stdout, class one of clean|finding|not-applicable|unreadable.
+# line per manifest on stdout, class one of clean|finding|not-applicable|not-yet|unreadable.
 _doc_red_run_sweep() {
   (
     # shellcheck source=lib/task-transition-guard.sh
     source "$_DOC_RED_RUN_GUARD" || exit 1
     emit_event() { return 0; }
-    local m id text rc reason
+    local m id text rc reason st
     while IFS= read -r m; do
       [ -n "$m" ] || continue
       id="${m##*/}"; id="${id%.md}"
       if [ ! -r "$m" ] || ! text=$(cat -- "$m" 2>/dev/null); then
         printf 'unreadable\t%s\t%s\n' "$id" "read_failed"
         continue
+      fi
+      st=$(get_task_status "$m" "" 2>/dev/null) || st=""
+      if [ -n "$st" ] && [ "$st" != "INVALID" ]; then
+        case " $_DOC_RED_RUN_GATED_STATUSES " in
+          *" $st "*) : ;;
+          *) printf 'not-yet\t%s\t%s\n' "$id" "$st"; continue ;;
+        esac
       fi
       TTG_RED_RUN_REASON=""
       rc=0
@@ -916,7 +934,7 @@ _doc_red_run_sweep() {
 
 check_red_run_coverage() {
   local tasks_dir="$NAZGUL_DIR/tasks" list="" total=0 m
-  local clean=0 findings=0 na=0 unreadable=0 f_extra=0 u_extra=0
+  local clean=0 findings=0 na=0 unreadable=0 notyet=0 f_extra=0 u_extra=0
   local f_named="" u_named="" klass id reason skipped checked grammar msg floor="" verdict
   local switch_note="" close
   local -a manifests=()
@@ -924,13 +942,13 @@ check_red_run_coverage() {
   close="Doctor only re-asked the gate: it ran no transition, edited no manifest, and wrote nothing. Backfilling history is not doctor's job — this is a report, not a queue."
 
   if [ ! -d "$tasks_dir" ]; then
-    _doc_skip pass red-run-coverage no-candidates "Not applicable — there is no nazgul/tasks/ directory, so no manifest exists to re-ask the red-run evidence gate about. red-run-coverage: 0 scanned, 0 skipped (unreadable=0, not-applicable=0), 0 checked, 0 findings."
+    _doc_skip pass red-run-coverage no-candidates "Not applicable — there is no nazgul/tasks/ directory, so no manifest exists to re-ask the red-run evidence gate about. red-run-coverage: 0 scanned, 0 skipped (unreadable=0, not-applicable=0, not-yet-gated=0), 0 checked, 0 findings."
     return 0
   fi
   # An unlistable directory globs to nothing, exactly as an empty one does, so the permission
   # bits are probed explicitly rather than inferred from an empty result.
   if [ ! -r "$tasks_dir" ] || [ ! -x "$tasks_dir" ]; then
-    _doc_skip warn red-run-coverage unreadable "COULD NOT LOOK: nazgul/tasks/ exists but this process cannot list it, so the red-run evidence gate was re-asked about NOTHING. This is NOT a report that every manifest carries evidence — whether a backlog exists here is UNDETERMINED. Make nazgul/tasks/ readable, then re-run /nazgul:doctor. red-run-coverage: 0 scanned, 0 skipped (unreadable=0, not-applicable=0), 0 checked, 0 findings."
+    _doc_skip warn red-run-coverage unreadable "COULD NOT LOOK: nazgul/tasks/ exists but this process cannot list it, so the red-run evidence gate was re-asked about NOTHING. This is NOT a report that every manifest carries evidence — whether a backlog exists here is UNDETERMINED. Make nazgul/tasks/ readable, then re-run /nazgul:doctor. red-run-coverage: 0 scanned, 0 skipped (unreadable=0, not-applicable=0, not-yet-gated=0), 0 checked, 0 findings."
     return 0
   fi
   # Enumerated by glob, not by find(1): doctor must report the same roster on a host whose
@@ -941,12 +959,12 @@ check_red_run_coverage() {
   done
   total=${#manifests[@]}
   if [ "$total" -eq 0 ]; then
-    _doc_skip pass red-run-coverage no-candidates "Not applicable — nazgul/tasks/ holds no TASK-*.md manifest, so there is nothing to re-ask the red-run evidence gate about. red-run-coverage: 0 scanned, 0 skipped (unreadable=0, not-applicable=0), 0 checked, 0 findings."
+    _doc_skip pass red-run-coverage no-candidates "Not applicable — nazgul/tasks/ holds no TASK-*.md manifest, so there is nothing to re-ask the red-run evidence gate about. red-run-coverage: 0 scanned, 0 skipped (unreadable=0, not-applicable=0, not-yet-gated=0), 0 checked, 0 findings."
     return 0
   fi
 
   if [ ! -r "$_DOC_RED_RUN_GUARD" ]; then
-    _doc_skip warn red-run-coverage unreadable "COULD NOT LOOK: $total manifest(s) are present but scripts/lib/task-transition-guard.sh is absent or unreadable, so ttg_verify_red_run_evidence could not be re-asked about any of them. This is NOT a report that every manifest carries evidence — all $total are UNDETERMINED. Reinstall or repair the plugin, then re-run /nazgul:doctor. red-run-coverage: $total scanned, $total skipped (unreadable=$total, not-applicable=0), 0 checked, 0 findings."
+    _doc_skip warn red-run-coverage unreadable "COULD NOT LOOK: $total manifest(s) are present but scripts/lib/task-transition-guard.sh is absent or unreadable, so ttg_verify_red_run_evidence could not be re-asked about any of them. This is NOT a report that every manifest carries evidence — all $total are UNDETERMINED. Reinstall or repair the plugin, then re-run /nazgul:doctor. red-run-coverage: $total scanned, $total skipped (unreadable=$total, not-applicable=0, not-yet-gated=0), 0 checked, 0 findings."
     return 0
   fi
 
@@ -962,6 +980,7 @@ check_red_run_coverage() {
           f_extra=$((f_extra + 1))
         fi ;;
       not-applicable) na=$((na + 1)) ;;
+      not-yet) notyet=$((notyet + 1)) ;;
       unreadable)
         unreadable=$((unreadable + 1))
         if [ "$unreadable" -le "$_DOC_RED_RUN_NAME_CAP" ]; then
@@ -974,9 +993,9 @@ check_red_run_coverage() {
   [ "$f_extra" -eq 0 ] || f_named="$f_named, +$f_extra more"
   [ "$u_extra" -eq 0 ] || u_named="$u_named, +$u_extra more"
 
-  skipped=$((unreadable + na))
+  skipped=$((unreadable + na + notyet))
   checked=$((clean + findings))
-  grammar="red-run-coverage: $total scanned, $skipped skipped (unreadable=$unreadable, not-applicable=$na), $checked checked, $findings findings"
+  grammar="red-run-coverage: $total scanned, $skipped skipped (unreadable=$unreadable, not-applicable=$na, not-yet-gated=$notyet), $checked checked, $findings findings"
 
   if [ "$total" -ne $((skipped + checked)) ]; then
     printf 'doctor: INTERNAL — red-run sweep accounting mismatch: %d scanned != %d skipped + %d checked\n' \
@@ -995,6 +1014,10 @@ check_red_run_coverage() {
       _doc_report warn red-run-coverage "${floor}${grammar}. Every one of the $total manifest(s) was skipped and $unreadable could not be read at all ($u_named), so no evidence was examined. This is 'could not look', NOT 'looked and found none' — whether a red-run backlog exists here is UNDETERMINED.$switch_note $close"
       return 0
     fi
+    if [ "$notyet" -gt 0 ]; then
+      _doc_skip pass red-run-coverage no-candidates "${floor}${grammar}. Not applicable — of $total manifest(s) read, $notyet has/have not reached IMPLEMENTED (or are CANCELLED) and so have never faced the gate, and the rest declare no scripts/** or tests/** path. Nothing here owes evidence YET; re-run once those tasks are implemented.$switch_note $close"
+      return 0
+    fi
     _doc_skip pass red-run-coverage no-candidates "${floor}${grammar}. Not applicable — all $total manifest(s) were read and none declares a scripts/** or tests/** path, so no manifest carries a red-run obligation and there was no evidence to check. That is a measured 'no candidates', not an unexamined one.$switch_note $close"
     return 0
   fi
@@ -1002,6 +1025,9 @@ check_red_run_coverage() {
   msg="$grammar"
   if [ "$findings" -gt 0 ]; then
     msg="$msg — ttg_verify_red_run_evidence refuses these manifests as the rule stands TODAY: $f_named. The gate runs from one call site, the IN_PROGRESS -> IMPLEMENTED edge, so a task that never went backwards was never re-asked: this is the pre-existing backlog surfacing, not a new failure."
+  fi
+  if [ "$notyet" -gt 0 ]; then
+    msg="$msg $notyet manifest(s) have not reached IMPLEMENTED (or are CANCELLED) and were skipped rather than checked: the gate fires on the IN_PROGRESS -> IMPLEMENTED edge, so work that has not started owes no evidence and is not a backlog item."
   fi
   if [ "$unreadable" -gt 0 ]; then
     msg="$msg $unreadable manifest(s) could NOT BE READ ($u_named) and are counted as skipped, never as a finding: 'could not look' and 'looked and found evidence wanting' are different answers and this check does not print them the same way."
@@ -1019,13 +1045,24 @@ check_red_run_coverage() {
 
 _DOC_CHECK_IDS="config-present plugin-version dependencies git-hooks invoking-shell nazgul-dir-env config-schema ignore-block stacking stack-registry stdin-hazard stop-payload messaging remote-control sessions red-run-coverage"
 _DOC_ONLY=""
+_DOC_SKIP_IDS=""
+_DOC_SKIPPED_BY_REQUEST=""
 
-# _doc_run <check-id> <function> — runs the check unless --only excluded it.
+# lean-comments: allow-run — why a requested omission is still named on stdout
+# _doc_run <check-id> <function> — runs the check unless --only or --skip excluded it.
+# A check dropped by --skip is NAMED on stdout at the end of the run: an operator-requested
+# omission is still an omission, and a report that quietly describes a smaller population than
+# the reader assumes is the vacuous green this file exists to abolish.
 _doc_run() {
   if [ -n "$_DOC_ONLY" ]; then
     case ",$_DOC_ONLY," in
       *",$1,"*) : ;;
       *) return 0 ;;
+    esac
+  fi
+  if [ -n "$_DOC_SKIP_IDS" ]; then
+    case ",$_DOC_SKIP_IDS," in
+      *",$1,"*) _DOC_SKIPPED_BY_REQUEST="${_DOC_SKIPPED_BY_REQUEST:+$_DOC_SKIPPED_BY_REQUEST, }$1"; return 0 ;;
     esac
   fi
   "$2"
@@ -1042,6 +1079,8 @@ _doc_emit_coverage_line() {
   if [ "$_DOC_CHECKED" -eq 0 ] && [ "$_DOC_SCANNED" -gt 0 ]; then
     printf 'doctor: NOTHING CHECKED — all %d candidates skipped\n' "$_DOC_SCANNED" >&2
   fi
+  [ -z "$_DOC_SKIPPED_BY_REQUEST" ] \
+    || printf 'doctor: NOT RUN by request (--skip): %s — this report describes the remaining checks only\n' "$_DOC_SKIPPED_BY_REQUEST"
   printf 'doctor: %d scanned, %d skipped (not-applicable-config=%d, not-applicable-env=%d, no-candidates=%d, unreadable=%d), %d checked, %d findings\n' \
     "$_DOC_SCANNED" "$skipped" "$_DOC_SKIP_NA_CONFIG" "$_DOC_SKIP_NA_ENV" \
     "$_DOC_SKIP_NO_CANDIDATES" "$_DOC_SKIP_UNREADABLE" "$_DOC_CHECKED" "$_DOC_FINDINGS"
@@ -1050,22 +1089,48 @@ _doc_emit_coverage_line() {
 # --only exists so the all-skipped path is reachable at all: with every check
 # selected at least one always inspects something.
 _doc_parse_args() {
-  local arg id found only_seen="false"
+  local arg id found only_seen="false" skip_seen="false"
   for arg in "$@"; do
     case "$arg" in
       --only=*) _DOC_ONLY="${arg#--only=}"; only_seen="true" ;;
+      --skip=*) _DOC_SKIP_IDS="${arg#--skip=}"; skip_seen="true" ;;
       -h|--help)
-        echo "Usage: doctor.sh [--only=<check-id>[,<check-id>...]]"
+        echo "Usage: doctor.sh [--only=<check-id>[,<check-id>...]] [--skip=<check-id>[,<check-id>...]]"
         echo "Checks: $_DOC_CHECK_IDS"
+        echo "Note: red-run-coverage re-asks the red-run gate over every task manifest and"
+        echo "      costs roughly 0.3s per IMPLEMENTED-or-later manifest. --skip=red-run-coverage"
+        echo "      drops it; the run then names it as skipped by request."
         exit 0
         ;;
       *)
         echo "doctor: unknown argument: $arg" >&2
-        echo "Usage: doctor.sh [--only=<check-id>[,<check-id>...]]" >&2
+        echo "Usage: doctor.sh [--only=<check-id>[,<check-id>...]] [--skip=<check-id>[,<check-id>...]]" >&2
         exit 1
         ;;
     esac
   done
+  if [ "$only_seen" = "true" ] && [ "$skip_seen" = "true" ]; then
+    echo "doctor: --only and --skip are mutually exclusive — one selects the population, the other subtracts from it, and together they describe no population unambiguously." >&2
+    exit 1
+  fi
+  if [ "$skip_seen" = "true" ]; then
+    case ",$_DOC_SKIP_IDS," in
+      *,,*)
+        echo "doctor: --skip requires one or more non-empty check ids. Known checks: $_DOC_CHECK_IDS" >&2
+        exit 1
+        ;;
+    esac
+    for id in ${_DOC_SKIP_IDS//,/ }; do
+      found="false"
+      for arg in $_DOC_CHECK_IDS; do
+        [ "$id" = "$arg" ] && found="true"
+      done
+      if [ "$found" != "true" ]; then
+        echo "doctor: --skip names unknown check '$id'. Known checks: $_DOC_CHECK_IDS" >&2
+        exit 1
+      fi
+    done
+  fi
   [ "$only_seen" = "true" ] || return 0
   case ",$_DOC_ONLY," in
     *,,*)

@@ -190,6 +190,11 @@ REPAIR_REPORTED="$REPAIR_SIGNAL_DIR/halt-reported"
 
 # A halt after the first edge has already left the quarantine, so re-enter it
 # rather than report a preservation that did not happen.
+
+# 1 only inside repair_walk_and_mark, which nz_manifest_with_lock runs in a SUBSHELL — so the
+# parent's copy stays 0 and each caller of repair_halt gets the truth about its own shell.
+REPAIR_LOCK_HELD=0
+
 repair_halt() {
   local edge="$1" live disposition detail
   live=$(get_task_status "$MANIFEST_FILE" "")
@@ -197,9 +202,20 @@ repair_halt() {
     disposition="preserved"
     detail="the quarantine is intact at BLOCKED"
   else
-    # The re-entry runs inside the held lock too, so it uses the _locked form; and since
-    # a rename can land before a failure is reported, the disposition is read back off disk.
-    _ttg_apply_transition_locked "$NAZGUL_DIR" "$PROJECT_ROOT" "$TASK_ID" "$live" BLOCKED "" || true
+    # lean-comments: allow-run — why the lock form is chosen rather than fixed
+    # The _locked form ONLY where the lock is actually held. This function is also called from
+    # the parent shell on the path where nz_manifest_with_lock itself failed — reached precisely
+    # BECAUSE the lock could not be taken, or because its holder died mid-transaction — and the
+    # _locked suffix is a claim of ownership, not a spelling. Using it there ran a
+    # snapshot/CAS/rename against a manifest another process may be mid-transaction on; the CAS
+    # narrows that window but does not close it. The outer form acquires the lock like any other
+    # writer. Since a rename can land before a failure is reported, the disposition is read back
+    # off disk either way.
+    if [ "$REPAIR_LOCK_HELD" -eq 1 ]; then
+      _ttg_apply_transition_locked "$NAZGUL_DIR" "$PROJECT_ROOT" "$TASK_ID" "$live" BLOCKED "" || true
+    else
+      ttg_apply_transition "$NAZGUL_DIR" "$PROJECT_ROOT" "$TASK_ID" "$live" BLOCKED "" || true
+    fi
     live=$(get_task_status "$MANIFEST_FILE" "")
     if [ "$live" = "BLOCKED" ]; then
       disposition="restored"
@@ -248,6 +264,7 @@ repair_marker_halt() {
 # the marker left a window where a quarantine could be exited and then re-marked.
 repair_walk_and_mark() {
   local edge repaired_at
+  REPAIR_LOCK_HELD=1
   for edge in ${REPAIR_EDGES[@]+"${REPAIR_EDGES[@]}"}; do
     # The _locked form throughout — the outer form would deadlock on the lock this subshell holds.
     if ! _ttg_apply_transition_locked "$NAZGUL_DIR" "$PROJECT_ROOT" \

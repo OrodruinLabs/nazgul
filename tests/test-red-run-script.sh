@@ -2254,12 +2254,17 @@ if rrp_begin "a read-back the predicate rejects is its own named refusal" digest
   run_capture TASK-032 --filter=alpha
   assert_exit_code "read-back: a status that stops parsing refuses with exit 7" "$RR_EC" 7
   assert_contains "read-back: the refusal names its own cause" "$RR_OUT" "cause: verify_failed"
-  # The rename precedes the read-back, so this is the ONE refusal that leaves the manifest
-  # replaced — saying "unchanged" here would send the operator to repair the wrong thing.
-  assert_contains "read-back: and does NOT claim the manifest is untouched" "$RR_OUT" \
-    "the one refusal that does not leave the manifest untouched"
-  assert_file_contains "read-back: the block really was installed before the predicate ran" \
+  # lean-comments: allow-run — what this pin measures now that the write rolls back
+  # The rename precedes the read-back, so verify_failed used to be the ONE refusal that left
+  # the manifest replaced. The primitive now ROLLS IT BACK, which is what makes every adopter's
+  # "a refused write changes nothing" sentence true instead of true-for-most-causes. What is
+  # asserted here is therefore the restore, not the residue.
+  assert_contains "read-back: the refusal says the write was rolled back" "$RR_OUT" \
+    "ROLLED THE WRITE BACK"
+  assert_file_not_contains "read-back: and the evidence block is NOT left installed" \
     "$RRP_M32" 'red-run.sh:begin'
+  assert_file_contains "read-back: the manifest still holds its pre-capture content" \
+    "$RRP_M32" 'status: NOT-A-STATUS'
   rrp_end
 fi
 

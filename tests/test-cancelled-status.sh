@@ -407,19 +407,27 @@ else
   assert_eq "consumer-scan: the review-provenance exemption's 'no predicate reads a task status' claim still holds" \
     "$(grep -E "$SCS_STATUS_TOKENS" "$RP_SRC" | grep -vE '^[[:space:]]*#' | grep -cvE 'printf|echo')" "0"
 
-  # The doctor.sh arm (#286) is justified BEHAVIOURALLY: its (o) red-run-coverage check globs
-  # nazgul/tasks/TASK-*.md status-blind, so two fixtures differing only in `status:` must agree.
+  # lean-comments: allow-run — why the doctor exemption was retired
+  # doctor.sh WAS exempt on the claim that its (o) check "reads no task status at all"
+  # (#286). That claim is now false and the exemption is retired: (o) reads each manifest's
+  # status to decide whether the gate has ever APPLIED to it, because the gate fires on the
+  # IN_PROGRESS -> IMPLEMENTED edge and re-asking it about work that has not started reported
+  # every PLANNED task as a backlog item. So doctor is now an ordinary CANCELLED-aware
+  # consumer, and what is pinned below is the DISCRIMINATION it makes, not its absence.
   DOCTOR_SRC="$REPO_ROOT/scripts/doctor.sh"
   DOCTOR_CODE=$(scs_code "$DOCTOR_SRC")
   if [ -n "$DOCTOR_CODE" ]; then
-    _pass "consumer-scan: doctor.sh's non-comment body was extracted (the claim below reads something)"
+    _pass "consumer-scan: doctor.sh's non-comment body was extracted (the claims below read something)"
   else
     _fail "consumer-scan: doctor.sh's non-comment body was extracted" \
-      "scs_code returned nothing, so the claim below would pass by never looking"
+      "scs_code returned nothing, so the claims below would pass by never looking"
   fi
-  # The structural half reuses the scan's OWN reach signals rather than a second authored copy.
-  assert_eq "consumer-scan: the doctor.sh exemption's 'reads no task status' claim still holds" \
-    "$(grep -cE "(${SCS_SIGNAL_AUTHORITY}|${SCS_SIGNAL_FIELD})" <<< "$DOCTOR_CODE")" "0"
+  # The retirement is asserted structurally: doctor really does reach a status now, so an
+  # exemption restored on the old wording would be provably stale rather than merely unfashionable.
+  assert_eq "consumer-scan: doctor.sh now genuinely reaches a task status, so the old exemption cannot return" \
+    "$([ "$(grep -cE "(${SCS_SIGNAL_AUTHORITY}|${SCS_SIGNAL_FIELD})" <<< "$DOCTOR_CODE")" -gt 0 ] && echo yes || echo no)" "yes"
+  assert_eq "consumer-scan: and doctor.sh is no longer carried as an enumerated exemption" \
+    "$(scs_exemption_paths | grep -cx 'scripts/doctor.sh')" "0"
 
   _dcs_doctor_report() { # <status> -> doctor's red-run-coverage report line for one such manifest
     local st="$1" out
@@ -434,10 +442,22 @@ else
   }
   DCS_CANCELLED=$(_dcs_doctor_report CANCELLED)
   DCS_IMPLEMENTED=$(_dcs_doctor_report IMPLEMENTED)
-  assert_contains "consumer-scan: the doctor.sh exemption was driven against a real finding, not a vacuous run" \
-    "$DCS_CANCELLED" "1 scanned, 0 skipped (unreadable=0, not-applicable=0), 1 checked, 1 findings"
-  assert_eq "consumer-scan: doctor.sh reports a CANCELLED manifest exactly as it reports an IMPLEMENTED one" \
-    "$DCS_CANCELLED" "$DCS_IMPLEMENTED"
+  DCS_IN_REVIEW=$(_dcs_doctor_report IN_REVIEW)
+  DCS_PLANNED=$(_dcs_doctor_report PLANNED)
+  # Without this row the two skip rows below could both pass on a fixture nothing could
+  # ever flag, which is the vacuous green they exist to rule out.
+  assert_contains "consumer-scan: an IMPLEMENTED manifest the gate applies to is a real finding, not a vacuous run" \
+    "$DCS_IMPLEMENTED" "1 scanned, 0 skipped (unreadable=0, not-applicable=0, not-yet-gated=0), 1 checked, 1 findings"
+  # CANCELLED will never ship, so its evidence is moot; PLANNED has never faced the gate.
+  # Both are SKIPPED WITH A REASON and counted, never dropped and never called findings.
+  assert_contains "consumer-scan: a CANCELLED manifest is skipped as not-yet-gated, never reported as owing evidence" \
+    "$DCS_CANCELLED" "1 scanned, 1 skipped (unreadable=0, not-applicable=0, not-yet-gated=1), 0 checked, 0 findings"
+  assert_eq "consumer-scan: and a PLANNED manifest is treated identically — neither has faced the gate" \
+    "$DCS_PLANNED" "$DCS_CANCELLED"
+  # The discrimination is ONLY about whether the gate has applied. Among statuses that HAVE
+  # reached it, doctor still reports byte-identically — the surviving half of #286.
+  assert_eq "consumer-scan: doctor.sh reports an IN_REVIEW manifest exactly as it reports an IMPLEMENTED one" \
+    "$DCS_IN_REVIEW" "$DCS_IMPLEMENTED"
 
   # The staleness checks read the live oracle's own case arms. An extraction that
   # returns nothing would pass both of them by never looking (RULES.md §15).

@@ -382,7 +382,10 @@ else
     "$MWI_M_PRIMITIVE" "1"
 fi
 
-# --- The six adopters, named one by one (AC-5) ---
+# lean-comments: allow-run — why the primitive is not counted as an adopter
+# --- The five adopters, named one by one (AC-5) ---
+# scripts/lib/manifest-write.sh DEFINES the primitive rather than adopting it, and is
+# asserted separately below as `primitive`.
 
 for mwi_adopter in \
   scripts/task-transition.sh \

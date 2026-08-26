@@ -439,5 +439,51 @@ else
 fi
 assert_not_contains "_ttg_release_lock alias releases the directory it took" "$ALIAS_OUT" "STILL-LOCKED"
 
+# lean-comments: allow-run — why both manifest shapes are driven here
+# --- Both addressable manifest shapes (#293) ---
+# /nazgul:patch writes PATCH-NNN under tasks/patches/, and task-state-guard runs the
+# IMPLEMENTED red-run gate for PATCH ids. A primitive that cannot address that manifest
+# leaves the route with no locked, atomic, read-back install at all — which is how
+# red-run came to refuse PATCH ids outright while their own gate still demanded evidence.
+mkdir -p "$NZ/tasks/patches"
+printf -- '- **Status**: IN_PROGRESS\n' > "$NZ/tasks/patches/PATCH-004.md"
+mw_to_implemented() { awk '{sub(/IN_PROGRESS/,"IMPLEMENTED")} 1' "$1"; }
+
+mw_fixture TASK-014 IN_PROGRESS
+nz_manifest_write "$NZ" TASK-014 -- mw_to_implemented >/dev/null 2>&1
+assert_file_contains "shape control: a TASK-NNN manifest still installs" \
+  "$NZ/tasks/TASK-014.md" "IMPLEMENTED"
+
+nz_manifest_write "$NZ" PATCH-004 -- mw_to_implemented >/dev/null 2>&1
+assert_file_contains "a PATCH-NNN manifest under tasks/patches/ installs through the primitive" \
+  "$NZ/tasks/patches/PATCH-004.md" "IMPLEMENTED"
+
+# lean-comments: allow-run — why each refusal reads back its escape target
+# The patches/ level earns the SAME path discipline as tasks/, so widening the address
+# space did not widen what a symlink can reach. Each refusal is asserted with the escape
+# target read back, because "it returned non-zero" is not "it wrote nothing".
+MW_ESC=$(mktemp -d)
+MW_SYM="$TEST_DIR/symroot"
+mkdir -p "$MW_SYM/tasks"
+printf -- '- **Status**: IN_PROGRESS\n' > "$MW_ESC/PATCH-004.md"
+ln -s "$MW_ESC" "$MW_SYM/tasks/patches"
+MW_SYM_ERR=$(nz_manifest_write "$MW_SYM" PATCH-004 -- mw_to_implemented 2>&1) || true
+assert_contains "a symlinked tasks/patches/ is refused by name" \
+  "$MW_SYM_ERR" "is not a regular non-symlink directory"
+assert_file_contains "and the escape target is left untouched" \
+  "$MW_ESC/PATCH-004.md" "IN_PROGRESS"
+
+MW_ID_ERR=$(nz_manifest_write "$NZ" 'PATCH-4/../../etc' -- mw_to_implemented 2>&1) || true
+assert_contains "a traversal-shaped id is refused before any path is built" \
+  "$MW_ID_ERR" "task id must match TASK-[0-9]+ or PATCH-[0-9]+"
+
+MW_TGT="$SCRATCH/patch-target.md"
+printf -- '- **Status**: IN_PROGRESS\n' > "$MW_TGT"
+ln -s "$MW_TGT" "$NZ/tasks/patches/PATCH-009.md"
+MW_LINK_ERR=$(nz_manifest_write "$NZ" PATCH-009 -- mw_to_implemented 2>&1) || true
+assert_contains "a symlinked PATCH manifest is refused" "$MW_LINK_ERR" "it is a symlink"
+assert_file_contains "and its target is left untouched" "$MW_TGT" "IN_PROGRESS"
+rm -rf "$MW_ESC"
+
 teardown_temp_dir
 report_results

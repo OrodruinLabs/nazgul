@@ -561,7 +561,7 @@ _TTG_TASK_DIFF_DETAIL=""
 _ttg_task_commit_diff() {
   local project_root="$1" manifest_text="$2"
   shift 2
-  local commits sha one out="" seen=0 resolved=0 unresolved=0 failed=0
+  local commits sha one out="" seen=0 resolved=0 unresolved=0 failed=0 merges=0 parents
   _TTG_TASK_DIFF_OUT=""
   _TTG_TASK_DIFF_DETAIL=""
   commits=$(printf '%s' "$manifest_text" | awk '/^## Commits/{f=1;next} /^## /{f=0} f')
@@ -570,6 +570,18 @@ _ttg_task_commit_diff() {
     seen=$((seen + 1))
     if ! git -C "$project_root" cat-file -e "${sha}^{commit}" 2>/dev/null; then
       unresolved=$((unresolved + 1))
+      continue
+    fi
+    # lean-comments: allow-run — why a merge commit is skipped rather than diffed
+    # A merge commit AUTHORED none of what its first-parent diff lists: `git diff <merge>^ <merge>`
+    # is the entire delta the merged branch brought in. This repo merges main into an objective
+    # branch rather than rebasing (never rebase — it dangles the SHAs the manifests record), so a
+    # recorded merge would re-acquire the branch-cumulative set #241 removed, by the very route
+    # #241 closed. Counted and skipped, never diffed — and named in the detail so a task whose
+    # ONLY recorded commits are merges reads as "nothing derivable", not as "nothing changed".
+    parents=$(git -C "$project_root" rev-list --parents -n 1 "$sha" 2>/dev/null | wc -w | tr -d '[:space:]')
+    if [ -n "$parents" ] && [ "$parents" -gt 2 ]; then
+      merges=$((merges + 1))
       continue
     fi
     if git -C "$project_root" rev-parse --verify --quiet "${sha}^{commit}^" >/dev/null 2>&1; then
@@ -586,16 +598,21 @@ _ttg_task_commit_diff() {
 "
   done < <(printf '%s' "$commits" | grep -oE "$TTG_SHA_SCAN_RE" || true)
 
+  # lean-comments: allow-run — why empty and unreadable take opposite dispositions
+  # 2, not 1: an EMPTY `## Commits` is not an unreadable one. Nothing was recorded, so nothing
+  # could be read, and a caller that fails closed on unreadability would be failing closed on a
+  # task that has simply not committed yet. The two states get two return codes so each caller
+  # picks its own disposition; every existing caller tests success/failure and is unaffected.
   if [ "$seen" -eq 0 ]; then
     _TTG_TASK_DIFF_DETAIL="the manifest records no SHA under ## Commits"
-    return 1
+    return 2
   fi
   if [ "$resolved" -eq 0 ]; then
-    _TTG_TASK_DIFF_DETAIL="none of the ${seen} SHA(s) under ## Commits could be diffed in ${project_root} (unresolvable=${unresolved}, diff-failed=${failed})"
+    _TTG_TASK_DIFF_DETAIL="none of the ${seen} SHA(s) under ## Commits could be diffed in ${project_root} (unresolvable=${unresolved}, diff-failed=${failed}, merges-skipped=${merges})"
     return 1
   fi
-  [ "$((unresolved + failed))" -eq 0 ] \
-    || _TTG_TASK_DIFF_DETAIL="only ${resolved} of ${seen} SHA(s) under ## Commits could be diffed (unresolvable=${unresolved}, diff-failed=${failed})"
+  [ "$((unresolved + failed + merges))" -eq 0 ] \
+    || _TTG_TASK_DIFF_DETAIL="only ${resolved} of ${seen} SHA(s) under ## Commits could be diffed (unresolvable=${unresolved}, diff-failed=${failed}, merges-skipped=${merges})"
   _TTG_TASK_DIFF_OUT=$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | LC_ALL=C sort -u || true)
   return 0
 }
@@ -609,7 +626,12 @@ _ttg_task_commit_diff() {
 # scope): the commits are readable in principle, so their absence is ambiguity. Git being
 # unavailable is not ambiguity but impossibility — red-run.sh cannot capture evidence
 # without git either — so that state still degrades loudly to the manifest field alone
-# rather than raising a gate nothing in that tree could satisfy.
+# rather than raising a gate nothing in that tree could satisfy. An EMPTY `## Commits` is a
+# THIRD state and takes the impossibility disposition, not the ambiguity one: nothing was
+# recorded, so nothing could be read, and failing closed there charged every PLANNED/READY
+# manifest with an obligation its own File Scope never declared — a gate raised against work
+# that has not started. It degrades to the manifest field alone and SAYS which of the three
+# it took, so "asked and the scope is clean" never reads the same as "could not ask".
 _ttg_red_run_in_scope() {
   local manifest_text="$1" project_root="$2"
   local nazgul_dir="${3:-$project_root/nazgul}"
@@ -631,18 +653,24 @@ $(printf '%s' "$manifest_text" | awk '/^## File Scope/{f=1;next} /^## /{f=0} f' 
     return 0
   fi
 
+  local diff_rc=0
   if ! command -v git >/dev/null 2>&1; then
     degrade="git unavailable"
   elif ! git -C "$project_root" rev-parse --git-dir >/dev/null 2>&1; then
     degrade="project root is not a git repository"
-  elif ! _ttg_task_commit_diff "$project_root" "$manifest_text"; then
-    echo "ttg_verify_red_run_evidence: red-run scope predicate could not read this task's own committed diff (${_TTG_TASK_DIFF_DETAIL}) — failing closed, this task is treated as in scope" >&2
-    return 0
   else
-    [ -z "$_TTG_TASK_DIFF_DETAIL" ] \
-      || echo "ttg_verify_red_run_evidence: red-run scope predicate read a PARTIAL commit set (${_TTG_TASK_DIFF_DETAIL})" >&2
-    if printf '%s\n' "$_TTG_TASK_DIFF_OUT" | grep -qE "^(${alt})/"; then
+    _ttg_task_commit_diff "$project_root" "$manifest_text" || diff_rc=$?
+    if [ "$diff_rc" -eq 2 ]; then
+      degrade="$_TTG_TASK_DIFF_DETAIL"
+    elif [ "$diff_rc" -ne 0 ]; then
+      echo "ttg_verify_red_run_evidence: red-run scope predicate could not read this task's own committed diff (${_TTG_TASK_DIFF_DETAIL}) — failing closed, this task is treated as in scope" >&2
       return 0
+    else
+      [ -z "$_TTG_TASK_DIFF_DETAIL" ] \
+        || echo "ttg_verify_red_run_evidence: red-run scope predicate read a PARTIAL commit set (${_TTG_TASK_DIFF_DETAIL})" >&2
+      if printf '%s\n' "$_TTG_TASK_DIFF_OUT" | grep -qE "^(${alt})/"; then
+        return 0
+      fi
     fi
   fi
 
@@ -2054,7 +2082,13 @@ _ttg_transition_producer() {
     manifest=$(cat "$snapshot")
     ttg_validate_transition "$nazgul_dir" "$project_root" "$task_id" "$from" "$to" "$manifest" \
       || return 1
-    _TTG_STAGED_BEFORE_HASH=$(_rp_sha256 < "$snapshot") || _TTG_STAGED_BEFORE_HASH=""
+    # lean-comments: allow-run — why the primitive owns this hash
+    # The primitive already hashed these exact bytes and published the result; recomputing
+    # it here spawned a second subprocess per transition to derive a number that must equal
+    # the one already in hand. The fallback keeps this producer usable outside the primitive.
+    _TTG_STAGED_BEFORE_HASH="${NZ_MW_BEFORE_HASH:-}"
+    [ -n "$_TTG_STAGED_BEFORE_HASH" ] \
+      || _TTG_STAGED_BEFORE_HASH=$(_rp_sha256 < "$snapshot") || _TTG_STAGED_BEFORE_HASH=""
     set_task_status "$snapshot" "$from" "$to"
     if [ "$(get_task_status "$snapshot" "")" != "$to" ]; then
       echo "ttg_apply_transition: staged status rewrite did not reach ${to}" >&2

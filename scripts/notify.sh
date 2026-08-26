@@ -172,6 +172,30 @@ if [[ -z "$TRIMMED" ]]; then
     output_result
 fi
 
+# lean-comments: allow-run — why a notifier screens a config value before running it
+# Screened before execution, as red-run screens project.test_command and for the same
+# reason: notify runs this string through /bin/sh directly, so it never reaches the
+# PreToolUse Bash guard, and a denylisted command relocated into nazgul/config.json would
+# otherwise run unguarded every time the loop completes. Fail-closed on a hit and stay
+# non-blocking: the notification is skipped, the refusal is logged, and the hook still
+# returns its ordinary envelope — a notifier must never end the loop.
+DP_LIB="${CLAUDE_PLUGIN_ROOT:-$SCRIPT_DIR/..}/scripts/lib/destructive-patterns.sh"
+[ -r "$DP_LIB" ] || DP_LIB="$SCRIPT_DIR/lib/destructive-patterns.sh"
+if [[ -r "$DP_LIB" ]]; then
+    # shellcheck source=./lib/destructive-patterns.sh
+    source "$DP_LIB"
+    DP_EC=0
+    dp_scan_command "$NOTIFY_CMD" || DP_EC=$?
+    if [[ "$DP_EC" -eq 2 ]]; then
+        echo "NAZGUL NOTIFY: REFUSED to run notifications.on_complete — it is on the destructive-command denylist (${DP_REASON}; matched: ${DP_PATTERN}). No notification was sent and nothing was executed." >&2
+        debug_log "Notification command refused by the destructive-command denylist: $DP_REASON"
+        output_result
+    fi
+else
+    echo "NAZGUL NOTIFY: could not read ${DP_LIB}, so notifications.on_complete was NOT screened against the destructive-command denylist before running." >&2
+    debug_log "Denylist library unreadable — command executed unscreened"
+fi
+
 debug_log "Executing notification command"
 
 # --- Execute with timeout ---
