@@ -46,6 +46,14 @@ per-batch labels for its own task commits (see "PR #254's own review board found
 `objectives_history` and are unrelated to this entry. The tracked `objectives_history`'s only
 `FEAT-035` is the one this entry describes, started `2026-08-25T22:36:00Z`.
 
+### Release-step verification
+
+RULES.md's rule-tier tally is unchanged at **94 enforced / 36 advisory / 23 hook-driven only** — this
+pass touched no script, hook, guard, config key, or rule tag, so the count already on record from the
+prior release stands. Re-read directly from `RULES.md`'s own `[enforced]`/`[advisory]`/`[hook-driven
+only]` tags at release time, and checked against that same derivation by
+`tests/test-doc-contract-fields.sh`.
+
 ## [2.36.0] - 2026-08-25
 
 ### PR #254, third review pass — eleven findings, all closed
