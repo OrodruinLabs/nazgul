@@ -73,7 +73,7 @@ run_hook() {
   HOOK_OUTPUT=$(bash "$STOP_HOOK" </dev/null 2>&1) && HOOK_EC=0 || HOOK_EC=$?
 }
 
-# 1/21 scripts/session-context.sh. FIRST deliberately: at the pre-change base the
+# 1/22 scripts/session-context.sh. FIRST deliberately: at the pre-change base the
 # injected summary carries no cancelled figure, so this reads as "it did not exist".
 consumer_begin
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
@@ -117,7 +117,7 @@ assert_contains "session-context: an uncancelled run reports zero, not silence" 
   "$SC_ALL_DONE" "0 cancelled"
 consumer_end
 
-# 2/21 scripts/post-compact.sh — the same summary, re-injected after compaction.
+# 2/22 scripts/post-compact.sh — the same summary, re-injected after compaction.
 consumer_begin
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
 create_config
@@ -134,7 +134,7 @@ assert_contains "post-compact: the cancelled task still counts into the total" \
 teardown_temp_dir
 consumer_end
 
-# 3/21 scripts/pre-compact.sh — the checkpoint is what recovery reads, so its
+# 3/22 scripts/pre-compact.sh — the checkpoint is what recovery reads, so its
 # buckets must still sum to total with a cancelled task present.
 consumer_begin
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
@@ -158,7 +158,7 @@ assert_eq "pre-compact: the checkpoint buckets sum to total_tasks" "$CP_SUM" "$C
 teardown_temp_dir
 consumer_end
 
-# 4/21 scripts/board-sync-github.sh. Its unhandled-status path REOPENS the issue,
+# 4/22 scripts/board-sync-github.sh. Its unhandled-status path REOPENS the issue,
 # so the miss-mode here is an active wrong action, not a stall.
 board_fixture() { # <status>
   setup_temp_dir; setup_git_repo; setup_nazgul_dir
@@ -486,7 +486,7 @@ else
 fi
 consumer_end
 
-# 5/21 skills/status/SKILL.md — the operator-facing report.
+# 5/22 skills/status/SKILL.md — the operator-facing report.
 consumer_begin
 STATUS_SKILL="$REPO_ROOT/skills/status/SKILL.md"
 if [ ! -r "$STATUS_SKILL" ]; then
@@ -507,7 +507,7 @@ else
 fi
 consumer_end
 
-# 6/21 scripts/lib/structured-state.sh (TASK-002) — vocabulary, never the
+# 6/22 scripts/lib/structured-state.sh (TASK-002) — vocabulary, never the
 # off-vocabulary placeholder.
 consumer_begin
 setup_temp_dir; setup_nazgul_dir
@@ -523,7 +523,7 @@ fi
 teardown_temp_dir
 consumer_end
 
-# 7/21 scripts/lib/task-transition-guard.sh (TASK-002) — the edge set, the
+# 7/22 scripts/lib/task-transition-guard.sh (TASK-002) — the edge set, the
 # quarantine refusal, and the dependency gate.
 consumer_begin
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
@@ -558,7 +558,7 @@ fi
 teardown_temp_dir
 consumer_end
 
-# 8/21 scripts/lib/task-utils.sh (TASK-002) — the one counter five call sites read.
+# 8/22 scripts/lib/task-utils.sh (TASK-002) — the one counter five call sites read.
 consumer_begin
 setup_temp_dir; setup_nazgul_dir
 create_task_file "TASK-001" "CANCELLED"
@@ -575,7 +575,7 @@ consumer_end
 COMPLETION_CONFIG=('.agents.reviewers = ["code-reviewer"]' '.learning.auto_distill_post_loop = false'
   '.docs.verify_comments = false' '.self_audit.enabled = false')
 
-# 9/21 scripts/stop-hook.sh completion predicate (TASK-002).
+# 9/22 scripts/stop-hook.sh completion predicate (TASK-002).
 consumer_begin
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
 create_config "${COMPLETION_CONFIG[@]}"
@@ -591,7 +591,7 @@ assert_contains "stop-hook completion: the done/cancelled split is reported" \
 teardown_temp_dir
 consumer_end
 
-# 10/21 scripts/stop-hook.sh aggregate-unit walk (TASK-003) — CANCELLED leaves the
+# 10/22 scripts/stop-hook.sh aggregate-unit walk (TASK-003) — CANCELLED leaves the
 # unit, BLOCKED still holds it.
 consumer_begin
 setup_temp_dir; setup_git_repo; setup_nazgul_dir
@@ -620,7 +620,7 @@ assert_not_contains "stop-hook unit walk: a BLOCKED sibling still holds the unit
 teardown_temp_dir
 consumer_end
 
-# 11/21 skills/task/SKILL.md `skip` (TASK-002).
+# 11/22 skills/task/SKILL.md `skip` (TASK-002).
 consumer_begin
 TASK_SKILL="$REPO_ROOT/skills/task/SKILL.md"
 if [ ! -r "$TASK_SKILL" ]; then
@@ -640,7 +640,7 @@ else
 fi
 consumer_end
 
-# 12/21 CONSUMER scripts/lib/parallel-batch.sh. ADR-022 called it a non-consumer on
+# 12/22 CONSUMER scripts/lib/parallel-batch.sh. ADR-022 called it a non-consumer on
 # `_pb_blocked_tasks` alone; two further status predicates vetoed a cancelled dep.
 consumer_begin
 setup_temp_dir; setup_nazgul_dir
@@ -720,7 +720,7 @@ assert_eq "parallel-batch control: a BLOCKED dependency still layers its depende
 teardown_temp_dir
 consumer_end
 
-# 13/21 CONSUMER scripts/parallel-dispatch-guard.sh — never enumerated by ADR-022 at
+# 13/22 CONSUMER scripts/parallel-dispatch-guard.sh — never enumerated by ADR-022 at
 # all. A CANCELLED unit will never ship, so re-dispatching it is the wasted work.
 dispatch_ec() { # <subagent_type> <prompt>
   local ec=0
@@ -745,7 +745,7 @@ assert_eq "dispatch guard control: a READY unit is still dispatchable" \
 teardown_temp_dir
 consumer_end
 
-# 14/21 CONSUMER scripts/task-transition.sh — ADR-022 exempted it as hardcoding no
+# 14/22 CONSUMER scripts/task-transition.sh — ADR-022 exempted it as hardcoding no
 # status vocabulary; `repair`'s quarantine-metadata check hardcodes one.
 repair_stderr() {
   { CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TRANSITION" repair TASK-001 >/dev/null; } 2>&1 || true
@@ -773,7 +773,7 @@ assert_contains "task-transition control: a genuinely off-vocabulary endpoint is
 teardown_temp_dir
 consumer_end
 
-# 15/21 NON-CONSUMER scripts/parallel-rework-guard.sh — ownership needs
+# 15/22 NON-CONSUMER scripts/parallel-rework-guard.sh — ownership needs
 # DONE|IMPLEMENTED *and* a recorded commit, so a cancelled task can own no scope.
 rework_ec() { # <file_path>
   local ec=0
@@ -804,7 +804,7 @@ assert_eq "rework guard control: the same manifest at DONE does own it" \
 teardown_temp_dir
 consumer_end
 
-# 16/21 NON-CONSUMER scripts/webhook-forward.sh — counts DONE only, via its own
+# 16/22 NON-CONSUMER scripts/webhook-forward.sh — counts DONE only, via its own
 # legacy-format grep, so the fixture is legacy or the assertion would be vacuous.
 consumer_begin
 setup_temp_dir; setup_nazgul_dir
@@ -828,7 +828,7 @@ fi
 teardown_temp_dir
 consumer_end
 
-# 17/21 NON-CONSUMER scripts/git-hooks/pre-merge-commit — identity is a SHA under
+# 17/22 NON-CONSUMER scripts/git-hooks/pre-merge-commit — identity is a SHA under
 # ## Commits or a feat/<x>/TASK-NNN ref; a cancelled task ships neither.
 pm_init_repo() {
   mkdir -p "$1"
@@ -900,7 +900,7 @@ assert_contains "pre-merge: the block names the cancelled unit" "$PM_STDERR" "TA
 teardown_temp_dir
 consumer_end
 
-# 18/21 NON-CONSUMER scripts/scrub-stale-review-artifacts.sh — examined and exempt:
+# 18/22 NON-CONSUMER scripts/scrub-stale-review-artifacts.sh — examined and exempt:
 # its guard enumerates the OPEN statuses, and CANCELLED is terminal.
 consumer_begin
 SCRUB="$REPO_ROOT/scripts/scrub-stale-review-artifacts.sh"
@@ -921,7 +921,7 @@ else
 fi
 consumer_end
 
-# 19/21 skills/metrics/SKILL.md — the outcome report an operator reads after a run.
+# 19/22 skills/metrics/SKILL.md — the outcome report an operator reads after a run.
 consumer_begin
 METRICS_SKILL="$REPO_ROOT/skills/metrics/SKILL.md"
 if [ ! -r "$METRICS_SKILL" ]; then
@@ -942,7 +942,7 @@ else
 fi
 consumer_end
 
-# 20/21 templates/task-manifest.md — the state-machine contract every new manifest carries.
+# 20/22 templates/task-manifest.md — the state-machine contract every new manifest carries.
 consumer_begin
 MANIFEST_TEMPLATE="$REPO_ROOT/templates/task-manifest.md"
 if [ ! -r "$MANIFEST_TEMPLATE" ]; then
@@ -974,7 +974,7 @@ else
 fi
 consumer_end
 
-# 21/21 RULES.md — the durable contract; §2 is where a reader learns the status exists.
+# 21/22 RULES.md — the durable contract; §2 is where a reader learns the status exists.
 consumer_begin
 RULES_DOC="$REPO_ROOT/RULES.md"
 if [ ! -r "$RULES_DOC" ]; then
@@ -1004,6 +1004,221 @@ else
 fi
 consumer_end
 
+# lean-comments: allow-run
+# 22/22 skills/start/SKILL.md — the DESTRUCTIVE consumer (#108 / ADR-033). Its counts feed a
+# state machine whose default arm ARCHIVES plan.md, tasks/, reviews/, docs/ and checkpoints/,
+# so a status it could not read must never render as `0`. These rows do not read the skill's
+# prose: they EXTRACT the shipped `!`-fenced preprocessor command string and RUN it against
+# fixtures. Asserting on the file's text would be #108's own defect one level up.
+consumer_begin
+START_SKILL="$REPO_ROOT/skills/start/SKILL.md"
+
+start_pp_command() { # <skill-file> <line-label> -> the command inside that line's !`…` fence
+  awk -v label="$2" '
+    index($0, label) == 1 {
+      i = index($0, "!`"); if (i == 0) next
+      s = substr($0, i + 2)
+      j = length(s); while (j > 0 && substr(s, j, 1) != "`") j--
+      if (j == 0) next
+      print substr(s, 1, j - 1); exit
+    }' "$1"
+}
+
+# The minimal read every count-consuming state has to perform: one numeric field, or nothing.
+start_field() { # <emitted-line> <field> -> value on stdout; empty when it is not readable
+  awk -v k="$2" '{
+    n = split($0, W, " ")
+    for (i = 1; i <= n; i++)
+      if (index(W[i], k "=") == 1) {
+        v = substr(W[i], length(k) + 2)
+        if (v ~ /^[0-9]+$/) { print v; exit }
+      }
+  }' <<< "$1"
+}
+
+start_counts() { # <fixture-dir> [<plugin-root>] -> the line the preprocessor would emit
+  ( cd "$1" && env CLAUDE_PLUGIN_ROOT="${2-$REPO_ROOT}" bash -c "$START_COUNTS_CMD" 2>/dev/null )
+}
+
+start_no_field_readable() { # <emitted-line> <label>
+  local line="$1" label="$2" k v bad=""
+  for k in active "done" cancelled total; do
+    v=$(start_field "$line" "$k")
+    [ -n "$v" ] && bad="$bad $k=$v"
+  done
+  if [ -z "$bad" ]; then
+    _pass "start skill [$label]: no count field is readable, so no count-consuming state can match"
+  else
+    _fail "start skill [$label]: no count field is readable" \
+      "expected: none of active/done/cancelled/total" "  actual:$bad"
+  fi
+}
+
+START_COUNTS_CMD=""
+if [ ! -r "$START_SKILL" ]; then
+  consumer_undrivable "skills/start/SKILL.md"
+else
+  consumer_checked
+  START_COUNTS_CMD=$(start_pp_command "$START_SKILL" "- Task counts:")
+  if [ -z "$START_COUNTS_CMD" ]; then
+    _fail "start skill: the Task counts preprocessor command was extracted and is runnable" \
+      "no '- Task counts: !\`…\`' line in skills/start/SKILL.md" \
+      "  every row below would be vacuous, so they are not run"
+  else
+    _pass "start skill: the Task counts preprocessor command was extracted (${#START_COUNTS_CMD} bytes)"
+
+    # (a) Counts read. The whole vocabulary is present, so `active` cannot be a
+    # coincidence of one status: 6 total, 1 DONE, 1 CANCELLED, 4 still open.
+    setup_temp_dir; setup_nazgul_dir
+    create_task_file "TASK-001" "DONE"
+    create_task_file "TASK-002" "CANCELLED"
+    create_task_file "TASK-003" "READY"
+    create_task_file "TASK-004" "IN_PROGRESS"
+    create_task_file "TASK-005" "IMPLEMENTED"
+    create_task_file "TASK-006" "BLOCKED"
+    SB_GOOD=$(start_counts "$TEST_DIR")
+    assert_eq "start skill (a): the shipped command reads every manifest's status" \
+      "$SB_GOOD" "active=4 done=1 cancelled=1 total=6"
+    assert_eq "start skill (a): active is readable as a number, not just present as text" \
+      "$(start_field "$SB_GOOD" active)" "4"
+    assert_eq "start skill (a): CANCELLED gets its own bucket" \
+      "$(start_field "$SB_GOOD" cancelled)" "1"
+    assert_eq "start skill (a): and is never folded into done" \
+      "$(start_field "$SB_GOOD" "done")" "1"
+    assert_not_contains "start skill (a): the structural false zero of #108 is gone" \
+      "$SB_GOOD" "active=0"
+    teardown_temp_dir
+
+    # OBJECTIVE_COMPLETE's condition is done + cancelled == total, not done == total:
+    # one cancellation used to make it unreachable forever (the #203 veto shape).
+    setup_temp_dir; setup_nazgul_dir
+    create_task_file "TASK-001" "DONE"
+    create_task_file "TASK-002" "CANCELLED"
+    SB_TERMINAL=$(start_counts "$TEST_DIR")
+    assert_eq "start skill (a): an all-terminal set leaves no active work" \
+      "$(start_field "$SB_TERMINAL" active)" "0"
+    assert_eq "start skill (a): and done + cancelled reaches total, so OBJECTIVE_COMPLETE is reachable" \
+      "$(( $(start_field "$SB_TERMINAL" "done") + $(start_field "$SB_TERMINAL" cancelled) ))" \
+      "$(start_field "$SB_TERMINAL" total)"
+    teardown_temp_dir
+
+    # (b) A real zero. FRESH must stay reachable when the project genuinely has no tasks.
+    setup_temp_dir; setup_nazgul_dir
+    SB_EMPTY=$(start_counts "$TEST_DIR")
+    assert_eq "start skill (b): an empty tasks dir is a real zero, in all four fields" \
+      "$SB_EMPTY" "active=0 done=0 cancelled=0 total=0"
+    assert_eq "start skill (b): and that zero is READABLE, which is what makes FRESH legitimate" \
+      "$(start_field "$SB_EMPTY" total)" "0"
+    teardown_temp_dir
+    setup_temp_dir
+    SB_ABSENT=$(start_counts "$TEST_DIR")
+    assert_eq "start skill (b): an absent tasks dir is the same real zero" \
+      "$SB_ABSENT" "active=0 done=0 cancelled=0 total=0"
+    teardown_temp_dir
+
+    # (c) Unreadable with total > 0 — the #108 shape verbatim: no frontmatter status,
+    # only the body placeholder whose literal text the old grep counted as a value.
+    setup_temp_dir; setup_nazgul_dir
+    create_task_file "TASK-001" "DONE"
+    printf '# TASK-002: t\n\n- **Status**: (see `status:` in the frontmatter block at the top)\n' \
+      > "$TEST_DIR/nazgul/tasks/TASK-002.md"
+    SB_PLACEHOLDER=$(start_counts "$TEST_DIR")
+    assert_contains "start skill (c): the #108 placeholder emits UNREADABLE, never a count" \
+      "$SB_PLACEHOLDER" "UNREADABLE"
+    assert_contains "start skill (c): the reason is named" "$SB_PLACEHOLDER" "reason=unreadable_status"
+    assert_contains "start skill (c): and so is the manifest that could not be read" \
+      "$SB_PLACEHOLDER" "TASK-002.md"
+    start_no_field_readable "$SB_PLACEHOLDER" "c: placeholder"
+    assert_eq "start skill (c): total is unreadable, NOT the 0 that routes to FRESH" \
+      "$(start_field "$SB_PLACEHOLDER" total)" ""
+    # Positive control: the same fixture, one repaired manifest, does emit counts —
+    # so the empty reads above are a refusal, not a broken probe.
+    create_task_file "TASK-002" "READY"
+    SB_REPAIRED=$(start_counts "$TEST_DIR")
+    assert_eq "start skill (c): positive control — repairing that manifest emits counts again" \
+      "$SB_REPAIRED" "active=1 done=1 cancelled=0 total=2"
+    teardown_temp_dir
+
+    # An off-vocabulary frontmatter value is the same refusal by a different route.
+    setup_temp_dir; setup_nazgul_dir
+    create_task_file "TASK-001" "DONE"
+    create_task_file "TASK-002" "WOBBLE"
+    SB_OFFVOCAB=$(start_counts "$TEST_DIR")
+    assert_contains "start skill (c): an off-vocabulary status is UNREADABLE too" \
+      "$SB_OFFVOCAB" "reason=unreadable_status"
+    start_no_field_readable "$SB_OFFVOCAB" "c: off-vocabulary"
+    teardown_temp_dir
+
+    # (d) The plugin-root dependency ADR-033 took on: its failure lands in the SAFE outcome.
+    setup_temp_dir; setup_nazgul_dir
+    create_task_file "TASK-001" "READY"
+    SB_CONTROL=$(start_counts "$TEST_DIR")
+    assert_eq "start skill (d): positive control — the same fixture reads fine with a good plugin root" \
+      "$SB_CONTROL" "active=1 done=0 cancelled=0 total=1"
+    SB_NOROOT=$( cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT bash -c "$START_COUNTS_CMD" 2>/dev/null )
+    assert_contains "start skill (d): an unset plugin root is UNREADABLE, not zero" \
+      "$SB_NOROOT" "reason=reader_unavailable"
+    start_no_field_readable "$SB_NOROOT" "d: plugin root unset"
+    SB_BADROOT=$(start_counts "$TEST_DIR" "$TEST_DIR/no-such-plugin-root")
+    assert_contains "start skill (d): an unresolvable plugin root is UNREADABLE, not zero" \
+      "$SB_BADROOT" "reason=reader_unavailable"
+    start_no_field_readable "$SB_BADROOT" "d: plugin root unresolvable"
+
+    # (e) A tasks dir the process cannot search reads as zero to a glob. It must not here.
+    if [ "$(id -u)" = "0" ]; then
+      _skip "start skill (e): an unsearchable tasks dir — root ignores the mode bits"
+    else
+      chmod 000 "$TEST_DIR/nazgul/tasks"
+      SB_LOCKED=$(start_counts "$TEST_DIR")
+      chmod 755 "$TEST_DIR/nazgul/tasks"
+      assert_contains "start skill (e): an unsearchable tasks dir is UNREADABLE, not an empty project" \
+        "$SB_LOCKED" "reason=tasks_dir_unreadable"
+      start_no_field_readable "$SB_LOCKED" "e: tasks dir unsearchable"
+    fi
+    teardown_temp_dir
+
+    # The `bash -c` wrapper exists so the reader's ${BASH_SOURCE[0]} resolves whatever
+    # shell runs the preprocessor line (#272 mode 5).
+    setup_temp_dir; setup_nazgul_dir
+    create_task_file "TASK-001" "CANCELLED"
+    if command -v zsh >/dev/null 2>&1; then
+      SB_ZSH=$( cd "$TEST_DIR" && env CLAUDE_PLUGIN_ROOT="$REPO_ROOT" zsh -c "$START_COUNTS_CMD" 2>/dev/null )
+      assert_eq "start skill: the shipped string emits the same line under zsh" \
+        "$SB_ZSH" "active=0 done=0 cancelled=1 total=1"
+    else
+      _skip "start skill: zsh cross-shell arm — zsh not installed"
+    fi
+    SB_SH=$( cd "$TEST_DIR" && env CLAUDE_PLUGIN_ROOT="$REPO_ROOT" sh -c "$START_COUNTS_CMD" 2>/dev/null )
+    assert_eq "start skill: and under sh" "$SB_SH" "active=0 done=0 cancelled=1 total=1"
+    teardown_temp_dir
+  fi
+
+  # (f) Order is the other half of the fix: below ACTIVE_LOOP the refusal would be
+  # unreachable exactly when a partial parse found one active task (ADR-033, detail 2).
+  START_STATE_ORDER=$(awk '/^#### STATE: /{print $3}' "$START_SKILL")
+  start_state_index() { awk -v s="$1" '$0 == s { print NR; exit }' <<< "$START_STATE_ORDER"; }
+  START_U_IDX=$(start_state_index "UNREADABLE")
+  if [ -z "$START_U_IDX" ]; then
+    _fail "start skill (f): the state machine declares an UNREADABLE state" \
+      "no '#### STATE: UNREADABLE' heading — the refusal has nowhere to land"
+  else
+    _pass "start skill (f): the state machine declares an UNREADABLE state"
+    for START_ST in ACTIVE_LOOP OBJECTIVE_COMPLETE DOCS_READY DISCOVERY_DONE FRESH; do
+      START_ST_IDX=$(start_state_index "$START_ST")
+      if [ -z "$START_ST_IDX" ]; then
+        _fail "start skill (f): $START_ST is still a declared state" \
+          "the ordering claim below would be vacuous against a state that does not exist"
+      elif [ "$START_U_IDX" -lt "$START_ST_IDX" ]; then
+        _pass "start skill (f): UNREADABLE is evaluated before $START_ST"
+      else
+        _fail "start skill (f): UNREADABLE is evaluated before $START_ST" \
+          "expected: UNREADABLE first" "  actual: UNREADABLE at $START_U_IDX, $START_ST at $START_ST_IDX"
+      fi
+    done
+  fi
+fi
+consumer_end
+
 rm -rf "$FAKEBIN" "$SETUP_BIN"
 
 # `deferred-to-TASK-013` is retired, not kept at a permanent =0: TASK-013 landed, so no
@@ -1011,7 +1226,7 @@ rm -rf "$FAKEBIN" "$SETUP_BIN"
 echo "  consumer-scan: ${CS_SCANNED} scanned, ${CS_SKIPPED} skipped (undrivable=${CS_UNDRIVABLE}), ${CS_CHECKED} checked, ${CS_FINDINGS} findings"
 assert_eq "consumer-scan: scanned == skipped + checked" \
   "$CS_SCANNED" "$((CS_SKIPPED + CS_CHECKED))"
-assert_eq "consumer-row registry: every row in THIS file was driven" "$CS_CHECKED" "21"
+assert_eq "consumer-row registry: every row in THIS file was driven" "$CS_CHECKED" "22"
 
 # The rows above are an authored registry, which certifies its author. The
 # denominator it cannot discharge is asked mechanically here instead.
