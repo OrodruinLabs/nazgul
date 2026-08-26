@@ -1,4 +1,4 @@
-# Guard Fail-Open Inventory — Enforcement Surface (Partial: 16 of ~46 Files)
+# Guard Fail-Open Inventory — Enforcement Surface (Partial: 16 of ~46 Files; `documented 125 → measured 242` rows, 2026-08-26 @ 92bf60f — W1)
 
 ## Scope boundary — read this before the table
 
@@ -81,14 +81,112 @@ deliberately excluded — in every instance checked, `return 1` propagates FAILU
 direction), the opposite of this pattern class, and including it would have diluted the table with
 non-findings.
 
-**As of this task's base commit, this grep returns exactly 125 lines across the 16 files** — the table
-below has exactly 125 rows, one per line, in the same order. **90 are (a), 18 are (b), 17 are (c).**
+**Re-measured 2026-08-26 @ `92bf60f` — W1: this grep now returns 242 lines across the 16 files
+(`documented 125 → measured 242`).** The original assertion — *"returns exactly 125 lines across the 16
+files... 90 are (a), 18 are (b), 17 are (c)"* — was true when written and is retained here as the frozen
+baseline every delta is measured against. It is **no longer** the current count.
+
+**The reproduction control, and what it does and does not establish.** The same command, extracted
+structurally from the `## Reproducing grep` block above and run against `c959a43` (this document's own
+stated base, `= 6f0be16^`), returns **exactly 125**. So `125 → 242` is growth in the *enforcement
+surface*, not drift in the *command* — which is the only thing that makes the new total attributable.
+It does **not** establish that the table's 125 rows are the `c959a43` rows: for 14 of the 16 files the
+table's sites match `6f0be16` exactly, while `pre-merge-commit` (13 vs 12) and `task-state-guard.sh`
+(19 vs 20) are line-shifted, and those two offsetting differences happen to land on the same total.
+That coincidence is filed as `nazgul/inbox/guard-inventory-table-unanchored.md` (issue #262).
+
+**Per-file distribution at `92bf60f`** (16 files, summing to 242; measured 2026-08-26 @ 92bf60f — W1):
+
+| File | Rows | File | Rows |
+|---|---:|---|---:|
+| `scripts/lib/task-transition-guard.sh` | 106 | `scripts/lib/task-utils.sh` | 8 |
+| `scripts/task-state-guard.sh` | 24 | `scripts/lib/parallel-batch.sh` | 8 |
+| `scripts/git-hooks/pre-merge-commit` | 14 | `scripts/lean-comments-guard.sh` | 8 |
+| `scripts/git-hooks/_dispatch.sh` | 12 | `scripts/parallel-dispatch-guard.sh` | 7 |
+| `scripts/parallel-rework-guard.sh` | 11 | `scripts/local-mode-tracking-guard.sh` | 7 |
+| `scripts/lib/review-evidence.sh` | 10 | `scripts/lib/review-provenance.sh` | 6 |
+| `scripts/teammate-idle-guard.sh` | 9 | `scripts/git-hooks/pre-commit` | 5 |
+| — | — | `scripts/pre-tool-guard.sh` | 4 |
+| — | — | `scripts/prompt-guard.sh` | 3 |
+
+`task-transition-guard.sh` alone contributes 106, having absorbed FEAT-031's merge-evidence gate; it
+held 3 rows at `c959a43`.
+
+**The regenerated (a)/(b)/(c) split is a JOIN, not a re-classification:**
+`documented 90/18/17 (a)/(b)/(c) → measured 70/14/14 inherited`, with 144 counted-but-unclassified and
+27 retired. Each current row was joined to an old table row on `(file, construct text)`; the join is
+`nazgul/context/FEAT-035-w1-join.tsv` and its rules, pass-by-pass counts and cross-checks are in
+`nazgul/context/FEAT-035-move0-measurements.md` §W1 (measured 2026-08-26 @ 92bf60f — W1):
+
+| Bucket | Count | Meaning |
+|---|---:|---|
+| `INHERITED-(a)` | 70 | matched an old row; class carried, line number updated |
+| `INHERITED-(b)` | 14 | matched an old row; class carried, line number updated |
+| `INHERITED-(c)` | 14 | matched an old row; class carried, line number updated |
+| `UNCLASSIFIED` | 144 | no old row matches — **counted, not classified** |
+| `RETIRED` | 27 | old row with no current match — (a)=20, (b)=4, (c)=3 |
+
+Both partitions were verified with `comm` over `sort -c`-checked lexicographic input: current
+`242 = 98 inherited + 144 unclassified`; old `125 = 98 matched + 27 retired`. **The (b) retirements, by
+old row number: 32, 52, 58, 74** — each confirmed absent from the current tree by direct grep rather
+than inferred from the join.
+
+**144 of the 242 rows carry no classification, and that is a finding about scope, not a defect in this
+measurement.** Re-classifying them is deliberately out of scope here; naming the bucket is what stops
+*"242 rows are classified"* from being asserted when 98 are. In §15 grammar:
+
+```text
+w1-reproducing-grep: 16 scanned, 0 skipped (unreadable=0, out-of-surface=0), 16 checked, 242 findings
+w1-join:            242 scanned, 0 skipped (unreadable=0), 242 checked, 144 findings
+```
+
 Several rows that textually match the grep are NOT themselves allow-branches (e.g. an extraction-
 fallback cascade step, or a `return 1` propagation reached via the `[ -n... ] ||` clause) — these are
 included for completeness per the "no truncation" mandate and their disposition says so explicitly,
 rather than being silently excluded to keep the table looking cleaner.
 
 ## The most serious category-(b) findings, ranked
+
+**Re-measured 2026-08-26 @ `92bf60f` — W2: how many of these 18 `(b)` rows survive, and what "closed"
+was measured to mean.** Of the 18 rows this table classifies `(b)`, **14 describe a site that still
+exists** and **4 are retired** — rows **32, 52, 58, 74**, each confirmed absent by direct `grep -c`
+returning 0 rather than inferred from W1's join (`nazgul/context/FEAT-035-w1-join.tsv`).
+
+W2 re-checked **6** of the 18 — the stdin family, rows **32, 38, 58, 76, 80, 91** — and **did not check
+the other 12** (rows 5, 17, 21, 26, 39, 41, 52, 53, 74, 77, 89, 108). Naming the 12 is the point: this
+section says nothing about them, and no reader should infer that it does.
+
+Result for the six, from three checks per file (hand-rolled `$(cat)` gone; `read-hook-payload.sh` in
+use; and — the check that makes this a re-check rather than an assumption — the three
+`HOOK_PAYLOAD_OUTCOME` values actually branched, not collapsed):
+
+| | Count | Rows |
+|---|---:|---|
+| Site retired outright | 2 | 32, 58 |
+| Surviving, all three outcomes branched | 4 | 38, 76, 80, 91 |
+| **Callers that collapse `timeout` into `empty`** | **0** | — |
+| Surviving rows where a stdin failure can still produce an allow | 3 | 38 (non-manifest `oversize`, or outside a Nazgul project), 76 (always), 80 (outside a Nazgul project) |
+| Surviving rows that deny on every timeout reason | 1 | 91 |
+| Rows only PARTIALLY closed | 1 | 80 — the jq-extraction half of its two-cause ambiguity is untouched |
+
+```text
+w2-stdin-rows:      6 scanned, 0 skipped (unreadable=0, out-of-scope=0), 6 checked, 0 findings
+w2-stdin-residual:  6 scanned, 2 skipped (site-retired=2), 4 checked, 3 findings
+w2-b-row-survival: 18 scanned, 12 skipped (not-a-stdin-row=12), 6 checked, 2 findings
+```
+
+`N == M + K` on all three; "findings" counts a different thing on each line and each is defined at
+`nazgul/context/FEAT-035-move0-measurements.md` §W2. Per-row detail, with every command and its output:
+`nazgul/context/FEAT-035-w2-stdin-rows.md`.
+
+**The honest boundary, stated because overstating it would re-create these rows under a `(c)` label.**
+"Closed" here means *the ambiguity is now named and its cause distinguishable* — `read_hook_payload()`
+reports `stall`, `deadline` or `oversize` in `HOOK_PAYLOAD_REASON`, on stderr, and as a
+`hook_stdin_timeout` event, where before a broken read and an empty one were the same silence. It does
+**not** mean *the guard can no longer allow on a stdin failure*: three of the four survivors still can,
+and one of them (row 76) does so on every timeout reason. That is the same distinction this document
+already draws for the rows that "are NOT themselves allow-branches ... and their disposition says so
+explicitly, rather than being silently excluded".
 
 1. **`scripts/git-hooks/pre-merge-commit:77`** — `PARALLEL` defaults to `"false"` on a corrupt-but-
    present `config.json` (no `jq -e .` validity check, unlike its PreToolUse sibling guards), silently
@@ -98,6 +196,10 @@ rather than being silently excluded to keep the table looking cleaner.
    (recursive root delete, SQL table drop, piped-internet-execution, fork bombs, force-push to main) on
    a stdin-read failure. Largest blast radius of any single site; classified here but out of this
    task's edit scope (FEAT-023 owns the fix).
+   **W2 2026-08-26 @ `92bf60f`, recorded not edited (row 91):** now the strictest of the six stdin
+   rows — a bounded read whose `timeout` denies with `exit 2` on all three reasons, and whose
+   library-load check asks four separate facts before allowing the read at all. The surviving `empty`
+   allow at `:60-62` is the narrow, correct reading, since a read that broke now reports `timeout`.
 3. **`scripts/git-hooks/pre-commit:36`** — the same MF-053-class gap as #1, applied to the base-branch
    guard's `FEATURE` flag; lower blast radius (reversible — a human can move a stray commit) but the
    same unaudited shape, on the same file family, introduced by the same objective as #1.
@@ -105,6 +207,11 @@ rather than being silently excluded to keep the table looking cleaner.
    file-scope/evidence-gate guard for that Write/Edit/MultiEdit call; this is the guard's own front
    door, the same shape repeated (with lower individual severity) at `parallel-dispatch-guard.sh:12`,
    `parallel-rework-guard.sh:11`, and `lean-comments-guard.sh:254`.
+   **W2 2026-08-26 @ `92bf60f` (rows 38, 32, 58, 76):** the shape is no longer uniform across the four,
+   so they can no longer be reasoned about together. `parallel-dispatch-guard.sh` and
+   `parallel-rework-guard.sh` retired the site outright and now deny on `timeout`;
+   `task-state-guard.sh:185` denies for a task-manifest target and still allows otherwise; and
+   `lean-comments-guard.sh:382` still allows on every `timeout`, now reported rather than silent.
 5. **`scripts/lib/task-utils.sh:109`** — a malformed (not just absent) `Files modified` value is
    indistinguishable, to every caller, from a genuinely-unscoped task; `task-state-guard.sh`'s file-scope
    guard then allows editing ANY file under the active task, despite `get_task_files_modified` emitting a
@@ -123,6 +230,45 @@ rather than being silently excluded to keep the table looking cleaner.
    "confirmed not IN_PROGRESS." Softened by the code's own comment naming this block as a secondary
    layer (the real fix is `review-evidence.sh`'s recompute-and-compare), but the ambiguity itself is
    unaudited.
+
+### Class N — the programme's unresolved stdin instance ("TASK-050's")
+
+`docs/BACKLOG-REMEDIATION-PROGRAMME.md` charters Move 0 to "re-check the six stdin rows
+`read-hook-payload.sh` closed **and TASK-050's instance**" (`:34`), and uses that closure as a term in
+class C3's pre-fix arithmetic (`:252`). The six rows are re-checked above.
+
+**Disposition: `UNRESOLVABLE — no manifest in tree, not recoverable from PR #240's commit list`.**
+
+A Class N result's whole contract is the enumerated list of places searched, each with its command and
+its output, because a negative result without one is indistinguishable from not having looked
+(RULES.md §15 / ADR-009) — which is precisely the failure this inventory exists to record. Nine
+searches were run:
+
+| # | Search | Result |
+|---|---|---|
+| S1 | `grep -rl 'TASK-050' . --exclude-dir=.git` | 3 files: `docs/BACKLOG-REMEDIATION-PROGRAMME.md` (the citation) and two test files where it is a **synthetic fixture id** in scaffolding, not a record of the task |
+| S2 | `find . -name 'TASK-0*50*' -not -path './.git/*'` | no output |
+| S3 | `ls nazgul/tasks/TASK-*.md` | 11 manifests, highest `TASK-011` |
+| S4 | every `nazgul/archive/*/tasks` set | three sets (highest 18, 29, 25); the fourth archive — `2026-08-16-200758-pre-FEAT-032/`, the one covering FEAT-031 — has **no `tasks/` directory at all** |
+| S5 | `gh pr view 240 ... \| grep -iE 'stdin\|payload\|TASK-0*50'` | no output, across 100 commits |
+| S6 | `git log --all -E --grep='TASK-0*50'` | one commit: `f3de728`, PR #240's own squash |
+| S7 | `git log --all -S'TASK-050'` | the same single commit |
+| S8 | which files gained the string at `f3de728` | the programme document and the two test files — the citation entered the tree in the same squash as the work it cites |
+| S9 | every `TASK-NNN` in PR #240's 100 commit headlines | `TASK-001`..`TASK-031`; **no `TASK-04x`, no `TASK-05x`** |
+
+```text
+w2-task-050: 9 scanned, 0 skipped (unreachable=0), 9 checked, 0 findings
+```
+
+The three-check disposition could therefore not be produced for it, and **no substitute was inferred**.
+`nazgul/` is gitignored, so a task recorded only there leaves nothing behind once its objective is
+archived; S4 shows that is exactly what happened. Filed as
+`nazgul/inbox/programme-cites-unresolvable-task-050.md` (issue **#263**, p3, board Rank 17 / Todo); the
+programme is not edited here.
+
+**Consequence for C3's recount:** six stdin instances are measured above; the seventh is a citation with
+no referent, so C3's pre-fix inflation must be stated as *"six measured, plus at least one further
+instance, unidentifiable"* rather than carried as a number.
 
 ## Findings folded in from prior review boards (this objective)
 
@@ -207,7 +353,22 @@ lines 167, 195, 262, 279, and 292 all say "follow **Branch Setup via `create_fea
 no error-handling instruction anywhere in that section. `skills/` is outside this task's file scope
 (not one of the 16 enforcement-surface scripts) — recorded here per the task brief, not actioned.
 
-## Full classification table (125 rows, one per reproducing-grep hit)
+## Full classification table (125 rows, one per reproducing-grep hit as of the time of writing)
+
+**Frozen baseline — deliberately NOT rewritten.** These 125 rows are the record every delta is measured
+against; regenerating them destroys it. Re-measured 2026-08-26 @ `92bf60f` — W1: the grep now returns
+`documented 125 → measured 242` rows, and the join (`nazgul/context/FEAT-035-w1-join.tsv`) carries
+**98** of these 125 rows forward onto current sites — `INHERITED-(a)` 70, `INHERITED-(b)` 14,
+`INHERITED-(c)` 14 — while `UNCLASSIFIED` 144 current rows have no old row to inherit from and
+`RETIRED` 27 of these rows describe a site that no longer exists ((a)=20, (b)=4, (c)=3; the (b)
+retirements are rows 32, 52, 58, 74).
+**These 125 rows therefore classify 98 of the 242 current rows, not 125 of them.**
+
+The `file:line` anchors below are as-written and are NOT current. 24 of them were already stale at this
+document's own landing commit `6f0be16` — 19 (a), 3 (b), 2 (c), the (b) ones being rows 5, 52 and 53,
+and row 5 is this document's own #1-ranked finding. Filed as
+`nazgul/inbox/guard-inventory-table-unanchored.md` (issue #262); use the join TSV for current sites.
+
 
 | # | Site (file:line) | Construct | What empty/missing means | Class | Disposition |
 |---|---|---|---|---|---|
@@ -242,13 +403,13 @@ no error-handling instruction anywhere in that section. `skills/` is outside thi
 | 29 | `scripts/git-hooks/_dispatch.sh:76` | `[ -f "$prior_hook" ] \|\| return 0` | prior hook path is not a regular file | (c) | Same trust-boundary design (lines 70-73). |
 | 30 | `scripts/git-hooks/_dispatch.sh:77` | `[ -x "$prior_hook" ] \|\| return 0` | prior hook path is not executable | (c) | Same trust-boundary design (lines 70-73). |
 | 31 | `scripts/parallel-dispatch-guard.sh:11` | `[ -z "$INPUT" ] && INPUT=$(cat 2>/dev/null \|\| echo "")` | arg not supplied | (a) | Standard arg-then-stdin fallback shape shared by all three PreToolUse-arg guards. |
-| 32 | `scripts/parallel-dispatch-guard.sh:12` | `[ -z "$INPUT" ] && exit 0` | stdin read failure / genuinely empty | (b) | A read failure is indistinguishable from "no input"; the whole re-dispatch check no-ops. Moderate severity: no-op means "allow the Agent dispatch", and the review board still runs on the dispatched unit's output later, bounding the cost (matches ADR-009's own fail-open reasoning for this guard family) — but the ambiguity itself is unaudited. |
+| 32 | `scripts/parallel-dispatch-guard.sh:12` | `[ -z "$INPUT" ] && exit 0` | stdin read failure / genuinely empty | (b) | A read failure is indistinguishable from "no input"; the whole re-dispatch check no-ops. Moderate severity: no-op means "allow the Agent dispatch", and the review board still runs on the dispatched unit's output later, bounding the cost (matches ADR-009's own fail-open reasoning for this guard family) — but the ambiguity itself is unaudited. **Re-measured 2026-08-26 @ `92bf60f` — W2: SITE RETIRED.** `grep -c -F '[ -z "$INPUT" ] && exit 0'` returns **0**; the construct is gone, replaced at `:40` by `if [ "$STDIN_TIMEOUT" = "0" ] && [ -z "$INPUT" ]; then exit 0; fi`. The successor branches all three `read_hook_payload` outcomes distinctly — `timeout` -> fail-CLOSED `exit 2` (deferred past the config and kill-switch gates so the deny fires only where the guard applies), `empty` -> allow, `payload` -> proceeds — so no stdin failure allows here. "The site no longer exists" and "the site is now closed" are different dispositions; this is the former, and it is one of W1's four `(b)` retirements (32, 52, 58, 74). Detail: `nazgul/context/FEAT-035-w2-stdin-rows.md`. |
 | 33 | `scripts/parallel-dispatch-guard.sh:13` | `command -v jq >/dev/null 2>&1 \|\| exit 0` | jq absent | (a) | Definite environmental fact, not ambiguous; guard cannot function without jq. |
 | 34 | `scripts/parallel-dispatch-guard.sh:26` | `[ -f "$CONFIG" ] \|\| exit 0` | nazgul/config.json absent | (a) | Not a Nazgul project; correct, and protected from the corrupt-config case by the `jq -e .` check on the next line (MF-053). |
 | 35 | `scripts/parallel-dispatch-guard.sh:29` | `PARALLEL=$(jq -r '.execution.parallel // false' "$CONFIG"); [ = true ] \|\| exit 0` | config read | (a) | Preceded by `jq -e . "$CONFIG" \|\| exit 2` (MF-053 fail-closed on corrupt config); this line only runs once JSON validity is already confirmed. Safe. |
 | 36 | `scripts/parallel-dispatch-guard.sh:39` | `[ "$TOOL" = "Agent" ] \|\| exit 0` | non-Agent tool call | (a) | Guard is Agent-tool-scoped by design; correct. |
 | 37 | `scripts/parallel-dispatch-guard.sh:70` | `UNIT=$(... grep -oE 'NAZGUL_UNIT: TASK-[0-9]+' ... \|\| true)` | no NAZGUL_UNIT marker in prompt | (a) | Empty UNIT correctly means "not a Nazgul-tracked dispatch"; see line 71 (supplement) for the real ambiguity this masks once UNIT IS present. |
-| 38 | `scripts/task-state-guard.sh:23` | `if [ -z "$INPUT" ]; then exit 0; fi` | stdin read failure / no input | (b) | HIGH. `cat 2>/dev/null \|\| echo ""` swallows any stdin-read error; an I/O failure is indistinguishable from "no tool call happened," and the ENTIRE state-machine/file-scope/evidence-gate guard no-ops for that Write/Edit/MultiEdit. This is the guard's own front door. |
+| 38 | `scripts/task-state-guard.sh:23` | `if [ -z "$INPUT" ]; then exit 0; fi` | stdin read failure / no input | (b) | HIGH. `cat 2>/dev/null \|\| echo ""` swallows any stdin-read error; an I/O failure is indistinguishable from "no tool call happened," and the ENTIRE state-machine/file-scope/evidence-gate guard no-ops for that Write/Edit/MultiEdit. This is the guard's own front door. **Re-measured 2026-08-26 @ `92bf60f` — W2: current site `:185`; ambiguity NAMED, allow NOT eliminated.** The hand-rolled `$(cat)` is gone (`read_hook_payload` at `:125`) and the three outcomes branch distinctly: `empty` -> allow at `:185-187`; `payload` -> proceeds; `timeout` -> `:126`, split again by `HOOK_PAYLOAD_REASON` — `oversize` (`:153-174`) names the write's target from the reader's bounded UNTRUSTED prefix, failing CLOSED for a task manifest and **fail-OPEN** for anything else, while `stall`/`deadline` (`:177-182`) fail CLOSED inside a Nazgul project and **fail-OPEN** outside one. So the cause is now distinguishable (stderr plus a `hook_stdin_timeout` event naming which bound fired), but a stdin failure can STILL allow. The `oversize` arm's own comment names its residual: the "source edits require an IN_PROGRESS task" rule is not applied to the targets it allows. Detail: `nazgul/context/FEAT-035-w2-stdin-rows.md`. |
 | 39 | `scripts/task-state-guard.sh:35` | `EDITS_JSON=$(... jq -c ... \|\| echo ""); if [ -z "$EDITS_JSON" ]; then exit 0; fi` | jq parse failure on MultiEdit payload | (b) | A malformed/unexpected MultiEdit tool_input is indistinguishable from "zero edits," and the entire fan-out (which is what actually re-invokes the guard per sub-edit) is skipped — the whole MultiEdit call is allowed unchecked. |
 | 40 | `scripts/task-state-guard.sh:39` | `[ -z "$EDIT" ] && continue` | blank line while iterating parsed edits | (a) | Standard loop hygiene. |
 | 41 | `scripts/task-state-guard.sh:118` | `if [ -f "$_dm_unit_task" ] && [ status = IN_PROGRESS ]; then _dm_blocking=true; fi` | TASK-*/PATCH-* manifest not found at either candidate path | (b) | `_dm_blocking` initializes false and is only ever set true on a positive match; a missing/unresolvable manifest for the review unit's own task silently allows the dispatch-manifest/diff.patch write. The file's own comment (lines 99-101) already names this block "defense-in-depth" with recompute-and-compare as "the real fix," which softens severity, but the lookup-miss-vs-genuinely-absent distinction is not itself audited. Same shape repeats at the GROUP-* (lines 126-129) and default (lines 136-139) case arms. |
@@ -268,7 +429,7 @@ no error-handling instruction anywhere in that section. `skills/` is outside thi
 | 55 | `scripts/task-state-guard.sh:431` | `EVIDENCE_PROBLEMS=$(ttg_verify_review_evidence ...) \|\| true` | command substitution nonzero under set -e | (a) | Required so `set -e` doesn't abort before the real `[ -n "$EVIDENCE_PROBLEMS" ]` gate two lines later, which correctly blocks; not itself a fail-open. |
 | 56 | `scripts/task-state-guard.sh:454` | `if [ -z "$MISSING_LIST" ] && [ -z "$UNAPPROVED_LIST" ]; then echo "Unexpected..."; fi` | diagnostic-message selection | (a) | Reached only inside the already-blocking (exit 2) branch; purely cosmetic, no authorization effect. |
 | 57 | `scripts/parallel-rework-guard.sh:10` | `[ -z "$INPUT" ] && INPUT=$(cat 2>/dev/null \|\| echo "")` | arg not supplied | (a) | Standard arg-then-stdin fallback. |
-| 58 | `scripts/parallel-rework-guard.sh:11` | `[ -z "$INPUT" ] && exit 0` | stdin read failure / genuinely empty | (b) | Same class as parallel-dispatch-guard.sh:12 — a read failure silently allows the Write/Edit/MultiEdit through the re-work check. |
+| 58 | `scripts/parallel-rework-guard.sh:11` | `[ -z "$INPUT" ] && exit 0` | stdin read failure / genuinely empty | (b) | Same class as parallel-dispatch-guard.sh:12 — a read failure silently allows the Write/Edit/MultiEdit through the re-work check. **Re-measured 2026-08-26 @ `92bf60f` — W2: SITE RETIRED.** `grep -c -F '[ -z "$INPUT" ] && exit 0'` returns **0**; replaced at `:39` by the same bounded-read shape as `parallel-dispatch-guard.sh:40`, structurally identical line-for-line: `timeout` -> fail-CLOSED `exit 2` at `:61-66`, `empty` -> allow at `:39`, `payload` -> proceeds. One of W1's four `(b)` retirements (32, 52, 58, 74). Detail: `nazgul/context/FEAT-035-w2-stdin-rows.md`. |
 | 59 | `scripts/parallel-rework-guard.sh:12` | `command -v jq >/dev/null 2>&1 \|\| exit 0` | jq absent | (a) | Definite environmental fact. |
 | 60 | `scripts/parallel-rework-guard.sh:25` | `[ -f "$CONFIG" ] \|\| exit 0` | nazgul/config.json absent | (a) | Not a Nazgul project; protected from corrupt-config by the `jq -e .` check on the next line (MF-053). |
 | 61 | `scripts/parallel-rework-guard.sh:28` | `PARALLEL=$(jq -r ...); [ = true ] \|\| exit 0` | config read | (a) | Preceded by MF-053's fail-closed validity check; safe. |
@@ -286,11 +447,11 @@ no error-handling instruction anywhere in that section. `skills/` is outside thi
 | 73 | `scripts/lean-comments-guard.sh:220` | `[ -z "$ln" ] && continue` | blank line while formatting findings | (a) | Standard loop hygiene. |
 | 74 | `scripts/lean-comments-guard.sh:240` | `[ -f "$f" ] \|\| continue` | --check mode: a caller-supplied path doesn't exist | (b) | Silent skip with no diagnostic. This mode is the one the Implementer Agent protocol explicitly instructs be run manually per changed file (`lean-comments-guard.sh --check <files>`); a typo'd or already-moved path is silently treated as "clean" rather than flagged, which could let real comment bloat through undetected. |
 | 75 | `scripts/lean-comments-guard.sh:242` | `[ -z "$style" ] && continue` | comment_style_for() returned nothing for this extension | (a) | Unsupported/unrecognized file type; genuinely not applicable. |
-| 76 | `scripts/lean-comments-guard.sh:254` | `[ -z "$INPUT" ] && exit 0` | stdin read failure (hook mode) | (b) | Same class as task-state-guard.sh:23 — a stdin-read failure silently allows the Write/Edit/MultiEdit through the comment-bloat check. |
+| 76 | `scripts/lean-comments-guard.sh:254` | `[ -z "$INPUT" ] && exit 0` | stdin read failure (hook mode) | (b) | Same class as task-state-guard.sh:23 — a stdin-read failure silently allows the Write/Edit/MultiEdit through the comment-bloat check. **Re-measured 2026-08-26 @ `92bf60f` — W2: current site `:382`; cause distinguishable, allow UNCHANGED.** `read_hook_payload` at `:376`; the outcomes do not share a branch (`timeout` at `:377-380`, `empty` at `:381-382`) — check 3 passes — but they reach the same disposition, `exit 0`. What changed is that the timeout allow now announces itself: `hook_payload_timeout_report "lean-comments-guard" "fail-open" "allowing the write unchecked"` on stderr, plus a `hook_stdin_timeout` event naming which of the three bounds fired, where before it was indistinguishable from "the harness sent nothing". That is an audited, logged fail-open — a `(c)` shape — and NOT a closure of the allow. Of the six stdin rows this is the only one that allows on **every** timeout reason. Detail: `nazgul/context/FEAT-035-w2-stdin-rows.md`. |
 | 77 | `scripts/lean-comments-guard.sh:280` | `[ -z "$FILE_PATH" ] && exit 0` | jq extraction of file_path empty | (b) | A malformed tool_input envelope is indistinguishable from "no file path," and the whole hook-mode check is skipped. |
 | 78 | `scripts/lean-comments-guard.sh:282` | `[ -z "$STYLE" ] && exit 0` | comment_style_for() returned nothing | (a) | Unsupported file type; genuinely not applicable. |
 | 79 | `scripts/prompt-guard.sh:22` | `if [ ! -f "$CONFIG" ]; then exit 0; fi` | nazgul/config.json absent | (a) | Explicitly commented: "If Nazgul not initialized, allow all prompts." Correct. |
-| 80 | `scripts/prompt-guard.sh:28` | `if [ -z "$USER_PROMPT" ]; then exit 0; fi` | jq extraction of .prompt empty / stdin read failure | (b) | A malformed UserPromptSubmit envelope or a stdin-read failure is indistinguishable from "no prompt content," and both of the guard's blocklist checks (manual NAZGUL_COMPLETE, direct status-manipulation text) are skipped for that turn. Lower severity than the PreToolUse guards (this is a HITL text-pattern safety net, not the state-machine enforcer), but unaudited. |
+| 80 | `scripts/prompt-guard.sh:28` | `if [ -z "$USER_PROMPT" ]; then exit 0; fi` | jq extraction of .prompt empty / stdin read failure | (b) | A malformed UserPromptSubmit envelope or a stdin-read failure is indistinguishable from "no prompt content," and both of the guard's blocklist checks (manual NAZGUL_COMPLETE, direct status-manipulation text) are skipped for that turn. Lower severity than the PreToolUse guards (this is a HITL text-pattern safety net, not the state-machine enforcer), but unaudited. **Re-measured 2026-08-26 @ `92bf60f` — W2: current site `:58`; PARTIALLY closed — half the recorded ambiguity survives.** This row's ambiguity is a disjunction, and only one side of it moved. The stdin side is closed: `read_hook_payload` at `:41`, `timeout` handled at `:51-54` -> fail-CLOSED `exit 2`. Two residuals remain. (1) Placement — the read sits deliberately ABOVE the `[ ! -f "$CONFIG" ]` gate (`:39-40`: quitting mid-read EPIPEs the harness under `pipefail`) while the disposition sits deliberately BELOW it (`:49-50`: a timeout blocks only where this guard has authority), so a timeout outside a Nazgul project takes a silent allow with no report. (2) **The jq side is untouched** — `:55` still reads `USER_PROMPT=$(printf '%s' "$STDIN_JSON" \| jq -r '.prompt // empty' 2>/dev/null \|\| echo "")`, so a successfully-read but malformed `UserPromptSubmit` envelope still yields an empty prompt and takes the same allow at `:57-59` as a genuinely empty one. Recording this row as "closed" would be false; the jq-extraction half is still `(b)` and belongs on OBJ-H's worklist. Detail: `nazgul/context/FEAT-035-w2-stdin-rows.md`. |
 | 81 | `scripts/teammate-idle-guard.sh:13` | `[ -z "$INPUT" ] && INPUT=$(cat 2>/dev/null \|\| echo "")` | arg not supplied | (a) | Standard arg-then-stdin fallback. |
 | 82 | `scripts/teammate-idle-guard.sh:14` | `[ -z "$INPUT" ] && exit 0` | stdin read failure / no input | (c) | Audited: file header (lines 8-10) and RULES.md §17 both state this file "Fails OPEN on unparseable payloads, unknown teammates, and stale feat_id — a deliberate inversion of the PreToolUse guards' fail-closed rule, because blocking on garbage strands live teammates." |
 | 83 | `scripts/teammate-idle-guard.sh:15` | `command -v jq >/dev/null 2>&1 \|\| exit 0` | jq absent | (a) | Definite environmental fact. |
@@ -301,7 +462,7 @@ no error-handling instruction anywhere in that section. `skills/` is outside thi
 | 88 | `scripts/teammate-idle-guard.sh:69` | `if [ ! -f "$MANIFEST" ]; then log_event allow; exit 0; fi` | no dispatch manifest for this teammate name | (a) | Explicitly commented: "no manifest means not a Nazgul-dispatched teammate." |
 | 89 | `scripts/teammate-idle-guard.sh:83` | `if [ -z "$REPORT_PATH" ]; then log_event allow; exit 0; fi` | manifest has no report_path field | (b) | Extends the file's stated "fail open on unparseable payloads" design, but the specific sub-case of a CORRUPT/unreadable manifest (jq read failure on $MANIFEST, `// ""` default) producing the identical log line as a genuinely field-less manifest is not itself named in the header or RULES.md §17. Recommend citing this sub-case explicitly if the (c) disposition is meant to cover it. |
 | 90 | `scripts/pre-tool-guard.sh:10` | `if [ -z "$INPUT" ]; then INPUT=$(cat 2>/dev/null \|\| echo ""); fi` | arg not supplied | (a) | Standard arg-then-stdin fallback. |
-| 91 | `scripts/pre-tool-guard.sh:15` | `if [ -z "$INPUT" ]; then exit 0; fi` | stdin read failure / no input | (b) | HIGH — INVENTORY ONLY, no fix permitted this task (owned by FEAT-023). "If no input, allow" — the entire destructive-command blocklist (rm -rf /, DROP TABLE, curl\|sh, fork bombs, force-push to main/master) is skipped whenever both the positional arg and stdin read come back empty. Largest documented blast radius of any site in this inventory. |
+| 91 | `scripts/pre-tool-guard.sh:15` | `if [ -z "$INPUT" ]; then exit 0; fi` | stdin read failure / no input | (b) | HIGH — INVENTORY ONLY, no fix permitted this task (owned by FEAT-023). "If no input, allow" — the entire destructive-command blocklist (rm -rf /, DROP TABLE, curl\|sh, fork bombs, force-push to main/master) is skipped whenever both the positional arg and stdin read come back empty. Largest documented blast radius of any site in this inventory. **Re-measured 2026-08-26 @ `92bf60f` — W2 (RECORDED, NOT EDITED — inventory-only, per the scope boundary above): current site `:58`; the strictest of the six.** `read_hook_payload` at `:38`; `timeout` at `:46-53` fails CLOSED `exit 2` for all three reasons, the `oversize` case additionally naming the cap and the remedy so a cap-sized pad cannot become a screening bypass. `rhp_unavailable` (`:12-18`) asks four separate facts — `-f`, `-r`, `bash -n`, and `declare -F` per function — and denies on any of them, because this hook blocks only on exit 2 and a library that loads while defining nothing would exit 127 and read as allow. `empty` still allows at `:60-62`, which is now the narrow, correct reading: with the read bounded, a read that broke reports `timeout`, so `empty` means input ended having delivered nothing and there is no command to screen. **No stdin failure allows here.** Detail: `nazgul/context/FEAT-035-w2-stdin-rows.md`. |
 | 92 | `scripts/pre-tool-guard.sh:24` | `CMD=$(printf '%s' "$INPUT" \| jq -r '.tool_input.command // empty' 2>/dev/null \|\| true)` | jq extraction failure | (a) | `\|\| true` only prevents `set -e` from killing the script; the actual recovery is the line-25/26 fallback below, which is MORE conservative (scans the whole envelope), not less. |
 | 93 | `scripts/pre-tool-guard.sh:25` | `if [ -z "$CMD" ]; then CMD="$INPUT"; fi` | jq extraction returned empty | (a) | Fallback to the raw envelope as the scan target; not an allow branch. |
 | 94 | `scripts/pre-tool-guard.sh:73` | `echo "$CMD" \| grep -qiE "$dbcli" \|\| return 0` | no DB-CLI token anywhere in the command | (c) | Audited in-file (lines 54-65, FEAT-019/LR-005): a deliberate scope-narrowing to avoid the over-blocking false positives the bare-keyword grep produced pre-FEAT-019 ("still requires a DB-CLI token present... immune to segment-splitting bypasses"). |
