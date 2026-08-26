@@ -143,7 +143,11 @@ if [[ "$LOOP_COMPLETE" != "true" ]]; then
             debug_log "All $TOTAL_COUNT tasks DONE or CANCELLED ($DONE_COUNT DONE, $CANCELLED_COUNT CANCELLED)"
         fi
     else
-        debug_log "task-utils.sh unavailable (rc $TU_RC) — task status unreadable, skipping notification"
+        # This arm does NOT skip anything itself: it only fails to PROMOTE LOOP_COMPLETE.
+        # The skip (or not) is decided by the not-complete gate immediately below, which
+        # calls output_result. Saying "skipping notification" here would credit this branch
+        # with a decision it does not make, and would become false if that gate ever moved.
+        debug_log "task-utils.sh unavailable (rc $TU_RC) — task status unreadable, so completion could not be confirmed from task state; the not-complete gate below decides whether to notify"
     fi
 fi
 

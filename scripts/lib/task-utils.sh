@@ -84,7 +84,7 @@ get_task_status() {
   status_pat=$(nz_manifest_field_pattern_ere Status)
   result=$(awk -v pat="$status_pat" '
     {
-      if ($0 ~ /^- \*\*Status\*\*:/) { if (!match(tolower($0), pat)) next }
+      if ($0 ~ /^- \*\*Status\*\*:/) { match(tolower($0), pat) }
       else if ($0 ~ /^## Status:/) { match($0, /^## Status:/) }
       else next
       v = substr($0, RSTART + RLENGTH)

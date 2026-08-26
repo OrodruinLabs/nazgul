@@ -871,7 +871,23 @@ if [ "$RECON_ENABLED" = "true" ] && [ -d "$NAZGUL_DIR/tasks" ]; then
           nz_manifest_with_lock "$NAZGUL_DIR" "$RECON_TASK_ID" \
             recon_write_quarantine "$RECON_TASK_ID" "$RECON_LIVE_STATUS" \
             "$RECON_PREV_STATUS" "$RECON_REASON" || RECON_Q_RC=$?
-          [ "$RECON_Q_RC" -ne 1 ] || continue
+          # lean-comments: allow-run — why rc 1 is LOUD rather than a bare continue
+          # rc 1 means the status install was refused, so this divergence is NOT quarantined.
+          # The recon loop globs TASK-*.md, which admits ids the primitive's ^TASK-[0-9]+$
+          # predicate rejects as bad_arguments (TASK-001a.md, TASK-2.1.md) — and a bare
+          # `continue` let an unguarded status forgery in such a manifest escape the pass
+          # permanently, in silence. Skipping is the one disposition reconciliation must
+          # never take quietly: it looked, it found a divergence, and it could not act.
+          if [ "$RECON_Q_RC" -eq 1 ]; then
+            echo "NAZGUL BASH-WRITE RECONCILIATION: ${RECON_TASK_ID} diverged (checkpoint=${RECON_PREV_STATUS} observed=${RECON_LIVE_STATUS}) but could NOT be quarantined — the status write was refused above. The divergence stands unremediated; this manifest is not protected by reconciliation." >&2
+            emit_event "stop_gate" \
+              reason "reconciliation_quarantine_refused" \
+              gate "reconciliation_quarantine" \
+              task_id "$RECON_TASK_ID" \
+              checkpoint_status "$RECON_PREV_STATUS" \
+              observed_status "$RECON_LIVE_STATUS"
+            continue
+          fi
           if [ "$RECON_Q_RC" -ne 0 ]; then
             echo "NAZGUL BASH-WRITE RECONCILIATION: ${RECON_TASK_ID} is quarantined at BLOCKED but its typed annotation is INCOMPLETE — at least one field was refused above. Recovery information may be missing; read the manifest before running repair." >&2
             emit_event "stop_gate" \
@@ -1035,8 +1051,11 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
       elif [ -n "$EVIDENCE_PROBLEMS" ]; then
         if [ "$EVID_RESET_COUNT" -ge 1 ]; then
           # Second consecutive violation — escalate to BLOCKED with remediation. A refused
-          # install strikes nothing: no ledger edge, no counter move, no violation line.
-          if install_task_status "$TASK_ID" "DONE" "BLOCKED" "review_evidence_escalate"; then
+          # install strikes no ledger edge and moves no counter — but the violation line is
+          # recorded either way, below.
+          _RG_WROTE=0
+          install_task_status "$TASK_ID" "DONE" "BLOCKED" "review_evidence_escalate" && _RG_WROTE=1
+          if [ "$_RG_WROTE" -eq 1 ]; then
             ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "BLOCKED" "" "" "stop-hook" || true
             BLOCKED_REASON_TEXT="review evidence missing (${MISSING_LIST}) — run /nazgul:review --materialize ${TASK_ID}"
             set_manifest_field "$TASK_ID" "Blocked kind" "review-evidence" || true
@@ -1044,20 +1063,38 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
             jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
             DONE_COUNT=$((DONE_COUNT - 1))
             BLOCKED_COUNT=$((BLOCKED_COUNT + 1))
-            REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} escalated to BLOCKED — review evidence missing: ${MISSING_LIST}. Run /nazgul:review --materialize ${TASK_ID}
-"
           fi
+          # lean-comments: allow-run — why the record is OUTSIDE the write
+          # A refused write used to suppress this line entirely, so a DONE task with
+          # missing or unapproved evidence passed the gate in SILENCE: REVIEW_VIOLATIONS
+          # is what both the stderr dump and the block reason read. A write that could
+          # not happen is a STRONGER reason to record the violation, not a reason to
+          # drop it. The refused case says so in its own words.
+          [ "$_RG_WROTE" -eq 1 ] || REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} — status write REFUSED, task UNCHANGED on disk, violation stands unremediated.
+"
+          REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} escalated to BLOCKED — review evidence missing: ${MISSING_LIST}. Run /nazgul:review --materialize ${TASK_ID}
+"
         else
           # First violation — reset to IMPLEMENTED. Ledger-logged with a writer, or the
           # ledger says DONE while the manifest says IMPLEMENTED: unreadable as tampering.
-          if install_task_status "$TASK_ID" "DONE" "IMPLEMENTED" "review_evidence_demote"; then
+          _RG_WROTE=0
+          install_task_status "$TASK_ID" "DONE" "IMPLEMENTED" "review_evidence_demote" && _RG_WROTE=1
+          if [ "$_RG_WROTE" -eq 1 ]; then
             ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "IMPLEMENTED" "" "" "stop-hook" || true
             jq --arg t "$TASK_ID" '.safety._review_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
             DONE_COUNT=$((DONE_COUNT - 1))
             IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
-            REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} reset DONE → IMPLEMENTED — missing/unapproved reviews: ${MISSING_LIST}. Fix: spawn review-gate for ${TASK_ID} with <main_worktree_path> = ${PROJECT_ROOT}, or run /nazgul:review --materialize ${TASK_ID}
-"
           fi
+          # lean-comments: allow-run — why the record is OUTSIDE the write
+          # A refused write used to suppress this line entirely, so a DONE task with
+          # missing or unapproved evidence passed the gate in SILENCE: REVIEW_VIOLATIONS
+          # is what both the stderr dump and the block reason read. A write that could
+          # not happen is a STRONGER reason to record the violation, not a reason to
+          # drop it. The refused case says so in its own words.
+          [ "$_RG_WROTE" -eq 1 ] || REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} — status write REFUSED, task UNCHANGED on disk, violation stands unremediated.
+"
+          REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} reset DONE → IMPLEMENTED — missing/unapproved reviews: ${MISSING_LIST}. Fix: spawn review-gate for ${TASK_ID} with <main_worktree_path> = ${PROJECT_ROOT}, or run /nazgul:review --materialize ${TASK_ID}
+"
         fi
       else
         # Evidence passed — gate on tamper/staleness provenance next (own bounded
@@ -1066,7 +1103,9 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
           PROVENANCE_LIST=$(echo "$PROVENANCE_PROBLEMS" | tr '\n' ',' | sed 's/,$//; s/,/, /g')
           if [ "$PROV_RESET_COUNT" -ge 1 ]; then
             # Second consecutive violation — escalate to BLOCKED with remediation
-            if install_task_status "$TASK_ID" "DONE" "BLOCKED" "review_provenance_escalate"; then
+            _RG_WROTE=0
+          install_task_status "$TASK_ID" "DONE" "BLOCKED" "review_provenance_escalate" && _RG_WROTE=1
+            if [ "$_RG_WROTE" -eq 1 ]; then
               ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "BLOCKED" "" "" "stop-hook" || true
               BLOCKED_REASON_TEXT="review provenance invalid (${PROVENANCE_LIST}) — re-run review-gate so a fresh diff-bound dispatch manifest is written"
               set_manifest_field "$TASK_ID" "Blocked kind" "review-provenance" || true
@@ -1076,22 +1115,40 @@ if { [ "$YOLO_MODE" != "true" ] || [ "$TASK_PR_MODE" != "true" ]; } && [ -d "$NA
               jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | del(.safety._provenance_reset_counts[$t])' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
               DONE_COUNT=$((DONE_COUNT - 1))
               BLOCKED_COUNT=$((BLOCKED_COUNT + 1))
-              REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} escalated to BLOCKED — review provenance invalid: ${PROVENANCE_LIST}. Re-run review-gate so a fresh diff-bound dispatch manifest is written for ${TASK_ID}
-"
             fi
+            # lean-comments: allow-run — why the record is OUTSIDE the write
+          # A refused write used to suppress this line entirely, so a DONE task with
+          # missing or unapproved evidence passed the gate in SILENCE: REVIEW_VIOLATIONS
+          # is what both the stderr dump and the block reason read. A write that could
+          # not happen is a STRONGER reason to record the violation, not a reason to
+          # drop it. The refused case says so in its own words.
+          [ "$_RG_WROTE" -eq 1 ] || REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} — status write REFUSED, task UNCHANGED on disk, violation stands unremediated.
+"
+          REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} escalated to BLOCKED — review provenance invalid: ${PROVENANCE_LIST}. Re-run review-gate so a fresh diff-bound dispatch manifest is written for ${TASK_ID}
+"
           else
             # lean-comments: allow-run — the two independent ladders, unchanged by the adoption.
             # First violation — reset to IMPLEMENTED with diagnostics.
             # Evidence passed to reach this branch — clear its (now-stale) counter so
             # the two gates' ladders stay independent (evidence is currently valid).
-            if install_task_status "$TASK_ID" "DONE" "IMPLEMENTED" "review_provenance_demote"; then
+            _RG_WROTE=0
+          install_task_status "$TASK_ID" "DONE" "IMPLEMENTED" "review_provenance_demote" && _RG_WROTE=1
+            if [ "$_RG_WROTE" -eq 1 ]; then
               ttg_log_transition "$NAZGUL_DIR" "$TASK_ID" "DONE" "IMPLEMENTED" "" "" "stop-hook" || true
               jq --arg t "$TASK_ID" 'del(.safety._review_reset_counts[$t]) | .safety._provenance_reset_counts[$t] = 1' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
               DONE_COUNT=$((DONE_COUNT - 1))
               IN_REVIEW_COUNT=$((IN_REVIEW_COUNT + 1))
-              REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} reset DONE → IMPLEMENTED — review provenance invalid: ${PROVENANCE_LIST}. Fix: re-run review-gate so a fresh diff-bound dispatch manifest is written for ${TASK_ID}
-"
             fi
+            # lean-comments: allow-run — why the record is OUTSIDE the write
+          # A refused write used to suppress this line entirely, so a DONE task with
+          # missing or unapproved evidence passed the gate in SILENCE: REVIEW_VIOLATIONS
+          # is what both the stderr dump and the block reason read. A write that could
+          # not happen is a STRONGER reason to record the violation, not a reason to
+          # drop it. The refused case says so in its own words.
+          [ "$_RG_WROTE" -eq 1 ] || REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} — status write REFUSED, task UNCHANGED on disk, violation stands unremediated.
+"
+          REVIEW_VIOLATIONS="${REVIEW_VIOLATIONS}NAZGUL REVIEW GATE VIOLATION: ${TASK_ID} reset DONE → IMPLEMENTED — review provenance invalid: ${PROVENANCE_LIST}. Fix: re-run review-gate so a fresh diff-bound dispatch manifest is written for ${TASK_ID}
+"
           fi
         elif [ "$EVID_RESET_COUNT" != "0" ] || [ "$PROV_RESET_COUNT" != "0" ]; then
           # Evidence and provenance are both now valid — clear both stale counters

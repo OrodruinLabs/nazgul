@@ -1120,7 +1120,16 @@ _doc_parse_args() {
         exit 1
         ;;
     esac
-    for id in ${_DOC_SKIP_IDS//,/ }; do
+    # Split on commas WITHOUT pathname expansion: unquoted ${x//,/ } is glob-expanded
+    # against the cwd first, so `--skip='*'` validated filenames the operator never typed
+    # ("--skip names unknown check 'CHANGELOG.md'"), and `--skip=stack*` silently changed
+    # which token was checked in a directory holding a match. set -f for the split only.
+    _doc_skip_noglob=0
+    case "$-" in *f*) ;; *) set -f; _doc_skip_noglob=1 ;; esac
+    # shellcheck disable=SC2086  # deliberate word-split on the comma-substituted list, globbing off
+    set -- ${_DOC_SKIP_IDS//,/ }
+    [ "$_doc_skip_noglob" -eq 0 ] || set +f
+    for id in "$@"; do
       found="false"
       for arg in $_DOC_CHECK_IDS; do
         [ "$id" = "$arg" ] && found="true"
