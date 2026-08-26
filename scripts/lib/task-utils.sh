@@ -285,7 +285,7 @@ count_tasks_by_status() {
 # Usage: count_tasks_and_find_active <tasks_dir>
 count_tasks_and_find_active() {
   local tasks_dir="$1"
-  local task_file status task_id raw_status retry_raw
+  local task_file status task_id raw_status retry_raw retry_digits
 
   DONE_COUNT=0; READY_COUNT=0; IN_PROGRESS_COUNT=0; IN_REVIEW_COUNT=0
   APPROVED_COUNT=0; CHANGES_COUNT=0; BLOCKED_COUNT=0; PLANNED_COUNT=0
@@ -343,10 +343,18 @@ ${task_id}:${raw_status}"
         ACTIVE_TASK=$(basename "$task_file" .md)
         # shellcheck disable=SC2034
         ACTIVE_STATUS="$status"
-        retry_raw=$(get_task_field "$task_file" "Retry count")
-        # The last hand-rolled reader in this file, and it carried the same greedy split (#169).
+        # lean-comments: allow-run — the floor belongs at the assignment, not in the consumer.
+        # TASK-008 dropped the old reader's `|| echo "0"` as dead code because "the pipeline's exit
+        # status is sed's, always 0" — true WITHOUT pipefail, false WITH it, and every caller runs
+        # `set -euo pipefail`. Four paths reach here as the empty string (field absent, present but
+        # empty, present but non-numeric, file unreadable), and stop-hook.sh hands the result straight
+        # to `jq --argjson`, which rejects empty and ends the hook before its decision:block payload
+        # (#281). ADR-033's "a count that could not be read is not zero" governs a count wired to a
+        # DESTRUCTIVE path; this one feeds a checkpoint field this function already initialises to 0.
+        retry_raw=$(get_task_field "$task_file" "Retry count" "0")
+        retry_digits="${retry_raw%%[!0-9]*}"
         # shellcheck disable=SC2034
-        ACTIVE_RETRY="${retry_raw%%[!0-9]*}"
+        ACTIVE_RETRY="${retry_digits:-0}"
         break
       fi
     done

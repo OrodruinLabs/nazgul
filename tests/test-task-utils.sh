@@ -493,18 +493,143 @@ assert_eq "INVALID_TASKS names the whole raw status, not its final segment" \
   "$INVALID_TASKS" "TASK-045:MIGRATED:LEGACY"
 teardown_temp_dir
 
-# --- Test 24 (#169): ACTIVE_RETRY goes through the shared reader — same contract, and no
-# hand-rolled greedy split left in this file ---
+# --- Test 24 (#169, assertion INVERTED by #281): ACTIVE_RETRY's failure value is a count ---
+
+# lean-comments: allow-run — why this assertion reads the opposite way from the day it was written.
+# TASK-008 asserted the absent case "stays empty (faithful refactor)", having read the base
+# reader's `|| echo "0"` as dead code and declined to quietly improve on it. The fallback was in
+# fact LIVE under pipefail, so empty was never the pre-refactor behaviour, and stop-hook.sh's
+# `jq --argjson` rejects empty outright. Inverted in place rather than deleted, so the history of
+# the claim stays readable next to the claim that replaced it.
 setup_temp_dir
 setup_nazgul_dir
 mkdir -p "$TEST_DIR/nazgul/tasks"
 printf -- '---\nstatus: IN_PROGRESS\n---\n# TASK-047: Test task\n' > "$TEST_DIR/nazgul/tasks/TASK-047.md"
 source "$LIB"
 count_tasks_and_find_active "$TEST_DIR/nazgul/tasks"
-assert_eq "ACTIVE_RETRY: absent Retry count field stays empty (faithful refactor)" "$ACTIVE_RETRY" ""
+assert_eq "ACTIVE_RETRY: absent Retry count field falls back to 0, never empty (#281)" "$ACTIVE_RETRY" "0"
 printf -- '  -  **retry count**: 3/3\n' >> "$TEST_DIR/nazgul/tasks/TASK-047.md"
 count_tasks_and_find_active "$TEST_DIR/nazgul/tasks"
 assert_eq "ACTIVE_RETRY: leading digit run of a tolerant-anchor Retry count" "$ACTIVE_RETRY" "3"
+teardown_temp_dir
+
+# --- Test 25 (#281): every ACTIVE_RETRY failure path yields a decimal integer ---
+
+# The four ways the field can fail to produce a number, plus the positive control that keeps the
+# floor from passing them vacuously — a reader hard-wired to 0 would satisfy all four probes.
+retry_probe() {
+  setup_temp_dir
+  setup_nazgul_dir
+  mkdir -p "$TEST_DIR/nazgul/tasks"
+  printf -- '%s' "$2" > "$TEST_DIR/nazgul/tasks/TASK-060.md"
+  [ -z "${3:-}" ] || chmod "$3" "$TEST_DIR/nazgul/tasks/TASK-060.md"
+  count_tasks_and_find_active "$TEST_DIR/nazgul/tasks" 2>/dev/null
+  RETRY_PROBE_VALUE="$ACTIVE_RETRY"
+  assert_eq "ACTIVE_RETRY is a decimal integer: $1" \
+    "$(printf '%s' "$ACTIVE_RETRY" | grep -cE '^[0-9]+$')" "1"
+  [ -z "${3:-}" ] || chmod 644 "$TEST_DIR/nazgul/tasks/TASK-060.md"
+  teardown_temp_dir
+}
+source "$LIB"
+retry_probe "field absent" '---
+status: IN_PROGRESS
+---
+# TASK-060: Test task
+'
+assert_eq "ACTIVE_RETRY: absent field reads 0" "$RETRY_PROBE_VALUE" "0"
+retry_probe "field present but empty" '---
+status: IN_PROGRESS
+---
+- **Retry count**:
+'
+assert_eq "ACTIVE_RETRY: empty field reads 0" "$RETRY_PROBE_VALUE" "0"
+retry_probe "field present but non-numeric" '---
+status: IN_PROGRESS
+---
+- **Retry count**: n/a
+'
+assert_eq "ACTIVE_RETRY: non-numeric field reads 0" "$RETRY_PROBE_VALUE" "0"
+retry_probe "manifest unreadable" '---
+status: IN_PROGRESS
+---
+- **Retry count**: 2/3
+' 000
+assert_eq "ACTIVE_RETRY: unreadable manifest reads 0 (never selected; the initialiser holds)" \
+  "$RETRY_PROBE_VALUE" "0"
+retry_probe "control: a real count still reads through" '---
+status: IN_PROGRESS
+---
+- **Retry count**: 2/3
+'
+assert_eq "control: ACTIVE_RETRY is not hard-wired to the floor" "$RETRY_PROBE_VALUE" "2"
+
+# --- Test 26 (#281): behavioural — scripts/stop-hook.sh reaches its decision:block payload ---
+
+# lean-comments: allow-run — why this row drives a second script from the task-utils suite.
+# The empty ACTIVE_RETRY is harmless where it is produced and fatal two files away: stop-hook.sh
+# passes it to `jq -n --argjson active_retry`, which rejects empty and, under `set -euo pipefail`,
+# ends the hook before the loop banner, before the decision:block payload and before every gate
+# after it. A unit assertion on the variable alone did not catch that — Test 24 asserted the
+# empty value and passed — so the consumer is exercised end to end here.
+JQ_EMPTY_ERR=$(jq -n --argjson x "" '.' 2>&1 || true)
+assert_contains "control: an empty --argjson really is a hard jq error" \
+  "$JQ_EMPTY_ERR" "invalid JSON text passed to --argjson"
+
+stop_hook_probe() {
+  setup_temp_dir
+  setup_git_repo
+  setup_nazgul_dir
+  create_config '.current_iteration = 0'
+  create_plan
+  create_task_file "TASK-061" "IN_PROGRESS"
+  printf -- '%s' "$2" > "$TEST_DIR/nazgul/tasks/TASK-061.md"
+  SH_OUTPUT=$(bash "$REPO_ROOT/scripts/stop-hook.sh" </dev/null 2>&1) && SH_EC=0 || SH_EC=$?
+  assert_exit_code "stop-hook exits 2 — $1 (block code; not on its own discriminating)" "$SH_EC" 2
+  assert_contains "stop-hook reaches decision:block — $1" "$SH_OUTPUT" '"decision": "block"'
+  assert_not_contains "stop-hook does not die in jq --argjson — $1" \
+    "$SH_OUTPUT" "invalid JSON text passed to --argjson"
+  teardown_temp_dir
+}
+stop_hook_probe "manifest with no Retry count line" '---
+status: IN_PROGRESS
+---
+# TASK-061: Test task
+
+- **Depends on**: none
+- **Group**: 1
+'
+stop_hook_probe "manifest with a non-numeric Retry count" '---
+status: IN_PROGRESS
+---
+# TASK-061: Test task
+
+- **Depends on**: none
+- **Group**: 1
+- **Retry count**: n/a
+'
+# Control: the same probe against a manifest that carries a well-formed count, so a decision:block
+# assertion that could never fail is ruled out by a case the fixture is known to reach.
+stop_hook_probe "control: manifest with a well-formed Retry count" '---
+status: IN_PROGRESS
+---
+# TASK-061: Test task
+
+- **Depends on**: none
+- **Group**: 1
+- **Retry count**: 1/3
+'
+# Control: the paused config is the case where decision:block is genuinely absent, so the
+# assert_contains above is reading real output rather than reporting a needle it cannot miss.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.paused = true'
+create_plan
+create_task_file "TASK-062" "IN_PROGRESS"
+SH_OUTPUT=$(bash "$REPO_ROOT/scripts/stop-hook.sh" </dev/null 2>&1) && SH_EC=0 || SH_EC=$?
+assert_not_contains "control: a paused loop emits no decision:block (the needle can miss)" \
+  "$SH_OUTPUT" '"decision": "block"'
+assert_exit_code "control: a paused loop exits 0" "$SH_EC" 0
 teardown_temp_dir
 
 report_results
