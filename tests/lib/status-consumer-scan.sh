@@ -34,8 +34,6 @@ SCS_STATE_SIGNAL="(${SCS_SIGNAL_PATH}|${SCS_SIGNAL_AUTHORITY}|${SCS_SIGNAL_FIELD
 # finding too — see scs_exemption_paths and SCS_RETIRED/SCS_ORPHANED below.
 scs_exemption() { # <rel-path> -> prints justification, exit 0 if exempt
   case "$1" in
-    scripts/notify.sh)
-      echo "issue #203, deliberately unfixed this objective: its private DONE regex matches only the legacy '- **Status**: DONE' and '## Status: DONE' forms, so on a canonical-frontmatter manifest set DONE counts 0 and the TOTAL == DONE completion check can never hold at all — CANCELLED-blindness is the narrower case inside that larger defect" ;;
     scripts/lib/review-evidence.sh)
       echo "its status-shaped tokens are review VERDICTS (CHANGES_REQUESTED/SKIPPED/UNVERIFIED); its nazgul/tasks/ read is resolve_review_unit's feat_id lookup, which never branches on task status" ;;
     scripts/self-audit.sh)

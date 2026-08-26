@@ -3,7 +3,7 @@
 # notify.sh — Stop hook for loop completion notifications
 #
 # Fires on Stop and executes a user-configured notification command
-# when the Nazgul loop completes (all tasks DONE or NAZGUL_COMPLETE detected).
+# when the Nazgul loop completes (every task terminal — DONE or CANCELLED — or NAZGUL_COMPLETE detected).
 #
 # Configuration (checked in order):
 #   1. nazgul/config.json → notifications.on_complete
@@ -57,9 +57,18 @@ declare -F read_hook_payload >/dev/null && declare -F hook_payload_timeout_repor
   || rhp_unavailable "$RHP_LIB defines no reader API after sourcing (source returned $rhp_rc)"
 source "$SCRIPT_DIR/lib/nazgul-root.sh"
 
-# MF-031: resolve nazgul/ paths against the project root like every sibling
-# guard, instead of bare relative paths that only work when cwd happens to
-# already be the project root.
+# Guarded so an unreadable lib leaves this Stop hook non-blocking instead of aborting it.
+TU_LIB="$SCRIPT_DIR/lib/task-utils.sh"
+TU_RC=0
+if [ -r "$TU_LIB" ]; then
+  # shellcheck source=./lib/task-utils.sh
+  source "$TU_LIB" || TU_RC=$?
+else
+  TU_RC=127
+fi
+
+# MF-031: resolve nazgul/ paths against the project root like every sibling guard,
+# not bare relative paths that only work when cwd is already the project root.
 PROJECT_ROOT="$(resolve_project_root)"
 
 debug_log() {
@@ -125,13 +134,16 @@ if [[ "$NAZGUL_TRANSCRIPT_PATH" != "unknown" && -f "$NAZGUL_TRANSCRIPT_PATH" ]];
     fi
 fi
 
-# Check if all tasks are DONE
-if [[ "$LOOP_COMPLETE" != "true" && -d "$PROJECT_ROOT/nazgul/tasks" ]]; then
-    TOTAL=$( (ls "$PROJECT_ROOT"/nazgul/tasks/TASK-*.md 2>/dev/null || true) | wc -l | tr -d ' ')
-    DONE=$( (grep -rlE '(Status\*\*:[[:space:]]*DONE|^## Status:[[:space:]]*DONE)' "$PROJECT_ROOT"/nazgul/tasks/TASK-*.md 2>/dev/null || true) | wc -l | tr -d ' ')
-    if [[ "$TOTAL" -gt 0 && "$TOTAL" == "$DONE" ]]; then
-        LOOP_COMPLETE="true"
-        debug_log "All $TOTAL tasks DONE"
+# Check whether every task has reached a terminal status (issue #203)
+if [[ "$LOOP_COMPLETE" != "true" ]]; then
+    if declare -F count_tasks_and_find_active >/dev/null; then
+        count_tasks_and_find_active "$PROJECT_ROOT/nazgul/tasks"
+        if [ "$TOTAL_COUNT" -gt 0 ] && [ "$((DONE_COUNT + CANCELLED_COUNT))" -eq "$TOTAL_COUNT" ]; then
+            LOOP_COMPLETE="true"
+            debug_log "All $TOTAL_COUNT tasks DONE or CANCELLED ($DONE_COUNT DONE, $CANCELLED_COUNT CANCELLED)"
+        fi
+    else
+        debug_log "task-utils.sh unavailable (rc $TU_RC) — task status unreadable, skipping notification"
     fi
 fi
 

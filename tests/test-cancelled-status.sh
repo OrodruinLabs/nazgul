@@ -393,12 +393,13 @@ else
       "scs_ambiguous_paths returned nothing, so the staleness check above examined no arm"
   fi
 
-  # #203 stays exempt only while its justification is still true of the file.
+  # #203's exemption is gone, so what pins the seam now is the fix itself: the
+  # legacy-only DONE regex left the file and the shared reader arrived with it.
   NOTIFY_SRC="$REPO_ROOT/scripts/notify.sh"
-  assert_eq "consumer-scan: the #203 exemption's legacy-only DONE regex is still what ships" \
-    "$(grep -cF 'Status\*\*:[[:space:]]*DONE' "$NOTIFY_SRC")" "1"
-  assert_eq "consumer-scan: the #203 exemption's 'never calls the shared reader' claim still holds" \
-    "$(grep -cE 'task-utils\.sh|count_tasks_and_find_active|get_task_status' "$NOTIFY_SRC")" "0"
+  assert_eq "consumer-scan: notify.sh no longer ships #203's legacy-only DONE regex" \
+    "$(grep -cF 'Status\*\*:[[:space:]]*DONE' "$NOTIFY_SRC")" "0"
+  assert_file_contains "consumer-scan: notify.sh reads task status through the shared reader" \
+    "$NOTIFY_SRC" "count_tasks_and_find_active"
 
   # The review-provenance arm stays exempt only while "no predicate reads a task status" holds:
   # a status token outside a comment or a message literal would be exactly that predicate.
