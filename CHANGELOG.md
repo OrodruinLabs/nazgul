@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ## [2.36.1] - 2026-08-26
 
+### FEAT-036 (OBJ-A of the Backlog Remediation Programme) — manifest write integrity (classes C15 + C1)
+
+**Architecture:** A new shared write primitive `scripts/lib/manifest-write.sh` (ADR-031) factors out the compare-and-swap semantics used by six manifest-writing scripts — it knows locks, snapshots, hashes, renames and read-backs, but is **status-agnostic** and confers no authority. `scripts/task-transition.sh` remains the sole sanctioned STATUS writer; `scripts/red-run.sh`, `scripts/stop-hook.sh`, and `scripts/close-objective.sh` remain the sole writers of their respective evidence sections. The six authors share a single transactional primitive, not authority. **Schema version stays 37** — no config keys, state-machine edges, or `schema_version` changed.
+
+**Task count and reviewers:** Sixteen tasks, base SHA `3b0b859`, one `FEATURE-FEAT-036` aggregate board (architect 87 / code 88 / security 87 / qa 88, all `APPROVE`).
+
+**Scope and verdicts:**
+
+- **C15 (Manifest writers' CAS integrity)**: Five findings closed. `#140` — avoid recording a borrowed case label as attribution. `#226` — `red-run.sh` adopts the shared write primitive and returns non-zero when the write is refused. `#227` — the red-run evidence gate becomes re-askable (sixteenth doctor check). `#241` — `red-run.sh` scope is now task-scoped, derived from each task's `## Commits`, not branch-cumulative (`Base SHA..HEAD`). New `stop_gate` reason `manifest_write_refused` (thirteen → fourteen closed reasons) when a write is declined by the compare-and-swap, plus a new exit code 7 for `red-run.sh` (`WRITE REFUSED`) distinct from exit 2/6 which describe the run.
+
+- **C1 (Status readers' consolidation)**: Four findings closed. `#105` (parts A + B) — `scripts/notify.sh` and `skills/start/SKILL.md` now use `scripts/lib/task-utils.sh`'s shared status reader. `#108` — `get_task_field` colon-truncation defect fixed (`#169`). `#203` — task-state reader consolidation complete (read nine status formats through one shared parser at four call sites).
+
+**Verification:**
+
+- **New bound entry point:** `tests/test-manifest-write-integrity.sh` (§15, sixteenth). ONE walk of `scripts/**` printing under TWO tokens (`manifest-writers` and `status-readers`); covered only when BOTH conform. Dogfooded on this repo's own manifest write paths.
+- **New primitive tests:** `test-manifest-write-primitive.sh` (happy path, refusals, degradations), `test-manifest-write-concurrency.sh` (serialization under concurrent writers), plus `test-cancelled-status-consumers.sh` for C1 reader consolidation.
+- **Test suite:** 119 → 123 files. **Full suite green at `d7a1bb0`** (`tests/run-tests.sh`).
+- **Diff:** 33 files, +5563 / -517. Key changes: `scripts/lib/manifest-write.sh` (new, 280 lines), `scripts/lib/task-transition-guard.sh` (+125, lock moved out), `scripts/red-run.sh` (+40, exit 7 + write primitive), `scripts/stop-hook.sh` (+25, write primitive), `scripts/close-objective.sh` (+18, write primitive), `scripts/task-transition.sh` (+10, write primitive), `scripts/doctor.sh` (+80, red-run-coverage check), `skills/doctor/SKILL.md` (+10), `tests/test-*.sh` (+1000 total across new and extended files).
+
+**Issues closed:** `#140 #226 #227 #241` (C15) and `#105 #108 #169 #203` (C1). Note: `#105`'s parts C and D remain open and out of scope.
+
+
+
 ### FEAT-035 (Move 0 of the Backlog Remediation Programme, board issue #248) — two documents' counts re-derived from commands run, not carried forward
 
 No script, hook, guard, config key, state-machine edge or schema version changed —
