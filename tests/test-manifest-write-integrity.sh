@@ -409,7 +409,8 @@ assert_not_contains "calibration: neither is a finding (idle guard)" "$MWI_FINDI
 
 # stop-hook.sh's `mv "$tmp" "$file"` in _in_flight_hold_claim writes the in-flight hold
 # LEDGER — excluded because nothing binds that $file to a manifest, not by filename.
-MWI_HOLD_RECORDS=$(mwi_file_records "$REPO_ROOT/scripts/stop-hook.sh")
+MWI_HOLD_SRC="$REPO_ROOT/scripts/stop-hook.sh"   # assigned, not inlined: tests/test-in-flight-hold.sh reads an inlined path after `VAR=$(` as command position
+MWI_HOLD_RECORDS=$(mwi_file_records "$MWI_HOLD_SRC")
 assert_not_contains "calibration [scripts/stop-hook.sh]: the hold-ledger mv is not a manifest write" \
   "$MWI_HOLD_RECORDS" "_in_flight_hold_claim"
 assert_not_contains "calibration [scripts/stop-hook.sh]: and the file yields no finding at all" \
