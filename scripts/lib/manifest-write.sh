@@ -259,6 +259,12 @@ _nz_default_verify() {
 # trap already exists rather than by adding a second one that fights the first.
 _NZ_MW_SNAPSHOT=""
 _NZ_MW_STAGE=""
+# shellcheck disable=SC2034  # published for the SOURCING shell: 1 iff the new bytes are the
+# manifest on disk, 0 otherwise. It is the machine-readable form of the verify_failed (rolled
+# back, file unchanged) vs verify_failed_unrestored (file HOLDS the rejected bytes) split, so a
+# caller need not parse stderr to know whether anything landed. NO ADOPTER READS IT YET —
+# stated rather than implied, because a published signal with no consumer is a claim, not a
+# contract.
 NZ_MW_INSTALLED=0
 NZ_MW_BEFORE_HASH=""
 
@@ -321,6 +327,11 @@ nz_manifest_write_locked() {
   # ledger records this value as before_sha256, and two independent computations of one
   # number are two things that can disagree — including silently, if the two hash helpers
   # are ever changed apart. One computation, one authority.
+  # shellcheck disable=SC2034  # published for the SOURCING shell, not read within this file:
+  # task-transition-guard.sh:2089 reads it into _TTG_STAGED_BEFORE_HASH. Publishing the hash the
+  # primitive already computed is what removes the second source of truth for the ledger's
+  # before_sha256 (PR #293 finding 13) — a recomputation could diverge silently if the two hash
+  # helpers were ever changed independently.
   NZ_MW_BEFORE_HASH="$before_hash"
   if [ -z "$before_hash" ]; then
     _nz_mw_cleanup
@@ -380,6 +391,7 @@ nz_manifest_write_locked() {
   if ! "$verify_fn" "$file"; then
     if mv "$snapshot" "$file"; then
       _NZ_MW_SNAPSHOT=""
+      # shellcheck disable=SC2034  # same published signal as at the top of this file
       NZ_MW_INSTALLED=0
       _nz_mw_fail verify_failed "${task_id} was written but ${verify_fn} rejected the installed bytes; the write was ROLLED BACK and ${file} holds its pre-write content"
       return 1
