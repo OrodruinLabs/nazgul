@@ -1,7 +1,34 @@
 # Backlog Remediation Programme
 
-**Status:** chartered, not started. Architect-validated 2026-08-23 (`CHANGES_REQUESTED`, confidence 88 — the
-corrections below are already folded in).
+**Status:** Move 0 complete 2026-08-26, re-derived against base SHA `92bf60f`. Architect-validated
+2026-08-23 (`CHANGES_REQUESTED`, confidence 88 — the corrections below are already folded in). Move 0
+measured and recorded; it started, split, merged and re-chartered nothing (ADR-029/D7).
+
+**Move 0 verification record.** The six procedures in `nazgul/docs/test-plan.md` ran to completion
+against `92bf60f` *before* this Status line was written. The ordering is the point: an assertion of
+completion written ahead of its own verification is the failure this pass exists to correct.
+
+```text
+move0-coverage (92bf60f..f96d8f5): 283 scanned, 241 skipped (issue-number=86, unchanged=62, compound-token=93), 42 checked, 0 findings
+test-doc-contract-fields: 279/279 passed
+test-doc-contract-fields: 5509 scanned, 5303 skipped (unreadable=0, no-claim=5303), 206 checked, 0 findings
+run-tests: 119 scanned, 118 skipped (filtered-out=118, unreadable=0), 1 checked, 0 findings
+```
+
+The coverage line is pinned to both endpoints rather than run against the working tree, so it cannot
+be invalidated by the amendment that carries it. **V-A** — every number this pass wrote resolves to a
+transcript section, an issue number, or a stated non-verified marker; `N == M + K` is asserted, and a
+planted unannotated number is caught, so the zero is measured rather than vacuous. **V-B** — every
+Class D command re-runs byte-identically, including the mandatory `c959a43` → `125` control that proves
+the recorded grep is still the document's grep. **V-C** — every Class L figure recomputes from the
+frozen snapshot (`jq 'length'` = 169, under the 1000 cap, so nothing derived from it is a floor).
+**V-D** — every replaced baseline is retained beside its measurement as `documented N → measured M`.
+**V-E** — the changed-file set is exactly this document and `docs/guard-fail-open-inventory.md`.
+**V-F** — all 29 inbox items carry an `issue:`, checked with `grep -L` because
+`scripts/sync-inbox-to-github.sh`, which `CLAUDE.md` names as the enforcement, is not in the tree.
+Two further defects were filed by this pass under the standing clause and are recorded, not fixed,
+here. Transcript, every control, and both filings:
+`nazgul/context/FEAT-035-move0-measurements.md` §V.
 
 **Thesis:** 144 open issues on a 353-file, 66-script repo are **not 144 independent defects**. A
 classification pass over all 144 found they collapse into 13 root-cause classes plus 22 residue —
