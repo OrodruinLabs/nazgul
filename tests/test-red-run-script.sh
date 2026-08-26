@@ -1975,6 +1975,213 @@ fi
 echo "  two roots: ${RRW_SCANNED} scanned, ${RRW_SKIPPED} skipped (jq-unavailable=${RRW_NOJQ}), ${RRW_CHECKED} checked, ${RRW_FINDINGS} findings"
 assert_eq "two roots: scanned == skipped + checked" "$RRW_SCANNED" "$((RRW_SKIPPED + RRW_CHECKED))"
 
+# lean-comments: allow-run — the defect this section pins; shortening it loses why the shape matters.
+# FEAT-036/TASK-004 (#226): the install goes through scripts/lib/manifest-write.sh — one
+# per-task lock, one snapshot, two compare-and-swaps, one atomic rename, one read-back. The
+# defect it replaces was `printf '%s' "$out" > "$MANIFEST"`: truncating, unlocked, non-atomic
+# and un-read-back, so an interrupted or concurrent write tore the manifest and the
+# reconciliation pass quarantined it — a quarantine plus a repair for every occurrence.
+RRP_SCANNED=0
+RRP_SKIPPED=0
+RRP_NODIGEST=0
+RRP_CHECKED=0
+RRP_FINDINGS=0
+RRP_MARK=0
+
+# A case that has to reach the compare-and-swap cannot run without a SHA-256 tool — the
+# primitive fails closed there — so it is SKIPPED and counted, never silently passed.
+rrp_begin() {
+  RRP_SCANNED=$((RRP_SCANNED + 1))
+  if [ "${2:-}" = "digest" ] \
+    && ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+    RRP_SKIPPED=$((RRP_SKIPPED + 1))
+    RRP_NODIGEST=$((RRP_NODIGEST + 1))
+    _skip "primitive: $1 (no SHA-256 tool — the write primitive fails closed without one)"
+    return 1
+  fi
+  RRP_CHECKED=$((RRP_CHECKED + 1))
+  RRP_MARK="$TESTS_FAILED"
+  return 0
+}
+rrp_end() {
+  [ "$TESTS_FAILED" -eq "$RRP_MARK" ] || RRP_FINDINGS=$((RRP_FINDINGS + 1))
+}
+
+RR_SRC="$REPO_ROOT/scripts/red-run.sh"
+
+if rrp_begin "no write of any shape targets the task manifest"; then
+  RRP_WRITE_SITES=$(grep -nE '(>>?[[:space:]]*"\$MANIFEST"|(mv|cp|tee)[^|;]*"\$MANIFEST"|sed -i[^|;]*"\$MANIFEST")' "$RR_SRC")
+  assert_eq "primitive: no redirect, append, mv, cp, tee or sed -i targets the manifest" \
+    "$RRP_WRITE_SITES" ""
+  assert_eq "primitive: exactly one install site" \
+    "$(grep -c '^nz_manifest_write ' "$RR_SRC")" "1"
+  assert_file_contains "primitive: and it is the shared primitive, with a read-back predicate" \
+    "$RR_SRC" '^nz_manifest_write "\$RR_STATE_DIR" "\$TASK_ID" --verify rr_verify_installed -- rr_manifest_producer'
+  rrp_end
+fi
+
+if rrp_begin "the read-modify-write reads the snapshot, never the live manifest"; then
+  # A producer that kept reading the live file would run the same race with a lock HELD —
+  # worse than the defect, because it looks correct. Asserted per body, not per file.
+  for RRP_FN in rr_read_existing_entries rr_merge_entries rr_render_manifest rr_manifest_producer; do
+    RRP_BODY=$(awk -v h="${RRP_FN}() {" 'index($0,h)==1{d=1} d{print} d && $0=="}"{exit}' "$RR_SRC")
+    assert_not_contains "primitive: $RRP_FN never reads the live manifest variable" \
+      "$RRP_BODY" 'MANIFEST'
+    assert_contains "primitive: $RRP_FN reads the snapshot the primitive passes" \
+      "$RRP_BODY" '$snapshot'
+  done
+  rrp_end
+fi
+
+teardown_temp_dir
+setup_project
+
+if rrp_begin "the install takes the shared per-task lock" digest; then
+  write_manifest TASK-030 "$BASE_SHA"
+  RRP_M30="$TEST_DIR/nazgul/tasks/TASK-030.md"
+  RRP_LOCK="$TEST_DIR/nazgul/locks/task-transition-TASK-030.lock"
+  mkdir -p "$RRP_LOCK"
+  printf '%s %s\n' "$$" "deadbeef" > "$RRP_LOCK/owner.$$.deadbeef"
+  run_capture TASK-030 --filter=alpha
+  assert_exit_code "primitive: a held lock refuses the install with the dedicated exit 7" "$RR_EC" 7
+  assert_contains "primitive: the refusal is about the WRITE" "$RR_OUT" "WRITE REFUSED"
+  assert_contains "primitive: it is the shared per-task lock it could not take" "$RR_OUT" \
+    "another transition already holds the TASK-030 lock"
+  assert_contains "primitive: it names the primitive's own cause" "$RR_OUT" "cause: lock_unavailable"
+  assert_contains "primitive: it says nothing was installed" "$RR_OUT" "Nothing was installed"
+  assert_contains "primitive: and that the run itself is not in doubt" "$RR_OUT" \
+    "The run itself is not in doubt"
+  assert_not_contains "primitive: a refused write is not reported as a vacuous test" \
+    "$RR_OUT" "VACUOUS TEST"
+  assert_not_contains "primitive: nor as an indeterminate run" "$RR_OUT" "INDETERMINATE"
+  assert_file_not_contains "primitive: no evidence block is installed under a held lock" \
+    "$RRP_M30" 'red-run.sh:begin'
+  rm -rf "$RRP_LOCK"
+  rrp_end
+fi
+
+if rrp_begin "a manifest that changes during the run is refused by the compare-and-swap" digest; then
+  write_manifest TASK-031 "$BASE_SHA"
+  RRP_M31="$TEST_DIR/nazgul/tasks/TASK-031.md"
+  RRP_BIN="$TEST_DIR/rrp-bin"
+  RRP_REAL_GIT=$(command -v git)
+  mkdir -p "$RRP_BIN"
+  cat > "$RRP_BIN/git" <<'RRP_FAKE_GIT'
+#!/usr/bin/env bash
+# lean-comments: allow-run — why this is deterministic rather than a sleep race.
+# Lands ONE concurrent append while the primitive's snapshot file exists. That file is
+# created inside the compare-and-swap window and removed when it closes, and the first git
+# the window ever runs is the producer's own resolve — so the timing is decided by the
+# primitive under test, not by a sleep, and the case is deterministic.
+if [ -n "${RRP_CAS_MANIFEST:-}" ] && [ ! -e "${RRP_CAS_MANIFEST}.mutated" ]; then
+  for _snap in "${RRP_CAS_MANIFEST%/*}"/.*.snapshot.*; do
+    [ -e "$_snap" ] || continue
+    printf '\n- a concurrent writer landed here mid-capture\n' >> "$RRP_CAS_MANIFEST"
+    : > "${RRP_CAS_MANIFEST}.mutated"
+    break
+  done
+fi
+exec "$RRP_REAL_GIT" "$@"
+RRP_FAKE_GIT
+  chmod +x "$RRP_BIN/git"
+  RR_OUT=$(PATH="$RRP_BIN:$PATH" RRP_CAS_MANIFEST="$RRP_M31" RRP_REAL_GIT="$RRP_REAL_GIT" \
+    bash "$RED_RUN" TASK-031 --filter=alpha --project-root="$TEST_DIR" 2>&1)
+  RR_EC=$?
+  assert_file_exists "CAS: the concurrent writer really did fire inside the window" \
+    "${RRP_M31}.mutated"
+  assert_exit_code "CAS: a manifest changed mid-capture gets the dedicated exit 7" "$RR_EC" 7
+  assert_contains "CAS: the refusal says the manifest changed DURING the run" "$RR_OUT" \
+    "manifest CHANGED during the run"
+  assert_contains "CAS: it names the compare-and-swap that refused" "$RR_OUT" \
+    "cause: cas_mismatch_install"
+  assert_contains "CAS: it says a Base SHA that moved makes the refusal CORRECT" "$RR_OUT" \
+    "If the manifest's Base SHA changed during the run, this refusal is the CORRECT outcome"
+  assert_contains "CAS: it tells the operator to re-capture against the manifest as it stands" \
+    "$RR_OUT" "Re-capture against the manifest as it now stands"
+  assert_contains "CAS: it separates the write from the run" "$RR_OUT" \
+    "The run itself is not in doubt"
+  assert_not_contains "CAS: the dedicated code is not the vacuous one" "$RR_OUT" "VACUOUS TEST"
+  assert_not_contains "CAS: nor the indeterminate one" "$RR_OUT" "INDETERMINATE"
+  assert_file_contains "CAS: the concurrent writer's content is preserved, not overwritten" \
+    "$RRP_M31" 'a concurrent writer landed here mid-capture'
+  assert_file_not_contains "CAS: and no block is installed over it" "$RRP_M31" 'red-run.sh:begin'
+  rm -rf "$RRP_BIN" "${RRP_M31}.mutated"
+  rrp_end
+fi
+
+if rrp_begin "a read-back the predicate rejects is its own named refusal" digest; then
+  write_manifest TASK-032 "$BASE_SHA"
+  RRP_M32="$TEST_DIR/nazgul/tasks/TASK-032.md"
+  RRP_BAD=$(awk '/^status: /{print "status: NOT-A-STATUS"; next} {print}' "$RRP_M32")
+  printf '%s\n' "$RRP_BAD" > "$RRP_M32"
+  run_capture TASK-032 --filter=alpha
+  assert_exit_code "read-back: a status that stops parsing refuses with exit 7" "$RR_EC" 7
+  assert_contains "read-back: the refusal names its own cause" "$RR_OUT" "cause: verify_failed"
+  # The rename precedes the read-back, so this is the ONE refusal that leaves the manifest
+  # replaced — saying "unchanged" here would send the operator to repair the wrong thing.
+  assert_contains "read-back: and does NOT claim the manifest is untouched" "$RR_OUT" \
+    "the one refusal that does not leave the manifest untouched"
+  assert_file_contains "read-back: the block really was installed before the predicate ran" \
+    "$RRP_M32" 'red-run.sh:begin'
+  rrp_end
+fi
+
+if rrp_begin "a manifest the primitive cannot address is refused before the run"; then
+  write_manifest TASK-033 "$BASE_SHA"
+  mkdir -p "$TEST_DIR/nazgul/tasks/patches"
+  RRP_M33="$TEST_DIR/nazgul/tasks/patches/TASK-033.md"
+  mv "$TEST_DIR/nazgul/tasks/TASK-033.md" "$RRP_M33"
+  run_capture TASK-033 --filter=alpha
+  assert_exit_code "addressability: a patches/ manifest is an environment refusal, exit 1" "$RR_EC" 1
+  assert_contains "addressability: it names what the primitive cannot address" "$RR_OUT" \
+    "which the shared manifest-write primitive cannot address"
+  assert_contains "addressability: it names the shape the primitive does install" "$RR_OUT" \
+    "installs only <state_root>/tasks/TASK-NNN.md"
+  assert_contains "addressability: it refuses to fall back to the unlocked write" "$RR_OUT" \
+    "will not fall back to the unlocked truncating write"
+  assert_contains "addressability: and says nothing was run at all" "$RR_OUT" "nothing was run at all"
+  assert_not_contains "addressability: the run never started" "$RR_OUT" "RED confirmed"
+  assert_file_not_contains "addressability: the patches/ manifest is untouched" \
+    "$RRP_M33" 'red-run.sh:begin'
+
+  cp "$RRP_M33" "$TEST_DIR/nazgul/tasks/PATCH-033.md"
+  run_capture PATCH-033 --filter=alpha
+  assert_exit_code "addressability: a PATCH-NNN id is refused for the same reason" "$RR_EC" 1
+  assert_contains "addressability: the PATCH refusal names the addressable shape too" "$RR_OUT" \
+    "installs only <state_root>/tasks/TASK-NNN.md"
+  assert_file_not_contains "addressability: and writes nothing into it" \
+    "$TEST_DIR/nazgul/tasks/PATCH-033.md" 'red-run.sh:begin'
+  rrp_end
+fi
+
+# The adoption must not change WHAT is recorded, only how it is installed: the same by-path
+# merge, now over the snapshot — replacing on hit and dropping the superseded.
+if rrp_begin "the by-path merge semantics survive the adoption" digest; then
+  write_manifest TASK-034 "$BASE_SHA"
+  RRP_M34="$TEST_DIR/nazgul/tasks/TASK-034.md"
+  run_capture TASK-034 --filter=alpha
+  assert_exit_code "merge: the first capture through the primitive exits 0" "$RR_EC" 0
+  run_capture TASK-034 --filter=gamma
+  assert_exit_code "merge: the second capture exits 0" "$RR_EC" 0
+  assert_eq "merge: both files carry an entry, keyed by path" \
+    "$(grep -c '^- red-run:' "$RRP_M34")" "2"
+  assert_contains "merge: the accounting line is unchanged by the adoption" "$RR_OUT" \
+    "evidence merge: 1 existing entry(ies) scanned, 1 retained, 0 replaced, 0 dropped (stale=0, unresolved-ref=0, no-ref=0, superseded-na=0); 1 entry(ies) from this capture"
+  run_capture TASK-034 --filter=alpha
+  assert_eq "merge: a re-capture replaces its own entry and no other" \
+    "$(grep -c '^- red-run:' "$RRP_M34")" "2"
+  assert_contains "merge: and still announces the replacement" "$RR_OUT" \
+    "replaced the existing entry for tests/test-alpha.sh"
+  assert_eq "merge: still exactly one generated block" \
+    "$(grep -c 'red-run.sh:begin' "$RRP_M34")" "1"
+  rrp_end
+fi
+
+teardown_temp_dir
+
+echo "  primitive: ${RRP_SCANNED} scanned, ${RRP_SKIPPED} skipped (no-digest-tool=${RRP_NODIGEST}), ${RRP_CHECKED} checked, ${RRP_FINDINGS} findings"
+assert_eq "primitive: scanned == skipped + checked" "$RRP_SCANNED" "$((RRP_SKIPPED + RRP_CHECKED))"
+
 setup_temp_dir
 
 teardown_temp_dir

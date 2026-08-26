@@ -67,6 +67,14 @@ set -euo pipefail
 #   5  REFUSED TO EXECUTE — the configured command is denylisted; nothing was run
 #   6  INDETERMINATE — the runner exited non-zero but no failing test file could be
 #      identified from its output; nothing written
+#   7  WRITE REFUSED — the run was red, but the shared manifest-write primitive
+#      refused to install the block; the manifest is unchanged
+#
+# 7 is about the WRITE, not the run: 2 and 6 say the capture produced no usable
+# result, while 7 says it produced one that could not be recorded. The load-bearing
+# case is a manifest that changed under a multi-minute run — installing a block
+# captured against a Base SHA the manifest no longer names is the corruption
+# ADR-031's compare-and-swap exists to refuse.
 #
 # How a RUNNER's exit code is read — declared here, not inherited from the one
 # harness this script was written against. Only 0 is universal: a pre-change run
@@ -257,6 +265,21 @@ MANIFEST="$STATE_ROOT/nazgul/tasks/$TASK_ID.md"
 [ -f "$MANIFEST" ] || die \
   "no manifest at $STATE_ROOT/nazgul/tasks/$TASK_ID.md or $STATE_ROOT/nazgul/tasks/patches/$TASK_ID.md" \
   "State tree resolved from $STATE_ROOT_SOURCE; code tree is $PROJECT_ROOT."
+
+# lean-comments: allow-run — the refusal's cost is a capability red-run used to have, so the
+# reason it is not simply kept has to survive here.
+# The shared primitive (ADR-031) addresses <state_root>/tasks/TASK-NNN.md and nothing else, so a
+# manifest it cannot name — a PATCH-NNN id, or one under nazgul/tasks/patches/ — has no locked,
+# atomic, read-back install available. That is refused HERE, before the multi-minute run rather
+# than after it, and red-run keeps NO unlocked fallback for those manifests: that fallback is
+# #226 itself, and a capability kept by writing torn manifests is not a capability.
+RR_STATE_DIR="$STATE_ROOT/nazgul"
+if [ "$MANIFEST" != "$RR_STATE_DIR/tasks/$TASK_ID.md" ] || [[ ! "$TASK_ID" =~ ^TASK-[0-9]+$ ]]; then
+  die \
+    "$TASK_ID's manifest is $MANIFEST, which the shared manifest-write primitive cannot address." \
+    "It installs only <state_root>/tasks/TASK-NNN.md, and red-run will not fall back to the unlocked truncating write ADR-031 replaced (#226)." \
+    "This is not a red run that failed — nothing was run at all."
+fi
 
 command -v git >/dev/null 2>&1 || die "git is not available — a red run cannot be captured without it"
 git -C "$PROJECT_ROOT" rev-parse --git-dir >/dev/null 2>&1 \
@@ -785,8 +808,10 @@ RR_OLD_PATHS=()
 RR_OLD_TEXTS=()
 RR_OLD_PREAMBLE=0
 
+# $1 is the SNAPSHOT the write primitive passes its producer, never $MANIFEST: reading the
+# live file here puts the read half back outside the CAS, with a lock held to look correct.
 rr_read_existing_entries() {
-  local line cur=""
+  local snapshot="$1" line cur=""
   while IFS= read -r line || [ -n "$line" ]; do
     if printf '%s' "$line" | grep -qE '^[[:space:]]*-[[:space:]]*(\*\*)?red-run(\*\*)?:'; then
       if [ -n "$cur" ]; then
@@ -804,7 +829,7 @@ rr_read_existing_entries() {
   done < <(awk -v b="$BEGIN_PREFIX" -v e="$END_MARK" '
       index($0, b) == 1 { f = 1; next }
       f && $0 == e { f = 0; next }
-      f { print }' "$MANIFEST")
+      f { print }' "$snapshot")
   if [ -n "$cur" ]; then
     RR_OLD_TEXTS+=("$cur")
     RR_OLD_PATHS+=("$(rr_entry_path "$cur")")
@@ -819,10 +844,11 @@ rr_read_existing_entries() {
 # entry left in place discharges its file's obligation whatever label it carries — which would
 # make accumulation a wider forgery route than the overwrite bug it replaces.
 rr_merge_entries() {
+  local snapshot="$1"
   local i=0 j hit old_path old_text ref resolved base_resolved emitted="" merged=""
   local retained=0 replaced=0 stale=0 unresolved=0 noref=0 superseded=0
 
-  rr_read_existing_entries
+  rr_read_existing_entries "$snapshot"
   base_resolved=$(rr_resolve_sha "$BASE_SHA")
 
   while [ "$i" -lt "${#RR_OLD_TEXTS[@]}" ]; do
@@ -929,20 +955,15 @@ done <<EOF
 $FAILED_NAMES
 EOF
 
-ENTRIES=$(rr_merge_entries)
-
-BLOCK="${BEGIN_MARK}
-${ENTRIES}
-${END_MARK}"
-
-# In-place file write, never `mv`/`cp` over a manifest: the bash-write
-# reconciliation pass reads manifests as state, and rightly flags a swap.
-rr_write_block() {
+# Renders the manifest's replacement bytes on stdout from $1, the SNAPSHOT. The install
+# is the primitive's atomic rename, so nothing here writes, appends or renames anything.
+rr_render_manifest() {
+  local snapshot="$1" block="$2"
   local has_section=0 has_marker=0 skipping=0 inserted=0 out="" line
-  if grep -q '^## Red-Run Evidence' "$MANIFEST"; then has_section=1; fi
+  if grep -q '^## Red-Run Evidence' "$snapshot"; then has_section=1; fi
   # Same line-start predicate the extractor uses. An unanchored search matches PROSE
   # quoting the marker, which reads as "region present" and appends a second section.
-  if awk -v b="$BEGIN_PREFIX" 'index($0, b) == 1 { f = 1; exit } END { exit !f }' "$MANIFEST"; then
+  if awk -v b="$BEGIN_PREFIX" 'index($0, b) == 1 { f = 1; exit } END { exit !f }' "$snapshot"; then
     has_marker=1
   fi
 
@@ -950,7 +971,7 @@ rr_write_block() {
     if [ "$has_marker" -eq 1 ]; then
       case "$line" in
         "$BEGIN_PREFIX"*)
-          out="${out}${BLOCK}
+          out="${out}${block}
 "
           skipping=1
           inserted=1
@@ -967,24 +988,82 @@ rr_write_block() {
     if [ "$has_marker" -eq 0 ] && [ "$has_section" -eq 1 ] && [ "$inserted" -eq 0 ]; then
       case "$line" in
         "## Red-Run Evidence"*)
-          out="${out}${BLOCK}
+          out="${out}${block}
 "
           inserted=1
           ;;
       esac
     fi
-  done < "$MANIFEST"
+  done < "$snapshot"
 
   if [ "$inserted" -eq 0 ]; then
     out="${out}
 ## Red-Run Evidence
-${BLOCK}
+${block}
 "
   fi
-  printf '%s' "$out" > "$MANIFEST"
+  printf '%s' "$out"
 }
 
-rr_write_block
+# lean-comments: allow-run — the ordering argument is the whole point of the adoption.
+# The producer that nz_manifest_write runs, with the snapshot path appended as its last argument.
+# Merge AND render read that snapshot, so the entire read-modify-write sits between the two
+# compare-and-swaps: what the merge saw is what the rename replaces. Merging outside the lock
+# and installing inside it would still race — the block would be built from bytes another
+# writer had already superseded — which is why the whole of it moved in here rather than the
+# redirect being swapped for a call.
+rr_manifest_producer() {
+  local snapshot="$1" entries block
+  entries=$(rr_merge_entries "$snapshot") || return 1
+  block="${BEGIN_MARK}
+${entries}
+${END_MARK}"
+  rr_render_manifest "$snapshot" "$block"
+}
+
+# Read-back predicate: the primitive's default status parse PLUS the region THIS caller
+# installed, found by the same line-start predicate rr_render_manifest and the extractor use.
+rr_verify_installed() {
+  local file="$1"
+  _nz_default_verify "$file" || return 1
+  awk -v b="$BEGIN_PREFIX" 'index($0, b) == 1 { f = 1; exit } END { exit !f }' "$file" && return 0
+  printf 'red-run: %s was installed but carries no generated block at line start\n' "$file" >&2
+  return 1
+}
+
+# Buffered rather than passed through live, so the refusal cause below is read from the
+# primitive's own words instead of re-derived; every line still reaches stderr either way.
+RR_WRITE_ERR="$SCRATCH_PARENT/manifest-write.err"
+RR_WRITE_EC=0
+nz_manifest_write "$RR_STATE_DIR" "$TASK_ID" --verify rr_verify_installed -- rr_manifest_producer \
+  2>"$RR_WRITE_ERR" || RR_WRITE_EC=$?
+cat "$RR_WRITE_ERR" >&2 || true
+
+if [ "$RR_WRITE_EC" -ne 0 ]; then
+  RR_WRITE_CAUSE=$(sed -n 's/.*(cause: \([a-z_]*\)).*/\1/p' "$RR_WRITE_ERR" | tail -1)
+  [ -n "$RR_WRITE_CAUSE" ] || RR_WRITE_CAUSE="unreported"
+  # A closed set of named refusals, because the three differ in what they leave on disk and
+  # a diagnostic that guesses wrong sends the operator to repair the wrong thing.
+  case "$RR_WRITE_CAUSE" in
+    cas_mismatch_snapshot|cas_mismatch_install)
+      die_code 7 \
+        "WRITE REFUSED — the pre-change run was RED, but $TASK_ID's manifest CHANGED during the run, so the compare-and-swap refused to install the block (cause: $RR_WRITE_CAUSE)." \
+        "The concurrent content is preserved and $MANIFEST is unchanged by this capture." \
+        "If the manifest's Base SHA changed during the run, this refusal is the CORRECT outcome: the block was captured against the old base, and installing it would record evidence for a tree the manifest no longer names. Re-capture against the manifest as it now stands." \
+        "The run itself is not in doubt — only the write was refused."
+      ;;
+    verify_failed)
+      die_code 7 \
+        "WRITE REFUSED — the pre-change run was RED and the block WAS installed, but the read-back rejected the installed bytes (cause: $RR_WRITE_CAUSE)." \
+        "$MANIFEST has been replaced and needs a human read before anything is transitioned on it — this is the one refusal that does not leave the manifest untouched." \
+        "The run itself is not in doubt — only the write's read-back failed."
+      ;;
+  esac
+  die_code 7 \
+    "WRITE REFUSED — the pre-change run was RED, but the shared manifest-write primitive refused to install the evidence block (cause: $RR_WRITE_CAUSE)." \
+    "Nothing was installed: $MANIFEST is unchanged, and red-run keeps no unlocked fallback to record it another way (#226)." \
+    "The run itself is not in doubt — only the write was refused."
+fi
 
 echo "red-run: RED confirmed for $TASK_ID — filter '$FILTER' exited $RUN_EC at $BASE_SHA in ${ELAPSED}s"
 echo "red-run: ${COPIED} changed test file(s) copied into the pre-change worktree; evidence written to $MANIFEST"
