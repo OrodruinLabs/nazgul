@@ -686,15 +686,19 @@ hand-off, and neither one's check finds the other's instance.
   - **They do not overlap, so they add.** The cap acts only on what the label admitted, so `comm -12`
     of the two sets is `0` and the union is exactly `22 + 31 = 53`. The visible set is **exactly 100**
     and is pinned there: past 100 labelled issues every further filing is invisible on arrival.
-  - **The composition is where the harm lands. All seven C13 issues are invisible** — #96 #97 #98 #100
-    #103 by cap (every one `priority:1`) and #224 #236 by label — so the class this programme dissolves
-    to `/nazgul:patch` and calls *"the cheapest morale wins on the board"* is **0 of 7 visible** to the
-    mechanism that would schedule it. Neither invisibility finds all seven alone; only the composed view
+  - **The composition is where the harm lands. All seven C13 issues are invisible.**
+    #96 #97 #98 #100 #103 are lost to the CAP (every one `priority:1`); #224 and #236 are lost to
+    the LABEL. So the class this programme dissolves to `/nazgul:patch` and calls *"the cheapest
+    morale wins on the board"* is **0 of 7 visible** to the mechanism that would schedule it.
+    Neither invisibility finds all seven alone; only the composed view
     does. Across the whole class table 41 of the 101 classed-and-open issues are invisible, and **39 of
     the 55 open p0/p1 issues — 71%** — while nothing at p3 or below is invisible at all. The cap
     discards by age, and in this backlog age tracks priority.
   - **Move 0 widened the gap it was measuring, one for one, and that is a property rather than a
-    confound.** Its eleven filings (#260–#270) moved the labelled count 120 → 131 and the dropped count
+    confound.** The composed total at three reference points: **42 of 142** at `92bf60f` (the
+    figure Move 0 opened with), **46 of 146** at the frozen snapshot, **53 of 153** live — the
+    denominator and the gap grow together, and the gap grows faster.
+    Its eleven filings (#260–#270) moved the labelled count 120 → 131 and the dropped count
     20 → 31; filing #271 during this measurement moved them to 132 / 32, evicting #126 — measured before
     and after, inside the same task. The ids evicted are never the ids filed: new work enters at the top
     and old work falls off the bottom, so a positional cap turns every act of filing into an act of
