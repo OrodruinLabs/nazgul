@@ -176,12 +176,50 @@ else
   _fail "control: an accepting --verify predicate lets the write report success" "expected rc 0"
 fi
 mw_fixture TASK-004 IN_PROGRESS
+M4R="$NZ/tasks/TASK-004.md"
+# lean-comments: allow-run — why this path owes a digest AND a mode assertion
+# verify_failed is the ONE refusal that fires on the far side of the rename, so it is the
+# only one whose "the manifest is unchanged" claim can be false. Asserting exit code and
+# cause token alone is what let two confirmed bugs ship (PR #293 round 2): the rollback
+# restored the producer-MUTATED snapshot, and it restored at mktemp's 0600 rather than the
+# file's own mode. A before/after digest plus a mode check is the cheapest thing that
+# distinguishes "rolled back" from "said it rolled back".
+record_file_digest D4_BEFORE "$M4R" "TASK-004 pre-write"
+MODE4_BEFORE=$(nz_file_mode "$M4R")
 ERR4=$(nz_manifest_write "$NZ" TASK-004 --verify v_always_reject -- p_append 2>&1 >/dev/null); RC4=$?
 assert_exit_code "verify failure: loud non-zero, never a warning" "$RC4" 1
 assert_contains "verify failure: named cause" "$ERR4" "(cause: verify_failed)"
 assert_contains "verify failure: names the predicate that rejected" "$ERR4" "v_always_reject"
+record_file_digest D4_AFTER "$M4R" "TASK-004 post-rollback"
+assert_eq "verify_failed: the rollback leaves the manifest byte-identical" "$D4_AFTER" "$D4_BEFORE"
+assert_eq "verify_failed: the rollback preserves the file mode" "$(nz_file_mode "$M4R")" "$MODE4_BEFORE"
 record_failure_path verify_failed
 assert_control_fired verify_failed verify-accepts
+
+# The shipped status producers WRITE TO the snapshot they are handed (set_task_status
+# "$snapshot" ...), so a rollback restoring from that snapshot installs the producer's
+# output and calls it pre-write content. This case reproduces that shape directly.
+p_mutates_snapshot() {
+  local snap="$1"
+  printf -- '- mutated-by-producer\n' >> "$snap"
+  cat "$snap"
+}
+mw_fixture TASK-014 IN_PROGRESS
+M14="$NZ/tasks/TASK-014.md"
+record_file_digest D14_BEFORE "$M14" "TASK-014 pre-write"
+MODE14_BEFORE=$(nz_file_mode "$M14")
+ERR14=$(nz_manifest_write "$NZ" TASK-014 --verify v_always_reject -- p_mutates_snapshot 2>&1 >/dev/null); RC14=$?
+assert_exit_code "mutating producer: verify_failed is still a loud non-zero" "$RC14" 1
+assert_contains "mutating producer: named cause" "$ERR14" "(cause: verify_failed)"
+record_file_digest D14_AFTER "$M14" "TASK-014 post-rollback"
+assert_eq "mutating producer: the rollback restores the ORIGINAL bytes, not the producer's" \
+  "$D14_AFTER" "$D14_BEFORE"
+assert_eq "mutating producer: and preserves the file mode" "$(nz_file_mode "$M14")" "$MODE14_BEFORE"
+case "$(cat "$M14")" in
+  *mutated-by-producer*) _fail "mutating producer: the producer's bytes must not survive a refusal" \
+      "the manifest carries 'mutated-by-producer' after a rolled-back write" ;;
+  *) _pass "mutating producer: the producer's bytes did not survive the refusal" ;;
+esac
 
 mw_fixture TASK-005 IN_PROGRESS
 M5="$NZ/tasks/TASK-005.md"

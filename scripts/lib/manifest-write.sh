@@ -259,6 +259,7 @@ _nz_default_verify() {
 # trap already exists rather than by adding a second one that fights the first.
 _NZ_MW_SNAPSHOT=""
 _NZ_MW_STAGE=""
+_NZ_MW_ROLLBACK=""
 # shellcheck disable=SC2034  # published for the SOURCING shell: 1 iff the new bytes are the
 # manifest on disk, 0 otherwise. It is the machine-readable form of the verify_failed (rolled
 # back, file unchanged) vs verify_failed_unrestored (file HOLDS the rejected bytes) split, so a
@@ -271,15 +272,19 @@ NZ_MW_BEFORE_HASH=""
 _nz_mw_cleanup() {
   [ -z "${_NZ_MW_SNAPSHOT:-}" ] || rm -f "$_NZ_MW_SNAPSHOT"
   [ -z "${_NZ_MW_STAGE:-}" ] || rm -f "$_NZ_MW_STAGE"
+  # A caller that must PRESERVE the pre-write bytes past a refusal clears _NZ_MW_ROLLBACK
+  # first — that is how verify_failed_unrestored keeps the only good copy on disk.
+  [ -z "${_NZ_MW_ROLLBACK:-}" ] || rm -f "$_NZ_MW_ROLLBACK"
   _NZ_MW_SNAPSHOT=""
   _NZ_MW_STAGE=""
+  _NZ_MW_ROLLBACK=""
 }
 
 # Steps 2-7 of the protocol. ASSUMES THE CALLER ALREADY HOLDS THE LOCK.
 # Usage: nz_manifest_write_locked <state_root> <task_id> [--verify <fn>] -- <producer…>
 nz_manifest_write_locked() {
   local state_root="${1:-}" task_id="${2:-}"
-  local verify_fn="_nz_default_verify" file mode snapshot stage before_hash current_hash
+  local verify_fn="_nz_default_verify" file mode snapshot stage before_hash current_hash rollback
   [ "$#" -ge 2 ] \
     || _nz_mw_fail bad_arguments "usage: nz_manifest_write_locked <state_root> <task_id> [--verify <fn>] -- <producer…>" || return 1
   shift 2
@@ -315,9 +320,29 @@ nz_manifest_write_locked() {
     return 1
   }
   _NZ_MW_STAGE="$stage"
+  # lean-comments: allow-run — why there are TWO pre-write copies and not one
+  # The snapshot is handed to the PRODUCER, and both shipped status producers write to it
+  # in place (set_task_status "$snapshot" ...). The rollback below therefore cannot restore
+  # from it: it would install the producer's mutated bytes and call them "pre-write content"
+  # (confirmed, PR #293 round 2). The rollback copy is never passed to anyone, so it still
+  # holds the manifest exactly as it was read. Two copies is the cost of a producer contract
+  # this library cannot enforce on callers it does not own.
+  rollback=$(mktemp "${file%/*}/.${task_id}.rollback.XXXXXX") || {
+    _nz_mw_cleanup
+    _nz_mw_fail stage_failed "could not create a colocated rollback copy beside ${file}"
+    return 1
+  }
+  _NZ_MW_ROLLBACK="$rollback"
   if ! cp "$file" "$snapshot"; then
     _nz_mw_cleanup
     _nz_mw_fail stage_failed "could not snapshot ${task_id}"
+    return 1
+  fi
+  # The SECOND pre-write copy, taken from the same source in the same critical section.
+  # This one is never handed to the producer, so it stays byte-identical to what was read.
+  if ! cp "$file" "$rollback"; then
+    _nz_mw_cleanup
+    _nz_mw_fail stage_failed "could not take the rollback copy of ${task_id}"
     return 1
   fi
 
@@ -389,19 +414,27 @@ nz_manifest_write_locked() {
   # special-case one cause, the ROLLBACK makes the sentence true: a refused write never
   # leaves changed bytes on disk. The restore is the same atomic rename, so it cannot tear.
   if ! "$verify_fn" "$file"; then
-    if mv "$snapshot" "$file"; then
-      _NZ_MW_SNAPSHOT=""
+    # The rollback carries the file's ORIGINAL mode: mktemp creates at 0600, and renaming
+    # that over a 0644 manifest silently downgrades it (confirmed, PR #293 round 2). Mode
+    # preservation has its own named refusal on the forward path; the restore owes the same.
+    if chmod "$mode" "$rollback" 2>/dev/null && mv "$rollback" "$file"; then
+      _NZ_MW_ROLLBACK=""
       # shellcheck disable=SC2034  # same published signal as at the top of this file
       NZ_MW_INSTALLED=0
-      _nz_mw_fail verify_failed "${task_id} was written but ${verify_fn} rejected the installed bytes; the write was ROLLED BACK and ${file} holds its pre-write content"
+      _nz_mw_fail verify_failed "${task_id} was written but ${verify_fn} rejected the installed bytes; the write was ROLLED BACK and ${file} holds its pre-write content, at its original ${mode} mode"
       return 1
     fi
     # lean-comments: allow-run — why the hash is published rather than recomputed
     # The restore itself failed, so the rejected bytes ARE the manifest. This is the only
     # state in which a refusal leaves the file changed, and it gets its own cause name so no
     # caller can report it with the sentence that fits every other refusal.
+    # DO NOT clean up here. The rejected bytes ARE the manifest, and this copy is the only
+    # surviving one of the good content — deleting it makes the human read this message
+    # demands impossible for every adopter except close-objective.sh, which keeps its own.
+    # The path is NAMED so the recovery is mechanical rather than a hunt.
+    _NZ_MW_ROLLBACK=""
     _nz_mw_cleanup
-    _nz_mw_fail verify_failed_unrestored "${task_id} was written, ${verify_fn} rejected the installed bytes, AND the rollback to its pre-write content FAILED; ${file} holds bytes a read-back declared bad and needs a human read before anything is transitioned on it"
+    _nz_mw_fail verify_failed_unrestored "${task_id} was written, ${verify_fn} rejected the installed bytes, AND the rollback to its pre-write content FAILED; ${file} holds bytes a read-back declared bad. Its PRE-WRITE content is preserved at ${rollback} — read both before transitioning anything on this task"
     return 1
   fi
   _nz_mw_cleanup
