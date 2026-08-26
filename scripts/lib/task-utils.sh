@@ -71,13 +71,28 @@ nz_rewrite_file() {
 get_task_status() {
   local result
   # Canonical frontmatter status takes precedence; INVALID surfaces loudly.
-  local fm_status fm_rc
+  local fm_status fm_rc status_pat
   fm_status=$(read_task_status "$1") && fm_rc=0 || fm_rc=$?
   if [ "$fm_rc" -eq 0 ]; then echo "$fm_status"; return; fi
   if [ "$fm_rc" -eq 2 ]; then echo "INVALID"; return; fi
-  # fm_rc==1 (no status frontmatter): fall through to legacy parsing below.
-  # Inline formats first; `|| true` so a no-match reaches this function's own documented default instead of aborting an errexit caller.
-  result=$(grep -m1 -E '(^\- \*\*Status\*\*:|^## Status:)' "$1" 2>/dev/null | sed 's/.*:[[:space:]]*//' || true)
+  # lean-comments: allow-run — fm_rc==1 (no status frontmatter): fall through to legacy parsing.
+  # The SPLIT moves to the label that matched: a greedy `.*:` took the LAST colon, so a colon-bearing
+  # off-vocabulary status read as its final segment and the INVALID diagnostic named a truncation of
+  # it (#169). SELECTION stays byte-for-byte the two spellings grep matched — widening this reader
+  # past its own writer in set_task_status is the defect one level up. `|| true` so a no-match reaches
+  # this function's own documented default instead of aborting an errexit caller.
+  status_pat=$(nz_manifest_field_pattern_ere Status)
+  result=$(awk -v pat="$status_pat" '
+    {
+      if ($0 ~ /^- \*\*Status\*\*:/) { if (!match(tolower($0), pat)) next }
+      else if ($0 ~ /^## Status:/) { match($0, /^## Status:/) }
+      else next
+      v = substr($0, RSTART + RLENGTH)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      print v
+      exit
+    }
+  ' "$1" 2>/dev/null || true)
   if [ -n "$result" ]; then
     echo "$result"
     return
@@ -179,10 +194,23 @@ nz_manifest_field_pattern_ere() {
 # Used by the loop to read a task's Group/Wave for group/feature review granularity.
 # Usage: get_task_field <file> <field-label> [default]
 get_task_field() {
-  local file="$1" field="$2" default="${3:-}" result
-  # The shared anchor, not a fifth hand-spelling. Every consumer reads "field absent" as the
-  # permissive answer (an unread `Files modified` disables the File Scope guard), so the pin was fail-open.
-  result=$(grep -m1 -iE "${NZ_MANIFEST_FIELD_ANCHOR}${field}\*\*:" "$file" 2>/dev/null | sed 's/.*:[[:space:]]*//' | sed 's/[[:space:]]*$//')
+  local file="$1" field="$2" default="${3:-}" result field_pat
+  # lean-comments: allow-run — the shared anchor, not a fifth hand-spelling. Every consumer reads
+  # "field absent" as the permissive answer (an unread `Files modified` disables the File Scope
+  # guard), so the pin was fail-open — and so was the split: `sed 's/.*:'` took the LAST colon, so
+  # a value ENDING in one (`review-evidence:`) trimmed to empty and this returned $default, and one
+  # CONTAINING one (`2026-08-26T11:15:00Z`) returned its final segment (#169). Splitting at the same
+  # pattern that selected the line is the only form that cannot disagree with the selection.
+  field_pat=$(nz_manifest_field_pattern_ere "$field")
+  result=$(awk -v pat="$field_pat" '
+    {
+      if (!match(tolower($0), pat)) next
+      v = substr($0, RSTART + RLENGTH)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      print v
+      exit
+    }
+  ' "$file" 2>/dev/null || true)
   if [ -n "$result" ]; then echo "$result"; else echo "$default"; fi
 }
 
@@ -257,7 +285,7 @@ count_tasks_by_status() {
 # Usage: count_tasks_and_find_active <tasks_dir>
 count_tasks_and_find_active() {
   local tasks_dir="$1"
-  local task_file status task_id raw_status
+  local task_file status task_id raw_status retry_raw
 
   DONE_COUNT=0; READY_COUNT=0; IN_PROGRESS_COUNT=0; IN_REVIEW_COUNT=0
   APPROVED_COUNT=0; CHANGES_COUNT=0; BLOCKED_COUNT=0; PLANNED_COUNT=0
@@ -315,8 +343,10 @@ ${task_id}:${raw_status}"
         ACTIVE_TASK=$(basename "$task_file" .md)
         # shellcheck disable=SC2034
         ACTIVE_STATUS="$status"
+        retry_raw=$(get_task_field "$task_file" "Retry count")
+        # The last hand-rolled reader in this file, and it carried the same greedy split (#169).
         # shellcheck disable=SC2034
-        ACTIVE_RETRY=$(grep -m1 '^\- \*\*Retry count\*\*:' "$task_file" 2>/dev/null | sed 's|.*: \([0-9]*\).*|\1|' || echo "0")
+        ACTIVE_RETRY="${retry_raw%%[!0-9]*}"
         break
       fi
     done

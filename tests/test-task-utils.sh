@@ -406,4 +406,105 @@ else
 fi
 teardown_temp_dir
 
+# --- Test 20 (#169 / AC-12): DEFECT PIN: get_task_field splits at the field's OWN colon. Captured,
+# not invented: Blocked reason is stop-hook.sh:886's text, the rest a live TASK-008.md manifest's ---
+setup_temp_dir
+setup_nazgul_dir
+mkdir -p "$TEST_DIR/nazgul/tasks"
+cat > "$TEST_DIR/nazgul/tasks/TASK-042.md" << 'EOF'
+---
+status: BLOCKED
+---
+# TASK-042: Test task
+
+- **Group**: 1
+- **Depends on**: none
+- **Retry count**: 2/3
+- **Created at**: 2026-08-26T11:15:00Z
+- **Files modified**: ["scripts/lib/task-utils.sh","tests/test-task-utils.sh"]
+- **Blocked kind**: reconciliation
+- **Blocked reason**: review evidence missing (code-reviewer) — run /nazgul:review --materialize TASK-042
+- **Blocked observed**: DONE
+EOF
+source "$LIB"
+TU_M="$TEST_DIR/nazgul/tasks/TASK-042.md"
+assert_eq "DEFECT PIN: Blocked reason keeps the colon inside /nazgul:review" \
+  "$(get_task_field "$TU_M" "Blocked reason" "Unknown reason")" \
+  "review evidence missing (code-reviewer) — run /nazgul:review --materialize TASK-042"
+assert_eq "DEFECT PIN: Created at keeps every colon in the ISO-8601 timestamp" \
+  "$(get_task_field "$TU_M" "Created at" "DEFAULT")" "2026-08-26T11:15:00Z"
+teardown_temp_dir
+
+# --- Test 21 (#169): a value ENDING in a colon reads as PRESENT, not as the caller's default ---
+# The greedy split trimmed it to empty, and every consumer reads "absent" as the permissive answer.
+setup_temp_dir
+setup_nazgul_dir
+mkdir -p "$TEST_DIR/nazgul/tasks"
+printf -- '- **Blocked reason**: waiting on upstream decision:\n' > "$TEST_DIR/nazgul/tasks/TASK-043.md"
+source "$LIB"
+assert_eq "trailing-colon value is returned verbatim, not swallowed into the default" \
+  "$(get_task_field "$TEST_DIR/nazgul/tasks/TASK-043.md" "Blocked reason" "Unknown reason")" \
+  "waiting on upstream decision:"
+teardown_temp_dir
+
+# --- Test 22 (#169 control): colon-free fields are byte-unchanged, and the derived pattern keeps
+# the tolerant, case-insensitive anchor the `grep -iE` had ---
+setup_temp_dir
+setup_nazgul_dir
+mkdir -p "$TEST_DIR/nazgul/tasks"
+cat > "$TEST_DIR/nazgul/tasks/TASK-044.md" << 'EOF'
+---
+status: BLOCKED
+---
+# TASK-044: Test task
+
+- **Group**: 1
+- **Depends on**: TASK-001, TASK-002
+- **Retry count**: 2/3
+- **Files modified**: ["scripts/lib/task-utils.sh","tests/test-task-utils.sh"]
+EOF
+printf -- '-  **blocked reason**:   stack-utils: sync conflict   \n' >> "$TEST_DIR/nazgul/tasks/TASK-044.md"
+source "$LIB"
+TU_M="$TEST_DIR/nazgul/tasks/TASK-044.md"
+assert_eq "control: colon-free Group byte-unchanged" "$(get_task_field "$TU_M" "Group" "X")" "1"
+assert_eq "control: colon-free Depends on byte-unchanged" "$(get_task_field "$TU_M" "Depends on" "X")" "TASK-001, TASK-002"
+assert_eq "control: colon-free Retry count byte-unchanged" "$(get_task_field "$TU_M" "Retry count" "X")" "2/3"
+assert_eq "control: Files modified still parses to a newline list" \
+  "$(get_task_files_modified "$TU_M")" "$(printf 'scripts/lib/task-utils.sh\ntests/test-task-utils.sh')"
+assert_eq "control: an absent field still returns the caller's default" "$(get_task_field "$TU_M" "Nope" "X")" "X"
+assert_eq "control: indented + lowercased label still matches, and padding is still trimmed" \
+  "$(get_task_field "$TU_M" "Blocked reason" "Unknown reason")" "stack-utils: sync conflict"
+teardown_temp_dir
+
+# --- Test 23 (#169 / AC-12): DEFECT PIN: get_task_status's two inline arms split at the label, so
+# the INVALID diagnostic names the whole off-vocabulary status and not its final segment ---
+setup_temp_dir
+setup_nazgul_dir
+mkdir -p "$TEST_DIR/nazgul/tasks"
+printf -- '# TASK-045: Test task\n\n- **Status**: MIGRATED:LEGACY\n' > "$TEST_DIR/nazgul/tasks/TASK-045.md"
+printf -- '# ATX: Test task\n## Status: MIGRATED:LEGACY\n' > "$TEST_DIR/atx-status.md"
+source "$LIB"
+assert_eq "DEFECT PIN: list-item arm keeps the colon in an off-vocabulary status" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-045.md" "PLANNED")" "MIGRATED:LEGACY"
+assert_eq "DEFECT PIN: ATX-inline arm keeps the colon in an off-vocabulary status" \
+  "$(get_task_status "$TEST_DIR/atx-status.md" "PLANNED")" "MIGRATED:LEGACY"
+count_tasks_and_find_active "$TEST_DIR/nazgul/tasks" 2>/dev/null
+assert_eq "INVALID_TASKS names the whole raw status, not its final segment" \
+  "$INVALID_TASKS" "TASK-045:MIGRATED:LEGACY"
+teardown_temp_dir
+
+# --- Test 24 (#169): ACTIVE_RETRY goes through the shared reader — same contract, and no
+# hand-rolled greedy split left in this file ---
+setup_temp_dir
+setup_nazgul_dir
+mkdir -p "$TEST_DIR/nazgul/tasks"
+printf -- '---\nstatus: IN_PROGRESS\n---\n# TASK-047: Test task\n' > "$TEST_DIR/nazgul/tasks/TASK-047.md"
+source "$LIB"
+count_tasks_and_find_active "$TEST_DIR/nazgul/tasks"
+assert_eq "ACTIVE_RETRY: absent Retry count field stays empty (faithful refactor)" "$ACTIVE_RETRY" ""
+printf -- '  -  **retry count**: 3/3\n' >> "$TEST_DIR/nazgul/tasks/TASK-047.md"
+count_tasks_and_find_active "$TEST_DIR/nazgul/tasks"
+assert_eq "ACTIVE_RETRY: leading digit run of a tolerant-anchor Retry count" "$ACTIVE_RETRY" "3"
+teardown_temp_dir
+
 report_results
