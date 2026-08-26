@@ -470,6 +470,110 @@ at 100 sub-issues** (`Parent cannot have more than 100 sub-issues`). At 109 the 
 last nine. The 89/20 split above is under the cap by construction, but any future umbrella near 100
 children needs a per-objective parent instead of one flat list.
 
+
+---
+
+**Re-derived at Move 0 (W4) — the issues the two lists above do not cover, per ADR-030.**
+**`documented "89 sub-issues + 20 residue = 109 accounted" → measured "109 accounted, and 44 open
+issues in neither"`**, at `at=2026-08-25T23:55:56Z` (frozen snapshot) plus a bounded delta at
+`at=2026-08-26T01:10:27Z`. **The 89/20 split, its three bullets and the cap note above are retained
+verbatim as the frozen baseline the delta is measured against.**
+
+The uncovered set is **derived, never enumerated**: every `OPEN` issue in the snapshot, minus the class
+table's 104, minus the 20 above. The two covered sets overlap by 15 — C12's eight and C13's seven sit
+in both — so `104 + 20 − 15 = 109` accounted, and `comm -23` over lexicographically sorted inputs
+(`sort -c`-verified, with a `sort -n` control proving `sort -c` can refuse) returns **40**. Four more
+issues (`#264`–`#267`) were filed after the snapshot instant and are added from a bounded delta query;
+a number-and-state `comm` in both directions proves **no state drifted** among the frozen 169, which is
+what licenses reusing the snapshot rather than replacing a record three other work items cite.
+**Population: 44.**
+
+This is a larger set than W3's "16 created after the classification instant", and the two reconcile
+exactly: `16 − 3 now-closed + 27 that pre-date the classification instant + 4 post-snapshot = 44`. Of
+the 27, ten are precisely the population W3-X named as "owned by **no** objective and by no residue
+bucket" (the eight still-open dead-on-merge issues plus `#231` and `#232`), and seventeen are W3's own
+orphan test's open half — whose `16 type:feature + 1 type:bug (#209)` label split W4 reproduces by an
+independent route.
+
+**Three join a class. The test is ADR-030/D1 — the mechanism, never the resemblance:**
+
+| Issue | Class | Mechanism that fixes it without additional scope |
+|---|---|---|
+| #231 | **C3** (i) → OBJ-G | OBJ-G(i)'s derivable scanner for `producer \| grep -q` / `\| head` under `set -o pipefail` — the SIGPIPE exit-status race. That is the issue's own measured mechanism verbatim, and OBJ-G's exit ("every site found is fixed or enumerated-exempt with a stated reason") disposes of all three of its sites. `X=ABSENT`: live work. |
+| #262 | **C3** (iii) → OBJ-H | OBJ-H's own exit criterion — "the inventory's counts are **regenerated, not hand-edited**". Regenerating `docs/guard-fail-open-inventory.md`'s 125-row table from a committed SHA *is* #262's fix, and re-anchors its 24 stale `file:line` rows as a byproduct. W1 already performed that regeneration, so the mechanism is demonstrated, not predicted. |
+| #250 | **C5** → OBJ-F | The source→doc derivation C5's objective must build to kill **#143** (`agents/doc-verifier.md`'s hard-coded stale 10-event taxonomy). #250 is the same authored-enumeration defect in the same file, one list over: the fence enumerates 10 `stop_gate` reasons while source emits 13. |
+
+**Arithmetic consequence, recorded and NOT applied here:** C3's `n` would go `24 → 26` and C5's `4 → 5`,
+with each row's `M` moving with its `n` (all three are `OPEN`). No class row's `Issues`, `n`, `M` or
+ADR-029 token is edited by W4 — TASK-010's verdict line is where that lands.
+
+**Everything else is residue, and every entry carries a reason (ADR-030/D2).** An issue in neither a
+class row nor this list **is a finding, not a gap** — `RULES.md` §15 applied to a classification, so
+that an unassigned issue stays distinguishable from an unexamined one. **That count is `0`, asserted
+mechanically over the two sets and carrying a control that returns `1` when a verdict is removed.**
+
+Seven entries route to **closure, not patch work**: W3-X measured their fixes already present in the
+tree at `92bf60f`. ADR-029/D2 forbids `X` from reducing `M`, so they stay open and stay in this
+population — but sending them to `/nazgul:patch` would schedule work that does not exist.
+
+| Issue | State | Residue reason |
+|---|---|---|
+| #109 | OPEN | no class mechanism touches install-mode ignore-routing or `red-run.sh`'s harness-path hardcoding. The fix is `.git/info/exclude` routing plus reading the `project.test_command` that already exists — new behaviour, not an instance any chartered mechanism kills. Nearest by name is C6, whose OBJ-F mechanism is the roster-scoped agent-spec auditor and never reads `scripts/**`. |
+| #116 | OPEN | C6's shape exactly; the reason it is not a C6 member is SCOPE, not resemblance. OBJ-F's C6 exit is `F == 0` over the **shipped agent roster** — a prose auditor whose population is `agents/**` path strings. #116 is a root-derivation defect in shell (`scripts/task-transition.sh:70` still derives `NAZGUL_DIR="$PROJECT_ROOT/nazgul"` from one root), which that auditor never reads; absorbing it means widening both its population and its predicate. **Nearest-miss, recorded per D1's stated purpose.** This is the ONE genuinely-live survivor of the dead-on-merge eight (W3-X `X=PARTIAL`) — real work owned by nobody. |
+| #129 | OPEN | proposes a new review-orchestration architecture (direct boards + scripted aggregation, no gate transcript). No chartered mechanism builds it; C7's derived scan finds hard-coded review-unit assumptions and does not change who orchestrates a board. |
+| #131 | OPEN | C8-adjacent, but OBJ-D's mechanism is dispatch IDENTITY (`AGENT` resolution, a recorded `SubagentStop` envelope, the receipt binding). #131 asks for a new detector for a subagent ending its turn holding a live background task; none of OBJ-D's exit criteria produce it. |
+| #134 | OPEN | a new upfront product-breakdown mode (`/nazgul:plan --product`). A feature, not an instance of any class's defect; no chartered mechanism. |
+| #135 | OPEN | a new env-signature field in checkpoints plus a drift event. New detection capability; no class's objective builds it. |
+| #142 | OPEN | **fix present in the tree** at `92bf60f` (W3-X `X=PRESENT`: `tests/lib/assertions.sh` passes needles via `-e` and routes `rc>=2` to `_assert_unevaluable`). No mechanism has anything left to kill. `action: close on the board` — tracked by #265, NOT patch work. |
+| #146 | OPEN | the doc-gate, already chartered on PR #87 (22 unresolved review findings, `REVIEW_REQUIRED`). Its own design spec owns it; no class mechanism. |
+| #157 | OPEN | C6-adjacent (two trees) but the fix is identity GENERATION (`feat_id` derivation, `NAZGUL_UNIT` namespacing), not path rooting. The roster auditor's population is path strings and does not reach it. |
+| #167 | OPEN | **fix present in the tree** at `92bf60f` (W3-X `X=PRESENT`: `scripts/lib/review-file-class.sh:46-52` matches `adversarial-*.md`; `review-evidence.sh:675` skips class `artifact`). `action: close on the board` — tracked by #265. |
+| #168 | OPEN | a separately chartered objective (Objective A — contracts + graph-aware planning) carrying its own binding spec and plan. Not a defect-class member. |
+| #177 | OPEN | asks that the S1-S9 seam inventory move into RULES.md as a numbered section — a durable-placement doctrine move, the same one FEAT-029/TASK-012 made for the §15 registry. No class's objective is chartered to make it. |
+| #180 | OPEN | **fix present in the tree** at `92bf60f` (W3-X `X=PRESENT`: `scripts/lib/nazgul-root.sh:57-58` returns a set, non-empty `CLAUDE_PROJECT_DIR` unconditionally; `heartbeat.sh:33` gates on the config). `action: close on the board` — tracked by #265. |
+| #181 | OPEN | reviewer teammate reuse, design-first — and FEAT-026/ADR-017 retired the named-teammate spawn paths the item is written against, so its premise needs re-grounding before any mechanism could apply to it. |
+| #182 | OPEN | a separately chartered objective (Objective B — concurrent feature loops) with its own binding spec. Not a defect-class member. |
+| #183 | OPEN | a separately chartered objective (Objective C — Mission Control) with its own binding spec. Not a defect-class member. |
+| #184 | OPEN | a separately chartered objective (Objective D slice 1 — Remote Control access). Not a defect-class member. |
+| #185 | OPEN | a separately chartered objective (Objective D slice 2 — cloud-hosted loops), explicitly SPEC-GATED on a doctrine decision. Not a defect-class member. |
+| #186 | OPEN | a repo-wide lean-comments housekeeping pass, explicitly deliberately low-priority and explicitly "research and ask before implementing". No class mechanism; the count is not urgency. |
+| #197 | OPEN | **fix present in the tree** at `92bf60f` (W3-X `X=PRESENT`: `scripts/webhook-forward.sh:11` sources `lib/task-utils.sh`, `:52` calls `count_tasks_and_find_active`). `action: close on the board` — tracked by #265. **Mechanism affinity, recorded so it is not lost and explicitly NOT counted in C1's `n`:** had it been live it is a textbook C1 — OBJ-A's "repoint the hand-rolled manifest readers at `task-utils.sh`" — and #203 is the identical defect in `notify.sh` and IS a C1 member. |
+| #204 | OPEN | **fix present in the tree** at `92bf60f` (W3-X `X=PRESENT`: `tests/test-hook-command-modes.sh` asserts the executable bit on every directly-invoked hook, population derived from `hooks/hooks.json`). `action: close on the board` — tracked by #265. |
+| #209 | OPEN | an explicitly-undecomposed umbrella (`pending planning/validation`, "do not auto-start") mixing five reproduced defects with unverified proposals. D1's test cannot be run against a set that has not been separated; assigning the umbrella would put speculative work in a class row. |
+| #216 | OPEN | proposes a new cross-reviewer verification round beyond Step 3.6. A new mechanism, not an instance of a chartered one. |
+| #221 | OPEN | **fix present in the tree** at `92bf60f` (W3-X `X=PRESENT`: the same shipped change as #167 — the closed four-name `_is_review_meta_file` loop the issue quotes does not exist in this tree). `action: close on the board` — tracked by #265. It sits in `nazgul/inbox/` at rank 4 with `priority: 1`, so the heartbeat would auto-start an objective for shipped work; that consequence is #266's. |
+| #230 | OPEN | **fix present in the tree** at `92bf60f` (W3-X `X=PRESENT`: `tests/lib/status-consumer-scan.sh` reads every walk on fd 9). `action: close on the board` — tracked by #265. |
+| #232 | OPEN | the quarantine-escape validator gap. Not C3-(i) (no pipeline), not C3-(ii) (no `\ |
+| #248 | OPEN | **not a defect.** This is the programme's own board item — the `priority:0` parent of the 89 sub-issues. It is the container for the classes, not a member of one. (TASK-003 excluded it from its 12 candidates for the same reason.) |
+| #249 | OPEN | names C2's territory (unbounded `gh`), and C2's shipped mechanism is exactly what does not reach it: `scripts/lib/bounded-net.sh` bounds only processes that SOURCE it, while #249's two populations are skill-load bang-commands and `gh`/`git` in agent and skill PROSE, neither of which sources anything. |
+| #253 | OPEN | proposes a NEW cross-cutting mechanism — a registered, honesty-checked refusal corpus per gate. Mechanism-creating, not an instance of a chartered mechanism; no class's objective builds it. |
+| #255 | OPEN | **the #128 pairing is DEFERRED to TASK-007 (W5), which owns that binding in full.** As an assignment, neither candidate class reaches it. Not C3-(i)/(ii)/(iii): the defect is a self-referential comparison (both operands are artifacts of the round that wrote the directory), not a pipeline race, a `\ |
+| #256 | OPEN | `cleanup_all_worktrees`'s sweep predicate recognises only `TASK-*` and reports success while leaving `RW-*` state behind. A narrowed predicate, but not C3-(i)/(ii)/(iii) and not on an authorization path; no chartered mechanism produces the `scanned / removed` coverage line it asks for. |
+| #257 | OPEN | C10's shape (items recorded, never consumable) but OBJ-I's chartered mechanism is `sync-inbox-to-github.sh --check`, the **inbox to board** enforcement. #257 needs a provider-switch MIGRATION enrolling file-provider items into `connectors.github.map`; OBJ-I builds no migration step. |
+| #258 | OPEN | asks for a §15 enrolment of `scripts/lib/gitignore-block.sh`. No class's objective is chartered to enrol entry points generally, and this is an unreported partition rather than a fail-open, so C3's three mechanisms do not address it. |
+| #259 | OPEN | a test-fixture gap — the P2 route arms never commit, so the tracked case is exercised nowhere. No chartered mechanism builds fixtures for it. |
+| #260 | OPEN | silent truncation at `gh issue list --limit 100` with no record of the drop — §15's looked-vs-never-looked applied to a CAP rather than a lookup. Not C3: a cap is not a guard fail-open. Not C10/OBJ-I: `--check` is the inbox-to-board direction, not the connector's pull path. |
+| #261 | OPEN | C2-adjacent, but C2's shipped mechanism bounds each CALL while #261's cost is ~100 sequential calls per tick. Its fix is to read `.priority` from the list query's labels, which bounding does not do. |
+| #263 | OPEN | a defect in the programme document itself (`TASK-050` resolves to no artifact). Move 0's own subject matter; no class mechanism kills a dangling identifier in the charter. |
+| #264 | OPEN | a defect in the programme document itself (C3's and C10's splits are unenumerated). Same family as #263 and #267. **Read from its title plus `nazgul/inbox/class-sub-splits-are-unenumerated.md`: its board body is EMPTY (0 bytes), filed as #268 under the standing clause.** |
+| #265 | OPEN | board-versus-tree reconciliation (7 fixed-but-open issues). C10's shape, but OBJ-I builds `--check` for the **inbox to board** direction and nothing in it observes whether a fix is present in the tree. |
+| #266 | OPEN | the **board to inbox** direction — exactly the direction OBJ-I's chartered mechanism does not provide. The issue states it itself: "`sync-inbox-to-github.sh` propagates **inbox to board**. Nothing propagates the other way." |
+| #267 | OPEN | a defect in the programme document itself (the `Verified:` line names no extraction method). Same family as #263 and #264. W8 has already amended the sentence to state the extraction, so part of the fix is present; the residual is the missing self-check. |
+
+**Provenance of this list.** Every figure above is recomputable from
+`nazgul/context/FEAT-035-issues-snapshot.json` by the commands recorded in
+`nazgul/context/FEAT-035-move0-measurements.md` → `### W4`, with the per-issue detail in
+`nazgul/context/FEAT-035-uncovered.md`. **Those three files live under a gitignored `nazgul/`
+(`install_mode: local`) and are therefore local-only**, which is why the result is written into this
+tracked document in full rather than cited from there — the same durability rule the Backlog Rule
+states for the inbox, applied to a measurement.
+
+**Filed during W4, not absorbed (standing clause):** **#268** — the board copy of `#264` carries an
+empty body (0 bytes) while its inbox item carries 6,940, so the durable copy of that finding is its
+title alone. Found while reading `#264`'s text for the D1 mechanism test. A sibling of **#266**, not a
+duplicate: #266 is the *state* axis (board → inbox), #268 is the *content* axis on the inbox → board
+hand-off, and neither one's check finds the other's instance.
+
 ## Two facts not on the board
 
 - **23 of 144 issues are invisible to the connector.** 121 carry the `nazgul` label it queries; 23 do not.
