@@ -1974,106 +1974,80 @@ _ttg_file_mode() {
   printf '%s\n' "$mode"
 }
 
-# Under the per-task lock, update one ordinary task status from a staged source
-# snapshot, recheck immediately before atomic rename, verify the target on disk,
-# and only then append authority metadata. A failure before the final mv leaves
-# the manifest untouched; a post-write ledger/event failure is loud and is
-# intentionally left for reconciliation to quarantine. This serializes Nazgul
-# transition writers; arbitrary uncooperative filesystem mutation is outside
-# the lock protocol and cannot be made into an OS-level conditional rename by
-# portable Bash.
+# Published by the producer, the only code that sees the replaced bytes under the primitive's CAS.
+_TTG_STAGED_BEFORE_HASH=""
+_TTG_INSTALL_TARGET=""
+
+# The producer nz_manifest_write_locked runs; the live manifest is never touched, only the snapshot.
+# Usage: _ttg_transition_producer <nazgul_dir> <project_root> <task_id> <from> <to> <reason> <snapshot>
+_ttg_transition_producer() {
+  local nazgul_dir="$1" project_root="$2" task_id="$3" from="$4" to="$5" reason="$6" snapshot="$7"
+  local live manifest reason_pat
+  # stdout IS the replacement manifest, so the validate-and-transform phase is redirected
+  # wholesale; a stray byte on stdout would be installed as manifest text.
+  {
+    live=$(get_task_status "$snapshot" "")
+    if [ "$live" != "$from" ]; then
+      echo "ttg_apply_transition: stale source for ${task_id}: expected ${from}, found ${live:-missing}" >&2
+      return 1
+    fi
+    manifest=$(cat "$snapshot")
+    ttg_validate_transition "$nazgul_dir" "$project_root" "$task_id" "$from" "$to" "$manifest" \
+      || return 1
+    _TTG_STAGED_BEFORE_HASH=$(_rp_sha256 < "$snapshot") || _TTG_STAGED_BEFORE_HASH=""
+    set_task_status "$snapshot" "$from" "$to"
+    if [ "$(get_task_status "$snapshot" "")" != "$to" ]; then
+      echo "ttg_apply_transition: staged status rewrite did not reach ${to}" >&2
+      return 1
+    fi
+  } >&2
+
+  if [ "$to" = "BLOCKED" ] && [ -n "$reason" ]; then
+    # The third writer of this field, and the one re-review #4 did not name: hand-spelled `^\- \*\*`
+    # sent an indented or two-space record down the append branch, leaving the reader on the stale one.
+    reason_pat=$(nz_manifest_field_pattern_ere "Blocked reason")
+    if grep -qiE "$reason_pat" "$snapshot" 2>/dev/null; then
+      TTG_BLOCK_REASON="$reason" awk -v pat="$reason_pat" \
+        '{ if (tolower($0) ~ pat) print "- **Blocked reason**: " ENVIRON["TTG_BLOCK_REASON"]; else print }' \
+        "$snapshot" || return 1
+      return 0
+    fi
+    cat "$snapshot" || return 1
+    printf '\n- **Blocked reason**: %s\n' "$reason"
+    return 0
+  fi
+  cat "$snapshot"
+}
+
+# The primitive's read-back predicate here: the installed bytes must parse to the exact target.
+_ttg_verify_installed_status() {
+  local file="$1" live
+  live=$(get_task_status "$file" "")
+  [ "$live" = "$_TTG_INSTALL_TARGET" ] && return 0
+  echo "ttg_apply_transition: write completed but disk verification did not find ${_TTG_INSTALL_TARGET} (found ${live:-missing})" >&2
+  return 1
+}
+
+# The status route's adoption of the shared write primitive (ADR-031): mechanics there, AUTHORITY here.
 # Usage: ttg_apply_transition <nazgul_dir> <project_root> <task_id> <from> <to> [blocked_reason]
 _ttg_apply_transition_locked() {
   local nazgul_dir="$1" project_root="$2" task_id="$3" from="$4" to="$5" reason="${6:-}"
-  local file live manifest tmp reason_tmp reason_pat before_hash current_hash after_hash original_mode
+  local file after_hash
 
   file=$(ttg_task_manifest_path "$nazgul_dir" "$task_id") || {
     echo "ttg_apply_transition: no regular task manifest for ${task_id} under ${nazgul_dir}/tasks" >&2
     return 1
   }
 
-  tmp=$(mktemp "$(dirname "$file")/.${task_id}.transition.XXXXXX") || {
-    echo "ttg_apply_transition: could not create a colocated transition file for ${task_id}" >&2
-    return 1
-  }
-  original_mode=$(_ttg_file_mode "$file") || {
-    rm -f "$tmp"
-    echo "ttg_apply_transition: could not read ${task_id} file mode" >&2
-    return 1
-  }
-  if ! cp "$file" "$tmp"; then
-    rm -f "$tmp"
-    echo "ttg_apply_transition: could not stage ${task_id}" >&2
-    return 1
-  fi
+  _TTG_STAGED_BEFORE_HASH=""
+  _TTG_INSTALL_TARGET="$to"
+  # The INNER form: ttg_apply_transition already holds this task's lock, and the outer would deadlock.
+  nz_manifest_write_locked "$nazgul_dir" "$task_id" --verify _ttg_verify_installed_status -- \
+    _ttg_transition_producer "$nazgul_dir" "$project_root" "$task_id" "$from" "$to" "$reason" \
+    || return 1
 
-  # The staged bytes are the validation snapshot. Confirm the source still
-  # matches them before parsing, and compare it again immediately before mv.
-  before_hash=$(_rp_sha256 < "$tmp") || {
-    rm -f "$tmp"
-    echo "ttg_apply_transition: no SHA-256 implementation available for snapshot comparison" >&2
-    return 1
-  }
-  current_hash=$(_rp_sha256 < "$file") || current_hash=""
-  if [ -z "$current_hash" ] || [ "$current_hash" != "$before_hash" ]; then
-    rm -f "$tmp"
-    echo "ttg_apply_transition: ${task_id} changed while its transition was staged; concurrent content preserved" >&2
-    return 1
-  fi
-
-  live=$(get_task_status "$tmp" "")
-  if [ "$live" != "$from" ]; then
-    rm -f "$tmp"
-    echo "ttg_apply_transition: stale source for ${task_id}: expected ${from}, found ${live:-missing}" >&2
-    return 1
-  fi
-  manifest=$(cat "$tmp")
-  ttg_validate_transition "$nazgul_dir" "$project_root" "$task_id" "$from" "$to" "$manifest" \
-    || { rm -f "$tmp"; return 1; }
-
-  set_task_status "$tmp" "$from" "$to"
-  if [ "$(get_task_status "$tmp" "")" != "$to" ]; then
-    rm -f "$tmp" "${tmp}.tmp" "${tmp}.bak"
-    echo "ttg_apply_transition: staged status rewrite did not reach ${to}" >&2
-    return 1
-  fi
-
-  if [ "$to" = "BLOCKED" ] && [ -n "$reason" ]; then
-    reason_tmp="${tmp}.reason"
-    # The third writer of this field, and the one re-review #4 did not name: hand-spelled `^\- \*\*`
-    # sent an indented or two-space record down the append branch, leaving the reader on the stale one.
-    reason_pat=$(nz_manifest_field_pattern_ere "Blocked reason")
-    if grep -qiE "$reason_pat" "$tmp" 2>/dev/null; then
-      TTG_BLOCK_REASON="$reason" awk -v pat="$reason_pat" \
-        '{ if (tolower($0) ~ pat) print "- **Blocked reason**: " ENVIRON["TTG_BLOCK_REASON"]; else print }' \
-        "$tmp" > "$reason_tmp" || { rm -f "$tmp" "$reason_tmp"; return 1; }
-    else
-      { cat "$tmp"; printf '\n- **Blocked reason**: %s\n' "$reason"; } > "$reason_tmp" \
-        || { rm -f "$tmp" "$reason_tmp"; return 1; }
-    fi
-    mv "$reason_tmp" "$tmp" || { rm -f "$tmp" "$reason_tmp"; return 1; }
-  fi
-
-  if ! chmod "$original_mode" "$tmp"; then
-    rm -f "$tmp" "${tmp}.tmp" "${tmp}.bak" "${tmp}.reason"
-    echo "ttg_apply_transition: could not preserve ${task_id} file mode" >&2
-    return 1
-  fi
-
-  current_hash=$(_rp_sha256 < "$file") || current_hash=""
-  if [ -z "$current_hash" ] || [ "$current_hash" != "$before_hash" ]; then
-    rm -f "$tmp" "${tmp}.tmp" "${tmp}.bak" "${tmp}.reason"
-    echo "ttg_apply_transition: ${task_id} changed while its transition was staged; concurrent content preserved" >&2
-    return 1
-  fi
-
-  mv "$tmp" "$file" || {
-    rm -f "$tmp"
-    echo "ttg_apply_transition: atomic manifest replace failed for ${task_id}" >&2
-    return 1
-  }
-  if [ "$(get_task_status "$file" "")" != "$to" ]; then
-    echo "ttg_apply_transition: ${task_id} write completed but disk verification did not find ${to}" >&2
+  if [ -z "$_TTG_STAGED_BEFORE_HASH" ]; then
+    echo "ttg_apply_transition: ${task_id} reached ${to}, but its replaced bytes could not be hashed; reconciliation will quarantine it" >&2
     return 1
   fi
   after_hash=$(_rp_sha256 < "$file") || after_hash=""
@@ -2081,7 +2055,7 @@ _ttg_apply_transition_locked() {
     echo "ttg_apply_transition: ${task_id} reached ${to}, but its completed bytes could not be hashed; reconciliation will quarantine it" >&2
     return 1
   fi
-  if ! ttg_log_transition "$nazgul_dir" "$task_id" "$from" "$to" "$before_hash" "$after_hash"; then
+  if ! ttg_log_transition "$nazgul_dir" "$task_id" "$from" "$to" "$_TTG_STAGED_BEFORE_HASH" "$after_hash"; then
     echo "ttg_apply_transition: ${task_id} reached ${to}, but its completed-transition record failed; reconciliation will quarantine it" >&2
     return 1
   fi

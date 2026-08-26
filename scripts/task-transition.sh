@@ -182,6 +182,12 @@ else
   REPAIR_EDGES=("BLOCKED:IN_REVIEW" "IN_REVIEW:DONE")
 fi
 
+# The walk runs in the primitive's lock subshell, so a halt it reported cannot be read from
+# an exit code alone; this sentinel is how the parent tells reported from unreported.
+REPAIR_SIGNAL_DIR=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-repair.XXXXXX")
+trap 'rm -rf "$REPAIR_SIGNAL_DIR"' EXIT
+REPAIR_REPORTED="$REPAIR_SIGNAL_DIR/halt-reported"
+
 # A halt after the first edge has already left the quarantine, so re-enter it
 # rather than report a preservation that did not happen.
 repair_halt() {
@@ -191,9 +197,9 @@ repair_halt() {
     disposition="preserved"
     detail="the quarantine is intact at BLOCKED"
   else
-    # ttg_apply_transition can report failure after its rename lands, so the
-    # disposition is read back off disk instead of taken from the return code.
-    ttg_apply_transition "$NAZGUL_DIR" "$PROJECT_ROOT" "$TASK_ID" "$live" BLOCKED "" || true
+    # The re-entry runs inside the held lock too, so it uses the _locked form; and since
+    # a rename can land before a failure is reported, the disposition is read back off disk.
+    _ttg_apply_transition_locked "$NAZGUL_DIR" "$PROJECT_ROOT" "$TASK_ID" "$live" BLOCKED "" || true
     live=$(get_task_status "$MANIFEST_FILE" "")
     if [ "$live" = "BLOCKED" ]; then
       disposition="restored"
@@ -207,36 +213,69 @@ repair_halt() {
   _ttg_emit_event "$NAZGUL_DIR" "reconciliation_repair" \
     task_id "$TASK_ID" action "halted" reason "edge_refused" edge "$edge" \
     quarantine "$disposition" live_status "${live:-missing}"
+  : > "$REPAIR_REPORTED"
   exit 1
 }
 
-for _repair_edge in ${REPAIR_EDGES[@]+"${REPAIR_EDGES[@]}"}; do
-  if ! ttg_apply_transition "$NAZGUL_DIR" "$PROJECT_ROOT" \
-    "$TASK_ID" "${_repair_edge%%:*}" "${_repair_edge##*:}" ""; then
-    repair_halt "$_repair_edge"
-  fi
-done
+# The primitive's read-back on the marker write. nz_rewrite_file returned 0 on a NO-OP, so a
+# pattern matching nothing reported success over an unchanged record (item 3); this is loud.
+repair_marker_cleared() {
+  local text
+  text=$(cat "$1" 2>/dev/null) || return 1
+  [ -n "$text" ] || return 1
+  ! ttg_is_reconciliation_quarantine "$text"
+}
 
-REPAIRED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-# Staged through nz_rewrite_file: it picks an unpredictable colocated name and
-# carries the manifest mode over, so no pre-created `.repair.tmp` can be aimed.
-export NAZGUL_REPAIR_LINE="- **Blocked kind**: reconciliation (repaired ${REPAIRED_AT})"
-if ! nz_rewrite_file "$MANIFEST_FILE" awk -v pat="$(nz_manifest_field_pattern_ere "Blocked kind")" \
-  '{ if (tolower($0) ~ pat) print ENVIRON["NAZGUL_REPAIR_LINE"]; else print }' \
-  "$MANIFEST_FILE"; then
-  unset NAZGUL_REPAIR_LINE
+# Two outcomes, kept apart: the marker never landed, or it landed and the record still reads
+# as a live quarantine. Only the second is unrecoverable, and only it emits its own event.
+repair_marker_halt() {
+  local live
+  live=$(get_task_status "$MANIFEST_FILE" "")
+  if ttg_is_reconciliation_quarantine "$(cat "$MANIFEST_FILE" 2>/dev/null || echo "")"; then
+    echo "task-transition: repair ${TASK_ID} completed its walk but the manifest STILL reads as a live reconciliation quarantine after the rewrite; refusing to report a repair that did not land. The walk is not reversible from ${live:-missing} — the manifest needs human repair" >&2
+    _ttg_emit_event "$NAZGUL_DIR" "reconciliation_repair" \
+      task_id "$TASK_ID" action "halted" reason "repair_marker_not_persisted" \
+      quarantine "live" live_status "${live:-missing}"
+    : > "$REPAIR_REPORTED"
+    exit 1
+  fi
   echo "task-transition: repair ${TASK_ID} completed its walk but could not mark the quarantine repaired; rerun repair after fixing the manifest" >&2
+  : > "$REPAIR_REPORTED"
   exit 1
-fi
-unset NAZGUL_REPAIR_LINE
-# nz_rewrite_file exits 0 on a NO-OP, so a pattern that matched nothing reported success over a
-# record that never changed (item 3). A write is not written until it is read back (ADR-021).
-if ttg_is_reconciliation_quarantine "$(cat "$MANIFEST_FILE" 2>/dev/null || echo "")"; then
-  REPAIR_LIVE=$(get_task_status "$MANIFEST_FILE" "")
-  echo "task-transition: repair ${TASK_ID} completed its walk but the manifest STILL reads as a live reconciliation quarantine after the rewrite; refusing to report a repair that did not land. The walk is not reversible from ${REPAIR_LIVE:-missing} — the manifest needs human repair" >&2
-  _ttg_emit_event "$NAZGUL_DIR" "reconciliation_repair" \
-    task_id "$TASK_ID" action "halted" reason "repair_marker_not_persisted" \
-    quarantine "live" live_status "${REPAIR_LIVE:-missing}"
+}
+
+# The walk and the marker are ONE critical section: written after the walk released its lock,
+# the marker left a window where a quarantine could be exited and then re-marked.
+repair_walk_and_mark() {
+  local edge repaired_at
+  for edge in ${REPAIR_EDGES[@]+"${REPAIR_EDGES[@]}"}; do
+    # The _locked form throughout — the outer form would deadlock on the lock this subshell holds.
+    if ! _ttg_apply_transition_locked "$NAZGUL_DIR" "$PROJECT_ROOT" \
+      "$TASK_ID" "${edge%%:*}" "${edge##*:}" ""; then
+      repair_halt "$edge"
+    fi
+  done
+
+  repaired_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  export NAZGUL_REPAIR_LINE="- **Blocked kind**: reconciliation (repaired ${repaired_at})"
+  if ! nz_manifest_write_locked "$NAZGUL_DIR" "$TASK_ID" --verify repair_marker_cleared -- \
+    awk -v pat="$(nz_manifest_field_pattern_ere "Blocked kind")" \
+    '{ if (tolower($0) ~ pat) print ENVIRON["NAZGUL_REPAIR_LINE"]; else print }'; then
+    unset NAZGUL_REPAIR_LINE
+    repair_marker_halt
+  fi
+  unset NAZGUL_REPAIR_LINE
+}
+
+# ttg_apply_transition asserted this per edge; the walk enters the lock once, so it asks once.
+_ttg_runtime_dir_path "$NAZGUL_DIR" logs true >/dev/null || {
+  echo "task-transition: repair ${TASK_ID} refused — logs/ is not a canonical runtime directory" >&2
+  exit 1
+}
+if ! nz_manifest_with_lock "$NAZGUL_DIR" "$TASK_ID" repair_walk_and_mark; then
+  # An unreported failure is the lock itself: the walk never started, so the quarantine is
+  # intact — and a preservation that is true still has to be said.
+  [ -e "$REPAIR_REPORTED" ] || repair_halt "${REPAIR_EDGES[0]}"
   exit 1
 fi
 

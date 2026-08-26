@@ -183,7 +183,10 @@ assert_eq "concurrent mutation keeps original status" \
   "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-005.md")" "READY"
 assert_contains "concurrent metadata is preserved" \
   "$(cat "$TEST_DIR/nazgul/tasks/TASK-005.md")" "concurrent-metadata: preserved"
-assert_contains "race diagnostic is explicit" "$(cat "$TEST_DIR/race.err")" "changed while its transition was staged"
+assert_contains "race diagnostic is explicit" "$(cat "$TEST_DIR/race.err")" \
+  "changed while its snapshot was taken"
+assert_contains "race diagnostic names which compare-and-swap refused" \
+  "$(cat "$TEST_DIR/race.err")" "cause: cas_mismatch_snapshot"
 
 # Validation and the pre-replace comparison must use one immutable snapshot. Mutating the
 # live manifest on the first hash invocation reproduces the old ordering:
@@ -224,7 +227,9 @@ assert_eq "snapshot race preserves source status" \
 assert_contains "snapshot race preserves concurrent bytes" \
   "$(cat "$TEST_DIR/nazgul/tasks/TASK-008.md")" "concurrent-evidence: changed-before-hash"
 assert_contains "snapshot race diagnostic names the staged comparison" \
-  "$(cat "$TEST_DIR/snapshot.err")" "changed while its transition was staged"
+  "$(cat "$TEST_DIR/snapshot.err")" "changed while its snapshot was taken"
+assert_contains "snapshot race names which compare-and-swap refused" \
+  "$(cat "$TEST_DIR/snapshot.err")" "cause: cas_mismatch_snapshot"
 fi
 
 # Transition locks fail closed, and a reason is written in the same atomic
@@ -835,6 +840,160 @@ else
   assert_eq "legacy bash: denied gate leaves the manifest alone" \
     "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-016.md")" "PLANNED"
 fi
+
+# FEAT-036/TASK-002 (ADR-031) — ONE lock path: a lock held where the primitive says this
+# task's lock lives must block the status writer, or the two serialize by luck, not design.
+create_task_file TASK-044 READY
+PRIMITIVE_LOCK=$(nz_manifest_lock_path "$TEST_DIR/nazgul" TASK-044)
+mkdir -p "$PRIMITIVE_LOCK"
+assert_eq "a lock held at the primitive's path blocks the status writer" \
+  "$(run_transition transition TASK-044 READY IN_PROGRESS)" "1"
+assert_eq "the blocked status writer leaves the manifest alone" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-044.md")" "READY"
+rmdir "$PRIMITIVE_LOCK"
+assert_eq "the same edge completes once that lock is released" \
+  "$(run_transition transition TASK-044 READY IN_PROGRESS)" "0"
+
+# RULES.md §2 prices stop-hook's raw-write exception in attribution, so writer= has to survive.
+assert_eq "a command-written edge records no writer attribution" \
+  "$(jq -r 'select(.task_id == "TASK-044") | .writer // "none"' \
+    "$TEST_DIR/nazgul/logs/guarded-transitions.jsonl")" "none"
+ttg_log_transition "$TEST_DIR/nazgul" TASK-044 IN_PROGRESS BLOCKED "" "" "stop-hook"
+assert_eq "an out-of-command edge still carries its writer= attribution" \
+  "$(jq -r 'select(.task_id == "TASK-044" and .to == "BLOCKED") | .writer' \
+    "$TEST_DIR/nazgul/logs/guarded-transitions.jsonl")" "stop-hook"
+
+# BOUNDED, because the regression this guards against is a deadlock: an unbounded hang here
+# is a stalled suite, not a failure. BOUNDED_EC is 124 on the limit, as timeout(1) reports.
+run_bounded() { # <limit-seconds> <command…>
+  local limit="$1"; shift
+  local pid tenths=0
+  BOUNDED_EC=0
+  "$@" >"$TEST_DIR/bounded.out" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$tenths" -ge $((limit * 10)) ]; then
+      kill -9 "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      BOUNDED_EC=124
+      return 0
+    fi
+    sleep 0.1
+    tenths=$((tenths + 1))
+  done
+  wait "$pid" || BOUNDED_EC=$?
+  return 0
+}
+
+# A committed manifest whose declared scope is deliberately outside scripts/**, tests/**,
+# so the red-run gate resolves not-applicable and IMPLEMENTED turns on commit evidence alone.
+committed_manifest() { # <task-id> <status> <base-sha> <head-sha>
+  printf -- '---\nstatus: %s\n---\n# %s: Test task\n\n## Metadata\n- **Depends on**: none\n- **Group**: 1\n- **Retry count**: 0/3\n- **Files modified**: ["docs/foo.md"]\n- **Base SHA**: %s\n\n## Commits\n- %s — feat: work\n' \
+    "$2" "$1" "$3" "$4"
+}
+
+quarantined_manifest() { # <task-id> <base-sha> <head-sha> [kind] [from] [observed]
+  printf -- '---\nstatus: BLOCKED\n---\n# %s: Test task\n\n## Metadata\n- **Depends on**: none\n- **Group**: 1\n- **Retry count**: 0/3\n- **Files modified**: ["docs/foo.md"]\n- **Base SHA**: %s\n' \
+    "$1" "$2"
+  [ "${4:-reconciliation}" = "none" ] || printf -- '- **Blocked kind**: %s\n' "${4:-reconciliation}"
+  [ "${5:-IN_REVIEW}" = "none" ] || printf -- '- **Blocked from**: %s\n' "${5:-IN_REVIEW}"
+  [ "${6:-DONE}" = "none" ] || printf -- '- **Blocked observed**: %s\n' "${6:-DONE}"
+  printf -- '\n## Commits\n- %s — feat: work\n' "$3"
+}
+
+teardown_temp_dir
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.agents.reviewers = ["code-reviewer"]'
+WALK_BASE=$(git -C "$TEST_DIR" rev-parse HEAD~1)
+WALK_HEAD=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+committed_manifest TASK-050 READY "$WALK_BASE" "$WALK_HEAD" > "$TEST_DIR/nazgul/tasks/TASK-050.md"
+run_bounded 30 env CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$COMMAND" transition TASK-050 READY IN_PROGRESS
+assert_exit_code "bounded walk: READY -> IN_PROGRESS neither hangs nor refuses" "$BOUNDED_EC" 0
+run_bounded 30 env CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$COMMAND" transition TASK-050 IN_PROGRESS IMPLEMENTED
+assert_exit_code "bounded walk: IN_PROGRESS -> IMPLEMENTED neither hangs nor refuses" "$BOUNDED_EC" 0
+assert_eq "bounded walk lands on IMPLEMENTED on disk" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-050.md")" "IMPLEMENTED"
+assert_dir_not_exists "the walk released the per-task lock it took" \
+  "$(nz_manifest_lock_path "$TEST_DIR/nazgul" TASK-050)"
+
+# The marker used to be written AFTER the walk released its locks, so a quarantine could be
+# exited and re-marked. The shim fires only while NAZGUL_REPAIR_LINE is exported — the marker.
+REAL_AWK=$(command -v awk)
+AWKBIN=$(mktemp -d "${TMPDIR:-/tmp}/nazgul-transition-awkbin.XXXXXX")
+cat > "$AWKBIN/awk" <<'FAKEAWK'
+#!/usr/bin/env bash
+if [ -n "${NAZGUL_REPAIR_LINE:-}" ]; then
+  if [ -d "${NAZGUL_TEST_TASK_LOCK:?}" ]; then
+    echo "locked" >> "${NAZGUL_TEST_LOCK_LOG:?}"
+  else
+    echo "unlocked" >> "${NAZGUL_TEST_LOCK_LOG:?}"
+  fi
+fi
+exec "${NAZGUL_REAL_AWK:?}" "$@"
+FAKEAWK
+chmod +x "$AWKBIN/awk"
+
+create_review_dir TASK-051
+quarantined_manifest TASK-051 "$WALK_BASE" "$WALK_HEAD" > "$TEST_DIR/nazgul/tasks/TASK-051.md"
+MARKER_LOG="$TEST_DIR/marker-lock.log"
+: > "$MARKER_LOG"
+MARKER_EC=0
+PATH="$AWKBIN:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" \
+  NAZGUL_REAL_AWK="$REAL_AWK" NAZGUL_TEST_LOCK_LOG="$MARKER_LOG" \
+  NAZGUL_TEST_TASK_LOCK="$TEST_DIR/nazgul/locks/task-transition-TASK-051.lock" \
+  bash "$COMMAND" repair TASK-051 >/dev/null 2>"$TEST_DIR/marker.err" || MARKER_EC=$?
+rm -f "$AWKBIN/awk"
+rmdir "$AWKBIN"
+assert_exit_code "repair walks and marks the quarantine" "$MARKER_EC" 0
+# A silent probe would let the assertion below pass on an empty file, which is the shape
+# it exists to refuse: looked and found none, never never-looked.
+assert_eq "the marker probe actually fired" \
+  "$([ -s "$MARKER_LOG" ] && echo fired || echo never-ran)" "fired"
+assert_eq "the repair marker is written inside the walk's critical section" \
+  "$(sort -u "$MARKER_LOG" | tr '\n' ' ' | sed 's/[[:space:]]*$//')" "locked"
+assert_contains "the quarantine is marked repaired" \
+  "$(cat "$TEST_DIR/nazgul/tasks/TASK-051.md")" "reconciliation (repaired"
+assert_eq "the repaired task lands on DONE" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-051.md")" "DONE"
+assert_dir_not_exists "the one critical section is released when repair returns" \
+  "$TEST_DIR/nazgul/locks/task-transition-TASK-051.lock"
+
+# The six repair refusals, each executed and read back from its own event — a closed
+# vocabulary is only closed if every member is driven, not inspected.
+repair_reason() { # <task-id>
+  CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$COMMAND" repair "$1" >/dev/null 2>&1 || true
+  jq -r --arg t "$1" \
+    'select(.event == "reconciliation_repair" and .task_id == $t and .action == "denied") | .reason' \
+    "$TEST_DIR/nazgul/logs/events.jsonl" 2>/dev/null | tail -1
+}
+create_task_file TASK-060 READY
+assert_eq "repair refuses a task that is not quarantined at all" \
+  "$(repair_reason TASK-060)" "not_blocked"
+quarantined_manifest TASK-061 "$WALK_BASE" "$WALK_HEAD" none none none \
+  > "$TEST_DIR/nazgul/tasks/TASK-061.md"
+assert_eq "repair refuses an untyped blocker" "$(repair_reason TASK-061)" "untyped_blocker"
+quarantined_manifest TASK-062 "$WALK_BASE" "$WALK_HEAD" security \
+  > "$TEST_DIR/nazgul/tasks/TASK-062.md"
+assert_eq "repair refuses a blocker of another kind" \
+  "$(repair_reason TASK-062)" "wrong_blocker_kind"
+quarantined_manifest TASK-063 "$WALK_BASE" "$WALK_HEAD" reconciliation IN_REVIEW none \
+  > "$TEST_DIR/nazgul/tasks/TASK-063.md"
+assert_eq "repair refuses incomplete quarantine metadata" \
+  "$(repair_reason TASK-063)" "corrupt_quarantine_metadata"
+quarantined_manifest TASK-064 "$WALK_BASE" "$WALK_HEAD" reconciliation IN_PROGRESS IN_PROGRESS \
+  > "$TEST_DIR/nazgul/tasks/TASK-064.md"
+assert_eq "repair refuses work that was never reviewed" \
+  "$(repair_reason TASK-064)" "unreviewed_observed_status"
+quarantined_manifest TASK-065 "$WALK_BASE" "$WALK_HEAD" > "$TEST_DIR/nazgul/tasks/TASK-065.md"
+assert_eq "repair refuses a quarantine whose evidence is incomplete" \
+  "$(repair_reason TASK-065)" "incomplete_evidence"
+assert_eq "a refused repair leaves every quarantine intact at BLOCKED" \
+  "$(for _t in TASK-061 TASK-062 TASK-063 TASK-064 TASK-065; do
+       get_task_status "$TEST_DIR/nazgul/tasks/${_t}.md"
+     done | sort -u | tr '\n' ' ' | sed 's/[[:space:]]*$//')" "BLOCKED"
 
 teardown_temp_dir
 report_results
