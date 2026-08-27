@@ -456,8 +456,17 @@ nz_manifest_with_lock() {
     trap '_nz_mw_cleanup; [ -z "${NZ_LOCK_TOKEN:-}" ] || _nz_release_lock "$lock" "$NZ_LOCK_TOKEN" 2>/dev/null || true' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    if ! _nz_acquire_lock "$lock" 1; then
-      _nz_mw_fail lock_unavailable "another transition already holds the ${task_id} lock"
+    # lean-comments: allow-run — why this retries instead of trying once
+    # One attempt turned TRANSIENT contention into a silently skipped state change. Every
+    # stop-hook status install and field upsert contends on the same per-task lock
+    # task-transition.sh holds for the duration of a transition, so a transition merely
+    # IN FLIGHT when the Stop hook ran made the reconciliation quarantine, the git-conflict
+    # block and both review-gate demotion ladders simply not happen — each reported once and
+    # then dropped. ttg_log_transition already uses 200 x 0.01s for its far less
+    # consequential LEDGER lock; the manifest lock owed at least as much. ~2s bounded, so a
+    # genuinely held lock still fails closed rather than hanging the hook.
+    if ! _nz_acquire_lock "$lock" "${NZ_MW_LOCK_ATTEMPTS:-200}" "${NZ_MW_LOCK_DELAY:-0.01}"; then
+      _nz_mw_fail lock_unavailable "another transition already holds the ${task_id} lock (still held after ${NZ_MW_LOCK_ATTEMPTS:-200} attempts)"
       exit 1
     fi
     "$@"

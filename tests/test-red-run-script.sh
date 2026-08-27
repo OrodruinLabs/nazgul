@@ -754,15 +754,35 @@ assert_file_contains "#241 control: recording BOTH commits copies the sibling's 
 assert_file_contains "#241 control: and this task's own file beside it" \
   "$RR241_DIR/TASK-242.md" 'red-run: tests/test-alpha-mine.sh'
 
-# The fallback is announced, never silent: a manifest with no usable `## Commits` still
-# captures from the branch-cumulative range, and says that is what it fell back to.
+# INVERTED IN PLACE (PR #293 round 2, finding 8). This case wrote an EMPTY `## Commits`
+# and asserted the branch-cumulative fallback — collapsing the two answers
+# `_ttg_task_commit_diff` deliberately keeps apart. rc 2 is "no SHA is recorded" and rc 1 is
+# "one is recorded that this repo cannot read", and `_ttg_red_run_in_scope` already gives
+# them OPPOSITE dispositions. A red run normally captures a task's changed tests BEFORE they
+# are committed, so rc 2 is the ORDINARY case: treating it as a degradation made every
+# routine capture on a shared branch pull siblings' test files in — the exact contamination
+# #241 removed. Empty is the correct committed half when nothing is committed.
 write_manifest TASK-243 "$BASE_SHA" "" "none"
 run_capture TASK-243 --filter=alpha
-assert_exit_code "#241: the fallback capture completes" "$RR_EC" 0
-assert_contains "#241: an unusable ## Commits names the fallback it took" \
-  "$RR_OUT" "falling back to the branch-cumulative"
-assert_file_contains "#241: and the fallback really is the wider set" \
+assert_contains "#241: an empty ## Commits does NOT take the branch-cumulative fallback" \
+  "$RR_OUT" "none recorded yet"
+case "$RR_OUT" in
+  *"falling back to the branch-cumulative"*)
+    _fail "#241: an empty ## Commits does not print a degradation warning" \
+      "rc 2 is the ordinary pre-commit case, not a failure to derive" ;;
+  *) _pass "#241: an empty ## Commits does not print a degradation warning" ;;
+esac
+assert_file_not_contains "#241: and no sibling test file is pulled in" \
   "$RR241_DIR/TASK-243.md" 'red-run: tests/test-alpha-sibling.sh'
+
+# rc 1 — a SHA IS recorded and cannot be read. THAT is the degradation, and it must still be
+# announced rather than silently narrowing the set.
+write_manifest TASK-244 "$BASE_SHA" "" "- 0000000000000000000000000000000000000000"
+run_capture TASK-244 --filter=alpha
+assert_contains "#241: an UNREADABLE ## Commits names the fallback it took" \
+  "$RR_OUT" "falling back to the branch-cumulative"
+assert_file_contains "#241: and that fallback really is the wider set" \
+  "$RR241_DIR/TASK-244.md" 'red-run: tests/test-alpha-sibling.sh'
 teardown_temp_dir
 
 # The project's own runner, not this repo's harness. Ordered FIRST among the

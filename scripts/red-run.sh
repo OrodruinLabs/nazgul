@@ -469,9 +469,25 @@ else
     [ -z "$_TTG_TASK_DIFF_DETAIL" ] \
       || echo "red-run: PARTIAL commit set — ${_TTG_TASK_DIFF_DETAIL}" >&2
   else
-    RR_COMMITTED=$(git -C "$PROJECT_ROOT" diff --name-only "${BASE_SHA}..HEAD" -- "${RR_ROOT_PATHSPEC[@]}" 2>/dev/null || true)
-    RR_COMMITTED_SOURCE="${BASE_SHA}..HEAD"
-    echo "red-run: cannot derive this task's own committed diff (${_TTG_TASK_DIFF_DETAIL}) — falling back to the branch-cumulative ${BASE_SHA}..HEAD diff, which on a shared branch can copy a sibling task's test files in" >&2
+    _RR_DIFF_RC=$?
+    # lean-comments: allow-run — why rc 2 is not a degradation
+    # _ttg_task_commit_diff separates two answers that this branch used to collapse, and
+    # _ttg_red_run_in_scope already gives them OPPOSITE dispositions: rc 2 is "the manifest
+    # records no SHA under ## Commits" and rc 1 is "it records one this repo cannot read".
+    # A red run normally captures a task's changed tests BEFORE they are committed, so rc 2
+    # is the ordinary case, not a failure — and treating it as one made every routine
+    # capture print a degradation warning and fall back to the branch-cumulative diff, which
+    # is precisely the sibling-file contamination #241 was written to remove. Empty is the
+    # correct committed half when nothing is committed; the working-tree and untracked sets
+    # are unioned on top below and supply the real files.
+    if [ "$_RR_DIFF_RC" -eq 2 ]; then
+      RR_COMMITTED=""
+      RR_COMMITTED_SOURCE="this task's own ## Commits (none recorded yet)"
+    else
+      RR_COMMITTED=$(git -C "$PROJECT_ROOT" diff --name-only "${BASE_SHA}..HEAD" -- "${RR_ROOT_PATHSPEC[@]}" 2>/dev/null || true)
+      RR_COMMITTED_SOURCE="${BASE_SHA}..HEAD"
+      echo "red-run: cannot derive this task's own committed diff (${_TTG_TASK_DIFF_DETAIL}) — falling back to the branch-cumulative ${BASE_SHA}..HEAD diff, which on a shared branch can copy a sibling task's test files in" >&2
+    fi
   fi
   TEST_FILES=$( {
       printf '%s\n' "$RR_COMMITTED"

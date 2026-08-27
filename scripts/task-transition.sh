@@ -237,6 +237,13 @@ repair_halt() {
 # pattern matching nothing reported success over an unchanged record (item 3); this is loud.
 repair_marker_cleared() {
   local text
+  # COMPOSE with the primitive's default read-back, never replace it. A --verify that only
+  # asks its own question leaves this the one call in the tree that never checks the
+  # installed manifest still parses to a valid status — so a producer that mangled the
+  # status line (a bad NAZGUL_REPAIR_LINE, an ENVIRON miss, a locale-dependent tolower)
+  # would pass this predicate and `repair` would report success over a manifest the state
+  # machine can no longer read. rr_verify_installed in red-run.sh does the same first.
+  _nz_default_verify "$1" || return 1
   text=$(cat "$1" 2>/dev/null) || return 1
   [ -n "$text" ] || return 1
   ! ttg_is_reconciliation_quarantine "$text"

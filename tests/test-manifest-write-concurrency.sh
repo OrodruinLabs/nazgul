@@ -505,7 +505,13 @@ if [ "$PRIMITIVE_PRESENT" -eq 1 ]; then
   bash "$BIN/c2-status.sh" "$LIB" "$NZ" "$C2_TASK" "$A_INSIDE" "$B_ARRIVED" \
     > /dev/null 2> "$SCRATCH/c2-a-forced.err" &
   FA=$!
-  bash "$BIN/c2-evidence.sh" "$LIB" "$NZ" "$C2_TASK" "$A_INSIDE" "$B_ARRIVED" forced 0.000 1 \
+  # NZ_MW_LOCK_ATTEMPTS=1 pins the REFUSAL disposition, which is what this arm exists to
+  # measure. The primitive now retries a bounded ~2s by default (PR #293 round 2 finding 5:
+  # a single attempt turned transient contention into silently skipped state changes), so
+  # without this the loser would simply wait for the holder and succeed — exercising the
+  # other disposition, which case 2's first half already covers. Forcing one attempt keeps
+  # both dispositions driven rather than trading one for the other.
+  NZ_MW_LOCK_ATTEMPTS=1 bash "$BIN/c2-evidence.sh" "$LIB" "$NZ" "$C2_TASK" "$A_INSIDE" "$B_ARRIVED" forced 0.000 1 \
     > /dev/null 2> "$SCRATCH/c2-b-forced.err" &
   FB=$!
   wait "$FA"; C2F_RA=$?
