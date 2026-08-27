@@ -284,7 +284,7 @@ _nz_mw_cleanup() {
 # Usage: nz_manifest_write_locked <state_root> <task_id> [--verify <fn>] -- <producer…>
 nz_manifest_write_locked() {
   local state_root="${1:-}" task_id="${2:-}"
-  local verify_fn="_nz_default_verify" file mode snapshot stage before_hash current_hash rollback
+  local verify_fn="_nz_default_verify" file mode snapshot stage before_hash current_hash rollback expect_hash=""
   [ "$#" -ge 2 ] \
     || _nz_mw_fail bad_arguments "usage: nz_manifest_write_locked <state_root> <task_id> [--verify <fn>] -- <producer…>" || return 1
   shift 2
@@ -294,6 +294,10 @@ nz_manifest_write_locked() {
         [ "$#" -ge 2 ] || _nz_mw_fail bad_arguments "--verify needs a function name" || return 1
         verify_fn="$2"; shift 2 ;;
       --verify=*) verify_fn="${1#--verify=}"; shift ;;
+      --expect-hash)
+        [ "$#" -ge 2 ] || _nz_mw_fail bad_arguments "--expect-hash needs a sha256" || return 1
+        expect_hash="$2"; shift 2 ;;
+      --expect-hash=*) expect_hash="${1#--expect-hash=}"; shift ;;
       --) shift; break ;;
       *) _nz_mw_fail bad_arguments "unexpected argument '${1}'; the producer must follow a '--' separator" || return 1 ;;
     esac
@@ -347,16 +351,29 @@ nz_manifest_write_locked() {
   fi
 
   before_hash=$(nz_sha256 < "$snapshot") || before_hash=""
+  # lean-comments: allow-run — why a caller may supply its own CAS baseline
+  # The primitive's own window is the WRITE: it hashes the manifest as it stands when the
+  # write begins, so a caller that READ the manifest minutes earlier and computed something
+  # from it (red-run parses Base SHA before a multi-minute run) gets no protection from a
+  # change in between. --expect-hash lets that caller extend the window back to its own read,
+  # which is the difference between exit 7's documented load-bearing case and a claim.
+  if [ -n "$expect_hash" ] && [ "$before_hash" != "$expect_hash" ]; then
+    _nz_mw_cleanup
+    _nz_mw_fail cas_mismatch_caller "${task_id} changed since the caller read it (expected ${expect_hash}, found ${before_hash:-unreadable}); whatever was computed from the earlier content is stale and nothing was installed"
+    return 1
+  fi
   # lean-comments: allow-run — why the snapshot outlives the rename
   # Published so the producer does not hash the same unmodified bytes a second time. The
   # ledger records this value as before_sha256, and two independent computations of one
   # number are two things that can disagree — including silently, if the two hash helpers
   # are ever changed apart. One computation, one authority.
-  # shellcheck disable=SC2034  # published for the SOURCING shell, not read within this file:
-  # task-transition-guard.sh:2089 reads it into _TTG_STAGED_BEFORE_HASH. Publishing the hash the
-  # primitive already computed is what removes the second source of truth for the ledger's
-  # before_sha256 (PR #293 finding 13) — a recomputation could diverge silently if the two hash
-  # helpers were ever changed independently.
+  # shellcheck disable=SC2034  # published for the SOURCING shell, not read within this file.
+  # Read by task-transition-guard.sh:2089 into _TTG_STAGED_BEFORE_HASH, which reaches it via
+  # the INNER form. Under the OUTER form this assignment happens inside a subshell and cannot
+  # reach the caller at all — nz_manifest_write republishes it through a file sentinel for
+  # exactly that reason (PR #293 round 2, finding 10). Publishing the hash the primitive
+  # already computed is what removes the second source of truth for the ledger's
+  # before_sha256 (round 1 finding 13): two computations of one number can disagree.
   NZ_MW_BEFORE_HASH="$before_hash"
   if [ -z "$before_hash" ]; then
     _nz_mw_cleanup
@@ -437,6 +454,8 @@ nz_manifest_write_locked() {
     _nz_mw_fail verify_failed_unrestored "${task_id} was written, ${verify_fn} rejected the installed bytes, AND the rollback to its pre-write content FAILED; ${file} holds bytes a read-back declared bad. Its PRE-WRITE content is preserved at ${rollback} — read both before transitioning anything on this task"
     return 1
   fi
+  # Publish for the OUTER form, whose subshell would otherwise swallow both values.
+  [ -z "${NZ_MW_PUBLISH_TO:-}" ] || printf '%s\n%s\n' "1" "$before_hash" > "$NZ_MW_PUBLISH_TO"
   _nz_mw_cleanup
   return 0
 }
@@ -476,7 +495,30 @@ nz_manifest_with_lock() {
 # Outer form: acquire the lock, then run steps 2-7 through the inner form.
 # Usage: nz_manifest_write <state_root> <task_id> [--verify <fn>] -- <producer…>
 nz_manifest_write() {
+  local _mw_pub _mw_rc=0
   [ "$#" -ge 2 ] \
     || _nz_mw_fail bad_arguments "usage: nz_manifest_write <state_root> <task_id> [--verify <fn>] -- <producer…>" || return 1
-  nz_manifest_with_lock "$1" "$2" nz_manifest_write_locked "$@"
+  # lean-comments: allow-run — why the outer form republishes through a file
+  # nz_manifest_with_lock runs its command in a SUBSHELL, so NZ_MW_INSTALLED and
+  # NZ_MW_BEFORE_HASH were assigned in a child and could never reach the caller here. The
+  # one reader in the tree worked only by accident of using the INNER form, and any future
+  # adopter reaching for this one would have read an empty before-hash — which in the status
+  # route lands on _ttg_apply_transition_locked's "could not be hashed" arm AFTER the
+  # transition already landed on disk, i.e. reported unledgerable and quarantined next pass.
+  # Same file-sentinel shape task-transition.sh uses for REPAIR_REPORTED.
+  _mw_pub=$(mktemp "${TMPDIR:-/tmp}/.nz-mw-pub.XXXXXX") || _mw_pub=""
+  NZ_MW_INSTALLED=0
+  NZ_MW_BEFORE_HASH=""
+  NZ_MW_PUBLISH_TO="$_mw_pub" nz_manifest_with_lock "$1" "$2" nz_manifest_write_locked "$@" || _mw_rc=$?
+  if [ -n "$_mw_pub" ]; then
+    if [ -s "$_mw_pub" ]; then
+      # shellcheck disable=SC2034  # both are published for the SOURCING shell; see the
+      # comment above and the readers named there.
+      NZ_MW_INSTALLED=$(awk 'NR==1{print}' "$_mw_pub")
+      # shellcheck disable=SC2034
+      NZ_MW_BEFORE_HASH=$(awk 'NR==2{print}' "$_mw_pub")
+    fi
+    rm -f "$_mw_pub"
+  fi
+  return "$_mw_rc"
 }

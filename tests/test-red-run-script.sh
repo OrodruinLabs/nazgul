@@ -2172,8 +2172,19 @@ if rrp_begin "no write of any shape targets the task manifest"; then
     "$RRP_WRITE_SITES" ""
   assert_eq "primitive: exactly one install site" \
     "$(grep -c '^nz_manifest_write ' "$RR_SRC")" "1"
+  # Asserted by PROPERTY, not by line shape: the call gained --expect-hash and now spans
+  # two lines. Pinning the one-line spelling made a correctness addition read as a regression.
   assert_file_contains "primitive: and it is the shared primitive, with a read-back predicate" \
-    "$RR_SRC" '^nz_manifest_write "\$RR_STATE_DIR" "\$TASK_ID" --verify rr_verify_installed -- rr_manifest_producer'
+    "$RR_SRC" '^nz_manifest_write "\$RR_STATE_DIR" "\$TASK_ID" --verify rr_verify_installed'
+  assert_file_contains "primitive: the producer is the composed renderer" \
+    "$RR_SRC" '\-\- rr_manifest_producer'
+  # The CAS baseline is taken at the Base SHA READ, not at write time — without it a
+  # manifest edited during a multi-minute run is never refused, which is exit 7'"'"'s own
+  # documented load-bearing case (PR #293 round 2, finding 6).
+  assert_file_contains "primitive: the write carries a CAS baseline from the caller read" \
+    "$RR_SRC" 'expect-hash "\$RR_MANIFEST_HASH_AT_READ"'
+  assert_file_contains "primitive: and that baseline is taken beside the Base SHA read" \
+    "$RR_SRC" 'RR_MANIFEST_HASH_AT_READ=\$(nz_sha256'
   rrp_end
 fi
 

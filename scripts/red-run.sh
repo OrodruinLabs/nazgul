@@ -296,6 +296,12 @@ git -C "$PROJECT_ROOT" rev-parse --git-dir >/dev/null 2>&1 \
 BASE_SHA=$(awk '/^## Metadata/{f=1;next} /^## /{f=0} f' "$MANIFEST" \
   | grep -iE '^[[:space:]]*-[[:space:]]*\*\*Base SHA\*\*' | head -1 \
   | grep -oE '[0-9a-f]{7,64}' | head -1 || true)
+# The CAS baseline for the write at the end of this run. Taken HERE, beside the read whose
+# result the whole capture is computed from, so a manifest edited during a multi-minute run
+# is refused instead of receiving a block captured against a Base SHA it no longer names —
+# the load-bearing case exit 7's header describes. Without it the primitive's window is only
+# the write itself, and the claim was documentation rather than behaviour.
+RR_MANIFEST_HASH_AT_READ=$(nz_sha256 < "$MANIFEST" 2>/dev/null) || RR_MANIFEST_HASH_AT_READ=""
 [ -n "$BASE_SHA" ] || die \
   "$TASK_ID's manifest records no Base SHA under ## Metadata." \
   "There is no pre-change tree to run against — record it before capturing a red run."
@@ -1082,7 +1088,8 @@ rr_verify_installed() {
 # primitive's own words instead of re-derived; every line still reaches stderr either way.
 RR_WRITE_ERR="$SCRATCH_PARENT/manifest-write.err"
 RR_WRITE_EC=0
-nz_manifest_write "$RR_STATE_DIR" "$TASK_ID" --verify rr_verify_installed -- rr_manifest_producer \
+nz_manifest_write "$RR_STATE_DIR" "$TASK_ID" --verify rr_verify_installed \
+  ${RR_MANIFEST_HASH_AT_READ:+--expect-hash "$RR_MANIFEST_HASH_AT_READ"} -- rr_manifest_producer \
   2>"$RR_WRITE_ERR" || RR_WRITE_EC=$?
 cat "$RR_WRITE_ERR" >&2 || true
 
