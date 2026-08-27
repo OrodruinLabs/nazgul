@@ -34,8 +34,6 @@ SCS_STATE_SIGNAL="(${SCS_SIGNAL_PATH}|${SCS_SIGNAL_AUTHORITY}|${SCS_SIGNAL_FIELD
 # finding too — see scs_exemption_paths and SCS_RETIRED/SCS_ORPHANED below.
 scs_exemption() { # <rel-path> -> prints justification, exit 0 if exempt
   case "$1" in
-    scripts/notify.sh)
-      echo "issue #203, deliberately unfixed this objective: its private DONE regex matches only the legacy '- **Status**: DONE' and '## Status: DONE' forms, so on a canonical-frontmatter manifest set DONE counts 0 and the TOTAL == DONE completion check can never hold at all — CANCELLED-blindness is the narrower case inside that larger defect" ;;
     scripts/lib/review-evidence.sh)
       echo "its status-shaped tokens are review VERDICTS (CHANGES_REQUESTED/SKIPPED/UNVERIFIED); its nazgul/tasks/ read is resolve_review_unit's feat_id lookup, which never branches on task status" ;;
     scripts/self-audit.sh)
@@ -50,6 +48,7 @@ scs_exemption() { # <rel-path> -> prints justification, exit 0 if exempt
       echo "surfaced by the widened reach signal: it spells no status vocabulary of its own — STATUS_ALT is derived at runtime from structured-state.sh's VALID_STATUSES, the single authority, which already carries CANCELLED; a restated status name here would be the defect (driven by tests/test-prompt-guard.sh)" ;;
     scripts/git-hooks/pre-merge-commit)
       echo "gates on review APPROVAL evidence rather than the status vocabulary; a cancelled unit carries no approval and is correctly blocked (driven as row 17 of tests/test-cancelled-status-consumers.sh)" ;;
+
     scripts/lib/review-provenance.sh)
       echo "gates on review PROVENANCE evidence (token match, diff hash, subject-file classification) rather than the status vocabulary; its read_frontmatter_field reach reads a REVIEW file's review_token, and every DONE occurrence is prose naming the gate that consumes its output — no predicate here reads a task status, so a cancelled unit's provenance validates identically" ;;
     *) return 1 ;;

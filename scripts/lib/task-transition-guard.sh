@@ -8,6 +8,10 @@
 _TTG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$_TTG_DIR/task-utils.sh"
+# The shared transactional manifest-write primitive, which owns the per-task lock this
+# library used to define. Sourcing is one-directional: manifest-write.sh never sources back.
+# shellcheck source=/dev/null
+source "$_TTG_DIR/manifest-write.sh"
 # shellcheck source=/dev/null
 source "$_TTG_DIR/review-evidence.sh"
 # shellcheck source=/dev/null
@@ -540,11 +544,98 @@ _ttg_drop_prohibitions() {
     }'
 }
 
-# Scope is the union of declared paths and Base SHA..HEAD; diff failure degrades loudly to manifest-only.
+_TTG_TASK_DIFF_OUT=""
+_TTG_TASK_DIFF_DETAIL=""
+
+# lean-comments: allow-run — why the answer is returned in a global rather than on stdout,
+# and why "derived nothing" and "derived part of it" are two returns and not one.
+# The task's OWN changed files: every SHA under `## Commits` — read through the identical
+# awk boundary ttg_verify_commit_evidence uses, so the two mechanisms cannot disagree about
+# what `## Commits` means — diffed against its FIRST parent, unioned. A parentless commit
+# has no first parent to diff against, so its own `show` listing is that commit's diff.
+# Sets `_TTG_TASK_DIFF_OUT` instead of printing: a command substitution would run this in a
+# subshell and lose `_TTG_TASK_DIFF_DETAIL`, which is the degradation the caller must name.
+# Returns 1 when NO set could be derived at all; on success `_TTG_TASK_DIFF_DETAIL` is
+# non-empty only when part of the recorded set was unreadable.
+# Usage: _ttg_task_commit_diff <project_root> <manifest_text> [pathspec ...]
+_ttg_task_commit_diff() {
+  local project_root="$1" manifest_text="$2"
+  shift 2
+  local commits sha one out="" seen=0 resolved=0 unresolved=0 failed=0 merges=0 parents
+  _TTG_TASK_DIFF_OUT=""
+  _TTG_TASK_DIFF_DETAIL=""
+  commits=$(printf '%s' "$manifest_text" | awk '/^## Commits/{f=1;next} /^## /{f=0} f')
+  while IFS= read -r sha; do
+    [ -n "$sha" ] || continue
+    seen=$((seen + 1))
+    if ! git -C "$project_root" cat-file -e "${sha}^{commit}" 2>/dev/null; then
+      unresolved=$((unresolved + 1))
+      continue
+    fi
+    # lean-comments: allow-run — why a merge commit is skipped rather than diffed
+    # A merge commit AUTHORED none of what its first-parent diff lists: `git diff <merge>^ <merge>`
+    # is the entire delta the merged branch brought in. This repo merges main into an objective
+    # branch rather than rebasing (never rebase — it dangles the SHAs the manifests record), so a
+    # recorded merge would re-acquire the branch-cumulative set #241 removed, by the very route
+    # #241 closed. Counted and skipped, never diffed — and named in the detail so a task whose
+    # ONLY recorded commits are merges reads as "nothing derivable", not as "nothing changed".
+    parents=$(git -C "$project_root" rev-list --parents -n 1 "$sha" 2>/dev/null | wc -w | tr -d '[:space:]')
+    if [ -n "$parents" ] && [ "$parents" -gt 2 ]; then
+      merges=$((merges + 1))
+      continue
+    fi
+    if git -C "$project_root" rev-parse --verify --quiet "${sha}^{commit}^" >/dev/null 2>&1; then
+      if ! one=$(git -C "$project_root" diff --name-only "${sha}^" "$sha" -- "$@" 2>/dev/null); then
+        failed=$((failed + 1))
+        continue
+      fi
+    elif ! one=$(git -C "$project_root" show --pretty=format: --name-only "$sha" -- "$@" 2>/dev/null); then
+      failed=$((failed + 1))
+      continue
+    fi
+    resolved=$((resolved + 1))
+    out="${out}${one}
+"
+  done < <(printf '%s' "$commits" | grep -oE "$TTG_SHA_SCAN_RE" || true)
+
+  # lean-comments: allow-run — why empty and unreadable take opposite dispositions
+  # 2, not 1: an EMPTY `## Commits` is not an unreadable one. Nothing was recorded, so nothing
+  # could be read, and a caller that fails closed on unreadability would be failing closed on a
+  # task that has simply not committed yet. The two states get two return codes so each caller
+  # picks its own disposition; every existing caller tests success/failure and is unaffected.
+  if [ "$seen" -eq 0 ]; then
+    _TTG_TASK_DIFF_DETAIL="the manifest records no SHA under ## Commits"
+    return 2
+  fi
+  if [ "$resolved" -eq 0 ]; then
+    _TTG_TASK_DIFF_DETAIL="none of the ${seen} SHA(s) under ## Commits could be diffed in ${project_root} (unresolvable=${unresolved}, diff-failed=${failed}, merges-skipped=${merges})"
+    return 1
+  fi
+  [ "$((unresolved + failed + merges))" -eq 0 ] \
+    || _TTG_TASK_DIFF_DETAIL="only ${resolved} of ${seen} SHA(s) under ## Commits could be diffed (unresolvable=${unresolved}, diff-failed=${failed}, merges-skipped=${merges})"
+  _TTG_TASK_DIFF_OUT=$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | LC_ALL=C sort -u || true)
+  return 0
+}
+
+# lean-comments: allow-run — why the file set is the task's own commits, and why the two
+# unusable states below take OPPOSITE dispositions rather than one shared degrade path.
+# Scope is the union of the declared paths and the task's OWN committed diff. It used to be
+# `Base SHA..HEAD`, which on a shared feature branch is branch-CUMULATIVE: every task was
+# charged with every sibling's changes (#241) — over-blocking only, never over-allowing, but
+# unfixable except by hand. An unusable `## Commits` inside a git repo fails CLOSED (in
+# scope): the commits are readable in principle, so their absence is ambiguity. Git being
+# unavailable is not ambiguity but impossibility — red-run.sh cannot capture evidence
+# without git either — so that state still degrades loudly to the manifest field alone
+# rather than raising a gate nothing in that tree could satisfy. An EMPTY `## Commits` is a
+# THIRD state and takes the impossibility disposition, not the ambiguity one: nothing was
+# recorded, so nothing could be read, and failing closed there charged every PLANNED/READY
+# manifest with an obligation its own File Scope never declared — a gate raised against work
+# that has not started. It degrades to the manifest field alone and SAYS which of the three
+# it took, so "asked and the scope is clean" never reads the same as "could not ask".
 _ttg_red_run_in_scope() {
   local manifest_text="$1" project_root="$2"
   local nazgul_dir="${3:-$project_root/nazgul}"
-  local declared diff_out base_sha degrade="" alt
+  local declared degrade="" alt
 
   if ! _ttg_red_run_roots "$project_root" "$nazgul_dir"; then
     echo "ttg_verify_red_run_evidence: red-run scope predicate could not determine the tests roots (project.test_roots is ${_TTG_ROOTS_DETAIL}) — failing closed, this task is treated as in scope" >&2
@@ -562,23 +653,24 @@ $(printf '%s' "$manifest_text" | awk '/^## File Scope/{f=1;next} /^## /{f=0} f' 
     return 0
   fi
 
+  local diff_rc=0
   if ! command -v git >/dev/null 2>&1; then
     degrade="git unavailable"
   elif ! git -C "$project_root" rev-parse --git-dir >/dev/null 2>&1; then
     degrade="project root is not a git repository"
   else
-    base_sha=$(printf '%s' "$manifest_text" \
-      | awk '/^## Metadata/{f=1;next} /^## /{f=0} f' \
-      | grep -iE '^[[:space:]]*-[[:space:]]*\*\*Base SHA\*\*' | head -1 \
-      | grep -oE "$TTG_SHA_SCAN_RE" | head -1 || true)
-    if [ -z "$base_sha" ]; then
-      degrade="no Base SHA in the manifest"
-    elif ! git -C "$project_root" cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
-      degrade="Base SHA ${base_sha} does not resolve"
-    elif ! diff_out=$(git -C "$project_root" diff --name-only "${base_sha}..HEAD" 2>/dev/null); then
-      degrade="git diff ${base_sha}..HEAD failed"
-    elif printf '%s\n' "$diff_out" | grep -qE "^(${alt})/"; then
+    _ttg_task_commit_diff "$project_root" "$manifest_text" || diff_rc=$?
+    if [ "$diff_rc" -eq 2 ]; then
+      degrade="$_TTG_TASK_DIFF_DETAIL"
+    elif [ "$diff_rc" -ne 0 ]; then
+      echo "ttg_verify_red_run_evidence: red-run scope predicate could not read this task's own committed diff (${_TTG_TASK_DIFF_DETAIL}) — failing closed, this task is treated as in scope" >&2
       return 0
+    else
+      [ -z "$_TTG_TASK_DIFF_DETAIL" ] \
+        || echo "ttg_verify_red_run_evidence: red-run scope predicate read a PARTIAL commit set (${_TTG_TASK_DIFF_DETAIL})" >&2
+      if printf '%s\n' "$_TTG_TASK_DIFF_OUT" | grep -qE "^(${alt})/"; then
+        return 0
+      fi
     fi
   fi
 
@@ -1954,120 +2046,10 @@ ttg_review_evidence_paths_safe() {
   return 0
 }
 
-# Age in whole seconds of a path's mtime. Non-zero when no stat(1) dialect on
-# this host can answer, and callers must then fail closed.
-_ttg_mtime_age_seconds() {
-  local path="$1" mtime="" now=""
-  mtime=$(stat -f '%m' "$path" 2>/dev/null) || mtime=""
-  if [ -z "$mtime" ]; then
-    mtime=$(stat -c '%Y' "$path" 2>/dev/null) || mtime=""
-  fi
-  [ -n "$mtime" ] || return 1
-  now=$(date +%s 2>/dev/null) || now=""
-  [ -n "$now" ] || return 1
-  case "${mtime}${now}" in *[!0-9]*) return 1 ;; esac
-  printf '%s\n' "$((now - mtime))"
-}
-
-# Per-task callers pass attempts=1, so an unreclaimable lock wedges every later
-# transition for that task until a human runs rmdir.
-_TTG_LOCK_ORPHAN_GRACE_SECONDS=30
-
-# mkdir locks are portable to Bash 3.2 and work across separate command
-# processes. Ownership lives in a tokenized owner filename, which makes stale
-# reclamation ABA-safe. A dead owner is reclaimable; a live or malformed one
-# fails closed; an ownerless directory — a writer killed between its mkdir and
-# its owner write — is reclaimable only after the grace period above and only
-# through rmdir, which refuses a directory that has since gained an owner.
-_ttg_acquire_lock() {
-  local lock="$1" attempts="${2:-1}" delay="${3:-0.02}"
-  local n=0 owner="" owner_pid="" owner_token="" owner_file="" owner_leaf="" token="" lock_age=""
-  local -a owner_files
-  TTG_LOCK_TOKEN=""
-  token=$(_rp_nonce) || token=""
-  [ -n "$token" ] || return 1
-  while [ "$n" -lt "$attempts" ]; do
-    if { [ -e "$lock" ] || [ -L "$lock" ]; } \
-      && { [ ! -d "$lock" ] || [ -L "$lock" ]; }; then
-      return 1
-    fi
-    if mkdir "$lock" 2>/dev/null; then
-      owner_file="$lock/owner.$$.${token}"
-      # Published before the write so a signal in this window still reaches the
-      # caller's release trap with the directory this call created.
-      TTG_LOCK_TOKEN="$token"
-      if ! printf '%s %s\n' "$$" "$token" > "$owner_file"; then
-        TTG_LOCK_TOKEN=""
-        rmdir "$lock" 2>/dev/null || true
-        return 1
-      fi
-      owner_files=("$lock"/owner.*)
-      if [ "${#owner_files[@]}" -eq 1 ] && [ "${owner_files[0]}" = "$owner_file" ]; then
-        return 0
-      fi
-      # A grace reclaim took the directory mid-claim and the owner file above
-      # landed in a successor's lock; withdraw rather than co-own it.
-      TTG_LOCK_TOKEN=""
-      rm -f "$owner_file" 2>/dev/null || true
-      n=$((n + 1))
-      [ "$n" -lt "$attempts" ] && sleep "$delay"
-      continue
-    fi
-
-    owner=""
-    owner_files=("$lock"/owner.*)
-    if [ "${#owner_files[@]}" -eq 1 ] \
-      && [ ! -e "${owner_files[0]}" ] && [ ! -L "${owner_files[0]}" ]; then
-      lock_age=$(_ttg_mtime_age_seconds "$lock") || lock_age=""
-      if [ -n "$lock_age" ] && [ "$lock_age" -ge "$_TTG_LOCK_ORPHAN_GRACE_SECONDS" ] \
-        && rmdir "$lock" 2>/dev/null; then
-        continue
-      fi
-      n=$((n + 1))
-      [ "$n" -lt "$attempts" ] && sleep "$delay"
-      continue
-    fi
-    [ "${#owner_files[@]}" -eq 1 ] || {
-      n=$((n + 1))
-      [ "$n" -lt "$attempts" ] && sleep "$delay"
-      continue
-    }
-    owner_file="${owner_files[0]}"
-    [ -f "$owner_file" ] && [ ! -L "$owner_file" ] \
-      && IFS= read -r owner < "$owner_file" || true
-    owner_pid=${owner%% *}
-    owner_token=${owner#* }
-    owner_leaf=${owner_file##*/}
-    if [[ "$owner_pid" =~ ^[0-9]+$ ]] \
-      && [[ "$owner_token" =~ ^[0-9a-f]+$ ]] \
-      && [ "$owner_leaf" = "owner.${owner_pid}.${owner_token}" ] \
-      && ! kill -0 "$owner_pid" 2>/dev/null; then
-      if rm "$owner_file" 2>/dev/null && rmdir "$lock" 2>/dev/null; then
-        continue
-      fi
-    fi
-    n=$((n + 1))
-    [ "$n" -lt "$attempts" ] && sleep "$delay"
-  done
-  return 1
-}
-
-_ttg_release_lock() {
-  local lock="$1" token="$2" owner="" owner_file=""
-  owner_file="$lock/owner.$$.${token}"
-  [ -d "$lock" ] && [ ! -L "$lock" ] || return 1
-  if [ ! -e "$owner_file" ] && [ ! -L "$owner_file" ]; then
-    # Claimed but never owned: clear it rather than waiting out the orphan
-    # grace. rmdir refuses a directory holding anyone else's owner file.
-    rmdir "$lock" 2>/dev/null
-    return
-  fi
-  [ -f "$owner_file" ] && [ ! -L "$owner_file" ] \
-    && IFS= read -r owner < "$owner_file" || true
-  [ "$owner" = "$$ $token" ] || return 1
-  rm "$owner_file" 2>/dev/null || return 1
-  rmdir "$lock" 2>/dev/null
-}
+# Thin aliases: the lock primitives now live in scripts/lib/manifest-write.sh (ADR-031),
+# so the status writer and every evidence writer contend on ONE implementation.
+_ttg_acquire_lock() { _nz_acquire_lock "$1" "${2:-1}" "${3:-0.02}" TTG_LOCK_TOKEN; }
+_ttg_release_lock() { _nz_release_lock "$@"; }
 
 # Delegate: one mode probe for the whole codebase (scripts/lib/task-utils.sh). An unreadable
 # mode is named and refused, never substituted with a default (issue #204).
@@ -2080,106 +2062,86 @@ _ttg_file_mode() {
   printf '%s\n' "$mode"
 }
 
-# Under the per-task lock, update one ordinary task status from a staged source
-# snapshot, recheck immediately before atomic rename, verify the target on disk,
-# and only then append authority metadata. A failure before the final mv leaves
-# the manifest untouched; a post-write ledger/event failure is loud and is
-# intentionally left for reconciliation to quarantine. This serializes Nazgul
-# transition writers; arbitrary uncooperative filesystem mutation is outside
-# the lock protocol and cannot be made into an OS-level conditional rename by
-# portable Bash.
+# Published by the producer, the only code that sees the replaced bytes under the primitive's CAS.
+_TTG_STAGED_BEFORE_HASH=""
+_TTG_INSTALL_TARGET=""
+
+# The producer nz_manifest_write_locked runs; the live manifest is never touched, only the snapshot.
+# Usage: _ttg_transition_producer <nazgul_dir> <project_root> <task_id> <from> <to> <reason> <snapshot>
+_ttg_transition_producer() {
+  local nazgul_dir="$1" project_root="$2" task_id="$3" from="$4" to="$5" reason="$6" snapshot="$7"
+  local live manifest reason_pat
+  # stdout IS the replacement manifest, so the validate-and-transform phase is redirected
+  # wholesale; a stray byte on stdout would be installed as manifest text.
+  {
+    live=$(get_task_status "$snapshot" "")
+    if [ "$live" != "$from" ]; then
+      echo "ttg_apply_transition: stale source for ${task_id}: expected ${from}, found ${live:-missing}" >&2
+      return 1
+    fi
+    manifest=$(cat "$snapshot")
+    ttg_validate_transition "$nazgul_dir" "$project_root" "$task_id" "$from" "$to" "$manifest" \
+      || return 1
+    # lean-comments: allow-run — why the primitive owns this hash
+    # The primitive already hashed these exact bytes and published the result; recomputing
+    # it here spawned a second subprocess per transition to derive a number that must equal
+    # the one already in hand. The fallback keeps this producer usable outside the primitive.
+    _TTG_STAGED_BEFORE_HASH="${NZ_MW_BEFORE_HASH:-}"
+    [ -n "$_TTG_STAGED_BEFORE_HASH" ] \
+      || _TTG_STAGED_BEFORE_HASH=$(_rp_sha256 < "$snapshot") || _TTG_STAGED_BEFORE_HASH=""
+    set_task_status "$snapshot" "$from" "$to"
+    if [ "$(get_task_status "$snapshot" "")" != "$to" ]; then
+      echo "ttg_apply_transition: staged status rewrite did not reach ${to}" >&2
+      return 1
+    fi
+  } >&2
+
+  if [ "$to" = "BLOCKED" ] && [ -n "$reason" ]; then
+    # The third writer of this field, and the one re-review #4 did not name: hand-spelled `^\- \*\*`
+    # sent an indented or two-space record down the append branch, leaving the reader on the stale one.
+    reason_pat=$(nz_manifest_field_pattern_ere "Blocked reason")
+    if grep -qiE "$reason_pat" "$snapshot" 2>/dev/null; then
+      TTG_BLOCK_REASON="$reason" awk -v pat="$reason_pat" \
+        '{ if (tolower($0) ~ pat) print "- **Blocked reason**: " ENVIRON["TTG_BLOCK_REASON"]; else print }' \
+        "$snapshot" || return 1
+      return 0
+    fi
+    cat "$snapshot" || return 1
+    printf '\n- **Blocked reason**: %s\n' "$reason"
+    return 0
+  fi
+  cat "$snapshot"
+}
+
+# The primitive's read-back predicate here: the installed bytes must parse to the exact target.
+_ttg_verify_installed_status() {
+  local file="$1" live
+  live=$(get_task_status "$file" "")
+  [ "$live" = "$_TTG_INSTALL_TARGET" ] && return 0
+  echo "ttg_apply_transition: write completed but disk verification did not find ${_TTG_INSTALL_TARGET} (found ${live:-missing})" >&2
+  return 1
+}
+
+# The status route's adoption of the shared write primitive (ADR-031): mechanics there, AUTHORITY here.
 # Usage: ttg_apply_transition <nazgul_dir> <project_root> <task_id> <from> <to> [blocked_reason]
 _ttg_apply_transition_locked() {
   local nazgul_dir="$1" project_root="$2" task_id="$3" from="$4" to="$5" reason="${6:-}"
-  local file live manifest tmp reason_tmp reason_pat before_hash current_hash after_hash original_mode
+  local file after_hash
 
   file=$(ttg_task_manifest_path "$nazgul_dir" "$task_id") || {
     echo "ttg_apply_transition: no regular task manifest for ${task_id} under ${nazgul_dir}/tasks" >&2
     return 1
   }
 
-  tmp=$(mktemp "$(dirname "$file")/.${task_id}.transition.XXXXXX") || {
-    echo "ttg_apply_transition: could not create a colocated transition file for ${task_id}" >&2
-    return 1
-  }
-  original_mode=$(_ttg_file_mode "$file") || {
-    rm -f "$tmp"
-    echo "ttg_apply_transition: could not read ${task_id} file mode" >&2
-    return 1
-  }
-  if ! cp "$file" "$tmp"; then
-    rm -f "$tmp"
-    echo "ttg_apply_transition: could not stage ${task_id}" >&2
-    return 1
-  fi
+  _TTG_STAGED_BEFORE_HASH=""
+  _TTG_INSTALL_TARGET="$to"
+  # The INNER form: ttg_apply_transition already holds this task's lock, and the outer would deadlock.
+  nz_manifest_write_locked "$nazgul_dir" "$task_id" --verify _ttg_verify_installed_status -- \
+    _ttg_transition_producer "$nazgul_dir" "$project_root" "$task_id" "$from" "$to" "$reason" \
+    || return 1
 
-  # The staged bytes are the validation snapshot. Confirm the source still
-  # matches them before parsing, and compare it again immediately before mv.
-  before_hash=$(_rp_sha256 < "$tmp") || {
-    rm -f "$tmp"
-    echo "ttg_apply_transition: no SHA-256 implementation available for snapshot comparison" >&2
-    return 1
-  }
-  current_hash=$(_rp_sha256 < "$file") || current_hash=""
-  if [ -z "$current_hash" ] || [ "$current_hash" != "$before_hash" ]; then
-    rm -f "$tmp"
-    echo "ttg_apply_transition: ${task_id} changed while its transition was staged; concurrent content preserved" >&2
-    return 1
-  fi
-
-  live=$(get_task_status "$tmp" "")
-  if [ "$live" != "$from" ]; then
-    rm -f "$tmp"
-    echo "ttg_apply_transition: stale source for ${task_id}: expected ${from}, found ${live:-missing}" >&2
-    return 1
-  fi
-  manifest=$(cat "$tmp")
-  ttg_validate_transition "$nazgul_dir" "$project_root" "$task_id" "$from" "$to" "$manifest" \
-    || { rm -f "$tmp"; return 1; }
-
-  set_task_status "$tmp" "$from" "$to"
-  if [ "$(get_task_status "$tmp" "")" != "$to" ]; then
-    rm -f "$tmp" "${tmp}.tmp" "${tmp}.bak"
-    echo "ttg_apply_transition: staged status rewrite did not reach ${to}" >&2
-    return 1
-  fi
-
-  if [ "$to" = "BLOCKED" ] && [ -n "$reason" ]; then
-    reason_tmp="${tmp}.reason"
-    # The third writer of this field, and the one re-review #4 did not name: hand-spelled `^\- \*\*`
-    # sent an indented or two-space record down the append branch, leaving the reader on the stale one.
-    reason_pat=$(nz_manifest_field_pattern_ere "Blocked reason")
-    if grep -qiE "$reason_pat" "$tmp" 2>/dev/null; then
-      TTG_BLOCK_REASON="$reason" awk -v pat="$reason_pat" \
-        '{ if (tolower($0) ~ pat) print "- **Blocked reason**: " ENVIRON["TTG_BLOCK_REASON"]; else print }' \
-        "$tmp" > "$reason_tmp" || { rm -f "$tmp" "$reason_tmp"; return 1; }
-    else
-      { cat "$tmp"; printf '\n- **Blocked reason**: %s\n' "$reason"; } > "$reason_tmp" \
-        || { rm -f "$tmp" "$reason_tmp"; return 1; }
-    fi
-    mv "$reason_tmp" "$tmp" || { rm -f "$tmp" "$reason_tmp"; return 1; }
-  fi
-
-  if ! chmod "$original_mode" "$tmp"; then
-    rm -f "$tmp" "${tmp}.tmp" "${tmp}.bak" "${tmp}.reason"
-    echo "ttg_apply_transition: could not preserve ${task_id} file mode" >&2
-    return 1
-  fi
-
-  current_hash=$(_rp_sha256 < "$file") || current_hash=""
-  if [ -z "$current_hash" ] || [ "$current_hash" != "$before_hash" ]; then
-    rm -f "$tmp" "${tmp}.tmp" "${tmp}.bak" "${tmp}.reason"
-    echo "ttg_apply_transition: ${task_id} changed while its transition was staged; concurrent content preserved" >&2
-    return 1
-  fi
-
-  mv "$tmp" "$file" || {
-    rm -f "$tmp"
-    echo "ttg_apply_transition: atomic manifest replace failed for ${task_id}" >&2
-    return 1
-  }
-  if [ "$(get_task_status "$file" "")" != "$to" ]; then
-    echo "ttg_apply_transition: ${task_id} write completed but disk verification did not find ${to}" >&2
+  if [ -z "$_TTG_STAGED_BEFORE_HASH" ]; then
+    echo "ttg_apply_transition: ${task_id} reached ${to}, but its replaced bytes could not be hashed; reconciliation will quarantine it" >&2
     return 1
   fi
   after_hash=$(_rp_sha256 < "$file") || after_hash=""
@@ -2187,7 +2149,7 @@ _ttg_apply_transition_locked() {
     echo "ttg_apply_transition: ${task_id} reached ${to}, but its completed bytes could not be hashed; reconciliation will quarantine it" >&2
     return 1
   fi
-  if ! ttg_log_transition "$nazgul_dir" "$task_id" "$from" "$to" "$before_hash" "$after_hash"; then
+  if ! ttg_log_transition "$nazgul_dir" "$task_id" "$from" "$to" "$_TTG_STAGED_BEFORE_HASH" "$after_hash"; then
     echo "ttg_apply_transition: ${task_id} reached ${to}, but its completed-transition record failed; reconciliation will quarantine it" >&2
     return 1
   fi

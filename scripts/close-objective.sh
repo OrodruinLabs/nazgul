@@ -39,9 +39,10 @@ set -euo pipefail
 # A REFUSED CLOSE LEAVES NO EVIDENCE BEHIND. `## Merge Evidence` is gate-satisfying on
 # its own, so a section written for a close that then refused would sit in the manifest
 # indistinguishable from a successful one and admit a later `transition <id> IMPLEMENTED
-# DONE` by any agent, on residue. Every manifest is therefore snapshotted before the write
-# and restored on any later refusal; a rollback that itself fails says so, loudly, in the
-# refusal record and in the run's final report.
+# DONE` by any agent, on residue. The write, its read-back and the restore therefore share
+# ONE scripts/lib/manifest-write.sh critical section (ADR-031), and the pre-close bytes come
+# from that primitive's own snapshot rather than a second hand-rolled copy of the live file;
+# a rollback that itself fails says so, loudly, in the refusal record and the final report.
 #
 # API FIRST, ANCESTRY NEVER (ADR-023 decision 1). This script never runs
 # `git merge-base --is-ancestor` and must not be "simplified" into doing so: after a
@@ -162,9 +163,17 @@ _refuse() {
 }
 
 MP_ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/nazgul-close-objective.XXXXXX")
-SNAPSHOT_FILE=$(mktemp "${TMPDIR:-/tmp}/nazgul-close-objective-snap.XXXXXX")
 VERIFY_ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/nazgul-close-objective-verify.XXXXXX")
-trap 'rm -f "$MP_ERR_FILE" "$SNAPSHOT_FILE" "$VERIFY_ERR_FILE" 2>/dev/null || true' EXIT
+# The primitive deletes its own snapshot on install, so the bytes a later rollback restores
+# are carried out of the producer HERE — still the primitive's snapshot, never a second read.
+CO_PRECLOSE_FILE=$(mktemp "${TMPDIR:-/tmp}/nazgul-close-objective-preclose.XXXXXX")
+CO_HELD_LOCK=""
+trap 'rm -f "$MP_ERR_FILE" "$VERIFY_ERR_FILE" "$CO_PRECLOSE_FILE" 2>/dev/null || true
+      [ -z "${NZ_LOCK_TOKEN:-}" ] || _nz_release_lock "${CO_HELD_LOCK:-}" "$NZ_LOCK_TOKEN" 2>/dev/null || true' EXIT
+# Bash runs no EXIT trap on an untrapped INT/TERM, and the lock is a directory: without these
+# an operator's Ctrl-C mid-close wedges every later transition for that task until a human rmdirs.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 MP_JSON=$(merge_provider_pr_state "$PROJECT_ROOT" "$PR_INPUT" 2>"$MP_ERR_FILE") || true
 cat "$MP_ERR_FILE" >&2 || true
 MP_RESULT=$(printf '%s' "$MP_JSON" | jq -r '.result // "api_failure"' 2>/dev/null || echo "api_failure")
@@ -287,14 +296,23 @@ END {
   }
 }'
 
+# The producer the shared primitive runs over its OWN snapshot (ADR-031): the pre-close bytes a
+# rollback may need come from there, so no second read of the live manifest can drift from them.
+_co_evidence_producer() {
+  local snapshot="$1"
+  cat "$snapshot" > "$CO_PRECLOSE_FILE" || return 1
+  awk "$_CO_AWK_PROG" "$snapshot"
+}
+
+# INNER form: _co_locked_close already holds this task's lock, and the outer would deadlock on it.
 _co_write_evidence() {
-  local file="$1" rc=0
+  local task_id="$1" rc=0
   # `$(...)` strips the block's trailing newline, so the trailing one is re-added HERE and is
   # the section's ONLY separating blank — every branch then writes the same bytes.
   NAZGUL_CO_EVIDENCE="$(_co_evidence_block)
 "
   export NAZGUL_CO_EVIDENCE
-  nz_rewrite_file "$file" awk "$_CO_AWK_PROG" "$file" || rc=$?
+  nz_manifest_write_locked "$NAZGUL_DIR" "$task_id" -- _co_evidence_producer || rc=$?
   unset NAZGUL_CO_EVIDENCE
   return "$rc"
 }
@@ -309,50 +327,131 @@ _co_tally_ancestry() {
   esac
 }
 
+# The primitive appends its snapshot path to every producer; a restore must emit the pre-close
+# bytes ALONE, so it names its own source and drops that trailing argument.
+_co_emit_preclose() {
+  cat "$CO_PRECLOSE_FILE"
+}
+
 # lean-comments: allow-run — why a refused close must undo its own write, not just report.
-# _co_rollback <manifest> -> restore the pre-close bytes, leaving the outcome in
-# CO_ROLLBACK_NOTE for the refusal record. `## Merge Evidence` satisfies the DONE gate on
-# its own and carries no trace of the refusal that followed it, so a section left behind
-# by a refused close is a standing token any later `transition <id> IMPLEMENTED DONE`
+# _co_rollback_via <writer> <task_id> <manifest> -> restore the pre-close bytes, leaving the
+# outcome in CO_ROLLBACK_NOTE for the refusal record. `## Merge Evidence` satisfies the DONE
+# gate on its own and carries no trace of the refusal that followed it, so a section left
+# behind by a refused close is a standing token any later `transition <id> IMPLEMENTED DONE`
 # would spend. Restoring the snapshot, rather than stripping the section, also undoes the
-# replacement of a pre-existing one.
-_co_rollback() {
-  local out
+# replacement of a pre-existing one. <writer> is the primitive form that matches whether the
+# lock is already held: it is not reentrant, so that choice belongs to the caller, not here.
+_co_rollback_via() {
+  local writer="$1" task_id="$2" manifest="$3" out
   CO_ROLLBACK_NOTE=""
-  if out=$(nz_rewrite_file "$1" cat "$SNAPSHOT_FILE" 2>&1); then
+  if out=$("$writer" "$NAZGUL_DIR" "$task_id" -- _co_emit_preclose 2>&1); then
     CO_ROLLBACK_NOTE="; the manifest was rolled back to its pre-close bytes, so no ## Merge Evidence residue remains"
     return 0
   fi
   ROLLBACK_FAILED=$((ROLLBACK_FAILED + 1))
-  CO_ROLLBACK_NOTE="; ROLLBACK FAILED ($(printf '%s' "$out" | tr '\n' ' ')) — ${1} still carries a ## Merge Evidence section that no closure stands behind; remove it by hand before any transition is attempted"
+  CO_ROLLBACK_NOTE="; ROLLBACK FAILED ($(printf '%s' "$out" | tr '\n' ' ')) — ${manifest} still carries a ## Merge Evidence section that no closure stands behind; remove it by hand before any transition is attempted"
   return 1
 }
 
-_co_close_one() {
-  local task_id="$1" manifest="$2" from="$3" err rc=0 vrc=0
+_co_rollback() {
+  _co_rollback_via nz_manifest_write_locked "$@"
+}
 
-  if ! cat "$manifest" > "$SNAPSHOT_FILE" 2>/dev/null; then
-    SKIP_EVIDENCE_WRITE=$((SKIP_EVIDENCE_WRITE + 1))
-    _refuse "$task_id" "evidence-write-failed" "could not snapshot ${manifest} before writing evidence, so nothing was written — a write that could not be undone must not be attempted"
-    return 0
+# lean-comments: allow-run — why the section is opened here rather than by nz_manifest_with_lock.
+# _co_with_task_lock <task_id> <command…> — ONE critical section for the evidence write, its
+# host-verified read-back and the rollback: two acquisitions let another writer land between a
+# refused close and its undo. The lock PATH, the acquire and the release are the primitive's own
+# (ADR-031) — one protocol, one lock — but the section is opened in THIS shell rather than
+# through nz_manifest_with_lock, which runs its command in a subshell. The read-back's host memo
+# and its consecutive-non-answer cap are per-PROCESS state (PATCH-008 item 9); from a subshell
+# neither survives, so every manifest re-asks a dead host at the net tier's full 60s and the cap
+# never fires. Measured on this suite: 5 host asks where 4 are owed, and 6 where 4 are.
+_co_with_task_lock() {
+  local task_id="$1" lock rc=0
+  shift
+  CO_LOCK_ERR=""
+  if ! lock=$(nz_manifest_lock_path "$NAZGUL_DIR" "$task_id" 2>&1); then
+    CO_LOCK_ERR="$lock"
+    return 1
   fi
+  NZ_LOCK_TOKEN=""
+  # lean-comments: allow-run — why the trap keys on the token and not the path
+  # The PATH is published before the acquire and the trap's GUARD is the token, never the
+  # path: _nz_acquire_lock publishes NZ_LOCK_TOKEN between its successful mkdir and its owner
+  # write precisely so a signal in that window still reaches a release. Guarding on a variable
+  # assigned only AFTER the acquire returned reopened that window — a Ctrl-C landing inside it
+  # left the directory, with a live owner file naming a dead pid, wedging every later
+  # transition for this task. The token is non-empty exactly when this call owns the directory,
+  # so a stale path with an empty token releases nothing.
+  CO_HELD_LOCK="$lock"
+  if ! _nz_acquire_lock "$lock" 1; then
+    CO_HELD_LOCK=""
+    CO_LOCK_ERR=$(_nz_mw_fail lock_unavailable "another transition already holds the ${task_id} lock" 2>&1) || true
+    return 1
+  fi
+  "$@" || rc=$?
+  _nz_release_lock "$lock" "$NZ_LOCK_TOKEN" 2>/dev/null || true
+  NZ_LOCK_TOKEN=""
+  CO_HELD_LOCK=""
+  return "$rc"
+}
 
-  # No rollback on this arm: nz_rewrite_file installs through an atomic rename, so a
-  # failed write left the manifest untouched and a restore here could only add noise.
-  if ! err=$(_co_write_evidence "$manifest" 2>&1); then
-    SKIP_EVIDENCE_WRITE=$((SKIP_EVIDENCE_WRITE + 1))
-    _refuse "$task_id" "evidence-write-failed" "could not record ## Merge Evidence in ${manifest}: $(printf '%s' "$err" | tr '\n' ' ')"
-    return 0
+# Runs under _co_with_task_lock, in the CURRENT shell. 4 means the read-back refused and the
+# rollback ran; any other non-zero means the primitive refused the write and named its cause.
+_co_locked_close() {
+  local task_id="$1" manifest="$2" vrc=0
+  CO_WRITE_ERR=""
+  CO_ROLLBACK_NOTE=""
+  if ! CO_WRITE_ERR=$(_co_write_evidence "$task_id" 2>&1); then
+    return 1
   fi
   # CURRENT SHELL, never `err=$(ttg_verify_merge_evidence …)`: the reason is returned in a
   # global, and a subshell's assignment cannot reach the record that has to name it.
   ttg_verify_merge_evidence "$(cat "$manifest")" "$PROJECT_ROOT" "$task_id" "$NAZGUL_DIR" \
     2>"$VERIFY_ERR_FILE" || vrc=$?
-  if [ "$vrc" -ne 0 ]; then
+  if [ "$vrc" -eq 0 ]; then
+    return 0
+  fi
+  _co_rollback "$task_id" "$manifest" || true
+  return 4
+}
+
+_co_close_one() {
+  local task_id="$1" manifest="$2" from="$3" err rc=0 lrc=0
+
+  CO_WRITE_ERR=""
+  CO_LOCK_ERR=""
+  CO_ROLLBACK_NOTE=""
+  _co_with_task_lock "$task_id" _co_locked_close "$task_id" "$manifest" || lrc=$?
+  if [ "$lrc" -eq 4 ]; then
     SKIP_EVIDENCE_WRITE=$((SKIP_EVIDENCE_WRITE + 1))
-    _co_rollback "$manifest" || true
     err=$(tr '\n' ' ' < "$VERIFY_ERR_FILE" 2>/dev/null) || err=""
     _refuse "$task_id" "evidence-write-failed" "the recorded ## Merge Evidence did not read back as verifiable [${TTG_MERGE_REASON:-unreported}] — nothing was closed on it${err:+; the verifier said: ${err}}${CO_ROLLBACK_NOTE}"
+    return 0
+  fi
+  if [ "$lrc" -ne 0 ]; then
+    # lean-comments: allow-run — why one refusal cause needs a rollback the others do not
+    # No rollback on this arm: nz_manifest_write_locked restores the manifest itself on every
+    # refusal, so a failed write left the file at its pre-write content and a restore here
+    # could only add noise. The single exception names itself — verify_failed_unrestored means
+    # the primitive's own rollback failed, so the rejected bytes ARE the manifest. This close
+    # is still refused, but it must not be reported as one that left nothing behind: an
+    # installed ## Merge Evidence block is a standing DONE-gate token, and CO_PRECLOSE_FILE
+    # holds the bytes that would undo it.
+    case "${CO_WRITE_ERR}${CO_LOCK_ERR}" in
+      *verify_failed_unrestored*)
+        SKIP_EVIDENCE_WRITE=$((SKIP_EVIDENCE_WRITE + 1))
+        # lean-comments: allow-run — which lock form this arm owns, and why
+        # The OUTER form, as at the transition-refused arm below: _co_with_task_lock has
+        # already returned, so nothing holds this task's lock and the _locked variant would
+        # be asserting ownership it does not have.
+        _co_rollback_via nz_manifest_write "$task_id" "$manifest" || true
+        _refuse "$task_id" "evidence-write-unrestored" "the ## Merge Evidence write into ${manifest} was refused AFTER its bytes were installed and the primitive's own rollback failed; a restore from the pre-close snapshot was attempted here${CO_ROLLBACK_NOTE}. READ ${manifest} BY HAND before transitioning anything on it — an installed ## Merge Evidence block satisfies ttg_verify_merge_evidence whether or not the close that wrote it succeeded: $(printf '%s' "${CO_WRITE_ERR}${CO_LOCK_ERR}" | tr '\n' ' ')"
+        return 0
+        ;;
+    esac
+    SKIP_EVIDENCE_WRITE=$((SKIP_EVIDENCE_WRITE + 1))
+    _refuse "$task_id" "evidence-write-failed" "could not record ## Merge Evidence in ${manifest}: $(printf '%s' "${CO_WRITE_ERR}${CO_LOCK_ERR}" | tr '\n' ' ')"
     return 0
   fi
 
@@ -360,7 +459,9 @@ _co_close_one() {
     transition "$task_id" "$from" DONE 2>&1) || rc=$?
   if [ "$rc" -ne 0 ]; then
     SKIP_TRANSITION=$((SKIP_TRANSITION + 1))
-    _co_rollback "$manifest" || true
+    # The walk takes and releases this task's lock itself, so its undo is necessarily a second
+    # critical section — the OUTER form, because nothing holds the lock by the time it runs.
+    _co_rollback_via nz_manifest_write "$task_id" "$manifest" || true
     _refuse "$task_id" "transition-refused" "${from} -> DONE was refused by the sole sanctioned writer: $(printf '%s' "$err" | tr '\n' ' ')${CO_ROLLBACK_NOTE}"
     return 0
   fi

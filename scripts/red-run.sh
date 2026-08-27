@@ -46,7 +46,7 @@ set -euo pipefail
 # multi-root evidence this producer could not generate, pushing the operator back
 # to hand-authoring the block ADR-019 exists to mechanize.
 #
-# The copy set defaults to the task's changed files under those roots MINUS the
+# The copy set defaults to the task's OWN changed files (its `## Commits`, each against its first parent — never the branch-cumulative `Base SHA..HEAD`, #241) under those roots MINUS the
 # harness itself: copying a changed `tests/run-tests.sh` into the pre-change tree
 # would run the new tests under the changed runner, which is the change being
 # present — the exact vacuity this script exists to detect. `--copy=` (repeatable)
@@ -67,6 +67,14 @@ set -euo pipefail
 #   5  REFUSED TO EXECUTE — the configured command is denylisted; nothing was run
 #   6  INDETERMINATE — the runner exited non-zero but no failing test file could be
 #      identified from its output; nothing written
+#   7  WRITE REFUSED — the run was red, but the shared manifest-write primitive
+#      refused to install the block; the manifest is unchanged
+#
+# 7 is about the WRITE, not the run: 2 and 6 say the capture produced no usable
+# result, while 7 says it produced one that could not be recorded. The load-bearing
+# case is a manifest that changed under a multi-minute run — installing a block
+# captured against a Base SHA the manifest no longer names is the corruption
+# ADR-031's compare-and-swap exists to refuse.
 #
 # How a RUNNER's exit code is read — declared here, not inherited from the one
 # harness this script was written against. Only 0 is universal: a pre-change run
@@ -258,6 +266,28 @@ MANIFEST="$STATE_ROOT/nazgul/tasks/$TASK_ID.md"
   "no manifest at $STATE_ROOT/nazgul/tasks/$TASK_ID.md or $STATE_ROOT/nazgul/tasks/patches/$TASK_ID.md" \
   "State tree resolved from $STATE_ROOT_SOURCE; code tree is $PROJECT_ROOT."
 
+# lean-comments: allow-run — the refusal is now narrow, so what it still refuses has to be said.
+# The primitive addresses BOTH shapes /nazgul:patch and the planner produce:
+# <state_root>/tasks/TASK-NNN.md and <state_root>/tasks/patches/PATCH-NNN.md. Refusing the
+# second outright cost red-run a capability its own consumer still demands — task-state-guard
+# runs the IMPLEMENTED red-run gate for PATCH ids, so a patch touching scripts/** could not
+# produce the evidence it was blocked for, leaving hand-authoring (the forgery route ADR-019
+# mechanized away) or a global kill switch. Any OTHER path is still refused HERE, before the
+# multi-minute run rather than after it, and red-run keeps NO unlocked fallback: that fallback
+# is #226 itself, and a capability kept by writing torn manifests is not a capability.
+RR_STATE_DIR="$STATE_ROOT/nazgul"
+RR_ADDRESSABLE=""
+case "$TASK_ID" in
+  TASK-*) RR_ADDRESSABLE="$RR_STATE_DIR/tasks/$TASK_ID.md" ;;
+  PATCH-*) RR_ADDRESSABLE="$RR_STATE_DIR/tasks/patches/$TASK_ID.md" ;;
+esac
+if [ -z "$RR_ADDRESSABLE" ] || [ "$MANIFEST" != "$RR_ADDRESSABLE" ]; then
+  die \
+    "$TASK_ID's manifest is $MANIFEST, which the shared manifest-write primitive cannot address." \
+    "It installs only <state_root>/tasks/TASK-NNN.md and <state_root>/tasks/patches/PATCH-NNN.md, and red-run will not fall back to the unlocked truncating write ADR-031 replaced (#226)." \
+    "This is not a red run that failed — nothing was run at all."
+fi
+
 command -v git >/dev/null 2>&1 || die "git is not available — a red run cannot be captured without it"
 git -C "$PROJECT_ROOT" rev-parse --git-dir >/dev/null 2>&1 \
   || die "$PROJECT_ROOT is not a git repository"
@@ -266,6 +296,12 @@ git -C "$PROJECT_ROOT" rev-parse --git-dir >/dev/null 2>&1 \
 BASE_SHA=$(awk '/^## Metadata/{f=1;next} /^## /{f=0} f' "$MANIFEST" \
   | grep -iE '^[[:space:]]*-[[:space:]]*\*\*Base SHA\*\*' | head -1 \
   | grep -oE '[0-9a-f]{7,64}' | head -1 || true)
+# The CAS baseline for the write at the end of this run. Taken HERE, beside the read whose
+# result the whole capture is computed from, so a manifest edited during a multi-minute run
+# is refused instead of receiving a block captured against a Base SHA it no longer names —
+# the load-bearing case exit 7's header describes. Without it the primitive's window is only
+# the write itself, and the claim was documentation rather than behaviour.
+RR_MANIFEST_HASH_AT_READ=$(nz_sha256 < "$MANIFEST" 2>/dev/null) || RR_MANIFEST_HASH_AT_READ=""
 [ -n "$BASE_SHA" ] || die \
   "$TASK_ID's manifest records no Base SHA under ## Metadata." \
   "There is no pre-change tree to run against — record it before capturing a red run."
@@ -423,15 +459,47 @@ done
 [ "${#FILTER_ARGV[@]}" -gt 0 ] || die \
   "project.test_filter_template in $RR_CONFIG expands to no argument: '$FILTER_TEMPLATE'."
 
+# lean-comments: allow-run — the fallback below is the defect being fixed, so it says so.
+# On a shared feature branch `${BASE_SHA}..HEAD` is branch-CUMULATIVE and drags a sibling
+# task's test files into this capture (#241), so the committed half of the set is this
+# task's own recorded commits; the working tree and untracked files are unioned on top
+# because a capture may precede the commit that records them.
+RR_COMMITTED_SOURCE="the copy set pinned by --copy"
 if [ -n "$EXPLICIT_COPY" ]; then
   TEST_FILES="$EXPLICIT_COPY"
   echo "red-run: copy set pinned by --copy; no derivation, no exclusions" >&2
 else
+  if _ttg_task_commit_diff "$PROJECT_ROOT" "$(cat "$MANIFEST")" "${RR_ROOT_PATHSPEC[@]}"; then
+    RR_COMMITTED="$_TTG_TASK_DIFF_OUT"
+    RR_COMMITTED_SOURCE="this task's own ## Commits"
+    [ -z "$_TTG_TASK_DIFF_DETAIL" ] \
+      || echo "red-run: PARTIAL commit set — ${_TTG_TASK_DIFF_DETAIL}" >&2
+  else
+    _RR_DIFF_RC=$?
+    # lean-comments: allow-run — why rc 2 is not a degradation
+    # _ttg_task_commit_diff separates two answers that this branch used to collapse, and
+    # _ttg_red_run_in_scope already gives them OPPOSITE dispositions: rc 2 is "the manifest
+    # records no SHA under ## Commits" and rc 1 is "it records one this repo cannot read".
+    # A red run normally captures a task's changed tests BEFORE they are committed, so rc 2
+    # is the ordinary case, not a failure — and treating it as one made every routine
+    # capture print a degradation warning and fall back to the branch-cumulative diff, which
+    # is precisely the sibling-file contamination #241 was written to remove. Empty is the
+    # correct committed half when nothing is committed; the working-tree and untracked sets
+    # are unioned on top below and supply the real files.
+    if [ "$_RR_DIFF_RC" -eq 2 ]; then
+      RR_COMMITTED=""
+      RR_COMMITTED_SOURCE="this task's own ## Commits (none recorded yet)"
+    else
+      RR_COMMITTED=$(git -C "$PROJECT_ROOT" diff --name-only "${BASE_SHA}..HEAD" -- "${RR_ROOT_PATHSPEC[@]}" 2>/dev/null || true)
+      RR_COMMITTED_SOURCE="${BASE_SHA}..HEAD"
+      echo "red-run: cannot derive this task's own committed diff (${_TTG_TASK_DIFF_DETAIL}) — falling back to the branch-cumulative ${BASE_SHA}..HEAD diff, which on a shared branch can copy a sibling task's test files in" >&2
+    fi
+  fi
   TEST_FILES=$( {
-      git -C "$PROJECT_ROOT" diff --name-only "${BASE_SHA}..HEAD" -- "${RR_ROOT_PATHSPEC[@]}" 2>/dev/null || true
+      printf '%s\n' "$RR_COMMITTED"
       git -C "$PROJECT_ROOT" diff --name-only HEAD -- "${RR_ROOT_PATHSPEC[@]}" 2>/dev/null || true
       git -C "$PROJECT_ROOT" ls-files --others --exclude-standard -- "${RR_ROOT_PATHSPEC[@]}" 2>/dev/null || true
-    } | sort -u | grep -v '^$' || true)
+    } | LC_ALL=C sort -u | grep -v '^$' || true)
 fi
 
 COPY_LIST=""
@@ -467,7 +535,7 @@ $TEST_FILES
 EOF
 
 [ -n "$COPY_LIST" ] || die \
-  "$TASK_ID changes no copyable file under this project's test roots [$RR_ROOTS_LIST] (looked at ${BASE_SHA}..HEAD, the working tree, and untracked files)." \
+  "$TASK_ID changes no copyable file under this project's test roots [$RR_ROOTS_LIST] (looked at ${RR_COMMITTED_SOURCE}, the working tree, and untracked files)." \
   "There is nothing to red-run. If that is correct, record an enumerated N/A token instead." \
   "If the only changed test-tree file is the harness itself, pin the copy set with --copy=<path>."
 
@@ -769,8 +837,10 @@ RR_OLD_PATHS=()
 RR_OLD_TEXTS=()
 RR_OLD_PREAMBLE=0
 
+# $1 is the SNAPSHOT the write primitive passes its producer, never $MANIFEST: reading the
+# live file here puts the read half back outside the CAS, with a lock held to look correct.
 rr_read_existing_entries() {
-  local line cur=""
+  local snapshot="$1" line cur=""
   while IFS= read -r line || [ -n "$line" ]; do
     if printf '%s' "$line" | grep -qE '^[[:space:]]*-[[:space:]]*(\*\*)?red-run(\*\*)?:'; then
       if [ -n "$cur" ]; then
@@ -788,7 +858,7 @@ rr_read_existing_entries() {
   done < <(awk -v b="$BEGIN_PREFIX" -v e="$END_MARK" '
       index($0, b) == 1 { f = 1; next }
       f && $0 == e { f = 0; next }
-      f { print }' "$MANIFEST")
+      f { print }' "$snapshot")
   if [ -n "$cur" ]; then
     RR_OLD_TEXTS+=("$cur")
     RR_OLD_PATHS+=("$(rr_entry_path "$cur")")
@@ -803,10 +873,11 @@ rr_read_existing_entries() {
 # entry left in place discharges its file's obligation whatever label it carries — which would
 # make accumulation a wider forgery route than the overwrite bug it replaces.
 rr_merge_entries() {
+  local snapshot="$1"
   local i=0 j hit old_path old_text ref resolved base_resolved emitted="" merged=""
   local retained=0 replaced=0 stale=0 unresolved=0 noref=0 superseded=0
 
-  rr_read_existing_entries
+  rr_read_existing_entries "$snapshot"
   base_resolved=$(rr_resolve_sha "$BASE_SHA")
 
   while [ "$i" -lt "${#RR_OLD_TEXTS[@]}" ]; do
@@ -883,20 +954,43 @@ CAPTURE_NOTE=""
 # captures, so one block-level line would describe only the newest of the runs below it.
 CAPTURE_LINE="  - capture: \`${RUN_CMD}\` in a detached worktree at \`${BASE_SHA}\`; ${COPIED} changed test file(s) copied in${CAPTURE_NOTE}${RUNNER_NOTE}; runner exit ${RUN_EC} in ${ELAPSED}s"
 
+# lean-comments: allow-run — the borrowing this replaces was SILENT, and a reader must not
+# shorten the record back to "the case is whichever FAIL: line we found".
+# #140: `$GLOBAL_FIRST_FAIL` is the first FAIL: line ANYWHERE in the run, so substituting it
+# for a file whose own section named nothing published a SIBLING's case as this entry's
+# attribution. A `case` may now come only from this file's own `=== <stem> ===` section; the
+# global line survives as `- run-context:`, which is context and says so. Every entry carries
+# exactly one `- attribution:` line, so the two are told apart by what is PRESENT rather than
+# by inferring from a missing line — an entry written before this change has neither.
+rr_attribution_lines() {
+  local stem="$1" fail_line="$2" borrowed
+  if [ -n "$fail_line" ]; then
+    printf '  - attribution: per-file — the runner named this case inside its own `=== %s ===` section\n' "$stem"
+    return 0
+  fi
+  printf '  - attribution: per-file section absent; the runner named no case for this file\n'
+  if [ -n "$GLOBAL_FIRST_FAIL" ]; then
+    borrowed=$(printf '%s' "$GLOBAL_FIRST_FAIL" | sed -E 's/^[[:space:]]+//')
+    printf '  - run-context: the FIRST FAIL: line of the whole run, which belongs to whichever file printed it and not necessarily this one: %s\n' "$borrowed"
+  else
+    printf '  - run-context: the run printed no FAIL: line at all, so there was no case to borrow\n'
+  fi
+}
+
 NEW_PATHS=()
 NEW_TEXTS=()
 while IFS= read -r name; do
   [ -n "$name" ] || continue
   stem="${name%.sh}"
   fail_line=$(first_fail_for "$stem")
-  [ -n "$fail_line" ] || fail_line="$GLOBAL_FIRST_FAIL"
   if [ -n "$fail_line" ]; then
     case_name=$(printf '%s' "$fail_line" | sed -E 's/^[[:space:]]*FAIL:[[:space:]]*//')
     result_detail="\"FAIL: ${case_name}\""
   else
-    case_name="(no FAIL: line reported)"
+    case_name="(no FAIL: line reported for this file)"
     result_detail="the file exited non-zero without naming a case"
   fi
+  attribution=$(rr_attribution_lines "$stem" "$fail_line")
   rel_path=$(rr_rel_for_name "$name") || die \
     "the pre-change run named $name, which is not in the copied test set — refusing to record a path this capture did not produce"
   if [ ! -f "$PROJECT_ROOT/$rel_path" ]; then
@@ -906,6 +1000,7 @@ while IFS= read -r name; do
   NEW_TEXTS+=("- red-run: ${rel_path} :: case \"${case_name}\"
   - pre-change-ref: ${BASE_SHA}
   - result: FAILED (exit ${RUN_EC}) — ${result_detail}
+${attribution}
 ${CAPTURE_LINE}
   - captured-by: scripts/red-run.sh at $(date -u +%Y-%m-%dT%H:%M:%SZ)
 ")
@@ -913,20 +1008,15 @@ done <<EOF
 $FAILED_NAMES
 EOF
 
-ENTRIES=$(rr_merge_entries)
-
-BLOCK="${BEGIN_MARK}
-${ENTRIES}
-${END_MARK}"
-
-# In-place file write, never `mv`/`cp` over a manifest: the bash-write
-# reconciliation pass reads manifests as state, and rightly flags a swap.
-rr_write_block() {
+# Renders the manifest's replacement bytes on stdout from $1, the SNAPSHOT. The install
+# is the primitive's atomic rename, so nothing here writes, appends or renames anything.
+rr_render_manifest() {
+  local snapshot="$1" block="$2"
   local has_section=0 has_marker=0 skipping=0 inserted=0 out="" line
-  if grep -q '^## Red-Run Evidence' "$MANIFEST"; then has_section=1; fi
+  if grep -q '^## Red-Run Evidence' "$snapshot"; then has_section=1; fi
   # Same line-start predicate the extractor uses. An unanchored search matches PROSE
   # quoting the marker, which reads as "region present" and appends a second section.
-  if awk -v b="$BEGIN_PREFIX" 'index($0, b) == 1 { f = 1; exit } END { exit !f }' "$MANIFEST"; then
+  if awk -v b="$BEGIN_PREFIX" 'index($0, b) == 1 { f = 1; exit } END { exit !f }' "$snapshot"; then
     has_marker=1
   fi
 
@@ -934,7 +1024,7 @@ rr_write_block() {
     if [ "$has_marker" -eq 1 ]; then
       case "$line" in
         "$BEGIN_PREFIX"*)
-          out="${out}${BLOCK}
+          out="${out}${block}
 "
           skipping=1
           inserted=1
@@ -951,24 +1041,92 @@ rr_write_block() {
     if [ "$has_marker" -eq 0 ] && [ "$has_section" -eq 1 ] && [ "$inserted" -eq 0 ]; then
       case "$line" in
         "## Red-Run Evidence"*)
-          out="${out}${BLOCK}
+          out="${out}${block}
 "
           inserted=1
           ;;
       esac
     fi
-  done < "$MANIFEST"
+  done < "$snapshot"
 
   if [ "$inserted" -eq 0 ]; then
     out="${out}
 ## Red-Run Evidence
-${BLOCK}
+${block}
 "
   fi
-  printf '%s' "$out" > "$MANIFEST"
+  printf '%s' "$out"
 }
 
-rr_write_block
+# lean-comments: allow-run — the ordering argument is the whole point of the adoption.
+# The producer that nz_manifest_write runs, with the snapshot path appended as its last argument.
+# Merge AND render read that snapshot, so the entire read-modify-write sits between the two
+# compare-and-swaps: what the merge saw is what the rename replaces. Merging outside the lock
+# and installing inside it would still race — the block would be built from bytes another
+# writer had already superseded — which is why the whole of it moved in here rather than the
+# redirect being swapped for a call.
+rr_manifest_producer() {
+  local snapshot="$1" entries block
+  entries=$(rr_merge_entries "$snapshot") || return 1
+  block="${BEGIN_MARK}
+${entries}
+${END_MARK}"
+  rr_render_manifest "$snapshot" "$block"
+}
+
+# Read-back predicate: the primitive's default status parse PLUS the region THIS caller
+# installed, found by the same line-start predicate rr_render_manifest and the extractor use.
+rr_verify_installed() {
+  local file="$1"
+  _nz_default_verify "$file" || return 1
+  awk -v b="$BEGIN_PREFIX" 'index($0, b) == 1 { f = 1; exit } END { exit !f }' "$file" && return 0
+  printf 'red-run: %s was installed but carries no generated block at line start\n' "$file" >&2
+  return 1
+}
+
+# Buffered rather than passed through live, so the refusal cause below is read from the
+# primitive's own words instead of re-derived; every line still reaches stderr either way.
+RR_WRITE_ERR="$SCRATCH_PARENT/manifest-write.err"
+RR_WRITE_EC=0
+nz_manifest_write "$RR_STATE_DIR" "$TASK_ID" --verify rr_verify_installed \
+  ${RR_MANIFEST_HASH_AT_READ:+--expect-hash "$RR_MANIFEST_HASH_AT_READ"} -- rr_manifest_producer \
+  2>"$RR_WRITE_ERR" || RR_WRITE_EC=$?
+cat "$RR_WRITE_ERR" >&2 || true
+
+if [ "$RR_WRITE_EC" -ne 0 ]; then
+  RR_WRITE_CAUSE=$(sed -n 's/.*(cause: \([a-z_]*\)).*/\1/p' "$RR_WRITE_ERR" | tail -1)
+  [ -n "$RR_WRITE_CAUSE" ] || RR_WRITE_CAUSE="unreported"
+  # lean-comments: allow-run — what each named refusal leaves on disk
+  # A closed set of named refusals, because they differ in what they leave on disk and a
+  # diagnostic that guesses wrong sends the operator to repair the wrong thing. Only
+  # verify_failed_unrestored leaves changed bytes; every other cause, verify_failed now
+  # included, restores the manifest before returning.
+  case "$RR_WRITE_CAUSE" in
+    cas_mismatch_snapshot|cas_mismatch_install)
+      die_code 7 \
+        "WRITE REFUSED — the pre-change run was RED, but $TASK_ID's manifest CHANGED during the run, so the compare-and-swap refused to install the block (cause: $RR_WRITE_CAUSE)." \
+        "The concurrent content is preserved and $MANIFEST is unchanged by this capture." \
+        "If the manifest's Base SHA changed during the run, this refusal is the CORRECT outcome: the block was captured against the old base, and installing it would record evidence for a tree the manifest no longer names. Re-capture against the manifest as it now stands." \
+        "The run itself is not in doubt — only the write was refused."
+      ;;
+    verify_failed)
+      die_code 7 \
+        "WRITE REFUSED — the pre-change run was RED and the block was installed, but the read-back rejected the installed bytes, so the primitive ROLLED THE WRITE BACK (cause: $RR_WRITE_CAUSE)." \
+        "$MANIFEST holds its pre-capture content and carries no evidence block from this run." \
+        "The run itself is not in doubt — only the write's read-back failed."
+      ;;
+    verify_failed_unrestored)
+      die_code 7 \
+        "WRITE REFUSED — the pre-change run was RED, the read-back rejected the installed bytes, AND the rollback to the pre-capture content FAILED (cause: $RR_WRITE_CAUSE)." \
+        "$MANIFEST has been replaced with bytes a read-back declared bad and needs a human read before anything is transitioned on it — this is the ONE refusal that leaves the manifest changed." \
+        "The run itself is not in doubt — only the write's read-back and its rollback failed."
+      ;;
+  esac
+  die_code 7 \
+    "WRITE REFUSED — the pre-change run was RED, but the shared manifest-write primitive refused to install the evidence block (cause: $RR_WRITE_CAUSE)." \
+    "Nothing was installed: $MANIFEST is unchanged, and red-run keeps no unlocked fallback to record it another way (#226)." \
+    "The run itself is not in doubt — only the write was refused."
+fi
 
 echo "red-run: RED confirmed for $TASK_ID — filter '$FILTER' exited $RUN_EC at $BASE_SHA in ${ELAPSED}s"
 echo "red-run: ${COPIED} changed test file(s) copied into the pre-change worktree; evidence written to $MANIFEST"

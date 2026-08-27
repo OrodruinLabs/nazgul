@@ -393,8 +393,9 @@ fi
 # through a per-site hand-spelled column-0 anchor, and consolidating those is a separate unit of
 # work with its own cost argument per field. Pinning the count is what stops that residual growing
 # quietly: a NEW hand-spelling anywhere under scripts/ turns this red, and fixing one is a
-# deliberate edit here rather than a silent drift.
-QW_RESIDUAL_PIN=27
+# deliberate edit here rather than a silent drift. 27 -> 26 (#282): TASK-008 folded the `Status`
+# and `Retry count` hand-spellings in task-utils.sh into one awk match, so the residual shrank.
+QW_RESIDUAL_PIN=26
 qw_assert "residual census: hand-spelled anchors for labels outside the shared reader" \
   "$QW_RESIDUAL" "$QW_RESIDUAL_PIN"
 

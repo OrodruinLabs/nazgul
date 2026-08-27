@@ -622,7 +622,7 @@ policy but emit `coverage_vacuous`. A filter that matches no file is also NOTHIN
 run. A new skip reason must be named and counted — it cannot disappear into `passed` or a free-form
 note. This is §15's looked-vs-never-looked distinction applied to tests, guards, smoke, and audits.
 
-- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Fifteen entry points are bound
+- **The registry of bound entry points lives HERE, not in a per-objective TRD.** `[enforced]` Sixteen entry points are bound
   by the contract above: `tests/run-tests.sh`, `scripts/lean-comments-guard.sh --check`,
   `tests/test-shellcheck.sh`, `scripts/doctor.sh`, `agents/comment-verifier.md`,
   `scripts/lib/heartbeat-triage.sh`, `scripts/self-audit.sh` (enrolled FEAT-029/TASK-012, which also
@@ -703,7 +703,24 @@ note. This is §15's looked-vs-never-looked distinction applied to tests, guards
   `record-only-excluded` on the `paths:` line rather than discarded. Block membership is asserted per
   declaration rather than per declared key, because
   the block's existing `nazgul/reviews/*/…` globs ignore particular children of a record directory
-  without ignoring the directory itself).
+  without ignoring the directory itself). The sixteenth is
+  `tests/test-manifest-write-integrity.sh` (enrolled FEAT-036/TASK-015 — ONE walk of the shipped
+  `scripts/` tree answering TWO questions, so like the thirteenth and fourteenth it prints under two
+  tokens and counts as covered only when BOTH conform: `manifest-writers` asks whether any shipped
+  script writes a task manifest by a route other than the shared write primitive of ADR-031, and
+  `status-readers` asks whether any re-implements the task-status parse instead of calling the shared
+  reader in `task-utils.sh`. Blocking, and each token's `K > 0` floor BLOCKS rather than only
+  reporting: a predicate that stopped matching would skip every candidate and report a clean tree,
+  which is the exact failure these scans exist to prevent. The walk is corroborated by an INDEPENDENT
+  `find`, because equality between two runs of the SAME walk cannot see a collapse that happens in
+  both, and each token carries its own tree-size floor so a broken walk is not read as a small tree.
+  Their skip reasons are two closed sets — `no-write-verb`, `primitive`, `unreadable` for the first
+  and `no-status-read`, `authority`, `unreadable` for the second — and both exemption lists are
+  policed in BOTH directions, an arm whose file has since adopted the primitive reported RETIRED and
+  an arm naming a path the walk never checked reported ORPHANED, each a finding rather than a silent
+  skip. Its population covers `scripts/**` only, deliberately: that is shell, where a leading `#` is a
+  comment, whereas the same strip over Markdown removes ATX HEADINGS, so a widened walk would report
+  a surface it never read).
   `tests/test-coverage-honesty.sh` drives every one of them under a forced
   all-skip input and FAILS if any enumerated entry point was never driven — membership is asserted, not
   assumed, so an entry point that conforms today cannot silently stop conforming tomorrow. Add a new

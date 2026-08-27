@@ -137,13 +137,45 @@ _tree_producers() {
 # IMMEDIATELY after `"stop_gate"` — ` +` admits whitespace only, so an intervening k/v pair hides
 # the site — and its value must match `[a-z_]+`, so an interpolated or mixed-case value is a
 # passthrough, not a name. SR4 plants one of each and measures that neither is derived.
+# A stop_gate reason reaches emit_event three ways, and a derivation that sees only the first
+# UNDERCOUNTS while looking like it counted (#287). All three ship today:
+#   (1) inline      emit_event "stop_gate" reason "x"
+#   (2) array-built ARGS=(reason "x") ... emit_event "stop_gate" "\${ARGS[@]}"
+#   (3) variable    VAR="x" ... emit_event "stop_gate" reason "\$VAR"
+# Shapes (2) and (3) are each BOUND to a stop_gate call site before their value is trusted:
+# matching every =(reason "x") or VAR="x" in the tree would count arrays and variables that
+# feed some other event entirely. Seeing only (1) yielded 14 where the tree emits 17.
 _derive_stop_reasons() {
-  local f
-  for f in "$@"; do
-    [ -r "$f" ] || continue
-    sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*/ /;ba' -e '}' "$f"
-  done | grep -oE '(emit_event|_su_emit) "stop_gate" +reason "[a-z_]+"' \
-    | sed -E 's/.*reason "([a-z_]+)"$/\1/' | LC_ALL=C sort -u
+  local f joined
+  joined=$(
+    for f in "$@"; do
+      [ -r "$f" ] || continue
+      sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*/ /;ba' -e '}' "$f"
+    done
+  )
+  {
+    printf '%s\n' "$joined" \
+      | grep -oE '(emit_event|_su_emit) "stop_gate" +reason "[a-z_]+"' \
+      | sed -E 's/.*reason "([a-z_]+)"$/\1/'
+    printf '%s\n' "$joined" \
+      | grep -oE '(emit_event|_su_emit) "stop_gate" +"\$\{[A-Za-z_][A-Za-z0-9_]*\[@\]\}"' \
+      | sed -E 's/.*\$\{([A-Za-z_][A-Za-z0-9_]*)\[@\]\}"$/\1/' | LC_ALL=C sort -u \
+      | while IFS= read -r _sr_var; do
+          [ -n "$_sr_var" ] || continue
+          printf '%s\n' "$joined" \
+            | grep -oE "^[[:space:]]*${_sr_var}=\(reason \"[a-z_]+\"" \
+            | sed -E 's/.*reason "([a-z_]+)"$/\1/'
+        done
+    printf '%s\n' "$joined" \
+      | grep -oE '(emit_event|_su_emit) "stop_gate" +reason "\$[A-Za-z_][A-Za-z0-9_]*"' \
+      | sed -E 's/.*reason "\$([A-Za-z_][A-Za-z0-9_]*)"$/\1/' | LC_ALL=C sort -u \
+      | while IFS= read -r _sr_v2; do
+          [ -n "$_sr_v2" ] || continue
+          printf '%s\n' "$joined" \
+            | grep -oE "^[[:space:]]*${_sr_v2}=\"[a-z_]+\"" \
+            | sed -E 's/.*="([a-z_]+)"$/\1/'
+        done
+  } | LC_ALL=C sort -u
 }
 
 _derive_driver() {
@@ -1013,6 +1045,27 @@ else
   _fail "[mutation] removing the planted stop_gate reason returns zero findings" \
     "stopreason findings=$FD_stopreason, stopreasoncount findings=$FD_stopreasoncount, stop_reason_n=$STOP_REASON_N (want $SHIPPED_STOP_REASON_N)"
 fi
+
+# lean-comments: allow-run — DEFECT PIN (#287): three emission SHAPES reach a stop_gate reason,
+# and a derivation blind to any of them undercounts while reporting a clean pass. Before this pin,
+# `_derive_stop_reasons` saw only the inline form and yielded 14 where the tree emits 17 — and
+# `docs/ARCHITECTURE.md` / `docs/CONFIGURATION.md` both said "fourteen", so the contract test AGREED
+# WITH THE DOCS while both undercounted the shipped tree. A green test is not evidence when the
+# checker and the thing checked share one blind spot. Naming a representative of each shape means a
+# future re-narrowing of the regex is a FAILURE here rather than a quietly smaller number.
+_sr_shape_pin() {
+  local set="$1" want="$2" shape="$3"
+  if printf '%s\n' "$set" | grep -qx -- "$want"; then
+    _pass "DEFECT PIN (#287): the $shape emission shape is derived (\`$want\`)"
+  else
+    _fail "DEFECT PIN (#287): the $shape emission shape is derived (\`$want\`)" \
+      "\`$want\` is absent from the derived set — _derive_stop_reasons has gone blind to $shape emissions again"
+  fi
+}
+_SR_SHIPPED_SET=$(_derive_stop_reasons "$SHIPPED_STOP_HOOK_LIB" "$WORKTREE_UTILS_LIB" "$STACK_UTILS_LIB")
+_sr_shape_pin "$_SR_SHIPPED_SET" "manifest_write_refused"          "inline \`reason \"x\"\`"
+_sr_shape_pin "$_SR_SHIPPED_SET" "in_flight_hold"                  "array-built \`ARGS=(reason \"x\")\`"
+_sr_shape_pin "$_SR_SHIPPED_SET" "in_flight_hold_budget_exhausted" "variable-valued \`reason \"\$VAR\"\`"
 
 # lean-comments: allow-run — SR4 asserts a NON-change, so what it measures has to be stated.
 # SR4 (INVERTED): the two shape boundaries `_derive_stop_reasons` states. A `reason` in second

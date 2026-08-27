@@ -1138,7 +1138,7 @@ else
 fi
 read -r D_SCANNED D_SKIPPED D_CHECKED <<<"$(printf '%s' "$COVERAGE" | sed -E "s/$DR_GRAMMAR/\1 \2 \7/")"
 assert_eq "coverage line adds up (N == M + K)" "$D_SCANNED" "$((D_SKIPPED + D_CHECKED))"
-assert_eq "the declared roster is the fifteen checks the docs name" "$DR_ROSTER_COUNT" "15"
+assert_eq "the declared roster is the sixteen checks the docs name" "$DR_ROSTER_COUNT" "16"
 assert_eq "every check reports exactly once, so N is the full check roster" "$D_SCANNED" "$DR_ROSTER_COUNT"
 if [ "$D_SKIPPED" -ge 1 ]; then
   _pass "the disabled-guard check is counted as skipped, not as a check that passed on nothing"
@@ -1513,6 +1513,172 @@ assert_eq "P12i: paused with an unselectable record is UNSELECTABLE RECORD, not 
   "$(_dr_sp_outcomes "$(_dr_sp_run)")" "UNSELECTABLE RECORD|"
 teardown_temp_dir
 
+# --- (o) red-run-coverage: the IMPLEMENTED gate, re-asked read-only over every manifest (#227) ---
+# ttg_verify_red_run_evidence has ONE call site, so a task that never goes backwards is never re-checked.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+_dr_config ".schema_version = $HIGHEST_MIGRATION" '.connectors.github.enabled = false' \
+  '.board.enabled = false' '.guards.git_hooks = false'
+DR_RR_BASE=$(git -C "$TEST_DIR" rev-parse HEAD~1)
+DR_RR_HEAD=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+# <id> <declared path> [evidence line]. HEAD's own diff touches README.md only, so the
+# DECLARED path is what puts each manifest in or out of red-run scope.
+_dr_rr_manifest() {
+  local id="$1" path="$2" ev="${3:-}"
+  {
+    printf -- '---\nstatus: DONE\n---\n# %s\n\n## Metadata\n- **Base SHA**: %s\n\n## Commits\n%s\n\n## Red-Run Evidence\n' \
+      "$id" "$DR_RR_BASE" "$DR_RR_HEAD"
+    [ -z "$ev" ] || printf -- '%s\n' "$ev"
+    printf -- '\n## File Scope\n\n**Modifies**:\n- `%s`\n' "$path"
+  } > "$TEST_DIR/nazgul/tasks/$id.md"
+}
+_dr_rr_run() {
+  (cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR bash "${1:-$DOCTOR}" --only=red-run-coverage 2>/dev/null) \
+    | grep -m1 'red-run-coverage' || true
+}
+DR_RR_GRAMMAR="red-run-coverage: ([0-9]+) scanned, ([0-9]+) skipped \(unreadable=([0-9]+), not-applicable=([0-9]+), not-yet-gated=([0-9]+)\), ([0-9]+) checked, ([0-9]+) findings"
+
+DR_RR_EMPTY=$(_dr_rr_run)
+assert_contains "(o): with no manifest at all the check is skipped with a named reason, not reported as a clean bill" \
+  "$DR_RR_EMPTY" "$(printf 'pass\tred-run-coverage\tNot applicable')"
+assert_contains "(o): and the empty case still prints the §15 grammar" \
+  "$DR_RR_EMPTY" "red-run-coverage: 0 scanned, 0 skipped (unreadable=0, not-applicable=0, not-yet-gated=0), 0 checked, 0 findings"
+
+_dr_rr_manifest TASK-100 README.md
+_dr_rr_manifest TASK-101 scripts/foo.sh
+_dr_rr_manifest TASK-102 scripts/bar.sh '- red-run: N/A — comment-only'
+cp "$TEST_DIR/nazgul/tasks/TASK-101.md" "$TEST_DIR/nazgul/tasks/TASK-103.md"
+# lean-comments: allow-run — what this fixture would have been under the prior rule
+# A PLANNED manifest that DECLARES scripts/** and carries no evidence. The gate fires on the
+# IN_PROGRESS -> IMPLEMENTED edge, so this task has never faced it and owes nothing yet — on
+# the rule before this fixture it was reported as a finding, which flipped doctor to warn (and
+# its exit code to non-zero) on any project whose work had simply not started.
+_dr_rr_manifest TASK-104 scripts/baz.sh
+_dr_planned=$(awk '/^status: DONE$/{print "status: PLANNED"; next} {print}' "$TEST_DIR/nazgul/tasks/TASK-104.md")
+_dr_rr_target="$TEST_DIR/nazgul/tasks/TASK-104.md"
+printf '%s\n' "$_dr_planned" > "$_dr_rr_target"
+
+# The unreadable arm needs a manifest this process genuinely cannot read; root can, so the
+# whole four-class fixture is announced as skipped rather than asserted with three classes.
+chmod 000 "$TEST_DIR/nazgul/tasks/TASK-103.md"
+if [ -r "$TEST_DIR/nazgul/tasks/TASK-103.md" ]; then
+  _skip "(o) four-class sweep (skipped — chmod 000 left the manifest readable; running as root?)"
+else
+  DR_RR_BEFORE=$(_dr_snapshot "$TEST_DIR/nazgul")
+  DR_RR_OUT=$(_dr_rr_run)
+  DR_RR_MSG=$(printf '%s' "$DR_RR_OUT" | cut -f3)
+  if printf '%s' "$DR_RR_MSG" | grep -qE "$DR_RR_GRAMMAR"; then
+    _pass "(o): the sweep prints the RULES §15 coverage grammar"
+  else
+    _fail "(o): the sweep prints the RULES §15 coverage grammar" "got: '$DR_RR_MSG'"
+  fi
+  read -r RR_N RR_M RR_U RR_A RR_Y RR_K RR_F \
+    <<<"$(printf '%s' "$DR_RR_MSG" | sed -E "s/^.*$DR_RR_GRAMMAR.*\$/\1 \2 \3 \4 \5 \6 \7/")"
+  assert_eq "(o): the sweep's own coverage line adds up (N == M + K)" "$RR_N" "$((RR_M + RR_K))"
+  assert_eq "(o): all five manifests were scanned" "$RR_N" "5"
+  assert_eq "(o): the PLANNED manifest has never faced the gate, so it is SKIPPED, never a finding" "$RR_Y" "1"
+  assert_contains "(o): and the sweep says WHY it skipped it, rather than dropping it silently" \
+    "$DR_RR_MSG" "have not reached IMPLEMENTED (or are CANCELLED) and were skipped rather than checked"
+  assert_not_contains "(o): the not-yet-gated manifest is never restated as a refusal" "$DR_RR_MSG" "TASK-104 (absent)"
+  assert_eq "(o) K>0 floor: the sweep actually checked something, so its zero-finding arm could not be vacuous" \
+    "$([ "$RR_K" -gt 0 ] && echo yes || echo no)" "yes"
+  assert_eq "(o): one manifest was read and found wanting, and it is counted as a FINDING" "$RR_F" "1"
+  assert_eq "(o): one manifest could not be read, and it is counted as SKIPPED, never as a finding" "$RR_U" "1"
+  assert_eq "(o): one manifest declares no scripts/** or tests/** path, so it carries no obligation at all" "$RR_A" "1"
+  assert_contains "(o): the manifest read and found wanting is named, with the gate's own refusal reason" \
+    "$DR_RR_MSG" "TASK-101 (absent)"
+  assert_contains "(o): the manifest that could not be read is named too" "$DR_RR_MSG" "could NOT BE READ (TASK-103)"
+  assert_not_contains "(o): and the unreadable one is never restated as a refusal" "$DR_RR_MSG" "TASK-103 (absent)"
+  # Counted in BOTH directions: a bare "the two differ" is also satisfied by output carrying
+  # neither clause, which is what a check that silently stopped reporting produces.
+  assert_eq "(o): 'could not read' and 'read and found wanting' are two different printings (RULES §15)" \
+    "$(printf '%s\n' "$DR_RR_MSG" | grep -c 'refuses these manifests' || true)/$(printf '%s\n' "$DR_RR_MSG" | grep -c 'could NOT BE READ' || true)" "1/1"
+  assert_contains "(o): a backlog is a warn — doctor reports it and never blocks on it" \
+    "$DR_RR_OUT" "$(printf 'warn\tred-run-coverage')"
+  assert_contains "(o): the message says the sweep transitioned nothing and wrote nothing" \
+    "$DR_RR_MSG" "ran no transition, edited no manifest, and wrote nothing"
+  assert_eq "(o) zero-write: driving the IMPLEMENTED gate over every manifest changes nothing under nazgul/" \
+    "$(_dr_snapshot "$TEST_DIR/nazgul")" "$DR_RR_BEFORE"
+  assert_file_not_exists "(o) zero-write: the gate's own red_run_missing event never reaches the bus from doctor" \
+    "$TEST_DIR/nazgul/logs/events.jsonl"
+fi
+chmod 644 "$TEST_DIR/nazgul/tasks/TASK-103.md"
+
+# Two dependency fixtures above run doctor on a PATH carrying no find(1), where an enumerator
+# that shelled out reported "could not look" over a perfectly readable directory.
+DR_RR_SHIM=$(_dr_shim_path dirname git grep sed sort tail cat bash jq)
+DR_RR_NOFIND=$( (cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR PATH="$DR_RR_SHIM" \
+  bash "$DOCTOR" --only=red-run-coverage 2>/dev/null) | grep -m1 'red-run-coverage' || true)
+assert_contains "(o): every manifest is still enumerated on a PATH carrying no find(1)" \
+  "$DR_RR_NOFIND" "5 scanned"
+assert_not_contains "(o): and a missing external tool is never reported as an unlistable directory" \
+  "$DR_RR_NOFIND" "COULD NOT LOOK"
+rm -rf "$DR_RR_SHIM"
+
+# A tasks/ directory this process cannot list globs to nothing exactly as an empty one does,
+# so the permission bits are probed rather than inferred from an empty result.
+chmod 000 "$TEST_DIR/nazgul/tasks"
+if [ -r "$TEST_DIR/nazgul/tasks" ] && [ -x "$TEST_DIR/nazgul/tasks" ]; then
+  _skip "(o) unlistable-tasks-directory arm (skipped — chmod 000 left the directory listable; running as root?)"
+else
+  DR_RR_NODIR=$(_dr_rr_run)
+  assert_contains "(o): an unlistable nazgul/tasks/ is 'could not look', not an empty backlog" \
+    "$DR_RR_NODIR" "COULD NOT LOOK"
+  assert_contains "(o): and it says so rather than reporting a clean bill" "$DR_RR_NODIR" "UNDETERMINED"
+  assert_not_contains "(o): an unlistable directory never borrows the Not-applicable convention" \
+    "$DR_RR_NODIR" "Not applicable"
+fi
+chmod 755 "$TEST_DIR/nazgul/tasks"
+
+# The structural half of the zero-write guarantee: task-transition-guard.sh sources emit-event.sh,
+# so _ttg_red_run_deny would append red_run_missing unless the sweep's subshell neutralises it.
+assert_eq "(o): the sweep neutralises emit_event before driving the gate" \
+  "$(grep -cF 'emit_event() { return 0; }' "$DOCTOR" || true)" "1"
+
+# The clean arm, so the warn above is not the only reachable verdict.
+rm -f "$TEST_DIR/nazgul/tasks/TASK-100.md" "$TEST_DIR/nazgul/tasks/TASK-101.md" \
+  "$TEST_DIR/nazgul/tasks/TASK-103.md" "$TEST_DIR/nazgul/tasks/TASK-104.md"
+DR_RR_CLEAN=$(_dr_rr_run)
+assert_contains "(o): a manifest carrying an enumerated exemption satisfies the gate and reports pass" \
+  "$DR_RR_CLEAN" "$(printf 'pass\tred-run-coverage')"
+assert_contains "(o): and the clean arm still prints the grammar with a non-zero checked count" \
+  "$DR_RR_CLEAN" "red-run-coverage: 1 scanned, 0 skipped (unreadable=0, not-applicable=0, not-yet-gated=0), 1 checked, 0 findings"
+assert_not_contains "(o): a clean arm claims no backlog it did not find" "$DR_RR_CLEAN" "refuses these manifests"
+
+# "Could not look" at the LIBRARY, which is a different state from "could not read a manifest":
+# with the gate itself unopenable, nothing was checked and the check says so rather than passing.
+DR_RR_COPY="$TEST_DIR/plugincopy"
+mkdir -p "$DR_RR_COPY"
+cp -R "$REPO_ROOT/scripts" "$DR_RR_COPY/scripts"
+chmod 000 "$DR_RR_COPY/scripts/lib/task-transition-guard.sh"
+if [ -r "$DR_RR_COPY/scripts/lib/task-transition-guard.sh" ]; then
+  _skip "(o) unreadable-guard-library arm (skipped — chmod 000 left the file readable; running as root?)"
+else
+  DR_RR_NOLIB=$(_dr_rr_run "$DR_RR_COPY/scripts/doctor.sh")
+  assert_contains "(o): an unopenable guard library is 'could not look', not a manifest that passed" \
+    "$DR_RR_NOLIB" "COULD NOT LOOK"
+  assert_contains "(o): and it refuses the clean-bill reading in as many words" "$DR_RR_NOLIB" "UNDETERMINED"
+  assert_contains "(o): the manifest that existed is counted as skipped-unreadable, not as checked" \
+    "$DR_RR_NOLIB" "red-run-coverage: 1 scanned, 1 skipped (unreadable=1, not-applicable=0, not-yet-gated=0), 0 checked, 0 findings"
+fi
+chmod 644 "$DR_RR_COPY/scripts/lib/task-transition-guard.sh"
+
+# The N == M + K assertion is not decoration: a guard library that fails to SOURCE leaves the
+# sweep classifying nothing, and the mismatch is what keeps that from reading as a clean bill.
+printf 'this is ( not valid bash\n' > "$DR_RR_COPY/scripts/lib/task-transition-guard.sh"
+DR_RR_BROKEN=$(_dr_rr_run "$DR_RR_COPY/scripts/doctor.sh")
+assert_contains "(o): a sweep that accounted for no manifest reports INTERNAL, never a clean bill" \
+  "$DR_RR_BROKEN" "INTERNAL — the red-run sweep did not account for every manifest"
+assert_contains "(o): and the mismatch names both sides of N == M + K" \
+  "$DR_RR_BROKEN" "1 scanned != 0 skipped + 0 checked"
+DR_RR_BROKEN_ERR=$( (cd "$TEST_DIR" && env -u CLAUDE_PLUGIN_ROOT -u NAZGUL_DIR \
+  bash "$DR_RR_COPY/scripts/doctor.sh" --only=red-run-coverage 2>&1 >/dev/null) || true)
+assert_contains "(o): the same mismatch reaches stderr, so a piped-stdout reader still learns of it" \
+  "$DR_RR_BROKEN_ERR" "doctor: INTERNAL — red-run sweep accounting mismatch"
+teardown_temp_dir
+
 # --- (n) stop-payload: P12d — the enrollment boundary (ruling item 7) ---
 # FEAT-031 made this roster DERIVED from RULES.md §15 itself, so the literal
 # ENTRY_POINTS= line this block used to read is now empty by construction.
@@ -1531,16 +1697,17 @@ _dr_count_word() {
   case "$1" in
     10) printf 'ten' ;; 11) printf 'eleven' ;; 12) printf 'twelve' ;;
     13) printf 'thirteen' ;; 14) printf 'fourteen' ;; 15) printf 'fifteen' ;;
+    16) printf 'sixteen' ;;
     *) printf 'UNMAPPED-%s' "$1" ;;
   esac
 }
 DR_COUNT_WORD=$(_dr_count_word "$DR_ROSTER_COUNT")
 assert_not_contains "P12d: the live roster size has a word form at all" "$DR_COUNT_WORD" "UNMAPPED"
-DR_COUNT_SITES=$(grep -ohE '\b(ten|eleven|twelve|thirteen|fourteen|fifteen) checks\b' \
+DR_COUNT_SITES=$(grep -ohE '\b(ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen) checks\b' \
   "$REPO_ROOT/CLAUDE.md" "$REPO_ROOT/skills/doctor/SKILL.md" | wc -l | tr -d ' ')
 assert_eq "P12d floor: all four known count-string sites were scanned" \
   "$([ "$DR_COUNT_SITES" -ge 4 ] && echo yes || echo no)" "yes"
-DR_COUNT_STALE=$(grep -ohE '\b(ten|eleven|twelve|thirteen|fourteen|fifteen) checks\b' \
+DR_COUNT_STALE=$(grep -ohE '\b(ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen) checks\b' \
   "$REPO_ROOT/CLAUDE.md" "$REPO_ROOT/skills/doctor/SKILL.md" | grep -vc "^$DR_COUNT_WORD checks$" || true)
 assert_eq "P12d: $DR_COUNT_SITES count-string site(s) scanned — every one names the live roster size" \
   "$DR_COUNT_STALE" "0"

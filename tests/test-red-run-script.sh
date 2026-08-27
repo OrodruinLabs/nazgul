@@ -82,14 +82,19 @@ VACUOUS_MASK
   HEAD_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
 }
 
-# Manifest carrying a Base SHA, a Commits SHA, and the given ## Red-Run Evidence
-# body — empty $3 means the section is omitted entirely (the append case).
+# Manifest carrying a Base SHA, the given ## Red-Run Evidence body, and the task's OWN
+# commit list: $4 pins it, `none` empties it, default `$base..HEAD` read from $WM_REPO.
+WM_REPO=""
 write_manifest() {
-  local id="$1" base="$2" evidence="${3:-}"
+  local id="$1" base="$2" evidence="${3:-}" commits="${4:-}" repo="${WM_REPO:-$TEST_DIR}"
+  case "$commits" in
+    none) commits="" ;;
+    "") commits=$(git -C "$repo" rev-list "${base}..HEAD" 2>/dev/null | sed 's/^/- /') ;;
+  esac
   {
     printf -- '---\nstatus: IN_PROGRESS\n---\n# %s: scratch task\n\n' "$id"
     printf -- '## Metadata\n- **ID**: %s\n- **Files modified**: ["scripts/feature.sh", "tests/test-alpha.sh"]\n- **Base SHA**: %s\n\n' "$id" "$base"
-    printf -- '## Commits\n%s\n\n' "$HEAD_SHA"
+    printf -- '## Commits\n%s\n\n' "$commits"
     if [ -n "$evidence" ]; then
       printf -- '## Red-Run Evidence\n%s\n\n' "$evidence"
     fi
@@ -423,6 +428,135 @@ assert_contains "unrelated failure: explains why the runner's failure is insuffi
 assert_file_not_contains "unrelated failure: writes NO evidence block" "$MANIFEST13" \
   '## Red-Run Evidence'
 
+# lean-comments: allow-run — the live instance is why this fixture exists; a reader must
+# not shorten it to "a multi-file case".
+# #140: a borrowed case label can no longer be recorded as attribution. `$GLOBAL_FIRST_FAIL`
+# is the first FAIL: line ANYWHERE in the run, so it belongs to whichever file printed it,
+# and substituting it for a file whose own section named nothing published a SIBLING's case
+# as that entry's `case`, unmarked — observed live when FEAT-036/TASK-004's capture recorded
+# TASK-003's case for a file with 37 failing assertions of its own.
+teardown_temp_dir
+setup_temp_dir
+git -C "$TEST_DIR" init -q -b main
+git -C "$TEST_DIR" config user.email "test@nazgul.dev"
+git -C "$TEST_DIR" config user.name "Nazgul Test"
+mkdir -p "$TEST_DIR/tests" "$TEST_DIR/scripts" "$TEST_DIR/nazgul/tasks"
+cp "$REPO_ROOT/tests/run-tests.sh" "$TEST_DIR/tests/run-tests.sh"
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "base"
+ATTR_BASE=$(git -C "$TEST_DIR" rev-parse HEAD)
+printf '#!/usr/bin/env bash\necho feature\n' > "$TEST_DIR/scripts/feature.sh"
+# A runs first (glob order) and names its own case, so it OWNS $GLOBAL_FIRST_FAIL.
+cat > "$TEST_DIR/tests/test-att-a.sh" <<'ATT_A'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "=== test-att-a ==="
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/scripts/feature.sh" ]; then
+  echo "  PASS: att-a sees the feature"
+  exit 0
+fi
+echo "  FAIL: att-a names its own failing case"
+exit 1
+ATT_A
+# B prints its own section header and NO FAIL: line: a section that names no case.
+cat > "$TEST_DIR/tests/test-att-b.sh" <<'ATT_B'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "=== test-att-b ==="
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/scripts/feature.sh" ]; then
+  exit 0
+fi
+echo "  att-b went wrong and names no case"
+exit 1
+ATT_B
+# C prints no section header at all: there is no per-file section to read.
+cat > "$TEST_DIR/tests/test-att-c.sh" <<'ATT_C'
+#!/usr/bin/env bash
+set -uo pipefail
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/scripts/feature.sh" ]; then
+  exit 0
+fi
+echo "  att-c prints no section header"
+exit 1
+ATT_C
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "the task's work: three test files, one naming its own case"
+
+# One entry's complete record, sliced out of the block so a per-file claim can be
+# asserted against the file it names rather than against the manifest as a whole.
+attr_entry() {
+  awk -v p="- red-run: ${1} ::" \
+    'index($0, p) == 1 { f = 1; print; next } /^- red-run:/ { f = 0 } f' "$2"
+}
+
+write_manifest TASK-160 "$ATTR_BASE"
+MANIFEST160="$TEST_DIR/nazgul/tasks/TASK-160.md"
+run_capture TASK-160 --filter=att
+assert_exit_code "attribution: the multi-file capture is red" "$RR_EC" 0
+assert_eq "attribution: one entry per failing file" \
+  "$(grep -c '^- red-run:' "$MANIFEST160")" "3"
+
+ATTR_A=$(attr_entry tests/test-att-a.sh "$MANIFEST160")
+ATTR_B=$(attr_entry tests/test-att-b.sh "$MANIFEST160")
+ATTR_C=$(attr_entry tests/test-att-c.sh "$MANIFEST160")
+
+assert_contains "attribution: A's case is the one A's own section named" \
+  "$ATTR_A" 'case "att-a names its own failing case"'
+assert_contains "attribution: and A's entry says the case came from A's own section" \
+  "$ATTR_A" 'attribution: per-file'
+assert_contains "attribution: naming the section it was read from" \
+  "$ATTR_A" '`=== test-att-a ===` section'
+assert_not_contains "attribution: an attributed entry carries no borrowed context" \
+  "$ATTR_A" 'run-context:'
+
+# lean-comments: allow-run — "not as a case" is the whole claim; dropping the second half
+# turns it back into "A's line never appears in B's entry", which is not what shipped.
+# The defect, stated as the assertion that would have failed before this change: B named no
+# case, so B's entry must not publish A's AS A CASE. A's line may still appear in B's entry,
+# but only under `run-context:` — borrowed and attributed are two records now, not one.
+assert_not_contains "attribution: B does not publish A's failing case as its own case" \
+  "$ATTR_B" 'case "att-a names its own failing case"'
+assert_contains "attribution: B's case says the absence is B's own" \
+  "$ATTR_B" 'case "(no FAIL: line reported for this file)"'
+assert_contains "attribution: B's entry marks the absent section as the reason" \
+  "$ATTR_B" 'attribution: per-file section absent; the runner named no case for this file'
+assert_not_contains "attribution: C does not publish A's failing case either" \
+  "$ATTR_C" 'case "att-a names its own failing case"'
+assert_contains "attribution: C, which printed no section header at all, reads the same" \
+  "$ATTR_C" 'attribution: per-file section absent; the runner named no case for this file'
+
+# lean-comments: allow-run — without the vacuity argument stated, this reads as a duplicate
+# of the assertions above it and gets deleted.
+# POSITIVE CONTROL. On a run where no FAIL: line existed at all there would be nothing to
+# borrow, so the two assertions above would pass vacuously. The run-context line is fed by
+# the same $GLOBAL_FIRST_FAIL the pre-change code substituted, so its presence here IS the
+# proof that the old shape would have written A's case into B's entry.
+assert_contains "attribution (positive control): the borrowable line existed and is recorded as context" \
+  "$ATTR_B" 'run-context: the FIRST FAIL: line of the whole run'
+assert_contains "attribution (positive control): context carries the sibling's line verbatim" \
+  "$ATTR_B" 'FAIL: att-a names its own failing case'
+assert_eq "attribution (positive control): borrowed context on both unattributed entries, never on the attributed one" \
+  "$(grep -c 'run-context: the FIRST FAIL: line of the whole run' "$MANIFEST160")" "2"
+# The discriminator: pre-change this count is 3 — one real attribution and two borrowings
+# that read identically. Post-change it is 1, and only the file that earned it.
+assert_eq "attribution: exactly one entry publishes A's case as a case" \
+  "$(grep -c 'case "att-a names its own failing case"' "$MANIFEST160")" "1"
+
+# The new lines are ADDITIVE: the shipped gate still parses every entry.
+# shellcheck disable=SC2034  # read by the sourced guard library, not within this file
+NAZGUL_DIR="$TEST_DIR/nazgul"
+if ttg_verify_red_run_evidence "$(cat "$MANIFEST160")" "$TEST_DIR" TASK-160 2>/dev/null >/dev/null; then
+  ATTR_GATE_EC=0
+else
+  ATTR_GATE_EC=$?
+fi
+assert_exit_code "attribution: the evidence gate ACCEPTS a block carrying the new lines" "$ATTR_GATE_EC" 0
+assert_eq "attribution: and its disposition is 'verified', not a degraded allow" \
+  "${TTG_RED_RUN_REASON:-<unset>}" "verified"
+
+teardown_temp_dir
+setup_project
+
 # --- filter derived from the manifest's Test Obligation ---------------------
 write_manifest TASK-006 "$BASE_SHA"
 MANIFEST6="$TEST_DIR/nazgul/tasks/TASK-006.md"
@@ -564,6 +698,91 @@ assert_contains "no changed tests: says it looked, and where" "$RR_OUT" "the wor
 assert_contains "no changed tests: points at the enumerated N/A escape" "$RR_OUT" "enumerated N/A token"
 assert_eq "no changed tests: no scratch worktree is left behind" "$(worktree_count)" "1"
 
+teardown_temp_dir
+
+# #241 — the copy set is the TASK's own commits, not the branch's. Two tasks commit to
+# one branch: BASE..HEAD carries both tasks' test files, each `## Commits` carries one.
+setup_project
+cat > "$TEST_DIR/tests/test-alpha-sibling.sh" <<'SIBLING'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "=== test-alpha-sibling ==="
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/scripts/sibling.sh" ]; then
+  echo "  PASS: sibling.sh is wired in"
+  exit 0
+fi
+echo "  FAIL: sibling.sh is wired in"
+exit 1
+SIBLING
+printf '#!/usr/bin/env bash\necho sibling\n' > "$TEST_DIR/scripts/sibling.sh"
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "a SIBLING task's work on the same branch"
+SIBLING_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+cat > "$TEST_DIR/tests/test-alpha-mine.sh" <<'MINE'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "=== test-alpha-mine ==="
+if [ -f "$(cd "$(dirname "$0")/.." && pwd)/scripts/mine.sh" ]; then
+  echo "  PASS: mine.sh is wired in"
+  exit 0
+fi
+echo "  FAIL: mine.sh is wired in"
+exit 1
+MINE
+printf '#!/usr/bin/env bash\necho mine\n' > "$TEST_DIR/scripts/mine.sh"
+git -C "$TEST_DIR" add -A
+git -C "$TEST_DIR" commit -q -m "MY task's work on the same branch"
+MINE_SHA=$(git -C "$TEST_DIR" rev-parse HEAD)
+RR241_DIR="$TEST_DIR/nazgul/tasks"
+
+write_manifest TASK-241 "$BASE_SHA" "" "- $MINE_SHA"
+run_capture TASK-241 --filter=alpha
+assert_exit_code "#241: a task-scoped capture completes" "$RR_EC" 0
+assert_file_contains "#241: this task's own committed test file IS copied" \
+  "$RR241_DIR/TASK-241.md" 'red-run: tests/test-alpha-mine.sh'
+assert_file_not_contains "#241: a sibling's committed test file on the same branch is NOT" \
+  "$RR241_DIR/TASK-241.md" 'red-run: tests/test-alpha-sibling.sh'
+
+# POSITIVE CONTROL — the sibling file is perfectly capable of producing an entry, so its
+# absence above is the commit set deciding, not the file being unusable.
+write_manifest TASK-242 "$BASE_SHA" "" "- $SIBLING_SHA
+- $MINE_SHA"
+run_capture TASK-242 --filter=alpha
+assert_exit_code "#241 control: a two-commit capture completes" "$RR_EC" 0
+assert_file_contains "#241 control: recording BOTH commits copies the sibling's file too" \
+  "$RR241_DIR/TASK-242.md" 'red-run: tests/test-alpha-sibling.sh'
+assert_file_contains "#241 control: and this task's own file beside it" \
+  "$RR241_DIR/TASK-242.md" 'red-run: tests/test-alpha-mine.sh'
+
+# INVERTED IN PLACE (PR #293 round 2, finding 8). This case wrote an EMPTY `## Commits`
+# and asserted the branch-cumulative fallback — collapsing the two answers
+# `_ttg_task_commit_diff` deliberately keeps apart. rc 2 is "no SHA is recorded" and rc 1 is
+# "one is recorded that this repo cannot read", and `_ttg_red_run_in_scope` already gives
+# them OPPOSITE dispositions. A red run normally captures a task's changed tests BEFORE they
+# are committed, so rc 2 is the ORDINARY case: treating it as a degradation made every
+# routine capture on a shared branch pull siblings' test files in — the exact contamination
+# #241 removed. Empty is the correct committed half when nothing is committed.
+write_manifest TASK-243 "$BASE_SHA" "" "none"
+run_capture TASK-243 --filter=alpha
+assert_contains "#241: an empty ## Commits does NOT take the branch-cumulative fallback" \
+  "$RR_OUT" "none recorded yet"
+case "$RR_OUT" in
+  *"falling back to the branch-cumulative"*)
+    _fail "#241: an empty ## Commits does not print a degradation warning" \
+      "rc 2 is the ordinary pre-commit case, not a failure to derive" ;;
+  *) _pass "#241: an empty ## Commits does not print a degradation warning" ;;
+esac
+assert_file_not_contains "#241: and no sibling test file is pulled in" \
+  "$RR241_DIR/TASK-243.md" 'red-run: tests/test-alpha-sibling.sh'
+
+# rc 1 — a SHA IS recorded and cannot be read. THAT is the degradation, and it must still be
+# announced rather than silently narrowing the set.
+write_manifest TASK-244 "$BASE_SHA" "" "- 0000000000000000000000000000000000000000"
+run_capture TASK-244 --filter=alpha
+assert_contains "#241: an UNREADABLE ## Commits names the fallback it took" \
+  "$RR_OUT" "falling back to the branch-cumulative"
+assert_file_contains "#241: and that fallback really is the wider set" \
+  "$RR241_DIR/TASK-244.md" 'red-run: tests/test-alpha-sibling.sh'
 teardown_temp_dir
 
 # The project's own runner, not this repo's harness. Ordered FIRST among the
@@ -1376,6 +1595,14 @@ PYTEST_FAIL
     "$MANIFEST141" 'red-run: tests/test-zeta.sh'
   assert_file_contains "named-file shape: the record is honest that no case was named" \
     "$MANIFEST141" 'the file exited non-zero without naming a case'
+  assert_file_contains "named-file shape: the absent case is scoped to THIS file" \
+    "$MANIFEST141" 'case "(no FAIL: line reported for this file)"'
+  assert_file_contains "named-file shape: and the absence is marked, not left to inference" \
+    "$MANIFEST141" 'attribution: per-file section absent'
+  # The other value of run-context: "there was no case anywhere" is a different state from
+  # "there was one, and it belonged to a sibling" — recorded rather than left as a gap.
+  assert_file_contains "named-file shape: run-context says the run named no case at all" \
+    "$MANIFEST141" 'run-context: the run printed no FAIL: line at all'
   assert_file_contains "named-file shape: the recorded exit code is the runner's own" \
     "$MANIFEST141" 'result: FAILED (exit 5)'
   teardown_temp_dir
@@ -1780,6 +2007,7 @@ exit 1
 WTTRACKED
   git -C "$RRW_WT" add tests/test-alpha-wt-tracked.sh
   git -C "$RRW_WT" commit -q -m "a commit the main working tree does not carry"
+  WM_REPO="$RRW_WT"
 }
 
 rrw_teardown() {
@@ -1792,7 +2020,7 @@ rrw_teardown() {
     git -C "$RRW_MAIN" worktree prune >/dev/null 2>&1 || true
   fi
   [ -n "$RRW_PARENT" ] && rm -rf "$RRW_PARENT"
-  RRW_PARENT=""; RRW_MAIN=""; RRW_WT=""
+  RRW_PARENT=""; RRW_MAIN=""; RRW_WT=""; WM_REPO=""
 }
 
 rrw_capture() {
@@ -1903,6 +2131,229 @@ fi
 
 echo "  two roots: ${RRW_SCANNED} scanned, ${RRW_SKIPPED} skipped (jq-unavailable=${RRW_NOJQ}), ${RRW_CHECKED} checked, ${RRW_FINDINGS} findings"
 assert_eq "two roots: scanned == skipped + checked" "$RRW_SCANNED" "$((RRW_SKIPPED + RRW_CHECKED))"
+
+# lean-comments: allow-run — the defect this section pins; shortening it loses why the shape matters.
+# FEAT-036/TASK-004 (#226): the install goes through scripts/lib/manifest-write.sh — one
+# per-task lock, one snapshot, two compare-and-swaps, one atomic rename, one read-back. The
+# defect it replaces was `printf '%s' "$out" > "$MANIFEST"`: truncating, unlocked, non-atomic
+# and un-read-back, so an interrupted or concurrent write tore the manifest and the
+# reconciliation pass quarantined it — a quarantine plus a repair for every occurrence.
+RRP_SCANNED=0
+RRP_SKIPPED=0
+RRP_NODIGEST=0
+RRP_CHECKED=0
+RRP_FINDINGS=0
+RRP_MARK=0
+
+# A case that has to reach the compare-and-swap cannot run without a SHA-256 tool — the
+# primitive fails closed there — so it is SKIPPED and counted, never silently passed.
+rrp_begin() {
+  RRP_SCANNED=$((RRP_SCANNED + 1))
+  if [ "${2:-}" = "digest" ] \
+    && ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+    RRP_SKIPPED=$((RRP_SKIPPED + 1))
+    RRP_NODIGEST=$((RRP_NODIGEST + 1))
+    _skip "primitive: $1 (no SHA-256 tool — the write primitive fails closed without one)"
+    return 1
+  fi
+  RRP_CHECKED=$((RRP_CHECKED + 1))
+  RRP_MARK="$TESTS_FAILED"
+  return 0
+}
+rrp_end() {
+  [ "$TESTS_FAILED" -eq "$RRP_MARK" ] || RRP_FINDINGS=$((RRP_FINDINGS + 1))
+}
+
+RR_SRC="$REPO_ROOT/scripts/red-run.sh"
+
+if rrp_begin "no write of any shape targets the task manifest"; then
+  RRP_WRITE_SITES=$(grep -nE '(>>?[[:space:]]*"\$MANIFEST"|(mv|cp|tee)[^|;]*"\$MANIFEST"|sed -i[^|;]*"\$MANIFEST")' "$RR_SRC")
+  assert_eq "primitive: no redirect, append, mv, cp, tee or sed -i targets the manifest" \
+    "$RRP_WRITE_SITES" ""
+  assert_eq "primitive: exactly one install site" \
+    "$(grep -c '^nz_manifest_write ' "$RR_SRC")" "1"
+  # Asserted by PROPERTY, not by line shape: the call gained --expect-hash and now spans
+  # two lines. Pinning the one-line spelling made a correctness addition read as a regression.
+  assert_file_contains "primitive: and it is the shared primitive, with a read-back predicate" \
+    "$RR_SRC" '^nz_manifest_write "\$RR_STATE_DIR" "\$TASK_ID" --verify rr_verify_installed'
+  assert_file_contains "primitive: the producer is the composed renderer" \
+    "$RR_SRC" '\-\- rr_manifest_producer'
+  # The CAS baseline is taken at the Base SHA READ, not at write time — without it a
+  # manifest edited during a multi-minute run is never refused, which is exit 7'"'"'s own
+  # documented load-bearing case (PR #293 round 2, finding 6).
+  assert_file_contains "primitive: the write carries a CAS baseline from the caller read" \
+    "$RR_SRC" 'expect-hash "\$RR_MANIFEST_HASH_AT_READ"'
+  assert_file_contains "primitive: and that baseline is taken beside the Base SHA read" \
+    "$RR_SRC" 'RR_MANIFEST_HASH_AT_READ=\$(nz_sha256'
+  rrp_end
+fi
+
+if rrp_begin "the read-modify-write reads the snapshot, never the live manifest"; then
+  # A producer that kept reading the live file would run the same race with a lock HELD —
+  # worse than the defect, because it looks correct. Asserted per body, not per file.
+  for RRP_FN in rr_read_existing_entries rr_merge_entries rr_render_manifest rr_manifest_producer; do
+    RRP_BODY=$(awk -v h="${RRP_FN}() {" 'index($0,h)==1{d=1} d{print} d && $0=="}"{exit}' "$RR_SRC")
+    assert_not_contains "primitive: $RRP_FN never reads the live manifest variable" \
+      "$RRP_BODY" 'MANIFEST'
+    assert_contains "primitive: $RRP_FN reads the snapshot the primitive passes" \
+      "$RRP_BODY" '$snapshot'
+  done
+  rrp_end
+fi
+
+teardown_temp_dir
+setup_project
+
+if rrp_begin "the install takes the shared per-task lock" digest; then
+  write_manifest TASK-030 "$BASE_SHA"
+  RRP_M30="$TEST_DIR/nazgul/tasks/TASK-030.md"
+  RRP_LOCK="$TEST_DIR/nazgul/locks/task-transition-TASK-030.lock"
+  mkdir -p "$RRP_LOCK"
+  printf '%s %s\n' "$$" "deadbeef" > "$RRP_LOCK/owner.$$.deadbeef"
+  run_capture TASK-030 --filter=alpha
+  assert_exit_code "primitive: a held lock refuses the install with the dedicated exit 7" "$RR_EC" 7
+  assert_contains "primitive: the refusal is about the WRITE" "$RR_OUT" "WRITE REFUSED"
+  assert_contains "primitive: it is the shared per-task lock it could not take" "$RR_OUT" \
+    "another transition already holds the TASK-030 lock"
+  assert_contains "primitive: it names the primitive's own cause" "$RR_OUT" "cause: lock_unavailable"
+  assert_contains "primitive: it says nothing was installed" "$RR_OUT" "Nothing was installed"
+  assert_contains "primitive: and that the run itself is not in doubt" "$RR_OUT" \
+    "The run itself is not in doubt"
+  assert_not_contains "primitive: a refused write is not reported as a vacuous test" \
+    "$RR_OUT" "VACUOUS TEST"
+  assert_not_contains "primitive: nor as an indeterminate run" "$RR_OUT" "INDETERMINATE"
+  assert_file_not_contains "primitive: no evidence block is installed under a held lock" \
+    "$RRP_M30" 'red-run.sh:begin'
+  rm -rf "$RRP_LOCK"
+  rrp_end
+fi
+
+if rrp_begin "a manifest that changes during the run is refused by the compare-and-swap" digest; then
+  write_manifest TASK-031 "$BASE_SHA"
+  RRP_M31="$TEST_DIR/nazgul/tasks/TASK-031.md"
+  RRP_BIN="$TEST_DIR/rrp-bin"
+  RRP_REAL_GIT=$(command -v git)
+  mkdir -p "$RRP_BIN"
+  cat > "$RRP_BIN/git" <<'RRP_FAKE_GIT'
+#!/usr/bin/env bash
+# lean-comments: allow-run — why this is deterministic rather than a sleep race.
+# Lands ONE concurrent append while the primitive's snapshot file exists. That file is
+# created inside the compare-and-swap window and removed when it closes, and the first git
+# the window ever runs is the producer's own resolve — so the timing is decided by the
+# primitive under test, not by a sleep, and the case is deterministic.
+if [ -n "${RRP_CAS_MANIFEST:-}" ] && [ ! -e "${RRP_CAS_MANIFEST}.mutated" ]; then
+  for _snap in "${RRP_CAS_MANIFEST%/*}"/.*.snapshot.*; do
+    [ -e "$_snap" ] || continue
+    printf '\n- a concurrent writer landed here mid-capture\n' >> "$RRP_CAS_MANIFEST"
+    : > "${RRP_CAS_MANIFEST}.mutated"
+    break
+  done
+fi
+exec "$RRP_REAL_GIT" "$@"
+RRP_FAKE_GIT
+  chmod +x "$RRP_BIN/git"
+  RR_OUT=$(PATH="$RRP_BIN:$PATH" RRP_CAS_MANIFEST="$RRP_M31" RRP_REAL_GIT="$RRP_REAL_GIT" \
+    bash "$RED_RUN" TASK-031 --filter=alpha --project-root="$TEST_DIR" 2>&1)
+  RR_EC=$?
+  assert_file_exists "CAS: the concurrent writer really did fire inside the window" \
+    "${RRP_M31}.mutated"
+  assert_exit_code "CAS: a manifest changed mid-capture gets the dedicated exit 7" "$RR_EC" 7
+  assert_contains "CAS: the refusal says the manifest changed DURING the run" "$RR_OUT" \
+    "manifest CHANGED during the run"
+  assert_contains "CAS: it names the compare-and-swap that refused" "$RR_OUT" \
+    "cause: cas_mismatch_install"
+  assert_contains "CAS: it says a Base SHA that moved makes the refusal CORRECT" "$RR_OUT" \
+    "If the manifest's Base SHA changed during the run, this refusal is the CORRECT outcome"
+  assert_contains "CAS: it tells the operator to re-capture against the manifest as it stands" \
+    "$RR_OUT" "Re-capture against the manifest as it now stands"
+  assert_contains "CAS: it separates the write from the run" "$RR_OUT" \
+    "The run itself is not in doubt"
+  assert_not_contains "CAS: the dedicated code is not the vacuous one" "$RR_OUT" "VACUOUS TEST"
+  assert_not_contains "CAS: nor the indeterminate one" "$RR_OUT" "INDETERMINATE"
+  assert_file_contains "CAS: the concurrent writer's content is preserved, not overwritten" \
+    "$RRP_M31" 'a concurrent writer landed here mid-capture'
+  assert_file_not_contains "CAS: and no block is installed over it" "$RRP_M31" 'red-run.sh:begin'
+  rm -rf "$RRP_BIN" "${RRP_M31}.mutated"
+  rrp_end
+fi
+
+if rrp_begin "a read-back the predicate rejects is its own named refusal" digest; then
+  write_manifest TASK-032 "$BASE_SHA"
+  RRP_M32="$TEST_DIR/nazgul/tasks/TASK-032.md"
+  RRP_BAD=$(awk '/^status: /{print "status: NOT-A-STATUS"; next} {print}' "$RRP_M32")
+  printf '%s\n' "$RRP_BAD" > "$RRP_M32"
+  run_capture TASK-032 --filter=alpha
+  assert_exit_code "read-back: a status that stops parsing refuses with exit 7" "$RR_EC" 7
+  assert_contains "read-back: the refusal names its own cause" "$RR_OUT" "cause: verify_failed"
+  # lean-comments: allow-run — what this pin measures now that the write rolls back
+  # The rename precedes the read-back, so verify_failed used to be the ONE refusal that left
+  # the manifest replaced. The primitive now ROLLS IT BACK, which is what makes every adopter's
+  # "a refused write changes nothing" sentence true instead of true-for-most-causes. What is
+  # asserted here is therefore the restore, not the residue.
+  assert_contains "read-back: the refusal says the write was rolled back" "$RR_OUT" \
+    "ROLLED THE WRITE BACK"
+  assert_file_not_contains "read-back: and the evidence block is NOT left installed" \
+    "$RRP_M32" 'red-run.sh:begin'
+  assert_file_contains "read-back: the manifest still holds its pre-capture content" \
+    "$RRP_M32" 'status: NOT-A-STATUS'
+  rrp_end
+fi
+
+if rrp_begin "a manifest the primitive cannot address is refused before the run"; then
+  write_manifest TASK-033 "$BASE_SHA"
+  mkdir -p "$TEST_DIR/nazgul/tasks/patches"
+  RRP_M33="$TEST_DIR/nazgul/tasks/patches/TASK-033.md"
+  mv "$TEST_DIR/nazgul/tasks/TASK-033.md" "$RRP_M33"
+  run_capture TASK-033 --filter=alpha
+  assert_exit_code "addressability: a patches/ manifest is an environment refusal, exit 1" "$RR_EC" 1
+  assert_contains "addressability: it names what the primitive cannot address" "$RR_OUT" \
+    "which the shared manifest-write primitive cannot address"
+  assert_contains "addressability: it names the shape the primitive does install" "$RR_OUT" \
+    "installs only <state_root>/tasks/TASK-NNN.md"
+  assert_contains "addressability: it refuses to fall back to the unlocked write" "$RR_OUT" \
+    "will not fall back to the unlocked truncating write"
+  assert_contains "addressability: and says nothing was run at all" "$RR_OUT" "nothing was run at all"
+  assert_not_contains "addressability: the run never started" "$RR_OUT" "RED confirmed"
+  assert_file_not_contains "addressability: the patches/ manifest is untouched" \
+    "$RRP_M33" 'red-run.sh:begin'
+
+  cp "$RRP_M33" "$TEST_DIR/nazgul/tasks/PATCH-033.md"
+  run_capture PATCH-033 --filter=alpha
+  assert_exit_code "addressability: a PATCH-NNN id is refused for the same reason" "$RR_EC" 1
+  assert_contains "addressability: the PATCH refusal names the addressable shape too" "$RR_OUT" \
+    "installs only <state_root>/tasks/TASK-NNN.md"
+  assert_file_not_contains "addressability: and writes nothing into it" \
+    "$TEST_DIR/nazgul/tasks/PATCH-033.md" 'red-run.sh:begin'
+  rrp_end
+fi
+
+# The adoption must not change WHAT is recorded, only how it is installed: the same by-path
+# merge, now over the snapshot — replacing on hit and dropping the superseded.
+if rrp_begin "the by-path merge semantics survive the adoption" digest; then
+  write_manifest TASK-034 "$BASE_SHA"
+  RRP_M34="$TEST_DIR/nazgul/tasks/TASK-034.md"
+  run_capture TASK-034 --filter=alpha
+  assert_exit_code "merge: the first capture through the primitive exits 0" "$RR_EC" 0
+  run_capture TASK-034 --filter=gamma
+  assert_exit_code "merge: the second capture exits 0" "$RR_EC" 0
+  assert_eq "merge: both files carry an entry, keyed by path" \
+    "$(grep -c '^- red-run:' "$RRP_M34")" "2"
+  assert_contains "merge: the accounting line is unchanged by the adoption" "$RR_OUT" \
+    "evidence merge: 1 existing entry(ies) scanned, 1 retained, 0 replaced, 0 dropped (stale=0, unresolved-ref=0, no-ref=0, superseded-na=0); 1 entry(ies) from this capture"
+  run_capture TASK-034 --filter=alpha
+  assert_eq "merge: a re-capture replaces its own entry and no other" \
+    "$(grep -c '^- red-run:' "$RRP_M34")" "2"
+  assert_contains "merge: and still announces the replacement" "$RR_OUT" \
+    "replaced the existing entry for tests/test-alpha.sh"
+  assert_eq "merge: still exactly one generated block" \
+    "$(grep -c 'red-run.sh:begin' "$RRP_M34")" "1"
+  rrp_end
+fi
+
+teardown_temp_dir
+
+echo "  primitive: ${RRP_SCANNED} scanned, ${RRP_SKIPPED} skipped (no-digest-tool=${RRP_NODIGEST}), ${RRP_CHECKED} checked, ${RRP_FINDINGS} findings"
+assert_eq "primitive: scanned == skipped + checked" "$RRP_SCANNED" "$((RRP_SKIPPED + RRP_CHECKED))"
 
 setup_temp_dir
 

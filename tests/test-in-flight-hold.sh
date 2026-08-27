@@ -2644,7 +2644,10 @@ P7_DIRECT_FILES_EXPECT="test-observability-hooks.sh test-stop-hook.sh "
 # 61 -> 62 for FEAT-034/TASK-005's P8c mixed-version control, which adds one `bash "$STOP_HOOK"`
 # site. Deliberately still a PIN, not a derivation — its whole job is to catch a re-narrowed
 # pattern, which a value derived from the same pattern could never do.
-P7_CHECKED_EXPECT=62
+
+# 62 -> 64: FEAT-036/TASK-016 adds two `bash "$REPO_ROOT/scripts/stop-hook.sh"` sites in
+# tests/test-task-utils.sh (#281); both bind `</dev/null`, so only the population moved.
+P7_CHECKED_EXPECT=64
 P7_SCANNED=0
 P7_SKIPPED=0
 P7_CHECKED=0

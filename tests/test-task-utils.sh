@@ -406,4 +406,230 @@ else
 fi
 teardown_temp_dir
 
+# --- Test 20 (#169 / AC-12): DEFECT PIN: get_task_field splits at the field's OWN colon. Captured,
+# not invented: Blocked reason is stop-hook.sh:886's text, the rest a live TASK-008.md manifest's ---
+setup_temp_dir
+setup_nazgul_dir
+mkdir -p "$TEST_DIR/nazgul/tasks"
+cat > "$TEST_DIR/nazgul/tasks/TASK-042.md" << 'EOF'
+---
+status: BLOCKED
+---
+# TASK-042: Test task
+
+- **Group**: 1
+- **Depends on**: none
+- **Retry count**: 2/3
+- **Created at**: 2026-08-26T11:15:00Z
+- **Files modified**: ["scripts/lib/task-utils.sh","tests/test-task-utils.sh"]
+- **Blocked kind**: reconciliation
+- **Blocked reason**: review evidence missing (code-reviewer) — run /nazgul:review --materialize TASK-042
+- **Blocked observed**: DONE
+EOF
+source "$LIB"
+TU_M="$TEST_DIR/nazgul/tasks/TASK-042.md"
+assert_eq "DEFECT PIN: Blocked reason keeps the colon inside /nazgul:review" \
+  "$(get_task_field "$TU_M" "Blocked reason" "Unknown reason")" \
+  "review evidence missing (code-reviewer) — run /nazgul:review --materialize TASK-042"
+assert_eq "DEFECT PIN: Created at keeps every colon in the ISO-8601 timestamp" \
+  "$(get_task_field "$TU_M" "Created at" "DEFAULT")" "2026-08-26T11:15:00Z"
+teardown_temp_dir
+
+# --- Test 21 (#169): a value ENDING in a colon reads as PRESENT, not as the caller's default ---
+# The greedy split trimmed it to empty, and every consumer reads "absent" as the permissive answer.
+setup_temp_dir
+setup_nazgul_dir
+mkdir -p "$TEST_DIR/nazgul/tasks"
+printf -- '- **Blocked reason**: waiting on upstream decision:\n' > "$TEST_DIR/nazgul/tasks/TASK-043.md"
+source "$LIB"
+assert_eq "trailing-colon value is returned verbatim, not swallowed into the default" \
+  "$(get_task_field "$TEST_DIR/nazgul/tasks/TASK-043.md" "Blocked reason" "Unknown reason")" \
+  "waiting on upstream decision:"
+teardown_temp_dir
+
+# --- Test 22 (#169 control): colon-free fields are byte-unchanged, and the derived pattern keeps
+# the tolerant, case-insensitive anchor the `grep -iE` had ---
+setup_temp_dir
+setup_nazgul_dir
+mkdir -p "$TEST_DIR/nazgul/tasks"
+cat > "$TEST_DIR/nazgul/tasks/TASK-044.md" << 'EOF'
+---
+status: BLOCKED
+---
+# TASK-044: Test task
+
+- **Group**: 1
+- **Depends on**: TASK-001, TASK-002
+- **Retry count**: 2/3
+- **Files modified**: ["scripts/lib/task-utils.sh","tests/test-task-utils.sh"]
+EOF
+printf -- '-  **blocked reason**:   stack-utils: sync conflict   \n' >> "$TEST_DIR/nazgul/tasks/TASK-044.md"
+source "$LIB"
+TU_M="$TEST_DIR/nazgul/tasks/TASK-044.md"
+assert_eq "control: colon-free Group byte-unchanged" "$(get_task_field "$TU_M" "Group" "X")" "1"
+assert_eq "control: colon-free Depends on byte-unchanged" "$(get_task_field "$TU_M" "Depends on" "X")" "TASK-001, TASK-002"
+assert_eq "control: colon-free Retry count byte-unchanged" "$(get_task_field "$TU_M" "Retry count" "X")" "2/3"
+assert_eq "control: Files modified still parses to a newline list" \
+  "$(get_task_files_modified "$TU_M")" "$(printf 'scripts/lib/task-utils.sh\ntests/test-task-utils.sh')"
+assert_eq "control: an absent field still returns the caller's default" "$(get_task_field "$TU_M" "Nope" "X")" "X"
+assert_eq "control: indented + lowercased label still matches, and padding is still trimmed" \
+  "$(get_task_field "$TU_M" "Blocked reason" "Unknown reason")" "stack-utils: sync conflict"
+teardown_temp_dir
+
+# --- Test 23 (#169 / AC-12): DEFECT PIN: get_task_status's two inline arms split at the label, so
+# the INVALID diagnostic names the whole off-vocabulary status and not its final segment ---
+setup_temp_dir
+setup_nazgul_dir
+mkdir -p "$TEST_DIR/nazgul/tasks"
+printf -- '# TASK-045: Test task\n\n- **Status**: MIGRATED:LEGACY\n' > "$TEST_DIR/nazgul/tasks/TASK-045.md"
+printf -- '# ATX: Test task\n## Status: MIGRATED:LEGACY\n' > "$TEST_DIR/atx-status.md"
+source "$LIB"
+assert_eq "DEFECT PIN: list-item arm keeps the colon in an off-vocabulary status" \
+  "$(get_task_status "$TEST_DIR/nazgul/tasks/TASK-045.md" "PLANNED")" "MIGRATED:LEGACY"
+assert_eq "DEFECT PIN: ATX-inline arm keeps the colon in an off-vocabulary status" \
+  "$(get_task_status "$TEST_DIR/atx-status.md" "PLANNED")" "MIGRATED:LEGACY"
+count_tasks_and_find_active "$TEST_DIR/nazgul/tasks" 2>/dev/null
+assert_eq "INVALID_TASKS names the whole raw status, not its final segment" \
+  "$INVALID_TASKS" "TASK-045:MIGRATED:LEGACY"
+teardown_temp_dir
+
+# --- Test 24 (#169, assertion INVERTED by #281): ACTIVE_RETRY's failure value is a count ---
+
+# lean-comments: allow-run — why this assertion reads the opposite way from the day it was written.
+# TASK-008 asserted the absent case "stays empty (faithful refactor)", having read the base
+# reader's `|| echo "0"` as dead code and declined to quietly improve on it. The fallback was in
+# fact LIVE under pipefail, so empty was never the pre-refactor behaviour, and stop-hook.sh's
+# `jq --argjson` rejects empty outright. Inverted in place rather than deleted, so the history of
+# the claim stays readable next to the claim that replaced it.
+setup_temp_dir
+setup_nazgul_dir
+mkdir -p "$TEST_DIR/nazgul/tasks"
+printf -- '---\nstatus: IN_PROGRESS\n---\n# TASK-047: Test task\n' > "$TEST_DIR/nazgul/tasks/TASK-047.md"
+source "$LIB"
+count_tasks_and_find_active "$TEST_DIR/nazgul/tasks"
+assert_eq "ACTIVE_RETRY: absent Retry count field falls back to 0, never empty (#281)" "$ACTIVE_RETRY" "0"
+printf -- '  -  **retry count**: 3/3\n' >> "$TEST_DIR/nazgul/tasks/TASK-047.md"
+count_tasks_and_find_active "$TEST_DIR/nazgul/tasks"
+assert_eq "ACTIVE_RETRY: leading digit run of a tolerant-anchor Retry count" "$ACTIVE_RETRY" "3"
+teardown_temp_dir
+
+# --- Test 25 (#281): every ACTIVE_RETRY failure path yields a decimal integer ---
+
+# The four ways the field can fail to produce a number, plus the positive control that keeps the
+# floor from passing them vacuously — a reader hard-wired to 0 would satisfy all four probes.
+retry_probe() {
+  setup_temp_dir
+  setup_nazgul_dir
+  mkdir -p "$TEST_DIR/nazgul/tasks"
+  printf -- '%s' "$2" > "$TEST_DIR/nazgul/tasks/TASK-060.md"
+  [ -z "${3:-}" ] || chmod "$3" "$TEST_DIR/nazgul/tasks/TASK-060.md"
+  count_tasks_and_find_active "$TEST_DIR/nazgul/tasks" 2>/dev/null
+  RETRY_PROBE_VALUE="$ACTIVE_RETRY"
+  assert_eq "ACTIVE_RETRY is a decimal integer: $1" \
+    "$(printf '%s' "$ACTIVE_RETRY" | grep -cE '^[0-9]+$')" "1"
+  [ -z "${3:-}" ] || chmod 644 "$TEST_DIR/nazgul/tasks/TASK-060.md"
+  teardown_temp_dir
+}
+source "$LIB"
+retry_probe "field absent" '---
+status: IN_PROGRESS
+---
+# TASK-060: Test task
+'
+assert_eq "ACTIVE_RETRY: absent field reads 0" "$RETRY_PROBE_VALUE" "0"
+retry_probe "field present but empty" '---
+status: IN_PROGRESS
+---
+- **Retry count**:
+'
+assert_eq "ACTIVE_RETRY: empty field reads 0" "$RETRY_PROBE_VALUE" "0"
+retry_probe "field present but non-numeric" '---
+status: IN_PROGRESS
+---
+- **Retry count**: n/a
+'
+assert_eq "ACTIVE_RETRY: non-numeric field reads 0" "$RETRY_PROBE_VALUE" "0"
+retry_probe "manifest unreadable" '---
+status: IN_PROGRESS
+---
+- **Retry count**: 2/3
+' 000
+assert_eq "ACTIVE_RETRY: unreadable manifest reads 0 (never selected; the initialiser holds)" \
+  "$RETRY_PROBE_VALUE" "0"
+retry_probe "control: a real count still reads through" '---
+status: IN_PROGRESS
+---
+- **Retry count**: 2/3
+'
+assert_eq "control: ACTIVE_RETRY is not hard-wired to the floor" "$RETRY_PROBE_VALUE" "2"
+
+# --- Test 26 (#281): behavioural — scripts/stop-hook.sh reaches its decision:block payload ---
+
+# lean-comments: allow-run — why this row drives a second script from the task-utils suite.
+# The empty ACTIVE_RETRY is harmless where it is produced and fatal two files away: stop-hook.sh
+# passes it to `jq -n --argjson active_retry`, which rejects empty and, under `set -euo pipefail`,
+# ends the hook before the loop banner, before the decision:block payload and before every gate
+# after it. A unit assertion on the variable alone did not catch that — Test 24 asserted the
+# empty value and passed — so the consumer is exercised end to end here.
+JQ_EMPTY_ERR=$(jq -n --argjson x "" '.' 2>&1 || true)
+assert_contains "control: an empty --argjson really is a hard jq error" \
+  "$JQ_EMPTY_ERR" "invalid JSON text passed to --argjson"
+
+stop_hook_probe() {
+  setup_temp_dir
+  setup_git_repo
+  setup_nazgul_dir
+  create_config '.current_iteration = 0'
+  create_plan
+  create_task_file "TASK-061" "IN_PROGRESS"
+  printf -- '%s' "$2" > "$TEST_DIR/nazgul/tasks/TASK-061.md"
+  SH_OUTPUT=$(bash "$REPO_ROOT/scripts/stop-hook.sh" </dev/null 2>&1) && SH_EC=0 || SH_EC=$?
+  assert_exit_code "stop-hook exits 2 — $1 (block code; not on its own discriminating)" "$SH_EC" 2
+  assert_contains "stop-hook reaches decision:block — $1" "$SH_OUTPUT" '"decision": "block"'
+  assert_not_contains "stop-hook does not die in jq --argjson — $1" \
+    "$SH_OUTPUT" "invalid JSON text passed to --argjson"
+  teardown_temp_dir
+}
+stop_hook_probe "manifest with no Retry count line" '---
+status: IN_PROGRESS
+---
+# TASK-061: Test task
+
+- **Depends on**: none
+- **Group**: 1
+'
+stop_hook_probe "manifest with a non-numeric Retry count" '---
+status: IN_PROGRESS
+---
+# TASK-061: Test task
+
+- **Depends on**: none
+- **Group**: 1
+- **Retry count**: n/a
+'
+# Control: the same probe against a manifest that carries a well-formed count, so a decision:block
+# assertion that could never fail is ruled out by a case the fixture is known to reach.
+stop_hook_probe "control: manifest with a well-formed Retry count" '---
+status: IN_PROGRESS
+---
+# TASK-061: Test task
+
+- **Depends on**: none
+- **Group**: 1
+- **Retry count**: 1/3
+'
+# Control: the paused config is the case where decision:block is genuinely absent, so the
+# assert_contains above is reading real output rather than reporting a needle it cannot miss.
+setup_temp_dir
+setup_git_repo
+setup_nazgul_dir
+create_config '.paused = true'
+create_plan
+create_task_file "TASK-062" "IN_PROGRESS"
+SH_OUTPUT=$(bash "$REPO_ROOT/scripts/stop-hook.sh" </dev/null 2>&1) && SH_EC=0 || SH_EC=$?
+assert_not_contains "control: a paused loop emits no decision:block (the needle can miss)" \
+  "$SH_OUTPUT" '"decision": "block"'
+assert_exit_code "control: a paused loop exits 0" "$SH_EC" 0
+teardown_temp_dir
+
 report_results

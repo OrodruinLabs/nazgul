@@ -28,9 +28,7 @@ $ARGUMENTS
 - Project spec: !`cat nazgul/context/project-spec.md 2>/dev/null | head -3 || echo "NONE"`
 - Classification: !`cat nazgul/context/project-classification.md 2>/dev/null | head -5 || echo "NOT_CLASSIFIED"`
 - Docs generated: !`ls nazgul/docs/*.md 2>/dev/null | wc -l | tr -d ' '`
-- Active tasks: !`grep -rl 'Status.*\(READY\|IN_PROGRESS\|IN_REVIEW\|IMPLEMENTED\|CHANGES_REQUESTED\)' nazgul/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' '`
-- Done tasks: !`grep -rl 'Status.*DONE' nazgul/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' '`
-- Total tasks: !`ls nazgul/tasks/TASK-*.md 2>/dev/null | wc -l | tr -d ' '`
+- Task counts: !`bash -c 'R="${CLAUDE_PLUGIN_ROOT}"; L="$R/scripts/lib/task-utils.sh"; P="${CLAUDE_PROJECT_DIR:-.}"; D="$P/nazgul/tasks"; if [ -z "$R" ] || [ ! -r "$L" ]; then echo "UNREADABLE reason=reader_unavailable detail=[$L]"; exit 0; fi; if ! . "$L" 2>/dev/null; then echo "UNREADABLE reason=reader_source_failed detail=[$L]"; exit 0; fi; if ! command -v get_task_status >/dev/null 2>&1 || ! command -v count_tasks_and_find_active >/dev/null 2>&1; then echo "UNREADABLE reason=reader_incomplete detail=[$L]"; exit 0; fi; if [ -e "$D" ] && { [ ! -d "$D" ] || [ ! -r "$D" ] || [ ! -x "$D" ]; }; then echo "UNREADABLE reason=tasks_dir_unreadable detail=[$D]"; exit 0; fi; if [ ! -e "$D" ]; then if [ -f "$P/nazgul/config.json" ]; then echo "UNREADABLE reason=tasks_dir_absent detail=[$D absent under $(pwd) while nazgul/config.json exists]"; else echo "UNREADABLE reason=no_initialised_root detail=[neither $D nor $P/nazgul/config.json exists under $(pwd); CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-unset}]"; fi; exit 0; fi; BAD=""; N=0; for f in "$D"/TASK-*.md; do [ -f "$f" ] || continue; N=$((N+1)); s=$(get_task_status "$f" "" 2>/dev/null) || s=""; case "$s" in DONE|CANCELLED|READY|IN_PROGRESS|IMPLEMENTED|IN_REVIEW|APPROVED|CHANGES_REQUESTED|BLOCKED|PLANNED) ;; *) v="${s:-empty}"; BAD="$BAD $(basename "$f")=[${v:0:40}]" ;; esac; done; if ! count_tasks_and_find_active "$D" 2>/dev/null; then echo "UNREADABLE reason=counter_failed detail=[$D]"; exit 0; fi; T="${TOTAL_COUNT-}"; case "$T" in ""|*[!0-9]*) echo "UNREADABLE reason=total_not_numeric detail=[$T]"; exit 0 ;; esac; if [ "$T" -ne "$N" ]; then echo "UNREADABLE reason=counter_disagrees detail=[counter=$T walk=$N]"; exit 0; fi; if [ -n "$BAD" ]; then echo "UNREADABLE reason=unreadable_status seen=$T manifests:$BAD"; exit 0; fi; A=$((T - DONE_COUNT - CANCELLED_COUNT)); if [ "$A" -lt 0 ]; then echo "UNREADABLE reason=bucket_overflow detail=[d=$DONE_COUNT c=$CANCELLED_COUNT n=$T]"; exit 0; fi; echo "active=$A done=$DONE_COUNT cancelled=$CANCELLED_COUNT total=$T"'`
 - Active reviewers: !`ls .claude/agents/generated/ 2>/dev/null || echo "No reviewers generated"`
 - Current plan: !`head -20 nazgul/plan.md 2>/dev/null || echo "No plan yet"`
 - Recovery Pointer: !`sed -n '/^## Recovery Pointer/,/^## /p' nazgul/plan.md 2>/dev/null | head -7 || echo "none"`
@@ -345,6 +343,39 @@ Every "Branch Setup" step referenced from a state below follows this same sequen
 
 Evaluate the preprocessor data above. Work through this state machine top-to-bottom — take the FIRST state that matches:
 
+**Reading the `Task counts` line.** It emits exactly one of two shapes, and there is no third:
+
+| Shape | Meaning |
+|---|---|
+| `active=<n> done=<n> cancelled=<n> total=<n>` | Every manifest's status was read. `active` is `total - done - cancelled` — every task not in a terminal state, so `PLANNED`, `APPROVED` and `BLOCKED` count as active work instead of falling through to FRESH. |
+| `UNREADABLE reason=<token> …` | The status set could not be read. **A count that could not be read is not zero** (ADR-033) — it is never rendered as `0`, because `0` is a legitimate value wired to an archiving path. |
+
+Anything that is not a well-formed counts line — an absent line, an empty line, an error message, a partial line missing any of the four fields, a non-numeric field — **is UNREADABLE**. There is no "the line wasn't there" fall-through, and no state below may substitute `0` for a field it could not read. An `UNREADABLE` line carries none of the four field tokens by construction, so there is no number on it for a later state to pick up by accident.
+
+---
+
+#### STATE: UNREADABLE
+**Detection:** The `Task counts` line above is not a well-formed `active=<n> done=<n> cancelled=<n> total=<n>` line. This includes the literal `UNREADABLE` token, an absent or empty line, and any error text.
+
+The counts probe resolves `nazgul/tasks` from `CLAUDE_PROJECT_DIR` rather than the current
+directory. An **absent** tasks directory never yields a count: it reports `tasks_dir_absent` when a
+`nazgul/config.json` exists beside it, and `no_initialised_root` when neither exists. Gating only the
+first arm on the config left the both-absent case — a wrong cwd, a subdirectory, a linked worktree —
+falling through to `total=0`. Both exist because a count read from the wrong tree is not zero tasks — it is no
+answer — and `total=0` routes to FRESH, whose action archives `plan.md`, `tasks/`, `reviews/`,
+`docs/` and `checkpoints/`. A false zero must never reach a destructive action (ADR-033).
+**Action:** **STOP. Evaluate no other state.** The task counts are the input to every state below, and a mis-read routes a live objective to FRESH, whose New Objective Override **archives** `plan.md`, `tasks/`, `reviews/`, `docs/` and `checkpoints/`.
+1. Tell the user the loop cannot start because the task statuses could not be read, and print the emitted line verbatim — its `reason=` token and, for `reason=unreadable_status`, the manifests it names are the whole diagnosis.
+2. Map the `reason=` token to what the operator has to fix:
+   - `reader_unavailable` / `reader_source_failed` / `reader_incomplete` — `${CLAUDE_PLUGIN_ROOT}/scripts/lib/task-utils.sh` did not resolve, load, or define its readers. The plugin install is broken; re-install or re-point the plugin directory.
+   - `tasks_dir_unreadable` — `nazgul/tasks` exists but is not a readable, searchable directory. Fix its permissions.
+   - `tasks_dir_absent` — `nazgul/tasks` is missing beside a `nazgul/config.json` that exists. This IS a Nazgul project whose task state cannot be read; do not treat it as an empty one.
+   - `no_initialised_root` — **the one token that is NOT a stop.** Neither `nazgul/tasks` nor `nazgul/config.json` exists under the resolved root, so there is no initialised project here and nothing to lose. **Proceed to `STATE: NOT_INITIALIZED`** and tell the user to run `/nazgul:init`. The detail names the resolved root and whether `CLAUDE_PROJECT_DIR` was set — if it was unset and the cwd is a subdirectory or a worktree, the fix is to re-run from the project root rather than to initialise a second project. Refusing outright here would make an uninitialised project unstartable, which is a cost with no matching benefit: an absent root archives nothing.
+   - `unreadable_status` — the named manifests carry no status this vocabulary recognises. Repair each one's `status:` frontmatter, then re-run.
+   - `counter_failed` / `counter_disagrees` / `total_not_numeric` / `bucket_overflow` — the shared counter and the directory listing disagree, or the counter returned nothing usable. Report it as a Nazgul defect rather than working around it.
+3. **Never** offer FRESH, OBJECTIVE_COMPLETE, or a New Objective Override from this state, and never archive anything. The single exception is `no_initialised_root`, which routes to `NOT_INITIALIZED` per the token map above — that path offers `/nazgul:init`, never an archive. An operator who genuinely wants a clean slate has `/nazgul:reset`, which is an explicit, informed choice; this is not.
+**Stop here.**
+
 ---
 
 #### STATE: NOT_INITIALIZED
@@ -355,7 +386,7 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 ---
 
 #### STATE: ACTIVE_LOOP
-**Detection:** Active tasks > 0 (any task with status READY, IN_PROGRESS, IN_REVIEW, IMPLEMENTED, or CHANGES_REQUESTED)
+**Detection:** `active` > 0 — any task that is neither DONE nor CANCELLED, i.e. PLANNED, READY, IN_PROGRESS, IMPLEMENTED, IN_REVIEW, APPROVED, CHANGES_REQUESTED or BLOCKED.
 **Action:** Auto-resume the loop.
 1. Tell the user: "Resuming: [stored objective]. [N] active tasks remaining."
 2. Read `nazgul/plan.md` → Recovery Pointer
@@ -368,19 +399,23 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 7. Delegate to the appropriate agent based on active task status:
    - READY/IN_PROGRESS → Implementer
    - IMPLEMENTED/IN_REVIEW → Review Gate
+   - APPROVED → Review Gate (finish the outstanding DONE transition)
    - CHANGES_REQUESTED → Implementer (read consolidated feedback first)
+   - PLANNED only (nothing promoted to READY yet) → read `nazgul/plan.md` and let the stop hook promote the first dependency-satisfied task; do NOT treat this as an empty project
    - BLOCKED → Show to user, ask what to do
 8. The stop hook takes over from here.
 
 ---
 
 #### STATE: OBJECTIVE_COMPLETE
-**Detection:** Total tasks > 0 AND active tasks == 0 AND done tasks == total tasks
-**Action:** All tasks are done.
+**Detection:** `total` > 0 AND `active` == 0 AND `done` + `cancelled` == `total`. A cancelled task closes the loop without being counted as shipped (RULES.md §2) — requiring `done == total` here would make this state unreachable forever after one cancellation.
+**Action:** All tasks are accounted for — report them as `[done] done, [cancelled] cancelled` and never as all shipped.
 1. VERIFY FROM DISK first: re-read every task manifest
-   (`grep -H -E '(^\- \*\*Status\*\*:|^## Status:)' nazgul/tasks/TASK-*.md`). If any task is not
-   DONE, this state was mis-detected — report the actual statuses and route to
-   the appropriate state instead. Never emit NAZGUL_COMPLETE, and never write
+   (`grep -H -E '(^\- \*\*Status\*\*:|^## Status:)' nazgul/tasks/TASK-*.md`). If any task is
+   neither DONE nor CANCELLED, this state was mis-detected — report the actual statuses and
+   route to the appropriate state instead. CANCELLED is terminal exactly as DONE is
+   (RULES.md §2); demanding DONE here would fail the verification of a state the detection
+   above admits. Never emit NAZGUL_COMPLETE, and never write
    DONE entries to plan.md, based on remembered transitions: status writes can
    be blocked by guards, so claims must come from reads that happened after the
    last write.
@@ -455,7 +490,7 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 ---
 
 #### STATE: DOCS_READY
-**Detection:** Docs generated > 0 AND total tasks == 0
+**Detection:** Docs generated > 0 AND `total` == 0
 **Action:** Documents exist but no plan yet — regenerate documents from current context, then run the planner.
 1. Read stored objective from config.json
 2. If no objective: read the PRD overview section as the objective, store it in config.json
@@ -472,7 +507,7 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 ---
 
 #### STATE: DISCOVERY_DONE
-**Detection:** Discovery summary is NOT "NOT_RUN" AND docs generated == 0 AND total tasks == 0
+**Detection:** Discovery summary is NOT "NOT_RUN" AND docs generated == 0 AND `total` == 0
 **Action:** Discovery ran but no docs or plan yet.
 1. Check if objective exists in config.json
 2. If no objective: run **Objective Derivation** (see below)
@@ -486,7 +521,7 @@ Evaluate the preprocessor data above. Work through this state machine top-to-bot
 ---
 
 #### STATE: FRESH
-**Detection:** None of the above matched (config exists but discovery hasn't run)
+**Detection:** None of the above matched (config exists but discovery hasn't run). Reachable ONLY from a well-formed `Task counts` line — an `UNREADABLE` one stopped at the first state and never arrives here.
 **Action:** Fresh project — need discovery + everything.
 1. Run **Objective Derivation** (see below) if no objective in config.json
 2. **Branch Setup:** follow **Branch Setup via `create_feature_branch`** above (worktree dir is created as a sibling of the project root, e.g. `../<project>-worktrees/`).
@@ -574,16 +609,17 @@ For the tool detection commands table (check commands and install commands per p
 
 When the user explicitly passes an objective string in `$ARGUMENTS`:
 
-1. **Check for existing active work:**
-   - If active tasks exist, warn in HITL mode:
-     ```
+0. **Refuse on an unreadable count (MANDATORY, before anything else).** If the `Task counts` line is not a well-formed `active=<n> done=<n> cancelled=<n> total=<n>` line, take **STATE: UNREADABLE** and stop. Step 2 below archives `plan.md`, `tasks/`, `reviews/`, `docs/` and `checkpoints/`, and "no active tasks" read off an unreadable count is exactly the false zero ADR-033 exists to stop. This holds in every mode, including AFK and YOLO.
+1. **Check for existing active work** (`active` from that line):
+   - If `active` > 0, warn in HITL mode:
+     ```text
      You have an active objective: "[stored objective]" with [N] tasks remaining.
      Options:
      a. Archive it and start the new objective
      b. Cancel and resume current work (/nazgul:start)
      ```
-   - In AFK mode with active tasks: auto-archive and start new
-   - If no active tasks: proceed directly
+   - In AFK mode with `active` > 0: auto-archive and start new
+   - If `active` == 0 on a well-formed counts line: proceed directly
 2. **Archive old work** (if applicable):
    - Create `nazgul/archive/[YYYY-MM-DD-HHMMSS]/` directory
    - Move: plan.md, tasks/, reviews/, docs/, checkpoints/ into archive
